@@ -43,6 +43,8 @@ const fixture = JSON.parse(
   ),
 );
 
+const DAILY_PATH = "2026/20261101.md";
+
 function parseNow(text) {
   const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(text);
   assert.ok(match, `bad clock ${text}`);
@@ -76,6 +78,57 @@ function resolverFor(vector) {
   };
 }
 
+function vectorFrontmatter(source) {
+  const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(String(source || ""));
+  if (!match) return {};
+  const frontmatter = {};
+  for (const line of match[1].split("\n")) {
+    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!field) continue;
+    const key = field[1];
+    let value = field[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    } else if (value.toLowerCase() === "true") {
+      value = true;
+    } else if (value.toLowerCase() === "false") {
+      value = false;
+    }
+    frontmatter[key] = value;
+  }
+  return frontmatter;
+}
+
+function clockEnvFor(notes, daily = "") {
+  const sources = new Map(Object.entries(notes || {}));
+  if (daily) sources.set(DAILY_PATH, daily);
+  const files = new Map([...sources.keys()].map((path) => [path, { path }]));
+  const resolve = (target) => {
+    const name = String(target || "").replace(/\.md$/i, "");
+    const exact = `${name}.md`;
+    if (files.has(exact)) return files.get(exact);
+    const basename = name.split("/").pop().toLowerCase();
+    return [...files.values()].find((file) => file.path.split("/").pop().replace(/\.md$/i, "").toLowerCase() === basename) || null;
+  };
+  const vault = { getAbstractFileByPath: (path) => files.get(path) || null };
+  const metadataCache = {
+    getFileCache: (file) => ({ frontmatter: vectorFrontmatter(sources.get(file.path)) }),
+    getFirstLinkpathDest: (target) => resolve(target),
+  };
+  return { files, vault, metadataCache, resolve };
+}
+
+function clockResolverFor(vector) {
+  const env = clockEnvFor(vector.notes, vector.day);
+  return (link, line) => {
+    const file = link && link.pathPart
+      ? env.resolve(link.pathPart)
+      : env.files.get(DAILY_PATH);
+    if (!file) return null;
+    return helpers.taskEffectiveClockResolution(file.path, line, env.metadataCache, env.vault);
+  };
+}
+
 function applyGesture(vector) {
   const lines = vector.day.split("\n");
   const sectionStart = lines.findIndex((line) => /^## Pomodoros\s*$/.test(line));
@@ -97,6 +150,7 @@ function applyGesture(vector) {
   assert.ok(expansion, `${vector.id}: no expansion`);
   const adjusted = helpers.applyEventRunToExpansion(document, target, expansion, now, {
     resolveTask: resolverFor(vector),
+    resolveClock: clockResolverFor(vector),
   });
   const line =
     typed.slice(0, adjusted.expansion.fromCh) +
@@ -106,9 +160,9 @@ function applyGesture(vector) {
 }
 
 for (const vector of fixture.cases) {
-  if (ELSEWHERE[vector.id]) {
+  if (ELSEWHERE[vector.id] || vector.token !== "=") {
     test(`shared vector (elsewhere): ${vector.id}`, () => {
-      assert.ok(ELSEWHERE[vector.id].length > 0);
+      assert.ok(ELSEWHERE[vector.id] || vector.token !== "=");
     });
     continue;
   }
@@ -267,4 +321,99 @@ test("a counted suffix keeps its span and still takes the lineup clock", () => {
   const adjusted = helpers.applyEventRunToExpansion(lines, 3, expansion, now);
   assert.equal(adjusted.offClock, true);
   assert.ok(adjusted.expansion.replacement.startsWith("(**0905-0920** [off:: 15m])"));
+});
+
+test("taskEffectiveOffClock inherits offclock: from the nearest area or project", () => {
+  const env = clockEnvFor({
+    "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+    "abby.md": "---\ntype: [[area]]\nparent: [[love]]\n---\n",
+    "fun.md": "---\ntype: [[area]]\nparent: [[love]]\noffclock: false\n---\n",
+    "surf.md": "---\ntype: [[area]]\nparent: [[fun]]\noffclock: true\n---\n",
+    "dog.md": "---\ntype: [[article]]\nparent: [[love]]\noffclock: false\n---\n",
+    "invalid.md": "---\ntype: [[project]]\nparent: [[love]]\noffclock: maybe\n---\n",
+  });
+  const resolve = (path, line) =>
+    helpers.taskEffectiveOffClock(path, line, env.metadataCache, env.vault);
+  assert.deepEqual(resolve("love.md", "- [ ] #task Lunch ^lunch"), {
+    offClock: true,
+    source: "note",
+    notePath: "love.md",
+  });
+  assert.deepEqual(resolve("abby.md", "- [ ] #task Pickup ^pickup"), {
+    offClock: true,
+    source: "note",
+    notePath: "love.md",
+  });
+  assert.deepEqual(resolve("fun.md", "- [ ] #task Park ^park"), {
+    offClock: false,
+    source: "note",
+    notePath: "fun.md",
+  });
+  assert.deepEqual(resolve("surf.md", "- [ ] #task Surf ^surf"), {
+    offClock: true,
+    source: "note",
+    notePath: "surf.md",
+  });
+  assert.deepEqual(resolve("dog.md", "- [ ] #task Walk Lenard ^lenard"), {
+    offClock: true,
+    source: "note",
+    notePath: "love.md",
+  });
+  assert.deepEqual(resolve("invalid.md", "- [ ] #task Maybe later ^maybe"), {
+    offClock: false,
+    source: "invalid_note",
+    notePath: "invalid.md",
+  });
+  assert.deepEqual(resolve("love.md", "- [ ] #task Work call #on ^call"), {
+    offClock: false,
+    source: "on_tag",
+    notePath: null,
+  });
+  assert.deepEqual(resolve("fun.md", "- [ ] #task Park #off ^park"), {
+    offClock: true,
+    source: "off_tag",
+    notePath: null,
+  });
+  assert.deepEqual(
+    resolve("love.md", "- [ ] #task Work call #on #off ^call"),
+    { offClock: false, source: "on_tag", notePath: null },
+  );
+  assert.deepEqual(
+    helpers.taskEffectiveOffClock("love.md", "- [ ] #task Lunch ^lunch", null, null),
+    { offClock: false, source: "default", notePath: null },
+  );
+});
+
+test("taskEffectiveOffClock follows [root::] off a daily note", () => {
+  const env = clockEnvFor({
+    "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+    "abby.md": "---\ntype: [[area]]\nparent: [[love]]\n---\n",
+  }, "## Events\n- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup\n");
+  assert.deepEqual(
+    helpers.taskEffectiveOffClock(
+      DAILY_PATH,
+      "- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup",
+      env.metadataCache,
+      env.vault,
+    ),
+    { offClock: true, source: "note", notePath: "love.md" },
+  );
+  assert.deepEqual(
+    helpers.taskEffectiveOffClock(
+      DAILY_PATH,
+      "- [ ] #task Orphan [root:: missing] ^orphan",
+      env.metadataCache,
+      env.vault,
+    ),
+    { offClock: false, source: "default", notePath: null },
+  );
+});
+
+test("#on wins over #off and #off does not match #offclock", () => {
+  assert.equal(helpers.eventTaskLineIsOffClock("- [ ] #task Lunch #off"), true);
+  assert.equal(helpers.eventTaskLineIsOffClock("- [ ] #task Lunch #offclock"), true);
+  assert.equal(helpers.eventTaskLineIsOffClock("- [ ] #task Lunch #on #off"), false);
+  assert.equal(helpers.eventTaskLineIsOffClock("- [ ] #task Lunch #office"), false);
+  assert.equal(helpers.eventTaskLineIsOffClock("- [ ] #task Lunch #one"), false);
+  assert.equal(helpers.eventTaskClockTag("- [ ] #task Lunch #on #off").conflict, true);
 });

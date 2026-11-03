@@ -259,8 +259,7 @@ class BobLedgerToolsPlugin extends Plugin {
         this.renderReviewChip(parent, options),
       // Review journal writer (stats namespace v1) plus the Stats page
       // data path (v2 adds `fetch` and `bobPath`). `host()` is the v1
-      // sanitizer; appends one validated answer event to this host's
-      // monthly JSONL file. Additive: api stays v3.
+      // sanitizer; appends one validated answer event. Additive: api stays v3.
       stats: Object.freeze({
         version: 2,
         append: (event) => this.apiStatsAppend(event),
@@ -268,6 +267,7 @@ class BobLedgerToolsPlugin extends Plugin {
         fetch: (options) => this.apiStatsFetch(options),
         bobPath: () => this.apiStatsBobPath(),
       }),
+      pomodoroClock: this.pomodoroClockApi(),
       // Themes namespace v1: cached history, sync hue/history/
       // near-duplicate mirrors, journal writers. Unavailable on mobile.
       // Additive: api stays v3.

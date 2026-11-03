@@ -44,6 +44,20 @@ if (WidgetType && typeof WidgetType === "function") {
 }
 
 class BobLedgerToolsPomodoroHomeChipsMixin {
+  pomodoroClockApi() {
+    return Object.freeze({
+      version: 1,
+      // `{ offClock, source, notePath }` for a task line in `path`.
+      taskEffectiveOffClock: (path, line) =>
+        taskEffectiveOffClock(
+          path,
+          line,
+          this.app && this.app.metadataCache,
+          this.app && this.app.vault,
+        ),
+    });
+  }
+
   setupPomodoroHomeChips() {
     try {
       if (typeof this.pomodoroHomeChipsEnabled !== "boolean") {
@@ -186,6 +200,27 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
       return this.pomodoroHomeChipTaskLineForBlock(file.path, link.blockId);
     } catch (error) {
       return null;
+    }
+  }
+
+  // Resolve the effective clock for a counted task link. Starts keep the
+  // explicit-tag result when the note cache or target file is unavailable.
+  pomodoroClockResolveLinkClock(link, line) {
+    try {
+      const app = this.app || {};
+      const workspace = app.workspace;
+      const active = workspace && typeof workspace.getActiveFile === "function"
+        ? workspace.getActiveFile()
+        : null;
+      const sourcePath = active && typeof active.path === "string" ? active.path : "";
+      if (!sourcePath) return pomodoroClockTagOnlyResolution(line);
+      const file = link && link.pathPart
+        ? pomodoroHomeResolveFile(link.pathPart, sourcePath, sourcePath, app.metadataCache, app.vault)
+        : active;
+      if (!file || typeof file.path !== "string") return pomodoroClockTagOnlyResolution(line);
+      return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault);
+    } catch (error) {
+      return pomodoroClockTagOnlyResolution(line);
     }
   }
 

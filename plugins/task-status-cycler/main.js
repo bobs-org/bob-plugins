@@ -4900,13 +4900,14 @@ class TaskStatusCyclerEventTaskClockMixin {
   }
 }
 // ---- src/062-pomodoro-clock.js ----
-// Pomodoro session clock at close (plan:202611/off_clock_pomodoros.md, phase
-// plugins-off-clock-ledger). Mirrors bob-cli's counted-links rule and the
+// Pomodoro session clock at close (plan:202611/off_on_tags_and_offclock_areas.md,
+// phase plugins-clock). Mirrors bob-cli's counted-links rule and the
 // close half of `capture_pomodoro_close/linked_tasks.rs`: a Ctrl+Enter close
 // stamps the closed row `[off:: Nm]` iff the links the closed entry keeps
 // (counted Task Links, minus the `#`-deferred ones the close carries away) all
-// resolve to `#offclock` tasks, and `[t:: Nm]` otherwise. An unlinked session,
-// an unresolved link, or one on-clock link keeps the whole session worked.
+// resolve off-clock by tag or the ledger-tools root-note inheritance API, and
+// `[t:: Nm]` otherwise. An unlinked session, unresolved link, or on-clock link
+// keeps the whole session worked.
 //
 // bob-cli owns `tests/fixtures/pomodoro_clock/vectors.json`; the copy under
 // `plugins/task-status-cycler/scripts/fixtures/pomodoro_clock/` is
@@ -4916,7 +4917,8 @@ class TaskStatusCyclerEventTaskClockMixin {
 // bob-ledger-tools carries the same pure rule for `se<X>` starts; deployed
 // plugins must not import one another, so this is an intentional copy.
 
-const POMODORO_CLOCK_TAGS = Object.freeze(["#offclock", "#off-clock", "#untracked"]);
+const POMODORO_CLOCK_OFF_TAGS = Object.freeze(["#off", "#offclock", "#off-clock", "#untracked"]);
+const POMODORO_CLOCK_ON_TAGS = Object.freeze(["#on"]);
 const POMODORO_CLOCK_WORKED_FIELD_RE = /\[t::\s*([^\]]*?)\s*\]/i;
 const POMODORO_CLOCK_OFF_FIELD_RE = /\[off::\s*([^\]]*?)\s*\]/i;
 const POMODORO_CLOCK_FIELD_GLOBAL_RE = /\[(?:t|off)::\s*[^\]]*?\s*\]/gi;
@@ -4988,15 +4990,10 @@ function pomodoroClockMaskCodeAndLinks(line) {
   return out.join("");
 }
 
-// Mirror of bob's `line_has_off_clock_tag`: a standalone `#offclock`,
-// `#off-clock`, or `#untracked` token, case-insensitive, whitespace-bounded on
-// the left and followed by whitespace, end of line, or one of `])}:.,;!?`, not
-// inside a code span or Markdown link. A nested tag (`#offclock/x`) does not
-// qualify.
-function pomodoroClockLineHasOffClockTag(line) {
+function pomodoroClockTagRange(line, tags) {
   const masked = pomodoroClockMaskCodeAndLinks(line);
   const lower = pomodoroClockAsciiLower(masked);
-  for (const needle of POMODORO_CLOCK_TAGS) {
+  for (const needle of tags) {
     let search = 0;
     while (search <= lower.length) {
       const at = lower.indexOf(needle, search);
@@ -5011,6 +5008,22 @@ function pomodoroClockLineHasOffClockTag(line) {
     }
   }
   return false;
+}
+
+// Mirror of bob's standalone-token rule. `#on` wins a conflict with any off
+// spelling; it is also the tag-only fallback when ledger-tools is unavailable.
+function pomodoroClockLineTagResolution(line) {
+  const off = pomodoroClockTagRange(line, POMODORO_CLOCK_OFF_TAGS);
+  const on = pomodoroClockTagRange(line, POMODORO_CLOCK_ON_TAGS);
+  if (on) {
+    return { offClock: false, source: "on_tag", note: null, conflict: Boolean(off) };
+  }
+  if (off) return { offClock: true, source: "off_tag", note: null, conflict: false };
+  return { offClock: false, source: "default", note: null, conflict: false };
+}
+
+function pomodoroClockLineHasOffClockTag(line) {
+  return pomodoroClockLineTagResolution(line).offClock;
 }
 
 function pomodoroClockParseDuration(value) {
@@ -5193,22 +5206,42 @@ function pomodoroClockMixedMessage(name, facts, verdict) {
 }
 
 // Decide the clock of the Pomodoro at `entryLine` from its counted links.
-// `resolveLine(link)` returns the linked task's full line text, or null when
-// the link does not resolve to a task. Returns
+// `resolveLine(link)` returns a task line or `{ lineText, path }`, or null when
+// the link does not resolve. `resolveClock(path, line)` returns the shared
+// ledger-tools decision when available. Returns
 // { clock: "worked" | "off-clock", verdict, facts, message }.
-async function planPomodoroCloseClock(lines, entryLine, name, resolveLine) {
+async function planPomodoroCloseClock(lines, entryLine, name, resolveLine, resolveClock) {
   const links = collectPomodoroClockLinks(lines, entryLine);
   const facts = [];
   for (const link of links) {
     const fact = { token: link.token, offClock: null, text: null };
-    let lineText = null;
+    let resolved = null;
     try {
-      lineText = await resolveLine(link);
+      resolved = await resolveLine(link);
     } catch (error) {
-      lineText = null;
+      resolved = null;
     }
+    const lineText = typeof resolved === "string"
+      ? resolved
+      : resolved && typeof resolved.lineText === "string"
+        ? resolved.lineText
+        : null;
     if (typeof lineText === "string") {
-      fact.offClock = pomodoroClockLineHasOffClockTag(lineText);
+      const path = resolved && typeof resolved === "object" ? resolved.path : null;
+      let decision = null;
+      if (typeof resolveClock === "function" && typeof path === "string" && path) {
+        try {
+          decision = await resolveClock(path, lineText);
+        } catch (error) {
+          decision = null;
+        }
+      }
+      fact.resolution = typeof decision === "boolean"
+        ? { ...pomodoroClockLineTagResolution(lineText), offClock: decision }
+        : decision && typeof decision.offClock === "boolean"
+          ? decision
+          : pomodoroClockLineTagResolution(lineText);
+      fact.offClock = fact.resolution.offClock;
       fact.text = pomodoroClockTaskLabel(lineText);
     }
     facts.push(fact);
@@ -5233,7 +5266,34 @@ class TaskStatusCyclerPomodoroClockMixin {
       context,
       { taskStatusPredicate: (status) => Boolean(status) },
     );
-    return target && typeof target.lineText === "string" ? target.lineText : null;
+    if (!target || typeof target.lineText !== "string") return null;
+    const path = target.file && typeof target.file.path === "string"
+      ? target.file.path
+      : context && typeof context.activePath === "string"
+        ? context.activePath
+        : null;
+    return { lineText: target.lineText, path };
+  }
+
+  pomodoroClockTaskEffectiveOffClock(path, line) {
+    try {
+      const plugins = this.app && this.app.plugins;
+      const holder = plugins && plugins.plugins
+        ? plugins.plugins["bob-ledger-tools"]
+        : plugins && typeof plugins.getPlugin === "function"
+          ? plugins.getPlugin("bob-ledger-tools")
+          : null;
+      const clock = holder && holder.api && holder.api.pomodoroClock;
+      if (!clock || clock.version < 1 || typeof clock.taskEffectiveOffClock !== "function") {
+        return null;
+      }
+      const result = clock.taskEffectiveOffClock(path, line);
+      if (typeof result === "boolean") return result;
+      if (result && typeof result.offClock === "boolean") return result;
+      return null;
+    } catch (error) {
+      return null;
+    }
   }
 
   // The clock to stamp on the Pomodoro being closed, or null when the row is
@@ -5250,6 +5310,7 @@ class TaskStatusCyclerPomodoroClockMixin {
         entryLine,
         parts && parts.name ? parts.name : "",
         (link) => this.resolvePomodoroClockLinkLine(link, context),
+        (path, line) => this.pomodoroClockTaskEffectiveOffClock(path, line),
       );
     } catch (error) {
       return null;
@@ -26663,6 +26724,7 @@ module.exports.helpers = {
   planEventTaskClockRewrites,
   planPomodoroCloseClock,
   pomodoroClockLineHasOffClockTag,
+  pomodoroClockLineTagResolution,
   pomodoroClockSession,
   collectPomodoroClockLinks,
   setPomodoroLineClock,

@@ -1,8 +1,8 @@
 # Pomodoro clock vectors
 
 `vectors.json` was copied byte-for-byte from bob-cli commit
-`71a65dad49413ba3662098834f01fbecda70fdd9` (`feat(capture): stamp session clock
-from counted Task Links`), at `tests/fixtures/pomodoro_clock/vectors.json`.
+`beae4dc79a0593d14d7ce775d1e1702bbbe0e588` (`feat(pomodoro-clock): stamp the
+effective clock on capture writers`), at `tests/fixtures/pomodoro_clock/vectors.json`.
 bob-cli is the source of truth; its Rust test
 (`tests/cli/capture/pomodoro_clock.rs`) runs every case through
 `bob capture -f json`.

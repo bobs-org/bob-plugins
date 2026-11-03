@@ -10,8 +10,7 @@ const GCAL_EVENTS_REFRESH_MS = 60000;
 const GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES = null;
 const GCAL_EVENTS_STAMP_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const GCAL_EVENTS_OFF_CLOCK_TITLE = "Off-clock · on the calendar, off the clock";
-// `#offclock` is canonical; `#off-clock` and `#untracked` are permanent aliases.
-const GCAL_EVENTS_OFF_CLOCK_TAG_RE = /^#(?:offclock|off-clock|untracked)$/i;
+// Event Task clock marks read the shared spelling table in 035-meet-event-run.
 const GCAL_EVENTS_PALETTE = [
   "blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red",
 ];
@@ -261,7 +260,7 @@ function gcalEventsScanMarkdown(lines, options = {}) {
       const at = line.indexOf(badge);
       if (at >= 0) badges.push({ badge, start: at, end: at + badge.length });
     }
-    // `#offclock` (or an alias) marks an Event Task whose session is off the
+    // An explicit off-clock tag marks an Event Task whose session is off the
     // clock; only task rows carry it (context rows are stripped of the token
     // by sync).
     const offClockTag = isTask ? eventTaskOffClockTagRange(line) : null;
@@ -873,7 +872,7 @@ class BobLedgerToolsGcalEventsMixin {
     }
   }
 
-  // Reading view renders `#offclock` (or an alias) as a tag link. Mark it,
+  // Reading view renders an explicit off-clock tag as a tag link. Mark it,
   // fold its `#` into a hidden span, and dash the row's time pill. The note
   // is untouched.
   calendarEventPaintOffClockTag(row, timeEl) {
@@ -881,7 +880,7 @@ class BobLedgerToolsGcalEventsMixin {
       const tags = row.querySelectorAll ? row.querySelectorAll("a.tag") : [];
       for (const tag of tags || []) {
         const text = String(tag.textContent || "").trim();
-        if (!GCAL_EVENTS_OFF_CLOCK_TAG_RE.test(text)) continue;
+        if (!eventTaskLineIsOffClock(text)) continue;
         if (tag.classList) tag.classList.add("bob-calendar-event-off-clock");
         tag.setAttribute("data-off-clock", "true");
         tag.setAttribute("title", GCAL_EVENTS_OFF_CLOCK_TITLE);

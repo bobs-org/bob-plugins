@@ -91,6 +91,7 @@ module.exports.helpers = {
   planEventTaskClockRewrites,
   planPomodoroCloseClock,
   pomodoroClockLineHasOffClockTag,
+  pomodoroClockLineTagResolution,
   pomodoroClockSession,
   collectPomodoroClockLinks,
   setPomodoroLineClock,

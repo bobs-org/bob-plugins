@@ -56,13 +56,19 @@ function makePlugin(harness, editor, nowMinutes) {
   return plugin;
 }
 
-async function closeFirstTimedRow(vector, mutate = (day) => day) {
+async function closeFirstTimedRow(vector, mutate = (day) => day, taskEffectiveOffClock = null) {
   const day = mutate(vector.day);
   const lines = day.split("\n");
   const pomodoroLine = lines.findIndex((line) => /^- \[ \] \(\*\*\d{4}-\d{4}\*\*/.test(line));
   assert.notEqual(pomodoroLine, -1, `${vector.id}: no running row`);
   const [hours, minutes] = vector.now.slice(11, 16).split(":").map(Number);
   const harness = createInMemoryObsidianApp({ ...(vector.notes || {}), [DAILY_PATH]: day });
+  if (typeof taskEffectiveOffClock === "function") {
+    harness.app.plugins.plugins["bob-ledger-tools"].api.pomodoroClock = {
+      version: 1,
+      taskEffectiveOffClock,
+    };
+  }
   const editor = createTextEditor(day, { line: pomodoroLine, ch: 4 });
   const plugin = makePlugin(harness, editor, hours * 60 + minutes);
   notices.length = 0;
@@ -77,9 +83,9 @@ async function closeFirstTimedRow(vector, mutate = (day) => day) {
 const closedRow = (text) => text.split("\n").find((line) => /^- \[x\] \(/.test(line));
 
 for (const vector of fixture.cases) {
-  if (ELSEWHERE[vector.id]) {
+  if (ELSEWHERE[vector.id] || vector.token !== "x") {
     test(`shared vector (elsewhere): ${vector.id}`, () => {
-      assert.ok(ELSEWHERE[vector.id].length > 0);
+      assert.ok(ELSEWHERE[vector.id] || vector.token !== "x");
     });
     continue;
   }
@@ -107,7 +113,7 @@ for (const vector of fixture.cases) {
 test("every close vector is either mirrored here or listed as handled elsewhere", () => {
   const ids = fixture.cases.map((item) => item.id);
   for (const id of Object.keys(ELSEWHERE)) assert.ok(ids.includes(id), id);
-  const mirrored = fixture.cases.filter((item) => !ELSEWHERE[item.id]);
+  const mirrored = fixture.cases.filter((item) => item.token === "x" && !ELSEWHERE[item.id]);
   assert.deepEqual(
     mirrored.map((item) => item.id),
     ["close-defers-not-started-off-clock", "bare-row-restamped-at-close", "conflict-row-at-close"],
@@ -129,6 +135,48 @@ test("a worked row closes off the clock when every kept link is #offclock", asyn
     ]),
   });
   assert.equal(closedRow(result.value), "- [x] (**0800-0900** [off:: 60m]) — HOME");
+});
+
+const inheritedCloseVector = {
+  id: "inherited-close",
+  now: "2026-11-01 09:00:00",
+  notes: {
+    "love.md": "---\ntype: [[area]]\noffclock: true\n---\n- [*] #task Lunch ^lunch\n",
+  },
+  day: ledger([
+    "- [ ] (**0800-0900** [t:: 60m]) — LUNCH",
+    "  - [[love#^lunch]]",
+  ]),
+};
+
+test("a close uses ledger-tools' effective task clock API when available", async () => {
+  const calls = [];
+  const result = await closeFirstTimedRow(
+    inheritedCloseVector,
+    (day) => day,
+    (path, line) => {
+      calls.push([path, line]);
+      return path === "love.md"
+        ? { offClock: true, source: "note", notePath: path }
+        : { offClock: false, source: "default", notePath: null };
+    },
+  );
+  assert.equal(closedRow(result.value), "- [x] (**0800-0900** [off:: 60m]) — LUNCH");
+  assert.deepEqual(calls, [["love.md", "- [*] #task Lunch ^lunch"]]);
+});
+
+test("a close still accepts a boolean from the effective clock API", async () => {
+  const result = await closeFirstTimedRow(
+    inheritedCloseVector,
+    (day) => day,
+    (path) => path === "love.md",
+  );
+  assert.equal(closedRow(result.value), "- [x] (**0800-0900** [off:: 60m]) — LUNCH");
+});
+
+test("a close without the clock API keeps an untagged inherited task on the clock", async () => {
+  const result = await closeFirstTimedRow(inheritedCloseVector);
+  assert.equal(closedRow(result.value), "- [x] (**0800-0900** [t:: 60m]) — LUNCH");
 });
 
 test("an off-clock row closes back onto the clock when it also links a worked task", async () => {
@@ -250,6 +298,7 @@ test("counted links are the direct-child dedicated bullets: plain, struck, marke
 test("the off-clock tag follows bob's rules for every spelling", () => {
   const has = helpers.pomodoroClockLineHasOffClockTag;
   for (const line of [
+    "- [*] #task Lunch #off [root:: love]",
     "- [*] #task Lunch #untracked [root:: love]",
     "- [*] #task Lunch #OFFCLOCK.",
     "- [*] #task Lunch #Off-Clock)",
@@ -267,6 +316,8 @@ test("the off-clock tag follows bob's rules for every spelling", () => {
   ]) {
     assert.equal(has(line), false, line);
   }
+  assert.equal(has("- [*] #task Work #on #off [root:: love]"), false);
+  assert.equal(helpers.pomodoroClockLineTagResolution("- [*] #task Work #on #off").conflict, true);
 });
 
 test("setPomodoroLineClock moves the recorded minutes between keys like Rust set_ledger_clock", () => {

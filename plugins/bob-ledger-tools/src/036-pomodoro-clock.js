@@ -2,16 +2,99 @@
 // Shared contract: bob-cli's tests/fixtures/pomodoro_clock/vectors.json
 // (copied byte-for-byte under scripts/fixtures/). A session is off the clock
 // iff it keeps at least one Task Link and every kept link resolves to a task
-// whose own line carries a standalone `#offclock` tag (aliases `#off-clock`
-// and `#untracked`). An unlinked session, an unresolved link, or one on-clock
-// link keeps the whole session worked. Everything here reads lines and
-// returns facts, text, or messages; it never touches the editor.
+// whose effective clock is off. An unlinked session, an unresolved link, or
+// one on-clock link keeps the whole session worked. Everything here reads
+// lines and returns facts, text, or messages; it never touches the editor.
 
 // A dedicated Task Link bullet once its 🍅 markers are stripped: plain,
 // embedded, or wrapped in one `~~` pair, and nothing else on the line.
 const POMODORO_CLOCK_LINK_RE =
   /^([ \t]+)[-*+][ \t]+(~~[ \t]*)?(!?)(\[\[([^\]|#]*)#\^([A-Za-z0-9-]+)(?:\|[^\]]*)?\]\])([ \t]*~~)?[ \t]*$/;
 const POMODORO_CLOCK_TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[.\](?:[ \t]|$)/;
+
+function taskEffectiveClockResolution(path, line, metadataCache, vault) {
+  const sourcePath = String(path || "");
+  const text = String(line || "");
+  const tag = eventTaskClockTag(text);
+  if (tag.source !== "default") return tag;
+  const defaultResolution = { offClock: false, source: "default", note: null, conflict: false };
+  if (!sourcePath || !metadataCache || typeof metadataCache.getFileCache !== "function") {
+    return defaultResolution;
+  }
+
+  let startPath = sourcePath;
+  try {
+    const root = rootMarkModel(text, { sourcePath, metadataCache, vault });
+    if (root && root.state !== "repair" && typeof root.targetPath === "string" && root.targetPath) {
+      startPath = root.targetPath;
+    }
+  } catch (error) {
+    // An invalid or unresolved root starts at the task's residence note.
+  }
+
+  const first = pomodoroHomeResolveFile(startPath, sourcePath, sourcePath, metadataCache, vault);
+  if (!first || typeof first.path !== "string") return defaultResolution;
+  const visited = new Set();
+  let current = first;
+  for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
+    const currentPath = String(current.path || "");
+    const key = currentPath.toLowerCase();
+    if (!currentPath || visited.has(key)) break;
+    visited.add(key);
+    const { frontmatter } = pomodoroHomeReadFrontmatter(current, metadataCache, vault);
+    const raw = frontmatter.offclock;
+    const hasValue = Object.prototype.hasOwnProperty.call(frontmatter, "offclock") &&
+      raw !== undefined && raw !== null && !(typeof raw === "string" && raw.trim() === "");
+    if (hasValue) {
+      const kind = pomodoroHomeType(frontmatter);
+      if (kind === "area" || kind === "project") {
+        if (raw === true || (typeof raw === "string" && raw.trim().toLowerCase() === "true")) {
+          return { offClock: true, source: "note", note: currentPath, conflict: false };
+        }
+        if (raw === false || (typeof raw === "string" && raw.trim().toLowerCase() === "false")) {
+          return { offClock: false, source: "note", note: currentPath, conflict: false };
+        }
+        return { offClock: false, source: "invalid_note", note: currentPath, conflict: false };
+      }
+      // Defaults on other note kinds are ignored; keep walking parents.
+    }
+    const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
+    if (!parentTarget || pomodoroHomePathEqual(parentTarget, currentPath)) break;
+    current = pomodoroHomeResolveFile(parentTarget, currentPath, sourcePath, metadataCache, vault);
+  }
+  return defaultResolution;
+}
+
+// Public effective-clock API used by task-status-cycler. Returns
+// `{ offClock, source, notePath }`. Callers fall back to tag-only when this
+// API or the note metadata cache is unavailable.
+function taskEffectiveOffClock(path, line, metadataCache, vault) {
+  const resolution = taskEffectiveClockResolution(path, line, metadataCache, vault);
+  return {
+    offClock: resolution.offClock,
+    source: resolution.source,
+    notePath: resolution.note,
+  };
+}
+
+function pomodoroClockTagOnlyResolution(line) {
+  return eventTaskClockTag(line);
+}
+
+function pomodoroClockResolveLine(line, resolveClock, link) {
+  if (typeof resolveClock === "function") {
+    try {
+      const value = resolveClock(link, line);
+      if (typeof value === "boolean") {
+        return { ...pomodoroClockTagOnlyResolution(line), offClock: value };
+      }
+      if (value && typeof value.offClock === "boolean") return value;
+    } catch (error) {
+      // Fall back to explicit line tags when note metadata is unavailable.
+    }
+  }
+  return pomodoroClockTagOnlyResolution(line);
+}
 
 // The session's counted Task Links, in ledger order: direct-child bullets at
 // the first child indentation, plain, struck, 🍅-marked, or embedded. Deferred
@@ -78,16 +161,20 @@ function pomodoroClockTaskLabel(lineText) {
 // One fact per link. Same-note links read `lines` (Event Tasks first, then
 // any single task carrying the block id); other-note links go through
 // `resolveTask(link)`, which returns the task's full line text or null.
-function pomodoroClockLinkFacts(lines, links, resolveTask) {
+function pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock) {
   const rows = eventRunEventRows(lines);
   return links.map((link) => {
     const fact = { token: link.token, offClock: null, text: null };
     if (link.pathPart === "") {
       const event = eventRunById(rows, link.blockId);
-      if (event) return { ...fact, offClock: event.offClock, text: event.title };
+      if (event) {
+        const resolution = pomodoroClockResolveLine(lines[event.lineIndex], resolveClock, link);
+        return { ...fact, ...resolution, resolution, text: event.title };
+      }
       const line = pomodoroClockTaskLineText(lines, link.blockId);
       if (line === null) return fact;
-      return { ...fact, offClock: eventTaskLineIsOffClock(line), text: pomodoroClockTaskLabel(line) };
+      const resolution = pomodoroClockResolveLine(line, resolveClock, link);
+      return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(line) };
     }
     let line = null;
     try {
@@ -95,8 +182,10 @@ function pomodoroClockLinkFacts(lines, links, resolveTask) {
     } catch (error) {
       line = null;
     }
-    if (typeof line !== "string" || !POMODORO_CLOCK_TASK_LINE_RE.test(line)) return fact;
-    return { ...fact, offClock: eventTaskLineIsOffClock(line), text: pomodoroClockTaskLabel(line) };
+    const lineText = line && typeof line === "object" ? line.lineText : line;
+    if (typeof lineText !== "string" || !POMODORO_CLOCK_TASK_LINE_RE.test(lineText)) return fact;
+    const resolution = pomodoroClockResolveLine(lineText, resolveClock, link);
+    return { ...fact, ...resolution, resolution, text: pomodoroClockTaskLabel(lineText) };
   });
 }
 
@@ -122,16 +211,43 @@ function pomodoroClockMixedNotice(name, facts, verdict) {
   return { code: "pomodoro_clock_mixed", message: `◌ ${label} stays on the clock: ${detail}` };
 }
 
+function pomodoroClockResolutionNotices(facts) {
+  const notices = [];
+  const seen = new Set();
+  for (const fact of Array.isArray(facts) ? facts : []) {
+    const resolution = fact && fact.resolution;
+    const code = resolution && resolution.conflict
+      ? "clock_tag_conflict"
+      : resolution && resolution.source === "invalid_note"
+        ? "note_offclock_invalid"
+        : null;
+    if (!code) continue;
+    const key = `${code}:${fact.token || fact.text || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const label = String(fact.text || fact.token || "a task").trim();
+    const message = code === "clock_tag_conflict"
+      ? `◌ ${label} has both #on and #off; #on wins`
+      : `◌ ${resolution.note || "a note"} has an invalid offclock: value; that task stays on the clock`;
+    notices.push({ code, message });
+  }
+  return notices;
+}
+
 // The clock of the session headlined at `entryIndex` from its counted lineup.
 // Returns { offClock, verdict, facts, notice }.
-function pomodoroLineupClock(lines, entryIndex, resolveTask, name = null) {
+function pomodoroLineupClock(lines, entryIndex, resolveTask, name = null, resolveClock = null) {
   const links = pomodoroClockCountedLinks(lines, entryIndex);
-  const facts = pomodoroClockLinkFacts(lines, links, resolveTask);
+  const facts = pomodoroClockLinkFacts(lines, links, resolveTask, resolveClock);
   const verdict = clockVerdict(facts);
+  const notice = pomodoroClockMixedNotice(name, facts, verdict);
+  const notices = pomodoroClockResolutionNotices(facts);
+  if (notice) notices.push(notice);
   return {
     offClock: verdict.kind === "off-clock",
     verdict,
     facts,
-    notice: pomodoroClockMixedNotice(name, facts, verdict),
+    notice,
+    notices,
   };
 }

@@ -1,5 +1,5 @@
 // --- Calendar-aware Pomodoro starts: pure mirror of bob capture -----------
-// The MEET event run, the `#offclock` clock rule, `[buffer::]` occupied
+// The MEET event run, the `#off` clock rule, `[buffer::]` occupied
 // spans, and the run-past-event notice. Shared contracts: bob-cli's
 // tests/fixtures/meet_event_run/vectors.json,
 // tests/fixtures/event_buffer/vectors.json, and
@@ -241,19 +241,19 @@ function eventRunMaskCodeAndLinks(line) {
   return out.join("");
 }
 
-// `#offclock` is canonical; `#off-clock` and `#untracked` are permanent
-// aliases (mirror of bob's `line_has_off_clock_tag`).
-const OFF_CLOCK_TAGS = Object.freeze(["#offclock", "#off-clock", "#untracked"]);
+// One spelling table per plugin: `#off` is canonical; the other spellings
+// remain readable aliases. `#on` takes precedence when both are present.
+const OFF_CLOCK_TAGS = Object.freeze(["#off", "#offclock", "#off-clock", "#untracked"]);
+const ON_CLOCK_TAGS = Object.freeze(["#on"]);
 
-// Offsets of the first standalone off-clock tag token (any spelling,
-// case-insensitive, whitespace-bounded on the left and followed by whitespace,
-// end of line, or one of `])}:.,;!?`, not inside a code span or Markdown
-// link), or null. A nested tag such as `#offclock/x` does not qualify.
-function eventTaskOffClockTagRange(line) {
+// Offsets of the first standalone clock tag, case-insensitive, whitespace-
+// bounded on the left and followed by whitespace, end of line, or one of
+// `])}:.,;!?`, not inside code spans or Markdown links.
+function eventTaskClockTagRange(line, tags) {
   const masked = eventRunMaskCodeAndLinks(line);
   const lower = eventRunAsciiLower(masked);
   let best = null;
-  for (const needle of OFF_CLOCK_TAGS) {
+  for (const needle of tags) {
     let search = 0;
     while (search <= lower.length) {
       const at = lower.indexOf(needle, search);
@@ -273,8 +273,46 @@ function eventTaskOffClockTagRange(line) {
   return best;
 }
 
+function eventTaskOffClockTagRange(line) {
+  return eventTaskClockTagRange(line, OFF_CLOCK_TAGS);
+}
+
+function eventTaskClockTag(line) {
+  const off = eventTaskOffClockTagRange(line);
+  const on = eventTaskClockTagRange(line, ON_CLOCK_TAGS);
+  if (on) {
+    return {
+      offClock: false,
+      source: "on_tag",
+      note: null,
+      conflict: Boolean(off),
+    };
+  }
+  if (off) {
+    return { offClock: true, source: "off_tag", note: null, conflict: false };
+  }
+  return { offClock: false, source: "default", note: null, conflict: false };
+}
+
 function eventTaskLineIsOffClock(line) {
-  return eventTaskOffClockTagRange(line) !== null;
+  return eventTaskClockTag(line).offClock;
+}
+
+function eventRunResolveClock(resolveClock, link, line) {
+  if (typeof resolveClock === "function") {
+    try {
+      const resolution = resolveClock(link, line);
+      if (typeof resolution === "boolean") {
+        return { ...eventTaskClockTag(line), offClock: resolution };
+      }
+      if (resolution && typeof resolution.offClock === "boolean") {
+        return resolution;
+      }
+    } catch (error) {
+      // The tag-only fallback below is safe when note metadata is unavailable.
+    }
+  }
+  return eventTaskClockTag(line);
 }
 
 function eventRunStripTrailingField(title) {
@@ -327,7 +365,7 @@ function eventRunCleanTitle(after) {
 
 // Every Event Task row in the daily note's `## Events` section. Context
 // rows (no checkbox) and all-day rows are not Event Tasks.
-function eventRunEventRows(lines) {
+function eventRunEventRows(lines, resolveClock = null) {
   const source = Array.isArray(lines) ? lines : [];
   const section = gcalEventsFindSection(source, "Events");
   if (!section) return [];
@@ -356,6 +394,12 @@ function eventRunEventRows(lines) {
     const bufferField = eventRunBufferFieldRange(line);
     const buffer = bufferField && bufferField.parsed ? bufferField.parsed : EVENT_BUFFER_EMPTY;
     const occupied = eventRunBufferedSpan(startMin, endOnTimeline, buffer);
+    const blockId = idMatch ? idMatch[1] : null;
+    const clockResolution = eventRunResolveClock(
+      resolveClock,
+      { pathPart: "", blockId, token: blockId ? `[[#^${blockId}]]` : "Event Task" },
+      line,
+    );
     rows.push({
       lineIndex: index,
       status: match[1],
@@ -370,8 +414,9 @@ function eventRunEventRows(lines) {
       bufferedStartMin: occupied.startMin,
       bufferedEndOnTimeline: occupied.endOnTimeline,
       bufferedTimeRange: occupied.timeRange,
-      offClock: eventTaskLineIsOffClock(line),
-      blockId: idMatch ? idMatch[1] : null,
+      offClock: clockResolution.offClock,
+      clockResolution,
+      blockId,
       title: eventRunCleanTitle(line.slice(match[0].length)),
       timeRange: `${match[2]}-${match[3]}`,
     });
@@ -707,9 +752,18 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
     const name = eventRunLineName(written);
     const suffix = expansion.replacement.slice(expansion.range.length);
     if (eventRunIsMeetName(name)) {
-      const run = computeMeetEventRun(lines, lineIndex, nowMinutes);
+      const eventRows = eventRunEventRows(lines, options.resolveClock);
+      const run = computeMeetEventRun(lines, lineIndex, nowMinutes, eventRows);
       if (run) {
         result.offClock = run.offClock;
+        result.notices.push(...pomodoroClockResolutionNotices(
+          run.events.map(({ event }) => ({
+            resolution: event.clockResolution,
+            text: event.title,
+            token: event.blockId ? `[[#^${event.blockId}]]` : "Event Task",
+          })),
+          eventRunLineName(lineText),
+        ));
         let startMinutes = base.startMinutes;
         let endMinutes = base.endMinutes;
         let durationMinutes = base.durationMinutes;
@@ -755,10 +809,16 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
         result.notices.push(eventRunConflictNotice(name, span, crossed, fit));
       }
     }
-    // Which clock the lineup puts this session on: all #offclock links write
+    // Which clock the lineup puts this session on: all effective off-clock links write
     // [off::]; an unlinked, mixed, or unresolved lineup stays worked.
-    const lineup = pomodoroLineupClock(lines, lineIndex, options.resolveTask, name);
-    if (lineup.notice) result.notices.push(lineup.notice);
+    const lineup = pomodoroLineupClock(
+      lines,
+      lineIndex,
+      options.resolveTask,
+      name,
+      options.resolveClock,
+    );
+    result.notices.push(...lineup.notices);
     if (lineup.offClock) {
       result.offClock = true;
       const range = formatTimeRange(base.startMinutes, base.endMinutes, "compact", ` ${formatOffClockField(base.durationMinutes)}`);

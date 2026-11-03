@@ -43,11 +43,56 @@ const fixture = JSON.parse(
   ),
 );
 
+const DAILY_PATH = "2026/20261101.md";
+
 function parseNow(text) {
   const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(text);
   assert.ok(match, `bad clock ${text}`);
   const [, year, month, day, hour, minute, second] = match.map(Number);
   return new Date(year, month - 1, day, hour, minute, second);
+}
+
+function vectorFrontmatter(source) {
+  const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(String(source || ""));
+  if (!match) return {};
+  const frontmatter = {};
+  for (const line of match[1].split("\n")) {
+    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!field) continue;
+    let value = field[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    } else if (value.toLowerCase() === "true") {
+      value = true;
+    } else if (value.toLowerCase() === "false") {
+      value = false;
+    }
+    frontmatter[field[1]] = value;
+  }
+  return frontmatter;
+}
+
+function clockResolverFor(vector) {
+  const sources = new Map(Object.entries(vector.notes || {}));
+  sources.set(DAILY_PATH, vector.day);
+  const files = new Map([...sources.keys()].map((path) => [path, { path }]));
+  const resolve = (target) => {
+    const name = String(target || "").replace(/\.md$/i, "");
+    const exact = `${name}.md`;
+    if (files.has(exact)) return files.get(exact);
+    const basename = name.split("/").pop().toLowerCase();
+    return [...files.values()].find((file) => file.path.split("/").pop().replace(/\.md$/i, "").toLowerCase() === basename) || null;
+  };
+  const vault = { getAbstractFileByPath: (path) => files.get(path) || null };
+  const metadataCache = {
+    getFileCache: (file) => ({ frontmatter: vectorFrontmatter(sources.get(file.path)) }),
+    getFirstLinkpathDest: (target) => resolve(target),
+  };
+  return (link, line) => {
+    const file = link && link.pathPart ? resolve(link.pathPart) : files.get(DAILY_PATH);
+    if (!file) return null;
+    return helpers.taskEffectiveClockResolution(file.path, line, metadataCache, vault);
+  };
 }
 
 // Vectors whose gesture has no Obsidian counterpart, with the reason.
@@ -86,7 +131,9 @@ function applyGesture(vector) {
   const now = parseNow(vector.now);
   const expansion = helpers.findExpansion(typed, cursorCh, now);
   assert.ok(expansion, `${vector.id}: no expansion`);
-  const adjusted = helpers.applyEventRunToExpansion(document, target, expansion, now);
+  const adjusted = helpers.applyEventRunToExpansion(document, target, expansion, now, {
+    resolveClock: clockResolverFor(vector),
+  });
   const line =
     typed.slice(0, adjusted.expansion.fromCh) +
     adjusted.expansion.replacement +
@@ -141,6 +188,8 @@ test("off-clock tag detection mirrors bob's Rust rules for every spelling", () =
     end: 41,
   });
   assert.deepEqual(tag("- [*] #task **1200-1300** Lunch #Off-Clock)"), { start: 32, end: 42 });
+  assert.deepEqual(tag("- [*] #task **1200-1300** Lunch #off"), { start: 32, end: 36 });
+  assert.equal(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #on #off"), false);
   assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #UNTRACKED."));
   assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** Lunch #OFFCLOCK."));
   assert.ok(helpers.eventTaskLineIsOffClock("- [*] #task **1200-1300** #offclock Lunch"));

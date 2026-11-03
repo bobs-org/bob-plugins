@@ -59,9 +59,13 @@ entry so planned work stays next.
 
 On a timed Pomodoro close the closed row is stamped with the clock its links
 put it on, by the same counted-links rule `bob capture` uses (pinned by bob-cli's
-shared `pomodoro_clock` vectors): the closed row gets `[off:: Nm]` iff the Task
-Links the closed entry keeps are all `#offclock` (aliases `#off-clock` and
-`#untracked`), and `[t:: Nm]` otherwise. The links it keeps are the direct-child
+shared `pomodoro_clock` vectors): the closed row gets `[off:: Nm]` iff every
+Task Link it keeps resolves off-clock — `#off` (deprecated aliases `#offclock`,
+`#off-clock`, `#untracked`), or an inherited area/project `offclock: true` on
+the task's root walk, with `#on` and `offclock: false` as overrides — and
+`[t:: Nm]` otherwise. The close reads that decision through ledger-tools
+`api.pomodoroClock` v1 when the plugin is present, and falls back to the
+line's tags when it is not. The links it keeps are the direct-child
 Task Link bullets that remain once the close has deferred and carried the
 `#`-marked ones, after the Event Task clock rewrites below; a worked link that is
 also carried forward still counts, and struck, embedded, and 🍅-marked links

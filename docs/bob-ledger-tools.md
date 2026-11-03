@@ -94,9 +94,18 @@ bob-cli's shared `pomodoro_clock` and `meet_event_run` vectors, `se<X>` stamps
 the key by the same counted-links rule `bob capture` uses:
 
 - A session is **off the clock** iff it keeps at least one Task Link and every
-  link resolves to a task whose own line carries a standalone `#offclock` tag
-  (permanent aliases `#off-clock` and `#untracked`, case-insensitive; a nested
-  `#offclock/x`, a code span, or a Markdown link is not a tag).
+  link resolves off-clock. First match wins: a standalone `#on` (even beside an
+  off spelling) keeps the task on the clock; `#off` or a deprecated alias
+  (`#offclock`, `#off-clock`, `#untracked`) is off the clock; otherwise the
+  nearest area or project `offclock: true|false` on the task's root walk
+  decides (a child `false` ends inheritance; a deeper `true` turns it back on;
+  an invalid nearer value stays on the clock). Nothing set is on the clock.
+  Tokens are case-insensitive and standalone: a nested `#off/x`, a code span,
+  or a Markdown link is not a tag. Writers never stamp an inherited `#off`
+  onto the task line. `se<X>` falls back to the line's tags when the note
+  cache is unavailable. Other plugins read the same decision through
+  `api.pomodoroClock` v1 (`taskEffectiveOffClock(path, line)` →
+  `{ offClock, source, notePath }`).
 - An unlinked session, an unresolved link, or a single on-clock link keeps the
   **whole session worked**; a mixed session is never split.
 - Counted links are the direct-child Task Link bullets (plain, struck,
@@ -476,16 +485,16 @@ The raw `[buffer::]` field is hidden on inactive lines and Dataview's
 refreshes once a minute while today's note is active. Painting reads the note
 and never changes it.
 
-An Event Task carrying a standalone `#offclock` tag (aliases `#off-clock` and
-`#untracked`, case-insensitive; sync writes the canonical spelling for a Google
-event tagged with any of them, and hand-written rows may carry it too) is *off
-the clock*: in Live Preview its tag becomes a single chip that shows the tag
-name without `#` (a `timer-off` icon in muted ink with a dashed outline,
-tooltip "Off-clock · on the calendar, off the clock"), and the raw `#offclock`
-returns while the cursor is on the line; in Reading view its tag paints as a
-quiet mark with the same icon, outline, and tooltip. Its time pill switches to
-a dashed outline in both views. A tag inside a code span or
-Markdown link, or a nested `#offclock/x`, is not a tag. The session that links
+An Event Task carrying a standalone `#off` tag (deprecated aliases `#offclock`,
+`#off-clock`, and `#untracked`, case-insensitive; sync writes the canonical
+`#off` spelling for a Google event tagged with any of them, and hand-written
+rows may carry it too) is *off the clock*: in Live Preview its tag becomes a
+single chip that shows the tag name without `#` (a `timer-off` icon in muted
+ink with a dashed outline, tooltip "Off-clock · on the calendar, off the
+clock"), and the raw tag returns while the cursor is on the line; in Reading
+view its tag paints as a quiet mark with the same icon, outline, and tooltip.
+Its time pill switches to a dashed outline in both views. A tag inside a code
+span or Markdown link, or a nested `#off/x`, is not a tag. The session that links
 such an event is written with `[off:: Nm]` instead of `[t::]`, so its Pomodoro
 home chip is dashed too, with its minutes, and its tooltip reads `love · 60m off
 the clock`. In Reading view the chip is dashed only when the rendered row still

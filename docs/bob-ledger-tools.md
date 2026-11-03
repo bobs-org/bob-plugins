@@ -494,12 +494,29 @@ ink with a dashed outline, tooltip "Off-clock · on the calendar, off the
 clock"), and the raw tag returns while the cursor is on the line; in Reading
 view its tag paints as a quiet mark with the same icon, outline, and tooltip.
 Its time pill switches to a dashed outline in both views. A tag inside a code
-span or Markdown link, or a nested `#off/x`, is not a tag. The session that links
-such an event is written with `[off:: Nm]` instead of `[t::]`, so its Pomodoro
-home chip is dashed too, with its minutes, and its tooltip reads `love · 60m off
-the clock`. In Reading view the chip is dashed only when the rendered row still
-shows an explicit `[off::]`, so a field the rendering dropped never dashes a
-worked session.
+span or Markdown link, or a nested `#off/x`, is not a tag.
+
+Untagged Event Tasks that resolve off-clock through `taskEffectiveOffClock`
+(an area or project `offclock: true` on the root walk) get the same dashed
+time pill in both views, with tooltip `Off-clock · from love` (the deciding
+note's stem). Sync never writes an inherited `#off`, so there is no tag chip.
+A standalone `#on` keeps the solid pill and a neutral tooltip
+`On the clock (override)` in both views, even under an off-clock note; `#on`
+still wins when an off spelling is also on the line, and the off-clock chip
+stays on that explicit tag.
+
+The session that links such an event is written with `[off:: Nm]` instead of
+`[t::]`, so its Pomodoro home chip is dashed too, with its minutes, and its
+tooltip reads `love · 60m off the clock`. In Reading view the chip is dashed
+only when the rendered row still shows an explicit `[off::]`, so a field the
+rendering dropped never dashes a worked session.
+
+After a successful daily auto-sync, a non-empty additive `deprecations[]` in
+the JSON report shows at most one Notice per day, for example
+`3 calendar events still use #offclock · run bob gcal list`. An omitted
+`deprecations` field is treated as empty. Setup and writer-host errors stay in
+the console; a runtime sync failure still shows at most one Notice per day of
+its own.
 
 `Ctrl+9` reuses an already open tab showing today's daily note in any window
 before using the current tab or opening a new one, including a background tab

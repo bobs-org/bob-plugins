@@ -11,7 +11,7 @@ function gcalEventsTimeAttributes(row, hue) {
   if (row.buffer && row.buffer.beforeMin) attributes["data-buffer-before"] = String(row.buffer.beforeMin);
   if (row.buffer && row.buffer.afterMin) attributes["data-buffer-after"] = String(row.buffer.afterMin);
   if (row.bufferPhase) attributes["data-buffer-phase"] = row.bufferPhase;
-  const tooltip = row.buffer
+  const bufferTooltip = row.buffer
     ? eventRunBufferTooltip(
       row.buffer,
       eventRunBufferedSpan(
@@ -23,6 +23,8 @@ function gcalEventsTimeAttributes(row, hue) {
       ),
     )
     : "";
+  const clockTooltip = gcalEventsClockTooltip(row);
+  const tooltip = [bufferTooltip, clockTooltip].filter(Boolean).join(" \u00b7 ");
   if (tooltip) attributes.title = tooltip;
   return attributes;
 }
@@ -162,6 +164,8 @@ function calendarEventApplyTimeAttributes(timeEl, row, hue) {
   }
   if (!attributes["data-theme-hue"]) timeEl.removeAttribute("data-theme-hue");
   if (!attributes["data-buffer-phase"]) timeEl.removeAttribute("data-buffer-phase");
+  if (!attributes["data-off-clock"]) timeEl.removeAttribute("data-off-clock");
+  if (!attributes.title) timeEl.removeAttribute("title");
 }
 
 function calendarEventPaintBufferField(row) {

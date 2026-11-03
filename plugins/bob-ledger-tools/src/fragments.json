@@ -137,6 +137,7 @@
   "290-plugin-today-and-location.js",
   "291-plugin-gcal-events.js",
   "291b-plugin-gcal-event-buffers.js",
+  "291c-plugin-gcal-event-clock.js",
   "292-keep-inbox-model.js",
   "292a-keep-inbox-tree.js",
   "293-keep-inbox-render.js",

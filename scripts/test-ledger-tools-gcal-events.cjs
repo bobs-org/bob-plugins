@@ -109,6 +109,15 @@ const {
   buildCalendarEventOffClockChip,
   CalendarEventOffClockChipWidget,
   GCAL_EVENTS_OFF_CLOCK_TITLE,
+  GCAL_EVENTS_ON_CLOCK_TITLE,
+  gcalEventsClockTooltip,
+  gcalEventsFromNoteTitle,
+  gcalEventsEnrichScannedClocks,
+  gcalEventsPaintClockMarks,
+  gcalEventsDecodeSync,
+  gcalEventsDecodeDeprecations,
+  gcalEventsDeprecationNoticeText,
+  gcalEventsShowDeprecationNotice,
   gcalEventsWaitForPomodoros,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   todayDailyPath,
@@ -574,4 +583,294 @@ test("the off-clock chip DOM carries the class, marker, and title", () => {
   assert.equal(attrs.get("data-off-clock"), "true");
   assert.equal(attrs.get("title"), GCAL_EVENTS_OFF_CLOCK_TITLE);
   assert.equal(GCAL_EVENTS_OFF_CLOCK_TITLE, "Off-clock · on the calendar, off the clock");
+});
+
+function clockEnvFor(notes) {
+  const sources = new Map(Object.entries(notes || {}));
+  const files = new Map([...sources.keys()].map((path) => [path, { path }]));
+  const resolve = (target) => {
+    const name = String(target || "").replace(/\.md$/i, "");
+    const exact = `${name}.md`;
+    if (files.has(exact)) return files.get(exact);
+    const basename = name.split("/").pop().toLowerCase();
+    return [...files.values()].find((file) =>
+      file.path.split("/").pop().replace(/\.md$/i, "").toLowerCase() === basename
+    ) || null;
+  };
+  const vault = { getAbstractFileByPath: (path) => files.get(path) || null };
+  const metadataCache = {
+    getFileCache: (file) => {
+      const source = sources.get(file.path) || "";
+      const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(source);
+      const frontmatter = {};
+      if (match) {
+        for (const line of match[1].split("\n")) {
+          const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+          if (!field) continue;
+          let value = field[2].trim();
+          if (
+            (value.startsWith('"') && value.endsWith('"'))
+            || (value.startsWith("'") && value.endsWith("'"))
+          ) {
+            value = value.slice(1, -1);
+          } else if (value.toLowerCase() === "true") {
+            value = true;
+          } else if (value.toLowerCase() === "false") {
+            value = false;
+          }
+          frontmatter[field[1]] = value;
+        }
+      }
+      return { frontmatter };
+    },
+    getFirstLinkpathDest: (target) => resolve(target),
+  };
+  return { vault, metadataCache };
+}
+
+function loveClockEnv() {
+  return clockEnvFor({
+    "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+    "abby.md": "---\ntype: [[area]]\nparent: [[love]]\n---\n",
+  });
+}
+
+test("scan treats #on as on-clock even beside an off spelling", () => {
+  const scan = gcalEventsScanMarkdown([
+    "## Events",
+    "- [*] #task **1200-1300** Planning #on #off [root:: love] ^plan",
+    "- [*] #task **1400-1430** Lunch #off ^lunch",
+    "## Pomodoros",
+  ]);
+  assert.equal(scan.rows[0].offClock, false);
+  assert.equal(scan.rows[0].clockSource, "on_tag");
+  assert.ok(scan.rows[0].offClockTag);
+  assert.equal(scan.rows[1].offClock, true);
+  assert.equal(scan.rows[1].clockSource, "off_tag");
+});
+
+test("inherited off-clock Event Tasks dash the pill with a from-note tooltip", () => {
+  const env = loveClockEnv();
+  const daily = todayDailyPath(new Date());
+  const lines = [
+    "## Events",
+    "- [*] #task **1200-1300** Lunch [root:: abby] ^lunch",
+    "- [*] #task **1400-1430** Planning #on [root:: love] ^plan",
+    "- [*] #task **1500-1530** Gym #off ^gym",
+    "## Pomodoros",
+  ];
+  const scanned = gcalEventsScanMarkdown(lines);
+  gcalEventsEnrichScannedClocks(scanned, lines, {
+    path: daily,
+    metadataCache: env.metadataCache,
+    vault: env.vault,
+  });
+  assert.equal(scanned.rows[0].offClock, true);
+  assert.equal(scanned.rows[0].clockSource, "note");
+  assert.equal(scanned.rows[0].clockNote, "love.md");
+  assert.equal(scanned.rows[0].offClockTag, null);
+  assert.equal(gcalEventsClockTooltip(scanned.rows[0]), "Off-clock · from love");
+  assert.equal(gcalEventsFromNoteTitle("love.md"), "Off-clock · from love");
+  const inherited = gcalEventsTimeAttributes(scanned.rows[0]);
+  assert.equal(inherited["data-off-clock"], "true");
+  assert.equal(inherited.title, "Off-clock · from love");
+
+  assert.equal(scanned.rows[1].offClock, false);
+  assert.equal(scanned.rows[1].clockSource, "on_tag");
+  assert.equal(gcalEventsClockTooltip(scanned.rows[1]), GCAL_EVENTS_ON_CLOCK_TITLE);
+  const onClock = gcalEventsTimeAttributes(scanned.rows[1]);
+  assert.equal(onClock["data-off-clock"], undefined);
+  assert.equal(onClock.title, GCAL_EVENTS_ON_CLOCK_TITLE);
+
+  assert.equal(scanned.rows[2].offClock, true);
+  assert.equal(scanned.rows[2].clockSource, "off_tag");
+  assert.equal(gcalEventsClockTooltip(scanned.rows[2]), "");
+  assert.equal(gcalEventsTimeAttributes(scanned.rows[2])["data-off-clock"], "true");
+});
+
+test("Live Preview dashes inherited rows and keeps #off chips", () => {
+  const env = loveClockEnv();
+  const lines = [
+    "## Events",
+    "- [*] #task **1200-1300** Lunch [root:: abby] ^lunch",
+    "- [*] #task **1400-1430** Gym #offclock ^gym",
+    "- [*] #task **1500-1530** Planning #on [root:: love] ^plan",
+    "## Pomodoros",
+  ];
+  const plugin = gcalPlugin();
+  plugin.app = { ...plugin.app, metadataCache: env.metadataCache, vault: env.vault };
+  const built = plugin.buildCalendarEventDecorations(gcalMakeView({ lines }));
+  const adds = built.adds;
+  const lunch = gcalLineOffsets(lines, 1);
+  const gym = gcalLineOffsets(lines, 2);
+  const planning = gcalLineOffsets(lines, 3);
+  const lunchTime = adds.find((add) =>
+    add.value && add.value.class === "bob-calendar-event-time" && add.from >= lunch && add.from < gym,
+  );
+  const gymTime = adds.find((add) =>
+    add.value && add.value.class === "bob-calendar-event-time" && add.from >= gym && add.from < planning,
+  );
+  const planTime = adds.find((add) =>
+    add.value && add.value.class === "bob-calendar-event-time" && add.from >= planning,
+  );
+  assert.ok(lunchTime);
+  assert.equal(lunchTime.value.attributes["data-off-clock"], "true");
+  assert.equal(lunchTime.value.attributes.title, "Off-clock · from love");
+  const lunchChip = adds.filter((add) =>
+    add.value && add.value.widget instanceof StubWidgetType && add.from >= lunch && add.from < gym,
+  );
+  assert.equal(lunchChip.length, 0);
+
+  assert.ok(gymTime);
+  assert.equal(gymTime.value.attributes["data-off-clock"], "true");
+  const gymChip = adds.filter((add) =>
+    add.value && add.value.widget instanceof StubWidgetType && add.from >= gym && add.from < planning,
+  );
+  assert.equal(gymChip.length, 1);
+  assert.equal(gymChip[0].value.widget.text, "offclock");
+
+  assert.ok(planTime);
+  assert.equal(planTime.value.attributes["data-off-clock"], undefined);
+  assert.equal(planTime.value.attributes.title, GCAL_EVENTS_ON_CLOCK_TITLE);
+});
+
+test("Reading view dashes inherited pills and tooltips #on overrides", () => {
+  const attrs = () => {
+    const map = new Map();
+    return {
+      setAttribute: (name, value) => map.set(name, String(value)),
+      getAttribute: (name) => (map.has(name) ? map.get(name) : null),
+      _map: map,
+    };
+  };
+  const inheritedTime = { ...attrs() };
+  assert.equal(
+    gcalEventsPaintClockMarks({ querySelectorAll: () => [] }, inheritedTime, {
+      offClock: true,
+      clockSource: "note",
+      clockNote: "love.md",
+    }),
+    false,
+  );
+  assert.equal(inheritedTime.getAttribute("data-off-clock"), "true");
+  assert.equal(inheritedTime.getAttribute("title"), "Off-clock · from love");
+
+  const onMap = new Map();
+  const onTag = {
+    textContent: "#on",
+    classList: { add: () => {} },
+    setAttribute: (name, value) => onMap.set(name, String(value)),
+    getAttribute: (name) => (onMap.has(name) ? onMap.get(name) : null),
+  };
+  const onTime = { ...attrs() };
+  gcalEventsPaintClockMarks({ querySelectorAll: () => [onTag] }, onTime, {
+    offClock: false,
+    clockSource: "on_tag",
+    clockNote: null,
+  });
+  assert.equal(onTime.getAttribute("data-off-clock"), null);
+  assert.equal(onTime.getAttribute("title"), GCAL_EVENTS_ON_CLOCK_TITLE);
+  assert.equal(onMap.get("title"), GCAL_EVENTS_ON_CLOCK_TITLE);
+});
+
+test("gcalEventsDecodeSync treats missing deprecations as empty", () => {
+  const ok = gcalEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    status: "unchanged",
+  }));
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.report.deprecations, []);
+  assert.deepEqual(gcalEventsDecodeDeprecations(undefined), []);
+  assert.deepEqual(gcalEventsDecodeDeprecations(null), []);
+  assert.deepEqual(gcalEventsDecodeDeprecations("nope"), []);
+});
+
+test("gcalEventsDecodeSync keeps additive deprecations[]", () => {
+  const records = [
+    {
+      calendar_id: "primary",
+      event_id: "e1",
+      title: "Swings!",
+      token: "#offclock",
+      where: "title",
+      replacement: "#off",
+      drop_suggested: true,
+      on_wins: false,
+    },
+    {
+      calendar_id: "primary",
+      event_id: "e2",
+      title: "Gym",
+      token: "#offclock",
+      where: "description",
+      replacement: "#off",
+      drop_suggested: false,
+      on_wins: false,
+    },
+    {
+      calendar_id: "primary",
+      event_id: "e2",
+      title: "Gym",
+      token: "#untracked",
+      where: "title",
+      replacement: "#off",
+      drop_suggested: false,
+      on_wins: false,
+    },
+  ];
+  const ok = gcalEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    status: "written",
+    deprecations: records,
+  }));
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.report.deprecations, records);
+  assert.equal(
+    gcalEventsDeprecationNoticeText(records.slice(0, 1)),
+    "1 calendar event still uses #offclock · run bob gcal list",
+  );
+  assert.equal(
+    gcalEventsDeprecationNoticeText(records.slice(0, 2)),
+    "2 calendar events still use #offclock · run bob gcal list",
+  );
+  assert.equal(
+    gcalEventsDeprecationNoticeText(records),
+    "2 calendar events still use deprecated clock tags · run bob gcal list",
+  );
+});
+
+test("deprecation Notice fires once per day from a successful auto-sync", () => {
+  const records = [
+    { calendar_id: "primary", event_id: "e1", token: "#offclock" },
+    { calendar_id: "primary", event_id: "e2", token: "#offclock" },
+    { calendar_id: "primary", event_id: "e3", token: "#offclock" },
+  ];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.gcalDeprecationNoticeDays = new Set();
+  const notices = [];
+  const now = new Date(2026, 10, 3, 9, 0, 0);
+  const later = new Date(2026, 10, 3, 18, 0, 0);
+  const nextDay = new Date(2026, 10, 4, 9, 0, 0);
+  const report = { deprecations: records };
+  assert.equal(
+    gcalEventsShowDeprecationNotice(plugin, report, { now, notice: (text) => notices.push(text) }),
+    true,
+  );
+  assert.equal(
+    gcalEventsShowDeprecationNotice(plugin, report, { now: later, notice: (text) => notices.push(text) }),
+    false,
+  );
+  assert.deepEqual(notices, ["3 calendar events still use #offclock · run bob gcal list"]);
+  assert.equal(
+    gcalEventsShowDeprecationNotice(plugin, report, { now: nextDay, notice: (text) => notices.push(text) }),
+    true,
+  );
+  assert.equal(notices.length, 2);
+  assert.equal(
+    gcalEventsShowDeprecationNotice(plugin, { deprecations: [] }, { now: nextDay, notice: (text) => notices.push(text) }),
+    false,
+  );
+  assert.equal(notices.length, 2);
 });

@@ -510,6 +510,13 @@ class BobLedgerToolsTaskThemeApiMixin {
             // Refresh after cache fill is best-effort.
           }
           try {
+            if (typeof self.scheduleEventLinkTimesRefresh === "function") {
+              self.scheduleEventLinkTimesRefresh();
+            }
+          } catch (error) {
+            // Link pill refresh after cache fill is best-effort.
+          }
+          try {
             if (typeof self.schedulePomodoroHomeChipRefresh === "function") {
               self.schedulePomodoroHomeChipRefresh();
             }

@@ -69,9 +69,15 @@ function gcalEventsClockMinutes(span) {
   return { start, end, endOnTimeline: end < start ? end + 1440 : end };
 }
 
-function gcalEventsNowOnTimeline(nowMinutes, start) {
+// Only a span whose occupied end crosses midnight moves an early `now`
+// onto the next-day timeline. An afternoon or evening meeting on the same
+// day must stay `future` until it starts.
+function gcalEventsNowOnTimeline(nowMinutes, start, occupiedEnd) {
   if (!Number.isFinite(nowMinutes) || !Number.isFinite(start)) return nowMinutes;
-  return nowMinutes < start && start >= 12 * 60 ? nowMinutes + 1440 : nowMinutes;
+  if (!Number.isFinite(occupiedEnd) || occupiedEnd <= 1440) return nowMinutes;
+  return nowMinutes < start && nowMinutes + 1440 < occupiedEnd
+    ? nowMinutes + 1440
+    : nowMinutes;
 }
 
 function gcalEventsTimeState(span, nowMinutes, isToday, isTask, buffer) {
@@ -79,7 +85,7 @@ function gcalEventsTimeState(span, nowMinutes, isToday, isTask, buffer) {
   const clock = gcalEventsClockMinutes(span);
   if (!clock || !Number.isFinite(nowMinutes)) return null;
   const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
-  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin, occupied.endOnTimeline);
   if (now < clock.start) return "future";
   if (now < clock.endOnTimeline) return "running";
   if (now < occupied.endOnTimeline) return null;
@@ -91,7 +97,7 @@ function gcalEventsBufferPhase(span, nowMinutes, isToday, isTask, buffer) {
   const clock = gcalEventsClockMinutes(span);
   if (!clock || !Number.isFinite(nowMinutes)) return null;
   const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
-  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin, occupied.endOnTimeline);
   if (now >= occupied.startMin && now < clock.start) return "lead-in";
   if (now >= clock.endOnTimeline && now < occupied.endOnTimeline) return "lead-out";
   return null;
@@ -346,6 +352,11 @@ class BobLedgerToolsGcalEventsMixin {
   setupGcalEvents() {
     this.setupGcalSyncOnCreate();
     this.setupCalendarEventPainting();
+    try {
+      if (typeof this.setupEventLinkTimes === "function") this.setupEventLinkTimes();
+    } catch (error) {
+      // Link time pills are best-effort.
+    }
   }
 
   setupGcalSyncOnCreate() {
@@ -424,6 +435,13 @@ class BobLedgerToolsGcalEventsMixin {
     this.calendarEventRefreshTimer = null;
     this.setCalendarEventPaintGate();
     try {
+      if (typeof this.registerMarkGatePopoutSync === "function") {
+        this.registerMarkGatePopoutSync("bob-calendar-events", () => this.calendarEventsPaintEnabled);
+      }
+    } catch (error) {
+      // Popout mirroring is best-effort.
+    }
+    try {
       this.addCommand({
         id: "toggle-calendar-event-painting",
         name: "Toggle calendar event painting",
@@ -460,6 +478,11 @@ class BobLedgerToolsGcalEventsMixin {
   }
 
   teardownCalendarEventPainting() {
+    try {
+      if (typeof this.teardownEventLinkTimes === "function") this.teardownEventLinkTimes();
+    } catch (error) {
+      // Link pill teardown is best-effort.
+    }
     const timer = this.calendarEventRefreshTimer;
     if (timer === null || timer === undefined) return;
     const clear = typeof window !== "undefined" && window.clearInterval
@@ -471,6 +494,10 @@ class BobLedgerToolsGcalEventsMixin {
 
   setCalendarEventPaintGate() {
     try {
+      if (typeof this.applyMarkGateClass === "function") {
+        this.applyMarkGateClass("bob-calendar-events", this.calendarEventsPaintEnabled);
+        return true;
+      }
       const classes = typeof document !== "undefined" && document.body && document.body.classList;
       if (!classes) return false;
       if (this.calendarEventsPaintEnabled) classes.add("bob-calendar-events");
@@ -908,6 +935,20 @@ class BobLedgerToolsGcalEventsMixin {
           continue;
         }
         if (isTodayDailyFile(this.app, { path: record.path }, { now })) this.calendarEventSetReadingState(record, now);
+      }
+      // The clock repaint also refreshes link pills, in both views, on
+      // the same once-a-minute cadence with no new timer.
+      try {
+        if (typeof this.refreshEventLinkTimesEditors === "function") this.refreshEventLinkTimesEditors();
+      } catch (error) {
+        // Link pill editor refresh is best-effort.
+      }
+      try {
+        if (typeof this.refreshEventLinkTimesReadingViews === "function") {
+          this.refreshEventLinkTimesReadingViews();
+        }
+      } catch (error) {
+        // Link pill Reading refresh is best-effort.
       }
     } catch (error) {}
   }

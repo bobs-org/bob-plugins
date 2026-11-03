@@ -25604,6 +25604,46 @@ function taskLinkMarkLedgerBodyIsDedicated(body) {
   }
 }
 
+// One section scan and one fence build per document version. The ledger
+// gate runs once per link line, so a 200-link ledger would otherwise
+// rescan the note per row. The cache is keyed on the lines array
+// identity; a new document version builds a new array. The verdicts are
+// unchanged: the same inputs give the same outputs, only faster. Never
+// throws.
+const TASK_LINK_MARK_SECTION_MEMO = new WeakMap();
+function taskLinkMarkMemoizedSection(lines) {
+  try {
+    if (!Array.isArray(lines)) return null;
+    if (TASK_LINK_MARK_SECTION_MEMO.has(lines)) {
+      return TASK_LINK_MARK_SECTION_MEMO.get(lines);
+    }
+    let section = null;
+    try {
+      section = planSectionRange(lines);
+    } catch (error) {
+      section = null;
+    }
+    let entry = null;
+    if (section) {
+      let fenced = null;
+      try {
+        fenced = planFencedLines(lines, section.start, section.end);
+      } catch (error) {
+        fenced = new Set();
+      }
+      entry = { section, fenced: fenced instanceof Set ? fenced : new Set() };
+    }
+    try {
+      TASK_LINK_MARK_SECTION_MEMO.set(lines, entry);
+    } catch (error) {
+      // An unkeyable array still returns a correct verdict.
+    }
+    return entry;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Rule 5: whether `lines[index]` is a dedicated Pomodoro Task Link row in
 // a canonical daily note's `## Pomodoros` section: a direct child bullet
 // of a column-0 Pomodoro entry (open or closed) at that entry's first
@@ -25629,25 +25669,15 @@ function taskLinkMarkIsLedgerTaskLinkLine(lines, index, path) {
     if (index < 0 || index >= lines.length) {
       return false;
     }
-    let section = null;
-    try {
-      section = planSectionRange(lines);
-    } catch (error) {
+    const memo = taskLinkMarkMemoizedSection(lines);
+    if (!memo || !memo.section) {
       return false;
     }
-    if (!section) {
-      return false;
-    }
+    const section = memo.section;
     if (index < section.start || index > section.end) {
       return false;
     }
-    let fenced = null;
-    try {
-      fenced = planFencedLines(lines, section.start, section.end);
-    } catch (error) {
-      fenced = new Set();
-    }
-    if (fenced.has(index)) {
+    if (memo.fenced.has(index)) {
       return false;
     }
     const line = String(lines[index] || "");
@@ -25702,7 +25732,7 @@ function taskLinkMarkIsLedgerTaskLinkLine(lines, index, path) {
     const range = [];
     try {
       for (let sub = entryIndex + 1; sub <= section.end; sub += 1) {
-        if (fenced.has(sub)) {
+        if (memo.fenced.has(sub)) {
           continue;
         }
         let isSub = false;
@@ -33577,6 +33607,13 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleTaskLinkMarksRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      if (typeof this.scheduleEventLinkTimesRefresh === "function") {
+        this.scheduleEventLinkTimesRefresh();
+      }
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -56350,6 +56387,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-unblocked-glyph",
                 "bob-frees-mark",
                 "bob-off-clock-link-chip",
+                "bob-event-link-time",
                 "bob-today-mark",
                 "list-bullet",
                 "list-collapse-indicator",
@@ -69165,6 +69203,13 @@ class BobLedgerToolsTaskThemeApiMixin {
             // Refresh after cache fill is best-effort.
           }
           try {
+            if (typeof self.scheduleEventLinkTimesRefresh === "function") {
+              self.scheduleEventLinkTimesRefresh();
+            }
+          } catch (error) {
+            // Link pill refresh after cache fill is best-effort.
+          }
+          try {
             if (typeof self.schedulePomodoroHomeChipRefresh === "function") {
               self.schedulePomodoroHomeChipRefresh();
             }
@@ -78097,9 +78142,15 @@ function gcalEventsClockMinutes(span) {
   return { start, end, endOnTimeline: end < start ? end + 1440 : end };
 }
 
-function gcalEventsNowOnTimeline(nowMinutes, start) {
+// Only a span whose occupied end crosses midnight moves an early `now`
+// onto the next-day timeline. An afternoon or evening meeting on the same
+// day must stay `future` until it starts.
+function gcalEventsNowOnTimeline(nowMinutes, start, occupiedEnd) {
   if (!Number.isFinite(nowMinutes) || !Number.isFinite(start)) return nowMinutes;
-  return nowMinutes < start && start >= 12 * 60 ? nowMinutes + 1440 : nowMinutes;
+  if (!Number.isFinite(occupiedEnd) || occupiedEnd <= 1440) return nowMinutes;
+  return nowMinutes < start && nowMinutes + 1440 < occupiedEnd
+    ? nowMinutes + 1440
+    : nowMinutes;
 }
 
 function gcalEventsTimeState(span, nowMinutes, isToday, isTask, buffer) {
@@ -78107,7 +78158,7 @@ function gcalEventsTimeState(span, nowMinutes, isToday, isTask, buffer) {
   const clock = gcalEventsClockMinutes(span);
   if (!clock || !Number.isFinite(nowMinutes)) return null;
   const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
-  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin, occupied.endOnTimeline);
   if (now < clock.start) return "future";
   if (now < clock.endOnTimeline) return "running";
   if (now < occupied.endOnTimeline) return null;
@@ -78119,7 +78170,7 @@ function gcalEventsBufferPhase(span, nowMinutes, isToday, isTask, buffer) {
   const clock = gcalEventsClockMinutes(span);
   if (!clock || !Number.isFinite(nowMinutes)) return null;
   const occupied = eventRunBufferedSpan(clock.start, clock.endOnTimeline, buffer);
-  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin);
+  const now = gcalEventsNowOnTimeline(nowMinutes, occupied.startMin, occupied.endOnTimeline);
   if (now >= occupied.startMin && now < clock.start) return "lead-in";
   if (now >= clock.endOnTimeline && now < occupied.endOnTimeline) return "lead-out";
   return null;
@@ -78374,6 +78425,11 @@ class BobLedgerToolsGcalEventsMixin {
   setupGcalEvents() {
     this.setupGcalSyncOnCreate();
     this.setupCalendarEventPainting();
+    try {
+      if (typeof this.setupEventLinkTimes === "function") this.setupEventLinkTimes();
+    } catch (error) {
+      // Link time pills are best-effort.
+    }
   }
 
   setupGcalSyncOnCreate() {
@@ -78452,6 +78508,13 @@ class BobLedgerToolsGcalEventsMixin {
     this.calendarEventRefreshTimer = null;
     this.setCalendarEventPaintGate();
     try {
+      if (typeof this.registerMarkGatePopoutSync === "function") {
+        this.registerMarkGatePopoutSync("bob-calendar-events", () => this.calendarEventsPaintEnabled);
+      }
+    } catch (error) {
+      // Popout mirroring is best-effort.
+    }
+    try {
       this.addCommand({
         id: "toggle-calendar-event-painting",
         name: "Toggle calendar event painting",
@@ -78488,6 +78551,11 @@ class BobLedgerToolsGcalEventsMixin {
   }
 
   teardownCalendarEventPainting() {
+    try {
+      if (typeof this.teardownEventLinkTimes === "function") this.teardownEventLinkTimes();
+    } catch (error) {
+      // Link pill teardown is best-effort.
+    }
     const timer = this.calendarEventRefreshTimer;
     if (timer === null || timer === undefined) return;
     const clear = typeof window !== "undefined" && window.clearInterval
@@ -78499,6 +78567,10 @@ class BobLedgerToolsGcalEventsMixin {
 
   setCalendarEventPaintGate() {
     try {
+      if (typeof this.applyMarkGateClass === "function") {
+        this.applyMarkGateClass("bob-calendar-events", this.calendarEventsPaintEnabled);
+        return true;
+      }
       const classes = typeof document !== "undefined" && document.body && document.body.classList;
       if (!classes) return false;
       if (this.calendarEventsPaintEnabled) classes.add("bob-calendar-events");
@@ -78936,6 +79008,20 @@ class BobLedgerToolsGcalEventsMixin {
           continue;
         }
         if (isTodayDailyFile(this.app, { path: record.path }, { now })) this.calendarEventSetReadingState(record, now);
+      }
+      // The clock repaint also refreshes link pills, in both views, on
+      // the same once-a-minute cadence with no new timer.
+      try {
+        if (typeof this.refreshEventLinkTimesEditors === "function") this.refreshEventLinkTimesEditors();
+      } catch (error) {
+        // Link pill editor refresh is best-effort.
+      }
+      try {
+        if (typeof this.refreshEventLinkTimesReadingViews === "function") {
+          this.refreshEventLinkTimesReadingViews();
+        }
+      } catch (error) {
+        // Link pill Reading refresh is best-effort.
       }
     } catch (error) {}
   }
@@ -79448,6 +79534,1567 @@ function gcalEventsDecodeSync(stdout, stderr) {
     return { ok: false, code: "bad-shape", message: "bob gcal sync returned an unexpected report.", detail: statsFirstLine(stderr) };
   }
   return { ok: true, report: Object.assign({}, body, { deprecations: gcalEventsDecodeDeprecations(body.deprecations) }) };
+}
+// ---- src/291d-event-link-times.js ----
+// --- Ledger Event link times: pure core ---------------------------------
+// Owned by the `docs/event-link-times.md` display contract in bob-cli
+// (bob-cli-gg phase `pill`). A ledger Task Link that points at one of the
+// same daily note's Event Tasks wears the same time pill the Event Task
+// wears in `## Events` (meeting span, past/running/future state, MEET hue,
+// off-clock dash, buffer wings), in Live Preview and Reading view.
+// Display-only: nothing writes, and every helper is synchronous and never
+// throws; bad input yields null or an empty list.
+//
+// Qualification mirrors the Mac agenda's event chip: a dedicated ledger
+// Task Link row (`taskLinkMarkIsLedgerTaskLinkLine`) whose target resolves
+// to the rendered note itself and whose block id belongs to exactly one
+// Event Task row (`eventRunById`). Unresolved or cross-note targets,
+// duplicate ids, context or all-day rows, missing source text, and any
+// thrown error show no pill and no warning.
+
+// The Live Preview widget sits at the link start, before the ledger type
+// mark (`side: -2`) and the progress mark (`side: -1`), so a row that also
+// wears those reads `pill #TYPE ◐ link`.
+const EVENT_LINK_TIME_SIDE = -3;
+const EVENT_LINK_TIME_TITLE_LIMIT = 80;
+
+// Lazy refresh effect, defined on first use so requiring the module never
+// adds an eager `StateEffect.define()` call.
+let eventLinkTimesRefresh = null;
+function ensureEventLinkTimesRefresh() {
+  if (eventLinkTimesRefresh) return eventLinkTimesRefresh;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      eventLinkTimesRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    eventLinkTimesRefresh = null;
+  }
+  return eventLinkTimesRefresh;
+}
+
+// Whether `linkpath` names the rendered note itself: an empty linkpath is
+// the note, otherwise `resolve(linkpath)` must equal `sourcePath` under
+// `samePath`. Never throws.
+function eventLinkTimeIsSameNote(linkpath, sourcePath, resolve, samePath) {
+  try {
+    const raw = String(linkpath || "").trim();
+    const source = String(sourcePath || "");
+    if (raw === "") return source !== "";
+    if (source === "" || typeof resolve !== "function") return false;
+    let resolved = null;
+    try {
+      resolved = resolve(raw);
+    } catch (error) {
+      return false;
+    }
+    if (!resolved) return false;
+    if (typeof samePath === "function") {
+      try {
+        return samePath(resolved, source) === true;
+      } catch (error) {
+        return false;
+      }
+    }
+    return String(resolved) === source;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Every ledger row that qualifies for a link time pill: one frozen
+// `{line, ch, pathPart, blockId, linktext}` per line
+// `taskLinkMarkIsLedgerTaskLinkLine` accepts, honouring fences,
+// frontmatter, and comments through the ring's document context
+// (`inert`/`excluded`, never `eligible`, which skips dedicated ledger
+// rows by design). `ch` is the link start (the opening `~~` of a struck
+// link, else `[[`). `options.isSameNote(pathPart)` decides rule 4, and
+// `options.isVisible(line, ch)` limits a Live Preview build. Both are
+// optional; without them only same-note `[[#^id]]` links qualify and
+// every row is visible. Never throws.
+function eventLinkTimeLinks(lines, path, options) {
+  try {
+    const list = Array.isArray(lines) ? lines : [];
+    const sourcePath = String(path || "");
+    if (list.length === 0 || sourcePath === "") return Object.freeze([]);
+    try {
+      if (typeof PLAN_DAILY_PATH_RE !== "undefined" && PLAN_DAILY_PATH_RE && !PLAN_DAILY_PATH_RE.test(sourcePath)) {
+        return Object.freeze([]);
+      }
+    } catch (error) {
+      return Object.freeze([]);
+    }
+    const opts = options && typeof options === "object" ? options : {};
+    const isSameNote = typeof opts.isSameNote === "function"
+      ? opts.isSameNote
+      : (pathPart) => String(pathPart || "").trim() === "";
+    const isVisible = typeof opts.isVisible === "function" ? opts.isVisible : null;
+    let ctx = null;
+    try {
+      ctx = taskLinkMarkDocContext(list, sourcePath);
+    } catch (error) {
+      ctx = null;
+    }
+    const out = [];
+    for (let index = 0; index < list.length; index += 1) {
+      try {
+        const text = String(list[index] || "");
+        if (text.indexOf("#^") === -1 && text.toLowerCase().indexOf("#%5e") === -1) continue;
+        if (ctx && typeof ctx.inert === "function" && ctx.inert(index)) continue;
+        if (!taskLinkMarkIsLedgerTaskLinkLine(list, index, sourcePath)) continue;
+        let excluded = null;
+        try {
+          excluded = ctx && typeof ctx.excluded === "function" ? ctx.excluded(index) : null;
+        } catch (error) {
+          excluded = null;
+        }
+        const spans = taskLinkMarkSpans(text, excluded);
+        if (!spans || spans.length === 0) continue;
+        const span = spans[0];
+        let same = false;
+        try {
+          same = isSameNote(span.linkpath) === true;
+        } catch (error) {
+          same = false;
+        }
+        if (!same) continue;
+        const ch = span.at;
+        if (isVisible) {
+          let visible = false;
+          try {
+            visible = isVisible(index, ch) === true;
+          } catch (error) {
+            visible = false;
+          }
+          if (!visible) continue;
+        }
+        out.push(Object.freeze({
+          line: index,
+          ch,
+          pathPart: String(span.linkpath || ""),
+          blockId: String(span.blockId || ""),
+          linktext: String(span.linkpath || "") + "#^" + String(span.blockId || ""),
+        }));
+      } catch (error) {
+        continue;
+      }
+    }
+    return Object.freeze(out);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// The Event row's cleaned title, cut to 80 characters (79 plus `…`), or
+// `Calendar event` when the title is empty. Never throws.
+function eventLinkTimeCutTitle(title) {
+  try {
+    const text = String(title || "").trim();
+    if (text === "") return "Calendar event";
+    if (text.length > EVENT_LINK_TIME_TITLE_LIMIT) {
+      return text.slice(0, EVENT_LINK_TIME_TITLE_LIMIT - 1) + "…";
+    }
+    return text;
+  } catch (error) {
+    return "Calendar event";
+  }
+}
+
+// The host tooltip for a link pill model: line 1 is the Event row's
+// cleaned title, line 2 (only when non-empty) is the Events pill's own
+// tooltip for the same row. Any stray `::` becomes `:`. Never throws.
+function eventLinkTimeTooltip(model) {
+  try {
+    const input = model && typeof model === "object" ? model : {};
+    const first = eventLinkTimeCutTitle(input.title);
+    const detail = String(input.detail || "").trim();
+    const label = detail ? first + "\n" + detail : first;
+    return label.replace(/::/g, ":");
+  } catch (error) {
+    return "Calendar event";
+  }
+}
+
+// The pill model for one unique Event Task row, or null unless the row is
+// a timed Event Task. `eventRow` is an `eventRunEventRows` row;
+// `options` carries `{isToday, nowMinutes, hue, line, path,
+// metadataCache, vault}`. State and phase come from the shared calendar
+// Event helpers (after the midnight-crossing fix), the clock from
+// `gcalEventsApplyClockToRow` (tag, then inherited `offclock:`), and the
+// wings from `gcalEventsWingModel`. Never throws.
+function eventLinkTimeModel(eventRow, options) {
+  try {
+    if (!eventRow || typeof eventRow !== "object") return null;
+    if (typeof eventRow.blockId !== "string" || eventRow.blockId === "") return null;
+    if (typeof eventRow.timeRange !== "string" || !/^\d{4}-\d{4}$/.test(eventRow.timeRange)) return null;
+    const opts = options && typeof options === "object" ? options : {};
+    const isToday = opts.isToday === true;
+    const nowMinutes = Number(opts.nowMinutes);
+    const hue = typeof opts.hue === "string" && opts.hue !== "" ? opts.hue : null;
+    const line = String(opts.line != null ? opts.line : "");
+    const path = String(opts.path || "");
+    const clockRow = { offClock: false, clockSource: null, clockNote: null };
+    try {
+      gcalEventsApplyClockToRow(clockRow, line, path, opts.metadataCache, opts.vault);
+    } catch (error) {
+      // Tag-only is the safe fallback when note metadata is unavailable.
+    }
+    const buffer = eventRow.buffer && !eventBufferIsEmpty(eventRow.buffer) ? eventRow.buffer : null;
+    const state = gcalEventsTimeState(eventRow.timeRange, nowMinutes, isToday, true, eventRow.buffer);
+    const bufferPhase = gcalEventsBufferPhase(eventRow.timeRange, nowMinutes, isToday, true, eventRow.buffer);
+    const row = {
+      time: eventRow.timeRange,
+      state,
+      buffer,
+      bufferPhase,
+      offClock: Boolean(clockRow.offClock),
+      clockSource: clockRow.clockSource || null,
+      clockNote: clockRow.clockNote || null,
+      startMinutes: eventRow.startMin,
+      endMinutes: eventRow.endMin,
+      bufferedStartMinutes: eventRow.bufferedStartMin,
+      bufferedEndMinutes: eventRow.bufferedEndOnTimeline,
+      bufferedTimeRange: eventRow.bufferedTimeRange,
+    };
+    let attributes = {};
+    try {
+      attributes = gcalEventsTimeAttributes(row, hue);
+    } catch (error) {
+      attributes = {};
+    }
+    const detail = String((attributes && attributes.title) || "");
+    const before = gcalEventsWingModel(row, "before", hue);
+    const after = gcalEventsWingModel(row, "after", hue);
+    const tooltip = eventLinkTimeTooltip({ title: eventRow.title, detail });
+    return Object.freeze({
+      time: eventRow.timeRange,
+      blockId: eventRow.blockId,
+      row: Object.freeze({ ...row }),
+      hue,
+      before: before ? Object.freeze({ ...before }) : null,
+      after: after ? Object.freeze({ ...after }) : null,
+      title: String(eventRow.title || ""),
+      detail,
+      tooltip,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+// Listener-free host element, shared by the Live Preview widget and the
+// Reading-view post-processor. Produces a
+// `span.bob-event-link-time.bob-calendar-event-time-wrap[role=img][aria-label][data-tooltip-position=top][data-block-id]`
+// holding an optional before wing, the existing
+// `bob-calendar-event-time` pill (with the `gcalEventsTimeAttributes`
+// attributes minus `title`), and an optional after wing. No element
+// inside the host carries a `title`: the host's `aria-label` is the
+// tooltip. `doc` provides `createElement` so tests can pass a fake
+// document. Never throws: bad input yields null.
+function buildEventLinkTimeElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || typeof model !== "object") return null;
+    if (typeof model.time !== "string" || typeof model.tooltip !== "string") return null;
+    const host = doc.createElement("span");
+    host.setAttribute("class", "bob-event-link-time bob-calendar-event-time-wrap");
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip).replace(/::/g, ":"));
+    host.setAttribute("data-tooltip-position", "top");
+    host.setAttribute("data-block-id", String(model.blockId || ""));
+    const appendWing = (wing) => {
+      if (!wing) return;
+      let el = null;
+      try {
+        el = buildCalendarEventBufferWing(doc, wing);
+      } catch (error) {
+        el = null;
+      }
+      if (!el) return;
+      try {
+        if (typeof el.removeAttribute === "function") el.removeAttribute("title");
+      } catch (error) {
+        // A wing without a title paints the same.
+      }
+      try {
+        host.appendChild(el);
+      } catch (error) {
+        // A missing wing never breaks the pill.
+      }
+    };
+    appendWing(model.before);
+    const inner = doc.createElement("span");
+    inner.setAttribute("class", "bob-calendar-event-time");
+    try {
+      if (typeof inner.textContent !== "undefined") inner.textContent = String(model.time);
+    } catch (error) {
+      // An empty pill still carries its attributes.
+    }
+    try {
+      const attributes = gcalEventsTimeAttributes(model.row, model.hue);
+      for (const [name, value] of Object.entries(attributes || {})) {
+        if (name === "title") continue;
+        if (value == null || value === "") {
+          if (typeof inner.removeAttribute === "function") inner.removeAttribute(name);
+          continue;
+        }
+        inner.setAttribute(name, value);
+      }
+    } catch (error) {
+      // Attribute paint is best-effort; the host still identifies the row.
+    }
+    try {
+      host.appendChild(inner);
+    } catch (error) {
+      return null;
+    }
+    appendWing(model.after);
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Live Preview widget for one link pill. Zero-width and position-free: it
+// sits at the link token start with `side: -3`, before the ledger type and
+// progress marks. `eq` compares the time, state, phase, hue, off-clock,
+// buffer, and tooltip (plus the click target, so a reused DOM never
+// carries a stale link). Plain mousedown places the caret just before the
+// link and focuses the editor; Mod+mousedown behaves exactly like
+// Mod+clicking the link text through `onOpen`. Defined only when
+// `WidgetType` exists; otherwise null and the extension is not
+// registered.
+let EventLinkTimeWidget = null;
+if (WidgetType && typeof WidgetType === "function") {
+  EventLinkTimeWidget = class extends WidgetType {
+    constructor(model, sourcePath, linktext, onOpen) {
+      super();
+      const input = model && typeof model === "object" ? model : {};
+      const row = input.row && typeof input.row === "object" ? input.row : {};
+      const beforeMin = row.buffer && Number.isFinite(row.buffer.beforeMin) ? row.buffer.beforeMin : 0;
+      const afterMin = row.buffer && Number.isFinite(row.buffer.afterMin) ? row.buffer.afterMin : 0;
+      this.key = [
+        String(input.time || ""),
+        String(row.state || ""),
+        String(row.bufferPhase || ""),
+        String(input.hue || ""),
+        row.offClock ? "o" : "",
+        String(beforeMin),
+        String(afterMin),
+        String(input.tooltip || ""),
+      ].join("|");
+      this.model = input;
+      this.sourcePath = String(sourcePath || "");
+      this.linktext = String(linktext || "");
+      this.onOpen = typeof onOpen === "function" ? onOpen : null;
+    }
+
+    eq(other) {
+      return (
+        Boolean(other) &&
+        other instanceof EventLinkTimeWidget &&
+        other.key === this.key &&
+        other.linktext === this.linktext &&
+        other.sourcePath === this.sourcePath
+      );
+    }
+
+    toDOM(view) {
+      let host = null;
+      try {
+        host = buildEventLinkTimeElement(
+          typeof document !== "undefined" ? document : null,
+          this.model || null,
+        );
+      } catch (error) {
+        host = null;
+      }
+      if (!host) {
+        try {
+          return typeof document !== "undefined" && document
+            ? document.createElement("span")
+            : null;
+        } catch (error) {
+          return null;
+        }
+      }
+      const self = this;
+      try {
+        host.addEventListener("mousedown", (event) => {
+          try {
+            if (event && event.button !== undefined && event.button !== null && event.button !== 0) return;
+            if (event && typeof event.preventDefault === "function") event.preventDefault();
+            let isMac = false;
+            try {
+              isMac = Boolean(Platform && Platform.isMacOS);
+            } catch (error) {
+              isMac = false;
+            }
+            const modified = typeof todayMarkModifierPressed === "function"
+              ? todayMarkModifierPressed(event, isMac)
+              : (isMac ? Boolean(event.metaKey) : Boolean(event.ctrlKey));
+            if (modified) {
+              if (self.onOpen) {
+                try {
+                  self.onOpen(self.linktext, self.sourcePath);
+                } catch (error) {
+                  // An open failure never breaks the editor.
+                }
+              }
+              return;
+            }
+            let anchor = null;
+            try {
+              anchor = view && typeof view.posAtDOM === "function" ? view.posAtDOM(host) : null;
+            } catch (error) {
+              anchor = null;
+            }
+            if (typeof anchor === "number" && view && typeof view.dispatch === "function") {
+              view.dispatch({ selection: { anchor } });
+            }
+            if (view && typeof view.focus === "function") view.focus();
+          } catch (error) {
+            // Placing the cursor is best-effort; the pill renders.
+          }
+        });
+      } catch (error) {
+        // A listener-free pill still renders.
+      }
+      return host;
+    }
+  };
+}
+// ---- src/291e-plugin-event-link-times.js ----
+// --- Ledger Event link times: Live Preview --------------------------------
+// `BobLedgerToolsEventLinkTimesMixin`, installed in
+// `310-install-methods.js` after the gcal mixins. The setup is called from
+// `setupGcalEvents()` (`170-plugin-lifecycle.js` sits at the fragment size
+// limit) and the teardown rides inside `teardownCalendarEventPainting()`.
+// The pure core lives in `291d-event-link-times.js`; the Reading view in
+// `291f-plugin-event-link-times-reading.js`. Every method is synchronous
+// and never throws.
+class BobLedgerToolsEventLinkTimesMixin {
+  setupEventLinkTimes() {
+    try {
+      if (typeof this.eventLinkTimesEnabled !== "boolean") {
+        this.eventLinkTimesEnabled = true;
+      }
+      if (!(this.eventLinkTimeViews instanceof Set)) {
+        try {
+          this.eventLinkTimeViews = new Set();
+        } catch (error) {
+          this.eventLinkTimeViews = null;
+        }
+      }
+      this.eventLinkTimeScanCache = null;
+      this.eventLinkTimesTimer = null;
+      this.applyMarkGateClass("bob-event-link-times", this.eventLinkTimesEnabled);
+      this.registerMarkGatePopoutSync("bob-event-link-times", () => this.eventLinkTimesEnabled);
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-event-link-times",
+            name: "Toggle Task Link event times",
+            callback: () => this.toggleEventLinkTimes(),
+          });
+        }
+      } catch (error) {
+        // The command is best-effort.
+      }
+      try {
+        const extension = this.createEventLinkTimesExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview pills are best-effort.
+      }
+      try {
+        this.setupEventLinkTimeListeners();
+      } catch (error) {
+        // Liveness is best-effort.
+      }
+      try {
+        if (typeof this.register === "function") {
+          this.register(() => this.cancelEventLinkTimesRefresh());
+        }
+      } catch (error) {
+        // Unload cleanup is best-effort.
+      }
+      try {
+        if (typeof this.setupEventLinkTimesReading === "function") {
+          this.setupEventLinkTimesReading();
+        }
+      } catch (error) {
+        // Reading-view pills are best-effort.
+      }
+    } catch (error) {
+      // Setup is display-only and never throws.
+    }
+  }
+
+  eventLinkTimesAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          EventLinkTimeWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createEventLinkTimesExtension() {
+    try {
+      if (!this.eventLinkTimesAvailable()) return null;
+      if (!ViewPlugin || typeof ViewPlugin.fromClass !== "function" || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const PillPluginClass = class {
+        constructor(view) {
+          this.view = view;
+          try {
+            if (plugin.eventLinkTimeViews instanceof Set) plugin.eventLinkTimeViews.add(view);
+          } catch (error) {
+            // View tracking is best-effort.
+          }
+          try {
+            this.decorations = plugin.buildEventLinkTimeDecorations(view, "init");
+          } catch (error) {
+            try {
+              this.decorations = Decoration.none;
+            } catch (inner) {
+              this.decorations = null;
+            }
+          }
+        }
+
+        update(u) {
+          try {
+            const reason = plugin.eventLinkTimeRebuildReason(u);
+            if (reason) {
+              this.decorations = plugin.buildEventLinkTimeDecorations(u.view, reason);
+            }
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+
+        destroy() {
+          try {
+            if (plugin.eventLinkTimeViews instanceof Set) plugin.eventLinkTimeViews.delete(this.view);
+          } catch (error) {
+            // View tracking is best-effort.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(PillPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Why an editor update must rebuild the pills, or null when it must
+  // not. A refresh effect wins (its own, or the calendar Event paint's —
+  // the once-a-minute clock repaints both), then a document change, then
+  // a Live Preview <-> source switch or a file switch ("mode"), then a
+  // viewport change. Never on `selectionSet` alone: the pill covers no
+  // source text and stays at the link start while the cursor is on the
+  // row. Never throws.
+  eventLinkTimeRebuildReason(u) {
+    try {
+      if (!u || typeof u !== "object") return null;
+      try {
+        const refresh = ensureEventLinkTimesRefresh();
+        const gcalRefresh = typeof ensureGcalEventsRefreshEffect === "function"
+          ? ensureGcalEventsRefreshEffect()
+          : null;
+        for (const transaction of u.transactions || []) {
+          const effects = transaction && transaction.effects !== undefined ? transaction.effects : null;
+          if (!effects) continue;
+          for (const effect of Array.isArray(effects) ? effects : [effects]) {
+            try {
+              if (!effect) continue;
+              const isOwn = refresh && (effect === refresh || (typeof effect.is === "function" && effect.is(refresh)));
+              const isGcal = gcalRefresh && (effect === gcalRefresh || (typeof effect.is === "function" && effect.is(gcalRefresh)));
+              if (isOwn || isGcal) return "refresh";
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        // Effect scan is best-effort.
+      }
+      if (u.docChanged) return "doc";
+      try {
+        if (editorLivePreviewField && u.startState && u.state) {
+          let before = null;
+          let after = null;
+          try {
+            before = u.startState.field(editorLivePreviewField);
+          } catch (error) {
+            before = null;
+          }
+          try {
+            after = u.state.field(editorLivePreviewField);
+          } catch (error) {
+            after = null;
+          }
+          if (before !== after) return "mode";
+        }
+        if (editorInfoField && u.startState && u.state) {
+          const pathOf = (state) => {
+            try {
+              const info = state.field(editorInfoField);
+              return info && info.file ? info.file.path : null;
+            } catch (error) {
+              return null;
+            }
+          };
+          if (pathOf(u.startState) !== pathOf(u.state)) return "mode";
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return u.viewportChanged ? "viewport" : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // The Event rows of one document version, indexed by block id. A block
+  // id carried by two Event rows maps to null (ambiguous), so the pill
+  // stays neutral. Never throws.
+  eventLinkTimeScanForView(view, lines, path, isToday, nowMinutes) {
+    try {
+      const doc = view && view.state && view.state.doc ? view.state.doc : null;
+      const sourcePath = typeof path === "string" ? path : "";
+      const cache = this.eventLinkTimeScanCache;
+      if (
+        cache &&
+        cache.doc === doc &&
+        cache.path === sourcePath &&
+        cache.isToday === isToday &&
+        cache.nowMinutes === nowMinutes
+      ) {
+        return cache;
+      }
+      const rows = eventRunEventRows(Array.isArray(lines) ? lines : []);
+      const byId = new Map();
+      for (const row of rows) {
+        try {
+          if (!row || typeof row.blockId !== "string" || row.blockId === "") continue;
+          if (byId.has(row.blockId)) byId.set(row.blockId, null);
+          else byId.set(row.blockId, row);
+        } catch (error) {
+          continue;
+        }
+      }
+      const starts = [];
+      let offset = 0;
+      for (const line of Array.isArray(lines) ? lines : []) {
+        starts.push(offset);
+        offset += String(line).length + 1;
+      }
+      const entry = { doc, path: sourcePath, isToday, nowMinutes, rows, byId, starts };
+      this.eventLinkTimeScanCache = entry;
+      return entry;
+    } catch (error) {
+      return { doc: null, path: "", isToday: false, nowMinutes: NaN, rows: [], byId: new Map(), starts: [] };
+    }
+  }
+
+  // A same-note verdict for one ledger link: an empty linkpath is the
+  // rendered note, otherwise the linkpath must resolve to it. Never
+  // throws.
+  eventLinkTimeIsSameNote(linkpath, sourcePath) {
+    try {
+      const raw = String(linkpath || "").trim();
+      if (raw === "") return String(sourcePath || "") !== "";
+      if (typeof this.taskLinkMarkResolvePath !== "function") return false;
+      let resolved = null;
+      try {
+        resolved = this.taskLinkMarkResolvePath(raw, sourcePath);
+      } catch (error) {
+        return false;
+      }
+      if (!resolved) return false;
+      if (typeof sameVaultPath === "function") {
+        try {
+          return sameVaultPath(resolved, sourcePath) === true;
+        } catch (error) {
+          return false;
+        }
+      }
+      return String(resolved) === String(sourcePath);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Mod+click on a pill behaves exactly like Mod+clicking the link text:
+  // open the link target in a new tab. Never throws.
+  eventLinkTimeOpenLink(linktext, sourcePath) {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        const opened = workspace.openLinkText(String(linktext || ""), String(sourcePath || ""), "tab");
+        if (opened && typeof opened.catch === "function") opened.catch(() => {});
+      }
+    } catch (error) {
+      // Opening is best-effort.
+    }
+  }
+
+  // Builds the pill widgets over the visible ranges of one editor. The
+  // link pill needs both toggles: its own, and calendar Event painting
+  // whose look it reuses. Never throws.
+  buildEventLinkTimeDecorations(view) {
+    try {
+      if (!this.eventLinkTimesEnabled || !this.calendarEventsPaintEnabled) return Decoration.none;
+      if (!Decoration || !RangeSetBuilder || !EventLinkTimeWidget || !editorInfoField || !editorLivePreviewField) {
+        return Decoration.none;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!live) return Decoration.none;
+      let filePath = null;
+      try {
+        const info = view.state.field(editorInfoField);
+        filePath = info && info.file && typeof info.file.path === "string" ? info.file.path : null;
+      } catch (error) {
+        return Decoration.none;
+      }
+      if (!filePath) return Decoration.none;
+      try {
+        if (typeof PLAN_DAILY_PATH_RE !== "undefined" && PLAN_DAILY_PATH_RE && !PLAN_DAILY_PATH_RE.test(filePath)) {
+          return Decoration.none;
+        }
+      } catch (error) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function") return Decoration.none;
+      const lines = doc.toString().replace(/\r\n/g, "\n").split("\n");
+      let today = false;
+      try {
+        today = isTodayDailyFile(this.app, { path: filePath });
+      } catch (error) {
+        today = false;
+      }
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const scan = this.eventLinkTimeScanForView(view, lines, filePath, today, nowMinutes);
+      if (!scan.byId || scan.byId.size === 0) return Decoration.none;
+      let hue = null;
+      try {
+        hue = typeof this.calendarEventMeetHue === "function" ? this.calendarEventMeetHue() : null;
+      } catch (error) {
+        hue = null;
+      }
+      const ranges = Array.isArray(view.visibleRanges)
+        ? view.visibleRanges.slice().sort((left, right) => left.from - right.from)
+        : [];
+      const sameNoteCache = new Map();
+      const isSameNote = (pathPart) => {
+        const key = String(pathPart || "");
+        if (sameNoteCache.has(key)) return sameNoteCache.get(key);
+        const verdict = this.eventLinkTimeIsSameNote(key, filePath);
+        sameNoteCache.set(key, verdict);
+        return verdict;
+      };
+      const isVisible = (lineNumber, ch) => {
+        try {
+          const line = doc.line(lineNumber + 1);
+          if (!line || typeof line.from !== "number") return false;
+          const pos = line.from + ch;
+          return ranges.some((range) =>
+            range &&
+            typeof range.from === "number" &&
+            typeof range.to === "number" &&
+            pos >= range.from &&
+            pos <= range.to,
+          );
+        } catch (error) {
+          return false;
+        }
+      };
+      const links = eventLinkTimeLinks(lines, filePath, { isSameNote, isVisible });
+      if (links.length === 0) return Decoration.none;
+      const builder = new RangeSetBuilder();
+      const models = new Map();
+      const modelFor = (blockId) => {
+        if (models.has(blockId)) return models.get(blockId);
+        let model = null;
+        try {
+          const eventRow = scan.byId.get(blockId) || null;
+          if (eventRow) {
+            model = eventLinkTimeModel(eventRow, {
+              isToday: today,
+              nowMinutes,
+              hue,
+              line: lines[eventRow.lineIndex],
+              path: filePath,
+              metadataCache: this.app && this.app.metadataCache,
+              vault: this.app && this.app.vault,
+            });
+          }
+        } catch (error) {
+          model = null;
+        }
+        models.set(blockId, model || null);
+        return model;
+      };
+      for (const link of links) {
+        try {
+          const model = modelFor(link.blockId);
+          if (!model) continue;
+          const line = doc.line(link.line + 1);
+          if (!line || typeof line.from !== "number") continue;
+          const pos = line.from + link.ch;
+          builder.add(
+            pos,
+            pos,
+            Decoration.widget({
+              widget: new EventLinkTimeWidget(
+                model,
+                filePath,
+                link.linktext,
+                (linktext, source) => this.eventLinkTimeOpenLink(linktext, source),
+              ),
+              side: EVENT_LINK_TIME_SIDE,
+            }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  toggleEventLinkTimes() {
+    try {
+      this.eventLinkTimesEnabled = !this.eventLinkTimesEnabled;
+      const enabled = this.eventLinkTimesEnabled;
+      this.applyMarkGateClass("bob-event-link-times", enabled);
+      this.refreshEventLinkTimesEditors();
+      try {
+        if (typeof this.refreshEventLinkTimesReadingViews === "function") {
+          this.refreshEventLinkTimesReadingViews();
+        }
+      } catch (error) {
+        // The Reading sweep is best-effort.
+      }
+      try {
+        new Notice(enabled ? "Task Link event times on" : "Task Link event times off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return Boolean(this.eventLinkTimesEnabled);
+    }
+  }
+
+  // Every live editor view: the ones the extension tracks (which covers
+  // popouts and canvas cards) plus each Markdown leaf's CodeMirror.
+  eventLinkTimeEditorViews() {
+    const views = new Set();
+    try {
+      if (this.eventLinkTimeViews instanceof Set) {
+        this.eventLinkTimeViews.forEach((view) => views.add(view));
+      }
+    } catch (error) {
+      // Tracked views are best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      const leaves =
+        workspace && typeof workspace.getLeavesOfType === "function"
+          ? workspace.getLeavesOfType("markdown") || []
+          : [];
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (cm) views.add(cm);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Leaf enumeration is best-effort.
+    }
+    return views;
+  }
+
+  refreshEventLinkTimesEditors() {
+    try {
+      const refresh = ensureEventLinkTimesRefresh();
+      if (!refresh) return;
+      for (const view of this.eventLinkTimeEditorViews()) {
+        try {
+          if (view && typeof view.dispatch === "function") {
+            view.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  // metadataCache `changed` / `resolved` and vault `rename` / `delete`
+  // each schedule the one coalesced refresh: an inheritance edit
+  // (`offclock:`, `type:`, `parent:`) changes the pill without touching
+  // the daily note. Never throws.
+  setupEventLinkTimeListeners() {
+    try {
+      if (typeof this.registerEvent !== "function") return;
+      const schedule = () => this.scheduleEventLinkTimesRefresh();
+      const cache = this.app && this.app.metadataCache;
+      if (cache && typeof cache.on === "function") {
+        this.registerEvent(cache.on("changed", schedule));
+        this.registerEvent(cache.on("resolved", schedule));
+      }
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        this.registerEvent(vault.on("rename", schedule));
+        this.registerEvent(vault.on("delete", schedule));
+      }
+    } catch (error) {
+      // Liveness is best-effort.
+    }
+  }
+
+  // The timer host behind the coalesced refresh; tests inject
+  // `eventLinkTimesTimers = {set, clear}`.
+  eventLinkTimesTimerHost() {
+    const injected = this.eventLinkTimesTimers;
+    if (injected && typeof injected.set === "function" && typeof injected.clear === "function") {
+      return injected;
+    }
+    const host = typeof window !== "undefined" && typeof window.setTimeout === "function" ? window : null;
+    return {
+      set: (fn, ms) => (host ? host.setTimeout(fn, ms) : setTimeout(fn, ms)),
+      clear: (handle) => (host ? host.clearTimeout(handle) : clearTimeout(handle)),
+    };
+  }
+
+  // The one coalesced refresh (about 120 ms). Triggers: the
+  // metadataCache and vault hooks above, a source-text cache fill, and
+  // either toggle. Never throws.
+  scheduleEventLinkTimesRefresh() {
+    try {
+      if (this.eventLinkTimesTimer !== null && this.eventLinkTimesTimer !== undefined) return;
+      this.eventLinkTimesTimer = this.eventLinkTimesTimerHost().set(() => {
+        this.eventLinkTimesTimer = null;
+        this.runEventLinkTimesRefresh();
+      }, 120);
+    } catch (error) {
+      this.eventLinkTimesTimer = null;
+    }
+  }
+
+  cancelEventLinkTimesRefresh() {
+    try {
+      if (this.eventLinkTimesTimer !== null && this.eventLinkTimesTimer !== undefined) {
+        this.eventLinkTimesTimerHost().clear(this.eventLinkTimesTimer);
+      }
+    } catch (error) {
+      // Cancelling is best-effort.
+    }
+    this.eventLinkTimesTimer = null;
+  }
+
+  // A refresh pass: rebuild every Live Preview editor and, when the
+  // Reading-view phase is installed, sweep its rendered pills. Never
+  // throws.
+  runEventLinkTimesRefresh() {
+    try {
+      this.refreshEventLinkTimesEditors();
+      try {
+        if (typeof this.refreshEventLinkTimesReadingViews === "function") {
+          this.refreshEventLinkTimesReadingViews();
+        }
+      } catch (error) {
+        // The Reading sweep is best-effort.
+      }
+    } catch (error) {
+      // A refresh pass never throws.
+    }
+  }
+
+  teardownEventLinkTimes() {
+    try {
+      this.cancelEventLinkTimesRefresh();
+      this.eventLinkTimeViews = null;
+      this.eventLinkTimeScanCache = null;
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-event-link-times");
+      }
+    } catch (error) {
+      // Timer and body-gate cleanup are best-effort.
+    }
+  }
+}
+// ---- src/291f-plugin-event-link-times-reading.js ----
+// --- Ledger Event link times: Reading view --------------------------------
+// `BobLedgerToolsEventLinkTimesReadingMixin`, installed in
+// `310-install-methods.js` after the Live Preview mixin and set up from
+// `setupEventLinkTimes()`. A markdown post-processor records each rendered
+// root and sweeps it; the sweep also visits every rendered daily note in
+// every window (main and popouts). The host carries no listeners: the
+// adjacent link stays the click target. Every method is synchronous and
+// never throws.
+class BobLedgerToolsEventLinkTimesReadingMixin {
+  setupEventLinkTimesReading() {
+    try {
+      if (!(this.eventLinkTimeReadingViews instanceof Map)) {
+        try {
+          this.eventLinkTimeReadingViews = new Map();
+        } catch (error) {
+          this.eventLinkTimeReadingViews = null;
+        }
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor(
+          (el, ctx) => this.renderEventLinkTimesIn(el, ctx),
+          56,
+        );
+      }
+    } catch (error) {
+      // Reading-view wiring never blocks plugin startup.
+    }
+  }
+
+  eventLinkTimeReadingTag(node) {
+    try {
+      return String((node && (node.tagName || node.nodeName)) || "").toUpperCase();
+    } catch (error) {
+      return "";
+    }
+  }
+
+  eventLinkTimeReadingHasClass(node, name) {
+    try {
+      if (!node || !name) return false;
+      if (node.classList && typeof node.classList.contains === "function") {
+        return node.classList.contains(name);
+      }
+      const raw = typeof node.getAttribute === "function"
+        ? node.getAttribute("class") || ""
+        : typeof node.className === "string" ? node.className : "";
+      return String(raw).split(/\s+/).includes(name);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  renderEventLinkTimesIn(el, ctx) {
+    try {
+      if (!el || !ctx) return;
+      if (!(this.eventLinkTimeReadingViews instanceof Map)) {
+        try {
+          this.eventLinkTimeReadingViews = new Map();
+        } catch (error) {
+          return;
+        }
+      }
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      const record = { el, ctx, sourcePath };
+      this.eventLinkTimeReadingViews.set(el, record);
+      this.sweepEventLinkTimesReadingView(record);
+      try {
+        if (typeof this.scheduleEventLinkTimesRefresh === "function") {
+          this.scheduleEventLinkTimesRefresh();
+        }
+      } catch (error) {
+        // A follow-up sweep covers a section that was still detaching.
+      }
+      if (typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            const views = this.eventLinkTimeReadingViews;
+            child.onunload = () => {
+              if (views) views.delete(el);
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          const views = this.eventLinkTimeReadingViews;
+          child = {
+            unload: () => {
+              if (views) views.delete(el);
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject processor children.
+        }
+      }
+    } catch (error) {
+      // Reading-view marks never throw.
+    }
+  }
+
+  // Every rendered Reading root with a daily-note path: the processor
+  // records plus each Markdown leaf's preview container (popouts render
+  // into their own document, mirroring `freesMarkPreviewRecords`).
+  eventLinkTimePreviewRecords() {
+    const records = [];
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") return records;
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) continue;
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") continue;
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (root) records.push({ el: root, ctx: { sourcePath }, sourcePath });
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshEventLinkTimesReadingViews() {
+    try {
+      let refreshed = false;
+      if (this.eventLinkTimeReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.eventLinkTimeReadingViews.entries())) {
+          try {
+            if (!el) {
+              this.eventLinkTimeReadingViews.delete(el);
+              continue;
+            }
+            this.sweepEventLinkTimesReadingView(record);
+            refreshed = true;
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      for (const record of this.eventLinkTimePreviewRecords()) {
+        try {
+          this.sweepEventLinkTimesReadingView(record);
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The note lines behind one Reading sweep, in the contract's
+  // Resolution order: the rendered section's source text, then the live
+  // editor document, then the task theme source-text cache. When the last
+  // one is empty, request a fill (the fill refreshes once it lands) and
+  // report no lines, so no pill shows meanwhile. Never reads from disk
+  // during render. Never throws.
+  eventLinkTimeReadingLines(record) {
+    try {
+      const sourcePath = String((record && record.sourcePath) || "");
+      if (sourcePath === "") return null;
+      const ctx = (record && record.ctx) || null;
+      try {
+        if (ctx && typeof ctx.getSectionInfo === "function" && record.el) {
+          const info = ctx.getSectionInfo(record.el);
+          if (info && typeof info.text === "string" && info.text !== "") {
+            const lines = String(info.text).replace(/\r\n/g, "\n").split("\n");
+            if (typeof gcalEventsFindSection === "function" && gcalEventsFindSection(lines, "Events")) {
+              return lines;
+            }
+          }
+        }
+      } catch (error) {
+        // Section text is best-effort.
+      }
+      try {
+        if (ctx && typeof this.calendarEventSourceLines === "function") {
+          const live = this.calendarEventSourceLines(ctx);
+          if (Array.isArray(live) && live.length > 0) return live;
+        }
+      } catch (error) {
+        // Live editor lines are best-effort.
+      }
+      try {
+        if (typeof this.taskThemeSourceTextFor === "function") {
+          const cached = this.taskThemeSourceTextFor(sourcePath);
+          if (typeof cached === "string" && cached !== "") {
+            return String(cached).replace(/\r\n/g, "\n").split("\n");
+          }
+        }
+      } catch (error) {
+        // The source cache is best-effort.
+      }
+      try {
+        if (typeof this.taskThemeRequestSourceText === "function") {
+          this.taskThemeRequestSourceText(sourcePath);
+        }
+      } catch (error) {
+        // A fill request is best-effort.
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  eventLinkTimeReadingOwnedHosts(li, root) {
+    try {
+      const found =
+        li && typeof li.querySelectorAll === "function"
+          ? li.querySelectorAll(".bob-event-link-time")
+          : [];
+      const hosts = [];
+      for (const host of found || []) {
+        try {
+          let node = host.parentNode || null;
+          let owner = null;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            if (this.eventLinkTimeReadingTag(node) === "LI") {
+              owner = node;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (owner === li) hosts.push(host);
+        } catch (error) {
+          continue;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  eventLinkTimeRemoveHost(host) {
+    try {
+      if (host && host.parentNode && typeof host.parentNode.removeChild === "function") {
+        host.parentNode.removeChild(host);
+      }
+    } catch (error) {
+      // A stale Reading-view host is harmless.
+    }
+  }
+
+  // Refresh one host in place from a fresh model: copy the attributes
+  // and move the rebuilt children over, so the host keeps its position.
+  // Never throws.
+  eventLinkTimeRefreshHost(host, doc, model) {
+    try {
+      if (!host || !doc || !model) return false;
+      const fresh = buildEventLinkTimeElement(doc, model);
+      if (!fresh) return false;
+      const names = ["class", "role", "aria-label", "data-tooltip-position", "data-block-id"];
+      for (const name of names) {
+        try {
+          const value = typeof fresh.getAttribute === "function" ? fresh.getAttribute(name) : null;
+          if (value == null) {
+            if (typeof host.removeAttribute === "function") host.removeAttribute(name);
+          } else if (typeof host.setAttribute === "function") {
+            host.setAttribute(name, value);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      try {
+        if (typeof host.removeAttribute === "function") host.removeAttribute("title");
+      } catch (error) {
+        // A host without a title paints the same.
+      }
+      try {
+        while (host.firstChild) host.removeChild(host.firstChild);
+      } catch (error) {
+        // Clearing is best-effort.
+      }
+      try {
+        const children = fresh.childNodes ? Array.from(fresh.childNodes) : [];
+        for (const child of children) host.appendChild(child);
+      } catch (error) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The link container: the anchor, or its `del`/`s` wrapper when the
+  // anchor is that wrapper's only child. Never throws.
+  eventLinkTimeReadingContainer(anchor) {
+    try {
+      if (!anchor) return null;
+      const parent = anchor.parentNode || null;
+      const tag = this.eventLinkTimeReadingTag(parent);
+      if (["DEL", "S", "STRIKE"].includes(tag) && parent.childNodes) {
+        const children = parent.childNodes;
+        if (children.length === 1 && children[0] === anchor) return parent;
+      }
+      return anchor;
+    } catch (error) {
+      return anchor || null;
+    }
+  }
+
+  // Insert the host before the link container, then bubble it left past
+  // any contiguous run of ledger type / progress marks, so the row reads
+  // `pill #TYPE ◐ link` no matter which processor ran first. Never
+  // throws.
+  eventLinkTimeReadingPlace(container, host) {
+    try {
+      if (!container || !host) return;
+      const parent = container.parentNode || null;
+      if (!parent || typeof parent.insertBefore !== "function") return;
+      if (host.parentNode !== parent || host.nextSibling !== container) {
+        parent.insertBefore(host, container);
+      }
+      let node = host.previousSibling || null;
+      let guard = 0;
+      while (node && guard < 100) {
+        guard += 1;
+        if (
+          !this.eventLinkTimeReadingHasClass(node, "bob-ledger-type-mark") &&
+          !this.eventLinkTimeReadingHasClass(node, "bob-progress-mark")
+        ) {
+          break;
+        }
+        const target = node;
+        node = node.previousSibling || null;
+        try {
+          parent.insertBefore(host, target);
+        } catch (error) {
+          break;
+        }
+      }
+    } catch (error) {
+      // Placement never breaks the rendered view.
+    }
+  }
+
+  sweepEventLinkTimesReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String((record && record.sourcePath) || "");
+      if (!root || !sourcePath) return false;
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) return false;
+      const allHosts =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll(".bob-event-link-time"))
+          : [];
+      let daily = false;
+      try {
+        daily = typeof PLAN_DAILY_PATH_RE !== "undefined" && PLAN_DAILY_PATH_RE
+          ? PLAN_DAILY_PATH_RE.test(sourcePath)
+          : false;
+      } catch (error) {
+        daily = false;
+      }
+      if (!this.eventLinkTimesEnabled || !this.calendarEventsPaintEnabled || !daily) {
+        for (const host of allHosts) this.eventLinkTimeRemoveHost(host);
+        return true;
+      }
+      const lines = this.eventLinkTimeReadingLines(record);
+      if (!lines) {
+        for (const host of allHosts) this.eventLinkTimeRemoveHost(host);
+        return true;
+      }
+      let rows = [];
+      try {
+        rows = eventRunEventRows(lines);
+      } catch (error) {
+        rows = [];
+      }
+      const byId = new Map();
+      for (const row of rows || []) {
+        try {
+          if (!row || typeof row.blockId !== "string" || row.blockId === "") continue;
+          if (byId.has(row.blockId)) byId.set(row.blockId, null);
+          else byId.set(row.blockId, row);
+        } catch (error) {
+          continue;
+        }
+      }
+      let isToday = false;
+      try {
+        isToday = isTodayDailyFile(this.app, { path: sourcePath });
+      } catch (error) {
+        isToday = false;
+      }
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      let hue = null;
+      try {
+        hue = typeof this.calendarEventMeetHue === "function" ? this.calendarEventMeetHue() : null;
+      } catch (error) {
+        hue = null;
+      }
+      const resolved = new Map();
+      const sameNote = (target) => {
+        const key = String(target || "");
+        if (resolved.has(key)) return resolved.get(key);
+        let verdict = false;
+        try {
+          verdict = typeof this.eventLinkTimeIsSameNote === "function"
+            ? this.eventLinkTimeIsSameNote(key, sourcePath) === true
+            : key === "";
+        } catch (error) {
+          verdict = false;
+        }
+        resolved.set(key, verdict);
+        return verdict;
+      };
+      const items =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll("li"))
+          : [];
+      for (const li of items) {
+        try {
+          const existing = this.eventLinkTimeReadingOwnedHosts(li, root);
+          let context = null;
+          try {
+            context = typeof this.progressMarkReadingContext === "function"
+              ? this.progressMarkReadingContext(li, root, {
+                includeStruck: true,
+                includeClosedEntry: true,
+                allowLedgerMarks: true,
+              })
+              : null;
+          } catch (error) {
+            context = null;
+          }
+          let model = null;
+          if (context && sameNote(context.target)) {
+            try {
+              const eventRow = byId.get(context.blockId) || null;
+              if (eventRow) {
+                model = eventLinkTimeModel(eventRow, {
+                  isToday,
+                  nowMinutes,
+                  hue,
+                  line: lines[eventRow.lineIndex],
+                  path: sourcePath,
+                  metadataCache: this.app && this.app.metadataCache,
+                  vault: this.app && this.app.vault,
+                });
+              }
+            } catch (error) {
+              model = null;
+            }
+          }
+          if (!model) {
+            for (const host of existing) this.eventLinkTimeRemoveHost(host);
+            continue;
+          }
+          let host = existing[0] || null;
+          if (host) {
+            this.eventLinkTimeRefreshHost(host, doc, model);
+          } else {
+            try {
+              host = buildEventLinkTimeElement(doc, model);
+            } catch (error) {
+              host = null;
+            }
+          }
+          if (!host) continue;
+          const container = this.eventLinkTimeReadingContainer(context.anchor);
+          if (!container) {
+            for (const stale of existing) this.eventLinkTimeRemoveHost(stale);
+            continue;
+          }
+          this.eventLinkTimeReadingPlace(container, host);
+          for (const duplicate of existing.slice(1)) this.eventLinkTimeRemoveHost(duplicate);
+        } catch (error) {
+          continue;
+        }
+      }
+      // Remove orphaned hosts whose row is no longer inside a list item.
+      for (const host of allHosts) {
+        try {
+          let node = host.parentNode || null;
+          let inList = false;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            if (this.eventLinkTimeReadingTag(node) === "LI") {
+              inList = true;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (!inList) this.eventLinkTimeRemoveHost(host);
+        } catch (error) {
+          continue;
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
 }
 // ---- src/292-keep-inbox-model.js ----
 // Keep inbox indicator model (keep-indicator-view): pure view model for the
@@ -82658,6 +84305,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
   BobLedgerToolsGcalEventsMixin,
+  BobLedgerToolsEventLinkTimesMixin,
+  BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,
 ]);
 // ---- src/320-plan-lane-and-config.js ----
@@ -84624,6 +86273,7 @@ module.exports.helpers = {
   applyEventRunToExpansion,
   computeMeetEventRun,
   eventRunEventRows,
+  eventRunById,
   eventRunRewriteNotice,
   eventRunCleanTitle,
   eventRunSpanConflict,
@@ -84673,6 +86323,15 @@ module.exports.helpers = {
   GCAL_EVENTS_ON_CLOCK_TITLE,
   gcalEventsClockTooltip,
   gcalEventsFromNoteTitle,
+  ensureEventLinkTimesRefresh,
+  eventLinkTimeIsSameNote,
+  eventLinkTimeLinks,
+  eventLinkTimeCutTitle,
+  eventLinkTimeTooltip,
+  eventLinkTimeModel,
+  buildEventLinkTimeElement,
+  EventLinkTimeWidget,
+  EVENT_LINK_TIME_SIDE,
   gcalEventsApplyClockToRow,
   gcalEventsEnrichScannedClocks,
   gcalEventsClockTagDecorations,

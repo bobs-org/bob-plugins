@@ -725,6 +725,13 @@ class BobLedgerToolsHeadingReviewMixin {
       // One missed schedule never breaks the fan-out.
     }
     try {
+      if (typeof this.scheduleEventLinkTimesRefresh === "function") {
+        this.scheduleEventLinkTimesRefresh();
+      }
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
       this.scheduleBlockMarksRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.

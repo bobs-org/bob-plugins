@@ -88,6 +88,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-unblocked-glyph",
                 "bob-frees-mark",
                 "bob-off-clock-link-chip",
+                "bob-event-link-time",
                 "bob-today-mark",
                 "list-bullet",
                 "list-collapse-indicator",

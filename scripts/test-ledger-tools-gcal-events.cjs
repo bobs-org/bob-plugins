@@ -221,6 +221,30 @@ test("event clock state distinguishes future, running, and past", () => {
   assert.equal(gcalEventsTimeState("0830-0900", 10 * 60, true, false), null);
 });
 
+test("afternoon and evening spans stay future until they start (ES1-ES10)", () => {
+  // ES1: the reported bug — 10:00 with an 18:30 meeting painted `past`.
+  assert.equal(gcalEventsTimeState("1830-1900", 10 * 60, true, true), "future");
+  // ES2: a midday meeting is future in the morning.
+  assert.equal(gcalEventsTimeState("1200-1230", 10 * 60, true, true), "future");
+  // ES3: a meeting in progress is running.
+  assert.equal(gcalEventsTimeState("0945-1015", 10 * 60, true, true), "running");
+  // ES4: a finished morning meeting is past.
+  assert.equal(gcalEventsTimeState("0815-0830", 10 * 60, true, true), "past");
+  // ES5-ES7: a midnight-crossing span shifts an early `now` onto the next day.
+  assert.equal(gcalEventsTimeState("2300-0030", 23 * 60 + 45, true, true), "running");
+  assert.equal(gcalEventsTimeState("2300-0030", 0 * 60 + 10, true, true), "running");
+  assert.equal(gcalEventsTimeState("2300-0030", 22 * 60, true, true), "future");
+  // ES8: a buffered evening meeting is future with a lead-in wing at 18:10.
+  assert.equal(gcalEventsTimeState("1830-1900", 18 * 60 + 10, true, true, { beforeMin: 30, afterMin: 0 }), "future");
+  assert.equal(gcalEventsBufferPhase("1830-1900", 18 * 60 + 10, true, true, { beforeMin: 30, afterMin: 0 }), "lead-in");
+  // ES9: a buffered midday span has no state in lead-out, then reads past.
+  assert.equal(gcalEventsTimeState("1200-1300", 13 * 60 + 5, true, true, { beforeMin: 30, afterMin: 15 }), null);
+  assert.equal(gcalEventsBufferPhase("1200-1300", 13 * 60 + 5, true, true, { beforeMin: 30, afterMin: 15 }), "lead-out");
+  assert.equal(gcalEventsTimeState("1200-1300", 13 * 60 + 20, true, true, { beforeMin: 30, afterMin: 15 }), "past");
+  // ES10: any span in a note that is not today's has no state.
+  assert.equal(gcalEventsTimeState("1830-1900", 10 * 60, false, true), null);
+});
+
 test("a buffer delays past fade and lights lead-in / lead-out wings", () => {
   const buffer = { beforeMin: 30, afterMin: 15 };
   assert.equal(gcalEventsTimeState("1200-1300", 11 * 60 + 40, true, true, buffer), "future");

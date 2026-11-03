@@ -399,6 +399,46 @@ function taskLinkMarkLedgerBodyIsDedicated(body) {
   }
 }
 
+// One section scan and one fence build per document version. The ledger
+// gate runs once per link line, so a 200-link ledger would otherwise
+// rescan the note per row. The cache is keyed on the lines array
+// identity; a new document version builds a new array. The verdicts are
+// unchanged: the same inputs give the same outputs, only faster. Never
+// throws.
+const TASK_LINK_MARK_SECTION_MEMO = new WeakMap();
+function taskLinkMarkMemoizedSection(lines) {
+  try {
+    if (!Array.isArray(lines)) return null;
+    if (TASK_LINK_MARK_SECTION_MEMO.has(lines)) {
+      return TASK_LINK_MARK_SECTION_MEMO.get(lines);
+    }
+    let section = null;
+    try {
+      section = planSectionRange(lines);
+    } catch (error) {
+      section = null;
+    }
+    let entry = null;
+    if (section) {
+      let fenced = null;
+      try {
+        fenced = planFencedLines(lines, section.start, section.end);
+      } catch (error) {
+        fenced = new Set();
+      }
+      entry = { section, fenced: fenced instanceof Set ? fenced : new Set() };
+    }
+    try {
+      TASK_LINK_MARK_SECTION_MEMO.set(lines, entry);
+    } catch (error) {
+      // An unkeyable array still returns a correct verdict.
+    }
+    return entry;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Rule 5: whether `lines[index]` is a dedicated Pomodoro Task Link row in
 // a canonical daily note's `## Pomodoros` section: a direct child bullet
 // of a column-0 Pomodoro entry (open or closed) at that entry's first
@@ -424,25 +464,15 @@ function taskLinkMarkIsLedgerTaskLinkLine(lines, index, path) {
     if (index < 0 || index >= lines.length) {
       return false;
     }
-    let section = null;
-    try {
-      section = planSectionRange(lines);
-    } catch (error) {
+    const memo = taskLinkMarkMemoizedSection(lines);
+    if (!memo || !memo.section) {
       return false;
     }
-    if (!section) {
-      return false;
-    }
+    const section = memo.section;
     if (index < section.start || index > section.end) {
       return false;
     }
-    let fenced = null;
-    try {
-      fenced = planFencedLines(lines, section.start, section.end);
-    } catch (error) {
-      fenced = new Set();
-    }
-    if (fenced.has(index)) {
+    if (memo.fenced.has(index)) {
       return false;
     }
     const line = String(lines[index] || "");
@@ -497,7 +527,7 @@ function taskLinkMarkIsLedgerTaskLinkLine(lines, index, path) {
     const range = [];
     try {
       for (let sub = entryIndex + 1; sub <= section.end; sub += 1) {
-        if (fenced.has(sub)) {
+        if (memo.fenced.has(sub)) {
           continue;
         }
         let isSub = false;

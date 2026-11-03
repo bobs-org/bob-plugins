@@ -5370,6 +5370,21 @@ body:not(.bob-off-clock-link-chips) .bob-off-clock-link-chip {
 .bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="violet"] { --bob-calendar-event-hue: var(--bob-hue-violet); }
 .bob-calendar-events .bob-calendar-event-buffer[data-theme-hue="red"] { --bob-calendar-event-hue: var(--bob-hue-red); }
 
+/* Ledger Event link times: the host reuses the Events pill look above,
+   so no pill rules live here. Host-only, never scoped under
+   .bob-calendar-events; the gates below own visibility. */
+.bob-event-link-time {
+  user-select: none;
+  cursor: default;
+  print-color-adjust: exact;
+  margin-inline-end: 0.35em;
+}
+
+body:not(.bob-event-link-times) .bob-event-link-time,
+body:not(.bob-calendar-events) .bob-event-link-time {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-calendar-events .bob-calendar-event-buffer {
     transition: none;

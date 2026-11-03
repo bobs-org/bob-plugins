@@ -177,6 +177,7 @@
   "677-plugin-ref-pdf-open.js",
   "678-plugin-templater-trigger.js",
   "679-plugin-image-zoom.js",
+  "679a-image-zoom-path.js",
   "680-plugin-link-parse.js",
   "681-plugin-quick-roll.js",
   "682-plugin-parent-change.js",

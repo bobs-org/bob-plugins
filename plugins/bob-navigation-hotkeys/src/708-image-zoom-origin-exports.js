@@ -3,4 +3,5 @@ Object.assign(module.exports.helpers, {
   imageZoomOriginSuffix,
   imageZoomMiddleTruncate,
   getNavigationAttachmentsApi,
+  findImagePathBullet,
 });

@@ -67,13 +67,30 @@ class BobNavigationHotkeysImageZoomMixin {
       return;
     }
     const contexts = getMarkdownLineContexts(editor.getValue());
+    const inCodeFence = Boolean(contexts[head.line] && contexts[head.line].inFence);
     const target = this.resolveImageZoomTargetOnLine({
       lineText,
       ch: head.ch,
       sourcePath: view.file.path,
-      inCodeFence: Boolean(contexts[head.line] && contexts[head.line].inFence),
+      inCodeFence,
     });
     if (target.kind === "notice") {
+      // A bullet holding only an image path imports through bob when the line
+      // has no image candidates ("No image on this line") and sits outside a
+      // fence, so existing image references keep priority.
+      if (target.message === "No image on this line" && !inCodeFence) {
+        let bullet = null;
+        try {
+          bullet = findImagePathBullet(lineText);
+        } catch (error) {
+          new Notice(error && error.message ? error.message : "Not an image");
+          return;
+        }
+        if (bullet) {
+          void this.importImagePathOnLine(editor, view, bullet);
+          return;
+        }
+      }
       new Notice(target.message);
       return;
     }

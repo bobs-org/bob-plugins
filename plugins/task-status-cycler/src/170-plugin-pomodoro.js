@@ -455,14 +455,11 @@ class TaskStatusCyclerPomodoroMixin {
           name = "";
         }
         // The relocation pass re-locates the entry and its created
-        // continuation from current text by content: a deferred-only close
-        // deletes the closed entry, and a placed-last MEET may sit after the
-        // last open Pomodoro. Block identity beats same-name reuse.
+        // continuation from current text by content: the closed `[x]` entry
+        // always survives, and a placed-last MEET may sit after the last open
+        // Pomodoro. Block identity beats same-name reuse.
         const createdBlock = getCreatedContinuationBlockFromPlan(plan);
         const createdBlockLines = createdBlock ? createdBlock.blockLines : null;
-        const createdLineText = plan.deferredOnlyClose === true && createdBlockLines
-          ? createdBlockLines[0] || null
-          : null;
         successorDailyBefore = lines.slice();
         successorClosingEntry = {
           line: context.pomodoroLine,
@@ -475,9 +472,6 @@ class TaskStatusCyclerPomodoroMixin {
           ...(createdBlockLines ? { createdBlockLines } : {}),
           ...(createdBlock && Number.isInteger(createdBlock.insertLine)
             ? { createdInsertLine: createdBlock.insertLine } : {}),
-          ...(createdLineText != null
-            ? { deletedClosedEntry: true, createdLineText }
-            : {}),
         };
       }
     } catch (error) {

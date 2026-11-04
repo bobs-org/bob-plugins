@@ -834,11 +834,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
             }
           }
           if (relocated != null && hint.createdPomodoro === true) {
-            // A deferred-only close relocates straight onto the inserted
-            // placeholder: it IS the created entry, not its predecessor.
-            if (hint.deletedClosedEntry === true) {
-              createdEntry = { line: relocated };
-            } else if (Array.isArray(hint.createdBlockLines) && hint.createdBlockLines.length > 0) {
+            // The closed `[x]` entry always survives, so `relocated` is the
+            // predecessor: find the created continuation after it.
+            if (Array.isArray(hint.createdBlockLines) && hint.createdBlockLines.length > 0) {
               // The created continuation beats same-name reuse even when its
               // headline matches another placeholder: match its full block.
               try {

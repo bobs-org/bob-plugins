@@ -727,7 +727,7 @@ test("Ctrl+Enter groups worked-on links above deferred marked links, keeping a n
   );
 });
 
-test("deferred-only close deletes the emptied entry and carries stripped links", () => {
+test("deferred-only close keeps the [x] entry and carries stripped links", () => {
   const lines = [
     "## Pomodoros",
     "- [ ] (1000-1025) — FOCUS",
@@ -738,25 +738,24 @@ test("deferred-only close deletes the emptied entry and carries stripped links",
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.equal(plan.deferredOnlyClose, true);
   // The `#` deferral markers are stripped for the carried copies.
   assert.deepEqual(plan.copiedBulletLines, [
     "\t- [[Tasks#^a|A]]",
     "\t- [[Tasks#^b|B]]",
   ]);
-  // The entry line goes as a removal, not an `[x]` rewrite, and the
-  // placeholder insert still addresses the pre-edit block end.
+  // The entry line is rewritten to `[x]`, the deferred links are removed,
+  // and the placeholder insert still addresses the pre-edit block end.
   assert.deepEqual(
     plan.edits.map((edit) => [edit.type, edit.line]),
     [
-      ["removeLine", 1],
+      ["replaceLine", 1],
       ["removeLine", 2],
       ["removeLine", 3],
       ["insertLines", 4],
     ],
   );
-  // The cursor lands on the placeholder at the entry's former start.
-  assert.equal(plan.cursorTargetLine, 1);
+  // The cursor lands on the created placeholder below the kept entry.
+  assert.equal(plan.cursorTargetLine, 2);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -769,6 +768,7 @@ test("deferred-only close deletes the emptied entry and carries stripped links",
     editor.getValue(),
     [
       "## Pomodoros",
+      "- [x] (1000-1025) — FOCUS",
       "- [ ] () — FOCUS",
       "\t- [[Tasks#^a|A]]",
       "\t- [[Tasks#^b|B]]",
@@ -776,10 +776,10 @@ test("deferred-only close deletes the emptied entry and carries stripped links",
       "\t- [[Tasks#^later|Keep later]]",
     ].join("\n"),
   );
-  assert.deepEqual(editor.getCursor(), { line: 1, ch: 7 });
+  assert.deepEqual(editor.getCursor(), { line: 2, ch: 7 });
 });
 
-test("deferred-only close at EOF leaves no dangling newline", () => {
+test("deferred-only close at EOF keeps the [x] entry and leaves no dangling newline", () => {
   const lines = [
     "## Pomodoros",
     "- [ ] (1000-1025) — FOCUS",
@@ -787,7 +787,6 @@ test("deferred-only close at EOF leaves no dangling newline", () => {
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.equal(plan.deferredOnlyClose, true);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -795,7 +794,12 @@ test("deferred-only close at EOF leaves no dangling newline", () => {
   plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor());
   assert.equal(
     editor.getValue(),
-    ["## Pomodoros", "- [ ] () — FOCUS", "\t- [[Tasks#^a|A]]"].join("\n"),
+    [
+      "## Pomodoros",
+      "- [x] (1000-1025) — FOCUS",
+      "- [ ] () — FOCUS",
+      "\t- [[Tasks#^a|A]]",
+    ].join("\n"),
   );
 });
 
@@ -808,7 +812,6 @@ test("a close with a remaining copyable link keeps the [x] entry", () => {
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.equal(plan.deferredOnlyClose, false);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -836,7 +839,6 @@ test("a prose sibling keeps the closed entry on a deferred close", () => {
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.equal(plan.deferredOnlyClose, false);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -854,7 +856,7 @@ test("a prose sibling keeps the closed entry on a deferred close", () => {
   );
 });
 
-test("Ctrl+Enter deferred-only close deletes the entry in one gesture", async () => {
+test("Ctrl+Enter deferred-only close keeps the [x] entry in one gesture", async () => {
   const daily = [
     "## Pomodoros",
     "- [ ] (1000-1025) — FOCUS",
@@ -873,13 +875,17 @@ test("Ctrl+Enter deferred-only close deletes the entry in one gesture", async ()
 
   assert.equal(
     editor.getValue(),
-    ["## Pomodoros", "- [ ] () — FOCUS", "\t- [[Tasks#^a|A]]", "\t- [[Tasks#^b|B]]"].join(
-      "\n",
-    ),
+    [
+      "## Pomodoros",
+      "- [x] (**1000-1025** [t:: 25m]) — FOCUS",
+      "- [ ] () — FOCUS",
+      "\t- [[Tasks#^a|A]]",
+      "\t- [[Tasks#^b|B]]",
+    ].join("\n"),
   );
 });
 
-test("deferred-only close keeps a separated prose child and deletes fence-only leftovers whole", () => {
+test("deferred-only close keeps the entry: prose, fences, and continuations stay", () => {
   // Exact move-only spelling: immediately adjacent `#`.
   const withProse = [
     "## Pomodoros",
@@ -892,10 +898,11 @@ test("deferred-only close keeps a separated prose child and deletes fence-only l
   {
     const section = helpers.findPomodorosSectionInLines(withProse);
     const plan = helpers.buildPomodoroCompletionPlan(withProse, section, 1);
-    assert.equal(plan.deferredOnlyClose, false);
     assert.equal(plan.cursorTargetLine, 4);
   }
-  // Fence-only remainder: whole block goes, stripped link carried.
+  // Fence-only remainder: the closed row is kept, the stripped link is
+  // carried, and the fenced example stays attached to the closed entry while
+  // the placeholder lands after the whole entry block.
   const fenced = [
     "## Pomodoros",
     "- [ ] (1000-1025) — FOCUS",
@@ -908,7 +915,6 @@ test("deferred-only close keeps a separated prose child and deletes fence-only l
   {
     const section = helpers.findPomodorosSectionInLines(fenced);
     const plan = helpers.buildPomodoroCompletionPlan(fenced, section, 1);
-    assert.equal(plan.deferredOnlyClose, true);
     assert.deepEqual(plan.copiedBulletLines, ["  - [[Tasks#^a|A]]"]);
     const editor = createTextEditor(fenced.join("\n"), { line: 1, ch: 4 });
     const plugin = new TaskStatusCyclerPlugin();
@@ -918,6 +924,10 @@ test("deferred-only close keeps a separated prose child and deletes fence-only l
       editor.getValue(),
       [
         "## Pomodoros",
+        "- [x] (1000-1025) — FOCUS",
+        "  ```",
+        "  - example",
+        "  ```",
         "- [ ] () — FOCUS",
         "  - [[Tasks#^a|A]]",
         "- [ ] () — NEXT",
@@ -925,8 +935,8 @@ test("deferred-only close keeps a separated prose child and deletes fence-only l
     );
   }
   // LF/CRLF with and without final newline: the planner sees editor lines
-  // (split by the file's own ending, so no stray `\r`), and a
-  // continuation-only remainder still deletes whole-block.
+  // (split by the file's own ending, so no stray `\r`), and the entry line
+  // is rewritten to `[x]` instead of removed.
   for (const ending of ["\n", "\r\n"]) {
     for (const finalNewline of [false, true]) {
       const build = (body) => body.join(ending) + (finalNewline ? ending : "");
@@ -939,15 +949,24 @@ test("deferred-only close keeps a separated prose child and deletes fence-only l
       ]).split(ending);
       const section = helpers.findPomodorosSectionInLines(raw);
       const plan = helpers.buildPomodoroCompletionPlan(raw, section, 1);
-      assert.equal(plan.deferredOnlyClose, true);
+      assert.deepEqual(
+        plan.edits.find((edit) => edit.line === 1),
+        {
+          type: "replaceLine",
+          line: 1,
+          sourceLineText: raw[1],
+          lineText: "- [x] (1000-1025) — FOCUS",
+        },
+      );
     }
   }
 });
 
-test("deferred-only successor relocation uses the inserted placeholder", () => {
+test("successor relocation finds the kept closed entry by its restamped headline", () => {
   const plugin = new TaskStatusCyclerPlugin();
   const lines = [
     "## Pomodoros",
+    "- [x] (1000-1025) — FOCUS",
     "- [ ] () — FOCUS",
     "  - [[Tasks#^a|A]]",
     "- [ ] Later",
@@ -959,8 +978,7 @@ test("deferred-only successor relocation uses the inserted placeholder", () => {
       name: "FOCUS",
       createdPomodoro: true,
       createdName: "FOCUS",
-      deletedClosedEntry: true,
-      createdLineText: "- [ ] () — FOCUS",
+      createdBlockLines: ["- [ ] () — FOCUS", "  - [[Tasks#^a|A]]"],
     }),
     1,
   );
@@ -1216,7 +1234,7 @@ test("MEET continuations follow the last open block and keep the cursor on next 
   assert.equal(editor.getCursor().line, 3);
 });
 
-test("deferred-only MEET continuations go last and successor relocation finds them", () => {
+test("deferred-only MEET continuations go last and successor relocation finds the kept entry", () => {
   const lines = [
     "## Pomodoros",
     "- [ ] (**0800-0815**) — MEET",
@@ -1227,10 +1245,9 @@ test("deferred-only MEET continuations go last and successor relocation finds th
   ];
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
-  assert.equal(plan.deferredOnlyClose, true);
   assert.equal(plan.placedLast, true);
   assert.equal(plan.edits.find((edit) => edit.type === "insertLines").line, 6);
-  assert.equal(plan.cursorTargetLine, 1);
+  assert.equal(plan.cursorTargetLine, 2);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -1240,6 +1257,7 @@ test("deferred-only MEET continuations go last and successor relocation finds th
     editor.getValue(),
     [
       "## Pomodoros",
+      "- [x] (**0800-0815**) — MEET",
       "- [ ] () — BUILD",
       "  - [[#^build]]",
       "- [ ] () — PLAN",
@@ -1247,14 +1265,17 @@ test("deferred-only MEET continuations go last and successor relocation finds th
       "  - [[#^later]]",
     ].join("\n"),
   );
-  assert.equal(editor.getCursor().line, 1);
+  assert.equal(editor.getCursor().line, 2);
   assert.equal(
     plugin.relocateSuccessorClosingEntry(editor.getValue().split("\n"), {
       line: 1,
-      deletedClosedEntry: true,
-      createdLineText: "- [ ] () — MEET",
+      lineText: "- [ ] (**0800-0815**) — MEET",
+      name: "MEET",
+      createdPomodoro: true,
+      createdName: "MEET",
+      createdBlockLines: ["- [ ] () — MEET", "  - [[#^later]]"],
     }),
-    4,
+    1,
   );
 });
 
@@ -1302,9 +1323,8 @@ test("MEET continuations ignore fenced candidates and insert before the fence", 
   const section = helpers.findPomodorosSectionInLines(lines);
   const plan = helpers.buildPomodoroCompletionPlan(lines, section, 1);
   assert.equal(plan.placedLast, true);
-  assert.equal(plan.deferredOnlyClose, true);
   assert.equal(plan.edits.find((edit) => edit.type === "insertLines").line, 4);
-  assert.equal(plan.cursorTargetLine, 1);
+  assert.equal(plan.cursorTargetLine, 2);
 
   const editor = createTextEditor(lines.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
@@ -1314,6 +1334,7 @@ test("MEET continuations ignore fenced candidates and insert before the fence", 
     editor.getValue(),
     [
       "## Pomodoros",
+      "- [x] (**0800-0815**) — MEET",
       "- [ ] () — BUILD",
       "- [ ] () — MEET",
       "  - [[#^later]]",
@@ -1322,7 +1343,7 @@ test("MEET continuations ignore fenced candidates and insert before the fence", 
       "```",
     ].join("\n"),
   );
-  assert.equal(editor.getCursor().line, 1);
+  assert.equal(editor.getCursor().line, 2);
 });
 
 test("MEET continuations ignore tilde fences and indented fakes", () => {
@@ -1392,9 +1413,8 @@ test("MEET continuations trim trailing blanks and keep interior content", () => 
     1,
   );
   assert.equal(deferredPlan.placedLast, true);
-  assert.equal(deferredPlan.deferredOnlyClose, true);
   assert.equal(deferredPlan.edits.find((edit) => edit.type === "insertLines").line, 5);
-  assert.equal(deferredPlan.cursorTargetLine, 1);
+  assert.equal(deferredPlan.cursorTargetLine, 2);
 
   const deferredEditor = createTextEditor(deferred.join("\n"), { line: 1, ch: 4 });
   const deferredPlugin = new TaskStatusCyclerPlugin();
@@ -1407,6 +1427,7 @@ test("MEET continuations trim trailing blanks and keep interior content", () => 
     deferredEditor.getValue(),
     [
       "## Pomodoros",
+      "- [x] (**0800-0815**) — MEET",
       "- [ ] () — PLAN",
       "  - plan note",
       "- [ ] () — MEET",
@@ -1415,7 +1436,7 @@ test("MEET continuations trim trailing blanks and keep interior content", () => 
       "- [x] (**0700-0730**) — DONE",
     ].join("\n"),
   );
-  assert.equal(deferredEditor.getCursor().line, 1);
+  assert.equal(deferredEditor.getCursor().line, 2);
 
   const retained = [
     "## Pomodoros",
@@ -1433,7 +1454,6 @@ test("MEET continuations trim trailing blanks and keep interior content", () => 
     1,
   );
   assert.equal(retainedPlan.placedLast, true);
-  assert.equal(retainedPlan.deferredOnlyClose, false);
   assert.equal(retainedPlan.edits.find((edit) => edit.type === "insertLines").line, 6);
   assert.equal(retainedPlan.cursorTargetLine, 3);
 
@@ -1461,7 +1481,7 @@ test("MEET continuations trim trailing blanks and keep interior content", () => 
   assert.equal(retainedEditor.getCursor().line, 3);
 });
 
-test("deferred-only MEET successor lands under the created continuation, not the older MEET", () => {
+test("kept MEET successor lands under the created continuation, not the older MEET", () => {
   const pre = [
     "## Pomodoros",
     "- [ ] (**0800-0815**) — MEET",
@@ -1474,18 +1494,19 @@ test("deferred-only MEET successor lands under the created continuation, not the
   ];
   const section = helpers.findPomodorosSectionInLines(pre);
   const plan = helpers.buildPomodoroCompletionPlan(pre, section, 1);
-  assert.equal(plan.deferredOnlyClose, true);
   assert.equal(plan.placedLast, true);
-  assert.equal(plan.cursorTargetLine, 1);
+  assert.equal(plan.cursorTargetLine, 2);
 
   const editor = createTextEditor(pre.join("\n"), { line: 1, ch: 4 });
   const plugin = new TaskStatusCyclerPlugin();
   plugin.scheduleCenterEditorLineInView = () => {};
   assert.equal(plugin.applyPomodoroCompletionPlan(editor, plan, editor.getCursor()), true);
   const after = editor.getValue().split("\n");
-  // Created MEET is last, older MEET unchanged, cursor on BUILD.
+  // Closed row is kept, created MEET is last, older MEET unchanged, cursor
+  // on the first open entry below the close.
   assert.deepEqual(after, [
     "## Pomodoros",
+    "- [x] (**0800-0815**) — MEET",
     "- [ ] () — MEET",
     "  - [[#^existing]]",
     "- [ ] () — BUILD",
@@ -1494,7 +1515,7 @@ test("deferred-only MEET successor lands under the created continuation, not the
     "- [ ] () — MEET",
     "  - [[#^later]]",
   ]);
-  assert.equal(editor.getCursor().line, 1);
+  assert.equal(editor.getCursor().line, 2);
   assert.equal(after[editor.getCursor().line], "- [ ] () — MEET");
 
   // Simulate a line-shifting Work Log write above the ledger.
@@ -1503,18 +1524,20 @@ test("deferred-only MEET successor lands under the created continuation, not the
   const blockLines = insert.lines.slice();
   const hint = {
     line: 1,
-    deletedClosedEntry: true,
-    createdLineText: blockLines[0],
+    lineText: "- [ ] (**0800-0815**) — MEET",
+    name: "MEET",
     createdBlockLines: blockLines.slice(),
     createdInsertLine: insert.line,
     createdPomodoro: true,
     createdName: "MEET",
   };
   const relocated = plugin.relocateSuccessorClosingEntry(shifted, hint);
+  const expectedClosed = shifted.findIndex((line) => line.startsWith("- [x] (**0800-0815**)"));
+  assert.equal(relocated, expectedClosed);
   const expectedCreated = shifted.findIndex(
     (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^later]]",
   );
-  assert.equal(relocated, expectedCreated);
+  assert.ok(expectedCreated > relocated);
   // Older MEET still holds only its original link.
   const olderIndex = shifted.findIndex(
     (line, index) => line === "- [ ] () — MEET" && shifted[index + 1] === "  - [[#^existing]]",
@@ -1532,7 +1555,7 @@ test("deferred-only MEET successor lands under the created continuation, not the
   ];
   const insertion = helpers.planSuccessorInsertions(shifted, placements, {
     closingEntry: relocated,
-    createdEntry: { line: relocated },
+    createdEntry: { line: expectedCreated },
   });
   assert.equal(insertion.skipped.length, 0);
   assert.equal(insertion.links.length, 1);
@@ -1565,7 +1588,6 @@ test("retained MEET successor beats same-name reuse and keeps case 3 below the c
   ];
   const section = helpers.findPomodorosSectionInLines(pre);
   const plan = helpers.buildPomodoroCompletionPlan(pre, section, 1);
-  assert.equal(plan.deferredOnlyClose, false);
   assert.equal(plan.placedLast, true);
   assert.equal(plan.cursorTargetLine, 3);
 

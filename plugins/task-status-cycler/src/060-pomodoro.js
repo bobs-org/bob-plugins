@@ -835,50 +835,26 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
   const movedSourceLines = new Set(
     sourceBullets.moveOnlyTaskLinkBullets.map((bullet) => bullet.line),
   );
-  // Deferred-only close (emptied-Pomodoro rule): every unfenced list-item
-  // child in the full fence-aware entry block is a move-only `#` link the
-  // plan removes, so no list-item child would survive under the closed
-  // entry. Delete the entry line and its whole block instead of rewriting it
-  // to `[x]`; the carried placeholder below still lands at the entry's former
-  // start. Any surviving prose, copyable, transcluded, or managed-line list
-  // child keeps the entry (childless emptiness, like reconcile). Fenced
-  // example bullets and continuation text never keep it.
+  // A close always keeps the closed entry: the `[x]` row survives with its
+  // recorded minutes even when every kept link is deferred and carried to the
+  // created placeholder (matching `bob capture x`, per the g4 keep policy).
+  // Deferred links are still removed from the closed entry and carried as
+  // stripped copies; surviving prose, copyable, transcluded, or managed-line
+  // children are rewritten in place as before.
   const fullEntryEndLine = getFullPomodoroEntryEndLine(lines, pomodoroLine, section);
-  let deferredOnlyClose =
-    sourceBullets.moveOnlyTaskLinkBullets.length > 0 &&
-    sourceBullets.copyableTaskLinkBullets.length === 0 &&
-    sourceBullets.transcludedTaskLinkBullets.length === 0 &&
-    sourceBullets.noteBullets.filter((bullet) => !fenced.has(bullet.line)).length === 0;
-  if (deferredOnlyClose) {
-    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
-      if (fenced.has(line)) {
-        continue;
-      }
-      if (LIST_ITEM_MARKER_RE.test(String(lines[line] || ""))) {
-        deferredOnlyClose = false;
-        break;
-      }
-    }
-  }
   const edits = [
-    deferredOnlyClose
-      ? {
-        type: "removeLine",
-        line: pomodoroLine,
-        sourceLineText: String(lines[pomodoroLine] || ""),
-      }
-      : {
-        type: "replaceLine",
-        line: pomodoroLine,
-        sourceLineText: String(lines[pomodoroLine] || ""),
-        lineText: replacePomodoroEntryName(
-          stampPomodoroClosedLineClock(
-            replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
-            options && options.sessionClock,
-          ),
-          options && options.closedName,
+    {
+      type: "replaceLine",
+      line: pomodoroLine,
+      sourceLineText: String(lines[pomodoroLine] || ""),
+      lineText: replacePomodoroEntryName(
+        stampPomodoroClosedLineClock(
+          replaceTaskStatusSymbol(lines[pomodoroLine], "x"),
+          options && options.sessionClock,
         ),
-      },
+        options && options.closedName,
+      ),
+    },
   ];
   for (let line = sourceRange.startLine; line < sourceRange.endLine; line += 1) {
     if (movedSourceLines.has(line)) {
@@ -901,19 +877,6 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
       edits.push({ type: "replaceLine", line, sourceLineText, lineText });
     }
   }
-  // Deferred-only close deletes the whole emptied block, including trailing
-  // continuation and fenced remainder beyond the contiguous range.
-  const deferredExtraLines = [];
-  if (deferredOnlyClose) {
-    for (let line = sourceRange.endLine; line <= fullEntryEndLine; line += 1) {
-      deferredExtraLines.push(line);
-      edits.push({
-        type: "removeLine",
-        line,
-        sourceLineText: String(lines[line] || ""),
-      });
-    }
-  }
   // Create a placeholder for carried links or the last entry. MEET continuations
   // with an open entry below go after the last such entry; other closes keep the
   // immediate slot. Worked-on links precede deferred links in source order.
@@ -930,7 +893,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
   const isLastPomodoro = nextPomodoroLine === null;
   const shouldCreatePomodoro = copyableBulletLines.length > 0 || isLastPomodoro;
   const removedLineCountBefore = (line) =>
-    [...movedSourceLines, ...deferredExtraLines].filter((removedLine) => removedLine < line).length;
+    [...movedSourceLines].filter((removedLine) => removedLine < line).length;
   const continuationName = options &&
     typeof options.continuationName === "string"
     ? options.continuationName
@@ -969,11 +932,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
     });
     cursorTargetLine = continuationPlacement.placedLast
       ? continuationPlacement.firstOpenLine -
-        removedLineCountBefore(continuationPlacement.firstOpenLine) -
-        (deferredOnlyClose ? 1 : 0)
-      : deferredOnlyClose
-      // The deleted entry's old line becomes the placeholder's final line.
-      ? pomodoroLine
+        removedLineCountBefore(continuationPlacement.firstOpenLine)
       : insertLine - removedLineCountBefore(insertLine);
   }
 
@@ -988,8 +947,7 @@ function buildPomodoroCompletionPlan(lines, section, pomodoroLine, options = {})
     cursorTargetLine,
     copiedBulletLines,
     edits,
-    deferredOnlyClose,
-    closedName: !deferredOnlyClose && options &&
+    closedName: options &&
       typeof options.closedName === "string"
       ? options.closedName
       : createdPomodoroName,

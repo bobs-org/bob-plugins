@@ -27,34 +27,6 @@ function getCreatedContinuationBlockFromPlan(plan) {
   }
 }
 
-function findCreatedContinuationBlockLine(currentLines, blockLines, fromLine) {
-  try {
-    const lines = Array.isArray(currentLines) ? currentLines : [];
-    const block = Array.isArray(blockLines)
-      ? blockLines.map((line) => String(line ?? ""))
-      : null;
-    if (!block || block.length === 0) {
-      return null;
-    }
-    const from = Number.isInteger(fromLine) && fromLine >= 0 ? fromLine : 0;
-    for (let line = from; line + block.length <= lines.length; line += 1) {
-      let matches = true;
-      for (let index = 0; index < block.length; index += 1) {
-        if (String(lines[line + index] || "") !== block[index]) {
-          matches = false;
-          break;
-        }
-      }
-      if (matches) {
-        return line;
-      }
-    }
-    return null;
-  } catch (error) {
-    return null;
-  }
-}
-
 function findCreatedContinuationEntryLine(dailyAfter, blockLines, createdName, relocatedLine) {
   try {
     const lines = Array.isArray(dailyAfter) ? dailyAfter : [];

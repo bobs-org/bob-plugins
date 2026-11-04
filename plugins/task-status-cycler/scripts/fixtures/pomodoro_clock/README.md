@@ -12,10 +12,11 @@ This plugin drives the close cases (token `x`) through `Ctrl+Enter`
 match `expected_day`'s closed row byte for byte, and `[off:: Nm]` appears
 exactly when `expected_off_clock` is true. Starts belong to bob-ledger-tools; a
 close with a `~K` drop, kept-ledger swaps, and link starts are capture-only
-gestures. One deliberate difference: a close whose every kept link is deferred
-deletes the emptied row in this plugin (the documented emptied-Pomodoro rule),
-where bob keeps it, so `close-defers-not-started-off-clock` asserts the deferral
-and the worked verdict rather than a closed headline.
+gestures. There is no deliberate close difference left: per the g4 keep policy
+a close whose every kept link is deferred keeps the closed row with its minutes
+exactly as bob does, deferring and carrying the links, so
+`close-defers-not-started-off-clock` asserts the full `expected_day` like every
+other close vector.
 
 Each case gives the whole daily note (`day`, path `2026/20261101.md`), optional
 other notes (`notes`, path → contents), the clock (`now`), the capture `token`,

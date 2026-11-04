@@ -408,15 +408,17 @@ test("take-back keeps entries that are closed or keep another child", () => {
   );
 });
 
-test("closing-entry relocation finds a deferred-only placeholder", () => {
+test("closing-entry relocation finds the kept closed entry", () => {
   const plugin = new TaskStatusCyclerPlugin();
   const lines = [
     "## Pomodoros",
+    "- [x] (1000-1025) — FOCUS",
     "- [ ] () — FOCUS",
     "\t- [[Tasks#^a|A]]",
     "- [ ] Later",
   ];
-  // A deferred-only close relocates onto the inserted placeholder headline.
+  // A deferred-only close keeps the `[x]` row, so relocation lands on the
+  // restamped headline rather than the inserted placeholder.
   assert.equal(
     plugin.relocateSuccessorClosingEntry(lines, {
       line: 1,
@@ -424,8 +426,7 @@ test("closing-entry relocation finds a deferred-only placeholder", () => {
       name: "FOCUS",
       createdPomodoro: true,
       createdName: "FOCUS",
-      deletedClosedEntry: true,
-      createdLineText: "- [ ] () — FOCUS",
+      createdBlockLines: ["- [ ] () — FOCUS", "\t- [[Tasks#^a|A]]"],
     }),
     1,
   );

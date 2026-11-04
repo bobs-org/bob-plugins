@@ -48,9 +48,9 @@ created when the task has none. One close reads the clock once, so every entry
 it writes carries the same stamp; the stamp is the write instant, never the
 daily note's filename date, so closing yesterday's forgotten session this
 morning stamps this morning. Older date-only entries are never rewritten. A
-Pomodoro close whose children are all deferred `#` links deletes the closed
-entry instead of leaving it childless, carrying the stripped links to the
-created placeholder.
+Pomodoro close whose children are all deferred `#` links keeps the closed
+`[x]` entry with its recorded minutes, matching `bob capture x`, while
+carrying the stripped links to the created placeholder.
 
 When Ctrl+Enter closes a MEET that carries later meetings with an open
 Pomodoro below it, the created continuation moves after the last open

@@ -95,10 +95,10 @@ for (const vector of fixture.cases) {
     assert.equal(result.completed, true);
     if (vector.id === "close-defers-not-started-off-clock") {
       // The not-started event is deferred to the next Pomodoro, so the close
-      // keeps no link: unlinked, worked. The plugin's emptied-Pomodoro rule
-      // (a deferred-only close deletes the childless row, which bob keeps)
-      // leaves no closed headline to stamp; the deferred link is carried.
-      assert.equal(closedRow(result.value), undefined);
+      // keeps no link: unlinked, worked. Per the g4 keep policy the closed
+      // `[x]` row survives with its minutes, exactly as bob writes it, while
+      // the deferred link is carried to the created placeholder.
+      assert.equal(closedRow(result.value), closedRow(vector.expected_day));
       assert.match(result.value, /^- \[ \] \(\) — MEET\n\s+- \[\[#\^lunch\]\]$/m);
       assert.equal(vector.expected_off_clock, false);
       return;

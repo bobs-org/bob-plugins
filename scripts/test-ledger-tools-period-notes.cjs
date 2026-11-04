@@ -68,7 +68,7 @@ const {
 function makeHarness({ vaultPaths = {}, spawn = null } = {}) {
   const vaultFiles = new Map(Object.entries(vaultPaths));
   const callbacks = {};
-  let layoutReady = null;
+  const layoutReadyCallbacks = [];
   const commands = [];
   const spawns = [];
   const opened = [];
@@ -76,7 +76,7 @@ function makeHarness({ vaultPaths = {}, spawn = null } = {}) {
     internalPlugins: { plugins: {} },
     workspace: {
       onLayoutReady(callback) {
-        layoutReady = callback;
+        layoutReadyCallbacks.push(callback);
       },
     },
     vault: {
@@ -128,7 +128,7 @@ function makeHarness({ vaultPaths = {}, spawn = null } = {}) {
     spawns,
     opened,
     fireLayoutReady: () => {
-      if (typeof layoutReady === "function") layoutReady();
+      for (const callback of layoutReadyCallbacks.splice(0)) callback();
     },
   };
 }

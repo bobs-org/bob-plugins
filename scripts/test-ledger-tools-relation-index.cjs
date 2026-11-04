@@ -10,7 +10,7 @@ class TestPlugin {
   registerEvent(ref) { this.registeredEvents = this.registeredEvents || []; this.registeredEvents.push(ref); }
   registerEditorExtension(extension) { this.editorExtensions = this.editorExtensions || []; this.editorExtensions.push(extension); }
   addCommand() {}
-  registerInterval(handle) { return handle; }
+  registerInterval(handle) { clearInterval(handle); return handle; }
 }
 class TestNotice { constructor() {} }
 
@@ -90,13 +90,13 @@ function makeOnloadApp(files, tasks = []) {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const aliases = new Map();
   const reads = [];
-  let layoutReadyCallback = null;
+  const layoutReadyCallbacks = [];
   const app = {
     workspace: {
       on: workspaceEvents.on.bind(workspaceEvents),
       offref: () => {},
       onLayoutReady: (callback) => {
-        layoutReadyCallback = callback;
+        layoutReadyCallbacks.push(callback);
       },
       getActiveViewOfType: () => app.activeView || null,
       getActiveFile: () => null,
@@ -129,7 +129,9 @@ function makeOnloadApp(files, tasks = []) {
     _files: byPath,
     _aliases: aliases,
     _reads: reads,
-    _getLayoutReadyCallback: () => layoutReadyCallback,
+    _fireLayoutReadyCallbacks: () => {
+      for (const callback of layoutReadyCallbacks.splice(0)) callback();
+    },
   };
   return app;
 }
@@ -267,15 +269,14 @@ test("relationIndex registers after layout-ready and never reads non-markdown du
   app._aliases.set("notes/target", "notes/target.md");
   const plugin = new LedgerToolsPlugin(app, {});
   plugin.onload();
-  const layoutReady = app._getLayoutReadyCallback();
-  assert.equal(typeof layoutReady, "function", "onload must defer relation setup to onLayoutReady");
+  assert.ok(app._fireLayoutReadyCallbacks, "onload must defer relation setup to onLayoutReady");
   for (const file of files) {
     app._events.vaultEvents.emit("create", file);
   }
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(app._reads.length, 0, "no vault reads before layout-ready");
   assert.equal(plugin.relationIndexFiles.size, 0, "no files indexed before layout-ready");
-  layoutReady();
+  app._fireLayoutReadyCallbacks();
   const api = plugin.relationIndexApi();
   await waitUntil(() => api.ready(), "relation scan should finish after layout-ready");
   for (const readPath of app._reads) {
@@ -337,10 +338,9 @@ test("relationIndex layout-ready after unload registers nothing", async () => {
   app._aliases.set("notes/target", "notes/target.md");
   const plugin = new LedgerToolsPlugin(app, {});
   plugin.onload();
-  const layoutReady = app._getLayoutReadyCallback();
-  assert.equal(typeof layoutReady, "function");
+  assert.ok(app._fireLayoutReadyCallbacks);
   plugin.onunload();
-  layoutReady();
+  app._fireLayoutReadyCallbacks();
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(plugin.relationIndexListeners.size, 0, "no relation listeners after unload");
   assert.equal(plugin.relationIndexFiles.size, 0, "no scan started after unload");

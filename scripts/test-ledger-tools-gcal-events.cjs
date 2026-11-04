@@ -360,10 +360,10 @@ test("sync-on-create gate only accepts today's canonical daily note", () => {
 test("create listener runs once for today's note after layout readiness", () => {
   const now = new Date();
   const callbacks = {};
-  let layoutReady;
+  const layoutReadyCallbacks = [];
   const app = {
     internalPlugins: { plugins: {} },
-    workspace: { onLayoutReady(callback) { layoutReady = callback; } },
+    workspace: { onLayoutReady(callback) { layoutReadyCallbacks.push(callback); } },
     vault: {
       on(event, callback) { callbacks[event] = callback; return { event, callback }; },
     },
@@ -376,7 +376,7 @@ test("create listener runs once for today's note after layout readiness", () => 
   plugin.gcalSyncCreatedDailyNote = () => { syncs += 1; };
   plugin.setupGcalSyncOnCreate();
   assert.equal(plugin.gcalSyncOnCreateEnabled, true);
-  layoutReady();
+  for (const callback of layoutReadyCallbacks.splice(0)) callback();
   const today = { path: todayDailyPath(now) };
   callbacks.create(today);
   callbacks.create(today);

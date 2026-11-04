@@ -919,6 +919,12 @@ test("Live Preview performance stays bounded on a large child block", () => {
   for (let i = 0; i < 5000; i += 1) kids.push("\t- filler " + i);
   kids.push("\t- 🥀 **ROTTEN LOG**", "\t\t- *2026-10-16* — old · kept 1×");
   const doc = makeRottenDoc(task, kids);
+  let lineReads = 0;
+  const readLine = doc.line;
+  doc.line = (number) => {
+    lineReads += 1;
+    return readLine(number);
+  };
   let toStringCalls = 0;
   doc.toString = () => {
     toStringCalls += 1;
@@ -926,7 +932,6 @@ test("Live Preview performance stays bounded on a large child block", () => {
   };
   const plugin = pluginWithSnapshot([sRow({ rawLine: task })]);
   const source = freshnessMarkSource(task, D);
-  const start = Date.now();
   const model = plugin.freshnessMarkModelForLine({
     path: "a.md",
     lineNumber: 0,
@@ -934,10 +939,13 @@ test("Live Preview performance stays bounded on a large child block", () => {
     doc,
     source,
   });
-  const elapsed = Date.now() - start;
   assert.ok(model);
   assert.equal(toStringCalls, 0);
-  assert.ok(elapsed < 5000, "bounded build, got " + elapsed + "ms");
+  assert.equal(
+    lineReads,
+    Math.min(doc.lines, 5001),
+    "large child blocks stop after at most 5,000 child lines",
+  );
 });
 
 test("reading view shows the rotten line and excludes Tasks and Dataview rows", () => {

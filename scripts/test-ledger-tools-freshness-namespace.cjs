@@ -318,9 +318,12 @@ test("the reload event fires only when the due key set changes", () => {
     const app = makeFreshnessApp({ tasks: undefined, frontmatter, triggers });
     app.plugins.plugins["obsidian-tasks-plugin"].getTasks = () => tasks;
     const plugin = new LedgerToolsPlugin(app, {});
+    const now = () => new Date(2026, 9, 8);
+    const ensureMemo = plugin.freshnessEnsureMemo.bind(plugin);
+    plugin.freshnessEnsureMemo = (instant = now()) => ensureMemo(instant);
     plugin.onload();
     try {
-      plugin.freshnessEnsureMemo(new Date(2026, 9, 8));
+      plugin.freshnessEnsureMemo();
       assert.deepEqual(triggers, []);
 
       // A longer interval clears the ROTTEN entry, so the due set changes.

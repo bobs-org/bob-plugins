@@ -13,12 +13,22 @@ const repoRoot = path.resolve(__dirname, "..");
 const pluginRoot = path.join(repoRoot, "plugins/bob-command-mode");
 
 function findChromium() {
-  if (process.env.CHROMIUM_PATH && fs.existsSync(process.env.CHROMIUM_PATH)) return process.env.CHROMIUM_PATH;
+  if (process.env.CHROMIUM_PATH) {
+    try {
+      const stat = fs.statSync(process.env.CHROMIUM_PATH);
+      if (!stat.isFile()) throw new Error("not a file");
+      fs.accessSync(process.env.CHROMIUM_PATH, fs.constants.X_OK);
+    } catch (error) {
+      throw new Error("CHROMIUM_PATH must name an executable browser: " + process.env.CHROMIUM_PATH);
+    }
+    return process.env.CHROMIUM_PATH;
+  }
   for (const name of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]) {
     const found = spawnSync("which", [name], { encoding: "utf8" });
     if (found.status === 0 && found.stdout.trim()) return found.stdout.trim();
   }
-  throw new Error("Could not find Chromium. Set CHROMIUM_PATH to a browser executable.");
+  if (process.env.CI) throw new Error("CI requires Chromium on PATH or CHROMIUM_PATH.");
+  return null;
 }
 
 class CdpClient {
@@ -160,10 +170,11 @@ function catalogJson() {
   };
 }
 
-test("production sheet render and clicks use real DOM APIs", { timeout: 30000 }, async () => {
+test("production sheet render and clicks use real DOM APIs", { timeout: 30000 }, async (t) => {
+  const chromium = findChromium();
+  if (!chromium) return t.skip("Chromium is not installed; set CHROMIUM_PATH to run production DOM coverage.");
   const htmlFile = path.join(os.tmpdir(), "bob-cmd-seq-dom-" + process.pid + ".html");
   fs.writeFileSync(htmlFile, pageHtml());
-  const chromium = findChromium();
   const profile = fs.mkdtempSync(path.join("/tmp", "bob-cmd-seq-dom-"));
   const child = spawn(chromium, [
     "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",

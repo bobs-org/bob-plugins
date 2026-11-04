@@ -44,6 +44,7 @@ class TestPlugin {
   registerInterval(handle) {
     this.intervals = this.intervals || [];
     this.intervals.push(handle);
+    clearInterval(handle);
     return handle;
   }
 }
@@ -190,6 +191,10 @@ function makeNoteReadyApp({
           getTasks: () => tasks,
           getState: () => tasksState,
         };
+  const layoutReadyCallbacks = [];
+  handlers.onLayoutReady = () => {
+    for (const callback of layoutReadyCallbacks.splice(0)) callback();
+  };
   return {
     vault: {
       getAbstractFileByPath: (filePath) =>
@@ -209,7 +214,7 @@ function makeNoteReadyApp({
       },
       offref: () => {},
       onLayoutReady: (callback) => {
-        handlers.onLayoutReady = callback;
+        layoutReadyCallbacks.push(callback);
       },
       getActiveFile: () => null,
       trigger: (event) => triggers.push(event),
@@ -1191,6 +1196,7 @@ test("the startup storm is linear", () => {
     assert.ok(plugin.api.noteReady.forNote(path), path);
   }
   assert.equal(plugin.api.noteReady.forNote("note-0001.md"), null);
+  plugin.onunload();
 });
 
 test("the first resolved event forces one rebuild and later ones do not", () => {

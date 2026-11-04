@@ -144,11 +144,25 @@ test("Ready and Blocked explicit dates review the Reason with no Work summary fi
 
 test("future scheduling on Pending marks Blocked but still writes the Work Log", async () => {
   notices.length = 0;
-  const harness = schedulingReviewHarness("- [/] #task Pending work ^a");
-  const picker = await openSchedulingReview(harness, "2026-11-02");
+  const now = new Date();
+  const harness = schedulingReviewHarness("- [/] #task Pending work ^a", {
+    baseDate: now,
+    now,
+  });
+  const future = new Date(now);
+  future.setDate(future.getDate() + 7);
+  const futureDate = [
+    String(future.getFullYear()).padStart(4, "0"),
+    String(future.getMonth() + 1).padStart(2, "0"),
+    String(future.getDate()).padStart(2, "0"),
+  ].join("-");
+  const picker = await openSchedulingReview(harness, futureDate);
   await confirmScheduleReasonStage(picker, "later", "Did prep");
   assert.match(harness.editor.content, /- \[\?\] #task Pending work/);
-  assert.match(harness.editor.content, /\*2026-10-02 14:32\* — Did prep/);
+  assert.match(
+    harness.editor.content,
+    new RegExp(`\\*${helpers.formatWorkLogStamp(now)}\\* — Did prep`),
+  );
 });
 
 test("tomorrow date on Pending still offers the Work Log", async () => {

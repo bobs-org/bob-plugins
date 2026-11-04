@@ -990,6 +990,12 @@ test("single flight queues one request and upgrades it from cache to forced", as
 test("forced check feedback follows the bob refresh result", async () => {
   const plugin = makeActionPlugin();
   const seen = [];
+  const formatLocalClock = (value) =>
+    new Date(value).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
   for (const refreshCase of [
     {
       name: "success",
@@ -1022,7 +1028,7 @@ test("forced check feedback follows the bob refresh result", async () => {
     {
       name: "rate-limited",
       keep: { state: "rate_limited", next_check_at: "2026-10-31T16:30:00Z", refresh: { ran: false, skipped: "backoff" } },
-      notice: "Google asked Bob to slow down · try after 16:30",
+      notice: "Google asked Bob to slow down · try after " + formatLocalClock("2026-10-31T16:30:00Z"),
     },
     {
       name: "in-flight",

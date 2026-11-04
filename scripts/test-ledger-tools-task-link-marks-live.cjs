@@ -1226,7 +1226,7 @@ test("a viewport-limited build over a 1,000-line note stays fast", () => {
   };
   const warm = ringsOf(env, scrollTo(500));
   assert.equal(warm.length, 122);
-  const warmMs = bestOf(5, (sample) => {
+  const warmMs = bestOf(3, (sample) => {
     assert.equal(ringsOf(env, scrollTo(500 + sample * 7)).length, 122);
   });
   assert.ok(warmMs < 25, `warm viewport build took ${warmMs.toFixed(1)}ms of CPU`);

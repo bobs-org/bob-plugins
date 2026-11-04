@@ -241,6 +241,26 @@ previewed rename flow. The relation-label stage also uses `Ctrl+R` to rename
 the selected existing label; it checks affected open editors before preview and
 write, and requires explicit confirmation before merging labels.
 
+## Task splitting
+
+`Ctrl+Shift+T` splits the note under the cursor into a new task, and the
+counted and visual-selection forms split the touched bullets together. On a
+task line it opens a picker across that task's splittable notes; on a drawer
+title it opens the same picker scoped to that drawer. Nothing starts marked.
+`Tab` marks or unmarks a row and advances, `Enter` splits the marked rows (or
+the highlighted row when none are marked), and `Esc` cancels without writing.
+
+A plain section bullet, such as one under `## Future Work`, becomes a task in
+the note's `## Tasks` intake and leaves a live link stub in the section. A
+split from a daily-note task writes new tasks to the task's `[root::]` note, or
+to the default inbox when no root is set. Same-note writes are one editor
+transaction and one `Ctrl+Z`. Cross-note writes put the destination first and
+guard both notes; their **Undo split** notice action restores the saved text
+only while all affected notes still match, otherwise it lists the changed
+paths. The cursor lands on the first new task and `Ctrl+O` returns to the
+source; if Bob cannot open the destination, it reports the destination path.
+The gesture never advances the `]s` review walk.
+
 ## Task properties, dependencies, and moves
 
 `Ctrl+Shift+P` edits scheduled, dependency, and priority task properties, with

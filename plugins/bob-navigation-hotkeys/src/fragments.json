@@ -169,6 +169,7 @@
   "651-pomodoro-bullet-type-move-commit.js",
   "652-pomodoro-split.js",
   "653-plugin-task-split.js",
+  "654-task-undo-notice.js",
   "655-plugin-inbox-route.js",
   "660-plugin-project-notes.js",
   "665-plugin-project-conversion.js",
@@ -193,5 +194,6 @@
   "705-relation-successor-exports.js",
   "706-successor-relation-exports.js",
   "707-decay-hotfix-exports.js",
-  "708-image-zoom-origin-exports.js"
+  "708-image-zoom-origin-exports.js",
+  "709-task-split-exports.js"
 ]

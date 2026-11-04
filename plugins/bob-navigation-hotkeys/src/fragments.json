@@ -109,6 +109,7 @@
   "428a-picker-relation-close-preview.js",
   "428b-picker-relation-successor-preview.js",
   "429-relation-label-management.js",
+  "429a-relation-merge-commit.js",
   "430-picker-vault-batch.js",
   "440-picker-vault-commit.js",
   "450-picker-keydown.js",
@@ -195,5 +196,6 @@
   "706-successor-relation-exports.js",
   "707-decay-hotfix-exports.js",
   "708-image-zoom-origin-exports.js",
-  "709-task-split-exports.js"
+  "709-task-split-exports.js",
+  "710-relation-merge-exports.js"
 ]

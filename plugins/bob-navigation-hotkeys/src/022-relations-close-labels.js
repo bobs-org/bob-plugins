@@ -1,7 +1,8 @@
-// Combined cancel/complete/successor label policy (`docs/task-relations.md`
-// §§17–18 and §20 SU2). The three kinds share one cache and one overlap
-// check so a configured label can never carry more than one effect: a key
-// listed in two or more lists has no effect and is dropped from every list.
+// Combined cancel/complete/successor/merge label policy
+// (`docs/task-relations.md` §§17–18, §20 SU2, and §21 ML1). The four kinds
+// share one cache and one overlap check so a configured label can never
+// carry more than one effect: a key listed in two or more lists has no
+// effect and is dropped from every list.
 const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
   cancel:
     "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing",
@@ -9,6 +10,8 @@ const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
     "invalid relations.complete_labels in %s: expected a list of relation labels; completing nothing",
   successor:
     "invalid relations.successor_labels in %s: expected a list of relation labels; offering nothing",
+  merge:
+    "invalid relations.merge_labels in %s: expected a list of relation labels; merging nothing",
 });
 
 let relationsCloseLabelsConfigCache = {
@@ -22,8 +25,13 @@ function emptyRelationsCloseLabels() {
     cancel: emptyRelationsCancelLabels(),
     complete: emptyRelationsCancelLabels(),
     successor: emptyRelationsCancelLabels(),
+    merge: emptyRelationsCancelLabels(),
     warnings: Object.freeze([]),
   });
+}
+
+function relationMergeLabelsSet(mergeLabels) {
+  return relationCancelLabelsSet(mergeLabels);
 }
 
 function relationSuccessorLabelsSet(successorLabels) {
@@ -53,6 +61,13 @@ function relationLabelEffectForKey(key, closeConfig) {
     relationCancelLabelsSet(closeConfig.successor).has(normalized)
   ) {
     return "successor";
+  }
+  if (
+    closeConfig &&
+    closeConfig.merge &&
+    relationCancelLabelsSet(closeConfig.merge).has(normalized)
+  ) {
+    return "merge";
   }
   return null;
 }
@@ -161,7 +176,9 @@ function loadRelationsCloseLabels(options = {}) {
       ? "cancel_labels"
       : kind === "complete"
         ? "complete_labels"
-        : "successor_labels";
+        : kind === "merge"
+          ? "merge_labels"
+          : "successor_labels";
     const value = relations && relations[field];
     if (value === undefined || value === null) {
       return freezeRelationsCancelLabels([], {});
@@ -201,19 +218,35 @@ function loadRelationsCloseLabels(options = {}) {
   let cancel = parseList("cancel");
   let complete = parseList("complete");
   let successor = parseList("successor");
+  let merge = parseList("merge");
   const countIn = (key) =>
     (cancel.keys.includes(key) ? 1 : 0) +
     (complete.keys.includes(key) ? 1 : 0) +
-    (successor.keys.includes(key) ? 1 : 0);
-  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys])]
+    (successor.keys.includes(key) ? 1 : 0) +
+    (merge.keys.includes(key) ? 1 : 0);
+  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys, ...merge.keys])]
     .filter((key) => countIn(key) > 1);
   if (overlap.length > 0) {
     const cancelKeys = cancel.keys.filter((key) => !overlap.includes(key));
     const completeKeys = complete.keys.filter((key) => !overlap.includes(key));
     const successorKeys = successor.keys.filter((key) => !overlap.includes(key));
+    const mergeKeys = merge.keys.filter((key) => !overlap.includes(key));
     for (const key of overlap) {
-      const successorInvolved = successor.keys.includes(key);
-      if (successorInvolved) {
+      // Mirror `task_merge::overlapping_effect_keys`: a merge-involved
+      // overlap names merge_labels; a bare cancel+complete overlap keeps
+      // its legacy "closes nothing" copy; anything else names the three
+      // legacy lists.
+      const mergeInvolved = merge.keys.includes(key);
+      if (mergeInvolved) {
+        const label = merge.labels[key] || successor.labels[key] ||
+          cancel.labels[key] || complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in merge_labels and another effect list in ${configPath}; it has no effect`,
+        );
+      } else if (
+        successor.keys.includes(key) ||
+        !(cancel.keys.includes(key) && complete.keys.includes(key))
+      ) {
         const label = successor.labels[key] || cancel.labels[key] ||
           complete.labels[key] || key;
         warnings.push(
@@ -238,6 +271,10 @@ function loadRelationsCloseLabels(options = {}) {
       successorKeys,
       Object.fromEntries(successorKeys.map((key) => [key, successor.labels[key]])),
     );
+    merge = freezeRelationsCancelLabels(
+      mergeKeys,
+      Object.fromEntries(mergeKeys.map((key) => [key, merge.labels[key]])),
+    );
   }
   emitRelationsCloseLabelWarnings(warnings, cacheKey, options.warn);
   return store(
@@ -245,6 +282,7 @@ function loadRelationsCloseLabels(options = {}) {
       cancel,
       complete,
       successor,
+      merge,
       warnings: Object.freeze(warnings.slice()),
     }),
   );

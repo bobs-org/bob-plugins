@@ -2522,10 +2522,11 @@ function loadRelationsCancelLabels(options = {}) {
   return loaded;
 }
 // ---- src/022-relations-close-labels.js ----
-// Combined cancel/complete/successor label policy (`docs/task-relations.md`
-// §§17–18 and §20 SU2). The three kinds share one cache and one overlap
-// check so a configured label can never carry more than one effect: a key
-// listed in two or more lists has no effect and is dropped from every list.
+// Combined cancel/complete/successor/merge label policy
+// (`docs/task-relations.md` §§17–18, §20 SU2, and §21 ML1). The four kinds
+// share one cache and one overlap check so a configured label can never
+// carry more than one effect: a key listed in two or more lists has no
+// effect and is dropped from every list.
 const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
   cancel:
     "invalid relations.cancel_labels in %s: expected a list of relation labels; cancelling nothing",
@@ -2533,6 +2534,8 @@ const RELATIONS_CLOSE_LABELS_LIST_WARNINGS = Object.freeze({
     "invalid relations.complete_labels in %s: expected a list of relation labels; completing nothing",
   successor:
     "invalid relations.successor_labels in %s: expected a list of relation labels; offering nothing",
+  merge:
+    "invalid relations.merge_labels in %s: expected a list of relation labels; merging nothing",
 });
 
 let relationsCloseLabelsConfigCache = {
@@ -2546,8 +2549,13 @@ function emptyRelationsCloseLabels() {
     cancel: emptyRelationsCancelLabels(),
     complete: emptyRelationsCancelLabels(),
     successor: emptyRelationsCancelLabels(),
+    merge: emptyRelationsCancelLabels(),
     warnings: Object.freeze([]),
   });
+}
+
+function relationMergeLabelsSet(mergeLabels) {
+  return relationCancelLabelsSet(mergeLabels);
 }
 
 function relationSuccessorLabelsSet(successorLabels) {
@@ -2577,6 +2585,13 @@ function relationLabelEffectForKey(key, closeConfig) {
     relationCancelLabelsSet(closeConfig.successor).has(normalized)
   ) {
     return "successor";
+  }
+  if (
+    closeConfig &&
+    closeConfig.merge &&
+    relationCancelLabelsSet(closeConfig.merge).has(normalized)
+  ) {
+    return "merge";
   }
   return null;
 }
@@ -2685,7 +2700,9 @@ function loadRelationsCloseLabels(options = {}) {
       ? "cancel_labels"
       : kind === "complete"
         ? "complete_labels"
-        : "successor_labels";
+        : kind === "merge"
+          ? "merge_labels"
+          : "successor_labels";
     const value = relations && relations[field];
     if (value === undefined || value === null) {
       return freezeRelationsCancelLabels([], {});
@@ -2725,19 +2742,35 @@ function loadRelationsCloseLabels(options = {}) {
   let cancel = parseList("cancel");
   let complete = parseList("complete");
   let successor = parseList("successor");
+  let merge = parseList("merge");
   const countIn = (key) =>
     (cancel.keys.includes(key) ? 1 : 0) +
     (complete.keys.includes(key) ? 1 : 0) +
-    (successor.keys.includes(key) ? 1 : 0);
-  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys])]
+    (successor.keys.includes(key) ? 1 : 0) +
+    (merge.keys.includes(key) ? 1 : 0);
+  const overlap = [...new Set([...cancel.keys, ...complete.keys, ...successor.keys, ...merge.keys])]
     .filter((key) => countIn(key) > 1);
   if (overlap.length > 0) {
     const cancelKeys = cancel.keys.filter((key) => !overlap.includes(key));
     const completeKeys = complete.keys.filter((key) => !overlap.includes(key));
     const successorKeys = successor.keys.filter((key) => !overlap.includes(key));
+    const mergeKeys = merge.keys.filter((key) => !overlap.includes(key));
     for (const key of overlap) {
-      const successorInvolved = successor.keys.includes(key);
-      if (successorInvolved) {
+      // Mirror `task_merge::overlapping_effect_keys`: a merge-involved
+      // overlap names merge_labels; a bare cancel+complete overlap keeps
+      // its legacy "closes nothing" copy; anything else names the three
+      // legacy lists.
+      const mergeInvolved = merge.keys.includes(key);
+      if (mergeInvolved) {
+        const label = merge.labels[key] || successor.labels[key] ||
+          cancel.labels[key] || complete.labels[key] || key;
+        warnings.push(
+          `relations: “${label}” is in merge_labels and another effect list in ${configPath}; it has no effect`,
+        );
+      } else if (
+        successor.keys.includes(key) ||
+        !(cancel.keys.includes(key) && complete.keys.includes(key))
+      ) {
         const label = successor.labels[key] || cancel.labels[key] ||
           complete.labels[key] || key;
         warnings.push(
@@ -2762,6 +2795,10 @@ function loadRelationsCloseLabels(options = {}) {
       successorKeys,
       Object.fromEntries(successorKeys.map((key) => [key, successor.labels[key]])),
     );
+    merge = freezeRelationsCancelLabels(
+      mergeKeys,
+      Object.fromEntries(mergeKeys.map((key) => [key, merge.labels[key]])),
+    );
   }
   emitRelationsCloseLabelWarnings(warnings, cacheKey, options.warn);
   return store(
@@ -2769,6 +2806,7 @@ function loadRelationsCloseLabels(options = {}) {
       cancel,
       complete,
       successor,
+      merge,
       warnings: Object.freeze(warnings.slice()),
     }),
   );
@@ -49966,6 +50004,165 @@ function relationStageLabelPlaceholder(suggestions) {
     ? `Relation (optional) — e.g. ${first}`
     : "Relation (optional) — e.g. see also";
 }
+
+// Merge-label indications (`docs/task-relations.md` §21 ML1). A configured
+// merge label never lands as a plain relation: committing it folds the
+// source's notes into the target and cancels the source at commit time.
+function relationMergeSuggestionMeta() {
+  return "⤵ merges";
+}
+
+function relationMergeRowMeta() {
+  return "⤵ merges source";
+}
+
+function relationMergeRenameWarningCopy(label) {
+  const name = String(label || "").trim() || "that label";
+  return `“${name}” is a merge label in config.yml — update relations.merge_labels`;
+}
+
+// Configured merge labels are suggestions even before their first use, like
+// the cancel/complete/successor overlays above.
+function mergeRelationMergeLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredMerge: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({
+      key,
+      label,
+      count: 0,
+      hidden: false,
+      inverse: null,
+      configuredMerge: true,
+    });
+  }
+  return out;
+}
+
+function relationMergeInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
+// Normalize one decoded `bob task merge -f json` report into the strip,
+// banner, and offer-picker inputs. Pure: never touches the vault.
+function taskMergePreviewSummary(report) {
+  const body = report && typeof report === "object" ? report : {};
+  const merges = Array.isArray(body.merges) ? body.merges : [];
+  const sources = merges.map((record) => {
+    const source = record && typeof record.source === "object" ? record.source : {};
+    const target = record && typeof record.target === "object" ? record.target : {};
+    return Object.freeze({
+      title: String(source.title || "that task"),
+      path: String(source.path || ""),
+      blockId: source.block_id != null ? String(source.block_id) : "",
+      outcome: String(record.outcome || ""),
+      movedNotes: Math.max(0, Math.floor(numericOrDefault(record.moved_notes, 0))),
+      dependents: Array.isArray(record.dependents_repointed)
+        ? record.dependents_repointed.map(String)
+        : [],
+      offers: Array.isArray(record.offers) ? record.offers.slice() : [],
+      targetTitle: target.title != null ? String(target.title) : "",
+      targetPath: String(target.path || ""),
+      targetKind: String(target.kind || "task"),
+      targetDrawer: target.drawer != null ? String(target.drawer) : "",
+      targetSection: target.section != null ? String(target.section) : "",
+    });
+  });
+  const first = merges.length > 0 && merges[0] && typeof merges[0] === "object"
+    ? merges[0]
+    : {};
+  const firstTarget = first.target && typeof first.target === "object" ? first.target : {};
+  const offers = [];
+  for (const record of merges) {
+    for (const offer of (record && Array.isArray(record.offers) ? record.offers : [])) {
+      if (offer && typeof offer === "object") offers.push(offer);
+    }
+  }
+  const merged = sources.filter((source) => source.outcome === "merged" || source.outcome === "");
+  return Object.freeze({
+    sources: Object.freeze(sources),
+    count: sources.length,
+    mergedCount: merged.length,
+    targetTitle: firstTarget.title != null ? String(firstTarget.title || "") : "",
+    targetPath: String(firstTarget.path || ""),
+    targetKind: String(firstTarget.kind || "task"),
+    targetDrawer: firstTarget.drawer != null ? String(firstTarget.drawer) : "",
+    targetSection: firstTarget.section != null ? String(firstTarget.section) : "",
+    movedNotes: sources.reduce((sum, source) => sum + source.movedNotes, 0),
+    dependents: Object.freeze(
+      sources.flatMap((source) => source.dependents),
+    ),
+    offers: Object.freeze(offers),
+    nonce: JSON.stringify({
+      sources: sources.map((source) => `${source.path}\x00${source.blockId}\x00${source.outcome}`),
+      target: `${String(firstTarget.path || "")}\x00${String(firstTarget.block_id || firstTarget.blockId || "")}\x00${String(firstTarget.kind || "")}`,
+      offers: offers.map((offer) => String(offer.key || offer.n || "")),
+    }),
+  });
+}
+
+// The Links-stage consequence strip for a merge preview
+// (`docs/task-relations.md` §21 ML1, canonical copy in
+// `docs/task-merge.md` §10): `⤵ Merges “S” into “T” · moves N notes ·
+// cancels “S” · N dependent(s) now wait on “T” · offers “T” under ENTRY`.
+function formatTaskMergeConsequenceStrip(summary) {
+  if (!summary || !Array.isArray(summary.sources) || summary.sources.length === 0) {
+    return "⤵ previewing…";
+  }
+  const target = summary.targetTitle
+    ? `“${summary.targetTitle}”`
+    : summary.targetSection
+      ? `## ${summary.targetSection}`
+      : "that task";
+  const firstSource = summary.sources.length === 1 ? `“${summary.sources[0].title}”` : `${summary.sources.length} tasks`;
+  const parts = [`⤵ Merges ${firstSource} into ${target}`];
+  if (summary.movedNotes > 0) {
+    parts.push(
+      summary.movedNotes === 1 ? "moves 1 note" : `moves ${summary.movedNotes} notes`,
+    );
+  }
+  if (summary.sources.length === 1) {
+    parts.push(`cancels “${summary.sources[0].title}”`);
+  } else {
+    parts.push(`cancels ${summary.sources.length} tasks`);
+  }
+  if (summary.dependents.length > 0) {
+    parts.push(
+      summary.dependents.length === 1
+        ? `1 dependent now waits on ${target}`
+        : `${summary.dependents.length} dependents now wait on ${target}`,
+    );
+  }
+  const offerEntries = [...new Set(
+    summary.offers.map((offer) => String((offer && offer.entry_name) || "").trim()).filter(Boolean),
+  )];
+  if (offerEntries.length > 0) {
+    parts.push(`offers ${target} under ${offerEntries.join(", ")}`);
+  }
+  return parts.join(" · ");
+}
+
+function relationMergeConfirmBanner(mergeCount) {
+  const merges = Math.max(0, Math.floor(numericOrDefault(mergeCount, 0)));
+  if (merges < 2) return "";
+  return `⤵ Merges ${merges} tasks — ↵ again to confirm`;
+}
 // ---- src/310-task-card-previews.js ----
 function buildTaskCardPriorityPreviews(options = {}) {
   const config = options.config || null;
@@ -62753,6 +62950,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationCancelExpected = null;
     this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
+    this.resetRelationMergeCommit();
     const suggestions = this.readRelationLabelSuggestions("", { hidden: "exclude" });
     const hiddenCount = this.readRelationLabelHiddenCount();
     this.relationLabelTitleBase = this.relationLabelMode === "relabel"
@@ -62855,6 +63053,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: relationSuccessorSuggestionMeta(),
       });
     }
+    if (item.configuredMerge) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-merge-meta",
+        text: relationMergeSuggestionMeta(),
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
         cls: item.configuredComplete
@@ -62920,6 +63124,21 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     const withLabel = targets.map((target) => ({ ...target, label }));
+    // Merge labels (§21 ML1) commit through `bob task merge` via the
+    // ledger-tools api.taskMerge namespace, not the JS close planner.
+    let mergeEffect = false;
+    try {
+      const closeConfig = typeof this.relationCloseLabelsConfig === "function"
+        ? this.relationCloseLabelsConfig()
+        : null;
+      mergeEffect = Boolean(label) &&
+        relationLabelEffectForKey(label, closeConfig) === "merge";
+    } catch (_mergeEffectError) {
+      mergeEffect = false;
+    }
+    if (mergeEffect) {
+      return this.commitRelationMergeLabel(item, label, withLabel);
+    }
     const selectedPreview = item && (item.closePreview || item.cancelPreview);
     const cancelPreview = selectedPreview &&
       relationCancelLabelKey(item.label || "") === relationCancelLabelKey(label || "")
@@ -62976,34 +63195,6 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     return committed;
-  }
-
-  restoreRelationList() {
-    this.clearRelationLabelSubscriptions();
-    this.relationLabelTargets = null;
-    this.relationLabelMode = null;
-    this.relationLabelShowHidden = false;
-    this.relationLabelOneOff = false;
-    this.relationLabelGhosts = new Map();
-    this.relationLabelWrites = new Set();
-    this.relationCancelExpected = null;
-    this.relationCloseExpected = null;
-    this.relationCancelConfirmNonce = null;
-    this.stage = "value";
-    this.selectedIndex = 0;
-    const items = this.vaultStage
-      ? planRelationStageItemsFromVault(
-          this.vaultStage,
-          this.getQuery ? this.getQuery() : "",
-        )
-      : [];
-    this.resetLocalTaskMarks(items);
-    this.applyOptions(this.relationStageListOptions());
-    if (this.resultsEl) {
-      this.renderAll({ clearQuery: true });
-    }
-    this.refreshRelationConsequenceStrip();
-    return true;
   }
 
 }
@@ -63907,13 +64098,15 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       { keys: ["⌃R"], label: "rename selected" },
       {
         keys: ["↵"],
-        label: relationCloseFooterEnterLabel({
-          disabled: Boolean(item && item.disabled),
-          confirming,
-          cancelCount: counts.cancelCount,
-          completeCount: counts.completeCount,
-          relabel: this.relationLabelMode === "relabel",
-        }),
+        label: item && item.configuredMerge === true
+          ? "link & merge"
+          : relationCloseFooterEnterLabel({
+            disabled: Boolean(item && item.disabled),
+            confirming,
+            cancelCount: counts.cancelCount,
+            completeCount: counts.completeCount,
+            relabel: this.relationLabelMode === "relabel",
+          }),
       },
       { keys: ["esc"], label: "back to list" },
     ];
@@ -63930,6 +64123,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
           this.relationCancelConfirmNonce = null;
           this.relationCancelExpected = null;
           this.relationCloseExpected = null;
+          this.resetRelationMergeCommit();
         }
         this.selectedIndex = index;
         this.relationLabelTabNoMatch = false;
@@ -63946,6 +64140,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
       this.relationCloseExpected = null;
+      this.resetRelationMergeCommit();
     }
     this.selectedIndex = index >= 0 ? index : 0;
   }
@@ -64016,6 +64211,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
           cancel: this.plugin.loadRelationsCancelLabels(),
           complete: emptyRelationsCancelLabels(),
           successor: emptyRelationsCancelLabels(),
+          merge: emptyRelationsCancelLabels(),
           warnings: Object.freeze([]),
         });
       }
@@ -64292,31 +64488,6 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     });
   }
 
-  relationCancelStayHintForItem(item) {
-    if (!item || item.stageSection !== "current") return "";
-    const close = this.relationCloseLabelsConfig();
-    const cancelKeys = relationCancelLabelsSet(close.cancel || this.relationCancelLabelsConfig());
-    const completeKeys = relationCompleteLabelsSet(close.complete);
-    const label = this.isLinkedFromSession()
-      ? item.storedLabel || item.label
-      : item.label;
-    const key = relationCancelLabelKey(label);
-    const sources = this.isLinkedFromSession() ? [item] : this.relationStageSourceRefs();
-    for (const source of sources) {
-      const rawLine = this.relationCancelContentForRef(source).split(/\r?\n/)[
-        Math.max(0, Math.floor(numericOrDefault(source.line, 0)))
-      ] || source.rawLine || "";
-      const status = relationCancelSourceStatus(rawLine);
-      if (cancelKeys.has(key) && status === "-") {
-        return "⊘ Stays Cancelled · reopen with Alt+]";
-      }
-      if (completeKeys.has(key) && (status === "x" || status === "X")) {
-        return "stays Done · reopen with Alt+[";
-      }
-    }
-    return "";
-  }
-
   relationLabelLiveContext(item, preview) {
     const linkedFrom = this.isLinkedFromSession();
     const sources = this.vaultStage && Array.isArray(this.vaultStage.sources)
@@ -64369,6 +64540,17 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const preview = item && (item.closePreview || item.cancelPreview)
       ? (item.closePreview || item.cancelPreview)
       : this.relationCancelPreviewForLabel(label);
+    if (item && item.configuredMerge === true) {
+      const context = this.relationLabelLiveContext(item, preview);
+      element.empty();
+      element.createSpan({ cls: "bob-cnp-relation-merge-mark", text: "⤵ " });
+      element.createSpan({ cls: "bob-cnp-relation-merge-source", text: context.sourceText });
+      element.createSpan({
+        cls: "bob-cnp-relation-merge-sentence-tail",
+        text: ` — ${context.label} → ${context.targetText}`,
+      });
+      return true;
+    }
     const completes = preview && Array.isArray(preview.completes) ? preview.completes : [];
     const cancels = preview && Array.isArray(preview.cancels) ? preview.cancels : [];
     if (completes.length === 0 && cancels.length === 0) {
@@ -64403,6 +64585,24 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     if (!el) return;
     const item = (this.visibleItems || [])[this.selectedIndex] || null;
     if (this.stage === "relation-label") {
+      if (item && item.configuredMerge === true) {
+        const mergePreview = this.relationMergePreview || null;
+        const mergeArmed = Boolean(mergePreview) &&
+          this.relationMergeConfirmNonce === mergePreview.nonce;
+        const mergeText = this.relationMergePreviewing === true
+          ? "⤵ previewing…"
+          : mergePreview
+            ? formatTaskMergeConsequenceStrip(mergePreview)
+            : "⤵ merges source · ↵ link & merge";
+        el.empty();
+        el.createSpan({
+          cls: "bob-cnp-consequence-strip-text bob-cnp-relation-merge-effects",
+          text: mergeArmed
+            ? `${mergeText} — ${relationMergeConfirmBanner(mergePreview.count)}`
+            : mergeText,
+        });
+        return;
+      }
       const preview = item && (item.closePreview || item.cancelPreview)
         ? (item.closePreview || item.cancelPreview)
         : item && item.label
@@ -64462,6 +64662,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
       this.relationCancelConfirmNonce = null;
       this.relationCancelExpected = null;
       this.relationCloseExpected = null;
+      this.resetRelationMergeCommit();
       this.selectedIndex = 0;
     }
     const typed = normalizeRelationLabel(raw);
@@ -64469,19 +64670,25 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
     const config = closeConfig.cancel || this.relationCancelLabelsConfig();
     const completeConfig = closeConfig.complete || emptyRelationsCancelLabels();
     const successorConfig = closeConfig.successor || emptyRelationsCancelLabels();
+    const mergeConfig = closeConfig.merge || emptyRelationsCancelLabels();
     const configuredComplete = relationCompleteLabelsSet(completeConfig);
     const configuredSuccessorKeys = relationSuccessorLabelsSet(successorConfig);
-    const suggestions = mergeRelationSuccessorLabelSuggestions(
-      mergeRelationCompleteLabelSuggestions(
-        mergeRelationCancelLabelSuggestions(
-          this.readRelationLabelSuggestions(raw, { hidden: "include" }),
-          config,
+    const configuredMergeKeys = relationMergeLabelsSet(mergeConfig);
+    const suggestions = mergeRelationMergeLabelSuggestions(
+      mergeRelationSuccessorLabelSuggestions(
+        mergeRelationCompleteLabelSuggestions(
+          mergeRelationCancelLabelSuggestions(
+            this.readRelationLabelSuggestions(raw, { hidden: "include" }),
+            config,
+            raw,
+          ),
+          completeConfig,
           raw,
         ),
-        completeConfig,
+        successorConfig,
         raw,
       ),
-      successorConfig,
+      mergeConfig,
       raw,
     );
     const ghosts = this.relationLabelGhosts instanceof Map
@@ -64503,10 +64710,13 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         configuredComplete.has(relationCancelLabelKey(item.label));
       const successorLabel = item.configuredSuccessor === true ||
         configuredSuccessorKeys.has(relationCancelLabelKey(item.label));
+      const mergeRowLabel = item.configuredMerge === true ||
+        configuredMergeKeys.has(relationCancelLabelKey(item.label));
       const inverse = relationCancelInverseLabel(item.label, config) ||
         relationCompleteInverseLabel(item.label, completeConfig) ||
-        relationSuccessorInverseLabel(item.label, successorConfig);
-      const preview = configuredCancel || completeLabel || successorLabel || inverse
+        relationSuccessorInverseLabel(item.label, successorConfig) ||
+        relationMergeInverseLabel(item.label, mergeConfig);
+      const preview = configuredCancel || completeLabel || successorLabel || mergeRowLabel || inverse
         ? this.relationCancelPreviewForLabel(item.label)
         : null;
       const disabledReason = configuredCancel && preview && preview.refusal
@@ -64519,6 +64729,7 @@ class BulletPropertyPickerRelationLabelVocabularyMixin extends FilteredPickerMod
         configuredCancel,
         configuredComplete: completeLabel,
         configuredSuccessor: successorLabel,
+        configuredMerge: mergeRowLabel,
         cancelPreview: preview,
         closePreview: preview,
         disabled: item.disabled === true || Boolean(disabledReason),
@@ -65342,7 +65553,26 @@ class RelationLabelRenameModal extends Modal {
       } catch (_successorWarningError) {
         successorWarning = "";
       }
-      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning].filter(Boolean)) {
+      let mergeWarning = "";
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["bob-navigation-hotkeys"];
+        const load = holder && typeof holder.loadRelationsCloseLabels === "function"
+          ? holder.loadRelationsCloseLabels.bind(holder)
+          : (typeof loadRelationsCloseLabels === "function" ? loadRelationsCloseLabels : null);
+        if (load && this.from) {
+          const cfg = load();
+          if (
+            cfg && cfg.merge &&
+            relationMergeLabelsSet(cfg.merge).has(relationCancelLabelKey(this.from))
+          ) {
+            mergeWarning = relationMergeRenameWarningCopy(this.from);
+          }
+        }
+      } catch (_mergeWarningError) {
+        mergeWarning = "";
+      }
+      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning, mergeWarning].filter(Boolean)) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: note });
       }
     } else if (!this.renameError) {
@@ -65656,6 +65886,466 @@ class BobNavigationHotkeysRelationLabelsManagerMixin {
       new Notice("Could not open relation labels.");
       return false;
     }
+  }
+}
+// ---- src/429a-relation-merge-commit.js ----
+// Merge-label commit through `bob task merge` (`docs/task-relations.md`
+// §21 ML1–ML8, the nav-merge phase of
+// plan:202611/task_move_merge_split.md). A configured merge label in the
+// Links stage previews through the ledger-tools `api.taskMerge` namespace
+// (desktop-only, built on `bobSpawnJson` like `api.relationLabels.rename`),
+// fills the consequence strip from the preview, routes offers through the
+// existing `SuccessorOfferPickerModal`, applies with `-p` picks, and shows
+// an Undo merge notice from the shared helper. An already-closed source
+// takes the plain relation through the existing JS writer with
+// "Already Cancelled · link only"; mobile resolves the desktop refusal and
+// writes nothing. Walk parity with cancel labels is structural: the merge
+// rides the same chord entries and the same guarded settle call cancel
+// uses, which is a no-op where cancel is one.
+const RELATION_MERGE_MOBILE_MESSAGE = "⤵ merging needs the desktop app";
+const RELATION_MERGE_ALREADY_CLOSED_MESSAGE = "Already Cancelled · link only";
+const RELATION_MERGE_UNCHANGED_MESSAGE = "Already merged — nothing to do";
+const RELATION_MERGE_MISSING_ID_MESSAGE = "Merging needs a ^block-id on every source and the target";
+
+// Pure target resolution for one merge commit. Links-to merges the stage
+// sources into the one picked target; linked-from (Ctrl+Shift+Alt+L)
+// merges the picked rows into the task under the cursor. More than one
+// links-to target is refused: a merge has exactly one destination.
+function relationMergeTargetsFromRefs(args = {}) {
+  const linkedFrom = args.linkedFrom === true;
+  const sources = Array.isArray(args.sources) ? args.sources : [];
+  const targets = Array.isArray(args.targets) ? args.targets : [];
+  if (sources.length === 0) {
+    return { ok: false, error: "Merging needs a task to merge" };
+  }
+  if (targets.length === 0) {
+    return { ok: false, error: "Merging needs one target task" };
+  }
+  if (!linkedFrom && targets.length > 1) {
+    return { ok: false, error: "Merging needs one target — pick one task to merge into" };
+  }
+  const into = targets[0];
+  if (!into || !into.path) {
+    return { ok: false, error: "Merging needs one target task" };
+  }
+  return { ok: true, sources, into, linkedFrom };
+}
+
+function relationMergeSourceStatus(source) {
+  const rawLine = source && typeof source.rawLine === "string" ? source.rawLine : "";
+  if (!rawLine) return "";
+  try {
+    return relationCancelSourceStatus(rawLine);
+  } catch (_error) {
+    return "";
+  }
+}
+
+// True when every source is already closed. The commit then skips bob and
+// writes the plain relation through the existing JS writer.
+function relationMergeAllClosed(sources) {
+  const list = Array.isArray(sources) ? sources : [];
+  if (list.length === 0) return false;
+  return list.every((source) => {
+    const status = relationMergeSourceStatus(source);
+    return status !== "" && !OPEN_OBSIDIAN_TASK_STATUSES.has(status);
+  });
+}
+
+function relationMergeRefsKey(sources, into, label) {
+  const keyOf = (ref) =>
+    `${normalizeVaultRelativePath((ref && ref.path) || "")}\x00${normalizeBulletPropertyValue((ref && ref.blockId) || "")}`;
+  return JSON.stringify({
+    sources: (Array.isArray(sources) ? sources : []).map(keyOf),
+    into: keyOf(into),
+    label: String(label || ""),
+  });
+}
+
+// The successor-picker model for one merge preview. Every offer reuses
+// group `hand_off` with its additive `merged_from` source key, so the
+// Mac Pull-In card and capture need no new group.
+function taskMergeOfferPickerModel(summary, label) {
+  const offers = summary && Array.isArray(summary.offers) ? summary.offers : [];
+  const targetTitle = summary && summary.targetTitle ? String(summary.targetTitle) : "that task";
+  const targetPath = summary && summary.targetPath ? String(summary.targetPath) : "";
+  const rows = [];
+  const seen = new Set();
+  for (const offer of offers) {
+    const key = offer && typeof offer.key === "string" ? offer.key : "";
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const entryName = offer && offer.entry_name != null ? String(offer.entry_name) : "";
+    const mergedFrom = offer && offer.merged_from != null ? String(offer.merged_from) : "";
+    rows.push({
+      key,
+      text: targetTitle,
+      notePath: targetPath,
+      status: "",
+      lane: "",
+      destinationLabel: "",
+      needsBlockId: false,
+      selectable: true,
+      suffix: entryName ? `under ${entryName}` : "",
+      reason: mergedFrom ? `merged from “${mergedFrom}”` : "",
+    });
+  }
+  return {
+    title: "Link the merged task?",
+    predecessors: [],
+    groups: [{
+      group: "hand_off",
+      header: "Hand off",
+      caption: `“${targetTitle}” can take the place of a removed link`,
+      tag: "",
+      project: "",
+      rows,
+      folded: {},
+    }],
+  };
+}
+
+// The success notice mirrors the `bob task merge` human header plus the
+// Undo affordance; the shared Undo helper renders the button.
+function formatTaskMergeSuccessNotice(summary, label) {
+  const count = summary && Number.isInteger(summary.mergedCount)
+    ? summary.mergedCount
+    : summary && Number.isInteger(summary.count) ? summary.count : 0;
+  const target = summary && summary.targetTitle
+    ? `“${summary.targetTitle}”`
+    : summary && summary.targetSection
+      ? `## ${summary.targetSection}`
+      : "that task";
+  const name = String(label || "").trim() || "merged into";
+  return `⤵ Merged ${count} ${count === 1 ? "task" : "tasks"} into ${target} · ${name}`;
+}
+
+class BulletPropertyPickerRelationMergeMixin extends FilteredPickerModal {
+  taskMergeLedgerApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-ledger-tools"];
+      const api = holder && holder.api && holder.api.taskMerge;
+      return api && Number(api.version) >= 1 &&
+        typeof api.preview === "function" && typeof api.apply === "function"
+        ? api
+        : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  resetRelationMergeCommit() {
+    this.relationMergePreview = null;
+    this.relationMergePreviewing = false;
+    this.relationMergeConfirmNonce = null;
+    this.relationMergeArmedKey = null;
+  }
+
+  // Live vault text for Undo preimages: open editor buffers first, then
+  // the vault. Null when the note cannot be read.
+  async readRelationMergeNoteText(path) {
+    const normalized = normalizeVaultRelativePath(path || "");
+    if (!normalized) return null;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.iterateAllLeaves === "function") {
+        const found = [];
+        workspace.iterateAllLeaves((leaf) => {
+          try {
+            if (leaf && leaf.view && leaf.view.file &&
+              normalizeVaultRelativePath(leaf.view.file.path || "") === normalized &&
+              leaf.view.editor && typeof leaf.view.editor.getValue === "function") {
+              found.push(String(leaf.view.editor.getValue() || ""));
+            }
+          } catch (_leafError) {
+            // An unreadable buffer is not the vault text.
+          }
+        });
+        if (found.length === 1) return found[0];
+        if (found.length > 1) return null;
+      }
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function") return null;
+      const file = typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(normalized)
+        : null;
+      if (!file) return null;
+      return String((await vault.cachedRead(file)) || "");
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async previewRelationMerge(sources, into) {
+    const api = this.taskMergeLedgerApi();
+    if (!api) {
+      return {
+        ok: false,
+        error: "Update Bob Ledger Tools to merge from a relation label.",
+      };
+    }
+    let result;
+    try {
+      result = await api.preview(sources, into);
+    } catch (_error) {
+      return { ok: false, error: "bob task merge preview failed." };
+    }
+    if (!result || result.ok !== true) {
+      const code = result && result.code ? String(result.code) : "";
+      if (code === "desktop_only") {
+        return { ok: false, error: RELATION_MERGE_MOBILE_MESSAGE };
+      }
+      return {
+        ok: false,
+        error: (result && result.message) || "bob task merge preview failed.",
+      };
+    }
+    const summary = taskMergePreviewSummary(result.report);
+    return { ok: true, summary, report: result.report };
+  }
+
+  // The merge branch of `commitRelationLabel`. Returns true when the
+  // gesture is fully handled (written, refused with a notice, or armed
+  // behind the batch banner).
+  async commitRelationMergeLabel(item, label, withLabel) {
+    const targets = Array.isArray(this.relationLabelTargets)
+      ? this.relationLabelTargets
+      : [];
+    const linkedFrom = this.isLinkedFromSession();
+    const stageSources = typeof this.relationStageSourceRefs === "function"
+      ? this.relationStageSourceRefs()
+      : [];
+    const resolved = relationMergeTargetsFromRefs({
+      sources: linkedFrom ? targets : stageSources,
+      targets: linkedFrom ? stageSources.slice(0, 1) : targets,
+      linkedFrom,
+    });
+    if (!resolved.ok) {
+      new Notice(resolved.error);
+      return false;
+    }
+    const sources = resolved.sources;
+    const into = resolved.into;
+    const missingId = [...sources, into].some(
+      (ref) => !normalizeBulletPropertyValue((ref && ref.blockId) || ""),
+    );
+    if (missingId) {
+      new Notice(RELATION_MERGE_MISSING_ID_MESSAGE);
+      return false;
+    }
+    if (relationMergeAllClosed(sources)) {
+      const groups = this.relationLabelMode === "relabel"
+        ? { add: [], remove: [], relabel: withLabel }
+        : { add: withLabel, remove: [], relabel: [] };
+      const committed = await this.commitRelationEdit(groups);
+      if (committed) new Notice(RELATION_MERGE_ALREADY_CLOSED_MESSAGE);
+      return committed;
+    }
+    let saved;
+    try {
+      saved = await saveActiveRelationLabelEditor(this.app);
+    } catch (_error) {
+      saved = { ok: false, message: "Could not save the active note before merging." };
+    }
+    if (!saved || saved.ok !== true) {
+      new Notice((saved && saved.message) || "Could not save the active note before merging.");
+      return false;
+    }
+    this.relationMergePreview = null;
+    this.relationMergePreviewing = true;
+    try {
+      if (typeof this.refreshRelationConsequenceStrip === "function") {
+        this.refreshRelationConsequenceStrip();
+      }
+    } catch (_stripError) {
+      // The strip is a preview aid; the commit continues without it.
+    }
+    const preview = await this.previewRelationMerge(sources, into);
+    this.relationMergePreviewing = false;
+    if (!preview.ok) {
+      try {
+        if (typeof this.refreshRelationConsequenceStrip === "function") {
+          this.refreshRelationConsequenceStrip();
+        }
+      } catch (_stripError) {
+        // Keep the refusal notice without the strip.
+      }
+      new Notice(preview.error);
+      return false;
+    }
+    this.relationMergePreview = preview.summary;
+    if (preview.summary.count >= 2) {
+      const refsKey = relationMergeRefsKey(sources, into, label);
+      if (
+        this.relationMergeConfirmNonce !== preview.summary.nonce ||
+        this.relationMergeArmedKey !== refsKey
+      ) {
+        this.relationMergeConfirmNonce = preview.summary.nonce;
+        this.relationMergeArmedKey = refsKey;
+        try {
+          if (typeof this.renderResults === "function") this.renderResults();
+          if (typeof this.refreshRelationConsequenceStrip === "function") {
+            this.refreshRelationConsequenceStrip();
+          }
+        } catch (_bannerError) {
+          // The banner is a preview aid; the second Return still confirms.
+        }
+        return false;
+      }
+      this.relationMergeConfirmNonce = null;
+      this.relationMergeArmedKey = null;
+    }
+    if (preview.summary.mergedCount === 0 && preview.summary.offers.length === 0) {
+      try {
+        if (typeof this.refreshRelationConsequenceStrip === "function") {
+          this.refreshRelationConsequenceStrip();
+        }
+      } catch (_stripError) {
+        // The notice below carries the outcome.
+      }
+      new Notice(RELATION_MERGE_UNCHANGED_MESSAGE);
+      return true;
+    }
+    let picks = null;
+    if (preview.summary.offers.length > 0) {
+      try {
+        const model = taskMergeOfferPickerModel(preview.summary, label);
+        const result = this.plugin && typeof this.plugin.pickSuccessorOffers === "function"
+          ? await this.plugin.pickSuccessorOffers(model, { retarget: false })
+          : null;
+        picks = result && Array.isArray(result.picks) ? result.picks : null;
+      } catch (_pickerError) {
+        picks = null;
+      }
+    }
+    const candidatePaths = [...new Set(
+      [...sources.map((ref) => ref.path), into.path]
+        .map((path) => normalizeVaultRelativePath(path || ""))
+        .filter(Boolean),
+    )];
+    const preimages = new Map();
+    for (const path of candidatePaths) {
+      preimages.set(path, await this.readRelationMergeNoteText(path));
+    }
+    const api = this.taskMergeLedgerApi();
+    let applied;
+    try {
+      applied = await api.apply(sources, into, picks);
+    } catch (_error) {
+      applied = { ok: false, code: "failed", message: "bob task merge failed." };
+    }
+    if (!applied || applied.ok !== true) {
+      new Notice((applied && applied.message) || "bob task merge failed.");
+      return false;
+    }
+    const appliedSummary = taskMergePreviewSummary(applied.report);
+    const restores = [];
+    const appliedPaths = applied.report && Array.isArray(applied.report.applied_paths)
+      ? applied.report.applied_paths
+      : [];
+    for (const rawPath of appliedPaths) {
+      const path = normalizeVaultRelativePath(String(rawPath || ""));
+      if (!path || !preimages.has(path)) continue;
+      const before = preimages.get(path);
+      if (typeof before !== "string") continue;
+      const after = await this.readRelationMergeNoteText(path);
+      if (typeof after !== "string" || after === before) continue;
+      let file = null;
+      try {
+        const vault = this.app && this.app.vault;
+        file = vault && typeof vault.getAbstractFileByPath === "function"
+          ? vault.getAbstractFileByPath(path)
+          : null;
+      } catch (_fileError) {
+        file = null;
+      }
+      restores.push({ path, file, before, after });
+    }
+    const notice = formatTaskMergeSuccessNotice(appliedSummary, label);
+    try {
+      if (this.plugin && typeof this.plugin.showGuardedUndoNotice === "function") {
+        this.plugin.showGuardedUndoNotice(notice, restores, {
+          actionLabel: "Undo merge",
+          successMessage: "Undid merge",
+          failureLabel: "Could not undo merge",
+        });
+      } else {
+        new Notice(notice);
+      }
+    } catch (_noticeError) {
+      new Notice(notice);
+    }
+    try {
+      const walkOrigin = this.reviewOrigin || null;
+      if (walkOrigin && typeof this.settleReviewOrigin === "function") {
+        await this.settleReviewOrigin("complete", { notice });
+      }
+    } catch (_walkError) {
+      // Walk parity with cancel labels: best effort only.
+    }
+    try {
+      if (typeof this.clearPendingBatch === "function") this.clearPendingBatch();
+    } catch (_batchError) {
+      // The picker closes with no pending batch either way.
+    }
+    this.pendingRelation = null;
+    this.resetRelationMergeCommit();
+    return true;
+  }
+
+  relationCancelStayHintForItem(item) {
+    if (!item || item.stageSection !== "current") return "";
+    const close = this.relationCloseLabelsConfig();
+    const cancelKeys = relationCancelLabelsSet(close.cancel || this.relationCancelLabelsConfig());
+    const completeKeys = relationCompleteLabelsSet(close.complete);
+    const label = this.isLinkedFromSession()
+      ? item.storedLabel || item.label
+      : item.label;
+    const key = relationCancelLabelKey(label);
+    const sources = this.isLinkedFromSession() ? [item] : this.relationStageSourceRefs();
+    for (const source of sources) {
+      const rawLine = this.relationCancelContentForRef(source).split(/\r?\n/)[
+        Math.max(0, Math.floor(numericOrDefault(source.line, 0)))
+      ] || source.rawLine || "";
+      const status = relationCancelSourceStatus(rawLine);
+      if (cancelKeys.has(key) && status === "-") {
+        return "⊘ Stays Cancelled · reopen with Alt+]";
+      }
+      if (completeKeys.has(key) && (status === "x" || status === "X")) {
+        return "stays Done · reopen with Alt+[";
+      }
+    }
+    return "";
+  }
+
+  restoreRelationList() {
+    this.clearRelationLabelSubscriptions();
+    this.relationLabelTargets = null;
+    this.relationLabelMode = null;
+    this.relationLabelShowHidden = false;
+    this.relationLabelOneOff = false;
+    this.relationLabelGhosts = new Map();
+    this.relationLabelWrites = new Set();
+    this.relationCancelExpected = null;
+    this.relationCloseExpected = null;
+    this.relationCancelConfirmNonce = null;
+    this.resetRelationMergeCommit();
+    this.stage = "value";
+    this.selectedIndex = 0;
+    const items = this.vaultStage
+      ? planRelationStageItemsFromVault(
+          this.vaultStage,
+          this.getQuery ? this.getQuery() : "",
+        )
+      : [];
+    this.resetLocalTaskMarks(items);
+    this.applyOptions(this.relationStageListOptions());
+    if (this.resultsEl) {
+      this.renderAll({ clearQuery: true });
+    }
+    this.refreshRelationConsequenceStrip();
+    return true;
   }
 }
 // ---- src/430-picker-vault-batch.js ----
@@ -68722,6 +69412,7 @@ installBulletPropertyPickerMixins(BulletPropertyPickerModal, [
   BulletPropertyPickerRelationClosePreviewMixin,
   BulletPropertyPickerRelationSuccessorPreviewMixin,
   BulletPropertyPickerRelationLabelManagementMixin,
+  BulletPropertyPickerRelationMergeMixin,
   BulletPropertyPickerVaultBatchMixin,
   BulletPropertyPickerVaultCommitMixin,
   BulletPropertyPickerKeydownMixin,
@@ -107487,4 +108178,29 @@ Object.assign(module.exports.helpers, {
   taskSplitPickerPicks,
   TASK_SPLIT_PICKER_HINTS,
   TaskSplitPickerModal,
+});
+// ---- src/710-relation-merge-exports.js ----
+// Merge-label exports for the nav-merge phase of
+// plan:202611/task_move_merge_split.md. Sibling fragment so
+// src/700-exports.js stays under the 1000-line cap.
+Object.assign(module.exports.helpers, {
+  BulletPropertyPickerRelationMergeMixin,
+  relationMergeTargetsFromRefs,
+  relationMergeAllClosed,
+  relationMergeRefsKey,
+  taskMergeOfferPickerModel,
+  formatTaskMergeSuccessNotice,
+  relationMergeSuggestionMeta,
+  relationMergeRowMeta,
+  relationMergeRenameWarningCopy,
+  mergeRelationMergeLabelSuggestions,
+  relationMergeInverseLabel,
+  taskMergePreviewSummary,
+  formatTaskMergeConsequenceStrip,
+  relationMergeConfirmBanner,
+  relationMergeLabelsSet,
+  RELATION_MERGE_MOBILE_MESSAGE,
+  RELATION_MERGE_ALREADY_CLOSED_MESSAGE,
+  RELATION_MERGE_UNCHANGED_MESSAGE,
+  RELATION_MERGE_MISSING_ID_MESSAGE,
 });

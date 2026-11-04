@@ -56,6 +56,7 @@
   "171-relation-index-lifecycle.js",
   "172-plugin-relation-labels.js",
   "173-plugin-attachments-api.js",
+  "174-plugin-task-merge-api.js",
   "180-plugin-plan-and-ready.js",
   "190-plugin-note-ready.js",
   "200-plugin-dashboard.js",

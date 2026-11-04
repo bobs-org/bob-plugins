@@ -64,6 +64,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroThemeChipsReadingMixin,
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsRelationLabelsMixin,
+  BobLedgerToolsTaskMergeMixin,
   BobLedgerToolsAttachmentsMixin,
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,

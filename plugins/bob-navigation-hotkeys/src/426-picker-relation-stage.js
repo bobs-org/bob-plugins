@@ -743,6 +743,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     this.relationCancelExpected = null;
     this.relationCloseExpected = null;
     this.relationCancelConfirmNonce = null;
+    this.resetRelationMergeCommit();
     const suggestions = this.readRelationLabelSuggestions("", { hidden: "exclude" });
     const hiddenCount = this.readRelationLabelHiddenCount();
     this.relationLabelTitleBase = this.relationLabelMode === "relabel"
@@ -845,6 +846,12 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
         text: relationSuccessorSuggestionMeta(),
       });
     }
+    if (item.configuredMerge) {
+      textEl.createDiv({
+        cls: "bob-cnp-row-meta bob-cnp-relation-merge-meta",
+        text: relationMergeSuggestionMeta(),
+      });
+    }
     if (item.disabledReason) {
       textEl.createDiv({
         cls: item.configuredComplete
@@ -910,6 +917,21 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     const withLabel = targets.map((target) => ({ ...target, label }));
+    // Merge labels (§21 ML1) commit through `bob task merge` via the
+    // ledger-tools api.taskMerge namespace, not the JS close planner.
+    let mergeEffect = false;
+    try {
+      const closeConfig = typeof this.relationCloseLabelsConfig === "function"
+        ? this.relationCloseLabelsConfig()
+        : null;
+      mergeEffect = Boolean(label) &&
+        relationLabelEffectForKey(label, closeConfig) === "merge";
+    } catch (_mergeEffectError) {
+      mergeEffect = false;
+    }
+    if (mergeEffect) {
+      return this.commitRelationMergeLabel(item, label, withLabel);
+    }
     const selectedPreview = item && (item.closePreview || item.cancelPreview);
     const cancelPreview = selectedPreview &&
       relationCancelLabelKey(item.label || "") === relationCancelLabelKey(label || "")
@@ -966,34 +988,6 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       }
     }
     return committed;
-  }
-
-  restoreRelationList() {
-    this.clearRelationLabelSubscriptions();
-    this.relationLabelTargets = null;
-    this.relationLabelMode = null;
-    this.relationLabelShowHidden = false;
-    this.relationLabelOneOff = false;
-    this.relationLabelGhosts = new Map();
-    this.relationLabelWrites = new Set();
-    this.relationCancelExpected = null;
-    this.relationCloseExpected = null;
-    this.relationCancelConfirmNonce = null;
-    this.stage = "value";
-    this.selectedIndex = 0;
-    const items = this.vaultStage
-      ? planRelationStageItemsFromVault(
-          this.vaultStage,
-          this.getQuery ? this.getQuery() : "",
-        )
-      : [];
-    this.resetLocalTaskMarks(items);
-    this.applyOptions(this.relationStageListOptions());
-    if (this.resultsEl) {
-      this.renderAll({ clearQuery: true });
-    }
-    this.refreshRelationConsequenceStrip();
-    return true;
   }
 
 }

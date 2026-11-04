@@ -397,14 +397,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // synchronous and never throws: guard calls with try/catch as
       // well as optional chaining.
       dateMarks: this.dateMarksApi(),
-      // Task Link In Progress marks (bob-cli-56 progress-marks,
-      // progressMarks namespace v1): display-only half-ring marks
-      // before In Progress Task Links under today's open Pomodoros,
-      // per the epic plan
-      // `plan:202610/in_progress_task_link_marks.md`. Additive:
-      // top-level api stays v3. Every member is synchronous and
-      // never throws: guard calls with try/catch as well as
-      // optional chaining.
+      // Task Link In Progress marks (progressMarks v1, additive: api stays
+      // v3): display-only half-ring marks before In Progress Task Links
+      // under today's open Pomodoros. Every member is synchronous and
+      // never throws: guard calls with try/catch as well as optional chaining.
       progressMarks: this.progressMarksApi(),
       // Unblocked hand-off glyph (bob-cli-5w ledger_glyph,
       // unblockedGlyph namespace v1): a display-only read-time `🔓`
@@ -418,6 +414,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // the root api stays v3 while this index evolves under its own v1.
       relationIndex: this.relationIndexApi(),
       relationLabels: this.relationLabelsApi(),
+      taskMerge: this.taskMergeApi(), // v1: Links-stage merge preview/apply
       attachments: this.attachmentsApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {

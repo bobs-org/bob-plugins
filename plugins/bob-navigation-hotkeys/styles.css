@@ -1718,6 +1718,25 @@
   color: var(--text-warning, var(--text-muted));
 }
 
+/* Merge-label cues use the theme accent in light and dark themes; the ⤵
+   glyph carries the meaning, never the color alone. The source dims like
+   the cancel and complete sentences. */
+.bob-cnp-relation-merge-meta,
+.bob-cnp-relation-merge-mark,
+.bob-cnp-relation-merge-effects {
+  color: var(--text-accent);
+}
+
+.bob-cnp-relation-merge-meta,
+.bob-cnp-relation-merge-mark {
+  font-weight: 600;
+}
+
+.bob-cnp-relation-merge-source {
+  color: var(--text-muted);
+  opacity: 0.68;
+}
+
 /* Successor-label cues stay neutral: relations never carry status colour.
    The row meta is muted and only the already-parked/closed caveat is amber. */
 .bob-cnp-relation-successor-meta {

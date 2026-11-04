@@ -338,7 +338,26 @@ class RelationLabelRenameModal extends Modal {
       } catch (_successorWarningError) {
         successorWarning = "";
       }
-      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning].filter(Boolean)) {
+      let mergeWarning = "";
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const holder = plugins && plugins["bob-navigation-hotkeys"];
+        const load = holder && typeof holder.loadRelationsCloseLabels === "function"
+          ? holder.loadRelationsCloseLabels.bind(holder)
+          : (typeof loadRelationsCloseLabels === "function" ? loadRelationsCloseLabels : null);
+        if (load && this.from) {
+          const cfg = load();
+          if (
+            cfg && cfg.merge &&
+            relationMergeLabelsSet(cfg.merge).has(relationCancelLabelKey(this.from))
+          ) {
+            mergeWarning = relationMergeRenameWarningCopy(this.from);
+          }
+        }
+      } catch (_mergeWarningError) {
+        mergeWarning = "";
+      }
+      for (const note of [summary.stateNote, summary.inverseNote, ...summary.warnings, successorWarning, mergeWarning].filter(Boolean)) {
         this.previewEl.createDiv({ cls: "bob-cnp-row-path", text: note });
       }
     } else if (!this.renameError) {

@@ -467,3 +467,162 @@ function relationStageLabelPlaceholder(suggestions) {
     ? `Relation (optional) — e.g. ${first}`
     : "Relation (optional) — e.g. see also";
 }
+
+// Merge-label indications (`docs/task-relations.md` §21 ML1). A configured
+// merge label never lands as a plain relation: committing it folds the
+// source's notes into the target and cancels the source at commit time.
+function relationMergeSuggestionMeta() {
+  return "⤵ merges";
+}
+
+function relationMergeRowMeta() {
+  return "⤵ merges source";
+}
+
+function relationMergeRenameWarningCopy(label) {
+  const name = String(label || "").trim() || "that label";
+  return `“${name}” is a merge label in config.yml — update relations.merge_labels`;
+}
+
+// Configured merge labels are suggestions even before their first use, like
+// the cancel/complete/successor overlays above.
+function mergeRelationMergeLabelSuggestions(rows, policy, query = "") {
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  const positions = new Map(
+    out.map((row, index) => [relationCancelLabelKey(row.key || row.label), index]),
+  );
+  const keys = Array.isArray(policy && policy.keys) ? policy.keys : [];
+  const labels = policy && policy.labels && typeof policy.labels === "object"
+    ? policy.labels
+    : {};
+  for (const rawKey of keys) {
+    const key = relationCancelLabelKey(rawKey);
+    const label = String(labels[key] || rawKey || "").trim();
+    if (!key || !label) continue;
+    const existingIndex = positions.get(key);
+    if (existingIndex !== undefined) {
+      out[existingIndex] = { ...out[existingIndex], configuredMerge: true };
+      continue;
+    }
+    if (query && !fuzzyMatchesText(label, query)) continue;
+    positions.set(key, out.length);
+    out.push({
+      key,
+      label,
+      count: 0,
+      hidden: false,
+      inverse: null,
+      configuredMerge: true,
+    });
+  }
+  return out;
+}
+
+function relationMergeInverseLabel(label, policy) {
+  return relationCancelInverseLabel(label, policy);
+}
+
+// Normalize one decoded `bob task merge -f json` report into the strip,
+// banner, and offer-picker inputs. Pure: never touches the vault.
+function taskMergePreviewSummary(report) {
+  const body = report && typeof report === "object" ? report : {};
+  const merges = Array.isArray(body.merges) ? body.merges : [];
+  const sources = merges.map((record) => {
+    const source = record && typeof record.source === "object" ? record.source : {};
+    const target = record && typeof record.target === "object" ? record.target : {};
+    return Object.freeze({
+      title: String(source.title || "that task"),
+      path: String(source.path || ""),
+      blockId: source.block_id != null ? String(source.block_id) : "",
+      outcome: String(record.outcome || ""),
+      movedNotes: Math.max(0, Math.floor(numericOrDefault(record.moved_notes, 0))),
+      dependents: Array.isArray(record.dependents_repointed)
+        ? record.dependents_repointed.map(String)
+        : [],
+      offers: Array.isArray(record.offers) ? record.offers.slice() : [],
+      targetTitle: target.title != null ? String(target.title) : "",
+      targetPath: String(target.path || ""),
+      targetKind: String(target.kind || "task"),
+      targetDrawer: target.drawer != null ? String(target.drawer) : "",
+      targetSection: target.section != null ? String(target.section) : "",
+    });
+  });
+  const first = merges.length > 0 && merges[0] && typeof merges[0] === "object"
+    ? merges[0]
+    : {};
+  const firstTarget = first.target && typeof first.target === "object" ? first.target : {};
+  const offers = [];
+  for (const record of merges) {
+    for (const offer of (record && Array.isArray(record.offers) ? record.offers : [])) {
+      if (offer && typeof offer === "object") offers.push(offer);
+    }
+  }
+  const merged = sources.filter((source) => source.outcome === "merged" || source.outcome === "");
+  return Object.freeze({
+    sources: Object.freeze(sources),
+    count: sources.length,
+    mergedCount: merged.length,
+    targetTitle: firstTarget.title != null ? String(firstTarget.title || "") : "",
+    targetPath: String(firstTarget.path || ""),
+    targetKind: String(firstTarget.kind || "task"),
+    targetDrawer: firstTarget.drawer != null ? String(firstTarget.drawer) : "",
+    targetSection: firstTarget.section != null ? String(firstTarget.section) : "",
+    movedNotes: sources.reduce((sum, source) => sum + source.movedNotes, 0),
+    dependents: Object.freeze(
+      sources.flatMap((source) => source.dependents),
+    ),
+    offers: Object.freeze(offers),
+    nonce: JSON.stringify({
+      sources: sources.map((source) => `${source.path}\x00${source.blockId}\x00${source.outcome}`),
+      target: `${String(firstTarget.path || "")}\x00${String(firstTarget.block_id || firstTarget.blockId || "")}\x00${String(firstTarget.kind || "")}`,
+      offers: offers.map((offer) => String(offer.key || offer.n || "")),
+    }),
+  });
+}
+
+// The Links-stage consequence strip for a merge preview
+// (`docs/task-relations.md` §21 ML1, canonical copy in
+// `docs/task-merge.md` §10): `⤵ Merges “S” into “T” · moves N notes ·
+// cancels “S” · N dependent(s) now wait on “T” · offers “T” under ENTRY`.
+function formatTaskMergeConsequenceStrip(summary) {
+  if (!summary || !Array.isArray(summary.sources) || summary.sources.length === 0) {
+    return "⤵ previewing…";
+  }
+  const target = summary.targetTitle
+    ? `“${summary.targetTitle}”`
+    : summary.targetSection
+      ? `## ${summary.targetSection}`
+      : "that task";
+  const firstSource = summary.sources.length === 1 ? `“${summary.sources[0].title}”` : `${summary.sources.length} tasks`;
+  const parts = [`⤵ Merges ${firstSource} into ${target}`];
+  if (summary.movedNotes > 0) {
+    parts.push(
+      summary.movedNotes === 1 ? "moves 1 note" : `moves ${summary.movedNotes} notes`,
+    );
+  }
+  if (summary.sources.length === 1) {
+    parts.push(`cancels “${summary.sources[0].title}”`);
+  } else {
+    parts.push(`cancels ${summary.sources.length} tasks`);
+  }
+  if (summary.dependents.length > 0) {
+    parts.push(
+      summary.dependents.length === 1
+        ? `1 dependent now waits on ${target}`
+        : `${summary.dependents.length} dependents now wait on ${target}`,
+    );
+  }
+  const offerEntries = [...new Set(
+    summary.offers.map((offer) => String((offer && offer.entry_name) || "").trim()).filter(Boolean),
+  )];
+  if (offerEntries.length > 0) {
+    parts.push(`offers ${target} under ${offerEntries.join(", ")}`);
+  }
+  return parts.join(" · ");
+}
+
+function relationMergeConfirmBanner(mergeCount) {
+  const merges = Math.max(0, Math.floor(numericOrDefault(mergeCount, 0)));
+  if (merges < 2) return "";
+  return `⤵ Merges ${merges} tasks — ↵ again to confirm`;
+}

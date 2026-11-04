@@ -1,8 +1,8 @@
 class BobLedgerToolsFreshnessStatusMixin {
   // --- Task freshness: status bar -----------------------------------------
   // Desktop only: a compact live review footer that appears while a
-  // trustworthy nonempty queue remains. Empty groups are omitted;
-  // an empty queue removes the whole item, including the upkeep meter.
+  // trustworthy nonempty queue remains. Empty groups are omitted. With no
+  // due rows, a prioritized Alt+P preview can keep a hint-only item visible.
   // The main button runs
   // `bob-navigation-hotkeys:jump-to-next-due-task`, falling back to
   // opening `rotten`.
@@ -218,20 +218,6 @@ class BobLedgerToolsFreshnessStatusMixin {
     }
   }
 
-  freshnessFooterCurrentEntry(queue) {
-    const list = Array.isArray(queue) ? queue : [];
-    if (list.length === 0) {
-      return null;
-    }
-    let cursor = this.freshnessFooterCursor(false);
-    let current = freshnessMatchQueueCursor(list, cursor);
-    if (current) {
-      return current;
-    }
-    cursor = this.freshnessFooterCursor(true);
-    return freshnessMatchQueueCursor(list, cursor);
-  }
-
   updateFreshnessStatusBar(options = {}) {
     const el = this.freshnessStatusEl;
     if (!el) {
@@ -269,11 +255,25 @@ class BobLedgerToolsFreshnessStatusMixin {
           mostOverdue = entry.daysOverdue;
         }
       }
-      const current = this.freshnessFooterCurrentEntry(queue);
+      const cursor = this.freshnessFooterCursor(false);
+      let sourceCursor = null;
+      let current = queue.length > 0
+        ? freshnessMatchQueueCursor(queue, cursor)
+        : null;
+      if (
+        !current &&
+        queue.length > 0 &&
+        cursor &&
+        typeof cursor.sourceLine === "string" &&
+        POMODORO_CLOCK_TASK_LINE_RE.test(cursor.sourceLine)
+      ) {
+        sourceCursor = this.freshnessFooterCursor(true);
+        current = freshnessMatchQueueCursor(queue, sourceCursor);
+      }
       // Additive roll preview from nav `api.quickRoll` v1 (plan
-      // 202610/quick_roll_alt_p.md, phase footer-preview). Only a queue row
-      // with a v1 namespace previews; anything else leaves the footer
-      // byte-identical to today. The footer never throws.
+      // 202610/quick_roll_alt_p.md, phase footer-preview). Queue rows keep
+      // their tier-aware preview. Off-walk task lines preview without a tier;
+      // the footer never throws.
       let quickRoll = null;
       try {
         const nav =
@@ -285,18 +285,33 @@ class BobLedgerToolsFreshnessStatusMixin {
             ? nav.quickRoll
             : null;
         if (
-          current &&
           namespace &&
           Number(namespace.version) >= 1 &&
           typeof namespace.preview === "function"
         ) {
-          const cursor = this.freshnessFooterCursor(true);
-          if (cursor && Array.isArray(cursor.sourceLines)) {
-            quickRoll = namespace.preview({
-              lines: cursor.sourceLines,
-              line: cursor.line0,
-              tier: freshnessReviewMachineTier(current),
-            });
+          if (current) {
+            const source = sourceCursor || this.freshnessFooterCursor(true);
+            if (source && Array.isArray(source.sourceLines)) {
+              quickRoll = namespace.preview({
+                lines: source.sourceLines,
+                line: source.line0,
+                tier: freshnessReviewMachineTier(current),
+              });
+            }
+          } else {
+            if (
+              cursor &&
+              typeof cursor.sourceLine === "string" &&
+              POMODORO_CLOCK_TASK_LINE_RE.test(cursor.sourceLine)
+            ) {
+              const source = sourceCursor || this.freshnessFooterCursor(true);
+              if (source && Array.isArray(source.sourceLines)) {
+                quickRoll = namespace.preview({
+                  lines: source.sourceLines,
+                  line: source.line0,
+                });
+              }
+            }
           }
         }
       } catch (error) {
@@ -320,6 +335,7 @@ class BobLedgerToolsFreshnessStatusMixin {
         view.groupsText,
         view.meterText,
         view.action,
+        view.tooltip,
       ].join("\0");
       if (paintKey === this.freshnessFooterPaintKey && this.freshnessFooterParts) {
         return;

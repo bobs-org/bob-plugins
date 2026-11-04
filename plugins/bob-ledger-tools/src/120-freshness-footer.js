@@ -360,6 +360,59 @@ function freshnessFooterHiddenView() {
   };
 }
 
+function freshnessFooterOffwalkQuickRoll(preview) {
+  try {
+    if (
+      !preview ||
+      typeof preview !== "object" ||
+      preview.ok !== true ||
+      typeof preview.compact !== "string" ||
+      preview.compact.trim() === "" ||
+      !["roll", "decay", "cancel"].includes(preview.kind)
+    ) {
+      return null;
+    }
+    return {
+      compact: preview.compact.trim(),
+      detail: typeof preview.detail === "string" ? preview.detail.trim() : "",
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function freshnessFooterHintOnlyView(preview, navAvailable) {
+  const action = navAvailable ? "jump" : "review";
+  const tooltipLines = ["Nothing due · " + preview.compact];
+  if (preview.detail) {
+    tooltipLines.push(preview.detail);
+  }
+  tooltipLines.push(
+    action === "jump"
+      ? "click for the next due task"
+      : "click to open the review page",
+  );
+  const dueText = "Nothing due";
+  const hintText = preview.compact;
+  return {
+    visible: true,
+    mode: "clear",
+    walk: 0,
+    commitments: 0,
+    dueText,
+    contextText: "",
+    detailText: "",
+    hintText,
+    groups: [],
+    groupsText: "",
+    meterText: "",
+    tooltip: tooltipLines.join("\n"),
+    ariaLabel: dueText + " · " + hintText,
+    current: null,
+    action,
+  };
+}
+
 function freshnessFooterJoin(parts) {
   return parts.filter((part) => part && String(part).trim()).join(" · ");
 }
@@ -463,7 +516,8 @@ function freshnessMatchQueueCursor(queue, cursor) {
 }
 
 // Compact live review footer from one memo's `counts` and `queue`.
-// Visible only for a usable, warm snapshot whose queue length is > 0.
+// A usable, warm snapshot shows the review queue, or only a prioritized
+// Alt+P hint when nothing is due and the cursor has a matching preview.
 // Never throws; unavailable, cold, or failed data hide the item.
 function freshnessFooterView(memo, options = {}) {
   try {
@@ -484,14 +538,19 @@ function freshnessFooterView(memo, options = {}) {
       : Array.isArray(options.queue)
         ? options.queue
         : [];
+    const navAvailable = options.navAvailable !== false;
+    const offwalkQuickRoll = freshnessFooterOffwalkQuickRoll(options.quickRoll);
     if (queue.length === 0) {
-      return freshnessFooterHiddenView();
+      return offwalkQuickRoll
+        ? freshnessFooterHintOnlyView(offwalkQuickRoll, navAvailable)
+        : freshnessFooterHiddenView();
     }
     const read = freshnessFooterReadTiers(counts);
     if (!Number.isInteger(read.walk) || read.walk <= 0) {
-      return freshnessFooterHiddenView();
+      return offwalkQuickRoll
+        ? freshnessFooterHintOnlyView(offwalkQuickRoll, navAvailable)
+        : freshnessFooterHiddenView();
     }
-    const navAvailable = options.navAvailable !== false;
     const action = navAvailable ? "jump" : "review";
     const hintDefault = navAvailable ? "]s next" : "open review";
     let current = null;
@@ -563,9 +622,9 @@ function freshnessFooterView(memo, options = {}) {
     let detailText = "";
     let hintText = "";
     // Additive roll preview from nav `api.quickRoll` v1 (plan
-    // 202610/quick_roll_alt_p.md, phase footer-preview). Only a queue row
-    // with an available preview takes the hint slot; anything else leaves
-    // the footer byte-identical to today.
+    // 202610/quick_roll_alt_p.md, phase footer-preview). Queue rows retain
+    // their existing preview behavior. Off-walk previews use the hint slot
+    // only for prioritized tasks.
     const quickRollOption =
       options && options.quickRoll && typeof options.quickRoll === "object"
         ? options.quickRoll
@@ -595,13 +654,13 @@ function freshnessFooterView(memo, options = {}) {
         read.commitments === 1
           ? "1 commitment"
           : read.commitments + " commitments";
-      hintText = hintDefault;
+      hintText = offwalkQuickRoll ? offwalkQuickRoll.compact : hintDefault;
     } else if (read.budgetMet) {
       contextText = "Upkeep budget met";
-      hintText = hintDefault;
+      hintText = offwalkQuickRoll ? offwalkQuickRoll.compact : hintDefault;
     } else {
       contextText = "Commitments done";
-      hintText = hintDefault;
+      hintText = offwalkQuickRoll ? offwalkQuickRoll.compact : hintDefault;
     }
     let mode = "due";
     if (read.tiers.new > 0) {
@@ -656,6 +715,8 @@ function freshnessFooterView(memo, options = {}) {
       quickRollOption.detail.trim() !== ""
     ) {
       tooltipLines.push(quickRollOption.detail);
+    } else if (offwalkQuickRoll && offwalkQuickRoll.detail) {
+      tooltipLines.push(offwalkQuickRoll.detail);
     }
     if (current && current.actionHint) {
       tooltipLines.push(current.actionHint);

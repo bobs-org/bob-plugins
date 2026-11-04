@@ -437,30 +437,34 @@ test("a NEW-state project appears only in its walk tier", () => {
 });
 
 test("empty queue hides the footer even with upkeep or a met budget", () => {
-  const hidden = freshnessFooterView(
-    {
-      counts: {
-        walk: 0,
-        upkeepToday: 12,
-        budget: 15,
-        budgetMet: true,
-        byTier: {
-          new: 0,
-          projects: 0,
-          pending: 0,
-          next: 0,
-          tickler: 0,
-              rotten: 0,
-        },
+  const memo = {
+    counts: {
+      walk: 0,
+      upkeepToday: 12,
+      budget: 15,
+      budgetMet: true,
+      byTier: {
+        new: 0,
+        projects: 0,
+        pending: 0,
+        next: 0,
+        tickler: 0,
+        rotten: 0,
       },
-      queue: [],
-      tasksAvailable: true,
     },
-    { navAvailable: true },
-  );
-  assert.equal(hidden.visible, false);
-  assert.equal(hidden.groupsText, "");
-  assert.equal(hidden.meterText, "");
+    queue: [],
+    tasksAvailable: true,
+  };
+  for (const quickRoll of [
+    null,
+    { ok: false },
+    { ok: true, kind: "assign", compact: "Alt+P set high" },
+  ]) {
+    const hidden = freshnessFooterView(memo, { navAvailable: true, quickRoll });
+    assert.equal(hidden.visible, false);
+    assert.equal(hidden.groupsText, "");
+    assert.equal(hidden.meterText, "");
+  }
 });
 
 test("unavailable or missing data never render false counts", () => {
@@ -1449,7 +1453,7 @@ test("quickRoll detail sits next to the action hint on lane rows", () => {
   assert.ok(view.current.actionHint.includes("Alt+N release"));
 });
 
-test("missing, failed, or off-row quickRoll leaves the footer byte-identical", () => {
+test("missing or failed quickRoll leaves a queue-row footer byte-identical", () => {
   const rotten = rottenQuickRollEntry();
   const memo = quickRollMemo(rotten);
   const options = { current: rotten, todayText: D, navAvailable: true };
@@ -1463,13 +1467,97 @@ test("missing, failed, or off-row quickRoll leaves the footer byte-identical", (
     freshnessFooterView(memo, { ...options, quickRoll: { ok: false, reason: "no-config" } }),
     plain,
   );
+});
+
+test("off-walk prioritized preview replaces ]s next", () => {
+  const memo = quickRollMemo(rottenQuickRollEntry());
   const offRow = freshnessFooterView(memo, {
     todayText: D,
     navAvailable: true,
-    quickRoll: QUICK_ROLL_OK,
+    quickRoll: null,
   });
   assert.equal(offRow.hintText, "]s next");
-  assert.equal(offRow.tooltip.includes(QUICK_ROLL_OK.detail), false);
+  for (const preview of [
+    QUICK_ROLL_OK,
+    {
+      ...QUICK_ROLL_OK,
+      kind: "decay",
+      compact: "Alt+P decay P2→P3",
+      detail: "Alt+P: decay P2 → P3, 31–90 days out",
+    },
+    {
+      ...QUICK_ROLL_OK,
+      kind: "cancel",
+      compact: "Alt+P cancel P4",
+      detail: "Alt+P: cancel the task after decay past P4",
+    },
+  ]) {
+    const view = freshnessFooterView(memo, {
+      todayText: D,
+      navAvailable: true,
+      quickRoll: preview,
+    });
+    assert.equal(view.hintText, preview.compact);
+    assert.equal(view.dueText, offRow.dueText);
+    assert.equal(view.contextText, offRow.contextText);
+    assert.equal(view.groupsText, offRow.groupsText);
+    assert.ok(view.ariaLabel.includes(preview.compact));
+    const lines = view.tooltip.split("\n");
+    assert.equal(lines.at(-2), preview.detail);
+    assert.equal(lines.at(-1), "click for the next due task");
+  }
+});
+
+test("off-walk assign or kind-less preview keeps ]s next", () => {
+  const memo = quickRollMemo(rottenQuickRollEntry());
+  for (const quickRoll of [
+    { ...QUICK_ROLL_OK, kind: "assign", compact: "Alt+P set high" },
+    { ok: true, compact: "Alt+P roll P2 1/1", detail: "untyped preview" },
+  ]) {
+    const view = freshnessFooterView(memo, {
+      todayText: D,
+      navAvailable: true,
+      quickRoll,
+    });
+    assert.equal(view.hintText, "]s next");
+    assert.equal(view.tooltip.includes(quickRoll.detail), false);
+  }
+});
+
+test("empty queue with a prioritized preview paints a hint-only footer", () => {
+  const emptyMemo = {
+    counts: {
+      walk: 0,
+      upkeepToday: 4,
+      budget: 15,
+      budgetMet: false,
+      byTier: {},
+    },
+    queue: [],
+    tasksAvailable: true,
+  };
+  const view = freshnessFooterView(emptyMemo, {
+    navAvailable: true,
+    quickRoll: QUICK_ROLL_OK,
+  });
+  assert.equal(view.visible, true);
+  assert.equal(view.mode, "clear");
+  assert.equal(view.dueText, "Nothing due");
+  assert.equal(view.hintText, QUICK_ROLL_OK.compact);
+  assert.deepEqual(view.groups, []);
+  assert.equal(view.groupsText, "");
+  assert.equal(view.meterText, "");
+  assert.equal(view.current, null);
+  assert.ok(view.tooltip.includes(QUICK_ROLL_OK.detail));
+  assert.equal(view.tooltip.split("\n")[0], "Nothing due · " + QUICK_ROLL_OK.compact);
+
+  const zeroWalkWithRows = freshnessFooterView(
+    { ...emptyMemo, queue: [queueEntry()] },
+    { navAvailable: true, quickRoll: QUICK_ROLL_OK },
+  );
+  assert.equal(zeroWalkWithRows.visible, true);
+  assert.equal(zeroWalkWithRows.mode, "clear");
+  assert.equal(zeroWalkWithRows.dueText, "Nothing due");
 });
 
 test("PRE rows stay unchanged under the nav checklist-tier contract", () => {
@@ -1501,8 +1589,10 @@ test("PRE rows stay unchanged under the nav checklist-tier contract", () => {
   assert.equal(plain.hintText, "");
 });
 
-function quickRollPluginApp({ navApi, cursor } = {}) {
-  const app = makeFreshnessApp({ tasks: [makeFreshnessTask()] });
+function quickRollPluginApp({ navApi, cursor, tasks } = {}) {
+  const app = makeFreshnessApp({
+    tasks: tasks === undefined ? [makeFreshnessTask()] : tasks,
+  });
   app.plugins.plugins["bob-navigation-hotkeys"] = { api: navApi === undefined ? null : navApi };
   if (cursor !== undefined) {
     app.workspace.getActiveViewOfType = () => cursor;
@@ -1510,14 +1600,28 @@ function quickRollPluginApp({ navApi, cursor } = {}) {
   return app;
 }
 
-function quickRollCursor() {
+function quickRollCursor({
+  lines = ["- [ ] #task Do it"],
+  line = 0,
+} = {}) {
   const view = new TestMarkdownView();
+  let sourceLines = lines.slice();
+  let currentLine = line;
+  let valueReads = 0;
   view.editor = {
-    getCursor: () => ({ line: 0 }),
-    getLine: () => "- [ ] #task Do it",
-    getValue: () => "- [ ] #task Do it",
+    getCursor: () => ({ line: currentLine }),
+    getLine: (line0) => sourceLines[line0] || "",
+    getValue: () => {
+      valueReads += 1;
+      return sourceLines.join("\n");
+    },
   };
   view.file = { path: "notes/a.md" };
+  view.setContent = (nextLines, nextLine = 0) => {
+    sourceLines = nextLines.slice();
+    currentLine = nextLine;
+  };
+  Object.defineProperty(view, "valueReads", { get: () => valueReads });
   return view;
 }
 
@@ -1559,6 +1663,120 @@ test("status bar wires nav api.quickRoll into the hint slot", () => {
       plugin.updateFreshnessStatusBar();
       assert.notEqual(plugin.freshnessFooterPaintKey, firstKey);
       assert.equal(findChild(el, "bob-freshness-hint").textContent, "Alt+P decay P2→P3");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("empty-queue status bar previews only a checkbox task line", () => {
+  withMissingConfig(() => {
+    const seen = [];
+    const navApi = {
+      version: 3,
+      quickRoll: {
+        version: 1,
+        preview: (args) => {
+          seen.push(args);
+          return { ...QUICK_ROLL_OK };
+        },
+      },
+    };
+    const cursor = quickRollCursor({
+      lines: ["- [ ] #task Prioritized [priority:: medium]"],
+    });
+    const app = quickRollPluginApp({ navApi, cursor, tasks: [] });
+    const el = makeStatusEl();
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
+    plugin.onload();
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].line, 0);
+      assert.deepEqual(seen[0].lines, ["- [ ] #task Prioritized [priority:: medium]"]);
+      assert.equal(Object.hasOwn(seen[0], "tier"), false);
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(el.classList.has("bob-freshness-clear"), true);
+      assert.equal(findChild(el, "bob-freshness-hint").textContent, QUICK_ROLL_OK.compact);
+
+      const plainCursor = quickRollCursor({ lines: ["plain text"] });
+      const plainApp = quickRollPluginApp({ navApi, cursor: plainCursor, tasks: [] });
+      const plainEl = makeStatusEl();
+      const plainPlugin = new LedgerToolsPlugin(plainApp, {});
+      plainPlugin.addStatusBarItem = makeStatusItemFactory(plainEl);
+      plainPlugin.onload();
+      try {
+        plainPlugin.updateFreshnessStatusBar();
+        assert.equal(seen.length, 1, "non-task lines never call nav preview");
+        assert.equal(plainCursor.valueReads, 0, "non-task lines avoid a full editor read");
+        assert.equal(plainEl.classList.has("bob-freshness-hidden"), true);
+      } finally {
+        plainPlugin.onunload();
+      }
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("off-walk task preview works with a queue and survives its 1-to-0 transition", () => {
+  withMissingConfig(() => {
+    const details = ["First preview detail", "Updated preview detail"];
+    let detailIndex = 0;
+    const seen = [];
+    const navApi = {
+      version: 3,
+      quickRoll: {
+        version: 1,
+        preview: (args) => {
+          seen.push(args);
+          return {
+            ok: true,
+            kind: "roll",
+            compact: "Alt+P roll P2 1/1",
+            detail: details[detailIndex],
+          };
+        },
+      },
+    };
+    const cursor = quickRollCursor({
+      lines: [
+        "- [ ] #task Do it",
+        "- [ ] #task Prioritized [priority:: medium]",
+      ],
+      line: 1,
+    });
+    const tasks = [makeFreshnessTask()];
+    const app = makeFreshnessApp({ tasks });
+    app.plugins.plugins["bob-navigation-hotkeys"] = { api: navApi };
+    app.workspace.getActiveViewOfType = () => cursor;
+    const el = makeStatusEl();
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
+    plugin.onload();
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].line, 1);
+      assert.equal(Object.hasOwn(seen[0], "tier"), false);
+      assert.equal(findChild(el, "bob-freshness-hint").textContent, "Alt+P roll P2 1/1");
+      const firstKey = plugin.freshnessFooterPaintKey;
+      detailIndex = 1;
+      plugin.updateFreshnessStatusBar();
+      assert.notEqual(plugin.freshnessFooterPaintKey, firstKey);
+      assert.match(el.attrs.title, /Updated preview detail/);
+
+      tasks.length = 0;
+      plugin.freshnessMemo = null;
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-clear"), true);
+      assert.equal(findChild(el, "bob-freshness-due").textContent, "Nothing due");
+      assert.equal(findChild(el, "bob-freshness-hint").textContent, "Alt+P roll P2 1/1");
+
+      cursor.setContent(["plain text"]);
+      plugin.updateFreshnessStatusBar({ contextOnly: true });
+      assert.equal(el.classList.has("bob-freshness-hidden"), true);
     } finally {
       plugin.onunload();
     }

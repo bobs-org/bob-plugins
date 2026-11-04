@@ -85,7 +85,16 @@ async function runTaskAction(content, mode, options = {}) {
     const picker = harness.plugin.activeBulletPropertyPicker;
     assert.ok(picker, "Task Card opened");
     await waitUntil(() => picker.taskCardModel && picker.stage === "task-card");
-    picker.handleTaskCardKeydown(ctrlEnterEvent());
+    if (mode === "key1") {
+      picker.handleTaskCardKeydown({
+        key: "1",
+        code: "Digit1",
+        preventDefault() {},
+        stopPropagation() {},
+      });
+    } else {
+      picker.handleTaskCardKeydown(ctrlEnterEvent());
+    }
   }
   await waitUntil(
     () => !harness.plugin.activeBulletPropertyPicker,
@@ -367,6 +376,19 @@ test("Alt+P assign matches Ctrl+Enter on the visible card", async () => {
   assert.deepEqual(quick, card);
   assert.match(quick.content, /\[priority:: high\]/);
   assert.match(quick.content, /🎲 P0 → P1/);
+});
+
+test("Alt+P assign matches Task Card key 1 on Ready rows", async () => {
+  for (const content of [
+    "- [ ] #task Past [scheduled:: 2026-09-20] ^past",
+    "- [ ] #task Unscheduled ^none",
+  ]) {
+    const quick = await runTaskAction(content, "quick");
+    const key1 = await runTaskAction(content, "key1");
+    assert.deepEqual(quick, key1);
+    assert.match(quick.content, /\[priority:: high\]/);
+    assert.match(quick.content, /🎲 P0 → P1/);
+  }
 });
 
 test("Alt+P assign routes through inbox and Next work summary", async () => {

@@ -879,11 +879,11 @@ function formatProjectSectionTitle(body) {
 }
 
 // The title-cased section title for a direct-child bullet body, or null when
-// the trimmed body does not match the ALL-CAPS title shape (PROJECT_SECTION_TITLE_RE
-// plus at least one letter, so an all-digit or empty body is rejected too).
+// the trimmed body is not a drawer title (isTaskSplitDrawerTitle, shared with
+// the task-split planner, so an all-digit or empty body is rejected too).
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
-  if (!PROJECT_SECTION_TITLE_RE.test(trimmed) || !/[A-Z]/.test(trimmed)) {
+  if (!isTaskSplitDrawerTitle(trimmed)) {
     return null;
   }
 

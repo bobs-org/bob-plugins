@@ -12696,11 +12696,11 @@ function formatProjectSectionTitle(body) {
 }
 
 // The title-cased section title for a direct-child bullet body, or null when
-// the trimmed body does not match the ALL-CAPS title shape (PROJECT_SECTION_TITLE_RE
-// plus at least one letter, so an all-digit or empty body is rejected too).
+// the trimmed body is not a drawer title (isTaskSplitDrawerTitle, shared with
+// the task-split planner, so an all-digit or empty body is rejected too).
 function parseProjectSectionBulletTitle(body) {
   const trimmed = String(body || "").trim();
-  if (!PROJECT_SECTION_TITLE_RE.test(trimmed) || !/[A-Z]/.test(trimmed)) {
+  if (!isTaskSplitDrawerTitle(trimmed)) {
     return null;
   }
 
@@ -39443,6 +39443,1844 @@ function createInboxRouteApi(plugin) {
     prompt: safePrompt,
     commit: safeCommit,
   });
+}
+// ---- src/256-task-split-plan.js ----
+// Task-split planner. JS twin of bob-cli `src/native/task_split/plan.rs`,
+// pinned byte-for-byte by `scripts/fixtures/task_split/vectors.json`
+// (SP1–SP30). Pure: no Obsidian imports, so the node vectors script and the
+// gesture share it. `planSplitBullets(files, request)` mirrors
+// `plan_task_split`; `listTaskSplitCandidates(files, request)` mirrors
+// `list_task_split_candidates`.
+//
+// Request shape (all lines 1-based):
+//   { ownerPath, ownerLine, selection, today, settings }
+// where selection is one of:
+//   { kind: "cursor", line } | { kind: "count", line, count } |
+//   { kind: "lines", from, to } | { kind: "nth", picks } |
+//   { kind: "match", texts } | { kind: "section", title } |
+//   { kind: "bulletref", ref }
+// and settings is { linked_from_mentions, linked_from_lines, inbox_route }.
+// `options.lineDigest` is an optional sync digest for the CLI-only bulletref
+// selector (SHA-256 of the Rust-trimmed line, first 8 hex chars).
+//
+// Success: { ok: true, files, tasks, stubs, placement, notice, cursor,
+//   clamped, owner_minted_id, owner_path, owner_line }.
+// Failure: { ok: false, code, message } with the §5.1 codes verbatim.
+
+// Drawer titles are the note-drawer grammar from
+// `capture_drawers::is_drawer_title`: an uppercase/digit lead, the drawer
+// rest alphabet, and at least one letter. `buildProjectSeedFromChildBullets`
+// gates its section titles on this same predicate.
+function isTaskSplitDrawerTitle(title) {
+  const text = String(title || "");
+  if (text.length === 0) {
+    return false;
+  }
+  const first = text.charAt(0);
+  if (!isTaskSplitDrawerTitleFirst(first)) {
+    return false;
+  }
+  let hasLetter = first >= "A" && first <= "Z";
+  for (let index = 1; index < text.length; index += 1) {
+    const character = text.charAt(index);
+    if (!isTaskSplitDrawerTitleRest(character)) {
+      return false;
+    }
+    if (character >= "A" && character <= "Z") {
+      hasLetter = true;
+    }
+  }
+  return hasLetter;
+}
+
+function isTaskSplitDrawerTitleFirst(character) {
+  return (
+    (character >= "A" && character <= "Z") ||
+    (character >= "0" && character <= "9")
+  );
+}
+
+function isTaskSplitDrawerTitleRest(character) {
+  return (
+    isTaskSplitDrawerTitleFirst(character) ||
+    character === " " ||
+    character === "\t" ||
+    character === "&" ||
+    character === "'" ||
+    character === "(" ||
+    character === ")" ||
+    character === "," ||
+    character === "." ||
+    character === "/" ||
+    character === "-"
+  );
+}
+
+// --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---
+
+const TASK_SPLIT_STOPWORDS = new Set(
+  "a|an|and|as|at|be|by|for|from|in|into|is|it|its|my|of|on|or|our|so|that|the|their|this|to|via|with|your".split(
+    "|",
+  ),
+);
+const TASK_SPLIT_FILLER_WORDS = new Set(
+  "ability|add|all|get|make|new|should|start|support|use".split("|"),
+);
+const TASK_SPLIT_FILLER_LEADINS = [
+  ["make", "it", "possible", "to"],
+  ["figure", "out", "how", "to"],
+  ["add", "support", "for"],
+  ["add", "ability", "to"],
+  ["make", "sure", "that"],
+  ["figure", "out", "how"],
+  ["make", "sure"],
+  ["figure", "out"],
+];
+const TASK_SPLIT_SKIP_LEADING_VERBS = new Set(
+  "allow|ask|build|check|clean|create|document|enable|ensure|finish|implement|improve|investigate|let|migrate|move|need|plan|please|refactor|remove|rename|review|run|stop|try|update|want|write".split(
+    "|",
+  ),
+);
+const TASK_SPLIT_WEAK_TRAILING = new Set(
+  "bug|code|docs|documentation|file|issue|item|items|note|notes|stuff|support|task|tasks|test|tests|testing|thing|things|today|tonight|work".split(
+    "|",
+  ),
+);
+const TASK_SPLIT_FIRST_SUGGESTION_MAX_BYTES = 20;
+
+function taskSplitRawWords(text) {
+  const words = [];
+  let current = "";
+  const flush = () => {
+    if (current) {
+      words.push(current);
+      current = "";
+    }
+  };
+  for (const character of String(text || "")) {
+    if (/^[A-Za-z0-9]$/.test(character)) {
+      current += character.toLowerCase();
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return words;
+}
+
+function taskSplitWordsIn(text) {
+  return taskSplitRawWords(text).filter(
+    (word) => !TASK_SPLIT_STOPWORDS.has(word),
+  );
+}
+
+function taskSplitContentWords(text) {
+  let words = taskSplitRawWords(text);
+  for (const leadin of TASK_SPLIT_FILLER_LEADINS) {
+    if (
+      words.length >= leadin.length &&
+      leadin.every((lead, index) => words[index] === lead)
+    ) {
+      words = words.slice(leadin.length);
+      break;
+    }
+  }
+  words = words.filter(
+    (word) =>
+      !TASK_SPLIT_STOPWORDS.has(word) && !TASK_SPLIT_FILLER_WORDS.has(word),
+  );
+  while (
+    words.length >= 4 &&
+    TASK_SPLIT_SKIP_LEADING_VERBS.has(words[0])
+  ) {
+    words.shift();
+  }
+  while (words.length >= 2 && TASK_SPLIT_WEAK_TRAILING.has(words[words.length - 1])) {
+    words.pop();
+  }
+  return words;
+}
+
+function taskSplitSchemeUriPrefix(rest) {
+  const text = String(rest || "");
+  if (text.length < 4 || !/^[A-Za-z]/.test(text.charAt(0))) {
+    return 0;
+  }
+  let index = 1;
+  while (
+    index < text.length &&
+    /^[A-Za-z0-9+.-]$/.test(text.charAt(index))
+  ) {
+    index += 1;
+  }
+  return text.slice(index, index + 3) === "://" ? index + 3 : 0;
+}
+
+function taskSplitUrlRunEnd(body, index) {
+  const rest = String(body || "").slice(index);
+  let prefix = 0;
+  if (rest.length >= 4 && rest.slice(0, 4).toLowerCase() === "www.") {
+    prefix = 4;
+  } else {
+    prefix = taskSplitSchemeUriPrefix(rest);
+  }
+  if (!prefix) {
+    return -1;
+  }
+  let end = index + prefix;
+  while (end < body.length && !/\s/.test(body.charAt(end))) {
+    end += 1;
+  }
+  return end;
+}
+
+function taskSplitClosingParenEnd(body, open) {
+  const close = String(body || "").indexOf(")", open + 1);
+  return close === -1 ? -1 : close + 1;
+}
+
+function taskSplitMarkdownLinkAt(body, index) {
+  const text = String(body || "");
+  if (!text.startsWith("[", index) || text.startsWith("[[", index)) {
+    return null;
+  }
+  const close = text.indexOf("]", index + 1);
+  if (close === -1) {
+    return null;
+  }
+  if (!text.startsWith("(", close + 1)) {
+    return null;
+  }
+  const end = taskSplitClosingParenEnd(text, close + 1);
+  if (end === -1) {
+    return null;
+  }
+  return { label: text.slice(index + 1, close), end };
+}
+
+// Body with Markdown link destinations and bare URLs removed, labels kept.
+function taskSplitProseText(body) {
+  const text = String(body || "");
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    const urlEnd = taskSplitUrlRunEnd(text, index);
+    if (urlEnd !== -1) {
+      out += " ";
+      index = urlEnd;
+      continue;
+    }
+    const link = taskSplitMarkdownLinkAt(text, index);
+    if (link) {
+      out += link.label;
+      index = link.end;
+      continue;
+    }
+    if (
+      text.charAt(index) === "(" &&
+      index > 0 &&
+      text.charAt(index - 1) === "]"
+    ) {
+      const end = taskSplitClosingParenEnd(text, index);
+      if (end !== -1) {
+        index = end;
+        continue;
+      }
+    }
+    out += text.charAt(index);
+    index += 1;
+  }
+  return out;
+}
+
+function taskSplitWikilinkPhrase(inner) {
+  const text = String(inner || "");
+  const pipe = text.indexOf("|");
+  if (pipe !== -1) {
+    return text.slice(pipe + 1);
+  }
+  const hash = text.indexOf("#");
+  const target = hash === -1 ? text : text.slice(0, hash);
+  const slash = target.lastIndexOf("/");
+  return slash === -1 ? target : target.slice(slash + 1);
+}
+
+function taskSplitPhraseSpans(body) {
+  const text = String(body || "");
+  const phrases = [];
+  let index = 0;
+  while (index < text.length) {
+    const character = text.charAt(index);
+    if (character === "`") {
+      const close = text.indexOf("`", index + 1);
+      if (close !== -1) {
+        phrases.push(text.slice(index + 1, close));
+        index = close + 1;
+        continue;
+      }
+      index += 1;
+    } else if (character === '"' || text.startsWith("\u201C", index)) {
+      const openLength = 1;
+      const rest = text.slice(index + openLength);
+      let offset = -1;
+      for (let scan = 0; scan < rest.length; scan += 1) {
+        if (rest[scan] === '"' || rest[scan] === "\u201D") {
+          offset = scan;
+          break;
+        }
+      }
+      if (offset !== -1) {
+        phrases.push(rest.slice(0, offset));
+        index = index + openLength + offset + 1;
+        continue;
+      }
+      index += openLength;
+    } else if (character === "(") {
+      if (index > 0 && text.charAt(index - 1) === "]") {
+        const end = taskSplitClosingParenEnd(text, index);
+        if (end !== -1) {
+          index = end;
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+      const close = text.indexOf(")", index + 1);
+      if (close !== -1) {
+        phrases.push(text.slice(index + 1, close));
+        index = close + 1;
+        continue;
+      }
+      index += 1;
+    } else if (text.startsWith("[[", index)) {
+      const close = text.indexOf("]]", index + 2);
+      if (close !== -1) {
+        phrases.push(taskSplitWikilinkPhrase(text.slice(index + 2, close)));
+        index = close + 2;
+        continue;
+      }
+      index += 2;
+    } else {
+      const link = taskSplitMarkdownLinkAt(text, index);
+      if (link) {
+        if (taskSplitWordsIn(link.label).length > 0) {
+          phrases.push(link.label);
+        }
+        index = link.end;
+      } else {
+        index += 1;
+      }
+    }
+  }
+  return phrases;
+}
+
+function taskSplitReduceWikilinks(text) {
+  const source = String(text || "");
+  let out = "";
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith("[[", index)) {
+      const close = source.indexOf("]]", index + 2);
+      if (close !== -1) {
+        out += taskSplitWikilinkPhrase(source.slice(index + 2, close));
+        index = close + 2;
+        continue;
+      }
+    }
+    out += source.charAt(index);
+    index += 1;
+  }
+  return out;
+}
+
+// Display text for minting and aliases: wikilinks flatten to their display
+// text (alias, or the pre-`#` target without basename reduction) and Markdown
+// links flatten to their label. Mirrors `flatten_links`, not the basename
+// `wikilink_phrase` used for suggestions.
+function taskSplitFlattenLinks(text) {
+  const reduced = String(text || "").replace(
+    /\[\[([^\]]+)\]\]/g,
+    (match, inner) => {
+      const pipe = String(inner).indexOf("|");
+      if (pipe !== -1) {
+        return String(inner).slice(pipe + 1);
+      }
+      const hash = String(inner).indexOf("#");
+      return hash === -1 ? String(inner) : String(inner).slice(0, hash);
+    },
+  );
+  return reduced.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+}
+
+function taskSplitIsValidBlockId(id) {
+  const text = String(id || "");
+  return text.length > 0 && /^[A-Za-z0-9-]+$/.test(text);
+}
+
+function taskSplitJoinTruncated(words) {
+  if (!words.length) {
+    return null;
+  }
+  const joined = words.join("-");
+  let truncated = joined;
+  if (joined.length > 32) {
+    const cut = joined.slice(0, 32).lastIndexOf("-");
+    if (cut <= 0) {
+      return null;
+    }
+    truncated = joined.slice(0, cut);
+  }
+  if (!truncated || !taskSplitIsValidBlockId(truncated)) {
+    return null;
+  }
+  return truncated;
+}
+
+function taskSplitSuggestIds(body, used) {
+  const usedSet = used instanceof Set ? used : new Set(used || []);
+  const prose = taskSplitContentWords(
+    taskSplitProseText(taskSplitReduceWikilinks(body)),
+  );
+  const three =
+    prose.length > 0
+      ? taskSplitJoinTruncated(prose.slice(0, Math.min(3, prose.length)))
+      : null;
+  const two =
+    prose.length >= 2 ? taskSplitJoinTruncated(prose.slice(0, 2)) : null;
+  const candidates = [];
+  if (three && three.length <= TASK_SPLIT_FIRST_SUGGESTION_MAX_BYTES) {
+    if (three) {
+      candidates.push(three);
+    }
+    if (two) {
+      candidates.push(two);
+    }
+  } else {
+    if (two) {
+      candidates.push(two);
+    }
+    if (three) {
+      candidates.push(three);
+    }
+  }
+  for (const phrase of taskSplitPhraseSpans(body)) {
+    const words = taskSplitWordsIn(phrase);
+    if (words.length === 0) {
+      continue;
+    }
+    const joined = taskSplitJoinTruncated(
+      words.slice(0, Math.min(4, words.length)),
+    );
+    if (joined) {
+      candidates.push(joined);
+    }
+    break;
+  }
+  const seen = new Set();
+  const deduped = [];
+  for (const candidate of candidates) {
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      deduped.push(candidate);
+    }
+  }
+  const out = [];
+  for (const candidate of deduped) {
+    if (!usedSet.has(candidate)) {
+      out.push(candidate);
+    } else {
+      let placed = null;
+      for (let suffix = 2; suffix <= 9; suffix += 1) {
+        const suffixed = `${candidate}-${suffix}`;
+        if (suffixed.length > 64) {
+          continue;
+        }
+        if (
+          !taskSplitIsValidBlockId(suffixed) ||
+          usedSet.has(suffixed) ||
+          seen.has(suffixed)
+        ) {
+          continue;
+        }
+        placed = suffixed;
+        break;
+      }
+      if (placed) {
+        seen.add(placed);
+        out.push(placed);
+      }
+    }
+    if (out.length >= 3) {
+      break;
+    }
+  }
+  return out;
+}
+
+// Mint a block ID for a split task: the first suggestion, else the first
+// free `task`, `task-2`, … ID. Mirrors `capture_block_ids::mint_block_id`.
+function taskSplitMintBlockId(description, used) {
+  const usedSet = used instanceof Set ? used : new Set(used || []);
+  const first = taskSplitSuggestIds(description, usedSet)[0];
+  if (first) {
+    return first;
+  }
+  if (!usedSet.has("task")) {
+    return "task";
+  }
+  let suffix = 2;
+  for (;;) {
+    const candidate = `task-${suffix}`;
+    if (!usedSet.has(candidate)) {
+      return candidate;
+    }
+    suffix += 1;
+  }
+}
+
+// --- Line helpers (mirror the private helpers in `plan.rs`) ---
+
+function taskSplitLines(contents) {
+  const text = String(contents || "");
+  if (text === "") {
+    return [];
+  }
+  const parts = text.split("\n");
+  const lines = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const last = index === parts.length - 1;
+    lines.push(last ? parts[index] : `${parts[index]}\n`);
+  }
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function taskSplitStripEnding(line) {
+  const text = String(line || "");
+  if (text.endsWith("\r\n")) {
+    return text.slice(0, -2);
+  }
+  if (text.endsWith("\n") || text.endsWith("\r")) {
+    return text.slice(0, -1);
+  }
+  return text;
+}
+
+function taskSplitSplitEnding(line) {
+  const text = String(line || "");
+  if (text.endsWith("\r\n")) {
+    return [text.slice(0, -2), "\r\n"];
+  }
+  if (text.endsWith("\n")) {
+    return [text.slice(0, -1), "\n"];
+  }
+  return [text, ""];
+}
+
+function taskSplitIndentOf(line) {
+  const text = taskSplitStripEnding(line);
+  const match = /^[ \t]*/.exec(text);
+  return match ? match[0] : "";
+}
+
+function taskSplitIndentLen(line) {
+  const text = String(line == null ? "" : line);
+  let length = 0;
+  while (
+    length < text.length &&
+    (text.charAt(length) === " " || text.charAt(length) === "\t")
+  ) {
+    length += 1;
+  }
+  return length;
+}
+
+function taskSplitListBody(line) {
+  const text = taskSplitStripEnding(line).trimStart();
+  return text.startsWith("- ") ? text.slice(2) : null;
+}
+
+function taskSplitParentListLine(lines, index, floor) {
+  const currentLen = taskSplitIndentLen(taskSplitStripEnding(lines[index]));
+  for (let prior = index - 1; prior >= floor; prior -= 1) {
+    if (
+      taskSplitListBody(lines[prior]) !== null &&
+      taskSplitIndentLen(taskSplitStripEnding(lines[prior])) < currentLen
+    ) {
+      return prior;
+    }
+  }
+  return null;
+}
+
+function taskSplitListSubtreeEnd(lines, start, limit) {
+  const stripped = lines.map((line) => taskSplitStripEnding(line));
+  const base = taskSplitIndentLen(stripped[start]);
+  let end = start;
+  for (let index = start + 1; index <= Math.min(limit, stripped.length - 1); index += 1) {
+    const line = stripped[index];
+    if (line.trim() === "") {
+      continue;
+    }
+    if (taskSplitIndentLen(line) <= base) {
+      return end;
+    }
+    end = index;
+  }
+  return end;
+}
+
+function taskSplitHeading(line) {
+  const text = taskSplitStripEnding(line).trimStart();
+  if (!text.startsWith("## ")) {
+    return null;
+  }
+  return text.slice(3).trim().replace(/#+$/, "").trim();
+}
+
+function taskSplitIsBlockIdByte(character) {
+  return /^[A-Za-z0-9-]$/.test(character);
+}
+
+function taskSplitTrailingBlockId(text) {
+  const trimmed = String(text || "").replace(/[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+$/, "");
+  const caret = trimmed.lastIndexOf("^");
+  if (caret === -1) {
+    return null;
+  }
+  const id = trimmed.slice(caret + 1);
+  if (id.length === 0) {
+    return null;
+  }
+  for (const character of id) {
+    if (!taskSplitIsBlockIdByte(character)) {
+      return null;
+    }
+  }
+  if (caret > 0 && !/\s/.test(trimmed.charAt(caret - 1))) {
+    return null;
+  }
+  return id;
+}
+
+function taskSplitBlockIdsInMarkdown(contents) {
+  const ids = [];
+  for (const line of taskSplitLines(contents)) {
+    const [content] = taskSplitSplitEnding(line);
+    const id = taskSplitTrailingBlockId(content);
+    if (id !== null) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function taskSplitSetTrailingBlockId(line, id) {
+  if (taskSplitTrailingBlockId(taskSplitStripEnding(line)) !== null) {
+    return String(line || "");
+  }
+  const [content, ending] = taskSplitSplitEnding(line);
+  return `${content.trimEnd()} ^${id}${ending}`;
+}
+
+function taskSplitWithoutTrailingId(title) {
+  const text = String(title || "").trimEnd();
+  const id = taskSplitTrailingBlockId(text);
+  if (id === null) {
+    return text;
+  }
+  return text.slice(0, text.length - id.length - 1).trimEnd();
+}
+
+function taskSplitParseBullet(body) {
+  const trimmed = String(body || "").trim();
+  if (trimmed.startsWith("[ ] ")) {
+    return { title: trimmed.slice(4), checked: false };
+  }
+  if (trimmed.startsWith("[x] ") || trimmed.startsWith("[X] ")) {
+    return { title: trimmed.slice(4), checked: true };
+  }
+  return { title: trimmed, checked: false };
+}
+
+function taskSplitIsStub(title) {
+  const text = String(title || "").trim();
+  return (
+    (text.startsWith("[[") &&
+      text.endsWith("]]") &&
+      !text.slice(2, Math.max(0, text.length - 2)).includes(" ")) ||
+    (text.startsWith("[[") && !text.includes("]] ") && text.endsWith("]]"))
+  );
+}
+
+function taskSplitBlockIdBeforeInlineFields(line) {
+  const match = /\s+\^([A-Za-z0-9-]+)(?:\s+\[[A-Za-z][A-Za-z0-9_-]*::[^\]]*\])+\s*$/.exec(
+    String(line || ""),
+  );
+  return match ? match[1] : null;
+}
+
+function taskSplitAliasFor(title) {
+  const text = taskSplitFlattenLinks(title)
+    .split("**").join("")
+    .split("__").join("")
+    .split("==").join("")
+    .split("~~").join("")
+    .split("`").join("")
+    .split("|").join("/")
+    .split("[").join("")
+    .split("]").join("");
+  const collapsed = text.split(/\s+/).filter(Boolean).join(" ");
+  if ([...collapsed].length <= 80) {
+    return collapsed;
+  }
+  let out = "";
+  for (const word of collapsed.split(/\s+/).filter(Boolean)) {
+    const nextLength =
+      [...out].length + [...word].length + (out ? 1 : 0) + 1;
+    if (nextLength > 80) {
+      break;
+    }
+    out += (out ? " " : "") + word;
+  }
+  return `${out}\u2026`;
+}
+
+function taskSplitShortNoticeTitle(title) {
+  const collapsed = String(title || "").split(/\s+/).filter(Boolean).join(" ");
+  if ([...collapsed].length <= 80) {
+    return collapsed;
+  }
+  let out = "";
+  for (const word of collapsed.split(/\s+/).filter(Boolean)) {
+    const nextLength =
+      [...out].length + [...word].length + (out ? 1 : 0) + 1;
+    if (nextLength > 80) {
+      break;
+    }
+    out += (out ? " " : "") + word;
+  }
+  return `${out}\u2026`;
+}
+
+function taskSplitInlineField(line, name) {
+  const pattern = new RegExp(
+    `\\[${name}::\\s*([^\\]]+)\\]`,
+  );
+  const match = pattern.exec(String(line || ""));
+  return match ? match[1].trim() : null;
+}
+
+function taskSplitPathWithMd(route) {
+  const text = String(route || "");
+  if (/\.[A-Za-z0-9]+$/.test(text)) {
+    return text;
+  }
+  return `${text}.md`;
+}
+
+function taskSplitNoteTarget(path) {
+  return String(path || "").replace(/\.md$/, "").replace(/\\/g, "/");
+}
+
+function taskSplitOwnerIndent(line) {
+  return taskSplitIndentOf(line);
+}
+
+// --- Owner scan (mirrors `note_tasks::scan` for task owners) ---
+
+function taskSplitFrontmatterEnd(stripped) {
+  if (stripped.length === 0 || stripped[0].trimEnd() !== "---") {
+    return -1;
+  }
+  for (let index = 1; index < stripped.length; index += 1) {
+    if (stripped[index].trimEnd() === "---") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function taskSplitFenceMarker(line) {
+  const text = String(line || "");
+  let indentation = 0;
+  while (indentation < text.length && text.charAt(indentation) === " ") {
+    indentation += 1;
+  }
+  if (indentation > 3) {
+    return null;
+  }
+  const rest = text.slice(indentation);
+  const character = rest.charAt(0);
+  if (character !== "`" && character !== "~") {
+    return null;
+  }
+  let length = 0;
+  while (rest.charAt(length) === character) {
+    length += 1;
+  }
+  return length >= 3 ? { character, length } : null;
+}
+
+function taskSplitFencedLines(stripped, start) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = start; index < stripped.length; index += 1) {
+    const line = stripped[index];
+    if (open) {
+      fenced.add(index);
+      const marker = taskSplitFenceMarker(line);
+      if (
+        marker &&
+        marker.character === open.character &&
+        marker.length >= open.length &&
+        line.trimStart().slice(marker.length).trim() === ""
+      ) {
+        open = null;
+      }
+    } else {
+      const marker = taskSplitFenceMarker(line);
+      if (marker) {
+        fenced.add(index);
+        open = marker;
+      }
+    }
+  }
+  return fenced;
+}
+
+// A task line is an indented `- [x] body` whose body carries the `#task`
+// token. Mirrors `note_tasks::parse_task_line` with the default filter.
+function taskSplitParseTaskLine(line) {
+  const text = taskSplitStripEnding(line);
+  let end = 0;
+  while (end < text.length && /\s/.test(text.charAt(end))) {
+    end += 1;
+  }
+  const indentation = text.slice(0, end);
+  const after = text.slice(end);
+  if (!after.startsWith("- [")) {
+    return null;
+  }
+  const symbol = after.charAt(3);
+  if (symbol === "") {
+    return null;
+  }
+  if (!after.startsWith("] ", 3 + symbol.length)) {
+    return null;
+  }
+  const body = after.slice(3 + symbol.length + 1);
+  if (!body.split(/\s+/).some((token) => token === "#task")) {
+    return null;
+  }
+  return { indentation, statusSymbol: symbol, body };
+}
+
+function taskSplitCleanDescription(body, blockId) {
+  let withoutBlock = String(body || "");
+  if (blockId) {
+    const suffix = `^${blockId}`;
+    const trimmed = withoutBlock.trimEnd();
+    if (trimmed.endsWith(suffix)) {
+      withoutBlock = trimmed.slice(0, trimmed.length - suffix.length);
+    }
+  }
+  const withoutFields = withoutBlock.replace(
+    /\[[A-Za-z][A-Za-z0-9_-]*::\s*[^\]]*\]/g,
+    " ",
+  );
+  const out = [];
+  let prevDroppedFilter = false;
+  for (const token of withoutFields.split(/\s+/)) {
+    if (token === "#task") {
+      prevDroppedFilter = true;
+      continue;
+    }
+    if (prevDroppedFilter && token.toLowerCase() === "#ref") {
+      prevDroppedFilter = false;
+      continue;
+    }
+    prevDroppedFilter = false;
+    if (token) {
+      out.push(token);
+    }
+  }
+  return out.join(" ");
+}
+
+function taskSplitBlockEnd(stripped, taskIndex, taskIndent) {
+  let index = taskIndex + 1;
+  let lastConsumed = taskIndex;
+  while (index < stripped.length) {
+    if (stripped[index].trim() === "") {
+      let next = -1;
+      for (let scan = index + 1; scan < stripped.length; scan += 1) {
+        if (stripped[scan].trim() !== "") {
+          next = scan;
+          break;
+        }
+      }
+      if (next !== -1 && taskSplitIndentLen(stripped[next]) > taskIndent) {
+        lastConsumed = index;
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    if (taskSplitIndentLen(stripped[index]) <= taskIndent) {
+      break;
+    }
+    lastConsumed = index;
+    index += 1;
+  }
+  return lastConsumed;
+}
+
+function taskSplitCancelLogLine(line) {
+  const text = String(line || "");
+  let indent = 0;
+  while (
+    indent < text.length &&
+    (text.charAt(indent) === " " || text.charAt(indent) === "\t")
+  ) {
+    indent += 1;
+  }
+  const rest = text.slice(indent);
+  let markerEnd = -1;
+  if (
+    (rest.charAt(0) === "-" ||
+      rest.charAt(0) === "*" ||
+      rest.charAt(0) === "+") &&
+    (rest.charAt(1) === " " || rest.charAt(1) === "\t")
+  ) {
+    markerEnd = indent + 1;
+  } else {
+    let digits = 0;
+    while (/^[0-9]$/.test(rest.charAt(digits))) {
+      digits += 1;
+    }
+    if (
+      digits > 0 &&
+      (rest.charAt(digits) === "." || rest.charAt(digits) === ")") &&
+      (rest.charAt(digits + 1) === " " || rest.charAt(digits + 1) === "\t")
+    ) {
+      markerEnd = indent + digits + 1;
+    }
+  }
+  if (markerEnd === -1) {
+    return false;
+  }
+  const body = text.slice(markerEnd).trimStart();
+  return body.startsWith("❌") && body.includes("CANCEL LOG");
+}
+
+// Classify one direct-child list line. Managed lines are never splittable;
+// drawer titles scope the picker; nested tasks read as authored here because
+// the planner validates `#task` lines with a teaching error instead.
+function taskSplitClassifyChild(line) {
+  const text = String(line || "");
+  if (isProjectSubprojectsLine(text)) {
+    return { kind: "managed" };
+  }
+  if (
+    isManagedDependencyLine(text) ||
+    parseLinksLine(text, {}).verdict !== "not-a-line" ||
+    parseLinkedFromLine(text, {}).verdict !== "not-a-line"
+  ) {
+    return { kind: "managed" };
+  }
+  if (
+    taskSplitCancelLogLine(text) ||
+    parseManagedTaskLogParentBullet(text) !== null
+  ) {
+    return { kind: "managed" };
+  }
+  const body = taskSplitListBody(text);
+  if (body !== null && isTaskSplitDrawerTitle(body.trim())) {
+    return { kind: "drawer", title: body.trim() };
+  }
+  return { kind: "authored" };
+}
+
+// ---- src/257-task-split-apply.js ----
+// Task-split planner, part 2: owner resolution, candidate collection,
+// selection, placement, and `planSplitBullets` / `listTaskSplitCandidates`.
+// Companions `256-task-split-plan.js` (mint pipeline, line helpers,
+// classifier); all fragments share one bundle scope.
+
+function taskSplitError(code, message) {
+  return { ok: false, code, message: String(message || "") };
+}
+
+function taskSplitSectionOwnerForBullet(lines, bulletLine) {
+  const bullet = lines[bulletLine];
+  if (!bullet) {
+    return null;
+  }
+  if (
+    taskSplitIndentOf(taskSplitStripEnding(bullet)) !== "" ||
+    taskSplitListBody(bullet) === null
+  ) {
+    return null;
+  }
+  let headingLine = -1;
+  for (let index = bulletLine - 1; index >= 0; index -= 1) {
+    if (taskSplitHeading(lines[index]) !== null) {
+      headingLine = index;
+      break;
+    }
+  }
+  if (headingLine === -1) {
+    return null;
+  }
+  const title = taskSplitHeading(lines[headingLine]);
+  let end = lines.length - 1;
+  for (let index = headingLine + 1; index < lines.length; index += 1) {
+    if (taskSplitHeading(lines[index]) !== null) {
+      end = index - 1;
+      break;
+    }
+  }
+  return { kind: "section", line: headingLine, end, title, blockId: null };
+}
+
+function taskSplitResolveOwner(lines, stripped, fenced, ownerPath, request) {
+  const selection = request.selection || {};
+  if (selection.kind === "section") {
+    const wanted = String(selection.title || "");
+    let found = -1;
+    for (let index = 0; index < lines.length; index += 1) {
+      const heading = taskSplitHeading(lines[index]);
+      if (heading !== null && heading.toLowerCase() === wanted.toLowerCase()) {
+        found = index;
+        break;
+      }
+    }
+    if (found === -1) {
+      return {
+        owner: null,
+        error: taskSplitError(
+          "split_section_missing",
+          `no ## ${wanted} section in ${ownerPath}`,
+        ),
+      };
+    }
+    let end = lines.length - 1;
+    for (let index = found + 1; index < lines.length; index += 1) {
+      if (taskSplitHeading(lines[index]) !== null) {
+        end = index - 1;
+        break;
+      }
+    }
+    return {
+      owner: { kind: "section", line: found, end, title: wanted, blockId: null },
+      error: null,
+    };
+  }
+  const line = Math.max(0, (request.ownerLine || 1) - 1);
+  const parsed = !fenced.has(line) ? taskSplitParseTaskLine(lines[line]) : null;
+  if (parsed) {
+    const blockId =
+      taskSplitTrailingBlockId(taskSplitStripEnding(lines[line] || "")) ||
+      taskSplitBlockIdBeforeInlineFields(lines[line] || "");
+    return {
+      owner: {
+        kind: "task",
+        line,
+        end: taskSplitBlockEnd(stripped, line, parsed.indentation.length),
+        title: taskSplitCleanDescription(parsed.body, blockId),
+        blockId,
+      },
+      error: null,
+    };
+  }
+  const text = lines[line] == null ? "" : taskSplitStripEnding(lines[line]).trim();
+  if (text.startsWith("- [") && text.includes("#task")) {
+    return {
+      owner: null,
+      error: taskSplitError(
+        "split_already_task",
+        "Already a task — split one of its notes or drawer entries instead",
+      ),
+    };
+  }
+  const sectionOwner = taskSplitSectionOwnerForBullet(lines, line);
+  if (sectionOwner) {
+    return { owner: sectionOwner, error: null };
+  }
+  return {
+    owner: null,
+    error: taskSplitError(
+      "split_owner_missing",
+      `no task owner at ${ownerPath}:${request.ownerLine || 1}`,
+    ),
+  };
+}
+
+function taskSplitCollectCandidates(lines, ownerLine, ownerEnd, kind) {
+  const stripped = lines.map((line) => taskSplitStripEnding(line));
+  const result = [];
+  if (kind === "task") {
+    const ownerIndent = taskSplitIndentOf(stripped[ownerLine] || "");
+    const last = Math.min(ownerEnd, stripped.length - 1);
+    const drawerLines = new Set();
+    for (let index = ownerLine + 1; index <= last; index += 1) {
+      if (
+        taskSplitListBody(lines[index]) === null ||
+        taskSplitIndentOf(stripped[index]).length <= ownerIndent.length
+      ) {
+        continue;
+      }
+      if (taskSplitClassifyChild(stripped[index]).kind !== "drawer") {
+        continue;
+      }
+      const drawerIndent = taskSplitIndentOf(stripped[index]).length;
+      for (let entry = index + 1; entry <= last; entry += 1) {
+        if (
+          stripped[entry].trim() !== "" &&
+          taskSplitIndentOf(stripped[entry]).length <= drawerIndent
+        ) {
+          break;
+        }
+        if (
+          taskSplitListBody(lines[entry]) !== null &&
+          taskSplitIndentOf(stripped[entry]).length > drawerIndent &&
+          taskSplitParentListLine(stripped, entry, ownerLine) === index
+        ) {
+          drawerLines.add(entry);
+        }
+      }
+    }
+    for (let index = ownerLine + 1; index <= last; index += 1) {
+      const body = taskSplitListBody(lines[index]);
+      if (body === null) {
+        continue;
+      }
+      if (taskSplitIndentOf(stripped[index]).length <= ownerIndent.length) {
+        continue;
+      }
+      const direct = taskSplitParentListLine(stripped, index, ownerLine);
+      const isDirect = direct === ownerLine;
+      if (!isDirect && !drawerLines.has(index)) {
+        continue;
+      }
+      const classified = taskSplitClassifyChild(stripped[index]);
+      const drawerTitle =
+        classified.kind === "drawer" ? classified.title : null;
+      if (
+        drawerTitle !== null ||
+        classified.kind === "managed" ||
+        classified.kind === "nested"
+      ) {
+        continue;
+      }
+      const parsed = taskSplitParseBullet(body);
+      const title = taskSplitWithoutTrailingId(parsed.title);
+      const end = taskSplitListSubtreeEnd(stripped, index, ownerEnd);
+      const childLines =
+        end > index ? lines.slice(index + 1, Math.min(end, lines.length - 1) + 1) : [];
+      if (
+        body.trimStart().startsWith("(**)") ||
+        body.trimStart().startsWith("(**")
+      ) {
+        continue;
+      }
+      const parentDrawer = isDirect
+        ? null
+        : taskSplitParentListLine(stripped, index, ownerLine) === null
+          ? null
+          : (() => {
+              const parentBody = taskSplitListBody(
+                lines[taskSplitParentListLine(stripped, index, ownerLine)],
+              );
+              return parentBody === null ? null : parentBody.trim();
+            })();
+      result.push({
+        line: index,
+        end,
+        indent: taskSplitIndentOf(stripped[index]),
+        rawBody: body,
+        title,
+        childLines,
+        drawerTitle: parentDrawer,
+      });
+    }
+  } else {
+    const last = Math.min(ownerEnd, stripped.length - 1);
+    for (let index = ownerLine + 1; index <= last; index += 1) {
+      const body = taskSplitListBody(lines[index]);
+      if (body === null) {
+        continue;
+      }
+      if (taskSplitIndentOf(stripped[index]) !== "") {
+        continue;
+      }
+      const parsed = taskSplitParseBullet(body);
+      const title = taskSplitWithoutTrailingId(parsed.title);
+      const end = taskSplitListSubtreeEnd(stripped, index, ownerEnd);
+      const childLines =
+        end > index ? lines.slice(index + 1, Math.min(end, lines.length - 1) + 1) : [];
+      result.push({
+        line: index,
+        end,
+        indent: "",
+        rawBody: body,
+        title,
+        childLines,
+        drawerTitle: null,
+      });
+    }
+  }
+  return result;
+}
+
+function taskSplitValidateCandidates(candidates, selected) {
+  for (const index of selected) {
+    const item = candidates[index];
+    const parsed = taskSplitParseBullet(item.rawBody);
+    if (item.rawBody.includes("#task")) {
+      return taskSplitError(
+        "split_already_task",
+        "Already a task — split one of its notes or drawer entries instead",
+      );
+    }
+    if (parsed.checked) {
+      return taskSplitError(
+        "split_not_splittable",
+        "Checked box — split an unchecked note instead",
+      );
+    }
+    if (parsed.title.trim() === "") {
+      return taskSplitError(
+        "split_not_splittable",
+        "Bullet has no text to split",
+      );
+    }
+    if (taskSplitIsStub(parsed.title)) {
+      return taskSplitError(
+        "split_stub",
+        "Stub only links a task — split a note with its own text instead",
+      );
+    }
+  }
+  return null;
+}
+
+function taskSplitSelectCandidates(candidates, lines, selection, owner, options) {
+  const lineToCandidate = (line) => {
+    for (let index = 0; index < candidates.length; index += 1) {
+      if (line >= candidates[index].line && line <= candidates[index].end) {
+        return index;
+      }
+    }
+    return -1;
+  };
+  const kind = selection.kind || "cursor";
+  if (kind === "cursor") {
+    const index = Math.max(0, (selection.line || 1) - 1);
+    if (owner.kind === "task" && index === owner.line) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_already_task",
+          "Already a task — split one of its notes or drawer entries instead",
+        ),
+      };
+    }
+    const found = lineToCandidate(index);
+    if (found !== -1) {
+      const error = taskSplitValidateCandidates(candidates, [found]);
+      return { selected: error ? null : [found], error };
+    }
+    const raw = lines[index] == null ? "" : String(lines[index]);
+    if (
+      raw.includes("DEPENDS ON") ||
+      raw.includes("BLOCKS:") ||
+      raw.includes("LINKS:") ||
+      raw.includes("LINKED FROM") ||
+      raw.includes("SCHEDULE LOG") ||
+      raw.includes("WORK LOG") ||
+      raw.includes("ROTTEN LOG") ||
+      raw.includes("CANCEL LOG") ||
+      raw.trimStart().startsWith("- (**")
+    ) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_managed_line",
+          "Managed line — Bob writes it; split a note or drawer entry instead",
+        ),
+      };
+    }
+    if (raw.trimStart().startsWith("- [x]") || raw.trimStart().startsWith("- [X]")) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_not_splittable",
+          "Checked box — split an unchecked note instead",
+        ),
+      };
+    }
+    if (lineToCandidate(index) === -1 && raw.includes("[[") && !raw.includes(" ")) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_stub",
+          "Stub only links a task — split a note with its own text instead",
+        ),
+      };
+    }
+    return {
+      selected: null,
+      error: taskSplitError(
+        "split_not_splittable",
+        "That line is not a splittable note",
+      ),
+    };
+  }
+  if (kind === "count") {
+    const start = lineToCandidate(Math.max(0, (selection.line || 1) - 1));
+    if (start === -1) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_not_splittable",
+          "That line is not a splittable note",
+        ),
+      };
+    }
+    const anchor = candidates[start];
+    const siblings = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const item = candidates[index];
+      if (
+        item.indent === anchor.indent &&
+        item.drawerTitle === anchor.drawerTitle &&
+        item.line >= anchor.line
+      ) {
+        siblings.push(index);
+      }
+    }
+    const picked = siblings.slice(0, Math.max(0, selection.count || 0));
+    const error = taskSplitValidateCandidates(candidates, picked);
+    return { selected: error ? null : picked, error };
+  }
+  if (kind === "lines") {
+    const from = selection.from || 1;
+    const to = selection.to || 1;
+    const picked = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const item = candidates[index];
+      if (item.line + 1 <= to && item.end + 1 >= from) {
+        picked.push(index);
+      }
+    }
+    picked.sort((left, right) => candidates[left].line - candidates[right].line);
+    const error = taskSplitValidateCandidates(candidates, picked);
+    return { selected: error ? null : picked, error };
+  }
+  if (kind === "nth") {
+    const picked = [];
+    for (const ordinal of selection.picks || []) {
+      if (!ordinal || ordinal > candidates.length) {
+        return {
+          selected: null,
+          error: taskSplitError(
+            "split_nth_missing",
+            `no splittable bullet ${ordinal}`,
+          ),
+        };
+      }
+      picked.push(ordinal - 1);
+    }
+    const error = taskSplitValidateCandidates(candidates, picked);
+    return { selected: error ? null : picked, error };
+  }
+  if (kind === "match") {
+    const picked = [];
+    for (const text of selection.texts || []) {
+      const matches = [];
+      for (let index = 0; index < candidates.length; index += 1) {
+        if (candidates[index].title.includes(text)) {
+          matches.push(index);
+        }
+      }
+      if (matches.length === 1) {
+        picked.push(matches[0]);
+      } else if (matches.length === 0) {
+        return {
+          selected: null,
+          error: taskSplitError(
+            "split_match_missing",
+            `no splittable bullet contains ${JSON.stringify(text)}`,
+          ),
+        };
+      } else {
+        return {
+          selected: null,
+          error: taskSplitError(
+            "split_match_ambiguous",
+            `more than one splittable bullet contains ${JSON.stringify(text)}`,
+          ),
+        };
+      }
+    }
+    const error = taskSplitValidateCandidates(candidates, picked);
+    return { selected: error ? null : picked, error };
+  }
+  if (kind === "section") {
+    const picked = candidates.map((item, index) => index);
+    const error = taskSplitValidateCandidates(candidates, picked);
+    return { selected: error ? null : picked, error };
+  }
+  if (kind === "bulletref") {
+    const value = String(selection.ref || "");
+    const separator = value.indexOf(":");
+    const line = Number(separator === -1 ? "" : value.slice(0, separator));
+    const digest = separator === -1 ? "" : value.slice(separator + 1);
+    const lineDigest =
+      options && typeof options.lineDigest === "function"
+        ? options.lineDigest
+        : null;
+    let found = -1;
+    if (Number.isInteger(line) && line >= 1 && lineDigest) {
+      for (let index = 0; index < candidates.length; index += 1) {
+        const item = candidates[index];
+        if (
+          item.line + 1 === line &&
+          lineDigest(taskSplitStripEnding(lines[item.line] || "")) === digest
+        ) {
+          found = index;
+          break;
+        }
+      }
+    }
+    if (found === -1) {
+      return {
+        selected: null,
+        error: taskSplitError(
+          "split_stale_ref",
+          "stale bullet reference; list candidates and try again",
+        ),
+      };
+    }
+    const error = taskSplitValidateCandidates(candidates, [found]);
+    return { selected: error ? null : [found], error };
+  }
+  return {
+    selected: null,
+    error: taskSplitError(
+      "split_not_splittable",
+      "That line is not a splittable note",
+    ),
+  };
+}
+
+function taskSplitChoosePlacement(ownerPath, lines, owner, inboxRoute) {
+  if (owner.kind === "section") {
+    return { kind: "tasks_section", path: ownerPath };
+  }
+  const taskLine = taskSplitStripEnding(lines[owner.line] || "");
+  const parent = ownerPath.includes("/")
+    ? ownerPath.slice(0, ownerPath.lastIndexOf("/"))
+    : "";
+  const dailyOwner =
+    (ownerPath.includes("/") && parent.startsWith("20")) ||
+    taskLine.includes("#gtd");
+  if (dailyOwner) {
+    const root = taskSplitInlineField(taskLine, "root");
+    if (root) {
+      return { kind: "root_note", path: taskSplitPathWithMd(root) };
+    }
+    return { kind: "inbox", path: taskSplitPathWithMd(inboxRoute) };
+  }
+  return { kind: "below_owner", path: ownerPath };
+}
+
+function taskSplitInsertAfterBlock(contents, end, generated) {
+  if (!generated.length) {
+    return String(contents || "");
+  }
+  const lines = taskSplitLines(contents);
+  const position = Math.min(end + 1, lines.length);
+  const insertion = generated.slice();
+  if (position > 0 && !lines[position - 1].endsWith("\n")) {
+    lines[position - 1] += "\n";
+  }
+  lines.splice(position, 0, ...insertion);
+  return lines.join("");
+}
+
+function taskSplitInsertTasksSectionString(contents, generated) {
+  const lines = taskSplitLines(contents);
+  const headingLine = lines.findIndex(
+    (line) =>
+      taskSplitHeading(line) !== null &&
+      taskSplitHeading(line).toLowerCase() === "tasks",
+  );
+  if (headingLine !== -1) {
+    let end = lines.length;
+    for (let index = headingLine + 1; index < lines.length; index += 1) {
+      if (taskSplitHeading(lines[index]) !== null) {
+        end = index;
+        break;
+      }
+    }
+    let at = end;
+    while (at > headingLine + 1 && lines[at - 1].trim() === "") {
+      at -= 1;
+    }
+    if (at > 0 && !lines[at - 1].endsWith("\n")) {
+      lines[at - 1] += "\n";
+    }
+    lines.splice(at, 0, ...generated.map(String));
+    return lines.join("");
+  }
+  if (
+    lines.length > 0 &&
+    lines[lines.length - 1].trim() !== "" &&
+    !lines[lines.length - 1].endsWith("\n")
+  ) {
+    lines[lines.length - 1] += "\n";
+  }
+  if (lines.length > 0 && lines[lines.length - 1].trim() !== "") {
+    lines.push("\n");
+  }
+  lines.push("## Tasks\n");
+  for (const line of generated) {
+    lines.push(String(line));
+  }
+  return lines.join("");
+}
+
+function taskSplitRebaseChildren(childLines, sourceIndent, destIndent) {
+  return (childLines || []).map((raw) => {
+    const line = String(raw || "");
+    if (line.trim() === "") {
+      return line;
+    }
+    const content = taskSplitStripEnding(line);
+    const indent = taskSplitIndentOf(content);
+    const rel = indent.startsWith(sourceIndent)
+      ? indent.slice(sourceIndent.length)
+      : "";
+    const suffix = line.startsWith(indent) ? line.slice(indent.length) : line;
+    return `${destIndent}${rel}${suffix}`;
+  });
+}
+
+function taskSplitLocateLine(contents, id) {
+  const lines = taskSplitLines(contents);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (taskSplitTrailingBlockId(taskSplitStripEnding(lines[index])) === id) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function planSplitBullets(files, request, options) {
+  const sourceFiles = files && typeof files === "object" ? files : {};
+  const ownerPath = String((request || {}).ownerPath || "");
+  const source = Object.prototype.hasOwnProperty.call(sourceFiles, ownerPath)
+    ? String(sourceFiles[ownerPath])
+    : null;
+  if (source === null) {
+    return taskSplitError(
+      "split_owner_missing",
+      `${ownerPath} does not exist in the vault`,
+    );
+  }
+  const settings = (request || {}).settings || {};
+  const linkedFromLines = settings.linked_from_lines !== false;
+  const linkedFromMentions = settings.linked_from_mentions !== false;
+  const inboxRoute = settings.inbox_route || "inbox.md";
+  const today = String((request || {}).today || "");
+  const selection = (request || {}).selection || {};
+
+  const lines = taskSplitLines(source);
+  const stripped = lines.map((line) => taskSplitStripEnding(line));
+  const frontmatterEnd = taskSplitFrontmatterEnd(stripped);
+  const fenced = taskSplitFencedLines(
+    stripped,
+    frontmatterEnd === -1 ? 0 : frontmatterEnd + 1,
+  );
+  const resolved = taskSplitResolveOwner(
+    lines,
+    stripped,
+    fenced,
+    ownerPath,
+    request || {},
+  );
+  if (resolved.error) {
+    return resolved.error;
+  }
+  const owner = resolved.owner;
+  const candidates = taskSplitCollectCandidates(
+    lines,
+    owner.line,
+    owner.end,
+    owner.kind,
+  );
+  const picked = taskSplitSelectCandidates(
+    candidates,
+    lines,
+    selection,
+    owner,
+    options,
+  );
+  if (picked.error) {
+    return picked.error;
+  }
+  let selected = picked.selected.slice().sort((left, right) => left - right);
+  selected = selected.filter(
+    (value, index) => index === 0 || value !== selected[index - 1],
+  );
+  if (selected.length === 0) {
+    return taskSplitError("split_no_selection", "no splittable bullets selected");
+  }
+
+  const placement = taskSplitChoosePlacement(ownerPath, lines, owner, inboxRoute);
+  let destinationPath = placement.path;
+  if (placement.kind !== "below_owner" && placement.kind !== "tasks_section") {
+    if (!Object.prototype.hasOwnProperty.call(sourceFiles, destinationPath)) {
+      const withExt = taskSplitPathWithMd(destinationPath);
+      destinationPath = withExt;
+    }
+  }
+  const destinationBefore = Object.prototype.hasOwnProperty.call(
+    sourceFiles,
+    destinationPath,
+  )
+    ? String(sourceFiles[destinationPath])
+    : "";
+  const destinationIsSource = destinationPath === ownerPath;
+  const usedSource = new Set(taskSplitBlockIdsInMarkdown(source));
+  const usedDest = new Set(taskSplitBlockIdsInMarkdown(destinationBefore));
+  const used = new Set(destinationIsSource ? usedSource : usedDest);
+  if (owner.blockId) {
+    used.add(owner.blockId);
+  }
+  let ownerMintedId = null;
+  if (
+    owner.kind === "task" &&
+    !owner.blockId &&
+    linkedFromLines &&
+    linkedFromMentions
+  ) {
+    ownerMintedId = taskSplitMintBlockId(owner.title, used);
+    used.add(ownerMintedId);
+  }
+  const mentionId = owner.blockId || ownerMintedId;
+
+  const sourceLines = taskSplitLines(source);
+  const transformedSource = sourceLines.slice();
+  if (ownerMintedId) {
+    transformedSource[owner.line] = taskSplitSetTrailingBlockId(
+      transformedSource[owner.line],
+      ownerMintedId,
+    );
+  }
+  const generated = [];
+  const plannedTasks = [];
+  const stubs = [];
+  for (const candidateIndex of selected) {
+    const candidate = candidates[candidateIndex];
+    const title = candidate.title.trim();
+    const anchor = taskSplitTrailingBlockId(
+      taskSplitStripEnding(candidate.rawBody).trimEnd(),
+    );
+    let id;
+    if (anchor !== null) {
+      used.add(anchor);
+      id = anchor;
+    } else {
+      const flat = taskSplitFlattenLinks(title);
+      id = taskSplitMintBlockId(flat, used);
+      used.add(id);
+    }
+    const alias = taskSplitAliasFor(title);
+    const link =
+      destinationPath === ownerPath
+        ? `[[#^${id}|${alias}]]`
+        : `[[${taskSplitNoteTarget(destinationPath)}#^${id}|${alias}]]`;
+    const originalLine = String(transformedSource[candidate.line] || "");
+    const [, ending] = taskSplitSplitEnding(originalLine);
+    const stub = `${candidate.indent}- ${link}${ending}`;
+    transformedSource[candidate.line] = stub;
+    for (let row = candidate.line + 1; row <= candidate.end; row += 1) {
+      transformedSource[row] = "";
+    }
+    stubs.push({
+      path: ownerPath,
+      line: candidate.line + 1,
+      text: stub.trim(),
+    });
+    const baseIndent = taskSplitOwnerIndent(sourceLines[owner.line] || "");
+    const taskLine = `${baseIndent}- [ ] #task ${title} [created:: ${today}] ^${id}\n`;
+    const childIndent = `${baseIndent}  `;
+    const children = taskSplitRebaseChildren(
+      candidate.childLines,
+      candidate.indent,
+      baseIndent,
+    );
+    if (
+      linkedFromLines &&
+      linkedFromMentions &&
+      mentionId &&
+      owner.kind === "task"
+    ) {
+      const parentTarget =
+        destinationPath === ownerPath
+          ? `#^${mentionId}`
+          : `${taskSplitNoteTarget(ownerPath)}#^${mentionId}`;
+      const mention = formatLinkedFromLine(childIndent, [
+        { link: `[[${parentTarget}]]`, label: TASK_MENTION_LABEL },
+      ]);
+      children.push(`${mention}\n`);
+    }
+    const childCount = candidate.childLines.length;
+    plannedTasks.push({
+      path: destinationPath,
+      line: 0,
+      block_id: id,
+      title,
+      anchor_reused: anchor !== null,
+      child_lines: childCount,
+    });
+    generated.push(taskLine);
+    for (const child of children) {
+      generated.push(child);
+    }
+  }
+
+  let sourceAfter = transformedSource.join("");
+  const nextFiles = {};
+  for (const key of Object.keys(sourceFiles)) {
+    nextFiles[key] = String(sourceFiles[key]);
+  }
+  if (destinationIsSource) {
+    if (owner.kind === "task") {
+      sourceAfter = taskSplitInsertAfterBlock(sourceAfter, owner.end, generated);
+    } else {
+      sourceAfter = taskSplitInsertTasksSectionString(sourceAfter, generated);
+    }
+    nextFiles[ownerPath] = sourceAfter;
+  } else {
+    nextFiles[ownerPath] = sourceAfter;
+    nextFiles[destinationPath] = taskSplitInsertTasksSectionString(
+      destinationBefore,
+      generated,
+    );
+  }
+  if (ownerMintedId && nextFiles[ownerPath] !== undefined) {
+    const minted = taskSplitLines(nextFiles[ownerPath]);
+    if (owner.line < minted.length) {
+      minted[owner.line] = taskSplitSetTrailingBlockId(
+        minted[owner.line],
+        ownerMintedId,
+      );
+      nextFiles[ownerPath] = minted.join("");
+    }
+  }
+
+  const postimages = {};
+  for (const key of Object.keys(nextFiles)) {
+    if (
+      !Object.prototype.hasOwnProperty.call(sourceFiles, key) ||
+      sourceFiles[key] !== nextFiles[key]
+    ) {
+      postimages[key] = nextFiles[key];
+    }
+  }
+  for (const task of plannedTasks) {
+    const located = taskSplitLocateLine(nextFiles[destinationPath], task.block_id);
+    task.line = (located === -1 ? 0 : located) + 1;
+  }
+  const first = plannedTasks[0];
+  const displayTitles = plannedTasks
+    .map((task) => `\u25EF ${taskSplitShortNoticeTitle(task.title)}`)
+    .join(" \u00B7 ");
+  const notice =
+    `\u2702 Split ${plannedTasks.length} ` +
+    `${plannedTasks.length === 1 ? "note" : "notes"} into tasks \u00B7 ${displayTitles}`;
+  let cursorLine = taskSplitLocateLine(nextFiles[destinationPath], first.block_id);
+  cursorLine = (cursorLine === -1 ? 0 : cursorLine) + 1;
+  let clamped = null;
+  if (selection.kind === "count" && (selection.count || 0) > plannedTasks.length) {
+    clamped = { requested: selection.count, split: plannedTasks.length };
+  }
+  const result = {
+    ok: true,
+    files: postimages,
+    tasks: plannedTasks,
+    stubs,
+    placement: { kind: placement.kind, path: placement.path },
+    notice,
+    cursor: { path: destinationPath, line: cursorLine },
+  };
+  if (clamped) {
+    result.clamped = clamped;
+  }
+  if (ownerMintedId) {
+    result.owner_minted_id = ownerMintedId;
+  }
+  result.owner_path = ownerPath;
+  result.owner_line = owner.line + 1;
+  return result;
+}
+
+function listTaskSplitCandidates(files, request) {
+  const sourceFiles = files && typeof files === "object" ? files : {};
+  const ownerPath = String((request || {}).ownerPath || "");
+  const source = Object.prototype.hasOwnProperty.call(sourceFiles, ownerPath)
+    ? String(sourceFiles[ownerPath])
+    : null;
+  if (source === null) {
+    return taskSplitError(
+      "split_owner_missing",
+      `${ownerPath} does not exist in the vault`,
+    );
+  }
+  const lines = taskSplitLines(source);
+  const stripped = lines.map((line) => taskSplitStripEnding(line));
+  const frontmatterEnd = taskSplitFrontmatterEnd(stripped);
+  const fenced = taskSplitFencedLines(
+    stripped,
+    frontmatterEnd === -1 ? 0 : frontmatterEnd + 1,
+  );
+  const resolved = taskSplitResolveOwner(
+    lines,
+    stripped,
+    fenced,
+    ownerPath,
+    request || {},
+  );
+  if (resolved.error) {
+    return resolved.error;
+  }
+  const owner = resolved.owner;
+  const candidates = taskSplitCollectCandidates(
+    lines,
+    owner.line,
+    owner.end,
+    owner.kind,
+  );
+  return {
+    ok: true,
+    owner_path: ownerPath,
+    owner_line: owner.line + 1,
+    candidates: candidates.map((item, index) => ({
+      ordinal: index + 1,
+      line: item.line + 1,
+      title: item.title,
+      drawer: item.drawerTitle,
+      child_lines: item.childLines.length,
+    })),
+  };
 }
 // ---- src/260-project-schedules.js ----
 function isDueInlineScheduledValue(value, today = new Date()) {
@@ -69967,6 +71805,8 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedTransclusionToggleInputListeners();
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
+    this.registerTaskSplitCommand();
+    this.registerTaskSplitInputListeners();
     this.registerPomodoroSplitCommand();
     this.registerPomodoroSplitInputListeners();
     this.wrapPomodoroSplitSaveCommand();
@@ -96764,6 +98604,580 @@ class BobNavigationHotkeysPomodoroSplitMixin {
     }
   }
 }
+// ---- src/653-plugin-task-split.js ----
+// Ctrl+Shift+T task-split gesture: cursor, counted, and visual-selection
+// splits through the `planSplitBullets` twin (256/257), with one-transaction
+// same-note writes, cursor landing with a Vim jump context, and an Undo
+// notice for cross-note splits. The Tab-mark picker on task lines and drawer
+// titles lands in the next phase; here those rows get the planner's teaching
+// notice. Never touches the review walk: `captureReviewGesture` busy handling
+// is the only interaction.
+
+// Pure gesture description for tests and the command route. `gesture` carries
+// 0-based lines: { cursorLine, anchorLine, headLine, countExplicit,
+// additionalCount }. Returns { ownerKind, ownerLine, selection } or
+// { refuse, message }.
+function describeTaskSplitGesture(content, gesture) {
+  const text = String(content || "");
+  const info = gesture && typeof gesture === "object" ? gesture : {};
+  const cursorLine = Math.max(0, Math.floor(info.cursorLine || 0));
+  const anchorLine = Number.isInteger(info.anchorLine)
+    ? info.anchorLine
+    : cursorLine;
+  const headLine = Number.isInteger(info.headLine) ? info.headLine : cursorLine;
+  const visual =
+    Math.min(anchorLine, headLine) !== Math.max(anchorLine, headLine);
+  if (visual) {
+    const from = Math.max(0, Math.min(anchorLine, headLine));
+    const to = Math.max(anchorLine, headLine);
+    const ownerA = findTaskSplitGestureOwner(text, from);
+    const ownerB = findTaskSplitGestureOwner(text, to);
+    if (
+      !ownerA ||
+      !ownerB ||
+      ownerA.kind !== ownerB.kind ||
+      ownerA.line !== ownerB.line
+    ) {
+      return {
+        refuse: "split_crosses_owners",
+        message:
+          "Split stays inside one task — select bullets under the same task",
+      };
+    }
+    const listed = listTaskSplitCandidates(
+      { "note.md": text },
+      { ownerPath: "note.md", ownerLine: ownerA.line + 1, selection: {} },
+    );
+    if (!listed.ok) {
+      return { refuse: listed.code, message: listed.message };
+    }
+    const picks = listed.candidates
+      .filter(
+        (candidate) => candidate.line - 1 >= from && candidate.line - 1 <= to,
+      )
+      .map((candidate) => candidate.ordinal);
+    if (picks.length === 0) {
+      return {
+        refuse: "split_not_splittable",
+        message: "That line is not a splittable note",
+      };
+    }
+    return {
+      ownerKind: ownerA.kind,
+      ownerLine: ownerA.line,
+      selection: { kind: "nth", picks },
+    };
+  }
+  const owner = findTaskSplitGestureOwner(text, cursorLine);
+  if (!owner) {
+    return {
+      refuse: "split_owner_missing",
+      message: "Place the cursor on a task note or section bullet",
+    };
+  }
+  if (info.countExplicit === true && (info.additionalCount || 0) > 0) {
+    return {
+      ownerKind: owner.kind,
+      ownerLine: owner.line,
+      selection: {
+        kind: "count",
+        line: cursorLine + 1,
+        count: (info.additionalCount || 0) + 1,
+      },
+    };
+  }
+  return {
+    ownerKind: owner.kind,
+    ownerLine: owner.line,
+    selection: { kind: "cursor", line: cursorLine + 1 },
+  };
+}
+
+function findTaskSplitGestureOwner(content, line) {
+  const text = String(content || "");
+  const lines = taskSplitLines(text);
+  if (lines.length === 0) {
+    return null;
+  }
+  const index = Math.min(Math.max(0, line), lines.length - 1);
+  const stripped = lines.map((entry) => taskSplitStripEnding(entry));
+  const frontmatterEnd = taskSplitFrontmatterEnd(stripped);
+  const fenced = taskSplitFencedLines(
+    stripped,
+    frontmatterEnd === -1 ? 0 : frontmatterEnd + 1,
+  );
+  const isTaskLine = (candidate) =>
+    candidate >= 0 &&
+    candidate < lines.length &&
+    !fenced.has(candidate) &&
+    (frontmatterEnd === -1 || candidate > frontmatterEnd) &&
+    taskSplitParseTaskLine(lines[candidate]) !== null;
+  if (isTaskLine(index)) {
+    return { kind: "task", line: index };
+  }
+  let current = index;
+  for (;;) {
+    const parent = taskSplitParentListLine(stripped, current, 0);
+    if (parent === null) {
+      break;
+    }
+    current = parent;
+    if (isTaskLine(current)) {
+      return { kind: "task", line: current };
+    }
+  }
+  if (
+    taskSplitListBody(lines[current]) !== null &&
+    taskSplitIndentOf(stripped[current]) === ""
+  ) {
+    const section = taskSplitSectionOwnerForBullet(lines, current);
+    if (section) {
+      return { kind: "section", line: section.line };
+    }
+  }
+  return null;
+}
+
+function formatTaskSplitGestureNotice(plan) {
+  const base = String((plan && plan.notice) || "");
+  if (plan && plan.clamped) {
+    return `${base} · clamped to ${plan.clamped.split} of ${plan.clamped.requested}`;
+  }
+  return base;
+}
+
+class BobNavigationHotkeysTaskSplitMixin {
+  registerTaskSplitCommand() {
+    this.addCommand({
+      id: "split-bullets-into-tasks",
+      name: "Split bullets into tasks",
+      // Obsidian core claims Mod+Shift+T for `workspace:undo-close-pane`;
+      // the vault rebinds that core chord so this literal Ctrl chord wins.
+      hotkeys: [{ modifiers: ["Ctrl", "Shift"], key: "T" }],
+      editorCallback: (editor, view) => this.splitBulletsIntoTasks(editor, view),
+    });
+  }
+
+  withPendingTaskSplitCount(editor, view, options = {}) {
+    if (options.countExplicit === true) {
+      return options;
+    }
+    const vimView = view || this.getActiveMarkdownView();
+    if (!this.isVimNormalModeEditor(editor, vimView)) {
+      return options;
+    }
+    const cm = this.resolveVimCodeMirror(editor, vimView);
+    const pending = getPendingVimRepeat(cm);
+    if (!pending.explicit) {
+      return options;
+    }
+    resetPendingVimInputState(cm, "task-split");
+    return {
+      ...options,
+      countExplicit: true,
+      additionalTaskCount: pending.repeat,
+    };
+  }
+
+  // Fallback for runtimes where no Obsidian binding handled the chord, mirroring
+  // the counted task-move listeners: the command route consumes the Vim count
+  // itself, so this acts only when the hotkey was removed or is unhandled.
+  registerTaskSplitInputListeners() {
+    this.handledTaskSplitEvents = new WeakSet();
+    const keydownHandler = (event) => this.handleTaskSplitPhysicalKeydown(event);
+    const targets = [];
+    if (typeof window !== "undefined") {
+      targets.push(window);
+    }
+    if (typeof document !== "undefined" && document !== window) {
+      targets.push(document);
+    }
+    for (const target of targets) {
+      if (!target || typeof target.addEventListener !== "function") {
+        continue;
+      }
+      target.addEventListener("keydown", keydownHandler, true);
+      this.register(() => {
+        target.removeEventListener("keydown", keydownHandler, true);
+      });
+    }
+  }
+
+  handleTaskSplitPhysicalKeydown(event) {
+    if (event && event.repeat) {
+      return false;
+    }
+    if (!this.isTaskSplitKeydown(event)) {
+      return false;
+    }
+    if (event && event.defaultPrevented === true) {
+      return false;
+    }
+    if (
+      this.handledTaskSplitEvents &&
+      this.handledTaskSplitEvents.has(event)
+    ) {
+      return false;
+    }
+    const view = this.getFocusedMarkdownEditorView();
+    if (!view || !this.isVimNormalModeEditor(view.editor, view)) {
+      return false;
+    }
+    const cm = this.resolveVimCodeMirror(view.editor, view);
+    const pendingRepeat = getPendingVimRepeat(cm);
+    if (this.handledTaskSplitEvents) {
+      this.handledTaskSplitEvents.add(event);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+    resetPendingVimInputState(cm, "task-split");
+    void this.splitBulletsIntoTasks(view.editor, view, {
+      countExplicit: pendingRepeat.explicit,
+      additionalTaskCount: pendingRepeat.explicit ? pendingRepeat.repeat : 0,
+    });
+    return true;
+  }
+
+  isTaskSplitKeydown(event) {
+    return Boolean(
+      event &&
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        (event.code === "KeyT" || event.key === "t" || event.key === "T"),
+    );
+  }
+
+  async splitBulletsIntoTasks(editor, view, options = {}) {
+    const resolvedOptions = this.withPendingTaskSplitCount(editor, view, options);
+    try {
+      if (typeof this.captureReviewGesture === "function") {
+        const captured = this.captureReviewGesture(editor);
+        if (captured && captured.busy === true) {
+          return true;
+        }
+      }
+    } catch (error) {
+      // A walk probe never blocks the split.
+    }
+    const sourceView = view || this.getActiveMarkdownView();
+    const sourceFile = sourceView && sourceView.file;
+    if (
+      !editor ||
+      typeof editor.getValue !== "function" ||
+      !this.isMarkdownFile(sourceFile)
+    ) {
+      new Notice("Open a Markdown note before splitting bullets");
+      return false;
+    }
+    const cursor = getEditorCursor(editor);
+    if (!cursor) {
+      new Notice("Place the cursor on a splittable bullet");
+      return false;
+    }
+    const sourceContent = String(editor.getValue() || "");
+    let anchorLine = cursor.line;
+    let headLine = cursor.line;
+    try {
+      if (
+        typeof editor.somethingSelected === "function" &&
+        editor.somethingSelected() &&
+        typeof editor.listSelections === "function"
+      ) {
+        const selections = editor.listSelections() || [];
+        if (selections.length > 0) {
+          let low = Number.POSITIVE_INFINITY;
+          let high = Number.NEGATIVE_INFINITY;
+          for (const selection of selections) {
+            const anchor = selection && selection.anchor;
+            const head = selection && selection.head;
+            if (!anchor || !head) {
+              continue;
+            }
+            low = Math.min(low, anchor.line, head.line);
+            high = Math.max(high, anchor.line, head.line);
+          }
+          if (Number.isFinite(low) && Number.isFinite(high)) {
+            anchorLine = low;
+            headLine = high;
+          }
+        }
+      }
+    } catch (error) {
+      anchorLine = cursor.line;
+      headLine = cursor.line;
+    }
+    const described = describeTaskSplitGesture(sourceContent, {
+      cursorLine: cursor.line,
+      anchorLine,
+      headLine,
+      countExplicit: resolvedOptions.countExplicit === true,
+      additionalCount: resolvedOptions.additionalTaskCount || 0,
+    });
+    if (described.refuse) {
+      new Notice(described.message);
+      return false;
+    }
+    const settings = {
+      linked_from_mentions: loadRelationsLinkedFromMentionsEnabled(),
+      linked_from_lines: loadRelationsLinkedFromLinesEnabled(),
+      inbox_route: INBOX_NOTE_PATH,
+    };
+    const today = formatProjectTaskCreatedDate(new Date());
+    const files = { [sourceFile.path]: sourceContent };
+    try {
+      const ownerForPlacement = {
+        kind: described.ownerKind,
+        line: described.ownerLine,
+        end: described.ownerLine,
+        title: "",
+        blockId: null,
+      };
+      const placement = taskSplitChoosePlacement(
+        sourceFile.path,
+        taskSplitLines(sourceContent),
+        ownerForPlacement,
+        INBOX_NOTE_PATH,
+      );
+      if (placement.path !== sourceFile.path) {
+        const destinationFile = this.app.vault.getAbstractFileByPath(
+          placement.path,
+        );
+        if (destinationFile && this.isMarkdownFile(destinationFile)) {
+          files[placement.path] = String(
+            (await this.app.vault.cachedRead(destinationFile)) || "",
+          );
+        }
+      }
+    } catch (error) {
+      // Destination pre-read is best-effort; the planner runs on the source.
+    }
+    const plan = planSplitBullets(files, {
+      ownerPath: sourceFile.path,
+      ownerLine: described.ownerLine + 1,
+      selection: described.selection,
+      today,
+      settings,
+    });
+    if (!plan.ok) {
+      new Notice(plan.message);
+      return false;
+    }
+    if (plan.cursor.path === sourceFile.path) {
+      return this.applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan);
+    }
+    return this.applyTaskSplitCrossNote(
+      editor,
+      sourceView,
+      sourceFile,
+      sourceContent,
+      plan,
+    );
+  }
+
+  applyTaskSplitSameNote(editor, sourceFile, sourceContent, cursor, plan) {
+    const after = plan.files[sourceFile.path];
+    if (typeof after !== "string") {
+      new Notice("Split planned no change");
+      return false;
+    }
+    const landingLine = Math.max(0, (plan.cursor.line || 1) - 1);
+    let applied = false;
+    try {
+      applied = applyEditorContentTransaction(editor, sourceContent, after, {
+        line: landingLine,
+        ch: 0,
+      });
+    } catch (error) {
+      new Notice("Split failed to apply");
+      return false;
+    }
+    if (!applied || String(editor.getValue() || "") !== after) {
+      new Notice("Split failed to apply");
+      return false;
+    }
+    try {
+      if (typeof this.ensureVimJumpHistory === "function") {
+        this.ensureVimJumpHistory();
+      }
+      recordVimJumpTransition(
+        this.vimJumpHistory,
+        {
+          path: sourceFile.path,
+          line: cursor.line,
+          ch: cursor.ch || 0,
+        },
+        { path: sourceFile.path, line: landingLine, ch: 0 },
+      );
+    } catch (error) {
+      // The Vim jump context is a nicety; the write already landed.
+    }
+    new Notice(formatTaskSplitGestureNotice(plan));
+    return true;
+  }
+
+  async applyTaskSplitCrossNote(editor, sourceView, sourceFile, sourceContent, plan) {
+    const destinationPath = plan.cursor.path;
+    const destinationAfter = plan.files[destinationPath];
+    const sourceAfter = plan.files[sourceFile.path];
+    if (typeof destinationAfter !== "string" || typeof sourceAfter !== "string") {
+      new Notice("Split planned no change");
+      return false;
+    }
+    const session = { sourcePath: sourceFile.path, editor: null };
+    const written = [];
+    try {
+      const destinationFile = this.app.vault.getAbstractFileByPath(
+        destinationPath,
+      );
+      if (destinationFile && this.isMarkdownFile(destinationFile)) {
+        const destinationBefore = String(
+          (await this.app.vault.cachedRead(destinationFile)) || "",
+        );
+        written.push(
+          await this.writeTaskMoveChange(
+            destinationPath,
+            { before: destinationBefore, after: destinationAfter },
+            destinationFile,
+            session,
+          ),
+        );
+      } else if (!destinationFile) {
+        const created = await this.app.vault.create(
+          destinationPath,
+          destinationAfter,
+        );
+        written.push({
+          path: destinationPath,
+          file: created,
+          editor: null,
+          change: { before: "", after: destinationAfter },
+          created: true,
+        });
+      } else {
+        new Notice(`Split destination is not a Markdown note: ${destinationPath}`);
+        return false;
+      }
+      written.push(
+        await this.writeTaskMoveChange(
+          sourceFile.path,
+          { before: sourceContent, after: sourceAfter },
+          sourceFile,
+          session,
+        ),
+      );
+    } catch (error) {
+      const failedPaths = await this.rollbackTaskMoveChanges(
+        written.filter((entry) => !entry.created),
+      );
+      for (const entry of written.filter((entry) => entry.created)) {
+        try {
+          await this.app.vault.delete(entry.file);
+        } catch (ignoredError) {
+          failedPaths.push(entry.path);
+        }
+      }
+      if (failedPaths.length > 0) {
+        new Notice(`Split wrote partially — review: ${failedPaths.join(", ")}`);
+      } else {
+        new Notice("Split failed to apply");
+      }
+      return false;
+    }
+    this.showTaskSplitUndoNotice(
+      formatTaskSplitGestureNotice(plan),
+      written.map((entry) => ({
+        path: entry.path,
+        file: entry.file || null,
+        before: entry.change.before,
+        after: entry.change.after,
+      })),
+    );
+    return true;
+  }
+
+  showTaskSplitUndoNotice(message, restores) {
+    const notice = new Notice(String(message || ""), 15000);
+    try {
+      const container = notice && notice.noticeEl;
+      if (container && typeof container.createEl === "function") {
+        const button = container.createEl("button", { text: "Undo split" });
+        button.addEventListener("click", () => {
+          void this.restoreTaskSplitUndo(restores, notice);
+        });
+      }
+    } catch (error) {
+      // The notice text remains without the action.
+    }
+    return notice;
+  }
+
+  async restoreTaskSplitUndo(restores, notice) {
+    const rows = Array.isArray(restores) ? restores.slice().reverse() : [];
+    const refused = [];
+    for (const restore of rows) {
+      try {
+        const editor =
+          typeof this.getOpenMarkdownEditorForPath === "function"
+            ? this.getOpenMarkdownEditorForPath(restore.path)
+            : null;
+        if (editor && typeof editor.getValue === "function") {
+          if (String(editor.getValue() || "") !== restore.after) {
+            refused.push(restore.path);
+            continue;
+          }
+          if (
+            !applyEditorContentTransaction(
+              editor,
+              restore.after,
+              restore.before,
+            ) ||
+            String(editor.getValue() || "") !== restore.before
+          ) {
+            refused.push(restore.path);
+          }
+          continue;
+        }
+        const file =
+          restore.file ||
+          (this.app &&
+            this.app.vault &&
+            this.app.vault.getAbstractFileByPath(restore.path));
+        if (!file) {
+          refused.push(restore.path);
+          continue;
+        }
+        const current = String(
+          (await this.app.vault.cachedRead(file)) || "",
+        );
+        if (current !== restore.after) {
+          refused.push(restore.path);
+          continue;
+        }
+        await this.app.vault.modify(file, restore.before);
+      } catch (error) {
+        refused.push(restore.path);
+      }
+    }
+    if (refused.length > 0) {
+      new Notice(`Could not undo split — changed since: ${refused.join(", ")}`);
+      return false;
+    }
+    try {
+      if (notice && typeof notice.hide === "function") {
+        notice.hide();
+      }
+    } catch (error) {
+      // The success notice below is the signal.
+    }
+    new Notice("Undid split");
+    return true;
+  }
+}
 // ---- src/655-plugin-inbox-route.js ----
 // Inbox routing core (route-core): the plugin side of inbox routing. Owns
 // the shared move plan-and-write core (Ctrl+Shift+M keeps its park, focus,
@@ -103450,6 +105864,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysJumpKeyMixin,
   BobNavigationHotkeysCountedTaskMoveMixin,
   BobNavigationHotkeysPomodoroSplitMixin,
+  BobNavigationHotkeysTaskSplitMixin,
   BobNavigationHotkeysVimJumpMixin,
   BobNavigationHotkeysLeafMixin,
   BobNavigationHotkeysPomodoroThemesManagerMixin,
@@ -103509,10 +105924,8 @@ module.exports.helpers = {
   BulletPropertyPickerModal,
   finiteNumberOrNull,
   clampNumber,
-  normalizePosition,
-  clampPositionToEditor,
-  getEditorViewFromEditor,
-  getElementRect,
+  normalizePosition, clampPositionToEditor,
+  getEditorViewFromEditor, getElementRect,
   getVerticalIntersectionHeight,
   getScrollDOMMaxScrollTop,
   getScrollDOMMaxScrollLeft,
@@ -103525,10 +105938,8 @@ module.exports.helpers = {
   getDashboardQueryRestoreScrollTop,
   positionFromCodeMirrorUpdate,
   positionFromTextOffset,
-  normalizeVimRepeat,
-  getVimRepeat,
-  hasVimRepeat,
-  getPendingVimRepeat,
+  normalizeVimRepeat, getVimRepeat,
+  hasVimRepeat, getPendingVimRepeat,
   resetPendingVimInputState,
   getVimTargetOffset,
   getVimOffsetTargetLine,
@@ -103546,14 +105957,12 @@ module.exports.helpers = {
   updateVimJumpHistoryPath,
   removeVimJumpHistoryPath,
   clearVimJumpHistory,
-  resolveVimJumpCount,
-  isVimJumpBridgeAvailable,
+  resolveVimJumpCount, isVimJumpBridgeAvailable,
   LinkCandidatePickerModal,
   VIM_JUMP_HISTORY_LIMIT,
   VIM_JUMP_HISTORY_DESTINATION_RETRIES,
   VIM_JUMP_HISTORY_COMPATIBILITY_NOTICE,
-  getEditorFirstLine,
-  getEditorLastLine,
+  getEditorFirstLine, getEditorLastLine,
   getEditorLineText,
   isExternalLinkTarget,
   normalizeVaultRelativePath,
@@ -103766,8 +106175,7 @@ module.exports.helpers = {
   prepareActiveLeafSwitch,
   openWithLeafSwitchGuard,
   checkLeafSwitchLanding,
-  getEditorCursor,
-  getEditorLine,
+  getEditorCursor, getEditorLine,
   setEditorCursorWithoutScroll,
   scrollEditorLineToTop,
   scrollEditorLineToCenter,
@@ -104044,6 +106452,12 @@ module.exports.helpers = {
   rewriteTaskMoveBlockLinks,
   rewriteTaskMoveReferences,
   planTaskMoveAcrossFiles,
+  planSplitBullets,
+  listTaskSplitCandidates,
+  isTaskSplitDrawerTitle,
+  describeTaskSplitGesture,
+  findTaskSplitGestureOwner,
+  formatTaskSplitGestureNotice,
   INBOX_NOTE_PATH,
   classifyInboxNote,
   normalizeInboxRouteTaskIdentity,

@@ -29943,7 +29943,7 @@ function attachmentsDecode(stdout, stderr, operation) {
       detail: statsFirstLine(stderr),
     };
   }
-  return { ...body, ok: true };
+  return { ok: true, report: body };
 }
 
 function attachmentsDecodeOrigin(stdout, stderr) {
@@ -29993,6 +29993,14 @@ class BobLedgerToolsAttachmentsMixin {
       timeout: BOB_SPAWN_TIMEOUT_MS,
       maxBuffer: BOB_SPAWN_MAX_BUFFER,
       firstLine: statsFirstLine,
+      execFile: typeof this.attachmentsExecFile === "function"
+        ? this.attachmentsExecFile
+        : undefined,
+    }).then((result) => {
+      if (result && result.ok === true && result.report && typeof result.report === "object") {
+        return { ...result.report, ok: true };
+      }
+      return result;
     });
   }
 

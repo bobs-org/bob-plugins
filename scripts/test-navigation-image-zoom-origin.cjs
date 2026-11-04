@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { helpers, notices } = require("./navigation-hotkeys-harness.cjs");
 const { ImageZoomModal, imageZoomOriginSuffix, imageZoomMiddleTruncate } = helpers;
 
@@ -303,6 +305,61 @@ test("r reports each unavailable origin state in the viewer pill", async () => {
   await web.modal.handleImageZoomKey({ key: "r" });
   assert.equal(childText(web.modal.imageZoomToastEl), "!Web images have no original path");
   web.modal.close();
+});
+
+test("fixed attachments API response renders origin and restores the image link", async () => {
+  notices.length = 0;
+  const lineText = "- ![[img/20261104_062032.png|400]]";
+  const session = makeSession({
+    lineText,
+    origin: Promise.resolve({
+      ok: true,
+      schema_version: 1,
+      path: "img/20261104_062032.png",
+      origin: { display: "~/tmp/screenshots/20261104_062032.png", state: "present" },
+      warnings: [],
+    }),
+  });
+  session.modal.imageZoomContext.restore.start = 2;
+  session.modal.imageZoomContext.restore.end = lineText.length;
+  await session.modal.awaitImageZoomOrigin();
+  assert.deepEqual(allByClass(session.modal.imageZoomFooterEl, "bob-image-zoom-chip").map(childText).slice(-2), [
+    "ycopy original path", "rrestore path",
+  ]);
+  assert.equal(session.modal.imageZoomOriginEl.children[0].textContent, "↳ ~/tmp/screenshots/20261104_062032.png");
+  await session.modal.handleImageZoomKey({ key: "r" });
+  assert.equal(session.editor.content, "- ~/tmp/screenshots/20261104_062032.png");
+  assert.equal(session.editor.transactions.length, 1);
+  assert.deepEqual(notices, ["Restored ~/tmp/screenshots/20261104_062032.png · vault copy kept at img/x.png"]);
+});
+
+test("lookup failures stay distinct from a missing origin", async () => {
+  for (const [result, message] of [
+    [{ ok: false, code: "bob-not-found", message: "bob was not found" }, "!Couldn't look up the original · bob was not found"],
+    [{ ok: true }, "!Couldn't look up the original · unexpected response from bob"],
+  ]) {
+    const session = makeSession({ origin: Promise.resolve(result) });
+    await session.modal.handleImageZoomKey({ key: "r" });
+    assert.equal(childText(session.modal.imageZoomToastEl), message);
+    assert.deepEqual(allByClass(session.modal.imageZoomFooterEl, "bob-image-zoom-chip").map(childText).slice(-1), [
+      "ycopy file path",
+    ]);
+    session.modal.close();
+  }
+  const noOrigin = makeSession({ origin: Promise.resolve({ ok: true, origin: null }) });
+  await noOrigin.modal.handleImageZoomKey({ key: "r" });
+  assert.equal(childText(noOrigin.modal.imageZoomToastEl), "!No original path recorded");
+  noOrigin.modal.close();
+});
+
+test("image zoom key chips override built-in kbd backgrounds", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"), "utf8");
+  const rule = css.match(/([^{}]*\.bob-image-zoom-modal[^{}]*\.bob-image-zoom-chip kbd[^{}]*)\{([^{}]*)\}/);
+  assert.ok(rule, "scoped image zoom kbd rule exists");
+  assert.match(rule[1], /^\s*\.modal\.bob-image-zoom-modal\s/);
+  assert.match(rule[2], /background:\s*rgba\(255,\s*255,\s*255,\s*0\.08\)/);
+  assert.match(rule[2], /box-shadow:\s*none/);
+  assert.match(rule[2], /color:\s*rgba\(255,\s*255,\s*255,/);
 });
 
 test("successful r replaces only the picked link in one undoable transaction", async () => {

@@ -42,8 +42,10 @@ web images it copies the URL. Copying shows a pill in the viewer.
 `r` is available when the original source is present. It replaces only the picked
 image link with the recorded display path in one undoable editor change, closes
 the viewer, and confirms that the vault copy remains. A changed, missing, or
-elsewhere origin shows a refusal pill; web images have no restore action. Native
-image click, double-click, and Zoom-button behavior still own embedded images
+elsewhere origin shows a refusal pill; web images have no restore action. If bob can't
+be reached or the origin lookup fails, `r` reports the lookup failure instead of saying
+no original path was recorded. Native image click, double-click, and Zoom-button behavior
+still own embedded images
 and Reading view. Obsidian's `g+`, `g-`, and `:image grow` resize embeds and write
 `|width` into the note; this viewer does neither.
 

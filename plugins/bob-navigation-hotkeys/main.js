@@ -28769,15 +28769,33 @@ ImageZoomModal.prototype.resolveImageZoomOrigin = function resolveImageZoomOrigi
   const input = this.imageZoomContext.origin;
   const isPromise = input && typeof input.then === "function";
   this.imageZoomOriginResolved = !isPromise;
+  this.imageZoomOriginError = null;
+  const normalizeResult = (result) => {
+    if (result && typeof result === "object" && result.ok === false) {
+      this.imageZoomOriginError = result.message || result.code || "bob lookup failed";
+      return null;
+    }
+    if (
+      result && typeof result === "object" && result.ok === true &&
+      !Object.prototype.hasOwnProperty.call(result, "origin")
+    ) {
+      this.imageZoomOriginError = "unexpected response from bob";
+      return null;
+    }
+    return imageZoomNormalizeOrigin(result);
+  };
   if (!isPromise) {
-    this.imageZoomOrigin = imageZoomNormalizeOrigin(input);
+    this.imageZoomOrigin = normalizeResult(input);
     this.renderImageZoomOrigin();
     this.renderImageZoomFooter();
     return Promise.resolve(this.imageZoomOrigin);
   }
   this.imageZoomOriginPromise = Promise.resolve(input)
-    .then((result) => imageZoomNormalizeOrigin(result))
-    .catch(() => null)
+    .then((result) => normalizeResult(result))
+    .catch((error) => {
+      this.imageZoomOriginError = error && error.message ? error.message : "bob lookup failed";
+      return null;
+    })
     .then((origin) => {
       if (!this.imageZoomClosed) {
         this.imageZoomOrigin = origin;
@@ -28946,6 +28964,10 @@ ImageZoomModal.prototype.restoreImageZoomSource = async function restoreImageZoo
     return false;
   }
   if (!origin) {
+    if (this.imageZoomOriginError) {
+      this.showImageZoomToast(`! Couldn't look up the original · ${this.imageZoomOriginError}`, { error: true });
+      return false;
+    }
     this.showImageZoomToast("! No original path recorded", { error: true });
     return false;
   }

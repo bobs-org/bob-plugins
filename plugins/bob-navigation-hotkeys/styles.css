@@ -3150,10 +3150,13 @@
   white-space: nowrap;
 }
 
-.bob-image-zoom-chip kbd {
+.modal.bob-image-zoom-modal .bob-image-zoom-chip kbd {
   padding: 0 5px;
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  text-shadow: none;
   color: rgba(255, 255, 255, 0.92);
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);

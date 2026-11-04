@@ -174,6 +174,102 @@ test("y waits for origin lookup before writing the clipboard, even before image 
   }
 });
 
+test("r does not restore or notify after the viewer closes during origin lookup", async () => {
+  notices.length = 0;
+  let resolveOrigin;
+  const pending = new Promise((resolve) => { resolveOrigin = resolve; });
+  const session = makeSession({ origin: pending });
+  const restore = session.modal.handleImageZoomKey({ key: "r" });
+  session.modal.close();
+  resolveOrigin({ ok: true, origin: {
+    source: "/tmp/x.png",
+    display: "~/tmp/x.png",
+    state: "present",
+  } });
+  await restore;
+
+  assert.equal(session.editor.transactions.length, 0);
+  assert.deepEqual(notices, []);
+  assert.equal(session.modal.imageZoomToastTimers.length, 0);
+  assert.equal(session.timers.callbacks.size, 0);
+  assert.equal(session.modal.imageZoomToastEl.classList.contains("is-visible"), false);
+});
+
+test("y does not write the clipboard or show UI after the viewer closes during origin lookup", async () => {
+  let resolveOrigin;
+  const pending = new Promise((resolve) => { resolveOrigin = resolve; });
+  const copied = [];
+  const restoreNavigator = installClipboard(async (text) => copied.push(text));
+  const session = makeSession({ origin: pending });
+  try {
+    const copy = session.modal.handleImageZoomKey({ key: "y" });
+    session.modal.close();
+    resolveOrigin({ ok: true, origin: {
+      source: "/tmp/x.png",
+      display: "~/tmp/x.png",
+      state: "present",
+    } });
+    await copy;
+
+    assert.deepEqual(copied, []);
+    assert.equal(session.modal.imageZoomToastTimers.length, 0);
+    assert.equal(session.timers.callbacks.size, 0);
+    assert.equal(session.modal.imageZoomToastEl.classList.contains("is-visible"), false);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+test("a clipboard write finishing after close does not recreate toast UI or timers", async () => {
+  let finishClipboard;
+  let markClipboardStarted;
+  const clipboardStarted = new Promise((resolve) => { markClipboardStarted = resolve; });
+  const copied = [];
+  const restoreNavigator = installClipboard((text) => {
+    copied.push(text);
+    markClipboardStarted();
+    return new Promise((resolve) => { finishClipboard = resolve; });
+  });
+  const session = makeSession({
+    origin: { display: "~/tmp/x.png", state: "present" },
+  });
+  try {
+    const copy = session.modal.handleImageZoomKey({ key: "y" });
+    await clipboardStarted;
+    session.modal.close();
+    finishClipboard();
+    await copy;
+
+    assert.deepEqual(copied, ["~/tmp/x.png"]);
+    assert.equal(session.modal.imageZoomToastTimers.length, 0);
+    assert.equal(session.timers.callbacks.size, 0);
+    assert.equal(session.modal.imageZoomToastEl.classList.contains("is-visible"), false);
+  } finally {
+    restoreNavigator();
+  }
+});
+
+test("r restores from a deferred origin while the viewer stays open", async () => {
+  notices.length = 0;
+  let resolveOrigin;
+  const pending = new Promise((resolve) => { resolveOrigin = resolve; });
+  const lineText = "- ![[img/x.png|400]]";
+  const session = makeSession({ lineText, origin: pending });
+  session.modal.imageZoomContext.restore.start = 2;
+  session.modal.imageZoomContext.restore.end = lineText.length;
+  const restore = session.modal.handleImageZoomKey({ key: "r" });
+  resolveOrigin({ ok: true, origin: {
+    source: "/tmp/x.png",
+    display: "~/tmp/x.png",
+    state: "present",
+  } });
+  await restore;
+
+  assert.equal(session.editor.content, "- ~/tmp/x.png");
+  assert.equal(session.editor.transactions.length, 1);
+  assert.deepEqual(notices, ["Restored ~/tmp/x.png · vault copy kept at img/x.png"]);
+});
+
 test("copy failure shows an orange refusal pill without raising a Notice", async () => {
   notices.length = 0;
   const restoreNavigator = installClipboard(async () => { throw new Error("denied"); });

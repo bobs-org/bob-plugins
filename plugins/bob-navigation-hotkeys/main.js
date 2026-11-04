@@ -28805,6 +28805,7 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
 };
 
 ImageZoomModal.prototype.showImageZoomToast = function showImageZoomToast(message, options = {}) {
+  if (this.imageZoomClosed) return;
   const el = this.imageZoomToastEl;
   if (!el || !message) return;
   this.clearImageZoomToast();
@@ -28869,7 +28870,9 @@ ImageZoomModal.prototype.awaitImageZoomOrigin = async function awaitImageZoomOri
 };
 
 ImageZoomModal.prototype.copyImageZoomSource = async function copyImageZoomSource() {
+  if (this.imageZoomClosed) return false;
   const origin = await this.awaitImageZoomOrigin();
+  if (this.imageZoomClosed) return false;
   const context = this.imageZoomContext || {};
   const text = origin
     ? String(origin.display || origin.source || "")
@@ -28884,18 +28887,22 @@ ImageZoomModal.prototype.copyImageZoomSource = async function copyImageZoomSourc
     const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
     if (!clipboard || typeof clipboard.writeText !== "function") throw new Error("Clipboard unavailable");
     await clipboard.writeText(text);
+    if (this.imageZoomClosed) return false;
     this.showImageZoomToast(`✓ Copied ${text}`);
     return true;
   } catch (_error) {
+    if (this.imageZoomClosed) return false;
     this.showImageZoomToast("! Couldn't copy", { error: true });
     return false;
   }
 };
 
 ImageZoomModal.prototype.restoreImageZoomSource = async function restoreImageZoomSource() {
+  if (this.imageZoomClosed) return false;
   const context = this.imageZoomContext || {};
   const restore = context.restore;
   const origin = await this.awaitImageZoomOrigin();
+  if (this.imageZoomClosed) return false;
   if (context.kind === "url") {
     this.showImageZoomToast("! Web images have no original path", { error: true });
     return false;

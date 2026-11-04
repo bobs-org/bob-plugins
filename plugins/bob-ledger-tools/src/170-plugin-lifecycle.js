@@ -215,8 +215,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.liveWidgetRefreshTimer = null;
     this.planPaintGen = 0;
     this.planPaintGens = new Map();
-    // Synchronous Today cache: built from the daily note's text (never
-    // awaited inside the api); before the first build `isToday` is false.
+    // Synchronous daily-note cache; api never awaits it, and it starts false.
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
     this.laneWalkMemo = null;

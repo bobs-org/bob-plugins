@@ -192,6 +192,82 @@ test("planDeferredPomodoroLinkCleanup removes a dedicated link bullet and its ne
   );
 });
 
+test("cleanup reports surviving open entry lines after deleting earlier children and editing mixed links", () => {
+  const noteIndex = buildDeferredPomodoroNoteIndex([
+    "2026/20260807.md",
+    "Tasks.md",
+  ]);
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "  - [[Tasks#^remove]]",
+    "  - [[Tasks#^keep]]",
+    "- [ ] () — WRITE",
+    "  - Review [[Tasks#^mixed]] before lunch",
+  ].join("\n");
+  const result = helpers.planDeferredPomodoroLinkCleanup(content, [
+    { path: "Tasks.md", blockId: "remove" },
+    { path: "Tasks.md", blockId: "mixed" },
+  ], {
+    dailyPath: "2026/20260807.md",
+    noteIndex,
+  });
+  assert.deepEqual(result.touchedEntryLines, [2, 4]);
+  assert.equal(result.content, [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "  - [[Tasks#^keep]]",
+    "- [ ] () — WRITE",
+    "  - Review before lunch",
+  ].join("\n"));
+});
+
+test("deferred cleanup agreement is scoped, optional, and skipped for incomplete type inputs", async () => {
+  const cleanup = Object.freeze({
+    content: "- [ ] () — BUILD",
+    changed: true,
+    touchedEntryLines: [1],
+  });
+  let request = null;
+  const api = {
+    available: () => ({ available: true }),
+    agreeLedgerEntries: async (value) => {
+      request = value;
+      return { content: "- [ ] () — FIX", unrepaired: [] };
+    },
+  };
+  const agreed = await helpers.agreeDeferredPomodoroLinkCleanup(
+    api,
+    "2026/20260807.md",
+    cleanup,
+  );
+  assert.equal(agreed.content, "- [ ] () — FIX");
+  assert.deepEqual(request, {
+    content: cleanup.content,
+    path: "2026/20260807.md",
+    entryLines: [1],
+  });
+  assert.equal(agreed.agreementApplied, true);
+
+  const unavailable = await helpers.agreeDeferredPomodoroLinkCleanup(
+    { available: () => ({ available: false }), agreeLedgerEntries: async () => {
+      throw new Error("must not run");
+    } },
+    "2026/20260807.md",
+    cleanup,
+  );
+  assert.equal(unavailable.content, cleanup.content);
+
+  const incomplete = await helpers.agreeDeferredPomodoroLinkCleanup({
+    available: () => ({ available: true }),
+    agreeLedgerEntries: async () => ({
+      content: "- [ ] () — FIX",
+      unrepaired: [{ code: "unknown_link" }],
+    }),
+  }, "2026/20260807.md", cleanup);
+  assert.equal(incomplete.content, cleanup.content);
+});
+
 test("planDeferredPomodoroLinkCleanup removes an embed and resolves same-note and explicit-path-vs-basename links", () => {
   const noteIndex = buildDeferredPomodoroNoteIndex([
     "2026/20260807.md",

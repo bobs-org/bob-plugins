@@ -739,6 +739,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
         filePath,
         workingContent,
         new Date(),
+        getNavigationPomodoroThemesApi(this.plugin.app),
       );
       if (batchPomodoroPrep.commitContent !== batchPlan.nextContent) {
         batchCommitContent = batchPomodoroPrep.commitContent;

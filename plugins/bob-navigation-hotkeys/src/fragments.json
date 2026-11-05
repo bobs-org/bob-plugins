@@ -28,6 +28,7 @@
   "150-pomodoro-capture.js",
   "151-pomodoro-type-split.js",
   "160-pomodoro-reorder.js",
+  "161-pomodoro-cleanup-agreement.js",
   "165-pomodoro-theme-picker.js",
   "170-open-task-jump.js",
   "180-editor-transactions.js",
@@ -197,5 +198,6 @@
   "707-decay-hotfix-exports.js",
   "708-image-zoom-origin-exports.js",
   "709-task-split-exports.js",
-  "710-relation-merge-exports.js"
+  "710-relation-merge-exports.js",
+  "711-pomodoro-name-agreement-exports.js"
 ]

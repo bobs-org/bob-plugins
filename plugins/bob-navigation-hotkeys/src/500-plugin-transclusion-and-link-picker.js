@@ -150,6 +150,12 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     if (!snapshot || snapshot.sameFile || !plan || !plan.changed) {
       return true;
     }
+    const themesApi = getNavigationPomodoroThemesApi(this.app);
+    const agreedPlan = await agreeDeferredPomodoroLinkCleanup(
+      themesApi,
+      snapshot.dailyPath,
+      plan,
+    );
     const { dailyPath, file } = snapshot;
     try {
       const editor =
@@ -163,10 +169,10 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         const applied = applyEditorContentTransaction(
           editor,
           snapshot.content,
-          plan.content,
-          pomodoroCleanupCursor(editor, plan),
+          agreedPlan.content,
+          pomodoroCleanupCursor(editor, agreedPlan),
         );
-        return applied && String(editor.getValue() || "") === plan.content;
+        return applied && String(editor.getValue() || "") === agreedPlan.content;
       }
       const vault = this.app && this.app.vault;
       if (!vault || typeof vault.process !== "function" || !file) {
@@ -178,7 +184,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           throw new Error("Daily note preimage changed");
         }
         transformed = true;
-        return plan.content;
+        return agreedPlan.content;
       });
       return transformed;
     } catch (error) {

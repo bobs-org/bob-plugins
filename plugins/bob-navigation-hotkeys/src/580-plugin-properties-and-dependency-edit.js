@@ -578,6 +578,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           parentPath,
           content,
           args.today || new Date(),
+          getNavigationPomodoroThemesApi(this.app),
         );
         if (pomodoroPrep.commitContent !== commitPlan.nextContent) {
           commitPlan = { ...commitPlan, nextContent: pomodoroPrep.commitContent };

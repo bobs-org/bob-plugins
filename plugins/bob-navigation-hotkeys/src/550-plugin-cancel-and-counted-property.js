@@ -829,18 +829,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
-            if (dailyCleanupPlan.changed) {
-              const linesRemovedBeforeCursor =
-                dailyCleanupPlan.removedLineRanges.reduce(
-                  (total, range) =>
-                    range.endLineExclusive <= plan.cursorLine
-                      ? total + (range.endLineExclusive - range.startLine)
-                      : total,
-                  0,
-                );
-              finalContent = dailyCleanupPlan.content;
-              finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
-            }
           } else {
             dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
               pomodoroSnapshot.content,
@@ -850,6 +838,17 @@ class BobNavigationHotkeysCancelPropertyMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+          }
+          dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
+          if (pomodoroSnapshot.sameFile && dailyCleanupPlan.changed) {
+            const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
+              (total, range) => range.endLineExclusive <= plan.cursorLine
+                ? total + (range.endLineExclusive - range.startLine)
+                : total,
+              0,
+            );
+            finalContent = dailyCleanupPlan.content;
+            finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
           }
         }
       }

@@ -252,7 +252,12 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
     if (!plan.valid) {
       return Object.freeze({ valid: false, error: plan.error || "Task link could not be moved", after: text });
     }
-    return Object.freeze({ valid: true, after: plan.after, changed: plan.after !== text });
+    return Object.freeze({
+      valid: true,
+      after: plan.after,
+      changed: plan.after !== text,
+      sourceEntryLine: plan.sourceEntryLineFinal,
+    });
   }
   if (relocation.kind === "createBelow") {
     const source = list[relocation.from];
@@ -337,9 +342,54 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api, options = {}) {
     } catch (_error) {
       // Destination naming is best-effort.
     }
-    working.moves.push(Object.freeze({ edit, relocation, liveLink: found, sourceName, destinationName, newType }));
+    working.moves.push(Object.freeze({
+      edit,
+      relocation,
+      liveLink: found,
+      sourceName,
+      destinationName,
+      newType,
+      sourceEntryLine: applied.sourceEntryLine,
+    }));
   }
   return { valid: true, error: null, moves: working.moves, content: working.content };
+}
+
+async function agreeTaskCardTypeMoveSources(plan, api, dailyPath) {
+  const current = plan && typeof plan === "object" ? plan : {};
+  const moves = (Array.isArray(current.moves) ? current.moves : []).filter(
+    (move) => move && move.relocation && move.relocation.kind === "moveTo",
+  );
+  if (
+    moves.length === 0 ||
+    !api ||
+    typeof api.agreeLedgerEntries !== "function" ||
+    !navigationPomodoroThemeAvailable(api)
+  ) {
+    return current;
+  }
+  if (moves.length === 1 && !Number.isInteger(moves[0].sourceEntryLine)) {
+    return current;
+  }
+  const entryLines = moves.length === 1
+    ? [moves[0].sourceEntryLine + 1]
+    : undefined;
+  try {
+    const outcome = await api.agreeLedgerEntries({
+      content: String(current.content || ""),
+      path: normalizeVaultRelativePath(dailyPath),
+      ...(entryLines ? { entryLines } : {}),
+    });
+    if (!outcome || typeof outcome.content !== "string") return current;
+    if (Array.isArray(outcome.unrepaired) && outcome.unrepaired.some(
+      (item) => item && item.code === "unknown_link",
+    )) {
+      return current;
+    }
+    return { ...current, content: outcome.content };
+  } catch (_error) {
+    return current;
+  }
 }
 
 async function writeTaskCardTypeDailyContent(deps, snapshot, preimage, nextContent) {

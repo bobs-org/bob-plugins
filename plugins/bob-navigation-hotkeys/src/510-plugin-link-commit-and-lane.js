@@ -13,10 +13,18 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     options = {},
   ) {
     const pomodoroSnapshot = options.pomodoroSnapshot || null;
-    const dailyCleanupPlan = options.dailyCleanupPlan || null;
+    let dailyCleanupPlan = options.dailyCleanupPlan || null;
     const foldedDailyPath = options.foldedDailyPath || null;
     const failed = (reason, extra = {}) =>
       Object.freeze({ ok: false, reason, pomodoroPruneFailed: false, ...extra });
+
+    if (pomodoroSnapshot && dailyCleanupPlan && dailyCleanupPlan.changed) {
+      dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+        getNavigationPomodoroThemesApi(this.app),
+        pomodoroSnapshot.dailyPath,
+        dailyCleanupPlan,
+      );
+    }
 
     // Re-verify every preimage before writing anything.
     for (const { group } of planned) {
@@ -844,6 +852,11 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
                 (total, range) =>
@@ -863,6 +876,11 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }

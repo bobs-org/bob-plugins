@@ -418,6 +418,11 @@ class BobNavigationHotkeysProjectConversionMixin {
             noteIndex: dailyCleanupSnapshot.noteIndex,
           },
         );
+        dailyCleanup = await agreeDeferredPomodoroLinkCleanup(
+          getNavigationPomodoroThemesApi(this.app),
+          dailyCleanupSnapshot.dailyPath,
+          dailyCleanup,
+        );
         if (dailyCleanup.changed) {
           if (dailyCleanupSnapshot.sameFile) {
             parentContentToWrite = dailyCleanup.content;

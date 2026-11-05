@@ -541,20 +541,6 @@ function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
   }
   return Object.freeze(targets);
 }
-
-function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
-  return Object.freeze({
-    content,
-    changed: false,
-    removedBulletCount: 0,
-    removedLinkCount: 0,
-    removedTargets: Object.freeze([]),
-    removedLineRanges: Object.freeze([]),
-    removedEntryCount: 0,
-    unresolvedCount,
-  });
-}
-
 // Plan the removal of every live link (in today's daily note, under an open
 // Pomodoro entry) to one of `targets`. `options` carries `dailyPath` (the
 // daily note's own vault-relative path, used to resolve a same-note
@@ -657,6 +643,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   }
 
   const subtreeCandidates = [];
+  const touchedEntryOffsets = [];
   for (const [line, lineMatches] of matchesByLine) {
     if (
       !isDedicatedPomodoroLinkLine(
@@ -746,6 +733,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         endLineExclusive,
       });
       removedEntryCount += 1;
+    } else {
+      // Keep the source offsets until every edit is known. Cleanup can remove
+      // earlier child blocks (and mixed-link token edits can change a line's
+      // width), so callers need the surviving entries' post-cleanup line
+      // numbers for the agreement pass.
+      touchedEntryOffsets.push(entryStart);
     }
   }
 
@@ -849,6 +842,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       nextContent.slice(edit.end);
   }
 
+  const touchedEntryLines = deferredPomodoroCleanupTouchedEntryLines(
+    touchedEntryOffsets,
+    edits,
+    nextContent,
+  );
+
   return Object.freeze({
     content: nextContent,
     changed: nextContent !== snapshot,
@@ -872,6 +871,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       ),
     ),
     removedEntryCount,
+    touchedEntryLines: Object.freeze(touchedEntryLines),
     unresolvedCount,
   });
 }

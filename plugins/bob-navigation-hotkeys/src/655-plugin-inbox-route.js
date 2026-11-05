@@ -337,6 +337,24 @@ class BobNavigationHotkeysInboxRouteMixin {
       noteMoveRelocated = [];
     }
 
+    if (plan.pomodoroCleanup && plan.pomodoroCleanupPath) {
+      const dailyPath = normalizeVaultRelativePath(plan.pomodoroCleanupPath);
+      const dailyChange = plan.changes.get(dailyPath);
+      if (dailyChange && plan.pomodoroCleanup.changed) {
+        const agreedCleanup = await agreeDeferredPomodoroLinkCleanup(
+          getNavigationPomodoroThemesApi(this.app),
+          dailyPath,
+          { ...plan.pomodoroCleanup, content: dailyChange.after },
+        );
+        if (agreedCleanup.content !== dailyChange.after) {
+          plan.changes.set(dailyPath, Object.freeze({
+            before: dailyChange.before,
+            after: agreedCleanup.content,
+          }));
+        }
+      }
+    }
+
     const sourceChange = plan.changes.get(sourcePath);
     const sourceLines = splitMarkdownContent(sourceChange.after).lines;
     const sourceLine = Math.min(

@@ -431,6 +431,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           foldWrite.original,
           foldWrite.nextContent,
           today,
+          getNavigationPomodoroThemesApi(this.app),
         );
         if (prep.commitContent !== foldWrite.nextContent) {
           foldWrite.nextContent = prep.commitContent;
@@ -554,6 +555,7 @@ class BobNavigationHotkeysBlocksEditMixin {
         "",
         "",
         today,
+        getNavigationPomodoroThemesApi(this.app),
       );
       const pomodoroDone = await finishProjectPomodoroCleanup(
         (snapshot, cleanup) =>

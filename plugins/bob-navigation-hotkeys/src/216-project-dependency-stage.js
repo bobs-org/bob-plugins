@@ -655,6 +655,7 @@ async function prepareDependencyPomodoroCleanup(
   beforeContent,
   nextContent,
   today,
+  themesApi = null,
 ) {
   const empty = Object.freeze({
     commitContent: nextContent,
@@ -698,6 +699,11 @@ async function prepareDependencyPomodoroCleanup(
       cleanup: null,
     });
   }
+  cleanup = await agreeDeferredPomodoroLinkCleanup(
+    themesApi,
+    snapshot.dailyPath,
+    cleanup,
+  );
   if (snapshot.sameFile) {
     return Object.freeze({
       commitContent: cleanup.content,
@@ -718,6 +724,7 @@ async function prepareProjectPomodoroCleanup(
   parentPath,
   content,
   today,
+  themesApi = null,
 ) {
   return prepareDependencyPomodoroCleanup(
     readSnapshot,
@@ -726,6 +733,7 @@ async function prepareProjectPomodoroCleanup(
     content,
     plan.nextContent,
     today,
+    themesApi,
   );
 }
 

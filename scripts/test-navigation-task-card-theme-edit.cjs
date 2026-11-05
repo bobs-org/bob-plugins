@@ -638,6 +638,64 @@ test("task-card-relocate: planned link moves into existing planned BUILD", () =>
   assert.equal(helpers.taskCardThemeSavedNotice(edit, { moved: true, destinationName: "BUILD" }), "Type BUILD · link moved to BUILD");
 });
 
+test("task-card MoveTo agrees its surviving source through the production agreement rule", async () => {
+  const api = makeThemeApi();
+  const edit = taskCardTypeEditFor("set", "build", "BUILD", "task-1", noteSuggestion("FIX", "dev"));
+  const daily = [
+    "## Pomodoros",
+    "- [ ] () — FIX + WRITE",
+    "\t- [[Tasks/Alpha#^task-1]]",
+    "\t- [[Tasks/Other#^keep-1]]",
+    "- [ ] () — BUILD",
+    "\t- [[Tasks/Other#^build-1]]",
+  ].join("\n");
+  const planned = planTaskCardTypeMovesForTest([edit], daily, api);
+  assert.equal(planned.valid, true);
+  assert.equal(planned.moves[0].relocation.kind, "moveTo");
+  assert.equal(planned.moves[0].sourceEntryLine, 1);
+
+  const calls = [];
+  api.available = () => ({ available: true });
+  api.agreeLedgerEntries = async (request) => {
+    calls.push(request);
+    const lines = request.content.split("\n");
+    const line = request.entryLines[0] - 1;
+    const match = / — (.+)$/.exec(lines[line]);
+    const outcome = ledgerHelpers.agreeEntry({
+      name: match && match[1],
+      open: true,
+      children: [{ kind: "live", key: "fix", name: "FIX" }],
+    }, {
+      vocab: ["BUILD", "CHORE", "FIX", "MEET", "PLAN", "READ", "WRITE"],
+      exempt: ["PLAN"],
+      inventory: [],
+    });
+    if (match && outcome.name !== match[1]) {
+      lines[line] = `${lines[line].slice(0, match.index)} — ${outcome.name}`;
+    }
+    return { content: lines.join("\n"), unrepaired: [], entries: [] };
+  };
+  const agreed = await helpers.agreeTaskCardTypeMoveSources(
+    planned,
+    api,
+    "2026/20261028.md",
+  );
+  assert.deepEqual(calls[0].entryLines, [2]);
+  assert.equal(calls[0].path, "2026/20261028.md");
+  assert.match(agreed.content, /- \[ \] \(\) — FIX\n/);
+  assert.match(agreed.content, /- \[ \] \(\) — BUILD\n/);
+  const fixedPoint = ledgerHelpers.agreeEntry({
+    name: "FIX",
+    open: true,
+    children: [{ kind: "live", key: "fix", name: "FIX" }],
+  }, {
+    vocab: ["BUILD", "CHORE", "FIX", "MEET", "PLAN", "READ", "WRITE"],
+    exempt: ["PLAN"],
+    inventory: [],
+  });
+  assert.equal(fixedPoint.name, "FIX");
+});
+
 test("task-card-relocate: sole placeholder renames in place", () => {
   const api = makeThemeApi();
   const edit = taskCardTypeEditFor("set", "build", "BUILD", "sole-1", noteSuggestion("FIX", "dev"));

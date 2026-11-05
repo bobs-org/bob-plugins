@@ -86,6 +86,7 @@ function planPomodoroBulletMove(content, options = {}) {
       error,
       after: text,
       destinationEntryLine: null,
+      sourceEntryLineFinal: null,
       firstMovedLine: null,
       movedCount: 0,
       skippedDuplicateCount: 0,
@@ -291,6 +292,9 @@ function planPomodoroBulletMove(content, options = {}) {
   // block, or below a brand-new entry created after the source's block.
   let finalLines;
   let destinationEntryLineFinal;
+  let sourceEntryLineFinal = sourcePomodoroDeleted
+    ? null
+    : sourceEntry.entryLine;
   let firstMovedLine = null;
   let createdPomodoro = false;
 
@@ -309,6 +313,12 @@ function planPomodoroBulletMove(content, options = {}) {
         .slice(0, destEntry.childStartLine)
         .concat(flatInserted, workingLines.slice(destEntry.childStartLine + 1));
       firstMovedLine = destEntry.childStartLine;
+      if (
+        sourceEntryLineFinal !== null &&
+        destEntry.entryLine < sourceEntry.entryLine
+      ) {
+        sourceEntryLineFinal += flatInserted.length - 1;
+      }
     } else if (isLonePlaceholder) {
       // Every moved block merged away as an exact duplicate of the
       // placeholder itself; leave the destination's placeholder in place
@@ -331,6 +341,12 @@ function planPomodoroBulletMove(content, options = {}) {
         .concat(flatInserted, workingLines.slice(insertAt));
       if (flatInserted.length > 0) {
         firstMovedLine = insertAt;
+        if (
+          sourceEntryLineFinal !== null &&
+          insertAt <= sourceEntry.entryLine
+        ) {
+          sourceEntryLineFinal += flatInserted.length;
+        }
       }
     }
     destinationEntryLineFinal = destEntry.entryLine;
@@ -364,6 +380,7 @@ function planPomodoroBulletMove(content, options = {}) {
     error: null,
     after: finalLines.join(lineEnding),
     destinationEntryLine: destinationEntryLineFinal,
+    sourceEntryLineFinal,
     firstMovedLine,
     movedCount: insertedBlocks.length,
     skippedDuplicateCount,

@@ -2,10 +2,32 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const Module = require("node:module");
 const {
   helpers,
   pomodoroFixtureLines,
 } = require("./navigation-hotkeys-harness.cjs");
+
+const originalLoad = Module._load;
+Module._load = function loadLedgerToolsWithObsidianStubs(request, parent, isMain) {
+  if (request === "obsidian") {
+    class EmptyClass {}
+    return {
+      ItemView: EmptyClass,
+      MarkdownView: EmptyClass,
+      Modal: EmptyClass,
+      Notice: class { constructor() {} },
+      Plugin: EmptyClass,
+      parseYaml: () => ({}),
+    };
+  }
+  if (request === "@codemirror/view") return { EditorView: class {} };
+  if (request === "@codemirror/state") return { Prec: { highest: (value) => value } };
+  return originalLoad.call(this, request, parent, isMain);
+};
+const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
+const ledgerHelpers = LedgerToolsPlugin.helpers;
+Module._load = originalLoad;
 
 test("planPomodoroBulletMove appends one bullet last in an existing open Pomodoro, deleting the emptied source", () => {
   const content = pomodoroFixtureLines().join("\n");
@@ -29,6 +51,99 @@ test("planPomodoroBulletMove appends one bullet last in an existing open Pomodor
   ]);
   assert.equal(afterLines[11], "\t- [[bob#^move-pomodoros]]");
   assert.equal(plan.firstMovedLine, 11);
+});
+
+test("planPomodoroBulletMove maps the surviving source line when a prior destination gains children", () => {
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — BUILD",
+    "\t- [[Tasks#^existing]]",
+    "- [ ] () — FIX + WRITE",
+    "\t- [[Tasks#^move]]",
+    "\t- [[Tasks#^keep]]",
+  ].join("\n");
+  const plan = helpers.planPomodoroBulletMove(content, {
+    targets: [{ line: 4, rawLine: "\t- [[Tasks#^move]]" }],
+    sourceEntryLine: 3,
+    destination: { kind: "existing", entryLine: 1 },
+    preserveSourceEntry: true,
+  });
+  assert.equal(plan.valid, true);
+  assert.equal(plan.destinationEntryLine, 1);
+  assert.equal(plan.sourceEntryLineFinal, 4);
+});
+
+test("new named bullet destinations retype and agree the surviving source to a fixed point", async () => {
+  assert.equal(
+    helpers.pomodoroBulletMoveTypeMode({ kind: "new" }, "merge"),
+    "retype",
+  );
+  assert.equal(
+    helpers.pomodoroBulletMoveTypeMode({ kind: "existing" }, "merge"),
+    "merge",
+  );
+  assert.equal(
+    helpers.pomodoroBulletMoveTypeMode({ kind: "existing" }, "retype"),
+    "retype",
+  );
+
+  const retypeModes = [];
+  const routeApi = {
+    planLanding: (options) => {
+      retypeModes.push(options.retype);
+      return { kind: "set", name: "BUILD" };
+    },
+  };
+  const typePlans = helpers.pomodoroBulletMoveTypePlanRows(routeApi, {
+    records: [{ field: { state: "none" }, effective: { theme: { key: "fix", name: "FIX" } } }],
+  }, "BUILD", {
+    typeMode: helpers.pomodoroBulletMoveTypeMode({ kind: "new" }, "merge"),
+  });
+  assert.deepEqual(retypeModes, [true]);
+  assert.equal(typePlans[0].plan.kind, "set");
+
+  const before = [
+    "## Pomodoros",
+    "- [ ] () — FIX + WRITE",
+    "\t- [[Tasks#^remaining]]",
+  ].join("\n");
+  const api = {
+    available: () => ({ available: true }),
+    agreeLedgerEntries: async (request) => {
+      const lines = request.content.split("\n");
+      const index = request.entryLines[0] - 1;
+      const name = lines[index].split(" — ")[1];
+      const agreement = ledgerHelpers.agreeEntry({
+        name,
+        open: true,
+        children: [{ kind: "live", key: "fix", name: "FIX" }],
+      }, {
+        vocab: ["BUILD", "FIX", "WRITE"],
+        exempt: [],
+        inventory: [],
+      });
+      lines[index] = lines[index].replace(`— ${name}`, `— ${agreement.name}`);
+      return { content: lines.join("\n"), unrepaired: [] };
+    },
+  };
+  const after = await helpers.agreePomodoroBulletMoveSource(
+    api,
+    before,
+    "2026/20261028.md",
+    1,
+    true,
+  );
+  assert.match(after, /- \[ \] \(\) — FIX\n/);
+  const fixedPoint = ledgerHelpers.agreeEntry({
+    name: "FIX",
+    open: true,
+    children: [{ kind: "live", key: "fix", name: "FIX" }],
+  }, {
+    vocab: ["BUILD", "FIX", "WRITE"],
+    exempt: [],
+    inventory: [],
+  });
+  assert.equal(fixedPoint.name, "FIX");
 });
 
 test("configured theme menu vectors scope Recent, preserve config order, and flag new names", () => {

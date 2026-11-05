@@ -16633,6 +16633,7 @@ function planPomodoroBulletMove(content, options = {}) {
       error,
       after: text,
       destinationEntryLine: null,
+      sourceEntryLineFinal: null,
       firstMovedLine: null,
       movedCount: 0,
       skippedDuplicateCount: 0,
@@ -16838,6 +16839,9 @@ function planPomodoroBulletMove(content, options = {}) {
   // block, or below a brand-new entry created after the source's block.
   let finalLines;
   let destinationEntryLineFinal;
+  let sourceEntryLineFinal = sourcePomodoroDeleted
+    ? null
+    : sourceEntry.entryLine;
   let firstMovedLine = null;
   let createdPomodoro = false;
 
@@ -16856,6 +16860,12 @@ function planPomodoroBulletMove(content, options = {}) {
         .slice(0, destEntry.childStartLine)
         .concat(flatInserted, workingLines.slice(destEntry.childStartLine + 1));
       firstMovedLine = destEntry.childStartLine;
+      if (
+        sourceEntryLineFinal !== null &&
+        destEntry.entryLine < sourceEntry.entryLine
+      ) {
+        sourceEntryLineFinal += flatInserted.length - 1;
+      }
     } else if (isLonePlaceholder) {
       // Every moved block merged away as an exact duplicate of the
       // placeholder itself; leave the destination's placeholder in place
@@ -16878,6 +16888,12 @@ function planPomodoroBulletMove(content, options = {}) {
         .concat(flatInserted, workingLines.slice(insertAt));
       if (flatInserted.length > 0) {
         firstMovedLine = insertAt;
+        if (
+          sourceEntryLineFinal !== null &&
+          insertAt <= sourceEntry.entryLine
+        ) {
+          sourceEntryLineFinal += flatInserted.length;
+        }
       }
     }
     destinationEntryLineFinal = destEntry.entryLine;
@@ -16911,6 +16927,7 @@ function planPomodoroBulletMove(content, options = {}) {
     error: null,
     after: finalLines.join(lineEnding),
     destinationEntryLine: destinationEntryLineFinal,
+    sourceEntryLineFinal,
     firstMovedLine,
     movedCount: insertedBlocks.length,
     skippedDuplicateCount,
@@ -18262,20 +18279,6 @@ function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
   }
   return Object.freeze(targets);
 }
-
-function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
-  return Object.freeze({
-    content,
-    changed: false,
-    removedBulletCount: 0,
-    removedLinkCount: 0,
-    removedTargets: Object.freeze([]),
-    removedLineRanges: Object.freeze([]),
-    removedEntryCount: 0,
-    unresolvedCount,
-  });
-}
-
 // Plan the removal of every live link (in today's daily note, under an open
 // Pomodoro entry) to one of `targets`. `options` carries `dailyPath` (the
 // daily note's own vault-relative path, used to resolve a same-note
@@ -18378,6 +18381,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   }
 
   const subtreeCandidates = [];
+  const touchedEntryOffsets = [];
   for (const [line, lineMatches] of matchesByLine) {
     if (
       !isDedicatedPomodoroLinkLine(
@@ -18467,6 +18471,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         endLineExclusive,
       });
       removedEntryCount += 1;
+    } else {
+      // Keep the source offsets until every edit is known. Cleanup can remove
+      // earlier child blocks (and mixed-link token edits can change a line's
+      // width), so callers need the surviving entries' post-cleanup line
+      // numbers for the agreement pass.
+      touchedEntryOffsets.push(entryStart);
     }
   }
 
@@ -18570,6 +18580,12 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       nextContent.slice(edit.end);
   }
 
+  const touchedEntryLines = deferredPomodoroCleanupTouchedEntryLines(
+    touchedEntryOffsets,
+    edits,
+    nextContent,
+  );
+
   return Object.freeze({
     content: nextContent,
     changed: nextContent !== snapshot,
@@ -18593,6 +18609,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       ),
     ),
     removedEntryCount,
+    touchedEntryLines: Object.freeze(touchedEntryLines),
     unresolvedCount,
   });
 }
@@ -18719,6 +18736,68 @@ function getOpenTaskNavigationLines(lines) {
 // Returns null only when there are no matching targets, or when the sole
 // matching target is already on the cursor line (so the caller can show its
 // no-target notice and leave the editor untouched).
+// ---- src/161-pomodoro-cleanup-agreement.js ----
+function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
+  return Object.freeze({
+    content,
+    changed: false,
+    removedBulletCount: 0,
+    removedLinkCount: 0,
+    removedTargets: Object.freeze([]),
+    removedLineRanges: Object.freeze([]),
+    removedEntryCount: 0,
+    touchedEntryLines: Object.freeze([]),
+    unresolvedCount,
+  });
+}
+
+async function agreeNavigationPomodoroCleanup(app, dailyPath, cleanup) {
+  return await agreeDeferredPomodoroLinkCleanup(
+    getNavigationPomodoroThemesApi(app),
+    dailyPath,
+    cleanup,
+  );
+}
+
+// Map surviving entry offsets through the cleanup's original-offset edits.
+function deferredPomodoroCleanupTouchedEntryLines(offsets, edits, content) {
+  return [...new Set((Array.isArray(offsets) ? offsets : []).map((offset) => {
+    let nextOffset = offset;
+    for (const edit of Array.isArray(edits) ? edits : []) {
+      if (edit.end <= offset) {
+        nextOffset += edit.replacement.length - (edit.end - edit.start);
+      }
+    }
+    const lineBreaks = String(content || "")
+      .slice(0, Math.max(0, nextOffset))
+      .match(/\r\n|\n|\r/g);
+    return (lineBreaks ? lineBreaks.length : 0) + 1;
+  }))].sort((left, right) => left - right);
+}
+
+// Agree only surviving open entries changed by a deferred link cleanup.
+async function agreeDeferredPomodoroLinkCleanup(api, dailyPath, cleanup) {
+  if (
+    !cleanup || cleanup.changed !== true || cleanup.agreementApplied === true ||
+    !Array.isArray(cleanup.touchedEntryLines) || cleanup.touchedEntryLines.length === 0 ||
+    !api || typeof api.agreeLedgerEntries !== "function" ||
+    !navigationPomodoroThemeAvailable(api)
+  ) return cleanup;
+  try {
+    const outcome = await api.agreeLedgerEntries({
+      content: cleanup.content,
+      path: normalizeVaultRelativePath(dailyPath),
+      entryLines: cleanup.touchedEntryLines,
+    });
+    if (!outcome || typeof outcome.content !== "string") return cleanup;
+    if (Array.isArray(outcome.unrepaired) && outcome.unrepaired.some(
+      (item) => item && item.code === "unknown_link",
+    )) return cleanup;
+    return Object.freeze({ ...cleanup, content: outcome.content, changed: true, agreementApplied: true });
+  } catch (_error) {
+    return cleanup;
+  }
+}
 // ---- src/165-pomodoro-theme-picker.js ----
 // Recent task type rows shared by nav's Pomodoro move and rename pickers.
 // Ledger Tools api.themes owns catalog scanning, ranking, hue, and writes.
@@ -24435,6 +24514,7 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
   );
   const destinationName = pomodoroBulletMoveDestinationName(row) || "unnamed";
   const records = preview && Array.isArray(preview.records) ? preview.records : [];
+  const createsNamedEntry = row && (row.kind === "new" || row.kind === "split");
   if (!preview || !preview.candidates) {
     return "no live link · ledger unchanged";
   }
@@ -24442,15 +24522,21 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
     const unresolved = preview.unresolved > 0
       ? ` · ${preview.unresolved} links unresolved`
       : "";
-    return `${destinationName} · no task types to merge${unresolved}`;
+    return createsNamedEntry
+      ? `${destinationName} · new Pomodoro${unresolved}`
+      : `${destinationName} · no task types to merge${unresolved}`;
   }
 
   const selectedPick = pomodoroBulletMovePickerTabPick(modal, row);
-  const merged = mergePomodoroBulletMoveTaskTypes(preview.api, records, destinationName);
+  const merged = createsNamedEntry
+    ? { name: destinationName, appended: [] }
+    : mergePomodoroBulletMoveTaskTypes(preview.api, records, destinationName);
   const typeNames = [...new Set(records.map((record) => record.typeName).filter(Boolean))];
-  let consequence = merged.name !== destinationName
-    ? `→ ${merged.name} · keeps ${typeNames.length === 1 ? typeNames[0] : "task types"}`
-    : `→ ${destinationName} · types already match`;
+  let consequence = createsNamedEntry
+    ? `→ ${destinationName} · new Pomodoro`
+    : merged.name !== destinationName
+      ? `→ ${merged.name} · keeps ${typeNames.length === 1 ? typeNames[0] : "task types"}`
+      : `→ ${destinationName} · types already match`;
 
   const retypePlans = planPomodoroBulletMoveRetypes(
     preview.api,
@@ -24466,7 +24552,11 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
     .map((item) => item.plan.name)
     .filter(Boolean))];
   const clearCount = changes.filter((item) => item.plan.kind === "clear").length;
-  if (setNames.length === 1 && clearCount === 0) {
+  if (createsNamedEntry && changes.length > 0) {
+    consequence += ` · retypes ${changes.length} task type${changes.length === 1 ? "" : "s"}`;
+  } else if (createsNamedEntry) {
+    consequence += " · task types already match";
+  } else if (setNames.length === 1 && clearCount === 0) {
     consequence += ` · ⌥↵ retype to ${setNames[0]}`;
   } else if (clearCount > 0 && setNames.length === 0) {
     consequence += ` · ⌥↵ clear ${clearCount === 1 ? "type" : "types"}`;
@@ -32462,6 +32552,7 @@ async function prepareDependencyPomodoroCleanup(
   beforeContent,
   nextContent,
   today,
+  themesApi = null,
 ) {
   const empty = Object.freeze({
     commitContent: nextContent,
@@ -32505,6 +32596,11 @@ async function prepareDependencyPomodoroCleanup(
       cleanup: null,
     });
   }
+  cleanup = await agreeDeferredPomodoroLinkCleanup(
+    themesApi,
+    snapshot.dailyPath,
+    cleanup,
+  );
   if (snapshot.sameFile) {
     return Object.freeze({
       commitContent: cleanup.content,
@@ -32525,6 +32621,7 @@ async function prepareProjectPomodoroCleanup(
   parentPath,
   content,
   today,
+  themesApi = null,
 ) {
   return prepareDependencyPomodoroCleanup(
     readSnapshot,
@@ -32533,6 +32630,7 @@ async function prepareProjectPomodoroCleanup(
     content,
     plan.nextContent,
     today,
+    themesApi,
   );
 }
 
@@ -34341,6 +34439,11 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
               noteIndex: pomodoroSnapshot.noteIndex,
             },
           );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
+          );
           if (dailyCleanupPlan.changed) {
             foldedDailyContent = dailyCleanupPlan.content;
           }
@@ -34352,6 +34455,11 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
               dailyPath: pomodoroSnapshot.dailyPath,
               noteIndex: pomodoroSnapshot.noteIndex,
             },
+          );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
           );
         }
       }
@@ -53051,7 +53159,12 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
     if (!plan.valid) {
       return Object.freeze({ valid: false, error: plan.error || "Task link could not be moved", after: text });
     }
-    return Object.freeze({ valid: true, after: plan.after, changed: plan.after !== text });
+    return Object.freeze({
+      valid: true,
+      after: plan.after,
+      changed: plan.after !== text,
+      sourceEntryLine: plan.sourceEntryLineFinal,
+    });
   }
   if (relocation.kind === "createBelow") {
     const source = list[relocation.from];
@@ -53136,9 +53249,54 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api, options = {}) {
     } catch (_error) {
       // Destination naming is best-effort.
     }
-    working.moves.push(Object.freeze({ edit, relocation, liveLink: found, sourceName, destinationName, newType }));
+    working.moves.push(Object.freeze({
+      edit,
+      relocation,
+      liveLink: found,
+      sourceName,
+      destinationName,
+      newType,
+      sourceEntryLine: applied.sourceEntryLine,
+    }));
   }
   return { valid: true, error: null, moves: working.moves, content: working.content };
+}
+
+async function agreeTaskCardTypeMoveSources(plan, api, dailyPath) {
+  const current = plan && typeof plan === "object" ? plan : {};
+  const moves = (Array.isArray(current.moves) ? current.moves : []).filter(
+    (move) => move && move.relocation && move.relocation.kind === "moveTo",
+  );
+  if (
+    moves.length === 0 ||
+    !api ||
+    typeof api.agreeLedgerEntries !== "function" ||
+    !navigationPomodoroThemeAvailable(api)
+  ) {
+    return current;
+  }
+  if (moves.length === 1 && !Number.isInteger(moves[0].sourceEntryLine)) {
+    return current;
+  }
+  const entryLines = moves.length === 1
+    ? [moves[0].sourceEntryLine + 1]
+    : undefined;
+  try {
+    const outcome = await api.agreeLedgerEntries({
+      content: String(current.content || ""),
+      path: normalizeVaultRelativePath(dailyPath),
+      ...(entryLines ? { entryLines } : {}),
+    });
+    if (!outcome || typeof outcome.content !== "string") return current;
+    if (Array.isArray(outcome.unrepaired) && outcome.unrepaired.some(
+      (item) => item && item.code === "unknown_link",
+    )) {
+      return current;
+    }
+    return { ...current, content: outcome.content };
+  } catch (_error) {
+    return current;
+  }
 }
 
 async function writeTaskCardTypeDailyContent(deps, snapshot, preimage, nextContent) {
@@ -56365,20 +56523,25 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(
+            const replanned = await planTaskCardTypeLedgerMoves(
               actionable,
               base,
               api,
               this.taskCardTypeLedgerLookupOptions(fresh || snapshot),
             );
-            if (!replanned.valid || replanned.content === base) {
-              const first = replanned.moves[0] || ledgerPlan.moves[0];
+            const agreed = await agreeTaskCardTypeMoveSources(
+              replanned,
+              api,
+              (fresh || snapshot).dailyPath,
+            );
+            if (!agreed.valid || agreed.content === base) {
+              const first = agreed.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
               if (!isCurrent()) return false;
             } else {
               const target = fresh || snapshot;
-              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
-              const first = replanned.moves[0];
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, agreed.content);
+              const first = agreed.moves[0];
               if (!wrote) {
                 new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               } else if (first) {
@@ -56441,19 +56604,24 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(
+            const replanned = await planTaskCardTypeLedgerMoves(
               actionable,
               base,
               api,
               this.taskCardTypeLedgerLookupOptions(freshSnapshot || snapshot),
             );
-            if (!replanned.valid || replanned.content === base) {
+            const agreed = await agreeTaskCardTypeMoveSources(
+              replanned,
+              api,
+              (freshSnapshot || snapshot).dailyPath,
+            );
+            if (!agreed.valid || agreed.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;
             } else {
               const target = freshSnapshot || snapshot;
-              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
-              const first = replanned.moves[0];
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, agreed.content);
+              const first = agreed.moves[0];
               if (!wrote) {
                 new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               } else if (first) {
@@ -61639,6 +61807,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       originalContent,
       working,
       new Date(),
+      getNavigationPomodoroThemesApi(this.plugin && this.plugin.app),
     );
     working = vaultPomodoroPrep.commitContent;
     if (
@@ -67441,6 +67610,7 @@ class BulletPropertyPickerVaultBatchMixin extends FilteredPickerModal {
         filePath,
         workingContent,
         new Date(),
+        getNavigationPomodoroThemesApi(this.plugin.app),
       );
       if (batchPomodoroPrep.commitContent !== batchPlan.nextContent) {
         batchCommitContent = batchPomodoroPrep.commitContent;
@@ -73120,6 +73290,12 @@ class BobNavigationHotkeysTransclusionLinkMixin {
     if (!snapshot || snapshot.sameFile || !plan || !plan.changed) {
       return true;
     }
+    const themesApi = getNavigationPomodoroThemesApi(this.app);
+    const agreedPlan = await agreeDeferredPomodoroLinkCleanup(
+      themesApi,
+      snapshot.dailyPath,
+      plan,
+    );
     const { dailyPath, file } = snapshot;
     try {
       const editor =
@@ -73133,10 +73309,10 @@ class BobNavigationHotkeysTransclusionLinkMixin {
         const applied = applyEditorContentTransaction(
           editor,
           snapshot.content,
-          plan.content,
-          pomodoroCleanupCursor(editor, plan),
+          agreedPlan.content,
+          pomodoroCleanupCursor(editor, agreedPlan),
         );
-        return applied && String(editor.getValue() || "") === plan.content;
+        return applied && String(editor.getValue() || "") === agreedPlan.content;
       }
       const vault = this.app && this.app.vault;
       if (!vault || typeof vault.process !== "function" || !file) {
@@ -73148,7 +73324,7 @@ class BobNavigationHotkeysTransclusionLinkMixin {
           throw new Error("Daily note preimage changed");
         }
         transformed = true;
-        return plan.content;
+        return agreedPlan.content;
       });
       return transformed;
     } catch (error) {
@@ -73915,10 +74091,18 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     options = {},
   ) {
     const pomodoroSnapshot = options.pomodoroSnapshot || null;
-    const dailyCleanupPlan = options.dailyCleanupPlan || null;
+    let dailyCleanupPlan = options.dailyCleanupPlan || null;
     const foldedDailyPath = options.foldedDailyPath || null;
     const failed = (reason, extra = {}) =>
       Object.freeze({ ok: false, reason, pomodoroPruneFailed: false, ...extra });
+
+    if (pomodoroSnapshot && dailyCleanupPlan && dailyCleanupPlan.changed) {
+      dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+        getNavigationPomodoroThemesApi(this.app),
+        pomodoroSnapshot.dailyPath,
+        dailyCleanupPlan,
+      );
+    }
 
     // Re-verify every preimage before writing anything.
     for (const { group } of planned) {
@@ -74746,6 +74930,11 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
                 (total, range) =>
@@ -74765,6 +74954,11 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -82212,6 +82406,11 @@ class BobNavigationHotkeysDecayCancelMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
                 (total, range) =>
@@ -82231,6 +82430,11 @@ class BobNavigationHotkeysDecayCancelMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -82451,6 +82655,11 @@ class BobNavigationHotkeysDecayCancelMixin {
               noteIndex: pomodoroSnapshot.noteIndex,
             },
           );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
+          );
           if (dailyCleanupPlan.changed) {
             const linesRemovedBeforeCursor =
               dailyCleanupPlan.removedLineRanges.reduce(
@@ -82471,6 +82680,11 @@ class BobNavigationHotkeysDecayCancelMixin {
               dailyPath: pomodoroSnapshot.dailyPath,
               noteIndex: pomodoroSnapshot.noteIndex,
             },
+          );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
           );
         }
       }
@@ -84891,18 +85105,6 @@ class BobNavigationHotkeysCancelPropertyMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
-            if (dailyCleanupPlan.changed) {
-              const linesRemovedBeforeCursor =
-                dailyCleanupPlan.removedLineRanges.reduce(
-                  (total, range) =>
-                    range.endLineExclusive <= plan.cursorLine
-                      ? total + (range.endLineExclusive - range.startLine)
-                      : total,
-                  0,
-                );
-              finalContent = dailyCleanupPlan.content;
-              finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
-            }
           } else {
             dailyCleanupPlan = planDeferredPomodoroLinkCleanup(
               pomodoroSnapshot.content,
@@ -84912,6 +85114,17 @@ class BobNavigationHotkeysCancelPropertyMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+          }
+          dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
+          if (pomodoroSnapshot.sameFile && dailyCleanupPlan.changed) {
+            const linesRemovedBeforeCursor = dailyCleanupPlan.removedLineRanges.reduce(
+              (total, range) => range.endLineExclusive <= plan.cursorLine
+                ? total + (range.endLineExclusive - range.startLine)
+                : total,
+              0,
+            );
+            finalContent = dailyCleanupPlan.content;
+            finalCursorLine = plan.cursorLine - linesRemovedBeforeCursor;
           }
         }
       }
@@ -85331,6 +85544,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -85351,6 +85569,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -85626,6 +85849,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -85646,6 +85874,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -85797,7 +86030,6 @@ class BobNavigationHotkeysCountedRollMixin {
 }
 // ---- src/570-plugin-link-roll-and-schedule.js ----
 class BobNavigationHotkeysLinkRollScheduleMixin {
-
   // Commit one composed recommended-roll write across every note behind the
   // picker's Task Links: each note group is planned with
   // `planRecommendedRollBatch` (cancel first, then set-priority), the union
@@ -86367,7 +86599,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       countedPomodoroPrep = await prepareDependencyPomodoroCleanup(
         (opts) => this.readDeferredPomodoroSnapshot(this.app, opts),
         plan.pomodoroTargets || [],
-        normalizedPath, writeContext.content, plan.content, new Date(),
+        normalizedPath, writeContext.content, plan.content, new Date(), getNavigationPomodoroThemesApi(this.app),
       );
       plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
@@ -86622,6 +86854,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -86643,6 +86876,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
           }
         }
       }
@@ -87376,6 +87610,7 @@ class BobNavigationHotkeysPropertyDependencyMixin {
           parentPath,
           content,
           args.today || new Date(),
+          getNavigationPomodoroThemesApi(this.app),
         );
         if (pomodoroPrep.commitContent !== commitPlan.nextContent) {
           commitPlan = { ...commitPlan, nextContent: pomodoroPrep.commitContent };
@@ -89021,6 +89256,7 @@ class BobNavigationHotkeysBlocksEditMixin {
           foldWrite.original,
           foldWrite.nextContent,
           today,
+          getNavigationPomodoroThemesApi(this.app),
         );
         if (prep.commitContent !== foldWrite.nextContent) {
           foldWrite.nextContent = prep.commitContent;
@@ -89144,6 +89380,7 @@ class BobNavigationHotkeysBlocksEditMixin {
         "",
         "",
         today,
+        getNavigationPomodoroThemesApi(this.app),
       );
       const pomodoroDone = await finishProjectPomodoroCleanup(
         (snapshot, cleanup) =>
@@ -91944,10 +92181,25 @@ class BobNavigationHotkeysRelationCancelComposeMixin {
       identities,
       snapshot,
     );
+    const plan = await agreeDeferredPomodoroLinkCleanup(
+      getNavigationPomodoroThemesApi(this.app),
+      snapshot.dailyPath,
+      foldedDaily.plan,
+    );
+    if (foldedDaily.folded && plan && plan.changed) {
+      const write = sourceWrites.get(snapshot.dailyPath);
+      if (write) {
+        sourceWrites.set(snapshot.dailyPath, {
+          path: write.path,
+          original: write.original,
+          nextContent: plan.content,
+        });
+      }
+    }
     return Object.freeze({
       ok: true,
       snapshot,
-      plan: foldedDaily.plan,
+      plan,
       cleanupHandled: foldedDaily.folded === true,
     });
   }
@@ -98451,6 +98703,42 @@ function pomodoroBulletMoveCurrentDestinationName(row) {
   return String(row && row.name || "").trim();
 }
 
+function pomodoroBulletMoveTypeMode(row, requestedMode) {
+  return Boolean(row && (row.kind === "new" || row.kind === "split")) ||
+    requestedMode === "retype"
+    ? "retype"
+    : "merge";
+}
+
+async function agreePomodoroBulletMoveSource(api, content, dailyPath, entryLine, typesComplete) {
+  const original = String(content || "");
+  if (
+    typesComplete !== true ||
+    !Number.isInteger(entryLine) ||
+    !api ||
+    typeof api.agreeLedgerEntries !== "function" ||
+    !navigationPomodoroThemeAvailable(api)
+  ) {
+    return original;
+  }
+  try {
+    const outcome = await api.agreeLedgerEntries({
+      content: original,
+      path: normalizeVaultRelativePath(dailyPath),
+      entryLines: [entryLine + 1],
+    });
+    if (!outcome || typeof outcome.content !== "string") return original;
+    if (Array.isArray(outcome.unrepaired) && outcome.unrepaired.some(
+      (item) => item && item.code === "unknown_link",
+    )) {
+      return original;
+    }
+    return outcome.content;
+  } catch (_error) {
+    return original;
+  }
+}
+
 function pomodoroBulletMoveFieldWrite(api, record, plan) {
   if (!plan || !record || !api) {
     return null;
@@ -98637,24 +98925,24 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
   if (!row || (!split && row.kind !== "existing" && row.kind !== "new")) {
     return false;
   }
-  if (options.typePreviewState && options.typePreviewState !== "ready") {
-    new Notice(options.typePreviewState === "loading"
-      ? "Task type preview is still loading; nothing was moved"
-      : "Task type preview is unavailable; nothing was moved");
-    return false;
-  }
-  if (options.typePreview && options.typePreview.error) {
-    new Notice("Task type preview is unavailable; nothing was moved");
-    return false;
-  }
-
-  const freshPreview = await resolvePomodoroBulletMoveTypePreview(plugin, session);
-  if (freshPreview.error) {
-    new Notice(`${freshPreview.error}; nothing was moved`);
-    return false;
+  let freshPreview = await resolvePomodoroBulletMoveTypePreview(plugin, session);
+  const typePreviewUnavailable = Boolean(freshPreview.error);
+  if (typePreviewUnavailable) {
+    freshPreview = {
+      ...freshPreview,
+      api: null,
+      candidates: 0,
+      records: [],
+      sourceRecords: [],
+      sourceTypesComplete: false,
+      unresolved: 0,
+      error: null,
+    };
   }
   if (
     options.typePreview &&
+    !typePreviewUnavailable &&
+    !options.typePreview.error &&
     pomodoroBulletMoveTypePreviewSignature(options.typePreview) !==
       pomodoroBulletMoveTypePreviewSignature(freshPreview)
   ) {
@@ -98663,22 +98951,22 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
   }
 
   const api = freshPreview.api;
-  const typeMode = options.typeMode === "retype" ? "retype" : "merge";
+  const typeMode = pomodoroBulletMoveTypeMode(row, options.typeMode);
   const destinationName = pomodoroBulletMoveCurrentDestinationName(row);
   const merged = api && freshPreview.records.length > 0 && typeMode === "merge"
     ? mergePomodoroBulletMoveTaskTypes(api, freshPreview.records, destinationName)
     : { name: destinationName, appended: [] };
   const finalDestinationName = pomodoroBulletMoveFinalDestinationName(row, merged.name);
   const typePlans = api
-    ? pomodoroBulletMoveTypePlanRows(api, freshPreview, destinationName, options)
+    ? pomodoroBulletMoveTypePlanRows(api, freshPreview, destinationName, {
+        ...options,
+        typeMode,
+      })
     : [];
-  if (typePlans.some((item) => !item.plan)) {
-    new Notice("Task type routing could not plan this move; nothing was moved");
-    return false;
-  }
+  const usableTypePlans = typePlans.some((item) => !item.plan) ? [] : typePlans;
   const writes = pomodoroBulletMoveTaskWrites(
     api,
-    typePlans,
+    usableTypePlans,
     normalizeVaultRelativePath(session.sourcePath),
   );
   if (!writes.valid) {
@@ -98686,50 +98974,7 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
     return false;
   }
 
-  let moveContent = session.sourceContent;
-  let preserveShedSource = false;
-  if (
-    !split && api && typeof api.shed === "function" &&
-    freshPreview.sourceTypesComplete === true &&
-    freshPreview.records.length > 0
-  ) {
-    const selectedIdentities = new Set(
-      collectPomodoroBulletMoveTaskLinks(session).map((candidate) =>
-        `${candidate.link.target}\u0000${candidate.link.blockId}`,
-      ),
-    );
-    const beforeKeys = freshPreview.sourceRecords
-      .map((record) => record.typeKey)
-      .filter(Boolean);
-    const afterKeys = freshPreview.sourceRecords
-      .filter((record) => !selectedIdentities.has(record.linkIdentity))
-      .map((record) => record.typeKey)
-      .filter(Boolean);
-    const sourceEntry = session.discovery.context && session.discovery.context.entry;
-    const sourceName = sourceEntry && typeof sourceEntry.name === "string"
-      ? sourceEntry.name
-      : "";
-    const shedName = api.shed(sourceName, beforeKeys, afterKeys);
-    if (shedName && shedName !== sourceName) {
-      const sourceLines = splitMarkdownContent(moveContent).lines;
-      const rename = planPomodoroEntryRename(moveContent, {
-        sourceEntryLine: session.discovery.entryLine,
-        sourceRawLine: String(sourceLines[session.discovery.entryLine] || ""),
-        name: shedName,
-        preserveSpelling: true,
-      });
-      if (!rename.valid) {
-        new Notice(`${rename.error}; nothing was moved`);
-        return false;
-      }
-      moveContent = rename.after;
-      // Keep the source Pomodoro as a planned base slot when its last
-      // merged-in type leaves. The generic move planner deletes empty source
-      // entries, which would discard the surviving base name we just shed to.
-      preserveShedSource = true;
-    }
-  }
-
+  const moveContent = session.sourceContent;
   let plan;
   let destinationLabel;
   if (split) {
@@ -98753,7 +98998,6 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
       targets: session.discovery.targets,
       sourceEntryLine: session.discovery.entryLine,
       destination,
-      preserveSourceEntry: preserveShedSource,
     });
     destinationLabel = row.kind === "existing"
       ? getPomodoroBulletMoveDestinationLabel(row.entry)
@@ -98791,6 +99035,14 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
     return false;
   }
   sourceAfter = localWrites.content;
+
+  sourceAfter = await agreePomodoroBulletMoveSource(
+    api,
+    sourceAfter,
+    session.sourcePath,
+    plan.sourceEntryLineFinal,
+    freshPreview.sourceTypesComplete,
+  );
 
   const afterLines = splitMarkdownContent(sourceAfter).lines;
   const firstMovedLine = Math.min(
@@ -98832,7 +99084,7 @@ async function commitPomodoroBulletMoveWithRetype(plugin, session, row, options 
     return true;
   }
   const typeSuffix = pomodoroBulletMoveTypeToast(
-    typePlans,
+    usableTypePlans,
     typeMode,
     finalDestinationName,
   );
@@ -101016,6 +101268,24 @@ class BobNavigationHotkeysInboxRouteMixin {
       noteMoveRelocated = [];
     }
 
+    if (plan.pomodoroCleanup && plan.pomodoroCleanupPath) {
+      const dailyPath = normalizeVaultRelativePath(plan.pomodoroCleanupPath);
+      const dailyChange = plan.changes.get(dailyPath);
+      if (dailyChange && plan.pomodoroCleanup.changed) {
+        const agreedCleanup = await agreeDeferredPomodoroLinkCleanup(
+          getNavigationPomodoroThemesApi(this.app),
+          dailyPath,
+          { ...plan.pomodoroCleanup, content: dailyChange.after },
+        );
+        if (agreedCleanup.content !== dailyChange.after) {
+          plan.changes.set(dailyPath, Object.freeze({
+            before: dailyChange.before,
+            after: agreedCleanup.content,
+          }));
+        }
+      }
+    }
+
     const sourceChange = plan.changes.get(sourcePath);
     const sourceLines = splitMarkdownContent(sourceChange.after).lines;
     const sourceLine = Math.min(
@@ -102264,6 +102534,11 @@ class BobNavigationHotkeysProjectConversionMixin {
             dailyPath: dailyCleanupSnapshot.dailyPath,
             noteIndex: dailyCleanupSnapshot.noteIndex,
           },
+        );
+        dailyCleanup = await agreeDeferredPomodoroLinkCleanup(
+          getNavigationPomodoroThemesApi(this.app),
+          dailyCleanupSnapshot.dailyPath,
+          dailyCleanup,
         );
         if (dailyCleanup.changed) {
           if (dailyCleanupSnapshot.sameFile) {
@@ -108594,4 +108869,14 @@ Object.assign(module.exports.helpers, {
   RELATION_MERGE_ALREADY_CLOSED_MESSAGE,
   RELATION_MERGE_UNCHANGED_MESSAGE,
   RELATION_MERGE_MISSING_ID_MESSAGE,
+});
+// ---- src/711-pomodoro-name-agreement-exports.js ----
+// Exports for Pomodoro entry name agreement across move and cleanup writers.
+Object.assign(module.exports.helpers, {
+  pomodoroBulletMoveTypeMode,
+  pomodoroBulletMoveTypePlanRows,
+  agreePomodoroBulletMoveSource,
+  pomodoroBulletMovePickerConsequence,
+  agreeDeferredPomodoroLinkCleanup,
+  agreeTaskCardTypeMoveSources,
 });

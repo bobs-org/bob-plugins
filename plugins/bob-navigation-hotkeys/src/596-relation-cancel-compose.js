@@ -529,10 +529,25 @@ class BobNavigationHotkeysRelationCancelComposeMixin {
       identities,
       snapshot,
     );
+    const plan = await agreeDeferredPomodoroLinkCleanup(
+      getNavigationPomodoroThemesApi(this.app),
+      snapshot.dailyPath,
+      foldedDaily.plan,
+    );
+    if (foldedDaily.folded && plan && plan.changed) {
+      const write = sourceWrites.get(snapshot.dailyPath);
+      if (write) {
+        sourceWrites.set(snapshot.dailyPath, {
+          path: write.path,
+          original: write.original,
+          nextContent: plan.content,
+        });
+      }
+    }
     return Object.freeze({
       ok: true,
       snapshot,
-      plan: foldedDaily.plan,
+      plan,
       cleanupHandled: foldedDaily.folded === true,
     });
   }

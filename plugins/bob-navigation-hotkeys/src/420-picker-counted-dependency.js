@@ -681,6 +681,7 @@ class BulletPropertyPickerCountedDependencyMixin extends FilteredPickerModal {
       originalContent,
       working,
       new Date(),
+      getNavigationPomodoroThemesApi(this.plugin && this.plugin.app),
     );
     working = vaultPomodoroPrep.commitContent;
     if (

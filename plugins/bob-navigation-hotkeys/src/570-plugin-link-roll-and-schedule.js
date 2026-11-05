@@ -1,5 +1,4 @@
 class BobNavigationHotkeysLinkRollScheduleMixin {
-
   // Commit one composed recommended-roll write across every note behind the
   // picker's Task Links: each note group is planned with
   // `planRecommendedRollBatch` (cancel first, then set-priority), the union
@@ -569,7 +568,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
       countedPomodoroPrep = await prepareDependencyPomodoroCleanup(
         (opts) => this.readDeferredPomodoroSnapshot(this.app, opts),
         plan.pomodoroTargets || [],
-        normalizedPath, writeContext.content, plan.content, new Date(),
+        normalizedPath, writeContext.content, plan.content, new Date(), getNavigationPomodoroThemesApi(this.app),
       );
       plan = withCountedPomodoroCursorMapped(plan, plan.content, countedPomodoroPrep.commitContent);
     }
@@ -824,6 +823,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -845,6 +845,7 @@ class BobNavigationHotkeysLinkRollScheduleMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeNavigationPomodoroCleanup(this.app, pomodoroSnapshot.dailyPath, dailyCleanupPlan);
           }
         }
       }

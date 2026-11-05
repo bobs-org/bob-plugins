@@ -351,6 +351,7 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
   );
   const destinationName = pomodoroBulletMoveDestinationName(row) || "unnamed";
   const records = preview && Array.isArray(preview.records) ? preview.records : [];
+  const createsNamedEntry = row && (row.kind === "new" || row.kind === "split");
   if (!preview || !preview.candidates) {
     return "no live link · ledger unchanged";
   }
@@ -358,15 +359,21 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
     const unresolved = preview.unresolved > 0
       ? ` · ${preview.unresolved} links unresolved`
       : "";
-    return `${destinationName} · no task types to merge${unresolved}`;
+    return createsNamedEntry
+      ? `${destinationName} · new Pomodoro${unresolved}`
+      : `${destinationName} · no task types to merge${unresolved}`;
   }
 
   const selectedPick = pomodoroBulletMovePickerTabPick(modal, row);
-  const merged = mergePomodoroBulletMoveTaskTypes(preview.api, records, destinationName);
+  const merged = createsNamedEntry
+    ? { name: destinationName, appended: [] }
+    : mergePomodoroBulletMoveTaskTypes(preview.api, records, destinationName);
   const typeNames = [...new Set(records.map((record) => record.typeName).filter(Boolean))];
-  let consequence = merged.name !== destinationName
-    ? `→ ${merged.name} · keeps ${typeNames.length === 1 ? typeNames[0] : "task types"}`
-    : `→ ${destinationName} · types already match`;
+  let consequence = createsNamedEntry
+    ? `→ ${destinationName} · new Pomodoro`
+    : merged.name !== destinationName
+      ? `→ ${merged.name} · keeps ${typeNames.length === 1 ? typeNames[0] : "task types"}`
+      : `→ ${destinationName} · types already match`;
 
   const retypePlans = planPomodoroBulletMoveRetypes(
     preview.api,
@@ -382,7 +389,11 @@ function pomodoroBulletMovePickerConsequence(modal, row) {
     .map((item) => item.plan.name)
     .filter(Boolean))];
   const clearCount = changes.filter((item) => item.plan.kind === "clear").length;
-  if (setNames.length === 1 && clearCount === 0) {
+  if (createsNamedEntry && changes.length > 0) {
+    consequence += ` · retypes ${changes.length} task type${changes.length === 1 ? "" : "s"}`;
+  } else if (createsNamedEntry) {
+    consequence += " · task types already match";
+  } else if (setNames.length === 1 && clearCount === 0) {
     consequence += ` · ⌥↵ retype to ${setNames[0]}`;
   } else if (clearCount > 0 && setNames.length === 0) {
     consequence += ` · ⌥↵ clear ${clearCount === 1 ? "type" : "types"}`;

@@ -197,6 +197,11 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
               noteIndex: pomodoroSnapshot.noteIndex,
             },
           );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
+          );
           if (dailyCleanupPlan.changed) {
             foldedDailyContent = dailyCleanupPlan.content;
           }
@@ -208,6 +213,11 @@ class BobNavigationHotkeysProjectSubtreeWritersMixin {
               dailyPath: pomodoroSnapshot.dailyPath,
               noteIndex: pomodoroSnapshot.noteIndex,
             },
+          );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
           );
         }
       }

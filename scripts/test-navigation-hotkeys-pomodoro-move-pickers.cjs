@@ -908,7 +908,7 @@ test("Pomodoro move Enter merges missing task types in move order and leaves fie
   assert.equal(notices.at(-1), "Moved 2 bullets to FIX + BUILD + WRITE · keeps task types");
 });
 
-test("moving the last linked merged-in type sheds it from the source Pomodoro", async () => {
+test("moving the last linked type deletes the empty source Pomodoro", async () => {
   const sourceContent = [
     "## Pomodoros",
     "- [ ] () — BASE + BUILD",
@@ -924,8 +924,9 @@ test("moving the last linked merged-in type sheds it from the source Pomodoro", 
     { typePreviewState: "ready" },
   );
   assert.equal(applied, true);
-  assert.match(fixture.editor.getValue(), /— BASE\n/);
+  assert.doesNotMatch(fixture.editor.getValue(), /— BASE(?: \+ BUILD)?\n/);
   assert.match(fixture.editor.getValue(), /— FIX \+ BUILD/);
+  assert.match(fixture.editor.getValue(), /\[\[Tasks#\^one\]\]/);
 });
 
 test("Pomodoro move Alt+Enter applies a multi-bullet retype in one closed-note write", async () => {
@@ -1036,7 +1037,7 @@ test("Pomodoro move landing in MEET retypes even on the default Enter path", asy
   assert.doesNotMatch(fixture.editor.getValue(), /MEET \+ BUILD/);
 });
 
-test("Pomodoro move to a new named entry merges by default", async () => {
+test("Pomodoro move to a new named entry retypes by default", async () => {
   const fixture = createTaskTypeMoveFixture();
   const applied = await fixture.plugin.commitPomodoroBulletMoveSession(
     fixture.session,
@@ -1044,8 +1045,9 @@ test("Pomodoro move to a new named entry merges by default", async () => {
     { typePreviewState: "ready" },
   );
   assert.equal(applied, true);
-  assert.match(fixture.editor.getValue(), /— WRITE \+ BUILD/);
-  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One ^one");
+  assert.match(fixture.editor.getValue(), /— WRITE\n/);
+  assert.doesNotMatch(fixture.editor.getValue(), /— WRITE \+ BUILD/);
+  assert.equal(fixture.notes.get("Tasks.md"), "- [ ] #task One [type:: WRITE] ^one");
 });
 
 test("Pomodoro move clears an explicit type that matches the inherited destination", async () => {

@@ -181,6 +181,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -201,6 +206,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -476,6 +486,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const linesRemovedBeforeCursor =
                 dailyCleanupPlan.removedLineRanges.reduce(
@@ -496,6 +511,11 @@ class BobNavigationHotkeysCountedRollMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }

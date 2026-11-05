@@ -524,20 +524,25 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(
+            const replanned = await planTaskCardTypeLedgerMoves(
               actionable,
               base,
               api,
               this.taskCardTypeLedgerLookupOptions(fresh || snapshot),
             );
-            if (!replanned.valid || replanned.content === base) {
-              const first = replanned.moves[0] || ledgerPlan.moves[0];
+            const agreed = await agreeTaskCardTypeMoveSources(
+              replanned,
+              api,
+              (fresh || snapshot).dailyPath,
+            );
+            if (!agreed.valid || agreed.content === base) {
+              const first = agreed.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
               if (!isCurrent()) return false;
             } else {
               const target = fresh || snapshot;
-              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
-              const first = replanned.moves[0];
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, agreed.content);
+              const first = agreed.moves[0];
               if (!wrote) {
                 new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               } else if (first) {
@@ -600,19 +605,24 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(
+            const replanned = await planTaskCardTypeLedgerMoves(
               actionable,
               base,
               api,
               this.taskCardTypeLedgerLookupOptions(freshSnapshot || snapshot),
             );
-            if (!replanned.valid || replanned.content === base) {
+            const agreed = await agreeTaskCardTypeMoveSources(
+              replanned,
+              api,
+              (freshSnapshot || snapshot).dailyPath,
+            );
+            if (!agreed.valid || agreed.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;
             } else {
               const target = freshSnapshot || snapshot;
-              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, replanned.content);
-              const first = replanned.moves[0];
+              const wrote = await writeTaskCardTypeDailyContent({ plugin: this.plugin, app: this.app }, target, base, agreed.content);
+              const first = agreed.moves[0];
               if (!wrote) {
                 new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               } else if (first) {

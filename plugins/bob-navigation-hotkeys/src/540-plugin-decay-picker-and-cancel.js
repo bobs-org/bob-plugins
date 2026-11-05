@@ -617,6 +617,11 @@ class BobNavigationHotkeysDecayCancelMixin {
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
             );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
+            );
             if (dailyCleanupPlan.changed) {
               const removedBefore = dailyCleanupPlan.removedLineRanges.reduce(
                 (total, range) =>
@@ -636,6 +641,11 @@ class BobNavigationHotkeysDecayCancelMixin {
                 dailyPath: pomodoroSnapshot.dailyPath,
                 noteIndex: pomodoroSnapshot.noteIndex,
               },
+            );
+            dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+              getNavigationPomodoroThemesApi(this.app),
+              pomodoroSnapshot.dailyPath,
+              dailyCleanupPlan,
             );
           }
         }
@@ -856,6 +866,11 @@ class BobNavigationHotkeysDecayCancelMixin {
               noteIndex: pomodoroSnapshot.noteIndex,
             },
           );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
+          );
           if (dailyCleanupPlan.changed) {
             const linesRemovedBeforeCursor =
               dailyCleanupPlan.removedLineRanges.reduce(
@@ -876,6 +891,11 @@ class BobNavigationHotkeysDecayCancelMixin {
               dailyPath: pomodoroSnapshot.dailyPath,
               noteIndex: pomodoroSnapshot.noteIndex,
             },
+          );
+          dailyCleanupPlan = await agreeDeferredPomodoroLinkCleanup(
+            getNavigationPomodoroThemesApi(this.app),
+            pomodoroSnapshot.dailyPath,
+            dailyCleanupPlan,
           );
         }
       }

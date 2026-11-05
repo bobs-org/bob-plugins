@@ -226,6 +226,7 @@ test("Task Link resolution keeps the outer modal hidden until its targets are re
   assert.ok(picker);
   assert.equal(picker.linkResolving, true);
   assert.ok(picker.containerEl.classes.includes("bob-task-card-quick-pending"));
+  assert.ok(picker.modalEl.classes.includes("bob-task-card-quick-pending"));
   assert.ok(picker.containerEl.children.includes(picker.backdropEl));
   await waitUntil(() => typeof releaseResolution === "function");
   releaseResolution();
@@ -245,8 +246,10 @@ test("Alt+P hides immediate rolls and reveals the optional Next Work summary", a
   ready.plugin.rollByRecommendation(ready.editor, rollOptions(ready));
   const pendingPicker = ready.plugin.activeBulletPropertyPicker;
   assert.ok(pendingPicker.containerEl.classes.includes("bob-task-card-quick-pending"));
+  assert.ok(pendingPicker.modalEl.classes.includes("bob-task-card-quick-pending"));
   await waitUntil(() => typeof releaseWrite === "function");
   assert.ok(pendingPicker.containerEl.classes.includes("bob-task-card-quick-pending"));
+  assert.ok(pendingPicker.modalEl.classes.includes("bob-task-card-quick-pending"));
   assert.ok(pendingPicker.containerEl.children.includes(pendingPicker.backdropEl));
   releaseWrite(true);
   await waitUntil(() => !ready.plugin.activeBulletPropertyPicker);
@@ -269,6 +272,7 @@ test("Alt+P hides immediate rolls and reveals the optional Next Work summary", a
       picker.opening === false,
   );
   assert.equal(picker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
+  assert.equal(picker.modalEl.classes.includes("bob-task-card-quick-pending"), false);
   assert.equal(writes, 0);
   picker.handleKeydown(quickRollEvent());
   await waitUntil(() => !next.plugin.activeBulletPropertyPicker);
@@ -293,6 +297,7 @@ test("a cancel recommendation waits for the visible card and the second Alt+P ca
   assert.ok(picker);
   assert.equal(picker.taskCardModel.recommendation.effects.cancel, 1);
   assert.equal(picker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
+  assert.equal(picker.modalEl.classes.includes("bob-task-card-quick-pending"), false);
   assert.equal(writes, 0);
   assert.deepEqual(notices, [
     "Decayed past P4 — Alt+P again cancels it, Esc keeps it",
@@ -327,6 +332,10 @@ test("a cancel recommendation waits for the visible card and the second Alt+P ca
   assert.equal(batchPicker.taskCardModel.recommendation.effects.cancel, 1);
   assert.equal(
     batchPicker.containerEl.classes.includes("bob-task-card-quick-pending"),
+    false,
+  );
+  assert.equal(
+    batchPicker.modalEl.classes.includes("bob-task-card-quick-pending"),
     false,
   );
   assert.equal(batchWrites, 0, "a cancel target holds the entire batch for confirmation");
@@ -458,6 +467,7 @@ test("Alt+P on an unusable P1 level reveals the card without writing", () => {
   const picker = harness.plugin.activeBulletPropertyPicker;
   assert.ok(picker);
   assert.equal(picker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
+  assert.equal(picker.modalEl.classes.includes("bob-task-card-quick-pending"), false);
   assert.equal(writes, 0);
   assert.ok(notices.includes("No priority to roll — pick a level (1–4)"));
   picker.close();
@@ -479,6 +489,10 @@ test("unavailable recurring tasks reveal the card without writing", () => {
   assert.equal(recurringPicker.taskCardModel.recommendation.available, false);
   assert.equal(
     recurringPicker.containerEl.classes.includes("bob-task-card-quick-pending"),
+    false,
+  );
+  assert.equal(
+    recurringPicker.modalEl.classes.includes("bob-task-card-quick-pending"),
     false,
   );
   assert.ok(notices.length > 0);
@@ -556,6 +570,10 @@ test("inbox routing is shown before the write and a managed line redirects to it
   assert.equal(backedOutPicker.pickerOpen, true);
   assert.equal(
     backedOutPicker.containerEl.classes.includes("bob-task-card-quick-pending"),
+    false,
+  );
+  assert.equal(
+    backedOutPicker.modalEl.classes.includes("bob-task-card-quick-pending"),
     false,
   );
   assert.equal(
@@ -638,7 +656,9 @@ test("a throwing one-shot dispatch always reveals the still-open card", async ()
     harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness));
     const picker = harness.plugin.activeBulletPropertyPicker;
     await waitUntil(
-      () => !picker.containerEl.classes.includes("bob-task-card-quick-pending"),
+      () =>
+        !picker.containerEl.classes.includes("bob-task-card-quick-pending") &&
+        !picker.modalEl.classes.includes("bob-task-card-quick-pending"),
       "quick card remained hidden after a dispatch exception",
     );
     assert.equal(picker.pickerOpen, true);
@@ -646,6 +666,58 @@ test("a throwing one-shot dispatch always reveals the still-open card", async ()
     prototype.dispatchTaskCardIntent = original;
     harness.plugin.activeBulletPropertyPicker?.close();
   }
+});
+
+test("a refused one-shot write reveals both modal elements and leaves the card open", async () => {
+  const content =
+    "- [ ] #task Refused [priority:: medium] [scheduled:: 2026-10-01] ^refused";
+  const harness = createTaskHarness(content);
+  let releaseWrite;
+  harness.plugin.setBulletPropertyValue = () =>
+    new Promise((resolve) => {
+      releaseWrite = resolve;
+    });
+  harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness));
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await waitUntil(() => typeof releaseWrite === "function");
+  assert.ok(picker.containerEl.classes.includes("bob-task-card-quick-pending"));
+  assert.ok(picker.modalEl.classes.includes("bob-task-card-quick-pending"));
+  releaseWrite(false);
+  await waitUntil(
+    () =>
+      !picker.containerEl.classes.includes("bob-task-card-quick-pending") &&
+      !picker.modalEl.classes.includes("bob-task-card-quick-pending"),
+    "a refused write did not reveal both modal elements",
+  );
+  assert.equal(picker.pickerOpen, true);
+  assert.equal(harness.editor.getValue(), content);
+  picker.close();
+});
+
+test("Alt+P and Task Card keys show feedback while the review walk settles", () => {
+  notices.length = 0;
+  const harness = createTaskHarness(
+    "- [ ] #task Busy [scheduled:: 2026-10-01] ^busy",
+  );
+  harness.plugin.captureReviewGesture = () => ({ busy: true });
+  const original = harness.editor.getValue();
+
+  assert.equal(
+    harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness)),
+    true,
+  );
+  assert.ok(!harness.plugin.activeBulletPropertyPicker);
+  assert.deepEqual(notices, ["Review walk still settling — press Alt+P again"]);
+  assert.equal(harness.editor.getValue(), original);
+
+  notices.length = 0;
+  assert.equal(
+    harness.plugin.openBulletPropertyPicker(harness.editor, { config: harness.config }),
+    true,
+  );
+  assert.ok(!harness.plugin.activeBulletPropertyPicker);
+  assert.deepEqual(notices, ["Review walk still settling — press again"]);
+  assert.equal(harness.editor.getValue(), original);
 });
 
 test("the registered command owns Alt+P and a Vim count is consumed once", () => {
@@ -712,14 +784,35 @@ test("the registered command owns Alt+P and a Vim count is consumed once", () =>
   assert.equal(routed.length, 0, "a live picker consumes the command alias exactly once");
 });
 
-test("quick-roll visibility CSS disables the modal entrance animation", () => {
+test("quick-roll visibility CSS disables the modal entrance animation and reveal clears its targets", async () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const css = fs.readFileSync(
     path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"),
     "utf8",
   );
+  assert.match(css, /\.modal-container\.bob-task-card-quick-pending/);
+  assert.match(css, /\.modal\.bob-cnp-modal\.bob-task-card-quick-pending/);
   assert.match(css, /bob-task-card-quick-pending[\s\S]*?visibility:\s*hidden/);
   assert.match(css, /bob-task-card-quick-pending[\s\S]*?animation:\s*none/);
   assert.match(css, /\.bob-key-card-key\.is-alias[\s\S]*?opacity:/);
+
+  const harness = createTaskHarness(
+    "- [ ] #task Reveal [priority:: medium] [scheduled:: 2026-10-01] ^reveal",
+  );
+  let releaseWrite;
+  harness.plugin.setBulletPropertyValue = () =>
+    new Promise((resolve) => {
+      releaseWrite = resolve;
+    });
+  harness.plugin.rollByRecommendation(harness.editor, rollOptions(harness));
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await waitUntil(() => typeof releaseWrite === "function");
+  assert.ok(picker.containerEl.classes.includes("bob-task-card-quick-pending"));
+  assert.ok(picker.modalEl.classes.includes("bob-task-card-quick-pending"));
+  picker.revealQuickRollCard();
+  assert.equal(picker.containerEl.classes.includes("bob-task-card-quick-pending"), false);
+  assert.equal(picker.modalEl.classes.includes("bob-task-card-quick-pending"), false);
+  releaseWrite(true);
+  await waitUntil(() => !harness.plugin.activeBulletPropertyPicker);
 });

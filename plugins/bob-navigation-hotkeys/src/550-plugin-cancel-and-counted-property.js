@@ -547,7 +547,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       try {
         const captured = this.captureReviewGesture(cm);
         if (captured && captured.busy === true) {
-          return true;
+          return this.noticeReviewWalkBusy(options);
         }
         reviewOrigin = captured || null;
       } catch (error) {

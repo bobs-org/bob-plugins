@@ -55477,7 +55477,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   onOpen() {
     this.bindCloseChord();
     if (this.quickRollCardPending && this.modalEl) {
-      this.modalEl.addClass("bob-task-card-quick-pending");
+      setQuickRollPendingClass(this, true);
     }
     if (this.stage === "task-card") {
       this.contentEl.empty();
@@ -69300,19 +69300,22 @@ function isQuickRollKeydown(event) {
 }
 
 function setQuickRollPendingClass(picker, pending) {
-  const element = picker && (picker.containerEl || picker.modalEl);
-  if (!element) return;
-  try {
-    if (typeof element.addClass === "function" && pending) {
-      element.addClass("bob-task-card-quick-pending");
-    } else if (typeof element.removeClass === "function" && !pending) {
-      element.removeClass("bob-task-card-quick-pending");
-    } else if (element.classList) {
-      if (pending) element.classList.add("bob-task-card-quick-pending");
-      else element.classList.remove("bob-task-card-quick-pending");
+  const elements = picker
+    ? [...new Set([picker.containerEl, picker.modalEl].filter(Boolean))]
+    : [];
+  for (const element of elements) {
+    try {
+      if (pending && typeof element.addClass === "function") {
+        element.addClass("bob-task-card-quick-pending");
+      } else if (!pending && typeof element.removeClass === "function") {
+        element.removeClass("bob-task-card-quick-pending");
+      } else if (element.classList) {
+        if (pending) element.classList.add("bob-task-card-quick-pending");
+        else element.classList.remove("bob-task-card-quick-pending");
+      }
+    } catch (_error) {
+      // Visibility is best-effort for older modal hosts.
     }
-  } catch (_error) {
-    // Visibility is best-effort for older modal hosts.
   }
 }
 
@@ -84277,7 +84280,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       try {
         const captured = this.captureReviewGesture(cm);
         if (captured && captured.busy === true) {
-          return true;
+          return this.noticeReviewWalkBusy(options);
         }
         reviewOrigin = captured || null;
       } catch (error) {
@@ -106607,6 +106610,14 @@ class BobNavigationHotkeysLinkParseMixin {
 const QUICK_ROLL_KEY_LABEL = "Alt+P";
 
 class BobNavigationHotkeysQuickRollMixin {
+  noticeReviewWalkBusy(options = {}) {
+    const message = options.initialTaskCardIntent === "apply-recommendation"
+      ? "Review walk still settling — press Alt+P again"
+      : "Review walk still settling — press again";
+    new Notice(message);
+    return true;
+  }
+
   rollByRecommendation(cm, options = {}) {
     let activePicker = this.activeBulletPropertyPicker;
     if (

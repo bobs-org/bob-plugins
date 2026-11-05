@@ -1,6 +1,14 @@
 const QUICK_ROLL_KEY_LABEL = "Alt+P";
 
 class BobNavigationHotkeysQuickRollMixin {
+  noticeReviewWalkBusy(options = {}) {
+    const message = options.initialTaskCardIntent === "apply-recommendation"
+      ? "Review walk still settling — press Alt+P again"
+      : "Review walk still settling — press again";
+    new Notice(message);
+    return true;
+  }
+
   rollByRecommendation(cm, options = {}) {
     let activePicker = this.activeBulletPropertyPicker;
     if (

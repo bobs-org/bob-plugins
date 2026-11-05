@@ -724,7 +724,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
   onOpen() {
     this.bindCloseChord();
     if (this.quickRollCardPending && this.modalEl) {
-      this.modalEl.addClass("bob-task-card-quick-pending");
+      setQuickRollPendingClass(this, true);
     }
     if (this.stage === "task-card") {
       this.contentEl.empty();

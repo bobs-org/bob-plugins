@@ -69,6 +69,7 @@ Schedule task Work summary stage.
 | A Next or Pending task needs a Work summary | Shows the summary stage; Enter, blank Enter, or a second Alt+P submits. |
 | The recommendation is cancel | Shows the danger banner without writing. A second Alt+P or Ctrl+Enter cancels; Escape keeps the task. |
 | The task has no priority (implicit P0) | Sets the first configured level (P1) and a date in its window through the Ctrl+Enter path, as if `1` were pressed. The Schedule Log reads `P0 → P1`. |
+| Pressed while the review walk is still settling after an answer | Shows _Review walk still settling — press Alt+P again_ and writes nothing. |
 | No recommendation is available | Shows the card and a notice without writing. |
 | The task is in an inbox | Opens the route prompt before writing; backing out returns to the visible card. |
 | A counted batch or Task Link batch includes a cancel | Waits on the card for confirmation before changing any target. |

@@ -1,6 +1,7 @@
 // --- Ledger type-agreement marks: Live Preview -----------------------------
 // `BobLedgerToolsLedgerTypeMarksMixin`. Prefixes disagreeing (and
-// composite-agreeing) Task Links with `#TYPE` using cached
+// composite-agreeing) Task Links with `#TYPE` using explicit or inherited
+// effective types from the cached
 // `effectiveTypeFor` / `typeAgrees`. Never spawns bob per row. Stale
 // cache yields no prefix rather than a confidently wrong type.
 class BobLedgerToolsLedgerTypeMarksMixin {
@@ -269,7 +270,7 @@ class BobLedgerToolsLedgerTypeMarksMixin {
             identity && typeof identity.type === "string" ? identity.type : "";
           const typeKey =
             identity && typeof identity.key === "string" ? identity.key : null;
-          if (!typeName || identity.inherited === true) {
+          if (!typeName) {
             continue;
           }
           const kind = ledgerTypeMarkKind(typeKey || typeName, link.entryName, sources);

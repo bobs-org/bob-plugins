@@ -263,7 +263,10 @@ function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);
-  if (mark === "x" || mark === "X" || mark === "-") {
+  if (
+    opts.asIfOpen !== true &&
+    (mark === "x" || mark === "X" || mark === "-")
+  ) {
     return {
       suggestion: null,
       warnings: [{ code: "closed_task" }],

@@ -98,6 +98,8 @@ const {
   pomodoroThemeDefaultTypeName,
   typeComponents,
   typeAgrees,
+  agreeEntry,
+  settleClosed,
   planRetype,
   planLanding,
   planSplit,
@@ -675,6 +677,42 @@ test("type vectors: agreement answers the D5 invariant", () => {
   }
 });
 
+test("type vectors: open entry names agree with all Task Link outcomes", () => {
+  assert.ok(fixture.agree_entry.length > 0, "vectors carry agree_entry cases");
+  for (const item of fixture.agree_entry) {
+    if (item.rust_only) continue;
+    const got = agreeEntry({
+      name: item.entry,
+      open: item.open,
+      children: item.children,
+    }, routingSources(item));
+    assert.equal(got.name, item.expected.name, `agree_entry name: ${item.name}`);
+    assert.deepEqual(got.added, item.expected.added, `agree_entry added: ${item.name}`);
+    assert.deepEqual(got.removed, item.expected.removed, `agree_entry removed: ${item.name}`);
+    assert.equal(got.unrepaired.length, (item.expected.unrepaired || []).length,
+      `agree_entry unrepaired count: ${item.name}`);
+    got.unrepaired.forEach((actual, index) => {
+      const expected = item.expected.unrepaired[index];
+      assert.equal(actual.code, expected.code, `agree_entry code: ${item.name}`);
+      if (expected.key !== undefined) {
+        assert.equal(actual.key, expected.key, `agree_entry key: ${item.name}`);
+      }
+    });
+  }
+});
+
+test("type vectors: closed names settle to worked types", () => {
+  assert.ok(fixture.settle.length > 0, "vectors carry settle cases");
+  for (const item of fixture.settle) {
+    if (item.rust_only) continue;
+    assert.equal(
+      settleClosed(item.entry, item.worked, routingSources(item)),
+      item.expected,
+      `settle: ${item.name}`,
+    );
+  }
+});
+
 test("type vectors: landing mirrors the R2 merge/retype rule", () => {
   assert.ok(fixture.land.length > 0, "vectors carry land cases");
   for (const item of fixture.land) {
@@ -863,7 +901,7 @@ test("theme suggestion vectors execute Rust precedence, origins, diagnostics, an
   }
 });
 
-test("task-theme API is additive, synchronous, path-bound, and read-only", () => {
+test("task-theme API is additive, path-bound, and read-only", () => {
   const todayPath = "2026/20261028.md";
   const todayText = "## Pomodoros\n- [ ] () — UNSAVED\n";
   const taskText = "- [ ] Write the tests ^write-tests";
@@ -906,7 +944,7 @@ test("task-theme API is additive, synchronous, path-bound, and read-only", () =>
     "available", "fetch", "snapshot", "isConfigured", "hueFor", "componentsOf",
     "historyRows", "similarTo", "hide", "unhide", "color", "rename", "onChange",
     "suggestFor", "taskThemeOf", "setTaskTheme", "clearTaskTheme", "isKnownTheme",
-    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "planRetype", "planLanding", "planSplit", "mergeNames", "narrowClosed", "shed", "isMeetName", "planPlacement", "planRelocation",
+    "effectiveTypeFor", "typeComponentsOf", "typeAgrees", "agreeEntry", "settleClosed", "agreeLedgerEntries", "planRetype", "planLanding", "planSplit", "mergeNames", "narrowClosed", "shed", "isMeetName", "planPlacement", "planRelocation",
   ]) {
     assert.equal(typeof api[member], "function", `themes.${member} is present`);
   }
@@ -1101,6 +1139,19 @@ test("themes routing API answers agreement, landing, merge, shed, placement, and
   assert.equal(api.narrowClosed("BUILD + FIX", ["fix"]), "FIX");
   assert.equal(api.shed("BUILD + FIX", ["build", "fix"], ["build"]), "BUILD");
   assert.deepEqual(
+    api.agreeEntry({
+      name: "FIX",
+      open: true,
+      children: [{ kind: "live", key: "build", name: "BUILD" }],
+      sources,
+    }),
+    { name: "BUILD", added: ["build"], removed: ["fix"], unrepaired: [] },
+  );
+  assert.equal(
+    api.settleClosed("FIX", [{ key: "build", name: "BUILD" }]),
+    "BUILD",
+  );
+  assert.deepEqual(
     api.planPlacement({
       type: "chore",
       typeName: "CHORE",
@@ -1118,6 +1169,19 @@ test("themes routing API answers agreement, landing, merge, shed, placement, and
       sources,
     }),
     { kind: "createBelow", from: 0, name: "BUILD" },
+  );
+  assert.deepEqual(
+    api.planRelocation({
+      entries: [
+        { name: "MEET", open: true, running: false, links: 1 },
+        { name: "BUILD", open: true, running: false, links: 0 },
+      ],
+      liveLink: 0,
+      type: "build",
+      typeName: "BUILD",
+      sources,
+    }),
+    { kind: "moveTo", from: 0, to: 1 },
   );
 });
 
@@ -1142,6 +1206,135 @@ test("effectiveTypeFor runs the suggest cascade for a task line", () => {
   });
   assert.equal(suggestion.source, "note");
   assert.equal(suggestion.theme.key, "build");
+  const closed = api.effectiveTypeFor({
+    path: "Task2.md",
+    line: 1,
+    text: "- [x] Done [type:: FIX] ^x",
+    asIfOpen: true,
+  });
+  assert.equal(closed.source, "task");
+  assert.equal(closed.theme.key, "fix");
+});
+
+test("agreeLedgerEntries resolves direct links, settles completed types, and returns text only", async () => {
+  const dayPath = "2026/20261105.md";
+  const taskText = [
+    "- [ ] Build task [type:: BUILD] ^open-build",
+    "- [x] Fixed task [type:: FIX] ^closed-fix",
+  ].join("\n");
+  const ids = {
+    "open-build": { position: { start: { line: 0 } } },
+    "closed-fix": { position: { start: { line: 1 } } },
+  };
+  let writes = 0;
+  const plugin = new LedgerToolsPlugin({
+    metadataCache: {
+      getCache: () => ({
+        blocks: ids,
+        listItems: [
+          { position: { start: { line: 0 } }, task: " " },
+          { position: { start: { line: 1 } }, task: "x" },
+        ],
+      }),
+    },
+    vault: {
+      getAbstractFileByPath: (path) => ({ path }),
+      cachedRead: async () => taskText,
+      modify: async () => { writes += 1; },
+    },
+    workspace: { getLeavesOfType: () => [] },
+  });
+  plugin.pomodoroThemeOpenEditorContent = () => null;
+  plugin.progressMarkResolveTarget = (target) =>
+    target === "Tasks" ? "Tasks.md" : null;
+  plugin.taskTypeSources = () => ({
+    vocab: ["BUILD", "FIX", "WRITE"],
+    exempt: [],
+    inventory: [],
+  });
+  const lookedUp = [];
+  plugin.taskTypeEffectiveTypeFor = (request) => {
+    lookedUp.push(request);
+    const line = request.text.split("\n")[request.line - 1];
+    const field = pomodoroThemeTaskFieldState(line);
+    return field.state === "set"
+      ? { theme: { key: field.key, name: field.value } }
+      : null;
+  };
+  const api = plugin.pomodoroThemesApi();
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "  - [[Tasks#^open-build]]",
+    "- [ ] () — BUILD + FIX",
+    "  - 🍅 [[Tasks#^closed-fix]]",
+    "  - [[Missing#^unknown]]",
+    "## Notes",
+    "Body",
+  ].join("\r\n");
+  const result = await api.agreeLedgerEntries({ path: dayPath, content });
+  assert.equal(result.changed, true);
+  assert.equal(
+    result.content,
+    content.replace("- [ ] () — FIX\r\n", "- [ ] () — BUILD\r\n"),
+  );
+  assert.deepEqual(result.entries, [{
+    line: 2,
+    before: "FIX",
+    after: "BUILD",
+    added: ["build"],
+    removed: ["fix"],
+  }]);
+  assert.deepEqual(result.unrepaired, [{
+    line: 4,
+    entry: "BUILD + FIX",
+    code: "unknown_link",
+    key: null,
+    message: "unresolved link",
+  }]);
+  assert.ok(lookedUp.length >= 2);
+  assert.ok(lookedUp.every((request) => request.asIfOpen === true));
+  assert.equal(writes, 0, "agreement returns content without writing the vault");
+});
+
+test("ledger type marks include inherited effective task types", () => {
+  const dayPath = "2026/20261105.md";
+  const content = [
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "  - [[Task#^inherited]]",
+  ].join("\n");
+  const plugin = new LedgerToolsPlugin({});
+  plugin.ledgerTypeMarksEnabled = true;
+  plugin.pomodoroThemeTodayPath = () => dayPath;
+  plugin.taskTypeSources = () => ({ vocab: ["BUILD", "FIX"], exempt: [], inventory: [] });
+  plugin.ledgerTypeLineTextFor = () => "- [ ] Inherited task ^inherited";
+  plugin.taskTagIdentityForLine = () => ({
+    type: "BUILD",
+    key: "build",
+    hue: "blue",
+    inherited: true,
+  });
+  const starts = [0];
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === "\n") starts.push(index + 1);
+  }
+  const view = {
+    state: {
+      field: (field) => field === LIVE_PREVIEW_FIELD
+        ? true
+        : { file: { path: dayPath } },
+      doc: {
+        toString: () => content,
+        line: (number) => ({ from: starts[number - 1] }),
+      },
+    },
+    visibleRanges: [{ from: 0, to: content.length }],
+  };
+  const marks = plugin.buildLedgerTypeMarkDecorations(view);
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].value.widget.model.type, "BUILD");
+  assert.equal(marks[0].value.widget.model.kind, "disagree");
 });
 
 test("muted exempt pill is gray while unconfigured stays transparent", () => {

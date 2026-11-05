@@ -594,8 +594,8 @@ Explicit `[type:: NAME]` (and legacy `[theme:: NAME]`) fields render as a
 colored `#TYPE` in the `#task` slot. The field is folded; there is no
 trailing pill on the task line. Inherited types stay a plain hash whose
 tooltip names the type, until **Toggle inherited task types** is turned
-on. A live Task Link that disagrees with its task's type gets a dashed
-`#TYPE` prefix in today's ledger. Day strip and Stats copy say **Time by
+on. A live Task Link that disagrees with its task's effective type (explicit
+or inherited) gets a dashed `#TYPE` prefix in today's ledger. Day strip and Stats copy say **Time by
 type** / **Types**; JSON still uses the `theme` dimension.
 Exempt types such as PLAN have no hue, so their `#TYPE` uses the muted ink
 (`--bob-type-ink-muted`) instead of a palette color.

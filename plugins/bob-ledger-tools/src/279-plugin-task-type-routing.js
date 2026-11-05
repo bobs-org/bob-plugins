@@ -217,6 +217,176 @@ function narrowClosed(name, workedKeys, sources) {
     .join(" + ");
 }
 
+function taskTypeIsTypeKey(key, sources) {
+  const sets = normalizeTaskTypeSources(sources);
+  return sets.vocab !== null ? sets.vocab.has(key) : !sets.inventory.has(key);
+}
+
+function taskTypeIsContainer(name, sources) {
+  return typeComponents(name, sources).every((item) => !item.isType);
+}
+
+function taskTypeSubstituteComponent(name, removedKey, addedName) {
+  const parts = pomodoroThemeSplitComponents(name);
+  const output = [];
+  let replaced = false;
+  for (const part of parts) {
+    if (pomodoroThemeNormalizeKey(part) === removedKey) {
+      if (!replaced) {
+        output.push(addedName);
+        replaced = true;
+      }
+    } else {
+      output.push(part);
+    }
+  }
+  if (!replaced) {
+    output.push(addedName);
+  }
+  return output.join(" + ");
+}
+
+// Agreement rule (D5): add missing live types and drop unsupported name
+// types only when every direct child is resolved as a Task Link.
+function agreeEntry(input, sources) {
+  const opts = input && typeof input === "object" ? input : {};
+  const original = opts.name === null || opts.name === undefined
+    ? ""
+    : String(opts.name);
+  const activeSources = opts.sources !== undefined ? opts.sources : sources;
+  const unchanged = (unrepaired = []) => ({
+    name: original,
+    added: [],
+    removed: [],
+    unrepaired,
+  });
+  if (opts.open === false || taskTypeIsContainer(opts.name, activeSources)) {
+    return unchanged();
+  }
+  const children = Array.isArray(opts.children) ? opts.children : [];
+  if (taskTypeIsMeetName(opts.name)) {
+    const unrepaired = [];
+    for (const child of children) {
+      if (!child || child.kind !== "live") continue;
+      const key = pomodoroThemeNormalizeKey(child.key);
+      if (key !== "meet") {
+        unrepaired.push({ code: "meet_mismatch", key: key || null });
+      }
+    }
+    return unchanged(unrepaired);
+  }
+
+  const classified = typeComponents(opts.name, activeSources);
+  const componentKeys = new Set(
+    pomodoroThemeSplitComponents(original).map((part) =>
+      pomodoroThemeNormalizeKey(part),
+    ),
+  );
+  const additions = [];
+  const seenAdded = new Set();
+  const unrepaired = [];
+  for (const child of children) {
+    if (!child || typeof child !== "object") continue;
+    if (child.kind === "live") {
+      const key = pomodoroThemeNormalizeKey(child.key);
+      if (componentKeys.has(key) || seenAdded.has(key)) continue;
+      if (!taskTypeIsTypeKey(key, activeSources)) {
+        unrepaired.push({ code: "unconfigured_type", key: key || null });
+        continue;
+      }
+      seenAdded.add(key);
+      additions.push({ key, name: String(child.name || child.key || "") });
+    } else if (child.kind === "unknown") {
+      unrepaired.push({ code: "unknown_link", key: null });
+    }
+  }
+
+  const canDrop = children.length > 0 && children.every((child) =>
+    child && (child.kind === "live" || child.kind === "worked"),
+  );
+  const supported = new Set();
+  if (canDrop) {
+    for (const child of children) {
+      supported.add(pomodoroThemeNormalizeKey(child.key));
+    }
+  }
+  const removed = canDrop
+    ? classified.filter((item) => item.isType && !supported.has(item.key))
+      .map((item) => item.key)
+    : [];
+  if (removed.length === 0 && additions.length === 0) {
+    return unchanged(unrepaired);
+  }
+  const typeCount = classified.filter((item) => item.isType).length;
+  if (removed.length === typeCount && additions.length === 0) {
+    return unchanged(unrepaired);
+  }
+
+  let name;
+  if (removed.length === 1 && additions.length === 1) {
+    name = taskTypeSubstituteComponent(original, removed[0], additions[0].name);
+  } else {
+    const removedSet = new Set(removed);
+    const parts = classified
+      .filter((item) => !(item.isType && removedSet.has(item.key)))
+      .map((item) => item.name);
+    for (const item of additions) parts.push(item.name);
+    name = parts.join(" + ");
+  }
+  if (name === original) return unchanged(unrepaired);
+  return {
+    name,
+    added: additions.map((item) => item.key),
+    removed,
+    unrepaired,
+  };
+}
+
+// A closed session keeps exactly the worked types, preserving labels and
+// component order while appending missing worked types in link order.
+function settleClosed(name, worked, sources) {
+  const original = String(name == null ? "" : name);
+  if (taskTypeIsMeetName(original) || taskTypeIsContainer(original, sources)) {
+    return original;
+  }
+  const typedWorked = [];
+  const seen = new Set();
+  for (const item of Array.isArray(worked) ? worked : []) {
+    const key = pomodoroThemeNormalizeKey(item && item.key);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (taskTypeIsTypeKey(key, sources)) {
+      typedWorked.push({ key, name: String(item.name || item.key) });
+    }
+  }
+  if (typedWorked.length === 0) return original;
+  const workedKeys = new Set(typedWorked.map((item) => item.key));
+  const classified = typeComponents(original, sources);
+  const dropped = classified
+    .filter((item) => item.isType && !workedKeys.has(item.key))
+    .map((item) => item.key);
+  const existingTypes = new Set(
+    classified.filter((item) => item.isType).map((item) => item.key),
+  );
+  const toAdd = [];
+  const seenAdd = new Set();
+  for (const item of typedWorked) {
+    if (!existingTypes.has(item.key) && !seenAdd.has(item.key)) {
+      seenAdd.add(item.key);
+      toAdd.push(item);
+    }
+  }
+  if (dropped.length === 0 && toAdd.length === 0) return original;
+  if (dropped.length === 1 && toAdd.length === 1) {
+    return taskTypeSubstituteComponent(original, dropped[0], toAdd[0].name);
+  }
+  const parts = classified
+    .filter((item) => !(item.isType && !workedKeys.has(item.key)))
+    .map((item) => item.name);
+  for (const item of toAdd) parts.push(item.name);
+  return parts.join(" + ");
+}
+
 // Shed merged-in types whose last Task Link left. Types with no prior links,
 // labels, and the base type survive. MEET is calendar-owned and immutable.
 function shed(name, beforeKeys, afterKeys, sources) {
@@ -364,6 +534,31 @@ function planRelocation(input) {
     ? opts.typeName
     : key;
   if (typeAgrees(key, entry.name, opts.sources)) {
+    return { kind: "unchanged" };
+  }
+  if (taskTypeIsMeetName(entry.name)) {
+    if (entry.running === true) {
+      return { kind: "unchanged" };
+    }
+    const sets = normalizeTaskTypeSources(opts.sources);
+    const planned = entries.map((item) => ({
+      name: item ? item.name : null,
+      open: !!item && item.open === true && item.running !== true,
+      running: false,
+    }));
+    const placed = planPlacement({
+      typeKey: key,
+      typeName,
+      entries: planned,
+      exempt: [...sets.exempt],
+      alreadyQueued: false,
+    });
+    if (placed.kind === "entry" && placed.index !== from) {
+      return { kind: "moveTo", from, to: placed.index };
+    }
+    if (Number(entry.links) > 1) {
+      return { kind: "createBelow", from, name: typeName };
+    }
     return { kind: "unchanged" };
   }
   if (entry.running === true) {

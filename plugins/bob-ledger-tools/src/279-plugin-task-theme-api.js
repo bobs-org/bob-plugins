@@ -1,6 +1,6 @@
 // --- api.themes v1 additive task-theme surface -------------------------
-// Synchronous wrappers over the pure PT13 helpers. They never spawn bob and
-// never write a vault file; consumers own their existing guarded writes.
+// Wrappers over the pure PT13 helpers. They never spawn bob or write a vault
+// file; consumers own their existing guarded writes.
 
 class BobLedgerToolsTaskThemeApiMixin {
   pomodoroThemesApi() {
@@ -26,6 +26,9 @@ class BobLedgerToolsTaskThemeApiMixin {
       effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
+      agreeEntry: (input) => this.taskTypeAgreeEntry(input),
+      settleClosed: (name, worked) => this.taskTypeSettleClosed(name, worked),
+      agreeLedgerEntries: (request) => this.taskTypeAgreeLedgerEntries(request),
       planRetype: (options) => this.taskTypePlanRetype(options),
       planLanding: (options) => this.taskTypePlanLanding(options),
       planSplit: (options) => this.taskTypePlanSplit(options),
@@ -83,6 +86,273 @@ class BobLedgerToolsTaskThemeApiMixin {
       return typeAgrees(key, entryName, this.taskTypeSources());
     } catch (error) {
       return true;
+    }
+  }
+
+  taskTypeAgreeEntry(input) {
+    try {
+      const opts = input && typeof input === "object" ? input : {};
+      return agreeEntry(
+        opts,
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      const name = input && input.name != null ? String(input.name) : "";
+      return { name, added: [], removed: [], unrepaired: [] };
+    }
+  }
+
+  taskTypeSettleClosed(name, worked) {
+    try {
+      return settleClosed(name, worked, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
+    }
+  }
+
+  taskTypeAgreeCachedBlockLine(path, blockId) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (!metadataCache || typeof metadataCache.getCache !== "function") {
+        return null;
+      }
+      const cache = metadataCache.getCache(path);
+      const blocks = cache && cache.blocks;
+      if (!blocks || typeof blocks !== "object") return null;
+      const id = String(blockId || "");
+      let block = null;
+      for (const key of [id, `^${id}`, id.toLowerCase()]) {
+        if (Object.prototype.hasOwnProperty.call(blocks, key)) {
+          block = blocks[key];
+          break;
+        }
+      }
+      if (!block) {
+        block = Object.values(blocks).find(
+          (item) => item && String(item.id || "").replace(/^\^/u, "") === id,
+        );
+      }
+      const line = block && block.position && block.position.start
+        ? block.position.start.line
+        : null;
+      if (!Number.isInteger(line) || line < 0) return null;
+      const item = (Array.isArray(cache.listItems) ? cache.listItems : [])
+        .find((row) => row && row.position && row.position.start &&
+          row.position.start.line === line);
+      return item && typeof item.task === "string" && item.task ? line : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeReadTaskText(path, sourcePath, sourceContent) {
+    try {
+      const samePath = typeof sameVaultPath === "function"
+        ? sameVaultPath(path, sourcePath)
+        : String(path) === String(sourcePath);
+      if (samePath) return sourceContent;
+      const editorText = this.pomodoroThemeOpenEditorContent(path);
+      if (typeof editorText === "string") return editorText;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function" ||
+          typeof vault.getAbstractFileByPath !== "function") {
+        return null;
+      }
+      const file = vault.getAbstractFileByPath(path);
+      if (!file) return null;
+      const text = await vault.cachedRead(file);
+      return typeof text === "string" ? text : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeResolveLink(target, blockId, sourcePath, sourceContent) {
+    try {
+      const writtenTarget = String(target || "");
+      let path = null;
+      if (!writtenTarget) {
+        path = sourcePath;
+      } else if (typeof this.progressMarkResolveTarget === "function") {
+        path = this.progressMarkResolveTarget(writtenTarget, sourcePath);
+      } else {
+        const metadataCache = this.app && this.app.metadataCache;
+        const dest = metadataCache &&
+          typeof metadataCache.getFirstLinkpathDest === "function"
+          ? metadataCache.getFirstLinkpathDest(writtenTarget, sourcePath)
+          : null;
+        path = dest && typeof dest.path === "string" ? dest.path : null;
+        if (path && !/\.md$/i.test(path)) path += ".md";
+      }
+      if (!path) return null;
+      const normalizedPath = typeof normalizePath === "function"
+        ? normalizePath(path)
+        : String(path);
+      const text = await this.taskTypeAgreeReadTaskText(
+        normalizedPath,
+        sourcePath,
+        sourceContent,
+      );
+      if (typeof text !== "string") return null;
+      const lines = text.replace(/\r\n?/g, "\n").split("\n");
+      const id = String(blockId || "");
+      if (!id) return null;
+      const matches = [];
+      for (let index = 0; index < lines.length; index += 1) {
+        if (pomodoroThemeTrailingBlockId(lines[index]) === id) {
+          matches.push(index);
+        }
+      }
+      if (matches.length !== 1) return null;
+      const cachedLine = this.taskTypeAgreeCachedBlockLine(normalizedPath, id);
+      const lineIndex = cachedLine === matches[0] ? cachedLine : matches[0];
+      const lineText = lines[lineIndex];
+      if (!pomodoroThemeTaskMark(lineText)) return null;
+      return {
+        path: normalizedPath,
+        line: lineIndex + 1,
+        lineText,
+        text: lines.join("\n"),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeClassifyChild(line, sourcePath, sourceContent) {
+    const bullet = todayBulletBody(line);
+    if (!bullet) return { kind: "prose" };
+    const body = bullet.body;
+    const tomato = body.includes("🍅");
+    const stripped = body.replace(/🍅/gu, "").trim();
+    if (!stripped || stripped.startsWith("~")) return { kind: "prose" };
+    const clean = stripped.replace(/~~/gu, "").trim();
+    const token = todayBareLink(clean);
+    if (!token) return { kind: "prose" };
+    const originalTokens = todayWikilinkTokens(stripped);
+    const sourceToken = originalTokens.length === 1 ? originalTokens[0] : null;
+    const struck = Boolean(sourceToken && planStruckInnerSpans(stripped).some(
+      ([start, end]) => sourceToken.start >= start && sourceToken.end <= end,
+    ));
+    const resolved = await this.taskTypeAgreeResolveLink(
+      token.pathPart,
+      token.blockId,
+      sourcePath,
+      sourceContent,
+    );
+    if (!resolved) return { kind: "unknown" };
+    const mark = pomodoroThemeTaskMark(resolved.lineText);
+    const isOpen = mark !== null && !/^(?:x|-)$/.test(mark.toLowerCase());
+    const suggestion = this.taskTypeEffectiveTypeFor({
+      path: resolved.path,
+      line: resolved.line,
+      text: resolved.text,
+      asIfOpen: true,
+    });
+    if (!suggestion || suggestion.repair || !suggestion.theme) {
+      return { kind: "unknown" };
+    }
+    const key = pomodoroThemeKeyOf(suggestion.theme);
+    const name = taskTypeThemeNameOf(suggestion.theme);
+    if (!key || !name) return { kind: "unknown" };
+    if (struck || token.embedded || tomato) {
+      return { kind: "worked", key, name };
+    }
+    return isOpen
+      ? { kind: "live", key, name }
+      : { kind: "unknown" };
+  }
+
+  async taskTypeAgreeLedgerEntries(request) {
+    const opts = request && typeof request === "object" ? request : {};
+    const originalContent = typeof opts.content === "string" ? opts.content : "";
+    try {
+      const path = typeof opts.path === "string" ? normalizePath(opts.path) : "";
+      const sources = this.taskTypeSources();
+      const selected = Array.isArray(opts.entryLines)
+        ? new Set(opts.entryLines.filter((line) => Number.isInteger(line) && line > 0))
+        : null;
+      const normalized = originalContent.replace(/\r\n?/g, "\n");
+      const scannedLines = normalized.split("\n");
+      const originalLines = originalContent.split(/\r\n|\n|\r/);
+      const lineStarts = [];
+      let cursor = 0;
+      for (let index = 0; index < originalLines.length; index += 1) {
+        lineStarts.push(cursor);
+        cursor += originalLines[index].length;
+        const ending = /^(?:\r\n|\n|\r)/.exec(originalContent.slice(cursor));
+        if (ending) cursor += ending[0].length;
+      }
+      const entries = [];
+      const unrepaired = [];
+      const replacements = [];
+      const openEntries = [];
+      todayEachOpenEntry(normalized, (entry) => openEntries.push(entry));
+      for (const entry of openEntries) {
+        const line = entry.index + 1;
+        if (selected && !selected.has(line)) continue;
+        const children = [];
+        const childIndent = entry.range.length
+          ? todayIndentLen(scannedLines[entry.range[0]])
+          : null;
+        for (const childIndex of entry.range) {
+          if (childIndent === null || todayIndentLen(scannedLines[childIndex]) !== childIndent) {
+            continue;
+          }
+          children.push(await this.taskTypeAgreeClassifyChild(
+            scannedLines[childIndex],
+            path,
+            normalized,
+          ));
+        }
+        const outcome = agreeEntry({
+          name: entry.entryName,
+          open: true,
+          children,
+        }, sources);
+        for (const item of outcome.unrepaired) {
+          const entryName = entry.entryName || "";
+          let message = "unresolved link";
+          if (item.code === "meet_mismatch") {
+            message = `${item.key || "task"} task under MEET — ${entryName}`;
+          } else if (item.code === "unconfigured_type") {
+            message = `${item.key || "type"} isn't one of your types`;
+          }
+          unrepaired.push({
+            line,
+            entry: entryName,
+            code: item.code,
+            key: item.key,
+            message,
+          });
+        }
+        const before = entry.entryName || "";
+        if (outcome.name === before || entry.entryName === null) continue;
+        const rawLine = originalLines[entry.index];
+        const range = pomodoroThemeNameOffsetInLine(rawLine);
+        if (!range) continue;
+        const dash = rawLine.lastIndexOf("—", range.nameStart);
+        if (dash < 0) continue;
+        replacements.push({
+          start: lineStarts[entry.index],
+          end: lineStarts[entry.index] + rawLine.length,
+          text: `${rawLine.slice(0, dash).replace(/[ \t]+$/u, "")} — ${outcome.name}`,
+        });
+        entries.push({
+          line,
+          before,
+          after: outcome.name,
+          added: outcome.added,
+          removed: outcome.removed,
+        });
+      }
+      let content = originalContent;
+      for (const item of replacements.sort((left, right) => right.start - left.start)) {
+        content = content.slice(0, item.start) + item.text + content.slice(item.end);
+      }
+      return { content, changed: content !== originalContent, entries, unrepaired };
+    } catch (error) {
+      return { content: originalContent, changed: false, entries: [], unrepaired: [] };
     }
   }
 
@@ -656,6 +926,7 @@ class BobLedgerToolsTaskThemeApiMixin {
       const result = pomodoroThemeSuggestWithDiagnostics({
         path: input.path,
         line: input.lineText,
+        asIfOpen: request && request.asIfOpen === true,
         dailyPath,
         metadataCache,
         vault,

@@ -860,6 +860,8 @@ module.exports.helpers = {
   pomodoroThemeDefaultTypeName,
   typeComponents,
   typeAgrees,
+  agreeEntry,
+  settleClosed,
   planRetype,
   planLanding,
   planSplit,

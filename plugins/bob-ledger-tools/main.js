@@ -58574,7 +58574,8 @@ class BobLedgerToolsProgressMarksMixin {
 // ---- src/268-plugin-ledger-type-marks.js ----
 // --- Ledger type-agreement marks: Live Preview -----------------------------
 // `BobLedgerToolsLedgerTypeMarksMixin`. Prefixes disagreeing (and
-// composite-agreeing) Task Links with `#TYPE` using cached
+// composite-agreeing) Task Links with `#TYPE` using explicit or inherited
+// effective types from the cached
 // `effectiveTypeFor` / `typeAgrees`. Never spawns bob per row. Stale
 // cache yields no prefix rather than a confidently wrong type.
 class BobLedgerToolsLedgerTypeMarksMixin {
@@ -58843,7 +58844,7 @@ class BobLedgerToolsLedgerTypeMarksMixin {
             identity && typeof identity.type === "string" ? identity.type : "";
           const typeKey =
             identity && typeof identity.key === "string" ? identity.key : null;
-          if (!typeName || identity.inherited === true) {
+          if (!typeName) {
             continue;
           }
           const kind = ledgerTypeMarkKind(typeKey || typeName, link.entryName, sources);
@@ -65275,7 +65276,10 @@ function pomodoroThemeSuggestWithDiagnostics(options = {}) {
   }
   const line = String(opts.line == null ? "" : opts.line);
   const mark = pomodoroThemeTaskMark(line);
-  if (mark === "x" || mark === "X" || mark === "-") {
+  if (
+    opts.asIfOpen !== true &&
+    (mark === "x" || mark === "X" || mark === "-")
+  ) {
     return {
       suggestion: null,
       warnings: [{ code: "closed_task" }],
@@ -65528,6 +65532,176 @@ function narrowClosed(name, workedKeys, sources) {
     .join(" + ");
 }
 
+function taskTypeIsTypeKey(key, sources) {
+  const sets = normalizeTaskTypeSources(sources);
+  return sets.vocab !== null ? sets.vocab.has(key) : !sets.inventory.has(key);
+}
+
+function taskTypeIsContainer(name, sources) {
+  return typeComponents(name, sources).every((item) => !item.isType);
+}
+
+function taskTypeSubstituteComponent(name, removedKey, addedName) {
+  const parts = pomodoroThemeSplitComponents(name);
+  const output = [];
+  let replaced = false;
+  for (const part of parts) {
+    if (pomodoroThemeNormalizeKey(part) === removedKey) {
+      if (!replaced) {
+        output.push(addedName);
+        replaced = true;
+      }
+    } else {
+      output.push(part);
+    }
+  }
+  if (!replaced) {
+    output.push(addedName);
+  }
+  return output.join(" + ");
+}
+
+// Agreement rule (D5): add missing live types and drop unsupported name
+// types only when every direct child is resolved as a Task Link.
+function agreeEntry(input, sources) {
+  const opts = input && typeof input === "object" ? input : {};
+  const original = opts.name === null || opts.name === undefined
+    ? ""
+    : String(opts.name);
+  const activeSources = opts.sources !== undefined ? opts.sources : sources;
+  const unchanged = (unrepaired = []) => ({
+    name: original,
+    added: [],
+    removed: [],
+    unrepaired,
+  });
+  if (opts.open === false || taskTypeIsContainer(opts.name, activeSources)) {
+    return unchanged();
+  }
+  const children = Array.isArray(opts.children) ? opts.children : [];
+  if (taskTypeIsMeetName(opts.name)) {
+    const unrepaired = [];
+    for (const child of children) {
+      if (!child || child.kind !== "live") continue;
+      const key = pomodoroThemeNormalizeKey(child.key);
+      if (key !== "meet") {
+        unrepaired.push({ code: "meet_mismatch", key: key || null });
+      }
+    }
+    return unchanged(unrepaired);
+  }
+
+  const classified = typeComponents(opts.name, activeSources);
+  const componentKeys = new Set(
+    pomodoroThemeSplitComponents(original).map((part) =>
+      pomodoroThemeNormalizeKey(part),
+    ),
+  );
+  const additions = [];
+  const seenAdded = new Set();
+  const unrepaired = [];
+  for (const child of children) {
+    if (!child || typeof child !== "object") continue;
+    if (child.kind === "live") {
+      const key = pomodoroThemeNormalizeKey(child.key);
+      if (componentKeys.has(key) || seenAdded.has(key)) continue;
+      if (!taskTypeIsTypeKey(key, activeSources)) {
+        unrepaired.push({ code: "unconfigured_type", key: key || null });
+        continue;
+      }
+      seenAdded.add(key);
+      additions.push({ key, name: String(child.name || child.key || "") });
+    } else if (child.kind === "unknown") {
+      unrepaired.push({ code: "unknown_link", key: null });
+    }
+  }
+
+  const canDrop = children.length > 0 && children.every((child) =>
+    child && (child.kind === "live" || child.kind === "worked"),
+  );
+  const supported = new Set();
+  if (canDrop) {
+    for (const child of children) {
+      supported.add(pomodoroThemeNormalizeKey(child.key));
+    }
+  }
+  const removed = canDrop
+    ? classified.filter((item) => item.isType && !supported.has(item.key))
+      .map((item) => item.key)
+    : [];
+  if (removed.length === 0 && additions.length === 0) {
+    return unchanged(unrepaired);
+  }
+  const typeCount = classified.filter((item) => item.isType).length;
+  if (removed.length === typeCount && additions.length === 0) {
+    return unchanged(unrepaired);
+  }
+
+  let name;
+  if (removed.length === 1 && additions.length === 1) {
+    name = taskTypeSubstituteComponent(original, removed[0], additions[0].name);
+  } else {
+    const removedSet = new Set(removed);
+    const parts = classified
+      .filter((item) => !(item.isType && removedSet.has(item.key)))
+      .map((item) => item.name);
+    for (const item of additions) parts.push(item.name);
+    name = parts.join(" + ");
+  }
+  if (name === original) return unchanged(unrepaired);
+  return {
+    name,
+    added: additions.map((item) => item.key),
+    removed,
+    unrepaired,
+  };
+}
+
+// A closed session keeps exactly the worked types, preserving labels and
+// component order while appending missing worked types in link order.
+function settleClosed(name, worked, sources) {
+  const original = String(name == null ? "" : name);
+  if (taskTypeIsMeetName(original) || taskTypeIsContainer(original, sources)) {
+    return original;
+  }
+  const typedWorked = [];
+  const seen = new Set();
+  for (const item of Array.isArray(worked) ? worked : []) {
+    const key = pomodoroThemeNormalizeKey(item && item.key);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (taskTypeIsTypeKey(key, sources)) {
+      typedWorked.push({ key, name: String(item.name || item.key) });
+    }
+  }
+  if (typedWorked.length === 0) return original;
+  const workedKeys = new Set(typedWorked.map((item) => item.key));
+  const classified = typeComponents(original, sources);
+  const dropped = classified
+    .filter((item) => item.isType && !workedKeys.has(item.key))
+    .map((item) => item.key);
+  const existingTypes = new Set(
+    classified.filter((item) => item.isType).map((item) => item.key),
+  );
+  const toAdd = [];
+  const seenAdd = new Set();
+  for (const item of typedWorked) {
+    if (!existingTypes.has(item.key) && !seenAdd.has(item.key)) {
+      seenAdd.add(item.key);
+      toAdd.push(item);
+    }
+  }
+  if (dropped.length === 0 && toAdd.length === 0) return original;
+  if (dropped.length === 1 && toAdd.length === 1) {
+    return taskTypeSubstituteComponent(original, dropped[0], toAdd[0].name);
+  }
+  const parts = classified
+    .filter((item) => !(item.isType && !workedKeys.has(item.key)))
+    .map((item) => item.name);
+  for (const item of toAdd) parts.push(item.name);
+  return parts.join(" + ");
+}
+
 // Shed merged-in types whose last Task Link left. Types with no prior links,
 // labels, and the base type survive. MEET is calendar-owned and immutable.
 function shed(name, beforeKeys, afterKeys, sources) {
@@ -65675,6 +65849,31 @@ function planRelocation(input) {
     ? opts.typeName
     : key;
   if (typeAgrees(key, entry.name, opts.sources)) {
+    return { kind: "unchanged" };
+  }
+  if (taskTypeIsMeetName(entry.name)) {
+    if (entry.running === true) {
+      return { kind: "unchanged" };
+    }
+    const sets = normalizeTaskTypeSources(opts.sources);
+    const planned = entries.map((item) => ({
+      name: item ? item.name : null,
+      open: !!item && item.open === true && item.running !== true,
+      running: false,
+    }));
+    const placed = planPlacement({
+      typeKey: key,
+      typeName,
+      entries: planned,
+      exempt: [...sets.exempt],
+      alreadyQueued: false,
+    });
+    if (placed.kind === "entry" && placed.index !== from) {
+      return { kind: "moveTo", from, to: placed.index };
+    }
+    if (Number(entry.links) > 1) {
+      return { kind: "createBelow", from, name: typeName };
+    }
     return { kind: "unchanged" };
   }
   if (entry.running === true) {
@@ -71321,8 +71520,8 @@ function pomodoroThemesPlanLintWarnings(entries, isConfigured, similarTo) {
 }
 // ---- src/279-plugin-task-theme-api.js ----
 // --- api.themes v1 additive task-theme surface -------------------------
-// Synchronous wrappers over the pure PT13 helpers. They never spawn bob and
-// never write a vault file; consumers own their existing guarded writes.
+// Wrappers over the pure PT13 helpers. They never spawn bob or write a vault
+// file; consumers own their existing guarded writes.
 
 class BobLedgerToolsTaskThemeApiMixin {
   pomodoroThemesApi() {
@@ -71348,6 +71547,9 @@ class BobLedgerToolsTaskThemeApiMixin {
       effectiveTypeFor: (request) => this.taskTypeEffectiveTypeFor(request),
       typeComponentsOf: (name) => this.taskTypeComponentsOf(name),
       typeAgrees: (taskKey, entryName) => this.taskTypeAgrees(taskKey, entryName),
+      agreeEntry: (input) => this.taskTypeAgreeEntry(input),
+      settleClosed: (name, worked) => this.taskTypeSettleClosed(name, worked),
+      agreeLedgerEntries: (request) => this.taskTypeAgreeLedgerEntries(request),
       planRetype: (options) => this.taskTypePlanRetype(options),
       planLanding: (options) => this.taskTypePlanLanding(options),
       planSplit: (options) => this.taskTypePlanSplit(options),
@@ -71405,6 +71607,273 @@ class BobLedgerToolsTaskThemeApiMixin {
       return typeAgrees(key, entryName, this.taskTypeSources());
     } catch (error) {
       return true;
+    }
+  }
+
+  taskTypeAgreeEntry(input) {
+    try {
+      const opts = input && typeof input === "object" ? input : {};
+      return agreeEntry(
+        opts,
+        opts.sources !== undefined ? opts.sources : this.taskTypeSources(),
+      );
+    } catch (error) {
+      const name = input && input.name != null ? String(input.name) : "";
+      return { name, added: [], removed: [], unrepaired: [] };
+    }
+  }
+
+  taskTypeSettleClosed(name, worked) {
+    try {
+      return settleClosed(name, worked, this.taskTypeSources());
+    } catch (error) {
+      return typeof name === "string" ? name : "";
+    }
+  }
+
+  taskTypeAgreeCachedBlockLine(path, blockId) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (!metadataCache || typeof metadataCache.getCache !== "function") {
+        return null;
+      }
+      const cache = metadataCache.getCache(path);
+      const blocks = cache && cache.blocks;
+      if (!blocks || typeof blocks !== "object") return null;
+      const id = String(blockId || "");
+      let block = null;
+      for (const key of [id, `^${id}`, id.toLowerCase()]) {
+        if (Object.prototype.hasOwnProperty.call(blocks, key)) {
+          block = blocks[key];
+          break;
+        }
+      }
+      if (!block) {
+        block = Object.values(blocks).find(
+          (item) => item && String(item.id || "").replace(/^\^/u, "") === id,
+        );
+      }
+      const line = block && block.position && block.position.start
+        ? block.position.start.line
+        : null;
+      if (!Number.isInteger(line) || line < 0) return null;
+      const item = (Array.isArray(cache.listItems) ? cache.listItems : [])
+        .find((row) => row && row.position && row.position.start &&
+          row.position.start.line === line);
+      return item && typeof item.task === "string" && item.task ? line : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeReadTaskText(path, sourcePath, sourceContent) {
+    try {
+      const samePath = typeof sameVaultPath === "function"
+        ? sameVaultPath(path, sourcePath)
+        : String(path) === String(sourcePath);
+      if (samePath) return sourceContent;
+      const editorText = this.pomodoroThemeOpenEditorContent(path);
+      if (typeof editorText === "string") return editorText;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function" ||
+          typeof vault.getAbstractFileByPath !== "function") {
+        return null;
+      }
+      const file = vault.getAbstractFileByPath(path);
+      if (!file) return null;
+      const text = await vault.cachedRead(file);
+      return typeof text === "string" ? text : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeResolveLink(target, blockId, sourcePath, sourceContent) {
+    try {
+      const writtenTarget = String(target || "");
+      let path = null;
+      if (!writtenTarget) {
+        path = sourcePath;
+      } else if (typeof this.progressMarkResolveTarget === "function") {
+        path = this.progressMarkResolveTarget(writtenTarget, sourcePath);
+      } else {
+        const metadataCache = this.app && this.app.metadataCache;
+        const dest = metadataCache &&
+          typeof metadataCache.getFirstLinkpathDest === "function"
+          ? metadataCache.getFirstLinkpathDest(writtenTarget, sourcePath)
+          : null;
+        path = dest && typeof dest.path === "string" ? dest.path : null;
+        if (path && !/\.md$/i.test(path)) path += ".md";
+      }
+      if (!path) return null;
+      const normalizedPath = typeof normalizePath === "function"
+        ? normalizePath(path)
+        : String(path);
+      const text = await this.taskTypeAgreeReadTaskText(
+        normalizedPath,
+        sourcePath,
+        sourceContent,
+      );
+      if (typeof text !== "string") return null;
+      const lines = text.replace(/\r\n?/g, "\n").split("\n");
+      const id = String(blockId || "");
+      if (!id) return null;
+      const matches = [];
+      for (let index = 0; index < lines.length; index += 1) {
+        if (pomodoroThemeTrailingBlockId(lines[index]) === id) {
+          matches.push(index);
+        }
+      }
+      if (matches.length !== 1) return null;
+      const cachedLine = this.taskTypeAgreeCachedBlockLine(normalizedPath, id);
+      const lineIndex = cachedLine === matches[0] ? cachedLine : matches[0];
+      const lineText = lines[lineIndex];
+      if (!pomodoroThemeTaskMark(lineText)) return null;
+      return {
+        path: normalizedPath,
+        line: lineIndex + 1,
+        lineText,
+        text: lines.join("\n"),
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async taskTypeAgreeClassifyChild(line, sourcePath, sourceContent) {
+    const bullet = todayBulletBody(line);
+    if (!bullet) return { kind: "prose" };
+    const body = bullet.body;
+    const tomato = body.includes("🍅");
+    const stripped = body.replace(/🍅/gu, "").trim();
+    if (!stripped || stripped.startsWith("~")) return { kind: "prose" };
+    const clean = stripped.replace(/~~/gu, "").trim();
+    const token = todayBareLink(clean);
+    if (!token) return { kind: "prose" };
+    const originalTokens = todayWikilinkTokens(stripped);
+    const sourceToken = originalTokens.length === 1 ? originalTokens[0] : null;
+    const struck = Boolean(sourceToken && planStruckInnerSpans(stripped).some(
+      ([start, end]) => sourceToken.start >= start && sourceToken.end <= end,
+    ));
+    const resolved = await this.taskTypeAgreeResolveLink(
+      token.pathPart,
+      token.blockId,
+      sourcePath,
+      sourceContent,
+    );
+    if (!resolved) return { kind: "unknown" };
+    const mark = pomodoroThemeTaskMark(resolved.lineText);
+    const isOpen = mark !== null && !/^(?:x|-)$/.test(mark.toLowerCase());
+    const suggestion = this.taskTypeEffectiveTypeFor({
+      path: resolved.path,
+      line: resolved.line,
+      text: resolved.text,
+      asIfOpen: true,
+    });
+    if (!suggestion || suggestion.repair || !suggestion.theme) {
+      return { kind: "unknown" };
+    }
+    const key = pomodoroThemeKeyOf(suggestion.theme);
+    const name = taskTypeThemeNameOf(suggestion.theme);
+    if (!key || !name) return { kind: "unknown" };
+    if (struck || token.embedded || tomato) {
+      return { kind: "worked", key, name };
+    }
+    return isOpen
+      ? { kind: "live", key, name }
+      : { kind: "unknown" };
+  }
+
+  async taskTypeAgreeLedgerEntries(request) {
+    const opts = request && typeof request === "object" ? request : {};
+    const originalContent = typeof opts.content === "string" ? opts.content : "";
+    try {
+      const path = typeof opts.path === "string" ? normalizePath(opts.path) : "";
+      const sources = this.taskTypeSources();
+      const selected = Array.isArray(opts.entryLines)
+        ? new Set(opts.entryLines.filter((line) => Number.isInteger(line) && line > 0))
+        : null;
+      const normalized = originalContent.replace(/\r\n?/g, "\n");
+      const scannedLines = normalized.split("\n");
+      const originalLines = originalContent.split(/\r\n|\n|\r/);
+      const lineStarts = [];
+      let cursor = 0;
+      for (let index = 0; index < originalLines.length; index += 1) {
+        lineStarts.push(cursor);
+        cursor += originalLines[index].length;
+        const ending = /^(?:\r\n|\n|\r)/.exec(originalContent.slice(cursor));
+        if (ending) cursor += ending[0].length;
+      }
+      const entries = [];
+      const unrepaired = [];
+      const replacements = [];
+      const openEntries = [];
+      todayEachOpenEntry(normalized, (entry) => openEntries.push(entry));
+      for (const entry of openEntries) {
+        const line = entry.index + 1;
+        if (selected && !selected.has(line)) continue;
+        const children = [];
+        const childIndent = entry.range.length
+          ? todayIndentLen(scannedLines[entry.range[0]])
+          : null;
+        for (const childIndex of entry.range) {
+          if (childIndent === null || todayIndentLen(scannedLines[childIndex]) !== childIndent) {
+            continue;
+          }
+          children.push(await this.taskTypeAgreeClassifyChild(
+            scannedLines[childIndex],
+            path,
+            normalized,
+          ));
+        }
+        const outcome = agreeEntry({
+          name: entry.entryName,
+          open: true,
+          children,
+        }, sources);
+        for (const item of outcome.unrepaired) {
+          const entryName = entry.entryName || "";
+          let message = "unresolved link";
+          if (item.code === "meet_mismatch") {
+            message = `${item.key || "task"} task under MEET — ${entryName}`;
+          } else if (item.code === "unconfigured_type") {
+            message = `${item.key || "type"} isn't one of your types`;
+          }
+          unrepaired.push({
+            line,
+            entry: entryName,
+            code: item.code,
+            key: item.key,
+            message,
+          });
+        }
+        const before = entry.entryName || "";
+        if (outcome.name === before || entry.entryName === null) continue;
+        const rawLine = originalLines[entry.index];
+        const range = pomodoroThemeNameOffsetInLine(rawLine);
+        if (!range) continue;
+        const dash = rawLine.lastIndexOf("—", range.nameStart);
+        if (dash < 0) continue;
+        replacements.push({
+          start: lineStarts[entry.index],
+          end: lineStarts[entry.index] + rawLine.length,
+          text: `${rawLine.slice(0, dash).replace(/[ \t]+$/u, "")} — ${outcome.name}`,
+        });
+        entries.push({
+          line,
+          before,
+          after: outcome.name,
+          added: outcome.added,
+          removed: outcome.removed,
+        });
+      }
+      let content = originalContent;
+      for (const item of replacements.sort((left, right) => right.start - left.start)) {
+        content = content.slice(0, item.start) + item.text + content.slice(item.end);
+      }
+      return { content, changed: content !== originalContent, entries, unrepaired };
+    } catch (error) {
+      return { content: originalContent, changed: false, entries: [], unrepaired: [] };
     }
   }
 
@@ -71978,6 +72447,7 @@ class BobLedgerToolsTaskThemeApiMixin {
       const result = pomodoroThemeSuggestWithDiagnostics({
         path: input.path,
         line: input.lineText,
+        asIfOpen: request && request.asIfOpen === true,
         dailyPath,
         metadataCache,
         vault,
@@ -90419,6 +90889,8 @@ module.exports.helpers = {
   pomodoroThemeDefaultTypeName,
   typeComponents,
   typeAgrees,
+  agreeEntry,
+  settleClosed,
   planRetype,
   planLanding,
   planSplit,

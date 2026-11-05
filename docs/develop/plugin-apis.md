@@ -212,6 +212,8 @@ The v1 namespace also exposes synchronous task-theme helpers:
 plus the additive
 task-type routing surface: `effectiveTypeFor(request)`,
 `typeComponentsOf(name)`, `typeAgrees(taskKey, entryName)`,
+`agreeEntry(input)`, `settleClosed(name, worked)`, and
+`agreeLedgerEntries({ path, content, entryLines? })`,
 `planRetype(options)`, `planLanding(options)`, `planSplit(options)`,
 `mergeNames(base, others)`,
 `narrowClosed(name, workedKeys)`, `shed(name, beforeKeys, afterKeys)`,
@@ -247,9 +249,24 @@ two or more type-ish fields on one line are the `duplicate` repair state.
 setters return rewritten strings and do not write the vault.
 `effectiveTypeFor(request)` runs the same cascade as `suggestFor` (field,
 reading task, note defaults, then `plan.default_type`) and returns the full
-suggestion or `null`. `typeComponentsOf(name)` returns `{ name, key, isType }`
-rows per D4. `typeAgrees(taskKey, entryName)` answers the D5 invariant; a
-missing type always agrees. `planLanding({ effective, inherited,
+suggestion or `null`. It accepts `{ path, line, text?, asIfOpen? }`; completed
+and cancelled tasks return `null` by default, while `asIfOpen: true` resolves
+their stored or inherited type using the same cascade as an open task. This is
+for writers that need the task's pre-close type. `typeComponentsOf(name)`
+returns `{ name, key, isType }` rows per D4. `typeAgrees(taskKey, entryName)`
+answers the D5 invariant; a missing type always agrees. `agreeEntry({ name,
+open?, children, sources? })` mirrors the shared name agreement rule and
+returns `{ name, added, removed, unrepaired }`; each child is `{ kind:
+"live" | "worked" | "unknown" | "prose", key?, name? }`. `settleClosed(name,
+worked)` returns the closed session name based on worked `{ key, name }` rows.
+`agreeLedgerEntries({ path, content, entryLines? })` asynchronously classifies
+the direct children of the selected open entries (all open entries when
+`entryLines` is omitted; otherwise one-based ledger lines), resolves task
+blocks through the metadata cache and cached or open-editor note text, then
+returns `{ content, changed, entries, unrepaired }`. It changes only name
+tails in the returned text and never writes a file; unresolved, ambiguous, or
+untyped links are reported as unknown and prevent unsupported types from being
+dropped. `planLanding({ effective, inherited,
 destination, retype?, selector?, tabPick?, sources? })` returns `container`,
 `consistent`, `merge`, `set`, or `clear` per R2. `merge` preserves the task
 type and returns the merged destination name; `retype: true` takes the

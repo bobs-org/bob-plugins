@@ -298,7 +298,7 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
         effective,
         inherited,
         destination: destinationName,
-        retype: intent.retype === true,
+        retype: intent.retype === true || Boolean(target && target.kind === "new"),
         tabPick: intent.tabPick,
       });
     } catch (_error) {
@@ -404,6 +404,122 @@ function rewritePomodoroEntryNameLine(lineText, newName) {
     }
   }
   return hasCR ? `${next}\r` : next;
+}
+
+function pomodoroOffsetAfterEdits(offset, edits) {
+  if (!Number.isInteger(offset) || offset < 0 || !Array.isArray(edits)) {
+    return null;
+  }
+  let delta = 0;
+  for (const edit of edits.slice().sort((left, right) => left.start - right.start)) {
+    if (!edit || !Number.isInteger(edit.start) || !Number.isInteger(edit.end)) {
+      return null;
+    }
+    const replacement = String(edit.replacement || "");
+    if (edit.start === edit.end) {
+      if (edit.start <= offset) {
+        delta += replacement.length;
+      }
+      continue;
+    }
+    if (edit.start < offset && offset < edit.end) {
+      return null;
+    }
+    if (edit.start === offset) {
+      return null;
+    }
+    if (edit.end <= offset) {
+      delta += replacement.length - (edit.end - edit.start);
+    } else if (edit.start > offset) {
+      break;
+    }
+  }
+  return offset + delta;
+}
+
+async function agreePomodoroLedgerPlan(
+  plugin,
+  path,
+  originalContent,
+  plan,
+  touchedEntryOffsets,
+) {
+  try {
+    const original = String(originalContent || "");
+    if (!plan || !Array.isArray(plan.edits)) return plan;
+    const offsets = Array.isArray(touchedEntryOffsets)
+      ? touchedEntryOffsets
+      : Array.isArray(plan.touchedEntryOffsets)
+        ? plan.touchedEntryOffsets
+        : [];
+    if (!path || offsets.length === 0) return plan;
+
+    const themesApi = getBlockPomodoroThemesApi(plugin && plugin.app);
+    if (!themesApi || typeof themesApi.agreeLedgerEntries !== "function") {
+      return plan;
+    }
+    const plannedContent = applyTextEdits(original, plan.edits);
+    const originalLines = original.split("\n");
+    const plannedLines = plannedContent.split("\n");
+    const lineToOriginalOffset = new Map();
+    for (const offset of [...new Set(offsets)]) {
+      const mapped = pomodoroOffsetAfterEdits(offset, plan.edits);
+      if (mapped === null || mapped > plannedContent.length) continue;
+      const line = plannedContent.slice(0, mapped).split("\n").length - 1;
+      const lineText = plannedLines[line] || "";
+      if (
+        isPomodoroEntryLine(lineText) &&
+        isOpenPomodoroStatus(pomodoroEntryStatus(lineText))
+      ) {
+        lineToOriginalOffset.set(line, offset);
+      }
+    }
+    if (lineToOriginalOffset.size === 0) return plan;
+
+    const agreed = await themesApi.agreeLedgerEntries({
+      path,
+      content: plannedContent,
+      entryLines: [...lineToOriginalOffset.keys()].map((line) => line + 1),
+    });
+    if (!agreed || typeof agreed.content !== "string" || !Array.isArray(agreed.entries)) {
+      return plan;
+    }
+
+    const nameEdits = [];
+    for (const entry of agreed.entries) {
+      const line = Number.isInteger(entry && entry.line) ? entry.line - 1 : -1;
+      const originalOffset = lineToOriginalOffset.get(line);
+      const oldLineIndex = originalOffset === undefined
+        ? -1
+        : original.slice(0, originalOffset).split("\n").length - 1;
+      if (
+        oldLineIndex < 0 || oldLineIndex >= originalLines.length ||
+        typeof entry.after !== "string"
+      ) {
+        continue;
+      }
+      const oldLine = originalLines[oldLineIndex];
+      const nextLine = rewritePomodoroEntryNameLine(oldLine, entry.after);
+      if (nextLine === oldLine) continue;
+      const start = lineStartIndexFromLines(originalLines, oldLineIndex);
+      nameEdits.push({ start, end: start + oldLine.length, replacement: nextLine });
+    }
+    if (nameEdits.length === 0 || !validateNonOverlappingEdits([...plan.edits, ...nameEdits])) {
+      return plan;
+    }
+    const edits = [...plan.edits, ...nameEdits];
+    const content = applyTextEdits(original, edits);
+    if (content !== agreed.content) return plan;
+    return {
+      ...plan,
+      edits,
+      content,
+      hasChanges: content !== original,
+      agreement: agreed,
+    };
+  } catch (_error) {
+    return plan;
+  }
 }
 
 function applyPomodoroKeepTypeMerge(plan, snapshot, themeWrite) {

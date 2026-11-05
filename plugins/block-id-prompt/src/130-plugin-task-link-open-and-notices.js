@@ -195,6 +195,16 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         ...mergeCoveringEdits([...mergedLinks, ...emptied.edits]),
         ...group.taskEdits,
       ];
+      if (dailyFile && group.file.path === dailyFile.path) {
+        const agreedPlan = await agreePomodoroLedgerPlan(
+          this,
+          dailyFile.path,
+          group.content,
+          { edits: group.edits },
+          cleanup.touchedEntryOffsets,
+        );
+        group.edits = agreedPlan.edits || group.edits;
+      }
       if (!validateNonOverlappingEdits(group.edits)) {
         new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
         return false;

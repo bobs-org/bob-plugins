@@ -299,7 +299,7 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
-  completeTaskSourceLink(source, id, destinationPath) {
+  async completeTaskSourceLink(source, id, destinationPath) {
     if (
       !source.editor ||
       typeof source.editor.getValue !== "function" ||
@@ -333,10 +333,18 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       resolveTarget: (reference) =>
         this.resolveReferenceDestination(reference, source.sourcePath),
     });
-    const edits = [
+    let edits = [
       { start: markerStart, end: markerEnd, replacement },
       ...cleanup.edits,
     ];
+    const agreedPlan = await agreePomodoroLedgerPlan(
+      this,
+      source.sourcePath,
+      snapshot,
+      { edits },
+      cleanup.touchedEntryOffsets,
+    );
+    edits = agreedPlan.edits || edits;
 
     if (
       !validateNonOverlappingEdits(edits) ||

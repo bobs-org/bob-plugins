@@ -31,6 +31,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerEventTaskClockMixin,
   TaskStatusCyclerPomodoroClockMixin,
   TaskStatusCyclerPomodoroMixin,
+  TaskStatusCyclerPomodoroNamesMixin,
   TaskStatusCyclerEditorEditsMixin,
   TaskStatusCyclerTargetsMixin,
 ]);

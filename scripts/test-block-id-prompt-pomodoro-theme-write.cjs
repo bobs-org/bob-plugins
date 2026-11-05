@@ -497,6 +497,82 @@ test("a named destination retypes the task in the same cross-note write", async 
   assert.equal(lastNotice(), "Linked under FIX · stays Next · type FIX");
 });
 
+test("a newly named picker entry forces the retype landing path", () => {
+  const plugin = new Plugin();
+  const planned = [];
+  installThemeWriteApis(plugin, {
+    planLanding: (options) => {
+      planned.push(options);
+      return { kind: "set", key: "fix", name: "FIX" };
+    },
+  });
+  const source = {
+    sourcePath: "Tasks.md",
+    line: 0,
+    pomodoroTarget: {
+      themeIntent: {
+        deliberate: true,
+        retype: false,
+        shown: noteSuggestion(),
+      },
+    },
+  };
+  const write = helpers.resolvePomodoroLinkThemeWrite(
+    plugin,
+    source,
+    { kind: "new", name: "FIX" },
+    "- [ ] #task Ship it ^ship",
+  );
+  assert.equal(planned.length, 1);
+  assert.equal(planned[0].retype, true);
+  assert.equal(write.retypeKind, "set");
+  assert.equal(write.themeEdit.action, "set");
+});
+
+test("Pomodoro cleanup agrees only touched open entries in the same edit plan", async () => {
+  const plugin = new Plugin();
+  installThemeWriteApis(plugin);
+  const original = [
+    "## Pomodoros",
+    "- [ ] () — FIX",
+    "  - [[Tasks#^ship]]",
+    "- [ ] () — WRITE",
+    "  - [[Tasks#^other]]",
+  ].join("\n");
+  const childStart = original.indexOf("  - [[Tasks#^ship]]");
+  const childEnd = childStart + "  - [[Tasks#^ship]]".length;
+  const touchedOffset = original.indexOf("- [ ] () — FIX");
+  let requestedLines = null;
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.themes.agreeLedgerEntries = async ({
+    content,
+    entryLines,
+  }) => {
+    requestedLines = entryLines;
+    const lines = content.split("\n");
+    lines[entryLines[0] - 1] = "- [ ] () — BUILD";
+    return {
+      content: lines.join("\n"),
+      changed: true,
+      entries: [{ line: entryLines[0], before: "FIX", after: "BUILD" }],
+      unrepaired: [],
+    };
+  };
+  const plan = await helpers.agreePomodoroLedgerPlan(
+    plugin,
+    "Daily.md",
+    original,
+    {
+      edits: [{ start: childStart, end: childEnd, replacement: "" }],
+      touchedEntryOffsets: [touchedOffset],
+    },
+  );
+  assert.deepEqual(requestedLines, [2]);
+  assert.match(plan.content, /— BUILD/);
+  assert.match(plan.content, /— WRITE/);
+  assert.doesNotMatch(plan.content, /\[\[Tasks#\^ship\]\]/);
+  assert.equal(plan.edits.length, 2);
+});
+
 test("unavailable current caps still retype the task and retain lane, ID, and freshness edits", async () => {
   const invalidCaps = [
     { noCaps: true },

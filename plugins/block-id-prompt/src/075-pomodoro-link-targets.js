@@ -769,6 +769,7 @@ function planExistingPomodoroLinkInsertion(
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     hasChanges: edits.length > 0,
     destination: {
       kind: "existing",
@@ -897,6 +898,7 @@ function planNewPomodoroLinkInsertion(
     content: nextContent,
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     hasChanges: true,
     destination: {
       kind: "created",

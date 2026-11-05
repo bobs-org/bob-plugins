@@ -390,7 +390,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       task.existingId,
       destination.file.path,

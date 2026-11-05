@@ -626,7 +626,7 @@ class BlockIdPromptPomodoroLinksMixin {
       source.pomodoroTarget || null,
       taskContent,
     );
-    const pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
+    let pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
       blockId: id,
       targetPath: taskFile.path,
       sourcePath: dailyFile.path,
@@ -645,6 +645,12 @@ class BlockIdPromptPomodoroLinksMixin {
       );
       return false;
     }
+    pomodoroPlan = await agreePomodoroLedgerPlan(
+      this,
+      dailyFile.path,
+      dailyContent,
+      pomodoroPlan,
+    );
     const plan = planTargetTaskUpdate(taskContent, source.line, {
       activationEligible: true,
       forceNext: true,
@@ -806,7 +812,15 @@ class BlockIdPromptPomodoroLinksMixin {
 
         if (sameNote) {
           const taskEdits = workLogPlan ? workLogPlan.edits : [];
-          const allEdits = [...taskEdits, ...cleanupPlan.edits];
+          let allEdits = [...taskEdits, ...cleanupPlan.edits];
+          const agreedPlan = await agreePomodoroLedgerPlan(
+            this,
+            dailyFile.path,
+            taskContent,
+            { ...cleanupPlan, edits: allEdits },
+            cleanupPlan.touchedEntryOffsets,
+          );
+          allEdits = agreedPlan.edits || allEdits;
           if (
             !validateNonOverlappingEdits(allEdits) ||
             source.editor.getValue() !== taskContent
@@ -832,6 +846,13 @@ class BlockIdPromptPomodoroLinksMixin {
             workLogPlan || {},
             status,
             routeGate,
+          );
+        } else {
+          cleanupPlan = await agreePomodoroLedgerPlan(
+            this,
+            dailyFile.path,
+            dailyContent,
+            cleanupPlan,
           );
         }
       }

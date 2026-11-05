@@ -272,7 +272,7 @@ class BlockIdPromptBlockIdSubmitMixin {
     }
 
     const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       newId,
       destination.file.path,

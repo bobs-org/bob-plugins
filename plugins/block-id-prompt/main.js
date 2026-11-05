@@ -6029,7 +6029,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     !targetBlockId ||
     typeof resolveTarget !== "function"
   ) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const matches = [];
@@ -6069,7 +6069,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   }
 
   if (matches.length === 0) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const subtreeCandidates = matches
@@ -6105,7 +6105,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   );
 
   if (!validateNonOverlappingEdits(linkEdits)) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   // Every cleanup caller passes open ranges only, so the emptied-entry pass
@@ -6117,7 +6117,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   );
 
   if (!validateNonOverlappingEdits(edits)) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const first = matches[0];
@@ -6131,6 +6131,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     removedCount: matches.length,
     removedEntryCount: emptied.removedEntryCount,
     entryEdits: emptied.edits,
+    touchedEntryOffsets: [...new Set(matches.map(({ pomodoroRange }) => lineStartIndexFromLines(lines, pomodoroRange.entryLine)))],
     references: matches.map(({ reference }) => reference),
     firstRemoved: firstRange ? {
       entryLine: firstRange.entryLine,
@@ -6157,7 +6158,7 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
       : findPomodoroSourceContext(lines, options.sourceLine);
 
   if (!context || !context.isOpen) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
@@ -6191,6 +6192,7 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
     entryEdits: cleanup.entryEdits,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     references: cleanup.references || [],
     firstRemoved: cleanup.firstRemoved || null,
     content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,
@@ -8015,6 +8017,7 @@ function planExistingPomodoroLinkInsertion(
     content: edits.length > 0 ? applyTextEdits(snapshot, edits) : snapshot,
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     hasChanges: edits.length > 0,
     destination: {
       kind: "existing",
@@ -8143,6 +8146,7 @@ function planNewPomodoroLinkInsertion(
     content: nextContent,
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     hasChanges: true,
     destination: {
       kind: "created",
@@ -9814,7 +9818,7 @@ function resolvePomodoroLinkThemeWrite(plugin, source, target, taskContent) {
         effective,
         inherited,
         destination: destinationName,
-        retype: intent.retype === true,
+        retype: intent.retype === true || Boolean(target && target.kind === "new"),
         tabPick: intent.tabPick,
       });
     } catch (_error) {
@@ -9920,6 +9924,122 @@ function rewritePomodoroEntryNameLine(lineText, newName) {
     }
   }
   return hasCR ? `${next}\r` : next;
+}
+
+function pomodoroOffsetAfterEdits(offset, edits) {
+  if (!Number.isInteger(offset) || offset < 0 || !Array.isArray(edits)) {
+    return null;
+  }
+  let delta = 0;
+  for (const edit of edits.slice().sort((left, right) => left.start - right.start)) {
+    if (!edit || !Number.isInteger(edit.start) || !Number.isInteger(edit.end)) {
+      return null;
+    }
+    const replacement = String(edit.replacement || "");
+    if (edit.start === edit.end) {
+      if (edit.start <= offset) {
+        delta += replacement.length;
+      }
+      continue;
+    }
+    if (edit.start < offset && offset < edit.end) {
+      return null;
+    }
+    if (edit.start === offset) {
+      return null;
+    }
+    if (edit.end <= offset) {
+      delta += replacement.length - (edit.end - edit.start);
+    } else if (edit.start > offset) {
+      break;
+    }
+  }
+  return offset + delta;
+}
+
+async function agreePomodoroLedgerPlan(
+  plugin,
+  path,
+  originalContent,
+  plan,
+  touchedEntryOffsets,
+) {
+  try {
+    const original = String(originalContent || "");
+    if (!plan || !Array.isArray(plan.edits)) return plan;
+    const offsets = Array.isArray(touchedEntryOffsets)
+      ? touchedEntryOffsets
+      : Array.isArray(plan.touchedEntryOffsets)
+        ? plan.touchedEntryOffsets
+        : [];
+    if (!path || offsets.length === 0) return plan;
+
+    const themesApi = getBlockPomodoroThemesApi(plugin && plugin.app);
+    if (!themesApi || typeof themesApi.agreeLedgerEntries !== "function") {
+      return plan;
+    }
+    const plannedContent = applyTextEdits(original, plan.edits);
+    const originalLines = original.split("\n");
+    const plannedLines = plannedContent.split("\n");
+    const lineToOriginalOffset = new Map();
+    for (const offset of [...new Set(offsets)]) {
+      const mapped = pomodoroOffsetAfterEdits(offset, plan.edits);
+      if (mapped === null || mapped > plannedContent.length) continue;
+      const line = plannedContent.slice(0, mapped).split("\n").length - 1;
+      const lineText = plannedLines[line] || "";
+      if (
+        isPomodoroEntryLine(lineText) &&
+        isOpenPomodoroStatus(pomodoroEntryStatus(lineText))
+      ) {
+        lineToOriginalOffset.set(line, offset);
+      }
+    }
+    if (lineToOriginalOffset.size === 0) return plan;
+
+    const agreed = await themesApi.agreeLedgerEntries({
+      path,
+      content: plannedContent,
+      entryLines: [...lineToOriginalOffset.keys()].map((line) => line + 1),
+    });
+    if (!agreed || typeof agreed.content !== "string" || !Array.isArray(agreed.entries)) {
+      return plan;
+    }
+
+    const nameEdits = [];
+    for (const entry of agreed.entries) {
+      const line = Number.isInteger(entry && entry.line) ? entry.line - 1 : -1;
+      const originalOffset = lineToOriginalOffset.get(line);
+      const oldLineIndex = originalOffset === undefined
+        ? -1
+        : original.slice(0, originalOffset).split("\n").length - 1;
+      if (
+        oldLineIndex < 0 || oldLineIndex >= originalLines.length ||
+        typeof entry.after !== "string"
+      ) {
+        continue;
+      }
+      const oldLine = originalLines[oldLineIndex];
+      const nextLine = rewritePomodoroEntryNameLine(oldLine, entry.after);
+      if (nextLine === oldLine) continue;
+      const start = lineStartIndexFromLines(originalLines, oldLineIndex);
+      nameEdits.push({ start, end: start + oldLine.length, replacement: nextLine });
+    }
+    if (nameEdits.length === 0 || !validateNonOverlappingEdits([...plan.edits, ...nameEdits])) {
+      return plan;
+    }
+    const edits = [...plan.edits, ...nameEdits];
+    const content = applyTextEdits(original, edits);
+    if (content !== agreed.content) return plan;
+    return {
+      ...plan,
+      edits,
+      content,
+      hasChanges: content !== original,
+      agreement: agreed,
+    };
+  } catch (_error) {
+    return plan;
+  }
 }
 
 function applyPomodoroKeepTypeMerge(plan, snapshot, themeWrite) {
@@ -14586,7 +14706,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
 
     const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       task.existingId,
       destination.file.path,
@@ -14972,7 +15092,7 @@ class BlockIdPromptBlockIdSubmitMixin {
     }
 
     const completionSource = this.adjustSourceForPlan(source, destination.file.path, plan);
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       newId,
       destination.file.path,
@@ -15625,7 +15745,7 @@ class BlockIdPromptPomodoroLinksMixin {
       source.pomodoroTarget || null,
       taskContent,
     );
-    const pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
+    let pomodoroPlan = planPomodoroLinkWithTypeMerge(dailyContent, {
       blockId: id,
       targetPath: taskFile.path,
       sourcePath: dailyFile.path,
@@ -15644,6 +15764,12 @@ class BlockIdPromptPomodoroLinksMixin {
       );
       return false;
     }
+    pomodoroPlan = await agreePomodoroLedgerPlan(
+      this,
+      dailyFile.path,
+      dailyContent,
+      pomodoroPlan,
+    );
     const plan = planTargetTaskUpdate(taskContent, source.line, {
       activationEligible: true,
       forceNext: true,
@@ -15805,7 +15931,15 @@ class BlockIdPromptPomodoroLinksMixin {
 
         if (sameNote) {
           const taskEdits = workLogPlan ? workLogPlan.edits : [];
-          const allEdits = [...taskEdits, ...cleanupPlan.edits];
+          let allEdits = [...taskEdits, ...cleanupPlan.edits];
+          const agreedPlan = await agreePomodoroLedgerPlan(
+            this,
+            dailyFile.path,
+            taskContent,
+            { ...cleanupPlan, edits: allEdits },
+            cleanupPlan.touchedEntryOffsets,
+          );
+          allEdits = agreedPlan.edits || allEdits;
           if (
             !validateNonOverlappingEdits(allEdits) ||
             source.editor.getValue() !== taskContent
@@ -15831,6 +15965,13 @@ class BlockIdPromptPomodoroLinksMixin {
             workLogPlan || {},
             status,
             routeGate,
+          );
+        } else {
+          cleanupPlan = await agreePomodoroLedgerPlan(
+            this,
+            dailyFile.path,
+            dailyContent,
+            cleanupPlan,
           );
         }
       }
@@ -17742,7 +17883,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       prepared.task.notePath,
       plan,
     );
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       id,
       prepared.task.notePath,
@@ -17994,6 +18135,16 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
         ...mergeCoveringEdits([...mergedLinks, ...emptied.edits]),
         ...group.taskEdits,
       ];
+      if (dailyFile && group.file.path === dailyFile.path) {
+        const agreedPlan = await agreePomodoroLedgerPlan(
+          this,
+          dailyFile.path,
+          group.content,
+          { edits: group.edits },
+          cleanup.touchedEntryOffsets,
+        );
+        group.edits = agreedPlan.edits || group.edits;
+      }
       if (!validateNonOverlappingEdits(group.edits)) {
         new Notice(`Task link stopped: overlapping edits in ${group.file.path}`);
         return false;
@@ -18753,7 +18904,7 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
-  completeTaskSourceLink(source, id, destinationPath) {
+  async completeTaskSourceLink(source, id, destinationPath) {
     if (
       !source.editor ||
       typeof source.editor.getValue !== "function" ||
@@ -18787,10 +18938,18 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       resolveTarget: (reference) =>
         this.resolveReferenceDestination(reference, source.sourcePath),
     });
-    const edits = [
+    let edits = [
       { start: markerStart, end: markerEnd, replacement },
       ...cleanup.edits,
     ];
+    const agreedPlan = await agreePomodoroLedgerPlan(
+      this,
+      source.sourcePath,
+      snapshot,
+      { edits },
+      cleanup.touchedEntryOffsets,
+    );
+    edits = agreedPlan.edits || edits;
 
     if (
       !validateNonOverlappingEdits(edits) ||
@@ -19284,6 +19443,7 @@ module.exports.helpers = {
   resolvePomodoroLinkThemeWrite,
   pomodoroTargetDestinationName,
   planPomodoroLinkWithTypeMerge,
+  agreePomodoroLedgerPlan,
   attachPomodoroLinkThemeOutcome,
   formatPomodoroThemeLinkChip,
   pomodoroPickerRowDeliberate,

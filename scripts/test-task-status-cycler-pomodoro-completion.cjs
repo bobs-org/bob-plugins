@@ -1026,20 +1026,25 @@ test("Ctrl+Enter close names use pre-close Task Link types and R6 outcomes", asy
     .map((part) => ({ name: part, key: part.toLowerCase(), isType: true }));
   const themes = {
     version: 1,
-    effectiveTypeFor({ line, text }) {
+    effectiveTypeFor({ line, text, asIfOpen }) {
+      assert.equal(asIfOpen, true);
       const taskLine = String(text || "").split("\n")[line - 1] || "";
       const match = /#(build|fix|read)\b/i.exec(taskLine);
-      return match ? { theme: { key: match[1].toLowerCase() } } : null;
+      return match ? { theme: { key: match[1].toLowerCase(), name: match[1].toUpperCase() } } : null;
     },
     isMeetName: (name) => String(name || "").trim().toLowerCase() === "meet",
     typeComponentsOf: typeParts,
-    narrowClosed(name, worked) {
-      calls.narrow = { name, worked: worked.slice() };
+    settleClosed(name, worked) {
+      calls.settle = { name, worked: worked.slice() };
       return "FIX + READ";
     },
     shed(name, before, after) {
       calls.shed = { name, before: before.slice(), after: after.slice() };
       return "BUILD + FIX";
+    },
+    agreeEntry(input) {
+      calls.agree = input;
+      return { name: "BUILD + FIX", added: [], removed: [], unrepaired: [] };
     },
   };
   const plugin = new TaskStatusCyclerPlugin();
@@ -1060,14 +1065,25 @@ test("Ctrl+Enter close names use pre-close Task Link types and R6 outcomes", asy
     { activePath: "Daily.md", originPath: "Daily.md" },
     bullets,
   );
-  assert.deepEqual(calls.narrow, {
+  assert.deepEqual(calls.settle, {
     name: "BUILD + FIX + READ",
-    worked: ["fix", "read"],
+    worked: [
+      { key: "fix", name: "FIX" },
+      { key: "read", name: "READ" },
+    ],
   });
   assert.deepEqual(calls.shed, {
     name: "BUILD + FIX + READ",
     before: ["fix", "build", "read"],
     after: ["fix", "build"],
+  });
+  assert.deepEqual(calls.agree, {
+    name: "BUILD + FIX",
+    open: true,
+    children: [
+      { kind: "live", key: "fix", name: "FIX" },
+      { kind: "live", key: "build", name: "BUILD" },
+    ],
   });
   assert.deepEqual(names, {
     closedName: "FIX + READ",
@@ -1095,7 +1111,8 @@ test("MEET close names are passed through without resolving or shedding types", 
             version: 1,
             isMeetName: (name) => String(name).toLowerCase() === "meet",
             effectiveTypeFor: () => { resolved += 1; return null; },
-            narrowClosed: () => { resolved += 1; return "changed"; },
+            settleClosed: () => { resolved += 1; return "changed"; },
+            agreeEntry: () => { resolved += 1; return { name: "changed" }; },
             shed: () => { resolved += 1; return "changed"; },
           } },
         },
@@ -1135,12 +1152,12 @@ test("Ctrl+Enter applies narrowed closed and shed continuation names", async () 
     effectiveTypeFor({ line, text }) {
       const body = String(text || "").split("\n")[line - 1] || "";
       const match = /#(build|fix|read)\b/i.exec(body);
-      return match ? { theme: { key: match[1].toLowerCase() } } : null;
+      return match ? { theme: { key: match[1].toLowerCase(), name: match[1].toUpperCase() } } : null;
     },
     isMeetName: (name) => String(name || "").trim().toLowerCase() === "meet",
     typeComponentsOf: parts,
-    narrowClosed(name, worked) {
-      const selected = new Set(worked);
+    settleClosed(name, worked) {
+      const selected = new Set(worked.map((row) => row.key));
       return parts(name)
         .filter((part) => selected.has(part.key))
         .map((part) => part.name)
@@ -1160,6 +1177,17 @@ test("Ctrl+Enter applies narrowed closed and shed continuation names", async () 
         .filter((part) => !drop.has(part.key))
         .map((part) => part.name)
         .join(" + ");
+    },
+    agreeEntry({ name, children }) {
+      const support = new Set(children.filter((child) => child.kind === "live").map((child) => child.key));
+      const original = parts(name);
+      const dropped = new Set(original
+        .filter((part) => !support.has(part.key))
+        .map((part) => part.key));
+      if (original.every((part) => dropped.has(part.key))) dropped.delete(original[0].key);
+      return {
+        name: original.filter((part) => !dropped.has(part.key)).map((part) => part.name).join(" + "),
+      };
     },
   };
   plugin.resolveTranscludedBlockTarget = async (target) => ({

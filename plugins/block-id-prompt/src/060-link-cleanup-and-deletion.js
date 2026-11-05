@@ -466,7 +466,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     !targetBlockId ||
     typeof resolveTarget !== "function"
   ) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const matches = [];
@@ -506,7 +506,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   }
 
   if (matches.length === 0) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const subtreeCandidates = matches
@@ -542,7 +542,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   );
 
   if (!validateNonOverlappingEdits(linkEdits)) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   // Every cleanup caller passes open ranges only, so the emptied-entry pass
@@ -554,7 +554,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
   );
 
   if (!validateNonOverlappingEdits(edits)) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const first = matches[0];
@@ -568,6 +568,7 @@ function planPomodoroLinkCleanupForRanges(content, ranges, options = {}) {
     removedCount: matches.length,
     removedEntryCount: emptied.removedEntryCount,
     entryEdits: emptied.edits,
+    touchedEntryOffsets: [...new Set(matches.map(({ pomodoroRange }) => lineStartIndexFromLines(lines, pomodoroRange.entryLine)))],
     references: matches.map(({ reference }) => reference),
     firstRemoved: firstRange ? {
       entryLine: firstRange.entryLine,
@@ -594,7 +595,7 @@ function planFuturePomodoroLinkCleanup(content, options = {}) {
       : findPomodoroSourceContext(lines, options.sourceLine);
 
   if (!context || !context.isOpen) {
-    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [] };
+    return { edits: [], removedCount: 0, removedEntryCount: 0, entryEdits: [], touchedEntryOffsets: [] };
   }
 
   const futureRanges = collectFutureOpenPomodoroRanges(lines, context);
@@ -628,6 +629,7 @@ function planAllOpenPomodoroLinkCleanup(content, options = {}) {
     removedCount: cleanup.removedCount,
     removedEntryCount: cleanup.removedEntryCount,
     entryEdits: cleanup.entryEdits,
+    touchedEntryOffsets: cleanup.touchedEntryOffsets || [],
     references: cleanup.references || [],
     firstRemoved: cleanup.firstRemoved || null,
     content: cleanup.edits.length > 0 ? applyTextEdits(snapshot, cleanup.edits) : snapshot,

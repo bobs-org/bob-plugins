@@ -42,6 +42,7 @@
   "150-plugin-commands.js",
   "160-plugin-completion.js",
   "170-plugin-pomodoro.js",
+  "175-plugin-pomodoro-names.js",
   "180-plugin-editor-edits.js",
   "190-plugin-targets.js",
   "200-install-methods.js",

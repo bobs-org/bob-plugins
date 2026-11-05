@@ -520,7 +520,7 @@ class BlockIdPromptTaskWikilinkPomodoroMixin {
       prepared.task.notePath,
       plan,
     );
-    const completion = this.completeTaskSourceLink(
+    const completion = await this.completeTaskSourceLink(
       completionSource,
       id,
       prepared.task.notePath,

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
+const { clockEnvFor, planCapsForVector } = require("./pomodoro-clock-vector-helpers.cjs");
 
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
@@ -78,54 +79,15 @@ function resolverFor(vector) {
   };
 }
 
-function vectorFrontmatter(source) {
-  const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(String(source || ""));
-  if (!match) return {};
-  const frontmatter = {};
-  for (const line of match[1].split("\n")) {
-    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!field) continue;
-    const key = field[1];
-    let value = field[2].trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    } else if (value.toLowerCase() === "true") {
-      value = true;
-    } else if (value.toLowerCase() === "false") {
-      value = false;
-    }
-    frontmatter[key] = value;
-  }
-  return frontmatter;
-}
-
-function clockEnvFor(notes, daily = "") {
-  const sources = new Map(Object.entries(notes || {}));
-  if (daily) sources.set(DAILY_PATH, daily);
-  const files = new Map([...sources.keys()].map((path) => [path, { path }]));
-  const resolve = (target) => {
-    const name = String(target || "").replace(/\.md$/i, "");
-    const exact = `${name}.md`;
-    if (files.has(exact)) return files.get(exact);
-    const basename = name.split("/").pop().toLowerCase();
-    return [...files.values()].find((file) => file.path.split("/").pop().replace(/\.md$/i, "").toLowerCase() === basename) || null;
-  };
-  const vault = { getAbstractFileByPath: (path) => files.get(path) || null };
-  const metadataCache = {
-    getFileCache: (file) => ({ frontmatter: vectorFrontmatter(sources.get(file.path)) }),
-    getFirstLinkpathDest: (target) => resolve(target),
-  };
-  return { files, vault, metadataCache, resolve };
-}
-
 function clockResolverFor(vector) {
-  const env = clockEnvFor(vector.notes, vector.day);
+  const env = clockEnvFor(vector.notes, DAILY_PATH, vector.day);
+  const caps = planCapsForVector(vector, helpers.defaultPlanCaps());
   return (link, line) => {
     const file = link && link.pathPart
       ? env.resolve(link.pathPart)
       : env.files.get(DAILY_PATH);
     if (!file) return null;
-    return helpers.taskEffectiveClockResolution(file.path, line, env.metadataCache, env.vault);
+    return helpers.taskEffectiveClockResolution(file.path, line, env.metadataCache, env.vault, caps);
   };
 }
 
@@ -187,6 +149,75 @@ for (const vector of fixture.cases) {
 test("every vector is either mirrored here or listed as handled elsewhere", () => {
   const ids = fixture.cases.map((item) => item.id);
   for (const id of Object.keys(ELSEWHERE)) assert.ok(ids.includes(id), id);
+});
+
+test("closed tasks use their own line type without changing the closed suggestion result", () => {
+  const notes = {
+    "love.md": "---\ntype: [[area]]\noffclock_types: [SIDE QUEST]\n---\n- [x] #task Old errand [type:: SIDE QUEST] ^done\n",
+  };
+  const line = "- [x] #task Old errand [type:: SIDE QUEST] ^done";
+  const env = clockEnvFor(notes, DAILY_PATH);
+  const caps = planCapsForVector({}, helpers.defaultPlanCaps());
+  const clock = helpers.taskEffectiveClockResolution(
+    "love.md",
+    line,
+    env.metadataCache,
+    env.vault,
+    caps,
+  );
+  assert.equal(clock.offClock, true);
+  assert.equal(clock.source, "note");
+  const suggestion = helpers.pomodoroThemeSuggestWithDiagnostics({
+    path: "love.md",
+    line,
+    metadataCache: env.metadataCache,
+    vault: env.vault,
+    config: { readingType: caps.readingTheme, defaultType: caps.defaultType },
+  });
+  assert.deepEqual(suggestion.warnings, [{ code: "closed_task" }]);
+});
+
+test("offclock_types follows the empty, scalar, list, and invalid YAML value rules", () => {
+  const parsed = helpers.pomodoroClockOffclockTypes;
+  for (const value of [undefined, null, "", [], [null, " "]]) {
+    assert.deepEqual(parsed(value === undefined ? {} : { offclock_types: value }), { kind: "absent" });
+  }
+  assert.deepEqual(parsed({ offclock_types: " meet " }), { kind: "valid", keys: new Set(["meet"]) });
+  assert.deepEqual(parsed({ offclock_types: ["Meet", "MEET", null, " "] }), { kind: "valid", keys: new Set(["meet"]) });
+  for (const value of [
+    7,
+    true,
+    {},
+    ["A + B"],
+    ["OFF"],
+    ["ON"],
+    ["OFFCLOCK"],
+    ["OFF-CLOCK"],
+    ["UNTRACKED"],
+    [["MEET"]],
+    ["MEET", 7],
+  ]) {
+    assert.deepEqual(parsed({ offclock_types: value }), { kind: "invalid" });
+  }
+});
+
+test("an invalid type-list warning names offclock_types", () => {
+  const vector = fixture.cases.find((item) => item.id === "invalid-type-list-item-stays-worked");
+  const line = vector.notes["love.md"].split("\n").find((item) => item.includes("^sync"));
+  const env = clockEnvFor(vector.notes, DAILY_PATH, vector.day);
+  const caps = planCapsForVector(vector, helpers.defaultPlanCaps());
+  const resolution = helpers.taskEffectiveClockResolution(
+    "love.md",
+    line,
+    env.metadataCache,
+    env.vault,
+    caps,
+  );
+  const notice = helpers.pomodoroClockResolutionNotices([
+    { token: "[[love#^sync]]", text: "Sync", resolution },
+  ])[0];
+  assert.equal(notice.code, "note_offclock_invalid");
+  assert.match(notice.message, /invalid offclock_types/);
 });
 
 test("the verdict needs a resolved, nonempty, all-off-clock lineup", () => {

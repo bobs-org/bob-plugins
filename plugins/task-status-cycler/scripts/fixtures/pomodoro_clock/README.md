@@ -1,32 +1,21 @@
 # Pomodoro clock vectors
 
-`vectors.json` was copied byte-for-byte from bob-cli commit
-`beae4dc79a0593d14d7ce775d1e1702bbbe0e588` (`feat(pomodoro-clock): stamp the
-effective clock on capture writers`), at `tests/fixtures/pomodoro_clock/vectors.json`.
-bob-cli is the source of truth. The Obsidian start mirror lives at
-`plugins/bob-ledger-tools/scripts/fixtures/pomodoro_clock/` in this repo, a
-byte-identical copy of the same file.
+`vectors.json` is copied byte-for-byte from bob-cli commit
+`ecc3d32d27d199f962d37d89bf954e6b7efa8168` (`feat(clock): add clock-type
+filter with strict offclock_types reader`), at
+`tests/fixtures/pomodoro_clock/vectors.json`. bob-cli is the source of truth.
 
-This plugin drives the close cases (token `x`) through `Ctrl+Enter`
-(`scripts/test-task-status-cycler-pomodoro-clock.cjs`): the closed headline must
-match `expected_day`'s closed row byte for byte, and `[off:: Nm]` appears
-exactly when `expected_off_clock` is true. Starts belong to bob-ledger-tools; a
-close with a `~K` drop, kept-ledger swaps, and link starts are capture-only
-gestures. There is no deliberate close difference left: per the g4 keep policy
-a close whose every kept link is deferred keeps the closed row with its minutes
-exactly as bob does, deferring and carrying the links, so
-`close-defers-not-started-off-clock` asserts the full `expected_day` like every
-other close vector.
+The vectors cover the counted-links rule and the effective clock of each
+linked task. After clock tags, the nearest area or project declaration wins:
+`offclock_types` off-clocks only tasks whose effective type is listed; an
+invalid list stays worked. A valid list takes precedence over a same-note
+`offclock` key. Task types follow the task field, reading-task rule, nearest
+task-type note default, then `plan.default_type`. The harness maps each
+vector's `config.plan` block into plan caps before resolving the task clock.
 
-Each case gives the whole daily note (`day`, path `2026/20261101.md`), optional
-other notes (`notes`, path → contents), the clock (`now`), the capture `token`,
-the expected note after the write (`expected_day`), whether the written session
-is off-clock (`expected_off_clock`), and an optional structured warning `code`
-(`expected_warning`).
+This plugin drives close cases (`x`) through Ctrl+Enter
+(`scripts/test-task-status-cycler-pomodoro-clock.cjs`). Starts belong to
+bob-ledger-tools; capture-only gestures are documented in the harness.
 
-Pin: copy this file from the bob-cli commit that adds it. A bob-plugins copy
-that predates those cases is stale.
-
-The vectors were refreshed from bob-cli's `feat(capture): place MEET
-continuation after last open Pomodoro` change; carried MEET continuations now
-follow the last open Pomodoro.
+Pin: copy this file from the bob-cli commit that adds or changes the shared
+clock contract. Keep both plugin fixture copies byte-identical to that file.

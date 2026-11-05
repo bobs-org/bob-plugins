@@ -2229,8 +2229,78 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
 const POMODORO_CLOCK_LINK_RE =
   /^([ \t]+)[-*+][ \t]+(~~[ \t]*)?(!?)(\[\[([^\]|#]*)#\^([A-Za-z0-9-]+)(?:\|[^\]]*)?\]\])([ \t]*~~)?[ \t]*$/;
 const POMODORO_CLOCK_TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[.\](?:[ \t]|$)/;
+const POMODORO_CLOCK_RESERVED_TYPE_KEYS = new Set([
+  "off",
+  "on",
+  "offclock",
+  "off-clock",
+  "untracked",
+]);
 
-function taskEffectiveClockResolution(path, line, metadataCache, vault) {
+// Obsidian's metadata cache returns a scalar string or a YAML array here.
+// Empty shapes inherit; every non-empty malformed value rejects the whole
+// declaration so it cannot accidentally widen an off-clock list.
+function pomodoroClockOffclockTypes(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter) ||
+      !Object.prototype.hasOwnProperty.call(frontmatter, "offclock_types")) {
+    return { kind: "absent" };
+  }
+  const raw = frontmatter.offclock_types;
+  if (raw === undefined || raw === null) return { kind: "absent" };
+  let values;
+  if (typeof raw === "string") {
+    if (!raw.trim()) return { kind: "absent" };
+    values = [raw];
+  } else if (Array.isArray(raw)) {
+    values = raw;
+  } else {
+    return { kind: "invalid" };
+  }
+  const keys = new Set();
+  for (const item of values) {
+    if (item === undefined || item === null || (typeof item === "string" && !item.trim())) continue;
+    if (typeof item !== "string") return { kind: "invalid" };
+    const canonical = pomodoroThemeCanonicalName(item);
+    if (!canonical) return { kind: "invalid" };
+    const key = pomodoroThemeNormalizeKey(canonical);
+    if (POMODORO_CLOCK_RESERVED_TYPE_KEYS.has(key)) return { kind: "invalid" };
+    keys.add(key);
+  }
+  return keys.size ? { kind: "valid", keys } : { kind: "absent" };
+}
+
+// Resolve the task's type from its own line and root walk. This deliberately
+// bypasses the suggestion API's closed-task filter and never consults the
+// configured type catalog; closed rows and unconfigured types still decide
+// the clock from their effective type.
+function pomodoroClockTaskTypeKey(path, line, metadataCache, vault, planCaps) {
+  try {
+    const field = pomodoroThemeTaskFieldState(String(line || ""));
+    if (field.state === "set") return field.key;
+    let caps = planCaps;
+    if (!caps || typeof caps !== "object") {
+      caps = loadPlanCaps().caps;
+    }
+    const result = pomodoroThemeResolveWithoutTaskField(path, line, {
+      metadataCache,
+      vault,
+      config: {
+        readingType: Object.prototype.hasOwnProperty.call(caps, "readingTheme")
+          ? caps.readingTheme
+          : "READ",
+        defaultType: Object.prototype.hasOwnProperty.call(caps, "defaultType")
+          ? caps.defaultType
+          : null,
+      },
+    });
+    const theme = result && result.suggestion && result.suggestion.theme;
+    return theme && typeof theme.key === "string" ? theme.key : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function taskEffectiveClockResolution(path, line, metadataCache, vault, planCaps) {
   const sourcePath = String(path || "");
   const text = String(line || "");
   const tag = eventTaskClockTag(text);
@@ -2254,6 +2324,21 @@ function taskEffectiveClockResolution(path, line, metadataCache, vault) {
   if (!first || typeof first.path !== "string") return defaultResolution;
   const visited = new Set();
   let current = first;
+  let typeKeyResolved = false;
+  let taskTypeKey = null;
+  const effectiveTaskTypeKey = () => {
+    if (!typeKeyResolved) {
+      typeKeyResolved = true;
+      taskTypeKey = pomodoroClockTaskTypeKey(
+        sourcePath,
+        text,
+        metadataCache,
+        vault,
+        planCaps,
+      );
+    }
+    return taskTypeKey;
+  };
   for (let depth = 0; current && depth < POMODORO_HOME_MAX_DEPTH; depth += 1) {
     const currentPath = String(current.path || "");
     const key = currentPath.toLowerCase();
@@ -2263,8 +2348,30 @@ function taskEffectiveClockResolution(path, line, metadataCache, vault) {
     const raw = frontmatter.offclock;
     const hasValue = Object.prototype.hasOwnProperty.call(frontmatter, "offclock") &&
       raw !== undefined && raw !== null && !(typeof raw === "string" && raw.trim() === "");
+    const typeList = pomodoroClockOffclockTypes(frontmatter);
+    const hasTypeList = typeList.kind !== "absent";
+    const kind = pomodoroHomeType(frontmatter);
+    if (kind === "area" || kind === "project") {
+      if (hasTypeList) {
+        if (typeList.kind === "invalid") {
+          return {
+            offClock: false,
+            source: "invalid_note",
+            note: currentPath,
+            key: "offclock_types",
+            conflict: false,
+          };
+        }
+        const key = effectiveTaskTypeKey();
+        return {
+          offClock: key !== null && typeList.keys.has(key),
+          source: "note",
+          note: currentPath,
+          conflict: false,
+        };
+      }
+    }
     if (hasValue) {
-      const kind = pomodoroHomeType(frontmatter);
       if (kind === "area" || kind === "project") {
         if (raw === true || (typeof raw === "string" && raw.trim().toLowerCase() === "true")) {
           return { offClock: true, source: "note", note: currentPath, conflict: false };
@@ -2272,10 +2379,18 @@ function taskEffectiveClockResolution(path, line, metadataCache, vault) {
         if (raw === false || (typeof raw === "string" && raw.trim().toLowerCase() === "false")) {
           return { offClock: false, source: "note", note: currentPath, conflict: false };
         }
-        return { offClock: false, source: "invalid_note", note: currentPath, conflict: false };
+        return {
+          offClock: false,
+          source: "invalid_note",
+          note: currentPath,
+          key: "offclock",
+          conflict: false,
+        };
       }
       // Defaults on other note kinds are ignored; keep walking parents.
     }
+    // Non-home notes may carry these keys, but their declarations are
+    // ignored and the root walk continues to the nearest area or project.
     const parentTarget = pomodoroHomeParentTarget(frontmatter.parent);
     if (!parentTarget || pomodoroHomePathEqual(parentTarget, currentPath)) break;
     current = pomodoroHomeResolveFile(parentTarget, currentPath, sourcePath, metadataCache, vault);
@@ -2286,8 +2401,8 @@ function taskEffectiveClockResolution(path, line, metadataCache, vault) {
 // Public effective-clock API used by task-status-cycler. Returns
 // `{ offClock, source, notePath }`. Callers fall back to tag-only when this
 // API or the note metadata cache is unavailable.
-function taskEffectiveOffClock(path, line, metadataCache, vault) {
-  const resolution = taskEffectiveClockResolution(path, line, metadataCache, vault);
+function taskEffectiveOffClock(path, line, metadataCache, vault, planCaps) {
+  const resolution = taskEffectiveClockResolution(path, line, metadataCache, vault, planCaps);
   return {
     offClock: resolution.offClock,
     source: resolution.source,
@@ -2447,7 +2562,7 @@ function pomodoroClockResolutionNotices(facts) {
     const label = String(fact.text || fact.token || "a task").trim();
     const message = code === "clock_tag_conflict"
       ? `◌ ${label} has both #on and #off; #on wins`
-      : `◌ ${resolution.note || "a note"} has an invalid offclock: value; that task stays on the clock`;
+      : `◌ ${resolution.note || "a note"} has an invalid ${resolution.key || "offclock"}: value; that task stays on the clock`;
     notices.push({ code, message });
   }
   return notices;
@@ -31264,7 +31379,7 @@ class BobLedgerToolsPlanAndReadyMixin {
 }
 // ---- src/181-plugin-plan-budget-off-clock.js ----
 class BobLedgerToolsPlanBudgetOffClockMixin {
-  planBudgetOffClockPredicate(dailyPath, content) {
+  planBudgetOffClockPredicate(dailyPath, content, planCaps) {
     try {
       const sourcePath = String(dailyPath || "");
       const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
@@ -31296,7 +31411,7 @@ class BobLedgerToolsPlanBudgetOffClockMixin {
             (item) =>
               this.pomodoroClockResolveTaskLineFrom(item, sourcePath),
             (item, line) =>
-              this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath),
+              this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath, planCaps),
           );
           const off =
             !!(facts && facts[0] && facts[0].offClock === true);
@@ -63194,7 +63309,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     }
   }
 
-  pomodoroClockResolveLinkClockFrom(link, line, sourcePath) {
+  pomodoroClockResolveLinkClockFrom(link, line, sourcePath, planCaps) {
     try {
       const app = this.app || {};
       const path = String(sourcePath || "");
@@ -63205,7 +63320,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           ? app.vault.getAbstractFileByPath(path)
           : { path });
       if (!file || typeof file.path !== "string") return pomodoroClockTagOnlyResolution(line);
-      return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault);
+      return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault, planCaps);
     } catch (error) {
       return pomodoroClockTagOnlyResolution(line);
     }
@@ -90055,6 +90170,8 @@ module.exports.helpers = {
   eventTaskClockTag,
   taskEffectiveClockResolution,
   taskEffectiveOffClock,
+  pomodoroClockOffclockTypes,
+  pomodoroClockTaskTypeKey,
   pomodoroClockCountedLinks,
   clockVerdict,
   pomodoroClockLinkFacts,

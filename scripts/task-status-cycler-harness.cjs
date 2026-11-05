@@ -5,6 +5,7 @@ const test = require("node:test");
 const originalLoad = Module._load;
 let MarkdownView;
 let TestModal;
+let obsidianStub;
 const notices = [];
 let focusedEl = null;
 
@@ -205,6 +206,7 @@ function parseHarnessYaml(text) {
 
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
+    if (obsidianStub) return obsidianStub;
     MarkdownView = class MarkdownView {};
     TestModal = class TestModal {
       constructor(app) {
@@ -231,7 +233,8 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
         return this;
       }
     };
-    return {
+    obsidianStub = {
+      MarkdownRenderChild: class MarkdownRenderChild {},
       MarkdownView,
       Modal: TestModal,
       Notice: class Notice {
@@ -240,24 +243,33 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
         }
       },
       Plugin: class Plugin {},
+      Platform: { isDesktopApp: true },
+      normalizePath: (value) => value,
       setIcon: () => {},
       parseYaml: parseHarnessYaml,
     };
+    return obsidianStub;
   }
   if (request === "@codemirror/view") {
-    return { EditorView: class EditorView {} };
+    return { EditorView: class EditorView {}, keymap: { of: (value) => value } };
+  }
+  if (request === "@codemirror/state") {
+    return { Prec: { highest: (value) => value } };
   }
   return originalLoad.call(this, request, parent, isMain);
 };
 
 let TaskStatusCyclerPlugin;
+let LedgerToolsPlugin;
 try {
   TaskStatusCyclerPlugin = require("../plugins/task-status-cycler/main.js");
+  LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
 } finally {
   Module._load = originalLoad;
 }
 
 const { helpers } = TaskStatusCyclerPlugin;
+const ledgerToolsHelpers = LedgerToolsPlugin.helpers;
 
 function createInMemoryObsidianApp(initialSources) {
   const files = new Map();
@@ -548,6 +560,7 @@ function installTasksCloseCommand(plugin, editor, { insertAbove = false } = {}) 
 
 module.exports = {
   TaskStatusCyclerPlugin,
+  ledgerToolsHelpers,
   helpers,
   MarkdownView,
   TestModal,

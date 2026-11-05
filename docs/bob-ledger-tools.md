@@ -96,17 +96,17 @@ older tools, reads as off-clock too and is counted by its span. Pinned by
 bob-cli's shared `pomodoro_clock` and `meet_event_run` vectors, `se<X>` stamps
 the key by the same counted-links rule `bob capture` uses:
 
-- A session is **off the clock** iff it keeps at least one Task Link and every
-  link resolves off-clock. First match wins: a standalone `#on` (even beside an
-  off spelling) keeps the task on the clock; `#off` or a deprecated alias
-  (`#offclock`, `#off-clock`, `#untracked`) is off the clock; otherwise the
-  nearest area or project `offclock: true|false` on the task's root walk
-  decides (a child `false` ends inheritance; a deeper `true` turns it back on;
-  an invalid nearer value stays on the clock). Nothing set is on the clock.
-  Tokens are case-insensitive and standalone: a nested `#off/x`, a code span,
-  or a Markdown link is not a tag. Writers never stamp an inherited `#off`
-  onto the task line. `se<X>` falls back to the line's tags when the note
-  cache is unavailable. Other plugins read the same decision through
+- A session is **off the clock** iff it has a Task Link and every link resolves
+  off-clock. First match: `#on`; `#off` or an alias (`#offclock`, `#off-clock`,
+  `#untracked`); then the nearest area/project root-walk policy. A non-empty
+  `offclock_types` list wins over same-note `offclock:` and matches the task's
+  effective type; invalid lists stay worked. Without a list,
+  `offclock: true|false` retains its inheritance. Effective type is the task
+  field, reading rule, nearest note default, then `plan.default_type`; types
+  need not be cataloged. No matching type means on-clock. Clock tags are
+  standalone, case-insensitive tokens; writers never add inherited `#off`.
+  `se<X>` falls back to tags when metadata is unavailable. Other plugins read
+  the same decision through
   `api.pomodoroClock` v1 (`taskEffectiveOffClock(path, line)` →
   `{ offClock, source, notePath }`).
 - An unlinked session, an unresolved link, or a single on-clock link keeps the
@@ -525,9 +525,10 @@ Its time pill switches to a dashed outline in both views. A tag inside a code
 span or Markdown link, or a nested `#off/x`, is not a tag.
 
 Untagged Event Tasks that resolve off-clock through `taskEffectiveOffClock`
-(an area or project `offclock: true` on the root walk) get the same dashed
-time pill in both views, with tooltip `Off-clock · from love` (the deciding
-note's stem). Sync never writes an inherited `#off`, so there is no tag chip.
+(an area or project `offclock: true` or a matching `offclock_types` entry on
+the root walk) get the same dashed time pill in both views, with tooltip
+`Off-clock · from love` (the deciding note's stem). Sync never writes an
+inherited `#off`, so there is no tag chip.
 A standalone `#on` keeps the solid pill and a neutral tooltip
 `On the clock (override)` in both views, even under an off-clock note; `#on`
 still wins when an off spelling is also on the line, and the off-clock chip

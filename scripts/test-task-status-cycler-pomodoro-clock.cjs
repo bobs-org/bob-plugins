@@ -11,10 +11,12 @@ const {
   TaskStatusCyclerPlugin,
   helpers,
   notices,
+  ledgerToolsHelpers,
   createInMemoryObsidianApp,
   createTextEditor,
   attachActiveMarkdownView,
 } = require("./task-status-cycler-harness.cjs");
+const { clockEnvFor, planCapsForVector } = require("./pomodoro-clock-vector-helpers.cjs");
 
 const fixture = JSON.parse(
   fs.readFileSync(
@@ -63,10 +65,25 @@ async function closeFirstTimedRow(vector, mutate = (day) => day, taskEffectiveOf
   assert.notEqual(pomodoroLine, -1, `${vector.id}: no running row`);
   const [hours, minutes] = vector.now.slice(11, 16).split(":").map(Number);
   const harness = createInMemoryObsidianApp({ ...(vector.notes || {}), [DAILY_PATH]: day });
-  if (typeof taskEffectiveOffClock === "function") {
+  const hasTypeClockInput = Boolean(vector.config) || Object.values(vector.notes || {}).some(
+    (source) => /(?:^|\n)offclock_types\s*:/.test(String(source || "")),
+  );
+  let effectiveClock = taskEffectiveOffClock;
+  if (typeof effectiveClock !== "function" && hasTypeClockInput) {
+    const env = clockEnvFor(vector.notes, DAILY_PATH, day);
+    const caps = planCapsForVector(vector, ledgerToolsHelpers.defaultPlanCaps());
+    effectiveClock = (path, line) => ledgerToolsHelpers.taskEffectiveOffClock(
+      path,
+      line,
+      env.metadataCache,
+      env.vault,
+      caps,
+    );
+  }
+  if (typeof effectiveClock === "function") {
     harness.app.plugins.plugins["bob-ledger-tools"].api.pomodoroClock = {
       version: 1,
-      taskEffectiveOffClock,
+      taskEffectiveOffClock: effectiveClock,
     };
   }
   const editor = createTextEditor(day, { line: pomodoroLine, ch: 4 });

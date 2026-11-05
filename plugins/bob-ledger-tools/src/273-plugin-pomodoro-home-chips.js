@@ -227,7 +227,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
     }
   }
 
-  pomodoroClockResolveLinkClockFrom(link, line, sourcePath) {
+  pomodoroClockResolveLinkClockFrom(link, line, sourcePath, planCaps) {
     try {
       const app = this.app || {};
       const path = String(sourcePath || "");
@@ -238,7 +238,7 @@ class BobLedgerToolsPomodoroHomeChipsMixin {
           ? app.vault.getAbstractFileByPath(path)
           : { path });
       if (!file || typeof file.path !== "string") return pomodoroClockTagOnlyResolution(line);
-      return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault);
+      return taskEffectiveClockResolution(file.path, line, app.metadataCache, app.vault, planCaps);
     } catch (error) {
       return pomodoroClockTagOnlyResolution(line);
     }

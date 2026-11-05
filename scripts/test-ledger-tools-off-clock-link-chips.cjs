@@ -4,6 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
+const {
+  clockEnvFor: vectorClockEnv,
+  planCapsForVector,
+} = require("./pomodoro-clock-vector-helpers.cjs");
 
 const editorInfoField = { chipField: "info" };
 const editorLivePreviewField = { chipField: "live" };
@@ -107,43 +111,14 @@ test("OC10 and OC15: history is included and toggle-off is a CSS and JavaScript 
   assert.equal(plugin.buildOffClockLinkChipDecorations({ state: { field: () => true, doc } }), StubDecoration.none);
 });
 
-function frontmatter(source) {
-  const match = /^---\s*\n([\s\S]*?)\n---/.exec(String(source || ""));
-  const values = {};
-  if (!match) return values;
-  for (const line of match[1].split("\n")) {
-    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!field) continue;
-    let value = field[2].trim();
-    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    if (value.toLowerCase() === "true") value = true;
-    else if (value.toLowerCase() === "false") value = false;
-    values[field[1]] = value;
-  }
-  return values;
-}
 function clockEnvFor(notes, daily) {
-  const sources = new Map(Object.entries(notes || {}));
-  if (daily) sources.set(DAILY, daily);
-  const files = new Map([...sources.keys()].map((notePath) => [notePath, { path: notePath }]));
-  const resolve = (target) => {
-    const name = String(target || "").replace(/\.md$/i, "");
-    const exact = `${name}.md`;
-    if (files.has(exact)) return files.get(exact);
-    const stem = name.split("/").pop().toLowerCase();
-    return [...files.values()].find((file) => path.basename(file.path, ".md").toLowerCase() === stem) || null;
-  };
-  const vault = { getAbstractFileByPath: (notePath) => files.get(notePath) || null };
-  const metadataCache = {
-    getFileCache: (file) => ({ frontmatter: frontmatter(sources.get(file.path)) }),
-    getFirstLinkpathDest: (target) => resolve(target),
-  };
-  return { files, sources, vault, metadataCache, resolve };
+  return vectorClockEnv(notes, DAILY, daily);
 }
 function vectorClockResolver(vector, env) {
+  const caps = planCapsForVector(vector, h.defaultPlanCaps());
   return (link, line) => {
     const file = link && link.pathPart ? env.resolve(link.pathPart) : env.files.get(DAILY);
-    return file ? h.taskEffectiveClockResolution(file.path, line, env.metadataCache, env.vault) : null;
+    return file ? h.taskEffectiveClockResolution(file.path, line, env.metadataCache, env.vault, caps) : null;
   };
 }
 function vectorTaskResolver(vector) {

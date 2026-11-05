@@ -26,6 +26,8 @@ module.exports.helpers = {
   eventTaskClockTag,
   taskEffectiveClockResolution,
   taskEffectiveOffClock,
+  pomodoroClockOffclockTypes,
+  pomodoroClockTaskTypeKey,
   pomodoroClockCountedLinks,
   clockVerdict,
   pomodoroClockLinkFacts,

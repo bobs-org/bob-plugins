@@ -7,6 +7,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
+const {
+  clockEnvFor,
+  parseVectorFrontmatter,
+  planCapsForVector,
+} = require("./pomodoro-clock-vector-helpers.cjs");
 
 class FakePlugin {
   constructor(app) {
@@ -73,34 +78,15 @@ const vectors = JSON.parse(
     "utf8",
   ),
 );
+const sharedClockVectors = JSON.parse(
+  fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-ledger-tools/scripts/fixtures/pomodoro_clock/vectors.json"),
+    "utf8",
+  ),
+);
 
 function frontmatter(source) {
-  const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(
-    String(source || ""),
-  );
-  const values = {};
-  if (!match) {
-    return values;
-  }
-  for (const line of match[1].split("\n")) {
-    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!field) {
-      continue;
-    }
-    let value = field[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    } else if (value.toLowerCase() === "true") {
-      value = true;
-    } else if (value.toLowerCase() === "false") {
-      value = false;
-    }
-    values[field[1]] = value;
-  }
-  return values;
+  return parseVectorFrontmatter(source);
 }
 
 function blocksFor(source) {
@@ -178,6 +164,7 @@ for (const vector of vectors.cases) {
     const predicate = plugin.planBudgetOffClockPredicate(
       DAILY,
       vector.day,
+      planCapsForVector(vector, h.defaultPlanCaps()),
     );
     const caps =
       vector.max_links !== undefined
@@ -205,6 +192,28 @@ for (const vector of vectors.cases) {
         ),
         `${vector.id}: expected cap lint`,
       );
+    }
+  });
+}
+
+for (const vector of sharedClockVectors.cases.filter((item) => item.config)) {
+  test(`plan budget predicate honors shared clock config: ${vector.id}`, () => {
+    const plugin = pluginFor(vector);
+    const env = clockEnvFor(vector.notes, DAILY, vector.day);
+    const caps = planCapsForVector(vector, h.defaultPlanCaps());
+    const predicate = plugin.planBudgetOffClockPredicate(DAILY, vector.day, caps);
+    const lines = vector.day.split("\n");
+    const entry = lines.findIndex((line, index) => index > lines.findIndex((item) => /^## Pomodoros\s*$/.test(item)) && /^- \[[ xX-]\]/.test(line));
+    assert.ok(entry >= 0, `${vector.id}: expected a ledger row`);
+    for (const link of h.pomodoroClockCountedLinks(lines, entry)) {
+      const file = link.pathPart ? env.resolve(link.pathPart) : env.files.get(DAILY);
+      const lineText = link.pathPart
+        ? String((vector.notes || {})[`${link.pathPart}.md`] || "").split("\n").find((line) => new RegExp(`(?:^|\\s)\\^${link.blockId}\\s*$`).test(line))
+        : h.pomodoroClockTaskLineText(lines, link.blockId);
+      const expected = file && lineText
+        ? h.taskEffectiveClockResolution(file.path, lineText, env.metadataCache, env.vault, caps).offClock
+        : false;
+      assert.equal(predicate(link.pathPart, link.blockId), expected, `${vector.id}: ${link.token}`);
     }
   });
 }

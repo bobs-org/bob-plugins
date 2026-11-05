@@ -1,5 +1,5 @@
 class BobLedgerToolsPlanBudgetOffClockMixin {
-  planBudgetOffClockPredicate(dailyPath, content) {
+  planBudgetOffClockPredicate(dailyPath, content, planCaps) {
     try {
       const sourcePath = String(dailyPath || "");
       const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
@@ -31,7 +31,7 @@ class BobLedgerToolsPlanBudgetOffClockMixin {
             (item) =>
               this.pomodoroClockResolveTaskLineFrom(item, sourcePath),
             (item, line) =>
-              this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath),
+              this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath, planCaps),
           );
           const off =
             !!(facts && facts[0] && facts[0].offClock === true);

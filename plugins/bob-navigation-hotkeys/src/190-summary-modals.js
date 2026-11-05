@@ -123,10 +123,14 @@ function getBulletPropertyLocalTaskHints(hasMarks) {
 // Footer hints for the block-ID prompt. In batch mode the Enter action advances
 // to the next pending prompt ("Next") until the final one, which applies the
 // whole batch ("Apply all"). The single-task prompt keeps "Create & link".
+// Merges prompt once per id-less task: "Next" until the last, then
+// "Create & merge".
 function getBulletPropertyBlockIdHints(options = {}) {
   let label = "Create & link";
   if (options.batch) {
     label = options.last ? "Apply all" : "Next";
+  } else if (options.merge) {
+    label = options.last ? "Create & merge" : "Next";
   } else if (options.counted) {
     label = "Create & apply";
   }

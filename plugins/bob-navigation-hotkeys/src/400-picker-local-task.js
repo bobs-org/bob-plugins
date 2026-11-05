@@ -591,6 +591,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     const isLast =
       this.blockIdMode !== "batch" ||
       this.blockIdContext.position >= this.blockIdContext.total;
+    const isMergePrompt =
+      this.blockIdMode === "relation-target" &&
+      Boolean(this.pendingRelation && this.pendingRelation.merge);
+    const isMergeLast = isMergePrompt
+      ? (Array.isArray(this.pendingRelation.queue) ? this.pendingRelation.queue.length <= 1 : true)
+      : isLast;
 
     this.applyOptions({
       items: [],
@@ -602,17 +608,28 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       emptyText: "Type a block ID",
       footerHints: getBulletPropertyBlockIdHints({
         batch: this.blockIdMode === "batch",
-        last: isLast,
+        last: isMergePrompt ? isMergeLast : isLast,
         counted: this.blockIdMode === "counted-source",
+        merge: isMergePrompt,
       }),
-      getSubtitle: () =>
-        this.blockIdMode === "batch"
+      getSubtitle: () => {
+        if (isMergePrompt) {
+          const pending = this.pendingRelation;
+          const total = pending && pending.merge && Number.isInteger(pending.merge.total)
+            ? pending.merge.total
+            : (Array.isArray(pending.queue) ? pending.queue.length : 1);
+          const remaining = Array.isArray(pending.queue) ? pending.queue.length : 1;
+          const position = total - remaining + 1;
+          return relationMergeBlockIdSubtitle(position, total, task.line + 1);
+        }
+        return this.blockIdMode === "batch"
           ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
           : this.blockIdMode === "counted-source"
             ? `${this.getTaskSessionSubtitle()} · create an ID for dependency on line ${task.line + 1}`
             : this.blockIdMode === "blocks-source"
               ? `Create an ID for this task first · line ${task.line + 1}`
-            : `Create an ID for line ${task.line + 1}`,
+            : `Create an ID for line ${task.line + 1}`;
+      },
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
         this.renderBlockIdPreviewItem(item, rowEl, query),

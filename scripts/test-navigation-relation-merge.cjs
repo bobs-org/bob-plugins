@@ -507,16 +507,55 @@ test("an already-closed source takes the plain relation with link only", async (
   assert.ok(notices.includes(helpers.RELATION_MERGE_ALREADY_CLOSED_MESSAGE));
 });
 
-test("merging needs task IDs on every source and the target", async () => {
+test("an id-less source starts the block-ID prompt with no notice", async () => {
   notices.length = 0;
+  const source = {
+    path: "inbox.md",
+    line: 1,
+    blockId: "",
+    rawLine: "- [ ] #task Bench",
+    displayText: "Bench",
+  };
   const { picker, calls } = makePicker({
-    sources: [{ path: "inbox.md", line: 1, blockId: "" }],
+    sources: [source],
     targets: [INTO_TARGET],
   });
+  picker.relationCancelContentForRef = (ref) => ref.rawLine || "";
+  picker.getRawQuery = () => "merged into";
+  picker.relationLabelMode = "add";
+  picker.relationLabelTargets = [INTO_TARGET];
+  picker.vaultStage = {
+    files: new Map([
+      ["inbox.md", "- [ ] #task Bench"],
+      ["db.md", "- [ ] #task Upgrade ^upgrade"],
+    ]),
+  };
+  const prompts = [];
+  picker.showBlockIdStage = (snapshot, options) => {
+    prompts.push({ snapshot, options });
+    return false;
+  };
+  picker.promptNextRelationTargetId = function () {
+    const pending = this.pendingRelation;
+    if (!pending || !Array.isArray(pending.queue) || pending.queue.length === 0) return false;
+    const target = pending.queue[0];
+    return this.showBlockIdStage(
+      { path: target.path, line: target.line, rawLine: target.rawLine, displayText: target.displayText },
+      { mode: "relation-target" },
+    );
+  };
   const committed = await picker.commitRelationMergeLabel({}, "merged into", WITH_LABEL);
   assert.equal(committed, false);
   assert.equal(calls.api.length, 0);
-  assert.ok(notices.includes(helpers.RELATION_MERGE_MISSING_ID_MESSAGE));
+  assert.equal(notices.length, 0);
+  assert.ok(picker.pendingRelation);
+  assert.equal(picker.pendingRelation.merge.label, "merged into");
+  assert.deepEqual(
+    picker.pendingRelation.queue.map((entry) => entry.path),
+    ["inbox.md"],
+  );
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].options.mode, "relation-target");
 });
 
 test("links-to refuses several picked targets", async () => {
@@ -706,4 +745,122 @@ test("an unchanged re-run writes nothing and stays quiet", async () => {
   assert.equal(committed, true);
   assert.equal(calls.apply.length, 0);
   assert.ok(notices.includes("Already merged — nothing to do"));
+});
+
+test("missing-ID queue orders sources then target and dedupes", () => {
+  const source = { path: "inbox.md", line: 1, blockId: "", rawLine: "- [ ] #task A" };
+  const target = { path: "db.md", line: 3, blockId: "", rawLine: "- [ ] #task B" };
+  assert.deepEqual(
+    helpers.relationMergeMissingIdRefs([source], target).map((entry) => entry.path),
+    ["inbox.md", "db.md"],
+  );
+  const withId = { path: "db.md", line: 3, blockId: "upgrade", rawLine: "- [ ] #task B ^upgrade" };
+  assert.deepEqual(
+    helpers.relationMergeMissingIdRefs([source], withId).map((entry) => entry.path),
+    ["inbox.md"],
+  );
+  assert.deepEqual(
+    helpers.relationMergeMissingIdRefs([], withId),
+    [],
+  );
+  const dup = { path: "inbox.md", line: 1, blockId: "", rawLine: "- [ ] #task A" };
+  assert.equal(helpers.relationMergeMissingIdRefs([source, dup], target).length, 2);
+  const linkedFromSources = [{ path: "Other.md", line: 0, blockId: "", rawLine: "- [ ] #task O" }];
+  const cursor = { path: "Current.md", line: 0, blockId: "", rawLine: "- [ ] #task C" };
+  assert.deepEqual(
+    helpers.relationMergeMissingIdRefs(linkedFromSources, cursor).map((entry) => entry.path),
+    ["Other.md", "Current.md"],
+  );
+});
+
+test("an already-closed id-less source links only with no merge prompt", async () => {
+  notices.length = 0;
+  const closed = { path: "inbox.md", line: 1, blockId: "", rawLine: "- [-] #task Bench" };
+  const { picker, calls } = makePicker({
+    sources: [closed],
+    targets: [INTO_TARGET],
+  });
+  let prompted = 0;
+  picker.promptNextRelationTargetId = () => {
+    prompted += 1;
+    return false;
+  };
+  const committed = await picker.commitRelationMergeLabel({}, "merged into", WITH_LABEL);
+  assert.equal(committed, true);
+  assert.equal(prompted, 0);
+  assert.equal(calls.api.length, 0);
+  assert.equal(calls.commits.length, 1);
+  assert.ok(notices.includes(helpers.RELATION_MERGE_ALREADY_CLOSED_MESSAGE));
+});
+
+test("a resumed commit without IDs refuses without prompting again", async () => {
+  notices.length = 0;
+  const { picker, calls } = makePicker({
+    sources: [{ path: "inbox.md", line: 1, blockId: "", rawLine: "- [ ] #task Bench" }],
+    targets: [INTO_TARGET],
+  });
+  picker.relationCancelContentForRef = () => "";
+  picker.getRawQuery = () => "merged into";
+  picker.relationLabelMode = "add";
+  picker.relationLabelTargets = [INTO_TARGET];
+  let prompted = 0;
+  picker.promptNextRelationTargetId = () => {
+    prompted += 1;
+    return false;
+  };
+  const committed = await picker.commitRelationMergeLabel({}, "merged into", WITH_LABEL, { resumed: true });
+  assert.equal(committed, false);
+  assert.equal(prompted, 0);
+  assert.equal(calls.api.length, 0);
+  assert.ok(notices.includes(helpers.RELATION_MERGE_MISSING_ID_MESSAGE));
+});
+
+test("an abandoned queue triggers no preview and no apply", async () => {
+  const source = { path: "inbox.md", line: 1, blockId: "", rawLine: "- [ ] #task A" };
+  const target = { path: "db.md", line: 3, blockId: "", rawLine: "- [ ] #task B" };
+  const queue = helpers.relationMergeMissingIdRefs([source], target);
+  assert.equal(queue.length, 2);
+  const remaining = queue.slice(1);
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].path, "db.md");
+});
+
+test("a non-active open editor is saved before preview", async () => {
+  notices.length = 0;
+  const targetView = { file: { path: "db.md" }, editor: {}, saveCalls: 0 };
+  targetView.save = async () => {
+    targetView.saveCalls += 1;
+  };
+  const activeView = { file: { path: "inbox.md" }, editor: {}, saveCalls: 0 };
+  activeView.save = async () => {
+    activeView.saveCalls += 1;
+  };
+  const app = {
+    workspace: {
+      getActiveViewOfType: () => activeView,
+      iterateAllLeaves: (visit) => {
+        visit({ view: activeView });
+        visit({ view: targetView });
+        visit({ view: { file: { path: "other.md" }, editor: {}, save: async () => { throw new Error("must not save"); } } });
+      },
+    },
+  };
+  const result = await helpers.saveRelationMergeEditors(app, ["inbox.md", "db.md"]);
+  assert.equal(result.ok, true);
+  assert.equal(activeView.saveCalls, 1);
+  assert.equal(targetView.saveCalls, 1);
+});
+
+test("merge block-ID copy pins subtitle and footer labels", () => {
+  assert.equal(helpers.relationMergeBlockIdSubtitle(1, 2, 7), "⤵ Merging needs an ID · 1 of 2 · line 7");
+  assert.equal(helpers.relationMergeBlockIdSubtitle(2, 2, 7), "⤵ Merging needs an ID · 2 of 2 · line 7");
+  assert.equal(helpers.relationMergeBlockIdSubtitle(1, 1, 7), "⤵ Merging needs an ID · line 7");
+  assert.deepEqual(helpers.getBulletPropertyBlockIdHints({ merge: true, last: false }), [
+    { keys: ["↵"], label: "Next" },
+    { keys: ["esc"], label: "Cancel" },
+  ]);
+  assert.deepEqual(helpers.getBulletPropertyBlockIdHints({ merge: true, last: true }), [
+    { keys: ["↵"], label: "Create & merge" },
+    { keys: ["esc"], label: "Cancel" },
+  ]);
 });

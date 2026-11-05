@@ -23,7 +23,7 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | [Bob Articles](bob-articles.md) | 0.2.1 | 1.8.7 | No |
 | [Bob Command Mode](bob-command-mode.md) | 0.1.0 | 1.8.7 | Yes |
 | [Bob Ledger Tools](bob-ledger-tools.md) | 1.99.0 | 1.8.7 | No |
-| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.74.0 | 1.8.7 | No |
+| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.74.1 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.1.0 | 1.8.7 | No |
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
 | [Task Status Cycler](task-status-cycler.md) | 1.48.1 | 1.8.7 | No |

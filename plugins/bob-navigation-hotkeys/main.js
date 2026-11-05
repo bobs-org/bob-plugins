@@ -21472,10 +21472,14 @@ function getBulletPropertyLocalTaskHints(hasMarks) {
 // Footer hints for the block-ID prompt. In batch mode the Enter action advances
 // to the next pending prompt ("Next") until the final one, which applies the
 // whole batch ("Apply all"). The single-task prompt keeps "Create & link".
+// Merges prompt once per id-less task: "Next" until the last, then
+// "Create & merge".
 function getBulletPropertyBlockIdHints(options = {}) {
   let label = "Create & link";
   if (options.batch) {
     label = options.last ? "Apply all" : "Next";
+  } else if (options.merge) {
+    label = options.last ? "Create & merge" : "Next";
   } else if (options.counted) {
     label = "Create & apply";
   }
@@ -60139,6 +60143,12 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
     const isLast =
       this.blockIdMode !== "batch" ||
       this.blockIdContext.position >= this.blockIdContext.total;
+    const isMergePrompt =
+      this.blockIdMode === "relation-target" &&
+      Boolean(this.pendingRelation && this.pendingRelation.merge);
+    const isMergeLast = isMergePrompt
+      ? (Array.isArray(this.pendingRelation.queue) ? this.pendingRelation.queue.length <= 1 : true)
+      : isLast;
 
     this.applyOptions({
       items: [],
@@ -60150,17 +60160,28 @@ class BulletPropertyPickerLocalTaskMixin extends FilteredPickerModal {
       emptyText: "Type a block ID",
       footerHints: getBulletPropertyBlockIdHints({
         batch: this.blockIdMode === "batch",
-        last: isLast,
+        last: isMergePrompt ? isMergeLast : isLast,
         counted: this.blockIdMode === "counted-source",
+        merge: isMergePrompt,
       }),
-      getSubtitle: () =>
-        this.blockIdMode === "batch"
+      getSubtitle: () => {
+        if (isMergePrompt) {
+          const pending = this.pendingRelation;
+          const total = pending && pending.merge && Number.isInteger(pending.merge.total)
+            ? pending.merge.total
+            : (Array.isArray(pending.queue) ? pending.queue.length : 1);
+          const remaining = Array.isArray(pending.queue) ? pending.queue.length : 1;
+          const position = total - remaining + 1;
+          return relationMergeBlockIdSubtitle(position, total, task.line + 1);
+        }
+        return this.blockIdMode === "batch"
           ? `Block ID ${this.blockIdContext.position} of ${this.blockIdContext.total} · line ${task.line + 1}`
           : this.blockIdMode === "counted-source"
             ? `${this.getTaskSessionSubtitle()} · create an ID for dependency on line ${task.line + 1}`
             : this.blockIdMode === "blocks-source"
               ? `Create an ID for this task first · line ${task.line + 1}`
-            : `Create an ID for line ${task.line + 1}`,
+            : `Create an ID for line ${task.line + 1}`;
+      },
       filterItem: () => true,
       renderItem: (item, rowEl, query) =>
         this.renderBlockIdPreviewItem(item, rowEl, query),
@@ -62837,6 +62858,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   promptNextRelationTargetId() {
     const pending = this.pendingRelation;
     if (!pending || !Array.isArray(pending.queue) || pending.queue.length === 0) {
+      if (pending && pending.merge) return this.resumeRelationMergeAfterIds(pending);
       return this.commitRelationEdit(
         { add: pending && pending.add, remove: pending && pending.remove, relabel: pending && pending.relabel },
         pending && pending.overrides,
@@ -62939,6 +62961,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     if (pending.queue.length > 0) {
       return this.promptNextRelationTargetId();
     }
+    if (pending.merge) return this.resumeRelationMergeAfterIds(pending);
     const add = pending.add;
     const remove = pending.remove;
     const relabel = pending.relabel;
@@ -65984,6 +66007,101 @@ function relationMergeRefsKey(sources, into, label) {
   });
 }
 
+// Missing-ID queue for a merge commit. Returns the refs whose normalized
+// blockId is empty, in prompt order: every id-less source in stage order,
+// then the target, deduped by normalized path and line.
+function relationMergeMissingIdRefs(sources, into) {
+  const list = [...(Array.isArray(sources) ? sources : []), into].filter(Boolean);
+  const seen = new Set();
+  const out = [];
+  for (const ref of list) {
+    if (normalizeBulletPropertyValue((ref && ref.blockId) || "")) continue;
+    const path = normalizeVaultRelativePath((ref && ref.path) || "");
+    const line = ref && ref.line;
+    const key = `${path}\x00${String(line)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      path,
+      line,
+      rawLine: ref.rawLine,
+      displayText: ref.displayText || ref.text || path,
+    });
+  }
+  return out;
+}
+
+function relationMergeBlockIdSubtitle(position, total, lineIndex) {
+  const linePart = `line ${lineIndex}`;
+  if (Number(total) > 1) {
+    return `⤵ Merging needs an ID · ${position} of ${total} · ${linePart}`;
+  }
+  return `⤵ Merging needs an ID · ${linePart}`;
+}
+
+// Save every touched open editor before `bob` reads disk. The minted IDs
+// may have landed in an open buffer that is not the active view, for
+// example a target note in another tab.
+async function saveRelationMergeEditors(app, paths) {
+  let saved;
+  try {
+    saved = await saveActiveRelationLabelEditor(app);
+  } catch (_error) {
+    saved = { ok: false, message: "Could not save the active note before merging." };
+  }
+  if (!saved || saved.ok !== true) return saved;
+  try {
+    const workspace = app && app.workspace;
+    if (!workspace) return { ok: true };
+    const wanted = new Set(
+      (Array.isArray(paths) ? paths : [])
+        .map((path) => normalizeVaultRelativePath(path || ""))
+        .filter(Boolean),
+    );
+    if (wanted.size === 0) return { ok: true };
+    const leaves = [];
+    if (typeof workspace.iterateAllLeaves === "function") {
+      workspace.iterateAllLeaves((leaf) => leaves.push(leaf));
+    } else if (typeof workspace.getLeavesOfType === "function") {
+      for (const type of ["markdown"]) {
+        try {
+          for (const leaf of workspace.getLeavesOfType(type) || []) leaves.push(leaf);
+        } catch (_typeError) {
+          // Other leaf types are not Markdown editors.
+        }
+      }
+    }
+    let activeView = null;
+    try {
+      if (typeof workspace.getActiveViewOfType === "function") {
+        activeView = workspace.getActiveViewOfType(MarkdownView);
+      }
+      if (!activeView && workspace.activeLeaf) activeView = workspace.activeLeaf.view || null;
+    } catch (_activeError) {
+      activeView = null;
+    }
+    for (const leaf of leaves) {
+      try {
+        const view = leaf && leaf.view;
+        const file = view && view.file;
+        if (!view || !file) continue;
+        if (view === activeView) continue;
+        const normalized = normalizeVaultRelativePath(file.path || "");
+        if (!wanted.has(normalized)) continue;
+        if (typeof view.save !== "function") {
+          return { ok: false, message: "Could not save the active note before merging." };
+        }
+        await view.save();
+      } catch (_leafError) {
+        return { ok: false, message: "Could not save the active note before merging." };
+      }
+    }
+    return { ok: true };
+  } catch (_error) {
+    return { ok: false, message: "Could not save the active note before merging." };
+  }
+}
+
 // The successor-picker model for one merge preview. Every offer reuses
 // group `hand_off` with its additive `merged_from` source key, so the
 // Mac Pull-In card and capture need no new group.
@@ -66130,7 +66248,8 @@ class BulletPropertyPickerRelationMergeMixin extends FilteredPickerModal {
   // The merge branch of `commitRelationLabel`. Returns true when the
   // gesture is fully handled (written, refused with a notice, or armed
   // behind the batch banner).
-  async commitRelationMergeLabel(item, label, withLabel) {
+  async commitRelationMergeLabel(item, label, withLabel, options = {}) {
+    const resumed = Boolean(options && options.resumed === true);
     const targets = Array.isArray(this.relationLabelTargets)
       ? this.relationLabelTargets
       : [];
@@ -66149,13 +66268,6 @@ class BulletPropertyPickerRelationMergeMixin extends FilteredPickerModal {
     }
     const sources = resolved.sources;
     const into = resolved.into;
-    const missingId = [...sources, into].some(
-      (ref) => !normalizeBulletPropertyValue((ref && ref.blockId) || ""),
-    );
-    if (missingId) {
-      new Notice(RELATION_MERGE_MISSING_ID_MESSAGE);
-      return false;
-    }
     if (relationMergeAllClosed(sources)) {
       const groups = this.relationLabelMode === "relabel"
         ? { add: [], remove: [], relabel: withLabel }
@@ -66164,9 +66276,72 @@ class BulletPropertyPickerRelationMergeMixin extends FilteredPickerModal {
       if (committed) new Notice(RELATION_MERGE_ALREADY_CLOSED_MESSAGE);
       return committed;
     }
+    const missingRefs = relationMergeMissingIdRefs(sources, into);
+    for (const ref of missingRefs) {
+      if (typeof ref.rawLine !== "string" || !ref.rawLine) {
+        try {
+          const content = this.relationCancelContentForRef(ref);
+          const lines = String(content || "").split(/\r?\n/);
+          if (Number.isInteger(ref.line) && typeof lines[ref.line] === "string" && lines[ref.line]) {
+            ref.rawLine = lines[ref.line];
+            if (!ref.displayText || ref.displayText === ref.path) {
+              try {
+                ref.displayText = cleanTaskDisplayText(ref.rawLine) || ref.displayText;
+              } catch (_displayError) {
+                // Keep the path fallback.
+              }
+            }
+          }
+        } catch (_contentError) {
+          // The fallback below refuses without prompting.
+        }
+      }
+    }
+    if (missingRefs.some((ref) => !Number.isInteger(ref.line) || typeof ref.rawLine !== "string" || !ref.rawLine)) {
+      new Notice(RELATION_MERGE_MISSING_ID_MESSAGE);
+      return false;
+    }
+    if (missingRefs.length > 0) {
+      if (resumed) {
+        new Notice(RELATION_MERGE_MISSING_ID_MESSAGE);
+        return false;
+      }
+      let rawQuery = "";
+      try {
+        rawQuery = typeof this.getRawQuery === "function" ? String(this.getRawQuery() || "") : "";
+      } catch (_queryError) {
+        rawQuery = "";
+      }
+      const queue = missingRefs.map((ref) => ({
+        path: ref.path,
+        line: ref.line,
+        rawLine: ref.rawLine,
+        displayText: ref.displayText || ref.path,
+      }));
+      this.pendingRelation = {
+        add: [],
+        remove: [],
+        relabel: [],
+        overrides: new Map(),
+        queue,
+        reservedIds: new Set(),
+        reverseOwner: null,
+        merge: {
+          label: String(label || ""),
+          mode: this.relationLabelMode,
+          targets: targets.slice(),
+          query: rawQuery,
+          total: queue.length,
+        },
+      };
+      return this.promptNextRelationTargetId();
+    }
     let saved;
     try {
-      saved = await saveActiveRelationLabelEditor(this.app);
+      saved = await saveRelationMergeEditors(
+        this.app,
+        [...sources.map((ref) => ref.path), into.path],
+      );
     } catch (_error) {
       saved = { ok: false, message: "Could not save the active note before merging." };
     }
@@ -66314,6 +66489,101 @@ class BulletPropertyPickerRelationMergeMixin extends FilteredPickerModal {
     this.pendingRelation = null;
     this.resetRelationMergeCommit();
     return true;
+  }
+
+  // Resume a merge after its missing block IDs were minted through the
+  // relation-target prompt. The session sees the new IDs, the relation
+  // field returns with the merge query, and the merge commits as if the
+  // second Return just happened.
+  async resumeRelationMergeAfterIds(pending) {
+    const merge = pending && pending.merge ? pending.merge : null;
+    const overrides = pending && pending.overrides instanceof Map
+      ? pending.overrides
+      : new Map();
+    const label = merge && merge.label ? String(merge.label) : "";
+    const mode = merge && merge.mode ? merge.mode : "add";
+    const query = merge && typeof merge.query === "string" ? merge.query : "";
+    this.pendingRelation = null;
+    try {
+      const stage = this.vaultStage;
+      const sources = stage && Array.isArray(stage.sources) ? stage.sources : [];
+      const updatedSources = sources.map((source) => {
+        const key = `${normalizeVaultRelativePath(source.path || "")}\x00${source.line}`;
+        const extra = overrides.get(key);
+        if (!extra) return source;
+        return {
+          ...source,
+          blockId: extra.blockId || source.blockId,
+          rawLine: typeof extra.rawLine === "string" ? extra.rawLine : source.rawLine,
+        };
+      });
+      if (stage) {
+        this.vaultStage = { ...stage, sources: Object.freeze(updatedSources) };
+      }
+    } catch (_sourcesError) {
+      // The commit below re-reads the session and refuses on stale state.
+    }
+    let updatedTargets = [];
+    try {
+      const baseTargets = merge && Array.isArray(merge.targets) ? merge.targets : [];
+      updatedTargets = baseTargets.map((target) => {
+        const key = `${normalizeVaultRelativePath(target.path || "")}\x00${target.line}`;
+        const extra = overrides.get(key);
+        if (!extra) return { ...target };
+        return {
+          ...target,
+          blockId: extra.blockId || target.blockId,
+          rawLine: typeof extra.rawLine === "string" ? extra.rawLine : target.rawLine,
+        };
+      });
+    } catch (_targetsError) {
+      updatedTargets = [];
+    }
+    try {
+      this.showRelationLabelStage(updatedTargets, { mode });
+    } catch (_stageError) {
+      // The commit below still runs against the updated session.
+    }
+    try {
+      const want = query || label;
+      if (this.inputEl && typeof want === "string") {
+        this.inputEl.value = want;
+      }
+      if (!this.inputEl) {
+        try {
+          this.getRawQuery = () => want;
+        } catch (_queryError) {
+          // The stored query still drives the commit label.
+        }
+      }
+      if (typeof this.renderResults === "function") {
+        try {
+          this.renderResults();
+        } catch (_renderError) {
+          // Selection below is best effort.
+        }
+      }
+      try {
+        const items = Array.isArray(this.visibleItems)
+          ? this.visibleItems
+          : (Array.isArray(this.items) ? this.items : []);
+        const wantKey = relationCancelLabelKey(label);
+        const index = items.findIndex(
+          (row) => row && typeof row.label === "string" && relationCancelLabelKey(row.label) === wantKey,
+        );
+        if (index >= 0) this.selectedIndex = index;
+      } catch (_selectError) {
+        // Keep the current selection.
+      }
+    } catch (_restoreError) {
+      // The commit below carries the label explicitly.
+    }
+    return this.commitRelationMergeLabel(
+      null,
+      label,
+      updatedTargets.map((target) => ({ ...target, label })),
+      { resumed: true },
+    );
   }
 
   relationCancelStayHintForItem(item) {
@@ -108221,6 +108491,10 @@ Object.assign(module.exports.helpers, {
   relationMergeTargetsFromRefs,
   relationMergeAllClosed,
   relationMergeRefsKey,
+  relationMergeMissingIdRefs,
+  relationMergeBlockIdSubtitle,
+  saveRelationMergeEditors,
+  getBulletPropertyBlockIdHints,
   taskMergeOfferPickerModel,
   formatTaskMergeSuccessNotice,
   relationMergeSuggestionMeta,

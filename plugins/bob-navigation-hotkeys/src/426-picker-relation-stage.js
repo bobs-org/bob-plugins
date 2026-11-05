@@ -608,6 +608,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   promptNextRelationTargetId() {
     const pending = this.pendingRelation;
     if (!pending || !Array.isArray(pending.queue) || pending.queue.length === 0) {
+      if (pending && pending.merge) return this.resumeRelationMergeAfterIds(pending);
       return this.commitRelationEdit(
         { add: pending && pending.add, remove: pending && pending.remove, relabel: pending && pending.relabel },
         pending && pending.overrides,
@@ -710,6 +711,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     if (pending.queue.length > 0) {
       return this.promptNextRelationTargetId();
     }
+    if (pending.merge) return this.resumeRelationMergeAfterIds(pending);
     const add = pending.add;
     const remove = pending.remove;
     const relabel = pending.relabel;

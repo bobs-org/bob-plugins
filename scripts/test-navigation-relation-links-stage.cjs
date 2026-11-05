@@ -2581,3 +2581,114 @@ test("SA22/SA30: successor labels overlay as configured with offers row meta and
     "SA22: inverse spelling resolves to the configured label for the hint only",
   );
 });
+
+test("merge label prompts for the missing source ID then previews with Current:current", async () => {
+  const notes = {
+    "Current.md": "- [ ] #task Current",
+    "Other.md": "- [ ] #task Other ^other",
+  };
+  const { harness, picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
+    "to",
+    notes,
+    { otherBlockId: "other" },
+  );
+  harness.plugin.loadRelationsCloseLabels = () => ({
+    cancel: { keys: [], labels: {} },
+    complete: { keys: [], labels: {} },
+    successor: { keys: [], labels: {} },
+    merge: { keys: ["merged into"], labels: { "merged into": "merged into" } },
+    warnings: [],
+  });
+  harness.plugin.loadRelationsCancelLabels = () => ({ keys: [], labels: {} });
+  const previewCalls = [];
+  const applyCalls = [];
+  const offerless = {
+    schema_version: 1,
+    ok: true,
+    dry_run: true,
+    merges: [{
+      source: { path: "Current.md", block_id: "current", line: 0, title: "Current" },
+      target: { path: "Other.md", block_id: "other", title: "Other", kind: "task" },
+      label: "merged into",
+      outcome: "merged",
+      previous_status: " ",
+      moved_lines: 1,
+      moved_notes: 1,
+      dependents_repointed: [],
+      prerequisites_left: [],
+      successors_orphaned: [],
+      links_pruned: 0,
+      offers: [],
+      message: "merged",
+    }],
+    pull_in: { choice: "none", offer_count: 0, picked_count: 0 },
+    warnings: [],
+    repaired_files: [],
+    applied_paths: ["Current.md", "Other.md"],
+    deferred_paths: [],
+    error: null,
+  };
+  harness.plugin.app.plugins = {
+    plugins: {
+      "bob-ledger-tools": {
+        api: {
+          taskMerge: {
+            version: 1,
+            preview: async (sources, into) => {
+              previewCalls.push({ sources: structuredClone(sources), into: structuredClone(into) });
+              return { ok: true, report: structuredClone(offerless) };
+            },
+            apply: async (sources, into) => {
+              applyCalls.push({ sources: structuredClone(sources), into: structuredClone(into) });
+              return { ok: true, report: structuredClone(offerless) };
+            },
+          },
+        },
+      },
+    },
+  };
+  picker.app = harness.plugin.app;
+  const saveCalls = [];
+  const patchLeaves = () => {
+    const workspace = harness.plugin.app.workspace;
+    const original = workspace.getLeavesOfType.bind(workspace);
+    workspace.getLeavesOfType = (type) => {
+      const leaves = original(type);
+      for (const leaf of leaves) {
+        const view = leaf && leaf.view;
+        if (view && typeof view.save !== "function") {
+          view.save = async () => {
+            saveCalls.push(view.file.path);
+          };
+        }
+      }
+      return leaves;
+    };
+  };
+  patchLeaves();
+  harness.plugin.showGuardedUndoNotice = (message) => {
+    notices.push(String(message));
+  };
+  const prompts = stubRelationBlockIdPrompt(picker);
+  picker.relationLabelTargets = [{ ...other, label: "merged into" }];
+  picker.relationLabelMode = "add";
+  picker.getRawQuery = () => "merged into";
+  picker.vaultStage.files = new Map(Object.entries({
+    "Current.md": notes["Current.md"],
+    "Other.md": notes["Other.md"],
+  }));
+  picker.vaultStage.sources = [{ path: "Current.md", line: 0, blockId: null, rawLine: notes["Current.md"] }];
+  const committed = await picker.commitRelationMergeLabel({}, "merged into", [{ ...other, label: "merged into" }]);
+  assert.equal(committed, false);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].options.mode, "relation-target");
+  assert.equal(previewCalls.length, 0);
+  assert.equal(await picker.confirmRelationTargetBlockId({ valid: true, id: "current" }), true);
+  assert.match(currentEditor.getValue(), /\^current/);
+  assert.equal(previewCalls.length, 1);
+  assert.equal(previewCalls[0].sources[0].blockId, "current");
+  assert.equal(previewCalls[0].into.blockId, "other");
+  assert.equal(applyCalls.length, 1);
+  assert.ok(saveCalls.includes("Other.md") || saveCalls.includes("Current.md"));
+  assert.equal(picker.stage, "relation-label");
+});

@@ -496,9 +496,7 @@ function summarizeProjectDependencyEdit(projectPrj, details = {}) {
         String(lines[details.parentIndex] || ""),
       );
       if (prjBlockId) {
-        targets.push(
-          Object.freeze({ path: projectPrj.path, blockId: prjBlockId }),
-        );
+        targets.push(Object.freeze({ path: projectPrj.path, blockId: prjBlockId }));
       }
     }
     for (const resident of projectPrj.residents) {
@@ -574,6 +572,20 @@ function dependencyPomodoroNoticeSuffix(removed, failed) {
   return "";
 }
 
+function dependencyPomodoroTargetsWithDisplayText(targets, sourcePath, content) {
+  const source = normalizeVaultRelativePath(sourcePath);
+  const lines = String(content || "").split(/\r?\n/);
+  return (Array.isArray(targets) ? targets : []).map((target) => {
+    const path = normalizeVaultRelativePath(target && target.path);
+    const blockId = normalizeBulletPropertyValue(target && target.blockId);
+    if (!path || !blockId || path !== source) return target;
+    const line = findTaskLineByTrailingBlockId(lines, blockId);
+    if (line === null) return target;
+    const displayText = cleanTaskDisplayText(String(lines[line] || ""));
+    return displayText ? Object.freeze({ ...target, displayText }) : target;
+  });
+}
+
 // Synchronous same-file fold for writers that must stay boolean-sync.
 // `hasDaily` is true when today's daily note exists, even when it is a
 // different file (the caller then runs the follow-up write).
@@ -619,11 +631,17 @@ function foldSameNotePomodoroCleanup(
       ),
     })),
   );
+  const cleanupTargets = dependencyPomodoroTargetsWithDisplayText(
+    targets,
+    parentPath,
+    content,
+  );
   let cleanup = null;
   try {
-    cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
+    cleanup = planDeferredPomodoroLinkCleanup(content, cleanupTargets, {
       dailyPath,
       noteIndex,
+      keepNotes: true,
     });
   } catch (_error) {
     cleanup = null;
@@ -679,14 +697,20 @@ async function prepareDependencyPomodoroCleanup(
   if (!snapshot) {
     return empty;
   }
+  const cleanupTargets = dependencyPomodoroTargetsWithDisplayText(
+    list,
+    parentPath,
+    beforeContent,
+  );
   let cleanup = null;
   try {
     cleanup = planDeferredPomodoroLinkCleanup(
       snapshot.sameFile ? nextContent : snapshot.content,
-      list,
+      cleanupTargets,
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
+        keepNotes: true,
       },
     );
   } catch (_cleanupError) {

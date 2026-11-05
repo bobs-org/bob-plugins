@@ -12,6 +12,68 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
   });
 }
 
+// Resolve `{ path, blockId }` deferred-pomodoro targets from task line
+// numbers. A line without a trailing block id cannot be linked.
+function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
+  const path = normalizeVaultRelativePath(sourcePath);
+  const targets = [];
+  for (const lineNumber of Array.isArray(lineNumbers) ? lineNumbers : []) {
+    const blockId = getTrailingBlockId(String((lines || [])[lineNumber] || ""));
+    if (blockId) targets.push(Object.freeze({ path, blockId }));
+  }
+  return Object.freeze(targets);
+}
+
+// Return replacement text only for a dedicated link bullet with authored
+// child list items; other consumed bullets retain the ordinary cleanup path.
+function deferredPomodoroPreservedNoteReplacement(
+  lines,
+  contexts,
+  lineMatches,
+  block,
+  targets,
+  keepNotes,
+) {
+  if (keepNotes !== true) return null;
+  const parentIndent = getBulletIndentWidth(lineMatches[0].lineText);
+  let hasChildNotes = false;
+  for (
+    let childLine = block.startLine;
+    childLine < block.endLineExclusive;
+    childLine += 1
+  ) {
+    const text = String(lines[childLine] || "");
+    if (
+      !contexts[childLine]?.inFence &&
+      PROJECT_LIST_ITEM_RE.test(text) &&
+      getBulletIndentWidth(text) > parentIndent
+    ) {
+      hasChildNotes = true;
+      break;
+    }
+  }
+  if (!hasChildNotes) return null;
+  const displayText = (match) => {
+    const target = targets.find((entry) =>
+      `${normalizeVaultRelativePath(entry.path)}\x00${entry.blockId}` ===
+      match.targetKey,
+    );
+    return String((target && target.displayText) || "").trim();
+  };
+  const names = [...new Set(lineMatches.map(displayText).filter(Boolean))];
+  const prefix = (PROJECT_LIST_ITEM_RE.exec(lineMatches[0].lineText) || [""])[0];
+  const fallback = `^${lineMatches[0].occurrence.blockId}`;
+  return `${prefix}${names.length ? names.join(" · ") : fallback}`;
+}
+
+function deferredPomodoroPreservedNoteLineEdits(noteLines, lines, lineStarts) {
+  return [...noteLines].map(([line, replacement]) => ({
+    start: lineStarts[line],
+    end: lineStarts[line] + String(lines[line] || "").length,
+    replacement,
+  }));
+}
+
 async function agreeNavigationPomodoroCleanup(app, dailyPath, cleanup) {
   return await agreeDeferredPomodoroLinkCleanup(
     getNavigationPomodoroThemesApi(app),

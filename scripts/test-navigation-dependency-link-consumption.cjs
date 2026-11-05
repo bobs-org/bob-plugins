@@ -297,45 +297,53 @@ test("suffix helper names the removed count and the failed follow-up", () => {
   assert.equal(dependencyPomodoroNoticeSuffix(0, false), "");
 });
 
-test("applyDependencyEdit cross-file consumes live links and emptied entries", async () => {
+test("PDL8-PDL10: Depends-On consumption keeps notes, matches aliases, and removes only emptied entries", async () => {
   resetNotices();
+  const parentPath = "projects/Tasks.md";
   const parentNote = ordinaryNote();
   const datePath = dailyPath();
   const daily = pomodoroDaily([
     "- [ ] Current (0900-0930)",
-    "  - [[Tasks#^parent]]",
+    "  - [[Tasks#^parent|Parent alias]]",
     "    - notes",
+    "      - nested note",
     "  - leftover",
     "- [ ] Solo (0930-1000)",
-    "  - [[Tasks#^parent]]",
-    "- [x] Done (0800-0830)",
-    "  - [[Tasks#^parent]]",
+    "  - [[projects/Tasks.md#^parent]]",
+    "- [ ] Case variant (1000-1030)",
+    "  - [[projects/tasks#^parent]]",
+    "- [ ] Untouched ()",
+    "- [x] Done (0800-0830) [t:: 30m]",
+    "  - [[Tasks#^parent|closed alias]]",
     "- [ ] Prose (1000-1030)",
     "  - see [[Tasks#^parent]] later",
     "- [ ] Struck (1030-1100)",
     "  - ~~[[Tasks#^parent]]~~",
   ]);
   const harness = createHarness({
-    "Tasks.md": parentNote,
+    [parentPath]: parentNote,
     [datePath]: daily,
   });
   const editor = new TransactionEditor(parentNote, { line: 0, ch: 0 });
   const outcome = await harness.plugin.applyDependencyEdit({
     editor,
-    parentPath: "Tasks.md",
+    parentPath,
     parentLine: 0,
-    add: [{ path: "Tasks.md", blockId: "target" }],
+    add: [{ path: parentPath, blockId: "target" }],
     remove: [],
     today: PINNED,
   });
   assert.equal(outcome.ok, true, JSON.stringify(outcome));
   assert.match(editor.content, /- \[\?\] #task Parent/);
   const nextDaily = harness.contents.get(datePath);
-  assert.ok(!nextDaily.includes("    - notes"), nextDaily);
+  assert.match(nextDaily, /  - Parent\n    - notes\n      - nested note/);
   assert.ok(nextDaily.includes("leftover"), nextDaily);
   assert.ok(!nextDaily.includes("Solo (0930-1000)"), nextDaily);
+  assert.ok(!nextDaily.includes("Case variant (1000-1030)"), nextDaily);
+  assert.ok(nextDaily.includes("Untouched ()"), nextDaily);
+  assert.ok(nextDaily.includes("Done (0800-0830) [t:: 30m]"), nextDaily);
+  assert.ok(nextDaily.includes("closed alias"), nextDaily);
   assert.match(nextDaily, /see .*later/);
-  assert.ok(nextDaily.includes("- [x] Done (0800-0830)"), nextDaily);
   assert.ok(nextDaily.includes("~~[[Tasks#^parent]]~~"), nextDaily);
   assert.match(outcome.notice, /· removed \d+ Pomodoro link/);
 });

@@ -18263,32 +18263,16 @@ function buildPomodoroBulletSplitNotice(plan = {}, discovery = {}) {
   return text;
 }
 
-// Resolve `{ path, blockId }` deferred-pomodoro targets from a set of task
-// line numbers (as produced by the writers below). A line with no trailing
-// `^block-id` cannot be linked from a Pomodoro sub-bullet, so it contributes
-// nothing.
-function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
-  const path = normalizeVaultRelativePath(sourcePath);
-  const sourceLines = Array.isArray(lines) ? lines : [];
-  const targets = [];
-  for (const lineNumber of Array.isArray(lineNumbers) ? lineNumbers : []) {
-    const blockId = getTrailingBlockId(String(sourceLines[lineNumber] || ""));
-    if (blockId) {
-      targets.push(Object.freeze({ path, blockId }));
-    }
-  }
-  return Object.freeze(targets);
-}
 // Plan the removal of every live link (in today's daily note, under an open
 // Pomodoro entry) to one of `targets`. `options` carries `dailyPath` (the
 // daily note's own vault-relative path, used to resolve a same-note
 // `[[#^id]]` link) and `noteIndex` (from `createScheduledRecoveryNoteIndex`,
 // used to resolve `[[target#^id]]` links to a vault path). Struck links and
 // links under a closed/cancelled entry are never candidates. A dedicated link
-// bullet (the link, its marker, and nothing else) is removed subtree and all;
-// otherwise only the matched token is removed from its bullet. Every entry
-// emptied by these removals is deleted in the same plan; untouched placeholders
-// and entries retaining a non-fenced list item are preserved.
+// bullet is normally removed with its subtree; `keepNotes` replaces a link-only
+// parent with the target's display text when it has child notes. Other bullets
+// lose only the matched token. An entry emptied by this pass is deleted;
+// untouched placeholders and entries retaining a non-fenced list item stay.
 function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   const snapshot = String(dailyContent || "");
   const targetList = Array.from(targets || []).filter(
@@ -18318,7 +18302,6 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
         `${normalizeVaultRelativePath(target.path)}\x00${target.blockId}`,
     ),
   );
-
   const lineStarts = [];
   let runningOffset = 0;
   for (let index = 0; index < lines.length; index += 1) {
@@ -18360,6 +18343,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
           line,
           lineText,
           occurrence,
+          targetKey: key,
           start: lineStarts[line] + occurrence.start,
           end: lineStarts[line] + occurrence.end,
         });
@@ -18381,6 +18365,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   }
 
   const subtreeCandidates = [];
+  const preservedNoteLines = new Map();
   const touchedEntryOffsets = [];
   for (const [line, lineMatches] of matchesByLine) {
     if (
@@ -18392,6 +18377,13 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
       continue;
     }
     const block = findCurrentBulletChildBlock(lines, line);
+    const noteReplacement = deferredPomodoroPreservedNoteReplacement(
+      lines, contexts, lineMatches, block, targetList, options.keepNotes,
+    );
+    if (noteReplacement !== null) {
+      preservedNoteLines.set(line, noteReplacement);
+      continue;
+    }
     const end =
       block.endLineExclusive < lines.length
         ? lineStarts[block.endLineExclusive]
@@ -18527,6 +18519,7 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     ? []
     : matches.filter(
         (match) =>
+          !preservedNoteLines.has(match.line) &&
           !subtreeEdits.some(
             (edit) => edit.start <= match.start && edit.end >= match.end,
           ),
@@ -18539,7 +18532,11 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
     tokenMatchesByLine.get(match.line).push(match);
   }
 
-  const lineEdits = [];
+  const lineEdits = deferredPomodoroPreservedNoteLineEdits(
+    preservedNoteLines,
+    lines,
+    lineStarts,
+  );
   for (const [line, lineMatches] of tokenMatchesByLine) {
     const lineStart = lineStarts[line];
     const lineText = String(lines[line] || "");
@@ -18589,8 +18586,8 @@ function planDeferredPomodoroLinkCleanup(dailyContent, targets, options = {}) {
   return Object.freeze({
     content: nextContent,
     changed: nextContent !== snapshot,
-    // Counts dedicated bullets found, not text-splice operations — adjacent
-    // dedicated bullets can merge into one contiguous edit above.
+    // Counts removed dedicated bullets, not text-splice operations — adjacent
+    // bullets can merge into one contiguous edit above.
     removedBulletCount,
     removedLinkCount: matches.length,
     removedTargets: Object.freeze(
@@ -18749,6 +18746,68 @@ function emptyDeferredPomodoroLinkCleanup(content, unresolvedCount = 0) {
     touchedEntryLines: Object.freeze([]),
     unresolvedCount,
   });
+}
+
+// Resolve `{ path, blockId }` deferred-pomodoro targets from task line
+// numbers. A line without a trailing block id cannot be linked.
+function deferredPomodoroTargetsFromLines(sourcePath, lines, lineNumbers) {
+  const path = normalizeVaultRelativePath(sourcePath);
+  const targets = [];
+  for (const lineNumber of Array.isArray(lineNumbers) ? lineNumbers : []) {
+    const blockId = getTrailingBlockId(String((lines || [])[lineNumber] || ""));
+    if (blockId) targets.push(Object.freeze({ path, blockId }));
+  }
+  return Object.freeze(targets);
+}
+
+// Return replacement text only for a dedicated link bullet with authored
+// child list items; other consumed bullets retain the ordinary cleanup path.
+function deferredPomodoroPreservedNoteReplacement(
+  lines,
+  contexts,
+  lineMatches,
+  block,
+  targets,
+  keepNotes,
+) {
+  if (keepNotes !== true) return null;
+  const parentIndent = getBulletIndentWidth(lineMatches[0].lineText);
+  let hasChildNotes = false;
+  for (
+    let childLine = block.startLine;
+    childLine < block.endLineExclusive;
+    childLine += 1
+  ) {
+    const text = String(lines[childLine] || "");
+    if (
+      !contexts[childLine]?.inFence &&
+      PROJECT_LIST_ITEM_RE.test(text) &&
+      getBulletIndentWidth(text) > parentIndent
+    ) {
+      hasChildNotes = true;
+      break;
+    }
+  }
+  if (!hasChildNotes) return null;
+  const displayText = (match) => {
+    const target = targets.find((entry) =>
+      `${normalizeVaultRelativePath(entry.path)}\x00${entry.blockId}` ===
+      match.targetKey,
+    );
+    return String((target && target.displayText) || "").trim();
+  };
+  const names = [...new Set(lineMatches.map(displayText).filter(Boolean))];
+  const prefix = (PROJECT_LIST_ITEM_RE.exec(lineMatches[0].lineText) || [""])[0];
+  const fallback = `^${lineMatches[0].occurrence.blockId}`;
+  return `${prefix}${names.length ? names.join(" · ") : fallback}`;
+}
+
+function deferredPomodoroPreservedNoteLineEdits(noteLines, lines, lineStarts) {
+  return [...noteLines].map(([line, replacement]) => ({
+    start: lineStarts[line],
+    end: lineStarts[line] + String(lines[line] || "").length,
+    replacement,
+  }));
 }
 
 async function agreeNavigationPomodoroCleanup(app, dailyPath, cleanup) {
@@ -32393,9 +32452,7 @@ function summarizeProjectDependencyEdit(projectPrj, details = {}) {
         String(lines[details.parentIndex] || ""),
       );
       if (prjBlockId) {
-        targets.push(
-          Object.freeze({ path: projectPrj.path, blockId: prjBlockId }),
-        );
+        targets.push(Object.freeze({ path: projectPrj.path, blockId: prjBlockId }));
       }
     }
     for (const resident of projectPrj.residents) {
@@ -32471,6 +32528,20 @@ function dependencyPomodoroNoticeSuffix(removed, failed) {
   return "";
 }
 
+function dependencyPomodoroTargetsWithDisplayText(targets, sourcePath, content) {
+  const source = normalizeVaultRelativePath(sourcePath);
+  const lines = String(content || "").split(/\r?\n/);
+  return (Array.isArray(targets) ? targets : []).map((target) => {
+    const path = normalizeVaultRelativePath(target && target.path);
+    const blockId = normalizeBulletPropertyValue(target && target.blockId);
+    if (!path || !blockId || path !== source) return target;
+    const line = findTaskLineByTrailingBlockId(lines, blockId);
+    if (line === null) return target;
+    const displayText = cleanTaskDisplayText(String(lines[line] || ""));
+    return displayText ? Object.freeze({ ...target, displayText }) : target;
+  });
+}
+
 // Synchronous same-file fold for writers that must stay boolean-sync.
 // `hasDaily` is true when today's daily note exists, even when it is a
 // different file (the caller then runs the follow-up write).
@@ -32516,11 +32587,17 @@ function foldSameNotePomodoroCleanup(
       ),
     })),
   );
+  const cleanupTargets = dependencyPomodoroTargetsWithDisplayText(
+    targets,
+    parentPath,
+    content,
+  );
   let cleanup = null;
   try {
-    cleanup = planDeferredPomodoroLinkCleanup(content, targets, {
+    cleanup = planDeferredPomodoroLinkCleanup(content, cleanupTargets, {
       dailyPath,
       noteIndex,
+      keepNotes: true,
     });
   } catch (_error) {
     cleanup = null;
@@ -32576,14 +32653,20 @@ async function prepareDependencyPomodoroCleanup(
   if (!snapshot) {
     return empty;
   }
+  const cleanupTargets = dependencyPomodoroTargetsWithDisplayText(
+    list,
+    parentPath,
+    beforeContent,
+  );
   let cleanup = null;
   try {
     cleanup = planDeferredPomodoroLinkCleanup(
       snapshot.sameFile ? nextContent : snapshot.content,
-      list,
+      cleanupTargets,
       {
         dailyPath: snapshot.dailyPath,
         noteIndex: snapshot.noteIndex,
+        keepNotes: true,
       },
     );
   } catch (_cleanupError) {

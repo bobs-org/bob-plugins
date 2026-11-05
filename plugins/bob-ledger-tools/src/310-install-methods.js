@@ -19,6 +19,7 @@ function installBobLedgerToolsMixins(pluginClass, mixins) {
 
 installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPlanAndReadyMixin,
+  BobLedgerToolsPlanBudgetOffClockMixin,
   BobLedgerToolsNoteReadyMixin,
   BobLedgerToolsDashboardMixin,
   BobLedgerToolsReadyNotesMixin,

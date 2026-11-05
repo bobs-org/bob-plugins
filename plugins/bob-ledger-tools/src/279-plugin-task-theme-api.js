@@ -530,6 +530,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Off-clock link chips may be disabled or unavailable.
           }
+          try {
+            if (typeof self.schedulePlanBlockRerender === "function") {
+              self.schedulePlanBlockRerender();
+            }
+          } catch (error) {
+            // Plan block rerender after cache fill is best-effort.
+          }
         })
         .catch(() => {
           try {

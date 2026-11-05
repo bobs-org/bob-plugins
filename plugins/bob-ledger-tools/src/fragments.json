@@ -58,6 +58,7 @@
   "173-plugin-attachments-api.js",
   "174-plugin-task-merge-api.js",
   "180-plugin-plan-and-ready.js",
+  "181-plugin-plan-budget-off-clock.js",
   "190-plugin-note-ready.js",
   "200-plugin-dashboard.js",
   "210-plugin-ready-notes.js",

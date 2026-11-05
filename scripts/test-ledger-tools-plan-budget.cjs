@@ -830,3 +830,101 @@ test("work tones: TODAY override and unavailable stay neutral in planBlockModel"
   assert.equal(model.nextModel.tone, workBadgeTone(model.nextModel.section, model.nextModel.cap));
   assert.equal(model.pendingModel.tone, workBadgeTone(model.pendingModel.section, model.pendingModel.cap));
 });
+
+test("plan budget off-clock: pure option semantics", () => {
+  const content =
+    "## Pomodoros\n\n- [ ] () — ONE\n    - [[task#^aaa]]\n" +
+    "- [ ] () — TWO\n    - [[task#^aaa]]\n    - [[other#^bbb]]\n";
+  const calls = [];
+  const budget = computePlanBudget(content, undefined, null, {
+    isOffClockLink: (target, blockId) => {
+      calls.push([target, blockId]);
+      return target === "other";
+    },
+  });
+  assert.equal(budget.links.count, 1);
+  assert.equal(budget.links.offClock, 1);
+  assert.deepEqual(
+    budget.entries.map((entry) => entry.links),
+    [1, 1],
+  );
+  calls.sort();
+  assert.deepEqual(calls, [
+    ["other", "bbb"],
+    ["task", "aaa"],
+  ]);
+
+  const unchanged = computePlanBudget(content);
+  assert.equal(unchanged.links.count, 2);
+  assert.equal(unchanged.links.offClock, 0);
+
+  const throwing = computePlanBudget(content, undefined, null, {
+    isOffClockLink: () => {
+      throw new Error("no vault yet");
+    },
+  });
+  assert.equal(throwing.links.count, 2);
+  assert.equal(throwing.links.offClock, 0);
+
+  const exempt = computePlanBudget(
+    "## Pomodoros\n\n- [ ] () — PLAN\n    - [[task#^aaa]]\n" +
+      "- [ ] () — GOALS\n    - [[task#^bbb]]\n",
+    undefined,
+    null,
+    {
+      isOffClockLink: (target, blockId) => {
+        assert.notEqual(blockId, "aaa");
+        return false;
+      },
+    },
+  );
+  assert.equal(exempt.links.count, 1);
+  assert.equal(exempt.links.offClock, 0);
+});
+
+test("planBlockModel tooltip names off-clock links", () => {
+  const model = planBlockModel({
+    content:
+      "## Pomodoros\n\n- [ ] () — GOALS\n    - [[task#^aaa]]\n    - [[task#^bbb]]\n",
+    tasks: [],
+    today: new Date(2026, 10, 5),
+    caps: defaultPlanCaps(),
+    isToday: () => false,
+  });
+  assert.equal(model.planTitle, "GOALS 2");
+
+  const offClocked = planBlockModel({
+    content:
+      "## Pomodoros\n\n- [ ] () — GOALS\n    - [[task#^aaa]]\n    - [[task#^bbb]]\n",
+    tasks: [],
+    today: new Date(2026, 10, 5),
+    caps: defaultPlanCaps(),
+    isToday: () => false,
+    isOffClockLink: (target) => target === "task",
+  });
+  assert.equal(offClocked.budget.links.count, 0);
+  assert.equal(offClocked.budget.links.offClock, 2);
+  assert.equal(offClocked.planTitle, "GOALS 0 · 2 off-clock uncapped");
+
+  const unnamed = planBlockModel({
+    content: "## Pomodoros\n\n- [ ] ()\n    - [[task#^aaa]]\n",
+    tasks: [],
+    today: new Date(2026, 10, 5),
+    caps: defaultPlanCaps(),
+    isToday: () => false,
+    isOffClockLink: () => true,
+  });
+  assert.equal(unnamed.planTitle, "(unnamed) 0 · 1 off-clock uncapped");
+});
+
+test("api.planBudget budgets content with the off-clock predicate", async () => {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = makeApp();
+  plugin.planBudgetOffClockPredicate = () => () => false;
+  const budget = await plugin.planBudgetForCallers({
+    content: "## Pomodoros\n\n- [ ] () — GOALS\n    - [[task#^aaa]]\n",
+    path: "2026/20261105.md",
+  });
+  assert.equal(budget.links.count, 1);
+  assert.equal(budget.links.offClock, 0);
+});

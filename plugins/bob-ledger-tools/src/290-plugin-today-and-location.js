@@ -534,6 +534,7 @@ class BobLedgerToolsTodayLocationMixin {
           planGate = null;
           planReview = null;
         }
+        const isOffClockLink = typeof this.planBudgetOffClockPredicate === "function" && typeof content === "string" ? this.planBudgetOffClockPredicate(sourcePath, content) : undefined;
         const model = planBlockModel({
           content,
           tasks,
@@ -550,6 +551,7 @@ class BobLedgerToolsTodayLocationMixin {
           themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
           themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
           taskLineForBlock: (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
+          isOffClockLink,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {

@@ -3643,7 +3643,7 @@ function emptyPlanBudget(caps) {
   const effective = effectivePlanCaps(caps);
   return {
     hasSection: false,
-    links: { count: 0, cap: effective.maxLinks, over: false },
+    links: { count: 0, cap: effective.maxLinks, over: false, offClock: 0 },
     status: "ok",
     themeNames: [],
     entries: [],
@@ -3981,11 +3981,11 @@ function planBlockLinks(line, dailyPath) {
 }
 
 function planMeter(count, cap) {
-  return { count, cap, over: count > cap };
+  return { count, cap, over: count > cap, offClock: 0 };
 }
 
 // Pure ledger budget and lint engine implementing docs/plan.md rules 1–9.
-function computePlanBudget(content, caps, dailyPath) {
+function computePlanBudget(content, caps, dailyPath, options = {}) {
   const effective = effectivePlanCaps(caps);
   const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const section = planSectionRange(lines);
@@ -4061,6 +4061,28 @@ function computePlanBudget(content, caps, dailyPath) {
   const seenThemes = new Map();
   const inventoryWarned = new Set();
   const seenLinks = new Set();
+  const seenOffClock = new Set();
+  const offClockMemo = new Map();
+  const isOffClockLink =
+    options && typeof options.isOffClockLink === "function"
+      ? options.isOffClockLink
+      : null;
+  const isOffClock = (target, blockId) => {
+    const key = `${target}\u0000${blockId}`;
+    if (offClockMemo.has(key)) {
+      return offClockMemo.get(key);
+    }
+    let off = false;
+    if (isOffClockLink) {
+      try {
+        off = isOffClockLink(target, blockId) === true;
+      } catch (error) {
+        off = false;
+      }
+    }
+    offClockMemo.set(key, off);
+    return off;
+  };
   let unnamedCounted = false;
 
   for (const entry of scanned) {
@@ -4105,8 +4127,12 @@ function computePlanBudget(content, caps, dailyPath) {
     if (!exemptEntry) {
       for (const [target, blockId] of entryLinks) {
         const key = `${target}\u0000${blockId}`;
-        distinctLinks.add(key);
-        seenLinks.add(key);
+        if (isOffClock(target, blockId)) {
+          seenOffClock.add(key);
+        } else {
+          distinctLinks.add(key);
+          seenLinks.add(key);
+        }
       }
     }
 
@@ -4173,6 +4199,7 @@ function computePlanBudget(content, caps, dailyPath) {
   }
 
   const links = planMeter(seenLinks.size, effective.maxLinks);
+  links.offClock = seenOffClock.size;
   const status = links.over ? "over" : "ok";
   if (links.over) {
     warnings.push({
@@ -30282,7 +30309,27 @@ class BobLedgerToolsPlanAndReadyMixin {
     const { caps } = loadPlanCaps();
     if (options && typeof options.content === "string") {
       const daily = typeof options.path === "string" ? options.path : null;
-      return computePlanBudget(options.content, caps, daily);
+      const resolutionPath =
+        typeof options.path === "string"
+          ? options.path
+          : typeof this.currentDailyPath === "function"
+            ? this.currentDailyPath()
+            : daily;
+      let isOffClockLink;
+      try {
+        isOffClockLink =
+          typeof this.planBudgetOffClockPredicate === "function"
+            ? this.planBudgetOffClockPredicate(
+                resolutionPath,
+                options.content,
+              )
+            : undefined;
+      } catch (error) {
+        isOffClockLink = undefined;
+      }
+      return computePlanBudget(options.content, caps, daily, {
+        isOffClockLink,
+      });
     }
     return (async () => {
       try {
@@ -30290,11 +30337,19 @@ class BobLedgerToolsPlanAndReadyMixin {
           options && typeof options.path === "string" ? options.path : null;
         const targetPath = planBlockTargetPath(this.app, sourcePath);
         const content = await this.readPlanBlockContent(targetPath);
-        return computePlanBudget(
-          typeof content === "string" ? content : "",
-          caps,
-          targetPath,
-        );
+        const text = typeof content === "string" ? content : "";
+        let isOffClockLink;
+        try {
+          isOffClockLink =
+            typeof this.planBudgetOffClockPredicate === "function"
+              ? this.planBudgetOffClockPredicate(targetPath, text)
+              : undefined;
+        } catch (error) {
+          isOffClockLink = undefined;
+        }
+        return computePlanBudget(text, caps, targetPath, {
+          isOffClockLink,
+        });
       } catch (error) {
         return emptyPlanBudget(caps);
       }
@@ -31206,6 +31261,55 @@ class BobLedgerToolsPlanAndReadyMixin {
     });
   }
 
+}
+// ---- src/181-plugin-plan-budget-off-clock.js ----
+class BobLedgerToolsPlanBudgetOffClockMixin {
+  planBudgetOffClockPredicate(dailyPath, content) {
+    try {
+      const sourcePath = String(dailyPath || "");
+      const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+      const memo = new Map();
+      let canonicalDaily = null;
+      try {
+        canonicalDaily = planCanonicalTarget("", sourcePath);
+      } catch (error) {
+        canonicalDaily = null;
+      }
+      return (target, blockId) => {
+        try {
+          const key = `${String(target || "")}\u0000${String(blockId || "")}`;
+          if (memo.has(key)) {
+            return memo.get(key);
+          }
+          let pathPart = String(target || "");
+          if (canonicalDaily !== null && pathPart === canonicalDaily) {
+            pathPart = "";
+          }
+          const link = {
+            pathPart,
+            blockId: String(blockId || ""),
+            token: `[[${pathPart}#^${String(blockId || "")}]]`,
+          };
+          const facts = pomodoroClockLinkFacts(
+            lines,
+            [link],
+            (item) =>
+              this.pomodoroClockResolveTaskLineFrom(item, sourcePath),
+            (item, line) =>
+              this.pomodoroClockResolveLinkClockFrom(item, line, sourcePath),
+          );
+          const off =
+            !!(facts && facts[0] && facts[0].offClock === true);
+          memo.set(key, off);
+          return off;
+        } catch (error) {
+          return false;
+        }
+      };
+    } catch (error) {
+      return () => false;
+    }
+  }
 }
 // ---- src/190-plugin-note-ready.js ----
 class BobLedgerToolsNoteReadyMixin {
@@ -62465,6 +62569,13 @@ class BobLedgerToolsOffClockLinkChipsMixin {
       // Source-cache freshness is a best-effort mirror of Obsidian's event.
     }
     this.scheduleOffClockLinkChipsRefresh();
+    try {
+      if (typeof this.schedulePlanBlockRerender === "function") {
+        this.schedulePlanBlockRerender();
+      }
+    } catch (error) {
+      // Plan block rerender from the off-clock source change is best-effort.
+    }
   }
 
   offClockLinkChipFactModel(lines, link, sourcePath, memo) {
@@ -71741,6 +71852,13 @@ class BobLedgerToolsTaskThemeApiMixin {
           } catch (error) {
             // Off-clock link chips may be disabled or unavailable.
           }
+          try {
+            if (typeof self.schedulePlanBlockRerender === "function") {
+              self.schedulePlanBlockRerender();
+            }
+          } catch (error) {
+            // Plan block rerender after cache fill is best-effort.
+          }
         })
         .catch(() => {
           try {
@@ -80126,6 +80244,7 @@ class BobLedgerToolsTodayLocationMixin {
           planGate = null;
           planReview = null;
         }
+        const isOffClockLink = typeof this.planBudgetOffClockPredicate === "function" && typeof content === "string" ? this.planBudgetOffClockPredicate(sourcePath, content) : undefined;
         const model = planBlockModel({
           content,
           tasks,
@@ -80142,6 +80261,7 @@ class BobLedgerToolsTodayLocationMixin {
           themeConfigured: (key) => this.pomodoroThemeIsConfigured(key),
           themeSimilarTo: (name) => this.pomodoroThemeSimilarTo(name),
           taskLineForBlock: (path, blockId) => this.pomodoroHomeChipTaskLineForBlock(path, blockId),
+          isOffClockLink,
         });
         const container = el.createDiv({ cls: "bob-plan" });
         try {
@@ -87401,6 +87521,7 @@ function installBobLedgerToolsMixins(pluginClass, mixins) {
 
 installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPlanAndReadyMixin,
+  BobLedgerToolsPlanBudgetOffClockMixin,
   BobLedgerToolsNoteReadyMixin,
   BobLedgerToolsDashboardMixin,
   BobLedgerToolsReadyNotesMixin,
@@ -89250,15 +89371,13 @@ function planBlockModel({
   themeConfigured,
   themeSimilarTo,
   taskLineForBlock,
+  isOffClockLink,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
   let budget;
   try {
-    budget =
-      typeof content === "string"
-        ? computePlanBudget(content, effective, targetPath)
-        : emptyPlanBudget(effective);
+    budget = typeof content === "string" ? computePlanBudget(content, effective, targetPath, { isOffClockLink }) : emptyPlanBudget(effective);
   } catch (error) {
     budget = emptyPlanBudget(effective);
   }
@@ -89377,6 +89496,8 @@ function planBlockModel({
   } catch (error) {
     todayTone = null;
   }
+  const offClockCount = budget && budget.links && budget.links.offClock > 0 ? budget.links.offClock : 0;
+  const planTitleText = [themeCounts.join(" · ") || null, offClockCount > 0 ? `${offClockCount} off-clock uncapped` : null].filter(Boolean).join(" · ");
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -89386,7 +89507,7 @@ function planBlockModel({
       : "TODAY –",
     todayTone,
     planTitle: budget.hasSection
-      ? themeCounts.join(" · ") || "no themes"
+      ? planTitleText || "no themes"
       : "no Pomodoros section",
     nextText: nextModel.text,
     pendingText: pendingModel.text,

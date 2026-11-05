@@ -1,0 +1,210 @@
+// Plan budget off-clock vectors: every case runs through the plugin
+// predicate and computePlanBudget, with a fake app and metadata cache
+// built the way test-ledger-tools-off-clock-link-chips.cjs builds them
+// from the pomodoro_clock vectors. today_count is Rust-only and skipped.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const Module = require("node:module");
+const test = require("node:test");
+
+class FakePlugin {
+  constructor(app) {
+    this.app = app;
+  }
+
+  addCommand(command) {
+    this.commands = this.commands || [];
+    this.commands.push(command);
+  }
+
+  registerEditorExtension(extension) {
+    this.editorExtensions = this.editorExtensions || [];
+    this.editorExtensions.push(extension);
+  }
+
+  registerEvent(ref) {
+    this.registeredEvents = this.registeredEvents || [];
+    this.registeredEvents.push(ref);
+  }
+}
+
+const originalLoad = Module._load;
+Module._load = function loadWithStubs(request, parent, isMain) {
+  if (request === "obsidian") {
+    return {
+      MarkdownView: class {},
+      Notice: class {},
+      Platform: { isDesktopApp: true },
+      Plugin: FakePlugin,
+      normalizePath: (value) => value,
+      parseYaml: (text) => JSON.parse(text),
+    };
+  }
+  if (request === "@codemirror/state") {
+    return { Prec: { highest: (value) => value } };
+  }
+  if (request === "@codemirror/view") {
+    return {
+      EditorView: { updateListener: { of: () => ({}) } },
+      keymap: { of: () => ({}) },
+    };
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
+
+const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
+Module._load = originalLoad;
+const h = LedgerToolsPlugin.helpers;
+
+const DAILY = "2026/20261105.md";
+const vectors = JSON.parse(
+  fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "plugins",
+      "bob-ledger-tools",
+      "scripts",
+      "fixtures",
+      "plan_budget_off_clock",
+      "vectors.json",
+    ),
+    "utf8",
+  ),
+);
+
+function frontmatter(source) {
+  const match = /^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/.exec(
+    String(source || ""),
+  );
+  const values = {};
+  if (!match) {
+    return values;
+  }
+  for (const line of match[1].split("\n")) {
+    const field = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!field) {
+      continue;
+    }
+    let value = field[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    } else if (value.toLowerCase() === "true") {
+      value = true;
+    } else if (value.toLowerCase() === "false") {
+      value = false;
+    }
+    values[field[1]] = value;
+  }
+  return values;
+}
+
+function blocksFor(source) {
+  const blocks = {};
+  const lines = String(source || "").split("\n");
+  lines.forEach((line, index) => {
+    const match = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line);
+    if (match) {
+      blocks[match[1]] = { position: { start: { line: index } } };
+      blocks[match[1].toLowerCase()] = {
+        position: { start: { line: index } },
+      };
+    }
+  });
+  return blocks;
+}
+
+function envFor(vector) {
+  const sources = new Map(Object.entries(vector.notes || {}));
+  sources.set(DAILY, vector.day);
+  const files = new Map(
+    [...sources.keys()].map((notePath) => [notePath, { path: notePath }]),
+  );
+  const resolve = (target) => {
+    const name = String(target || "").replace(/\.md$/i, "");
+    const exact = `${name}.md`;
+    if (files.has(exact)) {
+      return files.get(exact);
+    }
+    const stem = name.split("/").pop().toLowerCase();
+    return (
+      [...files.values()].find(
+        (file) =>
+          path.basename(file.path, ".md").toLowerCase() === stem,
+      ) || null
+    );
+  };
+  const vault = {
+    getAbstractFileByPath: (notePath) => files.get(notePath) || null,
+    cachedRead: (file) =>
+      Promise.resolve(sources.get(file && file.path) || null),
+  };
+  const metadataCache = {
+    getFileCache: (file) => ({
+      frontmatter: frontmatter(sources.get(file.path)),
+      blocks: blocksFor(sources.get(file.path)),
+    }),
+    getFirstLinkpathDest: (target) => resolve(target),
+  };
+  return { files, sources, vault, metadataCache, resolve };
+}
+
+function pluginFor(vector) {
+  const env = envFor(vector);
+  const app = {
+    vault: env.vault,
+    metadataCache: env.metadataCache,
+    workspace: { getActiveFile: () => ({ path: DAILY }) },
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = app;
+  for (const [notePath, text] of env.sources) {
+    try {
+      plugin.taskThemeRememberSourceText(notePath, text);
+    } catch (error) {
+      // Source-cache seeding is best-effort.
+    }
+  }
+  return plugin;
+}
+
+for (const vector of vectors.cases) {
+  test(`plan off-clock vectors: ${vector.id}`, () => {
+    const plugin = pluginFor(vector);
+    const predicate = plugin.planBudgetOffClockPredicate(
+      DAILY,
+      vector.day,
+    );
+    const caps =
+      vector.max_links !== undefined
+        ? { maxLinks: vector.max_links }
+        : undefined;
+    const budget = h.computePlanBudget(vector.day, caps, DAILY, {
+      isOffClockLink: predicate,
+    });
+    assert.equal(budget.links.count, vector.links_count, vector.id);
+    assert.equal(
+      budget.links.offClock,
+      vector.links_off_clock,
+      vector.id,
+    );
+    assert.equal(budget.status, vector.status, vector.id);
+    assert.deepEqual(
+      budget.entries.map((entry) => entry.links),
+      vector.entry_links,
+      vector.id,
+    );
+    if (vector.status === "over") {
+      assert.ok(
+        budget.warnings.some(
+          (warning) => warning.code === "plan_link_cap_exceeded",
+        ),
+        `${vector.id}: expected cap lint`,
+      );
+    }
+  });
+}

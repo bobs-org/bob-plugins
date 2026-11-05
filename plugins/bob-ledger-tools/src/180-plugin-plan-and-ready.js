@@ -11,7 +11,27 @@ class BobLedgerToolsPlanAndReadyMixin {
     const { caps } = loadPlanCaps();
     if (options && typeof options.content === "string") {
       const daily = typeof options.path === "string" ? options.path : null;
-      return computePlanBudget(options.content, caps, daily);
+      const resolutionPath =
+        typeof options.path === "string"
+          ? options.path
+          : typeof this.currentDailyPath === "function"
+            ? this.currentDailyPath()
+            : daily;
+      let isOffClockLink;
+      try {
+        isOffClockLink =
+          typeof this.planBudgetOffClockPredicate === "function"
+            ? this.planBudgetOffClockPredicate(
+                resolutionPath,
+                options.content,
+              )
+            : undefined;
+      } catch (error) {
+        isOffClockLink = undefined;
+      }
+      return computePlanBudget(options.content, caps, daily, {
+        isOffClockLink,
+      });
     }
     return (async () => {
       try {
@@ -19,11 +39,19 @@ class BobLedgerToolsPlanAndReadyMixin {
           options && typeof options.path === "string" ? options.path : null;
         const targetPath = planBlockTargetPath(this.app, sourcePath);
         const content = await this.readPlanBlockContent(targetPath);
-        return computePlanBudget(
-          typeof content === "string" ? content : "",
-          caps,
-          targetPath,
-        );
+        const text = typeof content === "string" ? content : "";
+        let isOffClockLink;
+        try {
+          isOffClockLink =
+            typeof this.planBudgetOffClockPredicate === "function"
+              ? this.planBudgetOffClockPredicate(targetPath, text)
+              : undefined;
+        } catch (error) {
+          isOffClockLink = undefined;
+        }
+        return computePlanBudget(text, caps, targetPath, {
+          isOffClockLink,
+        });
       } catch (error) {
         return emptyPlanBudget(caps);
       }

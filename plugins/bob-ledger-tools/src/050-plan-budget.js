@@ -297,7 +297,7 @@ function emptyPlanBudget(caps) {
   const effective = effectivePlanCaps(caps);
   return {
     hasSection: false,
-    links: { count: 0, cap: effective.maxLinks, over: false },
+    links: { count: 0, cap: effective.maxLinks, over: false, offClock: 0 },
     status: "ok",
     themeNames: [],
     entries: [],
@@ -635,11 +635,11 @@ function planBlockLinks(line, dailyPath) {
 }
 
 function planMeter(count, cap) {
-  return { count, cap, over: count > cap };
+  return { count, cap, over: count > cap, offClock: 0 };
 }
 
 // Pure ledger budget and lint engine implementing docs/plan.md rules 1–9.
-function computePlanBudget(content, caps, dailyPath) {
+function computePlanBudget(content, caps, dailyPath, options = {}) {
   const effective = effectivePlanCaps(caps);
   const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
   const section = planSectionRange(lines);
@@ -715,6 +715,28 @@ function computePlanBudget(content, caps, dailyPath) {
   const seenThemes = new Map();
   const inventoryWarned = new Set();
   const seenLinks = new Set();
+  const seenOffClock = new Set();
+  const offClockMemo = new Map();
+  const isOffClockLink =
+    options && typeof options.isOffClockLink === "function"
+      ? options.isOffClockLink
+      : null;
+  const isOffClock = (target, blockId) => {
+    const key = `${target}\u0000${blockId}`;
+    if (offClockMemo.has(key)) {
+      return offClockMemo.get(key);
+    }
+    let off = false;
+    if (isOffClockLink) {
+      try {
+        off = isOffClockLink(target, blockId) === true;
+      } catch (error) {
+        off = false;
+      }
+    }
+    offClockMemo.set(key, off);
+    return off;
+  };
   let unnamedCounted = false;
 
   for (const entry of scanned) {
@@ -759,8 +781,12 @@ function computePlanBudget(content, caps, dailyPath) {
     if (!exemptEntry) {
       for (const [target, blockId] of entryLinks) {
         const key = `${target}\u0000${blockId}`;
-        distinctLinks.add(key);
-        seenLinks.add(key);
+        if (isOffClock(target, blockId)) {
+          seenOffClock.add(key);
+        } else {
+          distinctLinks.add(key);
+          seenLinks.add(key);
+        }
       }
     }
 
@@ -827,6 +853,7 @@ function computePlanBudget(content, caps, dailyPath) {
   }
 
   const links = planMeter(seenLinks.size, effective.maxLinks);
+  links.offClock = seenOffClock.size;
   const status = links.over ? "over" : "ok";
   if (links.over) {
     warnings.push({

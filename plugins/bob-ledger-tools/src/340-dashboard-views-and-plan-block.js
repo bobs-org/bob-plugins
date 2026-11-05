@@ -810,15 +810,13 @@ function planBlockModel({
   themeConfigured,
   themeSimilarTo,
   taskLineForBlock,
+  isOffClockLink,
 }) {
   const effective = effectivePlanCaps(caps);
   const targetPath = planBlockTargetPath(app, sourcePath);
   let budget;
   try {
-    budget =
-      typeof content === "string"
-        ? computePlanBudget(content, effective, targetPath)
-        : emptyPlanBudget(effective);
+    budget = typeof content === "string" ? computePlanBudget(content, effective, targetPath, { isOffClockLink }) : emptyPlanBudget(effective);
   } catch (error) {
     budget = emptyPlanBudget(effective);
   }
@@ -937,6 +935,8 @@ function planBlockModel({
   } catch (error) {
     todayTone = null;
   }
+  const offClockCount = budget && budget.links && budget.links.offClock > 0 ? budget.links.offClock : 0;
+  const planTitleText = [themeCounts.join(" · ") || null, offClockCount > 0 ? `${offClockCount} off-clock uncapped` : null].filter(Boolean).join(" · ");
   return {
     targetPath,
     hasContent: typeof content === "string",
@@ -946,7 +946,7 @@ function planBlockModel({
       : "TODAY –",
     todayTone,
     planTitle: budget.hasSection
-      ? themeCounts.join(" · ") || "no themes"
+      ? planTitleText || "no themes"
       : "no Pomodoros section",
     nextText: nextModel.text,
     pendingText: pendingModel.text,

@@ -144,7 +144,7 @@ links by the meeting span, so a MEET closed when lunch ends still completes
 lunch even though its `+15` buffer runs on.
 
 The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
-Task Link budget (its tooltip lists each type with its link count),
+on-clock Task Link budget (off-clock links are uncapped; its tooltip lists each type with its link count, plus ` · N off-clock uncapped` when off-clock links were left out),
 `PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
 dashboard sections, the `★ GOALS · DECKS · BOB` type line with the highlight
 starred, a hue-ringed roots line of today's root parents (`○ bob 5  ○ sase 2`)

@@ -88,6 +88,13 @@ class BobLedgerToolsOffClockLinkChipsMixin {
       // Source-cache freshness is a best-effort mirror of Obsidian's event.
     }
     this.scheduleOffClockLinkChipsRefresh();
+    try {
+      if (typeof this.schedulePlanBlockRerender === "function") {
+        this.schedulePlanBlockRerender();
+      }
+    } catch (error) {
+      // Plan block rerender from the off-clock source change is best-effort.
+    }
   }
 
   offClockLinkChipFactModel(lines, link, sourcePath, memo) {

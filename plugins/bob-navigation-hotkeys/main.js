@@ -24512,7 +24512,7 @@ function pomodoroEntryRenameTypeConsequence(modal, row) {
     preview.api,
     preview,
     String(row.name || "").trim(),
-    {},
+    { typeMode: "rename" },
   );
   if (plans.some((item) => !item.plan)) {
     return "Task type preview unavailable · nothing will be renamed";
@@ -52918,16 +52918,42 @@ function taskCardTypeLedgerKeys(entries, api) {
   return [...keys];
 }
 
-function taskCardTypeFindLiveLink(details, blockId) {
-  const id = typeof blockId === "string" ? blockId.trim() : "";
-  if (!id) return null;
+function taskCardTypeLinkTargetPathResolver(plugin) {
+  return (linkTarget, sourcePath) => {
+    if (!plugin || typeof plugin.resolveLinkTargetFile !== "function") return null;
+    try {
+      const file = plugin.resolveLinkTargetFile(linkTarget, sourcePath);
+      return file && file.path;
+    } catch (_error) {
+      return null;
+    }
+  };
+}
+
+function taskCardTypeFindLiveLink(details, identity, dailyPath, resolveTargetPath) {
+  const target = identity && typeof identity === "object" ? identity : {};
+  const id = typeof target.blockId === "string" ? target.blockId.trim() : "";
+  const targetPath = normalizeVaultRelativePath(target.path || target.filePath || "");
+  const sourcePath = normalizeVaultRelativePath(dailyPath || "");
+  if (!id || !targetPath || !sourcePath || typeof resolveTargetPath !== "function") return null;
   const matches = [];
   const list = Array.isArray(details) ? details : [];
   for (let entryIndex = 0; entryIndex < list.length; entryIndex += 1) {
     const detail = list[entryIndex];
+    if (!detail || detail.open !== true) continue;
     const links = detail && Array.isArray(detail.linksList) ? detail.linksList : [];
     for (const item of links) {
-      if (item && item.blockId === id) {
+      if (!item || item.blockId !== id) continue;
+      let resolvedPath = "";
+      try {
+        const resolved = resolveTargetPath(item.target, sourcePath);
+        resolvedPath = normalizeVaultRelativePath(
+          typeof resolved === "string" ? resolved : resolved && resolved.path,
+        );
+      } catch (_error) {
+        resolvedPath = "";
+      }
+      if (resolvedPath === targetPath) {
         matches.push(Object.freeze({ entryIndex, line: item.line, rawLine: item.rawLine, entry: detail }));
       }
     }
@@ -53050,8 +53076,10 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
   return Object.freeze({ valid: false, error: "Task link could not be moved", after: text });
 }
 
-function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
+function planTaskCardTypeLedgerMoves(edits, dailyContent, api, options = {}) {
   const working = { content: String(dailyContent || ""), moves: [] };
+  const dailyPath = normalizeVaultRelativePath(options.dailyPath || "");
+  const resolveTargetPath = options.resolveTargetPath;
   let built = null;
   try {
     built = taskCardTypeLedgerEntries(working.content);
@@ -53061,7 +53089,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
   for (const edit of Array.isArray(edits) ? edits : []) {
     const newType = taskCardTypeNewTypeForEdit(edit);
     if (!newType) continue;
-    const blockId = edit.target && edit.target.identity && edit.target.identity.blockId;
+    const identity = edit.target && edit.target.identity;
     let details = built.details;
     let entries = built.entries;
     try {
@@ -53072,7 +53100,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
     } catch (_error) {
       // Keep the last good snapshot.
     }
-    const found = taskCardTypeFindLiveLink(details, blockId);
+    const found = taskCardTypeFindLiveLink(details, identity, dailyPath, resolveTargetPath);
     if (!found || found.multiple === true) continue;
     let relocation = null;
     try {
@@ -55902,6 +55930,13 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     return null;
   }
 
+  taskCardTypeLedgerLookupOptions(snapshot) {
+    return {
+      dailyPath: normalizeVaultRelativePath(snapshot && snapshot.dailyPath || ""),
+      resolveTargetPath: taskCardTypeLinkTargetPathResolver(this.plugin),
+    };
+  }
+
   taskCardTypePreviewKey(selection) {
     if (!selection || typeof selection !== "object") return "none";
     if (selection.kind === "default") return "default";
@@ -55924,8 +55959,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       const built = taskCardTypeLedgerEntries(preview.content);
       const first = actionable[0];
       const newType = taskCardTypeNewTypeForEdit(first);
-      const blockId = first.target && first.target.identity && first.target.identity.blockId;
-      const found = taskCardTypeFindLiveLink(built.details, blockId);
+      const found = taskCardTypeFindLiveLink(
+        built.details,
+        first.target && first.target.identity,
+        preview.snapshot && preview.snapshot.dailyPath,
+        taskCardTypeLinkTargetPathResolver(this.plugin),
+      );
       if (!found || found.multiple === true) return "no live link · ledger unchanged";
       if (!newType) {
         const sourceName = built.entries[found.entryIndex] && built.entries[found.entryIndex].name;
@@ -56310,7 +56349,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           const snapshot = await this.taskCardTypeDailySnapshot();
           let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
-            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+            ledgerPlan = planTaskCardTypeLedgerMoves(
+              actionable,
+              snapshot.content,
+              api,
+              this.taskCardTypeLedgerLookupOptions(snapshot),
+            );
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -56321,7 +56365,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            const replanned = planTaskCardTypeLedgerMoves(
+              actionable,
+              base,
+              api,
+              this.taskCardTypeLedgerLookupOptions(fresh || snapshot),
+            );
             if (!replanned.valid || replanned.content === base) {
               const first = replanned.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
@@ -56376,7 +56425,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           const snapshot = await this.taskCardTypeDailySnapshot();
           let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
-            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+            ledgerPlan = planTaskCardTypeLedgerMoves(
+              actionable,
+              snapshot.content,
+              api,
+              this.taskCardTypeLedgerLookupOptions(snapshot),
+            );
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -56387,7 +56441,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            const replanned = planTaskCardTypeLedgerMoves(
+              actionable,
+              base,
+              api,
+              this.taskCardTypeLedgerLookupOptions(freshSnapshot || snapshot),
+            );
             if (!replanned.valid || replanned.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;
@@ -97532,7 +97591,12 @@ function gestureRetypeRenamePlanForTask(api, record, destinationName, tabPick) {
     return null;
   }
   if (!plan || typeof plan !== "object") return null;
-  if (plan.kind !== "set" && plan.kind !== "clear") return null;
+  if (
+    plan.kind !== "set" &&
+    plan.kind !== "clear" &&
+    plan.kind !== "container" &&
+    plan.kind !== "consistent"
+  ) return null;
   return plan;
 }
 
@@ -97617,7 +97681,12 @@ class BobNavigationHotkeysMoveCommitMixin {
         }
         renameTypeApi = freshPreview.api;
         renameTypePlans = renameTypeApi
-          ? pomodoroBulletMoveTypePlanRows(renameTypeApi, freshPreview, plan.name, {})
+          ? pomodoroBulletMoveTypePlanRows(
+              renameTypeApi,
+              freshPreview,
+              plan.name,
+              { typeMode: "rename" },
+            )
           : [];
         if (renameTypePlans.some((item) => !item.plan)) {
           new Notice("Task type routing could not plan this rename; nothing was changed");
@@ -98401,17 +98470,20 @@ function pomodoroBulletMoveFieldWrite(api, record, plan) {
 
 function pomodoroBulletMoveTypePlanRows(api, preview, destinationName, options = {}) {
   const retype = options.typeMode === "retype";
+  const rename = options.typeMode === "rename";
   return (Array.isArray(preview && preview.records) ? preview.records : []).map((record) => {
     let plan = null;
     try {
-      plan = api.planLanding({
-        field: record.field,
-        effective: record.effective,
-        inherited: record.inherited,
-        destination: destinationName,
-        retype,
-        ...(options.tabPick && retype ? { tabPick: options.tabPick } : {}),
-      });
+      plan = rename
+        ? gestureRetypeRenamePlanForTask(api, record, destinationName, options.tabPick)
+        : api.planLanding({
+            field: record.field,
+            effective: record.effective,
+            inherited: record.inherited,
+            destination: destinationName,
+            retype,
+            ...(options.tabPick && retype ? { tabPick: options.tabPick } : {}),
+          });
     } catch (_error) {
       plan = null;
     }
@@ -100619,14 +100691,15 @@ function gestureRetypeExtractTaskBlockId(rawLine) {
 
 function gestureRetypeFindTaskLineByBlockId(content, blockId) {
   const lines = splitMarkdownContent(String(content || "")).lines;
+  const matches = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = String(lines[index] || "");
-    if (!/- \[[ xX*\/\?\-]\]/.test(line) || !line.includes("#task")) continue;
+    if (!isOpenObsidianTaskLine(line) || !line.includes("#task")) continue;
     if (gestureRetypeExtractTaskBlockId(line) === blockId) {
-      return { line: index, rawLine: line };
+      matches.push({ line: index, rawLine: line });
     }
   }
-  return null;
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function planNoteMoveLedgerRelocation(plugin, options = {}) {
@@ -100659,6 +100732,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       if (change && typeof change.after === "string") postMove.set(path, change.after);
     }
   }
+  const resolveTargetPath = taskCardTypeLinkTargetPathResolver(plugin);
   for (const target of targets) {
     const sourceLine = Number.isInteger(target && target.line) ? target.line : -1;
     const rawLine = typeof target.rawLine === "string" ? target.rawLine : String((splitMarkdownContent(sourceContent).lines[sourceLine] || ""));
@@ -100702,7 +100776,12 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       if (!built || !Array.isArray(built.details)) continue;
       let found = null;
       try {
-        found = taskCardTypeFindLiveLink(built.details, blockId);
+        found = taskCardTypeFindLiveLink(
+          built.details,
+          { path: destinationPath, blockId },
+          path,
+          resolveTargetPath,
+        );
       } catch (_error) {
         found = null;
       }
@@ -100729,7 +100808,12 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       liveContent = dailyEdits.get(livePath).after;
       try {
         const rebuilt = taskCardTypeLedgerEntries(liveContent);
-        const refound = taskCardTypeFindLiveLink(rebuilt.details, blockId);
+        const refound = taskCardTypeFindLiveLink(
+          rebuilt.details,
+          { path: destinationPath, blockId },
+          livePath,
+          resolveTargetPath,
+        );
         if (!refound || refound.multiple === true) continue;
         live = { built: rebuilt, found: refound };
       } catch (_error) {

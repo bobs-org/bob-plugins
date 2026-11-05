@@ -119,16 +119,42 @@ function taskCardTypeLedgerKeys(entries, api) {
   return [...keys];
 }
 
-function taskCardTypeFindLiveLink(details, blockId) {
-  const id = typeof blockId === "string" ? blockId.trim() : "";
-  if (!id) return null;
+function taskCardTypeLinkTargetPathResolver(plugin) {
+  return (linkTarget, sourcePath) => {
+    if (!plugin || typeof plugin.resolveLinkTargetFile !== "function") return null;
+    try {
+      const file = plugin.resolveLinkTargetFile(linkTarget, sourcePath);
+      return file && file.path;
+    } catch (_error) {
+      return null;
+    }
+  };
+}
+
+function taskCardTypeFindLiveLink(details, identity, dailyPath, resolveTargetPath) {
+  const target = identity && typeof identity === "object" ? identity : {};
+  const id = typeof target.blockId === "string" ? target.blockId.trim() : "";
+  const targetPath = normalizeVaultRelativePath(target.path || target.filePath || "");
+  const sourcePath = normalizeVaultRelativePath(dailyPath || "");
+  if (!id || !targetPath || !sourcePath || typeof resolveTargetPath !== "function") return null;
   const matches = [];
   const list = Array.isArray(details) ? details : [];
   for (let entryIndex = 0; entryIndex < list.length; entryIndex += 1) {
     const detail = list[entryIndex];
+    if (!detail || detail.open !== true) continue;
     const links = detail && Array.isArray(detail.linksList) ? detail.linksList : [];
     for (const item of links) {
-      if (item && item.blockId === id) {
+      if (!item || item.blockId !== id) continue;
+      let resolvedPath = "";
+      try {
+        const resolved = resolveTargetPath(item.target, sourcePath);
+        resolvedPath = normalizeVaultRelativePath(
+          typeof resolved === "string" ? resolved : resolved && resolved.path,
+        );
+      } catch (_error) {
+        resolvedPath = "";
+      }
+      if (resolvedPath === targetPath) {
         matches.push(Object.freeze({ entryIndex, line: item.line, rawLine: item.rawLine, entry: detail }));
       }
     }
@@ -251,8 +277,10 @@ function taskCardTypeApplyLedgerEdit(dailyContent, relocation, liveLink, details
   return Object.freeze({ valid: false, error: "Task link could not be moved", after: text });
 }
 
-function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
+function planTaskCardTypeLedgerMoves(edits, dailyContent, api, options = {}) {
   const working = { content: String(dailyContent || ""), moves: [] };
+  const dailyPath = normalizeVaultRelativePath(options.dailyPath || "");
+  const resolveTargetPath = options.resolveTargetPath;
   let built = null;
   try {
     built = taskCardTypeLedgerEntries(working.content);
@@ -262,7 +290,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
   for (const edit of Array.isArray(edits) ? edits : []) {
     const newType = taskCardTypeNewTypeForEdit(edit);
     if (!newType) continue;
-    const blockId = edit.target && edit.target.identity && edit.target.identity.blockId;
+    const identity = edit.target && edit.target.identity;
     let details = built.details;
     let entries = built.entries;
     try {
@@ -273,7 +301,7 @@ function planTaskCardTypeLedgerMoves(edits, dailyContent, api) {
     } catch (_error) {
       // Keep the last good snapshot.
     }
-    const found = taskCardTypeFindLiveLink(details, blockId);
+    const found = taskCardTypeFindLiveLink(details, identity, dailyPath, resolveTargetPath);
     if (!found || found.multiple === true) continue;
     let relocation = null;
     try {

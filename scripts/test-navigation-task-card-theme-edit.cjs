@@ -556,20 +556,60 @@ function dailyNoteWithLink(entryName, blockId, extraEntries = "") {
   return lines.join("\n");
 }
 
+function taskCardTypeResolveTargetPath(target) {
+  const note = String(target || "").split("#")[0].replace(/\.md$/i, "");
+  return note ? `${note}.md` : null;
+}
+
+function planTaskCardTypeMovesForTest(edits, daily, api, dailyPath = "2026/20261028.md") {
+  return helpers.planTaskCardTypeLedgerMoves(edits, daily, api, {
+    dailyPath,
+    resolveTargetPath: taskCardTypeResolveTargetPath,
+  });
+}
+
 test("task-card-relocate: unlinked backlog retype is field-only", () => {
   const api = makeThemeApi();
   const edit = taskCardTypeEditFor("set", "build", "BUILD", "no-link-here", noteSuggestion("WRITE", "dev"));
   const daily = dailyNoteWithLink("FIX", "other-id");
   const built = helpers.taskCardTypeLedgerEntries(daily);
   assert.equal(built.entries.length, 1);
-  const found = helpers.taskCardTypeFindLiveLink(built.details, "no-link-here");
+  const found = helpers.taskCardTypeFindLiveLink(
+    built.details,
+    { path: "Tasks/Alpha.md", blockId: "no-link-here" },
+    "2026/20261028.md",
+    taskCardTypeResolveTargetPath,
+  );
   assert.equal(found, null);
-  const plan = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  const plan = planTaskCardTypeMovesForTest([edit], daily, api);
   assert.equal(plan.valid, true);
   assert.equal(plan.moves.length, 0);
   assert.equal(plan.content, daily);
   const consequence = helpers.taskCardTypeConsequence(edit, { relocation: { kind: "unchanged" }, hasLiveLink: false, sourceEntryName: "FIX", newType: { key: "build", name: "BUILD" } });
   assert.equal(consequence, "no live link · ledger unchanged");
+});
+
+test("task-card-relocate: live link identity uses open entry, vault path, and block ID", () => {
+  const daily = [
+    "## Pomodoros",
+    "- [x] (0920-0950) — FIX",
+    "\t- [[Tasks/Alpha#^same-id]]",
+    "- [ ] () — FIX",
+    "\t- [[Tasks/Beta#^same-id]]",
+    "- [ ] () — BUILD",
+    "\t- [[Tasks/Alpha#^same-id]]",
+  ].join("\n");
+  const built = helpers.taskCardTypeLedgerEntries(daily);
+  const found = helpers.taskCardTypeFindLiveLink(
+    built.details,
+    { path: "Tasks/Alpha.md", blockId: "same-id" },
+    "2026/20261028.md",
+    taskCardTypeResolveTargetPath,
+  );
+  assert.ok(found);
+  assert.equal(found.entryIndex, 2);
+  assert.equal(found.entry.open, true);
+  assert.equal(found.entry.name, "BUILD");
 });
 
 test("task-card-relocate: planned link moves into existing planned BUILD", () => {
@@ -582,7 +622,7 @@ test("task-card-relocate: planned link moves into existing planned BUILD", () =>
     "- [ ] () — BUILD",
     "\t- [[Tasks/Other#^other]]",
   ].join("\n");
-  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  const planned = planTaskCardTypeMovesForTest([edit], daily, api);
   assert.equal(planned.valid, true);
   assert.equal(planned.moves.length, 1);
   assert.equal(planned.moves[0].relocation.kind, "moveTo");
@@ -602,7 +642,7 @@ test("task-card-relocate: sole placeholder renames in place", () => {
   const api = makeThemeApi();
   const edit = taskCardTypeEditFor("set", "build", "BUILD", "sole-1", noteSuggestion("FIX", "dev"));
   const daily = dailyNoteWithLink("FIX", "sole-1");
-  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  const planned = planTaskCardTypeMovesForTest([edit], daily, api);
   assert.equal(planned.valid, true);
   assert.equal(planned.moves.length, 1);
   assert.equal(planned.moves[0].relocation.kind, "renamePlaceholder");
@@ -627,7 +667,7 @@ test("task-card-relocate: crowded placeholder creates below the source", () => {
     "\t- [[Tasks/Alpha#^crowd-1]]",
     "\t- [[Tasks/Other#^crowd-2]]",
   ].join("\n");
-  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  const planned = planTaskCardTypeMovesForTest([edit], daily, api);
   assert.equal(planned.valid, true);
   assert.equal(planned.moves.length, 1);
   assert.equal(planned.moves[0].relocation.kind, "createBelow");
@@ -691,7 +731,7 @@ test("task-card-relocate: daily write is one undo with preimage guard", async ()
   const daily = dailyNoteWithLink("FIX", "w1");
   const edit = taskCardTypeEditFor("set", "build", "BUILD", "w1", noteSuggestion("FIX", "dev"));
   const api = makeThemeApi();
-  const planned = helpers.planTaskCardTypeLedgerMoves([edit], daily, api);
+  const planned = planTaskCardTypeMovesForTest([edit], daily, api);
   assert.equal(planned.moves.length, 1);
   let transactions = 0;
   let stored = daily;

@@ -89,6 +89,13 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
     return null;
   }
 
+  taskCardTypeLedgerLookupOptions(snapshot) {
+    return {
+      dailyPath: normalizeVaultRelativePath(snapshot && snapshot.dailyPath || ""),
+      resolveTargetPath: taskCardTypeLinkTargetPathResolver(this.plugin),
+    };
+  }
+
   taskCardTypePreviewKey(selection) {
     if (!selection || typeof selection !== "object") return "none";
     if (selection.kind === "default") return "default";
@@ -111,8 +118,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
       const built = taskCardTypeLedgerEntries(preview.content);
       const first = actionable[0];
       const newType = taskCardTypeNewTypeForEdit(first);
-      const blockId = first.target && first.target.identity && first.target.identity.blockId;
-      const found = taskCardTypeFindLiveLink(built.details, blockId);
+      const found = taskCardTypeFindLiveLink(
+        built.details,
+        first.target && first.target.identity,
+        preview.snapshot && preview.snapshot.dailyPath,
+        taskCardTypeLinkTargetPathResolver(this.plugin),
+      );
       if (!found || found.multiple === true) return "no live link · ledger unchanged";
       if (!newType) {
         const sourceName = built.entries[found.entryIndex] && built.entries[found.entryIndex].name;
@@ -497,7 +508,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           const snapshot = await this.taskCardTypeDailySnapshot();
           let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
-            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+            ledgerPlan = planTaskCardTypeLedgerMoves(
+              actionable,
+              snapshot.content,
+              api,
+              this.taskCardTypeLedgerLookupOptions(snapshot),
+            );
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -508,7 +524,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const fresh = await this.taskCardTypeDailySnapshot();
             const base = fresh && typeof fresh.content === "string" ? fresh.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            const replanned = planTaskCardTypeLedgerMoves(
+              actionable,
+              base,
+              api,
+              this.taskCardTypeLedgerLookupOptions(fresh || snapshot),
+            );
             if (!replanned.valid || replanned.content === base) {
               const first = replanned.moves[0] || ledgerPlan.moves[0];
               new Notice(taskCardThemeSavedNotice(actionable[0], first ? { moved: false, partial: true } : { moved: false, partial: true }));
@@ -563,7 +584,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           const snapshot = await this.taskCardTypeDailySnapshot();
           let ledgerPlan = { valid: true, moves: [], content: snapshot ? snapshot.content : null };
           if (snapshot && typeof snapshot.content === "string") {
-            ledgerPlan = planTaskCardTypeLedgerMoves(actionable, snapshot.content, api);
+            ledgerPlan = planTaskCardTypeLedgerMoves(
+              actionable,
+              snapshot.content,
+              api,
+              this.taskCardTypeLedgerLookupOptions(snapshot),
+            );
           }
           if (!ledgerPlan.valid) {
             new Notice(`${ledgerPlan.error || "Task link could not be moved"}; nothing was written`);
@@ -574,7 +600,12 @@ class BulletPropertyPickerTaskCardThemeStageMixin extends FilteredPickerModal {
           if (ledgerPlan.moves.length > 0 && snapshot && typeof snapshot.content === "string") {
             const freshSnapshot = await this.taskCardTypeDailySnapshot();
             const base = freshSnapshot && typeof freshSnapshot.content === "string" ? freshSnapshot.content : snapshot.content;
-            const replanned = planTaskCardTypeLedgerMoves(actionable, base, api);
+            const replanned = planTaskCardTypeLedgerMoves(
+              actionable,
+              base,
+              api,
+              this.taskCardTypeLedgerLookupOptions(freshSnapshot || snapshot),
+            );
             if (!replanned.valid || replanned.content === base) {
               new Notice(taskCardThemeSavedNotice(actionable[0], { moved: false, partial: true }));
               if (!isCurrent()) return false;

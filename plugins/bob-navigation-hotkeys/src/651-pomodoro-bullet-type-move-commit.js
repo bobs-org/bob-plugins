@@ -41,17 +41,20 @@ function pomodoroBulletMoveFieldWrite(api, record, plan) {
 
 function pomodoroBulletMoveTypePlanRows(api, preview, destinationName, options = {}) {
   const retype = options.typeMode === "retype";
+  const rename = options.typeMode === "rename";
   return (Array.isArray(preview && preview.records) ? preview.records : []).map((record) => {
     let plan = null;
     try {
-      plan = api.planLanding({
-        field: record.field,
-        effective: record.effective,
-        inherited: record.inherited,
-        destination: destinationName,
-        retype,
-        ...(options.tabPick && retype ? { tabPick: options.tabPick } : {}),
-      });
+      plan = rename
+        ? gestureRetypeRenamePlanForTask(api, record, destinationName, options.tabPick)
+        : api.planLanding({
+            field: record.field,
+            effective: record.effective,
+            inherited: record.inherited,
+            destination: destinationName,
+            retype,
+            ...(options.tabPick && retype ? { tabPick: options.tabPick } : {}),
+          });
     } catch (_error) {
       plan = null;
     }

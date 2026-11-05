@@ -428,7 +428,7 @@ function pomodoroEntryRenameTypeConsequence(modal, row) {
     preview.api,
     preview,
     String(row.name || "").trim(),
-    {},
+    { typeMode: "rename" },
   );
   if (plans.some((item) => !item.plan)) {
     return "Task type preview unavailable · nothing will be renamed";

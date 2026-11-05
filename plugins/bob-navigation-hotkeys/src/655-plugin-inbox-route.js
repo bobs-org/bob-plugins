@@ -12,14 +12,15 @@ function gestureRetypeExtractTaskBlockId(rawLine) {
 
 function gestureRetypeFindTaskLineByBlockId(content, blockId) {
   const lines = splitMarkdownContent(String(content || "")).lines;
+  const matches = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = String(lines[index] || "");
-    if (!/- \[[ xX*\/\?\-]\]/.test(line) || !line.includes("#task")) continue;
+    if (!isOpenObsidianTaskLine(line) || !line.includes("#task")) continue;
     if (gestureRetypeExtractTaskBlockId(line) === blockId) {
-      return { line: index, rawLine: line };
+      matches.push({ line: index, rawLine: line });
     }
   }
-  return null;
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function planNoteMoveLedgerRelocation(plugin, options = {}) {
@@ -52,6 +53,7 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       if (change && typeof change.after === "string") postMove.set(path, change.after);
     }
   }
+  const resolveTargetPath = taskCardTypeLinkTargetPathResolver(plugin);
   for (const target of targets) {
     const sourceLine = Number.isInteger(target && target.line) ? target.line : -1;
     const rawLine = typeof target.rawLine === "string" ? target.rawLine : String((splitMarkdownContent(sourceContent).lines[sourceLine] || ""));
@@ -95,7 +97,12 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       if (!built || !Array.isArray(built.details)) continue;
       let found = null;
       try {
-        found = taskCardTypeFindLiveLink(built.details, blockId);
+        found = taskCardTypeFindLiveLink(
+          built.details,
+          { path: destinationPath, blockId },
+          path,
+          resolveTargetPath,
+        );
       } catch (_error) {
         found = null;
       }
@@ -122,7 +129,12 @@ function planNoteMoveLedgerRelocation(plugin, options = {}) {
       liveContent = dailyEdits.get(livePath).after;
       try {
         const rebuilt = taskCardTypeLedgerEntries(liveContent);
-        const refound = taskCardTypeFindLiveLink(rebuilt.details, blockId);
+        const refound = taskCardTypeFindLiveLink(
+          rebuilt.details,
+          { path: destinationPath, blockId },
+          livePath,
+          resolveTargetPath,
+        );
         if (!refound || refound.multiple === true) continue;
         live = { built: rebuilt, found: refound };
       } catch (_error) {

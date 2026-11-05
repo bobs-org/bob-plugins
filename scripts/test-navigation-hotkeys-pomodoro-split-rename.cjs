@@ -747,12 +747,16 @@ test("planPomodoroEntryRename renames closed and cancelled entries the same way 
 });
 
 test("Pomodoro rename preview counts retyped tasks and reports containers", () => {
+  const retyped = [];
   const api = {
-    planLanding: ({ field }) => field && field.container
-      ? { kind: "container" }
-      : field && field.clear
-        ? { kind: "clear" }
-        : { kind: "set", name: "BUILD" },
+    planRetype: ({ field, destination }) => {
+      retyped.push(destination);
+      return field && field.container
+        ? { kind: "container" }
+        : field && field.clear
+          ? { kind: "clear" }
+          : { kind: "set", name: "BUILD" };
+    },
   };
   const modal = {
     renameTypePreviewState: "ready",
@@ -774,11 +778,12 @@ test("Pomodoro rename preview counts retyped tasks and reports containers", () =
     }),
     "2 tasks become BUILD · 1 task uses inherited types",
   );
+  assert.deepEqual(retyped, ["BUILD", "BUILD", "BUILD"]);
   assert.equal(
     helpers.pomodoroEntryRenameTypeConsequence({
       renameTypePreviewState: "ready",
       renameTypePreview: {
-        api: { planLanding: () => ({ kind: "container" }) },
+        api: { planRetype: () => ({ kind: "container" }) },
         candidates: 1,
         unresolved: 0,
         records: [{ field: { container: true } }],

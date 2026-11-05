@@ -52,7 +52,12 @@ function gestureRetypeRenamePlanForTask(api, record, destinationName, tabPick) {
     return null;
   }
   if (!plan || typeof plan !== "object") return null;
-  if (plan.kind !== "set" && plan.kind !== "clear") return null;
+  if (
+    plan.kind !== "set" &&
+    plan.kind !== "clear" &&
+    plan.kind !== "container" &&
+    plan.kind !== "consistent"
+  ) return null;
   return plan;
 }
 
@@ -137,7 +142,12 @@ class BobNavigationHotkeysMoveCommitMixin {
         }
         renameTypeApi = freshPreview.api;
         renameTypePlans = renameTypeApi
-          ? pomodoroBulletMoveTypePlanRows(renameTypeApi, freshPreview, plan.name, {})
+          ? pomodoroBulletMoveTypePlanRows(
+              renameTypeApi,
+              freshPreview,
+              plan.name,
+              { typeMode: "rename" },
+            )
           : [];
         if (renameTypePlans.some((item) => !item.plan)) {
           new Notice("Task type routing could not plan this rename; nothing was changed");

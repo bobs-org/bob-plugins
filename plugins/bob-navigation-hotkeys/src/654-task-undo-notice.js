@@ -10,7 +10,7 @@ class BobNavigationHotkeysTaskUndoMixin {
           text: options.actionLabel || "Undo",
         });
         button.addEventListener("click", () => {
-          void this.restoreGuardedUndoChanges(restores, {
+          void this.restoreGuardedSnapshots(restores, {
             notice,
             successMessage: options.successMessage || "Undid change",
             failureLabel: options.failureLabel || "Could not undo change",
@@ -21,6 +21,10 @@ class BobNavigationHotkeysTaskUndoMixin {
       // Keep the operation notice if the host cannot render an action button.
     }
     return notice;
+  }
+
+  restoreGuardedSnapshots(restores, options = {}) {
+    return this.restoreGuardedUndoChanges(restores, options);
   }
 
   async restoreGuardedUndoChanges(restores, options = {}) {

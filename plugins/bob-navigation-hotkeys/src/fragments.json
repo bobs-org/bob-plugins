@@ -202,5 +202,6 @@
   "709-task-split-exports.js",
   "710-relation-merge-exports.js",
   "711-pomodoro-name-agreement-exports.js",
-  "712-successor-verdict-exports.js"
+  "712-successor-verdict-exports.js",
+  "713-nav-offer-close-apis.js"
 ]

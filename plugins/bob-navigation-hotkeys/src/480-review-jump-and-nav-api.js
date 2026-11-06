@@ -933,6 +933,7 @@ function createDependencyNavApi(plugin) {
     quickRoll: createQuickRollApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
+    cancel: createCancelApi(),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),

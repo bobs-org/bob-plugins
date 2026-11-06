@@ -696,11 +696,13 @@ test("unblocked text truncates to 48 characters with an ellipsis", () => {
   assert.equal(helpers.formatUnblockedScheduledDate("not-a-date"), "not-a-date");
 });
 
-test("nav api exposes additive notice v3 and keeps version 3", () => {
+test("nav api exposes additive notice v4 and cancel v1 without changing nav api version", () => {
   const api = helpers.createDependencyNavApi({ app: {} });
   assert.equal(api.version, 3);
   assert.ok(api.notice);
-  assert.equal(api.notice.version, 3);
+  assert.equal(api.notice.version, 4);
+  assert.equal(api.cancel.version, 1);
+  assert.equal(typeof api.cancel.planCancel, "function");
   assert.equal(typeof api.notice.showUnblocked, "function");
   assert.equal(Object.isFrozen(api.notice), true);
   assert.equal(api.notice.showUnblocked({ unblocked: [], failure: null }), false);

@@ -990,7 +990,7 @@ function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 3,
-    showUnblocked: (model) => showUnblockedNotice(app, model),
+    version: 4,
+    showUnblocked: (model) => showUnblockedNotice(app, { ...model, __noticePlugin: plugin }),
   });
 }

@@ -1551,6 +1551,26 @@
   cursor: pointer;
 }
 
+.bob-nh-unblock-row.is-offer-close.is-done .bob-nh-unblock-glyph {
+  color: var(--color-green);
+  font-weight: 600;
+}
+
+.bob-nh-unblock-row.is-offer-close.is-cancelled .bob-nh-unblock-glyph {
+  color: var(--color-red);
+  font-weight: 600;
+}
+
+.bob-nh-unblock-row.is-offer-close .bob-nh-unblock-text {
+  color: var(--text-muted);
+}
+
+.bob-nh-unblock-row.is-offer-tickler {
+  grid-template-columns: auto minmax(0, 1fr);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
 .bob-nh-unblock-row.is-muted {
   color: var(--text-muted);
 }

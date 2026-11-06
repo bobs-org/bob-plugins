@@ -462,6 +462,18 @@ in the glyph slot, and the class `is-relation`. Mixed cards add a
 `✓ ‹T›` for done and `‹T› parked` for parked. Held-only and unavailable
 checks use the muted copy from §12.18. Older payloads still render as before.
 Callers add relation rows only when `api.notice?.version >= 3`.
+`notice` v4 additionally reads `offer_closes` (`outcome`, `text`, `message`, and
+`recovered` rows), `offer_close_refused` (`count`, `rows: [{text, why}]`), and
+`undo: { restores: [{path, before, after}] }`. It renders Done / Cancel receipts,
+`↳` tickler rows, a refusal line, and a guarded `Undo closes` action. The action
+restores only when every note still matches the recorded postimage. Older payloads
+retain the v3 rendering.
+
+`cancel` v1 exposes the pure `planCancel(content, targets, {date, reason})` planner.
+Each target is `{line, rawLine}` from the source shown to the user. It wraps the Task
+Card cancel planner and fixes the blank-reason fallback to `🤷 no reason given`; blank
+reasons write that fallback only when the task already has a Cancel Log. Callers write
+the returned content through their own transaction.
 
 Async navigation methods settle to result objects or `null` rather
 than rejecting. `taskLinkLane.matches` is synchronous and

@@ -58,6 +58,10 @@ named Pomodoro session actions to start, stop, extend, and shorten a
 session. Free-text `bob capture TEXT` is not accepted in command mode; use
 the dedicated capture workflow for free-text capture.
 
+When the clipboard contains a Gmail URL, the **FROM CLIPBOARD** section also
+offers **Save this email to Bob Mail**. This row runs the catalogued `gmail
+save` command with that URL.
+
 In argument mode, `Tab` accepts the selected completion, arrows or
 `Ctrl+P` / `Ctrl+N` move through completions in the order shown with the
 selected completion kept in view, and `Enter` accepts a completion.

@@ -1,0 +1,83 @@
+/* Bob Mail notes stay comfortable in either theme and remain readable when this stylesheet is absent. */
+.bob-mail {
+  --bob-mail-reading-width: 74ch;
+  max-width: var(--bob-mail-reading-width);
+  line-height: 1.62;
+}
+
+.bob-mail .callout[data-callout="mail"] {
+  --callout-color: var(--color-blue-rgb, 72, 130, 196);
+  --callout-icon: lucide-mail;
+  border-inline-start-color: rgba(var(--callout-color), 0.7);
+  background-color: rgba(var(--callout-color), 0.08);
+}
+
+.bob-mail .callout[data-callout="mail-sent"] {
+  --callout-color: var(--color-green-rgb, 70, 155, 108);
+  --callout-icon: lucide-send;
+  margin-inline-start: 1.5rem;
+  border-inline-start-color: rgba(var(--callout-color), 0.7);
+  background-color: rgba(var(--callout-color), 0.08);
+}
+
+.bob-mail .callout[data-callout="quote"],
+.bob-mail .callout[data-callout="mail-signature"] {
+  color: var(--text-muted);
+  opacity: 0.76;
+}
+
+.bob-mail .callout[data-callout="mail-signature"] {
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-picker-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 55vh;
+  overflow: auto;
+  margin-top: 0.75rem;
+}
+
+.bob-mail-picker-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  text-align: start;
+  cursor: pointer;
+}
+
+.bob-mail-picker-row:hover,
+.bob-mail-picker-row:focus-visible {
+  background: var(--background-modifier-hover);
+}
+
+.bob-mail-picker-subject {
+  font-weight: var(--font-semibold);
+}
+
+.bob-mail-picker-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.8rem;
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-saved-chip {
+  padding: 0 0.4rem;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-success);
+  color: var(--text-success);
+}
+
+.bob-mail-picker-empty {
+  color: var(--text-muted);
+}

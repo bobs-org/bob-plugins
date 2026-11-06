@@ -492,6 +492,18 @@ function cmSheetIsHttpUrl(value) {
   return /^https?:\/\/\S+$/i.test(String(value || "").trim());
 }
 
+function cmSheetIsGmailUrl(value) {
+  const text = String(value || "").trim();
+  if (!cmSheetIsHttpUrl(text)) return false;
+  try {
+    const url = new URL(text);
+    return (url.protocol === "https:" || url.protocol === "http:") &&
+      url.hostname.toLowerCase() === "mail.google.com" && url.pathname.startsWith("/mail/");
+  } catch (error) {
+    return false;
+  }
+}
+
 // Normalize a note's frontmatter `type` plus the article check into the
 // context kind the sheet builds "For this note" rows from.
 function cmSheetNoteKind(frontmatterType, isArticle) {
@@ -563,6 +575,9 @@ function cmSheetContextRows(catalog, context) {
     fill("ref-queue", [url], "Queue link for reading");
     fill("ref-create", [url], "Create reference now");
     fill("ref-find", [url], "Is this in my library?");
+  }
+  if (url && cmSheetIsGmailUrl(url)) {
+    fill("gmail-save", [url], "Save this email to Bob Mail");
   }
   return rows;
 }

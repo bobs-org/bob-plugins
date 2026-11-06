@@ -86,6 +86,14 @@ function sheetCatalog() {
         exit_codes: [], adapter: null, hosts: [], invalidates: [],
       },
       {
+        id: "gmail-save", path: ["gmail", "save"], fixed: [], title: "Save Gmail thread",
+        about: "Save a Gmail thread", section: "vault", keywords: ["email", "gmail", "save"],
+        effect: "writes", network: true, presentation: "action",
+        policy: "confirm", preview: null, confirm: "Save this Gmail thread?", budget_secs: 60,
+        args: [{ name: "URL", slot: "url", required: true, repeat: false }],
+        exit_codes: [], adapter: null, hosts: [], invalidates: [],
+      },
+      {
         id: "articles-outline", path: ["articles", "outline"], fixed: [], title: "Article outline",
         about: "Outline", section: "vault", keywords: ["outline"],
         effect: "reads", network: false, presentation: "report",
@@ -219,6 +227,12 @@ test("context rows fill For this note and From clipboard", () => {
   const clipRows = helpers.cmSheetContextRows(catalog, { clipboardUrl: "https://example.com/p.pdf" });
   assert.ok(clipRows.some((row) => row.entryId === "ref-queue"));
   assert.ok(clipRows.some((row) => row.entryId === "ref-find"));
+  const gmailRows = helpers.cmSheetContextRows(catalog, {
+    clipboardUrl: "https://mail.google.com/mail/u/0/#all/0123456789abcdef",
+  });
+  const gmailSave = gmailRows.find((row) => row.entryId === "gmail-save");
+  assert.deepEqual(gmailSave.userArgs, ["https://mail.google.com/mail/u/0/#all/0123456789abcdef"]);
+  assert.equal(gmailSave.tagline, "Save this email to Bob Mail");
   const junk = helpers.cmSheetContextRows(catalog, { clipboardUrl: "not a url" });
   assert.equal(junk.length, 0);
   // Unknown entries never produce rows.

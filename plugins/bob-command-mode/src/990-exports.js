@@ -139,6 +139,7 @@ module.exports.helpers = {
   cmSheetEntryUnavailable,
   cmSheetSurfaceRows,
   cmSheetPlainRows,
+  cmSheetIsGmailUrl,
   cmSheetContextRows,
   cmBuildSheetRows,
   cmGroupSheetRows,

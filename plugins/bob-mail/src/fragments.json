@@ -1,0 +1,8 @@
+[
+  "010-load.js",
+  "020-mail-core.js",
+  "030-picker-modal.js",
+  "040-task-modal.js",
+  "050-plugin.js",
+  "060-exports.js"
+]

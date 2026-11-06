@@ -1,5 +1,5 @@
 function mailDefaultSettings() {
-  return { pasteToLink: true };
+  return { pasteToLink: true, undoSeconds: MAIL_COMPOSE_DEFAULT_UNDO_SECONDS };
 }
 
 class BobMailSettingTab extends PluginSettingTab {
@@ -21,6 +21,16 @@ class BobMailSettingTab extends PluginSettingTab {
           this.plugin.settings.pasteToLink = Boolean(value);
           await this.plugin.saveData(this.plugin.settings);
         }));
+    new Setting(containerEl)
+      .setName("Undo seconds")
+      .setDesc("Countdown before a confirmed send runs, with an Undo button. 0 sends at once.")
+      .addText((text) => text
+        .setPlaceholder("5")
+        .setValue(String(mailComposeUndoSeconds(this.plugin.settings)))
+        .onChange(async (value) => {
+          this.plugin.settings.undoSeconds = mailComposeUndoSeconds({ undoSeconds: value });
+          await this.plugin.saveData(this.plugin.settings);
+        }));
   }
 }
 
@@ -29,6 +39,7 @@ class BobMailPlugin extends Plugin {
     this.settings = { ...mailDefaultSettings(), ...((await this.loadData()) || {}) };
     this.mailOldBobNoticed = false;
     this.mailPasteTimers = new Set();
+    this.mailSendActive = false;
     this.addSettingTab(new BobMailSettingTab(this.app, this));
     this.addCommand({
       id: "link-email",
@@ -76,6 +87,59 @@ class BobMailPlugin extends Plugin {
         return true;
       },
     });
+    this.addCommand({
+      id: "new-email",
+      name: "Bob Mail: New email",
+      checkCallback: (checking) => {
+        if (checking) return true;
+        new BobMailNewModal(this.app, this).open();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "reply",
+      name: "Bob Mail: Reply",
+      checkCallback: (checking) => {
+        const context = mailCurrentNote(this.app);
+        if (!context) return false;
+        if (checking) return true;
+        void this.mailAddReply(false);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "reply-all",
+      name: "Bob Mail: Reply all",
+      checkCallback: (checking) => {
+        const context = mailCurrentNote(this.app);
+        if (!context) return false;
+        if (checking) return true;
+        void this.mailAddReply(true);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "save-draft",
+      name: "Bob Mail: Save draft",
+      checkCallback: (checking) => {
+        const context = mailCurrentNote(this.app);
+        if (!context) return false;
+        if (checking) return true;
+        void this.mailSaveDraft();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "send",
+      name: "Bob Mail: Send",
+      checkCallback: (checking) => {
+        const context = mailCurrentNote(this.app);
+        if (!context) return false;
+        if (checking) return true;
+        void this.mailPreviewSend();
+        return true;
+      },
+    });
     const workspace = this.app && this.app.workspace;
     if (workspace && typeof workspace.on === "function") {
       this.registerEvent(workspace.on("editor-paste", (event, editor, view) => {
@@ -113,7 +177,9 @@ class BobMailPlugin extends Plugin {
       }
       return;
     }
-    new Notice(result && result.error || "Bob Mail command failed");
+    const message = result && result.error || "Bob Mail command failed";
+    const hint = mailComposeErrorHint(result);
+    new Notice(hint ? `${message}\n${hint}` : message);
   }
 
   mailOpenGmail(context) {
@@ -136,6 +202,233 @@ class BobMailPlugin extends Plugin {
     const added = Number(row.added_count) || 0;
     new Notice(added ? `Email refreshed · ${added} new message${added === 1 ? "" : "s"}` : "Email is up to date");
     return true;
+  }
+
+  async mailSaveAllMarkdown() {
+    const workspace = this.app && this.app.workspace;
+    if (!workspace || typeof workspace.iterateAllLeaves !== "function") return true;
+    const views = [];
+    try {
+      workspace.iterateAllLeaves((leaf) => {
+        if (leaf && leaf.view instanceof MarkdownView && leaf.view.file) views.push(leaf.view);
+      });
+    } catch (error) {
+      return true;
+    }
+    for (const view of views) {
+      try {
+        if (typeof view.save === "function") await view.save();
+      } catch (error) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async mailOpenNoteAtCursor(notePath, cursor) {
+    const path = String(notePath || "");
+    if (!path) return false;
+    try {
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file) {
+        new Notice(`Email note is not in the vault: ${path}`);
+        return false;
+      }
+      const workspace = this.app && this.app.workspace;
+      const leaf = (workspace && typeof workspace.getLeaf === "function" && workspace.getLeaf(false))
+        || (workspace && workspace.activeLeaf)
+        || null;
+      if (!leaf || typeof leaf.openFile !== "function") return false;
+      await leaf.openFile(file);
+      const line = cursor && Number.isInteger(cursor.line) ? cursor.line : 0;
+      const ch = cursor && Number.isInteger(cursor.column) ? cursor.column : 0;
+      const view = mailActiveMarkdownView(this.app) || (leaf.view && leaf.view.editor ? leaf.view : null);
+      const editor = view && view.editor;
+      if (editor && typeof editor.setCursor === "function") {
+        editor.setCursor({ line, ch });
+        if (typeof editor.focus === "function") editor.focus();
+      }
+      return true;
+    } catch (error) {
+      new Notice("Could not open the email note");
+      return false;
+    }
+  }
+
+  async mailCreateCompose(to, subject) {
+    const result = await this.mailCall(mailNewComposeArgs({ to, subject }));
+    if (!result || !result.ok) return false;
+    const placed = mailNoteCursorPayload(result.document);
+    if (!placed) {
+      new Notice("Bob did not return the new email note");
+      return false;
+    }
+    await this.mailOpenNoteAtCursor(placed.note, { line: placed.line, column: placed.column });
+    return true;
+  }
+
+  async mailAddReply(replyAll) {
+    const notePath = mailComposeNotePath(mailCurrentNote(this.app));
+    if (!notePath) return false;
+    await this.mailSaveAllMarkdown();
+    const result = await this.mailCall(mailReplyComposeArgs(notePath, replyAll));
+    if (!result || !result.ok) return false;
+    const placed = mailNoteCursorPayload(result.document);
+    if (!placed) {
+      new Notice("Bob did not return the reply section");
+      return false;
+    }
+    await this.mailOpenNoteAtCursor(placed.note, { line: placed.line, column: placed.column });
+    return true;
+  }
+
+  async mailSaveDraft() {
+    const notePath = mailComposeNotePath(mailCurrentNote(this.app));
+    if (!notePath) return false;
+    await this.mailSaveAllMarkdown();
+    const result = await this.mailCall(mailDraftComposeArgs(notePath));
+    if (!result || !result.ok) return false;
+    const payload = mailPreviewPayload(result.document);
+    new Notice(payload ? `Draft saved · ${payload.digest.slice(0, 12)}…` : "Draft saved");
+    return true;
+  }
+
+  async mailPreviewSend() {
+    const notePath = mailComposeNotePath(mailCurrentNote(this.app));
+    if (!notePath) return false;
+    await this.mailSaveAllMarkdown();
+    const result = await this.mailCall(mailSendPreviewArgs(notePath));
+    if (!result || !result.ok) return false;
+    const final = mailFinalSendPayload(result.document);
+    if (final && final.status === "already_sent") {
+      new Notice("Already sent; local state reconciled.");
+      return true;
+    }
+    const payload = mailPreviewPayload(result.document);
+    if (!payload) {
+      new Notice("Bob did not return a send preview");
+      return false;
+    }
+    new BobMailSendModal(this.app, this, payload).open();
+    return true;
+  }
+
+  // Holds the single send slot, offers Undo for `undoSeconds`, then sends
+  // with the digest bound to the preview the modal rendered.
+  async mailSendWithUndo(payload) {
+    if (!payload || !payload.note || !payload.digest) return false;
+    if (!mailTryBeginSend(this)) {
+      new Notice("A send is already running");
+      return false;
+    }
+    const seconds = mailComposeUndoSeconds(this.settings);
+    let undo = null;
+    let ticker = null;
+    let remaining = seconds;
+    const stopTicker = () => {
+      if (ticker !== null) {
+        try {
+          clearInterval(ticker);
+        } catch (error) {
+          // The countdown already settled.
+        }
+        ticker = null;
+      }
+    };
+    const notice = new Notice(
+      mailUndoCountdownLabel(remaining),
+      Math.max(1000, seconds * 1000 + 5000),
+    );
+    const hideNotice = () => {
+      try {
+        if (notice && typeof notice.hide === "function") notice.hide();
+      } catch (error) {
+        // The success or failure notice below carries the outcome.
+      }
+    };
+    try {
+      try {
+        const container = notice && notice.noticeEl;
+        if (container && typeof container.createEl === "function") {
+          const button = container.createEl("button", { text: "Undo" });
+          button.addEventListener("click", () => {
+            if (undo) undo.cancel();
+          });
+        }
+      } catch (error) {
+        // The notice text still names the countdown without a button host.
+      }
+      if (seconds > 1 && typeof setInterval === "function") {
+        ticker = setInterval(() => {
+          remaining -= 1;
+          try {
+            if (typeof notice.setMessage === "function") notice.setMessage(mailUndoCountdownLabel(remaining));
+          } catch (error) {
+            // The countdown label is best effort.
+          }
+          if (remaining <= 0) stopTicker();
+        }, 1000);
+      }
+      const proceed = await new Promise((resolve) => {
+        undo = mailCreateSendUndo({
+          seconds,
+          onFire: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      stopTicker();
+      if (!proceed) {
+        hideNotice();
+        new Notice("Send cancelled — the Gmail draft is kept");
+        return false;
+      }
+      hideNotice();
+      return await this.mailExecuteConfirmedSend(payload.note, payload.digest);
+    } finally {
+      stopTicker();
+      mailEndSend(this);
+    }
+  }
+
+  // Runs `bob gmail send -c <digest>` with the digest the modal rendered.
+  // The slot is owned by mailSendWithUndo; a digest mismatch re-previews
+  // instead of sending.
+  async mailExecuteConfirmedSend(notePath, digest) {
+    const result = await this.mailCall(mailSendConfirmArgs(notePath, digest));
+    if (result && result.ok) {
+      const final = mailFinalSendPayload(result.document);
+      const status = final && final.status;
+      if (status === "sent") {
+        new Notice(`Sent${final.threadId ? ` in thread ${final.threadId}` : ""}`);
+        return true;
+      }
+      if (status === "already_sent") {
+        new Notice("Already sent; local state reconciled.");
+        return true;
+      }
+      if (status === "recovered_to_draft") {
+        new Notice("The prior send was not accepted; review a fresh preview before sending again.");
+        return false;
+      }
+      new Notice(`Send status: ${status || "unknown"}`);
+      return false;
+    }
+    if (mailIsDigestMismatch(result)) {
+      new Notice("Email changed — review the new preview");
+      const preview = await this.mailCall(mailSendPreviewArgs(notePath));
+      if (preview && preview.ok) {
+        const payload = mailPreviewPayload(preview.document);
+        if (payload) {
+          new BobMailSendModal(this.app, this, payload).open();
+          return false;
+        }
+      }
+      return false;
+    }
+    return false;
   }
 
   async mailOpenTaskPrompt(context) {

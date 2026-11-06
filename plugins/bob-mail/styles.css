@@ -81,3 +81,54 @@
 .bob-mail-picker-empty {
   color: var(--text-muted);
 }
+
+.bob-mail input[type="text"] {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.bob-mail-send-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.bob-mail-send-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.bob-mail-send-label {
+  color: var(--text-muted);
+  min-width: 4.5rem;
+}
+
+.bob-mail-send-body {
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.bob-mail-send-attachments {
+  margin: 0.5rem 0;
+  padding-inline-start: 1.25rem;
+}
+
+.bob-mail-send-flattened {
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-send-digest {
+  color: var(--text-faint);
+  font-size: var(--font-smaller);
+}
+
+.bob-mail-send-empty {
+  color: var(--text-muted);
+}

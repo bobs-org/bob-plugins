@@ -3,6 +3,7 @@
   "020-mail-core.js",
   "030-picker-modal.js",
   "040-task-modal.js",
+  "045-compose.js",
   "050-plugin.js",
   "060-exports.js"
 ]

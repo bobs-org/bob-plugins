@@ -16,7 +16,7 @@ search and save behavior; the plugin displays its results and inserts links.
 | Version | 0.1.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
-| Description | Link, open, and refresh saved Gmail threads from Obsidian. |
+| Description | Link, open, refresh, and send saved Gmail threads from Obsidian. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -25,8 +25,13 @@ search and save behavior; the plugin displays its results and inserts links.
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
 | Bob Mail: Link email… | `link-email` | — |
+| Bob Mail: New email | `new-email` | — |
 | Bob Mail: Open in Gmail | `open-in-gmail` | — |
 | Bob Mail: Refresh this email | `refresh-this-email` | — |
+| Bob Mail: Reply | `reply` | — |
+| Bob Mail: Reply all | `reply-all` | — |
+| Bob Mail: Save draft | `save-draft` | — |
+| Bob Mail: Send | `send` | — |
 | Bob Mail: Task from this email | `task-from-this-email` | — |
 <!-- END GENERATED: commands -->
 
@@ -55,8 +60,30 @@ was and the notice shows Bob's message.
 - Bob Command Mode offers **Save this email to Bob Mail** under **FROM
   CLIPBOARD** when the clipboard contains a Gmail URL.
 
+## Write and send email
+
+- **Bob Mail: New email** asks for To and Subject, creates the compose note
+  at its final `mail/` path with `bob gmail new`, and opens it with the
+  cursor in the message body.
+- **Bob Mail: Reply** and **Bob Mail: Reply all** add the reply section with
+  `bob gmail reply` and put the cursor inside it.
+- **Bob Mail: Save draft** records the Gmail draft with `bob gmail draft`
+  and shows a toast with the draft digest.
+- **Bob Mail: Send** renders the exact preview from
+  `bob gmail send -d` — recipients, subject, text body, attachments, and any
+  flattened-link notice — in a confirmation modal. Choosing Send starts an
+  Undo countdown (5 seconds by default, adjustable under **Settings → Bob
+  Mail**); when it lapses without Undo, the plugin runs
+  `bob gmail send -c <digest>` with the digest bound to that preview. If the
+  note changed since the preview, nothing is sent and the fresh preview
+  opens instead. A second Send click while one is in flight is ignored.
+
+Read-only and missing-scope failures show Bob's hint, for example to run
+`bob gmail login -s compose` on the approved compose host.
+
 These commands appear only when their required note or link context is
-available. **Link email…** is available in any active Markdown note.
+available. **Link email…** is available in any active Markdown note, as is
+**New email**. Reply, Save draft, and Send need the open mail note.
 
 Bob Mail needs a Bob version that includes `bob gmail`. Older versions show
 the quiet notice **Update bob to use Bob Mail**. On first use, enable Bob Mail

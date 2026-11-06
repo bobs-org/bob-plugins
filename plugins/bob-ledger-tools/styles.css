@@ -2149,6 +2149,54 @@ body.bob-task-tag-marks a.tag.bob-checklist-task-hidden {
   display: none;
 }
 
+/* Checklist stage labels: a quiet small-caps stage name after the
+   sunrise or flag (after a type name when one is shown). Contract:
+   bob-cli `docs/task-tag-marks.md` "Checklist stage labels". The ink
+   is the identity teal, slightly quieter than the glyph, with gentle
+   letter-spacing and a stable left edge so stacked staged rows align.
+   Tasks query rows keep the native pill: no rule here touches them. */
+
+body.bob-task-tag-marks .bob-checklist-stage-label {
+  display: inline;
+  margin-left: 0.32em;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-caps: all-small-caps;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  vertical-align: 0.05em;
+  color: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+  opacity: 0.85;
+  white-space: nowrap;
+  cursor: default;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body.bob-task-tag-marks .bob-checklist-stage-wrap {
+  display: inline;
+  white-space: nowrap;
+}
+
+body.bob-task-tag-marks .bob-checklist-stage-wrap .bob-checklist-stage-label {
+  margin-left: 0.32em;
+}
+
+/* Resting: a closed row's stage label fades exactly like the glyph
+   (the shared 40% mix toward `--text-faint` with 0.75 opacity), on
+   every surface. */
+
+li.task-list-item[data-task="x"] .bob-checklist-stage-label,
+li.task-list-item[data-task="X"] .bob-checklist-stage-label,
+li.task-list-item[data-task="-"] .bob-checklist-stage-label,
+.HyperMD-task-line[data-task="x"] .bob-checklist-stage-label,
+.HyperMD-task-line[data-task="X"] .bob-checklist-stage-label,
+.HyperMD-task-line[data-task="-"] .bob-checklist-stage-label {
+  color: color-mix(in srgb, var(--bob-task-tag-color, var(--bob-task-tag-hue)) 40%, var(--text-faint));
+  opacity: 0.75;
+}
+
 /* Tasks query results: render the checklist identity glyphs with CSS
    alone. The selector checks the membership pair and excludes a row
    carrying both checklist tags; CSS cannot check the token's text-only

@@ -15478,16 +15478,272 @@ function stripChecklistTaskHidden(el) {
   return checklistRemoveClass(el, CHECKLIST_TASK_HIDDEN_CLASS);
 }
 
+// A configured stage tag immediately after the checklist identity run.
+// Owned by `docs/task-tag-marks.md` "Checklist stage labels" in bob-cli.
+// The evaluator (`freshnessChecklistStage`) is the authority: the label
+// shows only when the adjacent tag equals the resolved stage. Never
+// throws; bad input yields null.
+const CHECKLIST_STAGE_LABEL_CLASS = "bob-checklist-stage-label";
+
+function checklistStageListsFor(config) {
+  try {
+    const pre =
+      config && Array.isArray(config.preStages)
+        ? config.preStages.filter((name) => typeof name === "string")
+        : [];
+    const post =
+      config && Array.isArray(config.postStages)
+        ? config.postStages.filter((name) => typeof name === "string")
+        : [];
+    return Object.freeze({ pre: Object.freeze(pre.slice()), post: Object.freeze(post.slice()) });
+  } catch (error) {
+    return Object.freeze({ pre: Object.freeze([]), post: Object.freeze([]) });
+  }
+}
+
+function checklistStageOrderLine(kind, config, current) {
+  try {
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    if (!Array.isArray(names) || names.length === 0) {
+      return "unstaged";
+    }
+    const currentLower = String(current || "").toLowerCase();
+    const parts = names.map((name) =>
+      String(name).toLowerCase() === currentLower ? String(name).toUpperCase() : String(name),
+    );
+    parts.push("unstaged");
+    return parts.join(" → ");
+  } catch (error) {
+    return "unstaged";
+  }
+}
+
+function checklistStageLabelTooltip(stage, kind, config) {
+  try {
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const tier = kind === "post" ? "POST" : "PRE";
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    const index = names
+      .map((name) => String(name).toLowerCase())
+      .indexOf(String(stage).toLowerCase());
+    if (index < 0 || names.length === 0) {
+      return null;
+    }
+    const first = "#" + String(stage).toLowerCase() + " · " + tier + " stage " + (index + 1) + " of " + names.length;
+    return first + "\n" + checklistStageOrderLine(kind, config, stage);
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistStageLabelAria(stage, kind, config) {
+  try {
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const tier = kind === "post" ? "POST" : "PRE";
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    const index = names
+      .map((name) => String(name).toLowerCase())
+      .indexOf(String(stage).toLowerCase());
+    if (index < 0 || names.length === 0) {
+      return null;
+    }
+    return tier + " stage " + (index + 1) + " of " + names.length + ": " + String(stage).toLowerCase();
+  } catch (error) {
+    return null;
+  }
+}
+
+// Resolve the stage label for one task line, or null. Eligible only
+// when the existing PRE/POST identity run is recognized, followed by
+// one whitespace run and one exact whole-token tag equal to `stage(t)`
+// as the evaluator resolves it. Returns the normalized stage, its
+// 0-based index, the tier list length, and the UTF-16 offsets of the
+// stage tag (`tagFrom`/`tagTo`) plus the identity run end (`runTo`)
+// and the `#task` start (`taskFrom`). Never throws.
+function checklistStageLabelForLine(lineText, config) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return null;
+    }
+    try {
+      if (
+        typeof freshnessTaskStatus === "function" &&
+        freshnessTaskStatus(lineText) === null
+      ) {
+        return null;
+      }
+    } catch (error) {
+      return null;
+    }
+    let tokens = [];
+    try {
+      tokens = taskTagMarkTokenRanges(lineText);
+    } catch (error) {
+      return null;
+    }
+    for (const token of tokens) {
+      try {
+        if (!token || typeof token.from !== "number" || typeof token.to !== "number") {
+          continue;
+        }
+        let run = null;
+        try {
+          run =
+            typeof checklistTaskRunEnd === "function"
+              ? checklistTaskRunEnd(lineText, token.to)
+              : null;
+        } catch (error) {
+          run = null;
+        }
+        if (!run || (run.kind !== "pre" && run.kind !== "post")) {
+          continue;
+        }
+        const afterStart = checklistSkipWhitespace(lineText, run.to);
+        if (afterStart < 0) {
+          continue;
+        }
+        let stageToken = null;
+        try {
+          stageToken = checklistReadTagToken(lineText, afterStart);
+        } catch (error) {
+          stageToken = null;
+        }
+        if (!stageToken || typeof stageToken.to !== "number") {
+          continue;
+        }
+        let tags = [];
+        try {
+          tags = checklistTagTokens(lineText);
+        } catch (error) {
+          tags = [];
+        }
+        let resolved = null;
+        try {
+          resolved =
+            typeof freshnessChecklistStage === "function"
+              ? freshnessChecklistStage(tags, run.kind, config)
+              : null;
+        } catch (error) {
+          resolved = null;
+        }
+        if (!resolved || typeof resolved.stage !== "string" || !resolved.stage) {
+          continue;
+        }
+        const expected = "#" + String(resolved.stage).toLowerCase();
+        if (String(stageToken.text).toLowerCase() !== expected) {
+          continue;
+        }
+        const lists = checklistStageListsFor(config);
+        const names = run.kind === "post" ? lists.post : lists.pre;
+        if (!Array.isArray(names) || names.length === 0) {
+          continue;
+        }
+        return Object.freeze({
+          stage: String(resolved.stage).toLowerCase(),
+          stageIndex:
+            typeof resolved.stageIndex === "number" ? resolved.stageIndex : names
+              .map((name) => String(name).toLowerCase())
+              .indexOf(String(resolved.stage).toLowerCase()),
+          stageCount: names.length,
+          kind: run.kind,
+          taskFrom: token.from,
+          runTo: run.to,
+          tagFrom: afterStart,
+          tagTo: stageToken.to,
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The stage anchor after a Reading-view checklist run, or null: the
+// next element sibling after the run's second partner must be a tag
+// anchor whose text equals `#stage` (case-insensitive). Never throws.
+function checklistStageAnchorForRun(taskAnchor, run, stage) {
+  try {
+    if (!run || !Array.isArray(run.anchors) || run.anchors.length < 2) {
+      return null;
+    }
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const second = run.anchors[1];
+    if (!second) {
+      return null;
+    }
+    const candidate = checklistNextAnchorSibling(second);
+    if (!candidate) {
+      return null;
+    }
+    const expected = "#" + String(stage).toLowerCase();
+    return checklistAnchorIsTag(candidate, expected) ? candidate : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistStageLabelElement(doc, stage) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const label = doc.createElement("span");
+    if (!label) {
+      return null;
+    }
+    try {
+      if (typeof label.setAttribute === "function") {
+        label.setAttribute("class", CHECKLIST_STAGE_LABEL_CLASS);
+        label.setAttribute("aria-hidden", "true");
+      } else {
+        label.className = CHECKLIST_STAGE_LABEL_CLASS;
+        label["aria-hidden"] = "true";
+      }
+    } catch (error) {
+      return null;
+    }
+    try {
+      if ("textContent" in label) {
+        label.textContent = String(stage).toLowerCase();
+      } else {
+        label.text = String(stage).toLowerCase();
+      }
+    } catch (error) {
+      return null;
+    }
+    return label;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Live Preview widgets use the same listener-free host as task and ref
 // marks. The constant kind key keeps decorations stable across rebuilds.
 let ChecklistTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   ChecklistTaskMarkWidget = class extends WidgetType {
-    constructor(kind, identity, inheritedEnabled) {
+    constructor(kind, identity, inheritedEnabled, stage) {
       super();
       this.kind = kind === "post" ? "post" : "pre";
       this.identity = identity || null;
       this.inheritedEnabled = inheritedEnabled === true;
+      this.stage =
+        typeof stage === "string" && stage !== "" ? String(stage).toLowerCase() : null;
       const type =
         this.identity && typeof this.identity.type === "string"
           ? this.identity.type
@@ -15509,7 +15765,9 @@ if (WidgetType && typeof WidgetType === "function") {
         "|" +
         state +
         "|" +
-        String(this.inheritedEnabled);
+        String(this.inheritedEnabled) +
+        "|" +
+        String(this.stage || "");
     }
 
     eq(other) {
@@ -15521,16 +15779,51 @@ if (WidgetType && typeof WidgetType === "function") {
     }
 
     toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
       const dom = buildTaskTagMarkElement(
-        typeof document !== "undefined" ? document : null,
+        doc,
         this.kind,
         this.identity,
         this.inheritedEnabled,
       );
       if (!dom) {
-        return typeof document !== "undefined" && document
-          ? document.createElement("span")
-          : null;
+        return doc ? doc.createElement("span") : null;
+      }
+      if (this.stage) {
+        try {
+          const label = checklistStageLabelElement(doc, this.stage);
+          if (label) {
+            const wrap = doc.createElement("span");
+            if (wrap) {
+              try {
+                if (typeof wrap.setAttribute === "function") {
+                  wrap.setAttribute(
+                    "class",
+                    "bob-checklist-stage-wrap bob-checklist-stage-wrap-" + this.kind,
+                  );
+                } else {
+                  wrap.className = "bob-checklist-stage-wrap";
+                }
+              } catch (error) {
+                // Wrapper class is best-effort.
+              }
+              try {
+                if (typeof wrap.appendChild === "function") {
+                  wrap.appendChild(dom);
+                  wrap.appendChild(label);
+                } else {
+                  return dom;
+                }
+              } catch (error) {
+                return dom;
+              }
+              addTaskTagMarkReveal(wrap, view);
+              return wrap;
+            }
+          }
+        } catch (error) {
+          // A glyph without its label still renders.
+        }
       }
       addTaskTagMarkReveal(dom, view);
       return dom;
@@ -54454,6 +54747,19 @@ class BobLedgerToolsTaskTagMarksMixin {
             try {
               if (line.text.indexOf("#task") !== -1) {
                 const sources = taskTagMarkRanges(line.text);
+                let stageInfo = null;
+                try {
+                  if (
+                    typeof checklistStageLabelForLine === "function" &&
+                    typeof this.freshnessConfigSnapshot === "function"
+                  ) {
+                    const snapshot = this.freshnessConfigSnapshot();
+                    const config = snapshot && snapshot.config ? snapshot.config : null;
+                    stageInfo = checklistStageLabelForLine(line.text, config);
+                  }
+                } catch (error) {
+                  stageInfo = null;
+                }
                 for (const source of sources) {
                   try {
                     if (
@@ -54463,8 +54769,22 @@ class BobLedgerToolsTaskTagMarksMixin {
                     ) {
                       continue;
                     }
-                    const absFrom = line.from + source.from;
-                    const absTo = line.from + source.to;
+                    let absFrom = line.from + source.from;
+                    let absTo = line.from + source.to;
+                    let stage = null;
+                    try {
+                      if (
+                        stageInfo &&
+                        (source.kind === "pre" || source.kind === "post") &&
+                        stageInfo.kind === source.kind &&
+                        stageInfo.taskFrom === source.from
+                      ) {
+                        stage = stageInfo.stage;
+                        absTo = line.from + stageInfo.tagTo;
+                      }
+                    } catch (error) {
+                      stage = null;
+                    }
                     let revealed = false;
                     for (const selection of selectionRanges) {
                       try {
@@ -54511,6 +54831,7 @@ class BobLedgerToolsTaskTagMarksMixin {
                             source.kind,
                             identity,
                             inheritedEnabled,
+                            stage,
                           )
                         : source && source.kind === "ref"
                           ? new RefTaskMarkWidget(identity, inheritedEnabled)
@@ -54613,7 +54934,7 @@ class BobLedgerToolsTaskTagMarksMixin {
   // Annotate one eligible `#task` anchor: ref pairs take precedence,
   // then canonical checklist runs, then the ordinary hash. Returns
   // true on success, false otherwise. Never throws.
-  annotateTaskTagAnchor(anchor, identity, inheritedEnabled) {
+  annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, container) {
     try {
       if (!anchor || typeof anchor !== "object") {
         return false;
@@ -54630,12 +54951,21 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       const checklistRun = checklistTaskRunAnchors(anchor);
       if (checklistRun) {
-        return annotateChecklistTaskMark(
+        const ok = annotateChecklistTaskMark(
           anchor,
           checklistRun,
           identity,
           shownInherited,
         );
+        if (!ok) {
+          return false;
+        }
+        try {
+          this.annotateChecklistStageLabel(anchor, checklistRun, ctx, container);
+        } catch (error) {
+          // A glyph without its label still renders.
+        }
+        return true;
       }
       return annotateTaskTagMark(anchor, identity, shownInherited);
     } catch (error) {
@@ -54662,7 +54992,7 @@ class BobLedgerToolsTaskTagMarksMixin {
             continue;
           }
           const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
-          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled);
+          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, el);
         } catch (error) {
           continue;
         }
@@ -54688,7 +55018,7 @@ class BobLedgerToolsTaskTagMarksMixin {
         try {
           if (taskTagMarkElementEligible(anchor, root)) {
             const identity = this.taskTagIdentityForRenderedAnchor(anchor, null);
-            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled)) {
+            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, null, root)) {
               count += 1;
             }
           }
@@ -54713,6 +55043,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       let candidates = [];
       let hidden = [];
+      let stageLabels = [];
       try {
         if (root.querySelectorAll && typeof root.querySelectorAll === "function") {
           candidates = Array.prototype.slice.call(
@@ -54726,6 +55057,13 @@ class BobLedgerToolsTaskTagMarksMixin {
               root.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
             ),
           );
+          try {
+            stageLabels = Array.prototype.slice.call(
+              root.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
+            );
+          } catch (inner) {
+            stageLabels = [];
+          }
         } else if (
           typeof document.querySelectorAll === "function" &&
           root === document.body
@@ -54741,12 +55079,20 @@ class BobLedgerToolsTaskTagMarksMixin {
               document.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
             ),
           );
+          try {
+            stageLabels = Array.prototype.slice.call(
+              document.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
+            );
+          } catch (inner) {
+            stageLabels = [];
+          }
         }
       } catch (error) {
         candidates = [];
         hidden = [];
+        stageLabels = [];
       }
-      if (candidates.length === 0 && hidden.length === 0) {
+      if (candidates.length === 0 && hidden.length === 0 && stageLabels.length === 0) {
         try {
           const stack = [root];
           let guard = 0;
@@ -54776,6 +55122,11 @@ class BobLedgerToolsTaskTagMarksMixin {
                       parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1
                     ) {
                       hidden.push(child);
+                    } else if (
+                      typeof CHECKLIST_STAGE_LABEL_CLASS === "string" &&
+                      parts.indexOf(CHECKLIST_STAGE_LABEL_CLASS) !== -1
+                    ) {
+                      stageLabels.push(child);
                     }
                   }
                 } catch (error) {
@@ -54809,6 +55160,31 @@ class BobLedgerToolsTaskTagMarksMixin {
           const strippedChecklist = stripChecklistTaskHidden(partner);
           if (strippedRef || strippedChecklist) {
             count += 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      for (const label of stageLabels) {
+        try {
+          const parent = label && label.parentNode;
+          if (parent && typeof parent.removeChild === "function") {
+            parent.removeChild(label);
+            count += 1;
+          } else if (label && typeof label.remove === "function") {
+            label.remove();
+            count += 1;
+          } else if (parent && Array.isArray(parent.childNodes)) {
+            const at = parent.childNodes.indexOf(label);
+            if (at !== -1) {
+              parent.childNodes.splice(at, 1);
+              try {
+                label.parentNode = null;
+              } catch (error) {
+                // Parent link clear is best-effort.
+              }
+              count += 1;
+            }
           }
         } catch (error) {
           continue;
@@ -54888,6 +55264,295 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
     } catch (error) {
       // Editor refresh never throws.
+    }
+  }
+}
+// ---- src/264a-plugin-task-tag-stage-labels.js ----
+// --- Task tag stage labels: Reading-view label plumbing --------------------
+// `BobLedgerToolsTaskTagStageLabelsMixin`, installed after the task-tag
+// marks mixin. Resolves the configured checklist stage for a rendered
+// `#task` anchor and renders the quiet small-caps stage label beside
+// the sunrise or flag. Owned by `docs/task-tag-marks.md` "Checklist
+// stage labels" in bob-cli. Every method is synchronous and never
+// throws; bad input yields null or false, and a glyph without its
+// label still renders.
+class BobLedgerToolsTaskTagStageLabelsMixin {
+  taskTagStageLineTextForAnchor(anchor, ctx) {
+    try {
+      let lineText = "";
+      try {
+        const host =
+          anchor && typeof anchor.closest === "function"
+            ? anchor.closest("li") || anchor
+            : anchor;
+        const info =
+          ctx && typeof ctx.getSectionInfo === "function"
+            ? ctx.getSectionInfo(host)
+            : null;
+        if (info && typeof info.text === "string" && info.text) {
+          lineText = info.text;
+        }
+      } catch (error) {
+        lineText = "";
+      }
+      if (!lineText) {
+        try {
+          if (typeof this.taskTagSyntheticLineFromAnchor === "function") {
+            lineText = this.taskTagSyntheticLineFromAnchor(anchor) || "";
+          }
+        } catch (error) {
+          lineText = "";
+        }
+      }
+      if (!lineText) {
+        try {
+          let current = anchor && anchor.parentNode;
+          let guard = 0;
+          while (current && guard < 100) {
+            guard += 1;
+            try {
+              const tag = String(current.tagName || current.nodeName || "").toUpperCase();
+              if (tag === "LI") {
+                lineText =
+                  typeof current.textContent === "string" ? current.textContent : "";
+                if (!lineText) {
+                  try {
+                    const parts = [];
+                    const stack = [current];
+                    let inner = 0;
+                    while (stack.length > 0 && inner < 1000) {
+                      inner += 1;
+                      const node = stack.pop();
+                      if (!node || typeof node !== "object") {
+                        continue;
+                      }
+                      if (node.nodeType === 1) {
+                        let isTag = false;
+                        try {
+                          isTag = Boolean(
+                            node.classList &&
+                              typeof node.classList.contains === "function" &&
+                              node.classList.contains("tag"),
+                          );
+                        } catch (error) {
+                          isTag = false;
+                        }
+                        if (!isTag) {
+                          isTag = String(node.className || "").split(/\s+/).indexOf("tag") !== -1;
+                        }
+                        if (isTag && typeof node.textContent === "string" && node.textContent) {
+                          parts.push(node.textContent);
+                        }
+                      }
+                      for (const child of node.childNodes || []) {
+                        stack.push(child);
+                      }
+                    }
+                    if (parts.length > 0) {
+                      parts.reverse();
+                      lineText = "- [ ] " + parts.join(" ");
+                    }
+                  } catch (error) {
+                    // Tag collection is best-effort.
+                  }
+                }
+                break;
+              }
+            } catch (error) {
+              // Keep walking.
+            }
+            current = current.parentNode || null;
+          }
+        } catch (error) {
+          // Best-effort fallback only.
+        }
+      }
+      return typeof lineText === "string" ? lineText : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  taskTagStageConfig() {
+    try {
+      if (typeof this.freshnessConfigSnapshot === "function") {
+        const snapshot = this.freshnessConfigSnapshot();
+        return snapshot && snapshot.config ? snapshot.config : null;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  taskTagStageDocFor(container, anchor) {
+    try {
+      if (container && container.ownerDocument) {
+        return container.ownerDocument;
+      }
+      if (anchor && anchor.ownerDocument) {
+        return anchor.ownerDocument;
+      }
+      if (typeof document !== "undefined" && document) {
+        return document;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  annotateChecklistStageLabel(anchor, checklistRun, ctx, container) {
+    try {
+      if (!anchor || !checklistRun) {
+        return false;
+      }
+      if (typeof checklistStageLabelForLine !== "function") {
+        return false;
+      }
+      const config = this.taskTagStageConfig();
+      const lineText = this.taskTagStageLineTextForAnchor(anchor, ctx);
+      if (!lineText) {
+        return false;
+      }
+      const stageInfo = checklistStageLabelForLine(lineText, config);
+      if (
+        !stageInfo ||
+        stageInfo.kind !== checklistRun.kind ||
+        typeof stageInfo.stage !== "string" ||
+        !stageInfo.stage
+      ) {
+        return false;
+      }
+      let stageAnchor = null;
+      try {
+        stageAnchor =
+          typeof checklistStageAnchorForRun === "function"
+            ? checklistStageAnchorForRun(anchor, checklistRun, stageInfo.stage)
+            : null;
+      } catch (error) {
+        stageAnchor = null;
+      }
+      if (!stageAnchor) {
+        return false;
+      }
+      try {
+        checklistAddClass(stageAnchor, CHECKLIST_TASK_HIDDEN_CLASS);
+      } catch (error) {
+        // Hiding is best-effort.
+      }
+      let tooltip = null;
+      let aria = null;
+      try {
+        tooltip =
+          typeof checklistStageLabelTooltip === "function"
+            ? checklistStageLabelTooltip(stageInfo.stage, stageInfo.kind, config)
+            : null;
+        aria =
+          typeof checklistStageLabelAria === "function"
+            ? checklistStageLabelAria(stageInfo.stage, stageInfo.kind, config)
+            : null;
+      } catch (error) {
+        tooltip = null;
+        aria = null;
+      }
+      try {
+        if (typeof anchor.setAttribute === "function") {
+          if (aria) {
+            anchor.setAttribute("aria-label", aria);
+          }
+          if (tooltip) {
+            anchor.setAttribute("title", tooltip);
+          }
+        } else {
+          if (aria) {
+            anchor["aria-label"] = aria;
+          }
+          if (tooltip) {
+            anchor.title = tooltip;
+          }
+        }
+      } catch (error) {
+        // Tooltip update is best-effort.
+      }
+      const doc = this.taskTagStageDocFor(container, anchor);
+      if (!doc || typeof doc.createElement !== "function") {
+        return true;
+      }
+      try {
+        const parent = stageAnchor.parentNode || anchor.parentNode || null;
+        if (!parent) {
+          return true;
+        }
+        const kids = parent.childNodes || [];
+        let existing = null;
+        try {
+          for (const kid of kids) {
+            if (!kid || typeof kid !== "object" || kid.nodeType !== 1) {
+              continue;
+            }
+            let classes = "";
+            try {
+              classes =
+                typeof kid.className === "string"
+                  ? kid.className
+                  : typeof kid.getAttribute === "function"
+                    ? kid.getAttribute("class") || ""
+                    : "";
+            } catch (error) {
+              classes = "";
+            }
+            if (
+              typeof classes === "string" &&
+              classes.split(/\s+/).indexOf(CHECKLIST_STAGE_LABEL_CLASS) !== -1
+            ) {
+              existing = kid;
+              break;
+            }
+          }
+        } catch (error) {
+          existing = null;
+        }
+        const wanted = String(stageInfo.stage).toLowerCase();
+        if (existing) {
+          try {
+            const currentText =
+              typeof existing.textContent === "string" ? existing.textContent : "";
+            if (currentText !== wanted) {
+              existing.textContent = wanted;
+            }
+          } catch (error) {
+            // Text update is best-effort.
+          }
+          return true;
+        }
+        const label =
+          typeof checklistStageLabelElement === "function"
+            ? checklistStageLabelElement(doc, wanted)
+            : null;
+        if (!label) {
+          return true;
+        }
+        try {
+          if (typeof parent.insertBefore === "function") {
+            parent.insertBefore(label, stageAnchor.nextSibling || null);
+            try {
+              label.parentNode = parent;
+            } catch (error) {
+              // Parent link is best-effort for fake DOM.
+            }
+          } else if (typeof parent.appendChild === "function") {
+            parent.appendChild(label);
+          }
+        } catch (error) {
+          // Insertion is best-effort; the hidden anchor still preserves copy.
+        }
+      } catch (error) {
+        // Label insertion is best-effort.
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   }
 }
@@ -88312,6 +88977,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
+  BobLedgerToolsTaskTagStageLabelsMixin,
   BobLedgerToolsTaskTagTypeMixin,
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsMarkGateMixin,
@@ -90717,6 +91383,7 @@ module.exports.helpers = {
   CHECKLIST_TASK_MARK_LABELS,
   CHECKLIST_TASK_MARK_TOOLTIPS,
   CHECKLIST_TASK_HIDDEN_CLASS,
+  CHECKLIST_STAGE_LABEL_CLASS,
   ChecklistTaskMarkWidget,
   checklistTagTokens,
   checklistKindForText,
@@ -90725,6 +91392,13 @@ module.exports.helpers = {
   checklistTaskRunAnchors,
   annotateChecklistTaskMark,
   stripChecklistTaskHidden,
+  checklistStageListsFor,
+  checklistStageOrderLine,
+  checklistStageLabelTooltip,
+  checklistStageLabelAria,
+  checklistStageLabelForLine,
+  checklistStageAnchorForRun,
+  checklistStageLabelElement,
   REF_TASK_TAG_TEXT,
   REF_TASK_MARK_TOOLTIP,
   REF_TASK_MARK_LABEL,

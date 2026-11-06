@@ -324,6 +324,19 @@ class BobLedgerToolsTaskTagMarksMixin {
             try {
               if (line.text.indexOf("#task") !== -1) {
                 const sources = taskTagMarkRanges(line.text);
+                let stageInfo = null;
+                try {
+                  if (
+                    typeof checklistStageLabelForLine === "function" &&
+                    typeof this.freshnessConfigSnapshot === "function"
+                  ) {
+                    const snapshot = this.freshnessConfigSnapshot();
+                    const config = snapshot && snapshot.config ? snapshot.config : null;
+                    stageInfo = checklistStageLabelForLine(line.text, config);
+                  }
+                } catch (error) {
+                  stageInfo = null;
+                }
                 for (const source of sources) {
                   try {
                     if (
@@ -333,8 +346,22 @@ class BobLedgerToolsTaskTagMarksMixin {
                     ) {
                       continue;
                     }
-                    const absFrom = line.from + source.from;
-                    const absTo = line.from + source.to;
+                    let absFrom = line.from + source.from;
+                    let absTo = line.from + source.to;
+                    let stage = null;
+                    try {
+                      if (
+                        stageInfo &&
+                        (source.kind === "pre" || source.kind === "post") &&
+                        stageInfo.kind === source.kind &&
+                        stageInfo.taskFrom === source.from
+                      ) {
+                        stage = stageInfo.stage;
+                        absTo = line.from + stageInfo.tagTo;
+                      }
+                    } catch (error) {
+                      stage = null;
+                    }
                     let revealed = false;
                     for (const selection of selectionRanges) {
                       try {
@@ -381,6 +408,7 @@ class BobLedgerToolsTaskTagMarksMixin {
                             source.kind,
                             identity,
                             inheritedEnabled,
+                            stage,
                           )
                         : source && source.kind === "ref"
                           ? new RefTaskMarkWidget(identity, inheritedEnabled)
@@ -483,7 +511,7 @@ class BobLedgerToolsTaskTagMarksMixin {
   // Annotate one eligible `#task` anchor: ref pairs take precedence,
   // then canonical checklist runs, then the ordinary hash. Returns
   // true on success, false otherwise. Never throws.
-  annotateTaskTagAnchor(anchor, identity, inheritedEnabled) {
+  annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, container) {
     try {
       if (!anchor || typeof anchor !== "object") {
         return false;
@@ -500,12 +528,21 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       const checklistRun = checklistTaskRunAnchors(anchor);
       if (checklistRun) {
-        return annotateChecklistTaskMark(
+        const ok = annotateChecklistTaskMark(
           anchor,
           checklistRun,
           identity,
           shownInherited,
         );
+        if (!ok) {
+          return false;
+        }
+        try {
+          this.annotateChecklistStageLabel(anchor, checklistRun, ctx, container);
+        } catch (error) {
+          // A glyph without its label still renders.
+        }
+        return true;
       }
       return annotateTaskTagMark(anchor, identity, shownInherited);
     } catch (error) {
@@ -532,7 +569,7 @@ class BobLedgerToolsTaskTagMarksMixin {
             continue;
           }
           const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
-          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled);
+          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, el);
         } catch (error) {
           continue;
         }
@@ -558,7 +595,7 @@ class BobLedgerToolsTaskTagMarksMixin {
         try {
           if (taskTagMarkElementEligible(anchor, root)) {
             const identity = this.taskTagIdentityForRenderedAnchor(anchor, null);
-            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled)) {
+            if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, null, root)) {
               count += 1;
             }
           }
@@ -583,6 +620,7 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
       let candidates = [];
       let hidden = [];
+      let stageLabels = [];
       try {
         if (root.querySelectorAll && typeof root.querySelectorAll === "function") {
           candidates = Array.prototype.slice.call(
@@ -596,6 +634,13 @@ class BobLedgerToolsTaskTagMarksMixin {
               root.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
             ),
           );
+          try {
+            stageLabels = Array.prototype.slice.call(
+              root.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
+            );
+          } catch (inner) {
+            stageLabels = [];
+          }
         } else if (
           typeof document.querySelectorAll === "function" &&
           root === document.body
@@ -611,12 +656,20 @@ class BobLedgerToolsTaskTagMarksMixin {
               document.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
             ),
           );
+          try {
+            stageLabels = Array.prototype.slice.call(
+              document.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
+            );
+          } catch (inner) {
+            stageLabels = [];
+          }
         }
       } catch (error) {
         candidates = [];
         hidden = [];
+        stageLabels = [];
       }
-      if (candidates.length === 0 && hidden.length === 0) {
+      if (candidates.length === 0 && hidden.length === 0 && stageLabels.length === 0) {
         try {
           const stack = [root];
           let guard = 0;
@@ -646,6 +699,11 @@ class BobLedgerToolsTaskTagMarksMixin {
                       parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1
                     ) {
                       hidden.push(child);
+                    } else if (
+                      typeof CHECKLIST_STAGE_LABEL_CLASS === "string" &&
+                      parts.indexOf(CHECKLIST_STAGE_LABEL_CLASS) !== -1
+                    ) {
+                      stageLabels.push(child);
                     }
                   }
                 } catch (error) {
@@ -679,6 +737,31 @@ class BobLedgerToolsTaskTagMarksMixin {
           const strippedChecklist = stripChecklistTaskHidden(partner);
           if (strippedRef || strippedChecklist) {
             count += 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      for (const label of stageLabels) {
+        try {
+          const parent = label && label.parentNode;
+          if (parent && typeof parent.removeChild === "function") {
+            parent.removeChild(label);
+            count += 1;
+          } else if (label && typeof label.remove === "function") {
+            label.remove();
+            count += 1;
+          } else if (parent && Array.isArray(parent.childNodes)) {
+            const at = parent.childNodes.indexOf(label);
+            if (at !== -1) {
+              parent.childNodes.splice(at, 1);
+              try {
+                label.parentNode = null;
+              } catch (error) {
+                // Parent link clear is best-effort.
+              }
+              count += 1;
+            }
           }
         } catch (error) {
           continue;

@@ -187,6 +187,13 @@ const {
   CHECKLIST_TASK_MARK_LABELS,
   CHECKLIST_TASK_MARK_TOOLTIPS,
   CHECKLIST_TASK_HIDDEN_CLASS,
+  CHECKLIST_STAGE_LABEL_CLASS,
+  checklistStageLabelForLine,
+  checklistStageLabelTooltip,
+  checklistStageLabelAria,
+  checklistStageOrderLine,
+  checklistStageAnchorForRun,
+  checklistStageLabelElement,
   refTaskPairEnd,
   taskTagMarkTokenRanges,
   taskTagMarkRanges,
@@ -1702,4 +1709,228 @@ test("mark gate holds in popout windows for both toggle states", () => {
       global.document = savedDocument;
     }
   }
+});
+
+const STAGE_CONFIG = Object.freeze({
+  preStages: Object.freeze(["terminal", "periods", "browser"]),
+  postStages: Object.freeze(["periods"]),
+});
+
+function pluginWithStageConfig(config = STAGE_CONFIG) {
+  const plugin = pluginWithTaskTag();
+  plugin.freshnessConfigSnapshot = () => ({ config, invalid: false });
+  return plugin;
+}
+
+function stageCtxFor(line) {
+  return {
+    sourcePath: "gtd_daily.md",
+    getSectionInfo: () => ({ text: line }),
+  };
+}
+
+function makeStageTree({ tags, gaps } = {}) {
+  const list = tags || ["#task", "#gtd", "#pre", "#terminal"];
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  fx.root.appendChild(li);
+  const anchors = [];
+  for (let index = 0; index < list.length; index += 1) {
+    if (index > 0) {
+      li.appendChild(fx.doc.createTextNode(gaps && gaps[index - 1] !== undefined ? gaps[index - 1] : " "));
+    }
+    const anchor = makeAnchor(fx, { text: list[index], href: list[index] });
+    li.appendChild(anchor);
+    anchors.push(anchor);
+  }
+  return { fx, li, anchors };
+}
+
+function stageLabelsIn(li) {
+  const found = [];
+  const stack = [li];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+    if (node.nodeType === 1) {
+      const classes = String(node.className || "").split(/\s+/);
+      if (classes.indexOf(CHECKLIST_STAGE_LABEL_CLASS) !== -1) {
+        found.push(node);
+      }
+    }
+    for (const child of node.childNodes || []) {
+      stack.push(child);
+    }
+  }
+  return found;
+}
+
+test("SL core: stage resolves only for the adjacent winner tag", () => {
+  const sl1 = "- [?] #task #gtd #pre #terminal Clean up";
+  const info1 = checklistStageLabelForLine(sl1, STAGE_CONFIG);
+  assert.ok(info1);
+  assert.equal(info1.stage, "terminal");
+  assert.equal(info1.kind, "pre");
+  assert.equal(info1.stageIndex, 0);
+  assert.equal(info1.stageCount, 3);
+  assert.equal(sl1.slice(info1.tagFrom, info1.tagTo), "#terminal");
+
+  const sl2 = "- [?] #task #gtd #post #periods Weekly review";
+  const info2 = checklistStageLabelForLine(sl2, STAGE_CONFIG);
+  assert.ok(info2);
+  assert.equal(info2.stage, "periods");
+  assert.equal(info2.kind, "post");
+  assert.equal(info2.stageIndex, 0);
+  assert.equal(info2.stageCount, 1);
+
+  assert.equal(checklistStageLabelForLine("- [?] #task #gtd #pre #brower Weather", STAGE_CONFIG), null);
+  assert.equal(checklistStageLabelForLine("- [?] #task #gtd #pre Weather #browser", STAGE_CONFIG), null);
+  assert.equal(checklistStageLabelForLine("- [?] #task #gtd #pre #browser #terminal X", STAGE_CONFIG), null);
+  assert.equal(checklistStageLabelForLine(sl1, null), null);
+  assert.equal(checklistStageLabelForLine(sl1, { preStages: [], postStages: [] }), null);
+  assert.equal(checklistStageLabelForLine("- [?] #task #gtd #post #terminal X", STAGE_CONFIG), null);
+
+  const upper = checklistStageLabelForLine("- [?] #task #gtd #pre #TERMINAL Clean", STAGE_CONFIG);
+  assert.ok(upper);
+  assert.equal(upper.stage, "terminal");
+
+  const withType = checklistStageLabelForLine("- [?] #task #gtd #pre #terminal Do [type:: GTD]", STAGE_CONFIG);
+  assert.ok(withType);
+  assert.equal(withType.stage, "terminal");
+});
+
+test("SL tooltip and aria: stage position, order line, never a double colon", () => {
+  assert.equal(
+    checklistStageLabelTooltip("terminal", "pre", STAGE_CONFIG),
+    "#terminal · PRE stage 1 of 3\nTERMINAL → periods → browser → unstaged",
+  );
+  assert.equal(
+    checklistStageLabelAria("terminal", "pre", STAGE_CONFIG),
+    "PRE stage 1 of 3: terminal",
+  );
+  assert.equal(
+    checklistStageLabelTooltip("periods", "post", STAGE_CONFIG),
+    "#periods · POST stage 1 of 1\nPERIODS → unstaged",
+  );
+  assert.equal(
+    checklistStageLabelAria("periods", "post", STAGE_CONFIG),
+    "POST stage 1 of 1: periods",
+  );
+  assert.equal(checklistStageOrderLine("pre", STAGE_CONFIG, "terminal"), "TERMINAL → periods → browser → unstaged");
+  assert.equal(checklistStageOrderLine("post", STAGE_CONFIG, "periods"), "PERIODS → unstaged");
+  for (const text of [
+    checklistStageLabelTooltip("terminal", "pre", STAGE_CONFIG),
+    checklistStageLabelAria("terminal", "pre", STAGE_CONFIG),
+  ]) {
+    assert.ok(text.indexOf("::") === -1);
+  }
+});
+
+test("SL Live Preview: widget extends over the stage tag and reveals on touch", () => {
+  const line = "- [?] #task #gtd #pre #terminal Clean up";
+  const plugin = pluginWithStageConfig();
+  const built = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(built.adds.length, 1);
+  assert.deepEqual([built.adds[0].from, built.adds[0].to], [6, 31]);
+  assert.equal(line.slice(built.adds[0].from, built.adds[0].to), "#task #gtd #pre #terminal");
+  const widget = built.adds[0].value.widget;
+  assert.equal(widget.stage, "terminal");
+  assert.ok(widget.key.indexOf("terminal") !== -1);
+  const rebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(widget.eq(rebuilt.adds[0].value.widget), true);
+
+  for (const selection of [{ from: 6, to: 6 }, { from: 22, to: 22 }, { from: 30, to: 30 }]) {
+    assert.equal(
+      plugin.buildTaskTagMarkDecorations(makeView({ lines: [line], selection: [selection] })).adds.length,
+      0,
+      JSON.stringify(selection),
+    );
+  }
+
+  const plain = pluginWithTaskTag();
+  const withoutStage = plain.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(withoutStage.adds.length, 1);
+  assert.deepEqual([withoutStage.adds[0].from, withoutStage.adds[0].to], [6, 21]);
+});
+
+test("SL Reading view: stage hides in place and renders the quiet label", () => {
+  const line = "- [?] #task #gtd #pre #terminal Clean up";
+  const plugin = pluginWithStageConfig();
+  const { fx, li, anchors } = makeStageTree({});
+  plugin.renderTaskTagMarksIn(fx.root, stageCtxFor(line));
+  assert.ok(anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre));
+  assert.equal(anchors[0].getAttribute("aria-label"), "PRE stage 1 of 3: terminal");
+  assert.equal(anchors[0].getAttribute("title"), "#terminal · PRE stage 1 of 3\nTERMINAL → periods → browser → unstaged");
+  assert.ok(anchors[1].className.includes(CHECKLIST_TASK_HIDDEN_CLASS));
+  assert.ok(anchors[2].className.includes(CHECKLIST_TASK_HIDDEN_CLASS));
+  assert.ok(anchors[3].className.includes(CHECKLIST_TASK_HIDDEN_CLASS));
+  const labels = stageLabelsIn(li);
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].textContent, "terminal");
+  plugin.renderTaskTagMarksIn(fx.root, stageCtxFor(line));
+  assert.equal(stageLabelsIn(li).length, 1);
+
+  const typo = makeStageTree({ tags: ["#task", "#gtd", "#pre", "#brower"] });
+  plugin.renderTaskTagMarksIn(typo.fx.root, stageCtxFor("- [?] #task #gtd #pre #brower Weather"));
+  assert.ok(typo.anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre));
+  assert.equal(typo.anchors[3].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+  assert.equal(stageLabelsIn(typo.li).length, 0);
+
+  const conflict = makeStageTree({ tags: ["#task", "#gtd", "#pre", "#browser", "#terminal"] });
+  plugin.renderTaskTagMarksIn(conflict.fx.root, stageCtxFor("- [?] #task #gtd #pre #browser #terminal X"));
+  assert.ok(conflict.anchors[0].className.includes(CHECKLIST_TASK_MARK_CLASSES.pre));
+  assert.equal(conflict.anchors[3].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+  assert.equal(conflict.anchors[4].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+  assert.equal(stageLabelsIn(conflict.li).length, 0);
+});
+
+test("SL toggle and Tasks rows: off restores pills, Tasks rows keep native pills", () => {
+  const line = "- [?] #task #gtd #pre #terminal Clean up";
+  const savedDocument = global.document;
+  const { fx, li, anchors } = makeStageTree({});
+  global.document = { body: fx.root, createElement: fx.doc.createElement.bind(fx.doc) };
+  try {
+    const plugin = pluginWithStageConfig();
+    plugin.renderTaskTagMarksIn(fx.root, stageCtxFor(line));
+    assert.equal(stageLabelsIn(li).length, 1);
+    assert.equal(plugin.toggleTaskTagMarks(), false);
+    assert.equal(anchors[0].className.includes("bob-task-tag-mark"), false);
+    assert.equal(anchors[3].className.includes(CHECKLIST_TASK_HIDDEN_CLASS), false);
+    assert.equal(stageLabelsIn(li).length, 0);
+    assert.equal(plugin.toggleTaskTagMarks(), true);
+    assert.equal(stageLabelsIn(li).length, 1);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+
+  const tasksFx = fakeRenderTree();
+  const tasksLi = tasksFx.makeEl("li");
+  tasksLi.className = "plugin-tasks-list-item task-list-item";
+  const desc = tasksFx.makeEl("div");
+  desc.className = "task-description";
+  tasksLi.appendChild(desc);
+  tasksFx.root.appendChild(tasksLi);
+  const tasksAnchor = makeAnchor(tasksFx, { text: "#task" });
+  desc.appendChild(tasksAnchor);
+  assert.equal(taskTagMarkElementEligible(tasksAnchor, tasksFx.root), false);
+});
+
+test("SL stage label CSS contract: small caps teal, Tasks rows untouched, closed fades", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"), "utf8");
+  assert.ok(css.includes(".bob-checklist-stage-label"));
+  assert.ok(css.includes("font-variant-caps: all-small-caps"));
+  assert.ok(css.includes("letter-spacing: 0.06em"));
+  assert.ok(css.includes("color: var(--bob-task-tag-color, var(--bob-task-tag-hue))"));
+  assert.ok(css.includes("opacity: 0.85"));
+  assert.ok(css.includes('li.task-list-item[data-task="x"] .bob-checklist-stage-label'));
+  assert.ok(css.includes('.HyperMD-task-line[data-task="x"] .bob-checklist-stage-label'));
+  assert.ok(css.includes("opacity: 0.75"));
+  assert.equal(css.includes(".plugin-tasks-list-item") && css.includes("bob-checklist-stage-label") && /plugin-tasks-list-item[^}]*bob-checklist-stage-label/.test(css), false);
 });

@@ -453,16 +453,272 @@ function stripChecklistTaskHidden(el) {
   return checklistRemoveClass(el, CHECKLIST_TASK_HIDDEN_CLASS);
 }
 
+// A configured stage tag immediately after the checklist identity run.
+// Owned by `docs/task-tag-marks.md` "Checklist stage labels" in bob-cli.
+// The evaluator (`freshnessChecklistStage`) is the authority: the label
+// shows only when the adjacent tag equals the resolved stage. Never
+// throws; bad input yields null.
+const CHECKLIST_STAGE_LABEL_CLASS = "bob-checklist-stage-label";
+
+function checklistStageListsFor(config) {
+  try {
+    const pre =
+      config && Array.isArray(config.preStages)
+        ? config.preStages.filter((name) => typeof name === "string")
+        : [];
+    const post =
+      config && Array.isArray(config.postStages)
+        ? config.postStages.filter((name) => typeof name === "string")
+        : [];
+    return Object.freeze({ pre: Object.freeze(pre.slice()), post: Object.freeze(post.slice()) });
+  } catch (error) {
+    return Object.freeze({ pre: Object.freeze([]), post: Object.freeze([]) });
+  }
+}
+
+function checklistStageOrderLine(kind, config, current) {
+  try {
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    if (!Array.isArray(names) || names.length === 0) {
+      return "unstaged";
+    }
+    const currentLower = String(current || "").toLowerCase();
+    const parts = names.map((name) =>
+      String(name).toLowerCase() === currentLower ? String(name).toUpperCase() : String(name),
+    );
+    parts.push("unstaged");
+    return parts.join(" → ");
+  } catch (error) {
+    return "unstaged";
+  }
+}
+
+function checklistStageLabelTooltip(stage, kind, config) {
+  try {
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const tier = kind === "post" ? "POST" : "PRE";
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    const index = names
+      .map((name) => String(name).toLowerCase())
+      .indexOf(String(stage).toLowerCase());
+    if (index < 0 || names.length === 0) {
+      return null;
+    }
+    const first = "#" + String(stage).toLowerCase() + " · " + tier + " stage " + (index + 1) + " of " + names.length;
+    return first + "\n" + checklistStageOrderLine(kind, config, stage);
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistStageLabelAria(stage, kind, config) {
+  try {
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const tier = kind === "post" ? "POST" : "PRE";
+    const lists = checklistStageListsFor(config);
+    const names = kind === "post" ? lists.post : lists.pre;
+    const index = names
+      .map((name) => String(name).toLowerCase())
+      .indexOf(String(stage).toLowerCase());
+    if (index < 0 || names.length === 0) {
+      return null;
+    }
+    return tier + " stage " + (index + 1) + " of " + names.length + ": " + String(stage).toLowerCase();
+  } catch (error) {
+    return null;
+  }
+}
+
+// Resolve the stage label for one task line, or null. Eligible only
+// when the existing PRE/POST identity run is recognized, followed by
+// one whitespace run and one exact whole-token tag equal to `stage(t)`
+// as the evaluator resolves it. Returns the normalized stage, its
+// 0-based index, the tier list length, and the UTF-16 offsets of the
+// stage tag (`tagFrom`/`tagTo`) plus the identity run end (`runTo`)
+// and the `#task` start (`taskFrom`). Never throws.
+function checklistStageLabelForLine(lineText, config) {
+  try {
+    if (typeof lineText !== "string" || lineText === "") {
+      return null;
+    }
+    try {
+      if (
+        typeof freshnessTaskStatus === "function" &&
+        freshnessTaskStatus(lineText) === null
+      ) {
+        return null;
+      }
+    } catch (error) {
+      return null;
+    }
+    let tokens = [];
+    try {
+      tokens = taskTagMarkTokenRanges(lineText);
+    } catch (error) {
+      return null;
+    }
+    for (const token of tokens) {
+      try {
+        if (!token || typeof token.from !== "number" || typeof token.to !== "number") {
+          continue;
+        }
+        let run = null;
+        try {
+          run =
+            typeof checklistTaskRunEnd === "function"
+              ? checklistTaskRunEnd(lineText, token.to)
+              : null;
+        } catch (error) {
+          run = null;
+        }
+        if (!run || (run.kind !== "pre" && run.kind !== "post")) {
+          continue;
+        }
+        const afterStart = checklistSkipWhitespace(lineText, run.to);
+        if (afterStart < 0) {
+          continue;
+        }
+        let stageToken = null;
+        try {
+          stageToken = checklistReadTagToken(lineText, afterStart);
+        } catch (error) {
+          stageToken = null;
+        }
+        if (!stageToken || typeof stageToken.to !== "number") {
+          continue;
+        }
+        let tags = [];
+        try {
+          tags = checklistTagTokens(lineText);
+        } catch (error) {
+          tags = [];
+        }
+        let resolved = null;
+        try {
+          resolved =
+            typeof freshnessChecklistStage === "function"
+              ? freshnessChecklistStage(tags, run.kind, config)
+              : null;
+        } catch (error) {
+          resolved = null;
+        }
+        if (!resolved || typeof resolved.stage !== "string" || !resolved.stage) {
+          continue;
+        }
+        const expected = "#" + String(resolved.stage).toLowerCase();
+        if (String(stageToken.text).toLowerCase() !== expected) {
+          continue;
+        }
+        const lists = checklistStageListsFor(config);
+        const names = run.kind === "post" ? lists.post : lists.pre;
+        if (!Array.isArray(names) || names.length === 0) {
+          continue;
+        }
+        return Object.freeze({
+          stage: String(resolved.stage).toLowerCase(),
+          stageIndex:
+            typeof resolved.stageIndex === "number" ? resolved.stageIndex : names
+              .map((name) => String(name).toLowerCase())
+              .indexOf(String(resolved.stage).toLowerCase()),
+          stageCount: names.length,
+          kind: run.kind,
+          taskFrom: token.from,
+          runTo: run.to,
+          tagFrom: afterStart,
+          tagTo: stageToken.to,
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The stage anchor after a Reading-view checklist run, or null: the
+// next element sibling after the run's second partner must be a tag
+// anchor whose text equals `#stage` (case-insensitive). Never throws.
+function checklistStageAnchorForRun(taskAnchor, run, stage) {
+  try {
+    if (!run || !Array.isArray(run.anchors) || run.anchors.length < 2) {
+      return null;
+    }
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const second = run.anchors[1];
+    if (!second) {
+      return null;
+    }
+    const candidate = checklistNextAnchorSibling(second);
+    if (!candidate) {
+      return null;
+    }
+    const expected = "#" + String(stage).toLowerCase();
+    return checklistAnchorIsTag(candidate, expected) ? candidate : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function checklistStageLabelElement(doc, stage) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") {
+      return null;
+    }
+    if (typeof stage !== "string" || stage === "") {
+      return null;
+    }
+    const label = doc.createElement("span");
+    if (!label) {
+      return null;
+    }
+    try {
+      if (typeof label.setAttribute === "function") {
+        label.setAttribute("class", CHECKLIST_STAGE_LABEL_CLASS);
+        label.setAttribute("aria-hidden", "true");
+      } else {
+        label.className = CHECKLIST_STAGE_LABEL_CLASS;
+        label["aria-hidden"] = "true";
+      }
+    } catch (error) {
+      return null;
+    }
+    try {
+      if ("textContent" in label) {
+        label.textContent = String(stage).toLowerCase();
+      } else {
+        label.text = String(stage).toLowerCase();
+      }
+    } catch (error) {
+      return null;
+    }
+    return label;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Live Preview widgets use the same listener-free host as task and ref
 // marks. The constant kind key keeps decorations stable across rebuilds.
 let ChecklistTaskMarkWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   ChecklistTaskMarkWidget = class extends WidgetType {
-    constructor(kind, identity, inheritedEnabled) {
+    constructor(kind, identity, inheritedEnabled, stage) {
       super();
       this.kind = kind === "post" ? "post" : "pre";
       this.identity = identity || null;
       this.inheritedEnabled = inheritedEnabled === true;
+      this.stage =
+        typeof stage === "string" && stage !== "" ? String(stage).toLowerCase() : null;
       const type =
         this.identity && typeof this.identity.type === "string"
           ? this.identity.type
@@ -484,7 +740,9 @@ if (WidgetType && typeof WidgetType === "function") {
         "|" +
         state +
         "|" +
-        String(this.inheritedEnabled);
+        String(this.inheritedEnabled) +
+        "|" +
+        String(this.stage || "");
     }
 
     eq(other) {
@@ -496,16 +754,51 @@ if (WidgetType && typeof WidgetType === "function") {
     }
 
     toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
       const dom = buildTaskTagMarkElement(
-        typeof document !== "undefined" ? document : null,
+        doc,
         this.kind,
         this.identity,
         this.inheritedEnabled,
       );
       if (!dom) {
-        return typeof document !== "undefined" && document
-          ? document.createElement("span")
-          : null;
+        return doc ? doc.createElement("span") : null;
+      }
+      if (this.stage) {
+        try {
+          const label = checklistStageLabelElement(doc, this.stage);
+          if (label) {
+            const wrap = doc.createElement("span");
+            if (wrap) {
+              try {
+                if (typeof wrap.setAttribute === "function") {
+                  wrap.setAttribute(
+                    "class",
+                    "bob-checklist-stage-wrap bob-checklist-stage-wrap-" + this.kind,
+                  );
+                } else {
+                  wrap.className = "bob-checklist-stage-wrap";
+                }
+              } catch (error) {
+                // Wrapper class is best-effort.
+              }
+              try {
+                if (typeof wrap.appendChild === "function") {
+                  wrap.appendChild(dom);
+                  wrap.appendChild(label);
+                } else {
+                  return dom;
+                }
+              } catch (error) {
+                return dom;
+              }
+              addTaskTagMarkReveal(wrap, view);
+              return wrap;
+            }
+          }
+        } catch (error) {
+          // A glyph without its label still renders.
+        }
       }
       addTaskTagMarkReveal(dom, view);
       return dom;

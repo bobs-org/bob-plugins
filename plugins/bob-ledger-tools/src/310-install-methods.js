@@ -45,6 +45,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
+  BobLedgerToolsTaskTagStageLabelsMixin,
   BobLedgerToolsTaskTagTypeMixin,
   BobLedgerToolsPriorityMarksMixin,
   BobLedgerToolsMarkGateMixin,

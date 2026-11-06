@@ -79000,6 +79000,14 @@ function reviewChecklistGroupScan(queue, entry, handledKeys) {
   });
 }
 
+function reviewChecklistStageDoneLabel(entry, liveRows) {
+  const stage = entry && typeof entry.stage === "string" ? entry.stage.trim() : "";
+  if (!stage) return "";
+  return (Array.isArray(liveRows) ? liveRows : []).some((row) => row.stage === stage)
+    ? ""
+    : stage.toUpperCase();
+}
+
 function formatReviewCtrlEnterDoneLine(taskText, tier, stageDone = false, stage = "") {
   const text = String(taskText || "").trim() || "task";
   const label = String(tier || "").toUpperCase();
@@ -79015,8 +79023,10 @@ function formatReviewChecklistGroupEndNotice(options = {}) {
   const skipped = Number.isInteger(options.skipped)
     ? Math.max(0, options.skipped)
     : 0;
+  const stage = String(options.stage || "").trim();
+  const stageLabel = stage ? ` · ${stage.toUpperCase()} ✓` : "";
   const ending = skipped > 0 ? `end of ${label} · ${skipped} skipped` : `${label} done`;
-  const lines = [`✓ Done · ${taskText} · ${ending}`];
+  const lines = [`✓ Done · ${taskText}${stageLabel} · ${ending}`];
   const nextLabel = String(options.nextLabel || "").trim();
   if (nextLabel) {
     lines.push(
@@ -79300,6 +79310,20 @@ class BobNavigationHotkeysChecklistWalkMixin {
         before: scan.before.filter((row) => liveKeys.has(reviewQueueEntryKey(row))),
       };
     }
+    let stageDone = "";
+    if (advance && entry && typeof entry.stage === "string" && entry.stage.trim()) {
+      let stageRows;
+      if (groupWalk) {
+        stageRows = liveGroup.after.concat(liveGroup.before);
+      } else {
+        const scanned = reviewChecklistGroupScan(queueBefore, entry, scanHandled);
+        const sameStage = scanned.after.concat(scanned.before).filter(
+          (row) => row.stage === entry.stage,
+        );
+        stageRows = await this.filterLiveReviewEntries(sameStage, cm, filePath);
+      }
+      stageDone = reviewChecklistStageDoneLabel(entry, stageRows);
+    }
     if (groupWalk) {
       const liveGroupKeys = new Set(
         liveGroup.after.concat(liveGroup.before).map((row) => reviewQueueEntryKey(row)),
@@ -79364,14 +79388,10 @@ class BobNavigationHotkeysChecklistWalkMixin {
             ? formatReviewCtrlEnterDoneLine(
                 taskText,
                 tier,
-                typeof entry.stage === "string" &&
-                  entry.stage.trim() !== "" &&
-                  !liveGroup.after.concat(liveGroup.before).some(
-                    (row) => row.stage === entry.stage,
-                  ),
+              Boolean(stageDone),
                 entry.stage,
               )
-            : `✓ Done · ${taskText}`;
+            : `✓ Done · ${taskText}${stageDone ? ` · ${stageDone} ✓` : ""}`;
           new Notice(
             withSuccessorToast(
               [doneLine, landingNotice].filter(Boolean).join("\n"),
@@ -79409,6 +79429,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
             taskText,
             tier,
             skipped: liveGroup.before.length,
+            stage: stageDone,
             nextLabel,
             commitments: remaining.commitments,
           }),
@@ -79439,7 +79460,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
       new Notice(withSuccessorToast(`✓ Done · ${remaining.pre} PRE left`));
       return true;
     }
-    const doneLine = `✓ Done · ${taskText}`;
+    const doneLine = `✓ Done · ${taskText}${stageDone ? ` · ${stageDone} ✓` : ""}`;
     if (!nextPlan || nextPlan.kind !== "jump") {
       new Notice(withSuccessorToast(doneLine));
       return true;
@@ -109558,6 +109579,7 @@ module.exports.helpers = {
   formatReviewPostLandingTail,
   appendReviewPostLandingTail,
   reviewChecklistGroupScan,
+  reviewChecklistStageDoneLabel,
   formatReviewCtrlEnterDoneLine,
   formatReviewChecklistGroupEndNotice,
   formatReviewClosedNotice,

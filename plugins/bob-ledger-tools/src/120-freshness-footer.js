@@ -234,7 +234,7 @@ function freshnessReviewEntryView(entry, options = {}) {
       stage = freshnessReviewStagePresentation(entry);
       detail = stage ? stage.detail : "closeout";
       compact = stage ? stage.label : "closeout";
-      actionHint = "Ctrl+Enter done · closes the review";
+      actionHint = stage ? "Ctrl+Enter done · ]s skip" : "Ctrl+Enter done · closes the review";
     } else if (tier === "projects") {
       detail = freshnessReviewTrackerDetail(entry, "Empty project");
       compact = "Empty project";

@@ -283,7 +283,25 @@ test("FT1-FT6 footer details preserve tier semantics, stage color, and compact c
   );
   assert.equal(postView.contextText, "POST 1/2");
   assert.equal(postView.detailText, "PERIODS");
-  assert.match(postView.tooltip, /Ctrl\+Enter done · closes the review/);
+  assert.match(postView.tooltip, /Ctrl\+Enter done · \]s skip/);
+  assert.doesNotMatch(postView.tooltip, /closes the review/);
+  assert.equal(helpers.freshnessReviewEntryView(post).actionHint, "Ctrl+Enter done · ]s skip");
+  const unstagedPostView = helpers.freshnessFooterView(
+    {
+      counts: {
+        walk: 1,
+        byTier: {
+          pre: 0, new: 0, projects: 0, pending: 0, next: 0,
+          recurring: 0, tickler: 0, rotten: 0, post: 1,
+        },
+      },
+      queue: [{ ...post, key: "gtd_daily.md:4", stage: null, stageRank: null, stageTotal: null }],
+      tasksAvailable: true,
+    },
+    { current: { ...post, stage: null, stageRank: null, stageTotal: null }, navAvailable: true },
+  );
+  assert.equal(unstagedPostView.detailText, "closeout");
+  assert.match(unstagedPostView.tooltip, /Ctrl\+Enter done · closes the review/);
 
   const el = new PreviewNode();
   Object.defineProperty(el, "clientWidth", { value: 44 });

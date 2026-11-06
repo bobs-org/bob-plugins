@@ -277,9 +277,20 @@ test("review checklist group helpers format exact completion and close notices",
     helpers.formatReviewCtrlEnterDoneLine("Start draft", "pre", true, "periods"),
     "✓ Done · Start draft · PERIODS ✓ · Ctrl+Enter → next PRE",
   );
+  assert.equal(helpers.reviewChecklistStageDoneLabel({ stage: "browser" }, []), "BROWSER");
+  assert.equal(helpers.reviewChecklistStageDoneLabel({ stage: "browser" }, [{ stage: "browser" }]), "");
+  assert.equal(helpers.reviewChecklistStageDoneLabel({ stage: " " }, []), "");
   assert.equal(
     helpers.formatReviewChecklistGroupEndNotice({ taskText: "Last", tier: "pre", nextLabel: "NEW", commitments: 12 }),
     "✓ Done · Last · PRE done\n]s → NEW · 12 commitments due",
+  );
+  assert.equal(
+    helpers.formatReviewChecklistGroupEndNotice({ taskText: "Read email", tier: "pre", stage: "browser" }),
+    "✓ Done · Read email · BROWSER ✓ · PRE done",
+  );
+  assert.equal(
+    helpers.formatReviewChecklistGroupEndNotice({ taskText: "Read email", tier: "pre" }),
+    "✓ Done · Read email · PRE done",
   );
   assert.equal(
     helpers.formatReviewClosedNotice({ commitments: 0, postSkipped: 0, rotten: 3 }),
@@ -289,6 +300,97 @@ test("review checklist group helpers format exact completion and close notices",
     helpers.formatReviewClosedNotice({ commitments: 2, postSkipped: 1, rotten: 3 }),
     "1 POST still due · 2 commitments still due · Review closed — 3 ROTTEN left for later",
   );
+});
+
+test("staged POST weekly review advances to Morning review and carries the staged action hint", async () => {
+  const weekly = entry({
+    tier: "post", line: 1, rank: 1, tierRank: 1, tierTotal: 2,
+    stage: "periods", stageIndex: 0, stageRank: 1, stageTotal: 1,
+    text: "Weekly review", markdown: postLine("Weekly review"),
+  });
+  const morning = entry({
+    tier: "post", line: 2, rank: 2, tierRank: 2, tierTotal: 2,
+    text: "Morning review", markdown: postLine("Morning review"),
+  });
+  const fixture = makePlugin({ queue: [weekly, morning] });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Morning review/);
+  assert.equal(
+    notices.at(-1).split("\n")[0],
+    "✓ Done · Weekly review · PERIODS ✓ · Ctrl+Enter → next POST",
+  );
+});
+
+test("Ctrl+Alt+F ticks the last staged PRE row only", async () => {
+  const terminal = entry({
+    tier: "pre", line: 1, rank: 1, tierRank: 1, tierTotal: 1,
+    stage: "terminal", stageIndex: 0, stageRank: 1, stageTotal: 1,
+    text: "Clean up SASE", markdown: preLine("Clean up SASE"),
+  });
+  const alone = makePlugin({ queue: [terminal] });
+  assert.equal(await alone.plugin.completeReviewChecklistRow(alone.editor, {
+    api: alone.freshness, entry: terminal, queueBefore: [terminal],
+    filePath: "gtd_daily.md", withinGroup: false, advance: true, dateText: DATE,
+  }), true);
+  assert.equal(notices.at(-1).split("\n")[0], "✓ Done · Clean up SASE · TERMINAL ✓");
+
+  const other = { ...terminal, key: "gtd_daily.md:2", line: 2, rank: 2, text: "Another terminal row", originalMarkdown: preLine("Another terminal row") };
+  const remaining = makePlugin({ queue: [terminal, other] });
+  clearNotices();
+  assert.equal(await remaining.plugin.completeReviewChecklistRow(remaining.editor, {
+    api: remaining.freshness, entry: terminal, queueBefore: [terminal, other],
+    filePath: "gtd_daily.md", withinGroup: false, advance: true, dateText: DATE,
+  }), true);
+  assert.doesNotMatch(notices.at(-1).split("\n")[0], /TERMINAL ✓/);
+});
+
+test("Ctrl+Alt+F ticks a staged POST row before Morning review", async () => {
+  const weekly = entry({
+    tier: "post", line: 1, rank: 1, tierRank: 1, tierTotal: 2,
+    stage: "periods", stageIndex: 0, stageRank: 1, stageTotal: 1,
+    text: "Weekly review", markdown: postLine("Weekly review"),
+  });
+  const morning = entry({ tier: "post", line: 2, rank: 2, tierRank: 2, tierTotal: 2, text: "Morning review", markdown: postLine("Morning review") });
+  const fixture = makePlugin({ queue: [weekly, morning] });
+  assert.equal(await fixture.plugin.completeReviewChecklistRow(fixture.editor, {
+    api: fixture.freshness, entry: weekly, queueBefore: [weekly, morning],
+    filePath: "gtd_daily.md", withinGroup: false, advance: true, dateText: DATE,
+  }), true);
+  assert.equal(notices.at(-1).split("\n")[0], "✓ Done · Weekly review · PERIODS ✓");
+  assert.match(notices.at(-1), /Review 2\/2 · POST 2\/2/);
+});
+
+test("the last staged PRE row ticks the group-end completion line", async () => {
+  const browser = entry({
+    tier: "pre", line: 1, rank: 1, tierRank: 1, tierTotal: 1,
+    stage: "browser", stageIndex: 0, stageRank: 1, stageTotal: 1,
+    text: "Read email", markdown: preLine("Read email"),
+  });
+  const morning = entry({
+    tier: "post", line: 2, rank: 2, tierRank: 1, tierTotal: 1,
+    text: "Morning review", markdown: postLine("Morning review"),
+  });
+  const rows = [browser, morning];
+  const fixture = makePlugin({ queue: rows });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.equal(notices.at(-1), "✓ Done · Read email · BROWSER ✓ · PRE done\n]s → POST");
+});
+
+test("]s toast includes staged ledger details and action hint", () => {
+  const row = entry({
+    tier: "pre", line: 1, rank: 1, tierRank: 1, tierTotal: 9,
+    stage: "terminal", stageIndex: 0, stageRank: 1, stageTotal: 2,
+    text: "Clean up SASE", markdown: preLine("Clean up SASE"),
+  });
+  const notice = helpers.buildReviewJumpNotice(row, 1, 38, {
+    reviewEntryView: () => ({
+      label: "PRE", detail: "TERMINAL 1/2", actionHint: "Ctrl+Enter done · ]s skip",
+    }),
+  });
+  assert.match(notice, /^Review 1\/38 · PRE 1\/9 · TERMINAL 1\/2/);
+  assert.match(notice, /Ctrl\+Enter done · \]s skip/);
 });
 
 test("claim declines without a current exact PRE/POST walk landing", async () => {

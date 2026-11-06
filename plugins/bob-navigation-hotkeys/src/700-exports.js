@@ -501,6 +501,7 @@ module.exports.helpers = {
   formatReviewPostLandingTail,
   appendReviewPostLandingTail,
   reviewChecklistGroupScan,
+  reviewChecklistStageDoneLabel,
   formatReviewCtrlEnterDoneLine,
   formatReviewChecklistGroupEndNotice,
   formatReviewClosedNotice,

@@ -28,6 +28,8 @@
   "089d-successor-relation.js",
   "089e-successor-relation-policy.js",
   "089f-successor-relation-copy.js",
+  "089g-successor-offer-close.js",
+  "089h-successor-offer-close-copy.js",
   "090-source-and-formatting.js",
   "100-editor-and-modal.js",
   "110-plugin-lifecycle.js",

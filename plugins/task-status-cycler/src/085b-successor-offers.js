@@ -526,6 +526,22 @@ function buildSuccessorPickerModel(options = {}) {
       Number.isFinite(options.budget.links) && Number.isFinite(options.budget.max)) {
     model.budget = { links: options.budget.links, max: options.budget.max };
   }
+  const closeCapabilities = options.offerCloseCapabilities;
+  if (isSuccessorOfferCloseSupported(closeCapabilities)) {
+    const descriptors = options.offerCloseDescriptors instanceof Map ||
+        (options.offerCloseDescriptors && typeof options.offerCloseDescriptors === "object")
+      ? options.offerCloseDescriptors
+      : buildSuccessorOfferCloseDescriptors(
+        offers,
+        options.offerCloseContext,
+        closeCapabilities,
+      );
+    return enrichSuccessorPickerModelWithOfferCloses(
+      model,
+      descriptors,
+      closeCapabilities,
+    );
+  }
   return model;
 }
 
@@ -673,36 +689,8 @@ function normalizeSuccessorPickDestination(choice) {
 // malformed, and picker exceptions all mean no picks. Validated
 // destinations ride along for the override-aware insertion planner.
 function normalizeSuccessorPicks(result) {
-  try {
-    if (!result || typeof result !== "object") {
-      return [];
-    }
-    const picks = Array.isArray(result.picks) ? result.picks : null;
-    if (!picks) {
-      return [];
-    }
-    const items = [];
-    const seen = new Set();
-    for (const pick of picks) {
-      if (!pick || typeof pick !== "object") {
-        continue;
-      }
-      const key = String(pick.key || "").trim();
-      if (!key || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const item = { key };
-      const destination = normalizeSuccessorPickDestination(pick.destination);
-      if (destination) {
-        item.destination = destination;
-      }
-      items.push(item);
-    }
-    return items;
-  } catch (error) {
-    return [];
-  }
+  const choices = normalizeSuccessorChoices(result);
+  return choices ? choices.picks : [];
 }
 
 // Collect every open resident ([?] or [ ], including #ref/inbox/stale) of

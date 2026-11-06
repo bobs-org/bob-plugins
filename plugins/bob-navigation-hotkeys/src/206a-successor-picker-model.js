@@ -210,6 +210,60 @@ function successorPickerKeepMovingTitle(groups) {
   return names.length === 1 ? `Keep ‹${names[0]}› moving` : `Keep ${names.length} projects moving`;
 }
 
+// Per-row close descriptor (`api.successors` v4, docs/task-dependencies.md
+// §12.5). Rust emits snake_case; the JS model uses the camelCase names in
+// brackets. Presenters render these fields and never infer eligibility.
+// Null unless the shape is exact enough to render.
+function normalizeSuccessorCloseDescriptor(raw) {
+  try {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return null;
+    }
+    const complete = raw.complete === true;
+    const cancel = raw.cancel === true;
+    if (complete !== true && cancel !== true && raw.why == null &&
+      raw.completeConsequence == null && raw.complete_consequence == null &&
+      raw.cancelConsequence == null && raw.cancel_consequence == null &&
+      raw.scopeNote == null && raw.scope_note == null && raw.unblocks == null) {
+      return null;
+    }
+    const why = successorPickerText(raw.why);
+    const completeConsequence = successorPickerText(
+      raw.completeConsequence != null ? raw.completeConsequence : raw.complete_consequence,
+    );
+    const cancelConsequence = successorPickerText(
+      raw.cancelConsequence != null ? raw.cancelConsequence : raw.cancel_consequence,
+    );
+    const scopeNote = successorPickerText(
+      raw.scopeNote != null ? raw.scopeNote : raw.scope_note,
+    );
+    const unblocksRaw = Number(raw.unblocks);
+    const unblocks = Number.isFinite(unblocksRaw) && unblocksRaw > 0
+      ? Math.floor(unblocksRaw)
+      : 0;
+    return Object.freeze({
+      complete,
+      cancel,
+      ...(why ? { why } : {}),
+      ...(completeConsequence ? { completeConsequence } : {}),
+      ...(cancelConsequence ? { cancelConsequence } : {}),
+      ...(scopeNote ? { scopeNote } : {}),
+      unblocks,
+    });
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Whether the normalized model carries close support (`close.supported`).
+function successorPickerCloseSupported(model) {
+  try {
+    return Boolean(model && model.close && model.close.supported === true);
+  } catch (_error) {
+    return false;
+  }
+}
+
 // Optional validated task context for `api.pick({task})`. `line` is
 // one-based and `text` is the full note. `preimage` is the original task
 // line used to refuse a changed/missing source before the nested picker.
@@ -257,6 +311,7 @@ function normalizeSuccessorPickerModel(model) {
     const groups = [];
     let selectableCount = 0;
     let taskRowCount = 0;
+    const closeSupported = Boolean(model.close && typeof model.close === "object" && model.close.supported === true);
     for (const source of model.groups) {
       if (!source || typeof source !== "object" || !allowedGroups.has(source.group)) {
         continue;
@@ -280,6 +335,7 @@ function normalizeSuccessorPickerModel(model) {
         const task = normalizeSuccessorPickerTaskContext(row.task);
         const suffix = successorPickerText(row.suffix);
         const reason = successorPickerText(row.reason);
+        const close = closeSupported ? normalizeSuccessorCloseDescriptor(row.close) : null;
         const normalized = Object.freeze({
           key,
           text,
@@ -294,6 +350,7 @@ function normalizeSuccessorPickerModel(model) {
           ...(suffix ? { suffix } : {}),
           ...(reason ? { reason } : {}),
           ...(task ? { task } : {}),
+          ...(close ? { close } : {}),
         });
         seenKeys.add(key);
         rows.push(normalized);
@@ -369,6 +426,7 @@ function normalizeSuccessorPickerModel(model) {
       relationOnly,
       selectableCount,
       taskRowCount,
+      ...(closeSupported ? { close: Object.freeze({ supported: true }) } : {}),
     });
   } catch (_error) {
     return null;
@@ -458,15 +516,21 @@ function successorPickerTaskPickRequest(task) {
 
 // Marked selectable rows in displayed (model) order, else the highlighted
 // row. Never reconstructs identity from display text or the opaque key.
+// Verdict rows are never retargeted: bulk keys skip them and a lone
+// verdict highlight resolves to no rows (the caller shows a soft refusal).
 function successorPickerRetargetRows(modal) {
   const rows = [];
   try {
     if (!modal || !modal.model) {
       return rows;
     }
+    const verdicts = modal.verdicts instanceof Map ? modal.verdicts : null;
     if (modal.markedKeys && modal.markedKeys.size > 0) {
       for (const group of modal.model.groups) {
         for (const row of group.rows) {
+          if (verdicts && verdicts.has(row.key)) {
+            continue;
+          }
           if (row.selectable && modal.markedKeys.has(row.key)) {
             rows.push(row);
           }
@@ -476,6 +540,9 @@ function successorPickerRetargetRows(modal) {
     }
     const active = modal.visibleItems && modal.visibleItems[modal.selectedIndex];
     if (active && active.kind === "offer" && active.row && active.row.selectable) {
+      if (verdicts && verdicts.has(active.row.key)) {
+        return rows;
+      }
       rows.push(active.row);
     }
   } catch (_error) {

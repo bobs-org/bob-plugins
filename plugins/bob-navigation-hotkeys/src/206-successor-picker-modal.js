@@ -7,6 +7,14 @@ const SUCCESSOR_PICKER_FOOTER_HINTS = [
   { keys: ["↵"], label: "pull in" },
   { keys: ["Esc"], label: "none" },
 ];
+const SUCCESSOR_PICKER_VERDICT_HINTS = [
+  { keys: ["Tab"], label: "toggle and move" },
+  { keys: ["Ctrl+A"], label: "mark group" },
+  { keys: ["Ctrl+X"], label: "done" },
+  { keys: ["Ctrl+Shift+X"], label: "cancel" },
+  { keys: ["↵"], label: "pull in" },
+  { keys: ["Esc"], label: "none" },
+];
 const SUCCESSOR_PICKER_RETARGET_HINT = { keys: ["Ctrl+Shift+Enter"], label: "retarget" };
 
 function successorPickerGroupTitle(group) {
@@ -113,6 +121,15 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.now = typeof options.now === "function" ? options.now : () => Date.now();
     this.openedAt = null;
     this.markedKeys = new Set();
+    // Per-row verdicts (`api.successors` v4): key → {outcome, reason?}.
+    // One verdict per row, staged never written, exclusive with marks.
+    this.verdicts = new Map();
+    this.reasonEditKey = null;
+    this.reasonPreviousVerdict = null;
+    this.reasonOpenedAt = null;
+    this.escArmed = false;
+    this.statusLine = null;
+    this.allowCloseWithoutArm = false;
     // Per-row destination overrides (key → normalized destination). Shown
     // in the row (`→ NAME`) and returned with the picks. The retarget hint
     // appears only when the destination picker is available.
@@ -150,6 +167,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
   onOpen() {
     try {
+      try {
+        if (typeof successorInstallVerdictModalPatches === "function") {
+          successorInstallVerdictModalPatches();
+        }
+      } catch (_error) {
+        // The card renders without verdict keys rather than throwing.
+      }
       this.openedAt = this.currentTime();
       super.onOpen();
       addSuccessorPickerClasses(this.contentEl, "bob-cnp-successor");
@@ -215,6 +239,17 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     const targets = successorPickerRetargetRows(this);
     if (targets.length === 0) {
+      try {
+        const active = this.visibleItems && this.visibleItems[this.selectedIndex];
+        if (active && active.kind === "offer" && this.verdicts instanceof Map &&
+          this.verdicts.has(active.row.key) && (this.markedKeys == null || this.markedKeys.size === 0)) {
+          this.statusLine = { text: SUCCESSOR_VERDICT_RETARGET_REFUSAL, kind: "refusal" };
+          this.escArmed = false;
+          this.renderAll();
+        }
+      } catch (_error) {
+        // A missing refusal line never blocks retarget.
+      }
       return false;
     }
     this.retargetingDestination = true;
@@ -263,12 +298,33 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       (event.ctrlKey === true || event.metaKey === true) &&
       event.shiftKey === true && event.altKey !== true
     ) {
+      if (this.reasonEditKey != null) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       if (this.retargetEnabled !== false) {
         void this.retargetRowsForDestination();
       }
       return;
+    }
+    if (event.key === "Escape" || event.key === "Esc" ||
+      (event.ctrlKey === true && String(event.key || "").toLowerCase() === "[" && event.metaKey !== true && event.altKey !== true && event.shiftKey !== true)) {
+      if (this.reasonEditKey != null) {
+        return;
+      }
+      if (this.handleEscapeKey(event)) {
+        return;
+      }
+    }
+    if (this.handleVerdictKey(event)) {
+      return;
+    }
+    if (this.escArmed === true && successorModalHasVerdicts(this)) {
+      const harmless = event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta";
+      if (!harmless) {
+        this.escArmed = false;
+      }
     }
     if (event.key === "Enter") {
       event.preventDefault();
@@ -282,7 +338,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         return;
       }
       const active = this.visibleItems[this.selectedIndex];
-      if (this.markedKeys.size > 0) {
+      if (this.markedKeys.size > 0 || successorModalHasVerdicts(this)) {
         this.applySelection();
         return;
       }
@@ -336,6 +392,14 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       return;
     }
     this.selectedIndex = (this.selectedIndex + delta + this.visibleItems.length) % this.visibleItems.length;
+    try {
+      const highlight = successorStatusForHighlight(this);
+      if (highlight) {
+        this.statusLine = highlight;
+      }
+    } catch (_error) {
+      // Highlight keeps its previous status line.
+    }
     this.renderResults();
   }
 
@@ -350,9 +414,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     for (const row of group.rows) {
       if (row.selectable) {
+        if (this.verdicts instanceof Map && this.verdicts.has(row.key)) {
+          continue;
+        }
         this.markedKeys.add(row.key);
       }
     }
+    this.escArmed = false;
     this.renderAll();
   }
 
@@ -360,11 +428,22 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     if (!key) {
       return;
     }
+    try {
+      if (this.verdicts instanceof Map && this.verdicts.has(key)) {
+        successorConvertVerdictToMark(this, key);
+        this.escArmed = false;
+        this.renderAll();
+        return;
+      }
+    } catch (_error) {
+      // Fall through to the normal mark toggle.
+    }
     if (this.markedKeys.has(key)) {
       this.markedKeys.delete(key);
     } else {
       this.markedKeys.add(key);
     }
+    this.escArmed = false;
     this.renderAll();
   }
 
@@ -402,6 +481,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         .filter((row) => row.selectable && this.markedKeys.has(row.key))
         .map((row) => row.key);
     }
+    try {
+      if (successorModalHasVerdicts(this)) {
+        return [];
+      }
+    } catch (_error) {
+      // Fall through to the highlight fallback.
+    }
     const active = this.visibleItems[this.selectedIndex];
     return active && active.kind === "offer" && active.row.selectable
       ? [active.row.key]
@@ -409,13 +495,23 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   }
 
   renderFooter() {
+    try {
+      this.footerHints = successorVerdictFooterHints(this);
+    } catch (_error) {
+      // The static hints stay when the verdict hints cannot build.
+    }
     super.renderFooter();
     if (!this.footerEl || !this.model) {
       return;
     }
+    successorRenderStatusLine(this, this.footerEl);
+    const counts = successorVerdictCounts(this);
     const prospective = this.prospectiveKeys().length;
     const summary = this.footerEl.createDiv({ cls: "bob-successor-footer-summary" });
-    summary.createSpan({ cls: "bob-successor-pull-count", text: `pull in ${prospective}` });
+    summary.createSpan({
+      cls: "bob-successor-pull-count",
+      text: successorFooterSummaryText(prospective, counts.done, counts.cancel),
+    });
     if (this.model.budget) {
       const current = this.model.budget.links;
       const maximum = this.model.budget.max;
@@ -466,10 +562,14 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         const item = { kind: "offer", groupIndex, rowIndex, row };
         const navIndex = navigation.push(item) - 1;
         const selected = navIndex === this.selectedIndex || (this.highlightKeyAfterRender && this.highlightKeyAfterRender === row.key);
+        const verdict = this.verdicts instanceof Map ? this.verdicts.get(row.key) : null;
         const classes = ["bob-successor-row"];
         if (selected) classes.push("is-highlighted");
         if (this.markedKeys.has(row.key)) classes.push("is-marked");
+        if (verdict && verdict.outcome === SUCCESSOR_VERDICT_DONE) classes.push("is-verdict-done");
+        if (verdict && verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) classes.push("is-verdict-cancel");
         if (!row.selectable) classes.push("is-muted");
+        const ariaSuffix = successorVerdictRowAriaSuffix(row, verdict);
         const rowEl = groupEl.createDiv({
           cls: classes.join(" "),
           attr: {
@@ -477,30 +577,30 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
             "aria-selected": selected ? "true" : "false",
             "aria-checked": this.markedKeys.has(row.key) ? "true" : "false",
             "aria-disabled": row.selectable ? "false" : "true",
+            ...(ariaSuffix ? { "aria-label": `${row.text} — ${ariaSuffix}` } : {}),
+            ...(verdict ? { "data-successor-verdict": verdict.outcome } : {}),
+            "data-successor-key": row.key,
           },
         });
-        rowEl.createSpan({ cls: "bob-successor-mark", text: this.markedKeys.has(row.key) ? "☑" : "□", attr: { "aria-hidden": "true" } });
-        const content = rowEl.createDiv({ cls: "bob-successor-row-content" });
-        content.createDiv({ cls: "bob-successor-row-text", text: row.text });
-        const note = successorPickerNoteName(row.notePath);
-        const details = [];
-        if (note) details.push(note);
-        if (row.lane) details.push(row.lane);
-        let shownDestination = row.destinationLabel;
-        try {
-          const override = this.destinationOverrides && this.destinationOverrides.get(row.key);
-          const overrideLabel = successorDestinationOverrideLabel(override);
-          if (overrideLabel) {
-            shownDestination = overrideLabel;
-          }
-        } catch (_error) {
-          // Fall through to the planned destination label.
+        const markText = successorVerdictMarkText(row, verdict) ||
+          (this.markedKeys.has(row.key) ? "☑" : "□");
+        const markEl = rowEl.createSpan({ cls: "bob-successor-mark", text: markText, attr: { "aria-hidden": "true" } });
+        if (verdict) {
+          successorApplyVerdictMarkIcon(markEl, verdict);
         }
-        if (shownDestination) details.push(`→ ${shownDestination}`);
-        if (row.needsBlockId) details.push("needs ^id");
-        if (!row.selectable && row.mutedReason) details.push(row.mutedReason);
-        if (details.length > 0) {
-          content.createDiv({ cls: "bob-successor-row-details", text: details.join(" · ") });
+        if (successorModalVerdictsActive(this) && (selected || verdict)) {
+          successorRenderVerdictActions(this, rowEl, row, verdict, navIndex);
+        }
+        const content = rowEl.createDiv({ cls: "bob-successor-row-content" });
+        const titleCls = verdict ? "bob-successor-row-text is-verdict" : "bob-successor-row-text";
+        content.createDiv({ cls: titleCls, text: row.text });
+        if (this.reasonEditKey === row.key && verdict && verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) {
+          successorRenderReasonEditor(this, content, row, verdict.reason || "");
+        } else {
+          const details = successorRowDetailsList(this, row, verdict);
+          if (details.length > 0) {
+            content.createDiv({ cls: "bob-successor-row-details", text: details.join(" · ") });
+          }
         }
         const meta = [row.suffix, row.reason].filter(Boolean);
         if (meta.length > 0) {
@@ -565,10 +665,43 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
   applySelection() {
     const keys = this.model.groups.flatMap((group) => group.rows)
-      .filter((row) => row.selectable && this.markedKeys.has(row.key))
+      .filter((row) => {
+        if (!row.selectable || !this.markedKeys.has(row.key)) {
+          return false;
+        }
+        if (this.verdicts instanceof Map && this.verdicts.has(row.key)) {
+          return false;
+        }
+        return true;
+      })
       .map((row) => row.key);
+    const closes = [];
+    try {
+      if (this.verdicts instanceof Map) {
+        for (const [key, verdict] of this.verdicts) {
+          if (!verdict || !key) {
+            continue;
+          }
+          const row = successorFindRowByKey(this, key);
+          if (!row || !successorRowVerdictEligible(row, verdict.outcome)) {
+            continue;
+          }
+          if (this.markedKeys instanceof Set && this.markedKeys.has(key)) {
+            continue;
+          }
+          if (verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) {
+            const reason = normalizeSuccessorCancelReason(verdict.reason);
+            closes.push(reason ? { key, outcome: "cancelled", reason } : { key, outcome: "cancelled" });
+          } else {
+            closes.push({ key, outcome: "done" });
+          }
+        }
+      }
+    } catch (_error) {
+      // Picks still apply without closes rather than refusing the gesture.
+    }
     let selected = keys;
-    if (selected.length === 0) {
+    if (selected.length === 0 && closes.length === 0) {
       const active = this.visibleItems[this.selectedIndex];
       if (!active || active.kind !== "offer" || !active.row.selectable) {
         return false;
@@ -588,6 +721,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         }
         return item;
       }),
+      ...(closes.length > 0 ? { closes } : {}),
     });
     return true;
   }
@@ -595,7 +729,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
   settle(result) {
     if (this.didSettle) return;
     this.didSettle = true;
-    this.result = result && Array.isArray(result.picks) ? result : null;
+    const picks = result && Array.isArray(result.picks) ? result.picks : null;
+    const closes = result && Array.isArray(result.closes) ? result.closes : null;
+    if (picks) {
+      this.result = closes ? { picks, closes } : { picks };
+    } else {
+      this.result = null;
+    }
     try {
       this.close();
     } catch (_error) {
@@ -614,7 +754,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
 function createSuccessorPickerApi(plugin) {
   return Object.freeze({
-    version: 3,
+    version: 4,
     pick(model) {
       try {
         if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
@@ -624,7 +764,13 @@ function createSuccessorPickerApi(plugin) {
           .then(() => plugin.pickSuccessorOffers(model))
           .then((result) => {
             try {
-              return result && Array.isArray(result.picks) ? result : null;
+              if (!result || !Array.isArray(result.picks)) {
+                return null;
+              }
+              if (result.picks.length === 0 && !(Array.isArray(result.closes) && result.closes.length > 0)) {
+                return null;
+              }
+              return result;
             } catch (_error) {
               return null;
             }
@@ -742,9 +888,15 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 resolve(null);
                 return;
               }
-              const allowed = new Set(normalized.groups.flatMap((group) =>
-                group.rows.filter((row) => row.selectable).map((row) => row.key),
-              ));
+              const byKey = new Map();
+              for (const group of normalized.groups) {
+                for (const row of group.rows) {
+                  if (row && typeof row.key === "string" && !byKey.has(row.key)) {
+                    byKey.set(row.key, row);
+                  }
+                }
+              }
+              const allowed = new Set([...byKey].filter(([, row]) => row.selectable).map(([key]) => key));
               const picks = [];
               const pickedKeys = new Set();
               for (const pick of result.picks) {
@@ -760,7 +912,13 @@ class BobNavigationHotkeysSuccessorPickerMixin {
                 }
                 picks.push(item);
               }
-              resolve(picks.length > 0 ? { picks } : null);
+              const closes = normalizeSuccessorClosesForResult({ model: normalized }, result.closes);
+              const kept = closes.filter((close) => !pickedKeys.has(close.key));
+              if (picks.length === 0 && kept.length === 0) {
+                resolve(null);
+                return;
+              }
+              resolve(kept.length > 0 ? { picks, closes: kept } : { picks });
             } else {
               resolve(null);
             }
@@ -799,6 +957,7 @@ class BobNavigationHotkeysSuccessorPickerMixin {
     const modal = this.activeSuccessorPicker;
     if (modal) {
       try {
+        modal.allowCloseWithoutArm = true;
         modal.close();
       } catch (_error) {
         try {

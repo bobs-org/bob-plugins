@@ -441,14 +441,14 @@ other answer key stays landing-gated. Every `]s` landing on an
 eligible row ends its toast with the `Alt+P` roll preview (for example
 `Alt+P roll P2 1/1 · 8–30d`), naming the level, step or decay, and window
 the key would use. An unprioritized row previews `Alt+P set P1 · 2–7d`. In the successor picker,
-`Ctrl+Shift+Enter` retargets through the Block ID Prompt picker. One
-highlighted row opens one picker for that task. Multiple marked rows
-open one picker per target, in displayed order, so each task sees its
-own suggestion. A cancelled pick, a missing or changed source note, or
-closing the successor picker while a destination picker is open leaves
-the previous overrides, marks, and selection unchanged. Enter merges the
-task's type into the destination name; Alt+Enter explicitly retypes the task.
-Older destination pickers still retarget without changing the task type.
+`Ctrl+Shift+Enter` retargets through the Block ID Prompt picker (one picker
+per target, in displayed order; a cancelled, missing, or changed source
+leaves overrides, marks, and selection unchanged). Enter merges the task type;
+Alt+Enter retypes. Successor picker v4 stages per-row verdicts with close
+support: `Ctrl+X` Done, `Ctrl+Shift+X` Cancel with an optional reason. The
+same key clears, `Tab` on a verdict makes it Pull in, `Ctrl+A` skips verdicts,
+`Enter` applies both with no highlight fallback, and two-step `Esc` discards.
+The merge card stays pull-in-only.
 
 `Alt+N`, the Task Card property rows, and `Ctrl+Shift+M` moves stamp every
 rewritten open task through the ledger-tools stamper. The Task Card's Review

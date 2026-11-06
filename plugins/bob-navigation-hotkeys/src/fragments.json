@@ -47,6 +47,8 @@
   "206a-successor-picker-model.js",
   "206b-successor-relation-copy.js",
   "206-successor-picker-modal.js",
+  "206c-successor-picker-verdicts.js",
+  "206d-successor-picker-verdict-render.js",
   "207-image-zoom-modal.js",
   "207a-image-zoom-origin.js",
   "208-parent-note-picker-model.js",
@@ -199,5 +201,6 @@
   "708-image-zoom-origin-exports.js",
   "709-task-split-exports.js",
   "710-relation-merge-exports.js",
-  "711-pomodoro-name-agreement-exports.js"
+  "711-pomodoro-name-agreement-exports.js",
+  "712-successor-verdict-exports.js"
 ]

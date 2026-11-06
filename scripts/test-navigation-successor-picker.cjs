@@ -849,7 +849,7 @@ function keepMovingModel(groups = [keepMovingGroup()], extra = {}) {
 
 test("picker API v2 renders a keep_moving group: title, caption, tag, lanes, fold line, and the skip-forward icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 3);
+  assert.equal(plugin.api.successors.version, 4);
   const { pending, modal } = await openPicker(plugin, keepMovingModel());
   assert.equal(modal.title, "Keep ‹sase_badges› moving", "only-keep_moving models derive the picker title");
   assert.equal(modal.headerIcon, "skip-forward");
@@ -1165,7 +1165,7 @@ function relationModel(groups = [relationGroup()], extra = {}) {
 
 test("picker API v3 renders a relation group: header, caption, tag, fold, title, and link-2 icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 3);
+  assert.equal(plugin.api.successors.version, 4);
   const { pending, modal } = await openPicker(plugin, relationModel());
   assert.equal(modal.title, REL_HEADER);
   assert.equal(modal.headerIcon, "link-2");

@@ -347,7 +347,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `notice` | 3 | Show the Unblocked card; v2 renders `keep_moving` rows and v3 renders `relation_successors`. |
-| `successors` | 3 | Ask which offered successor links to add; v2 accepts `keep_moving` and v3 accepts the `relation` group. |
+| `successors` | 4 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, and v4 resolves verdict closes. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
@@ -419,6 +419,24 @@ title (or `‹Label› “‹T›”` / `‹Label› k tasks`) and the header ic
 `link-2`. Unknown groups are still dropped and v1/v2 models render exactly as
 before. Callers must offer `relation` groups only when
 `api.successors?.version >= 3`.
+`successors` v4 (offer verdicts, `docs/task-dependencies.md` §12.22 in
+bob-cli) keeps every v3 group and adds per-row verdicts. A model may carry
+`close: { supported: true }` and each row an engine-authored `close`
+descriptor (`complete`, `cancel`, `why`, `completeConsequence`,
+`cancelConsequence`, `scopeNote`, `unblocks`); the normalizer keeps row
+`close` only when the model carries support, so v3-shaped models render
+exactly as before. `pick(model)` resolves
+`{ picks: [{ key, destination? }], closes: [{ key, outcome: "done" |
+"cancelled", reason? }] }` or `null`. `null` still means no commit (Esc,
+discard, click-outside, unload, or a second picker); zero picks with at
+least one close is a commit, never `null`. Closes are re-filtered to keys
+whose descriptor allows that outcome and never overlap picks. The card
+stages one verdict per row (Leave, Pull in, Done, Cancel) with `Ctrl+X` /
+`Ctrl+Shift+X` on literal Control, an optional inline Cancel reason, a
+two-step Esc, hover buttons, and the `pull in {a} · ✓ {b} done · ⊘ {c}
+cancel` footer; the task-merge card never receives `close` and stays
+pull-in-only. Callers attach `close` descriptors only when
+`api.successors?.version >= 4`.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

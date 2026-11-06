@@ -16350,7 +16350,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         }
       }
       if (guardBefore === guardAfter) {
-        snapshots.set(path, { path, before: providedNotes.get(path) != null ? String(providedNotes.get(path)) : String(guardBefore), after: String(guardAfter) });
+        // No write occurred, so there is no undo preimage to record.
         continue;
       }
       const result = await writeOfferCloseNoteText(this, path, guardBefore, guardAfter, options.context || {});
@@ -16370,7 +16370,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         finalIntermediates.delete(path);
         continue;
       }
-      snapshots.set(path, { path, before: String(providedNotes.get(path) != null ? providedNotes.get(path) : guardBefore), after: String(guardAfter) });
+      snapshots.set(path, { path, before: String(guardBefore), after: String(guardAfter) });
       try { cache.delete(path); } catch (_error) {}
       for (const row of finalPlanned) {
         if (String(row.path) === String(path)) writtenRoots.push(row);
@@ -16442,7 +16442,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
           }
           const prev = snapshots.get(path);
           if (prev) snapshots.set(path, { path, before: prev.before, after });
-          else snapshots.set(path, { path, before: String(providedNotes.get(path) != null ? providedNotes.get(path) : baseText), after });
+          else snapshots.set(path, { path, before: String(baseText), after });
           for (const edit of edits) appliedRecovery.push(edit);
         }
         // Drop recoveries whose file write was refused; never report them.
@@ -16450,7 +16450,9 @@ class TaskStatusCyclerOfferCloseApplyMixin {
           const keptRecovered = [];
           for (const dep of recovery.recovered) {
             if (!refusedRecoveryPaths.has(dep.note_path)) keptRecovered.push(dep);
-            else recoveryFailures.push({ path: dep.note_path, reason: "recovery refused: note changed" });
+            else if (!recoveryFailures.some((failure) => String(failure.path) === String(dep.note_path))) {
+              recoveryFailures.push({ path: dep.note_path, reason: "recovery refused: note changed" });
+            }
           }
           recovery = { ...recovery, recovered: keptRecovered, edits: appliedRecovery };
         } else {
@@ -22107,6 +22109,7 @@ function successorOfferCloseNoticeText(model, baseText) {
   const source = model && typeof model === "object" ? model : {};
   const lines = [];
   if (typeof baseText === "string" && baseText) lines.push(baseText);
+  const stampedRecoveries = [];
   for (const row of Array.isArray(source.offer_closes) ? source.offer_closes : []) {
     if (!row || typeof row !== "object") continue;
     const message = String(row.message || successorOfferCloseReceiptMessage({
@@ -22118,10 +22121,13 @@ function successorOfferCloseNoticeText(model, baseText) {
     }) || "");
     if (message) lines.push(message);
     for (const recovered of Array.isArray(row.recovered) ? row.recovered : []) {
-      if (recovered && recovered.unblocked_stamped === true && recovered.text) {
-        lines.push(`↳ ${recovered.text} back tomorrow as a tickler`);
-      }
+      if (recovered && recovered.unblocked_stamped === true && recovered.text) stampedRecoveries.push(recovered);
     }
+  }
+  if (stampedRecoveries.length === 1) {
+    lines.push(`↳ “${stampedRecoveries[0].text}” back tomorrow as a tickler`);
+  } else if (stampedRecoveries.length > 1) {
+    lines.push(`↳ ${stampedRecoveries.length} unblocked tasks back tomorrow as ticklers`);
   }
   const refusal = source.offer_close_refused && typeof source.offer_close_refused === "object"
     ? source.offer_close_refused

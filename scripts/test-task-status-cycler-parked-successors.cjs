@@ -12,6 +12,7 @@ const {
   createTextEditor,
   attachActiveMarkdownView,
 } = require("./task-status-cycler-harness.cjs");
+const navigationHarness = require("./navigation-hotkeys-harness.cjs");
 
 const TODAY = helpers.formatLocalDate();
 const DAILY_NOW = new Date(`${TODAY}T12:00:00`);
@@ -201,6 +202,93 @@ test("offerParkedSuccessors offers a starts-after source at the parked slot", as
   const row = fixture.seen[0].relation_successors[0];
   assert.equal(row.relation.event, "parked");
   assert.ok(row.link);
+});
+
+test("parked relation offer combines one pull-in, Done, and reasoned Cancel", async () => {
+  notices.length = 0;
+  const parked = "- [/] #task Send implementation prompt [id:: agents__implement] ^implement";
+  const pick = [
+    "- [ ] #task Pull into BUILD [id:: agents__pick] ^pick",
+    "  - 🪢 **LINKS:** starts after [[agents#^implement]]",
+  ].join("\n");
+  const done = [
+    "- [ ] #task Resolve as Done [id:: agents__done] ^done",
+    "  - 🪢 **LINKS:** starts after [[agents#^implement]]",
+  ].join("\n");
+  const cancel = [
+    "- [ ] #task Resolve as Cancel [id:: agents__cancel] ^cancel",
+    "  - 🪢 **LINKS:** starts after [[agents#^implement]]",
+  ].join("\n");
+  const leaf = "- [?] #task Done cascade [fresh:: 2026-11-01] [dependsOn:: agents__done] [id:: agents__leaf] ^leaf";
+  const source = [parked, pick, done, cancel, leaf].join("\n");
+  const daily = [
+    `# ${TODAY}`, "", "## Pomodoros", "- [ ] () — BUILD", "  - leftover",
+  ].join("\n");
+  const sources = { "agents.md": source, [DAILY_PATH]: daily };
+  const harness = createInMemoryObsidianApp(sources);
+  const editor = createTextEditor(daily, { line: 3, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const seen = [];
+  const shown = [];
+  const offeredKeys = {};
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
+    api: {
+      version: 4,
+      cancel: navigationHarness.helpers.createCancelApi(),
+      successors: {
+        version: 4,
+        async pick(model) {
+          const rows = model.groups.flatMap((group) => group.rows || []);
+          for (const text of ["Pull into BUILD", "Resolve as Done", "Resolve as Cancel"]) {
+            const row = rows.find((candidate) => candidate.text === text);
+            assert.ok(row, `missing parked relation row ${text}: ${JSON.stringify(rows)}`);
+            offeredKeys[text] = row.key;
+          }
+          assert.ok(rows.find((row) => row.key === offeredKeys["Resolve as Done"]).close.complete);
+          assert.ok(rows.find((row) => row.key === offeredKeys["Resolve as Cancel"]).close.cancel);
+          seen.push(model);
+          return {
+            picks: [{ key: offeredKeys["Pull into BUILD"] }],
+            closes: [
+              { key: offeredKeys["Resolve as Done"], outcome: "done" },
+              { key: offeredKeys["Resolve as Cancel"], outcome: "cancelled", reason: "obsolete" },
+            ],
+          };
+        },
+      },
+      notice: {
+        version: 4,
+        showUnblocked(model) { shown.push(model); return true; },
+      },
+    },
+  };
+  installTasksStub(plugin, tasksFromSources(sources));
+  plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
+    version: 2,
+    ...helpers.buildFakeRelationIndex(sources),
+  };
+  const result = await plugin.offerParkedSuccessors([{
+    path: "agents.md", blockId: "implement", taskId: "agents__implement",
+    text: "Send implementation prompt",
+  }], {
+    dailyPath: DAILY_PATH,
+    relationConfig: relationConfig(),
+    slot: { entryLine: 3, bulletLine: 4, entryDeleted: false },
+  });
+
+  assert.equal(seen.length, 1, "the parked route opens one relation picker");
+  assert.equal(shown.length, 1, "all three outcomes share one receipt");
+  assert.equal(result.picked, 1, "only the explicit pull-in is linked");
+  const final = harness.getSource("agents.md");
+  assert.match(final, /^- \[\*\] #task Pull into BUILD/m);
+  assert.match(final, /^- \[x\] #task Resolve as Done/m);
+  assert.match(final, /^- \[-\] #task Resolve as Cancel .*\[cancelled:: .*\]/m);
+  assert.match(final, /obsolete/);
+  assert.match(final, /^- \[ \] #task Done cascade .*\[unblocked:: \d{4}-\d{2}-\d{2}\]/m);
+  assert.equal(shown[0].offer_closes.length, 2);
+  assert.equal(shown[0].offer_closes.reduce((sum, row) => sum + row.recovered.length, 0), 1,
+    "only the Done root recovers the leaf");
+  assert.ok(shown[0].undo, "the combined receipt keeps Undo for verdict writes");
 });
 
 test("offerParkedSuccessors stays silent when the target is still live-linked today", async () => {

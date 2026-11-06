@@ -206,6 +206,7 @@ function successorOfferCloseNoticeText(model, baseText) {
   const source = model && typeof model === "object" ? model : {};
   const lines = [];
   if (typeof baseText === "string" && baseText) lines.push(baseText);
+  const stampedRecoveries = [];
   for (const row of Array.isArray(source.offer_closes) ? source.offer_closes : []) {
     if (!row || typeof row !== "object") continue;
     const message = String(row.message || successorOfferCloseReceiptMessage({
@@ -217,10 +218,13 @@ function successorOfferCloseNoticeText(model, baseText) {
     }) || "");
     if (message) lines.push(message);
     for (const recovered of Array.isArray(row.recovered) ? row.recovered : []) {
-      if (recovered && recovered.unblocked_stamped === true && recovered.text) {
-        lines.push(`↳ ${recovered.text} back tomorrow as a tickler`);
-      }
+      if (recovered && recovered.unblocked_stamped === true && recovered.text) stampedRecoveries.push(recovered);
     }
+  }
+  if (stampedRecoveries.length === 1) {
+    lines.push(`↳ “${stampedRecoveries[0].text}” back tomorrow as a tickler`);
+  } else if (stampedRecoveries.length > 1) {
+    lines.push(`↳ ${stampedRecoveries.length} unblocked tasks back tomorrow as ticklers`);
   }
   const refusal = source.offer_close_refused && typeof source.offer_close_refused === "object"
     ? source.offer_close_refused

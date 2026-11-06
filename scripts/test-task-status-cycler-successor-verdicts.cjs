@@ -116,7 +116,7 @@ function descriptorFor(vector, { group, source, line, pathName, extra = {} } = {
 test("SV fixture is copied byte-for-byte from bob-cli", () => {
   assert.deepEqual(fixtureBytes, fs.readFileSync(CANONICAL_PATH));
   assert.equal(vectors.schema_version, 1);
-  assert.equal(vectors.cases.length, 22);
+  assert.ok(vectors.cases.length >= 22, "the shared vectors retain their original scenarios");
 });
 
 test("SV1–SV7 and SV17–SV18 use the canonical close, project, and scope copy", () => {
@@ -149,8 +149,8 @@ test("SV1–SV7 and SV17–SV18 use the canonical close, project, and scope copy
   assert.equal(plural.descriptor.scopeNote, "· its 2 open subtasks stay open");
 });
 
-test("SV9–SV22 simulate each candidate independently with WRITE skips", () => {
-  for (const id of ["SV9", "SV10", "SV19", "SV20", "SV21", "SV22"]) {
+test("SV9–SV24 simulate each candidate independently with WRITE skips", () => {
+  for (const id of ["SV9", "SV10", "SV19", "SV20", "SV21", "SV22", "SV23", "SV24"]) {
     const vector = vectors.cases.find((entry) => entry.id === id);
     const pathName = vector.path || "Tasks.md";
     const context = contextFor(vector.source, pathName);

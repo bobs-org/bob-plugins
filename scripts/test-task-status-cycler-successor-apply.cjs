@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { helpers, TaskStatusCyclerPlugin, createInMemoryObsidianApp } = require("./task-status-cycler-harness.cjs");
+const { helpers, TaskStatusCyclerPlugin, createInMemoryObsidianApp, createTextEditor, attachActiveMarkdownView } = require("./task-status-cycler-harness.cjs");
 const navHarness = require("./navigation-hotkeys-harness.cjs");
 
 const TODAY = "2026-11-05";
@@ -426,4 +426,131 @@ test("guarded Undo restores exact roots plus recovery and refuses after a later 
   });
   assert.equal(refused, false);
   assert.match(harness.getSource("Tasks.md"), /edited/);
+});
+
+test("Undo preimages retain unrelated edits arriving after the card snapshot on vault and editor paths", async () => {
+  const offered = "- [x] #task Earlier predecessor [id:: predecessor] ^predecessor\n- [*] #task Earlier pull-in [fresh:: 2026-11-05] [id:: picked] ^picked\n- [ ] #task Root [id:: root] ^root\n- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\nOld unrelated prose\n";
+  const live = offered.replace("Old unrelated prose", "User edited unrelated prose");
+  for (const pathMode of ["vault", "editor"]) {
+    const { harness, plugin } = setupPlugin({ "Tasks.md": live });
+    let editor = null;
+    if (pathMode === "editor") {
+      editor = createTextEditor(live, { line: 0, ch: 0 });
+      attachActiveMarkdownView(plugin, harness, editor, "Tasks.md");
+      const file = harness.app.vault.getAbstractFileByPath("Tasks.md");
+      harness.app.workspace.getActiveViewOfType = () => ({ editor, file });
+    }
+    const { offersByKey } = offersFor(offered);
+    const expected = expectedFor(offered, offersByKey);
+    const context = {
+      today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+      dependencySnapshotAvailable: true, markUnblockedLine,
+      noteTexts: new Map([["Tasks.md", offered]]),
+    };
+    const result = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+      closes: [{ key: "Tasks.md#^root", outcome: "done" }],
+      offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+      noteTexts: new Map([["Tasks.md", offered]]), context,
+    }));
+    assert.equal(result.offer_closes.length, 1, pathMode);
+    assert.equal(result.undo.restores.length, 1, pathMode);
+    const restore = result.undo.restores[0];
+    assert.equal(restore.before, live, `${pathMode} uses the accepted write preimage`);
+    const postimage = pathMode === "editor" ? editor.getValue() : harness.getSource("Tasks.md");
+    assert.match(postimage, /User edited unrelated prose/);
+    assert.match(postimage, /Earlier predecessor/);
+    assert.match(postimage, /Earlier pull-in/);
+
+    const navPlugin = new navHarness.NavigationHotkeysPlugin();
+    navPlugin.app = harness.app;
+    if (pathMode === "editor") {
+      navPlugin.getOpenMarkdownEditorForPath = (path) => path === "Tasks.md" ? editor : null;
+    }
+    assert.equal(restore.after, postimage, `${pathMode} undo postimage matches the writer`);
+    const undone = await navPlugin.restoreGuardedSnapshots(result.undo.restores, {
+      successMessage: "Closes undone", failureLabel: "Could not undo closes",
+    });
+    assert.equal(undone, true, pathMode);
+    const restored = pathMode === "editor" ? editor.getValue() : harness.getSource("Tasks.md");
+    assert.equal(restored, live, `${pathMode} undo preserves the concurrent edit and earlier effects`);
+  }
+});
+
+test("Undo checks every file before restoring any of them", async () => {
+  const root = "- [ ] #task Root [id:: root] ^root\n";
+  const dependent = "- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n";
+  const { harness, plugin } = setupPlugin({ "Root.md": root, "Deps.md": dependent });
+  const { offersByKey } = offersFor(root, "Root.md");
+  const expected = expectedFor(root, offersByKey);
+  const noteTexts = new Map([["Root.md", root], ["Deps.md", dependent]]);
+  const context = {
+    today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+    dependencySnapshotAvailable: true, markUnblockedLine, noteTexts,
+  };
+  const result = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [{ key: "Root.md#^root", outcome: "done" }],
+    offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+    noteTexts, context,
+  }));
+  assert.deepEqual(result.undo.restores.map((entry) => entry.path).sort(), ["Deps.md", "Root.md"]);
+  await harness.app.vault.modify(
+    harness.app.vault.getAbstractFileByPath("Deps.md"),
+    `${harness.getSource("Deps.md")}\n- later edit\n`,
+  );
+  const navPlugin = new navHarness.NavigationHotkeysPlugin();
+  navPlugin.app = harness.app;
+  const undone = await navPlugin.restoreGuardedSnapshots(result.undo.restores, {
+    successMessage: "Closes undone", failureLabel: "Could not undo closes",
+  });
+  assert.equal(undone, false);
+  assert.match(harness.getSource("Root.md"), /^- \[x\]/, "the earlier file was not partially undone");
+  assert.match(harness.getSource("Deps.md"), /\[unblocked:: 2026-11-05\]/);
+  assert.match(harness.getSource("Deps.md"), /later edit/);
+});
+
+test("a failed dependent write reaches the rich notice with only successful writes in Undo", async () => {
+  const root = "- [ ] #task Root [id:: root] ^root\n";
+  const dependent = "- [?] #task Waiting [fresh:: 2026-11-01] [dependsOn:: root] [id:: waiting] ^waiting\n";
+  const { harness, plugin } = setupPlugin({ "Root.md": root, "Deps.md": dependent });
+  const process = harness.app.vault.process.bind(harness.app.vault);
+  harness.app.vault.process = async (file, update) => {
+    if (file.path === "Deps.md") throw new Error("disk full");
+    return process(file, update);
+  };
+  const { offersByKey } = offersFor(root, "Root.md");
+  const expected = expectedFor(root, offersByKey);
+  const noteTexts = new Map([["Root.md", root], ["Deps.md", dependent]]);
+  const context = {
+    today: TODAY, dailyBefore: [], dailyAfter: [], dailyPath: "",
+    dependencySnapshotAvailable: true, markUnblockedLine, noteTexts,
+  };
+  const result = await runQueued(plugin, () => plugin.applyOfferClosesNow({
+    closes: [{ key: "Root.md#^root", outcome: "done" }],
+    offers: [...offersByKey.values()], offersByKey, expectedLines: expected,
+    noteTexts, context,
+  }));
+  assert.match(harness.getSource("Root.md"), /^- \[x\]/, "the successful root remains closed");
+  assert.doesNotMatch(harness.getSource("Deps.md"), /\[unblocked:: 2026-11-05\]/);
+  assert.equal(result.offer_closes.length, 1);
+  assert.deepEqual(result.offer_closes[0].recovered, [], "the failed dependent is not reported recovered");
+  assert.deepEqual(result.undo.restores.map((entry) => entry.path), ["Root.md"]);
+  assert.ok(result.failures.some((failure) => failure.kind === "recovery" && failure.path === "Deps.md"));
+
+  const navPlugin = new navHarness.NavigationHotkeysPlugin();
+  navPlugin.app = harness.app;
+  const view = navHarness.helpers.buildUnblockedNoticeModel({ ...result, __noticePlugin: navPlugin });
+  assert.match(view.text, /Recovery failed/);
+  assert.match(view.text, /Deps\.md/);
+  assert.match(view.text, /disk full/);
+  assert.deepEqual(view.offerCloseUndo.map((entry) => entry.path), ["Root.md"]);
+  const rootNode = navHarness.createFragmentNode();
+  navHarness.helpers.renderUnblockedNoticeFragment(view, rootNode, {});
+  assert.ok(navHarness.findFragmentNode(rootNode, (node) => node.text.includes("Recovery failed")));
+  assert.ok(navHarness.findFragmentNode(rootNode, (node) => node.text === "Undo closes"));
+  const undone = await navPlugin.restoreGuardedSnapshots(view.offerCloseUndo, {
+    successMessage: "Closes undone", failureLabel: "Could not undo closes",
+  });
+  assert.equal(undone, true);
+  assert.equal(harness.getSource("Root.md"), root, "Undo touches only the successful root write");
+  assert.equal(harness.getSource("Deps.md"), dependent, "the failed recovery path remains untouched");
 });

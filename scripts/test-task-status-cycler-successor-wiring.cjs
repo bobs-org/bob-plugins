@@ -14,6 +14,7 @@ const {
 } = require("./task-status-cycler-harness.cjs");
 const {
   helpers: navigationHelpers,
+  NavigationHotkeysPlugin,
   parseTestYaml,
 } = require("./navigation-hotkeys-harness.cjs");
 
@@ -325,7 +326,7 @@ test("link close links the unblocked successor into the slot and shows the nav c
     },
   ]);
   assert.equal(model.failure, null);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("Ctrl+Enter close preserves bracket and parenthesis theme fields", async () => {
@@ -752,7 +753,7 @@ test("close with no [id::] performs zero vault reads and shows nothing", async (
   assert.deepEqual(counts.process, []);
   assert.deepEqual(counts.modify, []);
   assert.equal(seen.length, 0);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("Warm finalize reads no unrelated note bodies on the real close path", async () => {
@@ -833,7 +834,7 @@ test("Warm finalize reads no unrelated note bodies on the real close path", asyn
   assert.ok(allReads.includes("a/d.md"));
   // Exactly one notice for the whole gesture.
   assert.equal(seen.length, 1);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("cold fallback still recovers and links without a Tasks cache", async () => {
@@ -904,7 +905,7 @@ test("recovered-only close reports unblocked without linking (SO4 Esc)", async (
     plugin.successorNoticeForModel(result.successors),
     /🔓 Unblocked/,
   );
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("SV14: stale close is refused per row while a fresh close and recovery apply", async () => {
@@ -1017,7 +1018,149 @@ test("SV14: stale close is refused per row while a fresh close and recovery appl
     "the successfully closed offer leaves ordinary successor receipts");
   assert.equal(integration.shown.length, 1);
   assert.ok(integration.shown[0].undo, "the v4 notice receives the take-back snapshot");
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
+});
+
+test("mixed pull-in, Done, and reasoned Cancel stay distinct across Undo and predecessor reopen", async () => {
+  for (const followup of ["undo", "reopen"]) {
+    notices.length = 0;
+    const rootOne = "- [x] #task Predecessor one [id:: root__one] ^root-one";
+    const rootTwo = "- [x] #task Predecessor two [id:: root__two] ^root-two";
+    const picked = "- [?] #task Pull this in [fresh:: 2026-11-01] [dependsOn:: root__one] [id:: picked] ^picked";
+    const done = "- [?] #task Mark complete [fresh:: 2026-11-01] [dependsOn:: root__two] [id:: done] ^done";
+    const cancelled = "- [?] #task Reasoned cancel [fresh:: 2026-11-01] [dependsOn:: root__two] [id:: cancelled] ^cancelled";
+    const leaf = "- [?] #task Done cascade [fresh:: 2026-11-01] [dependsOn:: done] [id:: leaf] ^leaf";
+    const source = [rootOne, rootTwo, picked, done, cancelled, leaf].join("\n");
+    const day = fixDay("\t- ");
+    const harness = createInMemoryObsidianApp({ "Tasks.md": source, [DAILY_PATH]: day });
+    const editor = createTextEditor(day, { line: 4, ch: 5 });
+    const plugin = makePlugin(harness, editor, DAILY_PATH);
+    const integration = installOfferCloseNavStub(plugin, {
+      pick(model) {
+        const rows = model.groups.flatMap((group) => group.rows || []);
+        const byText = new Map(rows.map((row) => [row.text, row]));
+        const pullInRow = byText.get("Pull this in");
+        const doneRow = byText.get("Mark complete");
+        const cancelRow = byText.get("Reasoned cancel");
+        assert.ok(pullInRow && doneRow && cancelRow, JSON.stringify(rows));
+        assert.equal(doneRow.close.complete, true);
+        assert.equal(cancelRow.close.cancel, true);
+        return {
+          picks: [{ key: pullInRow.key }],
+          closes: [
+            { key: doneRow.key, outcome: "done" },
+            { key: cancelRow.key, outcome: "cancelled", reason: "duplicate work" },
+          ],
+        };
+      },
+    });
+    plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.cancel =
+      navigationHelpers.createCancelApi();
+
+    const predecessorOne = {
+      path: "Tasks.md", blockId: "root-one", taskId: "root__one", text: "Predecessor one",
+    };
+    const predecessorTwo = {
+      path: "Tasks.md", blockId: "root-two", taskId: "root__two", text: "Predecessor two",
+    };
+    const result = await plugin.finalizeClosedTasks([predecessorOne, predecessorTwo], {
+      editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+    });
+    assert.equal(integration.picked.length, 1, `${followup}: one picker for the gesture`);
+    assert.equal(integration.shown.length, 1, `${followup}: one combined receipt`);
+    assert.ok(result.successors.offer_closes, JSON.stringify(result.successors));
+    assert.equal(result.successors.offer_closes.length, 2);
+    assert.deepEqual(result.successors.offer_closes.map((row) => row.outcome).sort(), ["cancelled", "done"]);
+    assert.match(result.successors.offer_closes.find((row) => row.outcome === "cancelled").message, /duplicate work/);
+    assert.equal(Boolean(result.successors.offer_close_refused), false, JSON.stringify(result.successors));
+    assert.equal(result.successors.unblocked.some((row) => row.block_id === "done" || row.block_id === "cancelled"), false,
+      "resolved roots leave ordinary successor rows");
+    assert.equal(result.successors.offer_closes.reduce((sum, row) => sum + row.recovered.length, 0), 1,
+      "only the Done root recovers its dependent");
+
+    const current = harness.getSource("Tasks.md");
+    assert.match(current, /^- \[\*\] #task Pull this in \[fresh:: .*\] .*\^picked$/m);
+    assert.match(current, /^- \[x\] #task Mark complete .* \^done$/m);
+    assert.match(current, /^- \[-\] #task Reasoned cancel .* \^cancelled$/m);
+    assert.match(current, /^- \[ \] #task Done cascade .* \[unblocked:: \d{4}-\d{2}-\d{2}\].*\^leaf$/m);
+    assert.match(editor.getValue(), /\[\[Tasks#\^picked\]\]/);
+    assert.equal(integration.shown[0].offer_closes.length, 2);
+    assert.ok(integration.shown[0].undo, "the combined receipt keeps guarded Undo");
+
+    if (followup === "undo") {
+      const navPlugin = new NavigationHotkeysPlugin();
+      navPlugin.app = harness.app;
+      navPlugin.getOpenMarkdownEditorForPath = (path) => path === DAILY_PATH ? editor : null;
+      const undone = await navPlugin.restoreGuardedSnapshots(integration.shown[0].undo.restores, {
+        successMessage: "Closes undone", failureLabel: "Could not undo closes",
+      });
+      assert.equal(undone, true);
+      const restored = harness.getSource("Tasks.md");
+      assert.match(restored, /^- \[x\] #task Predecessor one/m, "Undo keeps predecessor one closed");
+      assert.match(restored, /^- \[x\] #task Predecessor two/m, "Undo keeps predecessor two closed");
+      assert.match(restored, /^- \[\*\] #task Pull this in/m, "Undo keeps the ordinary pick");
+      assert.match(restored, /^- \[ \] #task Mark complete/m);
+      assert.match(restored, /^- \[ \] #task Reasoned cancel/m);
+      assert.match(restored, /^- \[\?\] #task Done cascade/m, "Undo restores only the verdict recovery");
+      assert.match(editor.getValue(), /\[\[Tasks#\^picked\]\]/);
+    } else {
+      await plugin.consumeSuccessorReopenReceipt([predecessorOne], {
+        editor, activePath: DAILY_PATH,
+      });
+      const reopened = harness.getSource("Tasks.md");
+      assert.match(reopened, /^- \[x\] #task Predecessor one/m);
+      assert.match(reopened, /^- \[x\] #task Predecessor two/m);
+      assert.match(reopened, /^- \[\?\] #task Pull this in/m, "same-day reopen restores the ordinary pick status");
+      assert.match(reopened, /^- \[x\] #task Mark complete/m, "same-day reopen leaves Done closed");
+      assert.match(reopened, /^- \[-\] #task Reasoned cancel/m, "same-day reopen leaves Cancel closed");
+      assert.doesNotMatch(editor.getValue(), /\[\[Tasks#\^picked\]\]/);
+    }
+    if (followup === "reopen") {
+      assert.deepEqual(notices, ["↩ Reopened Predecessor one · took back 1 successor link"]);
+    } else {
+      assert.equal(notices.length, 0, JSON.stringify(notices));
+    }
+  }
+});
+
+test("last project task and offered ^prj can resolve in one gesture and stay closed on predecessor reopen", async () => {
+  notices.length = 0;
+  const projectPath = "Projects/Alpha.md";
+  const project = [
+    "---", 'type: "[[project]]"', "status: wip", "---",
+    "- [ ] #task #prj Project Alpha [id:: alpha__prj] ^prj",
+    `- [x] #task Last task [id:: alpha__last] [completion:: ${TODAY}] ^last`,
+  ].join("\n");
+  const day = fixDay("\t- ");
+  const harness = createInMemoryObsidianApp({ [projectPath]: project, [DAILY_PATH]: day });
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  const integration = installOfferCloseNavStub(plugin, {
+    pick(model) {
+      const rows = model.groups.flatMap((group) => group.rows || []);
+      const prj = rows.find((row) => row.key === `${projectPath}#^prj`);
+      assert.ok(prj && prj.close && prj.close.complete, JSON.stringify(rows));
+      return { closes: [{ key: prj.key, outcome: "done" }] };
+    },
+  });
+  const last = { path: projectPath, blockId: "last", taskId: "alpha__last", text: "Last task" };
+  const result = await plugin.finalizeClosedTasks([last], {
+    editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH,
+  });
+  assert.equal(integration.picked.length, 1, "the project-finished row uses one picker");
+  assert.equal(integration.shown.length, 1, "the project close has one receipt");
+  assert.equal(result.successors.offer_closes.length, 1);
+  assert.equal(result.successors.offer_closes[0].key, `${projectPath}#^prj`);
+  assert.match(harness.getSource(projectPath), /^- \[x\] #task #prj Project Alpha .*\^prj$/m);
+  assert.match(harness.getSource(projectPath), /^- \[x\] #task Last task/m);
+  assert.equal(Boolean(result.successors.offer_close_refused), false);
+  assert.equal(result.successors.unblocked.some((row) => row.block_id === "prj"), false,
+    "the resolved project task is not offered again");
+
+  await plugin.consumeSuccessorReopenReceipt([last], { editor, activePath: DAILY_PATH });
+  assert.match(harness.getSource(projectPath), /^- \[x\] #task #prj Project Alpha .*\^prj$/m,
+    "reopening the predecessor does not reopen the verdict root");
+  assert.equal(integration.picked.length, 1, "reopen does not start another offer round");
 });
 
 test("offer-close receipts fall back to complete text with older notice APIs", () => {
@@ -1051,7 +1194,7 @@ test("offer-close receipts fall back to complete text with older notice APIs", (
   assert.equal(shown.length, 0, "a pre-v4 notice cannot discard the receipt");
   assert.equal(notices.length, 1);
   assert.match(notices[0], /completed “Offered two”/);
-  assert.match(notices[0], /Leaf back tomorrow as a tickler/);
+  assert.match(notices[0], /“Leaf” back tomorrow as a tickler/);
   assert.match(notices[0], /1 not closed/);
   assert.match(notices[0], /Offered one · Changed since the card opened/);
 });
@@ -1106,7 +1249,7 @@ test("walk landing composes a single toast and shows no card", async () => {
   assert.equal(walkContinued[0].outcome.kind, "complete");
   assert.match(walkContinued[0].outcome.notice || "", /🔓/);
   assert.equal(walkSeen.length, 0);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("SV15: a walk close shows one Undo receipt and forwards resolved identities", async () => {
@@ -1117,15 +1260,21 @@ test("SV15: a walk close shows one Undo receipt and forwards resolved identities
   const day = fixDay("");
   const harness = createInMemoryObsidianApp({
     "walk.md": landing,
-    "source.md": [offered, leaf].join("\n"),
+    "offers.md": offered,
+    "deps.md": leaf,
     [DAILY_PATH]: day,
   });
+  const process = harness.app.vault.process.bind(harness.app.vault);
+  harness.app.vault.process = async (file, update) => {
+    if (file.path === "deps.md") throw new Error("disk full");
+    return process(file, update);
+  };
   const editor = createTextEditor(landing, { line: 0, ch: 4 });
   const plugin = makePlugin(harness, editor, "walk.md");
   const integration = installOfferCloseNavStub(plugin, {
     pick(model) {
       const row = model.groups.flatMap((group) => group.rows || []).find(
-        (candidate) => candidate && candidate.key === "source.md#^offered" &&
+        (candidate) => candidate && candidate.key === "offers.md#^offered" &&
           candidate.close && candidate.close.complete,
       );
       assert.ok(row, "the walk's eligible offer has a Done verdict");
@@ -1148,16 +1297,22 @@ test("SV15: a walk close shows one Undo receipt and forwards resolved identities
   assert.equal(outcomes.length, 1, "the landing advances once");
   assert.equal(integration.shown.length, 1, "the v4 receipt is the one visible notice");
   assert.ok(integration.shown[0].undo, "the review walk keeps the Undo action");
+  assert.deepEqual(integration.shown[0].failures.map((failure) => ({ kind: failure.kind, path: failure.path })), [
+    { kind: "recovery", path: "deps.md" },
+  ], "the walk receipt keeps a failed dependent write visible");
+  assert.deepEqual(integration.shown[0].undo.restores.map((entry) => entry.path), ["offers.md"],
+    "Undo includes the successful verdict root only");
   assert.deepEqual(outcomes[0].outcome.excludeRefs.map((ref) => ({
     path: ref.path,
     blockId: ref.blockId,
     taskId: ref.taskId,
-  })), [{ path: "source.md", blockId: "offered", taskId: "offered" }]);
+  })), [{ path: "offers.md", blockId: "offered", taskId: "offered" }]);
   assert.doesNotMatch(outcomes[0].outcome.notice || "", /completed “Offered close”/,
     "the walk continuation does not repeat the close summary");
-  assert.match(harness.getSource("source.md"), /^- \[x\] #task Offered close/m);
-  assert.match(harness.getSource("source.md"), /^- \[ \] #task Recovered leaf .* \[unblocked:: \d{4}-\d{2}-\d{2}\]/m);
-  assert.equal(notices.length, 0);
+  assert.match(harness.getSource("offers.md"), /^- \[x\] #task Offered close/m);
+  assert.match(harness.getSource("deps.md"), /^- \[\?\] #task Recovered leaf/m);
+  assert.doesNotMatch(harness.getSource("deps.md"), /\[unblocked::/);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("nav absent falls back to a plain Notice with no link (SO missing picker)", async () => {
@@ -1286,7 +1441,7 @@ test("Pomodoro-line close appends the successor to the created continuation", as
   const row = seen[0].unblocked[0];
   assert.equal(row.link.entry_name, "FIX");
   assert.equal(row.link.entry_created, true);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("Pomodoro-line close keeps the closing anchor after the picker re-plan", async () => {
@@ -1356,7 +1511,7 @@ test("completeTaskAtCursor returns the notice and shows nothing itself", async (
   assert.equal(result.ok, true);
   assert.match(result.successorNotice || "", /🔓/);
   assert.equal(seen.length, 0);
-  assert.equal(notices.length, 0);
+  assert.equal(notices.length, 0, JSON.stringify(notices));
 });
 
 test("successor apply recovers project residents without ledger v12", async () => {

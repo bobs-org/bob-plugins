@@ -1,6 +1,7 @@
 # Offer-close vectors
 
 `vectors.json` is copied byte-for-byte from bob-cli's canonical
-`tests/fixtures/offer_close/vectors.json`, owned by bob-cli commit `44c5c8c8`
-(`fix(capture): repair shared offer-close contract and executable vectors`).
-Update the bob-cli fixture first, then copy it here without editing its bytes.
+`tests/fixtures/offer_close/vectors.json`, owned by bob-cli. The canonical
+fixture now includes SV23–SV24, which pin row-specific tickler attribution
+when another row in the same note already has today's stamp. Update the
+bob-cli fixture first, then copy it here byte-for-byte.

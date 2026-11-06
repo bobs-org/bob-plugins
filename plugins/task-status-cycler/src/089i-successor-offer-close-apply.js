@@ -832,7 +832,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         }
       }
       if (guardBefore === guardAfter) {
-        snapshots.set(path, { path, before: providedNotes.get(path) != null ? String(providedNotes.get(path)) : String(guardBefore), after: String(guardAfter) });
+        // No write occurred, so there is no undo preimage to record.
         continue;
       }
       const result = await writeOfferCloseNoteText(this, path, guardBefore, guardAfter, options.context || {});
@@ -852,7 +852,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         finalIntermediates.delete(path);
         continue;
       }
-      snapshots.set(path, { path, before: String(providedNotes.get(path) != null ? providedNotes.get(path) : guardBefore), after: String(guardAfter) });
+      snapshots.set(path, { path, before: String(guardBefore), after: String(guardAfter) });
       try { cache.delete(path); } catch (_error) {}
       for (const row of finalPlanned) {
         if (String(row.path) === String(path)) writtenRoots.push(row);
@@ -924,7 +924,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
           }
           const prev = snapshots.get(path);
           if (prev) snapshots.set(path, { path, before: prev.before, after });
-          else snapshots.set(path, { path, before: String(providedNotes.get(path) != null ? providedNotes.get(path) : baseText), after });
+          else snapshots.set(path, { path, before: String(baseText), after });
           for (const edit of edits) appliedRecovery.push(edit);
         }
         // Drop recoveries whose file write was refused; never report them.
@@ -932,7 +932,9 @@ class TaskStatusCyclerOfferCloseApplyMixin {
           const keptRecovered = [];
           for (const dep of recovery.recovered) {
             if (!refusedRecoveryPaths.has(dep.note_path)) keptRecovered.push(dep);
-            else recoveryFailures.push({ path: dep.note_path, reason: "recovery refused: note changed" });
+            else if (!recoveryFailures.some((failure) => String(failure.path) === String(dep.note_path))) {
+              recoveryFailures.push({ path: dep.note_path, reason: "recovery refused: note changed" });
+            }
           }
           recovery = { ...recovery, recovered: keptRecovered, edits: appliedRecovery };
         } else {

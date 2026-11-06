@@ -36,6 +36,15 @@ buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithOfferCloses(mo
           unblockedStamped: entry.unblocked_stamped === true || entry.unblockedStamped === true,
         }))),
     }));
+  const hasOfferCloseResult = Array.isArray(source.offer_closes) ||
+    (source.offer_close_refused && typeof source.offer_close_refused === "object");
+  const failures = Object.freeze((hasOfferCloseResult && Array.isArray(source.failures) ? source.failures : [])
+    .filter((failure) => failure && typeof failure === "object")
+    .map((failure) => Object.freeze({
+      kind: failure.kind === "recovery" ? "recovery" : "write",
+      path: unblockedNoticeText(failure.path),
+      reason: unblockedNoticeText(failure.reason),
+    })));
   const refusalRows = source.offer_close_refused && Array.isArray(source.offer_close_refused.rows)
     ? source.offer_close_refused.rows : [];
   const refusal = source.offer_close_refused && typeof source.offer_close_refused === "object"
@@ -46,7 +55,7 @@ buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithOfferCloses(mo
       })
     : null;
   const restores = source.undo && Array.isArray(source.undo.restores) ? source.undo.restores : [];
-  if (!view && offerCloses.length === 0 && !(refusal && refusal.count > 0)) return null;
+  if (!view && offerCloses.length === 0 && !(refusal && refusal.count > 0) && failures.length === 0) return null;
   const base = view || Object.freeze({
     rows: Object.freeze([]), visibleRows: Object.freeze([]), moreCount: 0,
     predecessors: Object.freeze([]), linked: Object.freeze([]), recovered: Object.freeze([]),
@@ -59,13 +68,19 @@ buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithOfferCloses(mo
     offerCloses: Object.freeze(offerCloses),
     offerCloseRefused: refusal && refusal.count > 0 ? refusal : null,
     offerCloseUndo: restores.length > 0 ? Object.freeze(restores.slice()) : null,
+    offerCloseFailures: failures,
     offerClosePlugin: source.__noticePlugin || null,
     text: [
       base.text,
       ...offerCloses.map((row) => row.message || row.text).filter(Boolean),
-      ...offerCloses.flatMap((row) => row.recovered.filter((entry) => entry.unblockedStamped)
-        .map((entry) => `↳ ${entry.text} back tomorrow as a tickler`)),
+      ...((() => {
+        const stamped = offerCloses.flatMap((row) => row.recovered.filter((entry) => entry.unblockedStamped));
+        if (stamped.length === 1) return [`↳ “${stamped[0].text}” back tomorrow as a tickler`];
+        if (stamped.length > 1) return [`↳ ${stamped.length} unblocked tasks back tomorrow as ticklers`];
+        return [];
+      })()),
       ...(refusal && refusal.count > 0 ? [`${refusal.count} not closed · changed since the card opened`] : []),
+      ...failures.map((failure) => `⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}${failure.path ? ` · ${failure.path}` : ""}: ${failure.reason || "The write could not be completed."}`),
     ].filter(Boolean).join("\n"),
   });
 };
@@ -73,14 +88,20 @@ buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithOfferCloses(mo
 const renderUnblockedNoticeBeforeOfferCloses = renderUnblockedNoticeFragment;
 renderUnblockedNoticeFragment = function renderUnblockedNoticeWithOfferCloses(view, root, options = {}) {
   const card = renderUnblockedNoticeBeforeOfferCloses(view, root, options);
-  if (!card || !view || (!view.offerCloses?.length && !view.offerCloseRefused && !view.offerCloseUndo)) return card;
+  if (!card || !view || (!view.offerCloses?.length && !view.offerCloseRefused && !view.offerCloseUndo && !view.offerCloseFailures?.length)) return card;
+  const stampedRecoveries = [];
   for (const close of view.offerCloses || []) {
     const row = card.createDiv({ cls: `bob-nh-unblock-row is-offer-close is-${close.outcome}` });
     row.createSpan({ cls: "bob-nh-unblock-glyph", text: close.outcome === "done" ? "✓" : "⊘", attr: { "aria-hidden": "true" } });
     row.createSpan({ cls: "bob-nh-unblock-text", text: close.message || close.text });
     for (const recovered of close.recovered || []) {
-      if (recovered.unblockedStamped) card.createDiv({ cls: "bob-nh-unblock-row is-muted is-offer-tickler", text: `↳ ${recovered.text} back tomorrow as a tickler` });
+      if (recovered.unblockedStamped) stampedRecoveries.push(recovered);
     }
+  }
+  if (stampedRecoveries.length === 1) {
+    card.createDiv({ cls: "bob-nh-unblock-row is-muted is-offer-tickler", text: `↳ “${stampedRecoveries[0].text}” back tomorrow as a tickler` });
+  } else if (stampedRecoveries.length > 1) {
+    card.createDiv({ cls: "bob-nh-unblock-row is-muted is-offer-tickler", text: `↳ ${stampedRecoveries.length} unblocked tasks back tomorrow as ticklers` });
   }
   if (view.offerCloseRefused) {
     const refused = card.createDiv({ cls: "bob-nh-notice-reason is-refusal" });
@@ -88,6 +109,10 @@ renderUnblockedNoticeFragment = function renderUnblockedNoticeWithOfferCloses(vi
     for (const row of view.offerCloseRefused.rows) {
       if (row.text || row.why) refused.createDiv({ cls: "bob-nh-notice-reason-text", text: [row.text, row.why].filter(Boolean).join(" · ") });
     }
+  }
+  for (const failure of view.offerCloseFailures || []) {
+    const failed = card.createDiv({ cls: "bob-nh-notice-reason is-failure" });
+    failed.createSpan({ cls: "bob-nh-notice-reason-text", text: `⚠ ${failure.kind === "recovery" ? "Recovery failed" : "Close write failed"}${failure.path ? ` · ${failure.path}` : ""}: ${failure.reason || "The write could not be completed."}` });
   }
   if (view.offerCloseUndo && view.offerClosePlugin) {
     const plugin = view.offerClosePlugin;

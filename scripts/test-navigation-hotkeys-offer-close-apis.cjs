@@ -54,3 +54,37 @@ test("notice v4 renders offer closes, refusal copy, ticklers, and guarded Undo a
   assert.ok(findFragmentNode(root, (node) => node.text.includes("changed since the card opened")));
   assert.equal(findFragmentNode(root, (node) => node.text === "Undo closes").text, "Undo closes");
 });
+
+test("notice v4 preserves failure-only payloads and aggregates stamped recoveries", () => {
+  const failureOnly = helpers.buildUnblockedNoticeModel({
+    offer_closes: [],
+    offer_close_refused: null,
+    failures: [{ kind: "recovery", path: "Deps.md", reason: "disk full" }],
+  });
+  assert.ok(failureOnly);
+  assert.match(failureOnly.text, /Recovery failed/);
+  assert.match(failureOnly.text, /Deps\.md/);
+  assert.match(failureOnly.text, /disk full/);
+  const failedRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(failureOnly, failedRoot, {});
+  assert.ok(findFragmentNode(failedRoot, (node) => node.text.includes("Recovery failed")));
+
+  const mixed = helpers.buildUnblockedNoticeModel({
+    offer_closes: [{
+      outcome: "done", text: "Root", message: "✓ completed Root",
+      recovered: [
+        { text: "A", unblocked_stamped: true },
+        { text: "B", unblocked_stamped: true },
+        { text: "C", unblocked_stamped: false },
+      ],
+    }],
+  });
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(mixed, root, {});
+  assert.equal(findFragmentNode(root, (node) => node.text.includes("2 unblocked tasks back tomorrow as ticklers")).text,
+    "↳ 2 unblocked tasks back tomorrow as ticklers");
+  assert.equal(findFragmentNode(root, (node) => node.text.includes("A back tomorrow")), null);
+
+  const legacy = helpers.buildUnblockedNoticeModel({ failures: [{ kind: "recovery", reason: "old payload" }] });
+  assert.equal(legacy, null, "payloads without the v4 offer-close marker keep prior behavior");
+});

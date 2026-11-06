@@ -417,13 +417,15 @@ test("recovery api is frozen at version 3 and recovers without striking referenc
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 4);
+  assert.equal(plugin.api.version, 5);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
   assert.equal(typeof plugin.api.completeTaskAtCursor, "function");
   assert.equal(typeof plugin.api.completeTaskLineText, "function");
   assert.equal(typeof plugin.api.finalizeClosedTasks, "function");
   assert.equal(typeof plugin.api.offerParkedSuccessors, "function");
+  assert.equal(typeof plugin.api.describeOfferCloses, "function");
+  assert.equal(typeof plugin.api.applyOfferCloses, "function");
 
   const harness = createInMemoryObsidianApp({
     "Daily.md": "## Pomodoros\n- [ ] Focus\n\t- ![[Tasks#^root]]",

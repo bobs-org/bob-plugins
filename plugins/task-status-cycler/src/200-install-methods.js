@@ -25,6 +25,7 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerOfferCloseApplyMixin,
   TaskStatusCyclerSuccessorOfferCloseIntegrationMixin,
   TaskStatusCyclerSuccessorProjectMixin,
+  TaskStatusCyclerSuccessorOfferCloseApiMixin,
   TaskStatusCyclerRelationSuccessorRuntimeMixin,
   TaskStatusCyclerSuccessorParkedMixin,
   TaskStatusCyclerVimMixin,

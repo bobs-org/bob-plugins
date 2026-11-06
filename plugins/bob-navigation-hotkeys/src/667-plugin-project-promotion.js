@@ -292,6 +292,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
       }
     }
     let picks = null;
+    let promotionCloses = [];
     let offerPlan = null;
     let liveLinkedChildIds = new Set();
     if (anchor && !projectIsBlocked && parsedTask.blockId) {
@@ -334,7 +335,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
       const selectableCount = offerPlan.rows.filter((row) => row.selectable).length;
       if (selectableCount > 0) {
         const header = projectDescription;
-        const model = buildPromotionSuccessorModel(offerPlan, {
+        let model = buildPromotionSuccessorModel(offerPlan, {
           sourcePath,
           sourceBlockId: parsedTask.blockId,
           sourceDescription: parsedTask.description || "",
@@ -343,11 +344,21 @@ class BobNavigationHotkeysProjectPromotionMixin {
           destinationLabel: anchor.destinationLabel || "",
         });
         if (model) {
+          // Verdicts ride the same card when the cycler speaks api v5;
+          // otherwise the model keeps today's pull-in-only shape.
+          try {
+            const descriptors = await promotionDescribeOfferCloses(this, offerPlan);
+            if (descriptors) model = promotionModelWithOfferCloses(model, descriptors);
+          } catch (_error) {
+            // The card stays pull-in-only.
+          }
           try {
             const result = await this.pickSuccessorOffers(model, { retarget: false });
             picks = result && Array.isArray(result.picks) ? result.picks : null;
+            promotionCloses = result && Array.isArray(result.closes) ? result.closes : [];
           } catch (_error) {
             picks = null;
+            promotionCloses = [];
           }
         }
       }
@@ -570,6 +581,16 @@ class BobNavigationHotkeysProjectPromotionMixin {
       new Notice("Created project, but the source task changed and was not removed");
       return true;
     }
+    // Picks applied above; staged verdicts close next through the cycler.
+    // A changed or vanished close row is refused alone inside the call.
+    let promotionCloseReceipt = null;
+    if (promotionCloses.length > 0 && offerPlan) {
+      try {
+        promotionCloseReceipt = await promotionApplyOfferCloses(this, offerPlan, promotionCloses);
+      } catch (_error) {
+        promotionCloseReceipt = null;
+      }
+    }
     const prjLineIndex = findProjectLifecycleTaskIndex(projectContent);
     const prjLineText = String((projectContent.split(/\r?\n/)[prjLineIndex] || ""));
     await this.focusTaskMoveDestination(createdFile, { line: prjLineIndex, text: prjLineText, blockId: "prj" });
@@ -598,6 +619,7 @@ class BobNavigationHotkeysProjectPromotionMixin {
       }
     }
     new Notice(notice);
+    if (promotionCloseReceipt) showPromotionOfferCloseReceipt(this, promotionCloseReceipt);
     return true;
   }
 

@@ -483,7 +483,7 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 
 ## Task Status Cycler
 
-`task-status-cycler.api` is version 4:
+`task-status-cycler.api` is version 5:
 
 - `recoverBlockedDependents(identities, context?)` runs the same
   dependent recovery as task completion without retiring references. It
@@ -518,6 +518,24 @@ than rejecting. `taskLinkLane.matches` is synchronous and
   never throws; it resolves `{ offered, picked }`. Still-linked,
   non-Pending, and empty identities are silence (`{ offered: 0, picked: 0 }`).
   Consumers feature-detect `api.version >= 4` and the method.
+- `describeOfferCloses({ rows, gesture }?)` reports per-row Done/Cancel
+  eligibility for the project-promotion successor card. Each row is
+  `{ key, text, notePath, status, selectable, line, rawLine, blockId? }`
+  with promotion-minted keys (`path#^id`, `path@digest~n`). It resolves to
+  `{ descriptors: { [key]: { complete, cancel, why?, completeConsequence?,
+  cancelConsequence?, scopeNote?, unblocks } }, supported }`. `supported`
+  is false when nav speaks older `successors`/`cancel` namespaces; in that
+  case `descriptors` is empty and the card stays pull-in-only. ID-less keys
+  are translated to the engine's digest per call, so the shared validators
+  keep refusing look-alike neighbours. The method never throws.
+- `applyOfferCloses({ closes, expectedLines, rows? }?)` runs the guarded
+  verdict step for the promotion card: revalidates each close against its
+  card preimage line, applies root-only Done / Task-Card-parity Cancel
+  writes, then runs one recover-only cascade over the joint closed set. It
+  resolves to `{ offer_closes, offer_close_refused, undo: { restores }?,
+  resolved?, failures? }` for the `api.notice` v4 receipt. Both methods are
+  queued like the other public cycler methods. Consumers feature-detect
+  `api.version >= 5` and the method.
 
 ## Bob Command Mode
 

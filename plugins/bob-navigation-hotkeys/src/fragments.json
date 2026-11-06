@@ -179,6 +179,7 @@
   "665-plugin-project-conversion.js",
   "666-project-reversal-rewrites.js",
   "667-plugin-project-promotion.js",
+  "667a-plugin-project-promotion-verdicts.js",
   "670-plugin-project-files.js",
   "675-plugin-goto-task-uri.js",
   "676-plugin-open-notes-uri.js",

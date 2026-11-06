@@ -165,7 +165,7 @@ function makeParkedFixture({
   };
 }
 
-test("cycler api v4 offerParkedSuccessors is frozen and never throws", () => {
+test("cycler api v5 offerParkedSuccessors is frozen and never throws", () => {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.addCommand = () => {};
   plugin.registerEvent = () => {};
@@ -178,7 +178,7 @@ test("cycler api v4 offerParkedSuccessors is frozen and never throws", () => {
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 4);
+  assert.equal(plugin.api.version, 5);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.offerParkedSuccessors, "function");
 });

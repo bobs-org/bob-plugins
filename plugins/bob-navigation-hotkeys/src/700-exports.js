@@ -161,7 +161,7 @@ module.exports.helpers = {
   resolveProjectPromotionLinkTarget,
   parseProjectPromotionDedicatedLink,
   planPromotionProjectHistoryRewrites, planProjectPromotionFileEdits, promotionSuccessorFnv1aHex,
-  planPromotionSuccessorRows, findPromotionPlannedLinks, buildPromotionSuccessorModel, planPromotionHistoryRewrites, buildPromotionNoticeLine2, promotionSuccessorLinkForId, promotionTruncateTaskText,
+  planPromotionSuccessorRows, findPromotionPlannedLinks, buildPromotionSuccessorModel, planPromotionHistoryRewrites, buildPromotionNoticeLine2, promotionSuccessorLinkForId, promotionTruncateTaskText, promotionOfferCloseCyclerApi, promotionSuccessorPickerCloseCapable, promotionSuccessorCloseRows, promotionCloseDescriptorEligible, promotionModelWithOfferCloses, promotionDescribeOfferCloses, promotionExpectedCloseLines, promotionOfferCloseReceiptEmpty, promotionApplyOfferCloses, promotionOfferCloseNoticeModel, showPromotionOfferCloseReceipt,
   getProjectFromTaskNoticeText,
   getFutureProjectSchedule,
   isFutureInlineScheduledValue,

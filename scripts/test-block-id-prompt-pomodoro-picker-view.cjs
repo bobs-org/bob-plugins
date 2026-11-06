@@ -901,7 +901,8 @@ test("configured theme menu vectors scope Recent, preserve config order, and fla
       similarTo: () => ["BUILD", "SNACK"],
       hueFor: (key) => ({ hue: key === "build" ? "yellow" : "violet", hue_source: "config" }),
     };
-    const query = item.draft.slice(2).trim();
+    // Drafts are `=#` (bare menu) or a glued `=name` (grammar since bob 01cb7b5c).
+    const query = item.draft.replace(/^=#?/, "").trim();
     const baseRows = query
       ? [{ kind: "new", key: `new-${query}`, name: query.toUpperCase(), selectable: true }]
       : [];

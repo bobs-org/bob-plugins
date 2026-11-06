@@ -1193,7 +1193,7 @@
     },
     {
       "name": "configured-unconfigured-create-row",
-      "draft": "=#snack",
+      "draft": "=snack",
       "today": [],
       "history": {
         "2026-10-23": [

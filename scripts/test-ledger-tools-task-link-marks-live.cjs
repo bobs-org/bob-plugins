@@ -1190,7 +1190,6 @@ test("a viewport-limited build over a 1,000-line note stays fast", () => {
     starts.push(offset);
     offset += line.length + 1;
   }
-  const hr = () => Number(process.hrtime.bigint()) / 1e6;
   // CPU time with a warm-up and best-of samples, as the other performance
   // tests do (`test-block-id-prompt-task-wikilink-index-performance.cjs`):
   // a full-suite run once failed this guard at 29.6 ms on a wall-clock
@@ -1226,7 +1225,7 @@ test("a viewport-limited build over a 1,000-line note stays fast", () => {
   };
   const warm = ringsOf(env, scrollTo(500));
   assert.equal(warm.length, 122);
-  const warmMs = bestOf(3, (sample) => {
+  const warmMs = bestOf(5, (sample) => {
     assert.equal(ringsOf(env, scrollTo(500 + sample * 7)).length, 122);
   });
   assert.ok(warmMs < 25, `warm viewport build took ${warmMs.toFixed(1)}ms of CPU`);
@@ -1239,13 +1238,14 @@ test("a viewport-limited build over a 1,000-line note stays fast", () => {
   });
   assert.ok(keystrokeMs < 25, `keystroke rebuild took ${keystrokeMs.toFixed(1)}ms of CPU`);
   // The whole note: 2,000 task links, 3 resolver lookups at most per unique id.
+  // Its first build is timed in CPU time too, so a host stall cannot fail it.
   const full = makeView(text, SOURCE);
   full.state.doc = viewport.state.doc;
-  const t2 = hr();
+  const fullStarted = cpuMs();
   const all = ringsOf(env, full);
-  const fullMs = hr() - t2;
+  const fullMs = cpuMs() - fullStarted;
   assert.equal(all.length, 2000);
-  assert.ok(fullMs < 500, `full build took ${fullMs.toFixed(1)}ms`);
+  assert.ok(fullMs < 500, `full build took ${fullMs.toFixed(1)}ms of CPU`);
   assert.equal(env.reads.count, 0);
 });
 

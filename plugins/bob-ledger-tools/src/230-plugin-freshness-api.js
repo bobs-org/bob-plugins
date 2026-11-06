@@ -1,5 +1,5 @@
 class BobLedgerToolsFreshnessApiMixin {
-  // --- Task freshness (freshness namespace v13) --------------------------
+  // --- Task freshness (freshness namespace v14) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -185,18 +185,23 @@ class BobLedgerToolsFreshnessApiMixin {
     const queue = freshnessQueue(rows, dateText, snapshot.config);
     const counts = freshnessCounts(rows, dateText, snapshot.config);
     const lints = freshnessCollectLints(rows, dateText, snapshot.config);
-    // One deprecation diagnostic per loaded config — never one per
-    // task — when the removed `stale_daily_budget` key supplied the
-    // budget or was ignored beside the canonical key.
-    if (snapshot.config && snapshot.config.deprecatedStaleBudget) {
-      let configPath = "";
+    const configLints = [];
+    let configPath = "";
+    if (
+      (snapshot.config && snapshot.config.deprecatedStaleBudget) ||
+      (snapshot.config && Array.isArray(snapshot.config.stagesInvalid) &&
+        snapshot.config.stagesInvalid.length > 0)
+    ) {
       try {
         configPath =
           typeof planConfigPath === "function" ? planConfigPath() : "";
       } catch (error) {
         configPath = "";
       }
-      lints.unshift({
+    }
+    // Config diagnostics appear once per loaded config, before row lints.
+    if (snapshot.config && snapshot.config.deprecatedStaleBudget) {
+      configLints.push({
         code: "freshness_stale_daily_budget_deprecated",
         path: String(configPath || ""),
         line: null,
@@ -206,6 +211,21 @@ class BobLedgerToolsFreshnessApiMixin {
           ] || "freshness_stale_daily_budget_deprecated",
       });
     }
+    for (const item of
+      snapshot.config && Array.isArray(snapshot.config.stagesInvalid)
+        ? snapshot.config.stagesInvalid
+        : []) {
+      if (!item || typeof item.key !== "string" || typeof item.problem !== "string") {
+        continue;
+      }
+      configLints.push({
+        code: "freshness_stages_invalid",
+        path: String(configPath || ""),
+        line: null,
+        message: freshnessStagesInvalidMessage(item),
+      });
+    }
+    lints.unshift(...configLints);
     const rank = new Map(queue.map((entry, index) => [entry.key, index]));
     // Key-to-evaluated-result map built once per snapshot, covering
     // FRESH and out-of-scope rows too — not just the review queue — so
@@ -419,6 +439,12 @@ class BobLedgerToolsFreshnessApiMixin {
         nextInterval,
         projectInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
+        preStages: Array.isArray(snapshot.config.preStages)
+          ? snapshot.config.preStages.slice()
+          : [],
+        postStages: Array.isArray(snapshot.config.postStages)
+          ? snapshot.config.postStages.slice()
+          : [],
         intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
         deprecatedStaleBudget: Boolean(
@@ -446,6 +472,8 @@ class BobLedgerToolsFreshnessApiMixin {
         nextInterval: 1,
         projectInterval: null,
         rottenDailyBudget: null,
+        preStages: [],
+        postStages: [],
         intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,

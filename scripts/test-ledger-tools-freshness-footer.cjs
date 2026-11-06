@@ -660,6 +660,7 @@ test("reviewEntryView compact and detail cover the original freshness tiers", ()
     label: "",
     detail: "",
     compact: "",
+    stage: null,
     actionHint: "",
   });
   assert.equal(freshnessReviewEntryView(queueEntry(), today).detail, "");

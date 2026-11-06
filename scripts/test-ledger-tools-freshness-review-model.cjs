@@ -232,6 +232,9 @@ test("config snapshot caches the parse and invalidates explicitly", () => {
           nextInterval: 1,
           projectInterval: null,
           rottenDailyBudget: null,
+          preStages: [],
+          postStages: [],
+          stagesInvalid: [],
           decay: {
             enabled: true,
             keeps: 3,

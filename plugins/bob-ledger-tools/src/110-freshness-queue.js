@@ -6,7 +6,7 @@
 // blockId, state (null for lane rows), bucket, tier (machine),
 // tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
 // intervalSource, keeps, decide, returnedBy, unblockedOn, rank,
-// tierRank, tierTotal }` with
+// tierRank, tierTotal, stage, stageIndex, stageRank, stageTotal }` with
 // 1-based `line` (Tasks' `lineNumber` is 0-based). `decide` means a
 // choice is due, not permission to execute an action.
 function freshnessQueue(rows, todayText, config) {
@@ -28,6 +28,9 @@ function freshnessQueue(rows, todayText, config) {
     ) {
       continue;
     }
+    const stage = checklistTier
+      ? freshnessChecklistStage(row.tags, evaluated.tier, config)
+      : { stage: null, stageIndex: null };
     entries.push({
       key: freshnessRowKey(row),
       path: String(row.path || ""),
@@ -56,6 +59,10 @@ function freshnessQueue(rows, todayText, config) {
       decide: evaluated.decide,
       returnedBy: evaluated.returnedBy,
       unblockedOn: evaluated.unblockedOn,
+      stage: stage.stage,
+      stageIndex: stage.stageIndex,
+      stageRank: null,
+      stageTotal: null,
       rank: 0,
       tierRank: 0,
       tierTotal: 0,
@@ -69,11 +76,12 @@ function freshnessQueue(rows, todayText, config) {
     if (tierOrder !== 0) {
       return tierOrder;
     }
-    if (
-      left.tier === "pre" ||
-      left.tier === "new" ||
-      left.tier === "post"
-    ) {
+    if (left.tier === "pre" || left.tier === "post") {
+      const leftIndex = left.stageIndex === null ? Number.POSITIVE_INFINITY : left.stageIndex;
+      const rightIndex = right.stageIndex === null ? Number.POSITIVE_INFINITY : right.stageIndex;
+      return leftIndex - rightIndex || freshnessComparePathLine(left, right);
+    }
+    if (left.tier === "new") {
       return freshnessComparePathLine(left, right);
     }
     if (
@@ -108,16 +116,28 @@ function freshnessQueue(rows, todayText, config) {
   });
 
   const totals = {};
+  const stageTotals = {};
   for (const entry of entries) {
     totals[entry.tier] = (totals[entry.tier] || 0) + 1;
+    if (entry.stage !== null) {
+      const key = `${entry.tier}\u0000${entry.stage}`;
+      stageTotals[key] = (stageTotals[key] || 0) + 1;
+    }
   }
   const seen = {};
+  const stageSeen = {};
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     entry.rank = index + 1;
     seen[entry.tier] = (seen[entry.tier] || 0) + 1;
     entry.tierRank = seen[entry.tier];
     entry.tierTotal = totals[entry.tier] || 0;
+    if (entry.stage !== null) {
+      const key = `${entry.tier}\u0000${entry.stage}`;
+      stageSeen[key] = (stageSeen[key] || 0) + 1;
+      entry.stageRank = stageSeen[key];
+      entry.stageTotal = stageTotals[key] || 0;
+    }
   }
   return entries;
 }

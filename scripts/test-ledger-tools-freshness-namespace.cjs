@@ -11,7 +11,7 @@ const {
   makeStatusEl,
   makeStatusItemFactory,
 } = require("./ledger-tools-harness.cjs");
-test("freshness namespace v13 exposes per-rung decay plus unblock TICKLER writers", () => {
+test("freshness namespace v14 exposes checklist stages with per-rung decay and unblock TICKLER writers", () => {
   withMissingConfig(() => {
     const tasks = [makeFreshnessTask()];
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
@@ -31,8 +31,9 @@ test("freshness namespace v13 exposes per-rung decay plus unblock TICKLER writer
       }
       assert.equal(plugin.api.nowBudget, undefined);
       const freshness = plugin.api.freshness;
-      assert.equal(freshness.version, 13);
+      assert.equal(freshness.version, 14);
       assert.equal(freshness.checklistTiers, true);
+      assert.equal(freshness.checklistStages, true);
       assert.equal(freshness.recurringTier, true);
       assert.equal(freshness.perRungDecay, true);
       assert.equal(freshness.referenceReview, undefined);
@@ -66,6 +67,8 @@ test("freshness namespace v13 exposes per-rung decay plus unblock TICKLER writer
         nextInterval: 1,
         projectInterval: null,
         rottenDailyBudget: null,
+        preStages: [],
+        postStages: [],
         intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,

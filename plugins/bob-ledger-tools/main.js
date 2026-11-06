@@ -6983,7 +6983,7 @@ function readFreshness(line, todayText) {
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v13).
+// Mirrors `docs/freshness.md` §§2-2a/4 in bob-cli (freshness namespace v14).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -7029,6 +7029,9 @@ function defaultFreshnessConfig() {
     nextInterval: 1,
     projectInterval: null,
     rottenDailyBudget: null,
+    preStages: [],
+    postStages: [],
+    stagesInvalid: [],
     decay: {
       enabled: true,
       keeps: 3,
@@ -7038,6 +7041,61 @@ function defaultFreshnessConfig() {
       enter: null,
     },
   };
+}
+
+function freshnessStageScalar(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "sequence";
+  if (typeof value === "object") return "mapping";
+  return JSON.stringify(value);
+}
+
+function freshnessNormalizeStageList(raw, key) {
+  if (raw === undefined || raw === null) {
+    return { stages: [], invalid: null };
+  }
+  if (!Array.isArray(raw)) {
+    return {
+      stages: [],
+      invalid: {
+        key,
+        problem: `${key} must be a list of stage names, got ${freshnessStageScalar(raw)}`,
+      },
+    };
+  }
+  const stages = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const value = raw[index];
+    let problem = null;
+    let name = null;
+    if (typeof value !== "string") {
+      problem = `${key} entry ${index + 1} must be a string, got ${freshnessStageScalar(value)}`;
+    } else {
+      const stripped = value.startsWith("#") ? value.slice(1) : value;
+      if (stripped === "") {
+        problem = `${key} entry ${index + 1} is empty`;
+      } else {
+        name = stripped.toLowerCase();
+        if (["task", "gtd", "pre", "post"].includes(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(name)} is reserved`;
+        } else if (!/^[\p{L}\p{N}_/-]+$/u.test(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(value)} is not a valid tag name`;
+        } else if (stages.includes(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(name)} duplicates an earlier stage`;
+        }
+      }
+    }
+    if (problem) {
+      return { stages: [], invalid: { key, problem } };
+    }
+    stages.push(name);
+  }
+  return { stages, invalid: null };
+}
+
+function freshnessStagesInvalidMessage({ key, problem }) {
+  const tier = key === "pre_stages" ? "PRE" : "POST";
+  return `freshness.${key} ${problem}; list ignored, ${tier} keeps file order`;
 }
 
 // One rung override out of a `freshness.decay` mapping: absent or null
@@ -7261,6 +7319,15 @@ function coerceFreshnessConfig(block) {
   // Snake_case keys, with camelCase tolerated like the plan caps.
   const pick = (snake, camel) =>
     block[snake] !== undefined ? block[snake] : block[camel];
+  const preStages = freshnessNormalizeStageList(
+    pick("pre_stages", "preStages"),
+    "pre_stages",
+  );
+  const postStages = freshnessNormalizeStageList(
+    pick("post_stages", "postStages"),
+    "post_stages",
+  );
+  const stagesInvalid = [preStages.invalid, postStages.invalid].filter(Boolean);
   let invalid = false;
   let interval = defaults.interval;
   let intervalFromConfig = false;
@@ -7385,7 +7452,7 @@ function coerceFreshnessConfig(block) {
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {
     return {
-      config: { ...defaults, intervalFromConfig: false },
+      config: { ...defaults, intervalFromConfig: false, stagesInvalid },
       invalid: true,
     };
   }
@@ -7396,6 +7463,9 @@ function coerceFreshnessConfig(block) {
       nextInterval: nextCoerced.days,
       projectInterval: projectCoerced.days,
       rottenDailyBudget: budget,
+      preStages: preStages.stages,
+      postStages: postStages.stages,
+      stagesInvalid,
       intervalFromConfig,
       deprecatedStaleBudget,
       decay: decayCoerced.decay,
@@ -7509,6 +7579,27 @@ function freshnessChecklistForTags(tags) {
     return "pre";
   }
   return tokens.has("#post") ? "post" : null;
+}
+
+// Resolve the first configured stage tag carried by a PRE/POST row.
+// Stage membership is exact and case-insensitive; ordering comes from
+// the configured list, independent of tag position on the task line.
+function freshnessChecklistStage(tags, kind, config) {
+  const field = kind === "pre" ? "preStages" : kind === "post" ? "postStages" : null;
+  const stages =
+    field && config && Array.isArray(config[field]) ? config[field] : [];
+  const tokens = new Set(
+    (Array.isArray(tags) ? tags : [])
+      .filter((tag) => typeof tag === "string")
+      .map((tag) => tag.toLowerCase()),
+  );
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
+    if (typeof stage === "string" && tokens.has(`#${stage}`)) {
+      return { stage, stageIndex: index };
+    }
+  }
+  return { stage: null, stageIndex: null };
 }
 
 // Lane interval for one lane: the configured `pendingInterval` /
@@ -8295,7 +8386,7 @@ function freshnessComparePathLine(a, b) {
 // blockId, state (null for lane rows), bucket, tier (machine),
 // tierLabel, lane, created, fresh, dueOn, daysOverdue, interval,
 // intervalSource, keeps, decide, returnedBy, unblockedOn, rank,
-// tierRank, tierTotal }` with
+// tierRank, tierTotal, stage, stageIndex, stageRank, stageTotal }` with
 // 1-based `line` (Tasks' `lineNumber` is 0-based). `decide` means a
 // choice is due, not permission to execute an action.
 function freshnessQueue(rows, todayText, config) {
@@ -8317,6 +8408,9 @@ function freshnessQueue(rows, todayText, config) {
     ) {
       continue;
     }
+    const stage = checklistTier
+      ? freshnessChecklistStage(row.tags, evaluated.tier, config)
+      : { stage: null, stageIndex: null };
     entries.push({
       key: freshnessRowKey(row),
       path: String(row.path || ""),
@@ -8345,6 +8439,10 @@ function freshnessQueue(rows, todayText, config) {
       decide: evaluated.decide,
       returnedBy: evaluated.returnedBy,
       unblockedOn: evaluated.unblockedOn,
+      stage: stage.stage,
+      stageIndex: stage.stageIndex,
+      stageRank: null,
+      stageTotal: null,
       rank: 0,
       tierRank: 0,
       tierTotal: 0,
@@ -8358,11 +8456,12 @@ function freshnessQueue(rows, todayText, config) {
     if (tierOrder !== 0) {
       return tierOrder;
     }
-    if (
-      left.tier === "pre" ||
-      left.tier === "new" ||
-      left.tier === "post"
-    ) {
+    if (left.tier === "pre" || left.tier === "post") {
+      const leftIndex = left.stageIndex === null ? Number.POSITIVE_INFINITY : left.stageIndex;
+      const rightIndex = right.stageIndex === null ? Number.POSITIVE_INFINITY : right.stageIndex;
+      return leftIndex - rightIndex || freshnessComparePathLine(left, right);
+    }
+    if (left.tier === "new") {
       return freshnessComparePathLine(left, right);
     }
     if (
@@ -8397,16 +8496,28 @@ function freshnessQueue(rows, todayText, config) {
   });
 
   const totals = {};
+  const stageTotals = {};
   for (const entry of entries) {
     totals[entry.tier] = (totals[entry.tier] || 0) + 1;
+    if (entry.stage !== null) {
+      const key = `${entry.tier}\u0000${entry.stage}`;
+      stageTotals[key] = (stageTotals[key] || 0) + 1;
+    }
   }
   const seen = {};
+  const stageSeen = {};
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     entry.rank = index + 1;
     seen[entry.tier] = (seen[entry.tier] || 0) + 1;
     entry.tierRank = seen[entry.tier];
     entry.tierTotal = totals[entry.tier] || 0;
+    if (entry.stage !== null) {
+      const key = `${entry.tier}\u0000${entry.stage}`;
+      stageSeen[key] = (stageSeen[key] || 0) + 1;
+      entry.stageRank = stageSeen[key];
+      entry.stageTotal = stageTotals[key] || 0;
+    }
   }
   return entries;
 }
@@ -8755,8 +8866,23 @@ function freshnessReviewEntryViewEmpty() {
     label: "",
     detail: "",
     compact: "",
+    stage: null,
     actionHint: "",
   };
+}
+
+function freshnessReviewStagePresentation(entry) {
+  const raw = entry && typeof entry.stage === "string" ? entry.stage.trim() : "";
+  if (!raw) {
+    return null;
+  }
+  const label = raw.toUpperCase();
+  const rank = Number.isInteger(entry.stageRank) ? entry.stageRank : null;
+  const total = Number.isInteger(entry.stageTotal) ? entry.stageTotal : null;
+  const detail = rank !== null && rank >= 1 && total !== null && total >= 2
+    ? `${label} ${rank}/${total}`
+    : label;
+  return { label, detail };
 }
 
 // Machine walk tier for an already-evaluated queue entry. v4 `tier`,
@@ -8936,14 +9062,17 @@ function freshnessReviewEntryView(entry, options = {}) {
         : null;
     let detail = "";
     let compact = "";
+    let stage = null;
     let actionHint = "";
     if (tier === "pre") {
-      detail = "checklist";
-      compact = "checklist";
+      stage = freshnessReviewStagePresentation(entry);
+      detail = stage ? stage.detail : "checklist";
+      compact = stage ? stage.label : "checklist";
       actionHint = "Ctrl+Enter done · ]s skip";
     } else if (tier === "post") {
-      detail = "closeout";
-      compact = "closeout";
+      stage = freshnessReviewStagePresentation(entry);
+      detail = stage ? stage.detail : "closeout";
+      compact = stage ? stage.label : "closeout";
       actionHint = "Ctrl+Enter done · closes the review";
     } else if (tier === "projects") {
       detail = freshnessReviewTrackerDetail(entry, "Empty project");
@@ -8991,6 +9120,7 @@ function freshnessReviewEntryView(entry, options = {}) {
       label,
       detail,
       compact,
+      stage: stage ? stage.label : null,
       actionHint,
     };
   } catch (error) {
@@ -9312,6 +9442,7 @@ function freshnessFooterView(memo, options = {}) {
               : null,
             compact: presentation.compact,
             detail: presentation.detail,
+            stage: presentation.stage,
             actionHint: presentation.actionHint,
           };
         }
@@ -9373,7 +9504,7 @@ function freshnessFooterView(memo, options = {}) {
       } else if (current.label) {
         contextText = current.label;
       }
-      detailText = current.compact || "";
+      detailText = (current.stage ? current.detail : current.compact) || "";
       if (quickRollReady) {
         hintText = quickRollOption.compact;
       }
@@ -9423,7 +9554,7 @@ function freshnessFooterView(memo, options = {}) {
       freshnessFooterJoin([
         dueText,
         contextText,
-        detailText,
+        current ? current.compact : detailText,
         hintText,
       ]),
       groupsText,
@@ -9471,6 +9602,7 @@ function freshnessFooterView(memo, options = {}) {
       dueText,
       contextText,
       detailText,
+      detailCompactText: current ? current.compact : "",
       hintText,
       groups,
       groupsText,
@@ -9697,8 +9829,8 @@ function freshnessFooterPaintGroups(container, groups) {
   }
 }
 
-// Shed groups from the end of the walk, then optional detail, shortcut
-// hint, and upkeep meter. The due rank and current tier stay visible.
+// Shed groups from the end, shorten stage detail, then hide detail,
+// shortcut hint, and upkeep meter. The current tier stays visible.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -9709,9 +9841,15 @@ function freshnessFooterFit(el, parts, view) {
   const total = fallbackGroup ? 1 : nodes.length;
   let shown = hasGroups ? total : 0;
   let detail = Boolean(view && view.detailText);
+  let detailText = detail ? String(view.detailText) : "";
+  const compactDetail =
+    view && typeof view.detailCompactText === "string"
+      ? view.detailCompactText
+      : detailText;
   let hint = Boolean(view && view.hintText);
   let meter = Boolean(view && view.meterText);
   const apply = () => {
+    freshnessFooterSetText(parts.detail, detailText);
     freshnessFooterSetOmitted(groupContainer, shown === 0);
     nodes.forEach((node, index) => {
       freshnessFooterSetOmitted(node, index >= shown);
@@ -9750,6 +9888,10 @@ function freshnessFooterFit(el, parts, view) {
   };
   while (overflows() && shown > 0) {
     shown -= 1;
+    apply();
+  }
+  if (overflows() && detail && detailText !== compactDetail) {
+    detailText = compactDetail;
     apply();
   }
   if (overflows() && detail) {
@@ -9822,6 +9964,7 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
+    freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
     freshnessFooterSetAttr(parts.button, "aria-label", "Review footer hidden");
     freshnessFooterSetAttr(el, "title", "");
     return parts;
@@ -9852,6 +9995,19 @@ function freshnessFooterPaint(el, view) {
     );
   } else {
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
+  }
+  if (
+    view.current &&
+    view.current.stage &&
+    FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
+  ) {
+    freshnessFooterSetAttr(
+      parts.detail,
+      "data-review-tier",
+      view.current.tier,
+    );
+  } else {
+    freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
   }
   freshnessFooterSetAttr(parts.button, "aria-label", view.ariaLabel || view.tooltip);
   freshnessFooterSetAttr(el, "title", view.tooltip);
@@ -27610,6 +27766,7 @@ function freshnessRowFromTask(task, index, context) {
         blockId: null,
         tracker: null,
         checklist: null,
+        tags: [],
         statusSymbol: null,
         isTodo: false,
         recurring: false,
@@ -27834,6 +27991,7 @@ function freshnessRowFromTask(task, index, context) {
       blockId,
       tracker,
       checklist,
+      tags: Array.isArray(task.tags) ? task.tags : [],
       statusSymbol,
       isTodo,
       recurring,
@@ -27857,6 +28015,7 @@ function freshnessRowFromTask(task, index, context) {
       blockId: null,
       tracker: null,
       checklist: null,
+      tags: [],
       statusSymbol: null,
       isTodo: false,
       recurring: false,
@@ -28234,21 +28393,14 @@ class BobLedgerToolsPlugin extends Plugin {
       // like any task. Visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS tier walks with `projectsDue`;
       // references use ordinary freshness and review groups.
-      // `checklistTiers` advertises PRE/POST and the nine-key `byTier`
-      // histogram including recurring. Namespace v11 removes
-      // the reference review tier and cadence. Top-level api stays v3).
-      // `freshness` namespace v12 adds recorded unblock TICKLERs and
-      // their source metadata. It mirrors `docs/freshness.md` §4 in
-      // bob-cli. Every member is synchronous, never awaits and never throws. Missing
-      // or old freshness namespaces degrade vault queries to the
-      // legacy READY visibility: guard calls with try/catch as well as
-      // optional chaining, since optional chaining alone does not
-      // catch a throwing api. `reviewEntryView` is additive under
-      // namespace v5: it formats already-evaluated queue entries.
+      // Namespace v14 adds checklistStages, stage fields on PRE/POST
+      // queue entries, and preStages/postStages in config(). All
+      // members are synchronous and never throw; top-level api stays v3.
       freshness: Object.freeze({
-        version: 13,
+        version: 14,
         trackerReview: true,
         checklistTiers: true,
+        checklistStages: true,
         recurringTier: true,
         perRungDecay: true,
         config: () => this.apiFreshnessConfig(),
@@ -34359,7 +34511,7 @@ class BobLedgerToolsHeadingReviewMixin {
 }
 // ---- src/230-plugin-freshness-api.js ----
 class BobLedgerToolsFreshnessApiMixin {
-  // --- Task freshness (freshness namespace v13) --------------------------
+  // --- Task freshness (freshness namespace v14) --------------------------
   // Rows come from the Tasks cache (`planBlockTasks`); `fresh` /
   // `refresh`/`created` come from `originalMarkdown`; frontmatter comes
   // from `metadataCache.getCache(path)?.frontmatter?.task_refresh`.
@@ -34545,18 +34697,23 @@ class BobLedgerToolsFreshnessApiMixin {
     const queue = freshnessQueue(rows, dateText, snapshot.config);
     const counts = freshnessCounts(rows, dateText, snapshot.config);
     const lints = freshnessCollectLints(rows, dateText, snapshot.config);
-    // One deprecation diagnostic per loaded config — never one per
-    // task — when the removed `stale_daily_budget` key supplied the
-    // budget or was ignored beside the canonical key.
-    if (snapshot.config && snapshot.config.deprecatedStaleBudget) {
-      let configPath = "";
+    const configLints = [];
+    let configPath = "";
+    if (
+      (snapshot.config && snapshot.config.deprecatedStaleBudget) ||
+      (snapshot.config && Array.isArray(snapshot.config.stagesInvalid) &&
+        snapshot.config.stagesInvalid.length > 0)
+    ) {
       try {
         configPath =
           typeof planConfigPath === "function" ? planConfigPath() : "";
       } catch (error) {
         configPath = "";
       }
-      lints.unshift({
+    }
+    // Config diagnostics appear once per loaded config, before row lints.
+    if (snapshot.config && snapshot.config.deprecatedStaleBudget) {
+      configLints.push({
         code: "freshness_stale_daily_budget_deprecated",
         path: String(configPath || ""),
         line: null,
@@ -34566,6 +34723,21 @@ class BobLedgerToolsFreshnessApiMixin {
           ] || "freshness_stale_daily_budget_deprecated",
       });
     }
+    for (const item of
+      snapshot.config && Array.isArray(snapshot.config.stagesInvalid)
+        ? snapshot.config.stagesInvalid
+        : []) {
+      if (!item || typeof item.key !== "string" || typeof item.problem !== "string") {
+        continue;
+      }
+      configLints.push({
+        code: "freshness_stages_invalid",
+        path: String(configPath || ""),
+        line: null,
+        message: freshnessStagesInvalidMessage(item),
+      });
+    }
+    lints.unshift(...configLints);
     const rank = new Map(queue.map((entry, index) => [entry.key, index]));
     // Key-to-evaluated-result map built once per snapshot, covering
     // FRESH and out-of-scope rows too — not just the review queue — so
@@ -34779,6 +34951,12 @@ class BobLedgerToolsFreshnessApiMixin {
         nextInterval,
         projectInterval,
         rottenDailyBudget: snapshot.config.rottenDailyBudget,
+        preStages: Array.isArray(snapshot.config.preStages)
+          ? snapshot.config.preStages.slice()
+          : [],
+        postStages: Array.isArray(snapshot.config.postStages)
+          ? snapshot.config.postStages.slice()
+          : [],
         intervalFromConfig: Boolean(snapshot.config.intervalFromConfig),
         invalid: snapshot.invalid,
         deprecatedStaleBudget: Boolean(
@@ -34806,6 +34984,8 @@ class BobLedgerToolsFreshnessApiMixin {
         nextInterval: 1,
         projectInterval: null,
         rottenDailyBudget: null,
+        preStages: [],
+        postStages: [],
         intervalFromConfig: false,
         invalid: false,
         deprecatedStaleBudget: false,
@@ -90429,11 +90609,15 @@ module.exports.helpers = {
   freshnessDecayLimitFor,
   freshnessDecideFor,
   defaultFreshnessConfig,
+  freshnessNormalizeStageList,
+  freshnessStagesInvalidMessage,
   freshnessBlock,
   coerceFreshnessConfig,
   loadFreshnessConfig,
   freshnessParseNoteRefresh,
   freshnessLaneForRow,
+  freshnessChecklistForTags,
+  freshnessChecklistStage,
   freshnessLaneIntervalDays,
   freshnessTrackerIntervalFor,
   freshnessIntervalFor,

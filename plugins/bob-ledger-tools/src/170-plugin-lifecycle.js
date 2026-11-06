@@ -310,21 +310,14 @@ class BobLedgerToolsPlugin extends Plugin {
       // like any task. Visible `^prj` rows use the ordinary
       // predicate, and the PROJECTS tier walks with `projectsDue`;
       // references use ordinary freshness and review groups.
-      // `checklistTiers` advertises PRE/POST and the nine-key `byTier`
-      // histogram including recurring. Namespace v11 removes
-      // the reference review tier and cadence. Top-level api stays v3).
-      // `freshness` namespace v12 adds recorded unblock TICKLERs and
-      // their source metadata. It mirrors `docs/freshness.md` §4 in
-      // bob-cli. Every member is synchronous, never awaits and never throws. Missing
-      // or old freshness namespaces degrade vault queries to the
-      // legacy READY visibility: guard calls with try/catch as well as
-      // optional chaining, since optional chaining alone does not
-      // catch a throwing api. `reviewEntryView` is additive under
-      // namespace v5: it formats already-evaluated queue entries.
+      // Namespace v14 adds checklistStages, stage fields on PRE/POST
+      // queue entries, and preStages/postStages in config(). All
+      // members are synchronous and never throw; top-level api stays v3.
       freshness: Object.freeze({
-        version: 13,
+        version: 14,
         trackerReview: true,
         checklistTiers: true,
+        checklistStages: true,
         recurringTier: true,
         perRungDecay: true,
         config: () => this.apiFreshnessConfig(),

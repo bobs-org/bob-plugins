@@ -157,6 +157,17 @@ function validateMatrix(entry) {
     if (!fixture.prefixOk) failures.push(`${fixture.id} visible groups are not a walk-order prefix`);
     if (!fixture.markerOk) failures.push(`${fixture.id} has an incorrect ellipsis state`);
     if (!fixture.contextMatchesTier) failures.push(`${fixture.id} context ink differs from its tier ink`);
+    if (fixture.id.startsWith("staged-")) {
+      if (fixture.detailTier !== (fixture.id === "staged-terminal" ? "pre" : "post")) {
+        failures.push(`${fixture.id} stage detail is not colored as its checklist tier`);
+      }
+      if (fixture.detailContrast === null || fixture.detailContrast < 4.5) {
+        failures.push(`${fixture.id} stage detail contrast is ${fixture.detailContrast}:1`);
+      }
+      if (!fixture.detailText.startsWith(fixture.id === "staged-terminal" ? "TERMINAL" : "PERIODS")) {
+        failures.push(`${fixture.id} stage detail is missing its stage name`);
+      }
+    }
     if (fixture.contextContrast === null || fixture.contextContrast < 4.5) {
       failures.push(`${fixture.id} context contrast is ${fixture.contextContrast}:1`);
     }
@@ -231,9 +242,9 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: all nine groups, a typical morning, NEW, NEXT with quickRoll, and ROTTEN.",
+      "- Fixtures: all nine groups, a typical morning, staged Monday PRE/POST rows, NEW, NEXT with quickRoll, and ROTTEN.",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
-      "- Checks: AA contrast for every group/context ink, nine distinct group inks, no host overflow, walk-order prefixes, and ellipsis only for a partial cut.",
+      "- Checks: AA contrast for group, current-tier, and stage-detail inks; nine distinct group inks; no host overflow; walk-order prefixes; and ellipsis only for a partial cut.",
       "",
       "| Width | Theme | Visible groups | Context contrast | Worst group contrast | Overflow | Result | Screenshot |",
       "| ---: | --- | --- | ---: | ---: | ---: | --- | --- |",

@@ -27,8 +27,23 @@ function freshnessReviewEntryViewEmpty() {
     label: "",
     detail: "",
     compact: "",
+    stage: null,
     actionHint: "",
   };
+}
+
+function freshnessReviewStagePresentation(entry) {
+  const raw = entry && typeof entry.stage === "string" ? entry.stage.trim() : "";
+  if (!raw) {
+    return null;
+  }
+  const label = raw.toUpperCase();
+  const rank = Number.isInteger(entry.stageRank) ? entry.stageRank : null;
+  const total = Number.isInteger(entry.stageTotal) ? entry.stageTotal : null;
+  const detail = rank !== null && rank >= 1 && total !== null && total >= 2
+    ? `${label} ${rank}/${total}`
+    : label;
+  return { label, detail };
 }
 
 // Machine walk tier for an already-evaluated queue entry. v4 `tier`,
@@ -208,14 +223,17 @@ function freshnessReviewEntryView(entry, options = {}) {
         : null;
     let detail = "";
     let compact = "";
+    let stage = null;
     let actionHint = "";
     if (tier === "pre") {
-      detail = "checklist";
-      compact = "checklist";
+      stage = freshnessReviewStagePresentation(entry);
+      detail = stage ? stage.detail : "checklist";
+      compact = stage ? stage.label : "checklist";
       actionHint = "Ctrl+Enter done · ]s skip";
     } else if (tier === "post") {
-      detail = "closeout";
-      compact = "closeout";
+      stage = freshnessReviewStagePresentation(entry);
+      detail = stage ? stage.detail : "closeout";
+      compact = stage ? stage.label : "closeout";
       actionHint = "Ctrl+Enter done · closes the review";
     } else if (tier === "projects") {
       detail = freshnessReviewTrackerDetail(entry, "Empty project");
@@ -263,6 +281,7 @@ function freshnessReviewEntryView(entry, options = {}) {
       label,
       detail,
       compact,
+      stage: stage ? stage.label : null,
       actionHint,
     };
   } catch (error) {
@@ -584,6 +603,7 @@ function freshnessFooterView(memo, options = {}) {
               : null,
             compact: presentation.compact,
             detail: presentation.detail,
+            stage: presentation.stage,
             actionHint: presentation.actionHint,
           };
         }
@@ -645,7 +665,7 @@ function freshnessFooterView(memo, options = {}) {
       } else if (current.label) {
         contextText = current.label;
       }
-      detailText = current.compact || "";
+      detailText = (current.stage ? current.detail : current.compact) || "";
       if (quickRollReady) {
         hintText = quickRollOption.compact;
       }
@@ -695,7 +715,7 @@ function freshnessFooterView(memo, options = {}) {
       freshnessFooterJoin([
         dueText,
         contextText,
-        detailText,
+        current ? current.compact : detailText,
         hintText,
       ]),
       groupsText,
@@ -743,6 +763,7 @@ function freshnessFooterView(memo, options = {}) {
       dueText,
       contextText,
       detailText,
+      detailCompactText: current ? current.compact : "",
       hintText,
       groups,
       groupsText,

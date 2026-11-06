@@ -4,7 +4,7 @@
 // `next_interval`, `rotten_daily_budget`, `decay`).
 // The removed `stale_daily_budget` key still supplies the budget for
 // one release with a deprecation lint.
-// Mirrors `docs/freshness.md` §§2-2a in bob-cli (freshness namespace v13).
+// Mirrors `docs/freshness.md` §§2-2a/4 in bob-cli (freshness namespace v14).
 
 // Whether the compatible review-walk decision card is present: nav exposes
 // `api.freshnessDecayCard.version >= 2` (ungated handler contract). Version
@@ -50,6 +50,9 @@ function defaultFreshnessConfig() {
     nextInterval: 1,
     projectInterval: null,
     rottenDailyBudget: null,
+    preStages: [],
+    postStages: [],
+    stagesInvalid: [],
     decay: {
       enabled: true,
       keeps: 3,
@@ -59,6 +62,61 @@ function defaultFreshnessConfig() {
       enter: null,
     },
   };
+}
+
+function freshnessStageScalar(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "sequence";
+  if (typeof value === "object") return "mapping";
+  return JSON.stringify(value);
+}
+
+function freshnessNormalizeStageList(raw, key) {
+  if (raw === undefined || raw === null) {
+    return { stages: [], invalid: null };
+  }
+  if (!Array.isArray(raw)) {
+    return {
+      stages: [],
+      invalid: {
+        key,
+        problem: `${key} must be a list of stage names, got ${freshnessStageScalar(raw)}`,
+      },
+    };
+  }
+  const stages = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    const value = raw[index];
+    let problem = null;
+    let name = null;
+    if (typeof value !== "string") {
+      problem = `${key} entry ${index + 1} must be a string, got ${freshnessStageScalar(value)}`;
+    } else {
+      const stripped = value.startsWith("#") ? value.slice(1) : value;
+      if (stripped === "") {
+        problem = `${key} entry ${index + 1} is empty`;
+      } else {
+        name = stripped.toLowerCase();
+        if (["task", "gtd", "pre", "post"].includes(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(name)} is reserved`;
+        } else if (!/^[\p{L}\p{N}_/-]+$/u.test(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(value)} is not a valid tag name`;
+        } else if (stages.includes(name)) {
+          problem = `${key} entry ${index + 1} ${JSON.stringify(name)} duplicates an earlier stage`;
+        }
+      }
+    }
+    if (problem) {
+      return { stages: [], invalid: { key, problem } };
+    }
+    stages.push(name);
+  }
+  return { stages, invalid: null };
+}
+
+function freshnessStagesInvalidMessage({ key, problem }) {
+  const tier = key === "pre_stages" ? "PRE" : "POST";
+  return `freshness.${key} ${problem}; list ignored, ${tier} keeps file order`;
 }
 
 // One rung override out of a `freshness.decay` mapping: absent or null
@@ -282,6 +340,15 @@ function coerceFreshnessConfig(block) {
   // Snake_case keys, with camelCase tolerated like the plan caps.
   const pick = (snake, camel) =>
     block[snake] !== undefined ? block[snake] : block[camel];
+  const preStages = freshnessNormalizeStageList(
+    pick("pre_stages", "preStages"),
+    "pre_stages",
+  );
+  const postStages = freshnessNormalizeStageList(
+    pick("post_stages", "postStages"),
+    "post_stages",
+  );
+  const stagesInvalid = [preStages.invalid, postStages.invalid].filter(Boolean);
   let invalid = false;
   let interval = defaults.interval;
   let intervalFromConfig = false;
@@ -406,7 +473,7 @@ function coerceFreshnessConfig(block) {
   // Like Rust, any invalid value falls back to the full default block.
   if (invalid) {
     return {
-      config: { ...defaults, intervalFromConfig: false },
+      config: { ...defaults, intervalFromConfig: false, stagesInvalid },
       invalid: true,
     };
   }
@@ -417,6 +484,9 @@ function coerceFreshnessConfig(block) {
       nextInterval: nextCoerced.days,
       projectInterval: projectCoerced.days,
       rottenDailyBudget: budget,
+      preStages: preStages.stages,
+      postStages: postStages.stages,
+      stagesInvalid,
       intervalFromConfig,
       deprecatedStaleBudget,
       decay: decayCoerced.decay,

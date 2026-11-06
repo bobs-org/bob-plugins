@@ -60,6 +60,27 @@ function freshnessChecklistForTags(tags) {
   return tokens.has("#post") ? "post" : null;
 }
 
+// Resolve the first configured stage tag carried by a PRE/POST row.
+// Stage membership is exact and case-insensitive; ordering comes from
+// the configured list, independent of tag position on the task line.
+function freshnessChecklistStage(tags, kind, config) {
+  const field = kind === "pre" ? "preStages" : kind === "post" ? "postStages" : null;
+  const stages =
+    field && config && Array.isArray(config[field]) ? config[field] : [];
+  const tokens = new Set(
+    (Array.isArray(tags) ? tags : [])
+      .filter((tag) => typeof tag === "string")
+      .map((tag) => tag.toLowerCase()),
+  );
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
+    if (typeof stage === "string" && tokens.has(`#${stage}`)) {
+      return { stage, stageIndex: index };
+    }
+  }
+  return { stage: null, stageIndex: null };
+}
+
 // Lane interval for one lane: the configured `pendingInterval` /
 // `nextInterval` (absent means the default 1); null means that lane is
 // not walked (`false` off-switch).

@@ -110,9 +110,12 @@
       pre: 1, new: 2, projects: 1, pending: 1, next: 2,
       recurring: 1, tickler: 1, rotten: 3, post: 1,
     };
+    const stagedMonday = { ...morning, pre: 9, post: 2 };
     const fixtures = [
       { id: "all-tiers", title: "Off-row · all nine groups", counts: allTiers },
       { id: "morning", title: "Typical morning", counts: morning },
+      { id: "staged-terminal", title: "Staged Monday · TERMINAL 1/2", counts: stagedMonday, current: "pre", stage: "terminal", stageIndex: 0, stageRank: 1, stageTotal: 2 },
+      { id: "staged-periods", title: "Staged Monday · POST PERIODS", counts: stagedMonday, current: "post", stage: "periods", stageIndex: 0, stageRank: 1, stageTotal: 1 },
       { id: "new-row", title: "On a NEW row", counts: morning, current: "new" },
       { id: "next-roll", title: "On a NEXT row · quickRoll", counts: morning, current: "next", quickRoll: true },
       { id: "rotten-row", title: "On a ROTTEN row", counts: morning, current: "rotten" },
@@ -132,7 +135,12 @@
           lane: tier === "next" ? "next" : "ready", created: null,
           fresh: tier === "new" ? null : "2026-10-28", dueOn: "2026-10-30",
           daysOverdue: tier === "rotten" ? 3 : 0, interval: 7,
-          rank: 3, tierRank: 1, tierTotal: byTier[tier] || 1,
+          rank: tier === "pre" ? 1 : tier === "post" ? walk : 3,
+          tierRank: 1, tierTotal: byTier[tier] || 1,
+          stage: fixture.stage || null,
+          stageIndex: fixture.stageIndex ?? null,
+          stageRank: fixture.stageRank ?? null,
+          stageTotal: fixture.stageTotal ?? null,
         };
       }
       return helpers.freshnessFooterView(
@@ -224,6 +232,7 @@
         helpers.freshnessFooterPaint(footer, view);
         const tokens = Array.from(footer.querySelectorAll(".bob-freshness-group"));
         const context = footer.querySelector(".bob-freshness-context");
+        const detail = footer.querySelector(".bob-freshness-detail");
         const background = getComputedStyle(bar).backgroundColor;
         const groupColors = tokens.map((token) => ({
           key: token.getAttribute("data-review-tier"),
@@ -234,6 +243,7 @@
           allTierColors = Object.fromEntries(groupColors.map((item) => [item.key, item.color]));
         }
         const contextColor = getComputedStyle(context).color;
+        const detailColor = getComputedStyle(detail).color;
         const visibleKeys = tokens.filter(visible).map((token) => token.getAttribute("data-review-tier"));
         const expectedKeys = view.groups.map((group) => group.key);
         const expectedVisible = expectedKeys.slice(0, visibleKeys.length);
@@ -252,6 +262,10 @@
           contextTier: context.getAttribute("data-review-tier"),
           contextColor,
           contextContrast: contrast(contextColor, background),
+          detailText: detail.textContent,
+          detailTier: detail.getAttribute("data-review-tier"),
+          detailColor,
+          detailContrast: contrast(detailColor, background),
           contextMatchesTier: view.current && view.current.tier in allTierColors
             ? contextColor === allTierColors[view.current.tier]
             : true,

@@ -283,6 +283,9 @@ test("config coercion keeps defaults, flags invalid, ignores unknown keys", () =
     nextInterval: 1,
     projectInterval: null,
     rottenDailyBudget: null,
+    preStages: [],
+    postStages: [],
+    stagesInvalid: [],
     decay: {
       enabled: true,
       keeps: 3,

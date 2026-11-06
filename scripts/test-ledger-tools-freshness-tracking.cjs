@@ -349,12 +349,12 @@ test("CL8-CL12: nine tier order, checklist-only due counts, and completion seman
   assert.equal(helpers.freshnessEvaluate(missingWhenDone, D, CFG).tier, "pre");
 });
 
-test("freshness namespace v13 retains the tracker capability contract", () => {
+test("freshness namespace v14 retains the tracker capability contract", () => {
   withMissingConfig(() => {
     const plugin = new LedgerToolsPlugin(makeFreshnessApp({}), {});
     plugin.onload();
     try {
-      assert.equal(plugin.api.freshness.version, 13);
+      assert.equal(plugin.api.freshness.version, 14);
       assert.equal(plugin.api.freshness.perRungDecay, true);
       assert.equal(plugin.api.freshness.referenceReview, undefined);
       assert.equal(plugin.api.freshness.refTagIdentity, undefined);

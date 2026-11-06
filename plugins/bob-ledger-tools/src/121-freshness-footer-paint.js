@@ -210,8 +210,8 @@ function freshnessFooterPaintGroups(container, groups) {
   }
 }
 
-// Shed groups from the end of the walk, then optional detail, shortcut
-// hint, and upkeep meter. The due rank and current tier stay visible.
+// Shed groups from the end, shorten stage detail, then hide detail,
+// shortcut hint, and upkeep meter. The current tier stays visible.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -222,9 +222,15 @@ function freshnessFooterFit(el, parts, view) {
   const total = fallbackGroup ? 1 : nodes.length;
   let shown = hasGroups ? total : 0;
   let detail = Boolean(view && view.detailText);
+  let detailText = detail ? String(view.detailText) : "";
+  const compactDetail =
+    view && typeof view.detailCompactText === "string"
+      ? view.detailCompactText
+      : detailText;
   let hint = Boolean(view && view.hintText);
   let meter = Boolean(view && view.meterText);
   const apply = () => {
+    freshnessFooterSetText(parts.detail, detailText);
     freshnessFooterSetOmitted(groupContainer, shown === 0);
     nodes.forEach((node, index) => {
       freshnessFooterSetOmitted(node, index >= shown);
@@ -263,6 +269,10 @@ function freshnessFooterFit(el, parts, view) {
   };
   while (overflows() && shown > 0) {
     shown -= 1;
+    apply();
+  }
+  if (overflows() && detail && detailText !== compactDetail) {
+    detailText = compactDetail;
     apply();
   }
   if (overflows() && detail) {
@@ -335,6 +345,7 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
+    freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
     freshnessFooterSetAttr(parts.button, "aria-label", "Review footer hidden");
     freshnessFooterSetAttr(el, "title", "");
     return parts;
@@ -365,6 +376,19 @@ function freshnessFooterPaint(el, view) {
     );
   } else {
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
+  }
+  if (
+    view.current &&
+    view.current.stage &&
+    FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
+  ) {
+    freshnessFooterSetAttr(
+      parts.detail,
+      "data-review-tier",
+      view.current.tier,
+    );
+  } else {
+    freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
   }
   freshnessFooterSetAttr(parts.button, "aria-label", view.ariaLabel || view.tooltip);
   freshnessFooterSetAttr(el, "title", view.tooltip);

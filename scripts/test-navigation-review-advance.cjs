@@ -867,6 +867,46 @@ test("continue: counted handled refs land past every handled key in one jump", a
   assert.deepEqual(notices, ["Ready · 3 tasks\nReview 1/1 · NEXT 4/4 · confirmed 2d ago"]);
 });
 
+test("SV15: close verdicts exclude resolved identities without moving the walk anchor", async () => {
+  const rows = nextQueue(["Landing", "Closed one", "Closed two", "Still open"]);
+  rows[1].originalMarkdown = "- [*] #task Closed one [id:: closed__one] ^closed-one";
+  rows[2].originalMarkdown = "- [*] #task Closed two [id:: closed__two] ^closed-two";
+  const fixture = makePlugin({ rows, activePath: "walk.md" });
+  const { plugin, editor, queueState } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  const excludeRefs = [
+    { key: "Tasks.md#^closed-one", path: "walk.md", line: 1, raw: queueState[1].originalMarkdown, blockId: "closed-one", taskId: "closed__one" },
+    { key: "Tasks.md#^closed-two", path: "walk.md", line: 2, raw: queueState[2].originalMarkdown, blockId: "closed-two", taskId: "closed__two" },
+  ];
+  const answer = helpers.collectReviewAnswerKeys(origin, [], null, DATE, excludeRefs);
+  assert.deepEqual(answer.positionKeys, ["walk.md:1"], "only the row that received the gesture positions the walk");
+  assert.deepEqual(answer.excludeKeys, ["walk.md:2", "walk.md:3"], "engine identities map through nav's queue key codec");
+  assert.ok(answer.excludeKeys.every((key) => !key.startsWith("Tasks.md#^")), "offer keys never enter the walk anchor");
+
+  let anchorAtGesture = null;
+  const advance = plugin.advanceReviewWalkAfterAnswer.bind(plugin);
+  plugin.advanceReviewWalkAfterAnswer = async (options) => {
+    anchorAtGesture = options.anchor;
+    return advance(options);
+  };
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "complete",
+    excludeRefs,
+    notice: "✓ closed two offered tasks",
+  });
+
+  assert.deepEqual(result, { ok: true, advanced: true, stopped: false }, "one walk continuation runs");
+  assert.equal(anchorAtGesture.path, "walk.md");
+  assert.equal(anchorAtGesture.line, 1, "resolved rows do not move the anchor away from the original landing");
+  assert.equal(editor.getCursor().line, 3, "lagging queue rows closed by the commit are skipped");
+  assert.equal(plugin.reviewLanding.key, "walk.md:4");
+  assert.equal(plugin.reviewAnchor.excludeRefs.length, 2, "identity exclusions survive the new landing");
+  const handled = helpers.reviewVerifiedHandledKeys(queueState, plugin.reviewAnchor);
+  assert.ok(handled.has("walk.md:2") && handled.has("walk.md:3"));
+  assert.ok(!handled.has("Tasks.md#^closed-one"));
+});
+
 test("continue: wrap is announced and the empty queue composes the empty notice", async () => {
   const wrapped = makePlugin({ rows: nextQueue(["One", "Two"]), activePath: "walk.md" });
   await land(wrapped, "last");

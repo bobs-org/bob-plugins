@@ -79674,7 +79674,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         typeof this.reviewAnsweredKeys !== "object" ||
         this.reviewAnsweredKeys.day !== day
       ) {
-        this.reviewAnsweredKeys = { day, keys: new Set(), texts: new Map() };
+        this.reviewAnsweredKeys = { day, keys: new Set(), texts: new Map(), identityRefs: new Map() };
       }
       const set =
         this.reviewAnsweredKeys.keys instanceof Set
@@ -79686,6 +79686,10 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           ? this.reviewAnsweredKeys.texts
           : new Map();
       this.reviewAnsweredKeys.texts = texts;
+      const identityRefs = this.reviewAnsweredKeys.identityRefs instanceof Map
+        ? this.reviewAnsweredKeys.identityRefs
+        : new Map();
+      this.reviewAnsweredKeys.identityRefs = identityRefs;
       for (const item of Array.isArray(keys) ? keys : []) {
         if (typeof item === "string" && item) {
           set.add(item);
@@ -79698,6 +79702,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           const text = typeof item.text === "string" ? item.text : "";
           if (text) {
             texts.set(key, text);
+          }
+          if (item.identityRef && typeof item.identityRef === "object") {
+            identityRefs.set(key, item.identityRef);
           }
         }
       }
@@ -79975,6 +79982,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         handledRefs,
         this.reviewAnsweredKeys,
         todayText,
+        input && Array.isArray(input.excludeRefs) ? input.excludeRefs : [],
       );
       const positionKeys = Array.isArray(answerKeys.positionKeys)
         ? answerKeys.positionKeys
@@ -80014,11 +80022,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         : Number.isInteger(landedEntry && landedEntry.rank)
           ? landedEntry.rank
           : 1;
-      const anchor = buildReviewAnchor(
+      const anchor = buildReviewAnchorWithIdentityExclusions(
         before,
         positionKeys,
         entryRank,
         todayText,
+        answerKeys.excludeRefs || [],
         { excludeKeys, answered: true },
       );
       this.reviewAnchor = anchor;
@@ -80130,7 +80139,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           ? settings.remaining
           : reviewWalkRemaining(
               queue,
-              anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+              reviewVerifiedHandledKeys(queue, anchor),
             );
       const stopped = this.checkReviewAdvanceStop(plan, settings, remaining);
       if (stopped !== null) {
@@ -80172,11 +80181,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       }
       // The walk anchor follows every successful landing, so a later
       // gesture continues from here.
-      this.reviewAnchor = buildReviewAnchor(
+      this.reviewAnchor = buildReviewAnchorWithIdentityExclusions(
         queue,
         [reviewQueueEntryKey(plan.entry)],
         plan.rank,
         todayText,
+        anchor && Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
       );
       let landingNotice = buildReviewJumpNotice(
         plan.entry,
@@ -80389,11 +80399,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
     // The walk anchor follows every successful landing, so a later
     // release, roll, or stamp continues from here.
-    this.reviewAnchor = buildReviewAnchor(
+    this.reviewAnchor = buildReviewAnchorWithIdentityExclusions(
       queue,
       [reviewQueueEntryKey(plan.entry)],
       plan.rank,
       todayText,
+      anchor && Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
     );
     let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
       wrapped: plan.wrapped,
@@ -80993,10 +81004,88 @@ function reviewVerifiedHandledKeys(list, anchor) {
       }
       out.add(key);
     }
+    for (const match of matchReviewIdentityRefs(
+      list,
+      Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
+    )) {
+      if (match && match.key) out.add(match.key);
+    }
     return out;
   } catch (error) {
     return new Set();
   }
+}
+
+function reviewIdentityRefSnapshot(ref) {
+  if (!ref || typeof ref !== "object") return null;
+  const path = typeof ref.path === "string" ? ref.path : "";
+  if (!path) return null;
+  const out = { path };
+  if (Number.isInteger(ref.line)) out.line = ref.line;
+  if (typeof ref.raw === "string" && ref.raw) out.raw = ref.raw;
+  if (typeof ref.blockId === "string" && ref.blockId) out.blockId = ref.blockId;
+  if (typeof ref.taskId === "string" && ref.taskId) out.taskId = ref.taskId;
+  return out;
+}
+
+function reviewEntryMatchesIdentityRef(entry, ref) {
+  if (!entry || !ref || String(entry.path || "") !== String(ref.path || "")) return false;
+  const source = String(entry.originalMarkdown || "");
+  const block = source.match(/(?:^|\s)\^([A-Za-z0-9_-]+)\s*$/);
+  const task = source.match(/\[id::\s*([^\]]+?)\s*\]/);
+  if (ref.blockId && (!block || block[1] !== String(ref.blockId))) return false;
+  if (ref.taskId && (!task || task[1].trim() !== String(ref.taskId))) return false;
+  return !!(ref.blockId || ref.taskId);
+}
+
+// Engine identities are resolved against review rows here so each exclusion
+// uses the review queue's key codec. Offer keys never become walk keys.
+function matchReviewIdentityRefs(queue, refs) {
+  const list = Array.isArray(queue) ? queue : [];
+  const out = [];
+  const seen = new Set();
+  for (const rawRef of Array.isArray(refs) ? refs : []) {
+    const ref = reviewIdentityRefSnapshot(rawRef);
+    if (!ref) continue;
+    let candidates = list.filter((entry) => reviewEntryMatchesIdentityRef(entry, ref));
+    if (candidates.length !== 1 && !(ref.blockId || ref.taskId) && ref.raw) {
+      const matched = matchFreshStampRefs(list, [ref]);
+      const key = matched.keys && matched.keys[0];
+      const entry = list.find((candidate) => {
+        try { return reviewQueueEntryKey(candidate) === key; } catch (_error) { return false; }
+      });
+      candidates = entry ? [entry] : [];
+    }
+    if (candidates.length !== 1) continue;
+    const entry = candidates[0];
+    let key = "";
+    try { key = reviewQueueEntryKey(entry); } catch (_error) { key = ""; }
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, entry, ref });
+  }
+  return out;
+}
+
+function buildReviewAnchorWithIdentityExclusions(queue, handledKeys, rank, day, refs, options = {}) {
+  const snapshots = [];
+  const seen = new Set();
+  for (const rawRef of Array.isArray(refs) ? refs : []) {
+    const ref = reviewIdentityRefSnapshot(rawRef);
+    if (!ref) continue;
+    const key = `${ref.path}\0${ref.blockId || ""}\0${ref.taskId || ""}\0${ref.raw || ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      snapshots.push(ref);
+    }
+  }
+  const identityKeys = matchReviewIdentityRefs(queue, snapshots).map((match) => match.key);
+  const existing = options && Array.isArray(options.excludeKeys) ? options.excludeKeys : [];
+  return buildReviewAnchor(queue, handledKeys, rank, day, {
+    ...options,
+    excludeKeys: [...new Set([...existing, ...identityKeys])],
+    ...(snapshots.length > 0 ? { excludeRefs: snapshots } : {}),
+  });
 }
 
 function verifyReviewKeyRefs(queue, refs) {
@@ -81075,6 +81164,16 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank, day, options = {}) 
       options && Array.isArray(options.excludeKeys)
         ? new Set(options.excludeKeys.filter((key) => typeof key === "string" && key))
         : new Set();
+    const excludeRefs = [];
+    const excludeRefKeys = new Set();
+    for (const rawRef of options && Array.isArray(options.excludeRefs) ? options.excludeRefs : []) {
+      const ref = reviewIdentityRefSnapshot(rawRef);
+      if (!ref) continue;
+      const key = `${ref.path}\0${ref.blockId || ""}\0${ref.taskId || ""}\0${ref.raw || ""}`;
+      if (excludeRefKeys.has(key)) continue;
+      excludeRefKeys.add(key);
+      excludeRefs.push(ref);
+    }
     const positions = [];
     queueKeys.forEach((key, index) => {
       if (handled.has(key)) {
@@ -81151,6 +81250,7 @@ function buildReviewAnchor(queue, handledKeys, fallbackRank, day, options = {}) 
       keyTexts: Object.freeze(keyTexts),
       afterRefs: Object.freeze(afterRefs),
       beforeRefs: Object.freeze(beforeRefs),
+      ...(excludeRefs.length > 0 ? { excludeRefs: Object.freeze(excludeRefs) } : {}),
     });
   } catch (error) {
     return null;
@@ -81418,7 +81518,7 @@ function matchFreshStampRefs(queueBefore, refs) {
 // earlier answers, today's accumulator, and prior anchor keys only
 // exclude rows and never move the anchor. Returns `{ positionKeys,
 // excludeKeys, handled, answeredRefs }`. Never throws.
-function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
+function collectReviewAnswerKeys(origin, handledRefs, stored, todayText, exclusionRefs) {
   try {
     const queueBefore =
       origin && Array.isArray(origin.queueBefore) ? origin.queueBefore : [];
@@ -81443,6 +81543,21 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
       // The origin key alone still walks.
     }
     const positionKeys = Object.freeze(Array.from(positionSet));
+    const identityRefs = [];
+    const seenIdentityRefs = new Set();
+    const addIdentityRef = (rawRef) => {
+      const ref = reviewIdentityRefSnapshot(rawRef);
+      if (!ref) return;
+      const key = `${ref.path}\0${ref.blockId || ""}\0${ref.taskId || ""}\0${ref.raw || ""}`;
+      if (seenIdentityRefs.has(key)) return;
+      seenIdentityRefs.add(key);
+      identityRefs.push(ref);
+    };
+    for (const ref of Array.isArray(exclusionRefs) ? exclusionRefs : []) addIdentityRef(ref);
+    if (stored && stored.identityRefs instanceof Map) {
+      for (const ref of stored.identityRefs.values()) addIdentityRef(ref);
+    }
+    const identityMatches = matchReviewIdentityRefs(queueBefore, identityRefs);
     const verifyTargets = [];
     try {
       const priorKeys =
@@ -81502,6 +81617,9 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
         excludeSet.add(key);
       }
     }
+    for (const match of identityMatches) {
+      if (match && match.key && !positionSet.has(match.key)) excludeSet.add(match.key);
+    }
     const excludeKeys = Object.freeze(Array.from(excludeSet));
     const handled = new Set([...positionSet, ...excludeSet]);
     const answeredRefs = [];
@@ -81529,6 +81647,16 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
             : "";
         answeredRefs.push(Object.freeze({ key, text }));
       }
+      for (const match of identityMatches) {
+        if (!match || !match.key || !match.entry) continue;
+        const text = typeof match.entry.originalMarkdown === "string"
+          ? match.entry.originalMarkdown
+          : "";
+        const index = answeredRefs.findIndex((entry) => entry && entry.key === match.key);
+        const answer = Object.freeze({ key: match.key, text, identityRef: match.ref });
+        if (index >= 0) answeredRefs[index] = answer;
+        else answeredRefs.push(answer);
+      }
     } catch (error) {
       // answeredRefs stays partial; the position keys still walk.
     }
@@ -81537,6 +81665,7 @@ function collectReviewAnswerKeys(origin, handledRefs, stored, todayText) {
       excludeKeys,
       handled,
       answeredRefs: Object.freeze(answeredRefs),
+      ...(identityRefs.length > 0 ? { excludeRefs: Object.freeze(identityRefs) } : {}),
     });
   } catch (error) {
     const fallback =
@@ -109558,8 +109687,8 @@ module.exports.helpers = {
   matchReviewChecklistCursor,
   matchReviewRecurringCursor,
   reviewLineChecklistKind,
-  buildReviewAnchor,
-  reviewVerifiedHandledKeys,
+  buildReviewAnchor, reviewVerifiedHandledKeys,
+  matchReviewIdentityRefs, buildReviewAnchorWithIdentityExclusions,
   verifyReviewKeyRefs,
   collectReviewAnswerKeys,
   reviewResumeRef,

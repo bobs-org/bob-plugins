@@ -187,6 +187,12 @@ Renaming a successor label warns
 `“{label}” is a successor label in config.yml — update
 relations.successor_labels`.
 
+With the compatible successor picker v4 and close APIs installed, an offered
+relation source can also be explicitly closed as Done or Cancelled. That
+choice uses the same guarded close, recover-only cascade, and Undo notice as
+other successor groups; it never turns the relation edge into an automatic
+link or consults the relation index during Cancel.
+
 Hand-editing a configured cancel or complete label into LINKS leaves an open
 task open and shows a hint to use the Links stage or capture. Unlinking a
 cancel-label edge or relabelling it away never reopens a cancelled task; the

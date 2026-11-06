@@ -433,9 +433,19 @@ class TaskStatusCyclerCompletionMixin {
         options && options.successorNoticeTarget === "return"
       ) {
         context.successorNoticeTarget = "return";
+        if (options.successorNoticeBox && typeof options.successorNoticeBox === "object") {
+          context.successorNoticeBox = options.successorNoticeBox;
+        }
       }
       if (closing) {
         const finalized = await this.finalizeClosedTasks(identities, context);
+        if (
+          options && options.successorNoticeBox &&
+          typeof options.successorNoticeBox === "object" &&
+          finalized && finalized.successors && Array.isArray(finalized.successors.resolved)
+        ) {
+          options.successorNoticeBox.excludeRefs = finalized.successors.resolved.slice();
+        }
         if (
           options && options.successorNoticeBox &&
           typeof options.successorNoticeBox === "object" &&

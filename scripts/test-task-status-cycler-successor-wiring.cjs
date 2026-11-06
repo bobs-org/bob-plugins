@@ -112,6 +112,49 @@ function installNavStub(plugin, seen, pickOverride = null) {
   };
 }
 
+function installOfferCloseNavStub(plugin, { pick, shown = [] } = {}) {
+  const previous = plugin.app.plugins && plugin.app.plugins.plugins
+    ? plugin.app.plugins.plugins
+    : {};
+  const picked = [];
+  plugin.app.plugins = {
+    plugins: {
+      ...previous,
+      "bob-navigation-hotkeys": {
+        api: {
+          version: 4,
+          cancel: {
+            version: 1,
+            planCancel(content, selected, options = {}) {
+              return {
+                valid: true,
+                content: String(content || "").replace(/- \[ \]/, "- [-]"),
+                loggedCount: options.reason ? 1 : 0,
+                createdLogCount: options.reason ? 1 : 0,
+              };
+            },
+          },
+          successors: {
+            version: 4,
+            async pick(model) {
+              picked.push(model);
+              return typeof pick === "function" ? pick(model) : null;
+            },
+          },
+          notice: {
+            version: 4,
+            showUnblocked(model) {
+              shown.push(model);
+              return true;
+            },
+          },
+        },
+      },
+    },
+  };
+  return { picked, shown };
+}
+
 function installRealTaskThemeApi(plugin, suggestFor) {
   const holder = plugin.app.plugins.plugins["bob-ledger-tools"];
   holder.api.caps = () => ({ exempt: ["PLAN"] });
@@ -864,6 +907,155 @@ test("recovered-only close reports unblocked without linking (SO4 Esc)", async (
   assert.equal(notices.length, 0);
 });
 
+test("SV14: stale close is refused per row while a fresh close and recovery apply", async () => {
+  notices.length = 0;
+  const rootOne = "- [x] #task Root one [id:: root__one] ^root-one";
+  const rootTwo = "- [x] #task Root two [id:: root__two] ^root-two";
+  const offeredOne = "- [?] #task Offered one [dependsOn:: root__one] [id:: offered__one] ^offered-one";
+  const offeredTwo = "- [?] #task Offered two [dependsOn:: root__two] [id:: offered__two] ^offered-two";
+  const leaf = "- [?] #task Leaf [fresh:: 2026-11-01] [dependsOn:: offered__two] [id:: leaf] ^leaf";
+  const day = fixDay("");
+  const harness = createInMemoryObsidianApp({
+    "Tasks.md": [rootOne, rootTwo, offeredOne, offeredTwo, leaf].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 3, ch: 0 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  let pickerFailure = null;
+  let pickerRows = [];
+  const integration = installOfferCloseNavStub(plugin, {
+    async pick(model) {
+      try {
+        const rows = model.groups.flatMap((group) => group.rows || [])
+          .filter((row) => row && row.selectable);
+        pickerRows = rows;
+        const stale = rows.find((row) => row.key === "Tasks.md#^offered-one");
+        const fresh = rows.find((row) => row.key === "Tasks.md#^offered-two");
+        if (!stale || !fresh) throw new Error(`missing close rows: ${JSON.stringify(rows)}`);
+        const current = harness.getSource("Tasks.md");
+        const edited = current.replace(offeredOne, offeredOne.replace("Offered one", "Edited while open"));
+        await harness.app.vault.modify(
+          harness.app.vault.getAbstractFileByPath("Tasks.md"),
+          edited,
+        );
+        assert.match(harness.getSource("Tasks.md"), /Edited while open/, "the simulated edit lands while the picker is open");
+        const selection = {
+          closes: [
+            { key: stale.key, outcome: "done" },
+            { key: fresh.key, outcome: "done" },
+          ],
+        };
+        assert.equal(helpers.normalizeSuccessorChoices(selection).closes.length, 2);
+        return selection;
+      } catch (error) {
+        pickerFailure = error;
+        return null;
+      }
+    },
+  });
+  const navApi = plugin.app.plugins.plugins["bob-navigation-hotkeys"].api;
+  const closeCaps = plugin.successorOfferCloseCapabilities(navApi.successors);
+  assert.equal(helpers.isSuccessorOfferCloseSupported(closeCaps), true, JSON.stringify({
+    successor: closeCaps.successors && closeCaps.successors.version,
+    cancel: closeCaps.cancel && closeCaps.cancel.version,
+    complete: typeof closeCaps.completeTaskLineText,
+    apply: typeof closeCaps.applyOfferClosesNow,
+  }));
+  let pickedChoices = null;
+  const pickSuccessorOfferChoices = plugin.pickSuccessorOfferChoices.bind(plugin);
+  plugin.pickSuccessorOfferChoices = async (...args) => {
+    const picked = await pickSuccessorOfferChoices(...args);
+    pickedChoices = picked.choices;
+    return picked;
+  };
+
+  const result = await plugin.finalizeClosedTasks([
+    { path: "Tasks.md", blockId: "root-one", taskId: "root__one", text: "Root one" },
+    { path: "Tasks.md", blockId: "root-two", taskId: "root__two", text: "Root two" },
+  ], { editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH });
+
+  assert.equal(integration.picked.length, 1, "the supported picker opens for the two offered rows");
+  assert.deepEqual(pickerRows.map((row) => ({ key: row.key, close: row.close }))
+    .sort((a, b) => a.key.localeCompare(b.key)), [
+    {
+      key: "Tasks.md#^offered-one",
+      close: {
+        complete: true,
+        cancel: true,
+        completeConsequence: "✓ Completes “Offered one” · Ready → Done",
+        cancelConsequence: "⊘ Cancels “Offered one” · Ready → Cancelled",
+        unblocks: 0,
+      },
+    },
+    {
+      key: "Tasks.md#^offered-two",
+      close: {
+        complete: true,
+        cancel: true,
+        completeConsequence: "✓ Completes “Offered two” · Ready → Done · unblocks “Leaf” · back tomorrow as a tickler",
+        cancelConsequence: "⊘ Cancels “Offered two” · Ready → Cancelled · unblocks “Leaf” · back tomorrow as a tickler",
+        unblocks: 1,
+      },
+    },
+  ]);
+  assert.equal(pickerFailure, null, pickerFailure && pickerFailure.stack);
+  assert.deepEqual(pickedChoices.closes.map((close) => close.key).sort(), [
+    "Tasks.md#^offered-one", "Tasks.md#^offered-two",
+  ]);
+  assert.ok(result.successors.offer_closes, JSON.stringify(result.successors));
+  assert.equal(result.successors.offer_close_refused.count, 1);
+  assert.deepEqual(result.successors.offer_close_refused.rows.map((row) => row.text), ["Edited while open"]);
+  assert.equal(result.successors.offer_closes.length, 1);
+  const current = harness.getSource("Tasks.md");
+  assert.match(current, /^- \[ \] #task Edited while open .* \^offered-one$/m);
+  assert.match(current, /^- \[x\] #task Offered two .* \^offered-two$/m);
+  assert.match(current, /^- \[ \] #task Leaf .* \[unblocked:: \d{4}-\d{2}-\d{2}\].* \^leaf$/m);
+  assert.ok(current.includes(`[unblocked:: ${TODAY}]`));
+  assert.match(result.successors.offer_closes[0].message, /completed “Offered two”/);
+  assert.ok(result.successors.undo && result.successors.undo.restores.length > 0);
+  assert.equal(result.successors.unblocked.some((row) => row.block_id === "offered-two"), false,
+    "the successfully closed offer leaves ordinary successor receipts");
+  assert.equal(integration.shown.length, 1);
+  assert.ok(integration.shown[0].undo, "the v4 notice receives the take-back snapshot");
+  assert.equal(notices.length, 0);
+});
+
+test("offer-close receipts fall back to complete text with older notice APIs", () => {
+  notices.length = 0;
+  const harness = createInMemoryObsidianApp({ "Tasks.md": "" });
+  const editor = createTextEditor("");
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const shown = [];
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
+    api: {
+      version: 3,
+      notice: {
+        version: 3,
+        showUnblocked(model) { shown.push(model); return true; },
+      },
+    },
+  };
+  const model = {
+    offer_closes: [{
+      message: "✓ completed “Offered two” · Ready → Done · unblocked “Leaf”",
+      recovered: [{ text: "Leaf", unblocked_stamped: true }],
+    }],
+    offer_close_refused: {
+      count: 1,
+      rows: [{ text: "Offered one", why: "Changed since the card opened" }],
+    },
+  };
+
+  plugin.presentSuccessorModel(model);
+
+  assert.equal(shown.length, 0, "a pre-v4 notice cannot discard the receipt");
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /completed “Offered two”/);
+  assert.match(notices[0], /Leaf back tomorrow as a tickler/);
+  assert.match(notices[0], /1 not closed/);
+  assert.match(notices[0], /Offered one · Changed since the card opened/);
+});
+
 test("walk landing composes a single toast and shows no card", async () => {
   notices.length = 0;
   // Drive the same walk branch `handleVimTaskToggleOpenDone` uses: the
@@ -914,6 +1106,57 @@ test("walk landing composes a single toast and shows no card", async () => {
   assert.equal(walkContinued[0].outcome.kind, "complete");
   assert.match(walkContinued[0].outcome.notice || "", /🔓/);
   assert.equal(walkSeen.length, 0);
+  assert.equal(notices.length, 0);
+});
+
+test("SV15: a walk close shows one Undo receipt and forwards resolved identities", async () => {
+  notices.length = 0;
+  const landing = "- [ ] #task Walk landing [id:: walk__landing] ^landing";
+  const offered = "- [?] #task Offered close [fresh:: 2026-11-01] [dependsOn:: walk__landing] [id:: offered] ^offered";
+  const leaf = "- [?] #task Recovered leaf [fresh:: 2026-11-01] [dependsOn:: offered] [id:: leaf] ^leaf";
+  const day = fixDay("");
+  const harness = createInMemoryObsidianApp({
+    "walk.md": landing,
+    "source.md": [offered, leaf].join("\n"),
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(landing, { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "walk.md");
+  const integration = installOfferCloseNavStub(plugin, {
+    pick(model) {
+      const row = model.groups.flatMap((group) => group.rows || []).find(
+        (candidate) => candidate && candidate.key === "source.md#^offered" &&
+          candidate.close && candidate.close.complete,
+      );
+      assert.ok(row, "the walk's eligible offer has a Done verdict");
+      return { closes: [{ key: row.key, outcome: "done" }] };
+    },
+  });
+  const outcomes = [];
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.reviewWalk = {
+    version: 1,
+    capture() { return { key: "landing", seq: 1, epoch: 1 }; },
+    continue(origin, outcome) {
+      outcomes.push({ origin, outcome });
+      return Promise.resolve({ ok: true, advanced: true, stopped: false });
+    },
+  };
+
+  plugin.handleVimTaskToggleOpenDone();
+  for (let round = 0; round < 20 && outcomes.length === 0; round += 1) await flushAsyncActions();
+
+  assert.equal(outcomes.length, 1, "the landing advances once");
+  assert.equal(integration.shown.length, 1, "the v4 receipt is the one visible notice");
+  assert.ok(integration.shown[0].undo, "the review walk keeps the Undo action");
+  assert.deepEqual(outcomes[0].outcome.excludeRefs.map((ref) => ({
+    path: ref.path,
+    blockId: ref.blockId,
+    taskId: ref.taskId,
+  })), [{ path: "source.md", blockId: "offered", taskId: "offered" }]);
+  assert.doesNotMatch(outcomes[0].outcome.notice || "", /completed “Offered close”/,
+    "the walk continuation does not repeat the close summary");
+  assert.match(harness.getSource("source.md"), /^- \[x\] #task Offered close/m);
+  assert.match(harness.getSource("source.md"), /^- \[ \] #task Recovered leaf .* \[unblocked:: \d{4}-\d{2}-\d{2}\]/m);
   assert.equal(notices.length, 0);
 });
 

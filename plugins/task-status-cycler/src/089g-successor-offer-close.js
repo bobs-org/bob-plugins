@@ -157,6 +157,9 @@ function createSuccessorOfferCloseContext(options = {}) {
   const context = {
     __successorOfferCloseContext: true,
     noteTexts,
+    plannedRecoveryEdits: Object.freeze(Array.isArray(options.plannedRecoveryEdits || options.recoveryEdits)
+      ? (options.plannedRecoveryEdits || options.recoveryEdits).map((edit) => Object.freeze({ ...edit }))
+      : []),
     notePaths: Array.isArray(options.notePaths)
       ? options.notePaths.slice()
       : [...noteTexts.keys()],
@@ -218,12 +221,21 @@ function successorOfferCloseTaskSource(offer, context) {
     return { refusal: "changed_identity" };
   }
   const lines = noteText.split(/\r?\n/);
-  const preimage = task && typeof task.rawLine === "string"
+  const cardPreimage = task && typeof task.rawLine === "string"
     ? task.rawLine
     : task && typeof task.lineText === "string" ? task.lineText
       : task && typeof task.text === "string" && TASK_LINE_RE.test(task.text) ? task.text
         : null;
-  if (preimage === null || lines[line] !== preimage) {
+  const currentLine = lines[line];
+  let preimage = cardPreimage;
+  if (preimage !== null && currentLine !== preimage) {
+    const recovery = context.plannedRecoveryEdits.find((edit) => edit &&
+      String(edit.path || "") === path && Number(edit.line) === line &&
+      edit.before === cardPreimage && edit.after === currentLine,
+    );
+    if (recovery) preimage = currentLine;
+  }
+  if (preimage === null || currentLine !== preimage) {
     return { refusal: "changed_identity" };
   }
   const parsed = context.tasks.find((candidate) =>

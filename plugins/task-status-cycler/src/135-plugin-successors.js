@@ -689,7 +689,13 @@ class TaskStatusCyclerSuccessorsMixin {
         return null;
       }
       const active = context && typeof context === "object" ? context : {};
-      if (active.successorNoticeTarget === "return") {
+      const offerCloseReceipt = successorOfferCloseHasReceipt(model);
+      if (Array.isArray(model && model.resolved) && active.successorNoticeBox &&
+          typeof active.successorNoticeBox === "object") {
+        active.successorNoticeBox.excludeRefs = model.resolved.slice();
+      }
+      const walkReturn = active.successorNoticeTarget === "return";
+      if (walkReturn && !offerCloseReceipt) {
         return text;
       }
       const relationBearing = !!(model && typeof model === "object" && (
@@ -706,11 +712,13 @@ class TaskStatusCyclerSuccessorsMixin {
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
       const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
-      if (api && relationNoticeCompatible && (!hasKeepMoving || Number(api.version) >= 2)) {
+      const closeNoticeCompatible = !offerCloseReceipt || Number(api && api.version) >= 4;
+      if (api && relationNoticeCompatible && closeNoticeCompatible &&
+          (!hasKeepMoving || Number(api.version) >= 2)) {
         try {
           const shown = api.showUnblocked(noticeModel);
           if (shown !== false) {
-            return text;
+            return walkReturn ? "" : text;
           }
         } catch (error) {
           // Fall through to the plain Notice.
@@ -721,7 +729,7 @@ class TaskStatusCyclerSuccessorsMixin {
       } catch (error) {
         // Best effort: the close already landed.
       }
-      return text;
+      return walkReturn ? "" : text;
     } catch (error) {
       return null;
     }

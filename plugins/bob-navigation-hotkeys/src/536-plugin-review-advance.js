@@ -168,7 +168,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         typeof this.reviewAnsweredKeys !== "object" ||
         this.reviewAnsweredKeys.day !== day
       ) {
-        this.reviewAnsweredKeys = { day, keys: new Set(), texts: new Map() };
+        this.reviewAnsweredKeys = { day, keys: new Set(), texts: new Map(), identityRefs: new Map() };
       }
       const set =
         this.reviewAnsweredKeys.keys instanceof Set
@@ -180,6 +180,10 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           ? this.reviewAnsweredKeys.texts
           : new Map();
       this.reviewAnsweredKeys.texts = texts;
+      const identityRefs = this.reviewAnsweredKeys.identityRefs instanceof Map
+        ? this.reviewAnsweredKeys.identityRefs
+        : new Map();
+      this.reviewAnsweredKeys.identityRefs = identityRefs;
       for (const item of Array.isArray(keys) ? keys : []) {
         if (typeof item === "string" && item) {
           set.add(item);
@@ -192,6 +196,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           const text = typeof item.text === "string" ? item.text : "";
           if (text) {
             texts.set(key, text);
+          }
+          if (item.identityRef && typeof item.identityRef === "object") {
+            identityRefs.set(key, item.identityRef);
           }
         }
       }
@@ -469,6 +476,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         handledRefs,
         this.reviewAnsweredKeys,
         todayText,
+        input && Array.isArray(input.excludeRefs) ? input.excludeRefs : [],
       );
       const positionKeys = Array.isArray(answerKeys.positionKeys)
         ? answerKeys.positionKeys
@@ -508,11 +516,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         : Number.isInteger(landedEntry && landedEntry.rank)
           ? landedEntry.rank
           : 1;
-      const anchor = buildReviewAnchor(
+      const anchor = buildReviewAnchorWithIdentityExclusions(
         before,
         positionKeys,
         entryRank,
         todayText,
+        answerKeys.excludeRefs || [],
         { excludeKeys, answered: true },
       );
       this.reviewAnchor = anchor;
@@ -624,7 +633,7 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           ? settings.remaining
           : reviewWalkRemaining(
               queue,
-              anchor && Array.isArray(anchor.keys) ? anchor.keys : [],
+              reviewVerifiedHandledKeys(queue, anchor),
             );
       const stopped = this.checkReviewAdvanceStop(plan, settings, remaining);
       if (stopped !== null) {
@@ -666,11 +675,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
       }
       // The walk anchor follows every successful landing, so a later
       // gesture continues from here.
-      this.reviewAnchor = buildReviewAnchor(
+      this.reviewAnchor = buildReviewAnchorWithIdentityExclusions(
         queue,
         [reviewQueueEntryKey(plan.entry)],
         plan.rank,
         todayText,
+        anchor && Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
       );
       let landingNotice = buildReviewJumpNotice(
         plan.entry,
@@ -883,11 +893,12 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     }
     // The walk anchor follows every successful landing, so a later
     // release, roll, or stamp continues from here.
-    this.reviewAnchor = buildReviewAnchor(
+    this.reviewAnchor = buildReviewAnchorWithIdentityExclusions(
       queue,
       [reviewQueueEntryKey(plan.entry)],
       plan.rank,
       todayText,
+      anchor && Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
     );
     let notice = buildReviewJumpNotice(plan.entry, plan.rank, plan.total, {
       wrapped: plan.wrapped,

@@ -144,6 +144,16 @@ on review landings, or a plain not-pulled-in notice reports the outcome
 exactly once. Successor picks carrying a destination override insert at the
 verified existing entry or a created `- [ ] () — NAME` placeholder.
 
+With navigation `api.successors` v4, the picker can also close an eligible
+offered task as Done or Cancelled. Each choice is re-read and checked against
+the card's line before it writes; a changed row is refused on its own, while
+other valid choices can still apply. A successful close recovers only what
+that task unblocks and does not start another successor round. The v4
+Unblocked notice carries an Undo snapshot; older notice APIs receive plain
+text listing every close, refusal, and recovery. From the review walk, the
+receipt stays available with Undo and resolved tasks are skipped by identity
+while the walk advances once from its original landing.
+
 With `plan.keep_moving` enabled, closing the last live planned task in a leaf
 project can offer that project's Pending, Next, and Ready residents in a
 separate `Keep <project> moving` group. The group can include `#ref` rows;

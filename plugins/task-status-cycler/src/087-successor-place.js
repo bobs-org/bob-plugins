@@ -660,7 +660,10 @@ function successorNoticeTextBase(model = {}) {
 
 function successorNoticeText(model = {}) {
   const base = successorKeepMovingNoticeText(model, successorNoticeTextBase);
-  return successorRelationNoticeText(model, base);
+  return successorOfferCloseNoticeText(
+    model,
+    successorRelationNoticeText(model, base),
+  );
 }
 
 // --- Loaders ---

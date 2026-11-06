@@ -327,31 +327,6 @@ function planOfferCloseRoots(options = {}) {
   return { planned, refused, intermediates };
 }
 
-function successorOfferCloseTaskIdFor(task, lineText) {
-  try {
-    const meta = parseTaskDependencyMetadata(String(lineText || ""));
-    if (meta && meta.taskId) return String(meta.taskId);
-  } catch (_error) {}
-  if (task && task.taskId) return String(task.taskId);
-  return "";
-}
-
-function successorOfferCloseClosedIdentities(planned) {
-  const out = [];
-  for (const row of planned) {
-    const lineText = row.beforeLine || row.expected || "";
-    const blockId = getTrailingBlockId(String(lineText)) || (row.task && row.task.blockId) || "";
-    const taskId = successorOfferCloseTaskIdFor(row.task, lineText);
-    out.push({
-      path: String(row.path || ""),
-      ...(blockId ? { blockId: String(blockId) } : {}),
-      ...(taskId ? { taskId: String(taskId) } : {}),
-      text: String(row.display || ""),
-    });
-  }
-  return out;
-}
-
 // Recover-only cascade over the actual joint closed set. No picker, no
 // relation offers, no keep-moving, no linking, no ID minting. Uses the
 // current rewriteRecoveredTaskLine and dependency rules; never a second
@@ -973,9 +948,16 @@ class TaskStatusCyclerOfferCloseApplyMixin {
     const resolvedRefs = finalPlanned.map((row) => {
       const blockId = getTrailingBlockId(String(row.beforeLine || "")) || (row.task && row.task.blockId) || "";
       const taskId = successorOfferCloseTaskIdFor(row.task, row.beforeLine);
+      const offeredTask = row.offer && row.offer.task && typeof row.offer.task === "object"
+        ? row.offer.task
+        : {};
       return {
         key: String(row.key),
         path: String(row.path || ""),
+        line: Number.isInteger(offeredTask.cardLine) ? offeredTask.cardLine : Number(row.line),
+        raw: typeof offeredTask.cardRawLine === "string" && offeredTask.cardRawLine
+          ? offeredTask.cardRawLine
+          : String(row.beforeLine || ""),
         ...(blockId ? { blockId: String(blockId) } : {}),
         ...(taskId ? { taskId: String(taskId) } : {}),
         text: String(row.display || ""),

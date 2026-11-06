@@ -253,6 +253,9 @@ class TaskStatusCyclerVimMixin {
                   ...(successorNoticeBox.text
                     ? { notice: successorNoticeBox.text }
                     : {}),
+                  ...(Array.isArray(successorNoticeBox.excludeRefs) && successorNoticeBox.excludeRefs.length > 0
+                    ? { excludeRefs: successorNoticeBox.excludeRefs }
+                    : {}),
                 }
                 : null,
             ),

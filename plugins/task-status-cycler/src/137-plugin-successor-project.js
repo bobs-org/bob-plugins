@@ -435,60 +435,53 @@ class TaskStatusCyclerSuccessorProjectMixin {
       // apply recovery with no picks (plain "not pulled in" fallback).
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
+      let closeChoices = [];
+      let closeRevalidatedKeys = new Set();
       let pickerOpened = false;
       let originalOfferByKey = new Map();
-      try {
-        for (const offer of selectableOffers) {
-          if (offer && offer.key) {
-            originalOfferByKey.set(String(offer.key), offer);
-          }
-        }
-      } catch (error) {
-        originalOfferByKey = new Map();
-      }
       let selectedDestinations = new Map();
+      let closePassNoteTexts = noteTextsObject;
+      let closePassTasks = tasks;
+      let closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
       if (selectableOffers.length > 0 && pickerApi) {
-        let model = null;
-        try {
-          const predecessorsForModel = identities.map((identity) => ({
-            note_path: String(identity.path || ""),
-            block_id: identity.blockId ? String(identity.blockId) : "",
-            text: identity.text ? String(identity.text) : "",
-          }));
-          const stillMuted = Array.isArray(plan.still_blocked) ? plan.still_blocked : [];
-          const folded = plan.foldedByProject instanceof Map ? plan.foldedByProject : new Map();
-          const headers = plan.projectHeaders instanceof Map ? plan.projectHeaders : new Map();
-          model = buildSuccessorPickerModel({
-            predecessors: predecessorsForModel,
-            offers: selectableOffers,
-            stillBlocked: stillMuted,
-            foldedByProject: folded,
-            headers,
-            relationHeld: Array.isArray(plan.relation_held) ? plan.relation_held : [],
-          });
-        } catch (error) {
-          model = null;
-        }
-        let picks = [];
-        if (model && Array.isArray(model.groups) && model.groups.some((group) => Array.isArray(group.rows) && group.rows.some((row) => row.selectable))) {
-          pickerOpened = true;
-          try {
-            const result = await pickerApi.pick(model);
-            picks = normalizeSuccessorPicks(result);
-          } catch (error) {
-            picks = [];
-          }
-        }
+        const picked = await this.pickSuccessorOfferChoices({
+          plan,
+          offers: selectableOffers,
+          identities,
+          pickerApi,
+          noteTexts: noteTextsObject,
+          tasks,
+          today,
+          dailyPath,
+          dailyBefore,
+          dailyAfter,
+          dependencySnapshotAvailable,
+          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+        });
+        pickerOpened = picked.pickerOpened === true;
+        originalOfferByKey = picked.originalOfferByKey instanceof Map
+          ? picked.originalOfferByKey
+          : new Map();
+        const choices = picked.choices;
+        const closeSupported = isSuccessorOfferCloseSupported(
+          this.successorOfferCloseCapabilities(pickerApi),
+        );
+        const picks = choices && Array.isArray(choices.picks) ? choices.picks : [];
+        closeChoices = closeSupported && choices && Array.isArray(choices.closes)
+          ? choices.closes
+          : [];
+        const closeKeySet = new Set(closeChoices.map((close) => String(close.key)));
         selectedKeys = picks.map((pick) => pick && pick.key).filter(Boolean);
+        selectedKeys = selectedKeys.filter((key) => !closeKeySet.has(String(key)));
         selectedDestinations = new Map();
         for (const pick of picks) {
           // Destination overrides keep optional themeIntent / preserveSpelling
           // from both normalizers; the write phase consumes them.
-          if (pick && pick.key && pick.destination) {
+          if (pick && pick.key && pick.destination && !closeKeySet.has(String(pick.key))) {
             selectedDestinations.set(String(pick.key), pick.destination);
           }
         }
-        if (selectedKeys.length > 0) {
+        if (selectedKeys.length > 0 || closeChoices.length > 0) {
           // Re-read fresh texts (editor buffers first), invalidating caches.
           const affected = new Set();
           for (const identity of identities) {
@@ -707,6 +700,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
             replanned = plan;
             selectedKeys = [];
             selectedDestinations = new Map();
+            closeRevalidatedKeys = new Set();
           } else {
             // Refuse stale/ambiguous picks individually; newly appearing
             // offers stay unpicked (no second picker).
@@ -714,44 +708,29 @@ class TaskStatusCyclerSuccessorProjectMixin {
             const refused = selectedKeys.filter((key) => !freshKeys.has(String(key)));
             // Ambiguous idless rebinding: when a note's digest count changed,
             // refuse every idless pick for that digest in that note.
-            try {
-              const origTable = buildSuccessorNoteDigestTable(noteTextsObject);
-              const freshTable = buildSuccessorNoteDigestTable(freshNotesObj);
-              const countFor = (table, path, digest) => {
-                const rows = table instanceof Map ? table.get(String(path)) : (table || {})[String(path)];
-                if (!Array.isArray(rows)) {
-                  return 0;
-                }
-                return rows.filter((row) => row.digest === digest).length;
-              };
-              const ambiguous = new Set();
-              for (const key of selectedKeys) {
-                const at = String(key).lastIndexOf("@");
-                const hash = String(key).indexOf("#^");
-                if (at === -1 || hash !== -1) {
-                  continue;
-                }
-                const path = String(key).slice(0, at);
-                const rest = String(key).slice(at + 1);
-                const digest = rest.split("~")[0];
-                if (countFor(origTable, path, digest) !== countFor(freshTable, path, digest)) {
-                  ambiguous.add(String(key));
-                }
+            const ambiguousCloseKeys = successorOfferCloseAmbiguousKeys(
+              [...selectedKeys, ...closeChoices.map((close) => String(close.key))],
+              noteTextsObject,
+              freshNotesObj,
+            );
+            for (const key of ambiguousCloseKeys) {
+              if (selectedKeys.some((selected) => String(selected) === String(key)) &&
+                  !refused.includes(key)) {
+                refused.push(key);
               }
-              for (const key of ambiguous) {
-                if (!refused.includes(key)) {
-                  refused.push(key);
-                }
-              }
-            } catch (error) {
-              // Best effort.
             }
+            closeRevalidatedKeys = new Set(closeChoices
+              .map((close) => String(close.key))
+              .filter((key) => freshKeys.has(key) && !ambiguousCloseKeys.has(key)));
             if (refused.length > 0) {
               replanned.refusedKeys = refused;
             }
             plan = replanned;
             // Swap working sets to the fresh texts for the apply below.
             tasks = freshTasks;
+            closePassTasks = freshTasks;
+            closePassNoteTexts = freshNotesObj;
+            closePassDependencySnapshotAvailable = dependencySnapshotAvailable;
             for (const [path, text] of freshNoteTexts) {
               noteTexts.set(path, text);
             }
@@ -911,6 +890,27 @@ class TaskStatusCyclerSuccessorProjectMixin {
           noteOutcome.failureReason = "task changed before write";
         }
       }
+      let closeResult = null;
+      if (closeChoices.length > 0) {
+        closeResult = await this.applySuccessorOfferCloseChoices({
+          closes: closeChoices,
+          revalidatedKeys: closeRevalidatedKeys,
+          cardOffers: originalOfferByKey,
+          freshOffers: Array.isArray(plan.offers) ? plan.offers : [],
+          cardNoteTexts: noteTextsObject,
+          noteTexts: closePassNoteTexts,
+          plan,
+          tasks: closePassTasks,
+          today,
+          dailyPath,
+          notePaths,
+          dependencySnapshotAvailable: closePassDependencySnapshotAvailable,
+          markUnblockedLine: this.getFreshnessMarkUnblockedLine(),
+          pickerApi,
+          context: active,
+        });
+        if (closeResult) removeResolvedOfferCloseRows(plan, closeResult);
+      }
       try {
         if (typeof this.rememberSuccessorPass === "function") {
           this.rememberSuccessorPass(identities, plan, insertion, {
@@ -962,6 +962,19 @@ class TaskStatusCyclerSuccessorProjectMixin {
         ...(plan.relation_check ? { relation_check: plan.relation_check } : {}),
         ...(Array.isArray(plan.relation_labels)
           ? { relation_labels: plan.relation_labels }
+          : {}),
+        ...(closeResult && Array.isArray(closeResult.offer_closes)
+          ? { offer_closes: closeResult.offer_closes }
+          : {}),
+        ...(closeResult && closeResult.offer_close_refused
+          ? { offer_close_refused: closeResult.offer_close_refused }
+          : {}),
+        ...(closeResult && closeResult.undo ? { undo: closeResult.undo } : {}),
+        ...(closeResult && Array.isArray(closeResult.resolved)
+          ? { resolved: closeResult.resolved }
+          : {}),
+        ...(closeResult && Array.isArray(closeResult.failures) && closeResult.failures.length > 0
+          ? { failures: closeResult.failures }
           : {}),
         relation_picker_opened: pickerOpened,
         daily_path: dailyPath || "",

@@ -293,6 +293,7 @@ test("r reports each unavailable origin state in the viewer pill", async () => {
     [{ display: "~/tmp/x.png", state: "missing" }, "!Original is no longer on disk"],
     [{ display: "~/tmp/x.png", state: "changed" }, "!Original changed since import · y still copies it"],
     [{ display: "~/tmp/x.png", host: "apollo", state: "elsewhere" }, "!Original lives on apollo"],
+    [{ display: "https://mail.google.com/mail/u/0/#all/thread", state: "external" }, "!Gmail attachment has no local source path"],
   ];
   for (const [origin, expected] of cases) {
     const session = makeSession({ origin });
@@ -418,6 +419,7 @@ test("restore chip only appears for a present origin and toast pills replace one
   assert.equal(imageZoomOriginSuffix({ state: "changed" }), "changed since import");
   assert.equal(imageZoomOriginSuffix({ state: "missing" }), "no longer on disk");
   assert.equal(imageZoomOriginSuffix({ state: "elsewhere", host: "apollo" }), "on apollo");
+  assert.equal(imageZoomOriginSuffix({ state: "external" }), "Gmail thread");
   assert.ok(imageZoomMiddleTruncate("x".repeat(200), 20).includes("…"));
   present.modal.close();
 });
@@ -428,6 +430,7 @@ test("origin line renders each recorded state below the title", () => {
     [{ display: "~/tmp/x.png", state: "missing" }, "↳ ~/tmp/x.png", "· no longer on disk"],
     [{ display: "~/tmp/x.png", state: "changed" }, "↳ ~/tmp/x.png", "· changed since import"],
     [{ display: "~/tmp/x.png", host: "apollo", state: "elsewhere" }, "↳ ~/tmp/x.png", "· on apollo"],
+    [{ display: "https://mail.google.com/mail/u/0/#all/thread", state: "external" }, "↳ https://mail.google.com/mail/u/0/#all/thread", "· Gmail thread"],
   ];
   for (const [origin, pathText, stateText] of cases) {
     const session = makeSession({ origin });
@@ -438,6 +441,19 @@ test("origin line renders each recorded state below the title", () => {
     assert.equal(line.getAttribute("title"), `${origin.display}${stateText ? ` ${stateText}` : ""}`);
     session.modal.close();
   }
+});
+
+test("external Gmail origins are copyable as links and cannot be restored as paths", () => {
+  const session = makeSession({
+    origin: {
+      display: "https://mail.google.com/mail/u/0/#all/thread",
+      state: "external",
+    },
+  });
+  const chips = allByClass(session.modal.imageZoomFooterEl, "bob-image-zoom-chip");
+  assert.ok(chips.some((chip) => childText(chip) === "ycopy Gmail link"));
+  assert.ok(!chips.some((chip) => childText(chip) === "rrestore path"));
+  session.modal.close();
 });
 
 test("imported viewer shows the longer import pill", () => {

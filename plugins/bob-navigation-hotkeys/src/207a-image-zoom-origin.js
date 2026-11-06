@@ -14,6 +14,7 @@ function imageZoomOriginSuffix(origin) {
   if (origin.state === "changed") return "changed since import";
   if (origin.state === "missing") return "no longer on disk";
   if (origin.state === "elsewhere") return `on ${origin.host || "another host"}`;
+  if (origin.state === "external") return "Gmail thread";
   return "";
 }
 
@@ -117,7 +118,12 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
   const recorded = Boolean(this.imageZoomOrigin && (this.imageZoomOrigin.display || this.imageZoomOrigin.source));
   const canRestore = Boolean(context.restore && this.imageZoomOrigin && this.imageZoomOrigin.state === "present");
   if (canCopy || canRestore) addDivider();
-  if (canCopy) addChip("y", recorded ? "copy original path" : isUrl ? "copy URL" : "copy file path");
+  if (canCopy) {
+    const label = this.imageZoomOrigin && this.imageZoomOrigin.state === "external"
+      ? "copy Gmail link"
+      : recorded ? "copy original path" : isUrl ? "copy URL" : "copy file path";
+    addChip("y", label);
+  }
   if (canRestore) addChip("r", "restore path");
 };
 
@@ -242,6 +248,10 @@ ImageZoomModal.prototype.restoreImageZoomSource = async function restoreImageZoo
   }
   if (origin.state === "elsewhere") {
     this.showImageZoomToast(`! Original lives on ${origin.host || "another host"}`, { error: true });
+    return false;
+  }
+  if (origin.state === "external") {
+    this.showImageZoomToast("! Gmail attachment has no local source path", { error: true });
     return false;
   }
   const display = String(origin.display || origin.source || "");

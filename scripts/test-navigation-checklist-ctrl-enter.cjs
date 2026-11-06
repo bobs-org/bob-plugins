@@ -59,7 +59,7 @@ function preLine(text, symbol = " ") {
 function postLine(text = "Morning review", symbol = " ") {
   return `- [${symbol}] #task #gtd #post ${text}  [repeat:: every day when done]`;
 }
-function entry({ tier = "pre", path = "gtd_daily.md", line, text, markdown, rank, tierRank, tierTotal }) {
+function entry({ tier = "pre", path = "gtd_daily.md", line, text, markdown, rank, tierRank, tierTotal, stage, stageIndex, stageRank, stageTotal }) {
   const isPost = tier === "post";
   return {
     key: `${path}:${line}`,
@@ -79,6 +79,10 @@ function entry({ tier = "pre", path = "gtd_daily.md", line, text, markdown, rank
     rank,
     tierRank,
     tierTotal,
+    stage,
+    stageIndex,
+    stageRank,
+    stageTotal,
   };
 }
 function queueFor(chores, posts = ["Morning review"], tail = []) {
@@ -270,6 +274,10 @@ test("review checklist group helpers format exact completion and close notices",
     "✓ Done · Check weather · Ctrl+Enter → next PRE",
   );
   assert.equal(
+    helpers.formatReviewCtrlEnterDoneLine("Start draft", "pre", true, "periods"),
+    "✓ Done · Start draft · PERIODS ✓ · Ctrl+Enter → next PRE",
+  );
+  assert.equal(
     helpers.formatReviewChecklistGroupEndNotice({ taskText: "Last", tier: "pre", nextLabel: "NEW", commitments: 12 }),
     "✓ Done · Last · PRE done\n]s → NEW · 12 commitments due",
   );
@@ -437,6 +445,56 @@ test("live successor filtering skips a stale completed row", async () => {
   await land(fixture.plugin, "first");
   assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
   assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /#pre Three/);
+});
+
+test("Ctrl+Enter ticks the last due row in a stage and advances by queue order above the cursor", async () => {
+  const terminal = entry({
+    tier: "pre", path: "gtd_daily.md", line: 2, rank: 1, tierRank: 1,
+    tierTotal: 2, stage: "terminal", stageIndex: 0, stageRank: 1, stageTotal: 1,
+    text: "Clean up SASE", markdown: preLine("Clean up SASE"),
+  });
+  const period = entry({
+    tier: "pre", path: "gtd_daily.md", line: 1, rank: 2, tierRank: 2,
+    tierTotal: 2, stage: "periods", stageIndex: 1, stageRank: 1, stageTotal: 1,
+    text: "Start draft", markdown: preLine("Start draft"),
+  });
+  // Config stage order, not source line position, puts TERMINAL first. Its
+  // queue successor is physically above the completed row in the note.
+  const fixture = makePlugin({
+    queue: [terminal, period],
+    content: `${period.originalMarkdown}\n${terminal.originalMarkdown}`,
+  });
+  fixture.editor.setCursor(1, 0);
+  assert.equal(await fixture.plugin.completeReviewChecklistRow(fixture.editor, {
+    api: fixture.freshness,
+    entry: terminal,
+    queueBefore: [terminal, period],
+    filePath: "gtd_daily.md",
+    withinGroup: true,
+    advance: true,
+    dateText: DATE,
+  }), true);
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Start draft/);
+  assert.equal(
+    notices.at(-1).split("\n")[0],
+    "✓ Done · Clean up SASE · TERMINAL ✓ · Ctrl+Enter → next PRE",
+  );
+});
+
+test("Ctrl+Enter does not tick a stage while another due row in that stage remains", async () => {
+  const rows = ["Draft week", "Draft quarter", "Clean up SASE"].map((text, index) =>
+    entry({
+      tier: "pre", line: index + 1, rank: index + 1, tierRank: index + 1,
+      tierTotal: 3, stage: index < 2 ? "periods" : "terminal",
+      stageIndex: index < 2 ? 1 : 0, stageRank: index < 2 ? index + 1 : 1,
+      stageTotal: index < 2 ? 2 : 1, text, markdown: preLine(text),
+    }),
+  );
+  const fixture = makePlugin({ queue: rows });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.match(notices.at(-1), /^✓ Done · Draft week · Ctrl\+Enter → next PRE\n/);
+  assert.doesNotMatch(notices.at(-1), /PERIODS ✓/);
 });
 
 test("live group filtering reads each cross-note path once", async () => {

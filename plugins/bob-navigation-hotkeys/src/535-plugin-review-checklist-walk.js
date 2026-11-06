@@ -19,10 +19,13 @@ function reviewChecklistGroupScan(queue, entry, handledKeys) {
   });
 }
 
-function formatReviewCtrlEnterDoneLine(taskText, tier) {
+function formatReviewCtrlEnterDoneLine(taskText, tier, stageDone = false, stage = "") {
   const text = String(taskText || "").trim() || "task";
   const label = String(tier || "").toUpperCase();
-  return `✓ Done · ${text} · Ctrl+Enter → next ${label}`;
+  const stageLabel = stageDone && String(stage || "").trim()
+    ? ` · ${String(stage).trim().toUpperCase()} ✓`
+    : "";
+  return `✓ Done · ${text}${stageLabel} · Ctrl+Enter → next ${label}`;
 }
 
 function formatReviewChecklistGroupEndNotice(options = {}) {
@@ -377,7 +380,16 @@ class BobNavigationHotkeysChecklistWalkMixin {
             landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
           }
           const doneLine = withinGroup
-            ? formatReviewCtrlEnterDoneLine(taskText, tier)
+            ? formatReviewCtrlEnterDoneLine(
+                taskText,
+                tier,
+                typeof entry.stage === "string" &&
+                  entry.stage.trim() !== "" &&
+                  !liveGroup.after.concat(liveGroup.before).some(
+                    (row) => row.stage === entry.stage,
+                  ),
+                entry.stage,
+              )
             : `✓ Done · ${taskText}`;
           new Notice(
             withSuccessorToast(

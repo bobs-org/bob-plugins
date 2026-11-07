@@ -420,6 +420,7 @@ function waitingInks(palette, mixes) {
   return {
     p1: anchor,
     date: anchor,
+    awaiting: anchor,
     p2: mixRgb(anchor, palette.muted, mixes.levels[0] / 100),
     p3: mixRgb(anchor, palette.muted, mixes.levels[1] / 100),
     p4: mixRgb(anchor, palette.muted, mixes.levels[2] / 100),
@@ -497,4 +498,78 @@ test("helpers never throw on bad input", () => {
   );
   assert.ok(noTooltip, "missing tooltip still renders");
   assert.equal(noTooltip.attrs["aria-label"], "");
+});
+
+// The awaiting-reply plane (bob-cli `docs/blocked-marks.md`, Glyphs):
+// one stroked 16x16 path at the chevron's 2.1 stroke with round caps and
+// joins, painted in the P1 waiting ink on every JS surface and the pip.
+function sentGlyphSvg() {
+  const section = sectionCss();
+  const match = section.match(/--bob-block-glyph-sent:\s*url\("data:image\/svg\+xml,([^"]+)"\)/);
+  assert.ok(match, "--bob-block-glyph-sent ships in the token block");
+  return decodeURIComponent(match[1]);
+}
+
+test("the plane mask is one hollow stroked path matched to the chevron", () => {
+  const svg = sentGlyphSvg();
+  assert.ok(svg.includes("viewBox='0 0 16 16'"), "16x16 viewBox");
+  assert.equal((svg.match(/<path\b/g) || []).length, 1, "one path");
+  assert.ok(svg.includes("d='M12.75 3.25 3.25 7.25l4 1.5 1.5 4Z'"), "contract geometry");
+  assert.ok(svg.includes("fill='none'"), "hollow");
+  const chevron = decodeURIComponent(
+    sectionCss().match(/--bob-block-glyph-chevron:\s*url\("data:image\/svg\+xml,([^"]+)"\)/)[1],
+  );
+  const stroke = (text) => (text.match(/stroke-width='([\d.]+)'/) || [])[1];
+  assert.equal(stroke(svg), "2.1");
+  assert.equal(stroke(svg), stroke(chevron), "stroke matches the chevron");
+  assert.ok(svg.includes("stroke-linejoin='round'") && svg.includes("stroke-linecap='round'"));
+});
+
+test("awaiting paints the P1 waiting box, the plane, the row tint, and the pip", () => {
+  const section = sectionCss();
+  const ruleFor = (needle) => {
+    const at = section.indexOf(needle);
+    assert.ok(at !== -1, "missing selector " + needle);
+    return section.slice(at, section.indexOf("}", at));
+  };
+  const box = ruleFor('span.bob-block-mark[data-bob-block="awaiting"] {');
+  assert.ok(box.includes("--bob-block-ink: var(--bob-block-ink-1)"), "P1 anchor ink");
+  assert.ok(box.includes("border: 1.5px solid var(--bob-block-ink)"));
+  assert.ok(box.includes("color-mix(in srgb, var(--bob-block-ink) 12%, transparent)"));
+  for (const surface of [
+    'li.task-list-item[data-task="?"][data-bob-block="awaiting"] > .task-list-item-checkbox:checked,',
+    '.HyperMD-task-line[data-task="?"][data-bob-block="awaiting"] input.task-list-item-checkbox:checked,',
+  ]) {
+    assert.ok(box.includes(surface) || section.indexOf(surface) !== -1, "box covers " + surface);
+  }
+  const glyph = ruleFor('span.bob-block-mark[data-bob-block="awaiting"]::before {');
+  assert.ok(glyph.includes("mask-image: var(--bob-block-glyph-sent)"));
+  assert.ok(glyph.includes("background-color: var(--bob-block-ink)"));
+  const tint = ruleFor('li.task-list-item[data-task="?"][data-bob-block="awaiting"] {');
+  assert.ok(tint.includes("5.5%, transparent") && tint.includes("45%, transparent"), "waiting tint and rail");
+  const pip = ruleFor('span.bob-block-mark[data-bob-block-more="awaiting"] {');
+  assert.ok(pip.includes("--bob-block-pip-ink: var(--bob-block-ink-1)"), "awaiting pip uses P1 ink");
+});
+
+test("the plane renders as a miniature for chips and the Task Card", () => {
+  const span = buildBlockMarkElement(
+    fakeDoc(),
+    {
+      key: "awaiting",
+      family: "waiting",
+      more: null,
+      tooltip: "Awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+    },
+    {},
+  );
+  assert.ok(span);
+  assert.equal(span.attrs["data-bob-block"], "awaiting");
+  assert.equal(span.attrs["data-bob-block-family"], "waiting");
+  assert.equal(span.attrs["aria-label"], "Awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days");
+  const pip = buildBlockMarkElement(
+    fakeDoc(),
+    { key: "dep", family: "held", more: "awaiting", tooltip: "x" },
+    {},
+  );
+  assert.equal(pip.attrs["data-bob-block-more"], "awaiting");
 });

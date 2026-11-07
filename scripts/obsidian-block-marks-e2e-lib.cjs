@@ -96,6 +96,7 @@ function tasksResultCssKey(row) {
   if (row.hasPrjTag) return "prj";
   const future = String(row.scheduled || "").startsWith("future-");
   const priority = String(row.priority || "");
+  if (future && row.hasAwaitingTag) return "awaiting";
   if (future && priority === "high") return "p1";
   if (future && priority === "medium") return "p2";
   if (future && priority === "low") return "p3";

@@ -67,6 +67,10 @@ const {
   blockMarkModel,
   blockMarkIsDigitKey,
   blockMarkProjectTagSource,
+  blockMarkAwaitingTagSource,
+  blockMarkFoldTagForKey,
+  blockMarkAwaitingPhrase,
+  blockMarkIsMailFrontmatter,
 } = LedgerToolsPlugin.helpers;
 
 const TODAY = "2026-11-01";
@@ -459,4 +463,264 @@ test("BM24 Tasks CSS cascade: digit from future scheduled + medium, no project t
     null,
     "Tasks paint must stay inside ul.plugin-tasks-query-result so source-note lis keep JS marks",
   );
+});
+
+// Awaiting-reply vectors (bob-cli `docs/blocked-marks.md`, AW1–AW7).
+// Today is Sat 2026-11-07; `A` links a mail note whose `who` is Ada.
+const AW_TODAY = "2026-11-07";
+const AW_LINK = "[[mail/2026/261107_lease_renewal|✉️ Lease renewal · Ada]]";
+const AW1_LINE = `- [?] #task #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-10]`;
+const AW_TOOLTIP = "Awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days";
+
+function awaitingModelFor(lineText, overrides = {}) {
+  return modelFor(lineText, {
+    today: AW_TODAY,
+    mailWho: () => "Ada",
+    ...overrides,
+  });
+}
+
+const AW_VECTORS = [
+  { id: "AW1", line: AW1_LINE, key: "awaiting", family: "waiting", digit: null, more: null, tooltip: AW_TOOLTIP, fold: "#awaiting_reply" },
+  { id: "AW2", line: `${AW1_LINE} [priority:: medium]`, key: "awaiting", family: "waiting", digit: null, more: null, tooltip: AW_TOOLTIP, fold: "#awaiting_reply" },
+  {
+    id: "AW3",
+    line: `${AW1_LINE} [dependsOn:: x]`,
+    key: "dep",
+    family: "held",
+    digit: null,
+    more: "awaiting",
+    tooltip:
+      "Blocked · after Finish the battery\n" +
+      "Ctrl+Shift+B to edit prerequisites\n" +
+      "Also awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+    fold: null,
+  },
+  { id: "AW4", line: `- [?] #task #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-07]`, key: "stale", family: "stale", digit: null, more: null, fold: null },
+  { id: "AW5", line: `- [ ] #task #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-05]`, key: null },
+  {
+    id: "AW6",
+    line: `- [?] #task #awaiting_reply_old ${AW_LINK} [scheduled:: 2026-11-10]`,
+    key: "date",
+    family: "waiting",
+    digit: null,
+    more: null,
+    tooltip: "Blocked · until Tue, Nov 10 · in 3 days\nCtrl+Shift+P to reschedule",
+    fold: null,
+  },
+];
+
+test("AW1–AW6 awaiting-reply model vectors pass verbatim", () => {
+  for (const vector of AW_VECTORS) {
+    const model = awaitingModelFor(vector.line);
+    assert.equal(model && model.key, vector.key, vector.id + ": key");
+    if (vector.key === null) continue;
+    assert.equal(model.family, vector.family, vector.id + ": family");
+    assert.equal(model.digit, vector.digit, vector.id + ": digit");
+    assert.equal(model.more, vector.more, vector.id + ": more");
+    if (vector.tooltip) assert.equal(model.tooltip, vector.tooltip, vector.id + ": tooltip");
+    assert.ok(!model.tooltip.includes("::"), vector.id + ": tooltip has no inline-field syntax");
+    assert.ok(Object.isFrozen(model) && Object.isFrozen(model.reasons), vector.id + ": frozen");
+    assert.equal(blockMarkFoldTagForKey(model.key), vector.fold, vector.id + ": fold");
+    assert.equal(blockMarkIsDigitKey(model.key), false, vector.id + ": bars stay shown");
+  }
+});
+
+test("awaiting owns its date: no date reason, no digit, no Also scheduled pip", () => {
+  const aw2 = awaitingModelFor(`${AW1_LINE} [priority:: medium]`);
+  assert.deepEqual(
+    aw2.reasons.map((reason) => [reason.kind, reason.key, reason.text]),
+    [["awaiting", "awaiting", "2026-11-10"]],
+  );
+  assert.ok(!aw2.tooltip.includes("Also scheduled"));
+
+  const recurring = awaitingModelFor(
+    `${AW1_LINE} [repeat:: every week]`,
+  );
+  assert.equal(recurring.key, "awaiting", "awaiting outranks every date source");
+
+  const prj = awaitingModelFor(
+    `- [?] #task #prj_is_blocked #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-10]`,
+  );
+  assert.equal(prj.key, "prj");
+  assert.equal(prj.more, "awaiting");
+  assert.equal(blockMarkFoldTagForKey(prj.key), "#prj_is_blocked");
+  assert.equal(
+    prj.tooltip,
+    "Blocked · via project Example\nAlso awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+  );
+
+  const depAndPrj = awaitingModelFor(
+    `- [?] #task #prj_is_blocked #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-10] [dependsOn:: x]`,
+  );
+  assert.equal(depAndPrj.key, "dep");
+  assert.equal(depAndPrj.more, "prj", "the highest losing reason takes the pip");
+
+  const inCode = awaitingModelFor(
+    `- [?] #task \`#awaiting_reply\` ${AW_LINK} [scheduled:: 2026-11-10]`,
+  );
+  assert.equal(inCode.key, "date", "a tag in inline code is not the token");
+});
+
+test("awaiting tooltip omits <who> when unknown and never throws on odd who", () => {
+  assert.equal(
+    awaitingModelFor(AW1_LINE, { mailWho: () => "" }).tooltip,
+    "Awaiting reply · nudge Tue, Nov 10 · in 3 days",
+  );
+  assert.equal(
+    awaitingModelFor(AW1_LINE, { mailWho: undefined }).tooltip,
+    "Awaiting reply · nudge Tue, Nov 10 · in 3 days",
+  );
+  assert.equal(
+    awaitingModelFor(AW1_LINE, {
+      mailWho: () => {
+        throw new Error("boom");
+      },
+    }).tooltip,
+    "Awaiting reply · nudge Tue, Nov 10 · in 3 days",
+  );
+  assert.equal(
+    awaitingModelFor(AW1_LINE, { mailWho: () => " Ada:: Lovelace\nsecond " }).tooltip,
+    "Awaiting reply from Ada: Lovelace · nudge Tue, Nov 10 · in 3 days",
+  );
+  let calls = 0;
+  awaitingModelFor(`- [?] #task #awaiting_reply_old ${AW_LINK} [scheduled:: 2026-11-10]`, {
+    mailWho: () => {
+      calls += 1;
+      return "Ada";
+    },
+  });
+  assert.equal(calls, 0, "the who lookup runs only for a live awaiting reason");
+  assert.equal(
+    blockMarkAwaitingPhrase("2026-11-08", AW_TODAY, "Ada"),
+    "Awaiting reply from Ada · nudge Sun, Nov 8 · tomorrow",
+  );
+});
+
+test("awaiting tag source is exact, quote-aware, and folds with its space", () => {
+  const source = blockMarkAwaitingTagSource(AW1_LINE);
+  assert.ok(source);
+  assert.equal(AW1_LINE.slice(source.tagStart, source.tagEnd), "#awaiting_reply");
+  assert.equal(source.foldSpace, true);
+  assert.equal(blockMarkAwaitingTagSource("- [?] #task #awaiting_reply_old A"), null);
+  assert.equal(blockMarkAwaitingTagSource("- [?] #task `#awaiting_reply` A"), null);
+  assert.equal(blockMarkFoldTagForKey("dep"), null);
+  assert.equal(blockMarkFoldTagForKey("p2"), null);
+});
+
+function mailPluginFor(files) {
+  const { plugin } = pluginFor(TASKS);
+  const lookups = [];
+  plugin.app.metadataCache = {
+    getFirstLinkpathDest(target, source) {
+      lookups.push([target, source]);
+      return Object.prototype.hasOwnProperty.call(files, target)
+        ? { path: target + ".md" }
+        : null;
+    },
+    getFileCache(file) {
+      const frontmatter = files[String(file.path).replace(/\.md$/, "")];
+      return frontmatter ? { frontmatter } : null;
+    },
+  };
+  plugin.dateMarksToday = () => AW_TODAY;
+  return { plugin, lookups };
+}
+
+test("plugin <who> lookup reads the first linked mail note through the metadata cache", () => {
+  const { plugin, lookups } = mailPluginFor({
+    "Projects/Other": { type: "[[area]]", who: "Nope" },
+    "mail/2026/261107_lease_renewal": { type: "[[mail]]", who: "Ada" },
+  });
+  const line =
+    "- [?] #task #awaiting_reply [[Projects/Other]] " +
+    AW_LINK +
+    " `[[mail/2026/261107_lease_renewal]]` [scheduled:: 2026-11-10]";
+  const model = plugin.blockMarkModelForLine("Projects/Example.md", line);
+  assert.equal(model.key, "awaiting");
+  assert.equal(model.tooltip, AW_TOOLTIP);
+  assert.deepEqual(lookups, [
+    ["Projects/Other", "Projects/Example.md"],
+    ["mail/2026/261107_lease_renewal", "Projects/Example.md"],
+  ]);
+
+  const api = plugin.blockMarksApi();
+  assert.equal(api.model(AW1_LINE, { path: "Projects/Example.md" }).tooltip, AW_TOOLTIP);
+
+  const { plugin: unknown } = mailPluginFor({});
+  assert.equal(
+    unknown.blockMarkModelForLine("Projects/Example.md", AW1_LINE).tooltip,
+    "Awaiting reply · nudge Tue, Nov 10 · in 3 days",
+  );
+  const { plugin: noCache } = pluginFor(TASKS);
+  noCache.dateMarksToday = () => AW_TODAY;
+  assert.equal(noCache.blockMarkMailWho(AW1_LINE, "Projects/Example.md"), "");
+
+  assert.equal(blockMarkIsMailFrontmatter({ type: "[[mail]]" }), true);
+  assert.equal(blockMarkIsMailFrontmatter({ type: ["mail"] }), true);
+  assert.equal(blockMarkIsMailFrontmatter({ gmail_thread_id: "abc" }), true);
+  assert.equal(blockMarkIsMailFrontmatter({ type: "[[area]]" }), false);
+  assert.equal(blockMarkIsMailFrontmatter(null), false);
+});
+
+test("AW7 Tasks CSS cascade: the plane beats the digit, prj beats the plane", () => {
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-3d",
+      priority: "medium",
+      hasAwaitingTag: true,
+    }),
+    "awaiting",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "future-3d",
+      priority: "medium",
+      hasAwaitingTag: true,
+      hasPrjTag: true,
+    }),
+    "prj",
+  );
+  assert.equal(
+    blockMarksE2e.tasksResultCssKey({
+      dataTask: "?",
+      scheduled: "today",
+      priority: "medium",
+      hasAwaitingTag: true,
+    }),
+    "dep",
+    "a nudge-due row cannot prove a reason in Tasks results",
+  );
+
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  const tasksSection = css.slice(css.indexOf("Tasks query results: CSS-only"));
+  const notPrj =
+    ':not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"]))';
+  const plane =
+    'li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]' +
+    notPrj +
+    ':has(.tag[data-tag-name="#awaiting_reply"]) > .task-list-item-checkbox:checked::after';
+  const planeAt = tasksSection.indexOf(plane);
+  assert.ok(planeAt !== -1, "the plane rule excludes prj rows explicitly");
+  const planeBody = tasksSection.slice(planeAt, tasksSection.indexOf("}", planeAt));
+  assert.ok(planeBody.includes("mask-image: var(--bob-block-glyph-sent)"));
+  const digitAt = tasksSection.indexOf('[data-task-priority="medium"] > .task-list-item-checkbox:checked::after');
+  const prjAt = tasksSection.indexOf(':has(.tag[data-tag-name="#prj_is_blocked"]) > .task-list-item-checkbox:checked::after');
+  assert.ok(digitAt !== -1 && digitAt < planeAt && planeAt < prjAt, "ranked after the digits, before prj");
+  assert.ok(
+    tasksSection.includes(
+      ':not(:has(.tag[data-tag-name="#awaiting_reply"])):not(:has(.tag[href="#awaiting_reply"])) .task-priority',
+    ),
+    "plane rows keep their bars",
+  );
+  assert.ok(
+    tasksSection.includes(notPrj + ' .tag[data-tag-name="#awaiting_reply"]'),
+    "plane rows clip the #awaiting_reply tag; prj rows keep it",
+  );
+  assert.ok(!tasksSection.includes('[data-tag-name^="#awaiting_reply"]'), "the tag is matched exactly");
 });

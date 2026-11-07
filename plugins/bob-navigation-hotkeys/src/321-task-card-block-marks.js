@@ -89,9 +89,31 @@ function taskCardBlockUntilWords(tooltip) {
   return "";
 }
 
+// The awaiting-reply tooltip line (`Awaiting reply from Ada · nudge …`,
+// or its losing `Also awaiting reply …` form) as a reason line:
+// `awaiting reply from Ada · nudge …`. Returns "" when the tooltip carries
+// no awaiting line. Never throws.
+function taskCardBlockAwaitingWords(tooltip) {
+  try {
+    const lines = String(tooltip || "").split("\n");
+    for (const line of lines) {
+      const match = /^(?:Also )?[Aa](waiting reply\b.*)$/.exec(
+        String(line || "").trim(),
+      );
+      if (match) {
+        return `a${match[1]}`;
+      }
+    }
+  } catch (error) {
+    // No awaiting words; the caller falls back to the raw date text.
+  }
+  return "";
+}
+
 // Compact reason list for the header: every reason, winner first, in the
 // tooltip words. `after <text>` runs one line per open prerequisite, up to
 // 3, then a `+N more` overflow line; then `via project <stem>`; then
+// `awaiting reply from <who> · nudge <short date> · <relative>`; then
 // `until <short date> · <relative>`. Frozen, possibly empty (stale).
 function taskCardBlockReasonLines(mark) {
   try {
@@ -114,6 +136,11 @@ function taskCardBlockReasonLines(mark) {
         shown += 1;
       } else if (reason.kind === "prj") {
         lines.push(`via project ${String(reason.text || "").trim()}`);
+      } else if (reason.kind === "awaiting") {
+        const words = taskCardBlockAwaitingWords(model.tooltip);
+        lines.push(
+          words || `awaiting reply · nudge ${String(reason.text || "").trim()}`,
+        );
       } else if (reason.kind === "date" && !dateShown) {
         const words = taskCardBlockUntilWords(model.tooltip);
         lines.push(`until ${words || String(reason.text || "").trim()}`);
@@ -184,7 +211,18 @@ function buildTaskCardBlockedHeader(session, filePath, blockMarks) {
       tooltip: String(mark.tooltip || ""),
     };
     if (
-      ["dep", "prj", "p1", "p2", "p3", "p4", "repeat", "date", "stale"].indexOf(
+      [
+        "dep",
+        "prj",
+        "awaiting",
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "repeat",
+        "date",
+        "stale",
+      ].indexOf(
         normalized.key,
       ) === -1
     ) {

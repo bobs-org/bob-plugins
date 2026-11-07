@@ -92,7 +92,9 @@ shared blocked-reason miniature (through the bob-ledger-tools
 `api.blockMarks` v1 namespace) with the tooltip words on hover, and a
 compact reason list below the chips names every reason, winner first, in
 `after <text>` (one line per open prerequisite, up to 3, then `+N more`),
-`via project <stem>`, and `until <short date> · <relative>` words. Each
+`via project <stem>`, `awaiting reply from <who> · nudge <short date> ·
+<relative>` (the hollow paper plane of a `bob gmail sync` hold), and
+`until <short date> · <relative>` words. Each
 P1–P4 level also shows a decorative hollow digit box beside its signal
 bars, teaching which checkbox digit that priority earns. Counted batches
 with mixed marks keep today's plain BLOCKED chip. Without the ledger api

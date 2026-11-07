@@ -503,3 +503,55 @@ test("prj rows fold the project tag; dep-over-prj keeps it; selection reveals", 
   assert.equal(plugin.blockMarkFoldShouldRebuild({ selectionSet: true }), true);
   assert.equal(plugin.blockMarkShouldRebuild({ selectionSet: true }), false);
 });
+
+test("awaiting rows fold the #awaiting_reply tag; losing rows keep it (AW1/AW3/AW4/AW6)", () => {
+  const { plugin } = makePlugin();
+  const awaiting = `- [?] #task #awaiting_reply Lease renewal [scheduled:: ${FUTURE}]`;
+  const source = LedgerToolsPlugin.helpers.blockMarkAwaitingTagSource(awaiting);
+  assert.ok(source);
+  const folds = replaceMarks(plugin.buildBlockMarkFoldDecorations(makeView(awaiting)));
+  assert.equal(folds.length, 1);
+  assert.equal(folds[0].from, source.tagStart - 1);
+  assert.equal(folds[0].to, source.tagEnd);
+  assert.equal(awaiting.slice(folds[0].from, folds[0].to), " #awaiting_reply");
+  assert.equal(folds[0].value.widget.foldSpace, true);
+  assert.equal(folds[0].value.widget.tag, "#awaiting_reply");
+
+  const prjFold = replaceMarks(
+    plugin.buildBlockMarkFoldDecorations(makeView("- [?] #task E #prj_is_blocked")),
+  );
+  assert.equal(prjFold[0].value.widget.tag, "#prj_is_blocked");
+  assert.equal(
+    folds[0].value.widget.eq(prjFold[0].value.widget),
+    false,
+    "an awaiting fold never reuses a prj fold widget",
+  );
+
+  for (const kept of [
+    `- [?] #task #awaiting_reply Lease [scheduled:: ${FUTURE}] [dependsOn:: dep]`,
+    `- [?] #task #awaiting_reply Lease [scheduled:: ${TODAY}]`,
+    `- [?] #task #awaiting_reply_old Lease [scheduled:: ${FUTURE}]`,
+    `- [ ] #task #awaiting_reply Lease [scheduled:: 2026-10-30]`,
+  ]) {
+    assert.equal(
+      replaceMarks(plugin.buildBlockMarkFoldDecorations(makeView(kept))).length,
+      0,
+      kept,
+    );
+  }
+
+  const both = `- [?] #task #prj_is_blocked #awaiting_reply Lease [scheduled:: ${FUTURE}]`;
+  const bothFolds = replaceMarks(plugin.buildBlockMarkFoldDecorations(makeView(both)));
+  assert.equal(bothFolds.length, 1, "a prj row folds only its project tag");
+  assert.equal(both.slice(bothFolds[0].from, bothFolds[0].to), " #prj_is_blocked");
+
+  const revealed = replaceMarks(
+    plugin.buildBlockMarkFoldDecorations(
+      makeView(awaiting, { selection: [{ from: source.tagStart, to: source.tagStart }] }),
+    ),
+  );
+  assert.equal(revealed.length, 0, "the cursor reveals the raw tag");
+
+  plugin.blockMarksEnabled = false;
+  assert.equal(plugin.buildBlockMarkFoldDecorations(makeView(awaiting)), StubDecoration.none);
+});

@@ -105,6 +105,48 @@ class BobLedgerToolsBlockMarksMixin {
     }
   }
 
+  // `<who>` for an awaiting tooltip: the first wikilink on the line,
+  // outside inline code, that resolves to a mail note (frontmatter `type`
+  // `[[mail]]` or a `gmail_thread_id`) supplies its frontmatter `who`.
+  // Metadata-cache lookups only; never reads disk. Returns "" when
+  // unknown. Never throws.
+  blockMarkMailWho(lineText, notePath) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function" ||
+        typeof metadataCache.getFileCache !== "function"
+      ) {
+        return "";
+      }
+      const visible = blockMarkMaskInlineCode(String(lineText || ""));
+      const links = /\[\[([^\[\]|#^\r\n]+)(?:[#^][^\[\]|\r\n]*)?(?:\|[^\[\]\r\n]*)?\]\]/g;
+      let match = links.exec(visible);
+      while (match !== null) {
+        try {
+          const target = String(match[1] || "").trim();
+          const file = target
+            ? metadataCache.getFirstLinkpathDest(target, String(notePath || ""))
+            : null;
+          const cache = file ? metadataCache.getFileCache(file) : null;
+          const frontmatter = cache && cache.frontmatter;
+          if (blockMarkIsMailFrontmatter(frontmatter)) {
+            return typeof frontmatter.who === "string"
+              ? frontmatter.who.trim()
+              : "";
+          }
+        } catch (error) {
+          // An unresolvable link is skipped.
+        }
+        match = links.exec(visible);
+      }
+      return "";
+    } catch (error) {
+      return "";
+    }
+  }
+
   // The shared model used by source-note surfaces and api.blockMarks v1.
   // The Live Preview and api.blockMarks v1 consumers share this one
   // display-only model; neither path writes source Markdown.
@@ -127,6 +169,7 @@ class BobLedgerToolsBlockMarksMixin {
           ? (id) => index.get(String(id || "")) || []
           : () => null,
         projectReason: (notePath) => this.blockMarkProjectReason(notePath),
+        mailWho: (text, notePath) => this.blockMarkMailWho(text, notePath),
       });
     } catch (error) {
       return null;

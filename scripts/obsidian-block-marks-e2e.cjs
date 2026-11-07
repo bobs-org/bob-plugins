@@ -77,6 +77,7 @@ function blockMarksNote(d) {
     "- [?] #task BM25 open over closed [dependsOn:: x, d]",
     "- [ ] #task BM26 ready box [priority:: high] [scheduled:: " + d.plus19 + "]",
     "- [?] #task BM27 past date [scheduled:: " + d.minus10 + "]",
+    "- [?] #task #awaiting_reply BMAw awaiting vector [[mail-ada|✉️ Lease · Ada]] [priority:: medium] [scheduled:: " + d.plus3 + "]",
     "- [?] #task BMClick probe [scheduled:: " + d.plus3 + "]",
     "- [x] #task BMDone done row [priority:: high] [scheduled:: " + d.plus19 + "]",
     "- [-] #task BMCancel cancelled row [priority:: high] [scheduled:: " + d.plus19 + "]",
@@ -89,6 +90,27 @@ function blockMarksNote(d) {
     "```",
     "",
   ].join("\n");
+}
+
+// The awaiting-reply tooltip reads `<who>` from the linked mail note.
+const MAIL_ADA_NOTE = [
+  "---",
+  'type: "[[mail]]"',
+  "gmail_thread_id: e2e-thread",
+  "who: Ada",
+  "---",
+  "# Lease",
+  "",
+].join("\n");
+
+// `Tue, Nov 10`: the date-marks short form for an ISO date.
+function shortDate(iso) {
+  const [year, month, day] = String(iso).split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 const PREREQS_NOTE = [
@@ -349,6 +371,7 @@ function buildFixture(vaultDir, dates) {
   const d = dates || fixtureDates();
   writeNote(path.join(vaultDir, "block-marks.md"), blockMarksNote(d));
   writeNote(path.join(vaultDir, "prereqs.md"), PREREQS_NOTE);
+  writeNote(path.join(vaultDir, "mail-ada.md"), MAIL_ADA_NOTE);
   writeNote(path.join(vaultDir, "embed-host.md"), EMBED_HOST_NOTE);
   writeNote(path.join(vaultDir, "prose.md"), PROSE_NOTE);
   writeNote(path.join(vaultDir, "tasks-query.md"), TASKS_QUERY_NOTE);
@@ -751,14 +774,16 @@ const FOLDS_PROBE = `(() => { try {
     });
     return match(".HyperMD-task-line") || match("li.task-list-item") || match(".cm-line") || match("p") || null;
   };
-  const isPrjTag = (tag) => {
+  const tagMatcher = (token) => (tag) => {
     if (!tag) return false;
     const href = tag.getAttribute ? tag.getAttribute("href") : "";
     const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
     const text = String(tag.textContent || "");
-    return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
+    return href === "#" + token || name === "#" + token || new RegExp("#?" + token + "(?![A-Za-z0-9_/-])").test(text);
   };
-  const row = (needle) => {
+  const isPrjTag = tagMatcher("prj_is_blocked");
+  const isAwaitingTag = tagMatcher("awaiting_reply");
+  const row = (needle, isFoldTag = isPrjTag, token = "prj_is_blocked") => {
     const host = pick(needle);
     if (!host) return { found: false, needle };
     const mark = host.querySelector ? host.querySelector(".bob-priority-mark") : null;
@@ -768,13 +793,13 @@ const FOLDS_PROBE = `(() => { try {
     const foldMark = mark || taskPriority;
     const foldWidget = host.querySelector ? host.querySelector(".bob-block-prj-fold") : null;
     const tags = host.querySelectorAll
-      ? Array.from(host.querySelectorAll("a.tag, .cm-hashtag, [data-tag-name], [href='#prj_is_blocked']"))
+      ? Array.from(host.querySelectorAll("a.tag, .cm-hashtag, [data-tag-name], [href='#" + token + "']"))
       : [];
-    const prjTag = tags.find(isPrjTag) || null;
+    const prjTag = tags.find(isFoldTag) || null;
     const markFoldedAttr = Boolean(mark && mark.getAttribute("data-folded") === "true");
     const markWidth = foldMark ? visibleWidth(foldMark) : null;
     const tagFoldedAttr = Boolean(prjTag && prjTag.getAttribute("data-bob-block-folded") === "true");
-    const textHasTag = /(?:^|[^A-Za-z0-9_/#])#prj_is_blocked(?![A-Za-z0-9_/-])/.test(String(host.textContent || ""));
+    const textHasTag = new RegExp("(?:^|[^A-Za-z0-9_/#])#" + token + "(?![A-Za-z0-9_/-])").test(String(host.textContent || ""));
     const tagWidth = prjTag
       ? visibleWidth(prjTag)
       : (foldWidget ? visibleWidth(foldWidget) : (textHasTag && !foldWidget ? Math.max(8, Math.round((host.getBoundingClientRect().width || 80) * 0.08)) : null));
@@ -798,6 +823,7 @@ const FOLDS_PROBE = `(() => { try {
     bm8: row("BM8 dep pip"),
     bm9: row("BM9 prj pip"),
     bm19: row("BM19 dep over prj"),
+    bmaw: row("BMAw awaiting vector", isAwaitingTag, "awaiting_reply"),
   };
 } catch (e) { return { error: String(e && e.message || e) }; } })()`;
 
@@ -825,6 +851,11 @@ const TASKS_ROWS_PROBE = `(() => { try {
       const text = String(tag.textContent || "");
       return href === "#prj_is_blocked" || name === "#prj_is_blocked" || /#?prj_is_blocked(?![A-Za-z0-9_/-])/.test(text);
     }) || null;
+    const awaitingTag = tags.find((tag) => {
+      const href = tag.getAttribute ? tag.getAttribute("href") : "";
+      const name = tag.getAttribute ? tag.getAttribute("data-tag-name") : "";
+      return href === "#awaiting_reply" || name === "#awaiting_reply";
+    }) || null;
     const attrNames = row.getAttributeNames ? row.getAttributeNames() : [];
     return {
       text: String(row.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 180),
@@ -840,6 +871,8 @@ const TASKS_ROWS_PROBE = `(() => { try {
       hasRecurring: Boolean(row.querySelector(".task-recurring")),
       hasPrjTag: Boolean(prjTag),
       prjTagWidth: prjTag ? visibleWidth(prjTag) : null,
+      hasAwaitingTag: Boolean(awaitingTag),
+      awaitingTagWidth: awaitingTag ? visibleWidth(awaitingTag) : null,
       priorityWidth: priority ? visibleWidth(priority) : null,
       hasPriorityEl: Boolean(priority),
       glyph: after ? String(after.content || "") : "",
@@ -902,6 +935,7 @@ const EXPECTED_KEYS = Object.freeze({
   BM21: "stale",
   BM25: "dep",
   BM27: "stale",
+  BMAw: "awaiting",
   BMParent: "dep",
   BMChild: "date",
   BMClick: "date",
@@ -920,6 +954,7 @@ const KEY_PAINT_MARKERS = Object.freeze({
   date: "BM2 date vector",
   repeat: "BM3 repeat vector",
   stale: "BM5 stale closed",
+  awaiting: "BMAw awaiting vector",
 });
 
 function markForMarker(marks, marker) {
@@ -1355,7 +1390,7 @@ function assertChipFamily(record, prefix, probe, needle, wantKey, alt) {
 }
 
 async function collectFolds(client) {
-  const keys = ["bm1", "bm7", "bm8", "bm9", "bm19"];
+  const keys = ["bm1", "bm7", "bm8", "bm9", "bm19", "bmaw"];
   const union = {};
   const steps = [0, 0.5, 1];
   for (const fraction of steps) {
@@ -1523,6 +1558,8 @@ async function runE2e(parsed) {
     record("lp-BM9-bars-shown", Boolean(lpFolds && lpFolds.bm9 && lpFolds.bm9.folded === false && lpFolds.bm9.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bm9).slice(0, 180));
     record("lp-BM7-pill-folded", Boolean(lpFolds && lpFolds.bm7 && lpFolds.bm7.prjFolded === true), JSON.stringify(lpFolds && lpFolds.bm7).slice(0, 180));
     record("lp-BM19-pill-kept", Boolean(lpFolds && lpFolds.bm19 && lpFolds.bm19.prjFolded === false && lpFolds.bm19.tagWidth > 4), JSON.stringify(lpFolds && lpFolds.bm19).slice(0, 180));
+    record("lp-BMAw-pill-folded", Boolean(lpFolds && lpFolds.bmaw && lpFolds.bmaw.prjFolded === true), JSON.stringify(lpFolds && lpFolds.bmaw).slice(0, 180));
+    record("lp-BMAw-bars-shown", Boolean(lpFolds && lpFolds.bmaw && lpFolds.bmaw.folded === false && lpFolds.bmaw.markWidth > 4), JSON.stringify(lpFolds && lpFolds.bmaw).slice(0, 180));
     // (Fence tree-name recording moved to the refresh-edit rebuild below.)
 
     const shotLiveLight = path.join(outDir, "e2e-block-marks-live-light.png");
@@ -1558,6 +1595,14 @@ async function runE2e(parsed) {
     const readingFolds = await collectFolds(client);
     record("reading-BM1-bars-folded", Boolean(readingFolds && readingFolds.bm1 && readingFolds.bm1.folded === true), JSON.stringify(readingFolds && readingFolds.bm1).slice(0, 180));
     record("reading-BM7-pill-folded", Boolean(readingFolds && readingFolds.bm7 && readingFolds.bm7.prjFolded === true), JSON.stringify(readingFolds && readingFolds.bm7).slice(0, 180));
+    record("reading-BMAw-pill-folded", Boolean(readingFolds && readingFolds.bmaw && readingFolds.bmaw.prjFolded === true), JSON.stringify(readingFolds && readingFolds.bmaw).slice(0, 180));
+    const readingAw = markForMarker(reading.marks, "BMAw");
+    const awaitingTip = "Awaiting reply from Ada · nudge " + shortDate(fixture.dates.plus3) + " · in 3 days";
+    record(
+      "reading-BMAw-tooltip",
+      Boolean(readingAw.visible.length && readingAw.visible[0].aria === awaitingTip),
+      `aria=${JSON.stringify(readingAw.visible[0] && readingAw.visible[0].aria)} want=${JSON.stringify(awaitingTip)}`,
+    );
     record("reading-BM19-pill-kept", Boolean(readingFolds && readingFolds.bm19 && readingFolds.bm19.prjFolded === false), JSON.stringify(readingFolds && readingFolds.bm19).slice(0, 180));
     // Quote diagnostic: the BM20 row is a quoted task; the reading adapter
     // maps it through section text plus data-line, so record what it saw.
@@ -1628,6 +1673,7 @@ async function runE2e(parsed) {
           key: host.getAttribute("data-bob-block"),
           glyph: String(after.content || ""),
           glyphColor: String(after.color || ""),
+          mask: String(after.webkitMaskImage || after.maskImage || ""),
           pipWidth: String(before.width || ""),
           pipBackground: String(before.backgroundColor || ""),
           border: String(cs.borderTopWidth || "") + " " + String(cs.borderTopStyle || ""),
@@ -1649,6 +1695,13 @@ async function runE2e(parsed) {
     record("paint-pip-geometry", compPip && compPip.ok && /6px/.test(compPip.pipWidth || ""), JSON.stringify(compPip).slice(0, 220));
     const compStale = await computedByMarker("BM5 stale");
     record("paint-stale-dashed", compStale && compStale.ok && /dashed/.test(compStale.border || ""), JSON.stringify(compStale).slice(0, 220));
+    const compAw = await computedByMarker("BMAw awaiting vector");
+    const awMask = compAw && compAw.mask ? decodeURIComponent(String(compAw.mask)) : "";
+    record(
+      "paint-awaiting-plane",
+      Boolean(compAw && compAw.ok && compAw.key === "awaiting" && awMask.includes("M12.75 3.25") && /solid/.test(compAw.border || "")),
+      JSON.stringify({ ...compAw, mask: awMask.slice(0, 120) }).slice(0, 260),
+    );
     const hitOk = compDep && compDep.ok && compDep.boxWidth >= 12 && compDep.boxHeight >= 12;
     record("paint-hit-area", hitOk, compDep && `box=${compDep.boxWidth}x${compDep.boxHeight}`);
     const heights = await client.evaluate(LINE_HEIGHT_PROBE).catch(() => ({}));
@@ -1805,6 +1858,13 @@ async function runE2e(parsed) {
       expected: expectedTip && expectedTip.tooltip,
     });
     record("hover-tooltip-text", tooltipAssert.ok, JSON.stringify(tooltipAssert).slice(0, 240));
+    const hoveredAw = await hoverCheckboxViaCdp(client, "BMAw awaiting vector");
+    const awaitingAssert = asserts.assertExactTooltip({
+      aria: hoveredAw && hoveredAw.aria,
+      tip: hoveredAw && hoveredAw.tip,
+      expected: "Awaiting reply from Ada · nudge " + shortDate(fixture.dates.plus3) + " · in 3 days",
+    });
+    record("hover-tooltip-awaiting", awaitingAssert.ok, JSON.stringify(awaitingAssert).slice(0, 240));
     record("lp-tooltip-aria", Boolean(tooltipAssert.ariaOk), `aria=${JSON.stringify(tooltipAssert.aria || "").slice(0, 120)}`);
     record("lp-tooltip-position", Boolean((await client.evaluate(`(() => {
       const boxes = Array.from(document.querySelectorAll("input.task-list-item-checkbox"));
@@ -2257,6 +2317,15 @@ async function runE2e(parsed) {
         record("tasks-BM12-untouched", Boolean(bm12 && bm12.dataTask === "*" && !bm12.jsMarked), JSON.stringify(bm12 && { dataTask: bm12.dataTask, glyph: bm12.glyph }).slice(0, 160));
         const bm19 = asserts.assertTasksCssMark(pick("BM19", "full"), { marker: "BM19", wantKey: "prj", wantGlyph: "", wantMask: true, hidePrjTag: true });
         record("tasks-BM19-prj-limit", bm19.ok, bm19.reason || "prj-over-dep known limit");
+        // AW7: the plane beats the medium digit; the tag clips, the bars stay.
+        const awRow = pick("BMAw", "full");
+        const aw7 = asserts.assertTasksCssMark(awRow, { marker: "BMAw", wantKey: "awaiting", wantGlyph: "", wantMask: true, hidePriority: false });
+        const aw7Mask = awRow ? decodeURIComponent(String(awRow.mask || "")) : "";
+        record(
+          "aw7-tasks-css-plane",
+          Boolean(aw7.ok && awRow.priority === "medium" && aw7Mask.includes("M12.75 3.25") && typeof awRow.awaitingTagWidth === "number" && awRow.awaitingTagWidth <= 4),
+          JSON.stringify({ ok: aw7.ok, reason: aw7.reason, priority: awRow && awRow.priority, scheduled: awRow && awRow.scheduled, tagWidth: awRow && awRow.awaitingTagWidth, mask: aw7Mask.slice(0, 80) }).slice(0, 360),
+        );
 
         const bm1Short = asserts.assertTasksCssMark(pick("BM1", "short"), { marker: "BM1-short", wantKey: "p2", wantGlyph: "2" });
         record("tasks-short-BM1", bm1Short.ok, bm1Short.reason || "short");

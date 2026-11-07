@@ -331,6 +331,17 @@ function taskRow(doc, options = {}) {
     li.appendChild(prj);
     li.appendChild(readingText(doc, " "));
   }
+  if (options.awaiting) {
+    const awaiting = readingEl(doc, "a", {
+      class: "tag",
+      href: options.awaiting === true ? "#awaiting_reply" : options.awaiting,
+    });
+    awaiting.appendChild(
+      readingText(doc, options.awaiting === true ? "#awaiting_reply" : options.awaiting),
+    );
+    li.appendChild(awaiting);
+    li.appendChild(readingText(doc, " "));
+  }
   li.appendChild(readingText(doc, options.trailing === undefined ? " Ship" : options.trailing));
   if (options.pill) {
     const pill = readingEl(doc, "span", { class: options.pill });
@@ -1262,4 +1273,78 @@ test("source-note lis Tasks also classifies still fold BM7 and keep BM19", () =>
   assert.equal(projectTagOf(folded).getAttribute("data-bob-block-folded"), "true");
   assert.equal(attrsOf(kept).key, "dep");
   assert.equal(projectTagOf(kept).getAttribute("data-bob-block-folded"), null);
+});
+
+function tagOf(li, href) {
+  return (li.children || []).find(
+    (child) =>
+      child &&
+      typeof child.getAttribute === "function" &&
+      child.getAttribute("href") === href,
+  );
+}
+
+test("AW1 folds the #awaiting_reply pill; AW3, AW6, and prj rows keep it", () => {
+  const plugin = makePlugin();
+  const doc = readingDoc();
+  const folded = taskRow(doc, {
+    dataLine: 0,
+    awaiting: true,
+    trailing: ` Lease [scheduled:: ${FUTURE}]`,
+  });
+  const losing = taskRow(doc, {
+    dataLine: 1,
+    awaiting: true,
+    trailing: ` Lease [scheduled:: ${FUTURE}] [dependsOn:: x]`,
+  });
+  const nearMiss = taskRow(doc, {
+    dataLine: 2,
+    awaiting: "#awaiting_reply_old",
+    trailing: ` Lease [scheduled:: ${FUTURE}]`,
+  });
+  const project = taskRow(doc, {
+    dataLine: 3,
+    prj: true,
+    awaiting: true,
+    trailing: ` Lease [scheduled:: ${FUTURE}]`,
+  });
+  const root = section(doc, [folded, losing, nearMiss, project]);
+  const ctx = ctxFor("Projects/Example.md", {
+    text: [
+      `- [?] #task #awaiting_reply Lease [scheduled:: ${FUTURE}]`,
+      `- [?] #task #awaiting_reply Lease [scheduled:: ${FUTURE}] [dependsOn:: x]`,
+      `- [?] #task #awaiting_reply_old Lease [scheduled:: ${FUTURE}]`,
+      `- [?] #task #prj_is_blocked #awaiting_reply Lease [scheduled:: ${FUTURE}]`,
+    ].join("\n"),
+    lineStart: 0,
+    lineEnd: 3,
+  });
+  plugin.renderBlockMarksIn(root, ctx);
+  plugin.renderBlockMarkFoldsIn(root);
+
+  assert.deepEqual(attrsOf(folded), { key: "awaiting", family: "waiting", more: null });
+  assert.equal(tagOf(folded, "#awaiting_reply").getAttribute("data-bob-block-folded"), "true");
+  assert.equal(
+    checkboxOf(folded).getAttribute("aria-label"),
+    "Awaiting reply · nudge Fri, Nov 20 · in 19 days",
+  );
+
+  assert.deepEqual(attrsOf(losing), { key: "dep", family: "held", more: "awaiting" });
+  assert.equal(tagOf(losing, "#awaiting_reply").getAttribute("data-bob-block-folded"), null);
+
+  assert.equal(attrsOf(nearMiss).key, "date");
+  assert.equal(
+    tagOf(nearMiss, "#awaiting_reply_old").getAttribute("data-bob-block-folded"),
+    null,
+  );
+
+  assert.deepEqual(attrsOf(project), { key: "prj", family: "held", more: "awaiting" });
+  assert.equal(tagOf(project, "#prj_is_blocked").getAttribute("data-bob-block-folded"), "true");
+  assert.equal(tagOf(project, "#awaiting_reply").getAttribute("data-bob-block-folded"), null);
+
+  plugin.blockMarksEnabled = false;
+  plugin.sweepBlockMarksReading();
+  plugin.sweepBlockMarkFoldsReading();
+  assert.equal(tagOf(folded, "#awaiting_reply").getAttribute("data-bob-block-folded"), null);
+  assert.equal(tagOf(project, "#prj_is_blocked").getAttribute("data-bob-block-folded"), null);
 });

@@ -2829,6 +2829,7 @@ body {
   --bob-block-ink-3: color-mix(in srgb, var(--bob-block-ink-anchor) 38%, var(--text-muted));
   --bob-block-ink-4: color-mix(in srgb, var(--bob-block-ink-anchor) 12%, var(--text-muted)); /* P4, recurrence loop */
   --bob-block-glyph-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 10.25 8 6.25l4 4' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --bob-block-glyph-sent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M12.75 3.25 3.25 7.25l4 1.5 1.5 4Z' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* Local held-fill darkening so a white glyph meets 4.5:1 on the default
@@ -2861,7 +2862,8 @@ body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p2"],
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p3"],
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p4"],
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="repeat"],
-body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"] {
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="date"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="awaiting"] {
   background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 5.5%, transparent);
   border-inline-start: 2px solid color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 45%, transparent);
 }
@@ -2871,7 +2873,8 @@ body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task=
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p3"],
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p4"],
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="repeat"],
-body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"] {
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="date"],
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="awaiting"] {
   border-radius: 4px;
   background: linear-gradient(to right, color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 45%, transparent) 0 2px, color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 5.5%, transparent) 2px 100%);
 }
@@ -2970,7 +2973,10 @@ body.bob-block-marks span.bob-block-mark[data-bob-block="prj"]::before {
 /* Waiting boxes: a 1.5px ink border with a 12% wash of the same ink. */
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="p1"] > .task-list-item-checkbox:checked,
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="p1"] input.task-list-item-checkbox:checked,
-body.bob-block-marks span.bob-block-mark[data-bob-block="p1"] {
+body.bob-block-marks span.bob-block-mark[data-bob-block="p1"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="awaiting"] > .task-list-item-checkbox:checked,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="awaiting"] input.task-list-item-checkbox:checked,
+body.bob-block-marks span.bob-block-mark[data-bob-block="awaiting"] {
   --bob-block-ink: var(--bob-block-ink-1);
   border: 1.5px solid var(--bob-block-ink);
   background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
@@ -3068,6 +3074,25 @@ body.bob-block-marks span.bob-block-mark[data-bob-block="date"]::before {
   color: var(--bob-block-ink);
 }
 
+/* The awaiting-reply plane is a 16x16 stroked mask (`M12.75 3.25 3.25
+   7.25l4 1.5 1.5 4Z`, 2.1 stroke like the chevron, round caps and
+   joins) in the P1 waiting ink. It has no fold line, so it stays hollow
+   at checkbox size. */
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="awaiting"] > .task-list-item-checkbox:checked::after,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="awaiting"] input.task-list-item-checkbox:checked::after,
+body.bob-block-marks span.bob-block-mark[data-bob-block="awaiting"]::before {
+  content: "";
+  background-color: var(--bob-block-ink);
+  -webkit-mask-image: var(--bob-block-glyph-sent);
+  mask-image: var(--bob-block-glyph-sent);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 /* Stale boxes: a dashed muted border with a muted glyph, no wash. */
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block="stale"] > .task-list-item-checkbox:checked,
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block="stale"] input.task-list-item-checkbox:checked,
@@ -3101,7 +3126,10 @@ body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task=
 body.bob-block-marks span.bob-block-mark[data-bob-block-more="p1"],
 body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="date"] > .task-list-item-checkbox,
 body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="date"] input.task-list-item-checkbox,
-body.bob-block-marks span.bob-block-mark[data-bob-block-more="date"] {
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="date"],
+body.bob-block-marks li.task-list-item[data-task="?"][data-bob-block-more="awaiting"] > .task-list-item-checkbox,
+body.bob-block-marks .markdown-source-view.mod-cm6 .HyperMD-task-line[data-task="?"][data-bob-block-more="awaiting"] input.task-list-item-checkbox,
+body.bob-block-marks span.bob-block-mark[data-bob-block-more="awaiting"] {
   --bob-block-pip-ink: var(--bob-block-ink-1);
 }
 
@@ -3151,9 +3179,11 @@ body.bob-block-marks span.bob-block-mark[data-bob-block][data-bob-block-more]::a
 }
 
 /* `prj` rows: the chevron already says the project is blocked, so the
-   `#prj_is_blocked` pill folds. Live Preview replaces the token with an
-   empty widget; reading view marks the exact `a.tag`. Either gate off
-   restores the raw look. Never `display: none` or `!important`. */
+   `#prj_is_blocked` pill folds; `awaiting` rows fold the
+   `#awaiting_reply` pill the same way. Live Preview replaces the token
+   with an empty widget; reading view marks the exact `a.tag`. Either
+   gate off restores the raw look. Never `display: none` or
+   `!important`. */
 body.bob-block-marks .bob-block-prj-fold {
   display: inline-block;
   width: 0;
@@ -3199,8 +3229,10 @@ body.bob-block-marks a.tag[data-bob-block-folded="true"] {
    BM19's kept pill. Cascade (later rules win at equal specificity):
    `&` by elimination, then a future date (hollow `?`, or the shared
    repeat mask when `.task-recurring` is present), then a ladder digit,
-   then `prj`. A project-tagged row always shows `prj` because Tasks
-   rows cannot see open prerequisites. */
+   then the awaiting plane, then `prj`. A project-tagged row always
+   shows `prj` because Tasks rows cannot see open prerequisites. The
+   plane's `:has()` outranks `prj` by specificity, so its rules exclude
+   project-tagged rows explicitly instead of relying on order. */
 
 body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] {
   background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent);
@@ -3320,6 +3352,31 @@ body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data
   mask-image: none;
 }
 
+/* AW7: an `#awaiting_reply` row with a future date shows the plane over
+   any digit or loop. Waiting tint and rail come from the future-date
+   row rule above. */
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])):has(.tag[data-tag-name="#awaiting_reply"]) > .task-list-item-checkbox:checked,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])):has(.tag[href="#awaiting_reply"]) > .task-list-item-checkbox:checked {
+  --bob-block-ink: var(--bob-block-ink-1);
+  border: 1.5px solid var(--bob-block-ink);
+  background-color: color-mix(in srgb, var(--bob-block-ink) 12%, transparent);
+}
+
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])):has(.tag[data-tag-name="#awaiting_reply"]) > .task-list-item-checkbox:checked::after,
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])):has(.tag[href="#awaiting_reply"]) > .task-list-item-checkbox:checked::after {
+  content: "";
+  color: transparent;
+  background-color: var(--bob-block-ink);
+  -webkit-mask-image: var(--bob-block-glyph-sent);
+  mask-image: var(--bob-block-glyph-sent);
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[data-tag-name="#prj_is_blocked"]),
 body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]:has(.tag[href="#prj_is_blocked"]) {
   background-color: color-mix(in srgb, var(--task-status-blocked, var(--color-red, #c65367)) 13%, transparent);
@@ -3349,16 +3406,20 @@ body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data
 }
 
 /* Digit rows already say the priority on the box; `prj` rows already
-   say the project is blocked. Clip, never `display: none`. A `prj`
-   row keeps its bars because the box is a chevron, not a digit. */
+   say the project is blocked; plane rows already say they await a
+   reply. Clip, never `display: none`. `prj` and plane rows keep their
+   bars because the box is not a digit, and a `prj` row keeps its
+   `#awaiting_reply` pill. */
 body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:is(
   [data-task-priority="high"],
   [data-task-priority="medium"],
   [data-task-priority="low"],
   [data-task-priority="lowest"]
-):not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])) .task-priority,
+):not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])):not(:has(.tag[data-tag-name="#awaiting_reply"])):not(:has(.tag[href="#awaiting_reply"])) .task-priority,
 body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] .tag[data-tag-name="#prj_is_blocked"],
-body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] .tag[href="#prj_is_blocked"] {
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"] .tag[href="#prj_is_blocked"],
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])) .tag[data-tag-name="#awaiting_reply"],
+body.bob-block-marks ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"][data-task-scheduled^="future-"]:not(:has(.tag[data-tag-name="#prj_is_blocked"])):not(:has(.tag[href="#prj_is_blocked"])) .tag[href="#awaiting_reply"] {
   position: absolute;
   width: 1px;
   height: 1px;

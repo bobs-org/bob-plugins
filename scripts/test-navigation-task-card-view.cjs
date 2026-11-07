@@ -3203,6 +3203,12 @@ test("task card BLOCKED chip renders the miniature mark with a reason list", () 
       family: "waiting",
       reasons: ["until Wed, Nov 4 · in 3 days"],
     },
+    {
+      content: "- [?] #task #awaiting_reply L [priority:: medium] [scheduled:: 2026-11-04]",
+      key: "awaiting",
+      family: "waiting",
+      reasons: ["awaiting reply · nudge Wed, Nov 4 · in 3 days"],
+    },
   ];
   for (const { content, key, family, reasons } of cases) {
     const api = blockMarksApiFor();

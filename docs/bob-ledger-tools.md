@@ -200,8 +200,9 @@ restores the unmarked rendering:
   (`🥀 WIP 2 · Next 1 · last <date> — <reason>`) from the task's Rotten Log;
   Tasks and Dataview query rows never show it.
 - The blocked-reason mark paints each canonical Blocked `[?]` `#task`
-  checkbox with the proven reason (`&`, project chevron, P1–P4 digit,
-  recurrence loop, hand-date `?`, or dashed stale `?`) in Live Preview,
+  checkbox with the proven reason (`&`, project chevron, reply plane,
+  P1–P4 digit, recurrence loop, hand-date `?`, or dashed stale `?`) in
+  Live Preview,
   Reading view, embeds, hover previews, and Dataview `TASK` rows. Nested
   children keep their own checkbox. Source mapping uses the section text
   and `data-line`; when that is unavailable a conservative own-text
@@ -220,9 +221,9 @@ restores the unmarked rendering:
   Live Preview also attaches those attributes through a CodeMirror
   `requestMeasure` write-pass after rebuild. While the marks are on, a
   digit checkbox (`p1`–`p4`) folds that row's priority bars to zero
-  width, and a `prj` checkbox folds the exact `#prj_is_blocked` pill;
-  the cursor and a click still reveal the raw field, and either session
-  toggle restores it. The session toggle restores the ordinary `?` box.
+  width, and `prj` / `awaiting` checkboxes fold their exact
+  `#prj_is_blocked` / `#awaiting_reply` pill; the cursor and a click
+  still reveal the raw field, and either session toggle restores it. The session toggle restores the ordinary `?` box.
 - The priority mark renders each canonical `[priority:: …]` field as one
   signal-bar glyph (4/3/2/1 filled bars for P1–P4, a solid `!` square for
   off-ladder `highest`) in Live Preview and rendered views. The glyph follows

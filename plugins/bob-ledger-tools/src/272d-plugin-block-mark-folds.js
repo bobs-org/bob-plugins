@@ -1,8 +1,11 @@
 // --- Blocked-reason marks: fold what the box already says -----------------
 // Digit rows fold their priority bars in `265-plugin-priority-marks.js`
 // via `priorityMarkFoldedForLine`. This mixin folds the exact
-// `#prj_is_blocked` token on `prj` rows in Live Preview and reading
-// view, and keeps both folds gated on `blockMarksEnabled`.
+// `#prj_is_blocked` token on `prj` rows and the exact `#awaiting_reply`
+// token on `awaiting` rows in Live Preview and reading view
+// (`blockMarkFoldTagForKey`), and keeps every fold gated on
+// `blockMarksEnabled`. A row whose box shows another key keeps both
+// pills.
 const BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER = 45;
 
 class BobLedgerToolsBlockMarkFoldsMixin {
@@ -209,8 +212,9 @@ class BobLedgerToolsBlockMarkFoldsMixin {
                 typeof this.blockMarkModelForEditorLine === "function"
                   ? this.blockMarkModelForEditorLine(path, line, tree)
                   : this.blockMarkModelForLine(path, line.text);
-              if (model && model.key === "prj") {
-                const source = blockMarkProjectTagSource(line.text);
+              const foldTag = model ? blockMarkFoldTagForKey(model.key) : null;
+              if (foldTag) {
+                const source = blockMarkTagSource(line.text, foldTag);
                 if (source) {
                   const absFrom =
                     line.from + source.tagStart - (source.foldSpace ? 1 : 0);
@@ -246,7 +250,10 @@ class BobLedgerToolsBlockMarkFoldsMixin {
                         absFrom,
                         absTo,
                         Decoration.replace({
-                          widget: new BlockMarkPrjFoldWidget(source.foldSpace),
+                          widget: new BlockMarkPrjFoldWidget(
+                            source.foldSpace,
+                            foldTag,
+                          ),
                         }),
                       );
                     }
@@ -274,9 +281,11 @@ class BobLedgerToolsBlockMarkFoldsMixin {
     }
   }
 
-  blockMarkFoldIsProjectTag(node) {
+  // True for the rendered `a.tag` pill of exactly `tagToken` (by `href`
+  // or `data-tag-name`, with matching or empty text). Never throws.
+  blockMarkFoldIsTag(node, tagToken) {
     try {
-      if (!node) return false;
+      if (!node || typeof tagToken !== "string" || !tagToken) return false;
       const tag = String(node.tagName || node.nodeName || "").toUpperCase();
       if (tag !== "A") return false;
       let isTag = false;
@@ -303,17 +312,19 @@ class BobLedgerToolsBlockMarkFoldsMixin {
         typeof node.getAttribute === "function"
           ? node.getAttribute("data-tag-name")
           : "";
-      if (href !== "#prj_is_blocked" && dataName !== "#prj_is_blocked") {
+      if (href !== tagToken && dataName !== tagToken) {
         return false;
       }
       const text = String(node.textContent || "").trim();
-      return text === "" || text === "#prj_is_blocked";
+      return text === "" || text === tagToken;
     } catch (error) {
       return false;
     }
   }
 
-  blockMarkFoldApplyProjectTag(li, fold) {
+  // Fold the row's own pill for `foldTag` (or none when null) and unfold
+  // every other foldable pill, so a key change never leaves a stale fold.
+  blockMarkFoldApplyTags(li, foldTag) {
     try {
       const own =
         typeof this.blockMarkReadingOwnElements === "function"
@@ -321,8 +332,15 @@ class BobLedgerToolsBlockMarkFoldsMixin {
           : [];
       for (const node of own) {
         try {
-          if (!this.blockMarkFoldIsProjectTag(node)) continue;
-          if (fold) {
+          let tag = null;
+          for (const candidate of ["#prj_is_blocked", "#awaiting_reply"]) {
+            if (this.blockMarkFoldIsTag(node, candidate)) {
+              tag = candidate;
+              break;
+            }
+          }
+          if (!tag) continue;
+          if (tag === foldTag) {
             if (typeof node.setAttribute === "function") {
               node.setAttribute("data-bob-block-folded", "true");
             }
@@ -353,8 +371,10 @@ class BobLedgerToolsBlockMarkFoldsMixin {
               : li && typeof li.getAttribute === "function"
                 ? li.getAttribute("data-bob-block")
                 : null;
-          const fold = this.blockMarksEnabled !== false && key === "prj";
-          this.blockMarkFoldApplyProjectTag(li, fold);
+          const foldTag = this.blockMarksEnabled !== false
+            ? blockMarkFoldTagForKey(key)
+            : null;
+          this.blockMarkFoldApplyTags(li, foldTag);
         } catch (error) {
           continue;
         }

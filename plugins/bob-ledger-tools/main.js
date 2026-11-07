@@ -19096,6 +19096,7 @@ const BLOCK_MARK_DEFAULT_DIGITS = Object.freeze({
 });
 
 const BLOCK_MARK_DEPENDENCY_HINT = "Ctrl+Shift+B to edit prerequisites";
+const BLOCK_MARK_AWAITING_TAG = "#awaiting_reply";
 const BLOCK_MARK_RESCHEDULE_HINT = "Ctrl+Shift+P to reschedule";
 const BLOCK_MARK_PRIORITY_HINT =
   "Ctrl+Shift+P to reschedule or change priority";
@@ -19225,9 +19226,11 @@ function blockMarkReason(kind, key, text) {
   });
 }
 
-// Resolve the precedence decision selected by this epic: own open
-// prerequisite, project, then future date. Unknown prerequisites remain
-// neutral because they could outrank either later reason. Never throws.
+// Resolve the precedence decision: own open prerequisite, project, the
+// `#awaiting_reply` hold, then future date. A live awaiting reason owns
+// the future date, so it never also yields a date reason. Unknown
+// prerequisites remain neutral because they could outrank every later
+// reason. Never throws.
 function blockMarkClassify(inputs) {
   try {
     const value = inputs && typeof inputs === "object" ? inputs : {};
@@ -19244,7 +19247,12 @@ function blockMarkClassify(inputs) {
       : null;
     const date = value.date && typeof value.date === "object" ? value.date : null;
     const projectBlocked = Boolean(project && project.blocked);
-    const dateKey = date && ["p1", "p2", "p3", "p4", "repeat", "date"].includes(date.key)
+    const awaiting = value.awaiting && typeof value.awaiting === "object" &&
+      typeof value.awaiting.date === "string" && value.awaiting.date
+      ? value.awaiting
+      : null;
+    const dateKey = !awaiting && date &&
+      ["p1", "p2", "p3", "p4", "repeat", "date"].includes(date.key)
       ? date.key
       : null;
 
@@ -19256,6 +19264,9 @@ function blockMarkClassify(inputs) {
     }
     if (projectBlocked) {
       reasons.push(blockMarkReason("prj", "prj", project.text || "project"));
+    }
+    if (awaiting) {
+      reasons.push(blockMarkReason("awaiting", "awaiting", awaiting.date));
     }
     if (dateKey) {
       reasons.push(blockMarkReason("date", dateKey, date.date));
@@ -19270,6 +19281,9 @@ function blockMarkClassify(inputs) {
     } else if (projectBlocked) {
       key = "prj";
       family = "held";
+    } else if (awaiting) {
+      key = "awaiting";
+      family = "waiting";
     } else if (dateKey) {
       key = dateKey;
       family = "waiting";
@@ -19278,11 +19292,13 @@ function blockMarkClassify(inputs) {
 
     let more = null;
     if (key === "dep") {
-      const losingProject = projectBlocked;
-      const losingDate = Boolean(dateKey);
-      more = losingProject ? "prj" : losingDate ? dateKey : null;
-    } else if (key === "prj" && dateKey) {
-      more = dateKey;
+      more = projectBlocked
+        ? "prj"
+        : awaiting
+          ? "awaiting"
+          : dateKey || null;
+    } else if (key === "prj") {
+      more = awaiting ? "awaiting" : dateKey || null;
     }
 
     return Object.freeze({
@@ -19314,6 +19330,56 @@ function blockMarkDateWords(dateText, todayText) {
   }
 }
 
+// True for a Bob mail note's frontmatter: `type` `[[mail]]` (scalar or
+// list, link brackets optional) or a string `gmail_thread_id`. Never
+// throws.
+function blockMarkIsMailFrontmatter(frontmatter) {
+  try {
+    if (!frontmatter || typeof frontmatter !== "object") return false;
+    if (typeof frontmatter.gmail_thread_id === "string") return true;
+    const types = Array.isArray(frontmatter.type)
+      ? frontmatter.type
+      : [frontmatter.type];
+    return types.some(
+      (value) =>
+        String(value || "")
+          .trim()
+          .replace(/^\[\[/, "")
+          .replace(/\]\]$/, "")
+          .trim()
+          .toLowerCase() === "mail",
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+// `<who>` from a mail note's frontmatter, cleaned for one tooltip line:
+// first line only, trimmed, and never inline-field syntax. Never throws.
+function blockMarkAwaitingWho(value) {
+  try {
+    if (typeof value !== "string") return "";
+    return value.split(/\r?\n/)[0].replace(/::/g, ":").trim();
+  } catch (error) {
+    return "";
+  }
+}
+
+// `Awaiting reply from <who> · nudge Tue, Nov 10 · in 3 days`, with
+// ` from <who>` omitted when unknown. Never throws.
+function blockMarkAwaitingPhrase(dateText, todayText, who) {
+  try {
+    const words = blockMarkDateWords(dateText, todayText);
+    const when = words
+      ? words.short + " · " + words.relative
+      : String(dateText || "");
+    const name = blockMarkAwaitingWho(who);
+    return "Awaiting reply" + (name ? " from " + name : "") + " · nudge " + when;
+  } catch (error) {
+    return "Awaiting reply";
+  }
+}
+
 // Build tooltip copy from the classifier result and the line-local facts.
 // The copy deliberately avoids inline-field syntax (`::`). Never throws.
 function blockMarkTooltip(model, facts) {
@@ -19323,6 +19389,8 @@ function blockMarkTooltip(model, facts) {
     const reasons = Array.isArray(model.reasons) ? model.reasons : [];
     const dependencies = reasons.filter((reason) => reason && reason.kind === "dep");
     const project = reasons.find((reason) => reason && reason.kind === "prj") || null;
+    const awaiting =
+      reasons.find((reason) => reason && reason.kind === "awaiting") || null;
     const date = reasons.find((reason) => reason && reason.kind === "date") || null;
     const dateWords = date
       ? blockMarkDateWords(date.text, value.today)
@@ -19332,6 +19400,9 @@ function blockMarkTooltip(model, facts) {
       : date
         ? String(date.text || "")
         : "";
+    const awaitingPhrase = awaiting
+      ? blockMarkAwaitingPhrase(awaiting.text, value.today, value.awaitingWho)
+      : "";
     const lines = [];
 
     if (model.key === "dep") {
@@ -19347,6 +19418,8 @@ function blockMarkTooltip(model, facts) {
       lines.push("Blocked · via project " + stem);
       const projectReason = String(value.projectReason || "").trim();
       if (projectReason) lines.push(projectReason);
+    } else if (model.key === "awaiting") {
+      lines.push(awaitingPhrase);
     } else if (["p1", "p2", "p3", "p4"].includes(model.key)) {
       lines.push(
         "Blocked · P" +
@@ -19367,6 +19440,11 @@ function blockMarkTooltip(model, facts) {
 
     if (model.key !== "prj" && project) {
       lines.push("Also via project " + (project.text || value.projectStem || "project"));
+    }
+    if (model.key !== "awaiting" && awaiting && awaitingPhrase) {
+      lines.push(
+        "Also " + awaitingPhrase.charAt(0).toLowerCase() + awaitingPhrase.slice(1),
+      );
     }
     if (date && model.key !== date.key) {
       lines.push("Also scheduled " + datePhrase);
@@ -19484,6 +19562,8 @@ function blockMarkModel(lineText, ctx) {
     const ids = blockMarkDependsOnIds(visible);
     const dependency = blockMarkDependencyFacts(ids, context.lookupId);
     const projectBlocked = /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/.test(visible);
+    const awaitingTagged =
+      /(?:^|\s)#awaiting_reply(?![A-Za-z0-9_/-])/.test(visible);
     const notePath = String(context.notePath || "");
     const projectStem = notePath.split("/").pop().replace(/\.md$/i, "") || "project";
     const projectReason = projectBlocked && typeof context.projectReason === "function"
@@ -19491,6 +19571,9 @@ function blockMarkModel(lineText, ctx) {
       : null;
     const dateFacts = blockMarkDateFacts(lineText, context.today, context.ladder);
     if (dateFacts.invalidToday) return null;
+    const awaiting = awaitingTagged && dateFacts.date
+      ? { date: dateFacts.date.date }
+      : null;
     const result = blockMarkClassify({
       dependencyState: dependency.state,
       dependencies: dependency.dependencies.map((text) => ({ text })),
@@ -19498,8 +19581,18 @@ function blockMarkModel(lineText, ctx) {
         ? { blocked: true, text: projectStem }
         : null,
       date: dateFacts.date,
+      awaiting,
     });
     if (!result) return null;
+
+    let awaitingWho = "";
+    if (awaiting && typeof context.mailWho === "function") {
+      try {
+        awaitingWho = blockMarkAwaitingWho(context.mailWho(lineText, notePath));
+      } catch (error) {
+        awaitingWho = "";
+      }
+    }
 
     let tooltip = "";
     try {
@@ -19507,6 +19600,7 @@ function blockMarkModel(lineText, ctx) {
         today: context.today,
         projectStem,
         projectReason,
+        awaitingWho,
       });
     } catch (error) {
       tooltip = "";
@@ -19545,29 +19639,48 @@ function blockMarkIsDigitKey(key) {
 
 const BLOCK_MARK_PRJ_TAG = "#prj_is_blocked";
 
-// The exact `#prj_is_blocked` token on `lineText` (not
-// `#prj_is_blocked_old`), quote-aware via the inline-code mask.
-// `foldSpace` is true when a single U+0020 precedes the hash.
-// Returns `{ tagStart, tagEnd, foldSpace }` in UTF-16 offsets, or
-// null. Never throws.
-function blockMarkProjectTagSource(lineText) {
+// The tag token a mark key folds because the box already says it:
+// `prj` folds `#prj_is_blocked`, `awaiting` folds `#awaiting_reply`.
+// Returns null for every other key. Never throws.
+function blockMarkFoldTagForKey(key) {
+  try {
+    if (key === "prj") return BLOCK_MARK_PRJ_TAG;
+    if (key === "awaiting") return BLOCK_MARK_AWAITING_TAG;
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The first exact `tag` token on `lineText` (so `#prj_is_blocked` never
+// matches `#prj_is_blocked_old`), quote-aware via the inline-code mask.
+// `foldSpace` is true when a single U+0020 precedes the hash. Returns
+// `{ tagStart, tagEnd, foldSpace }` in UTF-16 offsets, or null. Never
+// throws.
+function blockMarkTagSource(lineText, tag) {
   try {
     if (typeof lineText !== "string" || lineText === "") {
+      return null;
+    }
+    if (typeof tag !== "string" || !/^#[A-Za-z0-9_/-]+$/.test(tag)) {
       return null;
     }
     const visible =
       typeof blockMarkMaskInlineCode === "function"
         ? blockMarkMaskInlineCode(lineText)
         : lineText;
-    const pattern = /(?:^|\s)#prj_is_blocked(?![A-Za-z0-9_/-])/g;
+    const pattern = new RegExp(
+      "(?:^|\\s)" + tag.replace(/[/-]/g, "\\$&") + "(?![A-Za-z0-9_/-])",
+      "g",
+    );
     const match = pattern.exec(visible);
     if (!match) {
       return null;
     }
     const foldSpace = /^\s/.test(match[0]);
     const tagStart = match.index + (foldSpace ? 1 : 0);
-    const tagEnd = tagStart + BLOCK_MARK_PRJ_TAG.length;
-    if (lineText.slice(tagStart, tagEnd) !== BLOCK_MARK_PRJ_TAG) {
+    const tagEnd = tagStart + tag.length;
+    if (lineText.slice(tagStart, tagEnd) !== tag) {
       return null;
     }
     return Object.freeze({
@@ -19578,6 +19691,16 @@ function blockMarkProjectTagSource(lineText) {
   } catch (error) {
     return null;
   }
+}
+
+// The exact `#prj_is_blocked` token on `lineText`. Never throws.
+function blockMarkProjectTagSource(lineText) {
+  return blockMarkTagSource(lineText, BLOCK_MARK_PRJ_TAG);
+}
+
+// The exact `#awaiting_reply` token on `lineText`. Never throws.
+function blockMarkAwaitingTagSource(lineText) {
+  return blockMarkTagSource(lineText, BLOCK_MARK_AWAITING_TAG);
 }
 // ---- src/142d-block-marks-render.js ----
 // --- Blocked-reason marks: miniature renderer ------------------------------
@@ -19592,6 +19715,7 @@ function blockMarkProjectTagSource(lineText) {
 const BLOCK_MARK_RENDER_KEYS = Object.freeze([
   "dep",
   "prj",
+  "awaiting",
   "p1",
   "p2",
   "p3",
@@ -21700,9 +21824,11 @@ class BobLedgerToolsBlockMarksReadingMixin {
 }
 // ---- src/142h-block-mark-folds.js ----
 // --- Blocked-reason marks: redundancy-fold widgets ------------------------
-// Empty Live Preview widgets for the `#prj_is_blocked` pill on `prj`
-// rows. Digit-row priority bars reuse `PriorityMarkWidget` with
-// `data-folded="true"`. Every helper is synchronous and never throws.
+// Empty Live Preview widgets for the tag pill the box already says: the
+// `#prj_is_blocked` pill on `prj` rows and the `#awaiting_reply` pill on
+// `awaiting` rows. Digit-row priority bars reuse `PriorityMarkWidget`
+// with `data-folded="true"`. Every helper is synchronous and never
+// throws.
 
 function buildBlockMarkPrjFoldElement(doc, options) {
   try {
@@ -21711,10 +21837,14 @@ function buildBlockMarkPrjFoldElement(doc, options) {
     }
     const settings = options && typeof options === "object" ? options : {};
     const foldSpace = Boolean(settings.foldSpace);
+    const tag = typeof settings.tag === "string" && settings.tag
+      ? settings.tag
+      : "#prj_is_blocked";
     const span = doc.createElement("span");
     span.setAttribute("class", "bob-block-prj-fold");
     span.setAttribute("data-folded", "true");
     span.setAttribute("data-fold-space", foldSpace ? "true" : "false");
+    span.setAttribute("data-fold-tag", tag);
     span.setAttribute("aria-hidden", "true");
     return span;
   } catch (error) {
@@ -21725,10 +21855,11 @@ function buildBlockMarkPrjFoldElement(doc, options) {
 let BlockMarkPrjFoldWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BlockMarkPrjFoldWidget = class extends WidgetType {
-    constructor(foldSpace) {
+    constructor(foldSpace, tag) {
       super();
       this.foldSpace = Boolean(foldSpace);
-      this.key = this.foldSpace ? "1" : "0";
+      this.tag = typeof tag === "string" && tag ? tag : "#prj_is_blocked";
+      this.key = (this.foldSpace ? "1" : "0") + this.tag;
     }
 
     eq(other) {
@@ -21742,7 +21873,7 @@ if (WidgetType && typeof WidgetType === "function") {
     toDOM(view) {
       const dom = buildBlockMarkPrjFoldElement(
         typeof document !== "undefined" ? document : null,
-        { foldSpace: this.foldSpace },
+        { foldSpace: this.foldSpace, tag: this.tag },
       );
       if (!dom) {
         try {
@@ -61232,6 +61363,48 @@ class BobLedgerToolsBlockMarksMixin {
     }
   }
 
+  // `<who>` for an awaiting tooltip: the first wikilink on the line,
+  // outside inline code, that resolves to a mail note (frontmatter `type`
+  // `[[mail]]` or a `gmail_thread_id`) supplies its frontmatter `who`.
+  // Metadata-cache lookups only; never reads disk. Returns "" when
+  // unknown. Never throws.
+  blockMarkMailWho(lineText, notePath) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function" ||
+        typeof metadataCache.getFileCache !== "function"
+      ) {
+        return "";
+      }
+      const visible = blockMarkMaskInlineCode(String(lineText || ""));
+      const links = /\[\[([^\[\]|#^\r\n]+)(?:[#^][^\[\]|\r\n]*)?(?:\|[^\[\]\r\n]*)?\]\]/g;
+      let match = links.exec(visible);
+      while (match !== null) {
+        try {
+          const target = String(match[1] || "").trim();
+          const file = target
+            ? metadataCache.getFirstLinkpathDest(target, String(notePath || ""))
+            : null;
+          const cache = file ? metadataCache.getFileCache(file) : null;
+          const frontmatter = cache && cache.frontmatter;
+          if (blockMarkIsMailFrontmatter(frontmatter)) {
+            return typeof frontmatter.who === "string"
+              ? frontmatter.who.trim()
+              : "";
+          }
+        } catch (error) {
+          // An unresolvable link is skipped.
+        }
+        match = links.exec(visible);
+      }
+      return "";
+    } catch (error) {
+      return "";
+    }
+  }
+
   // The shared model used by source-note surfaces and api.blockMarks v1.
   // The Live Preview and api.blockMarks v1 consumers share this one
   // display-only model; neither path writes source Markdown.
@@ -61254,6 +61427,7 @@ class BobLedgerToolsBlockMarksMixin {
           ? (id) => index.get(String(id || "")) || []
           : () => null,
         projectReason: (notePath) => this.blockMarkProjectReason(notePath),
+        mailWho: (text, notePath) => this.blockMarkMailWho(text, notePath),
       });
     } catch (error) {
       return null;
@@ -61295,8 +61469,11 @@ class BobLedgerToolsBlockMarksMixin {
 // --- Blocked-reason marks: fold what the box already says -----------------
 // Digit rows fold their priority bars in `265-plugin-priority-marks.js`
 // via `priorityMarkFoldedForLine`. This mixin folds the exact
-// `#prj_is_blocked` token on `prj` rows in Live Preview and reading
-// view, and keeps both folds gated on `blockMarksEnabled`.
+// `#prj_is_blocked` token on `prj` rows and the exact `#awaiting_reply`
+// token on `awaiting` rows in Live Preview and reading view
+// (`blockMarkFoldTagForKey`), and keeps every fold gated on
+// `blockMarksEnabled`. A row whose box shows another key keeps both
+// pills.
 const BLOCK_MARK_FOLDS_READING_PROCESSOR_ORDER = 45;
 
 class BobLedgerToolsBlockMarkFoldsMixin {
@@ -61503,8 +61680,9 @@ class BobLedgerToolsBlockMarkFoldsMixin {
                 typeof this.blockMarkModelForEditorLine === "function"
                   ? this.blockMarkModelForEditorLine(path, line, tree)
                   : this.blockMarkModelForLine(path, line.text);
-              if (model && model.key === "prj") {
-                const source = blockMarkProjectTagSource(line.text);
+              const foldTag = model ? blockMarkFoldTagForKey(model.key) : null;
+              if (foldTag) {
+                const source = blockMarkTagSource(line.text, foldTag);
                 if (source) {
                   const absFrom =
                     line.from + source.tagStart - (source.foldSpace ? 1 : 0);
@@ -61540,7 +61718,10 @@ class BobLedgerToolsBlockMarkFoldsMixin {
                         absFrom,
                         absTo,
                         Decoration.replace({
-                          widget: new BlockMarkPrjFoldWidget(source.foldSpace),
+                          widget: new BlockMarkPrjFoldWidget(
+                            source.foldSpace,
+                            foldTag,
+                          ),
                         }),
                       );
                     }
@@ -61568,9 +61749,11 @@ class BobLedgerToolsBlockMarkFoldsMixin {
     }
   }
 
-  blockMarkFoldIsProjectTag(node) {
+  // True for the rendered `a.tag` pill of exactly `tagToken` (by `href`
+  // or `data-tag-name`, with matching or empty text). Never throws.
+  blockMarkFoldIsTag(node, tagToken) {
     try {
-      if (!node) return false;
+      if (!node || typeof tagToken !== "string" || !tagToken) return false;
       const tag = String(node.tagName || node.nodeName || "").toUpperCase();
       if (tag !== "A") return false;
       let isTag = false;
@@ -61597,17 +61780,19 @@ class BobLedgerToolsBlockMarkFoldsMixin {
         typeof node.getAttribute === "function"
           ? node.getAttribute("data-tag-name")
           : "";
-      if (href !== "#prj_is_blocked" && dataName !== "#prj_is_blocked") {
+      if (href !== tagToken && dataName !== tagToken) {
         return false;
       }
       const text = String(node.textContent || "").trim();
-      return text === "" || text === "#prj_is_blocked";
+      return text === "" || text === tagToken;
     } catch (error) {
       return false;
     }
   }
 
-  blockMarkFoldApplyProjectTag(li, fold) {
+  // Fold the row's own pill for `foldTag` (or none when null) and unfold
+  // every other foldable pill, so a key change never leaves a stale fold.
+  blockMarkFoldApplyTags(li, foldTag) {
     try {
       const own =
         typeof this.blockMarkReadingOwnElements === "function"
@@ -61615,8 +61800,15 @@ class BobLedgerToolsBlockMarkFoldsMixin {
           : [];
       for (const node of own) {
         try {
-          if (!this.blockMarkFoldIsProjectTag(node)) continue;
-          if (fold) {
+          let tag = null;
+          for (const candidate of ["#prj_is_blocked", "#awaiting_reply"]) {
+            if (this.blockMarkFoldIsTag(node, candidate)) {
+              tag = candidate;
+              break;
+            }
+          }
+          if (!tag) continue;
+          if (tag === foldTag) {
             if (typeof node.setAttribute === "function") {
               node.setAttribute("data-bob-block-folded", "true");
             }
@@ -61647,8 +61839,10 @@ class BobLedgerToolsBlockMarkFoldsMixin {
               : li && typeof li.getAttribute === "function"
                 ? li.getAttribute("data-bob-block")
                 : null;
-          const fold = this.blockMarksEnabled !== false && key === "prj";
-          this.blockMarkFoldApplyProjectTag(li, fold);
+          const foldTag = this.blockMarksEnabled !== false
+            ? blockMarkFoldTagForKey(key)
+            : null;
+          this.blockMarkFoldApplyTags(li, foldTag);
         } catch (error) {
           continue;
         }
@@ -91431,6 +91625,11 @@ module.exports.helpers = {
   blockMarkModel,
   blockMarkIsDigitKey,
   blockMarkProjectTagSource,
+  blockMarkAwaitingTagSource,
+  blockMarkTagSource,
+  blockMarkFoldTagForKey,
+  blockMarkAwaitingPhrase,
+  blockMarkIsMailFrontmatter,
   buildBlockMarkPrjFoldElement,
   ensureBlockMarksRefresh,
   BLOCK_MARK_READING_PROCESSOR_ORDER,

@@ -1083,6 +1083,37 @@ const BLOCKED_MARKS_BY_FAMILY = Object.freeze({
     reasons: Object.freeze([]),
     tooltip: "Blocked, but no reason is left\nClears on the next reconcile",
   }),
+  awaiting: Object.freeze({
+    key: "awaiting",
+    family: "waiting",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "awaiting", key: "awaiting", text: "2026-11-10" }),
+    ]),
+    tooltip: "Awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+  }),
+  depOverAwaiting: Object.freeze({
+    key: "dep",
+    family: "held",
+    digit: null,
+    more: "awaiting",
+    reasons: Object.freeze([
+      Object.freeze({ kind: "dep", key: "dep", text: "Finish the battery" }),
+      Object.freeze({ kind: "awaiting", key: "awaiting", text: "2026-11-10" }),
+    ]),
+    tooltip: "Blocked · after Finish the battery\nCtrl+Shift+B to edit prerequisites\nAlso awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+  }),
+  awaitingNoTooltip: Object.freeze({
+    key: "awaiting",
+    family: "waiting",
+    digit: null,
+    more: null,
+    reasons: Object.freeze([
+      Object.freeze({ kind: "awaiting", key: "awaiting", text: "2026-11-10" }),
+    ]),
+    tooltip: "",
+  }),
 });
 
 const BLOCKED_REASON_LINES = Object.freeze({
@@ -1092,6 +1123,12 @@ const BLOCKED_REASON_LINES = Object.freeze({
   repeat: Object.freeze(["until Mon, Nov 2 · tomorrow"]),
   date: Object.freeze(["until Wed, Nov 4 · in 3 days"]),
   stale: Object.freeze([]),
+  awaiting: Object.freeze(["awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days"]),
+  depOverAwaiting: Object.freeze([
+    "after Finish the battery",
+    "awaiting reply from Ada · nudge Tue, Nov 10 · in 3 days",
+  ]),
+  awaitingNoTooltip: Object.freeze(["awaiting reply · nudge 2026-11-10"]),
 });
 
 function blockedHeaderModel(family) {
@@ -1111,7 +1148,17 @@ function blockedHeaderModel(family) {
 }
 
 test("task card header stores the block mark and reason lines for each family", () => {
-  for (const family of ["dep", "prj", "p2", "repeat", "date", "stale"]) {
+  for (const family of [
+    "dep",
+    "prj",
+    "p2",
+    "repeat",
+    "date",
+    "stale",
+    "awaiting",
+    "depOverAwaiting",
+    "awaitingNoTooltip",
+  ]) {
     const blocked = blockedHeaderModel(family);
     assert.ok(blocked, `expected a block mark for ${family}`);
     assert.ok(Object.isFrozen(blocked), `block mark is frozen for ${family}`);

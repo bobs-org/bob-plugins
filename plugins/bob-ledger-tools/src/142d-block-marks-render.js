@@ -10,6 +10,7 @@
 const BLOCK_MARK_RENDER_KEYS = Object.freeze([
   "dep",
   "prj",
+  "awaiting",
   "p1",
   "p2",
   "p3",

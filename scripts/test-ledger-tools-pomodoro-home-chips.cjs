@@ -413,6 +413,56 @@ test("area-color lints are reported once per note", () => {
   );
 });
 
+test("R8 homes report hue_source and the root's own hue", () => {
+  const notes = {
+    ...fixture.notes,
+    "love_gray_child.md": "---\ntype: [[project]]\nparent: [[love_gray]]\ncolor: red\n---\n",
+    "blank_color.md": "---\ntype: [[project]]\nparent: [[dev]]\ncolor: \"  \"\n---\n",
+    "list_color.md": "---\ntype: [[project]]\nparent: [[dev]]\ncolor: [red]\n---\n",
+  };
+  const { metadataCache, vault } = fakeVault(notes);
+  const resolve = (target) => {
+    const warnings = [];
+    const home = LedgerToolsPlugin.helpers.pomodoroHomeResolve(
+      target, "2026/20261018.md", metadataCache, vault, warnings, new Set(),
+    );
+    return { home, warnings };
+  };
+  const pick = ({ home }) => ({ hue: home.hue, hue_source: home.hue_source, root: home.root, root_hue: home.root_hue });
+  assert.deepEqual(pick(resolve("quiet_inbox")), { hue: null, hue_source: "muted", root: "quiet_inbox.md", root_hue: null });
+  assert.deepEqual(pick(resolve("quiet_loud")), { hue: "red", hue_source: "color", root: "quiet_loud.md", root_hue: "red" });
+  assert.deepEqual(pick(resolve("dev_green_child")), { hue: "green", hue_source: "color", root: "dev_green.md", root_hue: "green" });
+  assert.deepEqual(pick(resolve("sase_violet")), { hue: "violet", hue_source: "color", root: "sase.md", root_hue: "blue" });
+  assert.deepEqual(pick(resolve("love_gray_child")), { hue: "red", hue_source: "color", root: "love_gray.md", root_hue: null });
+  assert.deepEqual(pick(resolve("sase")), { hue: "blue", hue_source: "color", root: "sase.md", root_hue: "blue" });
+  // Blank inherits silently; a list value is invalid, lints, and inherits.
+  const blank = resolve("blank_color");
+  assert.deepEqual(pick(blank), { hue: "blue", hue_source: "color", root: "blank_color.md", root_hue: "blue" });
+  assert.equal(blank.warnings.length, 0);
+  const list = resolve("list_color");
+  assert.equal(list.home.hue, "blue");
+  assert.deepEqual(list.warnings.map((warning) => [warning.code, warning.path]), [["area_color_invalid", "list_color.md"]]);
+  // No slot anywhere: the top-level area stem hash (job is invalid, so it hashes).
+  assert.deepEqual(pick(resolve("invalid_project")), { hue: "magenta", hue_source: "hash", root: "invalid_project.md", root_hue: "magenta" });
+});
+
+test("root marks wear the root's own hue, and a grey root stays gray", () => {
+  const notes = {
+    ...fixture.notes,
+    "love_gray_child.md": "---\ntype: [[project]]\nparent: [[love_gray]]\ncolor: red\n---\n",
+  };
+  const { metadataCache, vault } = fakeVault(notes);
+  const mark = (value) => rootMarkModel(`- [ ] #task Root ${value} [root:: ${value}] ^r`, {
+    sourcePath: "inbox.md",
+    metadataCache,
+    vault,
+  });
+  assert.deepEqual([mark("love_gray_child").state, mark("love_gray_child").hue], ["rolls-up", null]);
+  assert.deepEqual([mark("sase_violet").state, mark("sase_violet").hue], ["rolls-up", "blue"]);
+  assert.deepEqual([mark("quiet_loud").state, mark("quiet_loud").hue], ["set", "red"]);
+  assert.deepEqual([mark("quiet").state, mark("quiet").hue], ["set", null]);
+});
+
 test("a leftover rollup key neither regroups nor warns", () => {
   const notes = {
     ...fixture.notes,

@@ -169,6 +169,12 @@ function makeReport(options = {}) {
     homes["gtd_daily.md"] = { label: "gtd_daily", kind: "area", area: "gtd.md", root_parent: "gtd_daily.md", path: "gtd_daily.md", hue: "orange" };
     homes["gtd.md"] = { label: "gtd", kind: "area", area: "gtd.md", root_parent: "gtd.md", path: "gtd.md", hue: "orange", project_label: "gtd · area tasks" };
   }
+  if (options.mutedRoots) {
+    // A grey `color:` slot on gtd: bob reports its roots as hue null with
+    // hue_source muted (pomodoro-homes R8).
+    homes["gtd.md"] = { ...homes["gtd.md"], hue: null, hue_source: "muted" };
+    homes["gtd_daily.md"] = { ...homes["gtd_daily.md"], hue: null, hue_source: "muted" };
+  }
   if (options.screenshotDay) {
     homes["bob.md"] = { label: "bob", kind: "project", area: "dev.md", root_parent: "bob.md", path: "bob.md", hue: "blue" };
     homes["sase_pypi_releases.md"] = { label: "sase_pypi_releases", kind: "project", area: "dev.md", root_parent: "sase_pypi_releases.md", path: "sase_pypi_releases.md", hue: "blue" };
@@ -439,6 +445,7 @@ const fixtures = {
   redefinedWorked: fixture("redefined worked without area parts", { redefinedWorked: true }),
   areaOnly: fixture("old bob without root_parent", { areaOnly: true }),
   sameHueRoots: fixture("same-area roots get distinct hues", { sameHueRoots: true }),
+  mutedRoots: fixture("grey-slot roots stay gray", { sameHueRoots: true, mutedRoots: true }),
   manyRoots: fixture("seven roots and +N", { manyRoots: true }),
   screenshotDay: fixture("four roots with minutes", { screenshotDay: true, provisional: true }),
   themeCollision: fixture("same-hue themes get shades", { themeCollision: true, provisional: false }),

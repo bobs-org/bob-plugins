@@ -165,7 +165,9 @@ function rootMarkModel(line, context) {
       rootPath,
       rootLabel,
       areaLabel: rootHome && rootHome.area_label ? rootHome.area_label : targetHome.area_label,
-      hue: rootHome && rootHome.hue ? rootHome.hue : targetHome.hue,
+      // The root's own hue (R7/R8): a grey root stays null instead of
+      // borrowing the target's hue.
+      hue: rootHome ? rootHome.hue || null : targetHome.root_hue || null,
       compact,
     };
     model.id = JSON.stringify([model.state, model.targetPath, model.rootPath, model.hue, fieldStart]);

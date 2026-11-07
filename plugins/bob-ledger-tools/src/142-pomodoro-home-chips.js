@@ -1,9 +1,9 @@
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
 // The shared Rust contract and vectors live in bob-cli. This mirror only
 // resolves each dedicated Task Link to its current area/project home and
-// derives the quiet label, chip, and area hue. The label, chip, hue, and
-// tooltip name root parents (R2, R7); `parts` stay per nearest home. It never
-// writes note text.
+// derives the quiet label, chip, and hue (R8 nearest-note colors live in
+// 142a). The label, chip, hue, and tooltip name root parents (R2, R7);
+// `parts` stay per nearest home. It never writes note text.
 
 const POMODORO_HOME_MAX_DEPTH = 16;
 const POMODORO_HOME_SLOT_ORDER = [
@@ -200,8 +200,9 @@ function pomodoroHomePercentages(weights) {
 }
 
 // R7 root groups: parts bucketed by root parent in root order (the ledger
-// order of each root's first part). Share, tasks, and minutes are sums. The
-// hue is the root's first part's hue.
+// order of each root's first part). Share, tasks, and minutes are sums. A
+// root wears its own hue (R7/R8, `_rootHue`), which a nearer sub-project's
+// `color:` never changes; parts without one fall back to their own hue.
 function pomodoroHomeRootGroups(parts) {
   const groups = [];
   const byRoot = new Map();
@@ -217,7 +218,7 @@ function pomodoroHomeRootGroups(parts) {
         minutes: 0,
         order: groups.length,
         first: Number.isInteger(part._order) ? part._order : groups.length,
-        hue: part.hue || null,
+        hue: (part._rootHue !== undefined ? part._rootHue : part.hue) || null,
       };
       byRoot.set(key, group);
       groups.push(group);
@@ -451,30 +452,6 @@ function pomodoroHomeWarning(warnings, seen, code, path, message) {
   warnings.push({ code, path: String(path || ""), message });
 }
 
-function pomodoroHomeHueForArea(areaFile, areaFrontmatter, warnings, seen) {
-  const path = areaFile && typeof areaFile.path === "string" ? areaFile.path : "";
-  const stem = pomodoroHomeStem(path);
-  const configured = areaFrontmatter && areaFrontmatter.color;
-  if (configured !== undefined && configured !== null && configured !== "") {
-    if (typeof configured === "string") {
-      const slot = configured.trim().toLowerCase();
-      if (POMODORO_HOME_SLOT_ORDER.includes(slot)) {
-        return slot;
-      }
-    }
-    pomodoroHomeWarning(
-      warnings,
-      seen,
-      "area_color_invalid",
-      path,
-      `Invalid area color on ${path}; using its deterministic fallback.`,
-    );
-  }
-  return POMODORO_HOME_SLOT_ORDER[
-    pomodoroHomeFnv1a(stem) % POMODORO_HOME_SLOT_ORDER.length
-  ];
-}
-
 function pomodoroHomeReadFrontmatter(file, metadataCache, vault) {
   const cache = pomodoroHomeCacheFor(file, metadataCache, vault);
   const frontmatter =
@@ -529,10 +506,18 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
       ? chain[nearestAreaIndex].path
       : null;
   const home = chain[homeIndex];
-  const root = chain[pomodoroHomeRootIndex(chain, homeIndex)];
-  const hue = topArea
-    ? pomodoroHomeHueForArea(topArea.file, topArea.frontmatter, warnings, seen)
+  const rootIndex = pomodoroHomeRootIndex(chain, homeIndex);
+  const root = chain[rootIndex];
+  pomodoroHomeLintChainColors(chain, homeIndex, warnings, seen);
+  const fallback = topArea
+    ? POMODORO_HOME_SLOT_ORDER[
+      pomodoroHomeFnv1a(pomodoroHomeStem(topArea.path)) % POMODORO_HOME_SLOT_ORDER.length
+    ]
     : null;
+  const { hue, hue_source: hueSource } = pomodoroHomeChainHue(chain, homeIndex, fallback);
+  // R7/R8: a root wears its own hue, which a nearer sub-project's `color:`
+  // never changes.
+  const rootHue = pomodoroHomeChainHue(chain, rootIndex, fallback).hue;
   return {
     key: home.path,
     label: pomodoroHomeStem(home.path).toLowerCase(),
@@ -541,6 +526,8 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     area_label: topArea ? pomodoroHomeStem(topArea.path).toLowerCase() : "unfiled",
     subarea,
     hue,
+    hue_source: hueSource,
+    root_hue: rootHue,
     root: root.path,
     root_label: pomodoroHomeStem(root.path).toLowerCase(),
     chain: chain.map((item) => item.path),
@@ -556,6 +543,7 @@ function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
     area,
     area_label: areaLabel,
     hue,
+    root_hue: hue,
     subarea: null,
     root: key,
     root_label: label,
@@ -828,6 +816,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     tasks: part.tasks,
     _root: part.root || part.key,
     _rootLabel: part.root_label || part.label,
+    _rootHue: (part.root_hue !== undefined ? part.root_hue : part.hue) || null,
     _order: Number.isInteger(part.sourceOrder) ? part.sourceOrder : index,
     ...(attributed ? { minutes: Number.isInteger(part.minutes) ? part.minutes : 0 } : {}),
   }));
@@ -872,7 +861,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
       ? null
       : label;
   // The lead root has the most distinct tasks; ties go to the first task in
-  // ledger order. Its hue is its first part's hue.
+  // ledger order. Its hue is the root's own hue.
   const leadRoot = roots.reduce((best, group) => {
     if (!best) {
       return group;
@@ -891,7 +880,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     ...(entry.offClock ? { off_clock: true } : {}),
     // An Off-Clock Pomodoro's chip carries its recorded minutes.
     ...(entry.offClock && minutesKnown ? { minutes: entry.minutes } : {}),
-    parts: parts.map(({ _order, _root, _rootLabel, ...part }) => part),
+    parts: parts.map(({ _order, _root, _rootLabel, _rootHue, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
     tooltip: pomodoroHomeRankRoots(roots)
       .filter((group) => group.tasks > 0)

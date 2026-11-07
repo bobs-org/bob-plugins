@@ -846,10 +846,7 @@ class BobLedgerToolsTaskThemeReadingMixin {
                   } else if (model.kind === "repair") {
                     classes += " bob-pomo-theme-repair";
                   } else if (model.kind === "pill") {
-                    if (
-                      model.hueSource === "exempt" ||
-                      model.hueSource === "unconfigured"
-                    ) {
+                    if (pomodoroThemeHueIsMuted(model)) {
                       classes += " bob-pomo-theme-muted";
                     }
                     if (model.hueSource === "unconfigured") {

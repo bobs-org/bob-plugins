@@ -150,6 +150,30 @@ test("lanes and columns share one hue per root", () => {
   }
 });
 
+test("a muted root stays gray in the lane and the parts row", () => {
+  // A grey `color:` slot on gtd: bob reports hue null with hue_source muted.
+  const report = JSON.parse(JSON.stringify(current));
+  report.homes["gtd_daily.md"] = { ...report.homes["gtd_daily.md"], hue: null, hue_source: "muted" };
+  const model = helpers.periodStripModel(report, "2026-W45", { laneView: "both" });
+  const segment = model.roots.segments.find((item) => item.key === "gtd_daily.md");
+  assert.ok(segment, "gtd_daily keeps its lane segment");
+  assert.equal(segment.hue, "gray");
+  assert.equal(segment.tone, "gray");
+  assert.equal(segment.shade, 0);
+  const coloured = model.roots.segments.filter((item) => item.tone === "hue");
+  assert.ok(coloured.length > 0);
+  assert.equal(coloured.some((item) => item.hue === "gray"), false, "coloured roots keep palette hues");
+  let stacked = 0;
+  for (const column of model.columns) {
+    for (const entry of column.stack || []) {
+      if (entry.key !== "gtd_daily.md") continue;
+      stacked += 1;
+      assert.equal(entry.hue, "gray", "the parts row matches the lane");
+    }
+  }
+  assert.ok(stacked > 0, "gtd_daily appears in the parts row");
+});
+
 test("week columns carry closed, current, future, and missing states", () => {
   const model = helpers.periodStripModel(current, "2026-W45", { laneView: "both" });
   assert.equal(model.columns.length, 7);

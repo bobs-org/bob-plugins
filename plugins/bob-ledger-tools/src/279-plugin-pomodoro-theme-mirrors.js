@@ -91,9 +91,10 @@ function pomodoroThemeFallbackHue(key) {
 
 // Mirror of `pomodoro_themes::resolve_hue` (PT5, area_hues = area): a
 // configured color wins, then a journal pin, then exempt and unconfigured
-// mutes, then a top-level area stem, else the name hash. `configured` is
-// absent when bob has no configured vocabulary; otherwise it maps keys to
-// a palette slot or null for `auto`.
+// mutes, then a top-level area stem (an `areas` entry of null is a grey
+// area, which mutes the type), else the name hash. `configured` is absent
+// when bob has no configured vocabulary; otherwise it maps keys to a
+// palette slot or null for `auto`.
 function pomodoroThemeResolveHue(key, options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const configured =
@@ -128,7 +129,12 @@ function pomodoroThemeResolveHue(key, options = {}) {
     opts.areas && typeof opts.areas === "object" && !Array.isArray(opts.areas)
       ? opts.areas
       : {};
-  const areaHue = areas[key];
+  const areaHue = Object.prototype.hasOwnProperty.call(areas, key)
+    ? areas[key]
+    : undefined;
+  if (areaHue === null) {
+    return { hue: null, hue_source: "area" };
+  }
   if (
     typeof areaHue === "string" &&
     POMODORO_THEMES_HUE_SLOTS.includes(areaHue)
@@ -475,6 +481,21 @@ function pomodoroThemeRankHistory(themes, query, exclusions, configuredOrder) {
   return [...groupB.map((entry) => entry.theme), ...groupD];
 }
 
+// Whether a resolved type hue renders as the muted gray: the exempt and
+// unconfigured mutes, and a type named after a grey top-level area
+// (`hue_source: "area"` with no hue). Accepts `hue_source` or `hueSource`.
+function pomodoroThemeHueIsMuted(resolved) {
+  if (!resolved || typeof resolved !== "object") {
+    return false;
+  }
+  const source =
+    typeof resolved.hue_source === "string" ? resolved.hue_source : resolved.hueSource;
+  if (source === "exempt" || source === "unconfigured") {
+    return true;
+  }
+  return source === "area" && !resolved.hue;
+}
+
 // Display pill models for one Pomodoro name: each component gets its
 // own pill and the `+` stays neutral. `hueFor` maps a key to
 // `{ hue, hue_source }` (or null); without it every pill is neutral.
@@ -511,7 +532,7 @@ function pomodoroThemePillModels(name, hueFor) {
           ? resolved.configured
           : null,
       unconfigured: Boolean(resolved && resolved.configured === false),
-      muted: hueSource === "exempt" || hueSource === "unconfigured",
+      muted: pomodoroThemeHueIsMuted({ hue, hue_source: hueSource }),
     });
   }
   return pills;

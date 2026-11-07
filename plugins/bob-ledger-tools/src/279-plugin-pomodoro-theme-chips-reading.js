@@ -173,11 +173,7 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
       const resolved = this.pomodoroThemeHueFor(component.key, component.raw);
       const hue = resolved && resolved.hue ? resolved.hue : null;
       const unconfigured = this.pomodoroThemeIsConfigured(component.key) === false;
-      const muted = Boolean(
-        resolved &&
-          (resolved.hue_source === "exempt" ||
-            resolved.hue_source === "unconfigured"),
-      );
+      const muted = pomodoroThemeHueIsMuted(resolved);
       const pill = doc.createElement("span");
       pill.setAttribute(
         "class",
@@ -218,11 +214,7 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
               const resolved = this.pomodoroThemeHueFor(key, name);
               const hue = resolved && resolved.hue ? resolved.hue : null;
               const unconfigured = this.pomodoroThemeIsConfigured(key) === false;
-              const muted = Boolean(
-                resolved &&
-                  (resolved.hue_source === "exempt" ||
-                    resolved.hue_source === "unconfigured"),
-              );
+              const muted = pomodoroThemeHueIsMuted(resolved);
               pill.setAttribute(
                 "class",
                 `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured ? " bob-pomo-theme-unconfigured" : ""}`,

@@ -304,6 +304,13 @@ function statsPanelHomeHue(report, key, bucketGray = true) {
   return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
 }
 
+// A catalog entry whose `hue_source` is `muted` chose grey on purpose (a grey
+// `color:` slot): it stays gray and never claims a palette hue.
+function statsPanelHomeIsMuted(report, key) {
+  const entry = statsPanelHomeCatalog(report)[key];
+  return Boolean(entry && typeof entry === "object" && entry.hue_source === "muted");
+}
+
 function statsPanelFormatMinutes(value) {
   if (!statsFinite(value)) return "–";
   const minutes = Math.max(0, Math.round(value));
@@ -381,13 +388,19 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
+// One colour per root: buckets and muted roots stay gray up front; every
+// other root keeps its catalog hue when it is the biggest claimant, else
+// takes the next free palette hue.
 function statsPanelDistinctHues(rows, report) {
   const result = new Map();
   const list = Array.isArray(rows) ? rows.slice() : [];
   const coloured = [];
   for (const row of list) {
     if (!row || typeof row.key !== "string" || !row.key) continue;
-    if (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") {
+    if (
+      (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") ||
+      statsPanelHomeIsMuted(report, row.key)
+    ) {
       result.set(row.key, "gray");
     } else {
       coloured.push(row);

@@ -283,7 +283,8 @@ class BobLedgerToolsPomodoroThemesMixin {
   }
 
   // Top-level area stems (an area whose parent is `[[area]]`) to their
-  // resolved hues: a frontmatter `color:` slot, else the stem hash. This
+  // resolved hues: a frontmatter `color:` palette slot, null for a grey
+  // area (R8 mute), else the stem hash (an invalid value hashes too). This
   // is the JS half of the PT5 area rule; the Rust half owns the report
   // hues on desktop. Rebuilt at most once per 60 s.
   pomodoroThemesAreasMap() {
@@ -333,13 +334,12 @@ class BobLedgerToolsPomodoroThemesMixin {
             if (!key || Object.prototype.hasOwnProperty.call(map, key)) {
               continue;
             }
-            const configured =
-              typeof frontmatter.color === "string"
-                ? frontmatter.color.trim().toLowerCase()
-                : "";
-            map[key] = POMODORO_HOME_SLOT_ORDER.includes(configured)
-              ? configured
-              : pomodoroThemeFallbackHue(key);
+            const color = pomodoroHomeNoteColor(frontmatter);
+            map[key] = color && color.kind === "hue"
+              ? color.hue
+              : color && color.kind === "grey"
+                ? null
+                : pomodoroThemeFallbackHue(key);
           } catch (error) {
             continue;
           }

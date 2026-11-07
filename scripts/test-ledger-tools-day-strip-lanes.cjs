@@ -160,6 +160,39 @@ async function makePlugin(app) {
   return plugin;
 }
 
+test("muted roots stay gray, unshaded, claim no hue, and sort before the buckets", () => {
+  // gtd carries a grey `color:` slot: bob reports hue null, hue_source muted.
+  const model = modelFor(fixtures.mutedRoots, { laneView: "both" });
+  const segments = model.mix.segments;
+  assert.deepEqual(
+    segments.map((segment) => segment.key),
+    ["bob.md", "dev.md", "sase.md", "gtd.md", "gtd_daily.md", "@unfiled", "@unlinked"],
+    "coloured roots, then muted roots, then buckets",
+  );
+  for (const key of ["gtd.md", "gtd_daily.md"]) {
+    const segment = segments.find((item) => item.key === key);
+    assert.equal(segment.hue, "gray", `${key} stays gray`);
+    assert.equal(segment.tone, "gray", `${key} uses the muted fill, not the bucket hatch`);
+    assert.equal(segment.gray, true);
+    assert.equal(segment.shade, 0, `${key} is never shaded`);
+    assert.equal(segment.bucket, false);
+  }
+  const coloured = segments.filter((segment) => segment.tone === "hue");
+  assert.deepEqual(coloured.map((segment) => segment.key), ["bob.md", "dev.md", "sase.md"]);
+  assert.equal(new Set(coloured.map((segment) => segment.hue)).size, coloured.length, "coloured roots keep distinct hues");
+  assert.equal(coloured.some((segment) => segment.hue === "gray"), false);
+  // Without the mute the same report recolours gtd (orange) and gtd_daily.
+  const unmuted = modelFor(fixtures.sameHueRoots, { laneView: "both" });
+  assert.equal(unmuted.mix.segments.find((segment) => segment.key === "gtd.md").tone, "hue");
+  const { root } = paint(model);
+  const rootsBar = byClass(root, "bob-day-strip-bar").find((node) => node.getAttribute("data-lane") === "roots");
+  const gtdSegment = byClass(rootsBar, "bob-day-strip-bar-segment")
+    .find((node) => String(node.getAttribute("title") || "").startsWith("gtd "));
+  assert.ok(gtdSegment, "gtd paints a roots-bar segment");
+  assert.match(gtdSegment.getAttribute("class"), /\bbob-day-strip-hue-gray\b/);
+  assert.equal(gtdSegment.hasAttribute("data-shade"), false);
+});
+
 test("lane view sanitizes and cycles both -> roots -> themes -> both", () => {
   assert.equal(helpers.dayStripLaneViewOf("both"), "both");
   assert.equal(helpers.dayStripLaneViewOf("roots"), "roots");

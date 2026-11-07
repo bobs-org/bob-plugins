@@ -380,6 +380,52 @@ test("theme pill models mark exempt components muted", () => {
   );
 });
 
+test("a type named after a grey area mutes in pills, the area map, and the Stats type lane", () => {
+  const helpers = LedgerToolsPlugin.helpers;
+  const pills = pomodoroThemePillModels("GTD + DEV", (key) =>
+    key === "gtd" ? { hue: null, hue_source: "area" } : { hue: "blue", hue_source: "area" },
+  );
+  assert.deepEqual(
+    pills.map((pill) => [pill.text, pill.hue, pill.hueSource, pill.muted]),
+    [
+      ["GTD", null, "area", true],
+      ["DEV", "blue", "area", false],
+    ],
+  );
+  assert.equal(helpers.pomodoroThemeHueIsMuted({ hue: null, hue_source: "area" }), true);
+  assert.equal(helpers.pomodoroThemeHueIsMuted({ hue: null, hueSource: "area" }), true);
+  assert.equal(helpers.pomodoroThemeHueIsMuted({ hue: "blue", hue_source: "area" }), false);
+  assert.equal(helpers.pomodoroThemeHueIsMuted({ hue: null, hue_source: "exempt" }), true);
+  assert.equal(helpers.pomodoroThemeHueIsMuted({ hue: "red", hue_source: "hash" }), false);
+  assert.equal(helpers.pomodoroThemeHueIsMuted(null), false);
+  const ref = helpers.statsThemeRef(
+    { theme_hues: { gtd: { name: "GTD", hue: null, hue_source: "area" } } },
+    "GTD",
+  );
+  assert.deepEqual([ref.hue, ref.gray, ref.hue_source], ["gray", true, "area"]);
+  const frontmatter = {
+    "gtd.md": { type: [["area"]], parent: [["area"]], color: "Grey" },
+    "quiet.md": { type: [["area"]], parent: [["area"]], color: "gray" },
+    "dev.md": { type: [["area"]], parent: [["area"]], color: "blue" },
+    "job.md": { type: [["area"]], parent: [["area"]], color: "ultraviolet" },
+    "inbox.md": { type: [["area"]], parent: [["gtd"]], color: "red" },
+  };
+  const plugin = new LedgerToolsPlugin({
+    vault: { getMarkdownFiles: () => Object.keys(frontmatter).map((path) => ({ path })) },
+    metadataCache: { getCache: (path) => ({ frontmatter: frontmatter[path] }) },
+  });
+  assert.deepEqual(plugin.pomodoroThemesAreasMap(), {
+    gtd: null,
+    quiet: null,
+    dev: "blue",
+    job: helpers.pomodoroThemeFallbackHue("job"),
+  });
+  assert.deepEqual(
+    pomodoroThemeResolveHue("gtd", { exempt: ["plan"], areas: plugin.pomodoroThemesAreasMap() }),
+    { hue: null, hue_source: "area" },
+  );
+});
+
 test("theme pill models mark unconfigured components muted and outlined", () => {
   const pills = pomodoroThemePillModels("SNACK", () => ({
     hue: null,

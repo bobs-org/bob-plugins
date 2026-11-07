@@ -379,6 +379,25 @@ test("unconfigured explicit type keeps the name and drops the hue", () => {
   assert.equal(taskTagIdentityShown(identity, false), true);
 });
 
+test("a type named after a grey area renders muted, explicit or inherited", () => {
+  const explicit = taskTagIdentityFromField(
+    { fieldState: "set", type: "GTD", key: "gtd" },
+    { hue: null, hue_source: "area" },
+    {},
+  );
+  assert.equal(explicit.state, "muted");
+  assert.equal(explicit.hue, null);
+  const inherited = taskTagIdentityFromInherited("GTD", "gtd", { hue: null, hue_source: "area" }, {});
+  assert.equal(inherited.state, "muted");
+  const coloured = taskTagIdentityFromField(
+    { fieldState: "set", type: "DEV", key: "dev" },
+    { hue: "blue", hue_source: "area" },
+    {},
+  );
+  assert.equal(coloured.state, "explicit");
+  assert.equal(coloured.hue, "blue");
+});
+
 test("repair identity is always shown as #?", () => {
   const identity = taskTagIdentityFromField(
     { fieldState: "repair", type: "?", repair: "invalid" },

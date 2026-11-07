@@ -116,8 +116,9 @@ function taskTagTypeHueSourceOf(hueInfo) {
 }
 
 // Visual identity state for one mark. Repair wins, then unconfigured
-// (unknown / unconfigured hue source), then muted (exempt / auto),
-// then inherited, then explicit. Never throws.
+// (unknown / unconfigured hue source), then muted (exempt / auto, or a
+// type named after a grey top-level area: `area` with a supplied null
+// hue), then inherited, then explicit. Never throws.
 function taskTagIdentityKind(options) {
   try {
     const opts = options && typeof options === "object" ? options : {};
@@ -130,6 +131,13 @@ function taskTagIdentityKind(options) {
       return "unconfigured";
     }
     if (hueSource === "exempt" || hueSource === "auto") {
+      return "muted";
+    }
+    if (
+      hueSource === "area" &&
+      Object.prototype.hasOwnProperty.call(opts, "hue") &&
+      !opts.hue
+    ) {
       return "muted";
     }
     if (opts.inherited === true) {
@@ -173,6 +181,7 @@ function taskTagIdentityFromField(field, hueInfo, extra) {
       fieldState: "set",
       known,
       hue_source: hueSource,
+      hue,
     });
     return Object.freeze({
       type: source.type,
@@ -209,6 +218,7 @@ function taskTagIdentityFromInherited(name, key, hueInfo, extra) {
       inherited: true,
       known,
       hue_source: hueSource,
+      hue,
     });
     return Object.freeze({
       type,

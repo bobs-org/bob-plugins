@@ -15949,8 +15949,9 @@ function taskTagTypeHueSourceOf(hueInfo) {
 }
 
 // Visual identity state for one mark. Repair wins, then unconfigured
-// (unknown / unconfigured hue source), then muted (exempt / auto),
-// then inherited, then explicit. Never throws.
+// (unknown / unconfigured hue source), then muted (exempt / auto, or a
+// type named after a grey top-level area: `area` with a supplied null
+// hue), then inherited, then explicit. Never throws.
 function taskTagIdentityKind(options) {
   try {
     const opts = options && typeof options === "object" ? options : {};
@@ -15963,6 +15964,13 @@ function taskTagIdentityKind(options) {
       return "unconfigured";
     }
     if (hueSource === "exempt" || hueSource === "auto") {
+      return "muted";
+    }
+    if (
+      hueSource === "area" &&
+      Object.prototype.hasOwnProperty.call(opts, "hue") &&
+      !opts.hue
+    ) {
       return "muted";
     }
     if (opts.inherited === true) {
@@ -16006,6 +16014,7 @@ function taskTagIdentityFromField(field, hueInfo, extra) {
       fieldState: "set",
       known,
       hue_source: hueSource,
+      hue,
     });
     return Object.freeze({
       type: source.type,
@@ -16042,6 +16051,7 @@ function taskTagIdentityFromInherited(name, key, hueInfo, extra) {
       inherited: true,
       known,
       hue_source: hueSource,
+      hue,
     });
     return Object.freeze({
       type,
@@ -21923,9 +21933,9 @@ if (WidgetType && typeof WidgetType === "function") {
 // --- Pomodoro home chips: pure mirror of bob-cli pomodoro homes -----------
 // The shared Rust contract and vectors live in bob-cli. This mirror only
 // resolves each dedicated Task Link to its current area/project home and
-// derives the quiet label, chip, and area hue. The label, chip, hue, and
-// tooltip name root parents (R2, R7); `parts` stay per nearest home. It never
-// writes note text.
+// derives the quiet label, chip, and hue (R8 nearest-note colors live in
+// 142a). The label, chip, hue, and tooltip name root parents (R2, R7);
+// `parts` stay per nearest home. It never writes note text.
 
 const POMODORO_HOME_MAX_DEPTH = 16;
 const POMODORO_HOME_SLOT_ORDER = [
@@ -22122,8 +22132,9 @@ function pomodoroHomePercentages(weights) {
 }
 
 // R7 root groups: parts bucketed by root parent in root order (the ledger
-// order of each root's first part). Share, tasks, and minutes are sums. The
-// hue is the root's first part's hue.
+// order of each root's first part). Share, tasks, and minutes are sums. A
+// root wears its own hue (R7/R8, `_rootHue`), which a nearer sub-project's
+// `color:` never changes; parts without one fall back to their own hue.
 function pomodoroHomeRootGroups(parts) {
   const groups = [];
   const byRoot = new Map();
@@ -22139,7 +22150,7 @@ function pomodoroHomeRootGroups(parts) {
         minutes: 0,
         order: groups.length,
         first: Number.isInteger(part._order) ? part._order : groups.length,
-        hue: part.hue || null,
+        hue: (part._rootHue !== undefined ? part._rootHue : part.hue) || null,
       };
       byRoot.set(key, group);
       groups.push(group);
@@ -22373,30 +22384,6 @@ function pomodoroHomeWarning(warnings, seen, code, path, message) {
   warnings.push({ code, path: String(path || ""), message });
 }
 
-function pomodoroHomeHueForArea(areaFile, areaFrontmatter, warnings, seen) {
-  const path = areaFile && typeof areaFile.path === "string" ? areaFile.path : "";
-  const stem = pomodoroHomeStem(path);
-  const configured = areaFrontmatter && areaFrontmatter.color;
-  if (configured !== undefined && configured !== null && configured !== "") {
-    if (typeof configured === "string") {
-      const slot = configured.trim().toLowerCase();
-      if (POMODORO_HOME_SLOT_ORDER.includes(slot)) {
-        return slot;
-      }
-    }
-    pomodoroHomeWarning(
-      warnings,
-      seen,
-      "area_color_invalid",
-      path,
-      `Invalid area color on ${path}; using its deterministic fallback.`,
-    );
-  }
-  return POMODORO_HOME_SLOT_ORDER[
-    pomodoroHomeFnv1a(stem) % POMODORO_HOME_SLOT_ORDER.length
-  ];
-}
-
 function pomodoroHomeReadFrontmatter(file, metadataCache, vault) {
   const cache = pomodoroHomeCacheFor(file, metadataCache, vault);
   const frontmatter =
@@ -22451,10 +22438,18 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
       ? chain[nearestAreaIndex].path
       : null;
   const home = chain[homeIndex];
-  const root = chain[pomodoroHomeRootIndex(chain, homeIndex)];
-  const hue = topArea
-    ? pomodoroHomeHueForArea(topArea.file, topArea.frontmatter, warnings, seen)
+  const rootIndex = pomodoroHomeRootIndex(chain, homeIndex);
+  const root = chain[rootIndex];
+  pomodoroHomeLintChainColors(chain, homeIndex, warnings, seen);
+  const fallback = topArea
+    ? POMODORO_HOME_SLOT_ORDER[
+      pomodoroHomeFnv1a(pomodoroHomeStem(topArea.path)) % POMODORO_HOME_SLOT_ORDER.length
+    ]
     : null;
+  const { hue, hue_source: hueSource } = pomodoroHomeChainHue(chain, homeIndex, fallback);
+  // R7/R8: a root wears its own hue, which a nearer sub-project's `color:`
+  // never changes.
+  const rootHue = pomodoroHomeChainHue(chain, rootIndex, fallback).hue;
   return {
     key: home.path,
     label: pomodoroHomeStem(home.path).toLowerCase(),
@@ -22463,6 +22458,8 @@ function pomodoroHomeResolve(target, dailyPath, metadataCache, vault, warnings, 
     area_label: topArea ? pomodoroHomeStem(topArea.path).toLowerCase() : "unfiled",
     subarea,
     hue,
+    hue_source: hueSource,
+    root_hue: rootHue,
     root: root.path,
     root_label: pomodoroHomeStem(root.path).toLowerCase(),
     chain: chain.map((item) => item.path),
@@ -22478,6 +22475,7 @@ function pomodoroHomeBucketPart(key, label, area, areaLabel, hue) {
     area,
     area_label: areaLabel,
     hue,
+    root_hue: hue,
     subarea: null,
     root: key,
     root_label: label,
@@ -22750,6 +22748,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     tasks: part.tasks,
     _root: part.root || part.key,
     _rootLabel: part.root_label || part.label,
+    _rootHue: (part.root_hue !== undefined ? part.root_hue : part.hue) || null,
     _order: Number.isInteger(part.sourceOrder) ? part.sourceOrder : index,
     ...(attributed ? { minutes: Number.isInteger(part.minutes) ? part.minutes : 0 } : {}),
   }));
@@ -22794,7 +22793,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
       ? null
       : label;
   // The lead root has the most distinct tasks; ties go to the first task in
-  // ledger order. Its hue is its first part's hue.
+  // ledger order. Its hue is the root's own hue.
   const leadRoot = roots.reduce((best, group) => {
     if (!best) {
       return group;
@@ -22813,7 +22812,7 @@ function pomodoroHomeSessionModel(entry, dailyPath, metadataCache, vault, warnin
     ...(entry.offClock ? { off_clock: true } : {}),
     // An Off-Clock Pomodoro's chip carries its recorded minutes.
     ...(entry.offClock && minutesKnown ? { minutes: entry.minutes } : {}),
-    parts: parts.map(({ _order, _root, _rootLabel, ...part }) => part),
+    parts: parts.map(({ _order, _root, _rootLabel, _rootHue, ...part }) => part),
     lead_home: lead ? lead.key : "@unlinked",
     tooltip: pomodoroHomeRankRoots(roots)
       .filter((group) => group.tasks > 0)
@@ -22892,6 +22891,77 @@ function buildPomodoroHomeChipElement(doc, model) {
     return chip;
   } catch (error) {
     return null;
+  }
+}
+// ---- src/142a-pomodoro-home-colors.js ----
+// --- Pomodoro home colors: R8 nearest-note hue walk ------------------------
+// Mirror of bob-cli `pomodoro_homes` R8. A home's hue is the nearest area or
+// project `color:` slot (palette hue, or grey for a deliberate mute), else
+// the top-level area stem hash. Root parents wear their own hue (R7).
+
+// R8: an area's or project's `color:` slot. A palette slot or the grey mute
+// (`grey`/`gray`), matched without case; absent or blank inherits (null);
+// anything else, including lists and non-strings, is invalid and inherits.
+function pomodoroHomeNoteColor(frontmatter) {
+  const raw = frontmatter && typeof frontmatter === "object" ? frontmatter.color : undefined;
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  if (typeof raw !== "string") {
+    return { kind: "invalid" };
+  }
+  const value = raw.trim().toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (POMODORO_HOME_SLOT_ORDER.includes(value)) {
+    return { kind: "hue", hue: value };
+  }
+  if (value === "grey" || value === "gray") {
+    return { kind: "grey" };
+  }
+  return { kind: "invalid" };
+}
+
+// R8: the first valid `color:` slot on the area and project notes of
+// `chain[from..]`, nearest first; else the top-level area stem hash
+// (`fallback`). Grey is `hue: null` with `hue_source: "muted"`; no slot and
+// no area is `hue: null` with no source.
+function pomodoroHomeChainHue(chain, from, fallback) {
+  for (let index = Math.max(0, from); index < chain.length; index += 1) {
+    const item = chain[index];
+    if (item.type !== "area" && item.type !== "project") {
+      continue;
+    }
+    const color = pomodoroHomeNoteColor(item.frontmatter);
+    if (color && color.kind === "hue") {
+      return { hue: color.hue, hue_source: "color" };
+    }
+    if (color && color.kind === "grey") {
+      return { hue: null, hue_source: "muted" };
+    }
+  }
+  return fallback ? { hue: fallback, hue_source: "hash" } : { hue: null, hue_source: null };
+}
+
+// R8: every invalid `color:` on the walked area and project notes lints once
+// per path, whichever note ends up deciding the hue.
+function pomodoroHomeLintChainColors(chain, from, warnings, seen) {
+  for (let index = Math.max(0, from); index < chain.length; index += 1) {
+    const item = chain[index];
+    if (item.type !== "area" && item.type !== "project") {
+      continue;
+    }
+    const color = pomodoroHomeNoteColor(item.frontmatter);
+    if (color && color.kind === "invalid") {
+      pomodoroHomeWarning(
+        warnings,
+        seen,
+        "area_color_invalid",
+        item.path,
+        `Invalid color on ${item.path}; the note inherits its color. Set color: to a palette slot or grey.`,
+      );
+    }
   }
 }
 // ---- src/142b-plan-today-roots.js ----
@@ -23019,7 +23089,10 @@ function planTodayRootFromHome(home) {
   if (key.startsWith("@")) {
     return { key: "@unfiled", label: "unfiled", hue: null };
   }
-  const hue = typeof home.hue === "string" && home.hue ? home.hue : null;
+  // A root wears its own hue (R7/R8); a nearer sub-project's `color:` never
+  // changes it, and a grey root stays null.
+  const raw = home.root_hue !== undefined ? home.root_hue : home.hue;
+  const hue = typeof raw === "string" && raw ? raw : null;
   return { key, label: planTodayRootLabel(key), hue };
 }
 
@@ -40932,6 +41005,13 @@ function statsPanelHomeHue(report, key, bucketGray = true) {
   return entry && STATS_PANEL_HOME_HUES.includes(entry.hue) ? entry.hue : "gray";
 }
 
+// A catalog entry whose `hue_source` is `muted` chose grey on purpose (a grey
+// `color:` slot): it stays gray and never claims a palette hue.
+function statsPanelHomeIsMuted(report, key) {
+  const entry = statsPanelHomeCatalog(report)[key];
+  return Boolean(entry && typeof entry === "object" && entry.hue_source === "muted");
+}
+
 function statsPanelFormatMinutes(value) {
   if (!statsFinite(value)) return "–";
   const minutes = Math.max(0, Math.round(value));
@@ -41009,13 +41089,19 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
+// One colour per root: buckets and muted roots stay gray up front; every
+// other root keeps its catalog hue when it is the biggest claimant, else
+// takes the next free palette hue.
 function statsPanelDistinctHues(rows, report) {
   const result = new Map();
   const list = Array.isArray(rows) ? rows.slice() : [];
   const coloured = [];
   for (const row of list) {
     if (!row || typeof row.key !== "string" || !row.key) continue;
-    if (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") {
+    if (
+      (row.key.startsWith("@") && statsPanelHomeHue(report, row.key) === "gray") ||
+      statsPanelHomeIsMuted(report, row.key)
+    ) {
       result.set(row.key, "gray");
     } else {
       coloured.push(row);
@@ -65120,9 +65206,10 @@ function pomodoroThemeFallbackHue(key) {
 
 // Mirror of `pomodoro_themes::resolve_hue` (PT5, area_hues = area): a
 // configured color wins, then a journal pin, then exempt and unconfigured
-// mutes, then a top-level area stem, else the name hash. `configured` is
-// absent when bob has no configured vocabulary; otherwise it maps keys to
-// a palette slot or null for `auto`.
+// mutes, then a top-level area stem (an `areas` entry of null is a grey
+// area, which mutes the type), else the name hash. `configured` is absent
+// when bob has no configured vocabulary; otherwise it maps keys to a
+// palette slot or null for `auto`.
 function pomodoroThemeResolveHue(key, options = {}) {
   const opts = options && typeof options === "object" ? options : {};
   const configured =
@@ -65157,7 +65244,12 @@ function pomodoroThemeResolveHue(key, options = {}) {
     opts.areas && typeof opts.areas === "object" && !Array.isArray(opts.areas)
       ? opts.areas
       : {};
-  const areaHue = areas[key];
+  const areaHue = Object.prototype.hasOwnProperty.call(areas, key)
+    ? areas[key]
+    : undefined;
+  if (areaHue === null) {
+    return { hue: null, hue_source: "area" };
+  }
   if (
     typeof areaHue === "string" &&
     POMODORO_THEMES_HUE_SLOTS.includes(areaHue)
@@ -65504,6 +65596,21 @@ function pomodoroThemeRankHistory(themes, query, exclusions, configuredOrder) {
   return [...groupB.map((entry) => entry.theme), ...groupD];
 }
 
+// Whether a resolved type hue renders as the muted gray: the exempt and
+// unconfigured mutes, and a type named after a grey top-level area
+// (`hue_source: "area"` with no hue). Accepts `hue_source` or `hueSource`.
+function pomodoroThemeHueIsMuted(resolved) {
+  if (!resolved || typeof resolved !== "object") {
+    return false;
+  }
+  const source =
+    typeof resolved.hue_source === "string" ? resolved.hue_source : resolved.hueSource;
+  if (source === "exempt" || source === "unconfigured") {
+    return true;
+  }
+  return source === "area" && !resolved.hue;
+}
+
 // Display pill models for one Pomodoro name: each component gets its
 // own pill and the `+` stays neutral. `hueFor` maps a key to
 // `{ hue, hue_source }` (or null); without it every pill is neutral.
@@ -65540,7 +65647,7 @@ function pomodoroThemePillModels(name, hueFor) {
           ? resolved.configured
           : null,
       unconfigured: Boolean(resolved && resolved.configured === false),
-      muted: hueSource === "exempt" || hueSource === "unconfigured",
+      muted: pomodoroThemeHueIsMuted({ hue, hue_source: hueSource }),
     });
   }
   return pills;
@@ -67941,7 +68048,9 @@ function rootMarkModel(line, context) {
       rootPath,
       rootLabel,
       areaLabel: rootHome && rootHome.area_label ? rootHome.area_label : targetHome.area_label,
-      hue: rootHome && rootHome.hue ? rootHome.hue : targetHome.hue,
+      // The root's own hue (R7/R8): a grey root stays null instead of
+      // borrowing the target's hue.
+      hue: rootHome ? rootHome.hue || null : targetHome.root_hue || null,
       compact,
     };
     model.id = JSON.stringify([model.state, model.targetPath, model.rootPath, model.hue, fieldStart]);
@@ -71118,10 +71227,7 @@ class BobLedgerToolsTaskThemeReadingMixin {
                   } else if (model.kind === "repair") {
                     classes += " bob-pomo-theme-repair";
                   } else if (model.kind === "pill") {
-                    if (
-                      model.hueSource === "exempt" ||
-                      model.hueSource === "unconfigured"
-                    ) {
+                    if (pomodoroThemeHueIsMuted(model)) {
                       classes += " bob-pomo-theme-muted";
                     }
                     if (model.hueSource === "unconfigured") {
@@ -72055,7 +72161,8 @@ class BobLedgerToolsPomodoroThemesMixin {
   }
 
   // Top-level area stems (an area whose parent is `[[area]]`) to their
-  // resolved hues: a frontmatter `color:` slot, else the stem hash. This
+  // resolved hues: a frontmatter `color:` palette slot, null for a grey
+  // area (R8 mute), else the stem hash (an invalid value hashes too). This
   // is the JS half of the PT5 area rule; the Rust half owns the report
   // hues on desktop. Rebuilt at most once per 60 s.
   pomodoroThemesAreasMap() {
@@ -72105,13 +72212,12 @@ class BobLedgerToolsPomodoroThemesMixin {
             if (!key || Object.prototype.hasOwnProperty.call(map, key)) {
               continue;
             }
-            const configured =
-              typeof frontmatter.color === "string"
-                ? frontmatter.color.trim().toLowerCase()
-                : "";
-            map[key] = POMODORO_HOME_SLOT_ORDER.includes(configured)
-              ? configured
-              : pomodoroThemeFallbackHue(key);
+            const color = pomodoroHomeNoteColor(frontmatter);
+            map[key] = color && color.kind === "hue"
+              ? color.hue
+              : color && color.kind === "grey"
+                ? null
+                : pomodoroThemeFallbackHue(key);
           } catch (error) {
             continue;
           }
@@ -74034,10 +74140,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
               : resolved && resolved.hue
                 ? resolved.hue
                 : null;
-            const muted =
-              !neutral && resolved &&
-              (resolved.hue_source === "exempt" ||
-                resolved.hue_source === "unconfigured");
+            const muted = !neutral && pomodoroThemeHueIsMuted(resolved);
             const attributes = {
               "data-theme-key": component.key,
               title: this.pomodoroThemeTooltip(component.key, component.raw),
@@ -74303,11 +74406,7 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
       const resolved = this.pomodoroThemeHueFor(component.key, component.raw);
       const hue = resolved && resolved.hue ? resolved.hue : null;
       const unconfigured = this.pomodoroThemeIsConfigured(component.key) === false;
-      const muted = Boolean(
-        resolved &&
-          (resolved.hue_source === "exempt" ||
-            resolved.hue_source === "unconfigured"),
-      );
+      const muted = pomodoroThemeHueIsMuted(resolved);
       const pill = doc.createElement("span");
       pill.setAttribute(
         "class",
@@ -74348,11 +74447,7 @@ class BobLedgerToolsPomodoroThemeChipsReadingMixin {
               const resolved = this.pomodoroThemeHueFor(key, name);
               const hue = resolved && resolved.hue ? resolved.hue : null;
               const unconfigured = this.pomodoroThemeIsConfigured(key) === false;
-              const muted = Boolean(
-                resolved &&
-                  (resolved.hue_source === "exempt" ||
-                    resolved.hue_source === "unconfigured"),
-              );
+              const muted = pomodoroThemeHueIsMuted(resolved);
               pill.setAttribute(
                 "class",
                 `bob-pomo-theme${muted ? " bob-pomo-theme-muted" : ""}${unconfigured ? " bob-pomo-theme-unconfigured" : ""}`,
@@ -91928,6 +92023,7 @@ module.exports.helpers = {
   statsPanelRootSubRows,
   statsPanelHomeLabel,
   statsPanelHomeHue,
+  statsPanelHomeIsMuted,
   statsPanelDistinctHues,
   statsPanelFormatMinutes,
   statsPanelHomeRows,
@@ -92017,6 +92113,8 @@ module.exports.helpers = {
   pomodoroHomeLinkFromBody,
   pomodoroHomeParseEntries,
   pomodoroHomeResolve,
+  pomodoroHomeNoteColor,
+  pomodoroHomeChainHue,
   pomodoroHomeTaskHome,
   pomodoroHomeModels,
   pomodoroHomeSessionModel,
@@ -92036,6 +92134,7 @@ module.exports.helpers = {
   pomodoroThemeComponentsOf,
   pomodoroThemeFallbackHue,
   pomodoroThemeResolveHue,
+  pomodoroThemeHueIsMuted,
   pomodoroThemeParseJournalLine,
   pomodoroThemeFoldEvents,
   pomodoroThemeLevenshteinCapped,

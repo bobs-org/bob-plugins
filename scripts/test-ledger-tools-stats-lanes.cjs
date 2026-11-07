@@ -220,6 +220,42 @@ test("window lanes model matches panel root order and distinct hues", () => {
   assert.deepEqual(model.roots.segments.map((segment) => segment.hue), ordered.map((row) => hues.get(row.key)));
 });
 
+test("muted roots stay gray in the window lanes and the panel root rows", () => {
+  // A grey `color:` slot on gtd: bob reports hue null with hue_source muted.
+  const report = laneReport();
+  for (const key of ["gtd.md", "gtd_daily.md"]) {
+    report.homes[key] = { ...report.homes[key], hue: null, hue_source: "muted" };
+  }
+  const model = helpers.statsWindowLanesModel(report);
+  const keys = model.roots.segments.map((segment) => segment.key);
+  const muted = ["gtd.md", "gtd_daily.md"];
+  const buckets = ["@unfiled", "@unlinked"];
+  for (const key of muted) {
+    const segment = model.roots.segments.find((item) => item.key === key);
+    assert.equal(segment.hue, "gray", `${key} stays gray`);
+    assert.equal(segment.tone, "gray", `${key} uses the muted fill`);
+    assert.equal(segment.shade, 0, `${key} is never shaded`);
+  }
+  const coloured = model.roots.segments.filter((segment) => segment.tone === "hue");
+  assert.ok(coloured.length > 0);
+  assert.equal(coloured.some((segment) => segment.hue === "gray"), false);
+  const lastColoured = Math.max(...coloured.map((segment) => keys.indexOf(segment.key)));
+  const mutedIndexes = muted.map((key) => keys.indexOf(key));
+  const bucketIndexes = buckets.map((key) => keys.indexOf(key));
+  assert.ok(Math.min(...mutedIndexes) > lastColoured, "muted roots sort after coloured roots");
+  assert.ok(Math.max(...mutedIndexes) < Math.min(...bucketIndexes), "muted roots sort before the buckets");
+  // The Stats page root rows share the same distinct-hue map.
+  const worked = report.metrics.find((metric) => metric.id === "worked");
+  const rows = helpers.statsPanelHomeRows(worked, report, "root_parent", null);
+  const hues = helpers.statsPanelDistinctHues(rows, report);
+  for (const key of muted) assert.equal(hues.get(key), "gray");
+  // An uncoloured, arealess root (hue null, no hue_source) still takes a hue.
+  const uncoloured = laneReport();
+  uncoloured.homes["gtd.md"] = { ...uncoloured.homes["gtd.md"], hue: null };
+  const uncolouredHues = helpers.statsPanelDistinctHues(rows, uncoloured);
+  assert.notEqual(uncolouredHues.get("gtd.md"), "gray");
+});
+
 test("legend labels use the root note name for daily review tasks", () => {
   const model = helpers.statsWindowLanesModel(laneReport());
   const root = model.roots.legend.find((entry) => entry.key === "gtd_daily.md");

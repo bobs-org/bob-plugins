@@ -383,6 +383,34 @@ for (const vector of fixture.today_roots) {
   });
 }
 
+test("Today roots wear the root's own hue; a sub-project color never recolors it", () => {
+  const vector = {
+    name: "root-own-hue",
+    daily_path: "2026/20261101.md",
+    daily: "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 BUILD\n  - [[t_violet#^v1]]\n  - [[t_violet#^v2]]\n  - [[t_loud#^l1]]\n  - [[t_quiet#^q1]]\n\n## Tasks\n",
+    tasks_notes: {
+      "t_violet.md": "---\ntype: [[article]]\nparent: [[sase_violet]]\n---\n\n- [ ] #task Violet one ^v1\n- [ ] #task Violet two ^v2\n",
+      "t_loud.md": "---\ntype: [[article]]\nparent: [[quiet_loud]]\n---\n\n- [ ] #task Loud ^l1\n",
+      "t_quiet.md": "---\ntype: [[article]]\nparent: [[quiet_inbox]]\n---\n\n- [ ] #task Quiet ^q1\n",
+    },
+  };
+  const notes = notesForCase(vector);
+  const { metadataCache, vault } = fakeVault(notes);
+  const actual = planTodayRoots({
+    content: vector.daily,
+    dailyPath: vector.daily_path,
+    metadataCache,
+    vault,
+    tasks: tasksFromNotes(notes),
+    taskLineForBlock: taskLineForBlock(notes),
+  });
+  assert.deepEqual(actual, [
+    { key: "sase.md", label: "sase", hue: "blue", tasks: 2 },
+    { key: "quiet_loud.md", label: "quiet_loud", hue: "red", tasks: 1 },
+    { key: "quiet_inbox.md", label: "quiet_inbox", hue: null, tasks: 1 },
+  ]);
+});
+
 test("planTodayRoots returns null when Tasks is unavailable", () => {
   const notes = notesForCase(fixture.today_roots[0]);
   const { metadataCache, vault } = fakeVault(notes);

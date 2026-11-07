@@ -387,10 +387,7 @@ class BobLedgerToolsPomodoroThemeChipsMixin {
               : resolved && resolved.hue
                 ? resolved.hue
                 : null;
-            const muted =
-              !neutral && resolved &&
-              (resolved.hue_source === "exempt" ||
-                resolved.hue_source === "unconfigured");
+            const muted = !neutral && pomodoroThemeHueIsMuted(resolved);
             const attributes = {
               "data-theme-key": component.key,
               title: this.pomodoroThemeTooltip(component.key, component.raw),

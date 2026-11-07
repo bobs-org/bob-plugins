@@ -223,7 +223,7 @@ restores the unmarked rendering:
   digit checkbox (`p1`–`p4`) folds that row's priority bars to zero
   width, and `prj` / `awaiting` checkboxes fold their exact
   `#prj_is_blocked` / `#awaiting_reply` pill; the cursor and a click
-  still reveal the raw field, and either session toggle restores it. The session toggle restores the ordinary `?` box.
+  still reveal the raw field, and either session toggle restores it.
 - The priority mark renders each canonical `[priority:: …]` field as one
   signal-bar glyph (4/3/2/1 filled bars for P1–P4, a solid `!` square for
   off-ladder `highest`) in Live Preview and rendered views. The glyph follows
@@ -300,12 +300,12 @@ The plugin also renders the TODAY/PENDING/NEXT/READY badges on dashboard and
 daily `bob-plan` blocks as live section-over-cap counts that agree with their
 Tasks sections (the BLOCKED badge stays informational and neutral with no
 cap), the CROWDED chip, the `bob-ready-notes` ranked-bar block, `## Tasks`
-heading chips, Pomodoro home chips (quiet lowercase chips with area-hue dots
+heading chips, Pomodoro home chips (quiet lowercase chips with [root-hue](https://bobs-org.github.io/pomodoro-homes/#r8-area-hues) dots
 that name each linked task's root parent, so a project and its sub-projects read as one
 root, following each task's `[root:: NOTE]` field; the tooltip lists each root's tasks and
 minutes, and an Off-Clock Pomodoro's chip is dashed, shows its recorded minutes, and reads `love · 60m off the clock`), Pomodoro type pills (one soft tint per
 `+`-separated component of the ` — NAME` tail, with a gray pill for exempt
-types such as PLAN, a tooltip naming the hue and day count, and a session
+or grey-area types such as PLAN, a tooltip naming the hue and day count, and a session
 toggle now active in every window through the shared tint gate), and the display-only 🍅 Today mark on open
 task lines linked under today's open Pomodoros, with a session toggle and a
 jump to the Task Link. A name the catalog does not know stays neutral on the
@@ -320,19 +320,19 @@ fact), followed by two lanes on the same working
 minutes: the root-parent legend with `so far · HH:MM` over the
 root-parent bar, then a type legend over the full-width type bar that
 separates the strip from the badges — and paints from bob's Stats
-report; it never changes the note and never writes the vault. A quiet
+report; it never writes the vault. A quiet
 switch at the right of the top lane cycles both bars → root parents only
 → types only, for every daily note at once; the choice is remembered on
 this device. Review
 closed shows a green check, a red ✕, or the yellow In Progress half-ring
 while today's review is still open. The roots bar groups working time
 by root parent (falling back to areas with an honest "Time by area" label when
-bob predates `root_parent`). The type bar groups the same minutes by task type and wears each type's hue;
+bob predates `root_parent`). Grey roots stay gray, after coloured roots. The type bar groups the same minutes by task type and wears each type's hue;
 clicking it opens Stats on the Types view. Each legend fits as many names as its line holds.
 When the day's Worked point carries positive off-clock time, a quiet `◌ +<display> off-clock` hint renders under WORKED and opens Stats on that day with the Off-clock lens.
 Daily notes without a `bob-plan` block show no strip. To place one explicitly,
 add a `bob-day-stats` code fence in any note, optionally with `day: YYYY-MM-DD`.
-A fence placed inside a daily note simply renders its own strip.
+A fence inside a daily note renders its own strip.
 
 The **period stats strip** (`bob-stats-strip`) covers weeks, quarters, years, and all time: facts, typicals, root/type lanes, and child bars (days; quarter weeks with month ticks; year weeks grouped by quarter; all-time quarters grouped by year). Future bars are dashed; pre-ledger bars are hatched. Arrows move, Enter opens a child, and Alt+Enter pins Stats to a day. Strips and `bob-period-parts` tables share cached `bob periods show` JSON and never write notes. Tables show dates, Worked, review, and Headline or “mostly”; weekly Days add Done and closeout. Future rows show only child and dates. Daily paths render the Day strip; failures show Retry.
 
@@ -349,7 +349,7 @@ that split the selected window's minutes by root parent and by
 task type, then the responsive Root parents panel with Root parents
 and Types views, area groups with sub-project disclosure, bucket fix-it
 copy, and session drill-down, plus task counts; the Types view wears
-each type's hue on its bars, with exempt types and `other` in gray. Off-clock time renders as dashed outlines in the item's hue across tiles, focus charts, window lanes, and time breakdowns; under Total, a solid worked span ends in a dashed off-clock tail and off-clock sessions get a dashed edge. Total sums session minutes, so overlapping sessions count twice; it is neither occupied nor free time. The full value contract is on the [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type line of
+each type's hue on its bars, with exempt and grey-area types and `other` in gray. Off-clock time renders as dashed outlines in the item's hue across tiles, focus charts, window lanes, and time breakdowns; under Total, a solid worked span ends in a dashed off-clock tail and off-clock sessions get a dashed edge. Total sums session minutes, so overlapping sessions count twice; it is neither occupied nor free time. The full value contract is on the [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type line of
 the plan block renders the same pills. The read-only `bob-reading-board` block
 renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
 entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from
@@ -603,7 +603,7 @@ tooltip names the type, until **Toggle inherited task types** is turned
 on. A live Task Link that disagrees with its task's effective type (explicit
 or inherited) gets a dashed `#TYPE` prefix in today's ledger. Day strip and Stats copy say **Time by
 type** / **Types**; JSON still uses the `theme` dimension.
-Exempt types such as PLAN have no hue, so their `#TYPE` uses the muted ink
+Exempt types such as PLAN, and grey-area types, have no hue, so their `#TYPE` uses the muted ink
 (`--bob-type-ink-muted`) instead of a palette color.
 
 ## Settings

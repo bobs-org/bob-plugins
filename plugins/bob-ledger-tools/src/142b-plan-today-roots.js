@@ -122,7 +122,10 @@ function planTodayRootFromHome(home) {
   if (key.startsWith("@")) {
     return { key: "@unfiled", label: "unfiled", hue: null };
   }
-  const hue = typeof home.hue === "string" && home.hue ? home.hue : null;
+  // A root wears its own hue (R7/R8); a nearer sub-project's `color:` never
+  // changes it, and a grey root stays null.
+  const raw = home.root_hue !== undefined ? home.root_hue : home.hue;
+  const hue = typeof raw === "string" && raw ? raw : null;
   return { key, label: planTodayRootLabel(key), hue };
 }
 

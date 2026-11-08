@@ -184,6 +184,7 @@
   "675-plugin-goto-task-uri.js",
   "676-plugin-open-notes-uri.js",
   "677-plugin-ref-pdf-open.js",
+  "677a-ref-annotation-locator.js",
   "678-plugin-templater-trigger.js",
   "679-plugin-image-zoom.js",
   "679a-image-zoom-path.js",

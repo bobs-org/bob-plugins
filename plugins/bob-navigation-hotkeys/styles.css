@@ -3396,6 +3396,32 @@
 .bob-rotten-history-row.is-empty { color: var(--text-faint); }
 
 /* --- Lane walk notice --- */
+.bob-nh-notice.bob-nh-highlights {
+  --bob-nh-level-color: color-mix(in srgb, var(--color-yellow) 65%, var(--color-orange));
+}
+.bob-nh-notice.bob-nh-highlights.is-warn { --bob-nh-level-color: var(--color-orange); }
+.bob-nh-notice.bob-nh-highlights.is-error { --bob-nh-level-color: var(--color-red); }
+.bob-nh-notice.bob-nh-highlights.is-muted { --bob-nh-level-color: var(--text-muted); }
+.bob-nh-highlights-status { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.bob-nh-highlights-title {
+  overflow: hidden;
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-nh-highlights-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-style: italic;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.bob-nh-notice.bob-nh-highlights.is-warn .bob-nh-highlights-detail,
+.bob-nh-notice.bob-nh-highlights.is-error .bob-nh-highlights-detail { color: var(--bob-nh-level-color); font-style: normal; }
+.bob-nh-highlights-archive { width: fit-content; }
+
 .bob-nh-notice.bob-nh-lane-walk.is-pending {
   --bob-nh-level-color: var(--task-status-in-progress, var(--color-orange, #d9822b));
 }

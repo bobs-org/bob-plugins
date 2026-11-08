@@ -247,19 +247,32 @@ class BobNavigationHotkeysRefPdfOpenMixin {
     } else {
       message = `Opening ${title} in Highlights — no page number on this highlight`;
     }
-    new Notice(message);
+    const opening = highlightsNoticeModel(target, "opening", message);
+    const notice = showHighlightsNotice(this, opening, this.highlightsNotice);
     return {
       pageJumpUnavailable: () => {
-        new Notice(`Opened ${title} — jumping to p. ${page} needs Hammerspoon`);
+        const model = highlightsNoticeModel(
+          target,
+          "unavailable",
+          `Opened ${title} — jumping to p. ${page} needs Hammerspoon`,
+        );
+        showHighlightsNotice(this, model, notice);
       },
       failed: (reason) => {
-        new Notice(String(reason || "Could not open in Highlights"));
+        const failure = String(reason || "Could not open in Highlights");
+        showHighlightsNotice(
+          this,
+          highlightsNoticeModel(target, "failed", failure),
+          notice,
+        );
       },
     };
   }
 
   reportHighlightsOutcome(target) {
-    new Notice(String((target && target.message) || "Could not open in Highlights"));
+    const message = String((target && target.message) || "Could not open in Highlights");
+    const model = highlightsNoticeModel(target, "failed", message);
+    showHighlightsNotice(this, model, this.highlightsNotice);
   }
 
   async openReferencePdfPath(path, options = {}) {

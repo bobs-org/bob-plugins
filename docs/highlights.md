@@ -24,6 +24,12 @@ review state. A missing, unsafe, or unsynced PDF produces a notice.
 Highlights is macOS-only; on other systems the command reports that
 limitation.
 
+The command shows a single Highlights card before opening. It includes the
+reference title, page receipt when known, and a short quote or context line.
+Archived references show their replacement date. If the page handoff is
+unavailable or the launch fails, the card updates with the result; Hammerspoon
+confirms a successful page landing separately.
+
 ## Page behavior
 
 The resolver follows bookmark hops, Task Link hops, and managed-block

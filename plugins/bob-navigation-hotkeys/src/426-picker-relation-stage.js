@@ -14,7 +14,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
   }
 
   isLinkedFromSession() {
-    // The ⇧↵ relation field and the block-ID prompt leave the list stage
+    // The ⌃↵ relation field and the block-ID prompt leave the list stage
     // but still commit the gesture started in Linked from.
     return this.relationStage === true && this.relationStageDirection === "from";
   }
@@ -182,7 +182,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       const hints = [
         { keys: ["↑", "↓"], label: "navigate" },
         { keys: ["↵"], label: "open mention" },
-        { keys: ["⇧↵"], label: "add relation" },
+        { keys: ["⌃↵"], label: "add relation" },
       ];
       if (!this.taskSession || this.taskSession.type === "single") {
         hints.push({ keys: ["~"], label: "flip direction" });
@@ -200,7 +200,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       { keys: ["↑", "↓"], label: "navigate" },
       { keys: ["⇥"], label: "mark" },
       { keys: ["↵"], label: verb },
-      { keys: ["⇧↵"], label: "with a relation" },
+      { keys: ["⌃↵"], label: "with a relation" },
     ];
     if (!this.taskSession || this.taskSession.type === "single") {
       hints.push({ keys: ["~"], label: "flip direction" });
@@ -364,7 +364,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
       return false;
     }
     // §19: a mention row opens its source at the first occurrence (MN19).
-    // Toggling or removing it is refused; ⇧↵ adds a relation for the source
+    // Toggling or removing it is refused; ⌃↵ adds a relation for the source
     // instead, which replaces the mention entry by identity.
     if (item.mention === true) {
       if (options.withLabel) {
@@ -721,7 +721,7 @@ class BulletPropertyPickerRelationStageMixin extends FilteredPickerModal {
     return this.commitRelationEdit({ add, remove, relabel }, overrides);
   }
 
-  // The relation field (⇧↵): one input, suggestion chips from the live
+  // The relation field (⌃↵): one input, suggestion chips from the live
   // relation index, a live `S — ‹label› → T` sentence, and inline
   // validation. ↵ commits (empty commits plain, LG3); Escape returns to
   // the list and writes nothing.

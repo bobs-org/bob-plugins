@@ -68,12 +68,12 @@ function relationStageConsequenceStrip(item, context = {}) {
   // §19: a mention row opens instead of toggling; only its text edit
   // (or reconcile) changes the entry.
   if (item.mention === true) {
-    return "↵ opens it in its note · ⇧↵ adds a relation";
+    return "↵ opens it in its note · ⌃↵ adds a relation";
   }
   if (item.stageSection === "current") {
     return context.direction === "from"
-      ? "↵ removes this source · ⇧↵ relabels"
-      : "↵ unlinks · ⇧↵ relabels";
+      ? "↵ removes this source · ⌃↵ relabels"
+      : "↵ unlinks · ⌃↵ relabels";
   }
   return "Links only · never blocks, schedules, or changes status";
 }

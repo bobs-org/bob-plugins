@@ -446,6 +446,10 @@ test("Linked-from stage: footer hints follow the mention row kind", () => {
     "flip direction",
     "dismiss",
   ]);
+  assert.deepEqual(
+    hints.find((hint) => hint.label === "add relation").keys,
+    ["⌃↵"],
+  );
   picker.selectedIndex = 1;
   assert.ok(
     picker.getRelationStageFooterHints().some((hint) => hint.label === "link here"),
@@ -458,7 +462,7 @@ test("Linked-from stage: consequence strip names the mention gesture", () => {
       { mention: true, stageSection: "current" },
       { marked: [], direction: "from" },
     ),
-    "↵ opens it in its note · ⇧↵ adds a relation",
+    "↵ opens it in its note · ⌃↵ adds a relation",
   );
 });
 
@@ -483,7 +487,7 @@ test("MN19: ↵ on a mention row opens the source at the occurrence", async () =
   assert.equal(calls[0][1], "Tasks.md");
 });
 
-test("Linked-from stage: ⇧↵ on a mention row adds a relation for the source", async () => {
+test("Linked-from stage: ⌃↵ on a mention row adds a relation for the source", async () => {
   const notes = { "Tasks.md": "- [ ] #task T ^t" };
   const harness = makePlugin(notes);
   const picker = makeRelationPicker(

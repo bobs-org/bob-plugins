@@ -535,7 +535,7 @@ test("LG3: typed relation labels commit their text through the relation field", 
   });
 });
 
-test("Linked from Shift+Enter goes through the relation field and labels the source", async () => {
+test("Linked from Ctrl+Enter goes through the relation field and labels the source", async () => {
   const notes = currentOtherNotes();
   const { picker, currentEditor, otherEditor, other } = makeCurrentOtherPicker(
     "from",
@@ -559,7 +559,7 @@ test("Linked from Shift+Enter goes through the relation field and labels the sou
   assert.doesNotMatch(currentEditor.getValue(), /\*\*LINKS:\*\*/);
 });
 
-test("Linked from Shift+Enter relabels a CURRENT source", async () => {
+test("Linked from Ctrl+Enter relabels a CURRENT source", async () => {
   const notes = currentOtherNotes({
     current: [
       "- [ ] #task Current ^current",
@@ -628,7 +628,7 @@ test("Linked from prompts for the owner's id then links", async (t) => {
     assert.match(otherEditor.getValue(), /LINKS:\*\* \[\[Current#\^current\]\]/);
   });
 
-  await t.test("Shift+Enter labels the source after the owner id prompt", async () => {
+  await t.test("Ctrl+Enter labels the source after the owner id prompt", async () => {
     const notes = currentOtherNotes({
       current: "- [ ] #task Current",
     });
@@ -1361,7 +1361,7 @@ test("subtitle, consequence strip, live sentence, and label refusal copy", () =>
   // CURRENT copy names both gestures.
   assert.equal(
     helpers.relationStageConsequenceStrip({ kind: "local-task", stageSection: "current" }, {}),
-    "↵ unlinks · ⇧↵ relabels",
+    "↵ unlinks · ⌃↵ relabels",
   );
   // Archived rows explain the live-only mirror (LG6).
   assert.equal(
@@ -2362,6 +2362,59 @@ function makeFlipPicker(direction, query, extra = {}) {
   return { harness, picker, editor };
 }
 
+function enterKeyEvent(overrides = {}) {
+  let prevented = false;
+  let stopped = false;
+  return {
+    event: {
+      key: "Enter",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 13,
+      repeat: false,
+      target: null,
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {
+        stopped = true;
+      },
+      ...overrides,
+    },
+    get prevented() {
+      return prevented;
+    },
+    get stopped() {
+      return stopped;
+    },
+  };
+}
+
+function makeRelationKeydownPicker(extra = {}) {
+  const { picker } = makeFlipPicker("to", extra.query || "");
+  picker.showRelationStage("to");
+  picker.opening = false;
+  picker.markedLines = new Set();
+  const item = extra.item || {
+    path: "Other.md",
+    line: 0,
+    blockId: "foot",
+    displayText: "Footnote task",
+    stageSection: extra.stageSection || "results",
+    alreadyLinked: extra.alreadyLinked === true,
+  };
+  picker.visibleItems = [item];
+  picker.selectedIndex = 0;
+  picker.closed = false;
+  picker.close = () => {
+    picker.closed = true;
+  };
+  return { picker, item };
+}
+
 function tildeKeyEvent(overrides = {}) {
   let prevented = false;
   let stopped = false;
@@ -2524,6 +2577,11 @@ test("LG16: footer offers ~ flip direction in single sessions only", () => {
       .getRelationStageFooterHints()
       .some((hint) => hint.keys.includes("~") && /flip direction/.test(hint.label)),
   );
+  assert.ok(
+    single
+      .getRelationStageFooterHints()
+      .some((hint) => hint.keys.includes("⌃↵") && hint.label === "with a relation"),
+  );
   const counted = makeFlipPicker("to", "", {
     taskSession: { explicit: true, targets: [{ line: 0 }] },
   }).picker;
@@ -2533,6 +2591,137 @@ test("LG16: footer offers ~ flip direction in single sessions only", () => {
       .getRelationStageFooterHints()
       .some((hint) => hint.keys.includes("~")),
   );
+});
+
+test("⌃↵ on a RESULTS row opens the relation-label stage", () => {
+  for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
+    const { picker, item } = makeRelationKeydownPicker();
+    let opened = null;
+    picker.chooseRelationTask = (row, options) => {
+      opened = { row, options };
+      picker.stage = "relation-label";
+      return false;
+    };
+    const box = enterKeyEvent(modifiers);
+    picker.handleKeydown(box.event);
+    assert.equal(box.prevented, true);
+    assert.equal(box.stopped, true);
+    assert.equal(opened.row, item);
+    assert.deepEqual(opened.options, { withLabel: true });
+    assert.equal(picker.stage, "relation-label");
+    assert.equal(picker.closed, false);
+  }
+});
+
+test("⌃↵ on a CURRENT row opens the relabel stage and does not unlink", () => {
+  const { picker, item } = makeRelationKeydownPicker({
+    stageSection: "current",
+    alreadyLinked: true,
+  });
+  let opened = null;
+  let writes = 0;
+  picker.chooseRelationTask = (row, options) => {
+    opened = { row, options };
+    picker.stage = "relation-label";
+    return false;
+  };
+  picker.commitRelationEdit = () => {
+    writes += 1;
+    return true;
+  };
+  const box = enterKeyEvent({ ctrlKey: true });
+  picker.handleKeydown(box.event);
+  assert.equal(box.prevented, true);
+  assert.deepEqual(opened.options, { withLabel: true });
+  assert.equal(opened.row, item);
+  assert.equal(picker.stage, "relation-label");
+  assert.equal(writes, 0);
+});
+
+test("Ctrl+Shift+Enter and Alt+Ctrl+Enter do not open the label stage", () => {
+  for (const modifiers of [
+    { ctrlKey: true, shiftKey: true },
+    { ctrlKey: true, altKey: true },
+  ]) {
+    const { picker } = makeRelationKeydownPicker();
+    let opened = false;
+    picker.chooseRelationTask = (_row, options) => {
+      if (options && options.withLabel) {
+        opened = true;
+        picker.stage = "relation-label";
+      }
+      return false;
+    };
+    const box = enterKeyEvent(modifiers);
+    picker.handleKeydown(box.event);
+    assert.equal(opened, false);
+    assert.equal(picker.stage, "value");
+  }
+});
+
+test("⇧↵ on RESULTS and CURRENT is a no-op", () => {
+  for (const extra of [
+    { stageSection: "results" },
+    { stageSection: "current", alreadyLinked: true },
+  ]) {
+    const { picker } = makeRelationKeydownPicker(extra);
+    let called = false;
+    let writes = 0;
+    picker.chooseRelationTask = () => {
+      called = true;
+      return false;
+    };
+    picker.commitRelationEdit = () => {
+      writes += 1;
+      return true;
+    };
+    picker.openSelectedItem = () => {
+      called = true;
+    };
+    const box = enterKeyEvent({ shiftKey: true });
+    picker.handleKeydown(box.event);
+    assert.equal(box.prevented, true);
+    assert.equal(box.stopped, true);
+    assert.equal(picker.stage, "value");
+    assert.equal(called, false);
+    assert.equal(writes, 0);
+  }
+});
+
+test("⌃↵ in the relation-label stage commits like Enter", () => {
+  const { picker } = makeRelationKeydownPicker();
+  picker.stage = "relation-label";
+  let committed = 0;
+  picker.openSelectedItem = () => {
+    committed += 1;
+  };
+  const box = enterKeyEvent({ ctrlKey: true });
+  picker.handleKeydown(box.event);
+  assert.equal(box.prevented, true);
+  assert.equal(committed, 1);
+});
+
+test("Ctrl+Enter on a scheduled value stage still takes the recommended roll", () => {
+  const picker = Object.create(helpers.BulletPropertyPickerModal.prototype);
+  picker.relationStage = false;
+  picker.stage = "value";
+  picker.opening = false;
+  picker.selectedPropertyItem = {
+    property: { name: "scheduled", values: "date" },
+  };
+  picker.hasCountedRollBatchForDateProperty = () => false;
+  picker.hasLinkRollBatchForDateProperty = () => false;
+  picker.getScheduledRollRecommendation = () => ({ kind: "roll" });
+  let rolled = 0;
+  picker.applyRecommendedRoll = () => {
+    rolled += 1;
+    return Promise.resolve(true);
+  };
+  picker.close = () => {};
+  const box = enterKeyEvent({ ctrlKey: true });
+  picker.handleKeydown(box.event);
+  assert.equal(box.prevented, true);
+  assert.equal(rolled, 1);
 });
 
 test("SA22/SA30: successor labels overlay as configured with offers row meta and caveats", () => {

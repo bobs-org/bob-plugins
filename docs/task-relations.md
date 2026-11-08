@@ -83,7 +83,7 @@ In the Linked-from stage, mention rows carry the `💬 mentioned in` /
 `↵` opens the source at the first occurrence; toggling or removing a
 mention row is refused with `💬 This comes from a link in ‹S›'s text · edit
 it there (↵ opens it)`. Footer hints follow the selected row's kind, and
-`⇧↵` on a mention row adds a relation for that source, which replaces the
+`⌃↵` on a mention row adds a relation for that source, which replaces the
 mention entry by identity. Removing a relation whose source still mentions
 the target — `removeLink`, the chip `×`, or Links-to `Ctrl+D` — downgrades
 the entry to `(💬 mentions)` instead of deleting it, with
@@ -115,9 +115,10 @@ CURRENT holds the outgoing links with label pills in authored order,
 RESULTS holds open tasks, and CLOSED holds closed tasks then `done/`
 archives. RESULTS ranks open tasks of every status by match score, so Blocked
 `[?]` tasks are never set apart in their own section; exact-score ties put In
-Progress and Next first, then Ready and Blocked together. `↵` links (or unlinks on CURRENT), `⇧↵` opens the relation field
+Progress and Next first, then Ready and Blocked together. `↵` links (or unlinks on CURRENT), `⌃↵` opens the relation field
 (or relabels on CURRENT), `⇥` marks several, and id-less targets run the
-block-ID prompt once on apply. Typing `~` anywhere in the Links /
+block-ID prompt once on apply. Shift+Enter in those stages does nothing.
+Typing `~` anywhere in the Links /
 Linked-from filter flips the stage in place, keeping the filter text and
 caret while clearing Tab marks; counted sessions refuse the flip to Linked
 from with `Linked from needs a single task`. The relation field offers suggestions from
@@ -130,8 +131,8 @@ Linked from lists incoming sources in CURRENT from `api.relationIndex`, or
 from a generation-guarded vault scan while that index is unavailable.
 Sources of every task status count, including Next `[*]` and Blocked `[?]`.
 Its RESULTS are editable source tasks that can link here; Enter applies or
-removes the selected source, and `Shift+Enter` adds or changes the relation
-label. `Shift+Enter` labels the selected source's LINKS line, and the
+removes the selected source, and `Ctrl+Enter` adds or changes the relation
+label. `Ctrl+Enter` labels the selected source's LINKS line, and the
 relation field's live sentence reads `‹source› — ‹label› → this`. Named pairs
 and derived `‹participle› by` inverses show that inverse phrase in CURRENT.
 `N<Ctrl+Shift+L>`

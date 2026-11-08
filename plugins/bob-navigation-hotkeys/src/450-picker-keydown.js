@@ -20,7 +20,7 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       }
       return;
     }
-    // The relation field (⇧↵ from the Links stage): Escape and an empty
+    // The relation field (⌃↵ from the Links stage): Escape and an empty
     // Backspace return to the list and write nothing (LG3); ↵ commits
     // through the list's openItem path.
     if (this.stage === "relation-label" && event) {
@@ -42,17 +42,13 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         return;
       }
     }
-    // ⇧↵ on the Links stage opens the relation field (or relabels on
+    // ⌃↵ on the Links stage opens the relation field (or relabels on
     // CURRENT); plain ↵ keeps the list's toggle behavior (LG3, LG4).
+    // Claim this key before the scheduled-roll Ctrl+Enter handler.
     if (
       this.relationStage &&
       this.stage === "value" &&
-      event &&
-      event.key === "Enter" &&
-      event.shiftKey === true &&
-      event.ctrlKey !== true &&
-      event.metaKey !== true &&
-      event.altKey !== true
+      isRecommendedRollKeydown(event)
     ) {
       event.preventDefault();
       event.stopPropagation();
@@ -74,6 +70,22 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
         .finally(() => {
           this.opening = false;
         });
+      return;
+    }
+    // ⇧↵ in those stages does nothing: consume it so it cannot fall
+    // through to the base Enter handler (LG23).
+    if (
+      this.relationStage &&
+      this.stage === "value" &&
+      event &&
+      event.key === "Enter" &&
+      event.shiftKey === true &&
+      event.ctrlKey !== true &&
+      event.metaKey !== true &&
+      event.altKey !== true
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
     // `~` anywhere in the Links / Linked-from filter flips the stage in

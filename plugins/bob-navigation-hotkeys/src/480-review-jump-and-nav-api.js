@@ -902,11 +902,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
-// `openReferencePdf(path)` is the additive Highlights hand-off used by the
-// bob-ledger-tools Reading Board: it opens a vault-relative `source_pdf`
-// (macOS only, no vault writes) and settles to `{ok, reason?}`. Callers
-// feature-detect `typeof api.openReferencePdf === "function"`; the api
-// `version` is unchanged.
+// `openReferencePdf(path, options?)` hands `source_pdf` to Highlights;
+// `options.page` passes through when positive. Version unchanged.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -937,12 +934,15 @@ function createDependencyNavApi(plugin) {
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
-    openReferencePdf(path) {
+    openReferencePdf(path, options) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
       }
+      const p = options && options.page;
+      const args =
+        Number.isInteger(p) && p >= 1 && p <= 999999 ? { page: p } : {};
       return settle(async () =>
-        (await plugin.openReferencePdfPath(path))
+        (await plugin.openReferencePdfPath(path, args))
           ? { ok: true }
           : { ok: false, reason: "not-opened" },
       );

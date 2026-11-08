@@ -1,6 +1,7 @@
 const HIGHLIGHTS_BUNDLE_ID = "net.highlightsapp.universal";
 const HIGHLIGHTS_APP_NAME = "Highlights";
 const HIGHLIGHTS_OPEN_TIMEOUT_MS = 15000;
+const HIGHLIGHTS_REENTRY_MS = 400;
 const OPEN_LINK_IN_NEW_TAB_COMMAND_ID = "editor:open-link-in-new-leaf";
 
 function parseRefPdfBlockLinkLine(lineText) {
@@ -79,25 +80,52 @@ function errorDetail(error, stderr) {
 
 class BobNavigationHotkeysRefPdfOpenMixin {
   async openReferencePdfInHighlightsOrLink() {
+    const now = Date.now();
+    if (this._highlightsLaunchActive === true) {
+      return;
+    }
+    if (
+      typeof this._highlightsLastLaunchEnd === "number" &&
+      now - this._highlightsLastLaunchEnd < HIGHLIGHTS_REENTRY_MS
+    ) {
+      return;
+    }
     const context = this.getRefPdfEditorContext();
     if (!context) {
       this.delegateOpenLinkInNewTab();
       return;
     }
-
-    const result = await this.resolveReferencePdfAtCursor(
-      context.editor,
-      context.file,
-    );
-    if (result.kind === "none") {
+    let target = null;
+    try {
+      target = await this.resolveHighlightsTargetAtCursor(
+        context.editor,
+        context.file,
+      );
+    } catch (_error) {
+      target = null;
+    }
+    if (!target || target.kind === "none") {
       this.delegateOpenLinkInNewTab();
       return;
     }
-    if (result.kind === "error") {
-      new Notice(result.message);
+    if (
+      target.kind === "removed" ||
+      target.kind === "missing-highlight" ||
+      target.kind === "error"
+    ) {
+      this.reportHighlightsOutcome(target);
       return;
     }
-    await this.openReferencePdfPath(result.path);
+    this._highlightsLaunchActive = true;
+    try {
+      await this.openReferencePdfPath(target.pdfPath, {
+        page: target.page,
+        target,
+      });
+    } finally {
+      this._highlightsLaunchActive = false;
+      this._highlightsLastLaunchEnd = Date.now();
+    }
   }
 
   getRefPdfEditorContext() {
@@ -144,70 +172,6 @@ class BobNavigationHotkeysRefPdfOpenMixin {
     }
 
     return Object.freeze({ editor: view.editor, file: view.file });
-  }
-
-  async resolveReferencePdfAtCursor(editor, file) {
-    const content = String(editor.getValue() || "");
-    const cursor = editor.getCursor();
-    const lines = content.split(/\r?\n/);
-    const lineIndex = cursor && Number.isInteger(cursor.line) ? cursor.line : -1;
-    if (lineIndex < 0 || lineIndex >= lines.length) {
-      return Object.freeze({ kind: "none" });
-    }
-
-    const lineText = String(lines[lineIndex] || "");
-    const contexts = getMarkdownLineContexts(content);
-    if (isObsidianTaskAtLine(content, lineIndex, contexts, lines)) {
-      if (!REF_AFTER_TASK_RE.test(lineText)) {
-        return Object.freeze({ kind: "none" });
-      }
-      return this.resolveReferencePdfFromTaskLine(lineText, file.path);
-    }
-
-    const blockLink = parseRefPdfBlockLinkLine(lineText);
-    if (!blockLink) {
-      return Object.freeze({ kind: "none" });
-    }
-
-    const targetFile = this.resolveLinkTargetFile(
-      `${blockLink.target}#^${blockLink.blockId}`,
-      file.path,
-    );
-    if (!targetFile || !this.isMarkdownFile(targetFile)) {
-      return Object.freeze({ kind: "none" });
-    }
-
-    const targetPath = normalizeVaultRelativePath(targetFile.path);
-    const targetContent = await this.readLinkPickerNoteContent(
-      targetPath,
-      targetFile,
-    );
-    if (targetContent === null) {
-      return Object.freeze({ kind: "none" });
-    }
-    const found = findUniqueLinkPickerTargetLine(
-      targetContent,
-      blockLink.blockId,
-      { allowClosed: true },
-    );
-    if (!found.valid) {
-      return Object.freeze({ kind: "none" });
-    }
-
-    const targetLines = targetContent.split(/\r?\n/);
-    const targetContexts = getMarkdownLineContexts(targetContent);
-    if (
-      !isObsidianTaskAtLine(
-        targetContent,
-        found.line,
-        targetContexts,
-        targetLines,
-      ) ||
-      !REF_AFTER_TASK_RE.test(found.rawLine)
-    ) {
-      return Object.freeze({ kind: "none" });
-    }
-    return this.resolveReferencePdfFromTaskLine(found.rawLine, targetPath);
   }
 
   resolveReferencePdfFromTaskLine(lineText, sourcePath) {
@@ -269,12 +233,60 @@ class BobNavigationHotkeysRefPdfOpenMixin {
     return refPdfError("Reading task links no reference PDF");
   }
 
+  announceHighlightsOpen(target) {
+    const title =
+      target && typeof target.title === "string" && target.title
+        ? target.title
+        : "Untitled";
+    const page = normalizeHighlightsPageOption(target ? target.page : null);
+    let message = null;
+    if (!target || target.kind === "reading") {
+      message = `Opening ${title} in Highlights — resumes where you left off`;
+    } else if (page !== null) {
+      message = `Opening ${title} in Highlights at p. ${page}`;
+    } else {
+      message = `Opening ${title} in Highlights — no page number on this highlight`;
+    }
+    new Notice(message);
+    return {
+      pageJumpUnavailable: () => {
+        new Notice(`Opened ${title} — jumping to p. ${page} needs Hammerspoon`);
+      },
+      failed: (reason) => {
+        new Notice(String(reason || "Could not open in Highlights"));
+      },
+    };
+  }
+
+  reportHighlightsOutcome(target) {
+    new Notice(String((target && target.message) || "Could not open in Highlights"));
+  }
+
   async openReferencePdfPath(path, options = {}) {
+    const target = options.target || null;
+    const requestedPage = Object.prototype.hasOwnProperty.call(options, "page")
+      ? options.page
+      : target
+        ? target.page
+        : null;
+    const page = normalizeHighlightsPageOption(requestedPage);
     const normalizedPath = normalizeRefSourcePdfPath(path);
     if (!normalizedPath) {
-      new Notice(`Unsafe source_pdf: ${String(path || "")}`);
+      const message = `Unsafe source_pdf: ${String(path || "")}`;
+      if (target) {
+        this.reportHighlightsOutcome({ ...target, kind: "error", message });
+      } else {
+        new Notice(message);
+      }
       return false;
     }
+    const fail = (message) => {
+      if (target) {
+        this.reportHighlightsOutcome({ ...target, kind: "error", message });
+      } else {
+        new Notice(message);
+      }
+    };
 
     const adapter = this.app && this.app.vault && this.app.vault.adapter;
     const exists =
@@ -283,16 +295,16 @@ class BobNavigationHotkeysRefPdfOpenMixin {
         ? adapter.exists.bind(adapter)
         : null);
     if (typeof exists !== "function") {
-      new Notice(`Reference PDF not found: ${normalizedPath}`);
+      fail(`Reference PDF not found: ${normalizedPath}`);
       return false;
     }
     try {
       if (!(await exists(normalizedPath))) {
-        new Notice(`Reference PDF not found: ${normalizedPath}`);
+        fail(`Reference PDF not found: ${normalizedPath}`);
         return false;
       }
     } catch (_error) {
-      new Notice(`Reference PDF not found: ${normalizedPath}`);
+      fail(`Reference PDF not found: ${normalizedPath}`);
       return false;
     }
 
@@ -300,7 +312,7 @@ class BobNavigationHotkeysRefPdfOpenMixin {
       ? options.basePath
       : this.getVaultBasePath();
     if (!basePath) {
-      new Notice("Opening PDFs needs the desktop app");
+      fail("Opening PDFs needs the desktop app");
       return false;
     }
     const absolutePath = joinFilesystemPath(basePath, normalizedPath);
@@ -308,7 +320,7 @@ class BobNavigationHotkeysRefPdfOpenMixin {
       ? options.isMacOS === true
       : Boolean(obsidian.Platform && obsidian.Platform.isMacOS === true);
     if (!isMacOS) {
-      new Notice(`Highlights is macOS-only: ${normalizedPath}`);
+      fail(`Highlights is macOS-only: ${normalizedPath}`);
       return false;
     }
 
@@ -318,11 +330,29 @@ class BobNavigationHotkeysRefPdfOpenMixin {
         ({ execFile } = require("child_process"));
       }
     } catch (error) {
-      new Notice(
+      fail(
         `Could not open ${normalizedPath.split("/").at(-1)} in Highlights: ${error.message}`,
       );
       return false;
     }
+
+    const announceTarget =
+      target ||
+      freezeHighlightsTarget({
+        kind: page !== null ? "page" : "reading",
+        pdfPath: normalizedPath,
+        page,
+        title: getHighlightsRefTitle(null, null, normalizedPath),
+        snippet: null,
+        detail: null,
+        captionCount: null,
+        archived: null,
+        blockId: null,
+        via: "cursor",
+        railLines: null,
+        message: null,
+      });
+    const handle = this.announceHighlightsOpen(announceTarget);
 
     const [bundleAttempt, appAttempt] =
       buildHighlightsOpenAttempts(absolutePath);
@@ -341,21 +371,42 @@ class BobNavigationHotkeysRefPdfOpenMixin {
       });
 
     const first = await runAttempt(bundleAttempt);
-    if (!first.error) {
-      new Notice(`Opened ${normalizedPath.split("/").at(-1)} in Highlights`);
+    if (first.error) {
+      const firstDetail = errorDetail(first.error, first.stderr);
+      const second = await runAttempt(appAttempt);
+      if (second.error) {
+        const detail = firstDetail || errorDetail(second.error, second.stderr);
+        handle.failed(
+          `Could not open ${normalizedPath.split("/").at(-1)} in Highlights: ${detail}`,
+        );
+        return false;
+      }
+    }
+    if (page === null) {
       return true;
     }
-    const firstDetail = errorDetail(first.error, first.stderr);
-    const second = await runAttempt(appAttempt);
-    if (!second.error) {
-      new Notice(`Opened ${normalizedPath.split("/").at(-1)} in Highlights`);
+    const url = buildHighlightsPageUrl(absolutePath, page);
+    if (!url) {
       return true;
     }
-    const detail = firstDetail || errorDetail(second.error, second.stderr);
-    new Notice(
-      `Could not open ${normalizedPath.split("/").at(-1)} in Highlights: ${detail}`,
-    );
-    return false;
+    const pageResult = await new Promise((resolve) => {
+      try {
+        execFile(
+          "/usr/bin/open",
+          ["-g", url],
+          { timeout: HIGHLIGHTS_OPEN_TIMEOUT_MS },
+          (error, _stdout, stderr) => resolve({ error, stderr }),
+        );
+      } catch (error) {
+        resolve({ error, stderr: "" });
+      }
+    });
+    if (pageResult && pageResult.error) {
+      handle.pageJumpUnavailable(
+        errorDetail(pageResult.error, pageResult.stderr),
+      );
+    }
+    return true;
   }
 
   delegateOpenLinkInNewTab() {

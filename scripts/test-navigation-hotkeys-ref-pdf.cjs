@@ -160,7 +160,7 @@ test("v2 reading task opens its source_pdf in Highlights without writes", async 
     "net.highlightsapp.universal",
     `${BASE}/lib/chat/x.pdf`,
   ]);
-  assert.deepEqual(notices, ["Opened x.pdf in Highlights"]);
+  assert.deepEqual(notices, ["Opening x in Highlights \u2014 resumes where you left off"]);
   assert.deepEqual(harness.delegates, []);
 });
 
@@ -317,7 +317,7 @@ test("bundle launch retries with the app name, and reports stderr on total failu
     ["-b", "net.highlightsapp.universal", `${BASE}/lib/chat/x.pdf`],
     ["-a", "Highlights", `${BASE}/lib/chat/x.pdf`],
   ]);
-  assert.equal(notices.at(-1), "Opened x.pdf in Highlights");
+  assert.equal(notices.at(-1), "Opening x in Highlights \u2014 resumes where you left off");
 
   resetNotices();
   const failed = makeHarness("# prose", {
@@ -379,7 +379,7 @@ test("command registration is custom-hotkey only", () => {
   const start = source.indexOf('id: "open-reference-pdf-in-highlights"');
   assert.notEqual(start, -1);
   const command = source.slice(start, source.indexOf("    });", start));
-  assert.match(command, /name: "Open reference PDF in Highlights \(or link in new tab\)"/);
+  assert.match(command, /name: "Open in Highlights \(reading task, highlight page, or link in new tab\)"/);
   assert.match(command, /callback: \(\) => void this\.openReferencePdfInHighlightsOrLink\(\)/);
   assert.doesNotMatch(command, /hotkeys:/);
 });
@@ -396,7 +396,7 @@ test("nav api openReferencePdf hands a source_pdf to Highlights without version 
     "net.highlightsapp.universal",
     `${BASE}/lib/chat/x.pdf`,
   ]);
-  assert.deepEqual(notices, ["Opened x.pdf in Highlights"]);
+  assert.deepEqual(notices, ["Opening x in Highlights \u2014 resumes where you left off"]);
   assert.deepEqual(harness.delegates, []);
 });
 

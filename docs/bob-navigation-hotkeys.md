@@ -56,10 +56,10 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Open alternate file | `open-alternate-file` | — |
 | Open child note | `open-child-note` | — |
 | Open dash Tasks section | `open-dash-tasks` | Ctrl+0 |
+| Open in Highlights (reading task, highlight page, or link in new tab) | `open-reference-pdf-in-highlights` | — |
 | Open next link | `open-next-link` | — |
 | Open parent note | `open-parent-note` | — |
 | Open previous link | `open-prev-link` | — |
-| Open reference PDF in Highlights (or link in new tab) | `open-reference-pdf-in-highlights` | — |
 | Open template note | `open-template-note` | — |
 | Refresh task freshness (confirm it still looks right) | `refresh-task-freshness` | Alt+F |
 | Refresh task freshness and jump to the next due task | `refresh-task-freshness-and-advance` | Ctrl+Alt+F |

@@ -19473,6 +19473,14 @@ function blockMarkTooltip(model, facts) {
         "Also " + awaitingPhrase.charAt(0).toLowerCase() + awaitingPhrase.slice(1),
       );
     }
+    if (
+      model.key !== "awaiting" &&
+      !awaiting &&
+      String(value.mailTurn || "") === "yours"
+    ) {
+      const name = blockMarkAwaitingWho(value.awaitingWho);
+      lines.push("Also: " + (name ? name + " replied" : "replied"));
+    }
     if (date && model.key !== date.key) {
       lines.push("Also scheduled " + datePhrase);
     }
@@ -19612,8 +19620,24 @@ function blockMarkModel(lineText, ctx) {
     });
     if (!result) return null;
 
-    let awaitingWho = "";
-    if (awaiting && typeof context.mailWho === "function") {
+    let mailFacts = { who: "", turn: "", turnSince: "" };
+    if (typeof context.mailFacts === "function") {
+      try {
+        const facts = context.mailFacts(lineText, notePath);
+        if (facts && typeof facts === "object") {
+          mailFacts = {
+            who: typeof facts.who === "string" ? facts.who : "",
+            turn: typeof facts.turn === "string" ? facts.turn : "",
+            turnSince: typeof facts.turnSince === "string" ? facts.turnSince : "",
+          };
+        }
+      } catch (error) {
+        mailFacts = { who: "", turn: "", turnSince: "" };
+      }
+    }
+
+    let awaitingWho = blockMarkAwaitingWho(mailFacts.who);
+    if (awaiting && !awaitingWho && typeof context.mailWho === "function") {
       try {
         awaitingWho = blockMarkAwaitingWho(context.mailWho(lineText, notePath));
       } catch (error) {
@@ -19628,6 +19652,7 @@ function blockMarkModel(lineText, ctx) {
         projectStem,
         projectReason,
         awaitingWho,
+        mailTurn: mailFacts.turn,
       });
     } catch (error) {
       tooltip = "";
@@ -19728,6 +19753,425 @@ function blockMarkProjectTagSource(lineText) {
 // The exact `#awaiting_reply` token on `lineText`. Never throws.
 function blockMarkAwaitingTagSource(lineText) {
   return blockMarkTagSource(lineText, BLOCK_MARK_AWAITING_TAG);
+}
+// ---- src/142i-mail-link-marks.js ----
+// --- Mail link marks: reply badge pure core --------------------------------
+// Owned by bob-cli `docs/mail-link-marks.md`. Display-only: reads mail
+// note frontmatter through the metadata cache and never writes. Every
+// helper is synchronous and never throws.
+
+const MAIL_REPLY_BADGE_SIDE = 1;
+const MAIL_REPLY_BADGE_CLASS = "bob-mail-reply-badge";
+
+function mailLinkMarkTokens(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (text.indexOf("[[") === -1) return Object.freeze([]);
+    const visible = typeof blockMarkMaskInlineCode === "function"
+      ? blockMarkMaskInlineCode(text)
+      : text;
+    const tokens = [];
+    const matcher = /\[\[([^\[\]|#^\r\n]+)(?:[#^][^\[\]|\r\n]*)?(?:\|[^\[\]\r\n]*)?\]\]/g;
+    let match = matcher.exec(visible);
+    while (match !== null) {
+      try {
+        const start = match.index;
+        const end = start + match[0].length;
+        if (start > 0 && text[start - 1] === "!") {
+          match = matcher.exec(visible);
+          continue;
+        }
+        let pathPart = String(match[1] || "").trim();
+        if (/\.md$/i.test(pathPart)) pathPart = pathPart.slice(0, -3);
+        if (pathPart) {
+          tokens.push(Object.freeze({ start, end, pathPart }));
+        }
+      } catch (error) {
+        // One bad token never breaks the scan.
+      }
+      match = matcher.exec(visible);
+    }
+    return Object.freeze(tokens);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+function mailLinkMarkDateOf(value) {
+  try {
+    const text = String(value || "").trim();
+    if (text.length < 10) return null;
+    return typeof parseFreshDateStrict === "function"
+      ? parseFreshDateStrict(text.slice(0, 10))
+      : /^\d{4}-\d{2}-\d{2}$/.test(text.slice(0, 10))
+        ? text.slice(0, 10)
+        : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailLinkMarkAge(turnSince, now) {
+  try {
+    const then = Date.parse(String(turnSince || "").replace(" ", "T"));
+    if (!Number.isFinite(then)) return "";
+    const stamp = now instanceof Date ? now.getTime() : Date.now();
+    if (!Number.isFinite(stamp)) return "";
+    const minutes = Math.max(0, Math.round((stamp - then) / 60000));
+    if (minutes < 1) return "now";
+    if (minutes < 60) return String(minutes) + "m";
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return String(hours) + "h";
+    const days = Math.round(hours / 24);
+    return String(days) + "d";
+  } catch (error) {
+    return "";
+  }
+}
+
+function mailLinkMarkFreshFacts(lineText, today) {
+  try {
+    if (typeof readFreshness !== "function") {
+      return Object.freeze({ fresh: null, unblocked: null });
+    }
+    const facts = readFreshness(lineText, today);
+    return Object.freeze({
+      fresh: facts && facts.fresh ? String(facts.fresh) : null,
+      unblocked: facts && facts.unblocked ? String(facts.unblocked) : null,
+    });
+  } catch (error) {
+    return Object.freeze({ fresh: null, unblocked: null });
+  }
+}
+
+function mailReplyBadgeShouldShow(lineText, mail, today) {
+  try {
+    if (!mail || mail.turn !== "yours") return false;
+    try {
+      if (typeof freshnessTaskStatus === "function" && freshnessTaskStatus(lineText) === null) {
+        return false;
+      }
+    } catch (error) {
+      return false;
+    }
+    const dates = mailLinkMarkFreshFacts(lineText, today);
+    if (!dates.fresh) return true;
+    const since = mailLinkMarkDateOf(mail.turnSince);
+    if (!since) return false;
+    if (since > dates.fresh) return true;
+    if (since === dates.fresh) {
+      const todayDate = typeof parseFreshDateStrict === "function"
+        ? parseFreshDateStrict(String(today || ""))
+        : String(today || "");
+      return Boolean(todayDate && dates.unblocked === todayDate);
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function mailReplyBadgeText(who, age) {
+  try {
+    const name = typeof blockMarkAwaitingWho === "function"
+      ? blockMarkAwaitingWho(who)
+      : String(who || "").trim();
+    const elapsed = String(age || "").trim();
+    if (name && elapsed) return "\u21a9 " + name + " \u00b7 " + elapsed;
+    if (name) return "\u21a9 " + name;
+    if (elapsed) return "\u21a9 " + elapsed;
+    return "\u21a9";
+  } catch (error) {
+    return "\u21a9";
+  }
+}
+
+function mailReplyBadgeModel(lineText, mail, today, now) {
+  try {
+    if (!mailReplyBadgeShouldShow(lineText, mail, today)) return null;
+    const who = mail && typeof mail.who === "string" ? mail.who : "";
+    const age = mailLinkMarkAge(mail && mail.turnSince, now);
+    const text = mailReplyBadgeText(who, age);
+    const name = typeof blockMarkAwaitingWho === "function"
+      ? blockMarkAwaitingWho(who)
+      : String(who || "").trim();
+    const tooltip = name ? name + " replied" + (age ? " \u00b7 " + age : "") : text;
+    return Object.freeze({
+      text,
+      tooltip: tooltip.replace(/::/g, ":"),
+      who: name,
+      age,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailNoteFactsFromFrontmatter(frontmatter) {
+  try {
+    if (typeof blockMarkIsMailFrontmatter !== "function") return null;
+    if (!blockMarkIsMailFrontmatter(frontmatter)) return null;
+    const who = typeof frontmatter.who === "string" ? frontmatter.who : "";
+    const turn = typeof frontmatter.turn === "string" ? frontmatter.turn.trim() : "";
+    const turnSince = typeof frontmatter.turn_since === "string"
+      ? frontmatter.turn_since
+      : typeof frontmatter.turnSince === "string"
+        ? frontmatter.turnSince
+        : "";
+    return Object.freeze({ who, turn, turnSince });
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildMailReplyBadgeElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || !model.text) {
+      return null;
+    }
+    const host = doc.createElement("span");
+    host.setAttribute("class", MAIL_REPLY_BADGE_CLASS);
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip || model.text));
+    host.setAttribute("data-tooltip-position", "top");
+    host.textContent = String(model.text);
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+let MailReplyBadgeWidget = null;
+if (typeof WidgetType === "function") {
+  MailReplyBadgeWidget = class extends WidgetType {
+    constructor(model) {
+      super();
+      this.model = model && typeof model === "object" ? { ...model } : {};
+      this.key = String(this.model.text || "") + "\u0000" + String(this.model.tooltip || "");
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof MailReplyBadgeWidget && other.key === this.key);
+    }
+
+    toDOM() {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildMailReplyBadgeElement(doc, this.model);
+      if (dom) return dom;
+      try {
+        return doc && typeof doc.createElement === "function" ? doc.createElement("span") : null;
+      } catch (error) {
+        return null;
+      }
+    }
+  };
+}
+// ---- src/142j-no-reply-pills.js ----
+// --- No-reply pill: task-tag-marks family ----------------------------------
+// Owned by bob-cli `docs/mail-link-marks.md` and the no-reply section of
+// `docs/task-tag-marks.md`. Replaces `#awaiting_reply` on Ready overdue
+// rows. Display-only. Every helper is synchronous and never throws.
+
+const NO_REPLY_PILL_CLASS = "bob-no-reply-pill";
+
+function noReplyPillScheduledDate(lineText) {
+  try {
+    if (typeof dateMarkCanonicalFields !== "function") return null;
+    const fields = dateMarkCanonicalFields(lineText);
+    const scheduled = fields.find((field) => field && field.field === "scheduled");
+    return scheduled && scheduled.date ? String(scheduled.date) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function noReplyPillModel(lineText, ctx) {
+  try {
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    try {
+      if (typeof freshnessTaskStatus !== "function" || freshnessTaskStatus(lineText) !== " ") {
+        return null;
+      }
+    } catch (error) {
+      return null;
+    }
+    const source = typeof blockMarkAwaitingTagSource === "function"
+      ? blockMarkAwaitingTagSource(lineText)
+      : null;
+    if (!source || typeof source.tagStart !== "number" || typeof source.tagEnd !== "number") {
+      return null;
+    }
+    const scheduled = noReplyPillScheduledDate(lineText);
+    const today = typeof parseFreshDateStrict === "function"
+      ? parseFreshDateStrict(String(context.today || ""))
+      : String(context.today || "");
+    if (!scheduled || !today || scheduled > today) return null;
+    const since = mailLinkMarkDateOf(context.turnSince);
+    const label = since && typeof freshnessShortDate === "function"
+      ? freshnessShortDate(since, today)
+      : since;
+    const text = label
+      ? "\u2708 no reply since " + label
+      : "\u2708 no reply yet";
+    return Object.freeze({
+      text,
+      tooltip: text.replace(/::/g, ":"),
+      from: source.tagStart,
+      to: source.tagEnd,
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildNoReplyPillElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || !model.text) {
+      return null;
+    }
+    const host = doc.createElement("span");
+    host.setAttribute("class", NO_REPLY_PILL_CLASS);
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip || model.text));
+    host.setAttribute("data-tooltip-position", "top");
+    host.setAttribute("data-bob-no-reply", String(model.text));
+    host.textContent = String(model.text);
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+function annotateNoReplyPill(el, model) {
+  try {
+    if (!el || typeof el !== "object" || !model || !model.text) return false;
+    try {
+      if (el.classList && typeof el.classList.add === "function") {
+        el.classList.add(NO_REPLY_PILL_CLASS);
+      } else if (typeof el.className === "string") {
+        const parts = el.className.split(/\s+/).filter((part) => part !== "");
+        if (parts.indexOf(NO_REPLY_PILL_CLASS) === -1) parts.push(NO_REPLY_PILL_CLASS);
+        el.className = parts.join(" ");
+      } else if (typeof el.setAttribute === "function") {
+        el.setAttribute("class", NO_REPLY_PILL_CLASS);
+      } else {
+        return false;
+      }
+    } catch (error) {
+      return false;
+    }
+    try {
+      if (typeof el.setAttribute === "function") {
+        el.setAttribute("aria-label", String(model.tooltip || model.text));
+        el.setAttribute("data-tooltip-position", "top");
+        el.setAttribute("data-bob-no-reply", String(model.text));
+      }
+    } catch (error) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function stripNoReplyPill(el) {
+  try {
+    if (!el || typeof el !== "object") return false;
+    let changed = false;
+    try {
+      if (el.classList && typeof el.classList.remove === "function") {
+        if (el.classList.contains(NO_REPLY_PILL_CLASS)) {
+          el.classList.remove(NO_REPLY_PILL_CLASS);
+          changed = true;
+        }
+      } else if (typeof el.className === "string") {
+        const parts = el.className.split(/\s+/).filter((part) => part && part !== NO_REPLY_PILL_CLASS);
+        if (parts.join(" ") !== el.className) {
+          el.className = parts.join(" ");
+          changed = true;
+        }
+      }
+    } catch (error) {
+      // Class strip is best-effort.
+    }
+    try {
+      if (typeof el.removeAttribute === "function") {
+        el.removeAttribute("data-bob-no-reply");
+        el.removeAttribute("aria-label");
+        el.removeAttribute("data-tooltip-position");
+        changed = true;
+      }
+    } catch (error) {
+      // Attribute strip is best-effort.
+    }
+    return changed;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isNoReplyTagAnchor(node) {
+  try {
+    if (!node || typeof node !== "object") return false;
+    const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+    if (tag !== "A") return false;
+    let text = "";
+    try {
+      text = typeof node.textContent === "string" ? node.textContent : "";
+    } catch (error) {
+      text = "";
+    }
+    if (text !== "#awaiting_reply") return false;
+    try {
+      if (typeof node.getAttribute === "function") {
+        const href = node.getAttribute("href");
+        if (href !== null && href !== undefined && href !== "" && String(href) !== "#awaiting_reply") {
+          return false;
+        }
+      }
+    } catch (error) {
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+let NoReplyPillWidget = null;
+if (typeof WidgetType === "function") {
+  NoReplyPillWidget = class extends WidgetType {
+    constructor(model) {
+      super();
+      this.model = model && typeof model === "object" ? { ...model } : {};
+      this.key = String(this.model.text || "");
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof NoReplyPillWidget && other.key === this.key);
+    }
+
+    toDOM(view) {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildNoReplyPillElement(doc, this.model);
+      if (!dom) {
+        try {
+          return doc && typeof doc.createElement === "function" ? doc.createElement("span") : null;
+        } catch (error) {
+          return null;
+        }
+      }
+      if (typeof addTaskTagMarkReveal === "function") {
+        try {
+          addTaskTagMarkReveal(dom, view);
+        } catch (error) {
+          // Reveal is best-effort.
+        }
+      }
+      return dom;
+    }
+  };
 }
 // ---- src/142d-block-marks-render.js ----
 // --- Blocked-reason marks: miniature renderer ------------------------------
@@ -55450,6 +55894,13 @@ class BobLedgerToolsTaskTagMarksMixin {
         // Editor refresh is best-effort.
       }
       try {
+        if (typeof this.refreshNoReplyPillsEditors === "function") {
+          this.refreshNoReplyPillsEditors();
+        }
+      } catch (error) {
+        // No-reply pill refresh is best-effort.
+      }
+      try {
         const workspace = this.app && this.app.workspace;
         if (workspace && typeof workspace.trigger === "function") {
           workspace.trigger(TODAY_RELOAD_EVENT);
@@ -55498,6 +55949,296 @@ class BobLedgerToolsTaskTagMarksMixin {
       }
     } catch (error) {
       // Editor refresh never throws.
+    }
+  }
+}
+// ---- src/264b-plugin-no-reply-pills.js ----
+// --- No-reply pill: Live Preview and reading view --------------------------
+// Rides Toggle task tag marks. Owned by bob-cli `docs/mail-link-marks.md`
+// and the no-reply section of `docs/task-tag-marks.md`.
+
+let noReplyPillsRefreshEffect = null;
+function ensureNoReplyPillsRefresh() {
+  if (noReplyPillsRefreshEffect) return noReplyPillsRefreshEffect;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      noReplyPillsRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    noReplyPillsRefreshEffect = null;
+  }
+  return noReplyPillsRefreshEffect;
+}
+
+class BobLedgerToolsNoReplyPillsMixin {
+  setupNoReplyPills() {
+    try {
+      try {
+        const extension = this.createNoReplyPillExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor((el, ctx) => this.renderNoReplyPillsIn(el, ctx), 51);
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+    } catch (error) {
+      // Display-only setup never blocks plugin startup.
+    }
+  }
+
+  noReplyPillsAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin && Decoration && WidgetType && StateEffect &&
+        typeof StateEffect.define === "function" && RangeSetBuilder &&
+        editorInfoField && editorLivePreviewField && NoReplyPillWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createNoReplyPillExtension() {
+    try {
+      if (!this.noReplyPillsAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || !Prec || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const PillPluginClass = class {
+        constructor(view) {
+          try { this.decorations = plugin.buildNoReplyPillDecorations(view); }
+          catch (error) { this.decorations = Decoration.none; }
+        }
+        update(update) {
+          try {
+            if (plugin.noReplyPillsShouldRebuild(update)) {
+              this.decorations = plugin.buildNoReplyPillDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(PillPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  noReplyPillsShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged || update.selectionSet) return true;
+      const refresh = ensureNoReplyPillsRefresh();
+      const tagRefresh = typeof ensureTaskTagMarksRefresh === "function" ? ensureTaskTagMarksRefresh() : null;
+      for (const transaction of update.transactions || []) {
+        for (const effect of (transaction && transaction.effects)
+          ? (Array.isArray(transaction.effects) ? transaction.effects : [transaction.effects]) : []) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) return true;
+          if (effect === tagRefresh || (tagRefresh && effect && typeof effect.is === "function" && effect.is(tagRefresh))) return true;
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state &&
+        update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildNoReplyPillDecorations(view) {
+    try {
+      if (!this.taskTagMarksEnabled || !Decoration || !RangeSetBuilder || !NoReplyPillWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) return Decoration.none;
+      if (!view || !view.state || !view.state.field(editorLivePreviewField)) return Decoration.none;
+      const info = view.state.field(editorInfoField);
+      const sourcePath = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!sourcePath) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      let today = null;
+      try { today = this.dateMarksToday(); } catch (error) { today = null; }
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);
+      } catch (error) {
+        tree = null;
+      }
+      let selectionRanges = [];
+      try { selectionRanges = (view.state.selection && view.state.selection.ranges) || []; } catch (error) {
+        selectionRanges = [];
+      }
+      const ranges = view.visibleRanges || [];
+      const builder = new RangeSetBuilder();
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") continue;
+          let pos = Math.max(0, range.from);
+          const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try { line = doc.lineAt(pos); } catch (error) { break; }
+            if (!line || typeof line.text !== "string") break;
+            try {
+              if (line.text.indexOf("#awaiting_reply") !== -1) {
+                const facts = typeof this.mailNoteFacts === "function"
+                  ? this.mailNoteFacts(line.text, sourcePath)
+                  : { turnSince: "" };
+                const model = noReplyPillModel(line.text, {
+                  today,
+                  turnSince: facts && facts.turnSince,
+                });
+                if (model) {
+                  const absFrom = line.from + model.from;
+                  const absTo = line.from + model.to;
+                  let revealed = false;
+                  for (const selection of selectionRanges) {
+                    if (
+                      selection &&
+                      typeof selection.from === "number" &&
+                      typeof selection.to === "number" &&
+                      selection.from <= absTo &&
+                      selection.to >= absFrom
+                    ) {
+                      revealed = true;
+                      break;
+                    }
+                  }
+                  let inCode = false;
+                  try {
+                    if (!revealed && tree && typeof freshnessMarkPosInCode === "function") {
+                      inCode = freshnessMarkPosInCode(tree, absFrom + 1);
+                    }
+                  } catch (error) {
+                    inCode = false;
+                  }
+                  if (!revealed && !inCode) {
+                    builder.add(absFrom, absTo, Decoration.replace({
+                      widget: new NoReplyPillWidget(model),
+                    }));
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) break;
+            if (line.to < pos) break;
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  renderNoReplyPillsIn(el, ctx) {
+    try {
+      if (!this.taskTagMarksEnabled || !el) return;
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      let today = null;
+      try { today = this.dateMarksToday(); } catch (error) { today = null; }
+      const anchors = typeof el.querySelectorAll === "function"
+        ? Array.prototype.slice.call(el.querySelectorAll("a.tag"))
+        : [];
+      for (const anchor of anchors) {
+        try {
+          if (!isNoReplyTagAnchor(anchor)) continue;
+          if (this.taskTagMarkQueryAncestor && this.taskTagMarkQueryAncestor(anchor, el)) continue;
+          const host = typeof anchor.closest === "function" ? anchor.closest("li") || anchor : anchor;
+          const info = ctx && typeof ctx.getSectionInfo === "function"
+            ? ctx.getSectionInfo(host) || ctx.getSectionInfo(el)
+            : null;
+          let lineText = info && typeof info.text === "string" ? info.text : "";
+          if (!lineText && typeof host.textContent === "string") {
+            lineText = "- [ ] #task #awaiting_reply " + host.textContent;
+          }
+          const facts = typeof this.mailNoteFacts === "function"
+            ? this.mailNoteFacts(lineText, sourcePath)
+            : { turnSince: "" };
+          const model = noReplyPillModel(lineText, {
+            today,
+            turnSince: facts && facts.turnSince,
+          });
+          if (model) annotateNoReplyPill(anchor, model);
+          else stripNoReplyPill(anchor);
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Rendered-view pills never throw.
+    }
+  }
+
+  taskTagMarkQueryAncestor(node, root) {
+    try {
+      let current = node;
+      let guard = 0;
+      while (current && current !== root && guard++ < 80) {
+        let classText = "";
+        try {
+          if (current.classList && typeof current.classList.contains === "function") {
+            if (
+              current.classList.contains("plugin-tasks-list-item") ||
+              current.classList.contains("tasks-list-text") ||
+              current.classList.contains("task-description")
+            ) {
+              return true;
+            }
+          }
+          classText = typeof current.className === "string" ? current.className : "";
+        } catch (error) {
+          classText = "";
+        }
+        if (
+          typeof classText === "string" &&
+          (classText.indexOf("plugin-tasks-list-item") !== -1 ||
+            classText.indexOf("task-description") !== -1)
+        ) {
+          return true;
+        }
+        current = current.parentNode || null;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshNoReplyPillsEditors() {
+    try {
+      const refresh = ensureNoReplyPillsRefresh();
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (cm && typeof cm.dispatch === "function" && refresh) cm.dispatch({ effects: refresh.of(null) });
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
     }
   }
 }
@@ -61531,6 +62272,9 @@ class BobLedgerToolsBlockMarksMixin {
           : () => null,
         projectReason: (notePath) => this.blockMarkProjectReason(notePath),
         mailWho: (text, notePath) => this.blockMarkMailWho(text, notePath),
+        mailFacts: typeof this.mailNoteFacts === "function"
+          ? (text, notePath) => this.mailNoteFacts(text, notePath)
+          : undefined,
       });
     } catch (error) {
       return null;
@@ -64215,6 +64959,494 @@ class BobLedgerToolsOffClockLinkChipsReadingMixin {
         } catch (error) { continue; }
       }
       for (const host of allHosts) if (!seenHosts.has(host)) this.removeOffClockLinkChipHost(host);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
+// ---- src/271e-plugin-mail-link-marks.js ----
+// --- Mail link marks: Live Preview, toggle, and mail-note lookup -----------
+// Display-only reply badge after a task's mail wikilink. Owned by
+// bob-cli `docs/mail-link-marks.md`.
+
+let mailLinkMarksRefreshEffect = null;
+function ensureMailLinkMarksRefresh() {
+  if (mailLinkMarksRefreshEffect) return mailLinkMarksRefreshEffect;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      mailLinkMarksRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    mailLinkMarksRefreshEffect = null;
+  }
+  return mailLinkMarksRefreshEffect;
+}
+
+class BobLedgerToolsMailLinkMarksMixin {
+  setupMailLinkMarks() {
+    try {
+      if (typeof this.mailLinkMarksEnabled !== "boolean") this.mailLinkMarksEnabled = true;
+      if (!(this.mailLinkMarksReadingViews instanceof Map)) this.mailLinkMarksReadingViews = new Map();
+      this.applyMarkGateClass("bob-mail-link-marks", this.mailLinkMarksEnabled);
+      this.registerMarkGatePopoutSync("bob-mail-link-marks", () => this.mailLinkMarksEnabled);
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-mail-link-marks",
+            name: "Toggle mail reply badges",
+            callback: () => this.toggleMailLinkMarks(),
+          });
+        }
+      } catch (error) {
+        // The toggle is best-effort.
+      }
+      try {
+        const extension = this.createMailLinkMarksExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.setupMailLinkMarksReading === "function") this.setupMailLinkMarksReading();
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      this.setupMailLinkMarkListeners();
+      if (typeof this.register === "function") this.register(() => this.teardownMailLinkMarks());
+    } catch (error) {
+      // Display-only setup never blocks plugin startup.
+    }
+  }
+
+  mailNoteFacts(lineText, sourcePath) {
+    try {
+      const empty = Object.freeze({ who: "", turn: "", turnSince: "" });
+      const metadataCache = this.app && this.app.metadataCache;
+      if (
+        !metadataCache ||
+        typeof metadataCache.getFirstLinkpathDest !== "function" ||
+        typeof metadataCache.getFileCache !== "function"
+      ) {
+        return empty;
+      }
+      const tokens = mailLinkMarkTokens(lineText);
+      for (const token of tokens) {
+        try {
+          const file = token && token.pathPart
+            ? metadataCache.getFirstLinkpathDest(token.pathPart, String(sourcePath || ""))
+            : null;
+          const cache = file ? metadataCache.getFileCache(file) : null;
+          const facts = mailNoteFactsFromFrontmatter(cache && cache.frontmatter);
+          if (facts) return facts;
+        } catch (error) {
+          continue;
+        }
+      }
+      return empty;
+    } catch (error) {
+      return Object.freeze({ who: "", turn: "", turnSince: "" });
+    }
+  }
+
+  setupMailLinkMarkListeners() {
+    try {
+      if (typeof this.registerEvent !== "function") return;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", () => this.scheduleMailLinkMarksRefresh()));
+        this.registerEvent(metadataCache.on("resolved", () => this.scheduleMailLinkMarksRefresh()));
+      }
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("layout-change", () => this.scheduleMailLinkMarksRefresh()));
+      }
+    } catch (error) {
+      // Liveness listeners are best-effort.
+    }
+  }
+
+  mailLinkMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin && Decoration && WidgetType && StateEffect &&
+        typeof StateEffect.define === "function" && RangeSetBuilder &&
+        editorInfoField && editorLivePreviewField && MailReplyBadgeWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createMailLinkMarksExtension() {
+    try {
+      if (!this.mailLinkMarksAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || !Prec || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const BadgePluginClass = class {
+        constructor(view) {
+          try { this.decorations = plugin.buildMailLinkMarkDecorations(view); }
+          catch (error) { this.decorations = Decoration.none; }
+        }
+        update(update) {
+          try {
+            if (plugin.mailLinkMarksShouldRebuild(update)) {
+              this.decorations = plugin.buildMailLinkMarkDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(BadgePluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  mailLinkMarksShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged) return true;
+      const refresh = ensureMailLinkMarksRefresh();
+      for (const transaction of update.transactions || []) {
+        for (const effect of (transaction && transaction.effects)
+          ? (Array.isArray(transaction.effects) ? transaction.effects : [transaction.effects]) : []) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) return true;
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state &&
+        update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+      if (editorInfoField && update.startState && update.state) {
+        const before = update.startState.field(editorInfoField);
+        const after = update.state.field(editorInfoField);
+        if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  buildMailLinkMarkDecorations(view) {
+    try {
+      if (!this.mailLinkMarksEnabled || !Decoration || !RangeSetBuilder || !MailReplyBadgeWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) return Decoration.none;
+      if (!view || !view.state || !view.state.field(editorLivePreviewField)) return Decoration.none;
+      const info = view.state.field(editorInfoField);
+      const sourcePath = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!sourcePath) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      let today = null;
+      try { today = this.dateMarksToday(); } catch (error) { today = null; }
+      const now = new Date();
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);
+      } catch (error) {
+        tree = null;
+      }
+      const ranges = view.visibleRanges || [];
+      const builder = new RangeSetBuilder();
+      const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      for (const range of ranges) {
+        try {
+          if (!range || typeof range.from !== "number") continue;
+          let pos = Math.max(0, range.from);
+          const end = Math.min(typeof range.to === "number" ? range.to : docLength, docLength);
+          let guard = 0;
+          while (pos <= end && guard < 10000) {
+            guard += 1;
+            let line = null;
+            try { line = doc.lineAt(pos); } catch (error) { break; }
+            if (!line || typeof line.text !== "string") break;
+            try {
+              if (line.text.indexOf("[[") !== -1 && line.text.indexOf("#task") !== -1) {
+                const tokens = mailLinkMarkTokens(line.text);
+                const facts = tokens.length ? this.mailNoteFacts(line.text, sourcePath) : null;
+                const model = facts ? mailReplyBadgeModel(line.text, facts, today, now) : null;
+                if (model) {
+                  for (const token of tokens) {
+                    try {
+                      const abs = line.from + token.end;
+                      let inCode = false;
+                      try {
+                        if (tree && typeof freshnessMarkPosInCode === "function") {
+                          inCode = freshnessMarkPosInCode(tree, line.from + token.start + 1);
+                        }
+                      } catch (error) {
+                        inCode = false;
+                      }
+                      if (inCode) continue;
+                      builder.add(abs, abs, Decoration.widget({
+                        widget: new MailReplyBadgeWidget(model),
+                        side: MAIL_REPLY_BADGE_SIDE,
+                      }));
+                      break;
+                    } catch (error) {
+                      continue;
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              // One bad line never breaks the build.
+            }
+            if (typeof line.to !== "number" || line.to >= end) break;
+            if (line.to < pos) break;
+            pos = line.to + 1;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  toggleMailLinkMarks() {
+    try {
+      this.mailLinkMarksEnabled = !this.mailLinkMarksEnabled;
+      this.applyMarkGateClass("bob-mail-link-marks", this.mailLinkMarksEnabled);
+      this.refreshMailLinkMarksEditors();
+      if (typeof this.refreshMailLinkMarksReadingViews === "function") {
+        this.refreshMailLinkMarksReadingViews();
+      }
+      try {
+        new Notice(this.mailLinkMarksEnabled ? "Mail reply badges on" : "Mail reply badges off");
+      } catch (error) {}
+      return this.mailLinkMarksEnabled;
+    } catch (error) {
+      return Boolean(this.mailLinkMarksEnabled);
+    }
+  }
+
+  refreshMailLinkMarksEditors() {
+    try {
+      const refresh = ensureMailLinkMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (cm && typeof cm.dispatch === "function" && refresh) cm.dispatch({ effects: refresh.of(null) });
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleMailLinkMarksRefresh() {
+    try {
+      if (this.mailLinkMarksTimer !== null && this.mailLinkMarksTimer !== undefined) return;
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout.bind(window)
+        : setTimeout;
+      this.mailLinkMarksTimer = schedule(() => {
+        this.mailLinkMarksTimer = null;
+        this.refreshMailLinkMarksEditors();
+        if (typeof this.refreshMailLinkMarksReadingViews === "function") {
+          this.refreshMailLinkMarksReadingViews();
+        }
+        if (typeof this.scheduleBlockMarksRefresh === "function") {
+          this.scheduleBlockMarksRefresh();
+        }
+        if (typeof this.refreshNoReplyPillsEditors === "function") {
+          this.refreshNoReplyPillsEditors();
+        }
+      }, 120);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  teardownMailLinkMarks() {
+    try {
+      if (this.mailLinkMarksTimer !== null && this.mailLinkMarksTimer !== undefined) {
+        clearTimeout(this.mailLinkMarksTimer);
+      }
+      this.mailLinkMarksTimer = null;
+      if (this.mailLinkMarksReadingViews instanceof Map) this.mailLinkMarksReadingViews.clear();
+      this.applyMarkGateClass("bob-mail-link-marks", false);
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
+  }
+}
+// ---- src/271f-plugin-mail-link-marks-reading.js ----
+// --- Mail link marks: Reading view sweeps ----------------------------------
+class BobLedgerToolsMailLinkMarksReadingMixin {
+  setupMailLinkMarksReading() {
+    try {
+      if (!(this.mailLinkMarksReadingViews instanceof Map)) this.mailLinkMarksReadingViews = new Map();
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderMailLinkMarksIn(el, ctx), 62);
+      }
+    } catch (error) {
+      // Reading-view setup is best-effort.
+    }
+  }
+
+  renderMailLinkMarksIn(el, ctx) {
+    try {
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!el || !sourcePath) return;
+      if (!(this.mailLinkMarksReadingViews instanceof Map)) this.mailLinkMarksReadingViews = new Map();
+      const record = { el, sourcePath, ctx };
+      this.mailLinkMarksReadingViews.set(el, record);
+      this.sweepMailLinkMarksReadingView(record);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => this.mailLinkMarksReadingViews && this.mailLinkMarksReadingViews.delete(el);
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) child = { unload: () => this.mailLinkMarksReadingViews && this.mailLinkMarksReadingViews.delete(el) };
+        try { ctx.addChild(child); } catch (error) { /* Optional cleanup hook. */ }
+      }
+    } catch (error) {
+      // A Reading-view badge failure never affects Markdown rendering.
+    }
+  }
+
+  removeMailReplyBadgeHost(host) {
+    try {
+      if (host && host.parentNode && typeof host.parentNode.removeChild === "function") {
+        host.parentNode.removeChild(host);
+      }
+    } catch (error) {
+      // A stale host is harmless.
+    }
+  }
+
+  mailLinkMarkReadingAnchors(li) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function"
+        ? li.querySelectorAll("a.internal-link")
+        : [];
+      const anchors = [];
+      for (const node of found || []) {
+        let owner = node;
+        let guard = 0;
+        let mine = false;
+        while (owner && guard++ < 40) {
+          if (owner === li) { mine = true; break; }
+          owner = owner.parentNode || null;
+        }
+        if (mine) anchors.push(node);
+      }
+      return anchors;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  mailLinkMarkReadingOwnedHosts(li) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function"
+        ? li.querySelectorAll("." + MAIL_REPLY_BADGE_CLASS)
+        : [];
+      const hosts = [];
+      for (const host of found || []) {
+        let owner = host;
+        let guard = 0;
+        while (owner && guard++ < 40) {
+          if (owner === li) { hosts.push(host); break; }
+          owner = owner.parentNode || null;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  sweepMailLinkMarksReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String(record && record.sourcePath || "");
+      if (!root || !sourcePath) return false;
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) return false;
+      const allHosts = typeof root.querySelectorAll === "function"
+        ? Array.from(root.querySelectorAll("." + MAIL_REPLY_BADGE_CLASS))
+        : [];
+      if (!this.mailLinkMarksEnabled) {
+        for (const host of allHosts) this.removeMailReplyBadgeHost(host);
+        return true;
+      }
+      let today = null;
+      try { today = this.dateMarksToday(); } catch (error) { today = null; }
+      const now = new Date();
+      const items = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll("li.task-list-item")) : [];
+      const seen = new Set();
+      for (const li of items) {
+        try {
+          const existing = this.mailLinkMarkReadingOwnedHosts(li);
+          const info = record.ctx && typeof record.ctx.getSectionInfo === "function"
+            ? record.ctx.getSectionInfo(li) || record.ctx.getSectionInfo(root)
+            : null;
+          let lineText = info && typeof info.text === "string" ? info.text : "";
+          if (!lineText && typeof li.textContent === "string") lineText = "- [ ] " + li.textContent;
+          const facts = this.mailNoteFacts(lineText, sourcePath);
+          const model = mailReplyBadgeModel(lineText, facts, today, now);
+          if (!model) {
+            for (const host of existing) this.removeMailReplyBadgeHost(host);
+            continue;
+          }
+          const anchors = this.mailLinkMarkReadingAnchors(li);
+          const anchor = anchors[0];
+          if (!anchor) {
+            for (const host of existing) this.removeMailReplyBadgeHost(host);
+            continue;
+          }
+          let host = existing[0] || buildMailReplyBadgeElement(doc, model);
+          if (!host) continue;
+          host.setAttribute("aria-label", model.tooltip);
+          host.textContent = model.text;
+          const parent = anchor.parentNode;
+          if (parent && typeof parent.insertBefore === "function" && host.previousSibling !== anchor) {
+            parent.insertBefore(host, anchor.nextSibling || null);
+          }
+          seen.add(host);
+          for (let index = 1; index < existing.length; index += 1) this.removeMailReplyBadgeHost(existing[index]);
+        } catch (error) {
+          continue;
+        }
+      }
+      for (const host of allHosts) {
+        if (!seen.has(host)) this.removeMailReplyBadgeHost(host);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshMailLinkMarksReadingViews() {
+    try {
+      if (!(this.mailLinkMarksReadingViews instanceof Map)) return false;
+      for (const [el, record] of Array.from(this.mailLinkMarksReadingViews.entries())) {
+        if (!el) { this.mailLinkMarksReadingViews.delete(el); continue; }
+        this.sweepMailLinkMarksReadingView(record);
+      }
       return true;
     } catch (error) {
       return false;
@@ -79687,6 +80919,16 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupTaskLinkMarks();
     this.setupOffClockLinkChips();
     this.setupBlockMarks();
+    try {
+      if (typeof this.setupNoReplyPills === "function") this.setupNoReplyPills();
+    } catch (error) {
+      // No-reply pills are best-effort.
+    }
+    try {
+      if (typeof this.setupMailLinkMarks === "function") this.setupMailLinkMarks();
+    } catch (error) {
+      // Mail reply badges are best-effort.
+    }
   }
 
   setupTaskLinkMarks() {
@@ -82805,6 +84047,11 @@ class BobLedgerToolsGcalEventsMixin {
     } catch (error) {
       // The period-notes hook is best-effort.
     }
+    try {
+      if (typeof this.setupGmailSyncOnCreate === "function") this.setupGmailSyncOnCreate();
+    } catch (error) {
+      // Gmail sync on create is best-effort.
+    }
     this.setupCalendarEventPainting();
     try {
       if (typeof this.setupEventLinkTimes === "function") this.setupEventLinkTimes();
@@ -82833,11 +84080,16 @@ class BobLedgerToolsGcalEventsMixin {
       const vault = this.app && this.app.vault;
       if (!vault || typeof vault.on !== "function") return;
       this.registerEvent(vault.on("create", (file) => {
-        if (!gcalEventsShouldSyncCreatedFile(this.gcalSyncOnCreateEnabled, file, this.app)) return;
+        const wantGcal = gcalEventsShouldSyncCreatedFile(this.gcalSyncOnCreateEnabled, file, this.app);
+        const wantGmail = typeof this.gmailSyncShouldRunCreatedFile === "function"
+          && this.gmailSyncShouldRunCreatedFile(file);
+        if (!wantGcal && !wantGmail) return;
         const key = String(file.path || "");
         if (!key || this.gcalSyncCreatedPaths.has(key)) return;
         this.gcalSyncCreatedPaths.add(key);
-        void this.gcalSyncCreatedDailyNote(file);
+        void (typeof this.syncCreatedDailyNote === "function"
+          ? this.syncCreatedDailyNote(file)
+          : this.gcalSyncCreatedDailyNote(file));
       }));
     });
   }
@@ -83410,6 +84662,191 @@ class BobLedgerToolsGcalEventsMixin {
         // Link pill Reading refresh is best-effort.
       }
     } catch (error) {}
+  }
+}
+// ---- src/291g-plugin-gmail-sync.js ----
+// --- Daily-note Gmail sync (mail-link-marks) -------------------------------
+// After today's daily note is created and the existing gcal sync has
+// settled, Ledger Tools runs `bob gmail sync -q -f json -r 30` once per
+// path through `bobSpawnJson`. Display-adjacent: it never writes the
+// vault itself. Owned by bob-cli `docs/mail-link-marks.md`.
+
+const GMAIL_EVENTS_SYNC_TIMEOUT_MS = 120000;
+
+function gmailEventsSyncArgs() {
+  return ["gmail", "sync", "-q", "-f", "json", "-r", "30"];
+}
+
+function gmailEventsShouldSyncCreatedFile(enabled, file, app, now = new Date()) {
+  try {
+    return enabled === true && isTodayDailyFile(app, file, { now });
+  } catch (error) {
+    return false;
+  }
+}
+
+function gmailEventsDecodeSync(stdout, stderr) {
+  let body;
+  try {
+    body = JSON.parse(String(stdout || ""));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob gmail sync returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.schema_version !== 1) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob gmail sync returned an unexpected JSON shape.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok === false) {
+    const error = body.error && typeof body.error === "object" ? body.error : {};
+    return {
+      ok: false,
+      code: typeof error.kind === "string" ? error.kind : "bob-error",
+      message: typeof error.message === "string" ? error.message : "bob gmail sync failed.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok !== true) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob gmail sync returned an unexpected report.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  return { ok: true, report: body };
+}
+
+// "notice" (exit 1), "info" (exit 2, unknown subcommand, everything else),
+// or null when the spawn succeeded.
+function gmailEventsFailureKind(result) {
+  try {
+    const resolved = result && typeof result === "object" ? result : {};
+    if (resolved.ok === true) return null;
+    const text = `${resolved.code || ""} ${resolved.message || ""} ${resolved.detail || ""}`;
+    if (
+      resolved.exitCode === 2 ||
+      /unknown[\s_-]*subcommand|unrecognized[\s_-]*subcommand/i.test(text)
+    ) {
+      return "info";
+    }
+    if (resolved.exitCode === 1) return "notice";
+    return "info";
+  } catch (error) {
+    return "info";
+  }
+}
+
+function gmailEventsShowFailureNotice(state, now = new Date(), notice) {
+  try {
+    if (!state || typeof state !== "object") return false;
+    if (!state.gmailSyncNoticeDays) state.gmailSyncNoticeDays = new Set();
+    const day = formatLocalDate(now instanceof Date ? now : new Date());
+    if (state.gmailSyncNoticeDays.has(day)) return false;
+    state.gmailSyncNoticeDays.add(day);
+    const text = "Gmail sync failed · run `bob gmail doctor`";
+    try {
+      if (typeof notice === "function") notice(text);
+      else new Notice(text);
+    } catch (error) {
+      // Notice is best-effort.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+class BobLedgerToolsGmailSyncMixin {
+  setupGmailSyncOnCreate() {
+    if (typeof this.gmailSyncOnCreateEnabled !== "boolean") this.gmailSyncOnCreateEnabled = true;
+    if (!this.gmailSyncNoticeDays) this.gmailSyncNoticeDays = new Set();
+    try {
+      this.addCommand({
+        id: "toggle-gmail-sync-on-create",
+        name: "Toggle Gmail sync on daily-note creation",
+        callback: () => this.toggleGmailSyncOnCreate(),
+      });
+    } catch (error) {
+      // The session toggle is best-effort on limited test hosts.
+    }
+  }
+
+  gmailSyncShouldRunCreatedFile(file) {
+    return gmailEventsShouldSyncCreatedFile(this.gmailSyncOnCreateEnabled, file, this.app);
+  }
+
+  toggleGmailSyncOnCreate() {
+    this.gmailSyncOnCreateEnabled = !this.gmailSyncOnCreateEnabled;
+    try {
+      new Notice(
+        this.gmailSyncOnCreateEnabled
+          ? "Gmail sync on daily-note creation on"
+          : "Gmail sync on daily-note creation off",
+      );
+    } catch (error) {}
+    return this.gmailSyncOnCreateEnabled;
+  }
+
+  // Shared create-listener body: gcal first (it waits for Pomodoros),
+  // then Gmail. Each side re-checks its own session toggle.
+  async syncCreatedDailyNote(file) {
+    try {
+      if (this.gcalSyncOnCreateEnabled && typeof this.gcalSyncCreatedDailyNote === "function") {
+        await this.gcalSyncCreatedDailyNote(file);
+      }
+    } catch (error) {
+      // Calendar sync failures never block Gmail.
+    }
+    try {
+      if (this.gmailSyncOnCreateEnabled && typeof this.gmailSyncCreatedDailyNote === "function") {
+        await this.gmailSyncCreatedDailyNote(file);
+      }
+    } catch (error) {
+      // Gmail sync is best-effort.
+    }
+  }
+
+  async gmailSyncCreatedDailyNote(file) {
+    if (!this.gmailSyncOnCreateEnabled) return false;
+    const vault = this.app && this.app.vault;
+    const ready = await gcalEventsWaitForPomodoros(
+      () => vault && typeof vault.read === "function"
+        ? vault.read(file)
+        : Promise.reject(new Error("Vault read unavailable")),
+    );
+    if (!ready) {
+      console.warn("bob gmail sync skipped: today's note did not get a ## Pomodoros section within 15 seconds");
+      return false;
+    }
+    if (!this.gmailSyncOnCreateEnabled) return false;
+    const spawn = typeof this.bobSpawnJson === "function" ? this.bobSpawnJson.bind(this) : bobSpawnJson;
+    const result = await spawn(gmailEventsSyncArgs(), gmailEventsDecodeSync, {
+      commandLabel: "bob gmail sync",
+      resolveBobPath: () => typeof this.apiStatsBobPath === "function"
+        ? this.apiStatsBobPath()
+        : { path: "bob", source: "path" },
+      getVaultPath: () => typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: GMAIL_EVENTS_SYNC_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    if (result && result.ok) return true;
+    const kind = gmailEventsFailureKind(result);
+    if (kind === "notice") {
+      gmailEventsShowFailureNotice(this);
+      return false;
+    }
+    const suffix = result && result.exitCode === 2 ? " (setup or unknown subcommand)" : "";
+    console.info(`bob gmail sync skipped${suffix}: ${(result && (result.message || result.code)) || "failed"}`);
+    return false;
   }
 }
 // ---- src/291b-plugin-gcal-event-buffers.js ----
@@ -89283,6 +90720,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreshnessMarkModelMixin,
   BobLedgerToolsFreshnessMarkRenderMixin,
   BobLedgerToolsTaskTagMarksMixin,
+  BobLedgerToolsNoReplyPillsMixin,
   BobLedgerToolsTaskTagStageLabelsMixin,
   BobLedgerToolsTaskTagTypeMixin,
   BobLedgerToolsPriorityMarksMixin,
@@ -89320,6 +90758,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsFreesMarksMixin,
   BobLedgerToolsOffClockLinkChipsMixin,
   BobLedgerToolsOffClockLinkChipsReadingMixin,
+  BobLedgerToolsMailLinkMarksMixin,
+  BobLedgerToolsMailLinkMarksReadingMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,
@@ -89334,6 +90774,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsTaskLinkMarksResolveMixin,
   BobLedgerToolsTaskLinkMarksReadingMixin,
   BobLedgerToolsGcalEventsMixin,
+  BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
@@ -91376,6 +92817,12 @@ module.exports.helpers = {
   gcalEventsStampState,
   gcalEventsShouldSyncCreatedFile,
   gcalEventsWaitForPomodoros,
+  gmailEventsShouldSyncCreatedFile,
+  gmailEventsDecodeSync,
+  gmailEventsSyncArgs,
+  gmailEventsFailureKind,
+  gmailEventsShowFailureNotice,
+  GMAIL_EVENTS_SYNC_TIMEOUT_MS,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   periodNotesEnsureArgs,
   periodNotesAdoptionPath,
@@ -91742,6 +93189,23 @@ module.exports.helpers = {
   blockMarkFoldTagForKey,
   blockMarkAwaitingPhrase,
   blockMarkIsMailFrontmatter,
+  MAIL_REPLY_BADGE_SIDE,
+  mailLinkMarkTokens,
+  mailLinkMarkDateOf,
+  mailLinkMarkAge,
+  mailLinkMarkFreshFacts,
+  mailReplyBadgeShouldShow,
+  mailReplyBadgeText,
+  mailReplyBadgeModel,
+  mailNoteFactsFromFrontmatter,
+  buildMailReplyBadgeElement,
+  MailReplyBadgeWidget,
+  noReplyPillModel,
+  buildNoReplyPillElement,
+  annotateNoReplyPill,
+  stripNoReplyPill,
+  isNoReplyTagAnchor,
+  NoReplyPillWidget,
   buildBlockMarkPrjFoldElement,
   ensureBlockMarksRefresh,
   BLOCK_MARK_READING_PROCESSOR_ORDER,

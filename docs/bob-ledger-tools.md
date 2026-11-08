@@ -33,6 +33,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Open this week's note | `open-this-weeks-note` | — |
 | Open today's daily note | `open-today-daily-note` | — |
 | Toggle Day stats | `toggle-day-stats` | — |
+| Toggle Gmail sync on daily-note creation | `toggle-gmail-sync-on-create` | — |
 | Toggle Google Calendar sync on daily-note creation | `toggle-gcal-sync-on-create` | — |
 | Toggle Keep inbox indicator | `toggle-keep-inbox-indicator` | — |
 | Toggle Pomodoro home chips | `toggle-pomodoro-home-chips` | — |
@@ -45,6 +46,7 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 | Toggle calendar event painting | `toggle-calendar-event-painting` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
 | Toggle inherited task types | `toggle-inherited-task-types` | — |
+| Toggle mail reply badges | `toggle-mail-link-marks` | — |
 | Toggle root marks | `toggle-root-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |

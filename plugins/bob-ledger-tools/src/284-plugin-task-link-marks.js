@@ -31,6 +31,16 @@ class BobLedgerToolsTaskLinkMarksMixin {
     this.setupTaskLinkMarks();
     this.setupOffClockLinkChips();
     this.setupBlockMarks();
+    try {
+      if (typeof this.setupNoReplyPills === "function") this.setupNoReplyPills();
+    } catch (error) {
+      // No-reply pills are best-effort.
+    }
+    try {
+      if (typeof this.setupMailLinkMarks === "function") this.setupMailLinkMarks();
+    } catch (error) {
+      // Mail reply badges are best-effort.
+    }
   }
 
   setupTaskLinkMarks() {

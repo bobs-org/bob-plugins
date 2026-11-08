@@ -362,6 +362,14 @@ function blockMarkTooltip(model, facts) {
         "Also " + awaitingPhrase.charAt(0).toLowerCase() + awaitingPhrase.slice(1),
       );
     }
+    if (
+      model.key !== "awaiting" &&
+      !awaiting &&
+      String(value.mailTurn || "") === "yours"
+    ) {
+      const name = blockMarkAwaitingWho(value.awaitingWho);
+      lines.push("Also: " + (name ? name + " replied" : "replied"));
+    }
     if (date && model.key !== date.key) {
       lines.push("Also scheduled " + datePhrase);
     }
@@ -501,8 +509,24 @@ function blockMarkModel(lineText, ctx) {
     });
     if (!result) return null;
 
-    let awaitingWho = "";
-    if (awaiting && typeof context.mailWho === "function") {
+    let mailFacts = { who: "", turn: "", turnSince: "" };
+    if (typeof context.mailFacts === "function") {
+      try {
+        const facts = context.mailFacts(lineText, notePath);
+        if (facts && typeof facts === "object") {
+          mailFacts = {
+            who: typeof facts.who === "string" ? facts.who : "",
+            turn: typeof facts.turn === "string" ? facts.turn : "",
+            turnSince: typeof facts.turnSince === "string" ? facts.turnSince : "",
+          };
+        }
+      } catch (error) {
+        mailFacts = { who: "", turn: "", turnSince: "" };
+      }
+    }
+
+    let awaitingWho = blockMarkAwaitingWho(mailFacts.who);
+    if (awaiting && !awaitingWho && typeof context.mailWho === "function") {
       try {
         awaitingWho = blockMarkAwaitingWho(context.mailWho(lineText, notePath));
       } catch (error) {
@@ -517,6 +541,7 @@ function blockMarkModel(lineText, ctx) {
         projectStem,
         projectReason,
         awaitingWho,
+        mailTurn: mailFacts.turn,
       });
     } catch (error) {
       tooltip = "";

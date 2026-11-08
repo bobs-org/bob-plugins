@@ -170,6 +170,9 @@ class BobLedgerToolsBlockMarksMixin {
           : () => null,
         projectReason: (notePath) => this.blockMarkProjectReason(notePath),
         mailWho: (text, notePath) => this.blockMarkMailWho(text, notePath),
+        mailFacts: typeof this.mailNoteFacts === "function"
+          ? (text, notePath) => this.mailNoteFacts(text, notePath)
+          : undefined,
       });
     } catch (error) {
       return null;

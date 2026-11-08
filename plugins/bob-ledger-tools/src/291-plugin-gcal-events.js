@@ -358,6 +358,11 @@ class BobLedgerToolsGcalEventsMixin {
     } catch (error) {
       // The period-notes hook is best-effort.
     }
+    try {
+      if (typeof this.setupGmailSyncOnCreate === "function") this.setupGmailSyncOnCreate();
+    } catch (error) {
+      // Gmail sync on create is best-effort.
+    }
     this.setupCalendarEventPainting();
     try {
       if (typeof this.setupEventLinkTimes === "function") this.setupEventLinkTimes();
@@ -386,11 +391,16 @@ class BobLedgerToolsGcalEventsMixin {
       const vault = this.app && this.app.vault;
       if (!vault || typeof vault.on !== "function") return;
       this.registerEvent(vault.on("create", (file) => {
-        if (!gcalEventsShouldSyncCreatedFile(this.gcalSyncOnCreateEnabled, file, this.app)) return;
+        const wantGcal = gcalEventsShouldSyncCreatedFile(this.gcalSyncOnCreateEnabled, file, this.app);
+        const wantGmail = typeof this.gmailSyncShouldRunCreatedFile === "function"
+          && this.gmailSyncShouldRunCreatedFile(file);
+        if (!wantGcal && !wantGmail) return;
         const key = String(file.path || "");
         if (!key || this.gcalSyncCreatedPaths.has(key)) return;
         this.gcalSyncCreatedPaths.add(key);
-        void this.gcalSyncCreatedDailyNote(file);
+        void (typeof this.syncCreatedDailyNote === "function"
+          ? this.syncCreatedDailyNote(file)
+          : this.gcalSyncCreatedDailyNote(file));
       }));
     });
   }

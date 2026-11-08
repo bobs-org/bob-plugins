@@ -121,6 +121,12 @@ const {
   gcalEventsWaitForPomodoros,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
   todayDailyPath,
+  gmailEventsShouldSyncCreatedFile,
+  gmailEventsDecodeSync,
+  gmailEventsSyncArgs,
+  gmailEventsFailureKind,
+  gmailEventsShowFailureNotice,
+  GMAIL_EVENTS_SYNC_TIMEOUT_MS,
 } = LedgerToolsPlugin.helpers;
 
 test("calendar scan stays within an unfenced Events section", () => {
@@ -898,3 +904,118 @@ test("deprecation Notice fires once per day from a successful auto-sync", () => 
   );
   assert.equal(notices.length, 2);
 });
+
+test("gmail sync-on-create gate only accepts today's canonical daily note", () => {
+  const now = new Date(2026, 9, 30, 9, 0, 0);
+  const app = { internalPlugins: { plugins: {} } };
+  assert.equal(gmailEventsShouldSyncCreatedFile(true, { path: todayDailyPath(now) }, app, now), true);
+  assert.equal(gmailEventsShouldSyncCreatedFile(false, { path: todayDailyPath(now) }, app, now), false);
+  assert.equal(gmailEventsShouldSyncCreatedFile(true, { path: "2026/20261029.md" }, app, now), false);
+  assert.deepEqual(gmailEventsSyncArgs(), ["gmail", "sync", "-q", "-f", "json", "-r", "30"]);
+  assert.equal(GMAIL_EVENTS_SYNC_TIMEOUT_MS, 120000);
+});
+
+test("gmailEventsDecodeSync accepts schema_version 1", () => {
+  const ok = gmailEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    pulled: 1,
+  }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.report.pulled, 1);
+  assert.equal(gmailEventsDecodeSync("{").ok, false);
+  assert.equal(gmailEventsDecodeSync(JSON.stringify({ schema_version: 2, ok: true })).ok, false);
+  const fail = gmailEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: false,
+    error: { kind: "writer", message: "not the writer host" },
+  }));
+  assert.equal(fail.ok, false);
+  assert.equal(fail.code, "writer");
+});
+
+test("gmailEventsFailureKind routes exit 1 to a Notice and exit 2 / unknown subcommand to info", () => {
+  assert.equal(gmailEventsFailureKind({ ok: true }), null);
+  assert.equal(gmailEventsFailureKind({ ok: false, exitCode: 1 }), "notice");
+  assert.equal(gmailEventsFailureKind({ ok: false, exitCode: 2 }), "info");
+  assert.equal(gmailEventsFailureKind({ ok: false, message: "unknown subcommand 'gmail'" }), "info");
+  const notices = [];
+  const plugin = { gmailSyncNoticeDays: new Set() };
+  const now = new Date(2026, 10, 7, 9, 0, 0);
+  assert.equal(gmailEventsShowFailureNotice(plugin, now, (text) => notices.push(text)), true);
+  assert.equal(gmailEventsShowFailureNotice(plugin, now, (text) => notices.push(text)), false);
+  assert.deepEqual(notices, ["Gmail sync failed · run `bob gmail doctor`"]);
+});
+
+test("shared create listener runs gmail after gcal, and gmail when gcal is off", async () => {
+  const now = new Date();
+  const callbacks = {};
+  const layoutReadyCallbacks = [];
+  const app = {
+    internalPlugins: { plugins: {} },
+    workspace: { onLayoutReady(callback) { layoutReadyCallbacks.push(callback); } },
+    vault: {
+      on(event, callback) { callbacks[event] = callback; return { event, callback }; },
+    },
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = app;
+  plugin.addCommand = () => {};
+  plugin.registerEvent = () => {};
+  const order = [];
+  plugin.gcalSyncCreatedDailyNote = async () => { order.push("gcal"); };
+  plugin.gmailSyncCreatedDailyNote = async () => { order.push("gmail"); };
+  plugin.setupGcalSyncOnCreate();
+  plugin.setupGmailSyncOnCreate();
+  assert.equal(plugin.gmailSyncOnCreateEnabled, true);
+  for (const callback of layoutReadyCallbacks.splice(0)) callback();
+  const today = { path: todayDailyPath(now) };
+  callbacks.create(today);
+  callbacks.create(today);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, ["gcal", "gmail"]);
+
+  plugin.gcalSyncOnCreateEnabled = false;
+  plugin.gcalSyncCreatedPaths.clear();
+  order.length = 0;
+  callbacks.create(today);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, ["gmail"]);
+
+  plugin.gmailSyncOnCreateEnabled = false;
+  plugin.gcalSyncCreatedPaths.clear();
+  order.length = 0;
+  callbacks.create(today);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, []);
+  assert.equal(plugin.toggleGmailSyncOnCreate(), true);
+});
+
+test("gmailSyncCreatedDailyNote spawns bob gmail sync with a 120s timeout", async () => {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.gmailSyncOnCreateEnabled = true;
+  plugin.app = {
+    vault: { read: async () => "# Friday\n\n## Pomodoros\n" },
+  };
+  const calls = [];
+  plugin.bobSpawnJson = async (args, decode, options) => {
+    calls.push({ args, options });
+    return { ok: true, report: { schema_version: 1, ok: true } };
+  };
+  assert.equal(await plugin.gmailSyncCreatedDailyNote({ path: "2026/20261107.md" }), true);
+  assert.deepEqual(calls[0].args, ["gmail", "sync", "-q", "-f", "json", "-r", "30"]);
+  assert.equal(calls[0].options.timeout, 120000);
+  assert.equal(calls[0].options.commandLabel, "bob gmail sync");
+
+  plugin.bobSpawnJson = async () => ({ ok: false, exitCode: 2, message: "unknown subcommand" });
+  const infos = [];
+  const originalInfo = console.info;
+  console.info = (message) => infos.push(String(message));
+  try {
+    assert.equal(await plugin.gmailSyncCreatedDailyNote({ path: "2026/20261107.md" }), false);
+  } finally {
+    console.info = originalInfo;
+  }
+  assert.ok(infos[0].includes("bob gmail sync skipped"));
+});
+

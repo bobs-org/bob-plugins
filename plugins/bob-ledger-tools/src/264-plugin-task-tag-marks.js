@@ -793,6 +793,13 @@ class BobLedgerToolsTaskTagMarksMixin {
         // Editor refresh is best-effort.
       }
       try {
+        if (typeof this.refreshNoReplyPillsEditors === "function") {
+          this.refreshNoReplyPillsEditors();
+        }
+      } catch (error) {
+        // No-reply pill refresh is best-effort.
+      }
+      try {
         const workspace = this.app && this.app.workspace;
         if (workspace && typeof workspace.trigger === "function") {
           workspace.trigger(TODAY_RELOAD_EVENT);

@@ -562,6 +562,37 @@ test("awaiting owns its date: no date reason, no digit, no Also scheduled pip", 
   assert.equal(inCode.key, "date", "a tag in inline code is not the token");
 });
 
+test("AP1–AP4 Also-replied tooltip pip vectors pass verbatim", () => {
+  const ap1 = modelFor(`- [?] #task ${AW_LINK} [dependsOn:: x]`, {
+    today: AW_TODAY,
+    mailFacts: () => ({ who: "Ada", turn: "yours", turnSince: "2026-11-07T14:00:00" }),
+  });
+  assert.ok(ap1.tooltip.includes("Also: Ada replied"), "AP1");
+  assert.ok(!ap1.tooltip.includes("::"), "AP1: tooltip has no inline-field syntax");
+
+  const ap2 = modelFor(
+    `- [?] #task #awaiting_reply ${AW_LINK} [scheduled:: 2026-11-10] [dependsOn:: x]`,
+    {
+      today: AW_TODAY,
+      mailFacts: () => ({ who: "Ada", turn: "yours", turnSince: "2026-11-07T14:00:00" }),
+    },
+  );
+  assert.equal(ap2.tooltip.includes("replied"), false, "AP2: awaiting is live");
+  assert.ok(ap2.tooltip.includes("Also awaiting reply from Ada"), "AP2 still names the wait");
+
+  const ap3 = modelFor(`- [?] #task ${AW_LINK} [dependsOn:: x]`, {
+    today: AW_TODAY,
+    mailFacts: () => ({ who: "Ada", turn: "theirs", turnSince: "2026-11-07T14:00:00" }),
+  });
+  assert.equal(ap3.tooltip.includes("replied"), false, "AP3");
+
+  const ap4 = modelFor(`- [?] #task ${AW_LINK} [dependsOn:: x]`, {
+    today: AW_TODAY,
+    mailFacts: () => ({ who: "", turn: "yours", turnSince: "2026-11-07T14:00:00" }),
+  });
+  assert.ok(ap4.tooltip.includes("Also: replied"), "AP4");
+});
+
 test("awaiting tooltip omits <who> when unknown and never throws on odd who", () => {
   assert.equal(
     awaitingModelFor(AW1_LINE, { mailWho: () => "" }).tooltip,

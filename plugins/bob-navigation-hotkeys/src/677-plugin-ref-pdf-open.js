@@ -104,8 +104,25 @@ class BobNavigationHotkeysRefPdfOpenMixin {
     } catch (_error) {
       target = null;
     }
+    await this.openHighlightsTarget(target);
+  }
+
+  async openHighlightsTarget(target, options = {}) {
+    const fromHint = Boolean(options && options.fromHint === true);
+    const now = Date.now();
+    if (this._highlightsLaunchActive === true) {
+      return;
+    }
+    if (
+      typeof this._highlightsLastLaunchEnd === "number" &&
+      now - this._highlightsLastLaunchEnd < HIGHLIGHTS_REENTRY_MS
+    ) {
+      return;
+    }
     if (!target || target.kind === "none") {
-      this.delegateOpenLinkInNewTab();
+      if (!fromHint) {
+        this.delegateOpenLinkInNewTab();
+      }
       return;
     }
     if (

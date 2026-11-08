@@ -30,6 +30,16 @@ Archived references show their replacement date. If the page handoff is
 unavailable or the launch fails, the card updates with the result; Hammerspoon
 confirms a successful page landing separately.
 
+A status-bar chip and a highlighter rail preview the same dry resolver the
+key uses. The chip shows `Highlights` plus a page receipt when known and the
+vault's real `Cmd+Enter` keycap; clicking it opens the cached target so the
+status-bar click does not re-resolve from a blurred editor. Removed,
+missing, and missing-PDF rows mute the chip and drop the keycap. The chip
+stays hidden off macOS, in Reading view, with no Markdown editor, and while
+`Toggle Highlights hints` is off for the session (on by default, no hotkey).
+The rail paints a 2px highlighter-ink stripe on the active editor's source
+lines for the current block, piece, caption, or single task/bookmark line.
+
 ## Page behavior
 
 The resolver follows bookmark hops, Task Link hops, and managed-block

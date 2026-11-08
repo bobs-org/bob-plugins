@@ -187,6 +187,7 @@
   "677a-ref-annotation-locator.js",
   "677b-ref-pdf-target-resolver.js",
   "677c-highlights-notice.js",
+  "677d-highlights-hints.js",
   "678-plugin-templater-trigger.js",
   "679-plugin-image-zoom.js",
   "679a-image-zoom-path.js",
@@ -207,5 +208,6 @@
   "710-relation-merge-exports.js",
   "711-pomodoro-name-agreement-exports.js",
   "712-successor-verdict-exports.js",
-  "713-nav-offer-close-apis.js"
+  "713-nav-offer-close-apis.js",
+  "714-highlights-hints-exports.js"
 ]

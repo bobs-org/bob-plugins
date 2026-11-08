@@ -78,6 +78,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysOpenNotesUriMixin,
   BobNavigationHotkeysRefPdfOpenMixin,
   BobNavigationHotkeysRefPdfTargetResolverMixin,
+  BobNavigationHotkeysHighlightsHintsMixin,
   BobNavigationHotkeysTemplaterTriggerMixin,
   BobNavigationHotkeysImageZoomMixin,
   BobNavigationHotkeysLinkParseMixin,

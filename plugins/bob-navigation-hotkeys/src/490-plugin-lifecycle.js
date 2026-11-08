@@ -19,6 +19,18 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.bracketModePaintKey = undefined;
     this.bracketModeFlashTimer = null;
     this.bracketModeInstantFrame = null;
+    this.highlightsHintsEnabled = true;
+    this.highlightsChipEl = null;
+    this.highlightsChipParts = null;
+    this.highlightsChipPaintKey = null;
+    this._highlightsHintTarget = null;
+    this._highlightsHintsToken = 0;
+    this._highlightsHintsTimer = null;
+    this._highlightsHintLocalCache = null;
+    this._highlightsHintHopCache = null;
+    this._highlightsRailView = null;
+    this._highlightsChipFadeFrame = null;
+    this._highlightsChipWasVisible = false;
     this.vimJumpOperationToken = 0;
     this.vimJumpHistoryChain = Promise.resolve();
     this.vimJumpBridgeVim = null;
@@ -85,6 +97,12 @@ class BobNavigationHotkeysPlugin extends Plugin {
       id: "open-reference-pdf-in-highlights",
       name: "Open in Highlights (reading task, highlight page, or link in new tab)",
       callback: () => void this.openReferencePdfInHighlightsOrLink(),
+    });
+
+    this.addCommand({
+      id: "toggle-highlights-hints",
+      name: "Toggle Highlights hints",
+      callback: () => this.toggleHighlightsHints(),
     });
 
     // The vault vimrc maps normal-mode Z to this command; it has no default hotkey.
@@ -452,6 +470,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
       // The footer never blocks startup.
     }
 
+    try {
+      if (typeof this.setupHighlightsHints === "function") {
+        this.setupHighlightsHints();
+      }
+    } catch (error) {
+      // The Highlights chip never blocks startup.
+    }
+
     if (typeof this.registerObsidianProtocolHandler === "function") {
       this.registerObsidianProtocolHandler("bob-goto-task", (params) => {
         void this.handleGoToTaskUri(params);
@@ -470,13 +496,21 @@ class BobNavigationHotkeysPlugin extends Plugin {
       this.refreshDashScrollCaptureTarget();
       // Templater 2.25 made the trigger device-local (default off), and this restores the vault's folder-template intent on each device.
       this.ensureTemplaterNewNoteTrigger();
+      if (typeof this.scheduleHighlightsHints === "function") {
+        this.scheduleHighlightsHints();
+      }
     });
 
     this.registerVimMappingsWhenReady();
     this.registerVimJumpHistoryVaultEvents();
 
     this.registerEvent(
-      this.app.workspace.on("file-open", (file) => this.trackOpenedFile(file)),
+      this.app.workspace.on("file-open", (file) => {
+        this.trackOpenedFile(file);
+        if (typeof this.scheduleHighlightsHints === "function") {
+          this.scheduleHighlightsHints();
+        }
+      }),
     );
     // Hand-edit mirror (`docs/task-dependencies.md` §8): once the cursor
     // leaves an edited line, R1/R9 sync the owning task's line and field.
@@ -487,9 +521,12 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.pendingDependencyMirror = null;
     this.pendingDependencyMirrorSnapshot = null;
     this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () =>
-        this.refreshDashScrollCaptureTarget(),
-      ),
+      this.app.workspace.on("active-leaf-change", () => {
+        this.refreshDashScrollCaptureTarget();
+        if (typeof this.scheduleHighlightsHints === "function") {
+          this.scheduleHighlightsHints();
+        }
+      }),
     );
 
     if (
@@ -501,6 +538,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
         EditorView.updateListener.of((update) => {
           this.trackSelectionUpdate(update);
           this.scheduleDependencyHandEditMirrorFromUpdate(update);
+          if (typeof this.scheduleHighlightsHintsFromUpdate === "function") {
+            this.scheduleHighlightsHintsFromUpdate(update);
+          }
         }),
       );
     }
@@ -510,6 +550,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
       typeof this.registerEditorExtension === "function"
     ) {
       this.registerEditorExtension(bobOpenNotesLandingFlashField);
+    }
+
+    if (
+      bobHighlightsRailField &&
+      typeof this.registerEditorExtension === "function"
+    ) {
+      this.registerEditorExtension(bobHighlightsRailField);
     }
 
     this.reviewAnchor = null;
@@ -574,6 +621,13 @@ class BobNavigationHotkeysPlugin extends Plugin {
     try {
       if (typeof this.teardownBracketModeIndicator === "function") {
         this.teardownBracketModeIndicator();
+      }
+    } catch (error) {
+      // Best-effort during unload.
+    }
+    try {
+      if (typeof this.teardownHighlightsHints === "function") {
+        this.teardownHighlightsHints();
       }
     } catch (error) {
       // Best-effort during unload.

@@ -219,7 +219,8 @@ const {
 } = helpers;
 
 const TOOLTIP = "#task \u00b7 tracked task\nCtrl+Shift+] to demote to a bullet";
-const REF_TOOLTIP = "#task #ref \u00b7 reference reading task";
+const REF_TOOLTIP =
+  "#task #ref \u00b7 reference reading task \u00b7 \u2318\u21b5 Highlights";
 const REF_LABEL = "Reference reading task";
 
 function rangeList(ranges) {

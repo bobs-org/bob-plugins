@@ -75,6 +75,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Task card: Links to (task relation) | `task-card-links` | Ctrl+Shift+L |
 | Task card: Roll by recommendation | `roll-by-recommendation` | Alt+P |
 | Task types | `open-pomodoro-themes-manager` | — |
+| Toggle Highlights hints | `toggle-highlights-hints` | — |
 | Toggle current tab pin | `toggle-current-tab-pin` | — |
 | Toggle line transclusions | `toggle-line-transclusions` | — |
 | Yank absolute path | `yank-absolute-path` | — |

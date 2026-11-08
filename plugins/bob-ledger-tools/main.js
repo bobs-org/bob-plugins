@@ -14154,7 +14154,8 @@ const REF_TASK_TAG_TEXT = "#ref";
 
 // Hover tooltip for the open-book mark. Never contains `::`, because
 // Dataview re-scans `innerHTML` for inline fields.
-const REF_TASK_MARK_TOOLTIP = "#task #ref \u00b7 reference reading task";
+const REF_TASK_MARK_TOOLTIP =
+  "#task #ref \u00b7 reference reading task \u00b7 \u2318\u21b5 Highlights";
 
 // Accessible label for the open-book mark (`role="img"` name).
 const REF_TASK_MARK_LABEL = "Reference reading task";

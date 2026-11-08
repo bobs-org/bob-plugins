@@ -287,8 +287,8 @@ const DAILY_OPEN_RETRY_DELAY_MS = 50;
 const CENTER_ON_LINE_ATTEMPTS = 5;
 const DAILY_LOCATION_RESTORE_RETRIES = 5;
 const DAILY_LOCATION_RESTORE_ASSERT_FRAMES = 2;
-const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dtD])-?\d+|se\d*(?:-\d*)?|ta)$/;
-const LEDGER_TRIGGER_RE = /^se(\d*)(?:-(\d*))?$/;
+const TRIGGER_RE = /(^|[^A-Za-z0-9_])((?:dt|[dtD])-?\d+|se\d*(?:[-+]\d*)?|ta)$/;
+const LEDGER_TRIGGER_RE = /^se(\d*)(?:([-+])(\d*))?$/;
 const DATE_TIME_TRIGGER_RE = /^(dt|[dtD])(-?\d+)$/;
 const INCOMPLETE_NEGATIVE_OFFSET_TRIGGER_RE = /(^|[^A-Za-z0-9_])(?:dt|[dtD])-$/;
 const WORD_CHAR_RE = /[A-Za-z0-9_]/;
@@ -388,20 +388,30 @@ function parseTrigger(textBeforeCursor) {
   }
 
   const durationText = ledgerMatch[1] || "";
-  const offsetText = ledgerMatch[2];
+  const signText = ledgerMatch[2];
+  const offsetText = ledgerMatch[3];
   const dashPresent = trigger.includes("-");
+  const sign = signText === "-" || signText === "+" ? signText : null;
   const durationMultiplier =
     durationText === "" ? 5 : Number.parseInt(durationText, 10);
   const offsetMultiplier =
-    offsetText === undefined
-      ? dashPresent
+    sign === "-"
+      ? offsetText === ""
         ? 1
-        : 0
-      : offsetText === ""
+        : Number.parseInt(offsetText, 10)
+      : 0;
+  const laterMultiplier =
+    sign === "+"
+      ? offsetText === ""
         ? 1
-        : Number.parseInt(offsetText, 10);
+        : Number.parseInt(offsetText, 10)
+      : 0;
 
-  if (!Number.isFinite(durationMultiplier) || !Number.isFinite(offsetMultiplier)) {
+  if (!Number.isFinite(durationMultiplier) || !Number.isFinite(offsetMultiplier) || !Number.isFinite(laterMultiplier)) {
+    return null;
+  }
+
+  if (sign === "+" && laterMultiplier === 0) {
     return null;
   }
 
@@ -412,6 +422,8 @@ function parseTrigger(textBeforeCursor) {
     endCh,
     durationMultiplier,
     offsetMultiplier,
+    laterMultiplier,
+    sign,
     dashPresent,
   };
 }
@@ -1205,15 +1217,17 @@ function resolveEditPomodoroTarget(lines, cursorLine, requireRange = true) {
 }
 
 // ---- src/030-snippets.js ----
-function computeRange(now, durationMultiplier, offsetMultiplier, dashPresent) {
+function computeRange(now, durationMultiplier, offsetMultiplier, dashPresent, laterMultiplier = 0) {
   const safeDate = coerceDate(now);
   const durationSteps = numericOrDefault(durationMultiplier, 5);
   const offsetSteps = numericOrDefault(offsetMultiplier, dashPresent ? 1 : 0);
+  const laterSteps = numericOrDefault(laterMultiplier, 0);
   const offsetMinutes = offsetSteps * STEP_MINUTES;
+  const laterMinutes = laterSteps * STEP_MINUTES;
   const durationMinutes = durationSteps * STEP_MINUTES;
   const currentMinutes = safeDate.getHours() * 60 + safeDate.getMinutes();
   const startMinutes = normalizeMinutes(
-    Math.ceil((currentMinutes - offsetMinutes) / STEP_MINUTES) * STEP_MINUTES,
+    Math.ceil((currentMinutes - offsetMinutes + laterMinutes) / STEP_MINUTES) * STEP_MINUTES,
   );
   const endMinutes = normalizeMinutes(startMinutes + durationMinutes);
   const start = formatTime(startMinutes);
@@ -1253,6 +1267,7 @@ function computeSnippetExpansion(trigger, now = new Date()) {
       trigger.durationMultiplier,
       trigger.offsetMultiplier,
       trigger.dashPresent,
+      trigger.laterMultiplier,
     ).text;
     return {
       replacement: `${range} `,
@@ -2042,15 +2057,16 @@ function eventRunFitTarget(event, kind) {
 }
 
 // Fit draft: the largest same-gesture count that ends at or before the
-// occupied start. `kind` is "start" (`se<K>[-<offset>]`), "extend"
+// occupied start. `kind` is "start" (`se<K>[-<offset>][+<later>]`), "extend"
 // (`K\p`), "later" (`K\o`), or "earlier" (`K\O`); null when no positive
 // count fits. `\O` (`--N`) names the meeting start.
-function eventRunFitToken(kind, span, old, event, offsetUnits = 0) {
+function eventRunFitToken(kind, span, old, event, offsetUnits = 0, laterUnits = 0) {
   const target = eventRunFitTarget(event, kind);
   if (target == null) return null;
   if (kind === "start") {
     const count = Math.floor(eventRunMinutesAhead(span.start, target) / STEP_MINUTES);
     if (count <= 0) return null;
+    if (laterUnits) return `se${count}+${laterUnits}`;
     return offsetUnits ? `se${count}-${offsetUnits}` : `se${count}`;
   }
   if (kind === "extend" || kind === "later") {
@@ -2133,7 +2149,7 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
       return result;
     }
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const base = computeRange(now, trigger.durationMultiplier, trigger.offsetMultiplier, trigger.dashPresent);
+    const base = computeRange(now, trigger.durationMultiplier, trigger.offsetMultiplier, trigger.dashPresent, trigger.laterMultiplier);
     const written = lineText.slice(0, expansion.fromCh) + expansion.replacement + lineText.slice(expansion.toCh);
     const name = eventRunLineName(written);
     const suffix = expansion.replacement.slice(expansion.range.length);
@@ -2191,7 +2207,7 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
       const span = eventRunSpan(base.startMinutes, base.endMinutes);
       const crossed = eventRunNewCrossings(lines, lineIndex, span, old);
       if (crossed.length > 0) {
-        const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier);
+        const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier, trigger.laterMultiplier);
         result.notices.push(eventRunConflictNotice(name, span, crossed, fit));
       }
     }

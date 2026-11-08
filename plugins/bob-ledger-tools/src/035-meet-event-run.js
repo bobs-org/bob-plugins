@@ -656,15 +656,16 @@ function eventRunFitTarget(event, kind) {
 }
 
 // Fit draft: the largest same-gesture count that ends at or before the
-// occupied start. `kind` is "start" (`se<K>[-<offset>]`), "extend"
+// occupied start. `kind` is "start" (`se<K>[-<offset>][+<later>]`), "extend"
 // (`K\p`), "later" (`K\o`), or "earlier" (`K\O`); null when no positive
 // count fits. `\O` (`--N`) names the meeting start.
-function eventRunFitToken(kind, span, old, event, offsetUnits = 0) {
+function eventRunFitToken(kind, span, old, event, offsetUnits = 0, laterUnits = 0) {
   const target = eventRunFitTarget(event, kind);
   if (target == null) return null;
   if (kind === "start") {
     const count = Math.floor(eventRunMinutesAhead(span.start, target) / STEP_MINUTES);
     if (count <= 0) return null;
+    if (laterUnits) return `se${count}+${laterUnits}`;
     return offsetUnits ? `se${count}-${offsetUnits}` : `se${count}`;
   }
   if (kind === "extend" || kind === "later") {
@@ -747,7 +748,7 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
       return result;
     }
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const base = computeRange(now, trigger.durationMultiplier, trigger.offsetMultiplier, trigger.dashPresent);
+    const base = computeRange(now, trigger.durationMultiplier, trigger.offsetMultiplier, trigger.dashPresent, trigger.laterMultiplier);
     const written = lineText.slice(0, expansion.fromCh) + expansion.replacement + lineText.slice(expansion.toCh);
     const name = eventRunLineName(written);
     const suffix = expansion.replacement.slice(expansion.range.length);
@@ -805,7 +806,7 @@ function applyEventRunToExpansion(lines, lineIndex, expansion, now = new Date(),
       const span = eventRunSpan(base.startMinutes, base.endMinutes);
       const crossed = eventRunNewCrossings(lines, lineIndex, span, old);
       if (crossed.length > 0) {
-        const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier);
+        const fit = eventRunFitToken("start", span, old, crossed[0], trigger.offsetMultiplier, trigger.laterMultiplier);
         result.notices.push(eventRunConflictNotice(name, span, crossed, fit));
       }
     }

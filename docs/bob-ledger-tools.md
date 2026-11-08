@@ -75,17 +75,16 @@ sessions, pinned by bob-cli's shared `meet_event_run` vectors.
 
 On a session named `MEET`, an empty `se` follows the session's **event run**:
 the earliest open, not-yet-ended Event Task linked as a plain same-note
-`[[#^id]]` child, plus every following one that touches or overlaps it and
-shares its clock (worked or off-clock). The occupied span is the meeting plus any
-`[buffer::]` lead-in and lead-out: candidates, sort, clustering, the written
-range, the early start, and the far-run warning all use it. A `+15` after
-Standup 1000-1030 therefore bridges to a 1045 1:1, and `se` at 11:25 for
+`[[#^id]]` child, plus every touching or overlapping follower on its clock.
+The occupied span adds any `[buffer::]` lead-in and lead-out for candidates,
+sort, clustering, the written range, the early start, and the far-run warning.
+A `+15` after Standup 1000-1030 bridges to a 1045 1:1, and `se` at 11:25 for
 lunch with `-30 +15` writes `(**1130-1315**)`. A run never bridges
-clocks. A late join starts where today's latest closed session ended. A
-run that starts more than 25 minutes away still writes its future start and
-raises a Notice (`pomodoro_event_run_later`) naming the `se5` escape hatch,
+clocks. A late join starts where the latest closed session ended. A
+run starting more than 25 minutes away still writes its future start with
+a Notice (`pomodoro_event_run_later`) naming the `se5` escape hatch,
 with the buffer label on a buffered first event (`Lunch (1200-1300 −30m)`).
-A counted `se5` keeps its explicit span.
+In `<X>`, `+` starts later like `-` starts earlier (bare sign: one unit); `se+0` and two signs never expand, counted spans stay explicit, and fit drafts keep the sign.
 
 #### Which clock a session is on
 
@@ -119,7 +118,7 @@ the key by the same counted-links rule `bob capture` uses:
   unresolved and the session stays worked.
 - A MEET with a non-empty event run uses the **run's** clock (future lineup
   events are queue, not participation); a MEET with no run, and every other
-  session, uses its lineup. Only the key changes: a counted `se5` keeps its span.
+  session, uses its lineup. Only the key changes.
 
 When the lineup holds an off-clock link but the session stays worked, a Notice
 mirrors bob's `pomodoro_clock_mixed` warning: `◌ LUNCH stays on the clock: it
@@ -136,7 +135,7 @@ carries the event's buffer label; the fit draft ends at the buffered start. A
 session starting mid-meeting stays quiet. It covers `se<X>` + Tab, `N\p`,
 `N\o`, and `N\O`; `N\P` and closes never warn, and the write is never blocked.
 `N\p` and `N\P` keep the row's key and update its recorded minutes (`[t::]`
-stays `[t::]`, `[off::]` stays `[off::]`, a bare span is stamped `[off::]`, and a
+stays `[t::]`, `[off::]` stays `[off::]`, bare spans stamp `[off::]`, and a
 row holding both keys resolves to `[t::]`); `N\o` and `N\O` move the span and
 keep every key byte-for-byte. `Ctrl+Enter` re-stamps the closed row from the
 links it keeps (see Task Status Cycler). Timed close classifies Event Task

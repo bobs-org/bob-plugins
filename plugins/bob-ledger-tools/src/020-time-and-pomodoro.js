@@ -74,20 +74,30 @@ function parseTrigger(textBeforeCursor) {
   }
 
   const durationText = ledgerMatch[1] || "";
-  const offsetText = ledgerMatch[2];
+  const signText = ledgerMatch[2];
+  const offsetText = ledgerMatch[3];
   const dashPresent = trigger.includes("-");
+  const sign = signText === "-" || signText === "+" ? signText : null;
   const durationMultiplier =
     durationText === "" ? 5 : Number.parseInt(durationText, 10);
   const offsetMultiplier =
-    offsetText === undefined
-      ? dashPresent
+    sign === "-"
+      ? offsetText === ""
         ? 1
-        : 0
-      : offsetText === ""
+        : Number.parseInt(offsetText, 10)
+      : 0;
+  const laterMultiplier =
+    sign === "+"
+      ? offsetText === ""
         ? 1
-        : Number.parseInt(offsetText, 10);
+        : Number.parseInt(offsetText, 10)
+      : 0;
 
-  if (!Number.isFinite(durationMultiplier) || !Number.isFinite(offsetMultiplier)) {
+  if (!Number.isFinite(durationMultiplier) || !Number.isFinite(offsetMultiplier) || !Number.isFinite(laterMultiplier)) {
+    return null;
+  }
+
+  if (sign === "+" && laterMultiplier === 0) {
     return null;
   }
 
@@ -98,6 +108,8 @@ function parseTrigger(textBeforeCursor) {
     endCh,
     durationMultiplier,
     offsetMultiplier,
+    laterMultiplier,
+    sign,
     dashPresent,
   };
 }

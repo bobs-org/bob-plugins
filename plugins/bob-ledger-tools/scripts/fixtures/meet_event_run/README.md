@@ -1,8 +1,8 @@
 # MEET event-run vectors
 
 `vectors.json` was copied byte-for-byte from bob-cli commit
-`beae4dc79a0593d14d7ce775d1e1702bbbe0e588` (`feat(pomodoro-clock): stamp the
-effective clock on capture writers`), at `tests/fixtures/meet_event_run/vectors.json`.
+`f9601b704b23f6857cb26cef45a2c870afbdd1b6` (`feat(capture): add signed later
+Pomodoro starts`), at `tests/fixtures/meet_event_run/vectors.json`.
 bob-cli is the source of truth. This plugin drives each `=`, `=meet`, and
 `=5#meet` case as an `se<X>` + Tab inside the target `()` (a restart replaces
 the running range with `(se)`); the `~K` drop and kept-ledger swap cases are

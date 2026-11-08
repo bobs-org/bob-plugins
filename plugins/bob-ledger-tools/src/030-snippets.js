@@ -1,12 +1,14 @@
-function computeRange(now, durationMultiplier, offsetMultiplier, dashPresent) {
+function computeRange(now, durationMultiplier, offsetMultiplier, dashPresent, laterMultiplier = 0) {
   const safeDate = coerceDate(now);
   const durationSteps = numericOrDefault(durationMultiplier, 5);
   const offsetSteps = numericOrDefault(offsetMultiplier, dashPresent ? 1 : 0);
+  const laterSteps = numericOrDefault(laterMultiplier, 0);
   const offsetMinutes = offsetSteps * STEP_MINUTES;
+  const laterMinutes = laterSteps * STEP_MINUTES;
   const durationMinutes = durationSteps * STEP_MINUTES;
   const currentMinutes = safeDate.getHours() * 60 + safeDate.getMinutes();
   const startMinutes = normalizeMinutes(
-    Math.ceil((currentMinutes - offsetMinutes) / STEP_MINUTES) * STEP_MINUTES,
+    Math.ceil((currentMinutes - offsetMinutes + laterMinutes) / STEP_MINUTES) * STEP_MINUTES,
   );
   const endMinutes = normalizeMinutes(startMinutes + durationMinutes);
   const start = formatTime(startMinutes);
@@ -46,6 +48,7 @@ function computeSnippetExpansion(trigger, now = new Date()) {
       trigger.durationMultiplier,
       trigger.offsetMultiplier,
       trigger.dashPresent,
+      trigger.laterMultiplier,
     ).text;
     return {
       replacement: `${range} `,

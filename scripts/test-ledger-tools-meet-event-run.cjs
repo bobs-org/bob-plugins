@@ -116,9 +116,18 @@ function gestureFor(vector) {
   } else {
     target =
       entries.find((index) => /^- \[ \] \(\)/.test(lines[index])) ?? entries[0];
+    // An unnamed later start can join a meeting the plain `=` would not: when
+    // bob-cli wrote the MEET row, mirror the `se<X>` gesture on that row.
+    const meetIndex = entries.find((index) => /— MEET\s*$/.test(lines[index]));
+    if (meetIndex !== undefined && meetIndex !== target) {
+      const expectedMeet = String(vector.expected_day || "")
+        .split("\n")
+        .find((item) => item.endsWith("— MEET"));
+      if (expectedMeet && expectedMeet !== lines[meetIndex]) target = meetIndex;
+    }
   }
   assert.notEqual(target, undefined, `${vector.id}: no target entry`);
-  const suffix = /^=(\d+)/.exec(vector.token);
+  const suffix = /^=(\d*(?:[-+]\d*)?)/.exec(vector.token);
   return { lines, target, trigger: `se${suffix ? suffix[1] : ""}` };
 }
 

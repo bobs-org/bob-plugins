@@ -410,3 +410,42 @@ test("expandFromEditor replaces D0 trigger in editor and sets cursor to trailing
   assert.equal(cursorPosition.line, 1);
   assert.equal(cursorPosition.ch, 2 + replacedRange.replacement.length);
 });
+
+test("signed later offsets: se+, se+3, se3+, se3+2, and se+03 start later at 09:42", () => {
+  const morning = new Date(2026, 10, 7, 9, 42, 0); // 09:42
+  const cases = [
+    ["se+", "(**0950-1015** [t:: 25m])"],
+    ["se+3", "(**1000-1025** [t:: 25m])"],
+    ["se3+", "(**0950-1005** [t:: 15m])"],
+    ["se3+2", "(**0955-1010** [t:: 15m])"],
+    ["se+03", "(**1000-1025** [t:: 25m])"],
+  ];
+  for (const [trigger, range] of cases) {
+    const parsed = helpers.parseTrigger(trigger);
+    assert.equal(parsed.kind, "ledgerRange");
+    assert.equal(parsed.sign, "+");
+    const expansion = helpers.findExpansion(trigger, trigger.length, morning);
+    assert.notEqual(expansion, null);
+    assert.equal(expansion.range, range);
+  }
+
+  // `se+0` moves nothing and a second sign never expands.
+  assert.equal(helpers.parseTrigger("se+0"), null);
+  assert.equal(helpers.findExpansion("se+0", 4, morning), null);
+  assert.equal(helpers.parseTrigger("se3-1+2"), null);
+  assert.equal(helpers.findExpansion("se3-1+2", 7, morning), null);
+
+  // Existing unsigned and earlier-offset triggers are unchanged at 09:42.
+  const unchanged = [
+    ["se", "(**0945-1010** [t:: 25m])"],
+    ["se3", "(**0945-1000** [t:: 15m])"],
+    ["se-2", "(**0935-1000** [t:: 25m])"],
+    ["se2-1", "(**0940-0950** [t:: 10m])"],
+  ];
+  for (const [trigger, range] of unchanged) {
+    const expansion = helpers.findExpansion(trigger, trigger.length, morning);
+    assert.notEqual(expansion, null);
+    assert.equal(expansion.range, range);
+  }
+  assert.equal(helpers.parseTrigger("se-0").kind, "ledgerRange");
+});

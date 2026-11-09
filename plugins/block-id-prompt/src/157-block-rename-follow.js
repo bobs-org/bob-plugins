@@ -12,11 +12,17 @@
 // recorded spans no longer match exactly is never touched; the notes whose
 // links now dangle are named in a sticky Notice instead.
 //
+// Closed-note writes await vault I/O. Genuine editor undo/redo during that
+// wait is queued and the trigger note is revalidated afterward so the vault
+// converges on the latest user form. The plugin's own transactions are not
+// treated as a new undo or redo.
+//
 // Forms: "new" is the renamed state, "old" the original one.
 
 const BLOCK_RENAME_FOLLOW_WINDOW_MS = 30 * 60 * 1000;
 const BLOCK_RENAME_FOLLOW_DEBOUNCE_MS = 120;
 const BLOCK_RENAME_FOLLOW_MAX_RECORDS = 8;
+const BLOCK_RENAME_FOLLOW_MAX_CYCLES = 8;
 
 function blockRenameCountOccurrences(text, needle) {
   if (!needle) {
@@ -139,9 +145,11 @@ class BlockIdPromptRenameFollowMixin {
 
   // EditorView update hook (called for every editor update; must stay cheap
   // and never throw). Only notes in a live record are ever looked at.
+  // Plugin-own transactions are ignored so follow writes cannot retrigger
+  // themselves; genuine edits during awaited closed-note I/O stay queued.
   noteBlockRenameUpdate(update) {
     try {
-      if (!update || !update.docChanged || this.renameFollowBusy) {
+      if (!update || !update.docChanged || this.renameFollowApplying) {
         return;
       }
 
@@ -155,20 +163,28 @@ class BlockIdPromptRenameFollowMixin {
         return;
       }
 
-      if (!(this.renameFollowPending instanceof Set)) {
-        this.renameFollowPending = new Set();
-      }
-      this.renameFollowPending.add(path);
-      if (this.renameFollowTimer !== null && this.renameFollowTimer !== undefined) {
-        window.clearTimeout(this.renameFollowTimer);
-      }
-      this.renameFollowTimer = window.setTimeout(() => {
-        this.renameFollowTimer = null;
-        void this.runBlockRenameFollow();
-      }, BLOCK_RENAME_FOLLOW_DEBOUNCE_MS);
+      this.queueBlockRenameFollow(path);
     } catch (error) {
       // An editor update must never fail because of rename bookkeeping.
     }
+  }
+
+  queueBlockRenameFollow(path) {
+    if (!(this.renameFollowPending instanceof Set)) {
+      this.renameFollowPending = new Set();
+    }
+    this.renameFollowPending.add(path);
+    if (this.renameFollowRunning) {
+      this.renameFollowRerun = true;
+      return;
+    }
+    if (this.renameFollowTimer !== null && this.renameFollowTimer !== undefined) {
+      window.clearTimeout(this.renameFollowTimer);
+    }
+    this.renameFollowTimer = window.setTimeout(() => {
+      this.renameFollowTimer = null;
+      void this.runBlockRenameFollow();
+    }, BLOCK_RENAME_FOLLOW_DEBOUNCE_MS);
   }
 
   blockRenamePathForView(cmView) {
@@ -204,6 +220,7 @@ class BlockIdPromptRenameFollowMixin {
 
     this.renameFollowRunning = true;
     try {
+      let cycles = 0;
       do {
         this.renameFollowRerun = false;
         const paths = Array.from(this.renameFollowPending || []);
@@ -211,7 +228,11 @@ class BlockIdPromptRenameFollowMixin {
         for (const path of paths) {
           await this.evaluateBlockRenameFollow(path);
         }
-      } while (this.renameFollowRerun);
+        cycles += 1;
+      } while (
+        (this.renameFollowRerun || (this.renameFollowPending && this.renameFollowPending.size > 0)) &&
+        cycles < BLOCK_RENAME_FOLLOW_MAX_CYCLES
+      );
     } catch (error) {
       console.error("Block ID Prompt failed to follow a block ID rename", error);
     } finally {
@@ -242,50 +263,78 @@ class BlockIdPromptRenameFollowMixin {
     }
   }
 
-  async followBlockRename(record, triggerNote, targetForm) {
-    this.renameFollowBusy = true;
-    try {
-      triggerNote.observed = targetForm;
-
-      const targets = [];
-      const stuck = [];
-      for (const noteRecord of record.notes) {
-        if (noteRecord === triggerNote) {
-          continue;
-        }
-
-        const prepared = await this.prepareBlockRenameFollowTarget(
-          record,
-          noteRecord,
-          targetForm,
-        );
-        if (prepared.state === "already") {
-          noteRecord.observed = targetForm;
-        } else if (prepared.state === "ready") {
-          targets.push({ noteRecord, target: prepared.target });
-        } else {
-          stuck.push(noteRecord);
-        }
-      }
-
-      if (targets.length > 0) {
-        const committed = await this.commitRenameWrites(
-          targets.map((entry) => entry.target),
-        );
-        for (const entry of targets) {
-          if (committed) {
-            entry.noteRecord.observed = targetForm;
-          } else {
-            stuck.push(entry.noteRecord);
-          }
-        }
-      }
-
-      this.noticeBlockRenameFollow(record, targetForm, targets);
-    } finally {
-      this.renameFollowBusy = false;
-      this.renameFollowPending = new Set();
+  liveBlockRenameForm(record, noteRecord) {
+    const open = findOpenPromptTargetEditors(this, noteRecord.path);
+    if (open.length === 0) {
+      return null;
     }
+    if (open.some((entry) => entry.content !== open[0].content)) {
+      return null;
+    }
+    return blockRenameNoteForm(noteRecord, open[0].content, record);
+  }
+
+  async followBlockRename(record, triggerNote, targetForm) {
+    const liveForm = this.liveBlockRenameForm(record, triggerNote);
+    if (liveForm !== targetForm) {
+      return;
+    }
+
+    triggerNote.observed = targetForm;
+
+    const targets = [];
+    const stuck = [];
+    for (const noteRecord of record.notes) {
+      if (noteRecord === triggerNote) {
+        continue;
+      }
+
+      if (this.liveBlockRenameForm(record, triggerNote) !== targetForm) {
+        this.queueBlockRenameFollow(triggerNote.path);
+        return;
+      }
+
+      const prepared = await this.prepareBlockRenameFollowTarget(
+        record,
+        noteRecord,
+        targetForm,
+      );
+      if (prepared.state === "already") {
+        noteRecord.observed = targetForm;
+      } else if (prepared.state === "ready") {
+        targets.push({ noteRecord, target: prepared.target });
+      } else {
+        stuck.push(noteRecord);
+      }
+    }
+
+    if (this.liveBlockRenameForm(record, triggerNote) !== targetForm) {
+      this.queueBlockRenameFollow(triggerNote.path);
+      return;
+    }
+
+    if (targets.length > 0) {
+      const committed = await this.commitRenameWrites(
+        targets.map((entry) => entry.target),
+      );
+      const after = this.liveBlockRenameForm(record, triggerNote);
+      for (const entry of targets) {
+        if (committed) {
+          entry.noteRecord.observed = targetForm;
+        } else {
+          stuck.push(entry.noteRecord);
+        }
+      }
+      if (after !== targetForm) {
+        this.queueBlockRenameFollow(triggerNote.path);
+        if (!committed) {
+          this.noticeBlockRenameFollow(record, targetForm, targets);
+        }
+        return;
+      }
+    }
+
+    this.noticeBlockRenameFollow(record, targetForm, targets);
   }
 
   async prepareBlockRenameFollowTarget(record, noteRecord, targetForm) {

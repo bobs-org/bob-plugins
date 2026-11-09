@@ -204,29 +204,34 @@ class BlockIdPromptRenameWritesMixin {
     const editor = target.editor;
     const ordered = [...target.edits].sort((left, right) => left.start - right.start);
     this.suppressEditorScans();
+    this.renameFollowApplying = true;
 
-    if (editor && typeof editor.transaction === "function") {
-      editor.transaction({
-        changes: ordered.map((edit) => ({
-          from: indexToEditorPosition(target.content, edit.start),
-          to: indexToEditorPosition(target.content, edit.end),
-          text: edit.replacement,
-        })),
-      });
-      return true;
-    }
-
-    if (editor && typeof editor.replaceRange === "function") {
-      for (const edit of ordered.slice().reverse()) {
-        editor.replaceRange(
-          edit.replacement,
-          indexToEditorPosition(target.content, edit.start),
-          indexToEditorPosition(target.content, edit.end),
-        );
+    try {
+      if (editor && typeof editor.transaction === "function") {
+        editor.transaction({
+          changes: ordered.map((edit) => ({
+            from: indexToEditorPosition(target.content, edit.start),
+            to: indexToEditorPosition(target.content, edit.end),
+            text: edit.replacement,
+          })),
+        });
+        return true;
       }
-      return true;
-    }
 
-    return false;
+      if (editor && typeof editor.replaceRange === "function") {
+        for (const edit of ordered.slice().reverse()) {
+          editor.replaceRange(
+            edit.replacement,
+            indexToEditorPosition(target.content, edit.start),
+            indexToEditorPosition(target.content, edit.end),
+          );
+        }
+        return true;
+      }
+
+      return false;
+    } finally {
+      this.renameFollowApplying = false;
+    }
   }
 }

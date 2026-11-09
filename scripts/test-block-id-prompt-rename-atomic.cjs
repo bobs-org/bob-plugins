@@ -446,6 +446,106 @@ test("records expire, and edits without a live record schedule nothing", async (
   assert.equal(pendingTimers.length, 0, "unknown views and unchanged documents are ignored");
 });
 
+test("a redo during closed-note undo follow converges on the latest editor form", async () => {
+  const world = threeNotes();
+  await renameBob(world, "old", "new");
+  resetNotices();
+  world.editors[BOB].undo();
+  let redone = false;
+  world.calls.hooks.beforeProcess = () => {
+    if (redone) {
+      return;
+    }
+    redone = true;
+    world.editors[BOB].redo();
+    world.plugin.noteBlockRenameUpdate({
+      docChanged: true,
+      view: world.editors[BOB].cm,
+    });
+  };
+  await deliverUpdate(world, BOB);
+
+  assert.equal(world.editors[BOB].getValue(), bobNote("new"));
+  assert.equal(world.store[DAILY], dailyNote("new"));
+  assert.equal(world.store[DONE], doneNote("new"));
+  assert.equal((world.plugin.renameFollowPending || new Set()).size, 0);
+  assert.ok(
+    !noticeMessages.includes("Undid block ID rename in 2 notes"),
+    `stale undo success is dishonest after a redo: ${JSON.stringify(noticeMessages)}`,
+  );
+});
+
+test("an undo during closed-note redo follow converges on the latest editor form", async () => {
+  const world = threeNotes();
+  await renameBob(world, "old", "new");
+  world.editors[BOB].undo();
+  await deliverUpdate(world, BOB);
+  resetNotices();
+  world.editors[BOB].redo();
+  let undone = false;
+  world.calls.hooks.beforeProcess = () => {
+    if (undone) {
+      return;
+    }
+    undone = true;
+    world.editors[BOB].undo();
+    world.plugin.noteBlockRenameUpdate({
+      docChanged: true,
+      view: world.editors[BOB].cm,
+    });
+  };
+  await deliverUpdate(world, BOB);
+
+  assert.equal(world.editors[BOB].getValue(), bobNote("old"));
+  assert.equal(world.store[DAILY], dailyNote("old"));
+  assert.equal(world.store[DONE], doneNote("old"));
+  assert.equal((world.plugin.renameFollowPending || new Set()).size, 0);
+  assert.ok(
+    !noticeMessages.includes("Redid block ID rename in 2 notes"),
+    `stale redo success is dishonest after an undo: ${JSON.stringify(noticeMessages)}`,
+  );
+});
+
+test("an unrelated edit in a second editor during closed follow is preserved", async () => {
+  const world = threeNotes({ open: [DAILY] });
+  await renameBob(world, "old", "new");
+  resetNotices();
+  world.editors[BOB].undo();
+  let typed = false;
+  world.calls.hooks.beforeProcess = () => {
+    if (typed) {
+      return;
+    }
+    typed = true;
+    world.editors[DAILY].type("- unrelated\n");
+    world.plugin.noteBlockRenameUpdate({
+      docChanged: true,
+      view: world.editors[DAILY].cm,
+    });
+  };
+  await deliverUpdate(world, BOB);
+
+  assert.equal(world.editors[BOB].getValue(), bobNote("old"));
+  assert.ok(
+    world.editors[DAILY].getValue().includes("- unrelated\n"),
+    "the typed buffer is kept",
+  );
+  assert.match(world.editors[DAILY].getValue(), /\^new/);
+  assert.equal(world.store[DONE], doneNote("new"));
+  assert.ok(
+    noticeCalls.some((call) => call.duration === 0),
+    `expected a sticky dangling notice, got ${JSON.stringify(noticeMessages)}`,
+  );
+  assert.ok(
+    noticeCalls.some((call) => /daily\.md|done\/bob_done\.md/.test(call.message)),
+    `sticky notice should name the dangling notes: ${JSON.stringify(noticeMessages)}`,
+  );
+  assert.ok(
+    !noticeMessages.includes("Undid block ID rename in 2 notes"),
+    `success from stale observed fields: ${JSON.stringify(noticeMessages)}`,
+  );
+});
+
 test("blockRenameNoteForm reads token and link forms and refuses mixed or missing states", () => {
   const record = { oldId: "old", newId: "new" };
   const note = {

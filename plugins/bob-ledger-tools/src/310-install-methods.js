@@ -30,6 +30,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsCacheMixin,
   BobLedgerToolsStatsClockMixin,
   BobLedgerToolsReadingBoardDataMixin,
+  BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,

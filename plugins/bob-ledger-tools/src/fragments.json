@@ -96,6 +96,7 @@
   "239-plugin-period-strip-fence.js",
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
+  "241a-plugin-notebook-data.js",
   "242-plugin-reading-board-models.js",
   "243-plugin-reading-board-render.js",
   "244-plugin-reading-board-block.js",

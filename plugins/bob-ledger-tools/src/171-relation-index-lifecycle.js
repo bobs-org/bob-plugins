@@ -585,7 +585,11 @@ class BobLedgerToolsRelationIndexMixin {
     this.scheduleRelationIndexPublish();
     let files = [];
     try {
-      files = vault.getMarkdownFiles().filter((file) => this.relationIndexPrefilter(file));
+      const markdownFiles = vault.getMarkdownFiles();
+      if (typeof this.notebookSeedFrontmatterFingerprints === "function") {
+        this.notebookSeedFrontmatterFingerprints(markdownFiles);
+      }
+      files = markdownFiles.filter((file) => this.relationIndexPrefilter(file));
     } catch (error) {
       this.relationIndexReadyFlag = true;
       this.scheduleRelationIndexPublish();

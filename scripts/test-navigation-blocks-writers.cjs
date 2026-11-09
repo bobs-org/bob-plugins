@@ -114,6 +114,7 @@ test("SB1-SB9 dependent IDs match the successor mint vectors", () => {
     ["SB7", "- [?] #task Fix it", ["fix", ...Array.from({ length: 8 }, (_, index) => `fix-${index + 2}`)], "task"],
     ["SB8", "- [?] #task é🚀", [], "task"],
     ["SB9", "- [?] #task é🚀", ["task", "task-2"], "task-3"],
+    ["Keep URL is not task prose", "- [?] #task Auto-label Kelly's emails with Bob [💡](https://keep.google.com/u/0/#NOTE/abc)", [], "auto-label-kelly"],
   ];
   for (const [id, line, used, expected] of cases) assert.equal(helpers.mintDependentBlockId(line, used), expected, id);
 });

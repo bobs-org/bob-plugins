@@ -105,6 +105,11 @@ function blocksDependentDescription(rawLine, globalFilter = "#task") {
   let body = status ? line.slice(status[0].length) : blocksBodyAfterStatusBox(line);
   body = body.replace(/\s+\^[A-Za-z0-9-]+\s*$/, " ");
   body = body.replace(BLOCKS_ID_INLINE_FIELD_RE, " ");
+  // Link destinations are metadata, not task prose. In particular, Keep URLs
+  // must not become IDs such as `https-keep-google-com`; retain only the
+  // Markdown link's visible label before choosing an ID stem.
+  body = body.replace(/!?\[([^\]\n]*)\]\(([^)\n]+)\)/g, (whole, label) => ` ${label || ""} `);
+  body = body.replace(/(?:https?:\/\/|www\.)[^\s)\]]+/g, " ");
   const filter = globalFilter === undefined ? "#task" : globalFilter;
   return body.split(/\s+/).filter((token) => token && (filter === "" || token !== filter)).join(" ");
 }

@@ -169,8 +169,14 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
+  // Plans a whole rename against one set of snapshots: every referencing
+  // note's link rewrites plus, when the ID actually changes, the destination's
+  // `^id` edit (kind "block-id") in the destination note's own edit list, so
+  // each note is written exactly once (see 155-block-rename-writes.js).
+  // `editCount` counts link edits only.
   async buildReferenceRewritePlan(source, destination, newId, options = {}) {
     const requireSourceMarker = options.requireSourceMarker !== false;
+    const renamesId = newId !== source.oldId;
     const candidateFiles = await this.collectCandidateReferenceFiles(
       destination.file,
       source,
@@ -179,10 +185,15 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     let editCount = 0;
     let unsupportedCount = 0;
     let sourceMarkerPlanned = false;
-    let destinationContentAfterReferences = null;
+    let rename = null;
 
     for (const file of candidateFiles) {
-      const snapshot = await this.readFileSnapshot(file, source);
+      const read = await this.readRenameSnapshot(file, source);
+      if (read.ambiguous) {
+        new Notice(`Block ID rename blocked: ${file.path} changed before rewrite`);
+        return null;
+      }
+      const snapshot = read.content;
       if (snapshot === null) {
         new Notice(`Block ID rename blocked: ${file.path} could not be read`);
         return null;
@@ -249,8 +260,40 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
         return null;
       }
 
-      if (file.path === destination.file.path) {
-        destinationContentAfterReferences = applyTextEdits(snapshot, edits);
+      if (renamesId && file.path === destination.file.path) {
+        if (blockTokenMatches(snapshot, newId).length > 0) {
+          new Notice(`Block ID '${newId}' already exists in ${file.path}`);
+          return null;
+        }
+
+        const idMatches = blockTokenMatches(snapshot, source.oldId);
+        if (idMatches.length !== 1) {
+          new Notice(
+            `Block ID rename stopped: old ID was not found exactly once in ${file.path}`,
+          );
+          return null;
+        }
+
+        const idMatch = idMatches[0];
+        edits.push({
+          start: idMatch.start,
+          end: idMatch.end,
+          replacement: `^${newId}`,
+          kind: "block-id",
+        });
+        if (!validateNonOverlappingEdits(edits)) {
+          new Notice("Block ID rename blocked: overlapping link edits were found");
+          return null;
+        }
+
+        const lineStart = snapshot.lastIndexOf("\n", idMatch.start - 1) + 1;
+        const lineEnd = snapshot.indexOf("\n", idMatch.start);
+        rename = {
+          destinationPath: file.path,
+          oldId: source.oldId,
+          newId,
+          taskLine: snapshot.slice(lineStart, lineEnd === -1 ? snapshot.length : lineEnd),
+        };
       }
 
       if (edits.length > 0) {
@@ -267,14 +310,18 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       return null;
     }
 
+    if (renamesId && rename === null) {
+      new Notice(
+        `Block ID rename stopped: old ID was not found exactly once in ${destination.file.path}`,
+      );
+      return null;
+    }
+
     return {
       filePlans,
       editCount,
       unsupportedCount,
-      destinationContentAfterReferences:
-        destinationContentAfterReferences === null
-          ? destination.content
-          : destinationContentAfterReferences,
+      rename,
     };
   }
 

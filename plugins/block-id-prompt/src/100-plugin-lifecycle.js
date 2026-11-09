@@ -50,6 +50,7 @@ class BlockIdPromptPlugin extends Plugin {
 
   scheduleScan(update) {
     this.recordTaskWikilinkWrittenRanges(update);
+    this.noteBlockRenameUpdate(update);
 
     if (!update.docChanged) {
       return;
@@ -489,6 +490,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
     this.taskWikilinkWrittenRanges = [];
     this.taskWikilinkIndex = null;
+    this.clearBlockRenameFollow();
     // Drop the picker capability first so nav retargeting degrades to no
     // hint the moment this plugin unloads (mixed-version sessions never
     // call into a torn-down picker).

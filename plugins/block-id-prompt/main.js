@@ -14366,6 +14366,7 @@ class BlockIdPromptPlugin extends Plugin {
 
   scheduleScan(update) {
     this.recordTaskWikilinkWrittenRanges(update);
+    this.noteBlockRenameUpdate(update);
 
     if (!update.docChanged) {
       return;
@@ -14805,6 +14806,7 @@ class BlockIdPromptPlugin extends Plugin {
     }
     this.taskWikilinkWrittenRanges = [];
     this.taskWikilinkIndex = null;
+    this.clearBlockRenameFollow();
     // Drop the picker capability first so nav retargeting degrades to no
     // hint the moment this plugin unloads (mixed-version sessions never
     // call into a torn-down picker).
@@ -14882,19 +14884,9 @@ class BlockIdPromptBlockIdSubmitMixin {
       return false;
     }
 
+    // One write per note: link rewrites and the destination's `^id` land in
+    // the same editor transaction (open notes) or compare-and-swap write.
     if (!(await this.applyReferenceRewritePlan(plan, source))) {
-      return true;
-    }
-
-    if (
-      !(await this.renameDestinationBlock(
-        destination.file,
-        source,
-        source.oldId,
-        newId,
-        plan.destinationContentAfterReferences,
-      ))
-    ) {
       return true;
     }
 
@@ -14963,19 +14955,9 @@ class BlockIdPromptBlockIdSubmitMixin {
       return false;
     }
 
+    // One write per note: link rewrites and the destination's `^id` land in
+    // the same editor transaction (open notes) or compare-and-swap write.
     if (!(await this.applyReferenceRewritePlan(plan, source))) {
-      return true;
-    }
-
-    if (
-      !(await this.renameDestinationBlock(
-        destination.file,
-        source,
-        source.oldId,
-        newId,
-        plan.destinationContentAfterReferences,
-      ))
-    ) {
       return true;
     }
 
@@ -18774,8 +18756,14 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     return true;
   }
 
+  // Plans a whole rename against one set of snapshots: every referencing
+  // note's link rewrites plus, when the ID actually changes, the destination's
+  // `^id` edit (kind "block-id") in the destination note's own edit list, so
+  // each note is written exactly once (see 155-block-rename-writes.js).
+  // `editCount` counts link edits only.
   async buildReferenceRewritePlan(source, destination, newId, options = {}) {
     const requireSourceMarker = options.requireSourceMarker !== false;
+    const renamesId = newId !== source.oldId;
     const candidateFiles = await this.collectCandidateReferenceFiles(
       destination.file,
       source,
@@ -18784,10 +18772,15 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
     let editCount = 0;
     let unsupportedCount = 0;
     let sourceMarkerPlanned = false;
-    let destinationContentAfterReferences = null;
+    let rename = null;
 
     for (const file of candidateFiles) {
-      const snapshot = await this.readFileSnapshot(file, source);
+      const read = await this.readRenameSnapshot(file, source);
+      if (read.ambiguous) {
+        new Notice(`Block ID rename blocked: ${file.path} changed before rewrite`);
+        return null;
+      }
+      const snapshot = read.content;
       if (snapshot === null) {
         new Notice(`Block ID rename blocked: ${file.path} could not be read`);
         return null;
@@ -18854,8 +18847,40 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
         return null;
       }
 
-      if (file.path === destination.file.path) {
-        destinationContentAfterReferences = applyTextEdits(snapshot, edits);
+      if (renamesId && file.path === destination.file.path) {
+        if (blockTokenMatches(snapshot, newId).length > 0) {
+          new Notice(`Block ID '${newId}' already exists in ${file.path}`);
+          return null;
+        }
+
+        const idMatches = blockTokenMatches(snapshot, source.oldId);
+        if (idMatches.length !== 1) {
+          new Notice(
+            `Block ID rename stopped: old ID was not found exactly once in ${file.path}`,
+          );
+          return null;
+        }
+
+        const idMatch = idMatches[0];
+        edits.push({
+          start: idMatch.start,
+          end: idMatch.end,
+          replacement: `^${newId}`,
+          kind: "block-id",
+        });
+        if (!validateNonOverlappingEdits(edits)) {
+          new Notice("Block ID rename blocked: overlapping link edits were found");
+          return null;
+        }
+
+        const lineStart = snapshot.lastIndexOf("\n", idMatch.start - 1) + 1;
+        const lineEnd = snapshot.indexOf("\n", idMatch.start);
+        rename = {
+          destinationPath: file.path,
+          oldId: source.oldId,
+          newId,
+          taskLine: snapshot.slice(lineStart, lineEnd === -1 ? snapshot.length : lineEnd),
+        };
       }
 
       if (edits.length > 0) {
@@ -18872,14 +18897,18 @@ class BlockIdPromptTargetPlansAndRewritesMixin {
       return null;
     }
 
+    if (renamesId && rename === null) {
+      new Notice(
+        `Block ID rename stopped: old ID was not found exactly once in ${destination.file.path}`,
+      );
+      return null;
+    }
+
     return {
       filePlans,
       editCount,
       unsupportedCount,
-      destinationContentAfterReferences:
-        destinationContentAfterReferences === null
-          ? destination.content
-          : destinationContentAfterReferences,
+      rename,
     };
   }
 
@@ -19207,127 +19236,6 @@ class BlockIdPromptReferenceFilesMixin {
     }
   }
 
-  async applyReferenceRewritePlan(plan, source) {
-    if (!(await this.verifyPlannedFilesUnchanged(plan, source))) {
-      return false;
-    }
-
-    for (const filePlan of plan.filePlans) {
-      if (!(await this.applyReferenceEdits(filePlan, source))) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  async verifyPlannedFilesUnchanged(plan, source) {
-    for (const filePlan of plan.filePlans) {
-      const currentContent = await this.readFileSnapshot(filePlan.file, source);
-      if (currentContent === null) {
-        new Notice(`Block ID rename blocked: ${filePlan.file.path} could not be read`);
-        return false;
-      }
-
-      if (currentContent !== filePlan.content) {
-        new Notice(
-          `Block ID rename blocked: ${filePlan.file.path} changed before rewrite`,
-        );
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  async applyReferenceEdits(filePlan, source) {
-    if (filePlan.file.path === source.sourcePath) {
-      return this.applyActiveReferenceEdits(filePlan, source.editor);
-    }
-
-    const nextContent = applyTextEdits(filePlan.content, filePlan.edits);
-    try {
-      await this.app.vault.modify(filePlan.file, nextContent);
-      return true;
-    } catch (error) {
-      console.error("Block ID Prompt failed to modify backlink note", error);
-      new Notice(`Block ID rename stopped: ${filePlan.file.path} could not be modified`);
-      return false;
-    }
-  }
-
-  applyActiveReferenceEdits(filePlan, editor) {
-    if (!editor || typeof editor.replaceRange !== "function") {
-      new Notice("Block ID rename stopped: active note could not be modified");
-      return false;
-    }
-
-    this.suppressEditorScans();
-    const sorted = [...filePlan.edits].sort((left, right) => right.start - left.start);
-    for (const edit of sorted) {
-      editor.replaceRange(
-        edit.replacement,
-        indexToEditorPosition(filePlan.content, edit.start),
-        indexToEditorPosition(filePlan.content, edit.end),
-      );
-    }
-
-    return true;
-  }
-
-  async renameDestinationBlock(file, source, oldId, newId, expectedContent) {
-    if (newId === oldId) {
-      return true;
-    }
-
-    const content = await this.readFileSnapshot(file, source);
-    if (content === null) {
-      new Notice(`Block ID rename stopped: ${file.path} could not be read`);
-      return false;
-    }
-
-    if (typeof expectedContent === "string" && content !== expectedContent) {
-      new Notice(`Block ID rename stopped: ${file.path} changed before rename`);
-      return false;
-    }
-
-    const duplicateMatches = blockTokenMatches(content, newId);
-    if (duplicateMatches.length > 0) {
-      new Notice(`Block ID '${newId}' already exists in ${file.path}`);
-      return false;
-    }
-
-    const matches = blockTokenMatches(content, oldId);
-    if (matches.length !== 1) {
-      new Notice(
-        `Block ID rename stopped: old ID was not found exactly once in ${file.path}`,
-      );
-      return false;
-    }
-
-    const match = matches[0];
-    if (file.path === source.sourcePath) {
-      this.suppressEditorScans();
-      source.editor.replaceRange(
-        `^${newId}`,
-        indexToEditorPosition(content, match.start),
-        indexToEditorPosition(content, match.end),
-      );
-      return true;
-    }
-
-    const nextContent =
-      content.slice(0, match.start) + `^${newId}` + content.slice(match.end);
-    try {
-      await this.app.vault.modify(file, nextContent);
-      return true;
-    } catch (error) {
-      console.error("Block ID Prompt failed to modify target note", error);
-      new Notice(`Block ID rename stopped: ${file.path} could not be modified`);
-      return false;
-    }
-  }
-
   suppressEditorScans() {
     this.suppressUntil = Date.now() + EDIT_SUPPRESS_MS;
     if (this.scanTimer !== null) {
@@ -19383,6 +19291,663 @@ class BlockIdPromptReferenceFilesMixin {
   }
 
 }
+// ---- src/155-block-rename-writes.js ----
+// Block-ID rename writes (plan 202611/lost_task_guards.md, rename_atomic).
+//
+// A rename touches several notes: link rewrites in each referencing note plus
+// the `^id` itself in the destination. Each note is written exactly once:
+//
+// - A note open in any markdown leaf (active or not) is written with ONE
+//   editor transaction holding all of that note's edits. One transaction is
+//   one CM6 history event, so one undo reverts the whole note. Applying the
+//   edits one `replaceRange` at a time left separate undo events: a single vim
+//   `u` reverted only the `^id` and left the same-note links on the new ID.
+// - A note not open anywhere is written with `vault.process`, comparing the
+//   file to the planned before-image inside the atomic read-modify-write so a
+//   concurrent change (a sync pull, another writer) refuses instead of being
+//   overwritten.
+//
+// Closed notes are written first and rolled back when any of them refuses;
+// open notes are verified and written last in one synchronous pass, so a
+// refusal never leaves half a rename behind.
+
+function renameEditorText(editor) {
+  try {
+    return editor && typeof editor.getValue === "function"
+      ? String(editor.getValue() || "")
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+class BlockIdPromptRenameWritesMixin {
+  // Authoritative planning read: the live editor buffer when the note is open
+  // (unsaved edits win over stale disk, and editor offsets stay valid),
+  // otherwise the vault. Disagreeing buffers for one note refuse.
+  async readRenameSnapshot(file, source) {
+    const snapshot = await readAuthoritativePromptTargetContent(this, source, file);
+    if (snapshot.ambiguous) {
+      return { content: null, editor: null, ambiguous: true };
+    }
+    return { content: snapshot.content, editor: snapshot.editor || null };
+  }
+
+  async applyReferenceRewritePlan(plan, source) {
+    const targets = await this.prepareRenameWrites(plan, source);
+    if (!targets) {
+      return false;
+    }
+
+    if (!(await this.commitRenameWrites(targets))) {
+      return false;
+    }
+
+    if (plan.rename) {
+      this.recordBlockRename(plan, targets);
+    }
+
+    return true;
+  }
+
+  // Re-read every planned note and refuse when any changed since planning.
+  // Returns the write targets (planned before/after text plus the live editor
+  // when the note is open) or null with a notice already shown.
+  async prepareRenameWrites(plan, source) {
+    const targets = [];
+    for (const filePlan of plan.filePlans) {
+      const snapshot = await this.readRenameSnapshot(filePlan.file, source);
+      if (snapshot.ambiguous) {
+        new Notice(
+          `Block ID rename blocked: ${filePlan.file.path} changed before rewrite`,
+        );
+        return null;
+      }
+      if (snapshot.content === null) {
+        new Notice(`Block ID rename blocked: ${filePlan.file.path} could not be read`);
+        return null;
+      }
+      if (snapshot.content !== filePlan.content) {
+        new Notice(
+          `Block ID rename blocked: ${filePlan.file.path} changed before rewrite`,
+        );
+        return null;
+      }
+
+      targets.push({
+        file: filePlan.file,
+        path: filePlan.file.path,
+        content: filePlan.content,
+        edits: filePlan.edits,
+        after: applyTextEdits(filePlan.content, filePlan.edits),
+        editor: snapshot.editor,
+        isSource: filePlan.file.path === source.sourcePath,
+      });
+    }
+
+    return targets;
+  }
+
+  async commitRenameWrites(targets) {
+    const closedTargets = targets.filter((target) => !target.editor);
+    const openTargets = targets.filter((target) => target.editor);
+    const written = [];
+
+    for (const target of closedTargets) {
+      const outcome = await this.writeClosedRenameTarget(target);
+      if (outcome !== "written") {
+        await this.rollbackClosedRenameWrites(written);
+        this.noticeRenameWriteRefusal(target, outcome);
+        return false;
+      }
+      written.push(target);
+    }
+
+    // No await between this check and the last transaction: the editors
+    // cannot change underneath the verified before-image.
+    for (const target of openTargets) {
+      if (renameEditorText(target.editor) !== target.content) {
+        await this.rollbackClosedRenameWrites(written);
+        this.noticeRenameWriteRefusal(target, "changed");
+        return false;
+      }
+    }
+
+    for (const target of openTargets) {
+      let applied = false;
+      try {
+        applied = this.applyRenameTransaction(target);
+      } catch (error) {
+        console.error("Block ID Prompt failed to modify open note", error);
+      }
+      if (!applied) {
+        await this.rollbackClosedRenameWrites(written);
+        this.noticeRenameWriteRefusal(target, "failed");
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Compare-and-swap write of one closed note. Resolves "written",
+  // "changed" (the file no longer matches the planned before-image), or
+  // "failed".
+  async writeClosedRenameTarget(target) {
+    let changed = false;
+    try {
+      await this.app.vault.process(target.file, (data) => {
+        if (data !== target.content) {
+          changed = true;
+          return data;
+        }
+        return target.after;
+      });
+    } catch (error) {
+      console.error("Block ID Prompt failed to modify note", error);
+      return "failed";
+    }
+
+    return changed ? "changed" : "written";
+  }
+
+  // Undo closed writes already made when a later note refuses. A note that
+  // changed again since our write cannot be restored safely; it is named so
+  // its links can be checked by hand.
+  async rollbackClosedRenameWrites(written) {
+    const stuck = [];
+    for (const target of written.slice().reverse()) {
+      let restored = false;
+      try {
+        await this.app.vault.process(target.file, (data) => {
+          if (data === target.after) {
+            restored = true;
+            return target.content;
+          }
+          return data;
+        });
+      } catch (error) {
+        console.error("Block ID Prompt failed to roll back note", error);
+      }
+      if (!restored) {
+        stuck.push(target.path);
+      }
+    }
+
+    if (stuck.length > 0) {
+      new Notice(
+        `Block ID rename was stopped, but ${stuck.join(", ")} could not be restored; check its links`,
+        0,
+      );
+    }
+  }
+
+  noticeRenameWriteRefusal(target, outcome) {
+    if (outcome === "changed") {
+      new Notice(`Block ID rename blocked: ${target.path} changed before rewrite`);
+    } else if (target.isSource && target.editor) {
+      new Notice("Block ID rename stopped: active note could not be modified");
+    } else {
+      new Notice(`Block ID rename stopped: ${target.path} could not be modified`);
+    }
+  }
+
+  // One editor transaction per note: every edit is expressed against the
+  // planned before-image, so they land together and undo together.
+  applyRenameTransaction(target) {
+    const editor = target.editor;
+    const ordered = [...target.edits].sort((left, right) => left.start - right.start);
+    this.suppressEditorScans();
+
+    if (editor && typeof editor.transaction === "function") {
+      editor.transaction({
+        changes: ordered.map((edit) => ({
+          from: indexToEditorPosition(target.content, edit.start),
+          to: indexToEditorPosition(target.content, edit.end),
+          text: edit.replacement,
+        })),
+      });
+      return true;
+    }
+
+    if (editor && typeof editor.replaceRange === "function") {
+      for (const edit of ordered.slice().reverse()) {
+        editor.replaceRange(
+          edit.replacement,
+          indexToEditorPosition(target.content, edit.start),
+          indexToEditorPosition(target.content, edit.end),
+        );
+      }
+      return true;
+    }
+
+    return false;
+  }
+}
+// ---- src/157-block-rename-follow.js ----
+// Undo follows a block-ID rename (plan 202611/lost_task_guards.md,
+// rename_atomic; decision undo_follows_rename = yes).
+//
+// Editor undo only reaches notes open in an editor, and each note keeps its
+// own history, so undoing a rename in one note used to leave every other note
+// pointing at an ID that no longer existed. After a successful rename the
+// plugin keeps a session-scoped record (destination path, task line, old and
+// new ID, and the exact link spans it rewrote in each note). While any
+// recorded note stays open, a change in that note's form (every recorded
+// span back on the old ID, or forward on the new one) is followed into the
+// other recorded notes through the same safe write paths. A note whose
+// recorded spans no longer match exactly is never touched; the notes whose
+// links now dangle are named in a sticky Notice instead.
+//
+// Forms: "new" is the renamed state, "old" the original one.
+
+const BLOCK_RENAME_FOLLOW_WINDOW_MS = 30 * 60 * 1000;
+const BLOCK_RENAME_FOLLOW_DEBOUNCE_MS = 120;
+const BLOCK_RENAME_FOLLOW_MAX_RECORDS = 8;
+
+function blockRenameCountOccurrences(text, needle) {
+  if (!needle) {
+    return 0;
+  }
+
+  let count = 0;
+  let index = text.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = text.indexOf(needle, index + needle.length);
+  }
+
+  return count;
+}
+
+// The form one recorded note is in right now: "new" when only the renamed
+// forms of its recorded spans are present, "old" when only the original
+// forms are, null when mixed or gone (mid-edit, hand edited, deleted).
+function blockRenameNoteForm(noteRecord, content, record) {
+  const forms = [];
+
+  if (noteRecord.token) {
+    const oldTokens = blockTokenMatches(content, record.oldId).length;
+    const newTokens = blockTokenMatches(content, record.newId).length;
+    if (oldTokens === 1 && newTokens === 0) {
+      forms.push("old");
+    } else if (newTokens === 1 && oldTokens === 0) {
+      forms.push("new");
+    } else {
+      return null;
+    }
+  }
+
+  if (noteRecord.links.length > 0) {
+    let oldLinks = 0;
+    let newLinks = 0;
+    for (const raw of new Set(noteRecord.links.map((link) => link.before))) {
+      oldLinks += blockRenameCountOccurrences(content, raw);
+    }
+    for (const raw of new Set(noteRecord.links.map((link) => link.after))) {
+      newLinks += blockRenameCountOccurrences(content, raw);
+    }
+    if (oldLinks > 0 && newLinks === 0) {
+      forms.push("old");
+    } else if (newLinks > 0 && oldLinks === 0) {
+      forms.push("new");
+    } else {
+      return null;
+    }
+  }
+
+  if (forms.length === 0 || forms.some((form) => form !== forms[0])) {
+    return null;
+  }
+
+  return forms[0];
+}
+
+class BlockIdPromptRenameFollowMixin {
+  blockRenameRecordList() {
+    if (!Array.isArray(this.blockRenameRecords)) {
+      this.blockRenameRecords = [];
+    }
+
+    return this.blockRenameRecords;
+  }
+
+  pruneBlockRenameRecords() {
+    const now = this.now().getTime();
+    this.blockRenameRecords = this.blockRenameRecordList().filter(
+      (record) => record.expiresAt > now,
+    );
+    return this.blockRenameRecords;
+  }
+
+  // Called after every successful rename write. `targets` are the per-note
+  // writes (planned before-image plus edits); the recorded spans are exactly
+  // what the rename rewrote.
+  recordBlockRename(plan, targets) {
+    const meta = plan && plan.rename;
+    if (!meta || meta.oldId === meta.newId) {
+      return null;
+    }
+
+    const now = this.now().getTime();
+    const record = {
+      destinationPath: meta.destinationPath,
+      taskLine: meta.taskLine,
+      oldId: meta.oldId,
+      newId: meta.newId,
+      createdAt: now,
+      expiresAt: now + BLOCK_RENAME_FOLLOW_WINDOW_MS,
+      notes: targets.map((target) => ({
+        path: target.path,
+        token: target.edits.some((edit) => edit.kind === "block-id"),
+        links: target.edits
+          .filter((edit) => edit.kind !== "block-id")
+          .map((edit) => ({
+            before: target.content.slice(edit.start, edit.end),
+            after: edit.replacement,
+          })),
+        observed: "new",
+      })),
+    };
+
+    const records = this.pruneBlockRenameRecords().filter(
+      (existing) =>
+        existing.destinationPath !== record.destinationPath ||
+        existing.oldId !== record.oldId ||
+        existing.newId !== record.newId,
+    );
+    records.push(record);
+    while (records.length > BLOCK_RENAME_FOLLOW_MAX_RECORDS) {
+      records.shift();
+    }
+    this.blockRenameRecords = records;
+    return record;
+  }
+
+  // EditorView update hook (called for every editor update; must stay cheap
+  // and never throw). Only notes in a live record are ever looked at.
+  noteBlockRenameUpdate(update) {
+    try {
+      if (!update || !update.docChanged || this.renameFollowBusy) {
+        return;
+      }
+
+      const records = this.pruneBlockRenameRecords();
+      if (records.length === 0) {
+        return;
+      }
+
+      const path = this.blockRenamePathForView(update.view);
+      if (!path || !records.some((record) => record.notes.some((note) => note.path === path))) {
+        return;
+      }
+
+      if (!(this.renameFollowPending instanceof Set)) {
+        this.renameFollowPending = new Set();
+      }
+      this.renameFollowPending.add(path);
+      if (this.renameFollowTimer !== null && this.renameFollowTimer !== undefined) {
+        window.clearTimeout(this.renameFollowTimer);
+      }
+      this.renameFollowTimer = window.setTimeout(() => {
+        this.renameFollowTimer = null;
+        void this.runBlockRenameFollow();
+      }, BLOCK_RENAME_FOLLOW_DEBOUNCE_MS);
+    } catch (error) {
+      // An editor update must never fail because of rename bookkeeping.
+    }
+  }
+
+  blockRenamePathForView(cmView) {
+    const workspace = this.app && this.app.workspace;
+    if (!cmView || !workspace || typeof workspace.getLeavesOfType !== "function") {
+      return null;
+    }
+
+    for (const leaf of workspace.getLeavesOfType("markdown") || []) {
+      const view = leaf && leaf.view;
+      if (view && view.file && view.editor && view.editor.cm === cmView) {
+        return view.file.path;
+      }
+    }
+
+    return null;
+  }
+
+  clearBlockRenameFollow() {
+    if (this.renameFollowTimer !== null && this.renameFollowTimer !== undefined) {
+      window.clearTimeout(this.renameFollowTimer);
+    }
+    this.renameFollowTimer = null;
+    this.renameFollowPending = new Set();
+    this.blockRenameRecords = [];
+  }
+
+  async runBlockRenameFollow() {
+    if (this.renameFollowRunning) {
+      this.renameFollowRerun = true;
+      return;
+    }
+
+    this.renameFollowRunning = true;
+    try {
+      do {
+        this.renameFollowRerun = false;
+        const paths = Array.from(this.renameFollowPending || []);
+        this.renameFollowPending = new Set();
+        for (const path of paths) {
+          await this.evaluateBlockRenameFollow(path);
+        }
+      } while (this.renameFollowRerun);
+    } catch (error) {
+      console.error("Block ID Prompt failed to follow a block ID rename", error);
+    } finally {
+      this.renameFollowRunning = false;
+    }
+  }
+
+  // `path` changed in an open editor. Follow a form change in it into the
+  // other notes of every live record that lists it.
+  async evaluateBlockRenameFollow(path) {
+    for (const record of this.pruneBlockRenameRecords().slice()) {
+      const noteRecord = record.notes.find((note) => note.path === path);
+      if (!noteRecord) {
+        continue;
+      }
+
+      const open = findOpenPromptTargetEditors(this, path);
+      if (open.length === 0 || open.some((entry) => entry.content !== open[0].content)) {
+        continue;
+      }
+
+      const observed = blockRenameNoteForm(noteRecord, open[0].content, record);
+      if (observed === null || observed === noteRecord.observed) {
+        continue;
+      }
+
+      await this.followBlockRename(record, noteRecord, observed);
+    }
+  }
+
+  async followBlockRename(record, triggerNote, targetForm) {
+    this.renameFollowBusy = true;
+    try {
+      triggerNote.observed = targetForm;
+
+      const targets = [];
+      const stuck = [];
+      for (const noteRecord of record.notes) {
+        if (noteRecord === triggerNote) {
+          continue;
+        }
+
+        const prepared = await this.prepareBlockRenameFollowTarget(
+          record,
+          noteRecord,
+          targetForm,
+        );
+        if (prepared.state === "already") {
+          noteRecord.observed = targetForm;
+        } else if (prepared.state === "ready") {
+          targets.push({ noteRecord, target: prepared.target });
+        } else {
+          stuck.push(noteRecord);
+        }
+      }
+
+      if (targets.length > 0) {
+        const committed = await this.commitRenameWrites(
+          targets.map((entry) => entry.target),
+        );
+        for (const entry of targets) {
+          if (committed) {
+            entry.noteRecord.observed = targetForm;
+          } else {
+            stuck.push(entry.noteRecord);
+          }
+        }
+      }
+
+      this.noticeBlockRenameFollow(record, targetForm, targets);
+    } finally {
+      this.renameFollowBusy = false;
+      this.renameFollowPending = new Set();
+    }
+  }
+
+  async prepareBlockRenameFollowTarget(record, noteRecord, targetForm) {
+    const file = this.app.vault.getAbstractFileByPath(noteRecord.path);
+    if (!(file instanceof TFile)) {
+      return { state: "stuck" };
+    }
+
+    let snapshot = null;
+    try {
+      snapshot = await readAuthoritativePromptTargetContent(this, { sourcePath: "" }, file);
+    } catch (error) {
+      return { state: "stuck" };
+    }
+    if (!snapshot || snapshot.ambiguous || typeof snapshot.content !== "string") {
+      return { state: "stuck" };
+    }
+
+    if (blockRenameNoteForm(noteRecord, snapshot.content, record) === targetForm) {
+      return { state: "already" };
+    }
+
+    const edits = this.planRecordedBlockRename(record, noteRecord, snapshot.content, targetForm);
+    if (!edits) {
+      return { state: "stuck" };
+    }
+
+    return {
+      state: "ready",
+      target: {
+        file,
+        path: noteRecord.path,
+        content: snapshot.content,
+        edits,
+        after: applyTextEdits(snapshot.content, edits),
+        editor: snapshot.editor || null,
+        isSource: false,
+      },
+    };
+  }
+
+  // Rewrite only the recorded spans, and only when the note still holds
+  // exactly the recorded number of each one. Anything else is ambiguous
+  // (a span was edited, copied, or removed since the rename) and returns null.
+  planRecordedBlockRename(record, noteRecord, content, targetForm) {
+    const toNew = targetForm === "new";
+    const fromId = toNew ? record.oldId : record.newId;
+    const toId = toNew ? record.newId : record.oldId;
+    const wanted = new Map();
+    for (const link of noteRecord.links) {
+      const fromRaw = toNew ? link.before : link.after;
+      const toRaw = toNew ? link.after : link.before;
+      const entry = wanted.get(fromRaw) || { toRaw, expected: 0, found: 0 };
+      entry.expected += 1;
+      wanted.set(fromRaw, entry);
+    }
+
+    const edits = [];
+    for (const reference of collectWikiBlockReferences(content)) {
+      const entry = wanted.get(content.slice(reference.start, reference.end));
+      if (!entry) {
+        continue;
+      }
+
+      const target = this.resolveReferenceDestination(reference, noteRecord.path);
+      if (!target || target.path !== record.destinationPath) {
+        continue;
+      }
+
+      entry.found += 1;
+      edits.push({
+        start: reference.start,
+        end: reference.end,
+        replacement: entry.toRaw,
+      });
+    }
+
+    for (const entry of wanted.values()) {
+      if (entry.found !== entry.expected) {
+        return null;
+      }
+    }
+
+    if (noteRecord.token) {
+      const matches = blockTokenMatches(content, fromId);
+      if (matches.length !== 1 || blockTokenMatches(content, toId).length !== 0) {
+        return null;
+      }
+      edits.push({
+        start: matches[0].start,
+        end: matches[0].end,
+        replacement: `^${toId}`,
+        kind: "block-id",
+      });
+    }
+
+    return validateNonOverlappingEdits(edits) ? edits : null;
+  }
+
+  noticeBlockRenameFollow(record, targetForm, targets) {
+    const undone = targetForm === "old";
+    const rewritten = targets.filter((entry) => entry.noteRecord.observed === targetForm).length;
+
+    const destinationNote = record.notes.find((note) => note.token);
+    const destinationForm = destinationNote ? destinationNote.observed : targetForm;
+    const dangling = record.notes.filter(
+      (note) => note.links.length > 0 && note.observed !== destinationForm,
+    );
+
+    if (dangling.length === 0) {
+      if (rewritten > 0) {
+        new Notice(
+          `${undone ? "Undid" : "Redid"} block ID rename in ${rewritten} ${pluralize(
+            rewritten,
+            "note",
+            "notes",
+          )}`,
+        );
+      }
+      return;
+    }
+
+    const deadId = dangling[0].observed === "new" ? record.newId : record.oldId;
+    const scope =
+      rewritten > 0
+        ? ` in ${rewritten} ${pluralize(rewritten, "note", "notes")}`
+        : "";
+    new Notice(
+      `Block ID rename ${undone ? "undone" : "redone"}${scope}, but links in ${dangling
+        .map((note) => note.path)
+        .join(", ")} still point to ^${deadId}, which is gone from ${record.destinationPath}`,
+      0,
+    );
+  }
+}
 // ---- src/160-install-methods.js ----
 function installBlockIdPromptMixins(pluginClass, mixins) {
   const installedNames = new Set(
@@ -19415,12 +19980,16 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,
   BlockIdPromptReferenceFilesMixin,
+  BlockIdPromptRenameWritesMixin,
+  BlockIdPromptRenameFollowMixin,
 ]);
 // ---- src/170-exports.js ----
 module.exports = BlockIdPromptPlugin;
 
 module.exports.helpers = {
+  BLOCK_RENAME_FOLLOW_WINDOW_MS,
   POMODORO_NAME_USAGE,
+  blockRenameNoteForm,
   activationPartialFailureParts,
   activationSuccessChips,
   activationSuccessSuffix,

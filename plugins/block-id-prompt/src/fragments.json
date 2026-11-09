@@ -35,6 +35,8 @@
   "130-plugin-task-link-open-and-notices.js",
   "140-plugin-target-plans-and-rewrites.js",
   "150-plugin-reference-files.js",
+  "155-block-rename-writes.js",
+  "157-block-rename-follow.js",
   "160-install-methods.js",
   "170-exports.js"
 ]

@@ -1,7 +1,9 @@
 module.exports = BlockIdPromptPlugin;
 
 module.exports.helpers = {
+  BLOCK_RENAME_FOLLOW_WINDOW_MS,
   POMODORO_NAME_USAGE,
+  blockRenameNoteForm,
   activationPartialFailureParts,
   activationSuccessChips,
   activationSuccessSuffix,

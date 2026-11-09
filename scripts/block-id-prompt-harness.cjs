@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 
 const noticeMessages = [];
+// Every `new Notice(message, duration)`: `duration === 0` is a sticky Notice.
+const noticeCalls = [];
 let obsidianStubs = null;
 
 const originalLoad = Module._load;
@@ -9,8 +11,9 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     class EmptyClass {}
     class NoticeStub {
-      constructor(message) {
+      constructor(message, duration) {
         noticeMessages.push(message);
+        noticeCalls.push({ message, duration });
       }
     }
     obsidianStubs = {
@@ -40,6 +43,7 @@ const { helpers } = Plugin;
 
 function resetNotices() {
   noticeMessages.length = 0;
+  noticeCalls.length = 0;
 }
 
 function lastNotice() {
@@ -311,6 +315,7 @@ module.exports = {
   Plugin,
   helpers,
   noticeMessages,
+  noticeCalls,
   resetNotices,
   lastNotice,
   localDate,

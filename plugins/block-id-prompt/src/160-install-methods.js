@@ -29,4 +29,6 @@ installBlockIdPromptMixins(BlockIdPromptPlugin, [
   BlockIdPromptTaskLinkOpenAndNoticesMixin,
   BlockIdPromptTargetPlansAndRewritesMixin,
   BlockIdPromptReferenceFilesMixin,
+  BlockIdPromptRenameWritesMixin,
+  BlockIdPromptRenameFollowMixin,
 ]);

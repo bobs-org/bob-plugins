@@ -62,19 +62,9 @@ class BlockIdPromptBlockIdSubmitMixin {
       return false;
     }
 
+    // One write per note: link rewrites and the destination's `^id` land in
+    // the same editor transaction (open notes) or compare-and-swap write.
     if (!(await this.applyReferenceRewritePlan(plan, source))) {
-      return true;
-    }
-
-    if (
-      !(await this.renameDestinationBlock(
-        destination.file,
-        source,
-        source.oldId,
-        newId,
-        plan.destinationContentAfterReferences,
-      ))
-    ) {
       return true;
     }
 
@@ -143,19 +133,9 @@ class BlockIdPromptBlockIdSubmitMixin {
       return false;
     }
 
+    // One write per note: link rewrites and the destination's `^id` land in
+    // the same editor transaction (open notes) or compare-and-swap write.
     if (!(await this.applyReferenceRewritePlan(plan, source))) {
-      return true;
-    }
-
-    if (
-      !(await this.renameDestinationBlock(
-        destination.file,
-        source,
-        source.oldId,
-        newId,
-        plan.destinationContentAfterReferences,
-      ))
-    ) {
       return true;
     }
 

@@ -14,6 +14,20 @@ aware, so it can be accepted immediately or replaced by typing.
 | `Review [[project-notes#^fix-sample\|sample fix]] notes` | `sample-fix` |
 | `Réparer café` | `reparer-cafe` |
 
+A plain note bullet gets a suggestion too, such as a note in a notebook. The
+bullet's `[created::DATE]` stamp and any other inline field are ignored, so
+only the note's own words name it.
+
+| Note bullet | Suggested ID |
+| --- | --- |
+| `- Try mergiraf for merge conflicts [created::2026-11-09]` | `try-mergiraf-merge` |
+| ``- Use `<C-x><C-e>` to edit the command [created::2026-11-09]`` | `c-x-c-e` |
+| `- the and of` | `note` |
+
+A bullet with no usable words falls back to `note` (a task falls back to
+`task`), then walks `note-2`, `note-3`, and so on. A paragraph, a heading, or
+an empty bullet still gets a blank prompt.
+
 Press Enter to accept the suggestion. Typing replaces it; cancelling does
 not write. An explicit rename prompt keeps the task's current ID as its
 starting value.

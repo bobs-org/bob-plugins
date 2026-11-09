@@ -118,6 +118,7 @@ class BobNavigationHotkeysParentChangeMixin {
         basename: file.basename,
         file,
         noteInfo: getFileChildNoteInfo(this.app, file, now),
+        ruleKind: parentRuleKindOf(frontmatter),
         parentPath,
         recentRank,
       });
@@ -215,6 +216,16 @@ class BobNavigationHotkeysParentChangeMixin {
       new Notice(
         `Can't make ${candidateFile.basename} the parent: it is inside this note's subtree`,
       );
+      this.closeParentChangePicker();
+      return false;
+    }
+    const kindRefusal = parentChangeKindRefusal(
+      liveIndex,
+      file.path,
+      candidateFile.path,
+    );
+    if (kindRefusal) {
+      new Notice(`Can't change parent: ${kindRefusal}`);
       this.closeParentChangePicker();
       return false;
     }

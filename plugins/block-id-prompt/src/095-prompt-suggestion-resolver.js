@@ -109,7 +109,7 @@ function getDirectAddPromptRootLine(source) {
       }
     }
     const rootLine = lines[start];
-    if (promptBlockIdExtractTaskBody(rootLine) === null) {
+    if (promptBlockIdExtractBulletBody(rootLine) === null) {
       return null;
     }
     return rootLine;
@@ -119,8 +119,9 @@ function getDirectAddPromptRootLine(source) {
 }
 
 // Resolve which suggestion (if any) seeds the modal. Returns
-// `{ suggestion, notice }`; `suggestion` is null for blank (non-task,
-// explicit rename handled by the caller, or unresolvable). `notice` uses the
+// `{ suggestion, notice }`; `suggestion` is null for blank (neither a task
+// nor a plain note bullet, explicit rename handled by the caller, or
+// unresolvable). `notice` uses the
 // existing submit-path wording so failures look identical before/after Save.
 async function resolvePromptBlockIdSuggestion(plugin, source) {
   try {
@@ -230,7 +231,7 @@ async function resolvePromptBlockIdSuggestion(plugin, source) {
     }
 
     // Marker-triggered rename: oldId present without an explicit prefill flag.
-    // Suggest only for uniquely resolved task blocks; never hide ambiguity by
+    // Suggest only for uniquely resolved task or bullet blocks; never hide ambiguity by
     // globally removing duplicates (exclude exactly one occurrence).
     if (source.oldId && !source.prefillId) {
       const targetFile = plugin.resolveDestinationFile
@@ -280,7 +281,7 @@ async function resolvePromptBlockIdSuggestion(plugin, source) {
           notice: `Block ID rename blocked: old ID was not found exactly once in ${targetFile.path}`,
         };
       }
-      if (promptBlockIdExtractTaskBody(targetLine) === null) {
+      if (promptBlockIdExtractBulletBody(targetLine) === null) {
         return { suggestion: null, notice: null };
       }
       return {

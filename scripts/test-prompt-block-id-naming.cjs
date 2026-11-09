@@ -66,6 +66,36 @@ test("both prompt copies pass the shared fixture table identically", () => {
   }
 });
 
+test("both copies read task and plain bullet bodies alike", () => {
+  for (const impl of [bid, nav]) {
+    const body = impl.promptBlockIdExtractBulletBody;
+    assert.equal(typeof body, "function");
+    assert.equal(body("- [ ] #task Fix it"), "#task Fix it");
+    assert.equal(body("- Try mergiraf [created::2026-11-09]"), "Try mergiraf [created::2026-11-09]");
+    assert.equal(body("  > - quoted note"), "quoted note");
+    assert.equal(body("2) numbered"), "numbered");
+    assert.equal(body("-"), null);
+    assert.equal(body("- "), null);
+    assert.equal(body("-no space"), null);
+    assert.equal(body("plain paragraph"), null);
+    assert.equal(body(""), null);
+    assert.equal(body(null), null);
+  }
+});
+
+test("note bullets suggest the same ID in both copies and never lose task naming", () => {
+  const line = "- Try mergiraf for merge conflicts [created::2026-11-09]";
+  assert.equal(bid.suggestPromptBlockId(line, "", {}), "try-mergiraf-merge");
+  assert.equal(nav.suggestPromptBlockId(line, "", {}), "try-mergiraf-merge");
+  assert.equal(
+    bid.promptBlockIdCleanHeadline(line),
+    "Try mergiraf for merge conflicts",
+  );
+  // A task line keeps `task` as its fallback; only plain bullets say `note`.
+  assert.equal(bid.suggestPromptBlockId("- [ ] #task the and of", "", {}), "task");
+  assert.equal(bid.suggestPromptBlockId("- the and of", "", {}), "note");
+});
+
 test("suggestion is valid, compact, and collision-aware", () => {
   for (const fixture of PROMPT_BLOCK_ID_FIXTURES) {
     if (fixture.expected === null) {

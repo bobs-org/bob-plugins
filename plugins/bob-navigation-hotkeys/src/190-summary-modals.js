@@ -256,6 +256,18 @@ function isAreaType(value) {
   return false;
 }
 
+function isNotebookType(value) {
+  if (typeof value === "string") {
+    return value.trim() === NOTEBOOK_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isNotebookType(item));
+  }
+
+  return false;
+}
+
 function stripSurroundingQuotes(value) {
   const text = String(value === null || value === undefined ? "" : value).trim();
   if (text.length < 2) {
@@ -467,6 +479,21 @@ function getChildNoteInfo(frontmatter, now = new Date(), inlineSchedule) {
     };
   }
 
+  if (Boolean(frontmatter) && isNotebookType(frontmatter.type)) {
+    return {
+      kind: "notebook",
+      decorated: true,
+      statusKey: "",
+      label: NOTEBOOK_PRESENTATION.label,
+      emoji: NOTEBOOK_PRESENTATION.emoji,
+      icon: NOTEBOOK_PRESENTATION.icon,
+      variant: NOTEBOOK_PRESENTATION.variant,
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
+    };
+  }
+
   return {
     kind: "plain",
     decorated: false,
@@ -498,9 +525,21 @@ function getFileChildNoteInfo(app, file, now = new Date(), contentOverride) {
   return getChildNoteInfo(frontmatter, now, inlineSchedule);
 }
 
+// Accessible name of the kind badge in note pickers.
+function childNoteKindAriaLabel(noteInfo) {
+  if (noteInfo && noteInfo.kind === "area") {
+    return "Area note";
+  }
+  if (noteInfo && noteInfo.kind === "notebook") {
+    return "Notebook";
+  }
+  return `Project status: ${noteInfo ? noteInfo.label : ""}`;
+}
+
 function getChildNoteSummary(childFiles, noteInfoByPath) {
   let projectCount = 0;
   let areaCount = 0;
+  let notebookCount = 0;
   let futureScheduledCount = 0;
   const statusCounts = new Map();
 
@@ -512,6 +551,11 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
 
     if (info.kind === "area") {
       areaCount += 1;
+      return;
+    }
+
+    if (info.kind === "notebook") {
+      notebookCount += 1;
       return;
     }
 
@@ -563,6 +607,10 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
     parts.push(`${areaCount} area${areaCount === 1 ? "" : "s"}`);
   }
 
+  if (notebookCount > 0) {
+    parts.push(`${notebookCount} notebook${notebookCount === 1 ? "" : "s"}`);
+  }
+
   return parts;
 }
 
@@ -582,6 +630,8 @@ function getChildNoteSearchText(file, noteInfo) {
     }
   } else if (noteInfo && noteInfo.kind === "area") {
     parts.push("area", noteInfo.label);
+  } else if (noteInfo && noteInfo.kind === "notebook") {
+    parts.push("notebook", noteInfo.label);
   }
 
   return parts

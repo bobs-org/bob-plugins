@@ -408,6 +408,7 @@ class BobLedgerToolsPlugin extends Plugin {
       relationIndex: this.relationIndexApi(),
       relationLabels: this.relationLabelsApi(),
       taskMerge: this.taskMergeApi(), // v1: Links-stage merge preview/apply
+      notebooks: this.notebooksApi(), // v1: bob notebooks create
       attachments: this.attachmentsApi(),
     });
     if (typeof this.registerMarkdownCodeBlockProcessor === "function") {

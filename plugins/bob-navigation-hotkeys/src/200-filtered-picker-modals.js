@@ -430,10 +430,7 @@ function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
   const statusText = [noteInfo.emoji, noteInfo.label]
     .filter(Boolean)
     .join(" ");
-  const ariaLabel =
-    noteInfo.kind === "area"
-      ? "Area note"
-      : `Project status: ${noteInfo.label}`;
+  const ariaLabel = childNoteKindAriaLabel(noteInfo);
   const statusEl = badgesEl.createDiv({
     cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
     attr: {

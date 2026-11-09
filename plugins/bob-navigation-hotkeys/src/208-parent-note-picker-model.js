@@ -10,6 +10,109 @@ const PARENT_BREADCRUMB_MAX = 5;
 const PARENT_ANCESTRY_MAX_HOPS = 16;
 const PARENT_WORD_SEPARATORS = " _-./";
 
+// Notebook parent rules (plan 202611/bob_notebooks.md): an area, project,
+// reference, or record note never names a notebook as its parent, and a
+// notebook's parent is an area, a project, or another notebook. The kind comes
+// from the `type:` frontmatter, mirroring bob's classification: area, project,
+// notebook, ref, then any other typed note except the reserved non-record
+// types, which are record notes.
+const PARENT_RULE_NON_RECORD_TYPES = new Set([
+  "article",
+  "mail",
+  "day",
+  "done",
+  "type",
+]);
+
+function parentRuleTypeNames(frontmatter) {
+  const names = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "string") {
+      return;
+    }
+    const text = value.trim();
+    const wiki = text.match(/^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/);
+    const name = (wiki ? wiki[1] : text)
+      .trim()
+      .split("/")
+      .pop()
+      .replace(/\.md$/i, "")
+      .trim();
+    if (name) {
+      names.push(name);
+    }
+  };
+  visit(frontmatter && frontmatter.type);
+  return names;
+}
+
+// "area" | "project" | "notebook" | "reference" | "record" | "other".
+function parentRuleKindOf(frontmatter) {
+  const names = parentRuleTypeNames(frontmatter);
+  if (names.includes("area")) {
+    return "area";
+  }
+  if (names.includes("project")) {
+    return "project";
+  }
+  if (names.includes("notebook")) {
+    return "notebook";
+  }
+  if (names.includes("ref")) {
+    return "reference";
+  }
+  if (names.some((name) => !PARENT_RULE_NON_RECORD_TYPES.has(name))) {
+    return "record";
+  }
+  return "other";
+}
+
+const PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS = new Set([
+  "area",
+  "project",
+  "reference",
+  "record",
+]);
+const PARENT_RULE_NOTEBOOK_PARENT_KINDS = new Set([
+  "area",
+  "project",
+  "notebook",
+]);
+
+// Why `candidateKind` cannot be the parent of a `sourceKind` note, or null
+// when the pair is allowed: "notebook" (the source can never hang under a
+// notebook) or "not-notebook-parent" (a notebook hangs only under an area,
+// project, or notebook).
+function parentKindRefusal(sourceKind, candidateKind) {
+  if (sourceKind === "notebook") {
+    return PARENT_RULE_NOTEBOOK_PARENT_KINDS.has(candidateKind)
+      ? null
+      : "not-notebook-parent";
+  }
+  if (
+    candidateKind === "notebook" &&
+    PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS.has(sourceKind)
+  ) {
+    return "notebook";
+  }
+  return null;
+}
+
+function parentKindRefusalText(refusal, candidateName) {
+  const name = candidateName || "that note";
+  if (refusal === "notebook") {
+    return `${name} is a notebook — areas, projects, references, and record notes can't hang under one`;
+  }
+  if (refusal === "not-notebook-parent") {
+    return `${name} can't hold a notebook — a notebook hangs under an area, a project, or another notebook`;
+  }
+  return "";
+}
+
 function parentNoteBasenameFromPath(path) {
   const value = String(path || "");
   const leaf = value.split("/").pop() || value;
@@ -107,6 +210,7 @@ function normalizeParentPickerRecord(record) {
         : parentNoteBasenameFromPath(path),
     file: record.file || null,
     noteInfo: record.noteInfo || Object.freeze({ kind: "plain" }),
+    ruleKind: typeof record.ruleKind === "string" ? record.ruleKind : "other",
     parentPath: record.parentPath || null,
     recentRank: Number.isFinite(recentRank) ? recentRank : Infinity,
     childCount: 0,
@@ -161,6 +265,19 @@ function buildParentPickerIndex(records, context = {}) {
     }
   }
   const source = sourcePath ? byPath.get(sourcePath) : null;
+  const sourceRuleKind = source ? source.ruleKind : "other";
+  // Candidates the notebook parent rules rule out, kept apart from the
+  // subtree exclusions so the empty state can teach the right reason.
+  const hiddenByKind = new Map();
+  for (const record of byPath.values()) {
+    if (excluded.has(record.path)) {
+      continue;
+    }
+    const refusal = parentKindRefusal(sourceRuleKind, record.ruleKind);
+    if (refusal) {
+      hiddenByKind.set(record.path, refusal);
+    }
+  }
   const currentParentPath =
     (source && source.parentPath) ||
     (context && context.currentParentPath) ||
@@ -171,10 +288,12 @@ function buildParentPickerIndex(records, context = {}) {
     : null;
   return {
     sourcePath,
+    sourceRuleKind,
     byPath,
     records: Array.from(byPath.values()),
     children,
     excluded,
+    hiddenByKind,
     currentParentPath,
     grandparentPath,
   };
@@ -221,7 +340,14 @@ function rankParentCandidates(index, query, options = {}) {
     options.currentParentPath || (index && index.currentParentPath) || null;
   const grandparentPath =
     options.grandparentPath || (index && index.grandparentPath) || null;
-  const excluded = (index && index.excluded) || new Set();
+  const hiddenByKind = (index && index.hiddenByKind) || new Map();
+  // Rule-refused kinds drop out of every list; the subtree exclusions stay
+  // separate so an empty query never offers either.
+  const excluded = new Set([
+    ...((index && index.excluded) || []),
+    ...hiddenByKind.keys(),
+  ]);
+  const subtreeExcluded = (index && index.excluded) || new Set();
   const records = (index && Array.isArray(index.records) ? index.records : []);
   const needle = String(query || "").trim();
 
@@ -255,19 +381,26 @@ function rankParentCandidates(index, query, options = {}) {
       items: out.slice(0, limit),
       total: out.length,
       excludedOnly: false,
+      kindRefusal: null,
+      kindRefusalName: null,
     };
   }
 
   const matched = [];
   const excludedMatches = [];
+  const kindMatches = [];
   for (let indexRecord = 0; indexRecord < records.length; indexRecord += 1) {
     const record = records[indexRecord];
     const tier = parentQueryMatchTier(record, needle);
     if (tier === null) {
       continue;
     }
-    if (excluded.has(record.path)) {
+    if (subtreeExcluded.has(record.path)) {
       excludedMatches.push(record);
+      continue;
+    }
+    if (hiddenByKind.has(record.path)) {
+      kindMatches.push(record);
       continue;
     }
     matched.push({ record, tier });
@@ -279,10 +412,14 @@ function rankParentCandidates(index, query, options = {}) {
     return compareParentCandidates(left.record, right.record, currentParentPath);
   });
   const items = matched.map((row) => row.record);
+  const kindOnly =
+    items.length === 0 && excludedMatches.length === 0 && kindMatches.length > 0;
   return {
     items: items.slice(0, limit),
     total: items.length,
     excludedOnly: items.length === 0 && excludedMatches.length > 0,
+    kindRefusal: kindOnly ? hiddenByKind.get(kindMatches[0].path) : null,
+    kindRefusalName: kindOnly ? kindMatches[0].basename : null,
   };
 }
 
@@ -347,6 +484,21 @@ function parentChangeWouldCycle(index, sourcePath, candidatePath) {
   return false;
 }
 
+// The commit-time check against the live index: the notice text when the
+// notebook parent rules forbid `candidatePath` as `sourcePath`'s parent.
+function parentChangeKindRefusal(index, sourcePath, candidatePath) {
+  const byPath = (index && index.byPath) || new Map();
+  const source = byPath.get(sourcePath);
+  const candidate = byPath.get(candidatePath);
+  if (!source || !candidate) {
+    return null;
+  }
+  const refusal = parentKindRefusal(source.ruleKind, candidate.ruleKind);
+  return refusal
+    ? parentKindRefusalText(refusal, candidate.basename)
+    : null;
+}
+
 function parentNameLastSegment(target) {
   const text = String(target || "").trim();
   if (!text) {
@@ -356,10 +508,15 @@ function parentNameLastSegment(target) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
-function parentEmptyStateText(query, excludedOnly) {
+// `kindRefusal` / `kindRefusalName` come from `rankParentCandidates` when
+// every match was ruled out by the notebook parent rules.
+function parentEmptyStateText(query, excludedOnly, kindRefusal, kindRefusalName) {
   const shown = String(query || "").trim();
   if (excludedOnly) {
     return `“${shown}” is inside this note's own subtree — choosing it would create a cycle`;
+  }
+  if (kindRefusal) {
+    return parentKindRefusalText(kindRefusal, kindRefusalName || shown);
   }
   return `No note matches “${shown}” — the parent must be an existing note`;
 }

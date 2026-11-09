@@ -57,6 +57,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
     this.activeParentNotePicker = null;
+    this.activeNotebookCreateModal = null;
     this.parentChangePickerOpening = false;
     this.pendingTaskMoveJumpDeferred = null;
 
@@ -588,6 +589,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
     this.registerTaskSplitCommand();
+    this.registerNotebookCreateCommand();
     this.registerTaskSplitInputListeners();
     this.registerPomodoroSplitCommand();
     this.registerPomodoroSplitInputListeners();

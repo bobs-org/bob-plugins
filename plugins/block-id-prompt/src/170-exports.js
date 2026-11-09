@@ -183,6 +183,7 @@ module.exports.helpers = {
   PROMPT_BLOCK_ID_STOPWORDS,
   suggestPromptBlockId,
   promptBlockIdCleanHeadline,
+  promptBlockIdExtractBulletBody,
   promptBlockIdPhraseSpans,
   promptBlockIdProseText,
   promptBlockIdWordsIn,

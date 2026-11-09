@@ -122,6 +122,81 @@ const PROMPT_BLOCK_ID_FIXTURES = [
     content: "",
     expected: null,
   },
+  // Plain note bullets (notebook notes, plan 202611/bob_notebooks.md): the
+  // same naming path as tasks, with `[created::]` and other inline fields
+  // stripped before words are picked.
+  {
+    name: "note bullet strips the created stamp",
+    rawLine: "- Try mergiraf for merge conflicts [created::2026-11-09]",
+    content: "",
+    expected: "try-mergiraf-merge",
+  },
+  {
+    name: "note bullet keeps its backticked phrase",
+    rawLine: "- Use `<C-x><C-e>` to edit the command [created::2026-11-09]",
+    content: "",
+    expected: "c-x-c-e",
+  },
+  {
+    name: "note bullet drops a trailing block id",
+    rawLine: "- Faster with -j when linking ^old-id",
+    content: "",
+    expected: "faster-j-when",
+  },
+  {
+    name: "note bullet accepts star plus and numbered markers",
+    rawLine: "* Check which process owns a port",
+    content: "",
+    expected: "check-which-process",
+  },
+  {
+    name: "indented note bullet resolves like a top-level one",
+    rawLine: "    - Check which process owns a port",
+    content: "",
+    expected: "check-which-process",
+  },
+  {
+    name: "numbered note bullet resolves",
+    rawLine: "1. Check which process owns a port",
+    content: "",
+    expected: "check-which-process",
+  },
+  {
+    name: "note bullet with no usable words falls back to note",
+    rawLine: "- the and of [created::2026-11-09]",
+    content: "",
+    expected: "note",
+  },
+  {
+    name: "note fallback walks suffixes like any other stem",
+    rawLine: "- ???",
+    content: "- first ^note\n- second ^note-2",
+    expected: "note-3",
+  },
+  {
+    name: "note bullet collides with task ids",
+    rawLine: "- Book flights [created::2026-11-09]",
+    content: "- [ ] #task Book flights ^book-flights",
+    expected: "book-flights-2",
+  },
+  {
+    name: "empty bullet returns null",
+    rawLine: "- ",
+    content: "",
+    expected: null,
+  },
+  {
+    name: "heading returns null",
+    rawLine: "## Troubleshooting",
+    content: "",
+    expected: null,
+  },
+  {
+    name: "star emphasis without a space returns null",
+    rawLine: "**bold paragraph** start",
+    content: "",
+    expected: null,
+  },
   {
     name: "reserved ids force a suffix",
     rawLine: "- [ ] #task Book flights",

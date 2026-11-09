@@ -147,7 +147,12 @@ class ParentNotePickerModal extends FilteredPickerModal {
     });
     this.rankedTotal = ranked.total;
     this.rankedExcludedOnly = ranked.excludedOnly === true;
-    this.emptyText = parentEmptyStateText(query, this.rankedExcludedOnly);
+    this.emptyText = parentEmptyStateText(
+      query,
+      this.rankedExcludedOnly,
+      ranked.kindRefusal,
+      ranked.kindRefusalName,
+    );
     return ranked.items;
   }
 

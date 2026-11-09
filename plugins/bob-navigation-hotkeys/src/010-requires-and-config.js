@@ -85,6 +85,7 @@ const NOTE_TEMPLATE_MISSING_NOTICES = Object.freeze({
 });
 const PROJECT_TYPE_WIKILINK = "[[project]]";
 const AREA_TYPE_WIKILINK = "[[area]]";
+const NOTEBOOK_TYPE_WIKILINK = "[[notebook]]";
 const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
@@ -198,6 +199,15 @@ const AREA_PRESENTATION = Object.freeze({
   emoji: "🧭",
   label: "Area",
   variant: "area",
+});
+// A `type: "[[notebook]]"` note (plan 202611/bob_notebooks.md). Notebooks
+// hold note bullets, never tasks, so this kind is display-only: task-move and
+// inbox-route destinations stay keyed to area and project kinds.
+const NOTEBOOK_PRESENTATION = Object.freeze({
+  icon: "notebook-tabs",
+  emoji: "📓",
+  label: "Notebook",
+  variant: "notebook",
 });
 
 const YANK_PATH_COMMANDS = [

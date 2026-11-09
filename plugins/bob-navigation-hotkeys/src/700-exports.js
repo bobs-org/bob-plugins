@@ -638,6 +638,7 @@ module.exports.helpers = {
   suggestBlockIdFromTask,
   suggestPromptBlockId,
   promptBlockIdCleanHeadline,
+  promptBlockIdExtractBulletBody,
   promptBlockIdPhraseSpans,
   promptBlockIdProseText,
   promptBlockIdWordsIn,

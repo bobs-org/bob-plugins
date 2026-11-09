@@ -87,6 +87,7 @@ const NOTE_TEMPLATE_MISSING_NOTICES = Object.freeze({
 });
 const PROJECT_TYPE_WIKILINK = "[[project]]";
 const AREA_TYPE_WIKILINK = "[[area]]";
+const NOTEBOOK_TYPE_WIKILINK = "[[notebook]]";
 const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
@@ -200,6 +201,15 @@ const AREA_PRESENTATION = Object.freeze({
   emoji: "🧭",
   label: "Area",
   variant: "area",
+});
+// A `type: "[[notebook]]"` note (plan 202611/bob_notebooks.md). Notebooks
+// hold note bullets, never tasks, so this kind is display-only: task-move and
+// inbox-route destinations stay keyed to area and project kinds.
+const NOTEBOOK_PRESENTATION = Object.freeze({
+  icon: "notebook-tabs",
+  emoji: "📓",
+  label: "Notebook",
+  variant: "notebook",
 });
 
 const YANK_PATH_COMMANDS = [
@@ -1014,6 +1024,25 @@ function promptBlockIdExtractTaskBody(rawLine) {
   return match[1] || "";
 }
 
+// A list item's body, task or plain note bullet: `- [ ] #task Fix it` and
+// `- Try mergiraf [created::2026-11-09]` both resolve; a paragraph, heading,
+// empty bullet, or a `-`/`*` run with no following space does not. Notebook
+// notes are plain bullets, so the block-ID prompt names them the same way it
+// names tasks (plan 202611/bob_notebooks.md).
+function promptBlockIdExtractBulletBody(rawLine) {
+  const taskBody = promptBlockIdExtractTaskBody(rawLine);
+  if (taskBody !== null) {
+    return taskBody;
+  }
+  const match = String(rawLine || "").match(
+    /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+(\S.*)$/,
+  );
+  if (!match) {
+    return null;
+  }
+  return match[1];
+}
+
 function promptBlockIdFindProtectedSpans(text) {
   const spans = [];
   const body = String(text || "");
@@ -1052,13 +1081,14 @@ function promptBlockIdIndexInSpans(spans, index) {
   return false;
 }
 
-// Clean a task headline for suggestion only; source text is never rewritten
-// by this step. Strips the checkbox/list/blockquote prefix (via extract),
+// Clean a task or note-bullet headline for suggestion only; source text is
+// never rewritten by this step. Strips the checkbox/list/blockquote prefix
+// (via extract),
 // trailing block ID, Dataview inline fields, Tasks emoji date/priority
 // metadata, and standalone letter-tags outside code/link labels. Preserves
 // semantic numbers such as `#123` and technical text inside code spans.
 function promptBlockIdCleanHeadline(rawLine) {
-  const body = promptBlockIdExtractTaskBody(rawLine);
+  const body = promptBlockIdExtractBulletBody(rawLine);
   if (body === null) {
     return null;
   }
@@ -1310,8 +1340,10 @@ function promptBlockIdReservedSet(reservedIds) {
   return new Set(reservedIds || []);
 }
 
-// Pure suggestion over task text, occupied note content, and pending
-// reservations. Returns a slug or null for non-task input. Collisions walk
+// Pure suggestion over task or note-bullet text, occupied note content, and
+// pending reservations. Returns a slug or null for non-list input. A line
+// with no usable words falls back to `task` for a checkbox line and `note`
+// for a plain bullet. Collisions walk
 // `stem-2`, `stem-3`, … without a `-9` cutoff, reserving suffix room within
 // 32 characters. `excludeId` ignores one occurrence (marker-triggered
 // rename); never globally remove duplicates.
@@ -1337,6 +1369,8 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
     return count > 0;
   };
 
+  const fallbackStem =
+    promptBlockIdExtractTaskBody(rawLine) !== null ? "task" : "note";
   let stem = null;
   const phrases = promptBlockIdPhraseSpans(cleaned);
   for (const phrase of phrases) {
@@ -1364,9 +1398,9 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
     if (proseWords.length > 0) {
       stem =
         promptBlockIdJoinTruncated(proseWords, PROMPT_BLOCK_ID_MAX_LENGTH) ||
-        "task";
+        fallbackStem;
     } else {
-      stem = "task";
+      stem = fallbackStem;
     }
   }
 
@@ -1378,7 +1412,7 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
       promptBlockIdTruncateSlug(
         stem,
         Math.max(1, PROMPT_BLOCK_ID_MAX_LENGTH - suffixText.length),
-      ) || "task";
+      ) || fallbackStem;
     candidate = `${base}${suffixText}`;
     suffix += 1;
   }
@@ -21748,6 +21782,18 @@ function isAreaType(value) {
   return false;
 }
 
+function isNotebookType(value) {
+  if (typeof value === "string") {
+    return value.trim() === NOTEBOOK_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isNotebookType(item));
+  }
+
+  return false;
+}
+
 function stripSurroundingQuotes(value) {
   const text = String(value === null || value === undefined ? "" : value).trim();
   if (text.length < 2) {
@@ -21959,6 +22005,21 @@ function getChildNoteInfo(frontmatter, now = new Date(), inlineSchedule) {
     };
   }
 
+  if (Boolean(frontmatter) && isNotebookType(frontmatter.type)) {
+    return {
+      kind: "notebook",
+      decorated: true,
+      statusKey: "",
+      label: NOTEBOOK_PRESENTATION.label,
+      emoji: NOTEBOOK_PRESENTATION.emoji,
+      icon: NOTEBOOK_PRESENTATION.icon,
+      variant: NOTEBOOK_PRESENTATION.variant,
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
+    };
+  }
+
   return {
     kind: "plain",
     decorated: false,
@@ -21990,9 +22051,21 @@ function getFileChildNoteInfo(app, file, now = new Date(), contentOverride) {
   return getChildNoteInfo(frontmatter, now, inlineSchedule);
 }
 
+// Accessible name of the kind badge in note pickers.
+function childNoteKindAriaLabel(noteInfo) {
+  if (noteInfo && noteInfo.kind === "area") {
+    return "Area note";
+  }
+  if (noteInfo && noteInfo.kind === "notebook") {
+    return "Notebook";
+  }
+  return `Project status: ${noteInfo ? noteInfo.label : ""}`;
+}
+
 function getChildNoteSummary(childFiles, noteInfoByPath) {
   let projectCount = 0;
   let areaCount = 0;
+  let notebookCount = 0;
   let futureScheduledCount = 0;
   const statusCounts = new Map();
 
@@ -22004,6 +22077,11 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
 
     if (info.kind === "area") {
       areaCount += 1;
+      return;
+    }
+
+    if (info.kind === "notebook") {
+      notebookCount += 1;
       return;
     }
 
@@ -22055,6 +22133,10 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
     parts.push(`${areaCount} area${areaCount === 1 ? "" : "s"}`);
   }
 
+  if (notebookCount > 0) {
+    parts.push(`${notebookCount} notebook${notebookCount === 1 ? "" : "s"}`);
+  }
+
   return parts;
 }
 
@@ -22074,6 +22156,8 @@ function getChildNoteSearchText(file, noteInfo) {
     }
   } else if (noteInfo && noteInfo.kind === "area") {
     parts.push("area", noteInfo.label);
+  } else if (noteInfo && noteInfo.kind === "notebook") {
+    parts.push("notebook", noteInfo.label);
   }
 
   return parts
@@ -23693,10 +23777,7 @@ function renderTypedNotePickerRow(file, noteInfo, rowEl, query) {
   const statusText = [noteInfo.emoji, noteInfo.label]
     .filter(Boolean)
     .join(" ");
-  const ariaLabel =
-    noteInfo.kind === "area"
-      ? "Area note"
-      : `Project status: ${noteInfo.label}`;
+  const ariaLabel = childNoteKindAriaLabel(noteInfo);
   const statusEl = badgesEl.createDiv({
     cls: `bob-cnp-row-status is-status-${noteInfo.variant}`,
     attr: {
@@ -30484,6 +30565,109 @@ const PARENT_BREADCRUMB_MAX = 5;
 const PARENT_ANCESTRY_MAX_HOPS = 16;
 const PARENT_WORD_SEPARATORS = " _-./";
 
+// Notebook parent rules (plan 202611/bob_notebooks.md): an area, project,
+// reference, or record note never names a notebook as its parent, and a
+// notebook's parent is an area, a project, or another notebook. The kind comes
+// from the `type:` frontmatter, mirroring bob's classification: area, project,
+// notebook, ref, then any other typed note except the reserved non-record
+// types, which are record notes.
+const PARENT_RULE_NON_RECORD_TYPES = new Set([
+  "article",
+  "mail",
+  "day",
+  "done",
+  "type",
+]);
+
+function parentRuleTypeNames(frontmatter) {
+  const names = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "string") {
+      return;
+    }
+    const text = value.trim();
+    const wiki = text.match(/^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/);
+    const name = (wiki ? wiki[1] : text)
+      .trim()
+      .split("/")
+      .pop()
+      .replace(/\.md$/i, "")
+      .trim();
+    if (name) {
+      names.push(name);
+    }
+  };
+  visit(frontmatter && frontmatter.type);
+  return names;
+}
+
+// "area" | "project" | "notebook" | "reference" | "record" | "other".
+function parentRuleKindOf(frontmatter) {
+  const names = parentRuleTypeNames(frontmatter);
+  if (names.includes("area")) {
+    return "area";
+  }
+  if (names.includes("project")) {
+    return "project";
+  }
+  if (names.includes("notebook")) {
+    return "notebook";
+  }
+  if (names.includes("ref")) {
+    return "reference";
+  }
+  if (names.some((name) => !PARENT_RULE_NON_RECORD_TYPES.has(name))) {
+    return "record";
+  }
+  return "other";
+}
+
+const PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS = new Set([
+  "area",
+  "project",
+  "reference",
+  "record",
+]);
+const PARENT_RULE_NOTEBOOK_PARENT_KINDS = new Set([
+  "area",
+  "project",
+  "notebook",
+]);
+
+// Why `candidateKind` cannot be the parent of a `sourceKind` note, or null
+// when the pair is allowed: "notebook" (the source can never hang under a
+// notebook) or "not-notebook-parent" (a notebook hangs only under an area,
+// project, or notebook).
+function parentKindRefusal(sourceKind, candidateKind) {
+  if (sourceKind === "notebook") {
+    return PARENT_RULE_NOTEBOOK_PARENT_KINDS.has(candidateKind)
+      ? null
+      : "not-notebook-parent";
+  }
+  if (
+    candidateKind === "notebook" &&
+    PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS.has(sourceKind)
+  ) {
+    return "notebook";
+  }
+  return null;
+}
+
+function parentKindRefusalText(refusal, candidateName) {
+  const name = candidateName || "that note";
+  if (refusal === "notebook") {
+    return `${name} is a notebook — areas, projects, references, and record notes can't hang under one`;
+  }
+  if (refusal === "not-notebook-parent") {
+    return `${name} can't hold a notebook — a notebook hangs under an area, a project, or another notebook`;
+  }
+  return "";
+}
+
 function parentNoteBasenameFromPath(path) {
   const value = String(path || "");
   const leaf = value.split("/").pop() || value;
@@ -30581,6 +30765,7 @@ function normalizeParentPickerRecord(record) {
         : parentNoteBasenameFromPath(path),
     file: record.file || null,
     noteInfo: record.noteInfo || Object.freeze({ kind: "plain" }),
+    ruleKind: typeof record.ruleKind === "string" ? record.ruleKind : "other",
     parentPath: record.parentPath || null,
     recentRank: Number.isFinite(recentRank) ? recentRank : Infinity,
     childCount: 0,
@@ -30635,6 +30820,19 @@ function buildParentPickerIndex(records, context = {}) {
     }
   }
   const source = sourcePath ? byPath.get(sourcePath) : null;
+  const sourceRuleKind = source ? source.ruleKind : "other";
+  // Candidates the notebook parent rules rule out, kept apart from the
+  // subtree exclusions so the empty state can teach the right reason.
+  const hiddenByKind = new Map();
+  for (const record of byPath.values()) {
+    if (excluded.has(record.path)) {
+      continue;
+    }
+    const refusal = parentKindRefusal(sourceRuleKind, record.ruleKind);
+    if (refusal) {
+      hiddenByKind.set(record.path, refusal);
+    }
+  }
   const currentParentPath =
     (source && source.parentPath) ||
     (context && context.currentParentPath) ||
@@ -30645,10 +30843,12 @@ function buildParentPickerIndex(records, context = {}) {
     : null;
   return {
     sourcePath,
+    sourceRuleKind,
     byPath,
     records: Array.from(byPath.values()),
     children,
     excluded,
+    hiddenByKind,
     currentParentPath,
     grandparentPath,
   };
@@ -30695,7 +30895,14 @@ function rankParentCandidates(index, query, options = {}) {
     options.currentParentPath || (index && index.currentParentPath) || null;
   const grandparentPath =
     options.grandparentPath || (index && index.grandparentPath) || null;
-  const excluded = (index && index.excluded) || new Set();
+  const hiddenByKind = (index && index.hiddenByKind) || new Map();
+  // Rule-refused kinds drop out of every list; the subtree exclusions stay
+  // separate so an empty query never offers either.
+  const excluded = new Set([
+    ...((index && index.excluded) || []),
+    ...hiddenByKind.keys(),
+  ]);
+  const subtreeExcluded = (index && index.excluded) || new Set();
   const records = (index && Array.isArray(index.records) ? index.records : []);
   const needle = String(query || "").trim();
 
@@ -30729,19 +30936,26 @@ function rankParentCandidates(index, query, options = {}) {
       items: out.slice(0, limit),
       total: out.length,
       excludedOnly: false,
+      kindRefusal: null,
+      kindRefusalName: null,
     };
   }
 
   const matched = [];
   const excludedMatches = [];
+  const kindMatches = [];
   for (let indexRecord = 0; indexRecord < records.length; indexRecord += 1) {
     const record = records[indexRecord];
     const tier = parentQueryMatchTier(record, needle);
     if (tier === null) {
       continue;
     }
-    if (excluded.has(record.path)) {
+    if (subtreeExcluded.has(record.path)) {
       excludedMatches.push(record);
+      continue;
+    }
+    if (hiddenByKind.has(record.path)) {
+      kindMatches.push(record);
       continue;
     }
     matched.push({ record, tier });
@@ -30753,10 +30967,14 @@ function rankParentCandidates(index, query, options = {}) {
     return compareParentCandidates(left.record, right.record, currentParentPath);
   });
   const items = matched.map((row) => row.record);
+  const kindOnly =
+    items.length === 0 && excludedMatches.length === 0 && kindMatches.length > 0;
   return {
     items: items.slice(0, limit),
     total: items.length,
     excludedOnly: items.length === 0 && excludedMatches.length > 0,
+    kindRefusal: kindOnly ? hiddenByKind.get(kindMatches[0].path) : null,
+    kindRefusalName: kindOnly ? kindMatches[0].basename : null,
   };
 }
 
@@ -30821,6 +31039,21 @@ function parentChangeWouldCycle(index, sourcePath, candidatePath) {
   return false;
 }
 
+// The commit-time check against the live index: the notice text when the
+// notebook parent rules forbid `candidatePath` as `sourcePath`'s parent.
+function parentChangeKindRefusal(index, sourcePath, candidatePath) {
+  const byPath = (index && index.byPath) || new Map();
+  const source = byPath.get(sourcePath);
+  const candidate = byPath.get(candidatePath);
+  if (!source || !candidate) {
+    return null;
+  }
+  const refusal = parentKindRefusal(source.ruleKind, candidate.ruleKind);
+  return refusal
+    ? parentKindRefusalText(refusal, candidate.basename)
+    : null;
+}
+
 function parentNameLastSegment(target) {
   const text = String(target || "").trim();
   if (!text) {
@@ -30830,10 +31063,15 @@ function parentNameLastSegment(target) {
   return leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
 
-function parentEmptyStateText(query, excludedOnly) {
+// `kindRefusal` / `kindRefusalName` come from `rankParentCandidates` when
+// every match was ruled out by the notebook parent rules.
+function parentEmptyStateText(query, excludedOnly, kindRefusal, kindRefusalName) {
   const shown = String(query || "").trim();
   if (excludedOnly) {
     return `“${shown}” is inside this note's own subtree — choosing it would create a cycle`;
+  }
+  if (kindRefusal) {
+    return parentKindRefusalText(kindRefusal, kindRefusalName || shown);
   }
   return `No note matches “${shown}” — the parent must be an existing note`;
 }
@@ -30987,7 +31225,12 @@ class ParentNotePickerModal extends FilteredPickerModal {
     });
     this.rankedTotal = ranked.total;
     this.rankedExcludedOnly = ranked.excludedOnly === true;
-    this.emptyText = parentEmptyStateText(query, this.rankedExcludedOnly);
+    this.emptyText = parentEmptyStateText(
+      query,
+      this.rankedExcludedOnly,
+      ranked.kindRefusal,
+      ranked.kindRefusalName,
+    );
     return ranked.items;
   }
 
@@ -73955,6 +74198,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.activeTaskMoveDestinationPicker = null;
     this.activeBulletPropertyPicker = null;
     this.activeParentNotePicker = null;
+    this.activeNotebookCreateModal = null;
     this.parentChangePickerOpening = false;
     this.pendingTaskMoveJumpDeferred = null;
 
@@ -74486,6 +74730,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedBulletPropertyInputListeners();
     this.registerCountedTaskMoveInputListeners();
     this.registerTaskSplitCommand();
+    this.registerNotebookCreateCommand();
     this.registerTaskSplitInputListeners();
     this.registerPomodoroSplitCommand();
     this.registerPomodoroSplitInputListeners();
@@ -111999,6 +112244,7 @@ class BobNavigationHotkeysParentChangeMixin {
         basename: file.basename,
         file,
         noteInfo: getFileChildNoteInfo(this.app, file, now),
+        ruleKind: parentRuleKindOf(frontmatter),
         parentPath,
         recentRank,
       });
@@ -112099,6 +112345,16 @@ class BobNavigationHotkeysParentChangeMixin {
       this.closeParentChangePicker();
       return false;
     }
+    const kindRefusal = parentChangeKindRefusal(
+      liveIndex,
+      file.path,
+      candidateFile.path,
+    );
+    if (kindRefusal) {
+      new Notice(`Can't change parent: ${kindRefusal}`);
+      this.closeParentChangePicker();
+      return false;
+    }
     const currentParent = this.resolveParentChangeFile(file);
     if (currentParent && currentParent.path === candidateFile.path) {
       new Notice(`Parent unchanged: ${candidateFile.basename}`);
@@ -112177,6 +112433,462 @@ class BobNavigationHotkeysParentChangeMixin {
       return false;
     }
     return finish(plan);
+  }
+}
+// ---- src/684-notebook-create-model.js ----
+// Create notebook here: the pure model (plan 202611/bob_notebooks.md, phase
+// plugins-notebook-gestures). The command runs in an area, a project, or a
+// notebook; the modal asks for a required one-line summary, an ID suggested
+// from the summary by the block-ID prompt's own naming function, and an
+// optional title; `bob notebooks create` writes `<parent>_<id>.md` and every
+// affected catalog row in one guarded write. Nothing here reads the vault or
+// touches the DOM.
+const NOTEBOOK_CREATE_SUMMARY_SOFT_MAX = 140;
+const NOTEBOOK_CREATE_ID_RE = /^[A-Za-z0-9-]+$/;
+
+// Why the active note cannot host a notebook, or null when it can.
+function notebookCreateHostRefusal(ruleKind, name) {
+  if (ruleKind === "area" || ruleKind === "project" || ruleKind === "notebook") {
+    return null;
+  }
+  return `${name || "This note"} is not an area, project, or notebook — open one to create a notebook there`;
+}
+
+// `<parent>_<id>` with hyphens turned into underscores, the file stem bob
+// writes (`docs/notebooks.md` Create).
+function notebookCreateFileStem(parentStem, id) {
+  return `${String(parentStem || "")}_${String(id || "").replace(/-/g, "_")}`;
+}
+
+// Every ID already spent under `parentStem`, in the hyphenated spelling the
+// suggestion function walks: a file `dev_nvim_lua` spends `nvim_lua` and
+// `nvim-lua`. Case-insensitive, like bob's collision check.
+function notebookCreateTakenIds(parentStem, basenames) {
+  const prefix = `${String(parentStem || "")}_`.toLowerCase();
+  const taken = new Set();
+  for (const basename of Array.isArray(basenames) ? basenames : []) {
+    const lower = String(basename || "").toLowerCase();
+    if (!lower.startsWith(prefix) || lower.length === prefix.length) {
+      continue;
+    }
+    const rest = lower.slice(prefix.length);
+    taken.add(rest);
+    taken.add(rest.replace(/_/g, "-"));
+  }
+  return taken;
+}
+
+// The default ID for a summary: the same suggestion the block-ID prompt gives
+// a note bullet, collision-aware against the parent's existing notebooks.
+// Blank for a blank summary.
+function notebookCreateSuggestId(summary, parentStem, basenames) {
+  const text = String(summary || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return "";
+  }
+  return (
+    suggestPromptBlockId(`- ${text}`, "", {
+      reservedIds: notebookCreateTakenIds(parentStem, basenames),
+    }) || ""
+  );
+}
+
+function notebookCreateFileExists(parentStem, id, basenames) {
+  const stem = notebookCreateFileStem(parentStem, id).toLowerCase();
+  return (Array.isArray(basenames) ? basenames : []).some(
+    (basename) => String(basename || "").toLowerCase() === stem,
+  );
+}
+
+// Validate the modal's three fields. `errors` blocks the Create button;
+// `warning` (a long summary) never does.
+function notebookCreateValidate(input, context = {}) {
+  const fields = input && typeof input === "object" ? input : {};
+  const summary = String(fields.summary === undefined ? "" : fields.summary)
+    .replace(/\s+/g, " ")
+    .trim();
+  const id = String(fields.id === undefined ? "" : fields.id).trim();
+  const title = String(fields.title === undefined ? "" : fields.title)
+    .replace(/\s+/g, " ")
+    .trim();
+  const errors = {};
+  if (!summary) {
+    errors.summary = "A notebook needs a one-line summary of what belongs in it";
+  }
+  if (!id) {
+    errors.id = "Choose an ID";
+  } else if (!NOTEBOOK_CREATE_ID_RE.test(id)) {
+    errors.id = "An ID uses only letters, digits, and -";
+  } else if (
+    notebookCreateFileExists(context.parentStem, id, context.basenames)
+  ) {
+    errors.id = `${notebookCreateFileStem(context.parentStem, id)}.md already exists`;
+  }
+  const length = Array.from(summary).length;
+  const warning =
+    length > NOTEBOOK_CREATE_SUMMARY_SOFT_MAX
+      ? `The summary is ${length} characters; keep it to ${NOTEBOOK_CREATE_SUMMARY_SOFT_MAX} or fewer`
+      : "";
+  return {
+    ok: Object.keys(errors).length === 0,
+    summary,
+    id,
+    title,
+    errors,
+    warning,
+  };
+}
+
+// One notice for a failed create: bob's refusal message, then its teaching
+// hint when it has one.
+function notebookCreateFailureNotice(result) {
+  const failure = result && typeof result === "object" ? result : {};
+  const message =
+    typeof failure.message === "string" && failure.message
+      ? failure.message
+      : "bob notebooks create failed";
+  const detail =
+    typeof failure.detail === "string" && failure.detail ? failure.detail : "";
+  if (failure.code === "desktop_only") {
+    return message;
+  }
+  return detail
+    ? `Can't create notebook: ${message} — ${detail}`
+    : `Can't create notebook: ${message}`;
+}
+
+function notebookCreateSuccessNotice(report) {
+  const notebook = report && report.notebook ? report.notebook : {};
+  const path = String(notebook.path || "");
+  const parent = String(notebook.parent || "");
+  const base = parent
+    ? `Created notebook ${path} under ${parent}`
+    : `Created notebook ${path}`;
+  const warnings = Array.isArray(report && report.warnings)
+    ? report.warnings.filter((item) => typeof item === "string" && item)
+    : [];
+  return warnings.length > 0 ? `${base} (${warnings[0]})` : base;
+}
+// ---- src/685-plugin-notebook-create.js ----
+// Create notebook here: the modal and the command (plan
+// 202611/bob_notebooks.md, phase plugins-notebook-gestures). The pure model
+// is 684-notebook-create-model.js; the write goes through the Bob Ledger
+// Tools `api.notebooks.create` namespace, which runs `bob notebooks create`.
+const NOTEBOOK_CREATE_OPEN_ATTEMPTS = 25;
+const NOTEBOOK_CREATE_OPEN_DELAY_MS = 100;
+
+class NotebookCreateModal extends Modal {
+  constructor(app, plugin, options = {}) {
+    super(app);
+    this.plugin = plugin;
+    this.parentFile = options.parentFile || null;
+    this.parentPath = String(options.parentPath || (this.parentFile && this.parentFile.path) || "");
+    this.parentStem = String(options.parentStem || (this.parentFile && this.parentFile.basename) || "");
+    this.basenames = Array.isArray(options.basenames) ? options.basenames : [];
+    this.summaryInput = null;
+    this.idInput = null;
+    this.titleInput = null;
+    this.statusEl = null;
+    this.previewEl = null;
+    this.createButton = null;
+    this.idTouched = false;
+    this.busy = false;
+    this.closed = false;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    if (this.modalEl && typeof this.modalEl.addClass === "function") {
+      this.modalEl.addClass("bob-nbc-modal");
+    }
+    contentEl.createDiv({ cls: "bob-nbc-title", text: "Create notebook here" });
+    contentEl.createDiv({
+      cls: "bob-nbc-subtitle",
+      text: `A new notebook under ${this.parentStem}`,
+    });
+    this.summaryInput = this.addField(contentEl, "Summary", {
+      placeholder: "One line on what belongs in this notebook",
+      required: true,
+    });
+    this.idInput = this.addField(contentEl, "ID", {
+      placeholder: "Used in the file name",
+    });
+    this.titleInput = this.addField(contentEl, "Title (optional)", {
+      placeholder: "Defaults to the ID, title-cased",
+    });
+    this.previewEl = contentEl.createDiv({
+      cls: "bob-nbc-preview",
+      attr: { "aria-live": "polite" },
+    });
+    this.statusEl = contentEl.createDiv({
+      cls: "bob-nbc-status",
+      attr: { "aria-live": "polite" },
+    });
+    const row = contentEl.createDiv({ cls: "bob-nbc-actions" });
+    const cancelButton = row.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => this.close());
+    this.createButton = row.createEl("button", {
+      text: "Create",
+      cls: "mod-cta",
+    });
+    this.createButton.addEventListener("click", () => void this.submit());
+
+    this.summaryInput.addEventListener("input", () => {
+      if (!this.idTouched) {
+        this.idInput.value = notebookCreateSuggestId(
+          this.summaryInput.value,
+          this.parentStem,
+          this.basenames,
+        );
+      }
+      this.refresh();
+    });
+    this.idInput.addEventListener("input", () => {
+      this.idTouched = true;
+      this.refresh();
+    });
+    this.titleInput.addEventListener("input", () => this.refresh());
+    for (const input of [this.summaryInput, this.idInput, this.titleInput]) {
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          void this.submit();
+        }
+      });
+    }
+    this.refresh();
+    window.setTimeout(() => {
+      if (!this.closed && this.summaryInput) {
+        this.summaryInput.focus();
+      }
+    }, 0);
+  }
+
+  onClose() {
+    this.closed = true;
+    if (this.plugin && this.plugin.activeNotebookCreateModal === this) {
+      this.plugin.activeNotebookCreateModal = null;
+    }
+    this.contentEl.empty();
+  }
+
+  addField(parentEl, label, options = {}) {
+    const wrapper = parentEl.createDiv({ cls: "bob-nbc-field" });
+    wrapper.createEl("label", { cls: "bob-nbc-label", text: label });
+    return wrapper.createEl("input", {
+      cls: "bob-nbc-input",
+      attr: {
+        type: "text",
+        placeholder: options.placeholder || "",
+        ...(options.required ? { "aria-required": "true" } : {}),
+      },
+    });
+  }
+
+  currentFields() {
+    return {
+      summary: this.summaryInput ? this.summaryInput.value : "",
+      id: this.idInput ? this.idInput.value : "",
+      title: this.titleInput ? this.titleInput.value : "",
+    };
+  }
+
+  validation() {
+    return notebookCreateValidate(this.currentFields(), {
+      parentStem: this.parentStem,
+      basenames: this.basenames,
+    });
+  }
+
+  refresh() {
+    const result = this.validation();
+    if (this.previewEl) {
+      this.previewEl.empty();
+      if (result.id && NOTEBOOK_CREATE_ID_RE.test(result.id)) {
+        this.previewEl.setText(
+          `Creates ${notebookCreateFileStem(this.parentStem, result.id)}.md`,
+        );
+      }
+    }
+    if (this.statusEl) {
+      this.statusEl.empty();
+      // Stay quiet until the user has typed something: a fresh modal with no
+      // summary is not yet an error.
+      const typed = this.summaryInput && this.summaryInput.value !== "";
+      const message = typed
+        ? result.errors.id || result.errors.summary || result.warning
+        : "";
+      this.statusEl.setText(message || "");
+      this.statusEl.classList.toggle("is-error", Boolean(typed && !result.ok));
+    }
+    if (this.createButton) {
+      this.createButton.disabled = this.busy || !result.ok;
+    }
+    return result;
+  }
+
+  async submit() {
+    if (this.busy) {
+      return false;
+    }
+    const result = this.refresh();
+    if (!result.ok) {
+      const message = result.errors.summary || result.errors.id;
+      if (this.statusEl && message) {
+        this.statusEl.setText(message);
+        this.statusEl.classList.add("is-error");
+      }
+      return false;
+    }
+    this.busy = true;
+    this.refresh();
+    let outcome = null;
+    try {
+      outcome = await this.plugin.commitNotebookCreate({
+        parent: this.parentPath,
+        id: result.id,
+        summary: result.summary,
+        title: result.title,
+      });
+    } finally {
+      this.busy = false;
+    }
+    if (outcome && outcome.ok) {
+      this.close();
+      return true;
+    }
+    if (!this.closed) {
+      this.refresh();
+      if (this.idInput && typeof this.idInput.focus === "function") {
+        this.idInput.focus();
+      }
+    }
+    return false;
+  }
+}
+
+class BobNavigationHotkeysNotebookCreateMixin {
+  registerNotebookCreateCommand() {
+    this.addCommand({
+      id: "create-notebook-here",
+      name: "Create notebook here",
+      callback: () => this.openNotebookCreate(),
+    });
+  }
+
+  notebookLedgerApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-ledger-tools"];
+      const api = holder && holder.api && holder.api.notebooks;
+      return api && typeof api.create === "function" ? api : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // Every vault note's basename: the ID suggestion and the exists check read
+  // it, and bob's own collision check stays authoritative at write time.
+  collectNotebookCreateBasenames() {
+    const vault = this.app && this.app.vault;
+    const files =
+      vault && typeof vault.getMarkdownFiles === "function"
+        ? vault.getMarkdownFiles() || []
+        : [];
+    return files.map((file) => file.basename).filter(Boolean);
+  }
+
+  openNotebookCreate() {
+    const file = this.getActiveMarkdownFile();
+    if (!file) {
+      return false;
+    }
+    const cache =
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+    const refusal = notebookCreateHostRefusal(
+      parentRuleKindOf(cache && cache.frontmatter),
+      file.basename,
+    );
+    if (refusal) {
+      new Notice(refusal);
+      return false;
+    }
+    const active = this.activeNotebookCreateModal;
+    if (active && active.isOpen !== false && !active.closed) {
+      if (active.summaryInput && typeof active.summaryInput.focus === "function") {
+        active.summaryInput.focus();
+      }
+      return true;
+    }
+    const modal = new NotebookCreateModal(this.app, this, {
+      parentFile: file,
+      parentPath: file.path,
+      parentStem: file.basename,
+      basenames: this.collectNotebookCreateBasenames(),
+    });
+    this.activeNotebookCreateModal = modal;
+    modal.open();
+    return true;
+  }
+
+  // Run the create and open the new note. Resolves bob's result; a refusal
+  // is shown as one notice and the modal stays open to fix it.
+  async commitNotebookCreate(request) {
+    const api = this.notebookLedgerApi();
+    if (!api) {
+      new Notice(
+        "Can't create notebook: Bob Ledger Tools is not running — enable it and reload",
+      );
+      return { ok: false, code: "no-ledger-tools" };
+    }
+    let result;
+    try {
+      result = await api.create(request);
+    } catch (_error) {
+      result = { ok: false, code: "failed", message: "bob notebooks create failed" };
+    }
+    if (!result || !result.ok) {
+      new Notice(notebookCreateFailureNotice(result));
+      return result || { ok: false, code: "failed" };
+    }
+    new Notice(notebookCreateSuccessNotice(result.report));
+    await this.openCreatedNotebook(String(result.report.notebook.path || ""));
+    return result;
+  }
+
+  // The new file lands through bob, so Obsidian's vault watcher may not have
+  // indexed it yet: poll briefly before opening it.
+  async openCreatedNotebook(path) {
+    const vault = this.app && this.app.vault;
+    if (!path || !vault || typeof vault.getAbstractFileByPath !== "function") {
+      return false;
+    }
+    let file = null;
+    for (let attempt = 0; attempt < NOTEBOOK_CREATE_OPEN_ATTEMPTS; attempt += 1) {
+      file = vault.getAbstractFileByPath(path);
+      if (file) {
+        break;
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, NOTEBOOK_CREATE_OPEN_DELAY_MS),
+      );
+    }
+    if (!file || !this.isMarkdownFile(file)) {
+      new Notice(`Created ${path} — open it once Obsidian has indexed it`);
+      return false;
+    }
+    try {
+      const leaf = this.app.workspace.getLeaf(false);
+      return await openWithLeafSwitchGuard(this, file, leaf, () => leaf.openFile(file));
+    } catch (_error) {
+      new Notice(`Created ${path} — could not open it`);
+      return false;
+    }
   }
 }
 // ---- src/690-install-plugin-mixins.js ----
@@ -112265,6 +112977,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysImageZoomMixin,
   BobNavigationHotkeysLinkParseMixin,
   BobNavigationHotkeysParentChangeMixin,
+  BobNavigationHotkeysNotebookCreateMixin,
 ]);
 // ---- src/700-exports.js ----
 module.exports = BobNavigationHotkeysPlugin;
@@ -112907,6 +113620,7 @@ module.exports.helpers = {
   suggestBlockIdFromTask,
   suggestPromptBlockId,
   promptBlockIdCleanHeadline,
+  promptBlockIdExtractBulletBody,
   promptBlockIdPhraseSpans,
   promptBlockIdProseText,
   promptBlockIdWordsIn,
@@ -113276,6 +113990,24 @@ Object.assign(module.exports.helpers, {
   collapseParentBreadcrumb,
   parentChangeWouldCycle,
   parentEmptyStateText,
+  parentRuleKindOf,
+  parentKindRefusal,
+  parentKindRefusalText,
+  parentChangeKindRefusal,
+  isNotebookType,
+  NOTEBOOK_CREATE_SUMMARY_SOFT_MAX,
+  notebookCreateHostRefusal,
+  notebookCreateFileStem,
+  notebookCreateTakenIds,
+  notebookCreateSuggestId,
+  notebookCreateFileExists,
+  notebookCreateValidate,
+  notebookCreateFailureNotice,
+  notebookCreateSuccessNotice,
+  NotebookCreateModal,
+  BobNavigationHotkeysNotebookCreateMixin,
+  childNoteKindAriaLabel,
+  renderTypedNotePickerRow,
   PARENT_PICKER_HINTS,
   ParentNotePickerModal,
   isConflictsNotePath,

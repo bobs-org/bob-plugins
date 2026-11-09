@@ -68,6 +68,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsDependencyModelMixin,
   BobLedgerToolsRelationLabelsMixin,
   BobLedgerToolsTaskMergeMixin,
+  BobLedgerToolsNotebooksMixin,
   BobLedgerToolsAttachmentsMixin,
   BobLedgerToolsRelationIndexMixin,
   BobLedgerToolsRelationModelMixin,

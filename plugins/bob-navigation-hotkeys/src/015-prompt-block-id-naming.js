@@ -80,6 +80,25 @@ function promptBlockIdExtractTaskBody(rawLine) {
   return match[1] || "";
 }
 
+// A list item's body, task or plain note bullet: `- [ ] #task Fix it` and
+// `- Try mergiraf [created::2026-11-09]` both resolve; a paragraph, heading,
+// empty bullet, or a `-`/`*` run with no following space does not. Notebook
+// notes are plain bullets, so the block-ID prompt names them the same way it
+// names tasks (plan 202611/bob_notebooks.md).
+function promptBlockIdExtractBulletBody(rawLine) {
+  const taskBody = promptBlockIdExtractTaskBody(rawLine);
+  if (taskBody !== null) {
+    return taskBody;
+  }
+  const match = String(rawLine || "").match(
+    /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d+[.)])[ \t]+(\S.*)$/,
+  );
+  if (!match) {
+    return null;
+  }
+  return match[1];
+}
+
 function promptBlockIdFindProtectedSpans(text) {
   const spans = [];
   const body = String(text || "");
@@ -118,13 +137,14 @@ function promptBlockIdIndexInSpans(spans, index) {
   return false;
 }
 
-// Clean a task headline for suggestion only; source text is never rewritten
-// by this step. Strips the checkbox/list/blockquote prefix (via extract),
+// Clean a task or note-bullet headline for suggestion only; source text is
+// never rewritten by this step. Strips the checkbox/list/blockquote prefix
+// (via extract),
 // trailing block ID, Dataview inline fields, Tasks emoji date/priority
 // metadata, and standalone letter-tags outside code/link labels. Preserves
 // semantic numbers such as `#123` and technical text inside code spans.
 function promptBlockIdCleanHeadline(rawLine) {
-  const body = promptBlockIdExtractTaskBody(rawLine);
+  const body = promptBlockIdExtractBulletBody(rawLine);
   if (body === null) {
     return null;
   }
@@ -376,8 +396,10 @@ function promptBlockIdReservedSet(reservedIds) {
   return new Set(reservedIds || []);
 }
 
-// Pure suggestion over task text, occupied note content, and pending
-// reservations. Returns a slug or null for non-task input. Collisions walk
+// Pure suggestion over task or note-bullet text, occupied note content, and
+// pending reservations. Returns a slug or null for non-list input. A line
+// with no usable words falls back to `task` for a checkbox line and `note`
+// for a plain bullet. Collisions walk
 // `stem-2`, `stem-3`, … without a `-9` cutoff, reserving suffix room within
 // 32 characters. `excludeId` ignores one occurrence (marker-triggered
 // rename); never globally remove duplicates.
@@ -403,6 +425,8 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
     return count > 0;
   };
 
+  const fallbackStem =
+    promptBlockIdExtractTaskBody(rawLine) !== null ? "task" : "note";
   let stem = null;
   const phrases = promptBlockIdPhraseSpans(cleaned);
   for (const phrase of phrases) {
@@ -430,9 +454,9 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
     if (proseWords.length > 0) {
       stem =
         promptBlockIdJoinTruncated(proseWords, PROMPT_BLOCK_ID_MAX_LENGTH) ||
-        "task";
+        fallbackStem;
     } else {
-      stem = "task";
+      stem = fallbackStem;
     }
   }
 
@@ -444,7 +468,7 @@ function suggestPromptBlockId(rawLine, content, options = {}) {
       promptBlockIdTruncateSlug(
         stem,
         Math.max(1, PROMPT_BLOCK_ID_MAX_LENGTH - suffixText.length),
-      ) || "task";
+      ) || fallbackStem;
     candidate = `${base}${suffixText}`;
     suffix += 1;
   }

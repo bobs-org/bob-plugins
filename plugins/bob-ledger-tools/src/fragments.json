@@ -60,6 +60,7 @@
   "172-plugin-relation-labels.js",
   "173-plugin-attachments-api.js",
   "174-plugin-task-merge-api.js",
+  "175-plugin-notebooks-api.js",
   "180-plugin-plan-and-ready.js",
   "181-plugin-plan-budget-off-clock.js",
   "190-plugin-note-ready.js",

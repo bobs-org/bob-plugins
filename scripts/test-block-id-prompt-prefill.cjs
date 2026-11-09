@@ -299,6 +299,36 @@ test("direct-add seeds from the task headline, not non-task blocks", async () =>
   assert.ok(closed.suggestion);
 });
 
+test("direct-add seeds a plain note bullet from its text without the created stamp", async () => {
+  const { plugin } = createPluginWithFiles({}, "dev_tools.md");
+  const editor = createEditor(
+    "- Try mergiraf for merge conflicts [created::2026-11-09]",
+  );
+  const source = directAddSource(editor, "dev_tools.md", 0);
+  const result = await helpers.resolvePromptBlockIdSuggestion(plugin, source);
+  assert.equal(result.suggestion, "try-mergiraf-merge");
+  assert.equal(result.notice, null);
+
+  // Occupied IDs anywhere in the note still push the suggestion along.
+  const taken = createEditor(
+    "- Try mergiraf for merge conflicts [created::2026-11-09]\n- Other ^try-mergiraf-merge",
+  );
+  const takenResult = await helpers.resolvePromptBlockIdSuggestion(
+    plugin,
+    directAddSource(taken, "dev_tools.md", 0),
+  );
+  assert.equal(takenResult.suggestion, "try-mergiraf-merge-2");
+
+  // Paragraphs, headings, and empty bullets stay blank.
+  for (const text of ["Just a paragraph", "## Troubleshooting", "- "]) {
+    const blank = await helpers.resolvePromptBlockIdSuggestion(
+      plugin,
+      directAddSource(createEditor(text), "dev_tools.md", 0),
+    );
+    assert.equal(blank.suggestion, null, text);
+  }
+});
+
 test("link-task-complete seeds from the target, prefers open buffers", async () => {
   const targetContent = "- [ ] #task Renew the library books\n";
   const { plugin, store } = createPluginWithFiles(
@@ -418,6 +448,42 @@ test("marker rename suggests from the unique task, never hiding ambiguity", asyn
   const dup = await helpers.resolvePromptBlockIdSuggestion(dupPlugin, dupSource);
   assert.equal(dup.suggestion, null);
   assert.match(dup.notice || "", /exactly once/);
+});
+
+test("marker rename suggests from a unique plain note bullet", async () => {
+  const { plugin } = createPluginWithFiles(
+    {
+      "dev_tools.md":
+        "- Try mergiraf for merge conflicts [created::2026-11-09] ^old\n",
+    },
+    "Daily.md",
+  );
+  const source = {
+    editor: createEditor("[[dev_tools#^old]]@"),
+    sourcePath: "Daily.md",
+    targetText: "dev_tools",
+    oldId: "old",
+    blockPrefix: "#^",
+    line: 0,
+    startCh: 0,
+    endCh: 19,
+    raw: "[[dev_tools#^old]]@",
+  };
+  const result = await helpers.resolvePromptBlockIdSuggestion(plugin, source);
+  assert.equal(result.suggestion, "try-mergiraf-merge");
+  assert.equal(result.notice, null);
+
+  // A paragraph target stays blank, as before.
+  const { plugin: paragraphPlugin } = createPluginWithFiles(
+    { "dev_tools.md": "A loose paragraph ^old\n" },
+    "Daily.md",
+  );
+  const paragraph = await helpers.resolvePromptBlockIdSuggestion(
+    paragraphPlugin,
+    { ...source, editor: createEditor("[[dev_tools#^old]]@") },
+  );
+  assert.equal(paragraph.suggestion, null);
+  assert.equal(paragraph.notice, null);
 });
 
 test("modal seeds the value, selects once, and never overwrites typing", async () => {

@@ -27736,17 +27736,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       }
       return;
     }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.moveSelection(1);
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.moveSelection(-1);
-    }
+    // Unmatched keys go to the base picker for its navigation (↑/↓ and
+    // Ctrl+N/Ctrl+P), as every other FilteredPickerModal subclass does.
+    // Enter never reaches the base because the Enter branch above always returns.
+    super.handleKeydown(event);
   }
 
   moveSelection(delta) {

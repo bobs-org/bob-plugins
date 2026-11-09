@@ -147,6 +147,63 @@ test("1, 6, 11, and 20 offers start unmarked and retain supplied opaque keys", a
   }
 });
 
+test("Ctrl+N / Ctrl+P move the highlight like ArrowDown / ArrowUp", async () => {
+  const plugin = makePlugin();
+  const model = modelFor(3);
+  const { pending, modal } = await openPicker(plugin, model);
+  assert.equal(modal.selectedIndex, 0);
+
+  const down = pressKey(modal, "n", { ctrlKey: true });
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, 1);
+  assert.equal(modal.markedKeys.size, 0);
+  const highlighted = findAll(modal.resultsEl, "is-highlighted");
+  assert.equal(highlighted.length, 1);
+  assert.equal(highlighted[0].getAttribute("aria-selected"), "true");
+  assert.equal(highlighted[0].getAttribute("data-successor-key"), model.groups[0].rows[1].key);
+
+  pressKey(modal, "n", { ctrlKey: true });
+  assert.equal(modal.selectedIndex, 2);
+  const wrap = pressKey(modal, "n", { ctrlKey: true });
+  assert.equal(wrap.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, 0);
+
+  const wrapUp = pressKey(modal, "p", { ctrlKey: true });
+  assert.equal(wrapUp.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, 2);
+  pressKey(modal, "p", { ctrlKey: true });
+  assert.equal(modal.selectedIndex, 1);
+
+  pressKey(modal, "N", { ctrlKey: true });
+  assert.equal(modal.selectedIndex, 2, "Caps Lock Ctrl+N still moves");
+
+  const before = modal.selectedIndex;
+  const meta = pressKey(modal, "n", { metaKey: true });
+  assert.equal(meta.defaultPrevented, false);
+  assert.equal(modal.selectedIndex, before);
+  const alt = pressKey(modal, "n", { ctrlKey: true, altKey: true });
+  assert.equal(alt.defaultPrevented, false);
+  assert.equal(modal.selectedIndex, before);
+
+  await finishWithEnter(plugin, modal);
+  assert.deepEqual(await pending, { picks: [{ key: model.groups[0].rows[2].key }] });
+});
+
+test("Ctrl+P wraps to the collapsed group's expand row", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, modelFor(20, { group: "project" }));
+  assert.equal(modal.selectedIndex, 0);
+  const event = pressKey(modal, "p", { ctrlKey: true });
+  assert.equal(event.defaultPrevented, true);
+  const last = modal.visibleItems[modal.selectedIndex];
+  assert.equal(last.kind, "expand");
+  assert.equal(modal.selectedIndex, modal.visibleItems.length - 1);
+  await finishWithEnter(plugin, modal);
+  assert.equal(modal.expandedGroups.has(0), true, "Enter on the expand row expands the group");
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("Tab marks a subset, returns model order, and group Ctrl+A includes collapsed offers but excludes muted rows", async () => {
   const plugin = makePlugin();
   const subsetModel = modelFor(6);

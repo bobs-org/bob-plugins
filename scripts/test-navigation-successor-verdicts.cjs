@@ -204,6 +204,29 @@ test("Ctrl+X stages Done, advances, and the same key returns the row to Leave", 
   assert.equal(await pending, null);
 });
 
+test("verdict mode keeps Ctrl+N / Ctrl+P", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, verdictModel(3));
+  pressVerdict(modal, false);
+  assert.equal(modal.selectedIndex, 1, "Ctrl+X auto-advances after staging Done");
+  const verdictsBefore = Array.from(modal.verdicts.entries());
+  const markedBefore = modal.markedKeys.size;
+
+  const up = pressKey(modal, "p", { ctrlKey: true });
+  assert.equal(up.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, 0);
+
+  const down = pressKey(modal, "n", { ctrlKey: true });
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, 1);
+
+  assert.deepEqual(Array.from(modal.verdicts.entries()), verdictsBefore);
+  assert.equal(modal.markedKeys.size, markedBefore);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("Ctrl+Shift+X opens the reason field; Enter confirms and Esc restores", async () => {
   const plugin = makePlugin({ now: 5000 });
   const { pending, modal } = await openPicker(plugin, verdictModel(2));

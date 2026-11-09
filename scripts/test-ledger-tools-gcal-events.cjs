@@ -118,8 +118,18 @@ const {
   gcalEventsDecodeDeprecations,
   gcalEventsDeprecationNoticeText,
   gcalEventsShowDeprecationNotice,
+  gcalEventsFindPendingTag,
+  gcalEventsNoteReady,
+  gcalEventsWaitForRenderedNote,
   gcalEventsWaitForPomodoros,
+  gcalEventsSyncArgs,
+  gcalEventsWaitingNoticeText,
+  gcalEventsHeldNoticeText,
+  gcalEventsShowWaitingNotice,
+  gcalEventsShowHeldNotice,
+  GCAL_EVENTS_SETTLE_MS,
   GCAL_EVENTS_STAMP_STALE_AFTER_MINUTES,
+  formatLocalDate,
   todayDailyPath,
   gmailEventsShouldSyncCreatedFile,
   gmailEventsDecodeSync,
@@ -397,7 +407,7 @@ test("sync-on-create waits for Templater's Pomodoros section, then stops at its 
   let reads = 0;
   const becameReady = await gcalEventsWaitForPomodoros(
     async () => (++reads >= 3 ? "# Friday\n\n## Pomodoros\n" : "# Friday\n"),
-    { timeoutMs: 1000, pollMs: 100, now: () => now, delay: async (ms) => { now += ms; } },
+    { timeoutMs: 1000, pollMs: 100, settleMs: 0, now: () => now, delay: async (ms) => { now += ms; } },
   );
   assert.equal(becameReady, true);
   assert.equal(reads, 3);
@@ -410,6 +420,172 @@ test("sync-on-create waits for Templater's Pomodoros section, then stops at its 
   );
   assert.equal(timedOut, false);
   assert.equal(now, 500);
+});
+
+test("pending Templater tags are found everywhere except fenced and inline code", () => {
+  assert.deepEqual(
+    gcalEventsFindPendingTag("---\ntitle: <% tp.file.title %>\n---\n\n## Pomodoros\n"),
+    { line: 2, excerpt: "title: <% tp.file.title %>" },
+  );
+  assert.equal(gcalEventsFindPendingTag("# Friday\n\n## Pomodoros\n"), null);
+  assert.equal(gcalEventsFindPendingTag("# <%* Friday %>\n\n## Pomodoros\n").line, 1);
+  assert.equal(gcalEventsFindPendingTag("<%- partial %>\n\n## Pomodoros\n").line, 1);
+  assert.equal(
+    gcalEventsFindPendingTag("# Friday\n\n```md\n<% not a tag %>\n```\n\n## Pomodoros\n"),
+    null,
+  );
+  assert.equal(
+    gcalEventsFindPendingTag("# Friday\n\n~~~md\n<% nope %>\n~~~\n\n## Pomodoros\n"),
+    null,
+  );
+  assert.equal(
+    gcalEventsFindPendingTag("# Friday\n\n`<% tp %>` docs\n\n## Pomodoros\n"),
+    null,
+  );
+  const found = gcalEventsFindPendingTag(`<% ${"x".repeat(100)} %>\n\n## Pomodoros\n`);
+  assert.equal(found.line, 1);
+  assert.ok(found.excerpt.length <= 60);
+});
+
+test("a raw template is not ready; a rendered note is", () => {
+  assert.equal(gcalEventsNoteReady("# Friday\n<% tp.file.title %>\n\n## Pomodoros\n"), false);
+  assert.equal(gcalEventsNoteReady("# Friday\n"), false);
+  assert.equal(gcalEventsNoteReady("# Friday\n\n## Pomodoros\n"), true);
+  assert.equal(gcalEventsNoteReady("# Friday\n\n```\n<% x %>\n```\n\n## Pomodoros\n"), true);
+  assert.equal(gcalEventsNoteReady(null), false);
+});
+
+test("the waiter settles on two identical ready reads", async () => {
+  const ready = "# Friday\n\n## Pomodoros\n";
+  let now = 0;
+  let reads = 0;
+  const becameReady = await gcalEventsWaitForRenderedNote(
+    async () => {
+      reads += 1;
+      return reads >= 3 ? ready : "# Friday\n";
+    },
+    { timeoutMs: 5000, pollMs: 100, now: () => now, delay: async (ms) => { now += ms; } },
+  );
+  assert.equal(becameReady, true);
+  assert.ok(reads > 3);
+  assert.ok(now >= GCAL_EVENTS_SETTLE_MS);
+});
+
+test("the waiter restarts settle when the note changes", async () => {
+  const first = "# Friday\n\n## Pomodoros\n";
+  const second = "# Friday!\n\n## Pomodoros\n";
+  let now = 0;
+  let reads = 0;
+  const becameReady = await gcalEventsWaitForRenderedNote(
+    async () => {
+      reads += 1;
+      return reads < 3 ? first : second;
+    },
+    { timeoutMs: 5000, pollMs: 100, now: () => now, delay: async (ms) => { now += ms; } },
+  );
+  assert.equal(becameReady, true);
+  assert.ok(now >= GCAL_EVENTS_SETTLE_MS);
+});
+
+test("gcal sync spawns with --format json", () => {
+  assert.deepEqual(gcalEventsSyncArgs(), ["gcal", "sync", "-q", "--format", "json"]);
+});
+
+test("gcalEventsDecodeSync accepts held and ignores unknown future fields", () => {
+  const ok = gcalEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    status: "held",
+    future_field: { nested: true },
+  }), "");
+  assert.equal(ok.ok, true);
+  assert.equal(ok.report.status, "held");
+  assert.deepEqual(ok.report.deprecations, []);
+  const waiting = gcalEventsDecodeSync(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    status: "waiting",
+    waiting: { reason: "note_unrendered", detail: "d", hint: "h", line: 3 },
+  }), "");
+  assert.equal(waiting.ok, true);
+  assert.equal(waiting.report.waiting.reason, "note_unrendered");
+});
+
+test("waiting and held notices fire once per day", () => {
+  const seen = [];
+  const notice = (text) => seen.push(text);
+  const day = new Date(2026, 10, 9, 12, 0, 0);
+  const otherDay = new Date(2026, 10, 10, 12, 0, 0);
+  const waiting = { status: "waiting", waiting: { reason: "note_unrendered" } };
+  const state = {};
+  assert.equal(gcalEventsShowWaitingNotice(state, waiting, { notice, now: day }), true);
+  assert.deepEqual(seen, [gcalEventsWaitingNoticeText()]);
+  assert.equal(gcalEventsShowWaitingNotice(state, waiting, { notice, now: day }), false);
+  assert.equal(seen.length, 1);
+  assert.equal(gcalEventsShowWaitingNotice(state, waiting, { notice, now: otherDay }), true);
+  assert.equal(seen.length, 2);
+  assert.equal(
+    gcalEventsShowWaitingNotice({}, { status: "waiting", waiting: { reason: "note_missing" } }, { notice, now: day }),
+    false,
+  );
+  assert.equal(gcalEventsShowWaitingNotice({}, { status: "waiting" }, { notice, now: day }), false);
+  assert.equal(gcalEventsShowWaitingNotice({}, { status: "written" }, { notice, now: day }), false);
+
+  const heldState = {};
+  const held = { status: "held" };
+  assert.equal(gcalEventsShowHeldNotice(heldState, held, { notice, now: day }), true);
+  assert.equal(seen[seen.length - 1], gcalEventsHeldNoticeText());
+  assert.equal(gcalEventsShowHeldNotice(heldState, held, { notice, now: day }), false);
+  assert.equal(gcalEventsShowHeldNotice({}, { status: "written" }, { notice, now: day }), false);
+});
+
+test("calendar hook spawns sync after the wait times out and notices waiting", async () => {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { vault: { read: async () => "# Friday\n<% tp.file.title %>\n\n## Pomodoros\n" } };
+  plugin.gcalSyncOnCreateEnabled = true;
+  plugin.gcalSyncNoticeDays = new Set();
+  let spawned = null;
+  plugin.bobSpawnJson = async (args, decode, options) => {
+    spawned = args.slice();
+    assert.equal(options.commandLabel, "bob gcal sync");
+    return decode(JSON.stringify({
+      schema_version: 1,
+      ok: true,
+      status: "waiting",
+      waiting: { reason: "note_unrendered", detail: "d", hint: "h", line: 2 },
+    }), "");
+  };
+  const result = await plugin.gcalSyncCreatedDailyNote(
+    { path: "2026/20261109.md" },
+    { timeoutMs: 200, pollMs: 50, settleMs: 50 },
+  );
+  assert.equal(result, true);
+  assert.deepEqual(spawned, ["gcal", "sync", "-q", "--format", "json"]);
+  assert.ok(plugin.gcalSyncNoticeDays.has(formatLocalDate(new Date())));
+});
+
+test("calendar hook notices a held sync once per day", async () => {
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { vault: { read: async () => "# Friday\n\n## Pomodoros\n" } };
+  plugin.gcalSyncOnCreateEnabled = true;
+  plugin.gcalSyncNoticeDays = new Set();
+  plugin.bobSpawnJson = async (args, decode) => decode(JSON.stringify({
+    schema_version: 1,
+    ok: true,
+    status: "held",
+  }), "");
+  const first = await plugin.gcalSyncCreatedDailyNote(
+    { path: "2026/20261109.md" },
+    { timeoutMs: 5000, pollMs: 50, settleMs: 50 },
+  );
+  assert.equal(first, true);
+  assert.equal(plugin.gcalSyncNoticeDays.size, 1);
+  const second = await plugin.gcalSyncCreatedDailyNote(
+    { path: "2026/20261109.md" },
+    { timeoutMs: 5000, pollMs: 50, settleMs: 50 },
+  );
+  assert.equal(second, true);
+  assert.equal(plugin.gcalSyncNoticeDays.size, 1);
 });
 
 test("calendar paint teardown clears the clock refresh interval", () => {

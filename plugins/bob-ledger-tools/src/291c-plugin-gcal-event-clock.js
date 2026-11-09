@@ -219,7 +219,7 @@ function gcalEventsDecodeSync(stdout, stderr) {
       detail: statsFirstLine(stderr),
     };
   }
-  if (body.ok !== true || !["written", "unchanged", "waiting"].includes(body.status)) {
+  if (body.ok !== true || !["written", "unchanged", "waiting", "held"].includes(body.status)) {
     return { ok: false, code: "bad-shape", message: "bob gcal sync returned an unexpected report.", detail: statsFirstLine(stderr) };
   }
   return { ok: true, report: Object.assign({}, body, { deprecations: gcalEventsDecodeDeprecations(body.deprecations) }) };

@@ -492,12 +492,12 @@ view the next strip paints.
 
 ## Calendar Events
 
-On by default, **Toggle Google Calendar sync on daily-note creation** watches
-for today's canonical daily note after Obsidian finishes loading. When a new
-note appears, Ledger Tools waits up to 15 seconds for Templater to add
-`## Pomodoros`, then runs `bob gcal sync -q -f json` once. Bob remains the
-only writer. Setup and writer-host errors go to the console; a runtime failure
-shows at most one Notice per day. The toggle is session-only.
+**Toggle Google Calendar sync on daily-note creation** watches new daily notes
+(on by default, session-only). Ledger Tools waits up to 60 seconds for a
+rendered, settled note (`## Pomodoros`, no Templater tags), then runs
+`bob gcal sync -q --format json` once; on timeout sync still spawns for Bob's
+guard. Waiting and held reports show one Notice per day. Bob is the only
+writer; errors log to the console, at most one Notice per day.
 
 **Toggle calendar event painting** is also a session-only toggle. Events rows
 in Live Preview and Reading view show quiet time pills, context tags, and

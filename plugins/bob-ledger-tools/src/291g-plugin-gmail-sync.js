@@ -151,13 +151,13 @@ class BobLedgerToolsGmailSyncMixin {
   async gmailSyncCreatedDailyNote(file) {
     if (!this.gmailSyncOnCreateEnabled) return false;
     const vault = this.app && this.app.vault;
-    const ready = await gcalEventsWaitForPomodoros(
+    const ready = await gcalEventsWaitForRenderedNote(
       () => vault && typeof vault.read === "function"
         ? vault.read(file)
         : Promise.reject(new Error("Vault read unavailable")),
     );
     if (!ready) {
-      console.warn("bob gmail sync skipped: today's note did not get a ## Pomodoros section within 15 seconds");
+      console.warn("bob gmail sync skipped: today's note never settled into a rendered note with ## Pomodoros within 60 seconds");
       return false;
     }
     if (!this.gmailSyncOnCreateEnabled) return false;

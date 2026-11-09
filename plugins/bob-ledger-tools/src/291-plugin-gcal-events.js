@@ -3,7 +3,7 @@
 // has finished today's note and paints the resulting Events section.
 
 const GCAL_EVENTS_POLL_MS = 250;
-const GCAL_EVENTS_WAIT_MS = 15000;
+const GCAL_EVENTS_WAIT_MS = 60000;
 const GCAL_EVENTS_REFRESH_MS = 60000;
 // The stamp records the last `bob gcal sync` run. Sync runs on demand,
 // so age never paints it stale.
@@ -313,29 +313,6 @@ function gcalEventsShouldSyncCreatedFile(enabled, file, app, now = new Date()) {
   }
 }
 
-async function gcalEventsWaitForPomodoros(read, options = {}) {
-  if (typeof read !== "function") return false;
-  const opts = options && typeof options === "object" ? options : {};
-  const timeout = Number.isFinite(opts.timeoutMs) ? Math.max(0, opts.timeoutMs) : GCAL_EVENTS_WAIT_MS;
-  const poll = Number.isFinite(opts.pollMs) ? Math.max(0, opts.pollMs) : GCAL_EVENTS_POLL_MS;
-  const now = typeof opts.now === "function" ? opts.now : Date.now;
-  const delayFn = typeof opts.delay === "function"
-    ? opts.delay
-    : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const deadline = now() + timeout;
-  while (true) {
-    try {
-      const contents = await read();
-      if (gcalEventsHasPomodorosSection(contents)) return true;
-    } catch (error) {
-      // Templater may still be creating the note; keep waiting until the bound.
-    }
-    const remaining = deadline - now();
-    if (remaining <= 0) return false;
-    await delayFn(Math.min(poll, remaining));
-  }
-}
-
 function ensureGcalEventsRefreshEffect() {
   if (gcalEventsRefreshEffect) return gcalEventsRefreshEffect;
   try {
@@ -413,17 +390,20 @@ class BobLedgerToolsGcalEventsMixin {
     return this.gcalSyncOnCreateEnabled;
   }
 
-  async gcalSyncCreatedDailyNote(file) {
+  async gcalSyncCreatedDailyNote(file, waitOptions = {}) {
     const vault = this.app && this.app.vault;
-    const ready = await gcalEventsWaitForPomodoros(
+    const ready = await gcalEventsWaitForRenderedNote(
       () => vault && typeof vault.read === "function" ? vault.read(file) : Promise.reject(new Error("Vault read unavailable")),
+      waitOptions,
     );
     if (!ready) {
-      console.warn("bob gcal sync skipped: today's note did not get a ## Pomodoros section within 15 seconds");
-      return false;
+      // Bob's unrendered-note guard is the authority: spawn once anyway and let
+      // it report `waiting` instead of skipping a slow Templater render.
+      console.warn("bob gcal sync wait timed out: today's note never settled into a rendered note with ## Pomodoros; spawning sync anyway");
     }
     if (!this.gcalSyncOnCreateEnabled) return false;
-    const result = await bobSpawnJson(["gcal", "sync", "-q", "-f", "json"], gcalEventsDecodeSync, {
+    const spawn = typeof this.bobSpawnJson === "function" ? this.bobSpawnJson.bind(this) : bobSpawnJson;
+    const result = await spawn(gcalEventsSyncArgs(), gcalEventsDecodeSync, {
       commandLabel: "bob gcal sync",
       resolveBobPath: () => typeof this.apiStatsBobPath === "function" ? this.apiStatsBobPath() : { path: "bob", source: "path" },
       getVaultPath: () => this.statsVaultBasePath(),
@@ -432,6 +412,8 @@ class BobLedgerToolsGcalEventsMixin {
     });
     if (result.ok) {
       this.gcalEventsNoticeDeprecations(result.report);
+      gcalEventsShowWaitingNotice(this, result.report);
+      gcalEventsShowHeldNotice(this, result.report);
       return true;
     }
     if (result.exitCode === 1) {

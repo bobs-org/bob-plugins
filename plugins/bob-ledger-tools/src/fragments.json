@@ -153,6 +153,7 @@
   "285-plugin-task-link-marks-reading.js",
   "290-plugin-today-and-location.js",
   "291-plugin-gcal-events.js",
+  "291a-plugin-gcal-readiness.js",
   "291g-plugin-gmail-sync.js",
   "291b-plugin-gcal-event-buffers.js",
   "291c-plugin-gcal-event-clock.js",

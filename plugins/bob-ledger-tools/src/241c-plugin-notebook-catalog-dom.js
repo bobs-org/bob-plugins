@@ -401,6 +401,7 @@ function notebookPaintCallout(callout, options = {}) {
   const metadataCache = options.metadataCache || null;
   const vault = options.vault || null;
   const handlers = options.handlers || {};
+  const chipsEnabled = options.chipsEnabled !== false;
   for (const li of items) {
     try {
       if (notebookLiIsProjectGroup(li)) {
@@ -414,7 +415,7 @@ function notebookPaintCallout(callout, options = {}) {
       const target = notebookLinkHref(link);
       const notebook = notebookLookupByTarget(report, target, sourcePath, metadataCache, vault);
       notebookMuteSummary(li, doc);
-      if (!notebook) {
+      if (!chipsEnabled || !notebook) {
         notebookRemovePainted(li, NOTEBOOK_CHIP_CLASS);
         continue;
       }

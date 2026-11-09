@@ -4,6 +4,8 @@ const {
   Notice,
   Platform,
   Plugin,
+  PluginSettingTab,
+  Setting,
   normalizePath,
   parseYaml,
 } = require("obsidian");

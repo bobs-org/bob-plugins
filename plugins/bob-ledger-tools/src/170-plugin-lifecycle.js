@@ -673,7 +673,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData();
-    this.setupNotebookCatalog();
+    this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
 
@@ -792,6 +792,7 @@ class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
+    try { this.teardownNotebookHeader(); } catch (error) {}
     try {
       this.teardownNotebookCatalog();
       this.teardownNotebookData();

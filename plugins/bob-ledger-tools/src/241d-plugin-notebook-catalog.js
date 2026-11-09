@@ -111,6 +111,14 @@ class BobLedgerToolsNotebookCatalogMixin {
 
   notebookCatalogPaintOptions(sourcePath, state) {
     const current = state || this.notebookCatalogState();
+    let chipsEnabled = true;
+    try {
+      if (typeof this.notebookChipsVisible === "function") {
+        chipsEnabled = this.notebookChipsVisible() !== false;
+      }
+    } catch (error) {
+      chipsEnabled = true;
+    }
     return {
       report: current.report || null,
       sourcePath,
@@ -119,6 +127,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       metadataCache: this.app && this.app.metadataCache,
       vault: this.app && this.app.vault,
       handlers: this.notebookCatalogHandlers(sourcePath),
+      chipsEnabled,
     };
   }
 
@@ -148,7 +157,11 @@ class BobLedgerToolsNotebookCatalogMixin {
     const title = heading ? null : notebookFindHostTitle(el);
     const syncHost = heading || title;
     const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
-    if (syncHost && syncModel && (heading || syncModel.state === "missing" || syncModel.busy)) {
+    if (options.chipsEnabled === false) {
+      if (syncHost) {
+        notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
+      }
+    } else if (syncHost && syncModel && (heading || syncModel.state === "missing" || syncModel.busy)) {
       notebookPaintSyncAction(syncHost, syncModel, options.handlers, notebookDomDoc(syncHost));
     } else if (syncHost) {
       notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
@@ -365,7 +378,15 @@ class BobLedgerToolsNotebookCatalogMixin {
           // Skip one widget.
         }
       };
-      if (syncModel) {
+      let chipsEnabled = true;
+      try {
+        if (typeof this.notebookChipsVisible === "function") {
+          chipsEnabled = this.notebookChipsVisible() !== false;
+        }
+      } catch (error) {
+        chipsEnabled = true;
+      }
+      if (chipsEnabled && syncModel) {
         if (headingLine >= 0) {
           addWidget(headingLine, syncModel);
         } else if (syncModel.state === "missing" || syncModel.busy) {

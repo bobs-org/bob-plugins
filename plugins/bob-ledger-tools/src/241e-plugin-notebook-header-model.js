@@ -1,0 +1,241 @@
+// Linked notebook headers: pure ancestry and child models.
+// Bob remains the source of truth; this fragment never writes note bytes
+// and never turns `breadcrumb` display labels into link targets.
+
+const NOTEBOOK_HEADER_MAX_HOPS = 8;
+const NOTEBOOK_HEADER_MAX_CRUMBS = 5;
+
+function notebookHeaderReportPath(value) {
+  try {
+    if (typeof notebookReportPath === "function") {
+      return notebookReportPath(value);
+    }
+  } catch (error) {
+    // Fall through to the local normalizer.
+  }
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return String(path || "").replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function notebookHeaderStem(path) {
+  const normalized = notebookHeaderReportPath(path);
+  const name = normalized.split("/").pop() || "";
+  return name.replace(/\.md$/i, "");
+}
+
+function notebookHeaderLookup(report, stemOrPath) {
+  if (!report || typeof stemOrPath !== "string") {
+    return null;
+  }
+  const raw = stemOrPath.trim();
+  if (!raw) {
+    return null;
+  }
+  const asPath = notebookHeaderReportPath(raw);
+  if (report.notebooksByPath instanceof Map && asPath) {
+    const byPath = report.notebooksByPath.get(asPath);
+    if (byPath) {
+      return byPath;
+    }
+    if (!/\.md$/i.test(asPath)) {
+      const withExt = report.notebooksByPath.get(`${asPath}.md`);
+      if (withExt) {
+        return withExt;
+      }
+    }
+  }
+  const stem = notebookHeaderStem(raw.replace(/\.md$/i, ""));
+  if (report.notebooksByStem instanceof Map && stem) {
+    const byStem = report.notebooksByStem.get(stem);
+    if (byStem) {
+      return byStem;
+    }
+    const lower = stem.toLowerCase();
+    for (const [key, entry] of report.notebooksByStem) {
+      if (String(key).toLowerCase() === lower) {
+        return entry;
+      }
+    }
+  }
+  return null;
+}
+
+function notebookHeaderEntryForPath(report, sourcePath) {
+  if (!report || !sourcePath) {
+    return null;
+  }
+  const path = notebookHeaderReportPath(sourcePath);
+  if (!path) {
+    return null;
+  }
+  if (report.notebooksByPath instanceof Map) {
+    const direct = report.notebooksByPath.get(path);
+    if (direct) {
+      return direct;
+    }
+  }
+  return notebookHeaderLookup(report, notebookHeaderStem(path));
+}
+
+function notebookHeaderNotebookAncestors(report, sourcePath) {
+  const chain = [];
+  const seen = new Set();
+  let broken = false;
+  let cyclic = false;
+  if (!report) {
+    return { chain, broken: true, cyclic: false, truncated: false };
+  }
+  let current = notebookHeaderEntryForPath(report, sourcePath);
+  if (!current) {
+    return { chain, broken: true, cyclic: false, truncated: false };
+  }
+  let guard = 0;
+  while (current && guard < NOTEBOOK_HEADER_MAX_HOPS) {
+    const key = notebookHeaderReportPath(current.path || current.stem || "");
+    const stemKey = String(current.stem || key).toLowerCase();
+    if (stemKey && seen.has(stemKey)) {
+      cyclic = true;
+      break;
+    }
+    if (stemKey) {
+      seen.add(stemKey);
+    }
+    const parentStem = typeof current.parent === "string" ? current.parent.trim() : "";
+    const parentKind = typeof current.parent_kind === "string" ? current.parent_kind : "";
+    if (!parentStem) {
+      break;
+    }
+    if (parentKind && parentKind !== "notebook") {
+      break;
+    }
+    const parent = notebookHeaderLookup(report, parentStem);
+    if (!parent) {
+      broken = true;
+      break;
+    }
+    chain.unshift(parent);
+    current = parent;
+    guard += 1;
+  }
+  const truncated = guard >= NOTEBOOK_HEADER_MAX_HOPS;
+  return { chain, broken, cyclic, truncated };
+}
+
+function notebookHeaderCollapse(segments, max) {
+  const list = Array.isArray(segments) ? segments.slice() : [];
+  const cap = Number.isInteger(max) && max > 0 ? max : NOTEBOOK_HEADER_MAX_CRUMBS;
+  if (list.length <= cap) {
+    return list;
+  }
+  return [
+    list[0],
+    { ellipsis: true, path: "", stem: "", title: "…", kind: "ellipsis" },
+    ...list.slice(-(cap - 2)),
+  ];
+}
+
+function notebookHeaderChildEntries(report, entry) {
+  if (!report || !entry || !Array.isArray(entry.children)) {
+    return [];
+  }
+  const found = [];
+  for (const stem of entry.children) {
+    const child = notebookHeaderLookup(report, stem);
+    if (child) {
+      found.push(child);
+    }
+  }
+  found.sort((left, right) => {
+    const leftTitle = String(left.title || left.stem || "");
+    const rightTitle = String(right.title || right.stem || "");
+    const byTitle = leftTitle.toLowerCase().localeCompare(rightTitle.toLowerCase());
+    if (byTitle !== 0) {
+      return byTitle;
+    }
+    return notebookHeaderReportPath(left.path).localeCompare(notebookHeaderReportPath(right.path));
+  });
+  return found;
+}
+
+function notebookHeaderCrumbs(report, sourcePath) {
+  const self = notebookHeaderEntryForPath(report, sourcePath);
+  if (!self) {
+    return null;
+  }
+  const { chain, broken, cyclic, truncated } = notebookHeaderNotebookAncestors(report, sourcePath);
+  const crumbs = [];
+  const owner = typeof self.owner === "string" ? self.owner.trim() : "";
+  const root = typeof self.root === "string" ? self.root.trim() : "";
+  if (root && (!owner || root.toLowerCase() !== owner.toLowerCase())) {
+    crumbs.push({
+      stem: root,
+      path: `${root}.md`,
+      title: root,
+      kind: "root",
+      missing: !notebookHeaderLookup(report, root),
+    });
+  }
+  if (owner) {
+    const ownerEntry = notebookHeaderLookup(report, owner);
+    crumbs.push({
+      stem: owner,
+      path: ownerEntry ? ownerEntry.path : `${owner}.md`,
+      title: ownerEntry ? ownerEntry.title : owner,
+      kind: "owner",
+      missing: !ownerEntry,
+    });
+  }
+  for (const ancestor of chain) {
+    crumbs.push({
+      stem: ancestor.stem,
+      path: ancestor.path,
+      title: ancestor.title || ancestor.stem,
+      kind: "notebook",
+      missing: false,
+    });
+  }
+  crumbs.push({
+    stem: self.stem,
+    path: self.path,
+    title: self.title || self.stem,
+    kind: "self",
+    missing: false,
+  });
+  const collapsed = notebookHeaderCollapse(crumbs, NOTEBOOK_HEADER_MAX_CRUMBS);
+  return {
+    self,
+    crumbs: collapsed,
+    fullLength: crumbs.length,
+    truncated: truncated || collapsed.length !== crumbs.length,
+    broken,
+    cyclic,
+  };
+}
+
+function notebookHeaderModel(report, sourcePath) {
+  const headed = notebookHeaderCrumbs(report, sourcePath);
+  if (!headed) {
+    return null;
+  }
+  const children = notebookHeaderChildEntries(report, headed.self);
+  return { ...headed, children };
+}
+
+function notebookHeaderSignature(model) {
+  if (!model) {
+    return "none";
+  }
+  try {
+    const crumbs = (model.crumbs || []).map((crumb) =>
+      crumb.ellipsis ? "…" : `${crumb.kind}:${crumb.path || crumb.stem}`,
+    ).join(">");
+    const kids = (model.children || []).map((child) => child.path || child.stem).join(",");
+    return `${crumbs}|${kids}`;
+  } catch (error) {
+    return "header";
+  }
+}

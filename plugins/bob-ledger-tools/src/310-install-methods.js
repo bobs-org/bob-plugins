@@ -32,6 +32,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsNotebookCatalogMixin,
+  BobLedgerToolsNotebookHeaderMixin,
+  BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,

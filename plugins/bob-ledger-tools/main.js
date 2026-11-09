@@ -29714,6 +29714,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData();
+    this.setupNotebookCatalog();
     this.setupReadingBoardBlock();
   }
 
@@ -29833,9 +29834,10 @@ class BobLedgerToolsPlugin extends Plugin {
       // Reading Board data teardown is best-effort.
     }
     try {
+      this.teardownNotebookCatalog();
       this.teardownNotebookData();
     } catch (error) {
-      // Notebook data teardown is best-effort.
+      // Notebook catalog/data teardown is best-effort.
     }
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
@@ -53024,6 +53026,1577 @@ class BobLedgerToolsNotebookDataMixin {
     this.notebookReportError = null;
     this.notebookSyncBusy = false;
     this.notebookSyncError = null;
+  }
+}
+// ---- src/241b-plugin-notebook-catalog-model.js ----
+// Pure notebook catalog presentation: chips, source regions, hue, and
+// link matching. Bob remains the authority for rows and their order;
+// this fragment never writes note bytes.
+
+const NOTEBOOK_CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const NOTEBOOK_CATALOG_BEGIN_RE = /<!--\s*bob:notebooks:begin(?:\s+\S+)?\s*-->/;
+const NOTEBOOK_CATALOG_END_RE = /<!--\s*bob:notebooks:end\s*-->/;
+const NOTEBOOK_CALLOUT_HEAD_RE = /^>\s*\[!notebooks(?:\|[^\]]*)?\]\s*$/i;
+const NOTEBOOKS_H2_RE = /^##\s+Notebooks(?:\s.*)?$/i;
+const NOTEBOOK_H1_RE = /^#\s+\S/;
+const NOTEBOOK_FENCE_RE = /^(`{3,}|~{3,})/;
+const NOTEBOOK_PROJECT_GROUP_RE = /^\s*\u{1F9E9}/u;
+const NOTEBOOK_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/;
+const NOTEBOOK_EM_DASH = " \u2014 ";
+
+function notebookCalendarDate(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!NOTEBOOK_CALENDAR_DATE_RE.test(text)) {
+    return "";
+  }
+  const match = NOTEBOOK_CALENDAR_DATE_RE.exec(text);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return "";
+  }
+  return text;
+}
+
+function notebookAgeChip(lastNote, today) {
+  const last = notebookCalendarDate(lastNote);
+  const now = notebookCalendarDate(today);
+  if (!last || !now) {
+    return null;
+  }
+  let days;
+  try {
+    days = freshDateDiffDays(last, now);
+  } catch (error) {
+    return null;
+  }
+  if (!Number.isInteger(days) || days < 0) {
+    return null;
+  }
+  return days === 0 ? "today" : `${days}d`;
+}
+
+function notebookCountChip(notebook) {
+  if (!notebook || !Number.isInteger(notebook.notes)) {
+    return null;
+  }
+  if (!Array.isArray(notebook.sections)) {
+    return `${notebook.notes} notes`;
+  }
+  return `${notebook.notes} notes \u00b7 ${notebook.sections.length} \u00a7`;
+}
+
+function notebookSummaryIsBlank(summary) {
+  if (summary === null || summary === undefined) {
+    return true;
+  }
+  return String(summary).trim() === "";
+}
+
+function notebookWikilinkTarget(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "";
+  }
+  const inner = text.startsWith("[[") && text.endsWith("]]")
+    ? text.slice(2, -2)
+    : text;
+  const pathPart = inner.split("|")[0].split("#")[0].trim().replace(/\\/g, "/");
+  return pathPart.replace(/^\.\//, "");
+}
+
+function notebookLinkStem(target) {
+  const path = notebookReportPath(target);
+  const name = path.split("/").pop() || "";
+  return name.replace(/\.md$/i, "");
+}
+
+function notebookSourceFenceToggle(line, fence) {
+  const match = NOTEBOOK_FENCE_RE.exec(String(line || "").trim());
+  if (!match) {
+    return fence;
+  }
+  const marker = match[1];
+  if (!fence) {
+    return marker[0];
+  }
+  if (marker[0] === fence) {
+    return null;
+  }
+  return fence;
+}
+
+function notebookQuoteBody(line) {
+  const text = String(line || "");
+  if (!text.startsWith(">")) {
+    return text;
+  }
+  return text.replace(/^>(?: )?/gm, "").replace(/^>\s?/, "");
+}
+
+function notebookSourceRowKind(line) {
+  const body = notebookQuoteBody(line).replace(/^\s+/, "");
+  if (!body.startsWith("- ")) {
+    return "other";
+  }
+  const item = body.slice(2);
+  if (NOTEBOOK_PROJECT_GROUP_RE.test(item)) {
+    return "project-group";
+  }
+  if (NOTEBOOK_WIKILINK_RE.test(item)) {
+    return "notebook-row";
+  }
+  return "other";
+}
+
+function notebookSourceRowTarget(line) {
+  const match = NOTEBOOK_WIKILINK_RE.exec(String(line || ""));
+  if (!match) {
+    return "";
+  }
+  return notebookWikilinkTarget(match[1]);
+}
+
+function notebookCatalogRegions(text) {
+  const lines = String(text === null || text === undefined ? "" : text).split("\n");
+  const regions = [];
+  let fence = null;
+  let open = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextFence = notebookSourceFenceToggle(line, fence);
+    if (nextFence !== fence) {
+      fence = nextFence;
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
+    if (NOTEBOOK_CATALOG_BEGIN_RE.test(line)) {
+      open = {
+        begin: index,
+        end: -1,
+        calloutLine: -1,
+        rows: [],
+      };
+      continue;
+    }
+    if (open && NOTEBOOK_CATALOG_END_RE.test(line)) {
+      open.end = index;
+      regions.push(open);
+      open = null;
+      continue;
+    }
+    if (!open) {
+      continue;
+    }
+    if (open.calloutLine < 0 && NOTEBOOK_CALLOUT_HEAD_RE.test(line.trim())) {
+      open.calloutLine = index;
+      continue;
+    }
+    const kind = notebookSourceRowKind(line);
+    if (kind === "notebook-row" || kind === "project-group") {
+      open.rows.push({
+        line: index,
+        kind,
+        target: notebookSourceRowTarget(line),
+      });
+    }
+  }
+  return regions;
+}
+
+function notebookFindHeadingLine(text, matcher) {
+  const lines = String(text === null || text === undefined ? "" : text).split("\n");
+  let fence = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextFence = notebookSourceFenceToggle(line, fence);
+    if (nextFence !== fence) {
+      fence = nextFence;
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
+    if (matcher(line)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function notebookFindNotebooksHeadingLine(text) {
+  return notebookFindHeadingLine(text, (line) => NOTEBOOKS_H2_RE.test(line.trim()));
+}
+
+function notebookFindHostTitleLine(text) {
+  return notebookFindHeadingLine(text, (line) => NOTEBOOK_H1_RE.test(line.trim()));
+}
+
+function notebookHostCatalog(state, sourcePath) {
+  const report = state && state.report;
+  if (!report || !(report.catalogsByHostPath instanceof Map)) {
+    return null;
+  }
+  const path = notebookReportPath(sourcePath);
+  if (!path) {
+    return null;
+  }
+  return report.catalogsByHostPath.get(path)
+    || report.catalogsByHostPath.get(path.replace(/\.md$/i, "") + ".md")
+    || null;
+}
+
+function notebookSyncActionModel(catalog, options = {}) {
+  const busy = options.busy === true;
+  const state = catalog && typeof catalog.state === "string" ? catalog.state : "";
+  const needed = state === "missing" || state === "stale" || state === "damaged";
+  if (!needed && !busy) {
+    return null;
+  }
+  const label = busy ? "\u21bb sync" : "\u21bb sync";
+  let hint = "Run bob notebooks sync to refresh this catalog.";
+  if (state === "damaged") {
+    hint = "This catalog is damaged. Repair the markers by hand, then sync.";
+  } else if (state === "stale") {
+    hint = "This catalog is stale. Sync to rewrite it from the notebook tree.";
+  } else if (state === "missing") {
+    hint = "This catalog is missing. Sync to write it.";
+  }
+  if (options.errorHint) {
+    hint = String(options.errorHint);
+  }
+  return {
+    kind: "sync",
+    label,
+    hint,
+    busy,
+    disabled: busy,
+    state: state || "missing",
+    missingWithoutHeading: options.missingWithoutHeading === true,
+  };
+}
+
+function notebookRowModel(notebook, today) {
+  if (!notebook) {
+    return {
+      counts: null,
+      age: null,
+      addSummary: false,
+      path: "",
+      stem: "",
+      title: "",
+    };
+  }
+  return {
+    counts: notebookCountChip(notebook),
+    age: notebookAgeChip(notebook.last_note, today),
+    addSummary: notebookSummaryIsBlank(notebook.summary),
+    path: notebook.path || "",
+    stem: notebook.stem || "",
+    title: notebook.title || "",
+  };
+}
+
+function notebookResolveLinkFile(target, sourcePath, metadataCache, vault) {
+  const name = notebookWikilinkTarget(target);
+  if (!name) {
+    return null;
+  }
+  try {
+    if (typeof pomodoroHomeResolveFile === "function") {
+      const file = pomodoroHomeResolveFile(
+        name,
+        sourcePath,
+        sourcePath,
+        metadataCache,
+        vault,
+      );
+      if (file && typeof file.path === "string" && file.path) {
+        return file;
+      }
+    }
+  } catch (error) {
+    // Fall through to the path/stem guess.
+  }
+  const guessed = /\.md$/i.test(name) ? name : `${name}.md`;
+  return { path: guessed };
+}
+
+function notebookLookupByTarget(report, target, sourcePath, metadataCache, vault) {
+  if (!report) {
+    return null;
+  }
+  const file = notebookResolveLinkFile(target, sourcePath, metadataCache, vault);
+  const path = file && file.path ? notebookReportPath(file.path) : notebookReportPath(target);
+  const stem = notebookLinkStem(path || target);
+  if (report.notebooksByPath instanceof Map && path) {
+    const byPath = report.notebooksByPath.get(path);
+    if (byPath) {
+      return byPath;
+    }
+  }
+  if (report.notebooksByStem instanceof Map && stem) {
+    const byStem = report.notebooksByStem.get(stem);
+    if (byStem) {
+      return byStem;
+    }
+  }
+  return null;
+}
+
+function notebookHostHueName(path, metadataCache, vault) {
+  try {
+    if (typeof pomodoroHomeResolve !== "function") {
+      return null;
+    }
+    const resolved = pomodoroHomeResolve(
+      path,
+      path,
+      metadataCache,
+      vault,
+      [],
+      new Set(),
+    );
+    const hue = resolved && resolved.root_hue;
+    if (hue && Array.isArray(POMODORO_HOME_SLOT_ORDER) && POMODORO_HOME_SLOT_ORDER.includes(hue)) {
+      return hue;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function notebookPropertyCommandIds() {
+  return [
+    "app:show-file-properties",
+    "markdown:open-properties",
+    "file-properties:open",
+  ];
+}
+// ---- src/241c-plugin-notebook-catalog-dom.js ----
+// Rendered notebook catalog cards: hue, row chips, add-summary, and
+// heading sync. Safe text nodes only; never HTML from the report, and
+// never a vault write.
+
+const NOTEBOOK_CHIP_CLASS = "bob-notebook-chips";
+const NOTEBOOK_COUNT_CLASS = "bob-notebook-count";
+const NOTEBOOK_AGE_CLASS = "bob-notebook-age";
+const NOTEBOOK_ADD_CLASS = "bob-notebook-add-summary";
+const NOTEBOOK_SYNC_CLASS = "bob-notebook-sync";
+const NOTEBOOK_SUMMARY_CLASS = "bob-notebook-summary";
+const NOTEBOOK_CALLOUT_CLASS = "bob-notebook-catalog";
+
+function notebookDomDoc(node) {
+  try {
+    if (node && node.ownerDocument) {
+      return node.ownerDocument;
+    }
+  } catch (error) {
+    // Fall through.
+  }
+  return typeof document !== "undefined" ? document : null;
+}
+
+function notebookDomTag(node) {
+  try {
+    return String((node && (node.tagName || node.nodeName)) || "").toUpperCase();
+  } catch (error) {
+    return "";
+  }
+}
+
+function notebookDomHasClass(node, name) {
+  try {
+    if (!node || !name) {
+      return false;
+    }
+    if (node.classList && typeof node.classList.contains === "function") {
+      return node.classList.contains(name);
+    }
+    const raw = typeof node.getAttribute === "function"
+      ? node.getAttribute("class") || ""
+      : typeof node.className === "string" ? node.className : "";
+    return String(raw).split(/\s+/).indexOf(name) !== -1;
+  } catch (error) {
+    return false;
+  }
+}
+
+function notebookDomAttr(node, name) {
+  try {
+    return node && typeof node.getAttribute === "function" ? node.getAttribute(name) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function notebookCreateEl(doc, tag, className) {
+  if (!doc || typeof doc.createElement !== "function") {
+    return null;
+  }
+  const el = doc.createElement(tag);
+  if (className) {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("class", className);
+    }
+    try {
+      el.className = className;
+    } catch (error) {
+      // className is best-effort.
+    }
+  }
+  return el;
+}
+
+function notebookSetText(el, text) {
+  try {
+    if (!el) {
+      return;
+    }
+    el.textContent = String(text === null || text === undefined ? "" : text);
+  } catch (error) {
+    // Text assignment is best-effort.
+  }
+}
+
+function notebookBindAction(el, run) {
+  if (!el || typeof el.addEventListener !== "function" || typeof run !== "function") {
+    return;
+  }
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("role", "button");
+      el.setAttribute("tabindex", "0");
+      el.setAttribute("type", "button");
+    }
+  } catch (error) {
+    // Attributes are best-effort.
+  }
+  const invoke = (event) => {
+    try {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+    } catch (error) {
+      // Event cancellation is best-effort.
+    }
+    run(event);
+  };
+  el.addEventListener("mousedown", (event) => {
+    try {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+    } catch (error) {
+      // Keep the editor cursor still.
+    }
+  });
+  el.addEventListener("click", invoke);
+  el.addEventListener("keydown", (event) => {
+    if (!event) {
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      invoke(event);
+    }
+  });
+}
+
+function notebookRemovePainted(root, className) {
+  try {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return;
+    }
+    const nodes = Array.from(root.querySelectorAll(`.${className}`) || []);
+    for (const node of nodes) {
+      try {
+        if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
+          node.parentNode.removeChild(node);
+        } else if (node && typeof node.remove === "function") {
+          node.remove();
+        }
+      } catch (error) {
+        // Cleanup is best-effort.
+      }
+    }
+  } catch (error) {
+    // Query cleanup is best-effort.
+  }
+}
+
+function notebookLiOwnNodes(li) {
+  const own = [];
+  try {
+    const children = li && li.childNodes ? li.childNodes : [];
+    for (const child of children) {
+      const tag = notebookDomTag(child);
+      if (tag === "UL" || tag === "OL") {
+        continue;
+      }
+      own.push(child);
+    }
+  } catch (error) {
+    return [];
+  }
+  return own;
+}
+
+function notebookLiOwnText(li) {
+  let text = "";
+  const walk = (node) => {
+    if (!node) {
+      return;
+    }
+    try {
+      if (node.nodeType === 3) {
+        text += typeof node.nodeValue === "string" ? node.nodeValue : String(node.textContent || "");
+        return;
+      }
+      if (node.nodeType && node.nodeType !== 1) {
+        return;
+      }
+      const tag = notebookDomTag(node);
+      if (tag === "UL" || tag === "OL") {
+        return;
+      }
+      const children = node.childNodes || [];
+      if (children.length === 0 && typeof node.textContent === "string" && node === li) {
+        return;
+      }
+      for (const child of children) {
+        walk(child);
+      }
+    } catch (error) {
+      // Skip one node.
+    }
+  };
+  for (const child of notebookLiOwnNodes(li)) {
+    walk(child);
+  }
+  return text;
+}
+
+function notebookLiIsProjectGroup(li) {
+  return notebookLiOwnText(li).indexOf("\u{1F9E9}") !== -1;
+}
+
+function notebookLiOwnLink(li) {
+  const found = [];
+  const walk = (node) => {
+    if (!node) {
+      return;
+    }
+    const tag = notebookDomTag(node);
+    if (tag === "UL" || tag === "OL") {
+      return;
+    }
+    if (tag === "A" && notebookDomHasClass(node, "internal-link")) {
+      found.push(node);
+      return;
+    }
+    const children = node.childNodes || node.children || [];
+    for (const child of children) {
+      walk(child);
+    }
+  };
+  for (const child of notebookLiOwnNodes(li)) {
+    walk(child);
+  }
+  return found[0] || null;
+}
+
+function notebookLinkHref(link) {
+  const raw = notebookDomAttr(link, "data-href")
+    || notebookDomAttr(link, "href")
+    || notebookDomAttr(link, "data-path")
+    || "";
+  return notebookWikilinkTarget(String(raw).replace(/^app:\/\//, "").replace(/\.md$/i, "") || String(raw));
+}
+
+function notebookMuteSummary(li, doc) {
+  if (!li || notebookDomHasClass(li, NOTEBOOK_SUMMARY_CLASS)) {
+    return false;
+  }
+  try {
+    if (typeof li.querySelector === "function" && li.querySelector(`.${NOTEBOOK_SUMMARY_CLASS}`)) {
+      return false;
+    }
+  } catch (error) {
+    // Dedup is best-effort.
+  }
+  const dash = NOTEBOOK_EM_DASH;
+  const visit = (node) => {
+    if (!node) {
+      return false;
+    }
+    const tag = notebookDomTag(node);
+    if (tag === "UL" || tag === "OL") {
+      return false;
+    }
+    if (node.nodeType === 3) {
+      const value = typeof node.nodeValue === "string" ? node.nodeValue : String(node.textContent || "");
+      const at = value.indexOf(dash);
+      if (at < 0) {
+        return false;
+      }
+      const before = value.slice(0, at + dash.length);
+      const after = value.slice(at + dash.length);
+      const parent = node.parentNode;
+      if (!parent || typeof parent.insertBefore !== "function") {
+        return false;
+      }
+      const summary = notebookCreateEl(doc, "span", NOTEBOOK_SUMMARY_CLASS);
+      if (!summary) {
+        return false;
+      }
+      notebookSetText(summary, after);
+      try {
+        node.nodeValue = before;
+      } catch (error) {
+        try {
+          node.textContent = before;
+        } catch (inner) {
+          return false;
+        }
+      }
+      if (node.nextSibling) {
+        parent.insertBefore(summary, node.nextSibling);
+      } else if (typeof parent.appendChild === "function") {
+        parent.appendChild(summary);
+      }
+      return true;
+    }
+    const children = Array.from(node.childNodes || []);
+    for (const child of children) {
+      if (visit(child)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return visit(li);
+}
+
+function notebookPaintRowChips(li, model, handlers, doc) {
+  if (!li || !model) {
+    return null;
+  }
+  notebookRemovePainted(li, NOTEBOOK_CHIP_CLASS);
+  const parts = [];
+  if (model.counts) {
+    parts.push({ cls: NOTEBOOK_COUNT_CLASS, text: model.counts });
+  }
+  if (model.age) {
+    parts.push({ cls: NOTEBOOK_AGE_CLASS, text: model.age });
+  }
+  if (model.addSummary) {
+    parts.push({ cls: NOTEBOOK_ADD_CLASS, text: "add summary", action: "summary" });
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  const host = notebookCreateEl(doc, "span", NOTEBOOK_CHIP_CLASS);
+  if (!host) {
+    return null;
+  }
+  try {
+    if (typeof host.setAttribute === "function") {
+      if (model.path) {
+        host.setAttribute("data-notebook-path", model.path);
+      }
+      if (model.stem) {
+        host.setAttribute("data-notebook-stem", model.stem);
+      }
+    }
+  } catch (error) {
+    // Identity attributes are best-effort.
+  }
+  for (const part of parts) {
+    const tag = part.action ? "button" : "span";
+    const el = notebookCreateEl(doc, tag, part.cls);
+    if (!el) {
+      continue;
+    }
+    notebookSetText(el, part.text);
+    if (part.action === "summary" && handlers && typeof handlers.openSummary === "function") {
+      try {
+        if (typeof el.setAttribute === "function") {
+          el.setAttribute("aria-label", "Add a summary to this notebook");
+          el.setAttribute("title", "Open this notebook and edit its summary");
+        }
+      } catch (error) {
+        // Labels are best-effort.
+      }
+      notebookBindAction(el, (event) => handlers.openSummary(model, event));
+    }
+    if (typeof host.appendChild === "function") {
+      host.appendChild(el);
+    }
+  }
+  if (typeof li.appendChild === "function") {
+    li.appendChild(host);
+  }
+  return host;
+}
+
+function notebookPaintCallout(callout, options = {}) {
+  if (!callout) {
+    return false;
+  }
+  const doc = options.doc || notebookDomDoc(callout);
+  const hue = options.hue || null;
+  try {
+    if (typeof callout.setAttribute === "function") {
+      callout.setAttribute("class", `${notebookDomAttr(callout, "class") || "callout"} ${NOTEBOOK_CALLOUT_CLASS}`.trim());
+      if (hue) {
+        callout.setAttribute("data-root-hue", hue);
+      } else if (typeof callout.removeAttribute === "function") {
+        callout.removeAttribute("data-root-hue");
+      }
+    }
+    if (callout.classList && typeof callout.classList.add === "function") {
+      callout.classList.add(NOTEBOOK_CALLOUT_CLASS);
+    }
+  } catch (error) {
+    // Callout chrome is best-effort.
+  }
+  let items = [];
+  try {
+    if (typeof callout.querySelectorAll === "function") {
+      items = Array.from(callout.querySelectorAll("li") || []);
+    }
+  } catch (error) {
+    items = [];
+  }
+  const report = options.report || null;
+  const sourcePath = options.sourcePath || "";
+  const today = options.today || "";
+  const metadataCache = options.metadataCache || null;
+  const vault = options.vault || null;
+  const handlers = options.handlers || {};
+  for (const li of items) {
+    try {
+      if (notebookLiIsProjectGroup(li)) {
+        notebookRemovePainted(li, NOTEBOOK_CHIP_CLASS);
+        continue;
+      }
+      const link = notebookLiOwnLink(li);
+      if (!link) {
+        continue;
+      }
+      const target = notebookLinkHref(link);
+      const notebook = notebookLookupByTarget(report, target, sourcePath, metadataCache, vault);
+      notebookMuteSummary(li, doc);
+      if (!notebook) {
+        notebookRemovePainted(li, NOTEBOOK_CHIP_CLASS);
+        continue;
+      }
+      notebookPaintRowChips(li, notebookRowModel(notebook, today), handlers, doc);
+    } catch (error) {
+      // One row never breaks the catalog.
+    }
+  }
+  return true;
+}
+
+function notebookPaintSyncAction(host, model, handlers, doc) {
+  if (!host || !model) {
+    return null;
+  }
+  notebookRemovePainted(host, NOTEBOOK_SYNC_CLASS);
+  const el = notebookCreateEl(doc, "button", NOTEBOOK_SYNC_CLASS);
+  if (!el) {
+    return null;
+  }
+  notebookSetText(el, model.label);
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("aria-label", model.hint);
+      el.setAttribute("title", model.hint);
+      el.setAttribute("data-catalog-state", model.state);
+      if (model.busy) {
+        el.setAttribute("aria-busy", "true");
+        el.setAttribute("disabled", "true");
+      }
+    }
+    el.disabled = Boolean(model.disabled);
+  } catch (error) {
+    // Sync chrome is best-effort.
+  }
+  if (handlers && typeof handlers.sync === "function") {
+    notebookBindAction(el, (event) => {
+      if (model.disabled) {
+        return;
+      }
+      handlers.sync(event);
+    });
+  }
+  if (typeof host.appendChild === "function") {
+    host.appendChild(el);
+  }
+  return el;
+}
+
+function notebookCalloutSelector() {
+  return '.callout[data-callout="notebooks"], .cm-callout[data-callout="notebooks"]';
+}
+
+function notebookFindCallouts(root) {
+  const found = [];
+  try {
+    if (!root) {
+      return found;
+    }
+    const matchesAttr = (node) =>
+      notebookDomAttr(node, "data-callout") === "notebooks" &&
+      (notebookDomHasClass(node, "callout") || notebookDomHasClass(node, "cm-callout") || notebookDomTag(node) === "DIV");
+    if (matchesAttr(root)) {
+      found.push(root);
+    }
+    if (typeof root.querySelectorAll === "function") {
+      const nodes = Array.from(root.querySelectorAll(notebookCalloutSelector()) || []);
+      for (const node of nodes) {
+        if (found.indexOf(node) === -1) {
+          found.push(node);
+        }
+      }
+    }
+  } catch (error) {
+    return found;
+  }
+  return found;
+}
+
+function notebookInsideCode(node) {
+  let current = node;
+  let guard = 0;
+  while (current && guard < 40) {
+    guard += 1;
+    const tag = notebookDomTag(current);
+    if (tag === "PRE" || tag === "CODE") {
+      return true;
+    }
+    if (notebookDomHasClass(current, "HyperMD-codeblock") || notebookDomHasClass(current, "cm-line") && notebookDomHasClass(current, "HyperMD-codeblock-bg")) {
+      return true;
+    }
+    current = current.parentNode || current.parentElement || null;
+  }
+  return false;
+}
+
+function notebookHeadingIsNotebooks(head) {
+  try {
+    const text = String(head && head.textContent ? head.textContent : "").replace(/\s+/g, " ").trim();
+    return /^Notebooks(?:\s.*)?$/i.test(text.replace(/\u21bb.*$/, "").trim());
+  } catch (error) {
+    return false;
+  }
+}
+
+function notebookFindNotebooksHeading(root) {
+  try {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return null;
+    }
+    const heads = Array.from(root.querySelectorAll("h2") || []);
+    for (const head of heads) {
+      if (notebookInsideCode(head)) {
+        continue;
+      }
+      if (notebookHeadingIsNotebooks(head)) {
+        return head;
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function notebookFindHostTitle(root) {
+  try {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      return null;
+    }
+    const heads = Array.from(root.querySelectorAll("h1") || []);
+    for (const head of heads) {
+      if (!notebookInsideCode(head)) {
+        return head;
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+// ---- src/241d-plugin-notebook-catalog.js ----
+// Notebook catalog cards in Reading view and Live Preview. Decorations
+// never write note text; only the shared sync subprocess writes catalogs.
+
+let notebookCatalogRefreshEffect = null;
+function ensureNotebookCatalogRefresh() {
+  if (notebookCatalogRefreshEffect) {
+    return notebookCatalogRefreshEffect;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      notebookCatalogRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    notebookCatalogRefreshEffect = null;
+  }
+  return notebookCatalogRefreshEffect;
+}
+
+class BobLedgerToolsNotebookCatalogMixin {
+  setupNotebookCatalog() {
+    try {
+      this.notebookCatalogActive = true;
+      this.notebookCatalogEpoch = (this.notebookCatalogEpoch || 0) + 1;
+      if (!(this.notebookCatalogReadingWidgets instanceof Set)) {
+        this.notebookCatalogReadingWidgets = new Set();
+      }
+      try {
+        const extension = this.createNotebookCatalogExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.registerMarkdownPostProcessor === "function") {
+          this.registerMarkdownPostProcessor(
+            (el, ctx) => this.renderNotebookCatalogInReading(el, ctx),
+            50,
+          );
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      try {
+        this.notebookCatalogUnsubscribe = this.apiNotebookSubscribe((state) => {
+          this.notebookCatalogLastState = state;
+          this.scheduleNotebookCatalogRefresh();
+        });
+      } catch (error) {
+        this.notebookCatalogUnsubscribe = null;
+      }
+    } catch (error) {
+      // Catalog setup never throws.
+    }
+  }
+
+  teardownNotebookCatalog() {
+    this.notebookCatalogActive = false;
+    this.notebookCatalogEpoch = (this.notebookCatalogEpoch || 0) + 1;
+    try {
+      if (typeof this.notebookCatalogUnsubscribe === "function") {
+        this.notebookCatalogUnsubscribe();
+      }
+    } catch (error) {
+      // Unsubscribe is best-effort.
+    }
+    this.notebookCatalogUnsubscribe = null;
+    if (this.notebookCatalogRefreshTimer !== null && this.notebookCatalogRefreshTimer !== undefined) {
+      this.notebookClearTimeout(this.notebookCatalogRefreshTimer);
+    }
+    this.notebookCatalogRefreshTimer = null;
+    if (this.notebookCatalogReadingWidgets instanceof Set) {
+      this.notebookCatalogReadingWidgets.clear();
+    }
+  }
+
+  notebookCatalogState() {
+    try {
+      return typeof this.notebookReportState === "function"
+        ? this.notebookReportState()
+        : this.notebookCatalogLastState || { report: null, today: notebookLocalDate(), syncBusy: false };
+    } catch (error) {
+      return { report: null, today: "", syncBusy: false };
+    }
+  }
+
+  notebookCatalogHandlers(sourcePath) {
+    const plugin = this;
+    return {
+      openSummary: (model) => {
+        void plugin.apiNotebookOpenSummary(model && model.path, sourcePath);
+      },
+      sync: () => {
+        void plugin.apiNotebookCatalogSync();
+      },
+    };
+  }
+
+  notebookCatalogHue(sourcePath) {
+    try {
+      return notebookHostHueName(
+        sourcePath,
+        this.app && this.app.metadataCache,
+        this.app && this.app.vault,
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  notebookCatalogPaintOptions(sourcePath, state) {
+    const current = state || this.notebookCatalogState();
+    return {
+      report: current.report || null,
+      sourcePath,
+      today: current.today || notebookLocalDate(),
+      hue: this.notebookCatalogHue(sourcePath),
+      metadataCache: this.app && this.app.metadataCache,
+      vault: this.app && this.app.vault,
+      handlers: this.notebookCatalogHandlers(sourcePath),
+    };
+  }
+
+  notebookCatalogSyncModel(sourcePath, state, headingPresent) {
+    const current = state || this.notebookCatalogState();
+    const catalog = notebookHostCatalog(current, sourcePath);
+    const errorHint = current.syncErrorModel && current.syncErrorModel.hint
+      ? current.syncErrorModel.hint
+      : current.errorModel && current.errorModel.hint
+        ? current.errorModel.hint
+        : "";
+    return notebookSyncActionModel(catalog, {
+      busy: Boolean(current.syncBusy),
+      errorHint,
+      missingWithoutHeading: Boolean(catalog && catalog.state === "missing" && !headingPresent),
+    });
+  }
+
+  paintNotebookCatalogReading(el, sourcePath) {
+    const state = this.notebookCatalogState();
+    const options = this.notebookCatalogPaintOptions(sourcePath, state);
+    const callouts = notebookFindCallouts(el).filter((node) => !notebookInsideCode(node));
+    for (const callout of callouts) {
+      notebookPaintCallout(callout, options);
+    }
+    const heading = notebookFindNotebooksHeading(el);
+    const title = heading ? null : notebookFindHostTitle(el);
+    const syncHost = heading || title;
+    const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
+    if (syncHost && syncModel && (heading || syncModel.state === "missing" || syncModel.busy)) {
+      notebookPaintSyncAction(syncHost, syncModel, options.handlers, notebookDomDoc(syncHost));
+    } else if (syncHost) {
+      notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
+    }
+    return { callouts, heading, title };
+  }
+
+  renderNotebookCatalogInReading(el, ctx) {
+    try {
+      if (!el || this.notebookCatalogActive === false) {
+        return;
+      }
+      if (notebookInsideCode(el)) {
+        return;
+      }
+      const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+      if (!sourcePath) {
+        return;
+      }
+      this.paintNotebookCatalogReading(el, sourcePath);
+      if (!(this.notebookCatalogReadingWidgets instanceof Set)) {
+        this.notebookCatalogReadingWidgets = new Set();
+      }
+      for (const existing of this.notebookCatalogReadingWidgets) {
+        if (existing.el === el) {
+          existing.ctx = ctx;
+          existing.path = sourcePath;
+          return;
+        }
+      }
+      const widget = { el, ctx, path: sourcePath };
+      this.notebookCatalogReadingWidgets.add(widget);
+      if (ctx && typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => {
+              if (this.notebookCatalogReadingWidgets) {
+                this.notebookCatalogReadingWidgets.delete(widget);
+              }
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              if (this.notebookCatalogReadingWidgets) {
+                this.notebookCatalogReadingWidgets.delete(widget);
+              }
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject the child.
+        }
+      }
+    } catch (error) {
+      // Reading catalog paint never throws.
+    }
+  }
+
+  refreshNotebookCatalogReading() {
+    if (!(this.notebookCatalogReadingWidgets instanceof Set) || this.notebookCatalogReadingWidgets.size === 0) {
+      return false;
+    }
+    let refreshed = false;
+    for (const widget of Array.from(this.notebookCatalogReadingWidgets)) {
+      try {
+        this.paintNotebookCatalogReading(widget.el, widget.path);
+        refreshed = true;
+      } catch (error) {
+        // One stale view never breaks the others.
+      }
+    }
+    return refreshed;
+  }
+
+  notebookCatalogShouldRebuild(u) {
+    try {
+      if (!u || typeof u !== "object") {
+        return false;
+      }
+      if (u.docChanged || u.viewportChanged) {
+        return true;
+      }
+      const transactions = u.transactions || [];
+      const effectType = ensureNotebookCatalogRefresh();
+      for (const transaction of transactions) {
+        const effects = transaction && transaction.effects !== undefined ? transaction.effects : null;
+        if (!effects) {
+          continue;
+        }
+        const list = Array.isArray(effects) ? effects : [effects];
+        for (const effect of list) {
+          if (!effect) {
+            continue;
+          }
+          if (effectType && typeof effect.is === "function" && effect.is(effectType)) {
+            return true;
+          }
+          if (effect === effectType) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  notebookCatalogLivePath(view) {
+    try {
+      if (!editorInfoField || !editorLivePreviewField) {
+        return null;
+      }
+      let live = null;
+      try {
+        live = view.state.field(editorLivePreviewField);
+      } catch (error) {
+        return null;
+      }
+      if (!live) {
+        return null;
+      }
+      let info = null;
+      try {
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return null;
+      }
+      const path = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      return path || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildNotebookCatalogDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType) {
+        return Decoration ? Decoration.none : null;
+      }
+      const filePath = this.notebookCatalogLivePath(view);
+      if (!filePath) {
+        return Decoration.none;
+      }
+      let docText = "";
+      try {
+        docText = view.state.doc && typeof view.state.doc.toString === "function"
+          ? view.state.doc.toString()
+          : String(view.state.doc || "");
+      } catch (error) {
+        return Decoration.none;
+      }
+      const regions = notebookCatalogRegions(docText);
+      const headingLine = notebookFindNotebooksHeadingLine(docText);
+      const titleLine = headingLine < 0 ? notebookFindHostTitleLine(docText) : -1;
+      const state = this.notebookCatalogState();
+      const syncModel = this.notebookCatalogSyncModel(filePath, state, headingLine >= 0);
+      const hue = this.notebookCatalogHue(filePath);
+      const pending = [];
+      const plugin = this;
+      const SyncWidget = class extends WidgetType {
+        constructor(model, path) {
+          super();
+          this.model = model;
+          this.path = path;
+          this.key = `${model.state}|${model.busy ? "busy" : "idle"}|${model.label}`;
+        }
+        eq(other) {
+          return Boolean(other && other.key === this.key && other.path === this.path);
+        }
+        toDOM() {
+          const doc = typeof document !== "undefined" ? document : null;
+          const holder = notebookCreateEl(doc, "span", "bob-notebook-sync-host");
+          const host = holder || {
+            appendChild: () => {},
+            ownerDocument: doc,
+          };
+          notebookPaintSyncAction(host, this.model, plugin.notebookCatalogHandlers(this.path), doc);
+          if (holder && holder.firstChild) {
+            return holder;
+          }
+          if (holder) {
+            notebookSetText(holder, this.model.label);
+            holder.className = NOTEBOOK_SYNC_CLASS;
+            return holder;
+          }
+          try {
+            return document.createElement("span");
+          } catch (error) {
+            return null;
+          }
+        }
+      };
+      const addWidget = (lineIndex, model) => {
+        if (lineIndex < 0 || !model) {
+          return;
+        }
+        try {
+          const line = view.state.doc.line(lineIndex + 1);
+          pending.push({
+            from: line.to,
+            to: line.to,
+            spec: Decoration.widget({ widget: new SyncWidget(model, filePath), side: 1 }),
+          });
+        } catch (error) {
+          // Skip one widget.
+        }
+      };
+      if (syncModel) {
+        if (headingLine >= 0) {
+          addWidget(headingLine, syncModel);
+        } else if (syncModel.state === "missing" || syncModel.busy) {
+          addWidget(titleLine, syncModel);
+        }
+      }
+      if (hue && Decoration.line) {
+        for (const region of regions) {
+          if (region.calloutLine < 0) {
+            continue;
+          }
+          try {
+            const line = view.state.doc.line(region.calloutLine + 1);
+            pending.push({
+              from: line.from,
+              to: line.from,
+              spec: Decoration.line({
+                attributes: { "data-root-hue": hue, class: "bob-notebook-callout-line" },
+              }),
+            });
+          } catch (error) {
+            // Line attributes are best-effort.
+          }
+        }
+      }
+      pending.sort((left, right) => left.from - right.from || left.to - right.to);
+      const builder = new RangeSetBuilder();
+      for (const range of pending) {
+        try {
+          builder.add(range.from, range.to, range.spec);
+        } catch (error) {
+          // Skip one range.
+        }
+      }
+      try {
+        return builder.finish();
+      } catch (error) {
+        return Decoration.none;
+      }
+    } catch (error) {
+      try {
+        return Decoration ? Decoration.none : null;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  notebookCatalogPaintEditorDom(view) {
+    try {
+      if (this.notebookCatalogActive === false) {
+        return false;
+      }
+      const filePath = this.notebookCatalogLivePath(view);
+      if (!filePath || !view || !view.dom) {
+        return false;
+      }
+      const options = this.notebookCatalogPaintOptions(filePath);
+      const callouts = notebookFindCallouts(view.dom).filter((node) => !notebookInsideCode(node));
+      for (const callout of callouts) {
+        notebookPaintCallout(callout, options);
+      }
+      return callouts.length > 0;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createNotebookCatalogExtension() {
+    try {
+      if (!ViewPlugin || typeof ViewPlugin.fromClass !== "function") {
+        return null;
+      }
+      if (!Decoration || !WidgetType || !RangeSetBuilder) {
+        return null;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return null;
+      }
+      const plugin = this;
+      const CatalogPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildNotebookCatalogDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration ? Decoration.none : null;
+          }
+          this.lastPath = plugin.notebookCatalogLivePath(view);
+          try {
+            plugin.notebookCatalogPaintEditorDom(view);
+          } catch (error) {
+            // DOM paint is best-effort.
+          }
+        }
+        update(u) {
+          try {
+            const nextPath = plugin.notebookCatalogLivePath(u.view);
+            const pathChanged = nextPath !== this.lastPath;
+            this.lastPath = nextPath;
+            if (pathChanged || plugin.notebookCatalogShouldRebuild(u)) {
+              this.decorations = plugin.buildNotebookCatalogDecorations(u.view);
+            }
+            plugin.notebookCatalogPaintEditorDom(u.view);
+          } catch (error) {
+            // Keep previous decorations on failure.
+          }
+        }
+      };
+      let extension = null;
+      try {
+        extension = ViewPlugin.fromClass(CatalogPluginClass, {
+          decorations: (value) => value.decorations,
+        });
+      } catch (error) {
+        return null;
+      }
+      try {
+        return Prec && typeof Prec.highest === "function" ? Prec.highest(extension) : extension;
+      } catch (error) {
+        return extension;
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshNotebookCatalogEditors() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      const refreshEffect = ensureNotebookCatalogRefresh();
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor ? leaf.view.editor.cm : null;
+          if (cm && typeof cm.dispatch === "function" && refreshEffect) {
+            cm.dispatch({ effects: refreshEffect.of(null) });
+          }
+          if (cm) {
+            this.notebookCatalogPaintEditorDom(cm);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh never throws.
+    }
+  }
+
+  scheduleNotebookCatalogRefresh() {
+    if (this.notebookCatalogActive === false) {
+      return;
+    }
+    if (this.notebookCatalogRefreshTimer !== null && this.notebookCatalogRefreshTimer !== undefined) {
+      return;
+    }
+    this.notebookCatalogRefreshTimer = this.notebookSetTimeout(() => {
+      this.notebookCatalogRefreshTimer = null;
+      try {
+        this.refreshNotebookCatalogReading();
+      } catch (error) {
+        // Best-effort.
+      }
+      try {
+        this.refreshNotebookCatalogEditors();
+      } catch (error) {
+        // Best-effort.
+      }
+    }, 150);
+  }
+
+  apiNotebookCatalogSync() {
+    if (this.notebookCatalogActive === false) {
+      return Promise.resolve({ ok: false, error: { code: "unloaded" } });
+    }
+    if (this.notebookSyncBusy) {
+      return this.notebookSyncFlight || Promise.resolve({ ok: false, error: { code: "busy" } });
+    }
+    this.scheduleNotebookCatalogRefresh();
+    return this.apiNotebookSync({ automatic: false });
+  }
+
+  notebookFocusSummaryProperty(view, attemptedCommands) {
+    try {
+      const roots = [];
+      if (view && view.contentEl) {
+        roots.push(view.contentEl);
+      }
+      if (view && view.containerEl) {
+        roots.push(view.containerEl);
+      }
+      if (typeof document !== "undefined" && document && document.body) {
+        roots.push(document.body);
+      }
+      const selectors = [
+        '.metadata-property[data-property-key="summary"] input',
+        '.metadata-property[data-property-key="summary"] textarea',
+        '.metadata-property[data-property-key="summary"] .metadata-input',
+        '[data-property-key="summary"] input',
+        '[data-property-key="summary"] textarea',
+      ];
+      for (const root of roots) {
+        if (!root || typeof root.querySelector !== "function") {
+          continue;
+        }
+        for (const selector of selectors) {
+          const node = root.querySelector(selector);
+          if (node && typeof node.focus === "function") {
+            node.focus();
+            if (typeof node.select === "function") {
+              try {
+                node.select();
+              } catch (error) {
+                // Select is optional.
+              }
+            }
+            return true;
+          }
+        }
+      }
+      const editor = view && view.metadataEditor;
+      if (editor && typeof editor.focus === "function") {
+        editor.focus();
+        return true;
+      }
+      const commands = this.app && this.app.commands;
+      if (!attemptedCommands && commands && typeof commands.executeCommandById === "function") {
+        for (const id of notebookPropertyCommandIds()) {
+          try {
+            if (commands.executeCommandById(id)) {
+              return this.notebookFocusSummaryProperty(view, true);
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async apiNotebookOpenSummary(path, sourcePath) {
+    const target = String(path || "").trim();
+    if (!target) {
+      return { ok: false, focused: false };
+    }
+    let opened = false;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        await workspace.openLinkText(target.replace(/\.md$/i, ""), sourcePath || "", false);
+        opened = true;
+      }
+    } catch (error) {
+      opened = false;
+    }
+    let view = null;
+    try {
+      const workspace = this.app && this.app.workspace;
+      view = workspace && typeof workspace.getActiveViewOfType === "function" && typeof MarkdownView === "function"
+        ? workspace.getActiveViewOfType(MarkdownView)
+        : workspace && workspace.getActiveViewOfType
+          ? workspace.getActiveViewOfType("markdown")
+          : null;
+      if (!view && workspace && workspace.activeLeaf) {
+        view = workspace.activeLeaf.view;
+      }
+    } catch (error) {
+      view = null;
+    }
+    const focused = opened ? this.notebookFocusSummaryProperty(view) : false;
+    if (!opened) {
+      try {
+        new Notice("Could not open the notebook to edit its summary.");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return { ok: false, focused: false };
+    }
+    if (!focused) {
+      try {
+        new Notice("Opened the notebook. Edit its summary in Properties (the summary field).");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+    }
+    return { ok: true, focused };
   }
 }
 // ---- src/242-plugin-reading-board-models.js ----
@@ -91914,6 +93487,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsClockMixin,
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
+  BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsReadingBoardBlockMixin,
   BobLedgerToolsStatsBlockMixin,
   BobLedgerToolsStatsChartMixin,
@@ -94649,6 +96223,23 @@ module.exports.helpers = {
   notebookRelevantPath,
   notebookLocalDate,
   notebookErrorModel,
+  notebookAgeChip,
+  notebookCountChip,
+  notebookSummaryIsBlank,
+  notebookWikilinkTarget,
+  notebookSourceRowKind,
+  notebookCatalogRegions,
+  notebookFindNotebooksHeadingLine,
+  notebookFindHostTitleLine,
+  notebookHostCatalog,
+  notebookSyncActionModel,
+  notebookRowModel,
+  notebookLookupByTarget,
+  notebookHostHueName,
+  notebookPaintCallout,
+  notebookPaintSyncAction,
+  notebookFindCallouts,
+  notebookLiIsProjectGroup,
   READING_BOARD_SCHEMA_VERSION,
   READING_BOARD_CACHE_SIZE,
   READING_BOARD_REVALIDATE_DEBOUNCE_MS,

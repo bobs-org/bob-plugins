@@ -7624,3 +7624,139 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   font-family: var(--font-interface);
   font-size: 0.8em;
 }
+
+/* Notebook catalog card (`> [!notebooks]`). Scoped to this callout so
+ * ordinary lists and other callouts stay unchanged. Hue is live
+ * `data-root-hue` from the host note; counts and recency are rendered
+ * chips, never Markdown. */
+.callout[data-callout="notebooks"] {
+  --callout-icon: lucide-notebook-tabs;
+  --bob-notebook-hue: var(--text-muted);
+  --callout-color: var(--bob-notebook-hue);
+  background-color: color-mix(in srgb, var(--bob-notebook-hue) 9%, var(--background-secondary, var(--background-primary)));
+  border: 1px solid color-mix(in srgb, var(--bob-notebook-hue) 28%, var(--background-modifier-border));
+  border-radius: var(--radius-l, 8px);
+  padding: 0.55em 0.9em 0.7em;
+  box-shadow: none;
+}
+.callout[data-callout="notebooks"][data-root-hue="blue"] { --bob-notebook-hue: var(--bob-area-blue); }
+.callout[data-callout="notebooks"][data-root-hue="orange"] { --bob-notebook-hue: var(--bob-area-orange); }
+.callout[data-callout="notebooks"][data-root-hue="aqua"] { --bob-notebook-hue: var(--bob-area-aqua); }
+.callout[data-callout="notebooks"][data-root-hue="yellow"] { --bob-notebook-hue: var(--bob-area-yellow); }
+.callout[data-callout="notebooks"][data-root-hue="magenta"] { --bob-notebook-hue: var(--bob-area-magenta); }
+.callout[data-callout="notebooks"][data-root-hue="green"] { --bob-notebook-hue: var(--bob-area-green); }
+.callout[data-callout="notebooks"][data-root-hue="violet"] { --bob-notebook-hue: var(--bob-area-violet); }
+.callout[data-callout="notebooks"][data-root-hue="red"] { --bob-notebook-hue: var(--bob-area-red); }
+.callout[data-callout="notebooks"] > .callout-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35em;
+  margin: 0 0 0.2em;
+  padding: 0;
+  background: transparent;
+  color: var(--bob-notebook-hue);
+}
+.callout[data-callout="notebooks"] > .callout-title .callout-icon {
+  display: flex;
+  color: var(--bob-notebook-hue);
+}
+.callout[data-callout="notebooks"] > .callout-title .callout-title-inner {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.callout[data-callout="notebooks"] > .callout-content {
+  padding: 0;
+  background: transparent;
+}
+.callout[data-callout="notebooks"] .callout-content ul {
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+.callout[data-callout="notebooks"] .callout-content ul ul {
+  margin-block: 0.15em 0;
+  margin-inline-start: 0.35em;
+  padding-inline-start: 0.85em;
+  border-inline-start: 1px solid color-mix(in srgb, var(--bob-notebook-hue) 38%, var(--background-modifier-border));
+}
+.callout[data-callout="notebooks"] .callout-content li {
+  position: relative;
+  padding-block: 0.4em;
+  padding-inline-end: 8.5em;
+  line-height: 1.35;
+  min-height: 1.5em;
+}
+.callout[data-callout="notebooks"] .callout-content a.internal-link,
+.callout[data-callout="notebooks"] .callout-content strong a.internal-link {
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text-normal);
+}
+.callout[data-callout="notebooks"] .callout-content a.internal-link:focus-visible,
+.bob-notebook-add-summary:focus-visible,
+.bob-notebook-sync:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.callout[data-callout="notebooks"] .bob-notebook-summary {
+  color: var(--text-muted);
+  font-weight: var(--font-normal, 400);
+}
+.callout[data-callout="notebooks"] .bob-notebook-chips {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 0.4em;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45em;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+.bob-notebook-count,
+.bob-notebook-age {
+  font-variant-numeric: tabular-nums;
+}
+.bob-notebook-add-summary,
+.bob-notebook-sync {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  color: var(--color-orange, var(--bob-area-yellow, #c98500));
+  font-weight: 600;
+}
+.bob-notebook-sync {
+  margin-inline-start: 0.55em;
+  color: var(--text-muted);
+  font-size: 0.8em;
+  font-weight: 500;
+  font-family: var(--font-interface);
+  vertical-align: middle;
+}
+.bob-notebook-sync[aria-busy="true"],
+.bob-notebook-sync:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-notebook-add-summary,
+  .bob-notebook-sync,
+  .callout[data-callout="notebooks"] .callout-content a.internal-link {
+    transition: none;
+  }
+}

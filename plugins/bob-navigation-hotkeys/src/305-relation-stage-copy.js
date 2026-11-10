@@ -535,7 +535,7 @@ function taskMergePreviewSummary(report) {
       path: String(source.path || ""),
       blockId: source.block_id != null ? String(source.block_id) : "",
       outcome: String(record.outcome || ""),
-      movedNotes: Math.max(0, Math.floor(numericOrDefault(record.moved_notes, 0))),
+      copiedNotes: Math.max(0, Math.floor(numericOrDefault(record.moved_notes, 0))),
       dependents: Array.isArray(record.dependents_repointed)
         ? record.dependents_repointed.map(String)
         : [],
@@ -567,7 +567,7 @@ function taskMergePreviewSummary(report) {
     targetKind: String(firstTarget.kind || "task"),
     targetDrawer: firstTarget.drawer != null ? String(firstTarget.drawer) : "",
     targetSection: firstTarget.section != null ? String(firstTarget.section) : "",
-    movedNotes: sources.reduce((sum, source) => sum + source.movedNotes, 0),
+    copiedNotes: sources.reduce((sum, source) => sum + source.copiedNotes, 0),
     dependents: Object.freeze(
       sources.flatMap((source) => source.dependents),
     ),
@@ -582,7 +582,7 @@ function taskMergePreviewSummary(report) {
 
 // The Links-stage consequence strip for a merge preview
 // (`docs/task-relations.md` §21 ML1, canonical copy in
-// `docs/task-merge.md` §10): `⤵ Merges “S” into “T” · moves N notes ·
+// `docs/task-merge.md` §10): `⤵ Merges “S” into “T” · copies N notes ·
 // cancels “S” · N dependent(s) now wait on “T” · offers “T” under ENTRY`.
 function formatTaskMergeConsequenceStrip(summary) {
   if (!summary || !Array.isArray(summary.sources) || summary.sources.length === 0) {
@@ -595,9 +595,9 @@ function formatTaskMergeConsequenceStrip(summary) {
       : "that task";
   const firstSource = summary.sources.length === 1 ? `“${summary.sources[0].title}”` : `${summary.sources.length} tasks`;
   const parts = [`⤵ Merges ${firstSource} into ${target}`];
-  if (summary.movedNotes > 0) {
+  if (summary.copiedNotes > 0) {
     parts.push(
-      summary.movedNotes === 1 ? "moves 1 note" : `moves ${summary.movedNotes} notes`,
+      summary.copiedNotes === 1 ? "copies 1 note" : `copies ${summary.copiedNotes} notes`,
     );
   }
   if (summary.sources.length === 1) {

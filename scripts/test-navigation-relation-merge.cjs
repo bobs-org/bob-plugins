@@ -294,12 +294,12 @@ test("the merge strip reads the preview record verbatim", () => {
   assert.equal(summary.count, 1);
   assert.equal(summary.mergedCount, 1);
   assert.equal(summary.targetTitle, "Upgrade Postgres to 17");
-  assert.equal(summary.movedNotes, 2);
+  assert.equal(summary.copiedNotes, 2);
   assert.deepEqual(summary.dependents, ["db#^cutover"]);
   assert.equal(summary.offers.length, 1);
   assert.equal(
     helpers.formatTaskMergeConsequenceStrip(summary),
-    "⤵ Merges “Benchmark logical replication” into “Upgrade Postgres to 17” · moves 2 notes · cancels “Benchmark logical replication” · 1 dependent now waits on “Upgrade Postgres to 17” · offers “Upgrade Postgres to 17” under BUILD",
+    "⤵ Merges “Benchmark logical replication” into “Upgrade Postgres to 17” · copies 2 notes · cancels “Benchmark logical replication” · 1 dependent now waits on “Upgrade Postgres to 17” · offers “Upgrade Postgres to 17” under BUILD",
   );
 });
 
@@ -339,7 +339,7 @@ test("the merge strip counts several sources and omits empty parts", () => {
   const summary = helpers.taskMergePreviewSummary(report);
   assert.equal(
     helpers.formatTaskMergeConsequenceStrip(summary),
-    "⤵ Merges 2 tasks into “Target” · moves 1 note · cancels 2 tasks · 2 dependents now wait on “Target”",
+    "⤵ Merges 2 tasks into “Target” · copies 1 note · cancels 2 tasks · 2 dependents now wait on “Target”",
   );
   assert.equal(helpers.formatTaskMergeConsequenceStrip(null), "⤵ previewing…");
   const again = helpers.taskMergePreviewSummary(previewReport());

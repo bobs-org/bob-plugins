@@ -585,7 +585,7 @@ Escape or changing the query or selection disarms the confirm.
 
 Committing a merge label previews through `bob task merge --dry-run` (the
 Bob Ledger Tools `api.taskMerge` namespace, desktop only) and fills the
-consequence strip from the preview: `⤵ Merges “S” into “T” · moves N notes ·
+consequence strip from the preview: `⤵ Merges “S” into “T” · copies N notes ·
 cancels “S” · …`. The strip shows `⤵ previewing…` while the `bob` subprocess
 runs. When the preview reports offers, the existing successor offer picker
 opens; the commit then runs `bob task merge` with the picks and shows an

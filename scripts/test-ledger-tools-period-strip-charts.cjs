@@ -43,6 +43,75 @@ function fakeDocument() {
   return { createElement: (tag) => new FakeNode(tag, null), createElementNS: (_ns, tag) => new FakeNode(tag, null) };
 }
 
+// HTMLCollection-like fake node: `children` is array-like with length and
+// indexed access (plus iteration) but is NOT an Array, mirroring browsers
+// where `children` is an HTMLCollection. The old frame copy
+// (`Array.isArray(children) ? slice : []`) renders nothing here.
+class FakeCollectionNode extends FakeNode {
+  constructor(tagName, ownerDocument) {
+    super(tagName, ownerDocument);
+    this._kids = [];
+  }
+  get children() {
+    const kids = this._kids;
+    const collection = { length: kids.length, item: function (index) { return this[index] || null; } };
+    kids.forEach((kid, index) => { collection[index] = kid; });
+    collection[Symbol.iterator] = function* () { for (const kid of kids) yield kid; };
+    return collection;
+  }
+  set children(value) {
+    this._kids = Array.isArray(value) ? value.slice() : Array.from(value || []);
+  }
+  set textContent(value) { this._text = String(value); this._kids = []; }
+  get textContent() { return [this._text, ...this._kids.map((child) => child.textContent)].filter(Boolean).join(""); }
+  appendChild(child) {
+    try {
+      if (child && child.parentNode && child.parentNode !== this && typeof child.parentNode.removeChild === "function") {
+        child.parentNode.removeChild(child);
+      }
+    } catch (error) {
+      // Best-effort detach, mirroring real-DOM moves.
+    }
+    child.parentNode = this;
+    this._kids.push(child);
+    return child;
+  }
+  get firstChild() { return this._kids[0] || null; }
+  removeChild(child) {
+    const index = this._kids.indexOf(child);
+    if (index >= 0) this._kids.splice(index, 1);
+    child.parentNode = null;
+    return child;
+  }
+}
+
+function fakeCollectionDocument() {
+  const doc = {};
+  doc.createElement = (tag) => new FakeCollectionNode(tag, doc);
+  doc.createElementNS = (_ns, tag) => new FakeCollectionNode(tag, doc);
+  return doc;
+}
+
+function paintWithCollection(model, handlers = {}) {
+  const doc = fakeCollectionDocument();
+  const host = new FakeCollectionNode("div", doc);
+  host.ownerDocument = doc;
+  helpers.paintPeriodStrip(host, model, handlers);
+  return host;
+}
+
+function findAllCollection(root, predicate, result = []) {
+  if (predicate(root)) result.push(root);
+  const kids = root._kids || root.children || [];
+  const list = Array.isArray(kids) ? kids : Array.from(kids || []);
+  for (const child of list) findAllCollection(child, predicate, result);
+  return result;
+}
+
+function byClassCollection(root, name) {
+  return findAllCollection(root, (node) => (node.getAttribute("class") || "").split(/\s+/).includes(name));
+}
+
 function findAll(root, predicate, result = []) {
   if (predicate(root)) result.push(root);
   for (const child of root.children || []) findAll(child, predicate, result);
@@ -332,4 +401,140 @@ test("legend hover dims non-matching segments and forced-colors keeps shapes", (
   assert.match(css, /CanvasText/);
   const root = paint(helpers.periodStripModel(chartReport(closedWeek), "2026-W44"));
   assert.ok(byClass(root, "bob-period-strip-chart-legend-item").length > 0);
+});
+
+test("week, quarter, and all-time strips paint charts with HTMLCollection-like children", () => {
+  const parts = periodPartsFixtures(closedWeek);
+  const cases = [
+    ["week", chartReport(closedWeek), "2026-W44"],
+    ["quarter", chartReport(parts.closedQuarter), parts.closedQuarter.period.id],
+    ["all", chartReport(parts.all), parts.all.period.id],
+  ];
+  for (const [kind, report, periodId] of cases) {
+    const model = helpers.periodStripModel(report, periodId, { periodView: "both" });
+    assert.ok(model.charts && model.charts.shown.length > 0, kind + " has charts");
+    const root = paintWithCollection(model);
+    assert.equal(Array.isArray(root.children), false, kind + " uses HTMLCollection-like children");
+    const rows = byClassCollection(root, "bob-period-strip-chart-row");
+    assert.ok(rows.length >= 1, kind + " renders at least one chart row");
+    let pieces = 0;
+    for (const row of rows) {
+      pieces += byClassCollection(row, "bob-period-strip-column-piece").length;
+    }
+    assert.ok(pieces >= 1, kind + " renders at least one painted piece");
+  }
+});
+
+test("period legend fit swaps full values for compact values when one line overflows", () => {
+  assert.equal(helpers.periodStripLegendFitDecision({ available: 200, full: 150 }), "full");
+  assert.equal(helpers.periodStripLegendFitDecision({ available: 200, full: 200 }), "full");
+  assert.equal(helpers.periodStripLegendFitDecision({ available: 200, full: 260 }), "short");
+  assert.equal(helpers.periodStripLegendFitDecision({ available: 0, full: 260 }), "full");
+});
+
+test("data-only repaints never fade while view changes fade only the newly shown chart", () => {
+  const { plugin } = makePlugin();
+  const report = chartReport(closedWeek);
+  const record = { el: new FakeNode("div", fakeDocument()), surface: "strip" };
+  const both = helpers.periodStripModel(report, "2026-W44", { periodView: "both" });
+  plugin.periodStripFinishPaint(record, both, {}, "t1");
+  const firstRows = byClass(record.el, "bob-period-strip-chart-row");
+  assert.ok(firstRows.length === 2);
+  const second = helpers.periodStripModel(report, "2026-W44", { periodView: "both" });
+  plugin.periodStripFinishPaint(record, second, {}, "t1-data");
+  const repainted = byClass(record.el, "bob-period-strip-chart-row");
+  assert.ok(repainted.length === 2);
+  for (const row of repainted) {
+    assert.ok(!(row.getAttribute("class") || "").includes("bob-period-strip-chart-fade"), "data repaint leaves no fade");
+  }
+  const rootsOnly = helpers.periodStripModel(report, "2026-W44", { periodView: "roots" });
+  plugin.periodStripFinishPaint(record, rootsOnly, {}, "t2");
+  const rootsRows = byClass(record.el, "bob-period-strip-chart-row");
+  assert.equal(rootsRows.length, 1);
+  for (const row of rootsRows) {
+    assert.ok(!(row.getAttribute("class") || "").includes("bob-period-strip-chart-fade"), "already-shown roots stays still");
+  }
+  const typesOnly = helpers.periodStripModel(report, "2026-W44", { periodView: "types" });
+  plugin.periodStripFinishPaint(record, typesOnly, {}, "t3");
+  const typesRows = byClass(record.el, "bob-period-strip-chart-row");
+  assert.equal(typesRows.length, 1);
+  assert.equal(typesRows[0].getAttribute("data-chart-row"), "types");
+  assert.ok((typesRows[0].getAttribute("class") || "").includes("bob-period-strip-chart-fade"), "newly shown types fades");
+});
+
+test("Alt+Enter on a week day column opens Stats for that day", () => {
+  const report = chartReport(closedWeek);
+  const { plugin } = makePlugin();
+  const doc = fakeDocument();
+  const record = { el: new FakeNode("div", doc), periodId: "2026-W44", kind: "week", path: "2026/2026-W44.md", surface: "strip" };
+  let dayOpened = null;
+  let periodOpened = null;
+  plugin.openStatsForDay = (options) => { dayOpened = options; };
+  plugin.openStatsForPeriod = (options) => { periodOpened = options; };
+  plugin.periodStripPaint(record, { report, fetchedAt: "2026-10-30T12:00:00Z" });
+  const columns = byClass(record.el, "bob-period-strip-chart-axis-column");
+  assert.ok(columns.length >= 7);
+  const dayColumn = columns[0];
+  dayColumn.dispatch("keydown", { key: "Enter", altKey: true });
+  assert.ok(dayOpened, "day column routes to openStatsForDay");
+  assert.equal(dayOpened.day, report.columns[0].id);
+  assert.equal(dayOpened.sourcePath, "2026/2026-W44.md");
+  assert.equal(periodOpened, null);
+});
+
+test("year fallback quarters carry captions, values, and short group totals", () => {
+  const parts = periodPartsFixtures(closedWeek);
+  const yearReport = chartReport(parts.year);
+  yearReport.children = (parts.year.children || []).filter((row) => row && row.kind === "quarter").map((row, index) => {
+    const value = (row.worked && row.worked.value) || 60;
+    return {
+      ...row,
+      stacks: { roots: [{ key: "bob.md", minutes: 60 }], types: [{ key: "build", minutes: 60 }] },
+      worked: { value, display: "2h 15m", display_short: "2h", quality: "ok", so_far: false },
+    };
+  });
+  yearReport.groups = [
+    { key: "Q1", label: "Q1", worked_display: "2h 15m" },
+    { key: "Q2", label: "Q2", worked_display: "2h 26m" },
+  ];
+  yearReport.children[0].worked = { value: 135, display: "2h 15m", display_short: "2h", quality: "ok" };
+  yearReport.children[0].label = "Q1";
+  yearReport.children[1].worked = { value: 146, display: "2h 26m", display_short: "2h", quality: "ok" };
+  yearReport.children[1].label = "Q2";
+  const model = helpers.periodStripChartsModel(yearReport, "year", "both", {});
+  assert.ok(model.fallbackColumns.length >= 2);
+  for (const column of model.fallbackColumns.slice(0, 2)) {
+    assert.match(column.caption, /Q[1-4]/);
+    assert.ok(column.group && String(column.group).match(/Q[1-4]/));
+    assert.ok(column.worked && column.worked.displayShort && column.worked.displayShort !== "–");
+  }
+  const root = paint(helpers.periodStripModel(yearReport, yearReport.period.id));
+  const fallback = byClass(root, "bob-period-strip-charts-fallback")[0];
+  assert.ok(fallback, "fallback variant paints");
+  const captions = byClass(fallback, "bob-period-strip-column-caption").map((node) => node.textContent).filter(Boolean);
+  assert.ok(captions.some((text) => /Q[12]/.test(text)), "fallback quarter captions read Q1/Q2");
+  const values = byClass(fallback, "bob-period-strip-column-value").map((node) => node.textContent).filter(Boolean);
+  assert.ok(values.length >= 2, "fallback quarter values paint");
+  assert.ok(!values.some((text) => /\d+m$/.test(text) && text.includes(" ")), "fallback values use display_short");
+  const groups = byClass(root, "bob-period-strip-group-caption").map((node) => node.textContent);
+  assert.ok(groups.some((text) => /Q1 · 2h/.test(text)), "group captions use the quarter short total, got: " + groups.join(" | "));
+});
+
+test("untracked chart plots draw short ghosts and future plots draw only the stub", () => {
+  const report = chartReport(closedWeek);
+  report.columns[1].worked = { value: 0, display: "0m", display_short: "0m", quality: "not_tracked" };
+  report.columns[1].stacks = { roots: [], types: [] };
+  report.columns[2].state = "future";
+  report.columns[2].worked = { value: 0, display: "–", display_short: "–", quality: "ok" };
+  report.columns[2].stacks = { roots: [], types: [] };
+  const model = helpers.periodStripModel(report, "2026-W44", { periodView: "both" });
+  const missing = model.charts.columns[1];
+  assert.equal(missing.missing, true);
+  const root = paint(model);
+  assert.ok(byClass(root, "bob-period-strip-chart-ghost-bar").length >= 2, "missing plots draw the short ghost");
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-period-strip-chart-plot\.bob-period-strip-column-missing/);
+  assert.match(css, /\.bob-period-strip-chart-plot\.bob-period-strip-column-future/);
+  assert.match(css, /min\(24px, calc\(100% - 2px\)\)/);
+  assert.match(css, /\.bob-period-strip-chart-row\.bob-period-strip-chart-fade/);
 });

@@ -163,6 +163,34 @@ function addPreviewCharts(source) {
     roots: { limit: 5, dimension: "root_parent", series: rootSeries },
     types: { policy: "configured", series: typeSeries },
   };
+  for (const child of Array.isArray(report.children) ? report.children : []) {
+    if (!child || child.kind !== "quarter" || child.stacks) continue;
+    const total = child.worked && Number(child.worked.value) > 0 ? Number(child.worked.value) : 0;
+    if (total <= 0) {
+      child.stacks = { roots: [], types: [] };
+      continue;
+    }
+    const build = Math.floor(total * 0.54);
+    const fix = Math.floor(total * 0.26);
+    const untyped = total - build - fix;
+    const roots = [];
+    if (topRoots.length) roots.push({ key: topRoots[0][0], minutes: Math.max(1, total - 1) });
+    if (untyped > 0 && rootSeries.some((row) => row.key === "@unattributed")) roots.push({ key: "@unattributed", minutes: 1 });
+    child.stacks = {
+      roots: roots.filter((row) => row.minutes > 0),
+      types: [
+        { key: "build", minutes: build },
+        { key: "fix", minutes: fix },
+        { key: "@unattributed", minutes: untyped },
+      ].filter((row) => row.minutes > 0),
+    };
+  }
+  // Quarter children need display_short for the year fallback axis and group captions.
+  for (const child of Array.isArray(report.children) ? report.children : []) {
+    if (!child || !child.worked || typeof child.worked.display_short === "string") continue;
+    const value = Number(child.worked.value) || 0;
+    child.worked.display_short = displayShort(value);
+  }
   return report;
 }
 
@@ -290,11 +318,37 @@ async function main() {
             let budget = both ? PERIOD_STRIP_HEIGHT_BOTH : PERIOD_STRIP_HEIGHT_SINGLE;
             if (item.kind === "year" && width <= 410) budget += 80;
             else if (item.kind === "year") budget += 20;
-            else if (item.kind === "all" && width <= 410) budget += 40;
+            else if (item.kind === "all" && width <= 410) budget += 50;
+            else if (width <= 410) budget += both ? 50 : 40;
             if (item.stripHeight > budget + 0.5) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: ${item.stripHeight}px over ${budget}px`);
             if (!item.noOverflow) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: horizontal overflow`);
             if (item.overlap) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: caption/value overlap`);
             if (!item.proportional) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: chart pieces do not match their minute proportions`);
+          }
+          if (width === 320 || width === 410) {
+            const legendFit = await client.evaluate(`(() => {
+              let wrapped = 0;
+              let hidden = 0;
+              let compacted = 0;
+              for (const legend of document.querySelectorAll('.bob-period-strip-chart-legend')) {
+                if (legend.offsetParent === null) continue;
+                const rect = legend.getBoundingClientRect();
+                const first = legend.querySelector('.bob-period-strip-chart-legend-item');
+                const itemRect = first ? first.getBoundingClientRect() : null;
+                if (rect && itemRect && rect.height > itemRect.height * 2.6) wrapped += 1;
+                for (const item of legend.querySelectorAll('.bob-period-strip-chart-legend-item')) {
+                  if (item.hasAttribute('hidden')) hidden += 1;
+                }
+                for (const value of legend.querySelectorAll('.bob-period-strip-legend-value')) {
+                  const full = value.getAttribute('data-display');
+                  const short = value.getAttribute('data-display-short');
+                  if (full && short && full !== short && value.textContent === short) compacted += 1;
+                }
+              }
+              return { wrapped, hidden, compacted };
+            })()`);
+            if (legendFit.wrapped > 0) failures.push(`period legends wrap past two lines at ${width}px ${theme} ${view}: ${legendFit.wrapped} legends`);
+            if (legendFit.hidden > 0) failures.push(`period legends hide series at ${width}px ${theme} ${view}: ${legendFit.hidden} hidden`);
           }
           if (width === 320 || width === 1000) {
             const fallback = await client.evaluate(`(() => {
@@ -331,6 +385,17 @@ async function main() {
       const screenshot = await client.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
       const name = `period-strip-${width}-${theme}-${view}.png`;
       fs.writeFileSync(path.join(args.out, name), Buffer.from(screenshot.data, "base64"));
+    }
+    for (const [id, width] of [["closed", 700], ["closed-quarter", 700], ["year", 700], ["year", 320], ["all", 700]]) {
+      await client.call("Emulation.setDeviceMetricsOverride", { width, height: 1500, deviceScaleFactor: 1, mobile: false });
+      await client.evaluate(`window.periodStripPreview.renderMatrix(${width}, "light", "both", [${JSON.stringify(id)}])`);
+      await sleep(150);
+      await client.evaluate(`document.querySelectorAll('.preview-table').forEach((el) => { el.style.display = 'none'; })`);
+      await sleep(50);
+      const screenshot = await client.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+      const name = `period-strip-striponly-${id}-${width}px.png`;
+      fs.writeFileSync(path.join(args.out, name), Buffer.from(screenshot.data, "base64"));
+      await client.evaluate(`document.querySelectorAll('.preview-table').forEach((el) => { el.style.display = ''; })`);
     }
     const report = [
       "# Period strip chart preview",

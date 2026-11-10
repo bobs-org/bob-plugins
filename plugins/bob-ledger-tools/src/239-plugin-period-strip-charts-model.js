@@ -145,7 +145,10 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
       const rootStack = fallback ? column.stack : rawStacks.roots;
       const roots = periodStripChartStack(rootStack, rootsByKey);
       const types = fallback ? [] : periodStripChartStack(rawStacks.types, typesByKey);
-      const caption = kind === "year" ? "" : (typeof column.caption === "string" ? column.caption : "");
+      const rawKind = typeof column.kind === "string" ? column.kind : "";
+      const rawLabel = typeof column.label === "string" ? column.label : (typeof column.id === "string" ? column.id : "");
+      const rawCaption = typeof column.caption === "string" && column.caption ? column.caption : rawLabel;
+      const caption = kind === "year" ? (rawKind === "quarter" ? rawCaption : "") : (typeof column.caption === "string" ? column.caption : "");
       const modelColumn = {
         id: typeof column.id === "string" ? column.id : "",
         kind: typeof column.kind === "string" ? column.kind : "week",
@@ -166,7 +169,15 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
         missing,
         mark: typeof column.mark === "string" ? column.mark : null,
         tick: typeof column.tick === "string" ? column.tick : null,
-        group: column.group === null || column.group === undefined ? null : String(column.group),
+        group: (() => {
+          if (column.group !== null && column.group !== undefined) return String(column.group);
+          if (kind === "year" && rawKind === "quarter") {
+            const match = /Q([1-4])/.exec(rawLabel || "");
+            if (match) return "Q" + match[1];
+            return rawLabel || null;
+          }
+          return null;
+        })(),
         roots,
         types,
         tooltip: "",

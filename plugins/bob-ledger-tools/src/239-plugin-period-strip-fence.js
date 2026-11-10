@@ -403,6 +403,10 @@ class BobLedgerToolsPeriodStripMixin {
         },
         openStatsForColumn: (column, newLeaf) => {
           try {
+            if (column && column.kind === "day" && typeof this.openStatsForDay === "function") {
+              void this.openStatsForDay({ day: column.id, newLeaf, sourcePath: record.path });
+              return;
+            }
             void this.openStatsForPeriod({
               period: periodId,
               start: column && typeof column.start === "string" ? column.start : "",
@@ -472,6 +476,17 @@ class BobLedgerToolsPeriodStripMixin {
 
   periodStripFinishPaint(record, model, handlers, stamp) {
     try {
+      if (model && model.charts && Array.isArray(model.charts.shown)) {
+        const prev = Array.isArray(record.__lastChartShown) ? record.__lastChartShown : null;
+        const curr = model.charts.shown.slice();
+        const fade = prev === null ? curr.slice() : curr.filter((dimension) => !prev.includes(dimension));
+        try {
+          model.charts.fade = fade;
+        } catch (error) {
+          // Fade is best-effort.
+        }
+        record.__lastChartShown = curr.slice();
+      }
       const key = [
         record.surface || "strip",
         model.state,

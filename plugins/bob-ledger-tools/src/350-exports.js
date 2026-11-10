@@ -867,7 +867,7 @@ module.exports.helpers = {
   periodStripParseFencePeriod,
   periodStripClassifyId,
   periodStripModel,
-  periodStripChartsModel, periodStripChartsDigest, periodStripNextChartView, PERIOD_STRIP_CHART_VIEW_KEY, periodStripChartYearFallbackColumns, periodStripChartCollapseLeadingUntracked,
+  periodStripChartsModel, periodStripChartsDigest, periodStripNextChartView, PERIOD_STRIP_CHART_VIEW_KEY, periodStripChartYearFallbackColumns, periodStripChartCollapseLeadingUntracked, periodStripLegendFitDecision, periodStripChartApplyLegendFit, periodStripChartFitLegends, periodStripEnsureLegendFitObserver, periodStripChartGroupCaption,
   periodStripTableRows, periodStripYearQuarterColumns, periodPartsTableMiniBar,
   paintPeriodStripParts,
   paintPeriodPartsTable,

@@ -50971,6 +50971,10 @@ class BobLedgerToolsPeriodStripMixin {
         },
         openStatsForColumn: (column, newLeaf) => {
           try {
+            if (column && column.kind === "day" && typeof this.openStatsForDay === "function") {
+              void this.openStatsForDay({ day: column.id, newLeaf, sourcePath: record.path });
+              return;
+            }
             void this.openStatsForPeriod({
               period: periodId,
               start: column && typeof column.start === "string" ? column.start : "",
@@ -51040,6 +51044,17 @@ class BobLedgerToolsPeriodStripMixin {
 
   periodStripFinishPaint(record, model, handlers, stamp) {
     try {
+      if (model && model.charts && Array.isArray(model.charts.shown)) {
+        const prev = Array.isArray(record.__lastChartShown) ? record.__lastChartShown : null;
+        const curr = model.charts.shown.slice();
+        const fade = prev === null ? curr.slice() : curr.filter((dimension) => !prev.includes(dimension));
+        try {
+          model.charts.fade = fade;
+        } catch (error) {
+          // Fade is best-effort.
+        }
+        record.__lastChartShown = curr.slice();
+      }
       const key = [
         record.surface || "strip",
         model.state,
@@ -51559,7 +51574,10 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
       const rootStack = fallback ? column.stack : rawStacks.roots;
       const roots = periodStripChartStack(rootStack, rootsByKey);
       const types = fallback ? [] : periodStripChartStack(rawStacks.types, typesByKey);
-      const caption = kind === "year" ? "" : (typeof column.caption === "string" ? column.caption : "");
+      const rawKind = typeof column.kind === "string" ? column.kind : "";
+      const rawLabel = typeof column.label === "string" ? column.label : (typeof column.id === "string" ? column.id : "");
+      const rawCaption = typeof column.caption === "string" && column.caption ? column.caption : rawLabel;
+      const caption = kind === "year" ? (rawKind === "quarter" ? rawCaption : "") : (typeof column.caption === "string" ? column.caption : "");
       const modelColumn = {
         id: typeof column.id === "string" ? column.id : "",
         kind: typeof column.kind === "string" ? column.kind : "week",
@@ -51580,7 +51598,15 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
         missing,
         mark: typeof column.mark === "string" ? column.mark : null,
         tick: typeof column.tick === "string" ? column.tick : null,
-        group: column.group === null || column.group === undefined ? null : String(column.group),
+        group: (() => {
+          if (column.group !== null && column.group !== undefined) return String(column.group);
+          if (kind === "year" && rawKind === "quarter") {
+            const match = /Q([1-4])/.exec(rawLabel || "");
+            if (match) return "Q" + match[1];
+            return rawLabel || null;
+          }
+          return null;
+        })(),
         roots,
         types,
         tooltip: "",
@@ -51900,6 +51926,15 @@ function periodStripRenderChartPlot(doc, column, index, dimension, model, talles
     entry,
     height: tallest > 0 ? (Number(entry.minutes) / tallest) * viewHeight : 0,
   })).filter((item) => item.height >= 0.75);
+  if (!visible.length && column.missing && column.state !== "future" && !charts.zeroWorked) {
+    const ghost = statsEl(doc, "span", { class: "bob-period-strip-chart-ghost-bar", "aria-hidden": "true" });
+    if (ghost && ghost.style) {
+      try { ghost.style.height = Math.round(viewHeight * 0.35) + "px"; } catch (error) {}
+    }
+    if (ghost) bar.appendChild(ghost);
+    plot.appendChild(bar);
+    return plot;
+  }
   visible.forEach((item, visibleIndex) => {
     const entry = item.entry;
     const piece = statsEl(doc, "span", {
@@ -51919,8 +51954,10 @@ function periodStripRenderChartPlot(doc, column, index, dimension, model, talles
 
 function periodStripRenderChartRow(doc, model, dimension, columnsOverride, tallestOverride) {
   const columns = Array.isArray(columnsOverride) ? columnsOverride : (model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : []);
+  const fadeList = model.charts && Array.isArray(model.charts.fade) ? model.charts.fade : null;
+  const shouldFade = Array.isArray(fadeList) ? fadeList.includes(dimension) : false;
   const row = statsEl(doc, "div", {
-    class: "bob-period-strip-chart-row",
+    class: "bob-period-strip-chart-row" + (shouldFade ? " bob-period-strip-chart-fade" : ""),
     "data-chart-row": dimension,
     role: "presentation",
   });
@@ -51945,11 +51982,29 @@ function periodStripRenderChartTicks(doc, model, columnsOverride) {
   return row;
 }
 
-function periodStripChartGroupCaption(group, kind) {
+function periodStripChartGroupCaption(group, kind, lookupColumns) {
   if (!group || typeof group !== "object") return "";
   const label = typeof group.label === "string" ? group.label : String(group.key || "");
+  if (kind !== "year") return label;
+  const key = String(group.key || "");
+  let short = "";
+  for (const list of (Array.isArray(lookupColumns) ? lookupColumns : [])) {
+    for (const column of (Array.isArray(list) ? list : [])) {
+      if (!column || typeof column !== "object") continue;
+      const columnLabel = typeof column.label === "string" ? column.label : "";
+      const columnId = typeof column.id === "string" ? column.id : "";
+      const matches = columnLabel === key || columnLabel === label || columnId === key
+        || /Q([1-4])/.exec(columnLabel || "")?.[0] === key || /Q([1-4])/.exec(columnId || "")?.[0] === key;
+      if (matches && column.worked && typeof column.worked.displayShort === "string" && column.worked.displayShort && column.worked.displayShort !== "–") {
+        short = column.worked.displayShort;
+        break;
+      }
+    }
+    if (short) break;
+  }
+  if (short) return label + " · " + short;
   const worked = typeof group.worked_display === "string" ? group.worked_display : "";
-  return kind === "year" && worked && worked !== "–" ? label + " · " + worked : label;
+  return worked && worked !== "–" ? label + " · " + worked : label;
 }
 
 function periodStripRenderChartGroups(doc, model, columnsOverride) {
@@ -51964,7 +52019,7 @@ function periodStripRenderChartGroups(doc, model, columnsOverride) {
     const key = String(group && group.key || "");
     const count = columns.filter((column) => String(column.group || "") === key).length;
     if (!count) continue;
-    const caption = statsEl(doc, "span", { class: "bob-period-strip-group-caption", "data-group": key }, periodStripChartGroupCaption(group, model.kind));
+    const caption = statsEl(doc, "span", { class: "bob-period-strip-group-caption", "data-group": key }, periodStripChartGroupCaption(group, model.kind, [charts.fallbackColumns, charts.columns, columns]));
     if (caption && caption.style) caption.style.gridColumn = (cursor + 1) + " / span " + count;
     row.appendChild(caption);
     cursor += count;
@@ -52019,10 +52074,11 @@ function periodStripRenderChartAxisColumn(doc, column, index, model, handlers, a
     "data-mark": column.mark || "none",
     "aria-hidden": "true",
   }, markText));
-  const caption = model.kind === "year" ? "" : ((column.caption || "") + (state === "current" ? " · so far" : "") + (column.partial ? " · " + column.partial : ""));
+  const isYearWeekly = model.kind === "year" && column.kind !== "quarter";
+  const caption = isYearWeekly ? "" : ((column.caption || "") + (state === "current" ? " · so far" : "") + (column.partial ? " · " + column.partial : ""));
   node.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-caption" }, caption));
-  if (model.kind !== "year") {
-    const compact = model.kind === "quarter" || model.kind === "all";
+  if (!isYearWeekly) {
+    const compact = model.kind === "quarter" || model.kind === "all" || (model.kind === "year" && column.kind === "quarter");
     const value = column.worked ? (compact ? column.worked.displayShort : column.worked.display) : (state === "future" ? "" : "–");
     node.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-value" }, value));
   }
@@ -52160,11 +52216,170 @@ function periodStripRenderChartFrame(doc, model, handlers) {
   } else {
     const single = periodStripRenderChartFrameInner(doc, model, handlers || {}, columns, charts.tallest, "detailed");
     if (single && single.inner) {
-      const kids = Array.isArray(single.inner.children) ? single.inner.children.slice() : [];
+      const kids = Array.from(single.inner.children || []);
       for (const kid of kids) frame.appendChild(kid);
     }
   }
   return frame;
+}
+
+// Legend fit ladder: one line with full values, then compact values
+// (`display_short`), then wrap to at most two lines. A drawn series never
+// hides behind `+N`. Never throws and never hides a series.
+function periodStripLegendFitDecision(input) {
+  try {
+    const safe = input && typeof input === "object" ? input : {};
+    const available = Number(safe.available);
+    const full = Number(safe.full);
+    if (!Number.isFinite(available) || available <= 0) return "full";
+    if (!Number.isFinite(full) || full <= 0) return "full";
+    if (full <= available + 0.5) return "full";
+    return "short";
+  } catch (error) {
+    return "full";
+  }
+}
+
+function periodStripChartLegendValueNodes(legend) {
+  let values = [];
+  try {
+    if (legend && typeof legend.querySelectorAll === "function") {
+      values = Array.from(legend.querySelectorAll(".bob-period-strip-legend-value"));
+    }
+  } catch (error) {
+    values = [];
+  }
+  if (!values.length && typeof dayStripFitFindByClass === "function") {
+    try {
+      values = dayStripFitFindByClass(legend, "bob-period-strip-legend-value");
+    } catch (error) {
+      values = [];
+    }
+  }
+  return values;
+}
+
+function periodStripChartApplyLegendFit(legend) {
+  try {
+    if (!legend || typeof legend !== "object") return null;
+    const values = periodStripChartLegendValueNodes(legend);
+    if (!values.length) return null;
+    for (const node of values) {
+      try {
+        const full = node.getAttribute ? node.getAttribute("data-display") : null;
+        if (full !== null && full !== undefined) node.textContent = String(full);
+      } catch (error) {
+        // Best-effort.
+      }
+    }
+    let available = Number(legend.clientWidth) || 0;
+    try {
+      if (!available && typeof legend.getBoundingClientRect === "function") {
+        const rect = legend.getBoundingClientRect();
+        if (rect && Number.isFinite(rect.width) && rect.width > 0) available = rect.width;
+      }
+    } catch (error) {
+      // Best-effort.
+    }
+    let wrapped = false;
+    try {
+      const scroll = Number(legend.scrollWidth) || 0;
+      if (available > 0 && scroll > available + 0.5) wrapped = true;
+    } catch (error) {
+      // Best-effort.
+    }
+    if (!wrapped) {
+      try {
+        const legendRect = typeof legend.getBoundingClientRect === "function" ? legend.getBoundingClientRect() : null;
+        const legendHeight = legendRect && Number.isFinite(legendRect.height) ? legendRect.height : 0;
+        let itemHeight = 0;
+        try {
+          const first = typeof legend.querySelector === "function" ? legend.querySelector(".bob-period-strip-chart-legend-item") : null;
+          const itemRect = first && typeof first.getBoundingClientRect === "function" ? first.getBoundingClientRect() : null;
+          itemHeight = itemRect && Number.isFinite(itemRect.height) ? itemRect.height : 0;
+        } catch (error) {
+          itemHeight = 0;
+        }
+        if (legendHeight > 0 && itemHeight > 0 && legendHeight > itemHeight * 1.6) wrapped = true;
+      } catch (error) {
+        // Best-effort.
+      }
+    }
+    if (!wrapped) return "full";
+    const decision = "short";
+    if (decision === "short") {
+      for (const node of values) {
+        try {
+          const short = node.getAttribute ? node.getAttribute("data-display-short") : null;
+          if (short !== null && short !== undefined) node.textContent = String(short);
+        } catch (error) {
+          // Best-effort.
+        }
+      }
+    }
+    return decision;
+  } catch (error) {
+    return null;
+  }
+}
+
+function periodStripChartFitLegends(rootEl) {
+  try {
+    if (!rootEl || typeof rootEl !== "object") return null;
+    let legends = [];
+    try {
+      if (typeof rootEl.querySelectorAll === "function") {
+        legends = Array.from(rootEl.querySelectorAll(".bob-period-strip-chart-legend"));
+      }
+    } catch (error) {
+      legends = [];
+    }
+    if (!legends.length && typeof dayStripFitFindByClass === "function") {
+      try {
+        legends = dayStripFitFindByClass(rootEl, "bob-period-strip-chart-legend");
+      } catch (error) {
+        legends = [];
+      }
+    }
+    let last = null;
+    for (const legend of legends) {
+      try {
+        last = periodStripChartApplyLegendFit(legend);
+      } catch (error) {
+        // One legend never breaks the others.
+      }
+    }
+    return last;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Idempotent: one observer per strip element. Reuses the Day strip's observer
+// and view helpers rather than adding a second observer pattern.
+function periodStripEnsureLegendFitObserver(el) {
+  try {
+    if (!el || typeof el !== "object") return null;
+    if (el.__periodStripLegendFitObserver) return el.__periodStripLegendFitObserver;
+    const Observer = typeof dayStripFitObserverOf === "function" ? dayStripFitObserverOf(el) : null;
+    if (typeof Observer !== "function") return null;
+    const observer = new Observer(() => {
+      try {
+        if (typeof periodStripChartFitLegends === "function") periodStripChartFitLegends(el);
+      } catch (error) {
+        // Never throw into the observer lifecycle.
+      }
+    });
+    el.__periodStripLegendFitObserver = observer;
+    try {
+      if (typeof observer.observe === "function") observer.observe(el);
+    } catch (error) {
+      // Best-effort.
+    }
+    return observer;
+  } catch (error) {
+    return null;
+  }
 }
 
 // Replaces the retired single-lane painter. Bob remains the only source of
@@ -52211,6 +52426,16 @@ function paintPeriodStrip(host, model, handlers) {
     root.appendChild(rule);
     const chartFrame = periodStripRenderChartFrame(doc, model, handlers || {});
     root.appendChild(chartFrame);
+    try {
+      if (typeof periodStripChartFitLegends === "function") periodStripChartFitLegends(root);
+    } catch (error) {
+      // Fit is best-effort.
+    }
+    try {
+      if (typeof periodStripEnsureLegendFitObserver === "function") periodStripEnsureLegendFitObserver(host);
+    } catch (error) {
+      // Observer is best-effort.
+    }
     return root;
   } catch (error) {
     return null;
@@ -99909,7 +100134,7 @@ module.exports.helpers = {
   periodStripParseFencePeriod,
   periodStripClassifyId,
   periodStripModel,
-  periodStripChartsModel, periodStripChartsDigest, periodStripNextChartView, PERIOD_STRIP_CHART_VIEW_KEY, periodStripChartYearFallbackColumns, periodStripChartCollapseLeadingUntracked,
+  periodStripChartsModel, periodStripChartsDigest, periodStripNextChartView, PERIOD_STRIP_CHART_VIEW_KEY, periodStripChartYearFallbackColumns, periodStripChartCollapseLeadingUntracked, periodStripLegendFitDecision, periodStripChartApplyLegendFit, periodStripChartFitLegends, periodStripEnsureLegendFitObserver, periodStripChartGroupCaption,
   periodStripTableRows, periodStripYearQuarterColumns, periodPartsTableMiniBar,
   paintPeriodStripParts,
   paintPeriodPartsTable,

@@ -60,6 +60,55 @@ class BobLedgerToolsPeriodStripMixin {
     return this.periodStripPending;
   }
 
+  periodStripChartViewCurrent() {
+    return periodStripChartViewOf(this.periodStripChartView);
+  }
+
+  periodStripLoadChartView() {
+    try {
+      let stored = null;
+      if (this.app && typeof this.app.loadLocalStorage === "function") {
+        stored = this.app.loadLocalStorage(PERIOD_STRIP_CHART_VIEW_KEY);
+      }
+      this.periodStripChartView = periodStripChartViewOf(stored);
+      return this.periodStripChartView;
+    } catch (error) {
+      this.periodStripChartView = "both";
+      return this.periodStripChartView;
+    }
+  }
+
+  periodStripSetChartView(view, opts) {
+    try {
+      const next = periodStripChartViewOf(view);
+      this.periodStripChartView = next;
+      try {
+        if (this.app && typeof this.app.saveLocalStorage === "function") {
+          this.app.saveLocalStorage(PERIOD_STRIP_CHART_VIEW_KEY, next);
+        }
+      } catch (error) {
+        // A missing storage API keeps the in-memory view.
+      }
+      for (const record of Array.from(this.periodStripViewsStore())) {
+        if (!record || record.surface === "table") continue;
+        record.paintedKey = null;
+        try { this.periodStripPaint(record); } catch (error) {}
+      }
+      const from = opts && opts.focusFrom ? opts.focusFrom : null;
+      if (from && typeof dayStripFitFindByClass === "function") {
+        const found = dayStripFitFindByClass(from, "bob-period-strip-chart-switch");
+        if (found && found[0] && typeof found[0].focus === "function") found[0].focus();
+      }
+      return next;
+    } catch (error) {
+      return "both";
+    }
+  }
+
+  periodStripCycleCharts(opts) {
+    return this.periodStripSetChartView(periodStripNextChartView(this.periodStripChartViewCurrent()), opts);
+  }
+
   periodStripCanSpawn() {
     try {
       if (typeof this.dayStripCanSpawn === "function") return this.dayStripCanSpawn();
@@ -96,8 +145,18 @@ class BobLedgerToolsPeriodStripMixin {
   setupPeriodStripHosts() {
     try {
       this.periodStripViewsStore();
+      this.periodStripLoadChartView();
     } catch (error) {
       // Registry init is best-effort.
+    }
+    try {
+      this.addCommand({
+        id: "cycle-period-stats-charts",
+        name: "Cycle period stats charts",
+        callback: () => this.periodStripCycleCharts(),
+      });
+    } catch (error) {
+      // The command is best-effort in older Obsidian hosts.
     }
     try {
       if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
@@ -344,10 +403,24 @@ class BobLedgerToolsPeriodStripMixin {
         },
         openStatsForColumn: (column, newLeaf) => {
           try {
-            const day = column && typeof column.start === "string" ? column.start : (column && column.id) || "";
-            void this.openStatsForDay({ day, newLeaf, sourcePath: record.path });
+            void this.openStatsForPeriod({
+              period: periodId,
+              start: column && typeof column.start === "string" ? column.start : "",
+              end: column && typeof column.end === "string" ? column.end : "",
+              kind: record.kind || "",
+              newLeaf,
+              sourcePath: record.path,
+            });
           } catch (error) {
             // Opening Stats is best-effort.
+          }
+        },
+        cycleCharts: (opts) => {
+          try {
+            const safe = opts && typeof opts === "object" ? opts : {};
+            this.periodStripCycleCharts({ focusFrom: safe.focused ? record.el : null });
+          } catch (error) {
+            // Cycling is best-effort.
           }
         },
         retry: () => {
@@ -382,6 +455,7 @@ class BobLedgerToolsPeriodStripMixin {
         fetchedAt,
         stale,
         error,
+        periodView: this.periodStripChartViewCurrent(),
         themeHueFor: (key, name) => {
           try {
             return typeof this.pomodoroThemeHueFor === "function" ? this.pomodoroThemeHueFor(key, name) : "gray";
@@ -404,6 +478,9 @@ class BobLedgerToolsPeriodStripMixin {
         model.periodId,
         String(stamp === undefined ? "" : stamp),
         model.stale,
+        model.charts ? model.charts.view : "",
+        model.charts ? model.charts.digest : "",
+        model.charts ? model.charts.version : 0,
         model.error ? model.error.code : "",
         (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
         (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),

@@ -206,52 +206,47 @@ test("states: skeleton, unavailable, older-bob, and hidden", () => {
   assert.equal(helpers.periodStripModel(null, "2026-Q4", { laneView: "both" }).state, "skeleton");
 });
 
-test("paint renders facts, lanes, and the seven-day parts row with no buttons", () => {
+test("paint renders facts, a legacy Roots fallback, and the seven-child axis", () => {
   const model = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
   const { root } = paint(model);
   assert.equal(byClass(root, "bob-period-strip-fact").length, 5);
-  assert.ok(byClass(root, "bob-period-strip-parts").length >= 1);
+  assert.equal(byClass(root, "bob-period-strip-chart-title").length, 1);
+  assert.match(root.textContent, /Update bob for the Types chart/);
   assert.equal(byClass(root, "bob-period-strip-column").length, 7);
+  assert.equal(byClass(root, "bob-period-strip-chart-switch").length, 0);
   assert.equal(findAll(root, (node) => node.tagName === "BUTTON").length, 0);
   const paintedFuture = paint(helpers.periodStripModel(future, "2026-W46", { laneView: "both" })).root;
   assert.match(paintedFuture.textContent, /Starts/);
   assert.equal(byClass(paintedFuture, "bob-period-strip-column").length, 0);
 });
 
-test("period legend hue classes all have Day strip CSS rules and keep shade and tone", () => {
+test("Roots and Types legend marks reuse their identity hue classes", () => {
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
   const hues = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red", "gray"];
   const emitted = new Set();
   for (const hue of hues) {
-    const entry = (key, shade) => ({
-      key, label: key, legendLabel: key, display: "1h", value: 60, hue,
-      shade, tone: hue === "gray" ? "gray" : "hue",
-    });
-    const model = {
-      state: "ready", periodId: "2026-W44", kind: "week", facts: [],
-      lanes: { view: "both", shown: ["roots", "themes"], switchable: false },
-      roots: { title: "Time by root parent", legend: [entry("root-" + hue, 0)] },
-      themes: { title: "Time by type", legend: [entry("type-" + hue, hue === "blue" ? 2 : 0)] },
-      columns: [], children: [], groups: [], ariaLabel: "Period stats",
+    const report = JSON.parse(JSON.stringify(closed));
+    report.homes["root-" + hue] = { label: "Root " + hue, hue, kind: "project" };
+    report.theme_hues["type-" + hue] = { name: "Type " + hue, hue, configured: true };
+    report.charts = {
+      version: 1,
+      roots: { limit: 5, series: [{ key: "root-" + hue, kind: "root", label: "Root " + hue, minutes: 60, display: "1h", display_short: "1h" }] },
+      types: { policy: "configured", series: [{ key: "type-" + hue, kind: "type", label: "Type " + hue, minutes: 60, display: "1h", display_short: "1h" }] },
     };
-    const { root } = paint(model);
+    report.columns = report.columns.map((column) => ({ ...column, stacks: { roots: [], types: [] } }));
+    const { root } = paint(helpers.periodStripModel(report, "2026-W44"));
     const rootMark = byClass(root, "bob-period-strip-legend-dot")[0];
     const typeMark = byClass(root, "bob-period-strip-legend-swatch")[0];
     const rootClass = (rootMark.getAttribute("class").split(/\s+/).find((name) => name.startsWith("bob-day-strip-hue-")));
     const typeClass = (typeMark.getAttribute("class").split(/\s+/).find((name) => name.startsWith("bob-day-strip-theme-hue-")));
     emitted.add(rootClass);
     emitted.add(typeClass);
-    assert.equal(rootMark.getAttribute("data-tone"), hue === "gray" ? "gray" : "hue");
-    assert.equal(typeMark.getAttribute("data-tone"), hue === "gray" ? "gray" : "hue");
-    if (hue === "blue") assert.equal(typeMark.getAttribute("data-shade"), "2");
-  }
-  assert.equal(emitted.size, hues.length * 2);
-  for (const className of emitted) {
-    assert.match(css, new RegExp("\\." + className + "\\s*\\{"), className + " has a CSS rule");
+    assert.ok(css.includes("." + rootClass));
+    assert.ok(css.includes("." + typeClass));
   }
 });
 
-test("period legends show the three largest rows first and list the rest in the overflow title", () => {
+test("new chart legends show every series and do not collapse entries into +N", () => {
   const report = JSON.parse(JSON.stringify(closed));
   const rows = [
     { key: "tiny.md", label: "Tiny", minutes: 5, display: "5m", share: "2%" },
@@ -262,43 +257,46 @@ test("period legends show the three largest rows first and list the rest in the 
   ];
   report.lanes.root_parent = rows;
   for (const row of rows) report.homes[row.key] = { label: row.label, hue: "blue", kind: "project" };
+  report.charts = {
+    version: 1,
+    roots: { limit: 5, series: rows.map((row) => ({ ...row, kind: "root", display_short: row.display })) },
+    types: { policy: "configured", series: [] },
+  };
+  report.columns = report.columns.map((column) => ({ ...column, stacks: { roots: [], types: [] } }));
   const { root } = paint(helpers.periodStripModel(report, "2026-W44"));
-  const rootMix = byClass(root, "bob-period-strip-mix")[0];
-  const items = byClass(rootMix, "bob-period-strip-legend-item");
-  assert.deepEqual(items.map((item) => item.getAttribute("data-key")), ["largest.md", "middle.md", "next.md"]);
-  const overflow = byClass(rootMix, "bob-period-strip-overflow")[0];
-  assert.equal(overflow.textContent, "+2");
-  assert.equal(overflow.getAttribute("title"), "Small 20m\nTiny 5m");
+  const items = byClass(root, "bob-period-strip-chart-legend-item");
+  assert.deepEqual(items.map((item) => item.getAttribute("data-key")), rows.map((row) => row.key));
+  assert.equal(byClass(root, "bob-period-strip-overflow").length, 0);
 });
 
-test("quarter month ticks reserve one fixed row so every bar shares a baseline", () => {
+test("quarter month ticks occupy one shared row above aligned chart columns", () => {
   const quarter = periodPartsFixtures(closed).closedQuarter;
   const model = helpers.periodStripModel(quarter, "2026-Q2");
   const { root } = paint(model);
-  const columns = byClass(root, "bob-period-strip-column");
-  assert.equal(columns.length, 13);
-  assert.ok(columns.every((column) => byClass(column, "bob-period-strip-column-tick").length === 1));
-  assert.deepEqual(columns.map((column) => byClass(column, "bob-period-strip-column-tick")[0].textContent), [
+  const row = byClass(root, "bob-period-strip-chart-ticks")[0];
+  const ticks = byClass(row, "bob-period-strip-chart-tick");
+  assert.equal(ticks.length, 13);
+  assert.deepEqual(ticks.map((column) => column.textContent), [
     "Apr", "", "", "", "May", "", "", "", "Jun", "", "", "", "",
   ]);
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
-  assert.match(css, /\.bob-period-strip-column-tick\s*\{[^}]*flex:\s*0 0 0\.9em/s);
+  assert.match(css, /\.bob-period-strip-chart-ticks\s*\{/);
 });
 
 test("period slices keep honest heights, skip sub-pixel pieces, and omit year values", () => {
   const model = helpers.periodStripModel(closed, "2026-W44");
-  const first = model.columns[0];
+  const first = model.charts.columns[0];
   first.worked = { ...first.worked, value: 215, display: "3h 35m" };
-  first.stack = [
-    { key: "tiny.md", minutes: 1, hue: "green", rank: 0 },
-    { key: "large.md", minutes: 214, hue: "blue", rank: 1 },
+  first.roots = [
+    { key: "tiny.md", minutes: 1, label: "Tiny", hue: "green", fill: "identity", kind: "root" },
+    { key: "large.md", minutes: 214, label: "Large", hue: "blue", fill: "identity", kind: "root" },
   ];
-  const tallest = Math.max(...model.columns.map((column) => column.worked && column.worked.value || 0));
+  model.charts.tallest = 215;
   const { root } = paint(model);
-  const firstColumn = byClass(root, "bob-period-strip-column")[0];
-  const bar = byClass(firstColumn, "bob-period-strip-column-bar")[0];
+  const firstPlot = byClass(root, "bob-period-strip-chart-plot-roots")[0];
+  const bar = byClass(firstPlot, "bob-period-strip-column-bar")[0];
   assert.deepEqual(bar.children.map((piece) => piece.getAttribute("data-key")), ["large.md"]);
-  assert.equal(bar.children[0].style.height, String((214 / tallest) * 100) + "%");
+  assert.equal(bar.children[0].style.height, String((214 / 215) * 62) + "px");
   assert.match(bar.children[0].getAttribute("class"), /bob-period-strip-column-piece-top/);
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
   const barCss = css.match(/\.bob-period-strip-column-bar\s*\{([^}]+)\}/)[1];

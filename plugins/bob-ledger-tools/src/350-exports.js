@@ -867,7 +867,7 @@ module.exports.helpers = {
   periodStripParseFencePeriod,
   periodStripClassifyId,
   periodStripModel,
-  periodStripWeekColumns,
+  periodStripChartsModel, periodStripChartsDigest, periodStripNextChartView, PERIOD_STRIP_CHART_VIEW_KEY,
   periodStripTableRows,
   periodStripYearQuarterColumns,
   paintPeriodStripParts,

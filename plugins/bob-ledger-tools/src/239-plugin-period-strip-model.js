@@ -441,7 +441,7 @@ function periodStripErrorInfo(error) {
 function periodStripModel(report, periodId, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
-    const laneView = "both";
+    const laneView = typeof periodStripChartViewOf === "function" ? periodStripChartViewOf(safeContext.periodView) : "both";
     const classified = periodStripClassifyId(periodId);
     if (!classified || classified.kind === "day") {
       return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
@@ -473,11 +473,13 @@ function periodStripModel(report, periodId, context) {
     }
     const period = report.period && typeof report.period === "object" ? report.period : {};
     if (period.state === "future") {
-      return { state: "future", periodId: classified.id, kind, period, columns: periodStripWeekColumns(report), children: periodStripTableRows(report), groups: Array.isArray(report.groups) ? report.groups : [], lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
+      const charts = typeof periodStripChartsModel === "function" ? periodStripChartsModel(report, kind, laneView, safeContext) : null;
+      return { state: "future", periodId: classified.id, kind, period, columns: periodStripWeekColumns(report), charts, children: periodStripTableRows(report), groups: Array.isArray(report.groups) ? report.groups : [], lanes: { view: laneView, shown: [], switchable: false }, metaText: periodStripMetaText(report, safeContext.fetchedAt), stale: false, error: null };
     }
     const facts = (Array.isArray(report.facts) ? report.facts : []).map(periodStripBuildFact);
     const roots = periodStripLane(report, "root_parent", safeContext);
     const themes = periodStripLane(report, "theme", safeContext);
+    const charts = typeof periodStripChartsModel === "function" ? periodStripChartsModel(report, kind, laneView, safeContext) : null;
     const columns = periodStripWeekColumns(report);
     const children = periodStripTableRows(report);
     const groups = Array.isArray(report.groups) ? report.groups : [];
@@ -485,10 +487,7 @@ function periodStripModel(report, periodId, context) {
     const stale = safeContext.stale === true;
     const lanes = {
       view: laneView,
-      shown: [
-        ...(!roots.omitted ? ["roots"] : []),
-        ...(!themes.omitted ? ["themes"] : []),
-      ],
+      shown: [ ...(!roots.omitted ? ["roots"] : []), ...(!themes.omitted ? ["themes"] : []) ],
       switchable: false,
     };
     const metaText = periodStripMetaText(report, safeContext.fetchedAt);
@@ -508,6 +507,7 @@ function periodStripModel(report, periodId, context) {
       children,
       groups,
       quarterFallbackColumns,
+      charts,
       lanes,
       metaText,
       asOf,

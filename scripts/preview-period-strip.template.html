@@ -93,13 +93,14 @@
       return el;
     }
     window.periodStripPreview = {
-      renderMatrix(width, theme) {
+      renderMatrix(width, theme, view = "both", onlyIds = null) {
         document.body.className = "theme-" + theme;
         const root = document.getElementById("preview-root");
         root.innerHTML = "";
         root.style.width = width + "px";
         const measurements = [];
         for (const entry of cases) {
+          if (Array.isArray(onlyIds) && !onlyIds.includes(entry.id)) continue;
           const wrap = document.createElement("section");
           wrap.className = "preview-case";
           wrap.id = "case-" + entry.id;
@@ -119,13 +120,39 @@
           root.appendChild(wrap);
           const report = entry.report ? fixtures[entry.report] : null;
           const periodId = entry.report ? fixtures[entry.report].period.id : "2026-W45";
-          const model = helpers.periodStripModel(report, periodId, { laneView: "both", fetchedAt: (report && report.generated_at) || null });
+          const model = helpers.periodStripModel(report, periodId, { periodView: view, fetchedAt: (report && report.generated_at) || null });
           helpers.paintPeriodStrip(host, model, {});
           helpers.paintPeriodPartsTable(tableHost, model);
           const rect = host.getBoundingClientRect();
-          const fallback = host.querySelector(".bob-period-strip-parts-fallback");
           const tableRect = tableHost.getBoundingClientRect();
-          measurements.push({ state: entry.id, kind: model.kind, stripHeight: Math.ceil(rect.height), tableHeight: Math.ceil(tableRect.height), yearFallback: Boolean(fallback && getComputedStyle(fallback).display !== "none"), periodId });
+          const chart = host.querySelector(".bob-period-strip-charts");
+          const axisColumns = Array.from(host.querySelectorAll(".bob-period-strip-chart-axis-column"));
+          const overlap = axisColumns.some((column) => {
+            const caption = column.querySelector(".bob-period-strip-column-caption");
+            const value = column.querySelector(".bob-period-strip-column-value");
+            if (!caption || !value || !caption.textContent || !value.textContent) return false;
+            return caption.getBoundingClientRect().bottom > value.getBoundingClientRect().top + 0.5;
+          });
+          let proportional = Boolean(chart);
+          if (chart && report && report.charts) {
+            const tallest = Math.max(0, ...(report.columns || []).map((column) => Number(column.worked && column.worked.value) || 0));
+            const plotHeight = view === "both" ? 44 : 62;
+            for (const piece of chart.querySelectorAll(".bob-period-strip-column-piece")) {
+              const expected = tallest > 0 ? (Number(piece.getAttribute("data-minutes")) / tallest) * plotHeight : 0;
+              if (Math.abs(piece.getBoundingClientRect().height - expected) > 1.05) proportional = false;
+            }
+          }
+          measurements.push({
+            state: entry.id,
+            kind: model.kind,
+            periodId,
+            view,
+            stripHeight: Math.ceil(rect.height),
+            tableHeight: Math.ceil(tableRect.height),
+            noOverflow: host.scrollWidth <= host.clientWidth + 1 && (!chart || chart.scrollWidth <= chart.clientWidth + 1),
+            overlap,
+            proportional,
+          });
         }
         return { measurements };
       },

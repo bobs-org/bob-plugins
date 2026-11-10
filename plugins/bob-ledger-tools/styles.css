@@ -7648,6 +7648,106 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   .bob-period-parts-table-kind-week .bob-period-parts-row { grid-template-columns: minmax(4em, 5em) minmax(6em, 1fr) minmax(7em, 1fr) minmax(2.5em, 3em) minmax(3.5em, 4em) minmax(7em, 1.5fr); }
 }
 
+/* Two period charts use one child-period grid. The legend lines and each
+   plotted row span that same grid, so root and type bars share their baselines. */
+.bob-period-strip-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+  margin: 0.25em 0 0.35em;
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+.bob-period-strip-rule { height: 1px; min-width: 1em; flex: 1 1 auto; background: var(--background-modifier-border); }
+.bob-period-strip-chart-switch { margin-left: 0; }
+.bob-period-strip-charts { display: grid; min-width: 0; gap: 0.16em 0; }
+.bob-period-strip-chart-title {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.35em 0.8em;
+  color: var(--text-muted);
+  font-size: 0.7em;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.bob-period-strip-chart-title:hover { color: var(--text-normal); }
+.bob-period-strip-chart-title:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-period-strip-chart-heading { flex: none; font-size: 0.92em; font-weight: 700; letter-spacing: 0.08em; }
+.bob-period-strip-chart-legend { display: inline-flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0.18em 0.75em; }
+.bob-period-strip-chart-legend-item { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.bob-period-strip-chart-legend-item .bob-period-strip-legend-label { overflow-wrap: anywhere; }
+.bob-period-strip-chart-legend-item .bob-period-strip-legend-value { white-space: nowrap; }
+.bob-period-strip-chart-row,
+.bob-period-strip-chart-ticks,
+.bob-period-strip-chart-axis,
+.bob-period-strip-chart-groups {
+  display: grid;
+  min-width: 0;
+  width: 100%;
+}
+.bob-period-strip-chart-ticks { height: 0.9em; margin: 0.03em 0 0.06em; color: var(--text-muted); font-size: 0.62em; white-space: nowrap; }
+.bob-period-strip-chart-tick { display: flex; min-width: 0; align-items: center; gap: 2px; overflow: hidden; }
+.bob-period-strip-chart-tick .bob-period-strip-column-tick-rule { flex: none; }
+.bob-period-strip-chart-plot { display: flex; min-width: 0; height: 44px; align-items: flex-end; justify-content: center; }
+.bob-period-strip-charts[data-view="roots"] .bob-period-strip-chart-plot-roots,
+.bob-period-strip-charts[data-view="types"] .bob-period-strip-chart-plot-types { height: 62px; }
+.bob-period-strip-chart-plot .bob-period-strip-column-bar { height: 44px; width: min(100%, 1.8em); justify-content: flex-start; }
+.bob-period-strip-chart-plot .bob-period-strip-column-bar { position: relative; }
+.bob-period-strip-charts[data-view="roots"] .bob-period-strip-chart-plot-roots .bob-period-strip-column-bar,
+.bob-period-strip-charts[data-view="types"] .bob-period-strip-chart-plot-types .bob-period-strip-column-bar { height: 62px; }
+.bob-period-strip-chart-plot[data-active="true"] { opacity: 0.78; }
+.bob-period-strip-chart-plot .bob-period-strip-column-piece { min-height: 0; }
+.bob-period-strip-chart-legend [data-shade="1"],
+.bob-period-strip-chart-row[data-chart-row="types"] [data-shade="1"] { background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 65%, var(--background-primary)); }
+.bob-period-strip-chart-legend [data-shade="2"],
+.bob-period-strip-chart-row[data-chart-row="types"] [data-shade="2"] { background: color-mix(in srgb, var(--bob-day-strip-hue, var(--text-faint)) 42%, var(--background-primary)); }
+.bob-period-strip-series-rest { background: color-mix(in srgb, var(--text-muted) 18%, var(--background-primary)); }
+.bob-period-strip-series-rest-mark { background: color-mix(in srgb, var(--text-muted) 30%, var(--background-primary)); }
+.bob-period-strip-series-hatch {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 52%, transparent) 0 1px, transparent 1px 4px);
+}
+.bob-period-strip-legend-swatch.bob-period-strip-series-hatch { background-color: var(--background-primary); }
+.bob-period-strip-chart-axis { align-items: start; margin-top: 0.1em; }
+.bob-period-strip-chart-axis-column {
+  display: grid;
+  grid-template-rows: 1em auto auto;
+  min-width: 0;
+  gap: 1px;
+  padding: 1px 0;
+  text-align: center;
+}
+.bob-period-strip-chart-axis-column:hover { color: var(--text-normal); }
+.bob-period-strip-chart-axis-column:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-period-strip-chart-axis-column[data-active="true"] { color: var(--text-normal); }
+.bob-period-strip-chart-axis-column .bob-period-strip-column-mark { overflow: hidden; }
+.bob-period-strip-chart-axis-column .bob-period-strip-column-caption,
+.bob-period-strip-chart-axis-column .bob-period-strip-column-value {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  font-size: 0.63em;
+  line-height: 1.2;
+}
+.bob-period-strip-chart-axis-column .bob-period-strip-column-value { font-variant-numeric: tabular-nums; }
+.bob-period-strip-chart-groups { margin-top: 0.15em; min-height: 1.2em; }
+.bob-period-strip-chart-groups .bob-period-strip-group-caption { min-width: 0; padding: 0 1px; }
+.bob-period-strip-chart-zero-stub { position: absolute; bottom: 0; width: 2px; height: 1px; background: var(--text-faint); }
+.bob-period-strip-chart-future-stub { position: absolute; bottom: 0; width: 100%; border-top: 2px dashed var(--background-modifier-border); }
+.bob-period-strip-chart-zero-note,
+.bob-period-strip-chart-update-note { color: var(--text-muted); font-size: 0.72em; }
+.bob-period-strip-chart-update-note { margin: 0.15em 0; }
+.bob-period-strip-charts-legacy { padding-inline-start: 0.5em; }
+.bob-period-strip-chart-row { animation: bob-period-strip-chart-enter 160ms ease-out; }
+@keyframes bob-period-strip-chart-enter { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .bob-period-strip-chart-row { animation: none; }
+}
+
 /* Mail link marks (mail-link-marks): display-only reply badge after a
    task's mail wikilink. Gated by `body.bob-mail-link-marks`. */
 body.bob-mail-link-marks .bob-mail-reply-badge {

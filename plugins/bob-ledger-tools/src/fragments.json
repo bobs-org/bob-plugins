@@ -95,6 +95,8 @@
   "239-plugin-period-strip-parts.js",
   "239-plugin-period-strip-render.js",
   "239-plugin-period-strip-fence.js",
+  "239-plugin-period-strip-charts-model.js",
+  "239-plugin-period-strip-charts-render.js",
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
   "241a-plugin-notebook-data.js",

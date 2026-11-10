@@ -1305,6 +1305,93 @@
   gap: var(--size-4-2);
 }
 
+/* Delete current file confirmation -------------------------------------- */
+
+.modal.bob-delete-confirm-modal {
+  width: min(92vw, 520px);
+  max-width: 520px;
+}
+
+.bob-delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-4);
+  min-width: 0;
+}
+
+.bob-delete-confirm-header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-3);
+}
+
+.bob-delete-confirm-header-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-m);
+  color: var(--text-error);
+  background-color: color-mix(in srgb, var(--text-error) 14%, transparent);
+}
+
+.bob-delete-confirm-header-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.bob-delete-confirm-header-text {
+  min-width: 0;
+}
+
+.bob-delete-confirm-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-bold);
+  line-height: 1.2;
+}
+
+.bob-delete-confirm-subtitle {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-delete-confirm-reasons {
+  margin: 0;
+  padding-inline-start: 1.2em;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+.bob-delete-confirm-reason + .bob-delete-confirm-reason {
+  margin-top: 0.35em;
+}
+
+.bob-delete-confirm-facts {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.bob-delete-confirm-hint {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.bob-delete-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+
 /* --- Priority notice ---------------------------------------------------- */
 
 .notice:has(.bob-nh-notice) {

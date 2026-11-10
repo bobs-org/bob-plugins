@@ -212,20 +212,129 @@ class BobNavigationHotkeysProjectFileMixin {
     return opened;
   }
 
+  async trashFileForDelete(file, path) {
+    try {
+      await this.app.fileManager.trashFile(file);
+      new Notice(getDeletedFileNoticeText(path));
+      this.lastDeleteCurrentFile = { path, at: Date.now() };
+    } catch (error) {
+      new Notice(path ? `Could not delete "${path}"` : "Could not delete file");
+    }
+  }
+
+  async confirmCapturedDelete(file, path) {
+    const current =
+      this.app &&
+      this.app.vault &&
+      typeof this.app.vault.getAbstractFileByPath === "function"
+        ? this.app.vault.getAbstractFileByPath(path)
+        : null;
+    if (current !== file) {
+      new Notice(`"${path}" changed — nothing deleted`);
+      return;
+    }
+    await this.trashFileForDelete(file, path);
+  }
+
+  gatherDeleteCurrentFilePlanInput(file) {
+    const path = file.path;
+    const isMarkdown = this.isMarkdownFile(file);
+    const cache =
+      this.app &&
+      this.app.metadataCache &&
+      typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+    const frontmatter = cache && cache.frontmatter ? cache.frontmatter : null;
+    const childNoteCount =
+      isMarkdown && typeof this.collectChildNotes === "function"
+        ? this.collectChildNotes(file).length
+        : 0;
+    const backlinkCount = countDeleteGuardBacklinks(
+      this.app && this.app.metadataCache && this.app.metadataCache.resolvedLinks,
+      path,
+    );
+    const openTaskCount = countDeleteGuardOpenTasks(cache && cache.listItems);
+    return {
+      path,
+      isMarkdown,
+      frontmatter,
+      cache,
+      childNoteCount,
+      backlinkCount,
+      openTaskCount,
+    };
+  }
+
   async deleteCurrentFile() {
+    if (this.deleteCurrentFileModal || this.deleteCurrentFileBusy) {
+      return;
+    }
+
+    this.deleteCurrentFileBusy = true;
+    try {
+      await this.deleteCurrentFileOpen();
+    } finally {
+      this.deleteCurrentFileBusy = false;
+    }
+  }
+
+  async deleteCurrentFileOpen() {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
       return;
     }
 
-    const path = file.path;
-    try {
-      await this.app.fileManager.trashFile(file);
-      new Notice(getDeletedFileNoticeText(path));
-    } catch (error) {
-      new Notice(path ? `Could not delete "${path}"` : "Could not delete file");
+    const gathered = this.gatherDeleteCurrentFilePlanInput(file);
+    const path = gathered.path;
+    let body = "";
+    if (
+      gathered.isMarkdown &&
+      this.app &&
+      this.app.vault &&
+      typeof this.app.vault.cachedRead === "function"
+    ) {
+      try {
+        body = String((await this.app.vault.cachedRead(file)) || "");
+      } catch (_error) {
+        body = "";
+      }
     }
+    const lineCount = body ? body.split(/\r?\n/).length : 0;
+    const plan = planDeleteCurrentFile({
+      path,
+      isMarkdown: gathered.isMarkdown,
+      frontmatter: gathered.frontmatter,
+      now: Date.now(),
+      lastDelete: this.lastDeleteCurrentFile || null,
+      childNoteCount: gathered.childNoteCount,
+      backlinkCount: gathered.backlinkCount,
+      openTaskCount: gathered.openTaskCount,
+      lineCount,
+      body,
+    });
+    if (!plan.confirm) {
+      await this.trashFileForDelete(file, path);
+      return;
+    }
+
+    const modal = new DeleteFileConfirmModal(this.app, {
+      file,
+      path,
+      plan,
+      onConfirm: () => this.confirmCapturedDelete(file, path),
+      onCancel: () => {
+        new Notice(`Kept "${path}"`);
+      },
+      onClosed: () => {
+        if (this.deleteCurrentFileModal === modal) {
+          this.deleteCurrentFileModal = null;
+        }
+      },
+    });
+    this.deleteCurrentFileModal = modal;
+    modal.open();
   }
 
   openRenameCurrentFileModal() {

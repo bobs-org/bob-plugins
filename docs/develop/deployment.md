@@ -28,9 +28,42 @@ If a vault plugin file has uncommitted changes in the vault's Git repository,
 sync leaves it alone and warns; review local changes before deciding whether
 to overwrite them. Sync also refuses to overwrite another checkout's
 uncommitted or non-ancestor deploy. Same-checkout dirty iteration is allowed
-while the stamp still matches the vault. After an uncommitted fix is committed
-and present in a clean checkout of the same bytes, a real sync reconciles the
-stamp without `--force`; a later descendant can then update normally.
+while the stamp still matches the vault. Any clean checkout whose HEAD reaches
+a commit holding the deployed bundle byte for byte syncs without `--force`,
+and the sync names that proving commit; a later descendant can then update
+normally.
+
+### When sync refuses an overwrite
+
+If `bob plugins sync` refuses to overwrite another checkout's deploy, never
+pass `-F` on your own and do not ask Bryan yet. Run `git fetch` and
+`git log --oneline HEAD..@{upstream} -- plugins/<id>`.
+
+- Landed: the refusal names the commit when it is already fetched. Follow the
+  recipe below. No `-F`, no question.
+- Author still running: the build has not landed and the agent named in the
+  refusal is still running (`sase agent list`). Wait for it to land instead of
+  forcing.
+- Unlanded and abandoned: ask Bryan. The question must name what `-F` would
+  remove from the vault: the deployed plugin version and the features or APIs
+  it carries.
+
+```bash
+git fetch
+git log --oneline HEAD..@{upstream} -- plugins/<id>
+git stash push -u
+git merge --ff-only @{upstream}   # rebase instead if you have local commits
+bob plugins sync --repo "$PWD" --no-pull -p <id>
+git stash pop
+npm run build                     # source-fragment plugins
+bob plugins sync --repo "$PWD" --no-pull -p <id>
+```
+
+The clean sync rewrites the stamp to the landed commit, so the second sync is
+a descendant deploy and the vault keeps both changes. `-F` is appropriate only
+when Bryan approved dropping the deployed build, or when the deployed bytes are
+in no commit (for example after an earlier force) and you are deploying a clean
+commit that contains the work they carried.
 
 In a Git vault, sync and list also warn when a plugin's whole vault folder
 (`.obsidian/plugins/<id>/`) is not ignored or holds tracked files. The warning

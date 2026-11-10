@@ -388,9 +388,9 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
-// One colour per root: buckets and muted roots stay gray up front; every
-// other root keeps its catalog hue when it is the biggest claimant, else
-// takes the next free palette hue.
+// One colour per root: buckets and muted roots stay gray up front; coloured
+// roots claim their catalog hues in identity order, then take the next free
+// palette hue in that same order. Minutes never decide which root keeps a hue.
 function statsPanelDistinctHues(rows, report) {
   const result = new Map();
   const list = Array.isArray(rows) ? rows.slice() : [];
@@ -407,8 +407,9 @@ function statsPanelDistinctHues(rows, report) {
     }
   }
   const labelOf = (row) => (typeof row.label === "string" && row.label ? row.label : row.key);
-  const valueOf = (row) => (typeof row.value === "number" && Number.isFinite(row.value) ? row.value : 0);
-  coloured.sort((a, b) => (valueOf(b) - valueOf(a)) || labelOf(a).localeCompare(labelOf(b)) || a.key.localeCompare(b.key));
+  const identityCompare = (a, b) =>
+    labelOf(a).toLowerCase().localeCompare(labelOf(b).toLowerCase()) || a.key.localeCompare(b.key);
+  coloured.sort(identityCompare);
   const claimed = new Set();
   const preferredOf = (row) => statsPanelHomeHue(report, row.key);
   for (const row of coloured) {

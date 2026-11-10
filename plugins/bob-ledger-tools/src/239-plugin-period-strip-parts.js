@@ -49,10 +49,16 @@ function periodStripColumnBar(doc, column, tallest) {
     return bar;
   }
   const total = column.worked.value;
-  for (const entry of column.stack) {
+  const visible = column.stack.map((entry) => ({
+    entry,
+    height: total > 0 ? (entry.minutes / tallest) * 100 : 0,
+  })).filter((item) => item.height * 0.48 >= 0.75);
+  for (const [index, item] of visible.entries()) {
+    const entry = item.entry;
+    const isTop = index === visible.length - 1;
     const height = total > 0 ? (entry.minutes / tallest) * 100 : 0;
     const piece = statsEl(doc, "span", {
-      class: "bob-period-strip-column-piece bob-day-strip-hue-" + (entry.hue || "gray"),
+      class: "bob-period-strip-column-piece" + (isTop ? " bob-period-strip-column-piece-top" : " bob-period-strip-column-piece-seamed") + " bob-day-strip-hue-" + (entry.hue || "gray"),
       "data-key": entry.key,
     });
     if (piece && piece.style) {
@@ -87,11 +93,13 @@ function periodStripRenderColumn(doc, column, index, model, handlers) {
     "data-column-state": state,
   });
   if (!node) return null;
-  if (column.tick) {
+  if (column.tick || model.kind === "quarter") {
     const tick = statsEl(doc, "span", { class: "bob-period-strip-column-tick", "aria-hidden": "true" });
     if (tick) {
-      tick.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-tick-rule" }));
-      tick.appendChild(statsEl(doc, "span", {}, column.tick));
+      if (column.tick) {
+        tick.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-tick-rule" }));
+        tick.appendChild(statsEl(doc, "span", {}, column.tick));
+      }
       node.appendChild(tick);
     }
   }
@@ -108,9 +116,11 @@ function periodStripRenderColumn(doc, column, index, model, handlers) {
   const caption = statsEl(doc, "span", { class: "bob-period-strip-column-caption" },
     (column.caption || "") + (state === "current" ? " · so far" : "") + (column.partial ? " · " + column.partial : ""));
   if (caption && node.appendChild) node.appendChild(caption);
-  const value = statsEl(doc, "span", { class: "bob-period-strip-column-value" },
-    (column.worked && column.worked.display) || (state === "future" ? "" : "–"));
-  if (value && node.appendChild) node.appendChild(value);
+  if (model.kind !== "year") {
+    const value = statsEl(doc, "span", { class: "bob-period-strip-column-value" },
+      (column.worked && column.worked.display) || (state === "future" ? "" : "–"));
+    if (value && node.appendChild) node.appendChild(value);
+  }
   periodStripPartsActivate(node, (newLeaf, alt) => {
     if (alt) {
       if (handlers && typeof handlers.openStatsForColumn === "function") handlers.openStatsForColumn(column, newLeaf);

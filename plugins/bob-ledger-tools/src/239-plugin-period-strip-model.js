@@ -326,7 +326,7 @@ function periodStripWeekColumns(report) {
       if (periodKind === "quarter" && typeof column.kind === "string" && column.kind === "week") caption = caption.replace(/^W/i, "");
       if (periodKind === "year" && column.group) caption = "";
       const soFar = state === "current";
-      const tooltip = periodStripColumnTooltip(column, missing);
+      const tooltip = periodStripColumnTooltip(column, missing, report);
       return {
         id: typeof column.id === "string" ? column.id : "",
         kind: typeof column.kind === "string" ? column.kind : "day",
@@ -366,7 +366,7 @@ function periodStripPartialCaption(column) {
   }
 }
 
-function periodStripColumnTooltip(column, missing) {
+function periodStripColumnTooltip(column, missing, report) {
   try {
     const label = typeof column.label === "string" ? column.label : "";
     const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
@@ -378,13 +378,25 @@ function periodStripColumnTooltip(column, missing) {
     const stack = Array.isArray(column.stack) ? column.stack : [];
     for (const entry of stack) {
       if (!entry || typeof entry.key !== "string") continue;
-      lines.push(entry.key + " " + periodStripFormatMinutes(entry.minutes));
+      lines.push(periodStripRootLabel(report, entry.key) + " " + periodStripFormatMinutes(entry.minutes));
     }
     if (missing) lines.push("not tracked");
     return lines.join("\n");
   } catch (error) {
     return "";
   }
+}
+
+function periodStripRootLabel(report, key) {
+  const homes = report && report.homes && typeof report.homes === "object" ? report.homes : {};
+  const home = homes[key] && typeof homes[key] === "object" ? homes[key] : null;
+  if (home && typeof home.label === "string" && home.label.trim()) return home.label.trim();
+  const rows = report && report.lanes && Array.isArray(report.lanes.root_parent) ? report.lanes.root_parent : [];
+  const row = rows.find((entry) => entry && entry.key === key);
+  if (row && typeof row.label === "string" && row.label.trim()) return row.label.trim();
+  if (key === "@unlinked") return "unlinked";
+  if (key === "@unfiled") return "unfiled";
+  return String(key).replace(/^@/, "").replace(/\.md$/i, "").replace(/[_-]+/g, " ");
 }
 
 function periodStripColumnReviewWords(mark, state) {
@@ -429,9 +441,7 @@ function periodStripErrorInfo(error) {
 function periodStripModel(report, periodId, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
-    const laneView = typeof dayStripLaneViewOf === "function"
-      ? dayStripLaneViewOf(safeContext.laneView)
-      : (safeContext.laneView === "roots" || safeContext.laneView === "themes" || safeContext.laneView === "both" ? safeContext.laneView : "both");
+    const laneView = "both";
     const classified = periodStripClassifyId(periodId);
     if (!classified || classified.kind === "day") {
       return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
@@ -459,7 +469,7 @@ function periodStripModel(report, periodId, context) {
         offClock: null,
         unit: "",
       }));
-      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
+      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: false }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
     }
     const period = report.period && typeof report.period === "object" ? report.period : {};
     if (period.state === "future") {
@@ -473,9 +483,14 @@ function periodStripModel(report, periodId, context) {
     const groups = Array.isArray(report.groups) ? report.groups : [];
     const quarterFallbackColumns = kind === "year" ? periodStripYearQuarterColumns(children) : [];
     const stale = safeContext.stale === true;
-    const lanes = typeof dayStripLaneLayout === "function"
-      ? dayStripLaneLayout({ state: stale ? "stale" : "ready", mix: { ...roots, dimension: roots.dimension === "theme" ? "theme" : "root_parent" }, themes, view: laneView })
-      : { view: laneView, shown: ["roots", "themes"], switchable: true };
+    const lanes = {
+      view: laneView,
+      shown: [
+        ...(!roots.omitted ? ["roots"] : []),
+        ...(!themes.omitted ? ["themes"] : []),
+      ],
+      switchable: false,
+    };
     const metaText = periodStripMetaText(report, safeContext.fetchedAt);
     const asOf = periodStripAsOf(safeContext.fetchedAt);
     const staleTitle = stale ? ((error && error.title) || "Refresh failed") + " · showing the " + (asOf || "cached") + " report" : "";

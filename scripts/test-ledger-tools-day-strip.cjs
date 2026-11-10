@@ -422,11 +422,12 @@ test("same-area roots get distinct hues and legend dots match their segments", (
   const expectedOrder = helpers.statsPanelHomeAreaRows(helpers.statsPanelHomeRows(worked, fixture.report, "root_parent", point), fixture.report);
   assert.deepEqual(model.mix.segments.map((segment) => segment.key), expectedOrder.map((row) => row.key), "order is unchanged");
   const byKey = new Map(model.mix.segments.map((segment) => [segment.key, segment.hue]));
-  assert.equal(byKey.get("sase.md"), "blue");
+  assert.equal(byKey.get("bob.md"), "blue");
   assert.equal(byKey.get("@unfiled"), "gray");
-  assert.equal(byKey.get("bob.md"), "aqua");
-  assert.equal(byKey.get("gtd.md"), "yellow");
-  assert.equal(byKey.get("dev.md"), "magenta");
+  assert.equal(byKey.get("gtd.md"), "orange");
+  assert.equal(byKey.get("dev.md"), "aqua");
+  assert.equal(byKey.get("gtd_daily.md"), "yellow");
+  assert.equal(byKey.get("sase.md"), "magenta");
   assert.equal(byKey.get("@unlinked"), "gray");
   const nonGray = model.mix.segments.filter((segment) => segment.hue !== "gray");
   assert.equal(new Set(nonGray.map((segment) => segment.hue)).size, nonGray.length, "non-gray segments differ");

@@ -319,12 +319,6 @@ class BobLedgerToolsPeriodStripMixin {
         return this.periodStripPaintDay(record, result);
       }
       const periodId = periodStripPeriodIdForRecord(record);
-      let laneView = "both";
-      try {
-        laneView = typeof this.dayStripLaneViewCurrent === "function" ? this.dayStripLaneViewCurrent() : dayStripLaneViewOf(this.dayStripLaneView);
-      } catch (error) {
-        laneView = "both";
-      }
       const handlers = {
         openStats: (opts) => {
           try {
@@ -363,13 +357,6 @@ class BobLedgerToolsPeriodStripMixin {
             // Retry is best-effort.
           }
         },
-        cycleLanes: () => {
-          try {
-            if (typeof this.dayStripCycleLaneView === "function") this.dayStripCycleLaneView({});
-          } catch (error) {
-            // Cycling is best-effort.
-          }
-        },
       };
       const snapshot = result && typeof result === "object" && ("report" in result || "error" in result) ? result : null;
       let report = null;
@@ -388,11 +375,10 @@ class BobLedgerToolsPeriodStripMixin {
         stale = peek ? peek.stale === true : false;
       }
       if (!report) {
-        const model = periodStripModel(null, periodId, { laneView, fetchedAt, stale, error });
+        const model = periodStripModel(null, periodId, { fetchedAt, stale, error });
         return this.periodStripFinishPaint(record, model, handlers, fetchedAt);
       }
       const model = periodStripModel(report, periodId, {
-        laneView,
         fetchedAt,
         stale,
         error,

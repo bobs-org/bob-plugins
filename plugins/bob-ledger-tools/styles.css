@@ -7485,18 +7485,20 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   display: flex;
   flex-direction: column-reverse;
   justify-content: flex-start;
-  gap: 1px;
+  gap: 0;
   width: 100%;
   height: 48px;
   background: transparent;
 }
 .bob-period-strip-column-piece {
   display: block;
+  flex: 0 0 auto;
   width: 100%;
-  min-height: 2px;
-  border-radius: 2px 2px 0 0;
+  border-radius: 0;
   background: var(--bob-day-strip-hue, var(--text-faint));
 }
+.bob-period-strip-column-piece-seamed { box-shadow: inset 0 1px 0 var(--background-primary); }
+.bob-period-strip-column-piece-top { border-radius: 2px 2px 0 0; }
 .bob-period-strip-column-missing .bob-period-strip-column-bar,
 .bob-period-strip-column-future .bob-period-strip-column-bar {
   border: 1px dashed var(--background-modifier-border);
@@ -7575,8 +7577,10 @@ body:not(.bob-root-marks) .bob-root-mark-native {
   display: flex;
   align-items: center;
   align-self: flex-start;
+  flex: 0 0 0.9em;
   gap: 2px;
   height: 0.9em;
+  min-height: 0.9em;
   color: var(--text-muted);
   font-size: 0.62em;
   white-space: nowrap;

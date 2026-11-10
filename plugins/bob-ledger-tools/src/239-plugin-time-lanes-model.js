@@ -109,7 +109,8 @@ function timeLaneThemeSegments(report, entries, fallback) {
     byHue.set(entry.hue, group);
   }
   for (const group of byHue.values()) {
-    group.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    group.sort((a, b) =>
+      a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.key.localeCompare(b.key));
     group.forEach((entry, index) => {
       shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
     });

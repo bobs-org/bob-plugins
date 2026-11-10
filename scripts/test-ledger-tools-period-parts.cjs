@@ -67,7 +67,9 @@ test("quarter parts render week columns, month ticks, review marks, and future g
   assert.equal(model.columns[0].caption, "40");
   assert.equal(model.columns[0].partial, "4/7");
   assert.equal(byClass(host, "bob-period-strip-column").length, 14);
-  assert.equal(byClass(host, "bob-period-strip-column-tick").length, 4);
+  const ticks = byClass(host, "bob-period-strip-column-tick");
+  assert.equal(ticks.length, 14, "every week keeps an aligned month-tick baseline");
+  assert.deepEqual(ticks.map((node) => node.textContent).filter(Boolean), ["Oct", "Nov", "Dec", "Jan"]);
   assert.equal(byClass(host, "bob-period-strip-column-future").length, 3);
   assert.equal(byClass(host, "bob-period-strip-column-missing").length, 1);
 });

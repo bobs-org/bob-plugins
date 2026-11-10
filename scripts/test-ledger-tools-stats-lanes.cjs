@@ -271,7 +271,7 @@ test("tones mark unattributed none, muted gray, and hashed other/unnamed as gray
   assert.equal(tone(model.roots, "@unfiled"), "none");
   const dailyRoot = model.roots.segments.find((segment) => segment.key === "gtd_daily.md");
   assert.equal(dailyRoot.tone, "hue");
-  assert.equal(dailyRoot.hue, "orange");
+  assert.equal(dailyRoot.hue, "violet");
   assert.equal(tone(model.themes, "(unnamed)"), "none");
   assert.equal(tone(model.themes, "PLAN"), "gray");
   const hashed = helpers.statsThemeRef({
@@ -296,9 +296,9 @@ test("theme order is coloured, gray, other, unnamed, with same-hue shades", () =
   assert.equal(chore.hue, "orange");
   assert.equal(decks.hue, "orange");
   assert.equal(blog.hue, "orange");
-  assert.equal(chore.shade, 0);
-  assert.equal(decks.shade, 1);
-  assert.equal(blog.shade, 2);
+  assert.equal(blog.shade, 0);
+  assert.equal(chore.shade, 1);
+  assert.equal(decks.shade, 2);
   const old = laneReport();
   old.metrics[0].parts_summary.theme = [
     { key: "BUILD", value: 100, display: "1h 40m", share: "40%" },

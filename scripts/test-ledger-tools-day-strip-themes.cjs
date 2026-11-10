@@ -208,10 +208,31 @@ test("same-hue coloured themes take shade 0 then 1 then 2; gray is never shaded"
   fixture.report.theme_hues.code = { key: "code", name: "CODE", hue: "green", hue_source: "hash" };
   const shaded = helpers.dayStripThemeMix(fixture.report, worked, fixture.day, {});
   const third = Object.fromEntries(shaded.segments.map((segment) => [segment.key, segment]));
-  assert.equal(third.PYPI.shade, 0);
-  assert.equal(third.READ.shade, 1);
-  assert.equal(third.CODE.shade, 2);
+  assert.equal(third.CODE.shade, 0);
+  assert.equal(third.PYPI.shade, 1);
+  assert.equal(third.READ.shade, 2);
   assert.equal(third.GTD.shade, 0);
+});
+
+test("same-hue type shades follow label identity while segment position follows minutes", () => {
+  const report = { theme_hues: {
+    alpha: { key: "alpha", name: "ALPHA", hue: "green", hue_source: "config" },
+    zulu: { key: "zulu", name: "ZULU", hue: "green", hue_source: "config" },
+  } };
+  const entries = [
+    { key: "ZULU", label: "ZULU", value: 90, display: "90m" },
+    { key: "ALPHA", label: "ALPHA", value: 40, display: "40m" },
+  ];
+  const first = helpers.timeLaneThemeSegments(report, entries);
+  const permuted = helpers.timeLaneThemeSegments(report, [
+    { ...entries[0], value: 30 },
+    { ...entries[1], value: 100 },
+  ]);
+  const shades = (segments) => Object.fromEntries(segments.map((segment) => [segment.key, segment.shade]));
+  assert.deepEqual(shades(first), { ZULU: 1, ALPHA: 0 });
+  assert.deepEqual(shades(permuted), shades(first));
+  assert.deepEqual(first.map((segment) => segment.key), ["ZULU", "ALPHA"]);
+  assert.deepEqual(permuted.map((segment) => segment.key), ["ALPHA", "ZULU"]);
 });
 
 test("theme mix labels, ranks, overflow, titles, and aria follow the report", () => {

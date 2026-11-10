@@ -116,7 +116,6 @@ function periodStripRenderFact(doc, fact, model, handlers) {
     for (const run of runs) {
       value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-" + run.kind }, run.text));
     }
-    if (fact.soFar) value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-so-far", "aria-hidden": "true" }, " so far"));
     node.appendChild(value);
   }
   const ref = periodStripRenderRef(doc, fact);
@@ -170,9 +169,10 @@ function periodStripLegendItem(doc, entry, lane) {
   if (rank) item.setAttribute("data-rank", String(rank));
   if (key) item.setAttribute("data-key", key);
   const themes = lane === "themes";
+  const hue = entry && typeof entry.hue === "string" ? entry.hue : "gray";
   const markClass = themes
-    ? "bob-period-strip-legend-swatch" + (entry ? " bob-period-strip-theme-hue-" + entry.hue : "")
-    : "bob-period-strip-legend-dot" + (entry ? " bob-period-strip-hue-" + entry.hue : "");
+    ? "bob-period-strip-legend-swatch bob-day-strip-theme-hue-" + hue
+    : "bob-period-strip-legend-dot bob-day-strip-hue-" + hue;
   const mark = statsEl(doc, "span", { class: markClass, "aria-hidden": "true" });
   if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) mark.setAttribute("data-shade", String(entry.shade));
   if (mark && entry && typeof entry.tone === "string" && entry.tone) mark.setAttribute("data-tone", entry.tone);
@@ -191,14 +191,25 @@ function periodStripRenderMix(doc, model, handlers, lane) {
   if (!node) return null;
   const legend = statsEl(doc, "span", { class: "bob-period-strip-legend" });
   if (legend) {
-    const entries = (mix && Array.isArray(mix.legend) ? mix.legend : []).slice(0, 3);
+    const ranked = (mix && Array.isArray(mix.legend) ? mix.legend : []).slice().sort((a, b) => {
+      const aValue = a && typeof a.value === "number" ? a.value : 0;
+      const bValue = b && typeof b.value === "number" ? b.value : 0;
+      const aLabel = a && typeof a.label === "string" ? a.label : "";
+      const bLabel = b && typeof b.label === "string" ? b.label : "";
+      return bValue - aValue || aLabel.toLowerCase().localeCompare(bLabel.toLowerCase()) || String(a && a.key || "").localeCompare(String(b && b.key || ""));
+    });
+    const entries = ranked.slice(0, 3);
     for (const entry of entries) {
       const item = periodStripLegendItem(doc, entry, lane);
       if (item) legend.appendChild(item);
     }
-    const overflow = mix && mix.overflowDefault && typeof mix.overflowDefault.count === "number" ? mix.overflowDefault.count : 0;
+    const overflowEntries = ranked.slice(3);
+    const overflow = overflowEntries.length;
     if (overflow > 0 && !skeleton) {
-      legend.appendChild(statsEl(doc, "span", { class: "bob-period-strip-overflow", title: (mix.overflowDefault && mix.overflowDefault.title) || null }, "+" + overflow));
+      const overflowTitle = overflowEntries.map((entry) =>
+        (typeof entry.label === "string" && entry.label ? entry.label : entry.key) + " " + (entry.display || ""),
+      ).join("\n");
+      legend.appendChild(statsEl(doc, "span", { class: "bob-period-strip-overflow", title: overflowTitle }, "+" + overflow));
     }
     node.appendChild(legend);
   }

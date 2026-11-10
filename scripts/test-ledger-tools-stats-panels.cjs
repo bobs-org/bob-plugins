@@ -1108,11 +1108,11 @@ test("statsPanelDistinctHues gives every root its own colour", () => {
     { key: "@unlinked", value: 5, label: "unlinked" },
   ];
   const hues = helpers.statsPanelDistinctHues(rows, report);
-  assert.equal(hues.get("sase.md"), "blue");
-  assert.equal(hues.get("gtd_daily.md"), "orange");
-  assert.equal(hues.get("bob.md"), "aqua");
-  assert.equal(hues.get("gtd.md"), "yellow");
-  assert.equal(hues.get("dev.md"), "magenta");
+  assert.equal(hues.get("bob.md"), "blue");
+  assert.equal(hues.get("gtd.md"), "orange");
+  assert.equal(hues.get("dev.md"), "aqua");
+  assert.equal(hues.get("gtd_daily.md"), "yellow");
+  assert.equal(hues.get("sase.md"), "magenta");
   assert.equal(hues.get("@unlinked"), "gray");
 });
 

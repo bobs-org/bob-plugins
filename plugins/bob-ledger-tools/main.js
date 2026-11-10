@@ -42036,9 +42036,9 @@ function statsPanelHomeAreaRows(rows, report) {
   });
 }
 
-// One colour per root: buckets and muted roots stay gray up front; every
-// other root keeps its catalog hue when it is the biggest claimant, else
-// takes the next free palette hue.
+// One colour per root: buckets and muted roots stay gray up front; coloured
+// roots claim their catalog hues in identity order, then take the next free
+// palette hue in that same order. Minutes never decide which root keeps a hue.
 function statsPanelDistinctHues(rows, report) {
   const result = new Map();
   const list = Array.isArray(rows) ? rows.slice() : [];
@@ -42055,8 +42055,9 @@ function statsPanelDistinctHues(rows, report) {
     }
   }
   const labelOf = (row) => (typeof row.label === "string" && row.label ? row.label : row.key);
-  const valueOf = (row) => (typeof row.value === "number" && Number.isFinite(row.value) ? row.value : 0);
-  coloured.sort((a, b) => (valueOf(b) - valueOf(a)) || labelOf(a).localeCompare(labelOf(b)) || a.key.localeCompare(b.key));
+  const identityCompare = (a, b) =>
+    labelOf(a).toLowerCase().localeCompare(labelOf(b).toLowerCase()) || a.key.localeCompare(b.key);
+  coloured.sort(identityCompare);
   const claimed = new Set();
   const preferredOf = (row) => statsPanelHomeHue(report, row.key);
   for (const row of coloured) {
@@ -43990,7 +43991,8 @@ function timeLaneThemeSegments(report, entries, fallback) {
     byHue.set(entry.hue, group);
   }
   for (const group of byHue.values()) {
-    group.sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    group.sort((a, b) =>
+      a.label.toLowerCase().localeCompare(b.label.toLowerCase()) || a.key.localeCompare(b.key));
     group.forEach((entry, index) => {
       shadeOf.set(entry.key, index === 0 ? 0 : index === 1 ? 1 : 2);
     });
@@ -49510,7 +49512,7 @@ function periodStripWeekColumns(report) {
       if (periodKind === "quarter" && typeof column.kind === "string" && column.kind === "week") caption = caption.replace(/^W/i, "");
       if (periodKind === "year" && column.group) caption = "";
       const soFar = state === "current";
-      const tooltip = periodStripColumnTooltip(column, missing);
+      const tooltip = periodStripColumnTooltip(column, missing, report);
       return {
         id: typeof column.id === "string" ? column.id : "",
         kind: typeof column.kind === "string" ? column.kind : "day",
@@ -49550,7 +49552,7 @@ function periodStripPartialCaption(column) {
   }
 }
 
-function periodStripColumnTooltip(column, missing) {
+function periodStripColumnTooltip(column, missing, report) {
   try {
     const label = typeof column.label === "string" ? column.label : "";
     const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
@@ -49562,13 +49564,25 @@ function periodStripColumnTooltip(column, missing) {
     const stack = Array.isArray(column.stack) ? column.stack : [];
     for (const entry of stack) {
       if (!entry || typeof entry.key !== "string") continue;
-      lines.push(entry.key + " " + periodStripFormatMinutes(entry.minutes));
+      lines.push(periodStripRootLabel(report, entry.key) + " " + periodStripFormatMinutes(entry.minutes));
     }
     if (missing) lines.push("not tracked");
     return lines.join("\n");
   } catch (error) {
     return "";
   }
+}
+
+function periodStripRootLabel(report, key) {
+  const homes = report && report.homes && typeof report.homes === "object" ? report.homes : {};
+  const home = homes[key] && typeof homes[key] === "object" ? homes[key] : null;
+  if (home && typeof home.label === "string" && home.label.trim()) return home.label.trim();
+  const rows = report && report.lanes && Array.isArray(report.lanes.root_parent) ? report.lanes.root_parent : [];
+  const row = rows.find((entry) => entry && entry.key === key);
+  if (row && typeof row.label === "string" && row.label.trim()) return row.label.trim();
+  if (key === "@unlinked") return "unlinked";
+  if (key === "@unfiled") return "unfiled";
+  return String(key).replace(/^@/, "").replace(/\.md$/i, "").replace(/[_-]+/g, " ");
 }
 
 function periodStripColumnReviewWords(mark, state) {
@@ -49613,9 +49627,7 @@ function periodStripErrorInfo(error) {
 function periodStripModel(report, periodId, context) {
   try {
     const safeContext = context && typeof context === "object" ? context : {};
-    const laneView = typeof dayStripLaneViewOf === "function"
-      ? dayStripLaneViewOf(safeContext.laneView)
-      : (safeContext.laneView === "roots" || safeContext.laneView === "themes" || safeContext.laneView === "both" ? safeContext.laneView : "both");
+    const laneView = "both";
     const classified = periodStripClassifyId(periodId);
     if (!classified || classified.kind === "day") {
       return { state: "hidden", periodId: typeof periodId === "string" ? periodId : "", kind: (classified && classified.kind) || "", lanes: { view: laneView, shown: [], switchable: false } };
@@ -49643,7 +49655,7 @@ function periodStripModel(report, periodId, context) {
         offClock: null,
         unit: "",
       }));
-      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: true }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
+      return { state: "skeleton", periodId: classified.id, kind, facts, columns: [], children: [], groups: [], lanes: { view: laneView, shown: ["roots", "themes"], switchable: false }, roots: null, themes: null, metaText: "", stale: false, error: null, ariaLabel: periodStripKindTitle(kind) + " stats for " + classified.id + ". Loading." };
     }
     const period = report.period && typeof report.period === "object" ? report.period : {};
     if (period.state === "future") {
@@ -49657,9 +49669,14 @@ function periodStripModel(report, periodId, context) {
     const groups = Array.isArray(report.groups) ? report.groups : [];
     const quarterFallbackColumns = kind === "year" ? periodStripYearQuarterColumns(children) : [];
     const stale = safeContext.stale === true;
-    const lanes = typeof dayStripLaneLayout === "function"
-      ? dayStripLaneLayout({ state: stale ? "stale" : "ready", mix: { ...roots, dimension: roots.dimension === "theme" ? "theme" : "root_parent" }, themes, view: laneView })
-      : { view: laneView, shown: ["roots", "themes"], switchable: true };
+    const lanes = {
+      view: laneView,
+      shown: [
+        ...(!roots.omitted ? ["roots"] : []),
+        ...(!themes.omitted ? ["themes"] : []),
+      ],
+      switchable: false,
+    };
     const metaText = periodStripMetaText(report, safeContext.fetchedAt);
     const asOf = periodStripAsOf(safeContext.fetchedAt);
     const staleTitle = stale ? ((error && error.title) || "Refresh failed") + " · showing the " + (asOf || "cached") + " report" : "";
@@ -49809,10 +49826,16 @@ function periodStripColumnBar(doc, column, tallest) {
     return bar;
   }
   const total = column.worked.value;
-  for (const entry of column.stack) {
+  const visible = column.stack.map((entry) => ({
+    entry,
+    height: total > 0 ? (entry.minutes / tallest) * 100 : 0,
+  })).filter((item) => item.height * 0.48 >= 0.75);
+  for (const [index, item] of visible.entries()) {
+    const entry = item.entry;
+    const isTop = index === visible.length - 1;
     const height = total > 0 ? (entry.minutes / tallest) * 100 : 0;
     const piece = statsEl(doc, "span", {
-      class: "bob-period-strip-column-piece bob-day-strip-hue-" + (entry.hue || "gray"),
+      class: "bob-period-strip-column-piece" + (isTop ? " bob-period-strip-column-piece-top" : " bob-period-strip-column-piece-seamed") + " bob-day-strip-hue-" + (entry.hue || "gray"),
       "data-key": entry.key,
     });
     if (piece && piece.style) {
@@ -49847,11 +49870,13 @@ function periodStripRenderColumn(doc, column, index, model, handlers) {
     "data-column-state": state,
   });
   if (!node) return null;
-  if (column.tick) {
+  if (column.tick || model.kind === "quarter") {
     const tick = statsEl(doc, "span", { class: "bob-period-strip-column-tick", "aria-hidden": "true" });
     if (tick) {
-      tick.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-tick-rule" }));
-      tick.appendChild(statsEl(doc, "span", {}, column.tick));
+      if (column.tick) {
+        tick.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-tick-rule" }));
+        tick.appendChild(statsEl(doc, "span", {}, column.tick));
+      }
       node.appendChild(tick);
     }
   }
@@ -49868,9 +49893,11 @@ function periodStripRenderColumn(doc, column, index, model, handlers) {
   const caption = statsEl(doc, "span", { class: "bob-period-strip-column-caption" },
     (column.caption || "") + (state === "current" ? " · so far" : "") + (column.partial ? " · " + column.partial : ""));
   if (caption && node.appendChild) node.appendChild(caption);
-  const value = statsEl(doc, "span", { class: "bob-period-strip-column-value" },
-    (column.worked && column.worked.display) || (state === "future" ? "" : "–"));
-  if (value && node.appendChild) node.appendChild(value);
+  if (model.kind !== "year") {
+    const value = statsEl(doc, "span", { class: "bob-period-strip-column-value" },
+      (column.worked && column.worked.display) || (state === "future" ? "" : "–"));
+    if (value && node.appendChild) node.appendChild(value);
+  }
   periodStripPartsActivate(node, (newLeaf, alt) => {
     if (alt) {
       if (handlers && typeof handlers.openStatsForColumn === "function") handlers.openStatsForColumn(column, newLeaf);
@@ -50274,7 +50301,6 @@ function periodStripRenderFact(doc, fact, model, handlers) {
     for (const run of runs) {
       value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-" + run.kind }, run.text));
     }
-    if (fact.soFar) value.appendChild(statsEl(doc, "span", { class: "bob-period-strip-so-far", "aria-hidden": "true" }, " so far"));
     node.appendChild(value);
   }
   const ref = periodStripRenderRef(doc, fact);
@@ -50328,9 +50354,10 @@ function periodStripLegendItem(doc, entry, lane) {
   if (rank) item.setAttribute("data-rank", String(rank));
   if (key) item.setAttribute("data-key", key);
   const themes = lane === "themes";
+  const hue = entry && typeof entry.hue === "string" ? entry.hue : "gray";
   const markClass = themes
-    ? "bob-period-strip-legend-swatch" + (entry ? " bob-period-strip-theme-hue-" + entry.hue : "")
-    : "bob-period-strip-legend-dot" + (entry ? " bob-period-strip-hue-" + entry.hue : "");
+    ? "bob-period-strip-legend-swatch bob-day-strip-theme-hue-" + hue
+    : "bob-period-strip-legend-dot bob-day-strip-hue-" + hue;
   const mark = statsEl(doc, "span", { class: markClass, "aria-hidden": "true" });
   if (mark && themes && entry && typeof entry.shade === "number" && entry.shade > 0) mark.setAttribute("data-shade", String(entry.shade));
   if (mark && entry && typeof entry.tone === "string" && entry.tone) mark.setAttribute("data-tone", entry.tone);
@@ -50349,14 +50376,25 @@ function periodStripRenderMix(doc, model, handlers, lane) {
   if (!node) return null;
   const legend = statsEl(doc, "span", { class: "bob-period-strip-legend" });
   if (legend) {
-    const entries = (mix && Array.isArray(mix.legend) ? mix.legend : []).slice(0, 3);
+    const ranked = (mix && Array.isArray(mix.legend) ? mix.legend : []).slice().sort((a, b) => {
+      const aValue = a && typeof a.value === "number" ? a.value : 0;
+      const bValue = b && typeof b.value === "number" ? b.value : 0;
+      const aLabel = a && typeof a.label === "string" ? a.label : "";
+      const bLabel = b && typeof b.label === "string" ? b.label : "";
+      return bValue - aValue || aLabel.toLowerCase().localeCompare(bLabel.toLowerCase()) || String(a && a.key || "").localeCompare(String(b && b.key || ""));
+    });
+    const entries = ranked.slice(0, 3);
     for (const entry of entries) {
       const item = periodStripLegendItem(doc, entry, lane);
       if (item) legend.appendChild(item);
     }
-    const overflow = mix && mix.overflowDefault && typeof mix.overflowDefault.count === "number" ? mix.overflowDefault.count : 0;
+    const overflowEntries = ranked.slice(3);
+    const overflow = overflowEntries.length;
     if (overflow > 0 && !skeleton) {
-      legend.appendChild(statsEl(doc, "span", { class: "bob-period-strip-overflow", title: (mix.overflowDefault && mix.overflowDefault.title) || null }, "+" + overflow));
+      const overflowTitle = overflowEntries.map((entry) =>
+        (typeof entry.label === "string" && entry.label ? entry.label : entry.key) + " " + (entry.display || ""),
+      ).join("\n");
+      legend.appendChild(statsEl(doc, "span", { class: "bob-period-strip-overflow", title: overflowTitle }, "+" + overflow));
     }
     node.appendChild(legend);
   }
@@ -50824,12 +50862,6 @@ class BobLedgerToolsPeriodStripMixin {
         return this.periodStripPaintDay(record, result);
       }
       const periodId = periodStripPeriodIdForRecord(record);
-      let laneView = "both";
-      try {
-        laneView = typeof this.dayStripLaneViewCurrent === "function" ? this.dayStripLaneViewCurrent() : dayStripLaneViewOf(this.dayStripLaneView);
-      } catch (error) {
-        laneView = "both";
-      }
       const handlers = {
         openStats: (opts) => {
           try {
@@ -50868,13 +50900,6 @@ class BobLedgerToolsPeriodStripMixin {
             // Retry is best-effort.
           }
         },
-        cycleLanes: () => {
-          try {
-            if (typeof this.dayStripCycleLaneView === "function") this.dayStripCycleLaneView({});
-          } catch (error) {
-            // Cycling is best-effort.
-          }
-        },
       };
       const snapshot = result && typeof result === "object" && ("report" in result || "error" in result) ? result : null;
       let report = null;
@@ -50893,11 +50918,10 @@ class BobLedgerToolsPeriodStripMixin {
         stale = peek ? peek.stale === true : false;
       }
       if (!report) {
-        const model = periodStripModel(null, periodId, { laneView, fetchedAt, stale, error });
+        const model = periodStripModel(null, periodId, { fetchedAt, stale, error });
         return this.periodStripFinishPaint(record, model, handlers, fetchedAt);
       }
       const model = periodStripModel(report, periodId, {
-        laneView,
         fetchedAt,
         stale,
         error,

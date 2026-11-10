@@ -126,6 +126,13 @@ test("week model maps bob facts with typical marks only when closed", () => {
   assert.match(worked.tooltip, /Typical/);
 });
 
+test("period strips stay on Both and do not render a Day strip switch", () => {
+  const model = helpers.periodStripModel(current, "2026-W45", { laneView: "roots" });
+  assert.deepEqual(model.lanes, { view: "both", shown: ["roots", "themes"], switchable: false });
+  const { root } = paint(model, { cycleLanes: () => assert.fail("period strips must not cycle Day strip lanes") });
+  assert.equal(byClass(root, "bob-period-strip-lanes-switch").length, 0);
+});
+
 test("week meta covers open, closed gaps, and future", () => {
   const openModel = helpers.periodStripModel(current, "2026-W45", { laneView: "both", fetchedAt: current.generated_at });
   assert.match(openModel.metaText, /so far/);
@@ -211,6 +218,113 @@ test("paint renders facts, lanes, and the seven-day parts row with no buttons", 
   assert.equal(byClass(paintedFuture, "bob-period-strip-column").length, 0);
 });
 
+test("period legend hue classes all have Day strip CSS rules and keep shade and tone", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const hues = ["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red", "gray"];
+  const emitted = new Set();
+  for (const hue of hues) {
+    const entry = (key, shade) => ({
+      key, label: key, legendLabel: key, display: "1h", value: 60, hue,
+      shade, tone: hue === "gray" ? "gray" : "hue",
+    });
+    const model = {
+      state: "ready", periodId: "2026-W44", kind: "week", facts: [],
+      lanes: { view: "both", shown: ["roots", "themes"], switchable: false },
+      roots: { title: "Time by root parent", legend: [entry("root-" + hue, 0)] },
+      themes: { title: "Time by type", legend: [entry("type-" + hue, hue === "blue" ? 2 : 0)] },
+      columns: [], children: [], groups: [], ariaLabel: "Period stats",
+    };
+    const { root } = paint(model);
+    const rootMark = byClass(root, "bob-period-strip-legend-dot")[0];
+    const typeMark = byClass(root, "bob-period-strip-legend-swatch")[0];
+    const rootClass = (rootMark.getAttribute("class").split(/\s+/).find((name) => name.startsWith("bob-day-strip-hue-")));
+    const typeClass = (typeMark.getAttribute("class").split(/\s+/).find((name) => name.startsWith("bob-day-strip-theme-hue-")));
+    emitted.add(rootClass);
+    emitted.add(typeClass);
+    assert.equal(rootMark.getAttribute("data-tone"), hue === "gray" ? "gray" : "hue");
+    assert.equal(typeMark.getAttribute("data-tone"), hue === "gray" ? "gray" : "hue");
+    if (hue === "blue") assert.equal(typeMark.getAttribute("data-shade"), "2");
+  }
+  assert.equal(emitted.size, hues.length * 2);
+  for (const className of emitted) {
+    assert.match(css, new RegExp("\\." + className + "\\s*\\{"), className + " has a CSS rule");
+  }
+});
+
+test("period legends show the three largest rows first and list the rest in the overflow title", () => {
+  const report = JSON.parse(JSON.stringify(closed));
+  const rows = [
+    { key: "tiny.md", label: "Tiny", minutes: 5, display: "5m", share: "2%" },
+    { key: "largest.md", label: "Largest", minutes: 120, display: "2h", share: "50%" },
+    { key: "middle.md", label: "Middle", minutes: 60, display: "1h", share: "25%" },
+    { key: "small.md", label: "Small", minutes: 20, display: "20m", share: "8%" },
+    { key: "next.md", label: "Next", minutes: 40, display: "40m", share: "17%" },
+  ];
+  report.lanes.root_parent = rows;
+  for (const row of rows) report.homes[row.key] = { label: row.label, hue: "blue", kind: "project" };
+  const { root } = paint(helpers.periodStripModel(report, "2026-W44"));
+  const rootMix = byClass(root, "bob-period-strip-mix")[0];
+  const items = byClass(rootMix, "bob-period-strip-legend-item");
+  assert.deepEqual(items.map((item) => item.getAttribute("data-key")), ["largest.md", "middle.md", "next.md"]);
+  const overflow = byClass(rootMix, "bob-period-strip-overflow")[0];
+  assert.equal(overflow.textContent, "+2");
+  assert.equal(overflow.getAttribute("title"), "Small 20m\nTiny 5m");
+});
+
+test("quarter month ticks reserve one fixed row so every bar shares a baseline", () => {
+  const quarter = periodPartsFixtures(closed).closedQuarter;
+  const model = helpers.periodStripModel(quarter, "2026-Q2");
+  const { root } = paint(model);
+  const columns = byClass(root, "bob-period-strip-column");
+  assert.equal(columns.length, 13);
+  assert.ok(columns.every((column) => byClass(column, "bob-period-strip-column-tick").length === 1));
+  assert.deepEqual(columns.map((column) => byClass(column, "bob-period-strip-column-tick")[0].textContent), [
+    "Apr", "", "", "", "May", "", "", "", "Jun", "", "", "", "",
+  ]);
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-period-strip-column-tick\s*\{[^}]*flex:\s*0 0 0\.9em/s);
+});
+
+test("period slices keep honest heights, skip sub-pixel pieces, and omit year values", () => {
+  const model = helpers.periodStripModel(closed, "2026-W44");
+  const first = model.columns[0];
+  first.worked = { ...first.worked, value: 215, display: "3h 35m" };
+  first.stack = [
+    { key: "tiny.md", minutes: 1, hue: "green", rank: 0 },
+    { key: "large.md", minutes: 214, hue: "blue", rank: 1 },
+  ];
+  const tallest = Math.max(...model.columns.map((column) => column.worked && column.worked.value || 0));
+  const { root } = paint(model);
+  const firstColumn = byClass(root, "bob-period-strip-column")[0];
+  const bar = byClass(firstColumn, "bob-period-strip-column-bar")[0];
+  assert.deepEqual(bar.children.map((piece) => piece.getAttribute("data-key")), ["large.md"]);
+  assert.equal(bar.children[0].style.height, String((214 / tallest) * 100) + "%");
+  assert.match(bar.children[0].getAttribute("class"), /bob-period-strip-column-piece-top/);
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const barCss = css.match(/\.bob-period-strip-column-bar\s*\{([^}]+)\}/)[1];
+  const pieceCss = css.match(/\.bob-period-strip-column-piece\s*\{([^}]+)\}/)[1];
+  assert.match(barCss, /gap:\s*0;/);
+  assert.doesNotMatch(pieceCss, /min-height/);
+  assert.match(css, /\.bob-period-strip-column-piece-seamed\s*\{[^}]*inset 0 1px 0 var\(--background-primary\)/);
+
+  const year = periodPartsFixtures(closed).year;
+  const yearRoot = paint(helpers.periodStripModel(year, "2026")).root;
+  assert.equal(byClass(yearRoot, "bob-period-strip-column-value").length, 0);
+});
+
+test("so-far stays in fact accessibility text and column tooltips use catalog labels", () => {
+  const model = helpers.periodStripModel(current, "2026-W45");
+  const { root } = paint(model);
+  const workedFact = byClass(root, "bob-period-strip-fact").find((node) => node.getAttribute("data-period-strip-metric") === "worked");
+  assert.ok(workedFact.getAttribute("aria-label").includes("so far"));
+  assert.equal(byClass(workedFact, "bob-period-strip-so-far").length, 0);
+  assert.equal(byClass(workedFact, "bob-period-strip-value")[0].textContent.includes("so far"), false);
+  const column = byClass(root, "bob-period-strip-column")[0];
+  assert.match(column.getAttribute("title"), /bob 1h 30m/);
+  assert.match(column.getAttribute("title"), /gtd_daily 1h 30m/);
+  assert.doesNotMatch(column.getAttribute("title"), /\.md\b/);
+});
+
 test("parts row is one roving-tabindex group with tooltips", () => {
   const model = helpers.periodStripModel(closed, "2026-W44", { laneView: "both" });
   const { root } = paint(model);
@@ -293,6 +407,14 @@ test("period-note fences fetch once per period and paint the strip and the parts
   await settle();
   assert.equal(byClass(strip.el, "bob-period-strip-fact").length, 5);
   assert.equal(byClass(strip.el, "bob-period-strip-column").length, 7);
+  assert.equal(byClass(strip.el, "bob-period-strip-lanes-switch").length, 0);
+  let cycleCalls = 0;
+  plugin.dayStripCycleLaneView = () => { cycleCalls += 1; };
+  byClass(strip.el, "bob-period-strip-mix")[0].dispatch("click", {});
+  for (const column of byClass(strip.el, "bob-period-strip-column")) column.dispatch("click", {});
+  assert.equal(cycleCalls, 0);
+  assert.equal(plugin.app.loadLocalStorage(helpers.DAY_STRIP_LANES_STORAGE_KEY), null);
+  assert.equal(plugin.dayStripLaneView, "both");
   const table = mountFence(plugin, "bob-period-parts", "2026/2026-Q2.md");
   await settle();
   assert.ok(byClass(table.el, "bob-period-parts-table").length >= 1);

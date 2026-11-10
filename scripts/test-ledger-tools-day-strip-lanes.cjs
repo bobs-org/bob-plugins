@@ -193,6 +193,30 @@ test("muted roots stay gray, unshaded, claim no hue, and sort before the buckets
   assert.equal(gtdSegment.hasAttribute("data-shade"), false);
 });
 
+test("root hues follow identity order when minutes change", () => {
+  const report = { homes: {
+    "bob.md": { label: "bob", hue: "blue" },
+    "dev.md": { label: "dev", hue: "blue" },
+    "sase.md": { label: "sase", hue: "blue" },
+    "sase_blog.md": { label: "sase_blog", hue: "blue" },
+  } };
+  const rows = [
+    { key: "sase_blog.md", label: "sase_blog", value: 800 },
+    { key: "sase.md", label: "sase", value: 600 },
+    { key: "dev.md", label: "dev", value: 400 },
+    { key: "bob.md", label: "bob", value: 200 },
+  ];
+  const first = helpers.statsPanelDistinctHues(rows, report);
+  const permuted = helpers.statsPanelDistinctHues(rows.map((row) => ({ ...row, value: 1000 - row.value })), report);
+  assert.deepEqual(Object.fromEntries(first), Object.fromEntries(permuted));
+  assert.deepEqual(Object.fromEntries(first), {
+    "bob.md": "blue",
+    "dev.md": "orange",
+    "sase.md": "aqua",
+    "sase_blog.md": "yellow",
+  });
+});
+
 test("lane view sanitizes and cycles both -> roots -> themes -> both", () => {
   assert.equal(helpers.dayStripLaneViewOf("both"), "both");
   assert.equal(helpers.dayStripLaneViewOf("roots"), "roots");

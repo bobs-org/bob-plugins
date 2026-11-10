@@ -53352,7 +53352,7 @@ class BobLedgerToolsNotebookDataMixin {
 const NOTEBOOK_CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const NOTEBOOK_CATALOG_BEGIN_RE = /<!--\s*bob:notebooks:begin(?:\s+\S+)?\s*-->/;
 const NOTEBOOK_CATALOG_END_RE = /<!--\s*bob:notebooks:end\s*-->/;
-const NOTEBOOK_CALLOUT_HEAD_RE = /^>\s*\[!notebooks(?:\|[^\]]*)?\]\s*$/i;
+const NOTEBOOK_CALLOUT_HEAD_RE = /^>\s*\[!notebooks\]\s*[-+]?(?:\s+.*)?$/i;
 const NOTEBOOKS_H2_RE = /^##\s+Notebooks(?:\s.*)?$/i;
 const NOTEBOOK_H1_RE = /^#\s+\S/;
 const NOTEBOOK_FENCE_RE = /^(`{3,}|~{3,})/;
@@ -53474,52 +53474,145 @@ function notebookSourceRowTarget(line) {
   return notebookWikilinkTarget(match[1]);
 }
 
+function notebookIsCalloutHead(line) {
+  const text = String(line || "");
+  const indent = (text.match(/^ */) || [""])[0].length;
+  if (indent > 3) {
+    return false;
+  }
+  return NOTEBOOK_CALLOUT_HEAD_RE.test(text.trim());
+}
+
+function notebookIsQuoteLine(line) {
+  const text = String(line || "");
+  const indent = (text.match(/^ */) || [""])[0].length;
+  if (indent > 3) {
+    return false;
+  }
+  return text.trimStart().startsWith(">");
+}
+
+function notebookFrontmatterEnd(lines) {
+  const first = lines.length > 0 ? String(lines[0]).replace(/^\uFEFF/, "") : "";
+  if (first !== "---") {
+    return 0;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (String(lines[index]) === "---") {
+      return index + 1;
+    }
+  }
+  return 0;
+}
+
 function notebookCatalogRegions(text) {
   const lines = String(text === null || text === undefined ? "" : text).split("\n");
   const regions = [];
+  const bodyFirst = notebookFrontmatterEnd(lines);
   let fence = null;
   let open = null;
-  for (let index = 0; index < lines.length; index += 1) {
+  const fenced = new Array(lines.length).fill(false);
+  // First pass: fence map and legacy pairs.
+  for (let index = bodyFirst; index < lines.length; index += 1) {
     const line = lines[index];
     const nextFence = notebookSourceFenceToggle(line, fence);
     if (nextFence !== fence) {
       fence = nextFence;
+      fenced[index] = true;
       continue;
     }
     if (fence) {
-      continue;
-    }
-    if (NOTEBOOK_CATALOG_BEGIN_RE.test(line)) {
-      open = {
-        begin: index,
-        end: -1,
-        calloutLine: -1,
-        rows: [],
-      };
-      continue;
-    }
-    if (open && NOTEBOOK_CATALOG_END_RE.test(line)) {
-      open.end = index;
-      regions.push(open);
-      open = null;
-      continue;
-    }
-    if (!open) {
-      continue;
-    }
-    if (open.calloutLine < 0 && NOTEBOOK_CALLOUT_HEAD_RE.test(line.trim())) {
-      open.calloutLine = index;
-      continue;
-    }
-    const kind = notebookSourceRowKind(line);
-    if (kind === "notebook-row" || kind === "project-group") {
-      open.rows.push({
-        line: index,
-        kind,
-        target: notebookSourceRowTarget(line),
-      });
+      fenced[index] = true;
     }
   }
+  const isReal = (index) => index >= bodyFirst && !fenced[index];
+  // Legacy pairs first.
+  let legacyBegin = -1;
+  let legacyEnd = -1;
+  for (let index = bodyFirst; index < lines.length; index += 1) {
+    if (!isReal(index)) {
+      continue;
+    }
+    const line = lines[index];
+    if (NOTEBOOK_CATALOG_BEGIN_RE.test(line)) {
+      if (legacyBegin < 0) {
+        legacyBegin = index;
+      }
+      continue;
+    }
+    if (NOTEBOOK_CATALOG_END_RE.test(line)) {
+      if (legacyBegin >= 0 && legacyEnd < 0) {
+        legacyEnd = index;
+      }
+      continue;
+    }
+  }
+  let legacy = null;
+  if (legacyBegin >= 0 && legacyEnd > legacyBegin) {
+    legacy = {
+      begin: legacyBegin,
+      end: legacyEnd,
+      calloutLine: -1,
+      rows: [],
+      legacy: true,
+    };
+    for (let index = legacyBegin + 1; index < legacyEnd; index += 1) {
+      if (!isReal(index)) {
+        continue;
+      }
+      if (legacy.calloutLine < 0 && notebookIsCalloutHead(lines[index])) {
+        legacy.calloutLine = index;
+        continue;
+      }
+      const kind = notebookSourceRowKind(lines[index]);
+      if (kind === "notebook-row" || kind === "project-group") {
+        legacy.rows.push({
+          line: index,
+          kind,
+          target: notebookSourceRowTarget(lines[index]),
+        });
+      }
+    }
+    regions.push(legacy);
+  }
+  // Bare callout blocks outside the legacy pair.
+  let index = bodyFirst;
+  while (index < lines.length) {
+    if (!isReal(index) || !notebookIsCalloutHead(lines[index])) {
+      index += 1;
+      continue;
+    }
+    if (legacy && index > legacy.begin && index < legacy.end) {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    let next = index + 1;
+    while (next < lines.length && isReal(next) && notebookIsQuoteLine(lines[next])) {
+      end = next;
+      next += 1;
+    }
+    const region = {
+      begin: index,
+      end,
+      calloutLine: index,
+      rows: [],
+      legacy: false,
+    };
+    for (let row = index + 1; row <= end; row += 1) {
+      const kind = notebookSourceRowKind(lines[row]);
+      if (kind === "notebook-row" || kind === "project-group") {
+        region.rows.push({
+          line: row,
+          kind,
+          target: notebookSourceRowTarget(lines[row]),
+        });
+      }
+    }
+    regions.push(region);
+    index = end + 1;
+  }
+  regions.sort((a, b) => a.begin - b.begin);
   return regions;
 }
 
@@ -53575,7 +53668,7 @@ function notebookSyncActionModel(catalog, options = {}) {
   const label = busy ? "\u21bb sync" : "\u21bb sync";
   let hint = "Run bob notebooks sync to refresh this catalog.";
   if (state === "damaged") {
-    hint = "This catalog is damaged. Repair the markers by hand, then sync.";
+    hint = "This catalog is damaged. Repair the old markers by hand, then sync.";
   } else if (state === "stale") {
     hint = "This catalog is stale. Sync to rewrite it from the notebook tree.";
   } else if (state === "missing") {
@@ -53618,13 +53711,16 @@ function notebookRetryActionModel(state) {
       state: "unavailable",
     };
   }
-  if (stale) {
+  // Stale-while-revalidate stays silent: a report that only lags a vault
+  // change, with no recorded error, paints no Retry and no status.
+  // A failed refresh (errorModel) with a report always offers Retry.
+  if (errorModel && state.report) {
     return {
       kind: "retry",
       label: "Retry",
-      hint: (errorModel && errorModel.hint)
+      hint: errorModel.hint
         || "Showing the last good notebook list. Retry to refresh.",
-      code: (errorModel && errorModel.code) || "stale",
+      code: errorModel.code || "stale",
       busy,
       disabled: busy,
       state: "stale",
@@ -54651,14 +54747,37 @@ class BobLedgerToolsNotebookCatalogMixin {
     }
     const heading = notebookFindNotebooksHeading(el);
     const title = heading ? null : notebookFindHostTitle(el);
-    const retryModel = this.notebookCatalogRetryModel(sourcePath, state);
-    const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
-    const statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    const catalog = typeof notebookHostCatalog === "function"
+      ? notebookHostCatalog(state, sourcePath)
+      : null;
+    // Host-scope chrome; when no report has loaded yet, allow notes whose
+    // rendered view holds a callout (the source-text region check lives in
+    // Live Preview). Callout styling above stays unchanged.
+    const allowChrome = Boolean(catalog) || (!state.report && callouts.length > 0);
+    let retryModel = this.notebookCatalogRetryModel(sourcePath, state);
+    let syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
+    let statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    if (!allowChrome) {
+      retryModel = null;
+      syncModel = null;
+      statusModel = null;
+    }
     const needsAnchor = Boolean(
       options.chipsEnabled !== false
       && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
     );
-    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor, doc);
+    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor && allowChrome, doc);
+    if (!allowChrome) {
+      // Keep H1 and rendered-anchor fallbacks host-only: never create an
+      // anchor in a non-host note. Still allow leftover-host recovery below
+      // so old chrome is cleaned.
+      if (!heading && !title) {
+        actionHost = null;
+      } else if (!catalog) {
+        // For non-hosts with a heading/title, keep the host for cleanup but
+        // models are already nulled above so nothing new is painted.
+      }
+    }
     if (!actionHost && el && typeof el.querySelector === "function") {
       try {
         const painted = el.querySelector(
@@ -54854,6 +54973,19 @@ class BobLedgerToolsNotebookCatalogMixin {
       const headingLine = notebookFindNotebooksHeadingLine(docText);
       const titleLine = headingLine < 0 ? notebookFindHostTitleLine(docText) : -1;
       const state = this.notebookCatalogState();
+      // Host-scope all catalog chrome: only report-listed hosts get sync,
+      // Retry, status, or an action anchor. When no report has loaded yet,
+      // allow notes whose text holds a real callout or legacy region so the
+      // first sync affordance can appear. Daily notes and other non-hosts
+      // get no chrome at all.
+      const catalog = typeof notebookHostCatalog === "function"
+        ? notebookHostCatalog(state, filePath)
+        : null;
+      const hasLocalRegion = regions.length > 0;
+      const allowChrome = Boolean(catalog) || (!state.report && hasLocalRegion);
+      if (!allowChrome) {
+        return Decoration.none;
+      }
       const retryModel = this.notebookCatalogRetryModel(filePath, state);
       const syncModel = this.notebookCatalogSyncModel(filePath, state, headingLine >= 0);
       const hue = this.notebookCatalogHue(filePath);

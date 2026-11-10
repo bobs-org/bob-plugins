@@ -644,11 +644,7 @@ function catalogSource(options = {}) {
     ">   - **[[child_nb|Child]]** — Nested under a project group.",
     "> - **[[other_git|Git]]** — A different Git notebook.",
   ].join("\n");
-  const catalog = [
-    "<!-- bob:notebooks:begin v1 -->",
-    callout,
-    "<!-- bob:notebooks:end -->",
-  ].join("\n");
+  const catalog = callout;
   const heading = options.heading === false ? "" : "## Notebooks\n\n";
   const title = options.title === false ? "" : "# Dev\n\n";
   const fence = options.fence
@@ -1111,7 +1107,9 @@ test("first list failure is unavailable with a list retry, not invented zeros", 
   assert.equal(retry.kind, "retry");
   assert.equal(plugin.notebookCatalogSyncModel("dev.md", state, false), null);
   const doc = makeDoc();
-  const root = el(doc, "div", {});
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "x" }]);
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const root = el(doc, "div", {}, [heading, callout]);
   plugin.paintNotebookCatalogReading(root, "dev.md");
   const retryBtn = root.querySelector(".bob-notebook-retry");
   assert.ok(retryBtn);
@@ -1151,7 +1149,8 @@ test("retry recovers after a later successful list", () => {
   plugin.notebookReportError = { code: "failed", message: "nope" };
   const doc = makeDoc();
   const heading = el(doc, "h2", { text: "Notebooks" });
-  const root = el(doc, "div", {}, [heading]);
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "x" }]);
+  const root = el(doc, "div", {}, [heading, callout]);
   plugin.paintNotebookCatalogReading(root, "dev.md");
   assert.ok(heading.querySelector(".bob-notebook-retry"));
   plugin.notebookReport = decoded().report;
@@ -1219,16 +1218,114 @@ test("Live Preview and Reading both expose retry after a first fetch failure", (
   const { plugin } = makePlugin();
   plugin.notebookReport = null;
   plugin.notebookReportError = { code: "timeout", message: "timed out" };
-  const reading = el(makeDoc(), "div", {});
+  const doc = makeDoc();
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "x" }]);
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const reading = el(doc, "div", {}, [heading, callout]);
   plugin.paintNotebookCatalogReading(reading, "dev.md");
   assert.ok(reading.querySelector(".bob-notebook-retry"));
   widgetCalls.length = 0;
   const live = plugin.buildNotebookCatalogDecorations(makeEditorView({
-    text: "Just a paragraph.\n",
+    text: catalogSource(),
     live: true,
   }));
   assert.ok(Array.isArray(live));
   assert.ok(live.some((range) => range.decoration && range.decoration._widget));
+});
+
+test("daily note with generation lag gets no catalog chrome", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookVaultGeneration = 1;
+  plugin.notebookReportGeneration = 0;
+  plugin.notebookReportError = null;
+  const state = plugin.notebookReportState();
+  assert.equal(state.stale, true);
+  assert.equal(notebookRetryActionModel(state), null);
+  widgetCalls.length = 0;
+  const live = plugin.buildNotebookCatalogDecorations(makeEditorView({
+    text: "Just a paragraph.\n",
+    live: true,
+    path: "2026-11-10.md",
+  }));
+  assert.ok(!live || Array.isArray(live) || (live && live.none));
+  const widgets = Array.isArray(live) ? live.filter((range) => range.decoration && range.decoration._widget) : [];
+  assert.equal(widgets.length, 0);
+  const doc = makeDoc();
+  const root = el(doc, "div", {}, [el(doc, "h1", { text: "2026-11-10" })]);
+  plugin.paintNotebookCatalogReading(root, "2026-11-10.md");
+  assert.equal(root.querySelector(".bob-notebook-retry"), null);
+  assert.equal(root.querySelector(".bob-notebook-status"), null);
+  assert.equal(root.querySelector(".bob-notebook-anchor"), null);
+});
+
+test("non-host note with a failed report gets no catalog chrome", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReportError = { code: "timeout", message: "timed out" };
+  const doc = makeDoc();
+  const root = el(doc, "div", {}, [el(doc, "h1", { text: "Other" })]);
+  plugin.paintNotebookCatalogReading(root, "other.md");
+  assert.equal(root.querySelector(".bob-notebook-retry"), null);
+  assert.equal(root.querySelector(".bob-notebook-status"), null);
+  assert.equal(root.querySelector(".bob-notebook-anchor"), null);
+  widgetCalls.length = 0;
+  const live = plugin.buildNotebookCatalogDecorations(makeEditorView({
+    text: "Just a paragraph.\n",
+    live: true,
+    path: "other.md",
+  }));
+  assert.ok(!live || Array.isArray(live) || (live && live.none));
+  const widgets = Array.isArray(live) ? live.filter((range) => range.decoration && range.decoration._widget) : [];
+  assert.equal(widgets.length, 0);
+});
+
+test("host with a failed refresh shows Retry at its H2", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReportError = { code: "timeout", message: "timed out" };
+  const doc = makeDoc();
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "x" }]);
+  const root = el(doc, "div", {}, [heading, callout]);
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  assert.ok(heading.querySelector(".bob-notebook-retry"));
+});
+
+test("host with lag only shows no Retry", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookVaultGeneration = 1;
+  plugin.notebookReportGeneration = 0;
+  plugin.notebookReportError = null;
+  const state = plugin.notebookReportState();
+  assert.equal(notebookRetryActionModel(state), null);
+  const doc = makeDoc();
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "x" }]);
+  const root = el(doc, "div", {}, [heading, callout]);
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  assert.equal(heading.querySelector(".bob-notebook-retry"), null);
+  assert.equal(root.querySelector(".bob-notebook-status"), null);
+  widgetCalls.length = 0;
+  const live = plugin.buildNotebookCatalogDecorations(makeEditorView({
+    text: catalogSource(),
+    live: true,
+    path: "dev.md",
+  }));
+  // Sync is current so no action widget; lag alone never adds Retry.
+  assert.ok(!live || Array.isArray(live) || (live && live.none));
+  const widgets = Array.isArray(live) ? live.filter((range) => range.decoration && range.decoration._widget) : [];
+  assert.equal(widgets.length, 0);
+});
+
+test("bare callout blocks are regions and legacy pairs are recognized", () => {
+  const bare = "# Dev\n\n## Notebooks\n\n> [!notebooks]\n>\n> - **[[git|Git]]**\n";
+  const regions = notebookCatalogRegions(bare);
+  assert.equal(regions.length, 1);
+  assert.equal(regions[0].calloutLine >= 0, true);
+  assert.equal(regions[0].legacy, false);
+  const legacy = "# Dev\n\n## Notebooks\n\n<!-- bob:notebooks:begin v1 -->\n\n> [!notebooks]\n>\n> - **[[git|Git]]**\n\n<!-- bob:notebooks:end -->\n";
+  const legacyRegions = notebookCatalogRegions(legacy);
+  assert.equal(legacyRegions.length, 1);
+  assert.equal(legacyRegions[0].legacy, true);
+  assert.equal(legacyRegions[0].calloutLine >= 0, true);
 });
 
 test("add-summary focuses the opened notebook view, never another pane", async () => {

@@ -146,7 +146,6 @@ function fixtureNotes() {
       "",
       "## Notebooks",
       "",
-      "<!-- bob:notebooks:begin v1 -->",
       "> [!notebooks]",
       ">",
       `> - **[[tools|Developer tools]]** — Command-line tools.`,
@@ -154,7 +153,6 @@ function fixtureNotes() {
       `> - **[[ideas|Ideas]]**`,
       `> - 🧩 [[sub]]`,
       `>   - **[[child|${long}]]** — Nested under a project group.`,
-      "<!-- bob:notebooks:end -->",
       "",
     ].join("\n"),
     "tools.md": [
@@ -602,7 +600,8 @@ function selfTest() {
   for (const name of required) {
     if (!notes[name] || !String(notes[name]).trim()) throw new Error(`missing fixture note ${name}`);
   }
-  if (!notes["area.md"].includes("bob:notebooks:begin")) throw new Error("area catalog markers missing");
+  if (!notes["area.md"].includes("> [!notebooks]")) throw new Error("area catalog callout missing");
+  if (notes["area.md"].includes("bob:notebooks:")) throw new Error("area catalog must not carry markers");
   if (!notes["ideas.md"].includes("summary: \"\"")) throw new Error("ideas must have a blank summary");
   if (!notes["host.md"].includes("![[git]]")) throw new Error("host embed missing");
   if (notes["h1less.md"].includes("# ")) throw new Error("h1less must not have an H1");

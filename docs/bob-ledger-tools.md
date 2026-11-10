@@ -615,16 +615,15 @@ Exempt types such as PLAN, and grey-area types, have no hue, so their `#TYPE` us
 
 Catalogs use the host's ancestry hue, including mute. **add summary** opens
 the notebook and focuses Properties `summary`. **↻ sync** rewrites missing,
-stale, or damaged catalogs. **Retry** reloads the list report and keeps
-last-good counts. Notes without H1 or a Notebooks heading get a rendered
-action anchor. Headers show linked `📓` ancestry. Live data needs desktop
-Obsidian.
+stale, or damaged catalogs. Chrome (sync, Retry, status, anchor) paints only
+in report-listed hosts (or pre-report notes with a real callout); non-hosts
+get none, never at position 0. **Retry** needs a failed refresh or no report;
+lag alone stays silent. Live data needs desktop Obsidian.
 
 ## Settings
 
 The **Notebook chips** setting (default on) hides live chips while keeping
-catalog styling, ancestry links, and automatic sync. The plugin also reads the
-shared bob config file and serves its state through a versioned `api` surface.
+styling, links, and sync. The plugin also reads the shared bob config file.
 
 ## Related
 

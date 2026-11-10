@@ -197,14 +197,37 @@ class BobLedgerToolsNotebookCatalogMixin {
     }
     const heading = notebookFindNotebooksHeading(el);
     const title = heading ? null : notebookFindHostTitle(el);
-    const retryModel = this.notebookCatalogRetryModel(sourcePath, state);
-    const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
-    const statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    const catalog = typeof notebookHostCatalog === "function"
+      ? notebookHostCatalog(state, sourcePath)
+      : null;
+    // Host-scope chrome; when no report has loaded yet, allow notes whose
+    // rendered view holds a callout (the source-text region check lives in
+    // Live Preview). Callout styling above stays unchanged.
+    const allowChrome = Boolean(catalog) || (!state.report && callouts.length > 0);
+    let retryModel = this.notebookCatalogRetryModel(sourcePath, state);
+    let syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
+    let statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    if (!allowChrome) {
+      retryModel = null;
+      syncModel = null;
+      statusModel = null;
+    }
     const needsAnchor = Boolean(
       options.chipsEnabled !== false
       && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
     );
-    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor, doc);
+    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor && allowChrome, doc);
+    if (!allowChrome) {
+      // Keep H1 and rendered-anchor fallbacks host-only: never create an
+      // anchor in a non-host note. Still allow leftover-host recovery below
+      // so old chrome is cleaned.
+      if (!heading && !title) {
+        actionHost = null;
+      } else if (!catalog) {
+        // For non-hosts with a heading/title, keep the host for cleanup but
+        // models are already nulled above so nothing new is painted.
+      }
+    }
     if (!actionHost && el && typeof el.querySelector === "function") {
       try {
         const painted = el.querySelector(
@@ -400,6 +423,19 @@ class BobLedgerToolsNotebookCatalogMixin {
       const headingLine = notebookFindNotebooksHeadingLine(docText);
       const titleLine = headingLine < 0 ? notebookFindHostTitleLine(docText) : -1;
       const state = this.notebookCatalogState();
+      // Host-scope all catalog chrome: only report-listed hosts get sync,
+      // Retry, status, or an action anchor. When no report has loaded yet,
+      // allow notes whose text holds a real callout or legacy region so the
+      // first sync affordance can appear. Daily notes and other non-hosts
+      // get no chrome at all.
+      const catalog = typeof notebookHostCatalog === "function"
+        ? notebookHostCatalog(state, filePath)
+        : null;
+      const hasLocalRegion = regions.length > 0;
+      const allowChrome = Boolean(catalog) || (!state.report && hasLocalRegion);
+      if (!allowChrome) {
+        return Decoration.none;
+      }
       const retryModel = this.notebookCatalogRetryModel(filePath, state);
       const syncModel = this.notebookCatalogSyncModel(filePath, state, headingLine >= 0);
       const hue = this.notebookCatalogHue(filePath);

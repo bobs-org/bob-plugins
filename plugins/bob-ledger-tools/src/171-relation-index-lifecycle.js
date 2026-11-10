@@ -703,9 +703,9 @@ class BobLedgerToolsRelationIndexMixin {
           text: targetRaw ? targetRaw.text : null,
           status: targetRaw ? targetRaw.status : null,
           resolved,
-          archived: Boolean(targetPath && /(^|\/)done\//iu.test(targetPath)),
+          archived: Boolean(targetPath && isDoneArchivePath(targetPath)),
         };
-        if (targetRaw && targetRecord) target = { ...target, ...this.relationIndexDisplayTask(targetRaw, taskMemo), resolved, archived: Boolean(targetPath && /(^|\/)done\//iu.test(targetPath)) };
+        if (targetRaw && targetRecord) target = { ...target, ...this.relationIndexDisplayTask(targetRaw, taskMemo), resolved, archived: Boolean(targetPath && isDoneArchivePath(targetPath)) };
         const edge = {
           source: { path: sourcePath, blockId: source.blockId, line: source.line, text: source.text, status: source.status },
           sourceKey: sourceEdge.sourceKey || `${sourcePath}\u0000${source.blockId || ""}`,

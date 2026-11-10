@@ -102,7 +102,7 @@ function relationEdgeLinktext(otherPath, blockId, sourcePath) {
   const source = String(sourcePath || "");
   if (!target || target === source) return "#^" + id;
   const withoutMd = target.replace(/\.md$/i, "");
-  if (/^done\//i.test(withoutMd)) return withoutMd + "#^" + id;
+  if (isDoneArchivePath(withoutMd)) return withoutMd + "#^" + id;
   const stem = withoutMd.split("/").pop() || withoutMd;
   return stem + "#^" + id;
 }
@@ -128,7 +128,7 @@ function relationBuildChip({ direction, linkpath, blockId, label, task, otherPat
     // and (when live) an unresolved edge. A stale entry whose target
     // still resolves shows its status, dashed.
     const broken = !known && (!live || resolved !== true);
-    const archived = Boolean(resolvedPath && /(^|\/)done\//i.test(resolvedPath));
+    const archived = Boolean(resolvedPath && isDoneArchivePath(resolvedPath));
     const state = broken ? "broken" : relationStateFromTask(known);
     const symbol = broken ? "⚠" : dependencySymbolForState(state);
     const fullText = broken ? "^" + id + " not found" : relationFullTextFor(known, id);

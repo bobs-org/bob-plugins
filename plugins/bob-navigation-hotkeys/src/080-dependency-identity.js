@@ -21,7 +21,7 @@ function canonicalDependencyLink(target, sourcePath, markdownFiles) {
   // Archive targets always keep the explicit `done/` path form (contract
   // §3): basename links do not search `done/`, so the short form would
   // stop resolving.
-  const isArchiveTarget = /^done\//i.test(ref.path);
+  const isArchiveTarget = isDoneArchivePath(ref.path);
   const rivals = paths.filter(
     (entry) =>
       entry !== ref.path &&

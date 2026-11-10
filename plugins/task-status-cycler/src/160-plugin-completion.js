@@ -695,6 +695,9 @@ class TaskStatusCyclerCompletionMixin {
     if (!isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {
       return { resolved: true, changed: false };
     }
+    if (isDoneArchivePath(resolvedTarget.file.path)) {
+      return this.reopenArchivedTranscludedTaskTarget(resolvedTarget, context);
+    }
 
     const changed = await this.replaceResolvedTranscludedTaskLine(
       resolvedTarget,

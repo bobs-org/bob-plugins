@@ -65,7 +65,7 @@ function taskWikilinkIsDailyNotePath(path) {
 function taskWikilinkNoteKind(path, options) {
   const notePath = String(path || "");
   const root = notePath.split("/")[0];
-  if (root === "done") {
+  if (isDoneArchivePath(notePath)) {
     return "done";
   }
   if (root === "ref") {

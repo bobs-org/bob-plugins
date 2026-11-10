@@ -14,9 +14,7 @@ function successorIsProjectTask(blockId) {
 }
 
 function successorIsDonePath(path) {
-  return String(path || "")
-    .split("/")
-    .some((segment) => segment === "done");
+  return isDoneArchivePath(path);
 }
 
 // Row display text: the mint-pipeline cleaning of the body after the status

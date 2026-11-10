@@ -62,13 +62,14 @@ const LINT_NOTE_READY_IN_TERMINAL_PROJECT =
 // Directory names whose subtrees never hold per-note entries. Mirrors
 // the Rust walk (`is_excluded_directory` plus the `done/` rule); the
 // check applies to directory segments only, so `x/done.md` is fine.
+// `done/` archives match only as the first path segment, per the shared
+// done/ path contract, so `projects/done/` stays a live note.
 const NOTE_READY_EXCLUDED_DIRS = [
   ".git",
   ".obsidian",
   "_templates",
   "_conflicts",
   "_generated",
-  "done",
 ];
 
 function noteReadyPathExcluded(path) {
@@ -77,6 +78,9 @@ function noteReadyPathExcluded(path) {
     return true;
   }
   if (text === NOTE_READY_DASH_PATH) {
+    return true;
+  }
+  if (isDoneArchivePath(text)) {
     return true;
   }
   const segments = text.split("/");

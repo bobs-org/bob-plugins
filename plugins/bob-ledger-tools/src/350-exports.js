@@ -259,6 +259,7 @@ module.exports.helpers = {
   readyTaskVisible,
   readyTaskStatusIsTodo,
   loadPlanCaps,
+  isDoneArchivePath,
   noteReadyPathExcluded,
   noteReadyStemForPath,
   noteReadyKindFromType,

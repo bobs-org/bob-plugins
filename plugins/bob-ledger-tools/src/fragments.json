@@ -1,4 +1,5 @@
 [
+  "005-done-archive-path.js",
   "010-load-and-constants.js",
   "020-time-and-pomodoro.js",
   "030-snippets.js",

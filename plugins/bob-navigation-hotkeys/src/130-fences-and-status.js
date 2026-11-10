@@ -416,10 +416,12 @@ function isScheduledRecoveryMarkdownPath(path) {
   if (!MARKDOWN_EXTENSION_RE.test(normalized)) {
     return false;
   }
+  if (isDoneArchivePath(normalized)) {
+    return false;
+  }
   const directories = normalized.split("/").slice(0, -1);
   return !directories.some(
     (directory) =>
-      directory === "done" ||
       directory === "_generated" ||
       directory === "_templates" ||
       directory.startsWith("."),
@@ -504,7 +506,7 @@ function isArchivedRecoveryTarget(linkTarget) {
   if (!full) {
     return false;
   }
-  return full.split("/").slice(0, -1).includes("done");
+  return isDoneArchivePath(full);
 }
 
 function recoveryStrikethroughSpans(lineText) {

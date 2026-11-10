@@ -1,4 +1,5 @@
 [
+  "005-done-archive-path.js",
   "010-core.js",
   "015-prompt-block-id-naming.js",
   "020-markers-and-references.js",

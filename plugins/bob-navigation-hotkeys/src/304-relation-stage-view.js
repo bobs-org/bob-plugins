@@ -36,7 +36,7 @@ function isRelationStageExcludedPath(path) {
 }
 
 function isRelationStageArchivedPath(path) {
-  return /^done\//i.test(String(path || ""));
+  return isDoneArchivePath(path);
 }
 
 function relationStageCandidateFromEntry(path, entry) {

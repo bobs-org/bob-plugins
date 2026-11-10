@@ -755,7 +755,7 @@ module.exports.helpers = {
   dependencyStageRouteOf,
   dependencyStageBasenameOf,
   dependencyStageRowKey,
-  isDependencyStageExcludedPath,
+  isDependencyStageExcludedPath, isDoneArchivePath,
   findDependencyStageSection,
   scanDependencyStageNoteTasks,
   createDependencyNoteSnapshot,

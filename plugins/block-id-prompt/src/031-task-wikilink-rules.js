@@ -360,7 +360,7 @@ function taskWikilinkPathWithoutExtension(path) {
 }
 
 function taskWikilinkIsArchivePath(path) {
-  return String(path).split("/")[0] === "done";
+  return isDoneArchivePath(path);
 }
 
 // Mirror of `locator_for` plus `cross_note_link_target` over a basename

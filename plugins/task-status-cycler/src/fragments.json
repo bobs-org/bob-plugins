@@ -1,4 +1,5 @@
 [
+  "005-done-archive-path.js",
   "010-core.js",
   "020-schedule-and-logs.js",
   "030-task-toggles.js",
@@ -47,6 +48,7 @@
   "140-plugin-vim.js",
   "150-plugin-commands.js",
   "160-plugin-completion.js",
+  "162-plugin-completion-restore.js",
   "170-plugin-pomodoro.js",
   "175-plugin-pomodoro-names.js",
   "180-plugin-editor-edits.js",

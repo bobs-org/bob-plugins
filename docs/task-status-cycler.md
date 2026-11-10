@@ -98,7 +98,11 @@ while embedded links close their transcluded tree. Only links that do not
 resolve to a task fall back to completing the Pomodoro. `Ctrl+Enter` on a Task
 Link to a Cancelled task shows a notice instead and leaves the Pomodoro open.
 `Ctrl+Enter` on a task line wrapping an embedded block transclusion closes or
-reopens the transcluded source task too.
+reopens the transcluded source task too. When the transcluded target lives in
+a `done/` archive, reopening restores it to its bound source note with
+`bob task restore -r` instead of reopening it in place, so no open task is
+left inside `done/`; when the restore fails the archived task stays closed
+and a notice shows bob's message.
 
 The empty-placeholder toggle `Ctrl+Alt+]` toggles empty Pomodoro
 placeholders and sub-bullets, including named empty placeholders. The Obsidian

@@ -12,7 +12,7 @@ function blocksPathIsWritable(path, previousDailyPath) {
   const normalized = normalizeVaultRelativePath(path);
   return Boolean(
     normalized &&
-      !/^done\//i.test(normalized) &&
+      !isDoneArchivePath(normalized) &&
       normalized !== normalizeVaultRelativePath(previousDailyPath || ""),
   );
 }

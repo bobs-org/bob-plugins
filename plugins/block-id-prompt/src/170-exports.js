@@ -70,6 +70,7 @@ module.exports.helpers = {
   identityFreshStampLine,
   isDedicatedLinkBullet,
   isDedicatedTaskLinkBullet,
+  isDoneArchivePath,
   isPomodoroLinkName,
   isDependencyTransclusionLink,
   isSoleContentLinkBullet,

@@ -1,4 +1,5 @@
 [
+  "005-done-archive-path.js",
   "010-requires-and-config.js",
   "015-prompt-block-id-naming.js",
   "020-config-load-and-tasks.js",

@@ -15,7 +15,7 @@ class BobNavigationHotkeysBlocksFollowUpsMixin {
     const grouped = new Map();
     for (const entry of entries) {
       const path = normalizeVaultRelativePath(entry && entry.path);
-      if (!path || /^done\//i.test(path) || path === (dailyPaths && dailyPaths.previous)) continue;
+      if (!path || isDoneArchivePath(path) || path === (dailyPaths && dailyPaths.previous)) continue;
       if (!grouped.has(path)) grouped.set(path, { path, preimage: entry.preimage, owners: new Map() });
       const note = grouped.get(path);
       if (note.preimage !== entry.preimage) note.preimage = null;

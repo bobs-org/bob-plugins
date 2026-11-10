@@ -23,7 +23,7 @@ class BobNavigationHotkeysRelationFollowUpsMixin {
       const path = normalizeVaultRelativePath(entry && entry.path);
       if (
         !path ||
-        /^done\//i.test(path) ||
+        isDoneArchivePath(path) ||
         path === (dailyPaths && dailyPaths.previous)
       ) {
         continue;

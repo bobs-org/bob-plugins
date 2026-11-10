@@ -234,7 +234,7 @@ function isDependencyStageExcludedPath(path) {
   ) {
     return true;
   }
-  return segments[0] === "done";
+  return isDoneArchivePath(normalized);
 }
 
 function findDependencyStageSection(lines, line) {

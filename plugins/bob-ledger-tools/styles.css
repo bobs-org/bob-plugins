@@ -7747,6 +7747,39 @@ body:not(.bob-root-marks) .bob-root-mark-native {
 @media (prefers-reduced-motion: reduce) {
   .bob-period-strip-chart-row { animation: none; }
 }
+/* Year narrow-width fallback: four quarter columns below ~400px. The plugin
+   never re-adds minutes; both variants paint from bob's stacks. */
+.bob-period-strip-charts-year { container-type: inline-size; min-width: 0; }
+.bob-period-strip-charts-year .bob-period-strip-charts-fallback { display: none; }
+.bob-period-strip-charts-year .bob-period-strip-charts-detailed { display: block; min-width: 0; }
+@container (max-width: 400px) {
+  .bob-period-strip-charts-year .bob-period-strip-charts-detailed { display: none; }
+  .bob-period-strip-charts-year .bob-period-strip-charts-fallback { display: block; min-width: 0; }
+}
+/* All-time leading untracked collapse: one quiet non-interactive ghost. */
+.bob-period-strip-chart-ghost-column { color: var(--text-faint); }
+.bob-period-strip-ghost-label { color: var(--text-muted); font-size: 0.63em; white-space: nowrap; }
+.bob-period-strip-chart-ghost-bar {
+  position: absolute; bottom: 0; left: 50%; width: 8px; transform: translateX(-50%);
+  border-top: 2px dotted var(--text-faint);
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 30%, transparent) 0 2px, transparent 2px 5px);
+}
+/* Legend hover dimming: non-matching segments fade to 35% over 120ms. */
+.bob-period-strip-chart-plot .bob-period-strip-column-piece { transition: opacity 120ms ease; }
+.bob-period-strip-chart-legend-item { cursor: pointer; }
+@media (prefers-reduced-motion: reduce) {
+  .bob-period-strip-chart-plot .bob-period-strip-column-piece { transition: none; }
+}
+/* Forced colors: separators stay visible, hatch keeps its pattern, marks keep shape. */
+@media (forced-colors: active) {
+  .bob-period-strip-column-piece-seamed { box-shadow: inset 0 1px 0 CanvasText; }
+  .bob-period-strip-series-hatch {
+    background: repeating-linear-gradient(135deg, CanvasText 0 1px, transparent 1px 4px);
+    forced-color-adjust: none;
+  }
+  .bob-period-strip-chart-ghost-bar { border-top-color: CanvasText; }
+  .bob-period-strip-legend-dot, .bob-period-strip-legend-swatch { forced-color-adjust: none; }
+}
 
 /* Mail link marks (mail-link-marks): display-only reply badge after a
    task's mail wikilink. Gated by `body.bob-mail-link-marks`. */

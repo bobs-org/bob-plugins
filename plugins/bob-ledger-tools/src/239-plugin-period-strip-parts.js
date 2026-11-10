@@ -307,12 +307,31 @@ function paintPeriodStripParts(doc, host, model, handlers) {
   }
 }
 
-function periodPartsTableMiniBar(doc, row, tallest) {
+function periodPartsTableMiniBar(doc, row, tallest, model) {
   const bar = statsEl(doc, "span", { class: "bob-period-parts-mini-bar", "aria-hidden": "true" });
-  if (!bar || !row || !row.worked || !Array.isArray(row.stack) || tallest <= 0 || !(row.worked.value > 0)) return bar;
+  if (!bar || !row || !row.worked || tallest <= 0 || !(row.worked.value > 0)) return bar;
   if (bar.style) bar.style.width = String(Math.max(0, Math.min(100, row.worked.value / tallest * 100))) + "%";
-  for (const entry of row.stack) {
-    const piece = statsEl(doc, "span", { class: "bob-period-strip-column-piece bob-day-strip-hue-" + (entry.hue || "gray"), "data-key": entry.key });
+  const charts = model && model.charts && typeof model.charts === "object" ? model.charts : null;
+  const seriesByKey = new Map();
+  if (charts && Array.isArray(charts.roots)) {
+    for (const series of charts.roots) {
+      if (series && typeof series.key === "string") seriesByKey.set(series.key, series);
+    }
+  }
+  const useStacks = row.stacks && Array.isArray(row.stacks.roots) && row.stacks.roots.length && seriesByKey.size;
+  const entries = useStacks ? row.stacks.roots : (Array.isArray(row.stack) ? row.stack : []);
+  if (!entries.length) return bar;
+  for (const entry of entries) {
+    const series = seriesByKey.get(entry.key);
+    const hue = series ? series.hue || "gray" : (entry.hue || "gray");
+    const fill = series ? series.fill || "identity" : "identity";
+    const kind = series ? series.kind || "root" : "root";
+    let fillClass = "";
+    if (fill === "hatch") fillClass = " bob-period-strip-series-hatch";
+    else if (fill === "rest") fillClass = " bob-period-strip-series-rest";
+    else fillClass = " bob-day-strip-hue-" + (hue || "gray");
+    void kind;
+    const piece = statsEl(doc, "span", { class: "bob-period-strip-column-piece" + fillClass, "data-key": entry.key });
     if (piece && piece.style && row.worked.value > 0) {
       piece.style.flex = "0 0 " + String(Math.max(0, entry.minutes / row.worked.value * 100)) + "%";
       piece.style.height = "3px";
@@ -391,7 +410,7 @@ function paintPeriodPartsTable(host, model) {
         const workedText = notTracked ? "not tracked" : ((row.worked && row.worked.display) || "–") + (row.worked && row.worked.soFar ? " so far" : "");
         const workedCell = statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-worked", role: "cell", title: workedText });
         workedCell.appendChild(statsEl(doc, "span", { class: "bob-period-parts-worked-value" }, workedText));
-        workedCell.appendChild(periodPartsTableMiniBar(doc, row, tallest));
+        workedCell.appendChild(periodPartsTableMiniBar(doc, row, tallest, model));
         line.appendChild(workedCell);
         if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }, row.done && typeof row.done.display === "string" ? row.done.display : "–"));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }, periodPartsReviewText(row)));

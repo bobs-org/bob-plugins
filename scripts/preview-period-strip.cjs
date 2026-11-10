@@ -278,23 +278,51 @@ async function main() {
     await sleep(1500);
     const failures = [];
     const rows = [];
-    for (const width of [530, 760]) {
+    for (const width of [320, 410, 530, 700, 1000]) {
       for (const theme of ["light", "dark"]) {
         await client.call("Emulation.setDeviceMetricsOverride", { width, height: 1500, deviceScaleFactor: 1, mobile: false });
         for (const view of ["both", "roots", "types"]) {
           await sleep(100);
           const result = await client.evaluate(`window.periodStripPreview.renderMatrix(${width}, ${JSON.stringify(theme)}, ${JSON.stringify(view)})`);
-          for (const item of result.measurements.filter((entry) => (entry.kind === "week" || entry.kind === "quarter") && entry.state !== "future")) {
+          for (const item of result.measurements.filter((entry) => entry.kind !== "day" && entry.state !== "future" && entry.state !== "skeleton")) {
             rows.push({ width, theme, view, ...item });
             const both = view === "both";
-            const budget = both ? PERIOD_STRIP_HEIGHT_BOTH : PERIOD_STRIP_HEIGHT_SINGLE;
+            let budget = both ? PERIOD_STRIP_HEIGHT_BOTH : PERIOD_STRIP_HEIGHT_SINGLE;
+            if (item.kind === "year" && width <= 410) budget += 80;
+            else if (item.kind === "year") budget += 20;
+            else if (item.kind === "all" && width <= 410) budget += 40;
             if (item.stripHeight > budget + 0.5) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: ${item.stripHeight}px over ${budget}px`);
             if (!item.noOverflow) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: horizontal overflow`);
             if (item.overlap) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: caption/value overlap`);
             if (!item.proportional) failures.push(`${item.state} ${item.kind} ${view} ${width}px ${theme}: chart pieces do not match their minute proportions`);
           }
+          if (width === 320 || width === 1000) {
+            const fallback = await client.evaluate(`(() => {
+              const year = document.querySelector('#case-year .bob-period-strip-charts-year');
+              if (!year) return "no-year";
+              const detailed = year.querySelector('.bob-period-strip-charts-detailed');
+              const fallbackEl = year.querySelector('.bob-period-strip-charts-fallback');
+              const show = (el) => el ? getComputedStyle(el).display : "missing";
+              return "detailed:" + show(detailed) + " fallback:" + show(fallbackEl);
+            })()`);
+            const wantDetailedHidden = width === 320;
+            const detailedHidden = /detailed:none/.test(fallback.replace(/\s+/g, ""));
+            if (wantDetailedHidden !== detailedHidden) failures.push(`year fallback switching ${width}px ${theme} ${view}: got ${fallback}`);
+          }
         }
       }
+    }
+    {
+      await client.call("Emulation.setDeviceMetricsOverride", { width: 530, height: 1500, deviceScaleFactor: 1, mobile: false });
+      await client.evaluate(`document.body.style.fontSize = "20px"`);
+      await sleep(100);
+      const result = await client.evaluate(`window.periodStripPreview.renderMatrix(530, "light", "both")`);
+      for (const item of result.measurements.filter((entry) => entry.kind !== "day" && entry.state !== "future" && entry.state !== "skeleton")) {
+        rows.push({ width: 530, theme: "enlarged", view: "both", ...item });
+        if (!item.noOverflow) failures.push(`enlarged ${item.state} ${item.kind}: horizontal overflow`);
+        if (item.overlap) failures.push(`enlarged ${item.state} ${item.kind}: caption/value overlap`);
+      }
+      await client.evaluate(`document.body.style.fontSize = ""`);
     }
 
     for (const [width, theme, view] of [[760, "light", "both"], [530, "dark", "types"]]) {

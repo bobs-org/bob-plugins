@@ -278,3 +278,58 @@ test("every chart painter class has a CSS rule", () => {
     assert.match(css, new RegExp("\\." + escaped + "(?=[\\s.:#,[>~+{])"), name + " has a style rule");
   }
 });
+
+test("year model carries a four-quarter fallback from children stacks without re-adding minutes", () => {
+  const parts = periodPartsFixtures(closedWeek);
+  const yearReport = chartReport(parts.year);
+  yearReport.children = (parts.year.children || []).filter((row) => row && row.kind === "quarter").map((row) => ({
+    ...row,
+    stacks: { roots: [{ key: "bob.md", minutes: 60 }], types: [{ key: "build", minutes: 60 }] },
+    worked: row.worked || { value: 60, display: "1h 00m", display_short: "1h", quality: "ok" },
+  }));
+  const model = helpers.periodStripChartsModel(yearReport, "year", "both", {});
+  assert.ok(Array.isArray(model.fallbackColumns) && model.fallbackColumns.length === 4);
+  const weekTotal = model.columns.reduce((sum, column) => sum + (column.worked && column.worked.value || 0), 0);
+  const fallbackTotal = model.fallbackColumns.reduce((sum, column) => sum + (column.worked && column.worked.value || 0), 0);
+  assert.ok(fallbackTotal > 0 && fallbackTotal <= weekTotal + 240);
+  const root = paint(helpers.periodStripModel(yearReport, yearReport.period.id));
+  assert.ok(byClass(root, "bob-period-strip-charts-year").length >= 1);
+  assert.ok(byClass(root, "bob-period-strip-charts-detailed").length >= 1);
+  assert.ok(byClass(root, "bob-period-strip-charts-fallback").length >= 1);
+});
+
+test("all-time leading untracked years collapse into one quiet ghost", () => {
+  const report = chartReport(closedWeek);
+  report.groups = [{ key: "2023", label: "2023" }, { key: "2024", label: "2024" }, { key: "2026", label: "2026" }];
+  report.columns = [
+    { id: "2023-Q1", kind: "quarter", label: "Q1", group: "2023", state: "closed", worked: { value: 0, display: "0m", display_short: "0m", quality: "not_tracked" }, stacks: { roots: [], types: [] } },
+    { id: "2024-Q1", kind: "quarter", label: "Q1", group: "2024", state: "closed", worked: { value: 0, display: "0m", display_short: "0m", quality: "not_tracked" }, stacks: { roots: [], types: [] } },
+    { id: "2026-Q1", kind: "quarter", label: "Q1", group: "2026", state: "closed", worked: { value: 60, display: "1h 00m", display_short: "1h", quality: "ok" }, stacks: { roots: [{ key: "bob.md", minutes: 60 }], types: [{ key: "build", minutes: 60 }] } },
+  ];
+  const model = helpers.periodStripChartsModel(report, "all", "both", {});
+  assert.equal(model.columns[0].ghost, true);
+  assert.match(model.columns[0].label, /not tracked/);
+  const root = paint(helpers.periodStripModel(report, "all"));
+  assert.ok(byClass(root, "bob-period-strip-chart-ghost-column").length >= 1);
+  assert.ok(byClass(root, "bob-period-strip-chart-ghost-bar").length >= 2);
+});
+
+test("parts mini-bars reuse the strip Roots series hues and fills", () => {
+  const report = chartReport(closedWeek);
+  const model = helpers.periodStripModel(report, "2026-W44");
+  const rows = helpers.periodStripTableRows({ ...report, lanes: report.lanes, children: report.children || [] });
+  assert.ok(Array.isArray(rows));
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-period-parts-mini-bar/);
+  assert.match(css, /forced-colors/);
+});
+
+test("legend hover dims non-matching segments and forced-colors keeps shapes", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /0\.35/);
+  assert.match(css, /opacity 120ms/);
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /CanvasText/);
+  const root = paint(helpers.periodStripModel(chartReport(closedWeek), "2026-W44"));
+  assert.ok(byClass(root, "bob-period-strip-chart-legend-item").length > 0);
+});

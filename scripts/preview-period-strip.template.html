@@ -135,11 +135,18 @@
           });
           let proportional = Boolean(chart);
           if (chart && report && report.charts) {
-            const tallest = Math.max(0, ...(report.columns || []).map((column) => Number(column.worked && column.worked.value) || 0));
             const plotHeight = view === "both" ? 44 : 62;
-            for (const piece of chart.querySelectorAll(".bob-period-strip-column-piece")) {
-              const expected = tallest > 0 ? (Number(piece.getAttribute("data-minutes")) / tallest) * plotHeight : 0;
-              if (Math.abs(piece.getBoundingClientRect().height - expected) > 1.05) proportional = false;
+            for (const row of chart.querySelectorAll(".bob-period-strip-chart-row")) {
+              if (row.offsetParent === null && row.getBoundingClientRect().height === 0) continue;
+              const plots = Array.from(row.querySelectorAll(".bob-period-strip-chart-plot")).filter((plot) => plot.getAttribute("data-key") !== "__ghost__");
+              const totals = plots.map((plot) => Array.from(plot.querySelectorAll(".bob-period-strip-column-piece")).filter((piece) => piece.getAttribute("data-key") !== "__ghost__").reduce((sum, piece) => sum + (Number(piece.getAttribute("data-minutes")) || 0), 0));
+              const tallest = Math.max(0, ...totals);
+              if (tallest <= 0) continue;
+              for (const piece of row.querySelectorAll(".bob-period-strip-column-piece")) {
+                if (piece.getAttribute("data-key") === "__ghost__" || piece.getAttribute("data-minutes") === null) continue;
+                const expected = (Number(piece.getAttribute("data-minutes")) / tallest) * plotHeight;
+                if (Math.abs(piece.getBoundingClientRect().height - expected) > 1.05) proportional = false;
+              }
             }
           }
           measurements.push({

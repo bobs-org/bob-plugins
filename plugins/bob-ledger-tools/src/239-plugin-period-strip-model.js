@@ -567,6 +567,11 @@ function periodStripTableRows(report) {
       const stack = (Array.isArray(row.stack) ? row.stack : []).filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0)
         .map((entry) => ({ key: entry.key, minutes: entry.minutes, hue: hues.get(entry.key) || "gray", rank: order.has(entry.key) ? order.get(entry.key) : 999 }))
         .sort((a, b) => a.rank - b.rank);
+      const rawStacks = row.stacks && typeof row.stacks === "object" ? row.stacks : null;
+      const stacks = rawStacks ? {
+        roots: Array.isArray(rawStacks.roots) ? rawStacks.roots.filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0) : [],
+        types: Array.isArray(rawStacks.types) ? rawStacks.types.filter((entry) => entry && typeof entry.key === "string" && typeof entry.minutes === "number" && entry.minutes > 0) : [],
+      } : null;
       return {
         id: typeof row.id === "string" ? row.id : "",
         kind: typeof row.kind === "string" ? row.kind : "",
@@ -582,6 +587,7 @@ function periodStripTableRows(report) {
         headline: row.review && typeof row.review.headline === "string" ? row.review.headline : "",
         mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
         stack,
+        stacks,
       };
     });
   } catch (error) {

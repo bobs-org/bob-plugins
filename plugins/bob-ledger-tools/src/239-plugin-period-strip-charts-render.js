@@ -44,6 +44,37 @@ function periodStripChartLegendTitle(doc, dimension, series, model, handlers) {
       "data-display": entry.display,
       "data-display-short": entry.displayShort,
     }, entry.display));
+    const dimKey = entry.key;
+    const dimFrame = () => {
+      try {
+        const frame = node.closest ? node.closest(".bob-period-strip-charts") : null;
+        if (!frame || !frame.querySelectorAll) return;
+        const pieces = frame.querySelectorAll('.bob-period-strip-column-piece[data-key="' + dimKey + '"]');
+        const all = frame.querySelectorAll('[data-chart-row="' + dimension + '"] .bob-period-strip-column-piece');
+        for (const piece of all) {
+          let match = false;
+          for (const candidate of pieces) {
+            if (candidate === piece) { match = true; break; }
+          }
+          if (piece.style) piece.style.opacity = match ? "" : "0.35";
+        }
+      } catch (error) {}
+    };
+    const undim = () => {
+      try {
+        const frame = node.closest ? node.closest(".bob-period-strip-charts") : null;
+        if (!frame || !frame.querySelectorAll) return;
+        for (const piece of frame.querySelectorAll('[data-chart-row="' + dimension + '"] .bob-period-strip-column-piece')) {
+          if (piece.style) piece.style.opacity = "";
+        }
+      } catch (error) {}
+    };
+    if (item.addEventListener) {
+      item.addEventListener("mouseenter", dimKey ? dimFrame : () => {});
+      item.addEventListener("mouseleave", undim);
+      item.addEventListener("focus", dimKey ? dimFrame : () => {});
+      item.addEventListener("blur", undim);
+    }
     legend.appendChild(item);
   }
   node.appendChild(legend);
@@ -77,22 +108,33 @@ function periodStripChartPieceClass(entry, dimension, isTop) {
   return "bob-period-strip-column-piece" + (isTop ? " bob-period-strip-column-piece-top" : " bob-period-strip-column-piece-seamed") + fill;
 }
 
-function periodStripRenderChartPlot(doc, column, index, dimension, model) {
+function periodStripRenderChartPlot(doc, column, index, dimension, model, tallestOverride) {
   const charts = model.charts || {};
   const entries = dimension === "roots" ? column.roots : column.types;
   const plot = statsEl(doc, "span", {
     class: "bob-period-strip-chart-plot bob-period-strip-chart-plot-" + dimension
       + (column.missing ? " bob-period-strip-column-missing" : "")
-      + (column.state === "future" ? " bob-period-strip-column-future" : ""),
+      + (column.state === "future" ? " bob-period-strip-column-future" : "")
+      + (column.ghost ? " bob-period-strip-column-ghost" : ""),
     "data-column-index": String(index),
     "data-chart-dimension": dimension,
+    "data-key": column.ghost ? "__ghost__" : (column.id || ""),
     "aria-hidden": "true",
   });
   const bar = statsEl(doc, "span", { class: "bob-period-strip-column-bar" });
   if (!plot || !bar) return plot;
   const viewHeight = charts.view === "both" ? PERIOD_STRIP_CHART_BOTH_HEIGHT : PERIOD_STRIP_CHART_SINGLE_HEIGHT;
   try { bar.style.height = viewHeight + "px"; } catch (error) {}
-  const tallest = Number(charts.tallest) || 0;
+  if (column.ghost) {
+    const ghost = statsEl(doc, "span", { class: "bob-period-strip-chart-ghost-bar", "aria-hidden": "true" });
+    if (ghost && ghost.style) {
+      try { ghost.style.height = Math.round(viewHeight * 0.35) + "px"; } catch (error) {}
+    }
+    if (ghost) bar.appendChild(ghost);
+    plot.appendChild(bar);
+    return plot;
+  }
+  const tallest = Number(tallestOverride !== undefined ? tallestOverride : charts.tallest) || 0;
   const visible = (entries || []).map((entry) => ({
     entry,
     height: tallest > 0 ? (Number(entry.minutes) / tallest) * viewHeight : 0,
@@ -114,20 +156,20 @@ function periodStripRenderChartPlot(doc, column, index, dimension, model) {
   return plot;
 }
 
-function periodStripRenderChartRow(doc, model, dimension) {
-  const columns = model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : [];
+function periodStripRenderChartRow(doc, model, dimension, columnsOverride, tallestOverride) {
+  const columns = Array.isArray(columnsOverride) ? columnsOverride : (model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : []);
   const row = statsEl(doc, "div", {
     class: "bob-period-strip-chart-row",
     "data-chart-row": dimension,
     role: "presentation",
   });
   if (row && row.style) row.style.gridTemplateColumns = "repeat(" + Math.max(1, columns.length) + ", minmax(0, 1fr))";
-  columns.forEach((column, index) => row.appendChild(periodStripRenderChartPlot(doc, column, index, dimension, model)));
+  columns.forEach((column, index) => row.appendChild(periodStripRenderChartPlot(doc, column, index, dimension, model, tallestOverride)));
   return row;
 }
 
-function periodStripRenderChartTicks(doc, model) {
-  const columns = model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : [];
+function periodStripRenderChartTicks(doc, model, columnsOverride) {
+  const columns = Array.isArray(columnsOverride) ? columnsOverride : (model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : []);
   if (!columns.some((column) => column.tick)) return null;
   const row = statsEl(doc, "div", { class: "bob-period-strip-chart-ticks", "aria-hidden": "true" });
   if (row && row.style) row.style.gridTemplateColumns = "repeat(" + Math.max(1, columns.length) + ", minmax(0, 1fr))";
@@ -149,10 +191,10 @@ function periodStripChartGroupCaption(group, kind) {
   return kind === "year" && worked && worked !== "–" ? label + " · " + worked : label;
 }
 
-function periodStripRenderChartGroups(doc, model) {
+function periodStripRenderChartGroups(doc, model, columnsOverride) {
   if (model.kind !== "year" && model.kind !== "all") return null;
   const charts = model.charts || {};
-  const columns = Array.isArray(charts.columns) ? charts.columns : [];
+  const columns = Array.isArray(columnsOverride) ? columnsOverride : (Array.isArray(charts.columns) ? charts.columns : []);
   const groups = Array.isArray(charts.groups) ? charts.groups : [];
   const row = statsEl(doc, "div", { class: "bob-period-strip-chart-groups", "aria-hidden": "true" });
   if (row && row.style) row.style.gridTemplateColumns = "repeat(" + Math.max(1, columns.length) + ", minmax(0, 1fr))";
@@ -182,6 +224,21 @@ function periodStripChartColumnAria(column, charts) {
 
 function periodStripRenderChartAxisColumn(doc, column, index, model, handlers, axisNodes, plotRows) {
   const state = column.state || "closed";
+  if (column.ghost) {
+    const ghost = statsEl(doc, "span", {
+      class: "bob-period-strip-column bob-period-strip-chart-axis-column bob-period-strip-chart-ghost-column",
+      role: "presentation",
+      "aria-label": column.label,
+      title: column.tooltip || null,
+      "data-column-state": "ghost",
+    });
+    if (ghost) {
+      ghost.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-mark", "aria-hidden": "true" }, ""));
+      ghost.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-caption" }, ""));
+      ghost.appendChild(statsEl(doc, "span", { class: "bob-period-strip-column-value bob-period-strip-ghost-label" }, column.label));
+    }
+    return ghost;
+  }
   const node = statsEl(doc, "span", {
     class: "bob-period-strip-column bob-period-strip-chart-axis-column"
       + (column.missing ? " bob-period-strip-column-missing" : "")
@@ -231,12 +288,15 @@ function periodStripRenderChartAxisColumn(doc, column, index, model, handlers, a
   return node;
 }
 
-function periodStripRenderChartAxis(doc, model, handlers, plotRows) {
-  const columns = model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : [];
+function periodStripRenderChartAxis(doc, model, handlers, plotRows, columnsOverride) {
+  const columns = Array.isArray(columnsOverride) ? columnsOverride : (model.charts && Array.isArray(model.charts.columns) ? model.charts.columns : []);
   const row = statsEl(doc, "div", { class: "bob-period-strip-chart-axis", role: "group", "aria-label": "Child periods" });
   if (row && row.style) row.style.gridTemplateColumns = "repeat(" + Math.max(1, columns.length) + ", minmax(0, 1fr))";
   const axisNodes = [];
-  columns.forEach((column, index) => row.appendChild(periodStripRenderChartAxisColumn(doc, column, index, model, handlers, axisNodes, plotRows)));
+  columns.forEach((column, index) => {
+    const cell = periodStripRenderChartAxisColumn(doc, column, index, model, handlers, axisNodes, plotRows);
+    if (cell) row.appendChild(cell);
+  });
   if (row && row.addEventListener) {
     row.addEventListener("keydown", (event) => {
       const current = axisNodes.indexOf(event && event.target);
@@ -286,36 +346,63 @@ function periodStripRenderChartSwitch(doc, model, handlers) {
   return node;
 }
 
-function periodStripRenderChartFrame(doc, model, handlers) {
+function periodStripRenderChartFrameInner(doc, model, handlers, columns, tallest, variant) {
   const charts = model.charts || {};
-  const frame = statsEl(doc, "div", {
-    class: "bob-period-strip-charts" + (charts.fallback ? " bob-period-strip-charts-legacy" : ""),
-    "data-view": charts.view || "both",
-    "data-charts-version": String(charts.version || 0),
-  });
   const shown = Array.isArray(charts.shown) ? charts.shown : [];
-  if (charts.fallback) frame.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-update-note" }, "Update bob for the Types chart."));
-  if (charts.zeroWorked) frame.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-zero-note" }, "No Worked time in this period."));
+  const inner = statsEl(doc, "div", {
+    class: "bob-period-strip-charts-inner bob-period-strip-charts-" + (variant || "detailed"),
+    "data-variant": variant || "detailed",
+  });
+  if (!inner) return null;
+  if (charts.fallback) inner.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-update-note" }, "Update bob for the Types chart."));
+  if (charts.zeroWorked) inner.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-zero-note" }, "No Worked time in this period."));
   const plotRows = [];
   for (const dimension of shown) {
     if (!charts.zeroWorked) {
       const series = dimension === "roots" ? charts.roots : charts.types;
       const title = periodStripChartLegendTitle(doc, dimension, series, model, handlers || {});
-      if (title) frame.appendChild(title);
+      if (title) inner.appendChild(title);
       if (dimension === shown[0]) {
-        const ticks = periodStripRenderChartTicks(doc, model);
-        if (ticks) frame.appendChild(ticks);
+        const ticks = periodStripRenderChartTicks(doc, model, columns);
+        if (ticks) inner.appendChild(ticks);
       }
     }
-    const row = periodStripRenderChartRow(doc, model, dimension);
+    const row = periodStripRenderChartRow(doc, model, dimension, columns, tallest);
     plotRows.push(Array.from(row.children || []));
-    frame.appendChild(row);
+    inner.appendChild(row);
   }
-  const groups = periodStripRenderChartGroups(doc, model);
-  if (groups) frame.appendChild(groups);
-  const axis = periodStripRenderChartAxis(doc, model, handlers || {}, plotRows);
-  if (axis) frame.appendChild(axis);
-  if (charts.fallback && !charts.roots.length) frame.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-zero-note" }, "No root detail is available from this bob."));
+  const groups = periodStripRenderChartGroups(doc, model, columns);
+  if (groups) inner.appendChild(groups);
+  const axis = periodStripRenderChartAxis(doc, model, handlers || {}, plotRows, columns);
+  if (axis) inner.appendChild(axis);
+  if (charts.fallback && !charts.roots.length) inner.appendChild(statsEl(doc, "div", { class: "bob-period-strip-chart-zero-note" }, "No root detail is available from this bob."));
+  return { inner, plotRows };
+}
+
+function periodStripRenderChartFrame(doc, model, handlers) {
+  const charts = model.charts || {};
+  const frame = statsEl(doc, "div", {
+    class: "bob-period-strip-charts" + (charts.fallback ? " bob-period-strip-charts-legacy" : "")
+      + (model.kind === "year" && Array.isArray(charts.fallbackColumns) && charts.fallbackColumns.length ? " bob-period-strip-charts-year" : "")
+      + (charts.collapsed ? " bob-period-strip-charts-collapsed" : ""),
+    "data-view": charts.view || "both",
+    "data-charts-version": String(charts.version || 0),
+  });
+  const columns = Array.isArray(charts.columns) ? charts.columns : [];
+  if (model.kind === "year" && Array.isArray(charts.fallbackColumns) && charts.fallbackColumns.length) {
+    const detailed = periodStripRenderChartFrameInner(doc, model, handlers || {}, columns, charts.tallest, "detailed");
+    if (detailed && detailed.inner) frame.appendChild(detailed.inner);
+    const fallbackTallest = Number(charts.fallbackTallest) || 0;
+    const fallbackModel = { ...model, charts: { ...charts, columns: charts.fallbackColumns, tallest: fallbackTallest } };
+    const fallback = periodStripRenderChartFrameInner(doc, fallbackModel, handlers || {}, charts.fallbackColumns, fallbackTallest, "fallback");
+    if (fallback && fallback.inner) frame.appendChild(fallback.inner);
+  } else {
+    const single = periodStripRenderChartFrameInner(doc, model, handlers || {}, columns, charts.tallest, "detailed");
+    if (single && single.inner) {
+      const kids = Array.isArray(single.inner.children) ? single.inner.children.slice() : [];
+      for (const kid of kids) frame.appendChild(kid);
+    }
+  }
   return frame;
 }
 

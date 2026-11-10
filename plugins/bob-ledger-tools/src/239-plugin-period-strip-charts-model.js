@@ -132,14 +132,11 @@ function periodStripChartColumnTooltip(column, roots, types, fallback) {
   return lines.join("\n");
 }
 
-function periodStripChartColumns(report, kind, rootSeries, typeSeries, fallback) {
+function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fallback) {
   try {
-    const rawColumns = Array.isArray(report && report.columns)
-      ? report.columns
-      : (Array.isArray(report && report.children) ? report.children : []);
     const rootsByKey = new Map(rootSeries.map((row) => [row.key, row]));
     const typesByKey = new Map(typeSeries.map((row) => [row.key, row]));
-    return rawColumns.filter((row) => row && typeof row === "object").map((column) => {
+    return rawRows.filter((row) => row && typeof row === "object").map((column) => {
       const state = typeof column.state === "string" ? column.state : "closed";
       const worked = column.worked && typeof column.worked === "object" ? column.worked : null;
       const quality = worked && typeof worked.quality === "string" ? worked.quality : "";
@@ -182,6 +179,89 @@ function periodStripChartColumns(report, kind, rootSeries, typeSeries, fallback)
   }
 }
 
+function periodStripChartColumns(report, kind, rootSeries, typeSeries, fallback) {
+  try {
+    const rawColumns = Array.isArray(report && report.columns)
+      ? report.columns
+      : (Array.isArray(report && report.children) ? report.children : []);
+    return periodStripChartBuildColumns(rawColumns, kind, rootSeries, typeSeries, fallback);
+  } catch (error) {
+    return [];
+  }
+}
+
+// Year narrow-width fallback: four quarter columns from bob's children[]
+// stacks. The plugin never re-adds minutes; it only reuses the child stacks.
+function periodStripChartYearFallbackColumns(report, rootSeries, typeSeries, fallback) {
+  try {
+    const raw = Array.isArray(report && report.children) ? report.children : [];
+    const quarters = raw.filter((row) => row && row.kind === "quarter");
+    if (!quarters.length) return [];
+    return periodStripChartBuildColumns(quarters, "year", rootSeries, typeSeries, fallback);
+  } catch (error) {
+    return [];
+  }
+}
+
+// All-time leading untracked collapse: leading years with no tracked Worked
+// collapse into one non-interactive quiet ghost group.
+function periodStripChartCollapseLeadingUntracked(columns, groups) {
+  try {
+    if (!Array.isArray(columns) || !columns.length) return { columns, collapsed: null };
+    const groupOrder = Array.isArray(groups) ? groups.map((group) => String(group && group.key || "")) : [];
+    const byGroup = new Map();
+    for (const column of columns) {
+      const key = String(column.group || "");
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key).push(column);
+    }
+    const orderedKeys = groupOrder.length ? groupOrder.filter((key) => byGroup.has(key)) : Array.from(byGroup.keys());
+    const leading = [];
+    for (const key of orderedKeys) {
+      const members = byGroup.get(key) || [];
+      const tracked = members.some((column) => {
+        if (column.state === "future") return true;
+        const value = column.worked && typeof column.worked.value === "number" ? column.worked.value : 0;
+        if (value > 0) return true;
+        return column.missing !== true;
+      });
+      if (tracked) break;
+      leading.push(key);
+    }
+    if (!leading.length) return { columns, collapsed: null };
+    if (leading.length >= orderedKeys.length) return { columns, collapsed: null };
+    const leadingSet = new Set(leading);
+    const collapsedColumns = columns.filter((column) => !leadingSet.has(String(column.group || "")));
+    const first = leading[0];
+    const last = leading[leading.length - 1];
+    const label = first === last ? first + " · not tracked" : first + "–" + last + " · not tracked";
+    const ghost = {
+      id: "untracked-" + leading.join("-"),
+      kind: "ghost",
+      label,
+      caption: "",
+      path: "",
+      start: "",
+      end: "",
+      state: "ghost",
+      partial: null,
+      worked: null,
+      missing: true,
+      mark: null,
+      tick: null,
+      group: "__untracked__",
+      roots: [],
+      types: [],
+      tooltip: label,
+      ghost: true,
+      ghostSpan: leading.length,
+    };
+    return { columns: [ghost, ...collapsedColumns], collapsed: { keys: leading, label } };
+  } catch (error) {
+    return { columns, collapsed: null };
+  }
+}
+
 function periodStripChartsModel(report, kind, requestedView, context) {
   try {
     const rawCharts = report && report.charts && typeof report.charts === "object" ? report.charts : null;
@@ -215,13 +295,28 @@ function periodStripChartsModel(report, kind, requestedView, context) {
         : (view === "roots" ? (roots.length ? ["roots"] : []) : (types.length ? ["types"] : []));
     const rootByKey = new Map(roots.map((row) => [row.key, row]));
     const typeByKey = new Map(types.map((row) => [row.key, row]));
-    const columns = periodStripChartColumns(report, kind, roots, types, fallback);
+    let columns = periodStripChartColumns(report, kind, roots, types, fallback);
+    const groups = Array.isArray(report && report.groups) ? report.groups : [];
+    let collapsed = null;
+    if (kind === "all" && !fallback) {
+      const result = periodStripChartCollapseLeadingUntracked(columns, groups);
+      columns = result.columns;
+      collapsed = result.collapsed;
+    }
+    let fallbackColumns = [];
+    if (kind === "year" && !fallback) {
+      fallbackColumns = periodStripChartYearFallbackColumns(report, roots, types, fallback);
+    }
     let tallest = 0;
     for (const column of columns) {
       const value = column && column.worked && typeof column.worked.value === "number" ? column.worked.value : 0;
       tallest = Math.max(tallest, value);
     }
-    const groups = Array.isArray(report && report.groups) ? report.groups : [];
+    let fallbackTallest = 0;
+    for (const column of fallbackColumns) {
+      const value = column && column.worked && typeof column.worked.value === "number" ? column.worked.value : 0;
+      fallbackTallest = Math.max(fallbackTallest, value);
+    }
     const digest = periodStripChartsDigest(report);
     return {
       version: hasCharts ? rawCharts.version : 0,
@@ -233,6 +328,9 @@ function periodStripChartsModel(report, kind, requestedView, context) {
       roots,
       types,
       columns,
+      fallbackColumns,
+      fallbackTallest,
+      collapsed,
       groups,
       tallest,
       digest,
@@ -243,6 +341,6 @@ function periodStripChartsModel(report, kind, requestedView, context) {
       typeByKey,
     };
   } catch (error) {
-    return { version: 0, view: "roots", shown: [], switchable: false, fallback: true, zeroWorked: false, roots: [], types: [], columns: [], groups: [], tallest: 0, digest: "0:error", policy: "", limit: null };
+    return { version: 0, view: "roots", shown: [], switchable: false, fallback: true, zeroWorked: false, roots: [], types: [], columns: [], groups: [], fallbackColumns: [], fallbackTallest: 0, collapsed: null, tallest: 0, digest: "0:error", policy: "", limit: null };
   }
 }

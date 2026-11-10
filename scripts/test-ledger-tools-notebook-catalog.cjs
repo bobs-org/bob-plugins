@@ -144,8 +144,11 @@ const {
   notebookHostHueName,
   notebookPaintCallout,
   notebookPaintSyncAction,
+  notebookPaintRetryAction,
   notebookFindCallouts,
   notebookLiIsProjectGroup,
+  notebookRetryActionModel,
+  notebookStatusModel,
 } = helpers;
 
 const pluginRoot = path.join(__dirname, "..", "plugins", "bob-ledger-tools");
@@ -334,6 +337,17 @@ class FakeNode {
 
   matches(selector) {
     return selectorParts(selector).some((part) => matchPart(this, part));
+  }
+
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (node.nodeType === 1 && node.matches(selector)) {
+        return node;
+      }
+      node = node.parentNode;
+    }
+    return null;
   }
 
   querySelector(selector) {
@@ -766,9 +780,15 @@ test("styles.css scopes the notebook card, icon, tree, chips, and focus", () => 
   assert.ok(css.includes("font-variant-numeric: tabular-nums"));
   assert.ok(css.includes(".bob-notebook-add-summary"));
   assert.ok(css.includes(".bob-notebook-sync:focus-visible"));
+  assert.ok(css.includes(".bob-notebook-retry"));
   assert.ok(css.includes("outline: 2px solid var(--interactive-accent)"));
   assert.ok(css.includes('[data-root-hue="blue"]'));
   assert.ok(css.includes("var(--bob-area-blue)"));
+  assert.ok(css.includes("flex: 1 1 100%"));
+  assert.equal(css.includes("padding-inline-end: 8.5em"), false);
+  assert.ok(css.includes("375px"));
+  const notebookCss = css.slice(css.indexOf("Notebook catalog card"));
+  assert.equal(/#c98500/.test(notebookCss), false);
   assert.equal((css.match(/\.callout\[data-callout="notebooks"\]/g) || []).length > 5, true);
   assert.equal(css.includes("ul li {"), false);
 });
@@ -1074,4 +1094,204 @@ test("all catalog states stay visible until the list report changes them", () =>
     assert.equal(current.state, state);
     assert.ok(notebookSyncActionModel(current));
   }
+});
+
+test("first list failure is unavailable with a list retry, not invented zeros", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReport = null;
+  plugin.notebookReportStale = true;
+  plugin.notebookReportError = {
+    code: "bob-not-found",
+    message: "Notebook data needs the desktop app, where bob can run.",
+  };
+  const state = plugin.notebookReportState();
+  assert.equal(state.unavailable, true);
+  const retry = notebookRetryActionModel(state);
+  assert.ok(retry);
+  assert.equal(retry.kind, "retry");
+  assert.equal(plugin.notebookCatalogSyncModel("dev.md", state, false), null);
+  const doc = makeDoc();
+  const root = el(doc, "div", {});
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  const retryBtn = root.querySelector(".bob-notebook-retry");
+  assert.ok(retryBtn);
+  assert.ok(root.querySelector(".bob-notebook-status"));
+  assert.equal(root.querySelectorAll(".bob-notebook-count").length, 0);
+});
+
+test("stale last-good catalog keeps counts and offers retry", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReportStale = true;
+  plugin.notebookReportError = { code: "timeout", message: "bob notebooks timed out." };
+  const state = plugin.notebookReportState();
+  assert.equal(state.stale, true);
+  assert.ok(state.report);
+  const retry = notebookRetryActionModel(state);
+  assert.equal(retry.state, "stale");
+  const doc = makeDoc();
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "Commands and workflow." }]);
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const root = el(doc, "div", {}, [heading, callout]);
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  assert.equal(callout.getAttribute("data-stale"), "true");
+  assert.ok(root.querySelector(".bob-notebook-chips"));
+  assert.ok(heading.querySelector(".bob-notebook-retry"));
+  let reports = 0;
+  plugin.apiNotebookReport = async () => {
+    reports += 1;
+    return plugin.notebookReportState();
+  };
+  heading.querySelector(".bob-notebook-retry").fire("keydown", { key: "Enter" });
+  assert.equal(reports, 1);
+});
+
+test("retry recovers after a later successful list", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReport = null;
+  plugin.notebookReportError = { code: "failed", message: "nope" };
+  const doc = makeDoc();
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  const root = el(doc, "div", {}, [heading]);
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  assert.ok(heading.querySelector(".bob-notebook-retry"));
+  plugin.notebookReport = decoded().report;
+  plugin.notebookReportError = null;
+  plugin.notebookReportStale = false;
+  plugin.notebookReportGeneration = plugin.notebookVaultGeneration || 0;
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  assert.equal(heading.querySelector(".bob-notebook-retry"), null);
+  assert.equal(heading.querySelector(".bob-notebook-status"), null);
+});
+
+test("sync refusal keeps damaged feedback until the list succeeds", () => {
+  const { plugin } = makePlugin({
+    catalogs: [{ host: "dev", path: "dev.md", root: "dev", state: "damaged", notebooks: 1, issues: [] }],
+  });
+  plugin.notebookSyncError = {
+    code: "sync-refused",
+    message: "bob notebooks sync found a damaged catalog or could not complete.",
+  };
+  const doc = makeDoc();
+  const heading = el(doc, "h2", { text: "Notebooks" });
+  plugin.paintNotebookCatalogReading(el(doc, "div", {}, [heading]), "dev.md");
+  assert.equal(heading.querySelector(".bob-notebook-sync").getAttribute("data-catalog-state"), "damaged");
+  assert.ok(heading.querySelector(".bob-notebook-status"));
+});
+
+test("missing catalog without H1 or H2 uses a rendered-only anchor", () => {
+  const { plugin } = makePlugin({
+    catalogs: [{ host: "dev", path: "dev.md", root: "dev", state: "missing", notebooks: 0, issues: [] }],
+  });
+  const doc = makeDoc();
+  const para = el(doc, "p", { text: "No headings." });
+  const root = el(doc, "div", {}, [para]);
+  plugin.paintNotebookCatalogReading(root, "dev.md");
+  const anchor = root.querySelector(".bob-notebook-anchor");
+  assert.ok(anchor);
+  assert.ok(anchor.querySelector(".bob-notebook-sync"));
+  assert.equal(anchor.querySelector(".bob-notebook-sync").getAttribute("data-catalog-state"), "missing");
+});
+
+test("host hue uses the local override and honour mute, not root_hue", () => {
+  const files = [
+    { path: "dev.md", frontmatter: { type: "[[area]]" } },
+    { path: "root.md", frontmatter: { type: "[[project]]", parent: "[[dev]]", color: "blue" } },
+    { path: "sub.md", frontmatter: { type: "[[project]]", parent: "[[root]]", color: "orange" } },
+  ];
+  const { plugin } = makePlugin({}, files);
+  assert.equal(notebookHostHueName("sub.md", plugin.app.metadataCache, plugin.app.vault), "orange");
+  plugin.app.metadataCache.getFileCache = (file) => {
+    if (file && file.path === "sub.md") {
+      return { frontmatter: { type: "[[project]]", parent: "[[root]]", color: "grey" } };
+    }
+    if (file && file.path === "root.md") {
+      return { frontmatter: { type: "[[project]]", parent: "[[dev]]", color: "blue" } };
+    }
+    if (file && file.path === "dev.md") {
+      return { frontmatter: { type: "[[area]]" } };
+    }
+    return { frontmatter: {} };
+  };
+  assert.equal(notebookHostHueName("sub.md", plugin.app.metadataCache, plugin.app.vault), null);
+});
+
+test("Live Preview and Reading both expose retry after a first fetch failure", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReport = null;
+  plugin.notebookReportError = { code: "timeout", message: "timed out" };
+  const reading = el(makeDoc(), "div", {});
+  plugin.paintNotebookCatalogReading(reading, "dev.md");
+  assert.ok(reading.querySelector(".bob-notebook-retry"));
+  widgetCalls.length = 0;
+  const live = plugin.buildNotebookCatalogDecorations(makeEditorView({
+    text: "Just a paragraph.\n",
+    live: true,
+  }));
+  assert.ok(Array.isArray(live));
+  assert.ok(live.some((range) => range.decoration && range.decoration._widget));
+});
+
+test("add-summary focuses the opened notebook view, never another pane", async () => {
+  TestNotice.messages = [];
+  const { plugin } = makePlugin();
+  let focusedOther = false;
+  plugin.app.workspace.getLeavesOfType = () => [
+    { view: { file: { path: "ideas.md" }, contentEl: { querySelector: () => null, querySelectorAll: () => [] } } },
+  ];
+  plugin.notebookFocusSummaryProperty = (view) => {
+    if (!view || !view.file || view.file.path !== "ideas.md") {
+      focusedOther = true;
+    }
+    return false;
+  };
+  const result = await plugin.apiNotebookOpenSummary("ideas.md", "dev.md");
+  assert.equal(result.ok, true);
+  assert.equal(focusedOther, false);
+});
+
+test("create and metadata events refresh the shared catalog through one cache", async () => {
+  const { plugin } = makePlugin();
+  const doc = makeDoc();
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "Commands and workflow." }]);
+  plugin.paintNotebookCatalogReading(el(doc, "div", {}, [el(doc, "h2", { text: "Notebooks" }), callout]), "dev.md");
+  const gen = plugin.notebookVaultGeneration;
+  plugin.notebooksSpawn = async () => ({
+    ok: true,
+    report: {
+      schema_version: 1,
+      ok: true,
+      command: "create",
+      notebook: { path: "nvim.md", stem: "nvim", title: "Nvim", summary: "x", parent: "dev" },
+      warnings: [],
+    },
+  });
+  const created = await plugin.apiNotebooksCreate({ parent: "dev.md", id: "nvim", summary: "Neovim notes." });
+  assert.equal(created.ok, true);
+  plugin.notebookHandleVaultEvent("create", { path: "nvim.md" });
+  plugin.notebookHandleMetadataChanged(
+    { path: "nvim.md" },
+    { frontmatter: { type: "[[notebook]]", parent: "[[dev]]", summary: "Neovim notes." } },
+  );
+  assert.ok(plugin.notebookVaultGeneration > gen);
+  assert.equal(plugin.notebookReportStale, true);
+  assert.equal(Boolean(plugin.notebookSyncBusy), false);
+});
+
+test("desktop-unavailable live data is explicit and read-only styling still paints", () => {
+  const { plugin } = makePlugin();
+  plugin.notebookReport = decoded().report;
+  plugin.notebookReportError = {
+    code: "bob-not-found",
+    message: "Notebook data needs the desktop app, where bob can run.",
+  };
+  plugin.notebookReportStale = true;
+  const state = plugin.notebookReportState();
+  assert.equal(notebookRetryActionModel(state).code, "desktop-only");
+  const doc = makeDoc();
+  const callout = makeCalloutDom(doc, [{ href: "git", title: "Git", summary: "Commands and workflow." }]);
+  plugin.paintNotebookCatalogReading(el(doc, "div", {}, [callout]), "dev.md");
+  assert.equal(callout.getAttribute("data-root-hue"), "blue");
+  assert.ok(callout.querySelector(".bob-notebook-chips"));
+  void notebookPaintRetryAction;
+  void notebookStatusModel;
 });

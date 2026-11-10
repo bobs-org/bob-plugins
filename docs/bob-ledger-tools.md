@@ -609,10 +609,12 @@ Exempt types such as PLAN, and grey-area types, have no hue, so their `#TYPE` us
 
 ## Notebooks
 
-Catalogs render as cards with hue and live chips; **add summary** and **↻ sync**
-cover stale catalogs via debounced `bob notebooks sync`. Headers show linked
-`📓` ancestry and child chips below the title in both views, following report
-`parent` identities with cycle-safe bounds.
+Catalogs use the host's ancestry hue, including mute. **add summary** opens
+the notebook and focuses Properties `summary`. **↻ sync** rewrites missing,
+stale, or damaged catalogs. **Retry** reloads the list report and keeps
+last-good counts. Notes without H1 or a Notebooks heading get a rendered
+action anchor. Headers show linked `📓` ancestry. Live data needs desktop
+Obsidian.
 
 ## Settings
 

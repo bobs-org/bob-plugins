@@ -53282,6 +53282,67 @@ function notebookSyncActionModel(catalog, options = {}) {
   };
 }
 
+function notebookRetryActionModel(state) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+  const errorModel = state.errorModel || null;
+  const unavailable = state.unavailable === true;
+  const stale = state.stale === true && Boolean(state.report);
+  const busy = state.refreshing === true;
+  if (!unavailable && !stale && !errorModel) {
+    return null;
+  }
+  if (unavailable || (errorModel && !state.report)) {
+    return {
+      kind: "retry",
+      label: "Retry",
+      hint: (errorModel && errorModel.hint)
+        || "Notebook data is unavailable. Retry the list report.",
+      code: (errorModel && errorModel.code) || "unavailable",
+      busy,
+      disabled: busy,
+      state: "unavailable",
+    };
+  }
+  if (stale) {
+    return {
+      kind: "retry",
+      label: "Retry",
+      hint: (errorModel && errorModel.hint)
+        || "Showing the last good notebook list. Retry to refresh.",
+      code: (errorModel && errorModel.code) || "stale",
+      busy,
+      disabled: busy,
+      state: "stale",
+    };
+  }
+  return null;
+}
+
+function notebookStatusModel(state) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+  const retry = notebookRetryActionModel(state);
+  const syncError = state.syncErrorModel || null;
+  if (!retry && !syncError) {
+    return null;
+  }
+  const hint = (retry && retry.hint)
+    || (syncError && syncError.hint)
+    || "Notebook data is unavailable.";
+  const kind = retry
+    ? retry.state
+    : (syncError && syncError.code === "desktop-only" ? "unavailable" : "sync-error");
+  return {
+    kind,
+    hint,
+    retry,
+    code: (retry && retry.code) || (syncError && syncError.code) || "",
+  };
+}
+
 function notebookRowModel(notebook, today) {
   if (!notebook) {
     return {
@@ -53363,7 +53424,7 @@ function notebookHostHueName(path, metadataCache, vault) {
       [],
       new Set(),
     );
-    const hue = resolved && resolved.root_hue;
+    const hue = resolved && resolved.hue;
     if (hue && Array.isArray(POMODORO_HOME_SLOT_ORDER) && POMODORO_HOME_SLOT_ORDER.includes(hue)) {
       return hue;
     }
@@ -53390,6 +53451,9 @@ const NOTEBOOK_COUNT_CLASS = "bob-notebook-count";
 const NOTEBOOK_AGE_CLASS = "bob-notebook-age";
 const NOTEBOOK_ADD_CLASS = "bob-notebook-add-summary";
 const NOTEBOOK_SYNC_CLASS = "bob-notebook-sync";
+const NOTEBOOK_RETRY_CLASS = "bob-notebook-retry";
+const NOTEBOOK_STATUS_CLASS = "bob-notebook-status";
+const NOTEBOOK_ANCHOR_CLASS = "bob-notebook-anchor";
 const NOTEBOOK_SUMMARY_CLASS = "bob-notebook-summary";
 const NOTEBOOK_CALLOUT_CLASS = "bob-notebook-catalog";
 
@@ -53763,6 +53827,11 @@ function notebookPaintCallout(callout, options = {}) {
       } else if (typeof callout.removeAttribute === "function") {
         callout.removeAttribute("data-root-hue");
       }
+      if (options.stale) {
+        callout.setAttribute("data-stale", "true");
+      } else if (typeof callout.removeAttribute === "function") {
+        callout.removeAttribute("data-stale");
+      }
     }
     if (callout.classList && typeof callout.classList.add === "function") {
       callout.classList.add(NOTEBOOK_CALLOUT_CLASS);
@@ -53810,12 +53879,12 @@ function notebookPaintCallout(callout, options = {}) {
   return true;
 }
 
-function notebookPaintSyncAction(host, model, handlers, doc) {
+function notebookPaintActionButton(host, model, handlers, doc, className, run) {
   if (!host || !model) {
     return null;
   }
-  notebookRemovePainted(host, NOTEBOOK_SYNC_CLASS);
-  const el = notebookCreateEl(doc, "button", NOTEBOOK_SYNC_CLASS);
+  notebookRemovePainted(host, className);
+  const el = notebookCreateEl(doc, "button", className);
   if (!el) {
     return null;
   }
@@ -53824,7 +53893,12 @@ function notebookPaintSyncAction(host, model, handlers, doc) {
     if (typeof el.setAttribute === "function") {
       el.setAttribute("aria-label", model.hint);
       el.setAttribute("title", model.hint);
-      el.setAttribute("data-catalog-state", model.state);
+      if (model.state) {
+        el.setAttribute("data-catalog-state", model.state);
+      }
+      if (model.kind) {
+        el.setAttribute("data-action-kind", model.kind);
+      }
       if (model.busy) {
         el.setAttribute("aria-busy", "true");
         el.setAttribute("disabled", "true");
@@ -53832,18 +53906,114 @@ function notebookPaintSyncAction(host, model, handlers, doc) {
     }
     el.disabled = Boolean(model.disabled);
   } catch (error) {
-    // Sync chrome is best-effort.
+    // Action chrome is best-effort.
   }
-  if (handlers && typeof handlers.sync === "function") {
+  if (typeof run === "function") {
     notebookBindAction(el, (event) => {
       if (model.disabled) {
         return;
       }
-      handlers.sync(event);
+      run(event);
     });
   }
   if (typeof host.appendChild === "function") {
     host.appendChild(el);
+  }
+  return el;
+}
+
+function notebookPaintSyncAction(host, model, handlers, doc) {
+  return notebookPaintActionButton(
+    host,
+    model,
+    handlers,
+    doc,
+    NOTEBOOK_SYNC_CLASS,
+    handlers && typeof handlers.sync === "function" ? (event) => handlers.sync(event) : null,
+  );
+}
+
+function notebookPaintRetryAction(host, model, handlers, doc) {
+  return notebookPaintActionButton(
+    host,
+    model,
+    handlers,
+    doc,
+    NOTEBOOK_RETRY_CLASS,
+    handlers && typeof handlers.retry === "function" ? (event) => handlers.retry(event) : null,
+  );
+}
+
+function notebookPaintStatus(host, model, handlers, doc) {
+  if (!host || !model) {
+    return null;
+  }
+  notebookRemovePainted(host, NOTEBOOK_STATUS_CLASS);
+  const el = notebookCreateEl(doc, "div", NOTEBOOK_STATUS_CLASS);
+  if (!el) {
+    return null;
+  }
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("role", "status");
+      el.setAttribute("data-kind", model.kind || "status");
+      if (model.code) {
+        el.setAttribute("data-code", model.code);
+      }
+    }
+  } catch (error) {
+    // Status chrome is best-effort.
+  }
+  const hint = notebookCreateEl(doc, "span", "bob-notebook-status-hint");
+  if (hint) {
+    notebookSetText(hint, model.hint || "");
+    if (typeof el.appendChild === "function") {
+      el.appendChild(hint);
+    }
+  }
+  if (typeof host.appendChild === "function") {
+    host.appendChild(el);
+  }
+  return el;
+}
+
+function notebookEnsureRenderedAnchor(root, doc) {
+  if (!root) {
+    return null;
+  }
+  try {
+    if (typeof root.querySelector === "function") {
+      const existing = root.querySelector(`.${NOTEBOOK_ANCHOR_CLASS}`);
+      if (existing) {
+        return existing;
+      }
+    }
+  } catch (error) {
+    // Dedup is best-effort.
+  }
+  const el = notebookCreateEl(doc, "div", NOTEBOOK_ANCHOR_CLASS);
+  if (!el) {
+    return null;
+  }
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("data-notebook-anchor", "true");
+    }
+  } catch (error) {
+    // Anchor chrome is best-effort.
+  }
+  try {
+    if (typeof root.insertBefore === "function") {
+      root.insertBefore(el, root.firstChild || null);
+    } else if (typeof root.prepend === "function") {
+      root.prepend(el);
+    } else if (typeof root.appendChild === "function") {
+      root.appendChild(el);
+    } else {
+      return null;
+    }
+  } catch (error) {
+    return null;
   }
   return el;
 }
@@ -53895,10 +54065,38 @@ function notebookInsideCode(node) {
   return false;
 }
 
+function notebookHeadingPaintedChrome(node) {
+  try {
+    const cls = typeof node.getAttribute === "function"
+      ? node.getAttribute("class") || ""
+      : typeof node.className === "string" ? node.className : "";
+    return /\bbob-notebook-(retry|sync|status|anchor)\b/.test(String(cls));
+  } catch (error) {
+    return false;
+  }
+}
+
 function notebookHeadingIsNotebooks(head) {
   try {
-    const text = String(head && head.textContent ? head.textContent : "").replace(/\s+/g, " ").trim();
-    return /^Notebooks(?:\s.*)?$/i.test(text.replace(/\u21bb.*$/, "").trim());
+    let text = "";
+    const kids = head && head.childNodes ? Array.from(head.childNodes) : [];
+    if (kids.length) {
+      for (const child of kids) {
+        try {
+          if (child && child.nodeType === 1 && notebookHeadingPaintedChrome(child)) {
+            continue;
+          }
+        } catch (error) {
+          // Skip-chrome is best-effort.
+        }
+        text += child && child.textContent ? child.textContent : "";
+      }
+    } else {
+      text = String(head && head.textContent ? head.textContent : "");
+    }
+    text = String(text).replace(/\s+/g, " ").trim();
+    text = text.replace(/\u21bb[\s\S]*$/, "").trim();
+    return /^Notebooks(?:\s.*)?$/i.test(text);
   } catch (error) {
     return false;
   }
@@ -54037,6 +54235,9 @@ class BobLedgerToolsNotebookCatalogMixin {
       sync: () => {
         void plugin.apiNotebookCatalogSync();
       },
+      retry: () => {
+        void plugin.apiNotebookReport({ force: true });
+      },
     };
   }
 
@@ -54071,17 +54272,40 @@ class BobLedgerToolsNotebookCatalogMixin {
       vault: this.app && this.app.vault,
       handlers: this.notebookCatalogHandlers(sourcePath),
       chipsEnabled,
+      stale: Boolean(current.stale),
+      unavailable: Boolean(current.unavailable),
+      errorModel: current.errorModel || null,
+      syncErrorModel: current.syncErrorModel || null,
+      refreshing: Boolean(current.refreshing),
     };
+  }
+
+  notebookCatalogRetryModel(sourcePath, state) {
+    void sourcePath;
+    const current = state || this.notebookCatalogState();
+    return typeof notebookRetryActionModel === "function"
+      ? notebookRetryActionModel(current)
+      : null;
+  }
+
+  notebookCatalogStatusModel(sourcePath, state) {
+    void sourcePath;
+    const current = state || this.notebookCatalogState();
+    return typeof notebookStatusModel === "function"
+      ? notebookStatusModel(current)
+      : null;
   }
 
   notebookCatalogSyncModel(sourcePath, state, headingPresent) {
     const current = state || this.notebookCatalogState();
     const catalog = notebookHostCatalog(current, sourcePath);
+    const retry = this.notebookCatalogRetryModel(sourcePath, current);
+    if (retry && !catalog) {
+      return null;
+    }
     const errorHint = current.syncErrorModel && current.syncErrorModel.hint
       ? current.syncErrorModel.hint
-      : current.errorModel && current.errorModel.hint
-        ? current.errorModel.hint
-        : "";
+      : "";
     return notebookSyncActionModel(catalog, {
       busy: Boolean(current.syncBusy),
       errorHint,
@@ -54089,27 +54313,75 @@ class BobLedgerToolsNotebookCatalogMixin {
     });
   }
 
+  notebookCatalogActionHost(el, heading, title, needsAnchor, doc) {
+    if (heading) {
+      return heading;
+    }
+    if (title) {
+      return title;
+    }
+    if (!needsAnchor) {
+      return null;
+    }
+    return typeof notebookEnsureRenderedAnchor === "function"
+      ? notebookEnsureRenderedAnchor(el, doc)
+      : null;
+  }
+
   paintNotebookCatalogReading(el, sourcePath) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
+    const doc = notebookDomDoc(el);
     const callouts = notebookFindCallouts(el).filter((node) => !notebookInsideCode(node));
     for (const callout of callouts) {
       notebookPaintCallout(callout, options);
     }
     const heading = notebookFindNotebooksHeading(el);
     const title = heading ? null : notebookFindHostTitle(el);
-    const syncHost = heading || title;
+    const retryModel = this.notebookCatalogRetryModel(sourcePath, state);
     const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
-    if (options.chipsEnabled === false) {
-      if (syncHost) {
-        notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
+    const statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    const needsAnchor = Boolean(
+      options.chipsEnabled !== false
+      && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
+    );
+    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor, doc);
+    if (!actionHost && el && typeof el.querySelector === "function") {
+      try {
+        const painted = el.querySelector(
+          `.${NOTEBOOK_RETRY_CLASS}, .${NOTEBOOK_SYNC_CLASS}, .${NOTEBOOK_STATUS_CLASS}`,
+        );
+        if (painted && painted.parentNode) {
+          actionHost = painted.parentNode;
+        }
+      } catch (error) {
+        // Leftover-host recovery is best-effort.
       }
-    } else if (syncHost && syncModel && (heading || syncModel.state === "missing" || syncModel.busy)) {
-      notebookPaintSyncAction(syncHost, syncModel, options.handlers, notebookDomDoc(syncHost));
-    } else if (syncHost) {
-      notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
     }
-    return { callouts, heading, title };
+    if (options.chipsEnabled === false) {
+      if (actionHost) {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_STATUS_CLASS);
+      }
+    } else if (actionHost) {
+      if (syncModel && (heading || syncModel.state === "missing" || syncModel.busy || !title)) {
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+        notebookPaintSyncAction(actionHost, syncModel, options.handlers, doc);
+      } else if (retryModel) {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookPaintRetryAction(actionHost, retryModel, options.handlers, doc);
+      } else {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+      }
+      if (statusModel) {
+        notebookPaintStatus(actionHost, statusModel, options.handlers, doc);
+      } else {
+        notebookRemovePainted(actionHost, NOTEBOOK_STATUS_CLASS);
+      }
+    }
+    return { callouts, heading, title, actionHost };
   }
 
   renderNotebookCatalogInReading(el, ctx) {
@@ -54269,16 +54541,17 @@ class BobLedgerToolsNotebookCatalogMixin {
       const headingLine = notebookFindNotebooksHeadingLine(docText);
       const titleLine = headingLine < 0 ? notebookFindHostTitleLine(docText) : -1;
       const state = this.notebookCatalogState();
+      const retryModel = this.notebookCatalogRetryModel(filePath, state);
       const syncModel = this.notebookCatalogSyncModel(filePath, state, headingLine >= 0);
       const hue = this.notebookCatalogHue(filePath);
       const pending = [];
       const plugin = this;
-      const SyncWidget = class extends WidgetType {
+      const ActionWidget = class extends WidgetType {
         constructor(model, path) {
           super();
           this.model = model;
           this.path = path;
-          this.key = `${model.state}|${model.busy ? "busy" : "idle"}|${model.label}`;
+          this.key = `${model.kind || "sync"}|${model.state}|${model.busy ? "busy" : "idle"}|${model.label}`;
         }
         eq(other) {
           return Boolean(other && other.key === this.key && other.path === this.path);
@@ -54290,13 +54563,18 @@ class BobLedgerToolsNotebookCatalogMixin {
             appendChild: () => {},
             ownerDocument: doc,
           };
-          notebookPaintSyncAction(host, this.model, plugin.notebookCatalogHandlers(this.path), doc);
+          const handlers = plugin.notebookCatalogHandlers(this.path);
+          if (this.model.kind === "retry") {
+            notebookPaintRetryAction(host, this.model, handlers, doc);
+          } else {
+            notebookPaintSyncAction(host, this.model, handlers, doc);
+          }
           if (holder && holder.firstChild) {
             return holder;
           }
           if (holder) {
             notebookSetText(holder, this.model.label);
-            holder.className = NOTEBOOK_SYNC_CLASS;
+            holder.className = this.model.kind === "retry" ? NOTEBOOK_RETRY_CLASS : NOTEBOOK_SYNC_CLASS;
             return holder;
           }
           try {
@@ -54307,15 +54585,23 @@ class BobLedgerToolsNotebookCatalogMixin {
         }
       };
       const addWidget = (lineIndex, model) => {
-        if (lineIndex < 0 || !model) {
+        if (!model) {
           return;
         }
         try {
+          if (lineIndex < 0) {
+            pending.push({
+              from: 0,
+              to: 0,
+              spec: Decoration.widget({ widget: new ActionWidget(model, filePath), side: -1 }),
+            });
+            return;
+          }
           const line = view.state.doc.line(lineIndex + 1);
           pending.push({
             from: line.to,
             to: line.to,
-            spec: Decoration.widget({ widget: new SyncWidget(model, filePath), side: 1 }),
+            spec: Decoration.widget({ widget: new ActionWidget(model, filePath), side: 1 }),
           });
         } catch (error) {
           // Skip one widget.
@@ -54329,11 +54615,14 @@ class BobLedgerToolsNotebookCatalogMixin {
       } catch (error) {
         chipsEnabled = true;
       }
-      if (chipsEnabled && syncModel) {
+      const actionModel = syncModel || retryModel;
+      if (chipsEnabled && actionModel) {
         if (headingLine >= 0) {
-          addWidget(headingLine, syncModel);
-        } else if (syncModel.state === "missing" || syncModel.busy) {
-          addWidget(titleLine, syncModel);
+          addWidget(headingLine, actionModel);
+        } else if (titleLine >= 0 && (retryModel || actionModel.state === "missing" || actionModel.busy)) {
+          addWidget(titleLine, actionModel);
+        } else if (retryModel || actionModel.state === "missing" || actionModel.busy) {
+          addWidget(-1, actionModel);
         }
       }
       if (hue && Decoration.line) {
@@ -54524,8 +54813,8 @@ class BobLedgerToolsNotebookCatalogMixin {
       if (view && view.containerEl) {
         roots.push(view.containerEl);
       }
-      if (typeof document !== "undefined" && document && document.body) {
-        roots.push(document.body);
+      if (view && view.metadataEditor && view.metadataEditor.containerEl) {
+        roots.push(view.metadataEditor.containerEl);
       }
       const selectors = [
         '.metadata-property[data-property-key="summary"] input',
@@ -54594,11 +54883,29 @@ class BobLedgerToolsNotebookCatalogMixin {
     let view = null;
     try {
       const workspace = this.app && this.app.workspace;
-      view = workspace && typeof workspace.getActiveViewOfType === "function" && typeof MarkdownView === "function"
-        ? workspace.getActiveViewOfType(MarkdownView)
-        : workspace && workspace.getActiveViewOfType
-          ? workspace.getActiveViewOfType("markdown")
-          : null;
+      const wanted = target.replace(/\.md$/i, "");
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const file = leaf && leaf.view && leaf.view.file;
+          const path = file && typeof file.path === "string" ? file.path : "";
+          if (path && notebookReportPath(path).replace(/\.md$/i, "") === wanted) {
+            view = leaf.view;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (!view) {
+        view = workspace && typeof workspace.getActiveViewOfType === "function" && typeof MarkdownView === "function"
+          ? workspace.getActiveViewOfType(MarkdownView)
+          : workspace && workspace.getActiveViewOfType
+            ? workspace.getActiveViewOfType("markdown")
+            : null;
+      }
       if (!view && workspace && workspace.activeLeaf) {
         view = workspace.activeLeaf.view;
       }
@@ -54788,34 +55095,130 @@ function notebookHeaderChildEntries(report, entry) {
   return found;
 }
 
-function notebookHeaderCrumbs(report, sourcePath) {
+function notebookHeaderNoteTitle(path, metadataCache, vault) {
+  const stem = notebookHeaderStem(path);
+  try {
+    const file = typeof notebookResolveLinkFile === "function"
+      ? notebookResolveLinkFile(path || stem, path, metadataCache, vault)
+      : null;
+    const cache = file && metadataCache && typeof metadataCache.getFileCache === "function"
+      ? metadataCache.getFileCache(file)
+      : null;
+    const heading = cache && Array.isArray(cache.headings)
+      ? cache.headings.find((row) => row && row.level === 1 && row.heading)
+      : null;
+    if (heading && heading.heading) {
+      return String(heading.heading).trim() || stem;
+    }
+    const aliases = cache && cache.frontmatter && cache.frontmatter.aliases;
+    if (typeof aliases === "string" && aliases.trim()) {
+      return aliases.trim();
+    }
+    if (Array.isArray(aliases) && aliases.length > 0 && typeof aliases[0] === "string") {
+      return aliases[0].trim() || stem;
+    }
+  } catch (error) {
+    // Title lookup is best-effort.
+  }
+  return stem;
+}
+
+function notebookHeaderOwnerAncestors(self, options = {}) {
+  const owner = typeof self.owner === "string" ? self.owner.trim() : "";
+  const root = typeof self.root === "string" ? self.root.trim() : "";
+  const report = options.report || null;
+  const metadataCache = options.metadataCache || null;
+  const vault = options.vault || null;
+  const sourcePath = options.sourcePath || (self && self.path) || "";
+  const fallbackFromReport = () => {
+    const chain = [];
+    if (root && (!owner || root.toLowerCase() !== owner.toLowerCase())) {
+      chain.push({
+        stem: root,
+        path: /\.md$/i.test(root) ? root : `${root}.md`,
+        title: root,
+        kind: "root",
+        missing: false,
+      });
+    }
+    if (owner) {
+      const ownerEntry = report ? notebookHeaderLookup(report, owner) : null;
+      chain.push({
+        stem: owner,
+        path: ownerEntry && ownerEntry.path
+          ? ownerEntry.path
+          : (/\.md$/i.test(owner) ? owner : `${owner}.md`),
+        title: ownerEntry && ownerEntry.title ? ownerEntry.title : owner,
+        kind: "owner",
+        missing: false,
+      });
+    }
+    return { chain, broken: false, cyclic: false, truncated: false };
+  };
+  if (!owner && !root) {
+    return { chain: [], broken: false, cyclic: false, truncated: false };
+  }
+  if (typeof pomodoroHomeResolve === "function" && metadataCache) {
+    try {
+      const resolved = pomodoroHomeResolve(
+        owner || root,
+        sourcePath || owner || root,
+        metadataCache,
+        vault,
+        [],
+        new Set(),
+      );
+      if (resolved && Array.isArray(resolved.chain) && resolved.chain.length > 0) {
+        // Resolve walks owner → … → root parent. Reverse so the breadcrumb
+        // reads root-first and keeps every intermediate project.
+        const ordered = resolved.chain.slice().reverse();
+        let start = 0;
+        if (root) {
+          const rootKey = notebookHeaderStem(root).toLowerCase();
+          const at = ordered.findIndex((path) => notebookHeaderStem(path).toLowerCase() === rootKey);
+          if (at >= 0) {
+            start = at;
+          }
+        }
+        const slice = ordered.slice(start);
+        const crumbs = [];
+        for (const rawPath of slice) {
+          const path = notebookHeaderReportPath(rawPath);
+          const stem = notebookHeaderStem(path);
+          const stemKey = stem.toLowerCase();
+          const isOwner = owner && stemKey === notebookHeaderStem(owner).toLowerCase();
+          const isRoot = root && stemKey === notebookHeaderStem(root).toLowerCase();
+          crumbs.push({
+            stem,
+            path,
+            title: notebookHeaderNoteTitle(path, metadataCache, vault),
+            kind: isRoot ? "root" : isOwner ? "owner" : "ancestor",
+            missing: false,
+          });
+        }
+        if (crumbs.length > 0) {
+          return { chain: crumbs, broken: false, cyclic: false, truncated: false };
+        }
+      }
+    } catch (error) {
+      // Fall through to the report-identity fallback.
+    }
+  }
+  return fallbackFromReport();
+}
+
+function notebookHeaderCrumbs(report, sourcePath, options = {}) {
   const self = notebookHeaderEntryForPath(report, sourcePath);
   if (!self) {
     return null;
   }
   const { chain, broken, cyclic, truncated } = notebookHeaderNotebookAncestors(report, sourcePath);
-  const crumbs = [];
-  const owner = typeof self.owner === "string" ? self.owner.trim() : "";
-  const root = typeof self.root === "string" ? self.root.trim() : "";
-  if (root && (!owner || root.toLowerCase() !== owner.toLowerCase())) {
-    crumbs.push({
-      stem: root,
-      path: `${root}.md`,
-      title: root,
-      kind: "root",
-      missing: !notebookHeaderLookup(report, root),
-    });
-  }
-  if (owner) {
-    const ownerEntry = notebookHeaderLookup(report, owner);
-    crumbs.push({
-      stem: owner,
-      path: ownerEntry ? ownerEntry.path : `${owner}.md`,
-      title: ownerEntry ? ownerEntry.title : owner,
-      kind: "owner",
-      missing: !ownerEntry,
-    });
-  }
+  const ownerWalk = notebookHeaderOwnerAncestors(self, {
+    ...options,
+    report,
+    sourcePath,
+  });
+  const crumbs = ownerWalk.chain.slice();
   for (const ancestor of chain) {
     crumbs.push({
       stem: ancestor.stem,
@@ -54837,14 +55240,14 @@ function notebookHeaderCrumbs(report, sourcePath) {
     self,
     crumbs: collapsed,
     fullLength: crumbs.length,
-    truncated: truncated || collapsed.length !== crumbs.length,
-    broken,
-    cyclic,
+    truncated: truncated || ownerWalk.truncated || collapsed.length !== crumbs.length,
+    broken: broken || ownerWalk.broken,
+    cyclic: cyclic || ownerWalk.cyclic,
   };
 }
 
-function notebookHeaderModel(report, sourcePath) {
-  const headed = notebookHeaderCrumbs(report, sourcePath);
+function notebookHeaderModel(report, sourcePath, options = {}) {
+  const headed = notebookHeaderCrumbs(report, sourcePath, options);
   if (!headed) {
     return null;
   }
@@ -54852,19 +55255,60 @@ function notebookHeaderModel(report, sourcePath) {
   return { ...headed, children };
 }
 
-function notebookHeaderSignature(model) {
+function notebookHeaderSignature(model, options = {}) {
   if (!model) {
     return "none";
   }
   try {
     const crumbs = (model.crumbs || []).map((crumb) =>
-      crumb.ellipsis ? "…" : `${crumb.kind}:${crumb.path || crumb.stem}`,
+      crumb.ellipsis
+        ? "…"
+        : `${crumb.kind || ""}:${crumb.path || crumb.stem || ""}:${crumb.title || ""}:${crumb.missing ? "m" : ""}`,
     ).join(">");
-    const kids = (model.children || []).map((child) => child.path || child.stem).join(",");
-    return `${crumbs}|${kids}`;
+    const kids = (model.children || []).map((child) =>
+      `${child.path || child.stem || ""}:${child.title || ""}`,
+    ).join(",");
+    const hue = options && options.hue ? String(options.hue) : "";
+    const chips = options && options.chipsEnabled === false ? "0" : "1";
+    const flags = `${model.broken ? "b" : ""}${model.cyclic ? "c" : ""}${model.truncated ? "t" : ""}`;
+    return `${crumbs}|${kids}|${hue}|${chips}|${flags}`;
   } catch (error) {
     return "header";
   }
+}
+
+function notebookHeaderReadingSurface(el) {
+  if (!el) {
+    return el;
+  }
+  try {
+    if (typeof el.closest === "function") {
+      const embed = el.closest(".markdown-embed, .internal-embed");
+      if (embed) {
+        try {
+          if (typeof embed.querySelector === "function") {
+            return embed.querySelector(".markdown-embed-content")
+              || embed.querySelector(".markdown-preview-view")
+              || embed;
+          }
+        } catch (error) {
+          return embed;
+        }
+        return embed;
+      }
+      const sizer = el.closest(".markdown-preview-sizer");
+      if (sizer) {
+        return sizer;
+      }
+      const preview = el.closest(".markdown-preview-view");
+      if (preview) {
+        return preview;
+      }
+    }
+  } catch (error) {
+    // Fall through to el.
+  }
+  return el;
 }
 // ---- src/241f-plugin-notebook-header.js ----
 // Linked notebook headers in Reading view and Live Preview, plus the
@@ -54898,20 +55342,42 @@ class BobLedgerToolsNotebookHeaderMixin {
   }
 
   async loadNotebookChipsSetting() {
+    const epoch = this.notebookHeaderEpoch || 0;
     try {
       if (typeof this.loadData !== "function") {
         this.notebookChipsEnabledFlag = true;
         return true;
       }
       const stored = await this.loadData();
+      if (this.notebookHeaderActive === false || (this.notebookHeaderEpoch || 0) !== epoch) {
+        return this.notebookChipsEnabledFlag;
+      }
       if (stored && typeof stored === "object") {
         this.notebookPluginData = { ...stored };
       } else {
         this.notebookPluginData = {};
       }
       this.notebookChipsEnabledFlag = notebookHeaderReadChipsFlag(stored);
+      try {
+        this.refreshNotebookHeaderAll();
+      } catch (error) {
+        // Header refresh is best-effort.
+      }
+      try {
+        if (typeof this.refreshNotebookCatalogReading === "function") {
+          this.refreshNotebookCatalogReading();
+        }
+        if (typeof this.refreshNotebookCatalogEditors === "function") {
+          this.refreshNotebookCatalogEditors();
+        }
+      } catch (error) {
+        // Catalog refresh is best-effort.
+      }
       return this.notebookChipsEnabledFlag;
     } catch (error) {
+      if (this.notebookHeaderActive === false || (this.notebookHeaderEpoch || 0) !== epoch) {
+        return this.notebookChipsEnabledFlag;
+      }
       this.notebookChipsEnabledFlag = true;
       return true;
     }
@@ -55069,14 +55535,14 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!(this.notebookHeaderReadingWidgets instanceof Set)) {
         this.notebookHeaderReadingWidgets = new Set();
       }
+      if (!(this.notebookHeaderReadingTimers instanceof Map)) {
+        this.notebookHeaderReadingTimers = new Map();
+      }
+      if (!(this.notebookHeaderReadingPending instanceof Map)) {
+        this.notebookHeaderReadingPending = new Map();
+      }
       try {
-        void this.loadNotebookChipsSetting().then(() => {
-          try {
-            this.refreshNotebookHeaderAll();
-          } catch (error) {
-            // Initial refresh is best-effort.
-          }
-        });
+        void this.loadNotebookChipsSetting();
       } catch (error) {
         // Settings load is best-effort.
       }
@@ -55137,23 +55603,109 @@ class BobLedgerToolsNotebookHeaderMixin {
       }
     }
     this.notebookHeaderRefreshTimer = null;
+    if (this.notebookHeaderReadingTimers && typeof this.notebookHeaderReadingTimers.values === "function") {
+      for (const timer of this.notebookHeaderReadingTimers.values()) {
+        try {
+          this.notebookClearTimeout(timer);
+        } catch (error) {
+          // Timer cleanup is best-effort.
+        }
+      }
+      try {
+        this.notebookHeaderReadingTimers.clear();
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+    }
+    if (this.notebookHeaderReadingPending && typeof this.notebookHeaderReadingPending.clear === "function") {
+      try {
+        this.notebookHeaderReadingPending.clear();
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+    }
     if (this.notebookHeaderReadingWidgets instanceof Set) {
+      for (const widget of Array.from(this.notebookHeaderReadingWidgets)) {
+        try {
+          this.notebookHeaderRemoveOwned(widget.surface || widget.el, widget.path);
+        } catch (error) {
+          // Unload cleanup is best-effort.
+        }
+      }
       this.notebookHeaderReadingWidgets.clear();
     }
   }
 
   notebookHeaderReadingRoot(el) {
     try {
-      if (el && typeof el.closest === "function") {
-        const root = el.closest(".markdown-preview-view");
-        if (root) {
-          return root;
-        }
+      if (typeof notebookHeaderReadingSurface === "function") {
+        return notebookHeaderReadingSurface(el);
       }
     } catch (error) {
       // Fall through to el.
     }
     return el;
+  }
+
+  notebookHeaderBelongsTo(node, surface, sourcePath) {
+    void sourcePath;
+    if (!node) {
+      return false;
+    }
+    try {
+      try {
+        if (typeof node.getAttribute === "function" && node.getAttribute("data-cm-widget") === "true") {
+          return false;
+        }
+        if (typeof node.closest === "function" && node.closest(".cm-widgetBuffer, .cm-content")) {
+          return false;
+        }
+      } catch (error) {
+        // CodeMirror ownership is best-effort.
+      }
+      try {
+        const nestedEmbed = typeof node.closest === "function"
+          ? node.closest(".markdown-embed, .internal-embed")
+          : null;
+        const surfaceEmbed = surface && typeof surface.closest === "function"
+          ? surface.closest(".markdown-embed, .internal-embed")
+          : null;
+        if (nestedEmbed && nestedEmbed !== surfaceEmbed && nestedEmbed !== surface) {
+          return false;
+        }
+      } catch (error) {
+        // Embed comparison is best-effort.
+      }
+      if (surface && typeof surface.contains === "function") {
+        return surface.contains(node);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  notebookHeaderRemoveOwned(surface, sourcePath) {
+    if (!surface) {
+      return;
+    }
+    try {
+      const nodes = typeof surface.querySelectorAll === "function"
+        ? Array.from(surface.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || [])
+        : [];
+      for (const node of nodes) {
+        if (!this.notebookHeaderBelongsTo(node, surface, sourcePath)) {
+          continue;
+        }
+        if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
+          node.parentNode.removeChild(node);
+        } else if (node && typeof node.remove === "function") {
+          node.remove();
+        }
+      }
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
   }
 
   notebookHeaderModelFor(sourcePath, state) {
@@ -55164,7 +55716,11 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!report) {
         return null;
       }
-      return notebookHeaderModel(report, sourcePath);
+      return notebookHeaderModel(report, sourcePath, {
+        metadataCache: this.app && this.app.metadataCache,
+        vault: this.app && this.app.vault,
+        sourcePath,
+      });
     } catch (error) {
       return null;
     }
@@ -55192,20 +55748,7 @@ class BobLedgerToolsNotebookHeaderMixin {
     } catch (error) {
       focusedHref = "";
     }
-    try {
-      if (typeof notebookRemovePainted === "function") {
-        notebookRemovePainted(root, NOTEBOOK_HEADER_CLASS);
-      } else if (root && typeof root.querySelectorAll === "function") {
-        const stale = Array.from(root.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
-        for (const node of stale) {
-          if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
-            node.parentNode.removeChild(node);
-          }
-        }
-      }
-    } catch (error) {
-      // Cleanup is best-effort.
-    }
+    this.notebookHeaderRemoveOwned(root, sourcePath);
     const model = this.notebookHeaderModelFor(sourcePath, state);
     if (!model) {
       return null;
@@ -55213,6 +55756,13 @@ class BobLedgerToolsNotebookHeaderMixin {
     const header = this.notebookHeaderBuildEl(model, options, doc);
     if (!header) {
       return null;
+    }
+    try {
+      if (typeof header.setAttribute === "function") {
+        header.setAttribute("data-notebook-source", sourcePath);
+      }
+    } catch (error) {
+      // Source identity is best-effort.
     }
     try {
       const anchor = this.notebookHeaderReadingAnchor(root);
@@ -55236,10 +55786,30 @@ class BobLedgerToolsNotebookHeaderMixin {
         const next = header.querySelector(`[data-href="${focusedHref}"]`);
         if (next && typeof next.focus === "function") {
           next.focus();
+          this.notebookHeaderLastFocusHref = focusedHref;
         }
       } catch (error) {
         // Focus restore is best-effort.
       }
+    }
+    try {
+      if (header && typeof header.addEventListener === "function") {
+        header.addEventListener("focusin", (event) => {
+          try {
+            const target = event && event.target;
+            const href = target && typeof target.getAttribute === "function"
+              ? target.getAttribute("data-href")
+              : "";
+            if (href) {
+              this.notebookHeaderLastFocusHref = href;
+            }
+          } catch (error) {
+            // Last-focus tracking is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Last-focus tracking is best-effort.
     }
     return header;
   }
@@ -55355,20 +55925,23 @@ class BobLedgerToolsNotebookHeaderMixin {
         }
         return;
       }
+      const resolved = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
       const isSelf = crumb.kind === "self" || index === crumbs.length - 1;
-      if (isSelf) {
-        const self = create ? create(doc, "span", `${NOTEBOOK_HEADER_CRUMB_CLASS} bob-notebook-header-self`) : null;
-        const target = self || (doc ? doc.createElement("span") : null);
+      if (!resolved || crumb.missing) {
+        const inert = create
+          ? create(doc, "span", `${NOTEBOOK_HEADER_CRUMB_CLASS}${isSelf ? " bob-notebook-header-self" : ""}`)
+          : null;
+        const target = inert || (doc ? doc.createElement("span") : null);
         if (target) {
           if (setText) {
             setText(target, crumb.title || crumb.stem || "");
           }
-          try {
-            if (typeof target.setAttribute === "function") {
+          if (isSelf && typeof target.setAttribute === "function") {
+            try {
               target.setAttribute("aria-current", "page");
+            } catch (error) {
+              // Aria is best-effort.
             }
-          } catch (error) {
-            // Aria is best-effort.
           }
           if (typeof navEl.appendChild === "function") {
             navEl.appendChild(target);
@@ -55382,11 +55955,14 @@ class BobLedgerToolsNotebookHeaderMixin {
       }
       try {
         if (typeof link.setAttribute === "function") {
-          link.setAttribute("class", `internal-link ${NOTEBOOK_HEADER_CRUMB_CLASS}`);
-          const resolved = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
-          if (resolved) {
-            link.setAttribute("data-href", resolved);
-            link.setAttribute("href", resolved);
+          link.setAttribute(
+            "class",
+            `internal-link ${NOTEBOOK_HEADER_CRUMB_CLASS}${isSelf ? " bob-notebook-header-self" : ""}`,
+          );
+          link.setAttribute("data-href", resolved);
+          link.setAttribute("href", resolved);
+          if (isSelf) {
+            link.setAttribute("aria-current", "page");
           }
         }
         if (link.classList && typeof link.classList.add === "function") {
@@ -55399,10 +55975,8 @@ class BobLedgerToolsNotebookHeaderMixin {
         setText(link, crumb.title || crumb.stem || "");
       }
       if (typeof notebookBindAction === "function" && typeof handlers.openPath === "function") {
-        const target = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
-        notebookBindAction(link, () => handlers.openPath(target || crumb.path || crumb.stem));
+        notebookBindAction(link, () => handlers.openPath(resolved || crumb.path || crumb.stem));
       } else if (typeof link.addEventListener === "function" && typeof handlers.openPath === "function") {
-        const target = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
         link.addEventListener("click", (event) => {
           try {
             if (event && typeof event.preventDefault === "function") {
@@ -55411,7 +55985,7 @@ class BobLedgerToolsNotebookHeaderMixin {
           } catch (error) {
             // Best-effort.
           }
-          handlers.openPath(target || crumb.path || crumb.stem);
+          handlers.openPath(resolved || crumb.path || crumb.stem);
         });
       }
       if (typeof navEl.appendChild === "function") {
@@ -55520,50 +56094,155 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!sourcePath) {
         return;
       }
-      this.paintNotebookHeaderReading(el, sourcePath);
       if (!(this.notebookHeaderReadingWidgets instanceof Set)) {
         this.notebookHeaderReadingWidgets = new Set();
       }
-      for (const existing of this.notebookHeaderReadingWidgets) {
-        if (existing.el === el) {
-          existing.ctx = ctx;
-          existing.path = sourcePath;
+      if (!this.notebookHeaderReadingTimers || typeof this.notebookHeaderReadingTimers.set !== "function") {
+        this.notebookHeaderReadingTimers = new Map();
+      }
+      if (!this.notebookHeaderReadingPending || typeof this.notebookHeaderReadingPending.set !== "function") {
+        this.notebookHeaderReadingPending = new Map();
+      }
+      const key = sourcePath;
+      const pending = this.notebookHeaderReadingPending.get(key) || [];
+      pending.push({ el, ctx });
+      this.notebookHeaderReadingPending.set(key, pending);
+      try {
+        this.notebookClearTimeout(this.notebookHeaderReadingTimers.get(key));
+      } catch (error) {
+        // Coalesce is best-effort.
+      }
+      const paint = () => {
+        try {
+          this.notebookHeaderReadingTimers.delete(key);
+        } catch (error) {
+          // Map cleanup is best-effort.
+        }
+        const batch = this.notebookHeaderReadingPending.get(key) || [];
+        try {
+          this.notebookHeaderReadingPending.delete(key);
+        } catch (error) {
+          // Map cleanup is best-effort.
+        }
+        if (this.notebookHeaderActive === false) {
           return;
         }
-      }
-      const widget = { el, ctx, path: sourcePath };
-      this.notebookHeaderReadingWidgets.add(widget);
-      if (ctx && typeof ctx.addChild === "function") {
-        let child = null;
-        try {
-          if (typeof MarkdownRenderChild === "function") {
-            child = new MarkdownRenderChild(el);
-            child.onunload = () => {
-              if (this.notebookHeaderReadingWidgets) {
-                this.notebookHeaderReadingWidgets.delete(widget);
-              }
-            };
+        const chosen = this.notebookHeaderChooseReadingSurface(batch);
+        const surface = chosen.surface;
+        const chosenEl = chosen.el;
+        const chosenCtx = chosen.ctx;
+        this.paintNotebookHeaderReading(surface || chosenEl, sourcePath);
+        for (const existing of this.notebookHeaderReadingWidgets) {
+          if (
+            existing.path === sourcePath
+            && this.notebookHeaderSameSurface(existing.surface || existing.el, surface || chosenEl)
+          ) {
+            existing.el = chosenEl;
+            existing.ctx = chosenCtx;
+            existing.surface = surface || chosenEl;
+            return;
           }
-        } catch (error) {
-          child = null;
         }
-        if (!child) {
-          child = {
-            unload: () => {
-              if (this.notebookHeaderReadingWidgets) {
-                this.notebookHeaderReadingWidgets.delete(widget);
-              }
-            },
-          };
-        }
-        try {
-          ctx.addChild(child);
-        } catch (error) {
-          // Older hosts may reject the child.
-        }
+        const widget = {
+          el: chosenEl,
+          ctx: chosenCtx,
+          path: sourcePath,
+          surface: surface || chosenEl,
+        };
+        this.notebookHeaderReadingWidgets.add(widget);
+        this.notebookHeaderBindReadingChild(widget, chosenCtx, surface || chosenEl, sourcePath);
+      };
+      this.notebookHeaderReadingTimers.set(key, this.notebookSetTimeout(paint, 0));
+    } catch (error) {
+      // Reading paint never throws.
+    }
+  }
+
+  notebookHeaderSameSurface(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+    if (left === right) {
+      return true;
+    }
+    try {
+      if (typeof left.contains === "function" && left.contains(right)) {
+        return true;
+      }
+      if (typeof right.contains === "function" && right.contains(left)) {
+        return true;
       }
     } catch (error) {
-      // Reading header paint never throws.
+      return false;
+    }
+    return false;
+  }
+
+  notebookHeaderChooseReadingSurface(batch) {
+    const items = Array.isArray(batch) ? batch : [];
+    const last = items.length ? items[items.length - 1] : { el: null, ctx: null };
+    const pick = (el) => {
+      if (!el) {
+        return null;
+      }
+      try {
+        const attached = typeof el.closest === "function"
+          ? el.closest(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed")
+          : null;
+        if (attached) {
+          return this.notebookHeaderReadingRoot(attached) || attached;
+        }
+      } catch (error) {
+        // Attached-surface lookup is best-effort.
+      }
+      return null;
+    };
+    for (const item of items) {
+      const surface = pick(item && item.el);
+      if (surface) {
+        return { el: item.el, ctx: item.ctx, surface };
+      }
+    }
+    return {
+      el: last.el,
+      ctx: last.ctx,
+      surface: this.notebookHeaderReadingRoot(last.el) || last.el,
+    };
+  }
+
+  notebookHeaderBindReadingChild(widget, ctx, surface, sourcePath) {
+    if (!ctx || typeof ctx.addChild !== "function") {
+      return;
+    }
+    const hostEl = widget && widget.el;
+    let child = null;
+    try {
+      if (typeof MarkdownRenderChild === "function" && hostEl) {
+        child = new MarkdownRenderChild(hostEl);
+        child.onunload = () => {
+          if (this.notebookHeaderReadingWidgets) {
+            this.notebookHeaderReadingWidgets.delete(widget);
+          }
+          this.notebookHeaderRemoveOwned(surface, sourcePath);
+        };
+      }
+    } catch (error) {
+      child = null;
+    }
+    if (!child) {
+      child = {
+        unload: () => {
+          if (this.notebookHeaderReadingWidgets) {
+            this.notebookHeaderReadingWidgets.delete(widget);
+          }
+          this.notebookHeaderRemoveOwned(surface, sourcePath);
+        },
+      };
+    }
+    try {
+      ctx.addChild(child);
+    } catch (error) {
+      // Older hosts may reject the child.
     }
   }
 
@@ -55574,7 +56253,7 @@ class BobLedgerToolsNotebookHeaderMixin {
     let refreshed = false;
     for (const widget of Array.from(this.notebookHeaderReadingWidgets)) {
       try {
-        this.paintNotebookHeaderReading(widget.el, widget.path);
+        this.paintNotebookHeaderReading(widget.surface || widget.el, widget.path);
         refreshed = true;
       } catch (error) {
         // One stale view never breaks the others.
@@ -55702,7 +56381,8 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
         return Decoration.none;
       }
       const options = this.notebookHeaderPaintOptions(filePath, state);
-      const doc = typeof document !== "undefined" ? document : null;
+      const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
+        || (typeof document !== "undefined" ? document : null);
       const headerEl = this.notebookHeaderBuildEl(model, options, doc);
       if (!headerEl) {
         return Decoration.none;
@@ -55721,11 +56401,19 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           return Boolean(other && other.path === this.path && other.signature === this.signature);
         }
         toDOM() {
+          try {
+            if (this.el && typeof this.el.setAttribute === "function") {
+              this.el.setAttribute("data-cm-widget", "true");
+              this.el.setAttribute("data-notebook-source", this.path || "");
+            }
+          } catch (error) {
+            // Ownership marking is best-effort.
+          }
           return this.el;
         }
       };
       const signature = typeof notebookHeaderSignature === "function"
-        ? notebookHeaderSignature(model)
+        ? notebookHeaderSignature(model, options)
         : String(filePath);
       const widget = new HeaderWidget(headerEl, filePath, signature);
       const pending = [];
@@ -55814,7 +56502,18 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           : [];
         for (const node of stale) {
           if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
-            if (node.getAttribute && node.getAttribute("data-cm-widget") === "true") {
+            let cmOwned = false;
+            try {
+              cmOwned = Boolean(
+                node.getAttribute && (
+                  node.getAttribute("data-cm-widget") === "true"
+                  || node.closest && node.closest(".cm-widgetBuffer, .cm-content")
+                ),
+              );
+            } catch (error) {
+              cmOwned = Boolean(node.getAttribute && node.getAttribute("data-cm-widget") === "true");
+            }
+            if (cmOwned) {
               continue;
             }
             try {
@@ -55928,6 +56627,75 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     }
   }
 
+  notebookHeaderCaptureFocus() {
+    try {
+      const doc = typeof document !== "undefined" ? document : null;
+      const fromNode = (node) => {
+        if (!node || typeof node.getAttribute !== "function") {
+          return "";
+        }
+        try {
+          if (typeof node.closest === "function" && !node.closest(`.${NOTEBOOK_HEADER_CLASS}`)) {
+            return "";
+          }
+        } catch (error) {
+          return "";
+        }
+        return node.getAttribute("data-href") || "";
+      };
+      const fromActive = fromNode(doc && doc.activeElement);
+      if (fromActive) {
+        this.notebookHeaderLastFocusHref = fromActive;
+        return fromActive;
+      }
+      const focused = doc && typeof doc.querySelector === "function"
+        ? doc.querySelector(`.${NOTEBOOK_HEADER_CLASS} a.internal-link:focus, .${NOTEBOOK_HEADER_CLASS} a.internal-link:focus-visible`)
+        : null;
+      const fromFocus = fromNode(focused);
+      if (fromFocus) {
+        this.notebookHeaderLastFocusHref = fromFocus;
+        return fromFocus;
+      }
+      return String(this.notebookHeaderLastFocusHref || "");
+    } catch (error) {
+      return String(this.notebookHeaderLastFocusHref || "");
+    }
+  }
+
+  notebookHeaderRestoreFocus(href) {
+    const wanted = String(href || "").trim();
+    if (!wanted) {
+      return false;
+    }
+    try {
+      const doc = typeof document !== "undefined" ? document : null;
+      if (!doc || typeof doc.querySelectorAll !== "function") {
+        return false;
+      }
+      const safe = wanted.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const headers = Array.from(doc.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
+      for (const header of headers) {
+        try {
+          if (typeof header.getAttribute === "function" && header.getAttribute("data-cm-widget") === "true") {
+            continue;
+          }
+        } catch (error) {
+          // CodeMirror widgets are skipped when marked.
+        }
+        const next = typeof header.querySelector === "function"
+          ? header.querySelector(`[data-href="${safe}"]`)
+          : null;
+        if (next && typeof next.focus === "function") {
+          next.focus();
+          return true;
+        }
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  }
+
   scheduleNotebookHeaderRefresh() {
     if (this.notebookHeaderActive === false) {
       return;
@@ -55940,6 +56708,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       : (callback, delay) => setTimeout(callback, delay);
     this.notebookHeaderRefreshTimer = schedule(() => {
       this.notebookHeaderRefreshTimer = null;
+      const href = this.notebookHeaderCaptureFocus();
       try {
         this.refreshNotebookHeaderReading();
       } catch (error) {
@@ -55950,10 +56719,12 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       } catch (error) {
         // Best-effort.
       }
+      this.notebookHeaderRestoreFocus(href);
     }, 150);
   }
 
   refreshNotebookHeaderAll() {
+    const href = this.notebookHeaderCaptureFocus();
     try {
       this.refreshNotebookHeaderReading();
     } catch (error) {
@@ -55964,6 +56735,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     } catch (error) {
       // Best-effort.
     }
+    this.notebookHeaderRestoreFocus(href);
   }
 }
 // ---- src/242-plugin-reading-board-models.js ----
@@ -97600,16 +98372,15 @@ module.exports.helpers = {
   notebookCatalogRegions,
   notebookFindNotebooksHeadingLine,
   notebookFindHostTitleLine,
-  notebookHostCatalog,
-  notebookSyncActionModel,
-  notebookRowModel,
-  notebookLookupByTarget,
-  notebookHostHueName,
-  notebookPaintCallout, notebookPaintSyncAction, notebookFindCallouts, notebookLiIsProjectGroup,
+  notebookHostCatalog, notebookSyncActionModel, notebookRetryActionModel, notebookStatusModel,
+  notebookRowModel, notebookLookupByTarget, notebookHostHueName,
+  notebookPaintCallout, notebookPaintSyncAction, notebookPaintRetryAction, notebookPaintStatus,
+  notebookEnsureRenderedAnchor, notebookFindCallouts, notebookLiIsProjectGroup,
   NOTEBOOK_HEADER_MAX_HOPS, NOTEBOOK_HEADER_MAX_CRUMBS,
   notebookHeaderLookup, notebookHeaderEntryForPath, notebookHeaderNotebookAncestors,
-  notebookHeaderCollapse, notebookHeaderChildEntries, notebookHeaderCrumbs,
-  notebookHeaderModel, notebookHeaderSignature, notebookHeaderChipsDefault,
+  notebookHeaderOwnerAncestors, notebookHeaderReadingSurface, notebookHeaderCollapse,
+  notebookHeaderChildEntries, notebookHeaderCrumbs, notebookHeaderModel, notebookHeaderSignature,
+  notebookHeaderChipsDefault,
   READING_BOARD_SCHEMA_VERSION,
   READING_BOARD_CACHE_SIZE,
   READING_BOARD_REVALIDATE_DEBOUNCE_MS,

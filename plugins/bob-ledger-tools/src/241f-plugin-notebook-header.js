@@ -29,20 +29,42 @@ class BobLedgerToolsNotebookHeaderMixin {
   }
 
   async loadNotebookChipsSetting() {
+    const epoch = this.notebookHeaderEpoch || 0;
     try {
       if (typeof this.loadData !== "function") {
         this.notebookChipsEnabledFlag = true;
         return true;
       }
       const stored = await this.loadData();
+      if (this.notebookHeaderActive === false || (this.notebookHeaderEpoch || 0) !== epoch) {
+        return this.notebookChipsEnabledFlag;
+      }
       if (stored && typeof stored === "object") {
         this.notebookPluginData = { ...stored };
       } else {
         this.notebookPluginData = {};
       }
       this.notebookChipsEnabledFlag = notebookHeaderReadChipsFlag(stored);
+      try {
+        this.refreshNotebookHeaderAll();
+      } catch (error) {
+        // Header refresh is best-effort.
+      }
+      try {
+        if (typeof this.refreshNotebookCatalogReading === "function") {
+          this.refreshNotebookCatalogReading();
+        }
+        if (typeof this.refreshNotebookCatalogEditors === "function") {
+          this.refreshNotebookCatalogEditors();
+        }
+      } catch (error) {
+        // Catalog refresh is best-effort.
+      }
       return this.notebookChipsEnabledFlag;
     } catch (error) {
+      if (this.notebookHeaderActive === false || (this.notebookHeaderEpoch || 0) !== epoch) {
+        return this.notebookChipsEnabledFlag;
+      }
       this.notebookChipsEnabledFlag = true;
       return true;
     }
@@ -200,14 +222,14 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!(this.notebookHeaderReadingWidgets instanceof Set)) {
         this.notebookHeaderReadingWidgets = new Set();
       }
+      if (!(this.notebookHeaderReadingTimers instanceof Map)) {
+        this.notebookHeaderReadingTimers = new Map();
+      }
+      if (!(this.notebookHeaderReadingPending instanceof Map)) {
+        this.notebookHeaderReadingPending = new Map();
+      }
       try {
-        void this.loadNotebookChipsSetting().then(() => {
-          try {
-            this.refreshNotebookHeaderAll();
-          } catch (error) {
-            // Initial refresh is best-effort.
-          }
-        });
+        void this.loadNotebookChipsSetting();
       } catch (error) {
         // Settings load is best-effort.
       }
@@ -268,23 +290,109 @@ class BobLedgerToolsNotebookHeaderMixin {
       }
     }
     this.notebookHeaderRefreshTimer = null;
+    if (this.notebookHeaderReadingTimers && typeof this.notebookHeaderReadingTimers.values === "function") {
+      for (const timer of this.notebookHeaderReadingTimers.values()) {
+        try {
+          this.notebookClearTimeout(timer);
+        } catch (error) {
+          // Timer cleanup is best-effort.
+        }
+      }
+      try {
+        this.notebookHeaderReadingTimers.clear();
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+    }
+    if (this.notebookHeaderReadingPending && typeof this.notebookHeaderReadingPending.clear === "function") {
+      try {
+        this.notebookHeaderReadingPending.clear();
+      } catch (error) {
+        // Map cleanup is best-effort.
+      }
+    }
     if (this.notebookHeaderReadingWidgets instanceof Set) {
+      for (const widget of Array.from(this.notebookHeaderReadingWidgets)) {
+        try {
+          this.notebookHeaderRemoveOwned(widget.surface || widget.el, widget.path);
+        } catch (error) {
+          // Unload cleanup is best-effort.
+        }
+      }
       this.notebookHeaderReadingWidgets.clear();
     }
   }
 
   notebookHeaderReadingRoot(el) {
     try {
-      if (el && typeof el.closest === "function") {
-        const root = el.closest(".markdown-preview-view");
-        if (root) {
-          return root;
-        }
+      if (typeof notebookHeaderReadingSurface === "function") {
+        return notebookHeaderReadingSurface(el);
       }
     } catch (error) {
       // Fall through to el.
     }
     return el;
+  }
+
+  notebookHeaderBelongsTo(node, surface, sourcePath) {
+    void sourcePath;
+    if (!node) {
+      return false;
+    }
+    try {
+      try {
+        if (typeof node.getAttribute === "function" && node.getAttribute("data-cm-widget") === "true") {
+          return false;
+        }
+        if (typeof node.closest === "function" && node.closest(".cm-widgetBuffer, .cm-content")) {
+          return false;
+        }
+      } catch (error) {
+        // CodeMirror ownership is best-effort.
+      }
+      try {
+        const nestedEmbed = typeof node.closest === "function"
+          ? node.closest(".markdown-embed, .internal-embed")
+          : null;
+        const surfaceEmbed = surface && typeof surface.closest === "function"
+          ? surface.closest(".markdown-embed, .internal-embed")
+          : null;
+        if (nestedEmbed && nestedEmbed !== surfaceEmbed && nestedEmbed !== surface) {
+          return false;
+        }
+      } catch (error) {
+        // Embed comparison is best-effort.
+      }
+      if (surface && typeof surface.contains === "function") {
+        return surface.contains(node);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  notebookHeaderRemoveOwned(surface, sourcePath) {
+    if (!surface) {
+      return;
+    }
+    try {
+      const nodes = typeof surface.querySelectorAll === "function"
+        ? Array.from(surface.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || [])
+        : [];
+      for (const node of nodes) {
+        if (!this.notebookHeaderBelongsTo(node, surface, sourcePath)) {
+          continue;
+        }
+        if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
+          node.parentNode.removeChild(node);
+        } else if (node && typeof node.remove === "function") {
+          node.remove();
+        }
+      }
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
   }
 
   notebookHeaderModelFor(sourcePath, state) {
@@ -295,7 +403,11 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!report) {
         return null;
       }
-      return notebookHeaderModel(report, sourcePath);
+      return notebookHeaderModel(report, sourcePath, {
+        metadataCache: this.app && this.app.metadataCache,
+        vault: this.app && this.app.vault,
+        sourcePath,
+      });
     } catch (error) {
       return null;
     }
@@ -323,20 +435,7 @@ class BobLedgerToolsNotebookHeaderMixin {
     } catch (error) {
       focusedHref = "";
     }
-    try {
-      if (typeof notebookRemovePainted === "function") {
-        notebookRemovePainted(root, NOTEBOOK_HEADER_CLASS);
-      } else if (root && typeof root.querySelectorAll === "function") {
-        const stale = Array.from(root.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
-        for (const node of stale) {
-          if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
-            node.parentNode.removeChild(node);
-          }
-        }
-      }
-    } catch (error) {
-      // Cleanup is best-effort.
-    }
+    this.notebookHeaderRemoveOwned(root, sourcePath);
     const model = this.notebookHeaderModelFor(sourcePath, state);
     if (!model) {
       return null;
@@ -344,6 +443,13 @@ class BobLedgerToolsNotebookHeaderMixin {
     const header = this.notebookHeaderBuildEl(model, options, doc);
     if (!header) {
       return null;
+    }
+    try {
+      if (typeof header.setAttribute === "function") {
+        header.setAttribute("data-notebook-source", sourcePath);
+      }
+    } catch (error) {
+      // Source identity is best-effort.
     }
     try {
       const anchor = this.notebookHeaderReadingAnchor(root);
@@ -367,10 +473,30 @@ class BobLedgerToolsNotebookHeaderMixin {
         const next = header.querySelector(`[data-href="${focusedHref}"]`);
         if (next && typeof next.focus === "function") {
           next.focus();
+          this.notebookHeaderLastFocusHref = focusedHref;
         }
       } catch (error) {
         // Focus restore is best-effort.
       }
+    }
+    try {
+      if (header && typeof header.addEventListener === "function") {
+        header.addEventListener("focusin", (event) => {
+          try {
+            const target = event && event.target;
+            const href = target && typeof target.getAttribute === "function"
+              ? target.getAttribute("data-href")
+              : "";
+            if (href) {
+              this.notebookHeaderLastFocusHref = href;
+            }
+          } catch (error) {
+            // Last-focus tracking is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // Last-focus tracking is best-effort.
     }
     return header;
   }
@@ -486,20 +612,23 @@ class BobLedgerToolsNotebookHeaderMixin {
         }
         return;
       }
+      const resolved = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
       const isSelf = crumb.kind === "self" || index === crumbs.length - 1;
-      if (isSelf) {
-        const self = create ? create(doc, "span", `${NOTEBOOK_HEADER_CRUMB_CLASS} bob-notebook-header-self`) : null;
-        const target = self || (doc ? doc.createElement("span") : null);
+      if (!resolved || crumb.missing) {
+        const inert = create
+          ? create(doc, "span", `${NOTEBOOK_HEADER_CRUMB_CLASS}${isSelf ? " bob-notebook-header-self" : ""}`)
+          : null;
+        const target = inert || (doc ? doc.createElement("span") : null);
         if (target) {
           if (setText) {
             setText(target, crumb.title || crumb.stem || "");
           }
-          try {
-            if (typeof target.setAttribute === "function") {
+          if (isSelf && typeof target.setAttribute === "function") {
+            try {
               target.setAttribute("aria-current", "page");
+            } catch (error) {
+              // Aria is best-effort.
             }
-          } catch (error) {
-            // Aria is best-effort.
           }
           if (typeof navEl.appendChild === "function") {
             navEl.appendChild(target);
@@ -513,11 +642,14 @@ class BobLedgerToolsNotebookHeaderMixin {
       }
       try {
         if (typeof link.setAttribute === "function") {
-          link.setAttribute("class", `internal-link ${NOTEBOOK_HEADER_CRUMB_CLASS}`);
-          const resolved = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
-          if (resolved) {
-            link.setAttribute("data-href", resolved);
-            link.setAttribute("href", resolved);
+          link.setAttribute(
+            "class",
+            `internal-link ${NOTEBOOK_HEADER_CRUMB_CLASS}${isSelf ? " bob-notebook-header-self" : ""}`,
+          );
+          link.setAttribute("data-href", resolved);
+          link.setAttribute("href", resolved);
+          if (isSelf) {
+            link.setAttribute("aria-current", "page");
           }
         }
         if (link.classList && typeof link.classList.add === "function") {
@@ -530,10 +662,8 @@ class BobLedgerToolsNotebookHeaderMixin {
         setText(link, crumb.title || crumb.stem || "");
       }
       if (typeof notebookBindAction === "function" && typeof handlers.openPath === "function") {
-        const target = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
-        notebookBindAction(link, () => handlers.openPath(target || crumb.path || crumb.stem));
+        notebookBindAction(link, () => handlers.openPath(resolved || crumb.path || crumb.stem));
       } else if (typeof link.addEventListener === "function" && typeof handlers.openPath === "function") {
-        const target = this.notebookHeaderLinkTarget(crumb, sourcePath, metadataCache, vault);
         link.addEventListener("click", (event) => {
           try {
             if (event && typeof event.preventDefault === "function") {
@@ -542,7 +672,7 @@ class BobLedgerToolsNotebookHeaderMixin {
           } catch (error) {
             // Best-effort.
           }
-          handlers.openPath(target || crumb.path || crumb.stem);
+          handlers.openPath(resolved || crumb.path || crumb.stem);
         });
       }
       if (typeof navEl.appendChild === "function") {
@@ -651,50 +781,155 @@ class BobLedgerToolsNotebookHeaderMixin {
       if (!sourcePath) {
         return;
       }
-      this.paintNotebookHeaderReading(el, sourcePath);
       if (!(this.notebookHeaderReadingWidgets instanceof Set)) {
         this.notebookHeaderReadingWidgets = new Set();
       }
-      for (const existing of this.notebookHeaderReadingWidgets) {
-        if (existing.el === el) {
-          existing.ctx = ctx;
-          existing.path = sourcePath;
+      if (!this.notebookHeaderReadingTimers || typeof this.notebookHeaderReadingTimers.set !== "function") {
+        this.notebookHeaderReadingTimers = new Map();
+      }
+      if (!this.notebookHeaderReadingPending || typeof this.notebookHeaderReadingPending.set !== "function") {
+        this.notebookHeaderReadingPending = new Map();
+      }
+      const key = sourcePath;
+      const pending = this.notebookHeaderReadingPending.get(key) || [];
+      pending.push({ el, ctx });
+      this.notebookHeaderReadingPending.set(key, pending);
+      try {
+        this.notebookClearTimeout(this.notebookHeaderReadingTimers.get(key));
+      } catch (error) {
+        // Coalesce is best-effort.
+      }
+      const paint = () => {
+        try {
+          this.notebookHeaderReadingTimers.delete(key);
+        } catch (error) {
+          // Map cleanup is best-effort.
+        }
+        const batch = this.notebookHeaderReadingPending.get(key) || [];
+        try {
+          this.notebookHeaderReadingPending.delete(key);
+        } catch (error) {
+          // Map cleanup is best-effort.
+        }
+        if (this.notebookHeaderActive === false) {
           return;
         }
-      }
-      const widget = { el, ctx, path: sourcePath };
-      this.notebookHeaderReadingWidgets.add(widget);
-      if (ctx && typeof ctx.addChild === "function") {
-        let child = null;
-        try {
-          if (typeof MarkdownRenderChild === "function") {
-            child = new MarkdownRenderChild(el);
-            child.onunload = () => {
-              if (this.notebookHeaderReadingWidgets) {
-                this.notebookHeaderReadingWidgets.delete(widget);
-              }
-            };
+        const chosen = this.notebookHeaderChooseReadingSurface(batch);
+        const surface = chosen.surface;
+        const chosenEl = chosen.el;
+        const chosenCtx = chosen.ctx;
+        this.paintNotebookHeaderReading(surface || chosenEl, sourcePath);
+        for (const existing of this.notebookHeaderReadingWidgets) {
+          if (
+            existing.path === sourcePath
+            && this.notebookHeaderSameSurface(existing.surface || existing.el, surface || chosenEl)
+          ) {
+            existing.el = chosenEl;
+            existing.ctx = chosenCtx;
+            existing.surface = surface || chosenEl;
+            return;
           }
-        } catch (error) {
-          child = null;
         }
-        if (!child) {
-          child = {
-            unload: () => {
-              if (this.notebookHeaderReadingWidgets) {
-                this.notebookHeaderReadingWidgets.delete(widget);
-              }
-            },
-          };
-        }
-        try {
-          ctx.addChild(child);
-        } catch (error) {
-          // Older hosts may reject the child.
-        }
+        const widget = {
+          el: chosenEl,
+          ctx: chosenCtx,
+          path: sourcePath,
+          surface: surface || chosenEl,
+        };
+        this.notebookHeaderReadingWidgets.add(widget);
+        this.notebookHeaderBindReadingChild(widget, chosenCtx, surface || chosenEl, sourcePath);
+      };
+      this.notebookHeaderReadingTimers.set(key, this.notebookSetTimeout(paint, 0));
+    } catch (error) {
+      // Reading paint never throws.
+    }
+  }
+
+  notebookHeaderSameSurface(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+    if (left === right) {
+      return true;
+    }
+    try {
+      if (typeof left.contains === "function" && left.contains(right)) {
+        return true;
+      }
+      if (typeof right.contains === "function" && right.contains(left)) {
+        return true;
       }
     } catch (error) {
-      // Reading header paint never throws.
+      return false;
+    }
+    return false;
+  }
+
+  notebookHeaderChooseReadingSurface(batch) {
+    const items = Array.isArray(batch) ? batch : [];
+    const last = items.length ? items[items.length - 1] : { el: null, ctx: null };
+    const pick = (el) => {
+      if (!el) {
+        return null;
+      }
+      try {
+        const attached = typeof el.closest === "function"
+          ? el.closest(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed")
+          : null;
+        if (attached) {
+          return this.notebookHeaderReadingRoot(attached) || attached;
+        }
+      } catch (error) {
+        // Attached-surface lookup is best-effort.
+      }
+      return null;
+    };
+    for (const item of items) {
+      const surface = pick(item && item.el);
+      if (surface) {
+        return { el: item.el, ctx: item.ctx, surface };
+      }
+    }
+    return {
+      el: last.el,
+      ctx: last.ctx,
+      surface: this.notebookHeaderReadingRoot(last.el) || last.el,
+    };
+  }
+
+  notebookHeaderBindReadingChild(widget, ctx, surface, sourcePath) {
+    if (!ctx || typeof ctx.addChild !== "function") {
+      return;
+    }
+    const hostEl = widget && widget.el;
+    let child = null;
+    try {
+      if (typeof MarkdownRenderChild === "function" && hostEl) {
+        child = new MarkdownRenderChild(hostEl);
+        child.onunload = () => {
+          if (this.notebookHeaderReadingWidgets) {
+            this.notebookHeaderReadingWidgets.delete(widget);
+          }
+          this.notebookHeaderRemoveOwned(surface, sourcePath);
+        };
+      }
+    } catch (error) {
+      child = null;
+    }
+    if (!child) {
+      child = {
+        unload: () => {
+          if (this.notebookHeaderReadingWidgets) {
+            this.notebookHeaderReadingWidgets.delete(widget);
+          }
+          this.notebookHeaderRemoveOwned(surface, sourcePath);
+        },
+      };
+    }
+    try {
+      ctx.addChild(child);
+    } catch (error) {
+      // Older hosts may reject the child.
     }
   }
 
@@ -705,7 +940,7 @@ class BobLedgerToolsNotebookHeaderMixin {
     let refreshed = false;
     for (const widget of Array.from(this.notebookHeaderReadingWidgets)) {
       try {
-        this.paintNotebookHeaderReading(widget.el, widget.path);
+        this.paintNotebookHeaderReading(widget.surface || widget.el, widget.path);
         refreshed = true;
       } catch (error) {
         // One stale view never breaks the others.

@@ -85,6 +85,8 @@ const {
   notebookHeaderChildEntries,
   notebookHeaderSignature,
   notebookHeaderChipsDefault,
+  notebookHeaderOwnerAncestors,
+  notebookHeaderReadingSurface,
 } = helpers;
 
 function entry(over = {}) {
@@ -168,17 +170,51 @@ class FakeEl {
     return c;
   }
   addEventListener(t, f) { (this.listeners[t] ||= []).push(f); }
+  matches(sel) {
+    const parts = String(sel || "").split(",").map((part) => part.trim()).filter(Boolean);
+    return parts.some((part) => {
+      let rest = part;
+      const tagMatch = /^[a-zA-Z][\w-]*/.exec(rest);
+      if (tagMatch) {
+        if (this.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest) {
+        const cls = /^\.([\w-]+)/.exec(rest);
+        if (cls) {
+          if (!String(this.attrs.class || "").split(/\s+/).includes(cls[1])) return false;
+          rest = rest.slice(cls[0].length);
+          continue;
+        }
+        const attr = /^\[([^\]]+)\]/.exec(rest);
+        if (attr) {
+          const body = attr[1];
+          const eq = body.indexOf("=");
+          if (eq === -1) {
+            if (this.getAttribute(body) === null) return false;
+          } else {
+            const name = body.slice(0, eq);
+            const value = body.slice(eq + 1).replace(/^["']|["']$/g, "");
+            if (this.getAttribute(name) !== value) return false;
+          }
+          rest = rest.slice(attr[0].length);
+          continue;
+        }
+        return false;
+      }
+      return true;
+    });
+  }
   querySelectorAll(sel) {
     const out = [];
     const walk = (n) => {
       for (const c of n.children) {
-        if (c.tagName === "H1" && sel.includes("h1")) out.push(c);
-        if (c.attrs.class && sel.includes(c.attrs.class.split(" ")[0])) out.push(c);
+        if (c.matches && c.matches(sel)) out.push(c);
         walk(c);
       }
     };
     walk(this);
-    if (sel.includes("bob-notebook-header") && this.attrs.class?.includes("bob-notebook-header")) out.push(this);
+    if (this.matches && this.matches(sel)) out.push(this);
     return out;
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
@@ -187,7 +223,17 @@ class FakeEl {
     while (c) { if (c === this) return true; c = c.parentNode; }
     return false;
   }
-  closest() { return null; }
+  closest(sel) {
+    let n = this;
+    while (n) {
+      if (n.matches && n.matches(sel)) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+  focus() {
+    if (this.doc) this.doc.activeElement = this;
+  }
   get textContent() {
     if (this.nodeType === 3) return this.text;
     return this.children.map((c) => c.textContent).join("") + this.text;
@@ -369,4 +415,273 @@ test("lifecycle setup and teardown manage header widgets", () => {
   plugin.teardownNotebookHeader();
   assert.equal(plugin.notebookHeaderActive, false);
   assert.equal(plugin.notebookHeaderReadingWidgets.size, 0);
+});
+
+test("self crumb links to the notebook; ellipsis stays inert", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const root = new FakeEl("div", doc);
+  const h1 = new FakeEl("h1", doc);
+  h1.text = "Git";
+  root.appendChild(h1);
+  const header = plugin.paintNotebookHeaderReading(root, "git.md");
+  assert.ok(header);
+  const self = header.querySelector(".bob-notebook-header-self");
+  assert.ok(self);
+  assert.equal(self.tagName, "A");
+  assert.equal(self.getAttribute("data-href"), "git.md");
+});
+
+test("widget signature changes with labels, hue, and chips", () => {
+  const report = parentChainReport();
+  const model = notebookHeaderModel(report, "git.md");
+  const base = notebookHeaderSignature(model, { hue: "blue", chipsEnabled: true });
+  const renamed = notebookHeaderModel(
+    reportFor([
+      entry({ stem: "dev_tools", path: "dev_tools.md", title: "Tools", parent: "dev", parent_kind: "area", owner: "dev", root: "dev", children: ["git"] }),
+      entry({ title: "Git notes" }),
+    ]),
+    "git.md",
+  );
+  assert.notEqual(notebookHeaderSignature(renamed, { hue: "blue", chipsEnabled: true }), base);
+  assert.notEqual(notebookHeaderSignature(model, { hue: "orange", chipsEnabled: true }), base);
+  assert.notEqual(notebookHeaderSignature(model, { hue: "blue", chipsEnabled: false }), base);
+});
+
+test("deep non-root project ancestry keeps intermediate owners", () => {
+  const files = [
+    { path: "dev.md", frontmatter: { type: "[[area]]" } },
+    { path: "mid.md", frontmatter: { type: "[[project]]", parent: "[[dev]]" } },
+    { path: "sub.md", frontmatter: { type: "[[project]]", parent: "[[mid]]" } },
+    { path: "git.md", frontmatter: { type: "[[notebook]]", parent: "[[sub]]" } },
+  ];
+  const fileObjs = files.map((file) => ({ path: file.path, extension: "md" }));
+  const cache = new Map(files.map((file) => [file.path, { frontmatter: file.frontmatter }]));
+  const metadataCache = {
+    getFileCache: (file) => cache.get(file && file.path) || null,
+    getFirstLinkpathDest: (name) => {
+      const wanted = String(name || "").replace(/\.md$/i, "");
+      return fileObjs.find((file) => file.path.replace(/\.md$/i, "") === wanted) || { path: `${wanted}.md` };
+    },
+  };
+  const vault = { getAbstractFileByPath: (p) => fileObjs.find((file) => file.path === p) || null };
+  const report = reportFor([
+    entry({
+      parent: "sub",
+      parent_kind: "project",
+      owner: "sub",
+      root: "dev",
+      breadcrumb: ["dev", "sub", "Git"],
+    }),
+  ]);
+  const model = notebookHeaderModel(report, "git.md", { metadataCache, vault, sourcePath: "git.md" });
+  const stems = model.crumbs.filter((c) => !c.ellipsis).map((c) => c.stem);
+  assert.ok(stems.includes("dev"));
+  assert.ok(stems.includes("mid"));
+  assert.ok(stems.includes("sub"));
+  assert.ok(stems.includes("git"));
+  void notebookHeaderOwnerAncestors;
+});
+
+test("H1-less notes place the header at the first content position", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const root = new FakeEl("div", doc);
+  const para = new FakeEl("p", doc);
+  para.text = "Preamble.";
+  root.appendChild(para);
+  plugin.paintNotebookHeaderReading(root, "git.md");
+  assert.equal(root.children[0].attrs.class.includes("bob-notebook-header"), true);
+  assert.equal(root.children[1].tagName, "P");
+});
+
+test("Reading embed stays in its surface; host cleanup leaves it", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const host = new FakeEl("div", doc);
+  host.attrs.class = "markdown-preview-view";
+  const hostH1 = new FakeEl("h1", doc);
+  hostH1.text = "Host";
+  host.appendChild(hostH1);
+  const embed = new FakeEl("div", doc);
+  embed.attrs.class = "markdown-embed";
+  const embedH1 = new FakeEl("h1", doc);
+  embedH1.text = "Git";
+  embed.appendChild(embedH1);
+  host.appendChild(embed);
+  assert.equal(notebookHeaderReadingSurface(embed).attrs.class, "markdown-embed");
+  plugin.paintNotebookHeaderReading(embed, "git.md");
+  const inEmbed = embed.children.filter((c) => String(c.attrs.class || "").includes("bob-notebook-header"));
+  const inHost = host.children.filter((c) => String(c.attrs.class || "").includes("bob-notebook-header"));
+  assert.equal(inEmbed.length, 1);
+  assert.equal(inHost.length, 0);
+  plugin.paintNotebookHeaderReading(host, "host.md");
+  const still = embed.children.filter((c) => String(c.attrs.class || "").includes("bob-notebook-header"));
+  assert.equal(still.length, 1);
+});
+
+test("Live Preview widget survives paint, refresh, and equality transitions", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderLastState = plugin.notebookCatalogState();
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const view = {
+    state: {
+      doc: {
+        toString: () => "# Git\nbody",
+        line: () => ({ from: 0, to: 5 }),
+      },
+      field: (field) => {
+        if (field === editorLivePreviewField) return true;
+        return { file: { path: "git.md" } };
+      },
+    },
+    dom: new FakeEl("div", doc),
+  };
+  plugin.notebookHeaderLivePath = () => "git.md";
+  const decos = plugin.buildNotebookHeaderDecorations(view);
+  assert.ok(Array.isArray(decos));
+  const widget = decos[0].decoration.widget;
+  const mounted = widget.toDOM();
+  assert.equal(mounted.getAttribute("data-cm-widget"), "true");
+  view.dom.appendChild(mounted);
+  assert.equal(view.dom.children.length, 1);
+  plugin.notebookHeaderPaintEditorDom(view);
+  assert.equal(view.dom.children.length, 1);
+  plugin.notebookChipsEnabledFlag = false;
+  const toggled = plugin.buildNotebookHeaderDecorations(view)[0].decoration.widget;
+  assert.equal(widget.eq(toggled), false);
+  plugin.notebookChipsEnabledFlag = true;
+  const renamedReport = reportFor([
+    entry({ stem: "dev_tools", path: "dev_tools.md", title: "Developer tools", parent: "dev", parent_kind: "area", owner: "dev", root: "dev", children: ["git"] }),
+    entry({ title: "Git history" }),
+  ]);
+  plugin.notebookCatalogState = () => ({ report: renamedReport, today: "2026-11-09", syncBusy: false });
+  const renamed = plugin.buildNotebookHeaderDecorations(view)[0].decoration.widget;
+  assert.equal(widget.eq(renamed), false);
+});
+
+test("header refresh restores keyboard focus", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const root = new FakeEl("div", doc);
+  const h1 = new FakeEl("h1", doc);
+  h1.text = "Git";
+  root.appendChild(h1);
+  const first = plugin.paintNotebookHeaderReading(root, "git.md");
+  const link = first.querySelector("a.internal-link");
+  assert.ok(link);
+  link.focus();
+  plugin.paintNotebookHeaderReading(root, "git.md");
+  assert.equal(doc.activeElement.getAttribute("data-href"), link.getAttribute("data-href"));
+});
+
+test("refreshNotebookHeaderAll restores header focus after editor refresh", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const doc = fakeDoc();
+  const root = new FakeEl("div", doc);
+  doc.querySelectorAll = (sel) => root.querySelectorAll(sel);
+  const h1 = new FakeEl("h1", doc);
+  h1.text = "Git";
+  root.appendChild(h1);
+  const first = plugin.paintNotebookHeaderReading(root, "git.md");
+  plugin.notebookHeaderReadingWidgets = new Set([{ el: root, path: "git.md", surface: root }]);
+  const link = first.querySelector("a.internal-link");
+  assert.ok(link);
+  link.focus();
+  const previous = global.document;
+  global.document = doc;
+  try {
+    plugin.refreshNotebookHeaderEditors = () => { doc.activeElement = root; };
+    plugin.refreshNotebookHeaderAll();
+    assert.equal(doc.activeElement.getAttribute("data-href"), link.getAttribute("data-href"));
+  } finally {
+    global.document = previous;
+  }
+});
+
+test("late chips load refreshes catalogs and ignores a stale epoch", async () => {
+  const { plugin } = makePlugin();
+  let catalogReads = 0;
+  plugin.refreshNotebookHeaderAll = () => {};
+  plugin.refreshNotebookCatalogReading = () => { catalogReads += 1; };
+  plugin.refreshNotebookCatalogEditors = () => { catalogReads += 1; };
+  plugin.notebookHeaderActive = true;
+  plugin.notebookHeaderEpoch = 1;
+  plugin.loadData = async () => ({ notebookChips: false, other: 1 });
+  await plugin.loadNotebookChipsSetting();
+  assert.equal(plugin.notebookChipsVisible(), false);
+  assert.ok(catalogReads >= 2);
+  plugin.notebookChipsEnabledFlag = true;
+  plugin.notebookHeaderEpoch = 3;
+  plugin.loadData = async () => {
+    plugin.notebookHeaderEpoch = 4;
+    return { notebookChips: false };
+  };
+  await plugin.loadNotebookChipsSetting();
+  assert.equal(plugin.notebookChipsVisible(), true);
+});
+
+test("Reading section paints coalesce onto one attached surface", () => {
+  const report = parentChainReport();
+  const { plugin } = makePlugin();
+  plugin.notebookCatalogState = () => ({ report, today: "2026-11-09", syncBusy: false });
+  plugin.notebookHeaderActive = true;
+  plugin.notebookChipsEnabledFlag = true;
+  const pendingTimers = new Map();
+  let nextTimer = 0;
+  plugin.notebookSetTimeout = (cb) => {
+    nextTimer += 1;
+    pendingTimers.set(nextTimer, cb);
+    return nextTimer;
+  };
+  plugin.notebookClearTimeout = (id) => { pendingTimers.delete(id); };
+  const doc = fakeDoc();
+  const preview = new FakeEl("div", doc);
+  preview.attrs.class = "markdown-preview-view";
+  const sizer = new FakeEl("div", doc);
+  sizer.attrs.class = "markdown-preview-sizer";
+  preview.appendChild(sizer);
+  const h1 = new FakeEl("h1", doc);
+  h1.text = "Git";
+  const section1 = new FakeEl("div", doc);
+  section1.appendChild(h1);
+  const para = new FakeEl("p", doc);
+  para.text = "Workflow notes.";
+  const section2 = new FakeEl("div", doc);
+  section2.appendChild(para);
+  const ctx = { sourcePath: "git.md", addChild() {} };
+  plugin.renderNotebookHeaderInReading(section1, ctx);
+  plugin.renderNotebookHeaderInReading(section2, ctx);
+  assert.equal(pendingTimers.size, 1);
+  sizer.appendChild(section1);
+  sizer.appendChild(section2);
+  for (const cb of Array.from(pendingTimers.values())) cb();
+  const headers = sizer.querySelectorAll(".bob-notebook-header")
+    .filter((node) => String(node.attrs.class || "").includes("bob-notebook-header"));
+  assert.equal(headers.length, 1);
+  assert.equal(section2.children.filter((child) => String(child.attrs.class || "").includes("bob-notebook-header")).length, 0);
 });

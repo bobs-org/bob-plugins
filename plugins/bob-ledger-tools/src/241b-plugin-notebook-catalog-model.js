@@ -248,6 +248,67 @@ function notebookSyncActionModel(catalog, options = {}) {
   };
 }
 
+function notebookRetryActionModel(state) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+  const errorModel = state.errorModel || null;
+  const unavailable = state.unavailable === true;
+  const stale = state.stale === true && Boolean(state.report);
+  const busy = state.refreshing === true;
+  if (!unavailable && !stale && !errorModel) {
+    return null;
+  }
+  if (unavailable || (errorModel && !state.report)) {
+    return {
+      kind: "retry",
+      label: "Retry",
+      hint: (errorModel && errorModel.hint)
+        || "Notebook data is unavailable. Retry the list report.",
+      code: (errorModel && errorModel.code) || "unavailable",
+      busy,
+      disabled: busy,
+      state: "unavailable",
+    };
+  }
+  if (stale) {
+    return {
+      kind: "retry",
+      label: "Retry",
+      hint: (errorModel && errorModel.hint)
+        || "Showing the last good notebook list. Retry to refresh.",
+      code: (errorModel && errorModel.code) || "stale",
+      busy,
+      disabled: busy,
+      state: "stale",
+    };
+  }
+  return null;
+}
+
+function notebookStatusModel(state) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+  const retry = notebookRetryActionModel(state);
+  const syncError = state.syncErrorModel || null;
+  if (!retry && !syncError) {
+    return null;
+  }
+  const hint = (retry && retry.hint)
+    || (syncError && syncError.hint)
+    || "Notebook data is unavailable.";
+  const kind = retry
+    ? retry.state
+    : (syncError && syncError.code === "desktop-only" ? "unavailable" : "sync-error");
+  return {
+    kind,
+    hint,
+    retry,
+    code: (retry && retry.code) || (syncError && syncError.code) || "",
+  };
+}
+
 function notebookRowModel(notebook, today) {
   if (!notebook) {
     return {
@@ -329,7 +390,7 @@ function notebookHostHueName(path, metadataCache, vault) {
       [],
       new Set(),
     );
-    const hue = resolved && resolved.root_hue;
+    const hue = resolved && resolved.hue;
     if (hue && Array.isArray(POMODORO_HOME_SLOT_ORDER) && POMODORO_HOME_SLOT_ORDER.includes(hue)) {
       return hue;
     }

@@ -116,7 +116,8 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
         return Decoration.none;
       }
       const options = this.notebookHeaderPaintOptions(filePath, state);
-      const doc = typeof document !== "undefined" ? document : null;
+      const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
+        || (typeof document !== "undefined" ? document : null);
       const headerEl = this.notebookHeaderBuildEl(model, options, doc);
       if (!headerEl) {
         return Decoration.none;
@@ -135,11 +136,19 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           return Boolean(other && other.path === this.path && other.signature === this.signature);
         }
         toDOM() {
+          try {
+            if (this.el && typeof this.el.setAttribute === "function") {
+              this.el.setAttribute("data-cm-widget", "true");
+              this.el.setAttribute("data-notebook-source", this.path || "");
+            }
+          } catch (error) {
+            // Ownership marking is best-effort.
+          }
           return this.el;
         }
       };
       const signature = typeof notebookHeaderSignature === "function"
-        ? notebookHeaderSignature(model)
+        ? notebookHeaderSignature(model, options)
         : String(filePath);
       const widget = new HeaderWidget(headerEl, filePath, signature);
       const pending = [];
@@ -228,7 +237,18 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           : [];
         for (const node of stale) {
           if (node && node.parentNode && typeof node.parentNode.removeChild === "function") {
-            if (node.getAttribute && node.getAttribute("data-cm-widget") === "true") {
+            let cmOwned = false;
+            try {
+              cmOwned = Boolean(
+                node.getAttribute && (
+                  node.getAttribute("data-cm-widget") === "true"
+                  || node.closest && node.closest(".cm-widgetBuffer, .cm-content")
+                ),
+              );
+            } catch (error) {
+              cmOwned = Boolean(node.getAttribute && node.getAttribute("data-cm-widget") === "true");
+            }
+            if (cmOwned) {
               continue;
             }
             try {
@@ -342,6 +362,75 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     }
   }
 
+  notebookHeaderCaptureFocus() {
+    try {
+      const doc = typeof document !== "undefined" ? document : null;
+      const fromNode = (node) => {
+        if (!node || typeof node.getAttribute !== "function") {
+          return "";
+        }
+        try {
+          if (typeof node.closest === "function" && !node.closest(`.${NOTEBOOK_HEADER_CLASS}`)) {
+            return "";
+          }
+        } catch (error) {
+          return "";
+        }
+        return node.getAttribute("data-href") || "";
+      };
+      const fromActive = fromNode(doc && doc.activeElement);
+      if (fromActive) {
+        this.notebookHeaderLastFocusHref = fromActive;
+        return fromActive;
+      }
+      const focused = doc && typeof doc.querySelector === "function"
+        ? doc.querySelector(`.${NOTEBOOK_HEADER_CLASS} a.internal-link:focus, .${NOTEBOOK_HEADER_CLASS} a.internal-link:focus-visible`)
+        : null;
+      const fromFocus = fromNode(focused);
+      if (fromFocus) {
+        this.notebookHeaderLastFocusHref = fromFocus;
+        return fromFocus;
+      }
+      return String(this.notebookHeaderLastFocusHref || "");
+    } catch (error) {
+      return String(this.notebookHeaderLastFocusHref || "");
+    }
+  }
+
+  notebookHeaderRestoreFocus(href) {
+    const wanted = String(href || "").trim();
+    if (!wanted) {
+      return false;
+    }
+    try {
+      const doc = typeof document !== "undefined" ? document : null;
+      if (!doc || typeof doc.querySelectorAll !== "function") {
+        return false;
+      }
+      const safe = wanted.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const headers = Array.from(doc.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
+      for (const header of headers) {
+        try {
+          if (typeof header.getAttribute === "function" && header.getAttribute("data-cm-widget") === "true") {
+            continue;
+          }
+        } catch (error) {
+          // CodeMirror widgets are skipped when marked.
+        }
+        const next = typeof header.querySelector === "function"
+          ? header.querySelector(`[data-href="${safe}"]`)
+          : null;
+        if (next && typeof next.focus === "function") {
+          next.focus();
+          return true;
+        }
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  }
+
   scheduleNotebookHeaderRefresh() {
     if (this.notebookHeaderActive === false) {
       return;
@@ -354,6 +443,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       : (callback, delay) => setTimeout(callback, delay);
     this.notebookHeaderRefreshTimer = schedule(() => {
       this.notebookHeaderRefreshTimer = null;
+      const href = this.notebookHeaderCaptureFocus();
       try {
         this.refreshNotebookHeaderReading();
       } catch (error) {
@@ -364,10 +454,12 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       } catch (error) {
         // Best-effort.
       }
+      this.notebookHeaderRestoreFocus(href);
     }, 150);
   }
 
   refreshNotebookHeaderAll() {
+    const href = this.notebookHeaderCaptureFocus();
     try {
       this.refreshNotebookHeaderReading();
     } catch (error) {
@@ -378,5 +470,6 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     } catch (error) {
       // Best-effort.
     }
+    this.notebookHeaderRestoreFocus(href);
   }
 }

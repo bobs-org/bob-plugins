@@ -7,6 +7,9 @@ const NOTEBOOK_COUNT_CLASS = "bob-notebook-count";
 const NOTEBOOK_AGE_CLASS = "bob-notebook-age";
 const NOTEBOOK_ADD_CLASS = "bob-notebook-add-summary";
 const NOTEBOOK_SYNC_CLASS = "bob-notebook-sync";
+const NOTEBOOK_RETRY_CLASS = "bob-notebook-retry";
+const NOTEBOOK_STATUS_CLASS = "bob-notebook-status";
+const NOTEBOOK_ANCHOR_CLASS = "bob-notebook-anchor";
 const NOTEBOOK_SUMMARY_CLASS = "bob-notebook-summary";
 const NOTEBOOK_CALLOUT_CLASS = "bob-notebook-catalog";
 
@@ -380,6 +383,11 @@ function notebookPaintCallout(callout, options = {}) {
       } else if (typeof callout.removeAttribute === "function") {
         callout.removeAttribute("data-root-hue");
       }
+      if (options.stale) {
+        callout.setAttribute("data-stale", "true");
+      } else if (typeof callout.removeAttribute === "function") {
+        callout.removeAttribute("data-stale");
+      }
     }
     if (callout.classList && typeof callout.classList.add === "function") {
       callout.classList.add(NOTEBOOK_CALLOUT_CLASS);
@@ -427,12 +435,12 @@ function notebookPaintCallout(callout, options = {}) {
   return true;
 }
 
-function notebookPaintSyncAction(host, model, handlers, doc) {
+function notebookPaintActionButton(host, model, handlers, doc, className, run) {
   if (!host || !model) {
     return null;
   }
-  notebookRemovePainted(host, NOTEBOOK_SYNC_CLASS);
-  const el = notebookCreateEl(doc, "button", NOTEBOOK_SYNC_CLASS);
+  notebookRemovePainted(host, className);
+  const el = notebookCreateEl(doc, "button", className);
   if (!el) {
     return null;
   }
@@ -441,7 +449,12 @@ function notebookPaintSyncAction(host, model, handlers, doc) {
     if (typeof el.setAttribute === "function") {
       el.setAttribute("aria-label", model.hint);
       el.setAttribute("title", model.hint);
-      el.setAttribute("data-catalog-state", model.state);
+      if (model.state) {
+        el.setAttribute("data-catalog-state", model.state);
+      }
+      if (model.kind) {
+        el.setAttribute("data-action-kind", model.kind);
+      }
       if (model.busy) {
         el.setAttribute("aria-busy", "true");
         el.setAttribute("disabled", "true");
@@ -449,18 +462,114 @@ function notebookPaintSyncAction(host, model, handlers, doc) {
     }
     el.disabled = Boolean(model.disabled);
   } catch (error) {
-    // Sync chrome is best-effort.
+    // Action chrome is best-effort.
   }
-  if (handlers && typeof handlers.sync === "function") {
+  if (typeof run === "function") {
     notebookBindAction(el, (event) => {
       if (model.disabled) {
         return;
       }
-      handlers.sync(event);
+      run(event);
     });
   }
   if (typeof host.appendChild === "function") {
     host.appendChild(el);
+  }
+  return el;
+}
+
+function notebookPaintSyncAction(host, model, handlers, doc) {
+  return notebookPaintActionButton(
+    host,
+    model,
+    handlers,
+    doc,
+    NOTEBOOK_SYNC_CLASS,
+    handlers && typeof handlers.sync === "function" ? (event) => handlers.sync(event) : null,
+  );
+}
+
+function notebookPaintRetryAction(host, model, handlers, doc) {
+  return notebookPaintActionButton(
+    host,
+    model,
+    handlers,
+    doc,
+    NOTEBOOK_RETRY_CLASS,
+    handlers && typeof handlers.retry === "function" ? (event) => handlers.retry(event) : null,
+  );
+}
+
+function notebookPaintStatus(host, model, handlers, doc) {
+  if (!host || !model) {
+    return null;
+  }
+  notebookRemovePainted(host, NOTEBOOK_STATUS_CLASS);
+  const el = notebookCreateEl(doc, "div", NOTEBOOK_STATUS_CLASS);
+  if (!el) {
+    return null;
+  }
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("role", "status");
+      el.setAttribute("data-kind", model.kind || "status");
+      if (model.code) {
+        el.setAttribute("data-code", model.code);
+      }
+    }
+  } catch (error) {
+    // Status chrome is best-effort.
+  }
+  const hint = notebookCreateEl(doc, "span", "bob-notebook-status-hint");
+  if (hint) {
+    notebookSetText(hint, model.hint || "");
+    if (typeof el.appendChild === "function") {
+      el.appendChild(hint);
+    }
+  }
+  if (typeof host.appendChild === "function") {
+    host.appendChild(el);
+  }
+  return el;
+}
+
+function notebookEnsureRenderedAnchor(root, doc) {
+  if (!root) {
+    return null;
+  }
+  try {
+    if (typeof root.querySelector === "function") {
+      const existing = root.querySelector(`.${NOTEBOOK_ANCHOR_CLASS}`);
+      if (existing) {
+        return existing;
+      }
+    }
+  } catch (error) {
+    // Dedup is best-effort.
+  }
+  const el = notebookCreateEl(doc, "div", NOTEBOOK_ANCHOR_CLASS);
+  if (!el) {
+    return null;
+  }
+  try {
+    if (typeof el.setAttribute === "function") {
+      el.setAttribute("data-notebook-anchor", "true");
+    }
+  } catch (error) {
+    // Anchor chrome is best-effort.
+  }
+  try {
+    if (typeof root.insertBefore === "function") {
+      root.insertBefore(el, root.firstChild || null);
+    } else if (typeof root.prepend === "function") {
+      root.prepend(el);
+    } else if (typeof root.appendChild === "function") {
+      root.appendChild(el);
+    } else {
+      return null;
+    }
+  } catch (error) {
+    return null;
   }
   return el;
 }
@@ -512,10 +621,38 @@ function notebookInsideCode(node) {
   return false;
 }
 
+function notebookHeadingPaintedChrome(node) {
+  try {
+    const cls = typeof node.getAttribute === "function"
+      ? node.getAttribute("class") || ""
+      : typeof node.className === "string" ? node.className : "";
+    return /\bbob-notebook-(retry|sync|status|anchor)\b/.test(String(cls));
+  } catch (error) {
+    return false;
+  }
+}
+
 function notebookHeadingIsNotebooks(head) {
   try {
-    const text = String(head && head.textContent ? head.textContent : "").replace(/\s+/g, " ").trim();
-    return /^Notebooks(?:\s.*)?$/i.test(text.replace(/\u21bb.*$/, "").trim());
+    let text = "";
+    const kids = head && head.childNodes ? Array.from(head.childNodes) : [];
+    if (kids.length) {
+      for (const child of kids) {
+        try {
+          if (child && child.nodeType === 1 && notebookHeadingPaintedChrome(child)) {
+            continue;
+          }
+        } catch (error) {
+          // Skip-chrome is best-effort.
+        }
+        text += child && child.textContent ? child.textContent : "";
+      }
+    } else {
+      text = String(head && head.textContent ? head.textContent : "");
+    }
+    text = String(text).replace(/\s+/g, " ").trim();
+    text = text.replace(/\u21bb[\s\S]*$/, "").trim();
+    return /^Notebooks(?:\s.*)?$/i.test(text);
   } catch (error) {
     return false;
   }

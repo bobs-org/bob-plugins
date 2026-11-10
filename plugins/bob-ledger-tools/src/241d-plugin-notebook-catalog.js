@@ -94,6 +94,9 @@ class BobLedgerToolsNotebookCatalogMixin {
       sync: () => {
         void plugin.apiNotebookCatalogSync();
       },
+      retry: () => {
+        void plugin.apiNotebookReport({ force: true });
+      },
     };
   }
 
@@ -128,17 +131,40 @@ class BobLedgerToolsNotebookCatalogMixin {
       vault: this.app && this.app.vault,
       handlers: this.notebookCatalogHandlers(sourcePath),
       chipsEnabled,
+      stale: Boolean(current.stale),
+      unavailable: Boolean(current.unavailable),
+      errorModel: current.errorModel || null,
+      syncErrorModel: current.syncErrorModel || null,
+      refreshing: Boolean(current.refreshing),
     };
+  }
+
+  notebookCatalogRetryModel(sourcePath, state) {
+    void sourcePath;
+    const current = state || this.notebookCatalogState();
+    return typeof notebookRetryActionModel === "function"
+      ? notebookRetryActionModel(current)
+      : null;
+  }
+
+  notebookCatalogStatusModel(sourcePath, state) {
+    void sourcePath;
+    const current = state || this.notebookCatalogState();
+    return typeof notebookStatusModel === "function"
+      ? notebookStatusModel(current)
+      : null;
   }
 
   notebookCatalogSyncModel(sourcePath, state, headingPresent) {
     const current = state || this.notebookCatalogState();
     const catalog = notebookHostCatalog(current, sourcePath);
+    const retry = this.notebookCatalogRetryModel(sourcePath, current);
+    if (retry && !catalog) {
+      return null;
+    }
     const errorHint = current.syncErrorModel && current.syncErrorModel.hint
       ? current.syncErrorModel.hint
-      : current.errorModel && current.errorModel.hint
-        ? current.errorModel.hint
-        : "";
+      : "";
     return notebookSyncActionModel(catalog, {
       busy: Boolean(current.syncBusy),
       errorHint,
@@ -146,27 +172,75 @@ class BobLedgerToolsNotebookCatalogMixin {
     });
   }
 
+  notebookCatalogActionHost(el, heading, title, needsAnchor, doc) {
+    if (heading) {
+      return heading;
+    }
+    if (title) {
+      return title;
+    }
+    if (!needsAnchor) {
+      return null;
+    }
+    return typeof notebookEnsureRenderedAnchor === "function"
+      ? notebookEnsureRenderedAnchor(el, doc)
+      : null;
+  }
+
   paintNotebookCatalogReading(el, sourcePath) {
     const state = this.notebookCatalogState();
     const options = this.notebookCatalogPaintOptions(sourcePath, state);
+    const doc = notebookDomDoc(el);
     const callouts = notebookFindCallouts(el).filter((node) => !notebookInsideCode(node));
     for (const callout of callouts) {
       notebookPaintCallout(callout, options);
     }
     const heading = notebookFindNotebooksHeading(el);
     const title = heading ? null : notebookFindHostTitle(el);
-    const syncHost = heading || title;
+    const retryModel = this.notebookCatalogRetryModel(sourcePath, state);
     const syncModel = this.notebookCatalogSyncModel(sourcePath, state, Boolean(heading));
-    if (options.chipsEnabled === false) {
-      if (syncHost) {
-        notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
+    const statusModel = this.notebookCatalogStatusModel(sourcePath, state);
+    const needsAnchor = Boolean(
+      options.chipsEnabled !== false
+      && (retryModel || (syncModel && (syncModel.state === "missing" || syncModel.busy)) || statusModel),
+    );
+    let actionHost = this.notebookCatalogActionHost(el, heading, title, needsAnchor, doc);
+    if (!actionHost && el && typeof el.querySelector === "function") {
+      try {
+        const painted = el.querySelector(
+          `.${NOTEBOOK_RETRY_CLASS}, .${NOTEBOOK_SYNC_CLASS}, .${NOTEBOOK_STATUS_CLASS}`,
+        );
+        if (painted && painted.parentNode) {
+          actionHost = painted.parentNode;
+        }
+      } catch (error) {
+        // Leftover-host recovery is best-effort.
       }
-    } else if (syncHost && syncModel && (heading || syncModel.state === "missing" || syncModel.busy)) {
-      notebookPaintSyncAction(syncHost, syncModel, options.handlers, notebookDomDoc(syncHost));
-    } else if (syncHost) {
-      notebookRemovePainted(syncHost, NOTEBOOK_SYNC_CLASS);
     }
-    return { callouts, heading, title };
+    if (options.chipsEnabled === false) {
+      if (actionHost) {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_STATUS_CLASS);
+      }
+    } else if (actionHost) {
+      if (syncModel && (heading || syncModel.state === "missing" || syncModel.busy || !title)) {
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+        notebookPaintSyncAction(actionHost, syncModel, options.handlers, doc);
+      } else if (retryModel) {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookPaintRetryAction(actionHost, retryModel, options.handlers, doc);
+      } else {
+        notebookRemovePainted(actionHost, NOTEBOOK_SYNC_CLASS);
+        notebookRemovePainted(actionHost, NOTEBOOK_RETRY_CLASS);
+      }
+      if (statusModel) {
+        notebookPaintStatus(actionHost, statusModel, options.handlers, doc);
+      } else {
+        notebookRemovePainted(actionHost, NOTEBOOK_STATUS_CLASS);
+      }
+    }
+    return { callouts, heading, title, actionHost };
   }
 
   renderNotebookCatalogInReading(el, ctx) {
@@ -326,16 +400,17 @@ class BobLedgerToolsNotebookCatalogMixin {
       const headingLine = notebookFindNotebooksHeadingLine(docText);
       const titleLine = headingLine < 0 ? notebookFindHostTitleLine(docText) : -1;
       const state = this.notebookCatalogState();
+      const retryModel = this.notebookCatalogRetryModel(filePath, state);
       const syncModel = this.notebookCatalogSyncModel(filePath, state, headingLine >= 0);
       const hue = this.notebookCatalogHue(filePath);
       const pending = [];
       const plugin = this;
-      const SyncWidget = class extends WidgetType {
+      const ActionWidget = class extends WidgetType {
         constructor(model, path) {
           super();
           this.model = model;
           this.path = path;
-          this.key = `${model.state}|${model.busy ? "busy" : "idle"}|${model.label}`;
+          this.key = `${model.kind || "sync"}|${model.state}|${model.busy ? "busy" : "idle"}|${model.label}`;
         }
         eq(other) {
           return Boolean(other && other.key === this.key && other.path === this.path);
@@ -347,13 +422,18 @@ class BobLedgerToolsNotebookCatalogMixin {
             appendChild: () => {},
             ownerDocument: doc,
           };
-          notebookPaintSyncAction(host, this.model, plugin.notebookCatalogHandlers(this.path), doc);
+          const handlers = plugin.notebookCatalogHandlers(this.path);
+          if (this.model.kind === "retry") {
+            notebookPaintRetryAction(host, this.model, handlers, doc);
+          } else {
+            notebookPaintSyncAction(host, this.model, handlers, doc);
+          }
           if (holder && holder.firstChild) {
             return holder;
           }
           if (holder) {
             notebookSetText(holder, this.model.label);
-            holder.className = NOTEBOOK_SYNC_CLASS;
+            holder.className = this.model.kind === "retry" ? NOTEBOOK_RETRY_CLASS : NOTEBOOK_SYNC_CLASS;
             return holder;
           }
           try {
@@ -364,15 +444,23 @@ class BobLedgerToolsNotebookCatalogMixin {
         }
       };
       const addWidget = (lineIndex, model) => {
-        if (lineIndex < 0 || !model) {
+        if (!model) {
           return;
         }
         try {
+          if (lineIndex < 0) {
+            pending.push({
+              from: 0,
+              to: 0,
+              spec: Decoration.widget({ widget: new ActionWidget(model, filePath), side: -1 }),
+            });
+            return;
+          }
           const line = view.state.doc.line(lineIndex + 1);
           pending.push({
             from: line.to,
             to: line.to,
-            spec: Decoration.widget({ widget: new SyncWidget(model, filePath), side: 1 }),
+            spec: Decoration.widget({ widget: new ActionWidget(model, filePath), side: 1 }),
           });
         } catch (error) {
           // Skip one widget.
@@ -386,11 +474,14 @@ class BobLedgerToolsNotebookCatalogMixin {
       } catch (error) {
         chipsEnabled = true;
       }
-      if (chipsEnabled && syncModel) {
+      const actionModel = syncModel || retryModel;
+      if (chipsEnabled && actionModel) {
         if (headingLine >= 0) {
-          addWidget(headingLine, syncModel);
-        } else if (syncModel.state === "missing" || syncModel.busy) {
-          addWidget(titleLine, syncModel);
+          addWidget(headingLine, actionModel);
+        } else if (titleLine >= 0 && (retryModel || actionModel.state === "missing" || actionModel.busy)) {
+          addWidget(titleLine, actionModel);
+        } else if (retryModel || actionModel.state === "missing" || actionModel.busy) {
+          addWidget(-1, actionModel);
         }
       }
       if (hue && Decoration.line) {
@@ -581,8 +672,8 @@ class BobLedgerToolsNotebookCatalogMixin {
       if (view && view.containerEl) {
         roots.push(view.containerEl);
       }
-      if (typeof document !== "undefined" && document && document.body) {
-        roots.push(document.body);
+      if (view && view.metadataEditor && view.metadataEditor.containerEl) {
+        roots.push(view.metadataEditor.containerEl);
       }
       const selectors = [
         '.metadata-property[data-property-key="summary"] input',
@@ -651,11 +742,29 @@ class BobLedgerToolsNotebookCatalogMixin {
     let view = null;
     try {
       const workspace = this.app && this.app.workspace;
-      view = workspace && typeof workspace.getActiveViewOfType === "function" && typeof MarkdownView === "function"
-        ? workspace.getActiveViewOfType(MarkdownView)
-        : workspace && workspace.getActiveViewOfType
-          ? workspace.getActiveViewOfType("markdown")
-          : null;
+      const wanted = target.replace(/\.md$/i, "");
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const file = leaf && leaf.view && leaf.view.file;
+          const path = file && typeof file.path === "string" ? file.path : "";
+          if (path && notebookReportPath(path).replace(/\.md$/i, "") === wanted) {
+            view = leaf.view;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      if (!view) {
+        view = workspace && typeof workspace.getActiveViewOfType === "function" && typeof MarkdownView === "function"
+          ? workspace.getActiveViewOfType(MarkdownView)
+          : workspace && workspace.getActiveViewOfType
+            ? workspace.getActiveViewOfType("markdown")
+            : null;
+      }
       if (!view && workspace && workspace.activeLeaf) {
         view = workspace.activeLeaf.view;
       }

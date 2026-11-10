@@ -157,6 +157,27 @@ function validateMatrix(entry) {
     if (!fixture.prefixOk) failures.push(`${fixture.id} visible groups are not a walk-order prefix`);
     if (!fixture.markerOk) failures.push(`${fixture.id} has an incorrect ellipsis state`);
     if (!fixture.contextMatchesTier) failures.push(`${fixture.id} context ink differs from its tier ink`);
+    if (fixture.id.startsWith("tick-")) {
+      if (!fixture.chipPresent) failures.push(`${fixture.id} has no answer chip`);
+      if (!fixture.chipVisible) failures.push(`${fixture.id} chip is not visible at ${entry.width}px`);
+      if (fixture.chipTier !== "tickler") failures.push(`${fixture.id} chip tier is ${fixture.chipTier}, not tickler`);
+      if (!fixture.hintMatchesView) failures.push(`${fixture.id} hint text differs from the view hint`);
+      if (fixture.chipContrast === null || fixture.chipContrast < 4.5) {
+        failures.push(`${fixture.id} chip contrast is ${fixture.chipContrast}:1`);
+      }
+      if (fixture.keycapContrast === null || fixture.keycapContrast < 4.5) {
+        failures.push(`${fixture.id} keycap contrast is ${fixture.keycapContrast}:1`);
+      }
+      if (fixture.id === "tick-cancel" && fixture.chipKind !== "cancel") {
+        failures.push(`tick-cancel chip kind is ${fixture.chipKind}, not cancel`);
+      }
+      if (fixture.id === "tick-decay" && fixture.chipKind !== "decay") {
+        failures.push(`tick-decay chip kind is ${fixture.chipKind}, not decay`);
+      }
+    }
+    if (fixture.id === "next-roll" && fixture.chipPresent) {
+      failures.push("next-roll shows a chip but only TICK rows chip");
+    }
     if (fixture.id.startsWith("staged-")) {
       if (fixture.detailTier !== (fixture.id === "staged-terminal" ? "pre" : "post")) {
         failures.push(`${fixture.id} stage detail is not colored as its checklist tier`);
@@ -242,9 +263,9 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: all nine groups, a typical morning, staged Monday PRE/POST rows, NEW, NEXT with quickRoll, and ROTTEN.",
+      "- Fixtures: all nine groups, a typical morning, staged Monday PRE/POST rows, NEW, NEXT with quickRoll, ROTTEN, and TICK decay/cancel/legacy chips.",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
-      "- Checks: AA contrast for group, current-tier, and stage-detail inks; nine distinct group inks; no host overflow; walk-order prefixes; and ellipsis only for a partial cut.",
+      "- Checks: AA contrast for group, current-tier, stage-detail, chip, and keycap inks; nine distinct group inks; chips on every tick-* fixture and none on next-roll; hint text matches the view; chips stay visible at every width; no host overflow; walk-order prefixes; and ellipsis only for a partial cut.",
       "",
       "| Width | Theme | Visible groups | Context contrast | Worst group contrast | Overflow | Result | Screenshot |",
       "| ---: | --- | --- | ---: | ---: | ---: | --- | --- |",

@@ -361,10 +361,13 @@ The root `bob-navigation-hotkeys.api` is version 3:
 `quickRoll` has `keyLabel` (`Alt+P`) and
 `preview({ content | lines, line, tier })`. `preview` is synchronous
 and never throws: it plans the same recommendation `Alt+P` would use
-and returns the frozen `{ ok, kind, line, compact, detail }` preview
+and returns the frozen `{ ok, kind, line, compact, detail, parts }` preview
 (`kind` is `roll`, `decay`, `cancel`, or `assign`; unprioritized tasks
 now preview), or `{ ok: false, reason }` for PRE/POST rows and lines
-with no recommendation. With a null plugin (after unload) it returns
+with no recommendation. `parts` is additive (`keyLabel`, `verb`, `fromLabel`,
+`toLabel`, `step`, `limit`); joining it rebuilds `compact` exactly (`roll` and
+`assign` join `toLabel`, `decay` joins `fromLabel→toLabel`, a limited roll adds
+`step/limit`). With a null plugin (after unload) it returns
 `{ ok: false, reason: "unavailable" }`; the root api `version` stays 3.
 `taskLinkLane.matches({ content, line, path })` is synchronous;
 `toggle(args)` performs the Next/In Progress change and resolves

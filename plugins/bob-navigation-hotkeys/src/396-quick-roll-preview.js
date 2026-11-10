@@ -99,9 +99,22 @@ function formatQuickRollWindowDays(level) {
 
 // Concise preview of exactly what Alt+P would do, from the same
 // recommendation the key uses. Frozen `{ ok: true, kind, line, compact,
-// detail }`, or frozen `{ ok: false, reason }` for unavailable, closed,
-// and non-task lines. `cancelConfirms` selects the
-// confirm (default) or immediate-cancel strings.
+// detail, parts }`, or frozen `{ ok: false, reason }` for unavailable,
+// closed, and non-task lines. `cancelConfirms` selects the
+// confirm (default) or immediate-cancel strings. `parts` is the additive
+// structured answer (`keyLabel`, `verb`, `fromLabel`, `toLabel`, `step`,
+// `limit`); joining it rebuilds `compact` exactly.
+function quickRollPreviewPartsFor(options = {}) {
+  return Object.freeze({
+    keyLabel: options.keyLabel,
+    verb: options.verb,
+    fromLabel: options.fromLabel === undefined ? null : options.fromLabel,
+    toLabel: options.toLabel === undefined ? null : options.toLabel,
+    step: options.step === undefined ? null : options.step,
+    limit: options.limit === undefined ? null : options.limit,
+  });
+}
+
 function planQuickRollPreview(recommendation, options = {}) {
   const rawLabel = options.keyLabel;
   const keyLabel =
@@ -140,12 +153,30 @@ function planQuickRollPreview(recommendation, options = {}) {
         ? `${keyLabel}: roll ${label} again, ${windowDays}`
         : `${keyLabel}: roll ${label} again`;
     }
+    const parts = hasLimit
+      ? quickRollPreviewPartsFor({
+          keyLabel,
+          verb: "roll",
+          fromLabel: null,
+          toLabel: label,
+          step: Number(step),
+          limit: Number(limit),
+        })
+      : quickRollPreviewPartsFor({
+          keyLabel,
+          verb: "roll",
+          fromLabel: null,
+          toLabel: label,
+          step: null,
+          limit: null,
+        });
     return Object.freeze({
       ok: true,
       kind: "roll",
       line: window ? `${compact} · ${window}` : compact,
       compact,
       detail,
+      parts,
     });
   }
   if (kind === "decay") {
@@ -171,6 +202,14 @@ function planQuickRollPreview(recommendation, options = {}) {
       detail: windowDays
         ? `${keyLabel}: decay ${fromLabel} → ${toLabel}, ${windowDays}`
         : `${keyLabel}: decay ${fromLabel} → ${toLabel}`,
+      parts: quickRollPreviewPartsFor({
+        keyLabel,
+        verb: "decay",
+        fromLabel,
+        toLabel,
+        step: null,
+        limit: null,
+      }),
     });
   }
   if (kind === "assign") {
@@ -191,6 +230,14 @@ function planQuickRollPreview(recommendation, options = {}) {
       detail: windowDays
         ? `${keyLabel}: no priority — set ${label}, ${windowDays}`
         : `${keyLabel}: no priority — set ${label}`,
+      parts: quickRollPreviewPartsFor({
+        keyLabel,
+        verb: "set",
+        fromLabel: null,
+        toLabel: label,
+        step: null,
+        limit: null,
+      }),
     });
   }
   if (kind === "cancel") {
@@ -207,6 +254,14 @@ function planQuickRollPreview(recommendation, options = {}) {
         line: `${keyLabel} cancel? · decayed past ${label}`,
         compact: `${keyLabel} cancel?`,
         detail: `${keyLabel}: cancel — decayed past ${label} (confirm on the Task Card)`,
+        parts: quickRollPreviewPartsFor({
+          keyLabel,
+          verb: "cancel?",
+          fromLabel: null,
+          toLabel: null,
+          step: null,
+          limit: null,
+        }),
       });
     }
     return Object.freeze({
@@ -215,6 +270,14 @@ function planQuickRollPreview(recommendation, options = {}) {
       line: `${keyLabel} cancel · decayed past ${label}`,
       compact: `${keyLabel} cancel`,
       detail: `${keyLabel}: cancel — decayed past ${label}`,
+      parts: quickRollPreviewPartsFor({
+        keyLabel,
+        verb: "cancel",
+        fromLabel: null,
+        toLabel: null,
+        step: null,
+        limit: null,
+      }),
     });
   }
   return Object.freeze({ ok: false, reason: "unavailable" });

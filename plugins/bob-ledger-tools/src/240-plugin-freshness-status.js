@@ -336,6 +336,7 @@ class BobLedgerToolsFreshnessStatusMixin {
         view.meterText,
         view.action,
         view.tooltip,
+        view.answer ? view.answer.key : "",
       ].join("\0");
       if (paintKey === this.freshnessFooterPaintKey && this.freshnessFooterParts) {
         return;

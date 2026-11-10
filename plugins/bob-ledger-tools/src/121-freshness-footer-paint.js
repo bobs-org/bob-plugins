@@ -210,8 +210,144 @@ function freshnessFooterPaintGroups(container, groups) {
   }
 }
 
+function freshnessFooterPaintHint(node, view) {
+  if (!node) {
+    return;
+  }
+  try {
+    const answer =
+      view && typeof view === "object" && view.answer && typeof view.answer === "object"
+        ? view.answer
+        : null;
+    const hasAnswer =
+      answer !== null &&
+      typeof answer.key === "string" &&
+      Array.isArray(answer.segments);
+    if (hasAnswer) {
+      if (node._bobAnswerKey !== answer.key) {
+        try {
+          if (typeof node.empty === "function") {
+            node.empty();
+          } else if ("textContent" in node) {
+            node.textContent = "";
+          }
+          const chip = freshnessFooterCreateChild(node, "span", "bob-freshness-answer");
+          if (!chip) {
+            throw new Error("no chip host");
+          }
+          freshnessFooterSetAttr(chip, "data-review-tier", answer.tier);
+          freshnessFooterSetAttr(chip, "data-answer-kind", answer.kind);
+          freshnessFooterSetAttr(chip, "title", answer.title || answer.text);
+          const segments = answer.segments;
+          // The key keycap and its trailing space live directly under the
+          // chip, in creation order; every other segment lives inside one
+          // action wrap. Spaces stay spans (the fake DOM has no bare text
+          // nodes); the flex gap supplies the visible separation.
+          let startIndex = 0;
+          if (segments.length > 0 && segments[0] && segments[0].role === "key") {
+            const keyNode = freshnessFooterCreateChild(
+              chip,
+              "kbd",
+              "bob-freshness-answer-key",
+            );
+            if (!keyNode) {
+              throw new Error("no key host");
+            }
+            freshnessFooterSetText(keyNode, segments[0].text);
+            startIndex = 1;
+            if (segments[1] && segments[1].role === "space") {
+              const gap = freshnessFooterCreateChild(
+                chip,
+                "span",
+                "bob-freshness-answer-space",
+              );
+              if (!gap) {
+                throw new Error("no gap host");
+              }
+              freshnessFooterSetText(gap, segments[1].text);
+              startIndex = 2;
+            }
+          }
+          const actionWrap = freshnessFooterCreateChild(
+            chip,
+            "span",
+            "bob-freshness-answer-action",
+          );
+          if (!actionWrap) {
+            throw new Error("no action host");
+          }
+          for (let index = startIndex; index < segments.length; index += 1) {
+            const entry = segments[index];
+            if (!entry || typeof entry.text !== "string") {
+              throw new Error("bad segment");
+            }
+            const child = freshnessFooterCreateChild(
+              actionWrap,
+              "span",
+              "bob-freshness-answer-" + entry.role,
+            );
+            if (!child) {
+              throw new Error("no segment host");
+            }
+            freshnessFooterSetText(child, entry.text);
+          }
+          freshnessFooterToggleClass(node, "bob-freshness-hint-answer", true);
+          node._bobAnswerKey = answer.key;
+        } catch (error) {
+          try {
+            if (typeof node.empty === "function") {
+              node.empty();
+            } else if ("textContent" in node) {
+              node.textContent = "";
+            }
+          } catch (ignored) {
+            // Fall through to plain text.
+          }
+          freshnessFooterToggleClass(node, "bob-freshness-hint-answer", false);
+          try {
+            node._bobAnswerKey = undefined;
+          } catch (ignored) {
+            // Best-effort.
+          }
+          freshnessFooterSetText(node, view ? view.hintText : "");
+        }
+      } else {
+        freshnessFooterToggleClass(node, "bob-freshness-hint-answer", true);
+      }
+      return;
+    }
+    if (node._bobAnswerKey !== undefined && node._bobAnswerKey !== null) {
+      try {
+        if (typeof node.empty === "function") {
+          node.empty();
+        } else if ("textContent" in node) {
+          node.textContent = "";
+        }
+      } catch (error) {
+        // Best-effort.
+      }
+      freshnessFooterToggleClass(node, "bob-freshness-hint-answer", false);
+      try {
+        node._bobAnswerKey = undefined;
+      } catch (error) {
+        // Best-effort.
+      }
+    } else {
+      freshnessFooterToggleClass(node, "bob-freshness-hint-answer", false);
+    }
+    freshnessFooterSetText(node, view ? view.hintText : "");
+  } catch (error) {
+    try {
+      freshnessFooterSetText(node, view ? view.hintText : "");
+    } catch (ignored) {
+      // Cosmetic.
+    }
+  }
+}
+
 // Shed groups from the end, shorten stage detail, then hide detail,
-// shortcut hint, and upkeep meter. The current tier stays visible.
+// shortcut hint, and upkeep meter. With an answer chip the meter sheds
+// before the hint, so the chip outlasts it. The current tier stays visible.
 function freshnessFooterFit(el, parts, view) {
   const groupContainer = parts && parts.groups;
   const nodes = groupContainer && Array.isArray(groupContainer._bobFreshnessGroupNodes)
@@ -279,13 +415,25 @@ function freshnessFooterFit(el, parts, view) {
     detail = false;
     apply();
   }
-  if (overflows() && hint) {
-    hint = false;
-    apply();
-  }
-  if (overflows() && meter) {
-    meter = false;
-    apply();
+  const answerChip = Boolean(view && view.answer);
+  if (answerChip) {
+    if (overflows() && meter) {
+      meter = false;
+      apply();
+    }
+    if (overflows() && hint) {
+      hint = false;
+      apply();
+    }
+  } else {
+    if (overflows() && hint) {
+      hint = false;
+      apply();
+    }
+    if (overflows() && meter) {
+      meter = false;
+      apply();
+    }
   }
   return result();
 }
@@ -341,7 +489,7 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterSetText(parts.due, "");
     freshnessFooterSetText(parts.context, "");
     freshnessFooterSetText(parts.detail, "");
-    freshnessFooterSetText(parts.hint, "");
+    freshnessFooterPaintHint(parts.hint, view);
     freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
@@ -353,7 +501,7 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterSetText(parts.due, view.dueText);
   freshnessFooterSetText(parts.context, view.contextText);
   freshnessFooterSetText(parts.detail, view.detailText);
-  freshnessFooterSetText(parts.hint, view.hintText);
+  freshnessFooterPaintHint(parts.hint, view);
   freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
   freshnessFooterSetOmitted(parts.context, !view.contextText);

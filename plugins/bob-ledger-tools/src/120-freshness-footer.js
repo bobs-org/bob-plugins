@@ -20,6 +20,145 @@ const FRESHNESS_FOOTER_COMMITMENT_TIERS = [
   "tickler",
 ];
 
+const FRESHNESS_FOOTER_ANSWER_TIERS = ["tickler"];
+
+function freshnessFooterAnswerChipStructuredSegments(preview, kind, text) {
+  try {
+    const parts =
+      preview && typeof preview === "object" ? preview.parts : null;
+    if (!parts || typeof parts !== "object") {
+      return null;
+    }
+    const keyLabel =
+      typeof parts.keyLabel === "string" && parts.keyLabel ? parts.keyLabel : null;
+    const verb =
+      typeof parts.verb === "string" && parts.verb ? parts.verb : null;
+    if (!keyLabel || !verb) {
+      return null;
+    }
+    const fromRaw = parts.fromLabel === undefined ? null : parts.fromLabel;
+    const toRaw = parts.toLabel === undefined ? null : parts.toLabel;
+    const fromLabel =
+      fromRaw === null ? null : typeof fromRaw === "string" && fromRaw ? fromRaw : null;
+    const toLabel =
+      toRaw === null ? null : typeof toRaw === "string" && toRaw ? toRaw : null;
+    if ((fromRaw !== null && fromRaw !== undefined && fromLabel === null) ||
+      (toRaw !== null && toRaw !== undefined && toLabel === null)) {
+      return null;
+    }
+    const stepRaw = parts.step === undefined ? null : parts.step;
+    const limitRaw = parts.limit === undefined ? null : parts.limit;
+    const step =
+      stepRaw === null ? null : Number.isInteger(Number(stepRaw)) ? Number(stepRaw) : null;
+    const limit =
+      limitRaw === null ? null : Number.isInteger(Number(limitRaw)) ? Number(limitRaw) : null;
+    if ((stepRaw !== null && stepRaw !== undefined && step === null) ||
+      (limitRaw !== null && limitRaw !== undefined && limit === null)) {
+      return null;
+    }
+    const key = (value) => ({ role: "key", text: value });
+    const space = () => ({ role: "space", text: " " });
+    const seg = (role, value) => ({ role, text: value });
+    let segments = null;
+    if (kind === "roll") {
+      if (verb !== "roll" || fromLabel !== null || !toLabel) {
+        return null;
+      }
+      if ((step === null) !== (limit === null)) {
+        return null;
+      }
+      segments = [key(keyLabel), space(), seg("verb", verb), space(), seg("to", toLabel)];
+      if (step !== null && limit !== null) {
+        segments.push(space(), seg("count", step + "/" + limit));
+      }
+    } else if (kind === "decay") {
+      if (verb !== "decay" || !fromLabel || !toLabel || step !== null || limit !== null) {
+        return null;
+      }
+      segments = [
+        key(keyLabel),
+        space(),
+        seg("verb", verb),
+        space(),
+        seg("from", fromLabel),
+        seg("arrow", "→"),
+        seg("to", toLabel),
+      ];
+    } else if (kind === "assign") {
+      if (verb !== "set" || fromLabel !== null || !toLabel || step !== null || limit !== null) {
+        return null;
+      }
+      segments = [key(keyLabel), space(), seg("verb", verb), space(), seg("to", toLabel)];
+    } else if (kind === "cancel") {
+      if ((verb !== "cancel?" && verb !== "cancel") || fromLabel !== null || toLabel !== null || step !== null || limit !== null) {
+        return null;
+      }
+      segments = [key(keyLabel), space(), seg("verb", verb)];
+    } else {
+      return null;
+    }
+    if (segments.map((entry) => entry.text).join("") !== text) {
+      return null;
+    }
+    return segments;
+  } catch (error) {
+    return null;
+  }
+}
+
+function freshnessFooterAnswerChip(preview, current) {
+  try {
+    const tier = current && typeof current.tier === "string" ? current.tier : "";
+    if (!FRESHNESS_FOOTER_ANSWER_TIERS.includes(tier)) {
+      return null;
+    }
+    if (!preview || typeof preview !== "object" || preview.ok !== true) {
+      return null;
+    }
+    if (typeof preview.compact !== "string" || preview.compact.trim() === "") {
+      return null;
+    }
+    const kind = preview.kind;
+    if (kind !== "roll" && kind !== "decay" && kind !== "assign" && kind !== "cancel") {
+      return null;
+    }
+    const text = preview.compact.trim();
+    const title =
+      typeof preview.detail === "string" && preview.detail.trim()
+        ? preview.detail.trim()
+        : text;
+    const key = JSON.stringify([
+      current && "key" in Object(current) ? current.key : null,
+      current && Number.isInteger(current.rank) ? current.rank : null,
+      kind,
+      text,
+      title,
+    ]);
+    let segments = freshnessFooterAnswerChipStructuredSegments(preview, kind, text);
+    if (!segments) {
+      const firstSpace = text.indexOf(" ");
+      if (firstSpace < 0) {
+        segments = [{ role: "action", text }];
+      } else {
+        segments = [
+          { role: "key", text: text.slice(0, firstSpace) },
+          { role: "space", text: " " },
+          { role: "action", text: text.slice(firstSpace + 1) },
+        ];
+      }
+      if (segments.map((entry) => entry.text).join("") !== text) {
+        return null;
+      }
+    }
+    const frozenSegments = Object.freeze(
+      segments.map((entry) => Object.freeze({ role: entry.role, text: entry.text })),
+    );
+    return Object.freeze({ kind, tier, text, title, key, segments: frozenSegments });
+  } catch (error) {
+    return null;
+  }
+}
+
 function freshnessReviewEntryViewEmpty() {
   return {
     ok: false,
@@ -376,6 +515,7 @@ function freshnessFooterHiddenView() {
     ariaLabel: "",
     current: null,
     action: "review",
+    answer: null,
   };
 }
 
@@ -429,6 +569,7 @@ function freshnessFooterHintOnlyView(preview, navAvailable) {
     ariaLabel: dueText + " · " + hintText,
     current: null,
     action,
+    answer: null,
   };
 }
 
@@ -755,6 +896,10 @@ function freshnessFooterView(memo, options = {}) {
       meterText,
       hintText,
     ]);
+    const answer =
+      current && quickRollReady
+        ? freshnessFooterAnswerChip(quickRollOption, current)
+        : null;
     return {
       visible: true,
       mode,
@@ -772,6 +917,7 @@ function freshnessFooterView(memo, options = {}) {
       ariaLabel,
       current,
       action,
+      answer,
     };
   } catch (error) {
     return freshnessFooterHiddenView();

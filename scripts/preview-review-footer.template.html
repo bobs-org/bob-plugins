@@ -111,14 +111,32 @@
       recurring: 1, tickler: 1, rotten: 3, post: 1,
     };
     const stagedMonday = { ...morning, pre: 9, post: 2 };
+    const tickDecayPreview = {
+      ok: true, kind: "decay", compact: "Alt+P decay P2→P3",
+      detail: "Alt+P: decay P2 → P3, 9–31 days out",
+      parts: { keyLabel: "Alt+P", verb: "decay", fromLabel: "P2", toLabel: "P3", step: null, limit: null },
+    };
+    const tickCancelPreview = {
+      ok: true, kind: "cancel", compact: "Alt+P cancel?",
+      detail: "Alt+P: cancel — decayed past P4 (confirm on the Task Card)",
+      parts: { keyLabel: "Alt+P", verb: "cancel?", fromLabel: null, toLabel: null, step: null, limit: null },
+    };
+    const tickLegacyPreview = {
+      ok: true, kind: "decay", compact: "Alt+P decay P2→P3",
+      detail: "Alt+P: decay P2 → P3, 9–31 days out",
+    };
+    const nextRollPreview = { ok: true, compact: "Alt+P roll P2 1/1" };
     const fixtures = [
       { id: "all-tiers", title: "Off-row · all nine groups", counts: allTiers },
       { id: "morning", title: "Typical morning", counts: morning },
       { id: "staged-terminal", title: "Staged Monday · TERMINAL 1/2", counts: stagedMonday, current: "pre", stage: "terminal", stageIndex: 0, stageRank: 1, stageTotal: 2 },
       { id: "staged-periods", title: "Staged Monday · POST PERIODS", counts: stagedMonday, current: "post", stage: "periods", stageIndex: 0, stageRank: 1, stageTotal: 1 },
       { id: "new-row", title: "On a NEW row", counts: morning, current: "new" },
-      { id: "next-roll", title: "On a NEXT row · quickRoll", counts: morning, current: "next", quickRoll: true },
+      { id: "next-roll", title: "On a NEXT row · quickRoll", counts: morning, current: "next", quickRoll: nextRollPreview },
       { id: "rotten-row", title: "On a ROTTEN row", counts: morning, current: "rotten" },
+      { id: "tick-decay", title: "On a TICK row · decay chip", counts: morning, current: "tickler", quickRoll: tickDecayPreview },
+      { id: "tick-cancel", title: "On a TICK row · cancel chip", counts: morning, current: "tickler", quickRoll: tickCancelPreview },
+      { id: "tick-legacy", title: "On a TICK row · legacy preview", counts: morning, current: "tickler", quickRoll: tickLegacyPreview },
     ];
 
     function makeView(fixture) {
@@ -153,7 +171,7 @@
           current,
           navAvailable: true,
           todayText: "2026-10-30",
-          quickRoll: fixture.quickRoll ? { ok: true, compact: "Alt+P roll P2 1/1" } : null,
+          quickRoll: fixture.quickRoll || null,
         },
       );
     }
@@ -206,6 +224,49 @@
       if (a === null || b === null) return null;
       return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
     }
+    function resolvedChannels(colorText) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return rgb(colorText);
+        ctx.fillStyle = String(colorText);
+        ctx.fillRect(0, 0, 1, 1);
+        const data = ctx.getImageData(0, 0, 1, 1).data;
+        return [data[0], data[1], data[2]];
+      } catch (error) {
+        return rgb(colorText);
+      }
+    }
+    function resolvedContrast(foregroundText, backgroundText) {
+      const foreground = resolvedChannels(foregroundText);
+      const background = resolvedChannels(backgroundText);
+      if (!foreground || !background) return null;
+      const linear = (channels) => channels.map((value) => {
+        const component = value / 255;
+        return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+      });
+      const lum = (channels) => {
+        const [r, g, b] = linear(channels);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const a = lum(foreground);
+      const b = lum(background);
+      return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+    }
+    function chipText(node) {
+      if (!node) return "";
+      let out = "";
+      const walk = (current) => {
+        for (const child of current.childNodes || []) {
+          if (child.nodeType === 3) out += child.textContent || "";
+          else walk(child);
+        }
+      };
+      walk(node);
+      return out;
+    }
 
     function render(width, theme) {
       document.body.className = `theme-${theme}`;
@@ -230,6 +291,9 @@
 
         const view = makeView(fixture);
         helpers.freshnessFooterPaint(footer, view);
+        try {
+          if (document.getAnimations) document.getAnimations().forEach((anim) => { try { anim.finish(); } catch (ignored) {} });
+        } catch (ignored) {}
         const tokens = Array.from(footer.querySelectorAll(".bob-freshness-group"));
         const context = footer.querySelector(".bob-freshness-context");
         const detail = footer.querySelector(".bob-freshness-detail");
@@ -242,6 +306,9 @@
         if (fixture.id === "all-tiers") {
           allTierColors = Object.fromEntries(groupColors.map((item) => [item.key, item.color]));
         }
+        const hint = footer.querySelector(".bob-freshness-hint");
+        const chip = footer.querySelector(".bob-freshness-answer");
+        const keycap = footer.querySelector(".bob-freshness-answer-key");
         const contextColor = getComputedStyle(context).color;
         const detailColor = getComputedStyle(detail).color;
         const visibleKeys = tokens.filter(visible).map((token) => token.getAttribute("data-review-tier"));
@@ -250,6 +317,12 @@
         const more = footer.querySelector(".bob-freshness-groups-more");
         const markerVisible = visible(more);
         const shouldMarkCut = visibleKeys.length > 0 && visibleKeys.length < expectedKeys.length;
+        const chipPresent = Boolean(chip);
+        const chipVisibleNow = chipPresent && visible(chip);
+        const chipWash = chipPresent ? getComputedStyle(chip).backgroundColor : "";
+        const chipInk = chipPresent ? getComputedStyle(chip).color : "";
+        const keycapInk = keycap ? getComputedStyle(keycap).color : "";
+        const keycapGround = keycap ? getComputedStyle(keycap).backgroundColor : "";
         measurement.push({
           id: fixture.id,
           groups: groupColors,
@@ -259,6 +332,15 @@
           shouldMarkCut,
           markerOk: markerVisible === shouldMarkCut,
           overflow: footer.scrollWidth - footer.clientWidth,
+          chipPresent,
+          chipVisible: chipVisibleNow,
+          chipTier: chip ? chip.getAttribute("data-review-tier") : null,
+          chipKind: chip ? chip.getAttribute("data-answer-kind") : null,
+          chipTitle: chip ? chip.getAttribute("title") : null,
+          hintText: hint ? chipText(hint) : "",
+          hintMatchesView: hint ? chipText(hint) === view.hintText : view.hintText === "",
+          chipContrast: chipPresent ? resolvedContrast(chipInk, chipWash) : null,
+          keycapContrast: keycap ? resolvedContrast(keycapInk, keycapGround) : null,
           contextTier: context.getAttribute("data-review-tier"),
           contextColor,
           contextContrast: contrast(contextColor, background),

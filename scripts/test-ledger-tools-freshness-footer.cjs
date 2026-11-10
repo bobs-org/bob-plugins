@@ -80,11 +80,29 @@ const {
   freshnessFooterFit,
   freshnessFooterPaint,
   freshnessFooterView,
+  freshnessFooterAnswerChip,
+  FRESHNESS_FOOTER_ANSWER_TIERS,
   freshnessMatchQueueCursor,
   freshnessQueue,
   freshnessReviewEntryView,
   freshnessTierFooterLabel,
 } = helpers;
+
+function deepText(node) {
+  if (!node) return "";
+  if (typeof node.text === "string" && (!node.children || node.children.length === 0)) {
+    return node.text;
+  }
+  let out = "";
+  if (typeof node.text === "string" && node.children && node.children.length > 0) {
+    // Fake DOM stores leaf text in .text; container .text is "" after empty().
+  }
+  for (const child of node.children || []) {
+    out += deepText(child);
+  }
+  if (out === "" && typeof node.textContent === "string") return node.textContent;
+  return out;
+}
 
 const D = "2026-10-08";
 const CFG = {
@@ -1823,4 +1841,300 @@ test("status bar ignores missing, v0, or throwing quickRoll namespaces", () => {
       }
     }
   });
+});
+
+test("answer tiers list only tickler", () => {
+  assert.deepEqual(FRESHNESS_FOOTER_ANSWER_TIERS, ["tickler"]);
+});
+
+function ticklerCurrent(overrides = {}) {
+  return queueEntry({
+    key: "t.md:1",
+    path: "t.md",
+    line: 1,
+    lineNumber: 0,
+    originalMarkdown: "- [ ] #task Tick",
+    tier: "tickler",
+    tierLabel: "TICKLER",
+    lane: "ready",
+    state: "resurfaced",
+    fresh: "2026-10-05",
+    dueOn: "2026-10-07",
+    rank: 5,
+    tierRank: 2,
+    tierTotal: 14,
+    ...overrides,
+  });
+}
+
+function tickPreview(overrides = {}) {
+  return Object.freeze({
+    ok: true,
+    kind: "decay",
+    line: "Alt+P decay P2 → P3 · 31–90d",
+    compact: "Alt+P decay P2→P3",
+    detail: "Alt+P: decay P2 → P3, 31–90 days out",
+    parts: Object.freeze({
+      keyLabel: "Alt+P",
+      verb: "decay",
+      fromLabel: "P2",
+      toLabel: "P3",
+      step: null,
+      limit: null,
+    }),
+    ...overrides,
+  });
+}
+
+test("freshnessFooterAnswerChip builds structured segments for every kind", () => {
+  const current = ticklerCurrent();
+  const cases = [
+    {
+      name: "decay",
+      preview: tickPreview(),
+      roles: ["key", "space", "verb", "space", "from", "arrow", "to"],
+    },
+    {
+      name: "roll with limit",
+      preview: Object.freeze({
+        ok: true, kind: "roll", compact: "Alt+P roll P2 1/1",
+        detail: "Alt+P: roll P2 again (1 of 1), 8–30 days out",
+        parts: Object.freeze({ keyLabel: "Alt+P", verb: "roll", fromLabel: null, toLabel: "P2", step: 1, limit: 1 }),
+      }),
+      roles: ["key", "space", "verb", "space", "to", "space", "count"],
+    },
+    {
+      name: "roll without limit",
+      preview: Object.freeze({
+        ok: true, kind: "roll", compact: "Alt+P roll P2",
+        detail: "Alt+P: roll P2 again",
+        parts: Object.freeze({ keyLabel: "Alt+P", verb: "roll", fromLabel: null, toLabel: "P2", step: null, limit: null }),
+      }),
+      roles: ["key", "space", "verb", "space", "to"],
+    },
+    {
+      name: "assign",
+      preview: Object.freeze({
+        ok: true, kind: "assign", compact: "Alt+P set P1",
+        detail: "Alt+P: no priority — set P1",
+        parts: Object.freeze({ keyLabel: "Alt+P", verb: "set", fromLabel: null, toLabel: "P1", step: null, limit: null }),
+      }),
+      roles: ["key", "space", "verb", "space", "to"],
+    },
+    {
+      name: "cancel?",
+      preview: Object.freeze({
+        ok: true, kind: "cancel", compact: "Alt+P cancel?",
+        detail: "Alt+P: cancel — decayed past P4 (confirm on the Task Card)",
+        parts: Object.freeze({ keyLabel: "Alt+P", verb: "cancel?", fromLabel: null, toLabel: null, step: null, limit: null }),
+      }),
+      roles: ["key", "space", "verb"],
+    },
+    {
+      name: "immediate cancel",
+      preview: Object.freeze({
+        ok: true, kind: "cancel", compact: "Alt+P cancel",
+        detail: "Alt+P: cancel — decayed past P4",
+        parts: Object.freeze({ keyLabel: "Alt+P", verb: "cancel", fromLabel: null, toLabel: null, step: null, limit: null }),
+      }),
+      roles: ["key", "space", "verb"],
+    },
+  ];
+  for (const { name, preview, roles } of cases) {
+    const chip = freshnessFooterAnswerChip(preview, { tier: "tickler", key: "t.md:1", rank: 5 });
+    assert.ok(chip, name);
+    assert.equal(chip.kind, preview.kind, name);
+    assert.equal(chip.tier, "tickler", name);
+    assert.equal(chip.text, preview.compact, name);
+    assert.deepEqual(chip.segments.map((s) => s.role), roles, name);
+    assert.equal(chip.segments.map((s) => s.text).join(""), chip.text, `${name} joins`);
+    assert.ok(Object.isFrozen(chip), `${name} frozen`);
+  }
+  // Fallbacks: missing parts, parts that do not rebuild compact, compact with no space.
+  const noParts = freshnessFooterAnswerChip(
+    { ok: true, kind: "decay", compact: "Alt+P decay P2→P3", detail: "" },
+    { tier: "tickler", key: "t.md:1", rank: 5 },
+  );
+  assert.deepEqual(noParts.segments.map((s) => s.role), ["key", "space", "action"]);
+  const badParts = freshnessFooterAnswerChip(
+    {
+      ok: true, kind: "decay", compact: "Alt+P decay P2→P3", detail: "",
+      parts: { keyLabel: "Alt+P", verb: "roll", fromLabel: null, toLabel: "P9", step: null, limit: null },
+    },
+    { tier: "tickler", key: "t.md:1", rank: 5 },
+  );
+  assert.deepEqual(badParts.segments.map((s) => s.role), ["key", "space", "action"]);
+  const noSpace = freshnessFooterAnswerChip(
+    { ok: true, kind: "roll", compact: "Alt+P", detail: "" },
+    { tier: "tickler", key: "t.md:1", rank: 5 },
+  );
+  assert.deepEqual(noSpace.segments.map((s) => s.role), ["action"]);
+  assert.equal(noSpace.segments.map((s) => s.text).join(""), "Alt+P");
+  // Nulls: non-TICK tiers, ok:false, blank compact, unknown kind, garbage (never throws).
+  const tickler = { tier: "tickler", key: "t.md:1", rank: 5 };
+  assert.equal(freshnessFooterAnswerChip(tickPreview(), { tier: "next", key: "n", rank: 1 }), null);
+  assert.equal(freshnessFooterAnswerChip(tickPreview(), { tier: "rotten", key: "r", rank: 1 }), null);
+  assert.equal(freshnessFooterAnswerChip({ ok: false }, tickler), null);
+  assert.equal(freshnessFooterAnswerChip({ ok: true, kind: "decay", compact: "   " }, tickler), null);
+  assert.equal(freshnessFooterAnswerChip({ ok: true, kind: "nope", compact: "Alt+P nope" }, tickler), null);
+  for (const bad of [null, undefined, 42, "x", {}, { ok: true }]) {
+    assert.equal(freshnessFooterAnswerChip(bad, tickler), null);
+    assert.equal(freshnessFooterAnswerChip(tickPreview(), bad), null);
+  }
+  // Same compact text on different rows keys differently.
+  const a = freshnessFooterAnswerChip(tickPreview(), { tier: "tickler", key: "a.md:1", rank: 5 });
+  const b = freshnessFooterAnswerChip(tickPreview(), { tier: "tickler", key: "b.md:9", rank: 9 });
+  assert.notEqual(a.key, b.key);
+});
+
+test("a TICK row with a preview has answer set and unchanged hint, tooltip, and aria", () => {
+  const current = ticklerCurrent();
+  const preview = tickPreview();
+  const memo = {
+    counts: { walk: 14, upkeepToday: 1, budget: 5, budgetMet: false, byTier: { tickler: 14 } },
+    queue: [current],
+    tasksAvailable: true,
+  };
+  const plain = freshnessFooterView(memo, { current, todayText: D, navAvailable: true });
+  assert.equal(plain.answer, null);
+  const view = freshnessFooterView(memo, { current, todayText: D, navAvailable: true, quickRoll: preview });
+  assert.ok(view.answer);
+  assert.equal(view.answer.text, preview.compact);
+  assert.equal(view.answer.title, preview.detail);
+  assert.equal(view.hintText, preview.compact);
+  // Tooltip and aria carry the same preview sentences as before the chip.
+  assert.ok(view.tooltip.includes(preview.compact));
+  assert.ok(view.tooltip.includes(preview.detail));
+  assert.ok(view.ariaLabel.includes(preview.compact));
+  for (const tier of ["next", "rotten", "new", "recurring"]) {
+    const row = queueEntry({ key: `${tier}.md:1`, tier, tierLabel: tier.toUpperCase(), rank: 1, tierRank: 1, tierTotal: 1 });
+    const tierView = freshnessFooterView(
+      { counts: { walk: 1, byTier: { [tier]: 1 } }, queue: [row], tasksAvailable: true },
+      { current: row, todayText: D, navAvailable: true, quickRoll: preview },
+    );
+    assert.equal(tierView.answer, null, tier);
+  }
+  // Off-walk, hint-only, and hidden views carry no answer.
+  const offWalk = freshnessFooterView(memo, { todayText: D, navAvailable: true, quickRoll: { ok: true, kind: "roll", compact: "Alt+P roll P2 1/1" } });
+  assert.equal(offWalk.answer, null);
+  const hintOnly = freshnessFooterView({ counts: { walk: 0 }, queue: [] }, { navAvailable: true, quickRoll: QUICK_ROLL_OK });
+  assert.equal(hintOnly.answer, null);
+  assert.equal(freshnessFooterView({ queue: [], counts: { walk: 0 } }).answer, null);
+});
+
+test("a TICK view paints the answer chip and reuses or clears it by key", () => {
+  const current = ticklerCurrent();
+  const preview = tickPreview();
+  const memo = {
+    counts: { walk: 14, upkeepToday: 1, budget: 5, budgetMet: false, byTier: { tickler: 14 } },
+    queue: [current],
+    tasksAvailable: true,
+  };
+  const view = freshnessFooterView(memo, { current, todayText: D, navAvailable: true, quickRoll: preview });
+  const el = makeStatusEl();
+  const parts = freshnessFooterPaint(el, view);
+  const hint = parts.hint;
+  const chip = findChild(el, "bob-freshness-answer");
+  assert.ok(chip, "chip painted");
+  assert.equal(chip.attrs["data-review-tier"], "tickler");
+  assert.equal(chip.attrs["data-answer-kind"], "decay");
+  assert.equal(chip.attrs.title, preview.detail);
+  const keycap = findChild(el, "bob-freshness-answer-key");
+  assert.ok(keycap);
+  assert.equal(keycap.tag, "kbd");
+  assert.equal(keycap.text, "Alt+P");
+  assert.equal(deepText(hint), view.hintText);
+  // Same key keeps the same chip node (no rebuild).
+  const before = chip;
+  freshnessFooterPaint(el, view);
+  assert.equal(findChild(el, "bob-freshness-answer"), before);
+  // A new row with the same text gets a new key and rebuilds.
+  const other = ticklerCurrent({ key: "other.md:9", path: "other.md", rank: 9, tierRank: 9 });
+  const otherView = freshnessFooterView(
+    { counts: memo.counts, queue: [other], tasksAvailable: true },
+    { current: other, todayText: D, navAvailable: true, quickRoll: preview },
+  );
+  assert.notEqual(otherView.answer.key, view.answer.key);
+  freshnessFooterPaint(el, otherView);
+  const rebuilt = findChild(el, "bob-freshness-answer");
+  assert.ok(rebuilt);
+  assert.notEqual(rebuilt, before);
+  assert.equal(deepText(parts.hint), otherView.hintText);
+  // A non-TICK row clears the chip and paints plain text.
+  const nextRow = queueEntry({ key: "n.md:1", tier: "next", tierLabel: "NEXT", lane: "next", rank: 1, tierRank: 1, tierTotal: 1 });
+  const nextView = freshnessFooterView(
+    { counts: { walk: 1, byTier: { next: 1 } }, queue: [nextRow], tasksAvailable: true },
+    { current: nextRow, todayText: D, navAvailable: true, quickRoll: preview },
+  );
+  assert.equal(nextView.answer, null);
+  freshnessFooterPaint(el, nextView);
+  assert.equal(findChild(el, "bob-freshness-answer"), null);
+  assert.equal(deepText(parts.hint), nextView.hintText);
+  // A hidden view clears the chip too.
+  freshnessFooterPaint(el, view);
+  assert.ok(findChild(el, "bob-freshness-answer"));
+  freshnessFooterPaint(el, freshnessFooterView({ counts: { walk: 0 }, queue: [] }));
+  assert.equal(findChild(el, "bob-freshness-answer"), null);
+});
+
+test("a TICK fit sheds the meter before the hint chip", () => {
+  const current = ticklerCurrent();
+  const view = freshnessFooterView(
+    {
+      counts: {
+        walk: 9, upkeepToday: 0, budget: 15,
+        byTier: { pre: 1, new: 1, projects: 1, pending: 1, next: 1, recurring: 1, tickler: 1, rotten: 1, post: 1 },
+      },
+      queue: [current],
+      tasksAvailable: true,
+    },
+    { current, todayText: D, navAvailable: true, quickRoll: tickPreview() },
+  );
+  assert.ok(view.answer);
+  const el = makeStatusEl();
+  el.clientWidth = 1000;
+  const widthOf = (node) => {
+    if (node.classList.has("bob-freshness-main")) return 40;
+    if (node.classList.has("bob-freshness-context")) return 30;
+    if (node.classList.has("bob-freshness-detail")) return 30;
+    if (node.classList.has("bob-freshness-hint")) return 30;
+    if (node.classList.has("bob-freshness-meter")) return 30;
+    if (node.classList.has("bob-freshness-groups")) {
+      return node.children.reduce((sum, child) => {
+        if (child.classList.has("bob-freshness-omit")) return sum;
+        return sum + (child.classList.has("bob-freshness-group") ? 10 : 5);
+      }, 0);
+    }
+    return 0;
+  };
+  Object.defineProperty(el, "scrollWidth", {
+    configurable: true,
+    get() {
+      return this.children.reduce((sum, child) => {
+        if (child.classList.has("bob-freshness-omit")) return sum;
+        return sum + widthOf(child);
+      }, 0);
+    },
+  });
+  const parts = freshnessFooterPaint(el, view);
+  el.clientWidth = 155;
+  const shedDetail = freshnessFooterFit(el, parts, view);
+  assert.equal(shedDetail.detail, false);
+  assert.equal(shedDetail.hint, true);
+  assert.equal(shedDetail.meter, true);
+  el.clientWidth = 120;
+  const shedMeter = freshnessFooterFit(el, parts, view);
+  assert.deepEqual([shedMeter.meter, shedMeter.hint], [false, true]);
+  el.clientWidth = 90;
+  const shedHint = freshnessFooterFit(el, parts, view);
+  assert.deepEqual([shedHint.meter, shedHint.hint], [false, false]);
+});
+
+test("the footer stylesheet defines the TICK answer chip", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.equal(css.includes(".bob-freshness-answer"), true);
+  assert.equal(css.includes('.bob-freshness-answer[data-answer-kind="cancel"]'), true);
+  assert.equal(css.includes(".bob-freshness-answer-key"), true);
+  assert.equal(css.includes("@keyframes bob-freshness-answer-land"), true);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.bob-freshness \.bob-freshness-answer[\s\S]*?animation: none/);
 });

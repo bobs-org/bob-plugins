@@ -181,6 +181,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P roll P2 1/1 · 8–30d",
     compact: "Alt+P roll P2 1/1",
     detail: "Alt+P: roll P2 again (1 of 1), 8–30 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "roll",
+      fromLabel: null,
+      toLabel: "P2",
+      step: 1,
+      limit: 1,
+    },
   });
 
   const noLimit = quickRollPreviewForLine({
@@ -203,6 +211,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P roll P2 · 8–30d",
     compact: "Alt+P roll P2",
     detail: "Alt+P: roll P2 again, 8–30 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "roll",
+      fromLabel: null,
+      toLabel: "P2",
+      step: null,
+      limit: null,
+    },
   });
 
   const oneDay = quickRollPreviewForLine({
@@ -220,6 +236,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P roll P1 1/1 · 8d",
     compact: "Alt+P roll P1 1/1",
     detail: "Alt+P: roll P1 again (1 of 1), 8 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "roll",
+      fromLabel: null,
+      toLabel: "P1",
+      step: 1,
+      limit: 1,
+    },
   });
 
   const noBounds = planQuickRollPreview(
@@ -232,6 +256,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P roll P2 1/1",
     compact: "Alt+P roll P2 1/1",
     detail: "Alt+P: roll P2 again (1 of 1)",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "roll",
+      fromLabel: null,
+      toLabel: "P2",
+      step: 1,
+      limit: 1,
+    },
   });
 
   const decay = quickRollPreviewForLine({
@@ -246,6 +278,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P decay P2 → P3 · 31–90d",
     compact: "Alt+P decay P2→P3",
     detail: "Alt+P: decay P2 → P3, 31–90 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "decay",
+      fromLabel: "P2",
+      toLabel: "P3",
+      step: null,
+      limit: null,
+    },
   });
 
   const cancel = quickRollPreviewForLine({
@@ -260,6 +300,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P cancel? · decayed past P4",
     compact: "Alt+P cancel?",
     detail: "Alt+P: cancel — decayed past P4 (confirm on the Task Card)",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "cancel?",
+      fromLabel: null,
+      toLabel: null,
+      step: null,
+      limit: null,
+    },
   });
 
   const immediate = planQuickRollPreview(
@@ -276,6 +324,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P cancel · decayed past P4",
     compact: "Alt+P cancel",
     detail: "Alt+P: cancel — decayed past P4",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "cancel",
+      fromLabel: null,
+      toLabel: null,
+      step: null,
+      limit: null,
+    },
   });
 
   const assign = quickRollPreviewForLine({
@@ -290,6 +346,14 @@ test("the preview table strings are exact", () => {
     line: "Alt+P set P1 · 2–7d",
     compact: "Alt+P set P1",
     detail: "Alt+P: no priority — set P1, 2–7 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "set",
+      fromLabel: null,
+      toLabel: "P1",
+      step: null,
+      limit: null,
+    },
   });
 });
 
@@ -308,6 +372,14 @@ test("checklist tiers and unpreviewable rows report ok:false", () => {
     line: "Alt+P set P1 · 2–7d",
     compact: "Alt+P set P1",
     detail: "Alt+P: no priority — set P1, 2–7 days out",
+    parts: {
+      keyLabel: "Alt+P",
+      verb: "set",
+      fromLabel: null,
+      toLabel: "P1",
+      step: null,
+      limit: null,
+    },
   });
   for (const tier of ["pre", "post"]) {
     assert.deepEqual(
@@ -492,4 +564,49 @@ test("the preview matches what Alt+P then writes", async () => {
   });
   assert.equal(cancelPreview.ok, true);
   assert.equal(cancelPreview.kind, "cancel");
+});
+
+test("parts rebuild compact for every kind, including a keyLabel override", () => {
+  const rebuild = (preview) => {
+    const parts = preview.parts;
+    assert.ok(parts && typeof parts === "object", "parts present");
+    assert.ok(Object.isFrozen(parts), "parts frozen");
+    const base = parts.keyLabel + " " + parts.verb;
+    if (preview.kind === "roll") {
+      assert.equal(parts.fromLabel, null);
+      assert.equal(typeof parts.toLabel, "string");
+      if (parts.step !== null || parts.limit !== null) {
+        return base + " " + parts.toLabel + " " + parts.step + "/" + parts.limit;
+      }
+      return base + " " + parts.toLabel;
+    }
+    if (preview.kind === "decay") {
+      return base + " " + parts.fromLabel + "→" + parts.toLabel;
+    }
+    if (preview.kind === "assign") {
+      assert.equal(parts.fromLabel, null);
+      return base + " " + parts.toLabel;
+    }
+    return base;
+  };
+  const config = standardConfig();
+  const roll = quickRollPreviewForLine({ config, content: ROLL, line: 0, tier: "next" });
+  assert.equal(rebuild(roll), roll.compact);
+  const noLimitRoll = planQuickRollPreview({ kind: "roll", level: { label: "P2" } }, {});
+  assert.equal(rebuild(noLimitRoll), noLimitRoll.compact);
+  const decay = quickRollPreviewForLine({ config, content: DECAY, line: 0, tier: "next" });
+  assert.equal(rebuild(decay), decay.compact);
+  const assign = quickRollPreviewForLine({ config, content: NOPRIORITY, line: 0, tier: "next" });
+  assert.equal(rebuild(assign), assign.compact);
+  const cancelConfirms = quickRollPreviewForLine({ config, content: CANCEL, line: 0, tier: "rotten" });
+  assert.equal(rebuild(cancelConfirms), cancelConfirms.compact);
+  const immediate = planQuickRollPreview({ kind: "cancel", level: { label: "P4" } }, { cancelConfirms: false });
+  assert.equal(rebuild(immediate), immediate.compact);
+  const override = planQuickRollPreview(
+    { kind: "roll", level: { label: "P2" }, limit: 2, step: 1 },
+    { keyLabel: "⌥P" },
+  );
+  assert.equal(override.parts.keyLabel, "⌥P");
+  assert.equal(rebuild(override), override.compact);
+  assert.equal(override.compact, "⌥P roll P2 1/2");
 });

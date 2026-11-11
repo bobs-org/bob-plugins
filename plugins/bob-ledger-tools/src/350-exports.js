@@ -996,4 +996,5 @@ module.exports.helpers = {
   BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
+  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine,
 };

@@ -131,6 +131,23 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
+    // The only bank-row write: flip space/x with no task metadata,
+    // stamp, successor, or transclusion follow-up.
+    const openDoneFile = view.file ||
+      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? this.app.workspace.getActiveFile()
+        : null);
+    const openDoneBank = this.cyclerBankInfoAtCursor(editor, openDoneFile && openDoneFile.path);
+    if (openDoneBank) {
+      if (checking) {
+        return true;
+      }
+      if (!this.cyclerBankLocalFlip(editor, openDoneBank)) {
+        new Notice(CYCLER_BANK_ROW_NOTICE);
+      }
+      return true;
+    }
+
     const taskStatus = this.getActiveTaskStatus(editor);
     if (!this.isOpenDoneTaskStatus(taskStatus)) {
       return false;
@@ -154,6 +171,13 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
+    if (this.cyclerBankInfoAtCursor(editor, (view.file && view.file.path) || this.cyclerBankActivePath())) {
+      if (!checking) {
+        new Notice(CYCLER_BANK_ROW_NOTICE);
+      }
+      return true;
+    }
+
     const checkboxToggle = this.getActiveTaskCheckboxMarkerToggle(editor);
     if (!checkboxToggle) {
       return false;
@@ -169,6 +193,13 @@ class TaskStatusCyclerCompletionMixin {
   handleToggleObsidianTaskCommand(checking, editor, view) {
     if (!(view instanceof MarkdownView)) {
       return false;
+    }
+
+    if (this.cyclerBankInfoAtCursor(editor, (view.file && view.file.path) || this.cyclerBankActivePath())) {
+      if (!checking) {
+        new Notice(CYCLER_BANK_ROW_NOTICE);
+      }
+      return true;
     }
 
     const obsidianTaskToggle = this.getActiveObsidianTaskToggle(editor);
@@ -221,6 +252,13 @@ class TaskStatusCyclerCompletionMixin {
   completeTaskLineText(lineText, options = {}) {
     const line = String(lineText || "");
     try {
+      // Bank rows never become Done through the completion path: the
+      // open/done toggle owns the only bank-row write.
+      const completionPath = (options && typeof options.path === "string" && options.path) ||
+        this.cyclerBankActivePath();
+      if (cyclerBankLineKind(completionPath, line) !== null) {
+        return Object.freeze({ ok: false, reason: "bank-row", lineText: line });
+      }
       const status = getTaskStatusForLine(line, 0);
       if (!status) {
         return Object.freeze({ ok: false, reason: "not_completable", lineText: line });
@@ -265,6 +303,9 @@ class TaskStatusCyclerCompletionMixin {
       editor && typeof editor.getCursor === "function"
         ? this.getActiveTaskStatus(editor)
         : null;
+    if (taskStatus && this.cyclerBankInfoAtCursor(editor)) {
+      return { ok: false, reason: "bank-row" };
+    }
     if (
       !taskStatus ||
       !this.lineMatchesTasksGlobalFilter(taskStatus.lineText)
@@ -400,6 +441,12 @@ class TaskStatusCyclerCompletionMixin {
     options = {},
   ) {
     const activePath = activeFile && activeFile.path;
+    // Bank rows close and reopen as plain checkbox bytes only: no
+    // transclusion resolution, successor pass, or reference recovery.
+    const propagateBank = this.cyclerBankInfoAtCursor(editor, activePath);
+    if (propagateBank) {
+      return this.cyclerBankLocalFlip(editor, propagateBank);
+    }
     const cursor =
       typeof editor.getCursor === "function" ? editor.getCursor() : null;
     const isFenced =
@@ -749,6 +796,10 @@ class TaskStatusCyclerCompletionMixin {
     options = {},
   ) {
     if (!resolvedTarget || !isCyclableTaskStatus(resolvedTarget.taskStatus)) {
+      return false;
+    }
+
+    if (this.cyclerBankTransclusionIsBank(resolvedTarget)) {
       return false;
     }
 

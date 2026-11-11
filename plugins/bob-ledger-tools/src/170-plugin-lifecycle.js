@@ -672,7 +672,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupBankData();
+    this.setupNotebookData(); this.setupBankData(); this.setupBankActions();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -788,7 +788,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankData();
+      this.teardownReadingBoardData(); this.teardownBankData(); this.teardownBankActions();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }

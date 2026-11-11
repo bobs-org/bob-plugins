@@ -38,4 +38,5 @@ installTaskStatusCyclerMixins(TaskStatusCyclerPlugin, [
   TaskStatusCyclerPomodoroNamesMixin,
   TaskStatusCyclerEditorEditsMixin,
   TaskStatusCyclerTargetsMixin,
+  TaskStatusCyclerBankGuardMixin,
 ]);

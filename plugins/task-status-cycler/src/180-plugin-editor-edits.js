@@ -7,6 +7,11 @@ class TaskStatusCyclerEditorEditsMixin {
       return false;
     }
 
+    // Marker toggles never land on bank rows.
+    if (cyclerBankLineKind(this.cyclerBankActivePath(), checkboxToggle.sourceLineText) !== null) {
+      return false;
+    }
+
     editor.replaceRange(
       checkboxToggle.lineText,
       { line: checkboxToggle.line, ch: 0 },
@@ -420,6 +425,27 @@ class TaskStatusCyclerEditorEditsMixin {
       return false;
     }
 
+    // Bank rows flip between space and x as plain bytes: no Tasks
+    // command, task metadata, freshness stamp, or successor finalize.
+    // Every other transition refuses without mutating or repairing.
+    // Kind comes from the target line itself so counted ranges stay
+    // line-accurate when the cursor sits elsewhere.
+    const bankKind = cyclerBankLineKind(this.cyclerBankActivePath(), taskStatus.lineText);
+    if (bankKind !== null) {
+      const allowed = bankKind === "row" &&
+        ((taskStatus.symbol === " " && nextSymbol === "x") ||
+          ((taskStatus.symbol === "x" || taskStatus.symbol === "X") && nextSymbol === " "));
+      if (!allowed) {
+        return false;
+      }
+      editor.replaceRange(
+        nextSymbol,
+        { line: taskStatus.line, ch: taskStatus.statusStart },
+        { line: taskStatus.line, ch: taskStatus.statusEnd },
+      );
+      return true;
+    }
+
     if (this.applyTasksCommandAndMaybeStamp(editor, taskStatus, nextSymbol)) {
       return true;
     }
@@ -446,6 +472,25 @@ class TaskStatusCyclerEditorEditsMixin {
   setCheckboxStatusLocalForLine(editor, taskStatus, nextSymbol) {
     if (!taskStatus || !FIXED_SYMBOLS.includes(nextSymbol)) {
       return false;
+    }
+
+    // Counted-range writes take the same bank-only path: space/x flips,
+    // everything else refuses. Classified from the mapped target line,
+    // not the cursor line.
+    const rangeBankKind = cyclerBankLineKind(this.cyclerBankActivePath(), taskStatus.lineText);
+    if (rangeBankKind !== null) {
+      const rangeAllowed = rangeBankKind === "row" &&
+        ((taskStatus.symbol === " " && nextSymbol === "x") ||
+          ((taskStatus.symbol === "x" || taskStatus.symbol === "X") && nextSymbol === " "));
+      if (!rangeAllowed) {
+        return false;
+      }
+      editor.replaceRange(
+        nextSymbol,
+        { line: taskStatus.line, ch: taskStatus.statusStart },
+        { line: taskStatus.line, ch: taskStatus.statusEnd },
+      );
+      return true;
     }
 
     if (this.lineMatchesTasksGlobalFilter(taskStatus.lineText)) {
@@ -541,6 +586,12 @@ class TaskStatusCyclerEditorEditsMixin {
     const cursor = editor.getCursor();
     if (!cursor || typeof cursor.line !== "number") {
       return null;
+    }
+
+    // Bank rows never promote: refuse before the section planner runs so
+    // demotion pickers and move plans leave them byte-identical.
+    if (this.cyclerBankInfoAtCursor(editor)) {
+      return { mode: "refuse", message: CYCLER_BANK_ROW_NOTICE };
     }
 
     const lines = this.getEditorLineArray(editor);

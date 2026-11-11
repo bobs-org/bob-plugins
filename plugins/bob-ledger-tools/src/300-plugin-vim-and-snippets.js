@@ -282,11 +282,18 @@ class BobLedgerToolsVimSnippetsMixin {
       return false;
     }
 
-    return this.expandFromEditor(view.editor, cmView);
+    const activePath = view.file && typeof view.file.path === "string" ? view.file.path : "";
+    return this.expandFromEditor(view.editor, cmView, { path: activePath });
   }
 
-  expandFromEditor(editor, cmView = null) {
+  expandFromEditor(editor, cmView = null, options = {}) {
     if (!this.hasSingleCursor(editor, cmView)) {
+      return false;
+    }
+
+    // Bank rows are never snippet targets: a trigger-shaped tail inside a
+    // bank amount or payee must not rewrite the row.
+    if (this.bankExpansionGuardTripped(editor, options && options.path)) {
       return false;
     }
 

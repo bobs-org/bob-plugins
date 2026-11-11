@@ -420,6 +420,7 @@ class BobLedgerToolsBankDataMixin {
       monthPaths: () => this.apiBankMonthPaths(),
       locateHeading: (source, month, date) => bankLocateDayHeading(source, month, date),
       recognize: (path, source, line) => bankRecognizeRow(path, source, line),
+      ...(typeof this.apiBankActions === "function" ? this.apiBankActions() : {}),
     });
   }
 

@@ -4,6 +4,20 @@ class TaskStatusCyclerCommandsMixin {
       return false;
     }
 
+    // Bank rows never cycle: status, stub, and amount-like lines in a
+    // bank month note stay byte-identical here. The open/done toggle owns
+    // the only bank-row write (space/x flip, no metadata).
+    const cycleBankPath = (view.file && view.file.path) ||
+      (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
+        ? (this.app.workspace.getActiveFile() || {}).path
+        : "");
+    if (this.cyclerBankInfoAtCursor(editor, cycleBankPath || "")) {
+      if (!checking) {
+        new Notice(CYCLER_BANK_ROW_NOTICE);
+      }
+      return true;
+    }
+
     const taskStatus = this.getActiveTaskStatus(editor);
     if (taskStatus) {
       const activePath = view.file && view.file.path
@@ -624,6 +638,11 @@ class TaskStatusCyclerCommandsMixin {
         continue;
       }
       const lineText = String(lines[line] || "");
+      // Bank rows never range-cycle: skip silently, one line at a time,
+      // without touching bytes or emitting per-line notices.
+      if (cyclerBankLineKind(activePath, lineText) !== null) {
+        continue;
+      }
       const taskStatus = getTaskStatusForLine(lineText, line);
       if (taskStatus) {
         if (!isCyclableTaskStatus(taskStatus)) {

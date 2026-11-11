@@ -132,6 +132,16 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    // Bank rows bypass the Pomodoro/review-walk machinery entirely: flip
+    // space/x as plain bytes, or refuse with a notice.
+    const vimBank = this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null);
+    if (vimBank) {
+      if (!this.cyclerBankLocalFlip(view.editor, vimBank)) {
+        new Notice(CYCLER_BANK_ROW_NOTICE);
+      }
+      return;
+    }
+
     if (this.claimReviewWalkCtrlEnter(view.editor)) {
       return;
     }
@@ -286,12 +296,22 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    if (this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null)) {
+      new Notice(CYCLER_BANK_ROW_NOTICE);
+      return;
+    }
+
     this.toggleActiveCheckboxMarker(view.editor);
   }
 
   handleVimToggleObsidianTask(cm, actionArgs) {
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || !view.editor) {
+      return;
+    }
+
+    if (this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null)) {
+      new Notice(CYCLER_BANK_ROW_NOTICE);
       return;
     }
 

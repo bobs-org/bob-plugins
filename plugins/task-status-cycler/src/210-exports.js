@@ -260,6 +260,7 @@ module.exports.helpers = {
   getTaskCheckboxMarkerCursorCh,
   getTaskCheckboxMarkerToggle,
   getTaskStatusForLine,
+  cyclerBankMonthKey, cyclerBankParseAmountLead, cyclerBankClassifyLine, cyclerBankLineKind,
   getTaskBlockLinkTargetFromLine,
   identityFreshStampLine,
   getVimRepeat,

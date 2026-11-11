@@ -367,6 +367,26 @@ function bankClassifyLine(line) {
   return { kind: "amount-no-checkbox", lead };
 }
 
+const BANK_TRAILING_BLOCK_ID_RE = /[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/;
+const BANK_ACK_ID_RE = /^bank-([0-9a-fA-F]+)$/i;
+
+// Trailing `^bank-<hex>` is the row's ack identity (grammar.rs
+// split_trailing_bank_id); any other trailing block id is preserved as a
+// plain blockId and never submitted as an ack selection.
+function bankRowBlockId(line) {
+  const match = String(line || "").match(BANK_TRAILING_BLOCK_ID_RE);
+  return match ? match[1] : null;
+}
+
+function bankAckIdFromLine(line) {
+  const blockId = bankRowBlockId(line);
+  if (!blockId) {
+    return null;
+  }
+  const match = blockId.match(BANK_ACK_ID_RE);
+  return match ? match[1].toLowerCase() : null;
+}
+
 function bankAmountSpan(line, checkbox, body, lead) {
   if (!lead || lead.kind === "not-amount") {
     return null;
@@ -442,6 +462,8 @@ function bankScanSource(path, source) {
       acknowledged: classified.status === "x" || classified.status === "X",
       cents: classified.lead.kind === "amount" ? classified.lead.cents : null,
       unparsed: classified.lead.kind !== "amount",
+      blockId: bankRowBlockId(raw),
+      ackId: bankAckIdFromLine(raw),
       spans: {
         checkbox: classified.checkbox,
         amount,

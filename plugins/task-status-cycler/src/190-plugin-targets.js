@@ -258,6 +258,11 @@ class TaskStatusCyclerTargetsMixin {
     forcedNextSymbol = null,
     options = {},
   ) {
+    // Delegated navigation boundary: a resolved target that is a bank row
+    // never takes a transcluded write.
+    if (this.cyclerBankTransclusionIsBank(resolvedTarget)) {
+      return false;
+    }
     // Write through the editor only when the resolved task lives in the active
     // note; all other source notes are written through the vault.
     if (this.fileMatchesPath(resolvedTarget.file, context && context.activePath)) {

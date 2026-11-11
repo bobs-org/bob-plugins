@@ -106,6 +106,7 @@
   "241h-plugin-bank-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
+  "241k-plugin-bank-actions.js",
   "241b-plugin-notebook-catalog-model.js",
   "241c-plugin-notebook-catalog-dom.js",
   "241d-plugin-notebook-catalog.js",

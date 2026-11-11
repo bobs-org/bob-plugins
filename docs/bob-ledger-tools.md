@@ -23,6 +23,8 @@ Bob Ledger Tools renders task, Pomodoro, freshness, and planning information fro
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
+| Bank: acknowledge this day | `bank-ack-day` | — |
+| Bank: open today | `bank-open-today` | — |
 | Check Google Keep now | `check-google-keep-now` | — |
 | Cycle Day stats bars | `cycle-day-stats-bars` | — |
 | Cycle period stats charts | `cycle-period-stats-charts` | — |

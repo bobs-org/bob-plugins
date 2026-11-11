@@ -145,7 +145,7 @@ test("KM2-K8/K10/K12: only the pre-close own link behind the last live project l
 
 test("KM6/K7/K14/K16/K19/K20/K29: root, project-group, empty, blocked, disabled, and cancel exclusions", () => {
   const residents = ["- [ ] #task Ready work ^ready"];
-  assert.equal(purePlan({ residents, options: { leafProject: () => false } }).plan.keep_moving.length, 0); // KM6
+  assert.equal(purePlan({ residents, options: { leafProject: () => false } }).plan.keep_moving.length, 0); // KM6: umbrella -> nothing.
   const ownRoot = purePlan({ residents, rootLine: "- [ ] #task Badge project ^prj", options: { leafProject: () => false } });
   assert.equal(ownRoot.plan.keep_moving.length, 0);
   const blockedRoots = [
@@ -254,9 +254,126 @@ test("KM22/KM23: multiple leaf-project groups order by ledger anchor before path
   assert.deepEqual([...new Set(plan.keep_moving.map((row) => row.offer.project))], [zeta, alpha]);
 });
 
-function fakeMetadataApp(frontmatterByPath) {
+test("KM6 umbrella: a marked root offers nothing while an unmarked top-level project offers (KM33)", () => {
+  // Umbrella end-to-end: sase.md lists a sub-project, so closing its last
+  // planned link offers no keep-moving group even though residents remain.
+  const umbrellaNotes = {
+    "sase.md": [
+      "---", 'type: "[[project]]"', "status: wip", "parent: [[dev]]", "---",
+      "- [ ] #task Sase project ^prj",
+      "  - 🧩 **Sub-projects:** [[sase_goals]]",
+      "- [x] #task Planned umbrella work ^spec",
+      "- [ ] #task Leftover umbrella work ^left",
+    ].join("\n"),
+  };
+  const umbrellaFm = {
+    "dev.md": { type: "[[area]]" },
+    "sase.md": { type: "[[project]]", parent: "[[dev]]" },
+  };
+  const umbrellaApp = fakeMetadataApp(umbrellaFm);
+  const umbrellaDay = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", "\t- [[sase#^spec]]"].join("\n");
+  const umbrellaTasks = helpers.tasksFromDocuments(Object.entries(umbrellaNotes).map(([path, text]) => ({ path, text })));
+  const umbrellaPlan = helpers.planSuccessors({
+    closed: [{ path: "sase.md", blockId: "spec", text: "- [x] #task Planned umbrella work ^spec" }],
+    index: helpers.buildDependentsIndex(umbrellaTasks),
+    dailyBefore: umbrellaDay,
+    dailyPath: DAY_PATH,
+    today: TODAY,
+    noteTexts: umbrellaNotes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: (path, text) => helpers.successorLeafProject(umbrellaApp, path, text ?? umbrellaNotes[path]),
+  });
+  assert.equal(umbrellaPlan.keep_moving.length, 0); // KM6: umbrella -> nothing.
+
+  // KM33: standalone top-level project (project -> area, no marker) with four
+  // Next residents offers all four rows, mirroring the screenshot ledger.
+  const notePath = "job_email_recruiters.md";
+  const screenshotNotes = {
+    [notePath]: [
+      "---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
+      "- [ ] #task Job email recruiters ^prj",
+      "- [x] #task Reply to Luzern ^luzern",
+      "- [*] #task Ecogpt ^ecogpt",
+      "- [*] #task Ray Lyles ^ray-lyles",
+      "- [*] #task Product engineer Dan Dowd ^product-engineer-dan-dowd",
+      "- [*] #task Senior rust java engineer ^senior-rust-java-engineer",
+    ].join("\n"),
+  };
+  const screenshotFm = {
+    "job.md": { type: "[[area]]" },
+    [notePath]: { type: "[[project]]", parent: "[[job]]" },
+  };
+  const screenshotApp = fakeMetadataApp(screenshotFm);
+  const screenshotDay = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — WRITE", `\t- [[job_email_recruiters#^luzern]]`].join("\n");
+  const screenshotTasks = helpers.tasksFromDocuments(Object.entries(screenshotNotes).map(([path, text]) => ({ path, text })));
+  const screenshotPlan = helpers.planSuccessors({
+    closed: [{ path: notePath, blockId: "luzern", text: "- [x] #task Reply to Luzern ^luzern" }],
+    index: helpers.buildDependentsIndex(screenshotTasks),
+    dailyBefore: screenshotDay,
+    dailyPath: DAY_PATH,
+    today: TODAY,
+    noteTexts: screenshotNotes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: (path, text) => helpers.successorLeafProject(screenshotApp, path, text ?? screenshotNotes[path]),
+  });
+  assert.equal(screenshotPlan.keep_moving.length, 4); // KM33.
+  assert.deepEqual(
+    screenshotPlan.keep_moving.map((row) => row.block_id).sort(),
+    ["ecogpt", "product-engineer-dan-dowd", "ray-lyles", "senior-rust-java-engineer"].sort(),
+  );
+  assert.ok(screenshotPlan.keep_moving.every((row) => row.offer && row.offer.group === "keep_moving"));
+});
+
+test("LP16 planner: a _generated tag page never blocks the keep-moving group", () => {
+  const notePath = "sase_goals.md";
+  const notes = {
+    [notePath]: [
+      "---", 'type: "[[project]]"', "status: wip", "parent: [[sase]]", "---",
+      "- [ ] #task Sase goals ^prj",
+      "- [x] #task Planned goals work ^spec",
+      "- [ ] #task Leftover goals work ^left",
+    ].join("\n"),
+  };
+  const fm = {
+    "dev.md": { type: "[[area]]" },
+    "sase.md": { type: "[[project]]", parent: "[[dev]]" },
+    [notePath]: { type: "[[project]]", parent: "[[sase]]" },
+  };
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", `\t- [[sase_goals#^spec]]`].join("\n");
+  const tasks = helpers.tasksFromDocuments(Object.entries(notes).map(([path, text]) => ({ path, text })));
+  const planWithout = helpers.planSuccessors({
+    closed: [{ path: notePath, blockId: "spec", text: "- [x] #task Planned goals work ^spec" }],
+    index: helpers.buildDependentsIndex(tasks),
+    dailyBefore: day,
+    dailyPath: DAY_PATH,
+    today: TODAY,
+    noteTexts: notes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: (path, text) => helpers.successorLeafProject(fakeMetadataApp(fm), path, text ?? notes[path]),
+  });
+  const planWith = helpers.planSuccessors({
+    closed: [{ path: notePath, blockId: "spec", text: "- [x] #task Planned goals work ^spec" }],
+    index: helpers.buildDependentsIndex(tasks),
+    dailyBefore: day,
+    dailyPath: DAY_PATH,
+    today: TODAY,
+    noteTexts: notes,
+    keepMoving: true,
+    dependencySnapshotAvailable: true,
+    leafProject: (path, text) => helpers.successorLeafProject(
+      fakeMetadataApp(fm, ["_generated/tag_pages/topic/sase.md"]), path, text ?? notes[path]),
+  });
+  assert.equal(planWithout.keep_moving.length, 1);
+  assert.equal(planWith.keep_moving.length, 1); // LP16: same answer with the tag page.
+});
+
+function fakeMetadataApp(frontmatterByPath, extraPaths = []) {
   const paths = Object.keys(frontmatterByPath);
-  const byPath = new Map(paths.map((path) => [path, { path }]));
+  const allPaths = [...paths, ...extraPaths];
+  const byPath = new Map(allPaths.map((path) => [path, { path }]));
   return {
     vault: {
       getMarkdownFiles: () => [...byPath.values()],
@@ -267,54 +384,114 @@ function fakeMetadataApp(frontmatterByPath) {
       getFirstLinkpathDest: (target) => {
         const clean = String(target).replace(/\.md$/i, "");
         if (clean.includes("/")) return byPath.get(`${clean}.md`) || null;
-        return paths.find((path) => path.split("/").pop().replace(/\.md$/i, "") === clean) ?
-          byPath.get(paths.find((path) => path.split("/").pop().replace(/\.md$/i, "") === clean)) : null;
+        return allPaths.find((path) => path.split("/").pop().replace(/\.md$/i, "") === clean) ?
+          byPath.get(allPaths.find((path) => path.split("/").pop().replace(/\.md$/i, "") === clean)) : null;
       },
     },
   };
 }
 
-test("LP1-LP12: R2 leaf walk handles roots, wrappers, ambiguous/missing parents, cycles, and depth", () => {
+// Umbrella-rule note texts: an open ^prj with the marker directly beneath it
+// (two-space indent, as sync maintains) lists sub-projects; anything else is
+// not a direct-child marker (LP17).
+function leafNoteText({ marker = null, extra = [], rootLine = "- [ ] #task Leaf project ^prj" } = {}) {
+  const lines = [
+    "---",
+    'type: "[[project]]"',
+    "status: wip",
+    "---",
+    rootLine,
+  ];
+  if (marker) lines.push(marker);
+  lines.push(...extra);
+  lines.push("- [ ] #task Resident work ^resident");
+  return lines.join("\n");
+}
+
+const LEAF_OPEN_MARKER = "  - 🧩 **Sub-projects:** [[some_child]]";
+const LEAF_STRUCK_MARKER = "  - 🧩 **Sub-projects:** ~~[[gone_a]]~~ ✅ ~~[[gone_b]]~~ ❌";
+
+test("LP1-LP17: umbrella rule (any project except an umbrella)", () => {
   const fm = {
     "dev.md": { type: "[[area]]" },
     "sase.md": { type: "[[project]]", parent: "[[dev]]" },
     "sase_goals.md": { type: "[[project]]", parent: "[[sase]]" },
-    "rooted.md": { type: "[[project]]", root: " TRUE ", parent: "[[sase]]" },
-    "orphan.md": { type: "[[project]]" },
+    "sase_blog.md": { type: "[[project]]", root: " TRUE ", parent: "[[sase]]" },
+    "sase_pre_blog.md": { type: "[[project]]", parent: "[[sase_blog]]" },
+    "p.md": { type: "[[project]]", parent: "[[gtd_daily]]" },
+    "gtd_daily.md": { type: "[[area]]", parent: "[[dev]]" },
+    "o.md": { type: "[[project]]" },
     "wrapper.md": { type: "other", parent: "[[sase]]" },
-    "wrapped.md": { type: "[[project]]", parent: "[[wrapper]]" },
+    "k.md": { type: "[[project]]", parent: "[[wrapper]]" },
+    "m.md": { type: "[[project]]", parent: "[[sase]]" },
     "a.md": { type: "[[project]]", parent: "[[b]]" },
     "b.md": { type: "[[project]]", parent: "[[a]]" },
     "missing.md": { type: "[[project]]", parent: "[[gone]]" },
     "x/dup.md": { type: "[[project]]", parent: "[[dev]]" },
     "y/dup.md": { type: "[[project]]", parent: "[[dev]]" },
     "ambiguous.md": { type: "[[project]]", parent: "[[dup]]" },
-    "subarea.md": { type: "[[project]]", parent: "[[daily_area]]" },
-    "daily_area.md": { type: "[[area]]", parent: "[[dev]]" },
-    "middle.md": { type: "[[project]]", parent: "[[sase]]" },
-    "child.md": { type: "[[project]]", parent: "[[middle]]" },
+    "job.md": { type: "[[area]]" },
+    "job_email_recruiters.md": { type: "[[project]]", parent: "[[job]]" },
+    "rooted_lone.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
+    "umbrella_closed.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
+    "root_prose.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
+  };
+  const texts = {
+    "sase_goals.md": leafNoteText(), // LP1: no marker -> leaf.
+    "sase.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[sase_goals]]" }), // LP2: umbrella.
+    "sase_blog.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[sase_pre_blog]]" }), // LP3: umbrella.
+    "sase_pre_blog.md": leafNoteText(), // LP4: leaf.
+    "p.md": leafNoteText(), // LP5: standalone top-level -> leaf (was no).
+    "o.md": leafNoteText(), // LP6: orphan -> leaf (was no).
+    "k.md": leafNoteText(), // LP8: wrapper walked through -> leaf.
+    "m.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[m_child]]" }), // LP9: middle with child -> leaf.
+    "a.md": leafNoteText(), // LP12: non-self cycle -> leaf.
+    "missing.md": leafNoteText(), // LP7: unresolved parent, no marker -> leaf.
+    "ambiguous.md": leafNoteText(), // LP7: ambiguous parent, no marker -> leaf.
+    "job_email_recruiters.md": leafNoteText(), // LP13: screenshot -> leaf.
+    "rooted_lone.md": leafNoteText(), // LP14: root:true without marker -> leaf.
+    "umbrella_closed.md": leafNoteText({ marker: LEAF_STRUCK_MARKER }), // LP15: struck children still count.
   };
   const app = fakeMetadataApp(fm);
-  assert.equal(helpers.successorLeafProject(app, "sase_goals.md"), true); // LP1
-  assert.equal(helpers.successorLeafProject(app, "sase.md"), false); // LP2
-  assert.equal(helpers.successorLeafProject(app, "rooted.md"), false); // LP3
-  assert.equal(helpers.successorLeafProject(app, "orphan.md"), false); // LP6
-  assert.equal(helpers.successorLeafProject(app, "wrapped.md"), true); // LP8
-  assert.equal(helpers.successorLeafProject(app, "middle.md"), true); // LP9
-  assert.equal(helpers.successorLeafProject(app, "child.md"), true);
-  assert.equal(helpers.successorLeafProject(app, "ambiguous.md"), false); // LP7
-  assert.equal(helpers.successorLeafProject(app, "missing.md"), false); // LP7
-  assert.equal(helpers.successorLeafProject(app, "subarea.md"), false); // LP5
-  assert.equal(helpers.successorLeafProject(app, "a.md"), true); // LP12
+  const leaf = (path, text) => helpers.successorLeafProject(app, path, text);
+  assert.equal(leaf("sase_goals.md", texts["sase_goals.md"]), true); // LP1
+  assert.equal(leaf("sase.md", texts["sase.md"]), false); // LP2
+  assert.equal(leaf("sase_blog.md", texts["sase_blog.md"]), false); // LP3
+  assert.equal(leaf("sase_pre_blog.md", texts["sase_pre_blog.md"]), true); // LP4
+  assert.equal(leaf("p.md", texts["p.md"]), true); // LP5
+  assert.equal(leaf("o.md", texts["o.md"]), true); // LP6
+  assert.equal(leaf("missing.md", texts["missing.md"]), true); // LP7 no marker -> leaf
+  assert.equal(leaf("ambiguous.md", texts["ambiguous.md"]), true); // LP7 no marker -> leaf
+  assert.equal(leaf("missing.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> umbrella
+  assert.equal(leaf("ambiguous.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> umbrella
+  assert.equal(leaf("k.md", texts["k.md"]), true); // LP8
+  assert.equal(leaf("m.md", texts["m.md"]), true); // LP9
+  assert.equal(leaf("sase_goals.md", texts["sase_goals.md"]), true); // LP10: [root::] never changes its note.
+  assert.equal(leaf("dev.md", leafNoteText()), false); // LP11: area never a leaf.
+  assert.equal(leaf("a.md", texts["a.md"]), true); // LP12
+  assert.equal(leaf("job_email_recruiters.md", texts["job_email_recruiters.md"]), true); // LP13
+  assert.equal(leaf("rooted_lone.md", texts["rooted_lone.md"]), true); // LP14
+  assert.equal(leaf("umbrella_closed.md", texts["umbrella_closed.md"]), false); // LP15
+  assert.equal(leaf("sase_goals.md", ""), false); // missing text is neutral.
+  assert.equal(leaf("sase_goals.md", null), false); // missing text is neutral.
+  // LP17: prose, fenced, and sibling-task markers are not R's direct-child marker.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["See the 🧩 **Sub-projects:** [[child]] discussion above."] })), true); // LP17 prose.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["```", "🧩 **Sub-projects:** [[child]]", "```"] })), true); // LP17 fenced.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["- [ ] #task Other work ^other", "  - 🧩 **Sub-projects:** [[child]]"] })), true); // LP17 sibling child.
   assert.equal(helpers.successorKeepMovingRootFlag({ root: true }), true);
   assert.equal(helpers.successorKeepMovingRootFlag({ root: " tRuE " }), true);
   assert.equal(helpers.successorKeepMovingRootFlag({ root: "yes" }), false);
+  // LP16: _generated tag pages never make a parent stem ambiguous.
+  const generatedApp = fakeMetadataApp(fm, ["_generated/tag_pages/topic/sase.md"]);
+  assert.equal(helpers.successorLeafProject(generatedApp, "sase_goals.md", texts["sase_goals.md"]), true); // LP16
   const deep = { "dev.md": { type: "[[area]]" }, "start.md": { type: "[[project]]", parent: "[[w0]]" } };
+  const deepTexts = {};
   for (let index = 0; index < 16; index += 1) {
     deep[`w${index}.md`] = { type: "other", parent: index === 15 ? "[[later]]" : `[[w${index + 1}]]` };
   }
   deep["later.md"] = { type: "[[project]]", parent: "[[dev]]" };
-  assert.equal(helpers.successorLeafProject(fakeMetadataApp(deep), "start.md"), false); // R2 depth cap.
+  deepTexts["start.md"] = leafNoteText({ marker: LEAF_OPEN_MARKER });
+  assert.equal(helpers.successorLeafProject(fakeMetadataApp(deep), "start.md", deepTexts["start.md"]), false); // R2 depth cap.
 });
 
 test("KM copy, folds, title, lane labels, notices, and config parser/cache match the accepted API", () => {

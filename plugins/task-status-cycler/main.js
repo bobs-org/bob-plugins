@@ -7313,7 +7313,8 @@ function planSuccessors(options = {}) {
       dependencySnapshotAvailable: options.dependencySnapshotAvailable,
       existingMarks: successorMarks,
       leafProject: options.leafProject || (options.app
-        ? (path) => successorLeafProject(options.app, path)
+        ? (path, text) => successorLeafProject(options.app, path,
+          typeof text === "string" ? text : projectNoteTextFor(options.noteTexts, path))
         : null),
       closingEntry,
       anchorHints: options.keepMovingAnchorHints,
@@ -7398,7 +7399,8 @@ function planSuccessors(options = {}) {
         dependencySnapshotAvailable: options.dependencySnapshotAvailable,
         existingMarks: [],
         leafProject: options.leafProject || (options.app
-          ? (path) => successorLeafProject(options.app, path)
+          ? (path, text) => successorLeafProject(options.app, path,
+            typeof text === "string" ? text : projectNoteTextFor(options.noteTexts, path))
           : null),
         closingEntry,
       });
@@ -11654,6 +11656,53 @@ function projectHasScanIssue(sourceText) {
   return false;
 }
 
+// Listed sub-projects on R's direct-child marker line (any state: open,
+// struck, done, or canceled), deduped by link name. Shares the line-scan
+// rules of projectMarkerHasOpenChild: the first marker line under the open
+// ^prj, stopping at a blank line or a sibling list item. Unlike the open
+// check, this counts every wikilink child without resolving paths, so the
+// umbrella rule (any project except an umbrella) needs no I/O.
+function projectMarkerListedChildren(lines, prjLine) {
+  const list = Array.isArray(lines) ? lines : String(lines || "").split(/\r?\n/);
+  const prjIndex = Number(prjLine);
+  if (!Number.isInteger(prjIndex) || prjIndex < 0 || prjIndex >= list.length) {
+    return [];
+  }
+  const prjIndent = getLineIndentation(String(list[prjIndex] || "")).length;
+  const seen = new Set();
+  const children = [];
+  for (let line = prjIndex + 1; line < list.length; line += 1) {
+    const text = String(list[line] || "");
+    if (!text.trim()) {
+      break;
+    }
+    const indent = getLineIndentation(text).length;
+    if (indent <= prjIndent && parseListItemPrefix(text)) {
+      break;
+    }
+    const prefix = parseListItemPrefix(text);
+    if (!prefix) {
+      continue;
+    }
+    const content = text.replace(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/, "").trimStart();
+    if (!content.startsWith(PROJECT_SUBPROJECTS_MARKER)) {
+      continue;
+    }
+    PROJECT_WIKILINK_RE.lastIndex = 0;
+    let match;
+    while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
+      const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
+      if (!target || seen.has(target)) {
+        continue;
+      }
+      seen.add(target);
+      children.push(target);
+    }
+    return children;
+  }
+  return [];
+}
+
 function projectMarkerHasOpenChild(lines, prjLine, options = {}) {
   const closedChildPaths = options.closedChildPaths instanceof Set
     ? options.closedChildPaths
@@ -13203,9 +13252,12 @@ function successorKeepMovingResolveParent(app, target, sourcePath) {
     if (!clean || clean.split("/").some((part) => part === "." || part === "..")) return null;
     if (!clean.includes("/") && typeof vault.getMarkdownFiles === "function") {
       const stem = clean.split("/").pop().replace(/\.md$/i, "").toLowerCase();
-      const matches = vault.getMarkdownFiles().filter((file) =>
-        String(file && file.path || "").split("/").pop().replace(/\.md$/i, "").toLowerCase() === stem,
-      );
+      const indexedOnly = typeof projectParentPathIsIndexed === "function";
+      const matches = vault.getMarkdownFiles().filter((file) => {
+        const filePath = String(file && file.path || "");
+        if (indexedOnly && !projectParentPathIsIndexed(filePath)) return false;
+        return filePath.split("/").pop().replace(/\.md$/i, "").toLowerCase() === stem;
+      });
       if (matches.length > 1) return null;
     }
     const file = cache.getFirstLinkpathDest(clean, sourcePath);
@@ -13215,14 +13267,52 @@ function successorKeepMovingResolveParent(app, target, sourcePath) {
   }
 }
 
-// Port of the R2 root-parent test. Ambiguous, missing, or unreadable parents
-// stop the walk; a bounded cycle matches the resolver's non-self root.
-function successorLeafProject(app, path) {
+// Umbrella rule (docs/task-dependencies.md §12.15–§12.17): a leaf project is
+// any recognised project that is not an umbrella. An umbrella is a root
+// project whose open ^prj lists at least one sub-project on its direct-child
+// 🧩 marker line (any state). With no listed children the note is a leaf
+// without any parent walk; otherwise the R2 root-parent walk decides, with
+// ambiguous, missing, or unreadable parents stopping the walk and a bounded
+// cycle matching the resolver's non-self root. A missing note text is
+// neutral (false) so the planner offers nothing until the text is held.
+function successorMarkerListedCountForText(noteText, path) {
+  try {
+    const text = String(noteText || "");
+    if (!text) return 0;
+    if (typeof project089Info === "function") {
+      const info = project089Info(text, path);
+      if (!info || !info.projectTask || !Number.isInteger(info.projectTask.line)) return 0;
+      const lines = text.split(/\r?\n/);
+      if (typeof projectMarkerListedChildren === "function") {
+        return projectMarkerListedChildren(lines, info.projectTask.line).length;
+      }
+      return 0;
+    }
+    const lines = text.split(/\r?\n/);
+    let prjLine = -1;
+    for (let line = 0; line < lines.length; line += 1) {
+      const lineText = String(lines[line] || "");
+      if (!lineHasTrailingPrjAnchor(lineText)) continue;
+      const status = typeof getTaskStatusForLine === "function" ? getTaskStatusForLine(lineText, line) : null;
+      if (!status || status.symbol === "x" || status.symbol === "X" || status.symbol === "-") continue;
+      prjLine = line;
+      break;
+    }
+    if (prjLine < 0 || typeof projectMarkerListedChildren !== "function") return 0;
+    return projectMarkerListedChildren(lines, prjLine).length;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function successorLeafProject(app, path, noteText) {
   try {
     const start = String(path || "");
     const initial = successorKeepMovingMetadataCache(app, start);
-    if (!start || !initial || successorKeepMovingType(initial.frontmatter) !== "project" ||
-        successorKeepMovingRootFlag(initial.frontmatter)) return false;
+    if (!start || !initial || successorKeepMovingType(initial.frontmatter) !== "project") return false;
+    if (typeof noteText !== "string" || !noteText) return false;
+    if (successorMarkerListedCountForText(noteText, start) === 0) return true;
+    if (successorKeepMovingRootFlag(initial.frontmatter)) return false;
     const seen = new Set([start]);
     let current = start;
     for (let depth = 1; depth < SUCCESSOR_KEEP_MOVING_MAX_DEPTH; depth += 1) {
@@ -13400,7 +13490,7 @@ function planSuccessorKeepMoving(options = {}) {
     const path = String(pathValue || "");
     const text = projectNoteTextFor(noteTexts, path);
     const surface = projectSurfaceState(text, path, today, { skipKeys, notePaths: options.notePaths });
-    if (!surface || typeof options.leafProject !== "function" || options.leafProject(path) !== true) continue;
+    if (!surface || typeof options.leafProject !== "function" || options.leafProject(path, text) !== true) continue;
     const project = surface.project;
     const root = project.projectTask;
     if (!root || root.status === "?" ||

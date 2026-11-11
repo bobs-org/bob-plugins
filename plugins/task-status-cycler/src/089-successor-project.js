@@ -188,6 +188,53 @@ function projectHasScanIssue(sourceText) {
   return false;
 }
 
+// Listed sub-projects on R's direct-child marker line (any state: open,
+// struck, done, or canceled), deduped by link name. Shares the line-scan
+// rules of projectMarkerHasOpenChild: the first marker line under the open
+// ^prj, stopping at a blank line or a sibling list item. Unlike the open
+// check, this counts every wikilink child without resolving paths, so the
+// umbrella rule (any project except an umbrella) needs no I/O.
+function projectMarkerListedChildren(lines, prjLine) {
+  const list = Array.isArray(lines) ? lines : String(lines || "").split(/\r?\n/);
+  const prjIndex = Number(prjLine);
+  if (!Number.isInteger(prjIndex) || prjIndex < 0 || prjIndex >= list.length) {
+    return [];
+  }
+  const prjIndent = getLineIndentation(String(list[prjIndex] || "")).length;
+  const seen = new Set();
+  const children = [];
+  for (let line = prjIndex + 1; line < list.length; line += 1) {
+    const text = String(list[line] || "");
+    if (!text.trim()) {
+      break;
+    }
+    const indent = getLineIndentation(text).length;
+    if (indent <= prjIndent && parseListItemPrefix(text)) {
+      break;
+    }
+    const prefix = parseListItemPrefix(text);
+    if (!prefix) {
+      continue;
+    }
+    const content = text.replace(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/, "").trimStart();
+    if (!content.startsWith(PROJECT_SUBPROJECTS_MARKER)) {
+      continue;
+    }
+    PROJECT_WIKILINK_RE.lastIndex = 0;
+    let match;
+    while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
+      const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
+      if (!target || seen.has(target)) {
+        continue;
+      }
+      seen.add(target);
+      children.push(target);
+    }
+    return children;
+  }
+  return [];
+}
+
 function projectMarkerHasOpenChild(lines, prjLine, options = {}) {
   const closedChildPaths = options.closedChildPaths instanceof Set
     ? options.closedChildPaths

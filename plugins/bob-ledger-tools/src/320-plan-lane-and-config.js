@@ -365,3 +365,71 @@ function loadPlanCaps(options = {}) {
   return result;
 }
 
+// Keep-moving marks share the cycler's two opt-out keys and successor-label
+// catalog. Parse one config snapshot and cache it by the same stat contract as
+// plan caps; missing, unreadable, and invalid values retain the safe defaults.
+let keepMovingMarkConfigStatCache = { key: null, result: null };
+
+function resetKeepMovingMarkConfigCache() {
+  keepMovingMarkConfigStatCache = { key: null, result: null };
+}
+
+function keepMovingMarkConfigBoolean(value) {
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    const normalized = value.replace(/["']/g, "").split("#")[0].trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return true;
+}
+
+function loadKeepMovingMarkConfig(options = {}) {
+  const configPath = options.configPath || planConfigPath(options);
+  const defaults = {
+    keepMoving: true,
+    linkUnblocked: true,
+    successorLabels: [],
+    configPath,
+  };
+  const platform = options.Platform === undefined ? Platform : options.Platform;
+  if (platform && platform.isDesktopApp === false) return defaults;
+  const fsModule = options.fsModule === undefined
+    ? planRequireOptionalNodeModule("fs")
+    : options.fsModule;
+  if (!fsModule || typeof fsModule.readFileSync !== "function") return defaults;
+  const yamlParser = options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof yamlParser !== "function") return defaults;
+  const statKey = planCapsStatKey(fsModule, configPath);
+  const cacheKey = statKey === null ? null : String(configPath) + "\n" + String(statKey);
+  if (cacheKey !== null && keepMovingMarkConfigStatCache.key === cacheKey &&
+      keepMovingMarkConfigStatCache.result) {
+    return keepMovingMarkConfigStatCache.result;
+  }
+  let result = defaults;
+  try {
+    const parsed = yamlParser(fsModule.readFileSync(configPath, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const plan = parsed.plan && typeof parsed.plan === "object" ? parsed.plan : {};
+      const relations = parsed.relations && typeof parsed.relations === "object"
+        ? parsed.relations
+        : {};
+      const rawLabels = relations.successor_labels;
+      const successorLabels = Array.isArray(rawLabels)
+        ? rawLabels.filter((label) => typeof label === "string" && label.trim())
+          .map((label) => label.trim())
+        : [];
+      result = {
+        keepMoving: keepMovingMarkConfigBoolean(plan.keep_moving),
+        linkUnblocked: keepMovingMarkConfigBoolean(plan.link_unblocked),
+        successorLabels,
+        configPath,
+      };
+    }
+  } catch (error) {
+    result = defaults;
+  }
+  if (cacheKey !== null) keepMovingMarkConfigStatCache = { key: cacheKey, result };
+  return result;
+}
+

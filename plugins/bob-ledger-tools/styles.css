@@ -5593,6 +5593,7 @@ body:not(.bob-calendar-events) .bob-event-link-time {
 body {
   /* Lucide timer-off, drawn as a mask so it follows the ink color. */
   --bob-off-clock-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2h4'/%3E%3Cpath d='M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7'/%3E%3Cpath d='M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2'/%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M12 12v-2'/%3E%3C/svg%3E");
+  --bob-keep-moving-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 2.75 11 8l-7.5 5.25z'/%3E%3Crect x='11.75' y='2.75' width='1.9' height='10.5' rx='.6'/%3E%3C/svg%3E");
 }
 
 .bob-calendar-events .bob-calendar-event-context {
@@ -8106,6 +8107,60 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
     white-space: normal;
   }
 }
+
+/* Display-only count for the last planned Task Link in a leaf project. */
+.bob-keep-moving-mark {
+  --bob-keep-moving-mark-ink: var(--task-status-next, var(--color-green));
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.22em;
+  margin-inline-start: 0.4em;
+  padding: 0 0.42em;
+  border-radius: 999px;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: baseline;
+  color: var(--bob-keep-moving-mark-color, var(--text-muted));
+  user-select: none;
+  cursor: default;
+  print-color-adjust: exact;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.bob-keep-moving-mark-glyph {
+  display: inline-block;
+  inline-size: 0.95em;
+  block-size: 0.95em;
+  align-self: center;
+  background-color: var(--bob-keep-moving-mark-ink);
+  -webkit-mask: var(--bob-keep-moving-glyph) center / contain no-repeat;
+  mask: var(--bob-keep-moving-glyph) center / contain no-repeat;
+}
+.bob-keep-moving-mark:hover {
+  color: var(--text-normal);
+  background-color: color-mix(in srgb, var(--bob-keep-moving-mark-ink) 12%, transparent);
+}
+.bob-keep-moving-mark.bob-keep-moving-mark-tick {
+  animation: bob-keep-moving-mark-tick 180ms cubic-bezier(0.2, 0.9, 0.3, 1.25);
+}
+@keyframes bob-keep-moving-mark-tick {
+  from { opacity: 0.3; scale: 0.6; }
+  to { opacity: 1; scale: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-keep-moving-mark,
+  .bob-keep-moving-mark.bob-keep-moving-mark-tick {
+    animation: none;
+    transition: none;
+  }
+}
+@media (forced-colors: active) {
+  .bob-keep-moving-mark { color: CanvasText; }
+  .bob-keep-moving-mark-glyph { background-color: CanvasText; }
+}
+body:not(.bob-keep-moving-marks) .bob-keep-moving-mark { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .bob-notebook-header-crumb,
   .bob-notebook-header-child {

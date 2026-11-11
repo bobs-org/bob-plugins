@@ -32,6 +32,8 @@
   "141-blocks-model.js",
   "141b-frees-marks.js",
   "141c-off-clock-link-chips.js",
+  "141d-keep-moving-marks-model.js",
+  "141e-keep-moving-marks-render.js",
   "142c-block-marks-model.js",
   "142i-mail-link-marks.js",
   "142j-no-reply-pills.js",

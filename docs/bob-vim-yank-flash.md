@@ -33,7 +33,7 @@ when the live selection exactly equals the yanked text. The flash lasts
 | Keys | What highlights |
 | --- | --- |
 | `yy`, `3yy` | Whole lines, blank lines included |
-| `Y` | The whole current line |
+| `Y` | The whole current line in stock Vim. Bob's vault vimrc maps normal-mode `Y` to `y$`, so there it flashes like `y$` |
 | `yw`, `y$`, `yiw`, `yi(`, `yap`, `yb`, `yG`, `ygg` | The exact charwise range the motion covers |
 | `v…y`, `V…y`, `<C-v>…y`, visual `Y` | The exact visual selection, one mark per block row |
 | `"ayy`, `"Ayy` | The lines, like an uncounted `yy` |

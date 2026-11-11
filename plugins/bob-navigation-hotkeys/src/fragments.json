@@ -21,6 +21,9 @@
   "084-blocks-stage-plan.js",
   "090-local-task-ids.js",
   "100-yank-and-paths.js",
+  "101-copy-card-model.js",
+  "101a-copy-card-keys.js",
+  "102-copy-card-config.js",
   "110-project-seed.js",
   "120-project-notes.js",
   "122-project-promotion-successors.js",
@@ -217,5 +220,6 @@
   "713-nav-offer-close-apis.js",
   "714-highlights-hints-exports.js",
   "715-delete-guard-exports.js",
-  "716-reload-history-exports.js"
+  "716-reload-history-exports.js",
+  "717-copy-card-exports.js"
 ]

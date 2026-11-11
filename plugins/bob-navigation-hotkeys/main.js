@@ -12827,6 +12827,1199 @@ function normalizeProjectSectionTitle(title) {
 // source order), and `lossless` is false when any nonblank child line could not
 // be represented (so the caller can keep the source block instead of losing
 // content).
+// ---- src/101-copy-card-model.js ----
+// Pure Copy card model: builtin rows, owning-task resolver, single-pass
+// template grammar, and frozen snapshot. Key resolution lives in
+// 101a-copy-card-keys.js. Obsidian-free so Node tests can load it through
+// the navigation-hotkeys harness.
+
+const COPY_CARD_NOTICE_VALUE_LIMIT = 60;
+const COPY_CARD_NEWLINE_MARK = "⏎";
+const COPY_CARD_VARIABLE_NAMES = Object.freeze([
+  "path",
+  "absolute_path",
+  "file_name",
+  "note_name",
+  "block_id",
+]);
+const COPY_CARD_VARIABLE_SET = new Set(COPY_CARD_VARIABLE_NAMES);
+const COPY_CARD_VARIABLE_ALIASES = Object.freeze({
+  task_id: "block_id",
+  abs_file_with_tilde: "path",
+  abs_file: "absolute_path",
+  absolute: "absolute_path",
+  basename: "file_name",
+  basename_no_ext: "note_name",
+  stem: "note_name",
+  block_ref: "^{block_id}",
+});
+const COPY_CARD_BUILTIN_ROWS = Object.freeze([
+  Object.freeze({
+    id: "path",
+    key: "p",
+    label: "Path",
+    variable: "path",
+    needs: Object.freeze(["path"]),
+  }),
+  Object.freeze({
+    id: "absolute",
+    key: "a",
+    label: "Absolute path",
+    variable: "absolute_path",
+    needs: Object.freeze(["absolute_path"]),
+  }),
+  Object.freeze({
+    id: "file",
+    key: "f",
+    label: "File name",
+    variable: "file_name",
+    needs: Object.freeze(["file_name"]),
+  }),
+  Object.freeze({
+    id: "note",
+    key: "n",
+    label: "Note name",
+    variable: "note_name",
+    needs: Object.freeze(["note_name"]),
+  }),
+  Object.freeze({
+    id: "block-id",
+    key: "i",
+    label: "Block ID",
+    variable: "block_id",
+    needs: Object.freeze(["block_id"]),
+  }),
+]);
+const COPY_CARD_RESERVED_KEYS = Object.freeze(
+  COPY_CARD_BUILTIN_ROWS.map((row) => row.key),
+);
+const COPY_CARD_NONE_TASK = Object.freeze({
+  state: "none",
+  line: null,
+  blockId: null,
+  title: null,
+});
+
+function freezeCopyCardValue(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      freezeCopyCardValue(entry);
+    }
+    return Object.freeze(value);
+  }
+  for (const key of Object.keys(value)) {
+    freezeCopyCardValue(value[key]);
+  }
+  return Object.freeze(value);
+}
+
+function copyCardLevenshtein(left, right) {
+  const source = String(left);
+  const target = String(right);
+  const sourceLength = source.length;
+  const targetLength = target.length;
+  if (sourceLength === 0) {
+    return targetLength;
+  }
+  if (targetLength === 0) {
+    return sourceLength;
+  }
+  const row = new Array(targetLength + 1);
+  for (let index = 0; index <= targetLength; index += 1) {
+    row[index] = index;
+  }
+  for (let i = 1; i <= sourceLength; i += 1) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= targetLength; j += 1) {
+      const next = row[j];
+      const cost =
+        source.charCodeAt(i - 1) === target.charCodeAt(j - 1) ? 0 : 1;
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + cost);
+      previous = next;
+    }
+  }
+  return row[targetLength];
+}
+
+function formatCopyCardUnknownVariable(name) {
+  const token = String(name || "");
+  if (Object.prototype.hasOwnProperty.call(COPY_CARD_VARIABLE_ALIASES, token)) {
+    const alias = COPY_CARD_VARIABLE_ALIASES[token];
+    const hint = alias.includes("{") ? alias : `{${alias}}`;
+    return `unknown {${token}} · did you mean ${hint}?`;
+  }
+  let best = null;
+  let bestDistance = 3;
+  for (const known of COPY_CARD_VARIABLE_NAMES) {
+    const distance = copyCardLevenshtein(token, known);
+    if (distance < bestDistance || (distance === bestDistance && best && known < best)) {
+      bestDistance = distance;
+      best = known;
+    }
+  }
+  if (best && bestDistance <= 2) {
+    return `unknown {${token}} · did you mean {${best}}?`;
+  }
+  const list = COPY_CARD_VARIABLE_NAMES.map((known) => `{${known}}`).join(", ");
+  return `unknown {${token}} · valid names: ${list}`;
+}
+
+function parseCopyTemplate(text) {
+  if (text === null || text === undefined) {
+    return Object.freeze({ ok: false, reason: "template is empty" });
+  }
+  if (typeof text !== "string") {
+    if (text && typeof text === "object" && !Array.isArray(text)) {
+      return Object.freeze({
+        ok: false,
+        reason: "quote the template — YAML read it as a mapping",
+      });
+    }
+    return Object.freeze({ ok: false, reason: "quote the template" });
+  }
+  if (text.trim() === "") {
+    return Object.freeze({ ok: false, reason: "template is empty" });
+  }
+
+  const tokens = [];
+  const variables = [];
+  const seen = new Set();
+  let index = 0;
+  let textStart = 0;
+  const flushText = (end) => {
+    if (end > textStart) {
+      tokens.push(
+        Object.freeze({ type: "text", value: text.slice(textStart, end) }),
+      );
+    }
+  };
+
+  while (index < text.length) {
+    const current = text.charAt(index);
+    const next = index + 1 < text.length ? text.charAt(index + 1) : "";
+    if (current === "{" && next === "{") {
+      flushText(index);
+      tokens.push(Object.freeze({ type: "text", value: "{" }));
+      index += 2;
+      textStart = index;
+      continue;
+    }
+    if (current === "}" && next === "}") {
+      flushText(index);
+      tokens.push(Object.freeze({ type: "text", value: "}" }));
+      index += 2;
+      textStart = index;
+      continue;
+    }
+    if (current === "{") {
+      let nameEnd = index + 1;
+      while (nameEnd < text.length && /[a-z_]/.test(text.charAt(nameEnd))) {
+        nameEnd += 1;
+      }
+      const name = text.slice(index + 1, nameEnd);
+      if (name && nameEnd < text.length && text.charAt(nameEnd) === "}") {
+        if (!COPY_CARD_VARIABLE_SET.has(name)) {
+          return Object.freeze({
+            ok: false,
+            reason: formatCopyCardUnknownVariable(name),
+          });
+        }
+        flushText(index);
+        tokens.push(Object.freeze({ type: "var", name }));
+        if (!seen.has(name)) {
+          seen.add(name);
+          variables.push(name);
+        }
+        index = nameEnd + 1;
+        textStart = index;
+        continue;
+      }
+      return Object.freeze({
+        ok: false,
+        reason: `unmatched { at column ${index + 1}`,
+      });
+    }
+    if (current === "}") {
+      return Object.freeze({
+        ok: false,
+        reason: `unmatched } at column ${index + 1}`,
+      });
+    }
+    index += 1;
+  }
+
+  flushText(text.length);
+  return freezeCopyCardValue({
+    ok: true,
+    tokens,
+    variables,
+  });
+}
+
+function renderCopyTemplate(tokens, values) {
+  const parts = [];
+  const source = Array.isArray(tokens) ? tokens : [];
+  const table = values && typeof values === "object" ? values : {};
+  for (const token of source) {
+    if (!token || typeof token !== "object") {
+      continue;
+    }
+    if (token.type === "text") {
+      parts.push(String(token.value || ""));
+      continue;
+    }
+    if (token.type !== "var") {
+      continue;
+    }
+    const value = table[token.name];
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+    parts.push(String(value));
+  }
+  return parts.join("");
+}
+
+function copyCardSelectionPoint(point) {
+  if (point === null || point === undefined) {
+    return null;
+  }
+  if (typeof point === "number" && Number.isFinite(point)) {
+    return { line: Math.floor(point), ch: 0 };
+  }
+  if (typeof point !== "object") {
+    return null;
+  }
+  const line = Math.floor(numericOrDefault(point.line, Number.NaN));
+  if (!Number.isFinite(line)) {
+    return null;
+  }
+  const ch = Math.floor(numericOrDefault(point.ch, 0));
+  return { line, ch: Number.isFinite(ch) ? ch : 0 };
+}
+
+function copyCardSelectionIsEmpty(anchor, head) {
+  return anchor.line === head.line && anchor.ch === head.ch;
+}
+
+function resolveCopyCardTask(lines, selections) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  const list = Array.isArray(selections) ? selections : [];
+  if (list.length !== 1) {
+    return COPY_CARD_NONE_TASK;
+  }
+  const selection = list[0] && typeof list[0] === "object" ? list[0] : {};
+  const head = copyCardSelectionPoint(selection.head || selection);
+  const anchor = copyCardSelectionPoint(selection.anchor || selection.head || selection);
+  if (!head || !anchor) {
+    return COPY_CARD_NONE_TASK;
+  }
+  const headOwner = findOwningTaskLine(sourceLines, head.line);
+  if (headOwner === null || headOwner === undefined) {
+    return COPY_CARD_NONE_TASK;
+  }
+  if (!copyCardSelectionIsEmpty(anchor, head)) {
+    const anchorOwner = findOwningTaskLine(sourceLines, anchor.line);
+    if (anchorOwner !== headOwner) {
+      return COPY_CARD_NONE_TASK;
+    }
+  }
+  const ownerLine = String(sourceLines[headOwner] || "");
+  const blockId = getTrailingBlockId(ownerLine);
+  const title = cleanTaskDisplayText(ownerLine);
+  if (!blockId) {
+    return freezeCopyCardValue({
+      state: "no-id",
+      line: headOwner,
+      blockId: null,
+      title,
+    });
+  }
+  return freezeCopyCardValue({
+    state: "ready",
+    line: headOwner,
+    blockId,
+    title,
+  });
+}
+
+function copyCardPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function copyCardNormalizeKey(raw, index) {
+  if (raw === null || raw === undefined) {
+    const position = index + 1;
+    if (position > 9) {
+      return Object.freeze({
+        key: null,
+        reason: "add key: to bind",
+        invalid: false,
+      });
+    }
+    return Object.freeze({
+      key: String(position),
+      reason: null,
+      invalid: false,
+    });
+  }
+  let text = "";
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 0) {
+      return Object.freeze({
+        key: null,
+        reason: "key must be one letter or digit",
+        invalid: true,
+      });
+    }
+    text = String(raw);
+  } else if (typeof raw === "string") {
+    text = raw.trim().toLowerCase();
+  } else if (typeof raw === "boolean") {
+    return Object.freeze({
+      key: null,
+      reason: "key must be one letter or digit",
+      invalid: true,
+    });
+  } else {
+    return Object.freeze({
+      key: null,
+      reason: "key must be one letter or digit",
+      invalid: true,
+    });
+  }
+  if (!text) {
+    const position = index + 1;
+    if (position > 9) {
+      return Object.freeze({
+        key: null,
+        reason: "add key: to bind",
+        invalid: false,
+      });
+    }
+    return Object.freeze({
+      key: String(position),
+      reason: null,
+      invalid: false,
+    });
+  }
+  if (!/^[a-z0-9]$/.test(text)) {
+    return Object.freeze({
+      key: null,
+      reason: "key must be one letter or digit",
+      invalid: true,
+    });
+  }
+  return Object.freeze({ key: text, reason: null, invalid: false });
+}
+
+function copyCardTemplateLabel(raw, index) {
+  if (raw === null || raw === undefined) {
+    return "";
+  }
+  return String(raw).trim();
+}
+
+function normalizeCopyCardTemplates(list) {
+  const source = Array.isArray(list) ? list : [];
+  const templates = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const entry = source[index];
+    const id = `template-${index + 1}`;
+    const fallbackLabel = `Template ${index + 1}`;
+    if (!copyCardPlainObject(entry)) {
+      templates.push(
+        freezeCopyCardValue({
+          id,
+          index,
+          label: fallbackLabel,
+          key: null,
+          template: null,
+          tokens: null,
+          variables: Object.freeze([]),
+          state: "error",
+          reason: "expected label and template",
+        }),
+      );
+      continue;
+    }
+    const labelText = copyCardTemplateLabel(entry.label, index);
+    const label = labelText || fallbackLabel;
+    const labelReason = labelText ? null : "add a label";
+    const parsed = parseCopyTemplate(entry.template);
+    const keyInfo = copyCardNormalizeKey(entry.key, index);
+    if (!parsed.ok) {
+      templates.push(
+        freezeCopyCardValue({
+          id,
+          index,
+          label,
+          key: null,
+          template: entry.template,
+          tokens: null,
+          variables: Object.freeze([]),
+          state: "error",
+          reason: parsed.reason,
+        }),
+      );
+      continue;
+    }
+    if (labelReason) {
+      templates.push(
+        freezeCopyCardValue({
+          id,
+          index,
+          label,
+          key: null,
+          template: entry.template,
+          tokens: parsed.tokens,
+          variables: parsed.variables,
+          state: "error",
+          reason: labelReason,
+        }),
+      );
+      continue;
+    }
+    if (keyInfo.invalid) {
+      templates.push(
+        freezeCopyCardValue({
+          id,
+          index,
+          label,
+          key: null,
+          template: entry.template,
+          tokens: parsed.tokens,
+          variables: parsed.variables,
+          state: "error",
+          reason: keyInfo.reason,
+        }),
+      );
+      continue;
+    }
+    templates.push(
+      freezeCopyCardValue({
+        id,
+        index,
+        label,
+        key: keyInfo.key,
+        template: entry.template,
+        tokens: parsed.tokens,
+        variables: parsed.variables,
+        state: "ready",
+        reason: keyInfo.reason,
+      }),
+    );
+  }
+
+  const owners = new Map();
+  for (const builtin of COPY_CARD_BUILTIN_ROWS) {
+    owners.set(builtin.key, [
+      Object.freeze({ kind: "builtin", label: builtin.label, index: -1 }),
+    ]);
+  }
+  for (const template of templates) {
+    if (!template.key || template.state === "error") {
+      continue;
+    }
+    const listForKey = owners.get(template.key) || [];
+    listForKey.push(
+      Object.freeze({
+        kind: "template",
+        label: template.label,
+        index: template.index,
+      }),
+    );
+    owners.set(template.key, listForKey);
+  }
+
+  return freezeCopyCardValue(
+    templates.map((template) => {
+      if (!template.key || template.state === "error") {
+        return template;
+      }
+      const claimed = owners.get(template.key) || [];
+      const others = claimed.filter(
+        (owner) => owner.kind === "builtin" || owner.index !== template.index,
+      );
+      const uniqueTemplate =
+        claimed.length === 1 && claimed[0].kind === "template";
+      if (uniqueTemplate || others.length === 0) {
+        return template;
+      }
+      const builtin = others.find((owner) => owner.kind === "builtin");
+      const otherTemplate = others.find((owner) => owner.kind === "template");
+      const originalKey = template.key;
+      let reason;
+      if (builtin) {
+        reason = `key ${originalKey} is ${builtin.label}'s`;
+      } else {
+        reason = `key ${originalKey} is also ${otherTemplate.label}'s`;
+      }
+      return freezeCopyCardValue({
+        ...template,
+        key: null,
+        state: "collision",
+        reason,
+      });
+    }),
+  );
+}
+
+function copyCardPreviewText(value) {
+  return String(value ?? "").replace(/\r\n|\n|\r/g, COPY_CARD_NEWLINE_MARK);
+}
+
+function copyCardPathPreviewParts(value) {
+  const text = String(value ?? "");
+  const slash = text.lastIndexOf("/");
+  if (slash === -1) {
+    return Object.freeze({ head: "", tail: text });
+  }
+  return Object.freeze({
+    head: text.slice(0, slash + 1),
+    tail: text.slice(slash + 1),
+  });
+}
+
+function copyCardMiddleTruncate(text, limit) {
+  const value = String(text ?? "");
+  const max = Math.max(1, Math.floor(numericOrDefault(limit, COPY_CARD_NOTICE_VALUE_LIMIT)));
+  if (value.length <= max) {
+    return value;
+  }
+  const keep = max - 1;
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
+}
+
+function formatCopiedNotice(value) {
+  const display = copyCardPreviewText(value);
+  return `Copied ${copyCardMiddleTruncate(display, COPY_CARD_NOTICE_VALUE_LIMIT)}`;
+}
+
+function copyCardTaskState(task) {
+  const state = task && typeof task === "object" ? String(task.state || "") : "none";
+  if (state === "ready" || state === "no-id") {
+    return state;
+  }
+  return "none";
+}
+
+function copyCardAvailableValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = String(value);
+  return text === "" ? null : text;
+}
+
+function copyCardTemplateUsesBlockId(template) {
+  const variables = Array.isArray(template && template.variables)
+    ? template.variables
+    : [];
+  return variables.includes("block_id");
+}
+
+function isCopyableCopyCardRow(row) {
+  return Boolean(row) && (row.state === "ready" || row.state === "collision");
+}
+
+function buildCopyCardRow(fields) {
+  return freezeCopyCardValue({
+    id: fields.id,
+    group: fields.group,
+    key: fields.key || null,
+    label: fields.label,
+    value: fields.value === undefined ? null : fields.value,
+    preview: fields.preview,
+    previewParts: fields.previewParts || null,
+    state: fields.state,
+    reason: fields.reason || null,
+    isPath: fields.isPath === true,
+  });
+}
+
+function buildCopyCardBuiltinRow(spec, values, taskState) {
+  if (spec.id === "block-id") {
+    if (taskState === "none") {
+      return null;
+    }
+    if (taskState === "no-id") {
+      const reason = "none yet · Ctrl+6 on the task line names one";
+      return buildCopyCardRow({
+        id: spec.id,
+        group: "task",
+        key: spec.key,
+        label: spec.label,
+        value: null,
+        preview: reason,
+        state: "unavailable",
+        reason,
+        isPath: false,
+      });
+    }
+    const blockId = copyCardAvailableValue(values.block_id);
+    const value = blockId ? `^${blockId}` : null;
+    if (!value) {
+      const reason = "none yet · Ctrl+6 on the task line names one";
+      return buildCopyCardRow({
+        id: spec.id,
+        group: "task",
+        key: spec.key,
+        label: spec.label,
+        value: null,
+        preview: reason,
+        state: "unavailable",
+        reason,
+        isPath: false,
+      });
+    }
+    return buildCopyCardRow({
+      id: spec.id,
+      group: "task",
+      key: spec.key,
+      label: spec.label,
+      value,
+      preview: value,
+      state: "ready",
+      reason: null,
+      isPath: false,
+    });
+  }
+
+  const isPath = spec.id === "path" || spec.id === "absolute";
+  const needed = spec.needs[0];
+  const value = copyCardAvailableValue(values[needed]);
+  if (!value) {
+    const reason =
+      needed === "path" || needed === "absolute_path"
+        ? "needs an absolute vault path"
+        : `needs {${needed}}`;
+    return buildCopyCardRow({
+      id: spec.id,
+      group: "file",
+      key: spec.key,
+      label: spec.label,
+      value: null,
+      preview: reason,
+      previewParts: null,
+      state: "unavailable",
+      reason,
+      isPath,
+    });
+  }
+  return buildCopyCardRow({
+    id: spec.id,
+    group: "file",
+    key: spec.key,
+    label: spec.label,
+    value,
+    preview: copyCardPreviewText(value),
+    previewParts: isPath ? copyCardPathPreviewParts(value) : null,
+    state: "ready",
+    reason: null,
+    isPath,
+  });
+}
+
+function buildCopyCardTemplateRow(template, values, taskState) {
+  const usesBlockId = copyCardTemplateUsesBlockId(template);
+  const group = usesBlockId ? "task" : "file";
+  if (template.state === "error") {
+    return buildCopyCardRow({
+      id: template.id,
+      group,
+      key: null,
+      label: template.label,
+      value: null,
+      preview: template.reason,
+      state: "error",
+      reason: template.reason,
+      isPath: false,
+    });
+  }
+  if (usesBlockId && taskState === "none") {
+    return null;
+  }
+  if (usesBlockId && taskState === "no-id") {
+    const reason = "needs a block ID";
+    return buildCopyCardRow({
+      id: template.id,
+      group: "task",
+      key: template.key,
+      label: template.label,
+      value: null,
+      preview: reason,
+      state: "unavailable",
+      reason,
+      isPath: false,
+    });
+  }
+  const rendered = renderCopyTemplate(template.tokens, values);
+  if (rendered === null) {
+    const needsPath =
+      Array.isArray(template.variables) &&
+      (template.variables.includes("path") ||
+        template.variables.includes("absolute_path"));
+    const reason = needsPath
+      ? "needs an absolute vault path"
+      : "needs a block ID";
+    return buildCopyCardRow({
+      id: template.id,
+      group,
+      key: template.key,
+      label: template.label,
+      value: null,
+      preview: reason,
+      state: "unavailable",
+      reason,
+      isPath: false,
+    });
+  }
+  return buildCopyCardRow({
+    id: template.id,
+    group,
+    key: template.key,
+    label: template.label,
+    value: rendered,
+    preview: copyCardPreviewText(rendered),
+    state: template.state,
+    reason: template.reason,
+    isPath: false,
+  });
+}
+
+function buildCopyCardModel(input) {
+  const options = input && typeof input === "object" ? input : {};
+  const filePath = String(options.filePath || "");
+  const basePath = String(options.basePath || "");
+  const homePath = String(options.homePath || "");
+  const relative = normalizeVaultRelativePath(filePath);
+  const absolute = getYankPathText("absolute", relative, basePath, homePath);
+  const pathText = getYankPathText(
+    "absolute-tilde",
+    relative,
+    basePath,
+    homePath,
+  );
+  const fileName = getYankPathText("basename", relative, basePath, homePath);
+  const noteName = getYankPathText(
+    "basename-no-extension",
+    relative,
+    basePath,
+    homePath,
+  );
+  const task = options.task && typeof options.task === "object"
+    ? options.task
+    : COPY_CARD_NONE_TASK;
+  const taskState = copyCardTaskState(task);
+  const values = Object.freeze({
+    path: copyCardAvailableValue(pathText),
+    absolute_path: copyCardAvailableValue(absolute),
+    file_name: copyCardAvailableValue(fileName),
+    note_name: copyCardAvailableValue(noteName),
+    block_id:
+      taskState === "ready" ? copyCardAvailableValue(task.blockId) : null,
+  });
+  const templates = normalizeCopyCardTemplates(options.templates);
+  const diagnostic =
+    typeof options.diagnostic === "string" && options.diagnostic.trim()
+      ? options.diagnostic.trim()
+      : null;
+  const fileBuiltins = [];
+  const taskBuiltins = [];
+  for (const spec of COPY_CARD_BUILTIN_ROWS) {
+    const row = buildCopyCardBuiltinRow(spec, values, taskState);
+    if (!row) {
+      continue;
+    }
+    if (spec.id === "block-id") {
+      taskBuiltins.push(row);
+    } else {
+      fileBuiltins.push(row);
+    }
+  }
+  const fileTemplates = [];
+  const taskTemplates = [];
+  for (const template of templates) {
+    const row = buildCopyCardTemplateRow(template, values, taskState);
+    if (!row) {
+      continue;
+    }
+    if (row.group === "task") {
+      taskTemplates.push(row);
+    } else {
+      fileTemplates.push(row);
+    }
+  }
+  const diagnosticRow = diagnostic
+    ? [
+        buildCopyCardRow({
+          id: "diagnostic",
+          group: "file",
+          key: null,
+          label: "Templates",
+          value: null,
+          preview: diagnostic,
+          state: "error",
+          reason: diagnostic,
+          isPath: false,
+        }),
+      ]
+    : [];
+  const rows = [
+    ...fileBuiltins,
+    ...fileTemplates,
+    ...diagnosticRow,
+    ...taskBuiltins,
+    ...taskTemplates,
+  ];
+  const copyable = rows.filter(isCopyableCopyCardRow);
+  const pathRow = rows.find((row) => row.id === "path");
+  let defaultRowId = null;
+  if (pathRow && isCopyableCopyCardRow(pathRow)) {
+    defaultRowId = pathRow.id;
+  } else if (copyable.length > 0) {
+    defaultRowId = copyable[0].id;
+  } else if (rows.length > 0) {
+    defaultRowId = rows[0].id;
+  }
+  return freezeCopyCardValue({
+    title: "Copy",
+    subtitle: relative,
+    rows,
+    defaultRowId,
+    task: Object.freeze({
+      state: taskState,
+      title: taskState === "none" ? null : task.title || null,
+    }),
+  });
+}
+// ---- src/101a-copy-card-keys.js ----
+// Copy card key resolution and copied-notice formatting. Companion to
+// 101-copy-card-model.js; cmd_y_twice is the accepted plan decision.
+
+const COPY_CARD_CMD_Y_TWICE = true;
+const COPY_CARD_MODIFIER_KEYS = new Set([
+  "Shift",
+  "Control",
+  "Alt",
+  "Meta",
+  "AltGraph",
+]);
+
+function copyCardRowById(model, rowId) {
+  const rows = model && Array.isArray(model.rows) ? model.rows : [];
+  return rows.find((row) => row.id === rowId) || null;
+}
+
+function copyCardKeyAction(type, extra) {
+  return freezeCopyCardValue({ type, ...(extra || {}) });
+}
+
+function isCopyCardModY(event) {
+  const key = String(event && event.key ? event.key : "").toLowerCase();
+  if (key !== "y") {
+    return false;
+  }
+  if (event.altKey === true || event.shiftKey === true) {
+    return false;
+  }
+  return event.metaKey === true || event.ctrlKey === true;
+}
+
+function isCopyCardCtrlLetter(event, letter) {
+  const key = String(event && event.key ? event.key : "").toLowerCase();
+  return (
+    key === letter &&
+    event.ctrlKey === true &&
+    event.metaKey !== true &&
+    event.altKey !== true &&
+    event.shiftKey !== true
+  );
+}
+
+function stepCopyCardHighlight(model, highlightId, direction) {
+  const rows = model && Array.isArray(model.rows) ? model.rows : [];
+  const copyable = rows.filter(isCopyableCopyCardRow);
+  if (copyable.length === 0) {
+    return highlightId || null;
+  }
+  const currentIndex = rows.findIndex((row) => row.id === highlightId);
+  const count = rows.length;
+  for (let step = 1; step <= count; step += 1) {
+    const index =
+      currentIndex < 0
+        ? direction > 0
+          ? (step - 1) % count
+          : (count - step) % count
+        : (currentIndex + direction * step + count * step) % count;
+    const row = rows[index];
+    if (isCopyableCopyCardRow(row)) {
+      return row.id;
+    }
+  }
+  return copyable[0].id;
+}
+
+function resolveCopyCardCopyAction(model, row) {
+  if (!row) {
+    return null;
+  }
+  if (isCopyableCopyCardRow(row)) {
+    return copyCardKeyAction("copy", { rowId: row.id });
+  }
+  if (row.state === "unavailable") {
+    return copyCardKeyAction("refuse", {
+      rowId: row.id,
+      reason: row.reason || "unavailable",
+    });
+  }
+  return copyCardKeyAction("consume");
+}
+
+function resolveCopyCardKey(model, event, ui) {
+  if (!model || !event) {
+    return null;
+  }
+  const state = ui && typeof ui === "object" ? ui : {};
+  const busy = state.busy === true;
+  if (busy) {
+    return copyCardKeyAction("consume");
+  }
+  if (event.isComposing === true || event.keyCode === 229) {
+    return null;
+  }
+  if (event.repeat === true) {
+    return null;
+  }
+  const key = String(event.key || "");
+  if (COPY_CARD_MODIFIER_KEYS.has(key)) {
+    return null;
+  }
+  if (key === "Escape") {
+    return copyCardKeyAction("close");
+  }
+  if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event)) {
+    const row =
+      copyCardRowById(model, state.highlightId) ||
+      copyCardRowById(model, model.defaultRowId);
+    return resolveCopyCardCopyAction(model, row);
+  }
+  if (
+    key === "ArrowDown" &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.ctrlKey
+  ) {
+    return copyCardKeyAction("move", {
+      rowId: stepCopyCardHighlight(model, state.highlightId, 1),
+    });
+  }
+  if (
+    key === "ArrowUp" &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.ctrlKey
+  ) {
+    return copyCardKeyAction("move", {
+      rowId: stepCopyCardHighlight(model, state.highlightId, -1),
+    });
+  }
+  if (isCopyCardCtrlLetter(event, "n")) {
+    return copyCardKeyAction("move", {
+      rowId: stepCopyCardHighlight(model, state.highlightId, 1),
+    });
+  }
+  if (isCopyCardCtrlLetter(event, "p")) {
+    return copyCardKeyAction("move", {
+      rowId: stepCopyCardHighlight(model, state.highlightId, -1),
+    });
+  }
+  if (event.altKey === true || event.ctrlKey === true || event.metaKey === true) {
+    return null;
+  }
+  if (key === "Enter") {
+    const row =
+      copyCardRowById(model, state.highlightId) ||
+      copyCardRowById(model, model.defaultRowId);
+    return resolveCopyCardCopyAction(model, row);
+  }
+  if (event.shiftKey === true && /^[a-z]$/i.test(key)) {
+    return null;
+  }
+  const bound = key.toLowerCase();
+  if (!/^[a-z0-9]$/.test(bound)) {
+    return null;
+  }
+  const rows = Array.isArray(model.rows) ? model.rows : [];
+  const matched = rows.find((row) => row.key === bound) || null;
+  if (matched) {
+    return resolveCopyCardCopyAction(model, matched);
+  }
+  if (COPY_CARD_RESERVED_KEYS.includes(bound)) {
+    return copyCardKeyAction("consume");
+  }
+  return null;
+}
+// ---- src/102-copy-card-config.js ----
+// Copy card `copy.templates` loader. Reads ~/.config/bob/config.yml through
+// the same XDG-aware path and mtime/size cache as loadBlocksLinesEnabled.
+// Never throws: missing config is empty templates, broken YAML is one
+// diagnostic that the model can render as an error row.
+
+let copyCardTemplatesCache = { key: null, value: null };
+
+function resetCopyCardTemplatesCache() {
+  copyCardTemplatesCache = { key: null, value: null };
+}
+
+function copyCardTemplatesStatKey(fsModule, configPath) {
+  return blocksLinesConfigStatKey(fsModule, configPath);
+}
+
+function freezeCopyCardTemplatesResult(result) {
+  const templates = Array.isArray(result && result.templates)
+    ? result.templates
+    : [];
+  const diagnostic =
+    result && typeof result.diagnostic === "string" && result.diagnostic
+      ? result.diagnostic
+      : undefined;
+  if (diagnostic) {
+    return Object.freeze({
+      templates: Object.freeze(templates.slice()),
+      diagnostic,
+    });
+  }
+  return Object.freeze({
+    templates: Object.freeze(templates.slice()),
+  });
+}
+
+function emptyCopyCardTemplates() {
+  return freezeCopyCardTemplatesResult({ templates: [] });
+}
+
+function loadCopyCardTemplates(options = {}) {
+  const env =
+    options.env ||
+    (typeof process !== "undefined" && process.env ? process.env : {});
+  const osModule =
+    options.osModule === undefined
+      ? requireOptionalNodeModule("os")
+      : options.osModule;
+  const fsModule =
+    options.fsModule === undefined
+      ? requireOptionalNodeModule("fs")
+      : options.fsModule;
+  const configPath =
+    options.configPath || getBulletPropertyConfigPath({ env, osModule });
+
+  if (!fsModule || typeof fsModule.readFileSync !== "function") {
+    return emptyCopyCardTemplates();
+  }
+
+  const statKey = copyCardTemplatesStatKey(fsModule, configPath);
+  const cacheKey = statKey == null ? null : `${configPath}|${statKey}`;
+  if (cacheKey != null && copyCardTemplatesCache.key === cacheKey) {
+    return copyCardTemplatesCache.value;
+  }
+
+  const remember = (result) => {
+    const frozen = freezeCopyCardTemplatesResult(result);
+    if (cacheKey != null) {
+      copyCardTemplatesCache = { key: cacheKey, value: frozen };
+    }
+    return frozen;
+  };
+
+  let rawConfig;
+  try {
+    rawConfig = fsModule.readFileSync(configPath, "utf8");
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return remember({ templates: [] });
+    }
+    return remember({
+      templates: [],
+      diagnostic: "could not read copy.templates",
+    });
+  }
+
+  const parse =
+    options.parseYaml === undefined ? parseYaml : options.parseYaml;
+  if (typeof parse !== "function") {
+    return remember({
+      templates: [],
+      diagnostic: "could not parse copy.templates",
+    });
+  }
+
+  let parsed;
+  try {
+    parsed = parse(rawConfig);
+  } catch (_error) {
+    return remember({
+      templates: [],
+      diagnostic: "could not parse copy.templates",
+    });
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return remember({ templates: [] });
+  }
+  if (!Object.prototype.hasOwnProperty.call(parsed, "copy")) {
+    return remember({ templates: [] });
+  }
+  const copy = parsed.copy;
+  if (copy === null || copy === undefined) {
+    return remember({ templates: [] });
+  }
+  if (!copyCardPlainObject(copy)) {
+    return remember({
+      templates: [],
+      diagnostic: "copy must be a mapping",
+    });
+  }
+  if (!Object.prototype.hasOwnProperty.call(copy, "templates")) {
+    return remember({ templates: [] });
+  }
+  const templates = copy.templates;
+  if (templates === null || templates === undefined) {
+    return remember({
+      templates: [],
+      diagnostic: "copy.templates must be a list",
+    });
+  }
+  if (!Array.isArray(templates)) {
+    return remember({
+      templates: [],
+      diagnostic: "copy.templates must be a list",
+    });
+  }
+  if (templates.length === 0) {
+    return remember({ templates: [] });
+  }
+
+  try {
+    return remember({ templates: normalizeCopyCardTemplates(templates) });
+  } catch (_error) {
+    return remember({
+      templates: [],
+      diagnostic: "could not parse copy.templates",
+    });
+  }
+}
 // ---- src/110-project-seed.js ----
 function buildProjectSeedFromChildBullets(childLines, createdDateString) {
   const lines = Array.isArray(childLines)
@@ -115356,4 +116549,17 @@ Object.assign(module.exports.helpers, {
 Object.assign(module.exports.helpers, {
   isDiskReloadTransaction,
   createReloadHistoryExtension,
+});
+// ---- src/717-copy-card-exports.js ----
+Object.assign(module.exports.helpers, {
+  COPY_CARD_BUILTIN_ROWS,
+  COPY_CARD_RESERVED_KEYS,
+  resolveCopyCardTask,
+  parseCopyTemplate,
+  renderCopyTemplate,
+  buildCopyCardModel,
+  resolveCopyCardKey,
+  formatCopiedNotice,
+  loadCopyCardTemplates,
+  resetCopyCardTemplatesCache,
 });

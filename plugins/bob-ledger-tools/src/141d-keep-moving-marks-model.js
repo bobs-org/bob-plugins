@@ -616,6 +616,24 @@ function keepMovingMarkAgreement(row, memo, memoIndex) {
   return Boolean(task && keepMovingMarkTaskIsOpen(task));
 }
 
+// Row titles for the tooltip (§6 KT1): the contract shows clean prose
+// ("Ship it"), while dependencyCleanTaskText keeps the note line's
+// bullet and checkbox ("- [*] Ship it"). Strip the leading list marker
+// and checkbox first; the §12.6 cleaning still runs on the residue.
+function keepMovingMarkRowTitle(rawLine) {
+  try {
+    let text = String(rawLine || "");
+    text = text.replace(/^\s*(?:[-*+]|\d+[.)])\s*\[[ xX/*?\-]\]\s*/, "");
+    text = text.replace(/^\s*(?:[-*+]|\d+[.)])\s*/, "");
+    if (typeof dependencyCleanTaskText === "function") {
+      return dependencyCleanTaskText(text);
+    }
+    return text;
+  } catch (error) {
+    return String(rawLine || "");
+  }
+}
+
 function keepMovingMarkCount(closingTask, projectInput, ctx = {}) {
   const unknown = { state: "unknown", count: 0, rows: [], folded: { blocked: 0, scheduled: 0, hidden: 0 }, projectPath: "", projectStem: "" };
   try {
@@ -685,8 +703,7 @@ function keepMovingMarkCount(closingTask, projectInput, ctx = {}) {
         link, { path: project.path, blockId: resident.blockId }, ctx.dailyPath,
       ))) continue;
       if (!Object.prototype.hasOwnProperty.call(KEEP_MOVING_MARK_LANES, resident.status)) continue;
-      const title = typeof dependencyCleanTaskText === "function"
-        ? dependencyCleanTaskText(resident.rawLine) : resident.rawLine;
+      const title = keepMovingMarkRowTitle(resident.rawLine);
       rows.push({
         path: project.path, line: resident.line, blockId: resident.blockId,
         taskId: resident.taskId, status: resident.status,

@@ -41,6 +41,11 @@ class BobLedgerToolsTaskLinkMarksMixin {
     } catch (error) {
       // Mail reply badges are best-effort.
     }
+    try {
+      if (typeof this.setupKeepMovingMarks === "function") this.setupKeepMovingMarks();
+    } catch (error) {
+      // Keep-moving marks are best-effort.
+    }
   }
 
   setupTaskLinkMarks() {

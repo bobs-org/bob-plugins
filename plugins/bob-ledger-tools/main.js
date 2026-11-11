@@ -236,6 +236,24 @@ function ensureOffClockLinkChipsRefresh() {
   }
   return offClockLinkChipsRefresh;
 }
+// Ledger keep-moving marks (bob-cli-k7 mark-surface): the consolidated
+// live-refresh fan-out dispatches this lazy effect so the Tasks memo is
+// reread without changing the daily note. Keep it lazy to avoid another
+// eager effect.
+let keepMovingMarksRefresh = null;
+function ensureKeepMovingMarksRefresh() {
+  if (keepMovingMarksRefresh) {
+    return keepMovingMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      keepMovingMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    keepMovingMarksRefresh = null;
+  }
+  return keepMovingMarksRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first
@@ -20041,6 +20059,24 @@ function keepMovingMarkAgreement(row, memo, memoIndex) {
   return Boolean(task && keepMovingMarkTaskIsOpen(task));
 }
 
+// Row titles for the tooltip (§6 KT1): the contract shows clean prose
+// ("Ship it"), while dependencyCleanTaskText keeps the note line's
+// bullet and checkbox ("- [*] Ship it"). Strip the leading list marker
+// and checkbox first; the §12.6 cleaning still runs on the residue.
+function keepMovingMarkRowTitle(rawLine) {
+  try {
+    let text = String(rawLine || "");
+    text = text.replace(/^\s*(?:[-*+]|\d+[.)])\s*\[[ xX/*?\-]\]\s*/, "");
+    text = text.replace(/^\s*(?:[-*+]|\d+[.)])\s*/, "");
+    if (typeof dependencyCleanTaskText === "function") {
+      return dependencyCleanTaskText(text);
+    }
+    return text;
+  } catch (error) {
+    return String(rawLine || "");
+  }
+}
+
 function keepMovingMarkCount(closingTask, projectInput, ctx = {}) {
   const unknown = { state: "unknown", count: 0, rows: [], folded: { blocked: 0, scheduled: 0, hidden: 0 }, projectPath: "", projectStem: "" };
   try {
@@ -20110,8 +20146,7 @@ function keepMovingMarkCount(closingTask, projectInput, ctx = {}) {
         link, { path: project.path, blockId: resident.blockId }, ctx.dailyPath,
       ))) continue;
       if (!Object.prototype.hasOwnProperty.call(KEEP_MOVING_MARK_LANES, resident.status)) continue;
-      const title = typeof dependencyCleanTaskText === "function"
-        ? dependencyCleanTaskText(resident.rawLine) : resident.rawLine;
+      const title = keepMovingMarkRowTitle(resident.rawLine);
       rows.push({
         path: project.path, line: resident.line, blockId: resident.blockId,
         taskId: resident.taskId, status: resident.status,
@@ -36737,6 +36772,11 @@ class BobLedgerToolsHeadingReviewMixin {
     }
     try {
       this.scheduleOffClockLinkChipsRefresh();
+    } catch (error) {
+      // One missed schedule never breaks the fan-out.
+    }
+    try {
+      this.scheduleKeepMovingMarksRefresh();
     } catch (error) {
       // One missed schedule never breaks the fan-out.
     }
@@ -68293,6 +68333,7 @@ class BobLedgerToolsProgressMarksReadingMixin {
                 "bob-progress-mark",
                 "bob-unblocked-glyph",
                 "bob-frees-mark",
+                "bob-keep-moving-mark",
                 "bob-off-clock-link-chip",
                 "bob-event-link-time",
                 "bob-today-mark",
@@ -72032,7 +72073,7 @@ class BobLedgerToolsOffClockLinkChipsMixin {
           const linktext = `${link.pathPart ? link.pathPart : ""}#^${link.blockId}`;
           builder.add(pos, pos, Decoration.widget({
             widget: new OffClockLinkChipWidget(model, sourcePath, linktext, this.app && this.app.workspace),
-            side: 3,
+            side: 4,
           }));
         } catch (error) {
           continue;
@@ -72238,7 +72279,7 @@ class BobLedgerToolsOffClockLinkChipsReadingMixin {
       const wrapperTag = String(wrapper && (wrapper.tagName || wrapper.nodeName) || "").toUpperCase();
       const children = wrapper && wrapper.childNodes || [];
       if (["DEL", "S", "STRIKE"].includes(wrapperTag) && children.length === 1 && children[0] === anchor) after = wrapper;
-      const markClasses = new Set(["bob-unblocked-glyph", "bob-frees-mark"]);
+      const markClasses = new Set(["bob-unblocked-glyph", "bob-frees-mark", "bob-keep-moving-mark"]);
       let next = after.nextSibling || null;
       let guard = 0;
       while (next && guard++ < 20) {
@@ -72795,6 +72836,1222 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       for (const [el, record] of Array.from(this.mailLinkMarksReadingViews.entries())) {
         if (!el) { this.mailLinkMarksReadingViews.delete(el); continue; }
         this.sweepMailLinkMarksReadingView(record);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
+// ---- src/271g-plugin-keep-moving-marks.js ----
+// --- Ledger keep-moving marks: Live Preview mixin ------------------------
+// `BobLedgerToolsKeepMovingMarksMixin` renders the quiet `⏭ N` mark after a
+// Task Link whose close will really open a Keep-moving successor group.
+// The pure gates, count, tooltip, and widget live in
+// `141d-keep-moving-marks-model.js` / `141e-keep-moving-marks-render.js`;
+// this mixin only wires them into Live Preview with the shared source-text
+// cache. Reading view lives in `271h-plugin-keep-moving-marks-reading.js`.
+// All methods are synchronous and defensive; the mark never writes vault text.
+class BobLedgerToolsKeepMovingMarksMixin {
+  setupKeepMovingMarks() {
+    try {
+      if (typeof this.keepMovingMarksEnabled !== "boolean") {
+        this.keepMovingMarksEnabled = true;
+      }
+      if (this.keepMovingMarksTimer === undefined) {
+        this.keepMovingMarksTimer = null;
+      }
+      if (this.keepMovingMarksRolloverTimer === undefined) {
+        this.keepMovingMarksRolloverTimer = null;
+      }
+      if (!(this.keepMovingMarkCountsByEditor instanceof WeakMap)) {
+        this.keepMovingMarkCountsByEditor = new WeakMap();
+      }
+      try {
+        this.keepMovingMarkDay = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        this.keepMovingMarkDay = null;
+      }
+      this.applyMarkGateClass("bob-keep-moving-marks", this.keepMovingMarksEnabled);
+      this.registerMarkGatePopoutSync(
+        "bob-keep-moving-marks",
+        () => this.keepMovingMarksEnabled,
+      );
+      try {
+        if (typeof this.addCommand === "function") {
+          this.addCommand({
+            id: "toggle-keep-moving-marks",
+            name: "Toggle Task Link keep-moving marks",
+            callback: () => this.toggleKeepMovingMarks(),
+          });
+        }
+      } catch (error) {
+        // The command is best-effort.
+      }
+      try {
+        const extension = this.createKeepMovingMarksExtension();
+        if (extension && typeof this.registerEditorExtension === "function") {
+          this.registerEditorExtension(extension);
+        }
+      } catch (error) {
+        // Live Preview is best-effort.
+      }
+      try {
+        if (typeof this.setupKeepMovingMarksReading === "function") {
+          this.setupKeepMovingMarksReading();
+        }
+      } catch (error) {
+        // Reading view is best-effort.
+      }
+      try {
+        const metadataCache = this.app && this.app.metadataCache;
+        if (metadataCache && typeof metadataCache.on === "function") {
+          this.registerEvent(
+            metadataCache.on("changed", (file) =>
+              this.refreshKeepMovingMarksForChangedFile(file),
+            ),
+          );
+          this.registerEvent(
+            metadataCache.on("resolved", () =>
+              this.scheduleKeepMovingMarksRefresh(),
+            ),
+          );
+        }
+      } catch (error) {
+        // The daily-note hook is best-effort.
+      }
+      try {
+        const vault = this.app && this.app.vault;
+        if (vault && typeof vault.on === "function") {
+          this.registerEvent(
+            vault.on("rename", (file, oldPath) => {
+              try {
+                const cache = this.taskThemeSourceCacheStore();
+                const old = normalizeVaultPath(String(oldPath || ""));
+                if (cache instanceof Map && old) cache.delete(old);
+              } catch (error) {
+                // A moved note is re-read on demand.
+              }
+              this.scheduleKeepMovingMarksRefresh();
+            }),
+          );
+          this.registerEvent(
+            vault.on("delete", (file) => {
+              try {
+                const cache = this.taskThemeSourceCacheStore();
+                const filePath = normalizeVaultPath(String((file && file.path) || ""));
+                if (cache instanceof Map && filePath) cache.delete(filePath);
+              } catch (error) {
+                // Cache cleanup is best-effort.
+              }
+              this.scheduleKeepMovingMarksRefresh();
+            }),
+          );
+        }
+      } catch (error) {
+        // Vault hooks are best-effort.
+      }
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (
+          workspace &&
+          typeof workspace.on === "function" &&
+          typeof this.registerEvent === "function" &&
+          !this.keepMovingMarksLayoutHooked
+        ) {
+          this.keepMovingMarksLayoutHooked = true;
+          this.registerEvent(
+            workspace.on("layout-change", () => this.scheduleKeepMovingMarksRefresh()),
+          );
+        }
+      } catch (error) {
+        // Layout-change refresh is best-effort.
+      }
+      try {
+        if (typeof this.relationIndexApi === "function") {
+          const api = this.relationIndexApi();
+          if (api && typeof api.onChange === "function" && !this.keepMovingMarksRelationHooked) {
+            this.keepMovingMarksRelationHooked = true;
+            const unsubscribe = api.onChange(() => this.scheduleKeepMovingMarksRefresh());
+            if (typeof this.register === "function" && typeof unsubscribe === "function") {
+              this.register(unsubscribe);
+            }
+          }
+        }
+      } catch (error) {
+        // Relation-index refresh is best-effort.
+      }
+      try {
+        if (
+          this.keepMovingMarksRolloverTimer === null &&
+          typeof this.registerInterval === "function"
+        ) {
+          const interval = setInterval(
+            () => this.refreshKeepMovingMarksForRollover(new Date()),
+            60 * 1000,
+          );
+          this.keepMovingMarksRolloverTimer = interval;
+          try {
+            if (interval && typeof interval.unref === "function") {
+              interval.unref();
+            }
+          } catch (error) {
+            // A rollover poll must never keep a host process alive by itself.
+          }
+          this.registerInterval(interval);
+        }
+      } catch (error) {
+        // The midnight rollover hook is best-effort.
+      }
+      try {
+        if (typeof this.register === "function") {
+          this.register(() => this.teardownKeepMovingMarks());
+        }
+      } catch (error) {
+        // Obsidian also runs onunload; explicit registration covers teardown paths.
+      }
+    } catch (error) {
+      // Setup is display-only and never throws.
+    }
+  }
+
+  keepMovingMarksAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin &&
+          Decoration &&
+          WidgetType &&
+          StateEffect &&
+          typeof StateEffect.define === "function" &&
+          RangeSetBuilder &&
+          editorInfoField &&
+          editorLivePreviewField &&
+          KeepMovingMarkWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createKeepMovingMarksExtension() {
+    try {
+      if (!this.keepMovingMarksAvailable()) {
+        return null;
+      }
+      if (
+        !ViewPlugin ||
+        typeof ViewPlugin.fromClass !== "function" ||
+        !Prec ||
+        typeof Prec.highest !== "function"
+      ) {
+        return null;
+      }
+      const plugin = this;
+      const KeepMovingMarksPluginClass = class {
+        constructor(view) {
+          try {
+            this.decorations = plugin.buildKeepMovingMarkDecorations(view);
+          } catch (error) {
+            this.decorations = Decoration.none;
+          }
+        }
+
+        update(update) {
+          try {
+            if (plugin.keepMovingMarkShouldRebuild(update)) {
+              this.decorations = plugin.buildKeepMovingMarkDecorations(
+                update.view,
+                { suppressMotion: Boolean(update.viewportChanged && !update.docChanged) },
+              );
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(
+        ViewPlugin.fromClass(KeepMovingMarksPluginClass, {
+          decorations: (value) => value.decorations,
+        }),
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  keepMovingMarkShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") {
+        return false;
+      }
+      if (update.docChanged || update.viewportChanged) {
+        return true;
+      }
+      try {
+        const refresh = ensureKeepMovingMarksRefresh();
+        for (const transaction of update.transactions || []) {
+          const effects = transaction && transaction.effects;
+          if (!effects) {
+            continue;
+          }
+          for (const effect of Array.isArray(effects) ? effects : [effect]) {
+            try {
+              if (
+                effect === refresh ||
+                (refresh && typeof effect.is === "function" && effect.is(refresh))
+              ) {
+                return true;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        }
+      } catch (error) {
+        // Refresh effect scan is best-effort.
+      }
+      try {
+        if (editorLivePreviewField && update.startState && update.state) {
+          const before = update.startState.field(editorLivePreviewField);
+          const after = update.state.field(editorLivePreviewField);
+          if (before !== after) {
+            return true;
+          }
+        }
+        if (editorInfoField && update.startState && update.state) {
+          const before = update.startState.field(editorInfoField);
+          const after = update.state.field(editorInfoField);
+          const beforePath = before && before.file ? before.file.path : null;
+          const afterPath = after && after.file ? after.file.path : null;
+          if (beforePath !== afterPath) {
+            return true;
+          }
+        }
+      } catch (error) {
+        // Field comparison is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  keepMovingMarkEditorCounts(view) {
+    try {
+      if (!view || (typeof view !== "object" && typeof view !== "function")) {
+        return null;
+      }
+      if (!(this.keepMovingMarkCountsByEditor instanceof WeakMap)) {
+        this.keepMovingMarkCountsByEditor = new WeakMap();
+      }
+      let counts = this.keepMovingMarkCountsByEditor.get(view);
+      if (!(counts instanceof Map)) {
+        counts = new Map();
+        this.keepMovingMarkCountsByEditor.set(view, counts);
+      }
+      return counts;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  rememberKeepMovingMarkCount(counts, key, count) {
+    try {
+      if (!(counts instanceof Map) || !key) {
+        return { tick: false, previous: undefined };
+      }
+      const existed = counts.has(key);
+      const previous = existed ? counts.get(key) : undefined;
+      counts.delete(key);
+      counts.set(key, count);
+      while (counts.size > 2000) {
+        const oldest = counts.keys().next().value;
+        counts.delete(oldest);
+      }
+      return {
+        tick: existed && previous !== count && count >= 1,
+        previous,
+      };
+    } catch (error) {
+      return { tick: false, previous: undefined };
+    }
+  }
+
+  keepMovingMarkTodayString(memo) {
+    try {
+      if (memo && typeof memo.dateText === "string" && /^\d{4}-\d{2}-\d{2}$/.test(memo.dateText)) {
+        return memo.dateText;
+      }
+    } catch (error) {
+      // Fall through to the local date.
+    }
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  }
+
+  // One ctx per build: the same accessors feed the Live Preview and Reading
+  // sweeps, so both surfaces evaluate the same gates against the same
+  // snapshots. A project note with no cached text is requested through the
+  // shared source-text cache and reads as unknown until the fill fan-out
+  // schedules a follow-up refresh.
+  keepMovingMarkLoadConfig() {
+    try {
+      return loadKeepMovingMarkConfig();
+    } catch (error) {
+      return { keepMoving: true, linkUnblocked: true, successorLabels: [] };
+    }
+  }
+
+  keepMovingMarkPluginContext(content) {
+    const plugin = this;
+    let config = null;
+    try {
+      config = plugin.keepMovingMarkLoadConfig();
+    } catch (error) {
+      config = null;
+    }
+    let relationIndex = null;
+    try {
+      relationIndex =
+        typeof plugin.relationIndexApi === "function" ? plugin.relationIndexApi() : null;
+    } catch (error) {
+      relationIndex = null;
+    }
+    let dailyPath = null;
+    try {
+      dailyPath = plugin.currentTodayDailyPath(new Date());
+    } catch (error) {
+      dailyPath = null;
+    }
+    return {
+      config: config || { keepMoving: true, linkUnblocked: true, successorLabels: [] },
+      relationIndex,
+      dailyPath,
+      dayText: typeof content === "string" ? content : "",
+      toggleOn: plugin.keepMovingMarksEnabled !== false,
+      noteTextFor: (notePath) => {
+        try {
+          const text = plugin.taskThemeSourceTextFor(notePath);
+          if (typeof text === "string") {
+            return text;
+          }
+          try {
+            plugin.taskThemeRequestSourceText(notePath);
+          } catch (error) {
+            // The fill fan-out refreshes once the text lands.
+          }
+        } catch (error) {
+          // Unknown inputs render as nothing until the next refresh.
+        }
+        return "";
+      },
+      frontmatterFor: (notePath) => {
+        try {
+          const metadataCache = plugin.app && plugin.app.metadataCache;
+          if (metadataCache && typeof metadataCache.getCache === "function") {
+            const entry = metadataCache.getCache(notePath);
+            if (entry && entry.frontmatter && typeof entry.frontmatter === "object") {
+              return entry.frontmatter;
+            }
+          }
+        } catch (error) {
+          // The model falls back to parsing the note text.
+        }
+        return null;
+      },
+      markdownPaths: () => {
+        try {
+          const vault = plugin.app && plugin.app.vault;
+          if (vault && typeof vault.getMarkdownFiles === "function") {
+            return vault.getMarkdownFiles().map((file) => file && file.path).filter(Boolean);
+          }
+        } catch (error) {
+          // An unreadable file list reads as ambiguous, never as a leaf.
+        }
+        return [];
+      },
+      resolveLinkpath: (target, sourcePath) => {
+        try {
+          const metadataCache = plugin.app && plugin.app.metadataCache;
+          if (metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+            const file = metadataCache.getFirstLinkpathDest(
+              String(target || ""),
+              sourcePath || dailyPath,
+            );
+            if (file && typeof file.path === "string") {
+              return file;
+            }
+          }
+        } catch (error) {
+          // Unresolvable parents read as ambiguous.
+        }
+        return null;
+      },
+    };
+  }
+
+  buildKeepMovingMarkDecorations(view, options) {
+    try {
+      if (
+        !this.keepMovingMarksEnabled ||
+        !Decoration ||
+        !RangeSetBuilder ||
+        !KeepMovingMarkWidget ||
+        !editorInfoField ||
+        !editorLivePreviewField
+      ) {
+        return Decoration.none;
+      }
+      let live = false;
+      let info = null;
+      try {
+        live = Boolean(view.state.field(editorLivePreviewField));
+        info = view.state.field(editorInfoField);
+      } catch (error) {
+        return Decoration.none;
+      }
+      const filePath =
+        info && info.file && typeof info.file.path === "string"
+          ? info.file.path
+          : null;
+      if (!live || !filePath) {
+        return Decoration.none;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (!dailyPath || !sameVaultPath(filePath, dailyPath)) {
+        return Decoration.none;
+      }
+      const doc = view.state.doc;
+      if (!doc || typeof doc.toString !== "function" || typeof doc.line !== "function") {
+        return Decoration.none;
+      }
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
+        return Decoration.none;
+      }
+      const content = doc.toString();
+      const rows = content.replace(/\r\n/g, "\n").split("\n");
+      const ranges = view.visibleRanges || [];
+      const isVisible = (lineNumber, ch) => {
+        try {
+          const line = doc.line(lineNumber + 1);
+          if (!line || typeof line.from !== "number") return false;
+          const pos = line.from + ch;
+          return ranges.some((range) =>
+            range &&
+            typeof range.from === "number" &&
+            typeof range.to === "number" &&
+            pos >= range.from &&
+            pos <= range.to,
+          );
+        } catch (error) {
+          return false;
+        }
+      };
+      const ctx = this.keepMovingMarkPluginContext(content);
+      // The whole day is parsed so a link below the fold can still fail G4;
+      // the count itself is evaluated once per project per build, and only
+      // visible ranges grow widgets.
+      const entries = keepMovingMarkCandidateLinks(content, memo, this.keepMovingMarkTodayString(memo), {
+        ...ctx,
+        dailyPath,
+        isToday: true,
+        isVisible,
+      });
+      const builder = new RangeSetBuilder();
+      const counts = this.keepMovingMarkEditorCounts(view);
+      const transitions = new Map();
+      const workspace = this.app && this.app.workspace;
+      for (const entry of entries) {
+        try {
+          const key = entry.ownerKey || entry.ownerPath + "\u0000" + entry.ownerBlockId;
+          if (!transitions.has(key)) {
+            transitions.set(
+              key,
+              this.rememberKeepMovingMarkCount(counts, key, entry.count),
+            );
+          }
+          const transition = transitions.get(key);
+          if (options && options.suppressMotion && transition) {
+            transition.tick = false;
+          }
+          if (!entry || entry.state !== "positive" || !(entry.count >= 1)) {
+            continue;
+          }
+          const lineText = rows[entry.line];
+          if (typeof lineText !== "string") {
+            continue;
+          }
+          const endCh = freesMarkLinkEndCh(lineText);
+          if (!Number.isInteger(endCh)) {
+            continue;
+          }
+          const line = doc.line(entry.line + 1);
+          if (!line || typeof line.from !== "number") {
+            continue;
+          }
+          const pos = line.from + endCh;
+          if (!isVisible(entry.line, endCh)) {
+            continue;
+          }
+          builder.add(
+            pos,
+            pos,
+            Decoration.widget({
+              widget: new KeepMovingMarkWidget(
+                { ...entry, tick: Boolean(transition && transition.tick) },
+                filePath,
+                workspace,
+              ),
+              side: 3,
+            }),
+          );
+        } catch (error) {
+          continue;
+        }
+      }
+      return builder.finish();
+    } catch (error) {
+      try {
+        return Decoration.none;
+      } catch (inner) {
+        return null;
+      }
+    }
+  }
+
+  toggleKeepMovingMarks() {
+    try {
+      this.keepMovingMarksEnabled = !this.keepMovingMarksEnabled;
+      const enabled = this.keepMovingMarksEnabled;
+      this.applyMarkGateClass("bob-keep-moving-marks", enabled);
+      this.refreshKeepMovingMarksEditors();
+      this.refreshKeepMovingMarksReadingViews();
+      try {
+        new Notice(enabled ? "Keep-moving marks on" : "Keep-moving marks off");
+      } catch (error) {
+        // Notice is best-effort.
+      }
+      return enabled;
+    } catch (error) {
+      return Boolean(this.keepMovingMarksEnabled);
+    }
+  }
+
+  refreshKeepMovingMarksEditors(allMarkdown) {
+    try {
+      const refresh = ensureKeepMovingMarksRefresh();
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const filePath = view && view.file && view.file.path;
+          if (
+            !allMarkdown &&
+            filePath &&
+            dailyPath &&
+            !sameVaultPath(filePath, dailyPath)
+          ) {
+            continue;
+          }
+          const cm = view && view.editor && view.editor.cm;
+          if (cm && typeof cm.dispatch === "function" && refresh) {
+            cm.dispatch({ effects: refresh.of(null) });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleKeepMovingMarksRefresh() {
+    try {
+      if (this.keepMovingMarksTimer !== null && this.keepMovingMarksTimer !== undefined) {
+        return;
+      }
+      const schedule =
+        typeof window !== "undefined" && typeof window.setTimeout === "function"
+          ? window.setTimeout
+          : setTimeout;
+      this.keepMovingMarksTimer = schedule(() => {
+        this.keepMovingMarksTimer = null;
+        try {
+          this.refreshKeepMovingMarksEditors();
+          this.refreshKeepMovingMarksReadingViews();
+        } catch (error) {
+          // One missed refresh never changes the ledger.
+        }
+      }, 120);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  teardownKeepMovingMarks() {
+    try {
+      if (
+        this.keepMovingMarksTimer !== null &&
+        this.keepMovingMarksTimer !== undefined &&
+        typeof clearTimeout === "function"
+      ) {
+        clearTimeout(this.keepMovingMarksTimer);
+      }
+      this.keepMovingMarksTimer = null;
+      if (
+        this.keepMovingMarksRolloverTimer !== null &&
+        this.keepMovingMarksRolloverTimer !== undefined &&
+        typeof clearInterval === "function"
+      ) {
+        clearInterval(this.keepMovingMarksRolloverTimer);
+      }
+      this.keepMovingMarksRolloverTimer = null;
+      if (this.keepMovingMarksReadingViews instanceof Map) {
+        this.keepMovingMarksReadingViews.clear();
+      }
+      if (
+        typeof document !== "undefined" &&
+        document &&
+        document.body &&
+        document.body.classList &&
+        typeof document.body.classList.remove === "function"
+      ) {
+        document.body.classList.remove("bob-keep-moving-marks");
+      }
+    } catch (error) {
+      // Timer and body-gate cleanup are best-effort.
+    }
+  }
+
+  refreshKeepMovingMarksForChangedFile(file) {
+    try {
+      const changedPath = file && typeof file.path === "string" ? file.path : "";
+      if (!changedPath) {
+        return false;
+      }
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (dailyPath && sameVaultPath(changedPath, dailyPath)) {
+        this.scheduleKeepMovingMarksRefresh();
+        return true;
+      }
+      // A project note behind today's live links can move a gate or the
+      // count. Only notes the mark already reads (the shared source-text
+      // cache) schedule a refresh; anything else is not our input.
+      try {
+        const cache = this.taskThemeSourceCacheStore();
+        if (cache instanceof Map && cache.has(normalizeVaultPath(changedPath))) {
+          this.scheduleKeepMovingMarksRefresh();
+          return true;
+        }
+      } catch (error) {
+        // Cache lookup is best-effort.
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  refreshKeepMovingMarksForRollover(now) {
+    try {
+      const dailyPath = this.currentTodayDailyPath(
+        now instanceof Date ? now : new Date(),
+      );
+      if (!dailyPath) {
+        return false;
+      }
+      if (this.keepMovingMarkDay === null || this.keepMovingMarkDay === undefined) {
+        this.keepMovingMarkDay = dailyPath;
+        return false;
+      }
+      if (sameVaultPath(this.keepMovingMarkDay, dailyPath)) {
+        return false;
+      }
+      this.keepMovingMarkDay = dailyPath;
+      // A new daily note is a first paint. Drop prior counts so no mark
+      // inherits a tick, and invalidate yesterday's editor so its marks
+      // disappear without waiting for an edit or viewport update.
+      this.keepMovingMarkCountsByEditor = new WeakMap();
+      this.refreshKeepMovingMarksEditors(true);
+      this.refreshKeepMovingMarksReadingViews();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
+// ---- src/271h-plugin-keep-moving-marks-reading.js ----
+// --- Keep-moving marks: Reading view sweeps -------------------------------
+// Reconciles display-only `⏭ N` hosts against the current note text and the
+// same pure count the Live Preview mixin uses. It records roots from every
+// window and also discovers open leaves. The host stays listener-free like
+// 🔑's, so Reading-view re-renders never drop it.
+class BobLedgerToolsKeepMovingMarksReadingMixin {
+  setupKeepMovingMarksReading() {
+    try {
+      if (!(this.keepMovingMarksReadingViews instanceof Map)) {
+        this.keepMovingMarksReadingViews = new Map();
+      }
+      if (typeof this.registerMarkdownPostProcessor === "function") {
+        this.registerMarkdownPostProcessor((el, ctx) => this.renderKeepMovingMarksIn(el, ctx), 63);
+      }
+    } catch (error) {
+      // Reading-view setup is best-effort.
+    }
+  }
+
+  renderKeepMovingMarksIn(el, ctx) {
+    try {
+      if (!el || !ctx || typeof ctx.sourcePath !== "string") {
+        return;
+      }
+      if (!(this.keepMovingMarksReadingViews instanceof Map)) {
+        this.keepMovingMarksReadingViews = new Map();
+      }
+      const record = { el, ctx, sourcePath: ctx.sourcePath };
+      this.keepMovingMarksReadingViews.set(el, record);
+      this.sweepKeepMovingMarksReadingView(record);
+      try {
+        this.scheduleKeepMovingMarksRefresh();
+      } catch (error) {
+        // A follow-up sweep covers a section that was still detaching.
+      }
+      if (typeof ctx.addChild === "function") {
+        let child = null;
+        try {
+          if (typeof MarkdownRenderChild === "function") {
+            child = new MarkdownRenderChild(el);
+            child.onunload = () => {
+              if (this.keepMovingMarksReadingViews) {
+                this.keepMovingMarksReadingViews.delete(el);
+              }
+            };
+          }
+        } catch (error) {
+          child = null;
+        }
+        if (!child) {
+          child = {
+            unload: () => {
+              if (this.keepMovingMarksReadingViews) {
+                this.keepMovingMarksReadingViews.delete(el);
+              }
+            },
+          };
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Older hosts may reject processor children.
+        }
+      }
+    } catch (error) {
+      // Reading-view marks never throw.
+    }
+  }
+
+  keepMovingMarkPreviewRecords() {
+    const records = [];
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.getLeavesOfType !== "function") {
+        return records;
+      }
+      const leaves = workspace.getLeavesOfType("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          const view = leaf && leaf.view ? leaf.view : null;
+          const sourcePath =
+            view && view.file && typeof view.file.path === "string"
+              ? view.file.path
+              : "";
+          if (!sourcePath) {
+            continue;
+          }
+          const container =
+            (view.previewMode && view.previewMode.containerEl) ||
+            view.contentEl ||
+            view.containerEl ||
+            null;
+          if (!container || typeof container.querySelector !== "function") {
+            continue;
+          }
+          const root =
+            container.querySelector(
+              ".markdown-preview-view, .markdown-reading-view",
+            ) || container;
+          if (root) {
+            records.push({ el: root, sourcePath });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      return records;
+    }
+    return records;
+  }
+
+  refreshKeepMovingMarksReadingViews() {
+    try {
+      let refreshed = false;
+      if (this.keepMovingMarksReadingViews instanceof Map) {
+        for (const [el, record] of Array.from(this.keepMovingMarksReadingViews.entries())) {
+          try {
+            if (!el) {
+              this.keepMovingMarksReadingViews.delete(el);
+              continue;
+            }
+            this.sweepKeepMovingMarksReadingView(record);
+            refreshed = true;
+          } catch (error) {
+            continue;
+          }
+        }
+      }
+      for (const record of this.keepMovingMarkPreviewRecords()) {
+        try {
+          this.sweepKeepMovingMarksReadingView(record);
+          refreshed = true;
+        } catch (error) {
+          continue;
+        }
+      }
+      return refreshed;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  keepMovingMarkReadingOwnedHosts(li, root) {
+    try {
+      const found =
+        li && typeof li.querySelectorAll === "function"
+          ? li.querySelectorAll(".bob-keep-moving-mark")
+          : [];
+      const hosts = [];
+      for (const host of found || []) {
+        try {
+          let node = host.parentNode || null;
+          let owner = null;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            const tag = String(node.tagName || node.nodeName || "").toUpperCase();
+            if (tag === "LI") {
+              owner = node;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (owner === li) {
+            hosts.push(host);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  removeKeepMovingMarkHost(host) {
+    try {
+      if (host && host.parentNode && typeof host.parentNode.removeChild === "function") {
+        host.parentNode.removeChild(host);
+      }
+    } catch (error) {
+      // A stale Reading-view host is harmless.
+    }
+  }
+
+  paintKeepMovingMarkHost(host, doc, model) {
+    try {
+      if (!host || !doc || !model) {
+        return false;
+      }
+      host.setAttribute("class", "bob-keep-moving-mark");
+      host.setAttribute("role", "img");
+      host.setAttribute("aria-label", keepMovingMarkTooltip(model));
+      host.setAttribute("data-tooltip-position", "top");
+      host.setAttribute("data-count", String(model.count));
+      host.setAttribute("data-block-id", String(model.blockId || ""));
+      host.setAttribute("data-project", String(model.projectPath || ""));
+      if (typeof host.removeAttribute === "function") {
+        host.removeAttribute("title");
+      }
+      host.textContent = "";
+      const glyph = doc.createElement("span");
+      glyph.setAttribute("class", "bob-keep-moving-mark-glyph");
+      glyph.setAttribute("aria-hidden", "true");
+      host.appendChild(glyph);
+      if (typeof doc.createTextNode === "function") {
+        host.appendChild(doc.createTextNode(String(model.count)));
+      } else {
+        const count = doc.createElement("span");
+        count.textContent = String(model.count);
+        host.appendChild(count);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // KP3/KP4: after the last of the link's trailing unblocked glyph, mail
+  // reply badge, and 🔑 siblings; always before the off-clock chip, which
+  // stays last. With none of those, right after the link (or its sole
+  // strike-through wrapper).
+  keepMovingMarkReadingInsertAfter(anchor) {
+    try {
+      if (!anchor) {
+        return null;
+      }
+      let after = anchor;
+      const wrapper = anchor.parentNode || null;
+      const wrapperTag = String(wrapper && (wrapper.tagName || wrapper.nodeName) || "").toUpperCase();
+      const wrapperChildren = wrapper && wrapper.childNodes ? wrapper.childNodes : [];
+      if (
+        ["DEL", "S", "STRIKE"].includes(wrapperTag) &&
+        wrapperChildren.length === 1 &&
+        wrapperChildren[0] === anchor
+      ) {
+        after = wrapper;
+      }
+      const beforeClasses = new Set(["bob-unblocked-glyph", "bob-mail-reply-badge", "bob-frees-mark"]);
+      let next = after.nextSibling || null;
+      let guard = 0;
+      while (next && guard < 20) {
+        guard += 1;
+        let names = [];
+        try {
+          names = String(
+            (next.className !== undefined ? next.className : null) ??
+              (next.getAttribute ? next.getAttribute("class") : "") ?? "",
+          ).split(/\s+/).filter(Boolean);
+        } catch (error) {
+          names = [];
+        }
+        if (names.includes("bob-off-clock-link-chip")) {
+          break;
+        }
+        if (names.includes("bob-keep-moving-mark")) {
+          after = next;
+          next = after.nextSibling || null;
+          continue;
+        }
+        if (!names.some((name) => beforeClasses.has(name))) {
+          break;
+        }
+        after = next;
+        next = after.nextSibling || null;
+      }
+      return after;
+    } catch (error) {
+      return anchor || null;
+    }
+  }
+
+  sweepKeepMovingMarksReadingView(record) {
+    try {
+      const root = record && record.el;
+      const sourcePath = String((record && record.sourcePath) || "");
+      if (!root || !sourcePath) {
+        return false;
+      }
+      const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (!doc) {
+        return false;
+      }
+      const allHosts =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll(".bob-keep-moving-mark"))
+          : [];
+      const removeAll = () => {
+        for (const host of allHosts) {
+          this.removeKeepMovingMarkHost(host);
+        }
+      };
+      let dailyPath = null;
+      try {
+        dailyPath = this.currentTodayDailyPath(new Date());
+      } catch (error) {
+        dailyPath = null;
+      }
+      if (
+        this.keepMovingMarksEnabled === false ||
+        !dailyPath ||
+        !sameVaultPath(sourcePath, dailyPath)
+      ) {
+        removeAll();
+        return true;
+      }
+      const memo = this.freshnessEnsureMemo();
+      if (!memo || !Array.isArray(memo.tasks) || memo.tasks.length === 0) {
+        removeAll();
+        return true;
+      }
+      let content = null;
+      try {
+        content = this.taskThemeSourceTextFor(sourcePath);
+      } catch (error) {
+        content = null;
+      }
+      if (typeof content !== "string") {
+        try {
+          this.taskThemeRequestSourceText(sourcePath);
+        } catch (error) {
+          // The fill fan-out refreshes once the text lands.
+        }
+        removeAll();
+        return true;
+      }
+      const ctx = this.keepMovingMarkPluginContext(content);
+      ctx.memo = memo;
+      ctx.dailyPath = dailyPath;
+      const today = this.keepMovingMarkTodayString(memo);
+      ctx.today = today;
+      const index = unblockedGlyphIndex(memo.tasks);
+      const resolutions = new Map();
+      const counts = new Map();
+      const items =
+        typeof root.querySelectorAll === "function"
+          ? Array.from(root.querySelectorAll("li"))
+          : [];
+      const seenHosts = new Set();
+      for (const li of items) {
+        try {
+          const existing = this.keepMovingMarkReadingOwnedHosts(li, root);
+          let context = null;
+          try {
+            context = this.progressMarkReadingContext(li, root, {
+              allowLedgerMarks: true,
+            });
+          } catch (error) {
+            context = null;
+          }
+          let model = null;
+          if (context && context.target && context.blockId) {
+            const targetKey = String(context.target || "") + "\u0000" + String(context.blockId || "");
+            let linked;
+            if (resolutions.has(targetKey)) {
+              linked = resolutions.get(targetKey);
+            } else {
+              linked = freesMarkLinkedTask(
+                index,
+                context.target,
+                context.blockId,
+                sourcePath,
+              );
+              resolutions.set(targetKey, linked || null);
+            }
+            if (linked && keepMovingMarkTaskIsOpen(linked)) {
+              const path = keepMovingMarkPath(planTaskPath(linked));
+              const blockId = String(planTaskBlockId(linked) || "");
+              const ownerKey = path && blockId ? path + "\u0000" + blockId : targetKey;
+              let count;
+              if (counts.has(ownerKey)) {
+                count = counts.get(ownerKey);
+              } else {
+                count = keepMovingMarkCount(linked, { path }, ctx);
+                counts.set(ownerKey, count || null);
+              }
+              if (count && count.state === "positive" && count.count >= 1) {
+                model = {
+                  ...count,
+                  blockId: context.blockId,
+                  ownerPath: path,
+                  ownerBlockId: blockId,
+                  ownerKey,
+                  target: context.target,
+                  linktext:
+                    (String(context.target || "") ? String(context.target) : "") +
+                    "#^" +
+                    String(context.blockId || ""),
+                  dailyPath,
+                };
+              }
+            }
+          }
+          if (!model) {
+            for (const host of existing) {
+              this.removeKeepMovingMarkHost(host);
+            }
+            continue;
+          }
+          let host = existing[0] || null;
+          if (!host) {
+            host = buildKeepMovingMarkElement(doc, model);
+          } else {
+            this.paintKeepMovingMarkHost(host, doc, model);
+          }
+          if (!host) {
+            continue;
+          }
+          const after = this.keepMovingMarkReadingInsertAfter(context.anchor);
+          const parent = after && after.parentNode;
+          if (parent && typeof parent.insertBefore === "function") {
+            if (host.parentNode !== parent || host.previousSibling !== after) {
+              parent.insertBefore(host, after.nextSibling || null);
+            }
+          }
+          seenHosts.add(host);
+          for (const duplicate of existing.slice(1)) {
+            this.removeKeepMovingMarkHost(duplicate);
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      // Remove orphaned hosts whose row is no longer inside a list item.
+      for (const host of allHosts) {
+        try {
+          if (seenHosts.has(host)) {
+            continue;
+          }
+          let node = host.parentNode || null;
+          let inList = false;
+          let guard = 0;
+          while (node && node !== root && guard < 100) {
+            guard += 1;
+            if (String(node.tagName || node.nodeName || "").toUpperCase() === "LI") {
+              inList = true;
+              break;
+            }
+            node = node.parentNode || null;
+          }
+          if (!inList) {
+            this.removeKeepMovingMarkHost(host);
+          }
+        } catch (error) {
+          continue;
+        }
       }
       return true;
     } catch (error) {
@@ -82078,7 +83335,7 @@ class BobLedgerToolsTaskThemeApiMixin {
         cache.delete(normalized);
       }
       cache.set(normalized, text);
-      while (cache.size > 32) {
+      while (cache.size > 64) {
         const first = cache.keys().next().value;
         cache.delete(first);
       }
@@ -82178,6 +83435,13 @@ class BobLedgerToolsTaskThemeApiMixin {
             }
           } catch (error) {
             // Off-clock link chips may be disabled or unavailable.
+          }
+          try {
+            if (typeof self.scheduleKeepMovingMarksRefresh === "function") {
+              self.scheduleKeepMovingMarksRefresh();
+            }
+          } catch (error) {
+            // Keep-moving marks may be disabled or unavailable.
           }
           try {
             if (typeof self.schedulePlanBlockRerender === "function") {
@@ -88277,6 +89541,11 @@ class BobLedgerToolsTaskLinkMarksMixin {
       if (typeof this.setupMailLinkMarks === "function") this.setupMailLinkMarks();
     } catch (error) {
       // Mail reply badges are best-effort.
+    }
+    try {
+      if (typeof this.setupKeepMovingMarks === "function") this.setupKeepMovingMarks();
+    } catch (error) {
+      // Keep-moving marks are best-effort.
     }
   }
 
@@ -98227,6 +99496,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsOffClockLinkChipsReadingMixin,
   BobLedgerToolsMailLinkMarksMixin,
   BobLedgerToolsMailLinkMarksReadingMixin,
+  BobLedgerToolsKeepMovingMarksMixin,
+  BobLedgerToolsKeepMovingMarksReadingMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,
@@ -100828,8 +102099,9 @@ module.exports.helpers = {
   FREES_MARK_KEY, freesMarkTaskId, freesMarkCount, freesMarkLinkedTask,
   freesMarkCandidateLinks, freesMarkLinks, freesMarkTooltip,
   buildFreesMarkElement, FreesMarkWidget,
-  KEEP_MOVING_MARK_MAX_PARENT_DEPTH, keepMovingMarkPath, keepMovingMarkPathIsIndexed, keepMovingMarkTypeIsProject, keepMovingMarkRootFlag, keepMovingMarkParentTarget, keepMovingMarkResolveParent, keepMovingMarkTaskRows, keepMovingMarkParseProject, keepMovingMarkLeafProject, keepMovingMarkLiveLinks, keepMovingMarkLinkMatchesIdentity, keepMovingMarkCount, keepMovingMarkCandidateLinks, keepMovingMarkLinks, keepMovingMarkTooltip, buildKeepMovingMarkElement, KeepMovingMarkWidget,
+  KEEP_MOVING_MARK_MAX_PARENT_DEPTH, keepMovingMarkPath, keepMovingMarkPathIsIndexed, keepMovingMarkTypeIsProject, keepMovingMarkRootFlag, keepMovingMarkParentTarget, keepMovingMarkResolveParent, keepMovingMarkTaskRows, keepMovingMarkParseProject, keepMovingMarkLeafProject, keepMovingMarkLiveLinks, keepMovingMarkLinkMatchesIdentity, keepMovingMarkRowTitle, keepMovingMarkCount, keepMovingMarkCandidateLinks, keepMovingMarkLinks, keepMovingMarkTooltip, buildKeepMovingMarkElement, KeepMovingMarkWidget,
   ensureFreesMarksRefresh,
+  ensureKeepMovingMarksRefresh,
   offClockLinkChipLinks,
   offClockLinkChipTooltip,
   offClockLinkChipModel,

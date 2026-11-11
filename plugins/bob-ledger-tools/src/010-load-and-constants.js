@@ -216,6 +216,24 @@ function ensureOffClockLinkChipsRefresh() {
   }
   return offClockLinkChipsRefresh;
 }
+// Ledger keep-moving marks (bob-cli-k7 mark-surface): the consolidated
+// live-refresh fan-out dispatches this lazy effect so the Tasks memo is
+// reread without changing the daily note. Keep it lazy to avoid another
+// eager effect.
+let keepMovingMarksRefresh = null;
+function ensureKeepMovingMarksRefresh() {
+  if (keepMovingMarksRefresh) {
+    return keepMovingMarksRefresh;
+  }
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      keepMovingMarksRefresh = StateEffect.define();
+    }
+  } catch (error) {
+    keepMovingMarksRefresh = null;
+  }
+  return keepMovingMarksRefresh;
+}
 // Today marks (bob-cli-9r mark_core): a StateEffect the
 // consolidated live-refresh fan-out dispatches so Live Preview Today
 // widgets rebuild without a doc change. Defined lazily on first

@@ -244,7 +244,7 @@ test("OT and OP3: builder uses one listener-free accessible host with no title",
   assert.equal(host.listeners, undefined);
 });
 
-test("OP1, OP2, and OP4: widget placement is side 3, after other chips, and selection-only updates do not rebuild", () => {
+test("OP1, OP2, and OP4: widget placement is side 4, after other chips, and selection-only updates do not rebuild", () => {
   const plugin = Object.create(LedgerToolsPlugin.prototype);
   plugin.offClockLinkChipsEnabled = true;
   plugin.app = { workspace: { openLinkText() {} } };
@@ -263,7 +263,7 @@ test("OP1, OP2, and OP4: widget placement is side 3, after other chips, and sele
   const decorations = plugin.buildOffClockLinkChipDecorations({ state, visibleRanges: [{ from: 0, to: text.length }] });
   assert.equal(decorations.adds.length, 1);
   assert.equal(decorations.adds[0].from, rowFrom + text.split("\n")[2].indexOf("]]" ) + 2);
-  assert.equal(decorations.adds[0].value.side, 3);
+  assert.equal(decorations.adds[0].value.side, 4); // OP1: ⏭ took side 3, so the off chip moved to side 4.
   assert.equal(plugin.offClockLinkChipsShouldRebuild({ selectionSet: true, transactions: [] }), false);
   assert.equal(plugin.offClockLinkChipsShouldRebuild({ docChanged: true }), true);
   const el = new FakeDocument().createElement("span");

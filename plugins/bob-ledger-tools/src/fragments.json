@@ -134,6 +134,8 @@
   "271d-plugin-off-clock-link-chips-reading.js",
   "271e-plugin-mail-link-marks.js",
   "271f-plugin-mail-link-marks-reading.js",
+  "271g-plugin-keep-moving-marks.js",
+  "271h-plugin-keep-moving-marks-reading.js",
   "273-plugin-pomodoro-home-chips.js",
   "274-plugin-pomodoro-home-chips-reading.js",
   "279-plugin-pomodoro-theme-mirrors.js",

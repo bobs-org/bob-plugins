@@ -8110,7 +8110,7 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 
 /* Display-only count for the last planned Task Link in a leaf project. */
 .bob-keep-moving-mark {
-  --bob-keep-moving-mark-ink: var(--task-status-next, var(--color-green));
+  --bob-keep-moving-mark-ink: var(--task-status-next, var(--color-green, #3f8f5f));
   display: inline-flex;
   align-items: baseline;
   gap: 0.22em;

@@ -90,6 +90,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsOffClockLinkChipsReadingMixin,
   BobLedgerToolsMailLinkMarksMixin,
   BobLedgerToolsMailLinkMarksReadingMixin,
+  BobLedgerToolsKeepMovingMarksMixin,
+  BobLedgerToolsKeepMovingMarksReadingMixin,
   BobLedgerToolsDependencyRenderMixin,
   BobLedgerToolsBlocksRenderMixin,
   BobLedgerToolsRelationRenderMixin,

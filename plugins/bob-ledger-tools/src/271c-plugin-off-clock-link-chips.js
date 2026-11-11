@@ -200,7 +200,7 @@ class BobLedgerToolsOffClockLinkChipsMixin {
           const linktext = `${link.pathPart ? link.pathPart : ""}#^${link.blockId}`;
           builder.add(pos, pos, Decoration.widget({
             widget: new OffClockLinkChipWidget(model, sourcePath, linktext, this.app && this.app.workspace),
-            side: 3,
+            side: 4,
           }));
         } catch (error) {
           continue;

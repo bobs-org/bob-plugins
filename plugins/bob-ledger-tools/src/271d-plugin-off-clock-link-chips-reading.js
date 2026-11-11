@@ -132,7 +132,7 @@ class BobLedgerToolsOffClockLinkChipsReadingMixin {
       const wrapperTag = String(wrapper && (wrapper.tagName || wrapper.nodeName) || "").toUpperCase();
       const children = wrapper && wrapper.childNodes || [];
       if (["DEL", "S", "STRIKE"].includes(wrapperTag) && children.length === 1 && children[0] === anchor) after = wrapper;
-      const markClasses = new Set(["bob-unblocked-glyph", "bob-frees-mark"]);
+      const markClasses = new Set(["bob-unblocked-glyph", "bob-frees-mark", "bob-keep-moving-mark"]);
       let next = after.nextSibling || null;
       let guard = 0;
       while (next && guard++ < 20) {

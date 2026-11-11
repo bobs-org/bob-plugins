@@ -699,7 +699,7 @@ class BobLedgerToolsTaskThemeApiMixin {
         cache.delete(normalized);
       }
       cache.set(normalized, text);
-      while (cache.size > 32) {
+      while (cache.size > 64) {
         const first = cache.keys().next().value;
         cache.delete(first);
       }
@@ -799,6 +799,13 @@ class BobLedgerToolsTaskThemeApiMixin {
             }
           } catch (error) {
             // Off-clock link chips may be disabled or unavailable.
+          }
+          try {
+            if (typeof self.scheduleKeepMovingMarksRefresh === "function") {
+              self.scheduleKeepMovingMarksRefresh();
+            }
+          } catch (error) {
+            // Keep-moving marks may be disabled or unavailable.
           }
           try {
             if (typeof self.schedulePlanBlockRerender === "function") {

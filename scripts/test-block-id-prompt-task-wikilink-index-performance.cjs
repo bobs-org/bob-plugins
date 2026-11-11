@@ -9,131 +9,26 @@
 // - one keystroke's rank of 5,000 rows takes at most 12 ms;
 // - no vault reads happen while filtering;
 // - growth stays near-linear (a 6x step check).
+//
+// Fixture, sampler, and CPU clock live in
+// `task-wikilink-index-perf-support.cjs` so the developer diagnostic
+// can report per-stage samples without changing these budgets.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { helpers } = require("./block-id-prompt-harness.cjs");
-
-const { TaskWikilinkIndex } = helpers;
-
-const COLD_BUILD_BUDGET_MS = 1500;
-const CHUNK_BUDGET_MS = 16;
-const SNAPSHOT_BUDGET_MS = 50;
-const KEYSTROKE_BUDGET_MS = 12;
-
-// A realistic vault mix: most notes carry one task amid prose, some are
-// prose-only, and a few are daily notes. Sizes stay small so the test
-// measures index overhead, not string allocation.
-function syntheticVault(noteCount) {
-  const files = [];
-  let tasks = 0;
-  for (let i = 0; i < noteCount; i += 1) {
-    const folder = i % 10 === 0 ? `areas/area-${i % 5}` : `notes/topic-${i % 50}`;
-    const path = `${folder}/note-${i}.md`;
-    const lines = [
-      `# Note ${i}`,
-      "",
-      `Prose paragraph ${i} with enough words to resemble a real note body.`,
-    ];
-    if (i % 13 < 10) {
-      const status = i % 7 === 0 ? "x" : i % 11 === 0 ? "/" : " ";
-      lines.push(`- [${status}] #task Task number ${i} about Trains ^task-${i}`);
-      tasks += 1;
-    } else {
-      lines.push("- a plain bullet with no task");
-    }
-    const content = `${lines.join("\n")}\n`;
-    files.push({
-      path,
-      content,
-      cache: null,
-      stat: { mtime: 1000 + i, size: Buffer.byteLength(content, "utf8"), ctime: 1000 + i },
-    });
-  }
-  return { files, tasks };
-}
-
-function createPerfApp(files) {
-  const reads = [];
-  return {
-    reads,
-    vault: {
-      getMarkdownFiles: () => files,
-      getAbstractFileByPath: (path) => files.find((file) => file.path === path) || null,
-      cachedRead: async (file) => {
-        reads.push(file.path);
-        return file.content;
-      },
-      on: () => ({}),
-    },
-    metadataCache: {
-      getFileCache: () => null,
-      on: () => ({}),
-    },
-    workspace: {
-      getLeavesOfType: () => [],
-    },
-  };
-}
-
-function buildIndex(noteCount, options = {}) {
-  const { files } = syntheticVault(noteCount);
-  const app = createPerfApp(files);
-  const index = new TaskWikilinkIndex();
-  index.emitThrottleMs = 0;
-  return { index, app, files };
-}
-
-async function coldBuildTimed(noteCount, { yieldAfterMs = 12 } = {}) {
-  const { index, app } = buildIndex(noteCount);
-  const chunks = [];
-  const chunkCpuMs = [];
-  let previousScheduleEnd = cpuTimeMs();
-  const schedule = (callback) => {
-    const scheduledAt = cpuTimeMs();
-    chunkCpuMs.push(scheduledAt - previousScheduleEnd);
-    callback();
-    previousScheduleEnd = cpuTimeMs();
-  };
-  const start = cpuTimeMs();
-  const result = await index.warmUpFromVault(app, {
-    schedule,
-    yieldAfterMs,
-    onChunk: (chunk) => chunks.push(chunk),
-  });
-  const cpuMs = cpuTimeMs() - start;
-  return { index, app, result, chunks, chunkCpuMs, cpuMs };
-}
-
-// CPU time measures work done by the test thread, so a descheduled process
-// does not make an otherwise cheap chunk look over budget. A short real
-// delay between samples lets separate contention bursts affect different
-// attempts. Snapshot gets five samples and rank gets seven.
-function cpuTimeMs() {
-  const usage = typeof process.threadCpuUsage === "function"
-    ? process.threadCpuUsage()
-    : process.cpuUsage();
-  return (usage.user + usage.system) / 1000;
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function bestOf(run, attempts, delayMs = 10) {
-  let best = Infinity;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    best = Math.min(best, await run());
-    if (attempt + 1 < attempts) {
-      await delay(delayMs);
-    }
-  }
-  return best;
-}
-
-function worstChunkMs(chunks) {
-  return Math.max(0, ...chunks);
-}
+const {
+  helpers,
+  COLD_BUILD_BUDGET_MS,
+  CHUNK_BUDGET_MS,
+  SNAPSHOT_BUDGET_MS,
+  KEYSTROKE_BUDGET_MS,
+  cpuTimeMs,
+  delay,
+  bestOf,
+  worstChunkMs,
+  coldBuildTimed,
+  settleRankPath,
+} = require("./task-wikilink-index-perf-support.cjs");
 
 test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16 ms", async () => {
   const built = await coldBuildTimed(6500, { yieldAfterMs: 1 });
@@ -159,16 +54,11 @@ test("cold build of 6,500 notes / 5,000 tasks fits 1.5 s in chunks of at most 16
 
 // The budgets below describe steady-state CPU costs after an untimed
 // warmup of the rank path.
-function settleRankPath(rows) {
-  helpers.orderForWikilinkPicker(rows, "trains", null);
-  helpers.orderForWikilinkPicker(rows, "task number", null);
-}
-
 test("warm snapshot plus order takes at most 50 ms", async () => {
   const { index } = await coldBuildTimed(6500);
   settleRankPath(index.snapshot({}).rows);
   let ordered = null;
-  const ms = await bestOf(async () => {
+  const { best: ms } = await bestOf(async () => {
     const start = cpuTimeMs();
     const snap = index.snapshot({});
     ordered = helpers.orderForWikilinkPicker(snap.rows, "trains", null);
@@ -184,7 +74,7 @@ test("one keystroke rank of 5,000 rows takes at most 12 ms", async () => {
   assert.ok(rows.length >= 5000, `expected 5,000+ rows, saw ${rows.length}`);
   settleRankPath(rows);
   let ranked = null;
-  const ms = await bestOf(async () => {
+  const { best: ms } = await bestOf(async () => {
     const start = cpuTimeMs();
     ranked = helpers.orderForWikilinkPicker(rows, "task number", null);
     return cpuTimeMs() - start;

@@ -383,3 +383,159 @@ test("custom settings narrow the parsed pool", () => {
   assert.deepEqual(index.taskBearingPaths(), ["a.md"]);
   assert.deepEqual(index.snapshot({}).rows.map((row) => row.blockId), ["right"]);
 });
+
+const PARSED_ROW_KEYS = [
+  "notePath",
+  "line",
+  "rawLine",
+  "status",
+  "blockId",
+  "hidden",
+  "prjBlocked",
+  "scheduleLogPresent",
+  "section",
+  "depth",
+  "searchText",
+  "displayText",
+  "duplicateId",
+  "open",
+];
+
+function storedFingerprint(index) {
+  return [...index.entries.entries()].map(([path, entry]) => [
+    path,
+    JSON.stringify(entry.rows),
+  ]);
+}
+
+function withoutSearchCache(row) {
+  const copy = Object.assign({}, row);
+  copy.loweredSearchFields = undefined;
+  return copy;
+}
+
+function sortedFields(fields) {
+  return [...fields].sort();
+}
+
+function assertDecoratedRow(row, stored) {
+  for (const key of PARSED_ROW_KEYS) {
+    assert.ok(key in row, `snapshot row keeps ${key}`);
+    if (stored && Object.prototype.hasOwnProperty.call(stored, key)) {
+      assert.deepEqual(row[key], stored[key], `snapshot preserves ${key}`);
+    }
+  }
+  assert.equal(typeof row.locator, "string");
+  assert.equal(typeof row.linkTarget, "string");
+  assert.ok(Array.isArray(row.loweredSearchFields));
+  assert.equal(row.loweredSearchFields[0], String(row.searchText).toLowerCase());
+  assert.deepEqual(
+    sortedFields(row.loweredSearchFields),
+    sortedFields(
+      helpers.taskWikilinkSearchFields(row).map((field) => String(field).toLowerCase()),
+    ),
+  );
+  assert.deepEqual(
+    row.loweredSearchFields,
+    helpers.loweredTaskWikilinkSearchFields(withoutSearchCache(row)),
+  );
+}
+
+function assertCachedUncachedParity(index, options = {}) {
+  const beforeStored = storedFingerprint(index);
+  const snap = index.snapshot(options);
+  assert.deepEqual(storedFingerprint(index), beforeStored, "decoration leaves stored rows unchanged");
+  const storedByKey = new Map();
+  for (const entry of index.entries.values()) {
+    for (const row of entry.rows) {
+      assert.equal(row.loweredSearchFields, undefined);
+      assert.equal(row.locator, undefined);
+      storedByKey.set(`${row.notePath}:${row.line}`, row);
+    }
+  }
+  const owner = options.ownerPath || null;
+  const uncached = snap.rows.map(withoutSearchCache);
+  const queries = ["", "task", "Live", "café", "alpha", "id-less", "t"];
+  for (const row of snap.rows) {
+    const overlayPath =
+      options.overlays &&
+      (options.overlays instanceof Map
+        ? options.overlays.has(row.notePath)
+        : Object.prototype.hasOwnProperty.call(options.overlays, row.notePath));
+    assertDecoratedRow(row, overlayPath ? null : storedByKey.get(`${row.notePath}:${row.line}`));
+    for (const query of queries) {
+      assert.equal(
+        helpers.matchScoreLoweredFields(row.loweredSearchFields, query),
+        helpers.matchScoreWikilinkTasks(helpers.taskWikilinkSearchFields(row), query),
+        `cached score matches uncached for ${JSON.stringify(query)}`,
+      );
+    }
+  }
+  for (const query of queries) {
+    const cached = helpers.orderForWikilinkPicker(snap.rows, query, owner);
+    const plain = helpers.orderForWikilinkPicker(uncached, query, owner);
+    assert.deepEqual(
+      cached.map((row) => `${row.notePath}:${row.line}`),
+      plain.map((row) => `${row.notePath}:${row.line}`),
+      `cached and uncached order agree for ${JSON.stringify(query)}`,
+    );
+  }
+  return snap;
+}
+
+test("snapshot rows keep parsed metadata, leave stored rows bare, and cache search-text-first fields", () => {
+  const index = makeIndex();
+  index.ingestNote(
+    "cafe.md",
+    [
+      "# Café",
+      "- [ ] #task Café naïve task ^cafe",
+      "- [ ] #task ID-less unicode",
+      "- [x] #task Done twin ^twin",
+      "- [ ] #task Open twin ^twin",
+    ].join("\n"),
+    null,
+  );
+  index.ingestNote("other.md", "- [ ] #task Other alpha ^alpha\n", null);
+  const snap = assertCachedUncachedParity(index, { ownerPath: "cafe.md" });
+  assert.ok(snap.rows.some((row) => row.blockId === null));
+  assert.ok(snap.rows.some((row) => row.duplicateId === true));
+  assert.ok(snap.rows.some((row) => row.searchText.includes("Café") || row.searchText.includes("naïve") || row.searchText.toLowerCase().includes("café")));
+});
+
+test("cached and uncached matching stay aligned across overlay, rename collision, delete, and refresh", () => {
+  const index = makeIndex();
+  index.ingestNote("sub/note.md", "- [ ] #task Sub ^sub\n", null);
+  index.ingestNote("note.md", "- [ ] #task Top ^top\n", null);
+  index.ingestNote("keep.md", "- [ ] #task Keep ^keep\n", null);
+  assertCachedUncachedParity(index);
+
+  assertCachedUncachedParity(index, {
+    overlays: { "note.md": "- [ ] #task Live overlay ^live\n- [ ] #task ID-less live\n" },
+    ownerPath: "note.md",
+  });
+  const afterOverlay = index.snapshot({});
+  assert.deepEqual(afterOverlay.rows.map((row) => row.blockId).sort(), ["keep", "sub", "top"]);
+
+  assert.equal(index.renameNote("note.md", "renamed.md"), true);
+  assertCachedUncachedParity(index);
+  const afterRename = new Map(index.snapshot({}).rows.map((row) => [row.blockId, row.locator]));
+  assert.equal(afterRename.get("sub"), "note");
+  assert.equal(afterRename.get("top"), "renamed");
+
+  assert.equal(index.removeNote("keep.md"), true);
+  assertCachedUncachedParity(index);
+  assert.equal(index.snapshot({}).rows.some((row) => row.blockId === "keep"), false);
+
+  index.refreshPaths([
+    { path: "sub/note.md", content: "- [ ] #task Sub renamed ^sub\n", stat: null },
+    { path: "note.md", content: "- [ ] #task Restored collision ^restored\n", stat: null },
+    { path: "fresh.md", content: "- [ ] #task Fresh café ^fresh\n", stat: null },
+  ]);
+  assertCachedUncachedParity(index, { ownerPath: "fresh.md" });
+  const afterRefresh = new Map(index.snapshot({}).rows.map((row) => [row.blockId, row.locator]));
+  assert.equal(afterRefresh.get("top"), "renamed");
+  assert.equal(afterRefresh.get("sub"), "sub/note");
+  assert.equal(afterRefresh.get("restored"), "note");
+  assert.equal(afterRefresh.get("fresh"), "fresh");
+});

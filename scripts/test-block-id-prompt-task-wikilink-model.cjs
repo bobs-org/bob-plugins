@@ -406,9 +406,86 @@ test("fused scorer matches the layered scorer across randomized rows and queries
       linkTarget: `note-${i}`,
     });
   }
-  const queries = ["", "task", "task number", "zzz", "id-3", "t", "alpha Trains", "12", "café", "a b", "note-1 id-2"];
+  rows.push(
+    {
+      notePath: "notes/tier.md",
+      line: 0,
+      status: " ",
+      blockId: "alpha",
+      hidden: false,
+      section: "Heading",
+      searchText: "task number café",
+      displayText: "task number café",
+      duplicateId: false,
+      open: true,
+      locator: "tier",
+      linkTarget: "tier",
+    },
+    {
+      notePath: "notes/tie-a.md",
+      line: 0,
+      status: " ",
+      blockId: null,
+      hidden: false,
+      searchText: "identical tie row",
+      displayText: "identical tie row",
+      duplicateId: false,
+      open: true,
+      locator: "tie-a",
+      linkTarget: "tie-a",
+    },
+    {
+      notePath: "notes/tie-b.md",
+      line: 0,
+      status: " ",
+      blockId: null,
+      hidden: false,
+      searchText: "identical tie row",
+      displayText: "identical tie row",
+      duplicateId: false,
+      open: true,
+      locator: "tie-b",
+      linkTarget: "tie-b",
+    },
+  );
+  const cachedRows = rows.map((row) => {
+    const copy = Object.assign({}, row);
+    copy.loweredSearchFields = helpers.loweredTaskWikilinkSearchFields(copy);
+    return copy;
+  });
+  for (const row of cachedRows) {
+    assert.ok(Array.isArray(row.loweredSearchFields));
+    assert.equal(row.loweredSearchFields[0], String(row.searchText).toLowerCase());
+    assert.equal(helpers.loweredTaskWikilinkSearchFields(row), row.loweredSearchFields);
+    assert.deepEqual(
+      [...row.loweredSearchFields].sort(),
+      helpers.taskWikilinkSearchFields(row).map((field) => String(field).toLowerCase()).sort(),
+    );
+  }
+  const uncachedRows = cachedRows.map((row) => {
+    const copy = Object.assign({}, row);
+    copy.loweredSearchFields = undefined;
+    return copy;
+  });
+  const queries = [
+    "",
+    "task",
+    "task number",
+    "zzz",
+    "id-3",
+    "t",
+    "alpha Trains",
+    "12",
+    "café",
+    "a b",
+    "note-1 id-2",
+    "ask",
+    "number",
+    "tnc",
+    "identical tie row",
+  ];
   for (const query of queries) {
-    for (const row of rows) {
+    for (const row of cachedRows) {
       const raw = helpers.taskWikilinkSearchFields(row);
       const layered = helpers.matchScoreWikilinkTasks(raw, query);
       const lowered = helpers.loweredTaskWikilinkSearchFields(row);
@@ -423,18 +500,14 @@ test("fused scorer matches the layered scorer across randomized rows and queries
         `fused scorer matches layered for ${JSON.stringify(query)}`,
       );
     }
-    const owners = [null, rows[0].notePath];
+    const owners = [null, cachedRows[0].notePath, "notes/tier.md"];
     for (const owner of owners) {
-      const plain = helpers.orderForWikilinkPicker(
-        rows.map((row) => ({ ...row, loweredSearchFields: undefined })),
-        query,
-        owner,
-      );
-      const cached = helpers.orderForWikilinkPicker(rows, query, owner);
+      const plain = helpers.orderForWikilinkPicker(uncachedRows, query, owner);
+      const cached = helpers.orderForWikilinkPicker(cachedRows, query, owner);
       assert.deepEqual(
         cached.map((row) => `${row.notePath}:${row.line}`),
         plain.map((row) => `${row.notePath}:${row.line}`),
-        `cached and uncached order agree for ${JSON.stringify(query)}`,
+        `cached and uncached order agree for ${JSON.stringify(query)} owner=${owner}`,
       );
     }
   }

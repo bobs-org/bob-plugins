@@ -3964,17 +3964,13 @@ class TaskWikilinkIndex {
 
   decorateRow(row) {
     const [locator, linkTarget] = this.basename.locatorAndTargetFor(row.notePath);
-    const decorated = {
-      ...row,
-      locator,
-      linkTarget,
-    };
-    // Precompute the lowered search fields once per snapshot so every
-    // per-keystroke rank reuses them instead of rebuilding and
-    // re-lowercasing thousands of field arrays.
-    decorated.loweredSearchFields = taskWikilinkSearchFields(decorated).map(
-      (field) => String(field).toLowerCase(),
-    );
+    // Fresh Object.assign copy: spreading then appending properties
+    // deoptimized V8 hidden classes on the snapshot/rank path. Compute
+    // search-text-first fields before installing the cache so the
+    // helper does not return a copied array, and so per-keystroke
+    // scoring can exit on the first field.
+    const decorated = Object.assign({}, row, { locator, linkTarget });
+    decorated.loweredSearchFields = loweredTaskWikilinkSearchFields(decorated);
     return decorated;
   }
 

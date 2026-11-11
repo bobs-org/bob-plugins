@@ -270,7 +270,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Themes namespace v1: cached history, sync hue/history/near-duplicate
       // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),
-      periodNotes: this.periodNotesApi(), // v1: open missing period notes through bob
+      periodNotes: this.periodNotesApi(), bank: this.bankApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -672,7 +672,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData();
+    this.setupNotebookData(); this.setupBankData();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -788,7 +788,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData();
+      this.teardownReadingBoardData(); this.teardownBankData();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }

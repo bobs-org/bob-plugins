@@ -98,6 +98,9 @@ function stubRefresh(plugin, calls) {
   plugin.scheduleFreshnessStatusBar = () => {
     calls.push(["tasks-freshness-status"]);
   };
+  plugin.apiBankInvalidate = (reason) => {
+    calls.push(["bank", reason]);
+  };
 }
 
 test("setup subscribes to the command-mode run-finished workspace event", () => {
@@ -123,7 +126,7 @@ test("each invalidates tag refreshes its ledger cache and unknown tags are ignor
     entryId: "ref-create",
     outcome: "completed",
     effect: "writes",
-    invalidates: ["themes", "relations", "stats", "references", "tasks", "plugins"],
+    invalidates: ["themes", "relations", "stats", "references", "tasks", "bank", "plugins"],
   });
 
   assert.deepEqual(calls, [
@@ -136,6 +139,7 @@ test("each invalidates tag refreshes its ledger cache and unknown tags are ignor
     ["tasks-today"],
     ["tasks-freshness-marks"],
     ["tasks-freshness-status"],
+    ["bank", "command-mode"],
   ]);
 });
 

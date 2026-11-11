@@ -48,6 +48,8 @@ class BobLedgerToolsCommandModeRefreshMixin {
             this.refreshTasksForCommandModeRun();
           } else if (tag === "gkeep") {
             this.refreshKeepInboxForCommandModeRun();
+          } else if (tag === "bank") {
+            this.refreshBankForCommandModeRun();
           }
           // Unknown tags belong to other plugins; ignore them.
         } catch (error) {
@@ -98,6 +100,12 @@ class BobLedgerToolsCommandModeRefreshMixin {
     }
     if (typeof this.scheduleFreshnessStatusBar === "function") {
       this.scheduleFreshnessStatusBar();
+    }
+  }
+
+  refreshBankForCommandModeRun() {
+    if (typeof this.apiBankInvalidate === "function") {
+      this.apiBankInvalidate("command-mode");
     }
   }
 }

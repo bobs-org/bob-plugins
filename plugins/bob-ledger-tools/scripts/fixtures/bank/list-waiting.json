@@ -1,0 +1,76 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "today": "2026-11-12",
+  "categories": [
+    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "builtin": false },
+    { "key": "cash", "emoji": "🏧", "label": "Cash out", "builtin": true }
+  ],
+  "accounts": [
+    {
+      "alias": "checking",
+      "label": "WF Checking",
+      "kind": "checking",
+      "default": true,
+      "start": "2026-11-01",
+      "status": "unverified",
+      "last_import": null,
+      "balance_cents": null,
+      "balance_asof": null,
+      "delta_cents": null,
+      "hint": "No import yet — bob bank import FILE"
+    }
+  ],
+  "issues": { "errors": 0, "warnings": 0 },
+  "filter": "waiting",
+  "month": null,
+  "days": [
+    {
+      "date": "2026-10-31",
+      "heading": "Sat Oct 31",
+      "path": "bank/2026-10.md",
+      "line": 8,
+      "rows": [
+        {
+          "path": "bank/2026-10.md",
+          "line": 9,
+          "date": "2026-10-31",
+          "account": "checking",
+          "cents": -425,
+          "payee": "Halloween candy",
+          "category": "groceries",
+          "links": [],
+          "note": null,
+          "flagged": false,
+          "acknowledged": false,
+          "id": null,
+          "origin": "typed"
+        }
+      ]
+    },
+    {
+      "date": "2026-11-12",
+      "heading": "Thu Nov 12",
+      "path": "bank/2026-11.md",
+      "line": 12,
+      "rows": [
+        {
+          "path": "bank/2026-11.md",
+          "line": 18,
+          "date": "2026-11-12",
+          "account": "checking",
+          "cents": -6120,
+          "payee": "ShopRite",
+          "category": "groceries",
+          "links": [],
+          "note": null,
+          "flagged": false,
+          "acknowledged": false,
+          "id": null,
+          "origin": "typed"
+        }
+      ]
+    }
+  ],
+  "counts": { "rows": 2, "waiting": 2, "flagged": 0 }
+}

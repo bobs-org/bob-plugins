@@ -30601,7 +30601,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Themes namespace v1: cached history, sync hue/history/near-duplicate
       // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),
-      periodNotes: this.periodNotesApi(), // v1: open missing period notes through bob
+      periodNotes: this.periodNotesApi(), bank: this.bankApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -31003,7 +31003,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData();
+    this.setupNotebookData(); this.setupBankData();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -31119,7 +31119,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData();
+      this.teardownReadingBoardData(); this.teardownBankData();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
@@ -55479,6 +55479,1705 @@ class BobLedgerToolsNotebookDataMixin {
     this.notebookReportError = null;
     this.notebookSyncBusy = false;
     this.notebookSyncError = null;
+  }
+}
+// ---- src/241h-plugin-bank-decode.js ----
+// --- Bank JSON boundary (bob-cli-kd.6.1.1) --------------------------------
+// Decode `bob bank list|report -f json` without duplicating accounting.
+// Integer cents stay integers; a schema mismatch or bad JSON is never a
+// zero-dollar success. Presentation helpers only format what bob already
+// computed.
+
+const BANK_SCHEMA_VERSION = 1;
+const BANK_CACHE_SIZE = 16;
+const BANK_REVALIDATE_DEBOUNCE_MS = 400;
+const BANK_ROLLOVER_INTERVAL_MS = 60 * 1000;
+
+function bankJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function bankString(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function bankText(value) {
+  return typeof value === "string" ? value : null;
+}
+
+function bankCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function bankSafeCents(value, options = {}) {
+  if (options.allowNull === true && value === null) {
+    return { ok: true, value: null };
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    return { ok: false };
+  }
+  return { ok: true, value };
+}
+
+function bankLocalDate(now = new Date()) {
+  try {
+    const date = now instanceof Date ? now : new Date(now);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  } catch (error) {
+    return "";
+  }
+}
+
+function bankGroupThousands(value) {
+  const raw = String(value);
+  let out = "";
+  for (let index = 0; index < raw.length; index += 1) {
+    if (index > 0 && (raw.length - index) % 3 === 0) {
+      out += ",";
+    }
+    out += raw[index];
+  }
+  return out;
+}
+
+function bankFormatCents(cents) {
+  if (!Number.isSafeInteger(cents)) {
+    return null;
+  }
+  const sign = cents > 0 ? "+" : "";
+  const abs = cents < 0 ? -cents : cents;
+  const dollars = Math.floor(abs / 100);
+  const remainder = abs % 100;
+  return `${sign}$${bankGroupThousands(dollars)}.${String(remainder).padStart(2, "0")}`;
+}
+
+function bankCacheKey(args) {
+  try {
+    return JSON.stringify(Array.isArray(args) ? args : []);
+  } catch (error) {
+    return String(args);
+  }
+}
+
+function bankBuildArgs(options = {}) {
+  const opts = bankJsonObject(options) ? options : {};
+  const command = opts.command === "report" ? "report" : "list";
+  const args = ["bank", command];
+  if (command === "list" && opts.all === true) {
+    args.push("-a");
+  }
+  if (command === "report") {
+    if (bankString(opts.day) || bankString(opts.date)) {
+      args.push("-D", bankString(opts.day) || bankString(opts.date));
+    } else if (bankString(opts.week)) {
+      args.push("-w", opts.week.trim());
+    } else if (bankString(opts.year)) {
+      args.push("-y", opts.year.trim());
+    } else if (bankString(opts.month)) {
+      args.push("-m", opts.month.trim());
+    }
+  } else if (bankString(opts.month)) {
+    args.push("-m", opts.month.trim());
+  }
+  args.push("-f", "json");
+  return args;
+}
+
+function bankFail(code, message, stderr) {
+  return {
+    ok: false,
+    code,
+    message,
+    detail: statsFirstLine(stderr),
+  };
+}
+
+function bankParseBody(stdout, stderr, commandLabel) {
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return bankFail("bad-json", `${commandLabel} returned output that is not JSON.`, stderr);
+  }
+  if (!bankJsonObject(body)) {
+    return bankFail("bad-shape", `${commandLabel} returned an unexpected JSON shape.`, stderr);
+  }
+  if (body.schema_version !== BANK_SCHEMA_VERSION) {
+    return bankFail(
+      "schema-mismatch",
+      `${commandLabel} returned schema ${String(body.schema_version)}, this block reads schema ${BANK_SCHEMA_VERSION}.`,
+      stderr,
+    );
+  }
+  if (body.ok === false) {
+    const inner = bankJsonObject(body.error) ? body.error : {};
+    const message = bankString(inner.message)
+      || (typeof body.error === "string" && body.error ? body.error : null)
+      || `${commandLabel} reported an error.`;
+    return {
+      ok: false,
+      code: bankString(inner.code) || "bob-error",
+      message,
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok !== true) {
+    return bankFail("bad-shape", `${commandLabel} returned a report without ok: true.`, stderr);
+  }
+  return { ok: true, body };
+}
+
+function bankNormalizeCategory(value) {
+  if (!bankJsonObject(value) || bankText(value.key) === null || bankText(value.label) === null) {
+    return null;
+  }
+  return {
+    key: value.key,
+    emoji: bankText(value.emoji) || "",
+    label: value.label,
+    builtin: value.builtin === true,
+  };
+}
+
+function bankNormalizeAccount(value) {
+  if (!bankJsonObject(value) || bankText(value.alias) === null || bankText(value.label) === null) {
+    return null;
+  }
+  const balance = bankSafeCents(value.balance_cents, { allowNull: true });
+  const delta = bankSafeCents(value.delta_cents, { allowNull: true });
+  if (!balance.ok || !delta.ok) {
+    return null;
+  }
+  return {
+    alias: value.alias,
+    label: value.label,
+    kind: bankString(value.kind),
+    default: value.default === true,
+    start: bankString(value.start),
+    status: bankString(value.status),
+    last_import: value.last_import === null ? null : bankString(value.last_import),
+    balance_cents: balance.value,
+    balance_asof: value.balance_asof === null ? null : bankString(value.balance_asof),
+    delta_cents: delta.value,
+    hint: bankText(value.hint),
+  };
+}
+
+function bankNormalizeLinks(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((link) => typeof link === "string");
+}
+
+function bankNormalizeRow(value) {
+  if (!bankJsonObject(value)) {
+    return null;
+  }
+  const cents = bankSafeCents(value.cents);
+  if (!cents.ok || bankText(value.payee) === null) {
+    return null;
+  }
+  const line = bankCount(value.line);
+  if (line === null) {
+    return null;
+  }
+  return {
+    path: bankString(value.path),
+    line,
+    date: bankString(value.date),
+    account: bankString(value.account),
+    cents: cents.value,
+    payee: value.payee,
+    category: value.category === null || value.category === undefined ? null : bankText(value.category),
+    links: bankNormalizeLinks(value.links),
+    note: value.note === null || value.note === undefined ? null : bankText(value.note),
+    flagged: value.flagged === true,
+    acknowledged: value.acknowledged === true,
+    id: value.id === null || value.id === undefined ? null : bankString(value.id),
+    origin: bankString(value.origin),
+  };
+}
+
+function bankNormalizeRows(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const rows = [];
+  for (const entry of value) {
+    const row = bankNormalizeRow(entry);
+    if (!row) {
+      return null;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function bankSharedFields(body) {
+  const categories = Array.isArray(body.categories)
+    ? body.categories.map(bankNormalizeCategory).filter(Boolean)
+    : [];
+  const accounts = Array.isArray(body.accounts)
+    ? body.accounts.map(bankNormalizeAccount)
+    : [];
+  if (Array.isArray(body.accounts) && accounts.some((account) => account === null)) {
+    return null;
+  }
+  return {
+    schema_version: BANK_SCHEMA_VERSION,
+    today: bankString(body.today),
+    categories,
+    accounts,
+    issues: bankJsonObject(body.issues)
+      ? {
+          errors: bankCount(body.issues.errors) || 0,
+          warnings: bankCount(body.issues.warnings) || 0,
+        }
+      : { errors: 0, warnings: 0 },
+    findings: Array.isArray(body.findings) ? body.findings : [],
+  };
+}
+
+function bankTeachingReport(body) {
+  return {
+    schema_version: BANK_SCHEMA_VERSION,
+    ok: true,
+    teaching_empty: true,
+    today: bankString(body.today),
+    categories: [],
+    accounts: [],
+    issues: { errors: 0, warnings: 0 },
+    findings: [],
+  };
+}
+
+function bankDecodeList(stdout, stderr) {
+  const parsed = bankParseBody(stdout, stderr, "bob bank list");
+  if (!parsed.ok) {
+    return parsed;
+  }
+  const body = parsed.body;
+  if (body.teaching_empty === true) {
+    return { ok: true, report: { ...bankTeachingReport(body), command: "list" } };
+  }
+  const shared = bankSharedFields(body);
+  if (!shared) {
+    return bankFail("bad-shape", "bob bank list returned an account with invalid cents.", stderr);
+  }
+  const daysRaw = Array.isArray(body.days) ? body.days : null;
+  const counts = bankJsonObject(body.counts) ? body.counts : null;
+  if (!daysRaw || !counts) {
+    return bankFail("bad-shape", "bob bank list returned a report without days or counts.", stderr);
+  }
+  const days = [];
+  for (const day of daysRaw) {
+    if (!bankJsonObject(day)) {
+      return bankFail("bad-shape", "bob bank list returned a malformed day.", stderr);
+    }
+    const rows = bankNormalizeRows(day.rows);
+    if (!rows) {
+      return bankFail("bad-shape", "bob bank list returned a row with invalid cents or payee.", stderr);
+    }
+    const line = bankCount(day.line);
+    if (line === null) {
+      return bankFail("bad-shape", "bob bank list returned a day without a line number.", stderr);
+    }
+    days.push({
+      date: bankString(day.date),
+      heading: bankText(day.heading) || "",
+      path: bankString(day.path),
+      line,
+      rows,
+    });
+  }
+  const rowsCount = bankCount(counts.rows);
+  const waiting = bankCount(counts.waiting);
+  const flagged = bankCount(counts.flagged);
+  if (rowsCount === null || waiting === null || flagged === null) {
+    return bankFail("bad-shape", "bob bank list returned invalid counts.", stderr);
+  }
+  return {
+    ok: true,
+    report: {
+      ...shared,
+      command: "list",
+      teaching_empty: false,
+      filter: body.filter === "all" ? "all" : "waiting",
+      month: body.month === null || body.month === undefined ? null : bankString(body.month),
+      days,
+      counts: { rows: rowsCount, waiting, flagged },
+    },
+  };
+}
+
+function bankNormalizeTotals(value) {
+  if (!bankJsonObject(value)) {
+    return null;
+  }
+  const keys = [
+    "out_cents",
+    "in_cents",
+    "net_cents",
+    "refund_cents",
+    "transfer_out_cents",
+    "transfer_in_cents",
+    "cash_out_cents",
+    "cash_traced_cents",
+    "unclassified_out_cents",
+    "unclassified_in_cents",
+  ];
+  const totals = {};
+  for (const key of keys) {
+    const cents = bankSafeCents(value[key]);
+    if (!cents.ok) {
+      return null;
+    }
+    totals[key] = cents.value;
+  }
+  return totals;
+}
+
+function bankNormalizeBreakdown(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const entries = [];
+  for (const entry of value) {
+    if (!bankJsonObject(entry) || bankText(entry.key) === null || bankText(entry.label) === null) {
+      return null;
+    }
+    const cents = bankSafeCents(entry.out_cents);
+    const rows = bankCount(entry.rows);
+    if (!cents.ok || rows === null || typeof entry.share !== "number" || !Number.isFinite(entry.share)) {
+      return null;
+    }
+    entries.push({
+      key: entry.key,
+      emoji: bankText(entry.emoji) || "",
+      label: entry.label,
+      out_cents: cents.value,
+      share: entry.share,
+      rows,
+    });
+  }
+  return entries;
+}
+
+function bankDecodeReport(stdout, stderr) {
+  const parsed = bankParseBody(stdout, stderr, "bob bank report");
+  if (!parsed.ok) {
+    return parsed;
+  }
+  const body = parsed.body;
+  if (body.teaching_empty === true) {
+    return { ok: true, report: { ...bankTeachingReport(body), command: "report" } };
+  }
+  const shared = bankSharedFields(body);
+  if (!shared) {
+    return bankFail("bad-shape", "bob bank report returned an account with invalid cents.", stderr);
+  }
+  if (!bankJsonObject(body.period) || !Array.isArray(body.days) || !bankJsonObject(body.waiting)) {
+    return bankFail("bad-shape", "bob bank report returned a report without period, days, or waiting.", stderr);
+  }
+  const totals = bankNormalizeTotals(body.totals);
+  const breakdown = bankNormalizeBreakdown(body.breakdown);
+  if (!totals || !breakdown) {
+    return bankFail("bad-shape", "bob bank report returned invalid totals or breakdown cents.", stderr);
+  }
+  const days = [];
+  for (const day of body.days) {
+    if (!bankJsonObject(day)) {
+      return bankFail("bad-shape", "bob bank report returned a malformed day.", stderr);
+    }
+    const rows = bankNormalizeRows(Array.isArray(day.rows) ? day.rows : []);
+    const outCents = bankSafeCents(day.out_cents);
+    const inCents = bankSafeCents(day.in_cents);
+    const waiting = bankCount(day.waiting);
+    const flagged = bankCount(day.flagged);
+    const line = bankCount(day.line);
+    if (!rows || !outCents.ok || !inCents.ok || waiting === null || flagged === null || line === null) {
+      return bankFail("bad-shape", "bob bank report returned a day with invalid cents or counts.", stderr);
+    }
+    days.push({
+      date: bankString(day.date),
+      heading: bankText(day.heading) || "",
+      path: bankString(day.path),
+      line,
+      out_cents: outCents.value,
+      in_cents: inCents.value,
+      rows,
+      waiting,
+      flagged,
+    });
+  }
+  const waitingPeriod = bankCount(body.waiting.period);
+  const waitingAll = bankCount(body.waiting.all);
+  const flagged = bankCount(body.flagged);
+  if (waitingPeriod === null || waitingAll === null || flagged === null) {
+    return bankFail("bad-shape", "bob bank report returned invalid waiting counts.", stderr);
+  }
+  return {
+    ok: true,
+    report: {
+      ...shared,
+      command: "report",
+      teaching_empty: false,
+      period: {
+        kind: bankString(body.period.kind),
+        key: bankString(body.period.key),
+        start: bankString(body.period.start),
+        end: bankString(body.period.end),
+        label: bankText(body.period.label) || "",
+        so_far: body.period.so_far === true,
+        note: body.period.note === null || body.period.note === undefined ? null : bankText(body.period.note),
+      },
+      totals,
+      breakdown,
+      days,
+      waiting: {
+        period: waitingPeriod,
+        all: waitingAll,
+        oldest: body.waiting.oldest === null || body.waiting.oldest === undefined
+          ? null
+          : bankString(body.waiting.oldest),
+      },
+      flagged,
+    },
+  };
+}
+
+function bankErrorModel(result, options = {}) {
+  const error = bankJsonObject(result) ? result : { code: "failed" };
+  const tried = Array.isArray(options.tried)
+    ? options.tried
+    : Array.isArray(error.tried)
+      ? error.tried
+      : [];
+  if (error.code === "bob-not-found" && /needs the desktop app/i.test(String(error.message || ""))) {
+    return {
+      code: "desktop-only",
+      title: "Bank views need the desktop app",
+      hint: "bob runs only in Obsidian on a computer. Open this vault there to see bank totals.",
+      retry: false,
+    };
+  }
+  if (error.code === "bob-not-found") {
+    return {
+      code: "bob-not-found",
+      title: "bob was not found",
+      hint: tried.length > 0
+        ? `Tried ${tried.join(", ")}. Set stats.bob_path in ~/.config/bob/config.yml.`
+        : "Set stats.bob_path in ~/.config/bob/config.yml.",
+      retry: true,
+    };
+  }
+  if (error.code === "timeout") {
+    return {
+      code: "timeout",
+      title: "bob bank timed out",
+      hint: "Retry once, then run bob bank list -f json in a terminal.",
+      retry: true,
+    };
+  }
+  if (error.code === "schema-mismatch") {
+    return {
+      code: "schema-mismatch",
+      title: "bob bank uses a different schema",
+      hint: "Update bob-cli and Bob Ledger Tools together, then retry.",
+      retry: true,
+    };
+  }
+  return {
+    code: typeof error.code === "string" ? error.code : "failed",
+    title: "bob bank failed",
+    hint: error.detail || error.message || "Retry once, then run bob bank list in a terminal.",
+    retry: true,
+  };
+}
+
+function bankPresentRow(row) {
+  return {
+    ...row,
+    amountText: bankFormatCents(row.cents),
+  };
+}
+
+function bankPresentList(report) {
+  if (!bankJsonObject(report)) {
+    return null;
+  }
+  if (report.teaching_empty === true) {
+    return { kind: "teaching-empty", command: "list", today: report.today };
+  }
+  return {
+    kind: "list",
+    command: "list",
+    today: report.today,
+    filter: report.filter,
+    month: report.month,
+    counts: report.counts,
+    categories: report.categories,
+    accounts: report.accounts,
+    days: (report.days || []).map((day) => ({
+      ...day,
+      rows: (day.rows || []).map(bankPresentRow),
+    })),
+  };
+}
+
+function bankPresentReport(report) {
+  if (!bankJsonObject(report)) {
+    return null;
+  }
+  if (report.teaching_empty === true) {
+    return { kind: "teaching-empty", command: "report", today: report.today };
+  }
+  const totals = report.totals || {};
+  return {
+    kind: "report",
+    command: "report",
+    today: report.today,
+    period: report.period,
+    categories: report.categories,
+    accounts: report.accounts,
+    totals: {
+      ...totals,
+      outText: bankFormatCents(-totals.out_cents),
+      inText: bankFormatCents(totals.in_cents),
+      netText: bankFormatCents(totals.net_cents),
+    },
+    breakdown: (report.breakdown || []).map((entry) => ({
+      ...entry,
+      outText: bankFormatCents(-entry.out_cents),
+    })),
+    days: (report.days || []).map((day) => ({
+      ...day,
+      outText: bankFormatCents(-day.out_cents),
+      inText: bankFormatCents(day.in_cents),
+      rows: (day.rows || []).map(bankPresentRow),
+    })),
+    waiting: report.waiting,
+    flagged: report.flagged,
+  };
+}
+// ---- src/241i-plugin-bank-source.js ----
+// Pure bank source recognizer. Syntax only: a canonical month path, a
+// valid day heading, and a top-level checkbox whose amount begins with
+// `$`. Fences, indented children, stubs, and non-day sections are not
+// rows. Spans point at the original line bytes.
+
+const BANK_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const BANK_MONTHS_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const BANK_HUB_PATH = /^bank\.md$/i;
+const BANK_MONTH_PATH = /^bank\/(\d{4})-(\d{2})\.md$/i;
+
+function bankNormalizePath(value) {
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function bankMonthFromPath(fileOrPath) {
+  const match = bankNormalizePath(fileOrPath).match(BANK_MONTH_PATH);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || month < 1 || month > 12) {
+    return null;
+  }
+  return { year, month, key: `${match[1]}-${match[2]}` };
+}
+
+function bankIsHubPath(fileOrPath) {
+  return BANK_HUB_PATH.test(bankNormalizePath(fileOrPath));
+}
+
+function bankRelevantPath(fileOrPath) {
+  const path = bankNormalizePath(fileOrPath);
+  return bankIsHubPath(path) || bankMonthFromPath(path) !== null;
+}
+
+function bankDiscoverMonthPaths(files) {
+  const keys = [];
+  const seen = new Set();
+  for (const file of Array.isArray(files) ? files : []) {
+    const path = bankNormalizePath(file);
+    const month = bankMonthFromPath(path);
+    if (!month || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    keys.push({ path, month: month.key, year: month.year, monthNumber: month.month });
+  }
+  keys.sort((left, right) => left.path.localeCompare(right.path));
+  return keys;
+}
+
+function bankFenceMarker(line) {
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") {
+    indent += 1;
+  }
+  if (indent > 3) {
+    return null;
+  }
+  const rest = line.slice(indent);
+  const character = rest[0];
+  if (character !== "`" && character !== "~") {
+    return null;
+  }
+  let length = 0;
+  while (length < rest.length && rest[length] === character) {
+    length += 1;
+  }
+  return length >= 3 ? { character, length } : null;
+}
+
+function bankClosesFence(line, open) {
+  const marker = bankFenceMarker(line);
+  if (!marker || marker.character !== open.character || marker.length < open.length) {
+    return false;
+  }
+  return line.trimStart().slice(marker.length).trim() === "";
+}
+
+function bankFenceLines(lines) {
+  const fenced = new Set();
+  let open = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (open) {
+      fenced.add(index);
+      if (bankClosesFence(line, open)) {
+        open = null;
+      }
+    } else {
+      const marker = bankFenceMarker(line);
+      if (marker) {
+        fenced.add(index);
+        open = marker;
+      }
+    }
+  }
+  return fenced;
+}
+
+function bankFrontmatterEnd(lines) {
+  if (!lines.length || lines[0].trimEnd() !== "---") {
+    return null;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trimEnd() === "---") {
+      return index;
+    }
+  }
+  return null;
+}
+
+function bankAtxHeading(line) {
+  let indent = 0;
+  while (indent < line.length && line[indent] === " ") {
+    indent += 1;
+  }
+  if (indent > 3) {
+    return null;
+  }
+  const rest = line.slice(indent);
+  let hashes = 0;
+  while (hashes < rest.length && rest[hashes] === "#") {
+    hashes += 1;
+  }
+  if (hashes < 1 || hashes > 6) {
+    return null;
+  }
+  if (hashes < rest.length && rest[hashes] !== " " && rest[hashes] !== "\t") {
+    return null;
+  }
+  let title = rest.slice(hashes).trim();
+  if (title.endsWith("#")) {
+    const stripped = title.replace(/#+$/, "");
+    if (!stripped.length || /\s$/.test(stripped)) {
+      title = stripped.trimEnd();
+    }
+  }
+  return { level: hashes, title };
+}
+
+function bankMonthIndex(name) {
+  const index = BANK_MONTHS_ABBR.indexOf(name);
+  return index >= 0 ? index + 1 : null;
+}
+
+function bankWeekdayAbbr(year, month, day) {
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  return BANK_WEEKDAYS[(date.getDay() + 6) % 7];
+}
+
+function bankValidDate(year, month, day) {
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return {
+    year,
+    month,
+    day,
+    iso: `${year}-${mm}-${dd}`,
+  };
+}
+
+function bankLooksLikeIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function bankParseDayHeading(title, month) {
+  const tokens = String(title || "").trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length || !month) {
+    return null;
+  }
+  if (bankLooksLikeIsoDate(tokens[0])) {
+    if (tokens.length > 2) {
+      return null;
+    }
+    const [yearText, monthText, dayText] = tokens[0].split("-");
+    const date = bankValidDate(Number(yearText), Number(monthText), Number(dayText));
+    if (!date) {
+      return null;
+    }
+    if (tokens[1]) {
+      return {
+        date,
+        kind: "iso-weekday",
+        weekday_mismatch: tokens[1] !== bankWeekdayAbbr(date.year, date.month, date.day),
+      };
+    }
+    return { date, kind: "iso", weekday_mismatch: false };
+  }
+  if (tokens.length === 3 && BANK_WEEKDAYS.includes(tokens[0])) {
+    const monthNum = bankMonthIndex(tokens[1]);
+    const day = Number(tokens[2]);
+    if (!monthNum || !Number.isInteger(day)) {
+      return null;
+    }
+    const date = bankValidDate(month.year, monthNum, day);
+    if (!date) {
+      return null;
+    }
+    return {
+      date,
+      kind: "canonical",
+      weekday_mismatch: tokens[0] !== bankWeekdayAbbr(date.year, date.month, date.day),
+    };
+  }
+  if (tokens.length === 2) {
+    const monthNum = bankMonthIndex(tokens[0]);
+    const day = Number(tokens[1]);
+    if (!monthNum || !Number.isInteger(day)) {
+      return null;
+    }
+    const date = bankValidDate(month.year, monthNum, day);
+    if (!date) {
+      return null;
+    }
+    return { date, kind: "month-day", weekday_mismatch: false };
+  }
+  return null;
+}
+
+function bankParseCentsUnsigned(input) {
+  if (!input || input[0] < "0" || input[0] > "9") {
+    return null;
+  }
+  let index = 0;
+  while (index < input.length && ((input[index] >= "0" && input[index] <= "9") || input[index] === ",")) {
+    index += 1;
+  }
+  const integer = input.slice(0, index);
+  if (integer.includes(",")) {
+    const parts = integer.split(",");
+    if (!parts[0] || parts[0].length < 1 || parts[0].length > 3) {
+      return null;
+    }
+    if (parts.slice(1).some((part) => part.length !== 3 || !part.length)) {
+      return null;
+    }
+  }
+  const dollars = Number(integer.replace(/,/g, ""));
+  if (!Number.isSafeInteger(dollars)) {
+    return null;
+  }
+  let rest = input.slice(index);
+  let cents = dollars * 100;
+  if (!Number.isSafeInteger(cents)) {
+    return null;
+  }
+  if (rest.startsWith(".")) {
+    const afterDot = rest.slice(1);
+    let digits = 0;
+    while (digits < afterDot.length && afterDot[digits] >= "0" && afterDot[digits] <= "9") {
+      digits += 1;
+    }
+    if (digits === 0 || digits > 2) {
+      return null;
+    }
+    const frac = Number(afterDot.slice(0, digits));
+    const scale = digits === 1 ? 10 : 1;
+    cents += frac * scale;
+    if (!Number.isSafeInteger(cents)) {
+      return null;
+    }
+    rest = afterDot.slice(digits);
+  }
+  return { cents, rest };
+}
+
+function bankParseAmountLead(body) {
+  let rest = String(body || "").replace(/^\s+/, "");
+  const amountStartSkip = String(body || "").length - rest.length;
+  const bold = rest.startsWith("**");
+  if (bold) {
+    rest = rest.slice(2);
+  }
+  let sign = -1;
+  if (rest.startsWith("+")) {
+    sign = 1;
+    rest = rest.slice(1);
+  } else if (rest.startsWith("-")) {
+    sign = -1;
+    rest = rest.slice(1);
+  } else if (rest.startsWith("−")) {
+    sign = -1;
+    rest = rest.slice("−".length);
+  }
+  if (!rest.startsWith("$")) {
+    return { kind: "not-amount" };
+  }
+  rest = rest.slice(1);
+  if (rest.startsWith("**")) {
+    rest = rest.slice(2);
+  }
+  if (rest.trimStart() === "") {
+    return { kind: "stub", amountStartSkip };
+  }
+  const parsed = bankParseCentsUnsigned(rest);
+  if (!parsed) {
+    return { kind: "unparsed", amountStartSkip };
+  }
+  rest = parsed.rest;
+  if (bold) {
+    rest = rest.startsWith("**") ? rest.slice(2) : rest;
+  }
+  return {
+    kind: "amount",
+    cents: sign * parsed.cents,
+    rest,
+    amountStartSkip,
+  };
+}
+
+function bankClassifyLine(line) {
+  if (typeof line !== "string") {
+    return { kind: "not-a-row" };
+  }
+  if (line.startsWith(" ") || line.startsWith("\t")) {
+    return { kind: "not-a-row" };
+  }
+  if (!line.startsWith("- ")) {
+    return { kind: "not-a-row" };
+  }
+  const afterDash = line.slice(2);
+  if (afterDash.startsWith("[")) {
+    const status = afterDash[1];
+    if (status === undefined) {
+      return { kind: "not-a-row" };
+    }
+    let body = null;
+    let checkbox = null;
+    if (afterDash.startsWith(`[${status}] `)) {
+      checkbox = { start: 2, end: 5, text: `[${status}]` };
+      body = afterDash.slice(4);
+    } else if (afterDash.startsWith(`[${status}]`)) {
+      checkbox = { start: 2, end: 5, text: `[${status}]` };
+      body = afterDash.slice(3).trimStart();
+    } else {
+      return { kind: "not-a-row" };
+    }
+    const lead = bankParseAmountLead(body);
+    if (lead.kind === "not-amount") {
+      return { kind: "not-a-row" };
+    }
+    if (lead.kind === "stub") {
+      return { kind: "stub", status, body, checkbox };
+    }
+    return { kind: "checkbox", status, body, checkbox, lead };
+  }
+  const lead = bankParseAmountLead(afterDash);
+  if (lead.kind === "not-amount") {
+    return { kind: "not-a-row" };
+  }
+  return { kind: "amount-no-checkbox", lead };
+}
+
+function bankAmountSpan(line, checkbox, body, lead) {
+  if (!lead || lead.kind === "not-amount") {
+    return null;
+  }
+  const bodyStart = checkbox ? checkbox.end + (line[checkbox.end] === " " ? 1 : 0) : 2;
+  const trimmedBody = body || "";
+  const skip = lead.amountStartSkip || 0;
+  const amountStart = bodyStart + skip;
+  const afterAmount = lead.kind === "amount" ? lead.rest : "";
+  const consumed = trimmedBody.length - skip - afterAmount.length;
+  const amountEnd = amountStart + consumed;
+  return {
+    start: amountStart,
+    end: amountEnd,
+    text: line.slice(amountStart, amountEnd),
+  };
+}
+
+function bankScanSource(path, source) {
+  const month = bankMonthFromPath(path);
+  if (!month || typeof source !== "string") {
+    return { path: bankNormalizePath(path), month: null, days: [], rows: [], headings: [] };
+  }
+  const lines = source.replace(/^\uFEFF/, "").split(/\n/);
+  const frontmatterEnd = bankFrontmatterEnd(lines);
+  const fenced = bankFenceLines(lines);
+  const days = [];
+  const rows = [];
+  const headings = [];
+  let current = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index].replace(/\r$/, "");
+    if ((frontmatterEnd !== null && index <= frontmatterEnd) || fenced.has(index)) {
+      continue;
+    }
+    const lineNumber = index + 1;
+    const heading = bankAtxHeading(raw);
+    if (heading && heading.level === 2) {
+      const parsed = bankParseDayHeading(heading.title, month);
+      if (parsed) {
+        current = {
+          date: parsed.date.iso,
+          heading: heading.title,
+          line: lineNumber,
+          weekday_mismatch: parsed.weekday_mismatch,
+        };
+        days.push(current);
+        headings.push(current);
+      } else {
+        current = null;
+        headings.push({ date: null, heading: heading.title, line: lineNumber });
+      }
+      continue;
+    }
+    const classified = bankClassifyLine(raw);
+    if (classified.kind === "not-a-row" || classified.kind === "stub") {
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    if (classified.kind !== "checkbox") {
+      continue;
+    }
+    const amount = bankAmountSpan(raw, classified.checkbox, classified.body, classified.lead);
+    rows.push({
+      path: bankNormalizePath(path),
+      line: lineNumber,
+      date: current.date,
+      headingLine: current.line,
+      heading: current.heading,
+      status: classified.status,
+      acknowledged: classified.status === "x" || classified.status === "X",
+      cents: classified.lead.kind === "amount" ? classified.lead.cents : null,
+      unparsed: classified.lead.kind !== "amount",
+      spans: {
+        checkbox: classified.checkbox,
+        amount,
+        line: { start: 0, end: raw.length, text: raw },
+      },
+    });
+  }
+  return { path: bankNormalizePath(path), month: month.key, days, rows, headings };
+}
+
+function bankRecognizeRow(path, source, lineNumber) {
+  const scan = bankScanSource(path, source);
+  if (!scan.month) {
+    return null;
+  }
+  const line = Number(lineNumber);
+  return scan.rows.find((row) => row.line === line) || null;
+}
+
+function bankLocateDayHeading(source, month, dateIso) {
+  if (typeof source !== "string" || !month || !dateIso) {
+    return null;
+  }
+  const monthSpec = typeof month === "string"
+    ? bankMonthFromPath(`bank/${month}.md`)
+    : month;
+  if (!monthSpec) {
+    return null;
+  }
+  const lines = source.replace(/^\uFEFF/, "").split(/\n/);
+  const frontmatterEnd = bankFrontmatterEnd(lines);
+  const fenced = bankFenceLines(lines);
+  for (let index = 0; index < lines.length; index += 1) {
+    if ((frontmatterEnd !== null && index <= frontmatterEnd) || fenced.has(index)) {
+      continue;
+    }
+    const raw = lines[index].replace(/\r$/, "");
+    const heading = bankAtxHeading(raw);
+    if (!heading || heading.level !== 2) {
+      continue;
+    }
+    const parsed = bankParseDayHeading(heading.title, monthSpec);
+    if (parsed && parsed.date.iso === dateIso) {
+      return {
+        line: index + 1,
+        heading: heading.title,
+        text: raw,
+        weekday_mismatch: parsed.weekday_mismatch,
+      };
+    }
+  }
+  return null;
+}
+
+function bankSourceFenceLines(source) {
+  const lines = String(source || "").replace(/^\uFEFF/, "").split(/\n/);
+  return bankFenceLines(lines);
+}
+// ---- src/241j-plugin-bank-data.js ----
+// Shared bank data service: cached `bob bank list|report` reads, filtered
+// invalidation, subscribe/teardown. Bob owns every total; this fragment
+// only moves JSON. A late response never overwrites a newer generation.
+
+class BobLedgerToolsBankDataMixin {
+  bankTimerApi() {
+    if (this.bankTimers && typeof this.bankTimers === "object") {
+      return this.bankTimers;
+    }
+    return typeof window !== "undefined" && window ? window : globalThis;
+  }
+
+  bankSetTimeout(callback, delay) {
+    const timers = this.bankTimerApi();
+    const schedule = timers && typeof timers.setTimeout === "function"
+      ? timers.setTimeout.bind(timers)
+      : setTimeout;
+    return schedule(callback, delay);
+  }
+
+  bankClearTimeout(timer) {
+    if (timer === null || timer === undefined) {
+      return;
+    }
+    const timers = this.bankTimerApi();
+    const clear = timers && typeof timers.clearTimeout === "function"
+      ? timers.clearTimeout.bind(timers)
+      : clearTimeout;
+    clear(timer);
+  }
+
+  bankCacheStore() {
+    if (!(this.bankCache instanceof Map)) {
+      this.bankCache = new Map();
+    }
+    return this.bankCache;
+  }
+
+  bankMountsStore() {
+    if (!(this.bankMounts instanceof Set)) {
+      this.bankMounts = new Set();
+    }
+    return this.bankMounts;
+  }
+
+  bankFlightsStore() {
+    if (!(this.bankFlights instanceof Map)) {
+      this.bankFlights = new Map();
+    }
+    return this.bankFlights;
+  }
+
+  bankPendingStore() {
+    if (!(this.bankPendingFetches instanceof Map)) {
+      this.bankPendingFetches = new Map();
+    }
+    return this.bankPendingFetches;
+  }
+
+  bankLatestStore() {
+    if (!(this.bankLatestGeneration instanceof Map)) {
+      this.bankLatestGeneration = new Map();
+    }
+    return this.bankLatestGeneration;
+  }
+
+  bankCacheGet(key) {
+    const store = this.bankCacheStore();
+    const entry = store.get(key);
+    if (!entry) {
+      return null;
+    }
+    store.delete(key);
+    store.set(key, entry);
+    return entry;
+  }
+
+  bankCacheSet(key, report, generation) {
+    const store = this.bankCacheStore();
+    const existing = store.get(key);
+    if (existing && Number(existing.generation) > Number(generation)) {
+      return existing;
+    }
+    if (store.has(key)) {
+      store.delete(key);
+    }
+    const entry = { report, fetchedAt: Date.now(), generation: Number(generation) || 0 };
+    store.set(key, entry);
+    while (store.size > BANK_CACHE_SIZE) {
+      const oldest = store.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      store.delete(oldest.value);
+    }
+    return entry;
+  }
+
+  bankLastGoodReport(key) {
+    const cached = this.bankCacheGet(key);
+    return cached ? cached.report : null;
+  }
+
+  bankUnloadedResult(key) {
+    return {
+      report: null,
+      stale: false,
+      key,
+      error: { code: "unloaded", message: "Bank data has unloaded.", detail: "" },
+    };
+  }
+
+  bankSpawnFetch(args, options = {}) {
+    const command = Array.isArray(args) && args[1] === "report" ? "report" : "list";
+    const decoder = command === "report" ? bankDecodeReport : bankDecodeList;
+    return bobSpawnJson(args, decoder, {
+      ...options,
+      commandLabel: command === "report" ? "bob bank report" : "bob bank list",
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function"
+          ? this.statsVaultBasePath()
+          : null,
+      timeout: BOB_SPAWN_TIMEOUT_MS,
+      maxBuffer: BOB_SPAWN_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  bankFetchesFor(spec = {}) {
+    const opts = bankJsonObject(spec) ? spec : {};
+    if (Array.isArray(opts.fetches)) {
+      return opts.fetches.filter((entry) => bankJsonObject(entry));
+    }
+    const fetches = [];
+    if (opts.list === true || opts.command === "list") {
+      fetches.push({ command: "list", all: opts.all === true, month: opts.month });
+    }
+    if (opts.command === "report" || opts.report === true || opts.month || opts.date || opts.day) {
+      fetches.push({
+        command: "report",
+        month: opts.month,
+        date: opts.date,
+        day: opts.day,
+        week: opts.week,
+        year: opts.year,
+      });
+    }
+    if (fetches.length === 0 && (opts.month || opts.date || opts.day)) {
+      fetches.push({ command: "report", month: opts.month, date: opts.date, day: opts.day });
+    }
+    if (fetches.length === 0) {
+      fetches.push({ command: "list" });
+    }
+    return fetches;
+  }
+
+  apiBankFetch(options = {}) {
+    const opts = bankJsonObject(options) ? options : {};
+    const force = opts.force === true;
+    const args = bankBuildArgs(opts);
+    const key = bankCacheKey(args);
+    if (this.bankDataActive === false) {
+      return Promise.resolve(this.bankUnloadedResult(key));
+    }
+    const generation = Math.max(
+      this.bankVaultGeneration || 0,
+      Number.isInteger(opts.requiredGeneration) ? opts.requiredGeneration : 0,
+    );
+    this.bankLatestStore().set(key, Math.max(this.bankLatestStore().get(key) || 0, generation));
+    const cached = this.bankCacheGet(key);
+    const flight = this.bankFlightsStore().get(key);
+    if (flight) {
+      if (!force && generation <= flight.generation && cached) {
+        return Promise.resolve({
+          report: cached.report,
+          stale: true,
+          error: null,
+          key,
+          generation: cached.generation,
+        });
+      }
+      if (!force && generation <= flight.generation) {
+        return flight.promise;
+      }
+      return this.bankQueueFetch(key, args, opts, generation, true);
+    }
+    if (cached && !force && generation <= (cached.generation || 0)) {
+      this.bankStartFetch(args, key, { ...opts, force: true }, generation);
+      return Promise.resolve({
+        report: cached.report,
+        stale: true,
+        error: null,
+        key,
+        generation: cached.generation,
+      });
+    }
+    return this.bankStartFetch(args, key, opts, generation).promise;
+  }
+
+  apiBankRefresh(options = {}) {
+    return this.apiBankFetch({ ...(bankJsonObject(options) ? options : {}), force: true });
+  }
+
+  bankQueueFetch(key, args, opts, generation, waitForResult) {
+    const pendingStore = this.bankPendingStore();
+    let resolve = null;
+    const result = waitForResult
+      ? new Promise((done) => { resolve = done; })
+      : null;
+    let pending = pendingStore.get(key);
+    if (!pending) {
+      pending = { key, args, opts: { ...opts, force: true }, generation, waiters: [] };
+      pendingStore.set(key, pending);
+    } else {
+      pending.opts = { ...pending.opts, ...opts, force: true };
+      pending.generation = Math.max(pending.generation, generation);
+      pending.args = args;
+    }
+    this.bankLatestStore().set(key, Math.max(this.bankLatestStore().get(key) || 0, generation));
+    if (resolve) {
+      pending.waiters.push(resolve);
+    }
+    return result || Promise.resolve({ report: null, stale: false, error: null, queued: true, key });
+  }
+
+  bankStartFetch(args, key, opts, requiredGeneration) {
+    const epoch = this.bankDataEpoch || 0;
+    const generation = Math.max(
+      this.bankVaultGeneration || 0,
+      Number.isInteger(requiredGeneration) ? requiredGeneration : 0,
+    );
+    this.bankLatestStore().set(key, Math.max(this.bankLatestStore().get(key) || 0, generation));
+    const flight = { key, args, opts: { ...opts }, generation, epoch, promise: null };
+    const run = async () => {
+      if (this.bankDataActive === false || this.bankDataEpoch !== epoch) {
+        return this.bankUnloadedResult(key);
+      }
+      try {
+        const result = await this.bankSpawnFetch(args, opts);
+        if (this.bankDataActive === false || this.bankDataEpoch !== epoch) {
+          return this.bankUnloadedResult(key);
+        }
+        const latest = this.bankLatestStore().get(key) || 0;
+        const superseded = generation < latest;
+        if (result && result.ok) {
+          this.bankCacheSet(key, result.report, generation);
+          return {
+            report: result.report,
+            stale: superseded,
+            error: null,
+            key,
+            generation,
+          };
+        }
+        const staleReport = this.bankLastGoodReport(key);
+        return {
+          report: staleReport,
+          stale: Boolean(staleReport),
+          error: result || { code: "failed", message: "bob bank failed.", detail: "" },
+          key,
+          generation,
+        };
+      } catch (error) {
+        const staleReport = this.bankLastGoodReport(key);
+        return {
+          report: staleReport,
+          stale: Boolean(staleReport),
+          error: {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob bank failed.",
+            detail: "",
+          },
+          key,
+          generation,
+        };
+      }
+    };
+    flight.promise = Promise.resolve()
+      .then(run)
+      .then((outcome) => {
+        if (this.bankDataActive !== false && this.bankDataEpoch === epoch) {
+          this.bankDeliverFetchResult(flight, outcome);
+        }
+        return outcome;
+      })
+      .finally(() => {
+        if (this.bankFlightsStore().get(key) === flight) {
+          this.bankFlightsStore().delete(key);
+          this.bankStartNextFetch(key, epoch);
+        }
+      });
+    this.bankFlightsStore().set(key, flight);
+    return flight;
+  }
+
+  bankStartNextFetch(key, epoch = this.bankDataEpoch || 0) {
+    if (this.bankDataActive === false || this.bankDataEpoch !== epoch) {
+      return;
+    }
+    const pending = this.bankPendingStore().get(key);
+    if (!pending) {
+      return;
+    }
+    this.bankPendingStore().delete(key);
+    const next = this.bankStartFetch(pending.args, key, pending.opts, pending.generation);
+    for (const waiter of pending.waiters) {
+      next.promise.then(waiter, () => waiter(this.bankUnloadedResult(key)));
+    }
+  }
+
+  bankDeliverFetchResult(flight, result) {
+    if (!flight || !result || this.bankDataActive === false) {
+      return;
+    }
+    for (const mount of this.bankMountsStore()) {
+      if (!mount || mount.unloaded === true) {
+        continue;
+      }
+      const keys = (mount.keys || []).map((entry) => entry.key);
+      if (!keys.includes(flight.key)) {
+        continue;
+      }
+      try {
+        mount.subscriber(this.bankMountState(mount));
+      } catch (error) {
+        // A mounted renderer cannot break shared bank refresh.
+      }
+    }
+  }
+
+  bankMountState(mount) {
+    const results = {};
+    let stale = false;
+    let error = null;
+    for (const entry of mount.keys || []) {
+      const cached = this.bankCacheGet(entry.key);
+      const flight = this.bankFlightsStore().get(entry.key);
+      results[entry.key] = {
+        report: cached ? cached.report : null,
+        stale: Boolean(
+          cached && (
+            (cached.generation || 0) < (this.bankVaultGeneration || 0) ||
+            (this.bankLatestStore().get(entry.key) || 0) > (cached.generation || 0)
+          ),
+        ),
+        error: null,
+        refreshing: Boolean(flight),
+        args: entry.args,
+      };
+      if (results[entry.key].stale) {
+        stale = true;
+      }
+    }
+    return {
+      results,
+      stale,
+      error,
+      generation: this.bankVaultGeneration || 0,
+      today: this.bankLocalDay || bankLocalDate(),
+    };
+  }
+
+  apiBankSubscribe(spec, subscriber) {
+    if (typeof subscriber !== "function" || this.bankDataActive === false) {
+      return () => {};
+    }
+    const fetches = this.bankFetchesFor(spec);
+    const keys = fetches.map((options) => {
+      const args = bankBuildArgs(options);
+      return { options, args, key: bankCacheKey(args) };
+    });
+    const mount = { spec, subscriber, keys, unloaded: false };
+    this.bankMountsStore().add(mount);
+    try {
+      subscriber(this.bankMountState(mount));
+    } catch (error) {
+      // A subscriber may mount before its renderer is ready.
+    }
+    for (const entry of keys) {
+      void this.apiBankFetch(entry.options);
+    }
+    return () => {
+      mount.unloaded = true;
+      this.bankMountsStore().delete(mount);
+    };
+  }
+
+  apiBankInvalidate(reason = "manual") {
+    if (this.bankDataActive === false) {
+      return;
+    }
+    this.bankVaultGeneration = (this.bankVaultGeneration || 0) + 1;
+    this.bankInvalidationReason = String(reason || "vault");
+    this.bankScheduleRevalidate(reason);
+  }
+
+  apiBankMonthPaths() {
+    try {
+      const files = this.app && this.app.vault && typeof this.app.vault.getMarkdownFiles === "function"
+        ? this.app.vault.getMarkdownFiles()
+        : [];
+      return bankDiscoverMonthPaths(files);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  bankApi() {
+    return Object.freeze({
+      version: 1,
+      fetch: (options) => this.apiBankFetch(options),
+      refresh: (options) => this.apiBankRefresh(options),
+      subscribe: (spec, subscriber) => this.apiBankSubscribe(spec, subscriber),
+      invalidate: (reason) => this.apiBankInvalidate(reason),
+      monthPaths: () => this.apiBankMonthPaths(),
+      locateHeading: (source, month, date) => bankLocateDayHeading(source, month, date),
+      recognize: (path, source, line) => bankRecognizeRow(path, source, line),
+    });
+  }
+
+  bankScheduleRevalidate(reason = "vault") {
+    void reason;
+    if (this.bankDataActive === false || this.bankMountsStore().size === 0) {
+      return;
+    }
+    this.bankClearTimeout(this.bankRevalidateTimer);
+    this.bankRevalidateTimer = this.bankSetTimeout(() => {
+      this.bankRevalidateTimer = null;
+      this.bankRevalidateMounts();
+    }, BANK_REVALIDATE_DEBOUNCE_MS);
+  }
+
+  bankRevalidateMounts() {
+    if (this.bankDataActive === false) {
+      return;
+    }
+    const generation = this.bankVaultGeneration || 0;
+    const seen = new Set();
+    for (const mount of this.bankMountsStore()) {
+      if (!mount || mount.unloaded === true) {
+        continue;
+      }
+      for (const entry of mount.keys || []) {
+        if (seen.has(entry.key)) {
+          continue;
+        }
+        seen.add(entry.key);
+        void this.apiBankFetch({
+          ...entry.options,
+          force: true,
+          requiredGeneration: generation,
+        });
+      }
+    }
+  }
+
+  bankHandleFileEvent(file, oldPath) {
+    const current = bankRelevantPath(file);
+    const previous = oldPath ? bankRelevantPath(oldPath) : false;
+    if (!current && !previous) {
+      return;
+    }
+    this.apiBankInvalidate("vault");
+  }
+
+  bankRefreshRollover(now = new Date()) {
+    const day = bankLocalDate(now);
+    if (!day) {
+      return false;
+    }
+    if (this.bankLocalDay === null || this.bankLocalDay === undefined) {
+      this.bankLocalDay = day;
+      return false;
+    }
+    if (this.bankLocalDay === day) {
+      return false;
+    }
+    this.bankLocalDay = day;
+    this.apiBankInvalidate("local-date-rollover");
+    return true;
+  }
+
+  setupBankData() {
+    this.bankDataActive = true;
+    this.bankDataEpoch = (this.bankDataEpoch || 0) + 1;
+    this.bankVaultGeneration = 0;
+    this.bankCache = new Map();
+    this.bankMounts = new Set();
+    this.bankFlights = new Map();
+    this.bankPendingFetches = new Map();
+    this.bankLatestGeneration = new Map();
+    this.bankRevalidateTimer = null;
+    this.bankRolloverTimer = null;
+    this.bankLocalDay = bankLocalDate();
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file) => this.bankHandleFileEvent(file)));
+      }
+    } catch (error) {
+      // Metadata-cache revalidation is best-effort.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "modify", "delete", "rename"]) {
+          this.registerEvent(vault.on(event, (file, oldPath) => this.bankHandleFileEvent(file, oldPath)));
+        }
+      }
+    } catch (error) {
+      // Vault revalidation is best-effort.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("active-leaf-change", () => this.bankScheduleRevalidate("active-leaf")));
+        this.registerEvent(workspace.on("file-open", () => this.bankScheduleRevalidate("file-open")));
+      }
+    } catch (error) {
+      // Focused-leaf revalidation is best-effort.
+    }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof window !== "undefined" && window) {
+        this.registerDomEvent(window, "focus", () => this.bankScheduleRevalidate("window-focus"));
+        if (typeof document !== "undefined" && document) {
+          this.registerDomEvent(document, "visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+              this.bankScheduleRevalidate("document-visible");
+            }
+          });
+        }
+      }
+    } catch (error) {
+      // Focus and visibility are best-effort.
+    }
+    try {
+      const timers = this.bankTimerApi();
+      const hasTimerHost = Boolean(
+        (this.bankTimers && typeof this.bankTimers === "object") ||
+        (typeof window !== "undefined" && window),
+      );
+      const setIntervalFn = hasTimerHost && timers && typeof timers.setInterval === "function"
+        ? timers.setInterval.bind(timers)
+        : null;
+      if (setIntervalFn) {
+        this.bankRolloverTimer = setIntervalFn(() => {
+          try {
+            this.bankRefreshRollover(new Date());
+          } catch (error) {
+            // Rollover is best-effort.
+          }
+        }, BANK_ROLLOVER_INTERVAL_MS);
+        if (typeof this.registerInterval === "function") {
+          this.registerInterval(this.bankRolloverTimer);
+        }
+      }
+    } catch (error) {
+      this.bankRolloverTimer = null;
+    }
+  }
+
+  teardownBankData() {
+    this.bankDataActive = false;
+    this.bankDataEpoch = (this.bankDataEpoch || 0) + 1;
+    this.bankClearTimeout(this.bankRevalidateTimer);
+    this.bankRevalidateTimer = null;
+    if (this.bankRolloverTimer !== null && this.bankRolloverTimer !== undefined) {
+      const timers = this.bankTimerApi();
+      if (timers && typeof timers.clearInterval === "function") {
+        timers.clearInterval(this.bankRolloverTimer);
+      }
+    }
+    this.bankRolloverTimer = null;
+    this.bankLocalDay = null;
+    this.bankVaultGeneration = 0;
+    if (this.bankMounts instanceof Set) {
+      for (const mount of this.bankMounts) {
+        if (mount) {
+          mount.unloaded = true;
+        }
+      }
+      this.bankMounts.clear();
+    }
+    if (this.bankCache instanceof Map) {
+      this.bankCache.clear();
+    }
+    if (this.bankFlights instanceof Map) {
+      this.bankFlights.clear();
+    }
+    if (this.bankPendingFetches instanceof Map) {
+      for (const [key, pending] of this.bankPendingFetches) {
+        const result = this.bankUnloadedResult(key);
+        for (const waiter of pending.waiters || []) {
+          try {
+            waiter(result);
+          } catch (error) {
+            // Unload delivery is best-effort.
+          }
+        }
+      }
+      this.bankPendingFetches.clear();
+    }
+    if (this.bankLatestGeneration instanceof Map) {
+      this.bankLatestGeneration.clear();
+    }
   }
 }
 // ---- src/241b-plugin-notebook-catalog-model.js ----
@@ -89445,6 +91144,8 @@ class BobLedgerToolsCommandModeRefreshMixin {
             this.refreshTasksForCommandModeRun();
           } else if (tag === "gkeep") {
             this.refreshKeepInboxForCommandModeRun();
+          } else if (tag === "bank") {
+            this.refreshBankForCommandModeRun();
           }
           // Unknown tags belong to other plugins; ignore them.
         } catch (error) {
@@ -89495,6 +91196,12 @@ class BobLedgerToolsCommandModeRefreshMixin {
     }
     if (typeof this.scheduleFreshnessStatusBar === "function") {
       this.scheduleFreshnessStatusBar();
+    }
+  }
+
+  refreshBankForCommandModeRun() {
+    if (typeof this.apiBankInvalidate === "function") {
+      this.apiBankInvalidate("command-mode");
     }
   }
 }
@@ -99437,6 +101144,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsClockMixin,
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
+  BobLedgerToolsBankDataMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
@@ -102540,4 +104248,7 @@ module.exports.helpers = {
   ensureTaskThemeMarksRefresh,
   taskThemeFallbackFold,
   ensurePomodoroThemeChipsRefresh,
+  BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport,
+  bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
+  bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
 };

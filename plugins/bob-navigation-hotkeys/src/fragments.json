@@ -34,6 +34,7 @@
   "170-open-task-jump.js",
   "180-editor-transactions.js",
   "181-editor-line-diff.js",
+  "182-reload-history.js",
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",
@@ -215,5 +216,6 @@
   "712-successor-verdict-exports.js",
   "713-nav-offer-close-apis.js",
   "714-highlights-hints-exports.js",
-  "715-delete-guard-exports.js"
+  "715-delete-guard-exports.js",
+  "716-reload-history-exports.js"
 ]

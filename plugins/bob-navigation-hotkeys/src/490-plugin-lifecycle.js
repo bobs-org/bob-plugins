@@ -547,6 +547,20 @@ class BobNavigationHotkeysPlugin extends Plugin {
     }
 
     if (
+      typeof createReloadHistoryExtension === "function" &&
+      typeof this.registerEditorExtension === "function"
+    ) {
+      try {
+        const reloadHistoryExtension = createReloadHistoryExtension();
+        if (reloadHistoryExtension) {
+          this.registerEditorExtension(reloadHistoryExtension);
+        }
+      } catch (error) {
+        // Disk-reload history never blocks startup.
+      }
+    }
+
+    if (
       bobOpenNotesLandingFlashField &&
       typeof this.registerEditorExtension === "function"
     ) {

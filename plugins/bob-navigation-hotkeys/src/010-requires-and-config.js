@@ -7,7 +7,7 @@ try {
 } catch {
   // Obsidian supplies CodeMirror at runtime; lightweight Node harnesses may not.
 }
-const { StateEffect, StateField } = codeMirrorState;
+const { StateEffect, StateField, EditorState, Transaction } = codeMirrorState;
 
 const FRONTMATTER_DELIMITER_RE = /^\s*(?:---|\.\.\.)\s*$/;
 const OPENING_FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;

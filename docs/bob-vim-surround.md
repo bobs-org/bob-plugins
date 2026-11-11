@@ -52,3 +52,5 @@ per-plugin settings. Its operators live entirely in the Vim keymap.
 - [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the plugin that owns
   the `\s` Vim mapping; surround uses the `ys`/`cs`/`ds` operators and claims
   no backslash mapping.
+- [Bob Vim Yank Flash](bob-vim-yank-flash.md) — briefly highlights the exact
+  text a Vim yank copies; `ys` never flashes because it is not a yank.

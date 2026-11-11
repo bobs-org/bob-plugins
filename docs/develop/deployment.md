@@ -149,7 +149,7 @@ pass.
 This monorepo is a development source and vault sync target, not a package
 for direct installation from the Obsidian community registry or BRAT. Each
 plugin has its own ID and manifest version, while the repository contains
-eight plugins. If one is published separately, split it into its own public
+ten plugins. If one is published separately, split it into its own public
 repository with the standard root plugin files and a release tag matching
 its manifest version.
 

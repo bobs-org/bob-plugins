@@ -930,6 +930,7 @@ const PURPOSES = {
   "bob-navigation-hotkeys": "Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob notes.",
   "bob-project-tasks": "Bob Project Tasks keeps project task sections in sync across notes.",
   "bob-vim-surround": "Bob Vim Surround adds Vim-style surround editing to Obsidian.",
+  "bob-vim-yank-flash": "Bob Vim Yank Flash briefly highlights the exact text a Vim yank copies in Obsidian.",
   "task-status-cycler": "Task Status Cycler changes task and Pomodoro states in Bob's workflow.",
 };
 
@@ -941,6 +942,7 @@ const PAGE_DESCRIPTIONS = {
   "bob-navigation-hotkeys": "Navigate and edit Bob notes with keyboard commands.",
   "bob-project-tasks": "Synchronize project task sections across notes.",
   "bob-vim-surround": "Edit delimiters around text with Vim-style surround commands.",
+  "bob-vim-yank-flash": "See a brief highlight on exactly the text a Vim yank copies.",
   "task-status-cycler": "Change task and Pomodoro states in Bob's workflow.",
 };
 

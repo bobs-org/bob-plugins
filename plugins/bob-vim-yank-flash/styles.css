@@ -1,0 +1,11 @@
+.bob-yank-flash {
+  background-color: var(--bob-yank-flash-bg, rgba(var(--color-green-rgb), 0.35));
+}
+
+/* An inset overlay paints above the line's own background and below its text. The
+   vault's task-status snippet sets a more specific `background` on tinted task rows,
+   and a background-only line flash would be hidden there. */
+.cm-line.bob-yank-flash-line {
+  box-shadow: inset 0 0 0 100vmax
+    var(--bob-yank-flash-bg, rgba(var(--color-green-rgb), 0.35));
+}

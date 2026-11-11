@@ -739,6 +739,60 @@ test("KM1: Obsidian daily-note link close offers keep-moving and links after the
   assert.ok(dayAfter.indexOf("~~[[sase_badges#^spec]]~~") < dayAfter.indexOf("[[sase_badges#^renderer]]"));
 });
 
+test("KM33: Ctrl+Enter on the screenshot link opens a 4-row Keep group and Esc writes nothing", async () => {
+  // Real close wiring for a standalone top-level project (project -> area,
+  // no Sub-projects marker, hidden ^prj, X carries [id::]): the same path the
+  // ⏭ 4 mark forecasts (docs/keep-moving-marks.md, KB7).
+  notices.length = 0;
+  helpers.resetSuccessorKeepMovingCache();
+  const notePath = "job_email_recruiters.md";
+  const projectText = [
+    "---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
+    "- [ ] #task #prj Email all recruiters back! #hide ^prj",
+    "- [*] #task Reply to Luzern [id:: job_email_recruiters__luzern] ^luzern",
+    "- [*] #task Ecogpt ^ecogpt",
+    "- [*] #task Ray Lyles ^ray-lyles",
+    "- [*] #task Product engineer Dan Dowd ^product-engineer-dan-dowd",
+    "- [*] #task Senior rust java engineer ^senior-rust-java-engineer",
+  ].join("\n");
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — WRITE", "\t- [[job_email_recruiters#^luzern]]"].join("\n");
+  const harness = createInMemoryObsidianApp({ [notePath]: projectText, "job.md": "", [DAY_PATH]: day });
+  const frontmatter = {
+    [notePath]: { type: "[[project]]", parent: "[[job]]" },
+    "job.md": { type: "[[area]]" },
+  };
+  harness.app.metadataCache.getCache = (path) => frontmatter[path] ? { frontmatter: frontmatter[path] } : null;
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makeRealPlugin(harness, editor, DAY_PATH);
+  const picked = { models: [], choose: false };
+  installPicker(plugin, 2, picked, [], 2);
+  const result = await plugin.handleActiveTaskBlockLinkOpenDone(editor, { path: DAY_PATH });
+  await settleReal(plugin);
+  assert.equal(result.changed, true);
+  assert.equal(picked.models.length, 1);
+  const groups = picked.models[0].groups;
+  assert.deepEqual(groups.map((group) => group.group), ["keep_moving"]);
+  assert.equal(groups[0].header, "Keep ‹job_email_recruiters› moving");
+  const rows = groups[0].rows.filter((row) => row.selectable);
+  assert.deepEqual(
+    rows.map((row) => String(row.key).split("#^").pop()).sort(),
+    ["ecogpt", "product-engineer-dan-dowd", "ray-lyles", "senior-rust-java-engineer"],
+  );
+  assert.ok(rows.every((row) => row.selected !== true), "nothing preselected");
+  // Esc: only X closes and its link strikes; no resident or day link is written.
+  const projectAfter = harness.getSource(notePath).split("\n");
+  assert.match(projectAfter.find((line) => line.includes("^luzern")), /^- \[x\]/);
+  for (const id of ["ecogpt", "ray-lyles", "product-engineer-dan-dowd", "senior-rust-java-engineer"]) {
+    assert.equal(
+      projectAfter.find((line) => line.endsWith(`^${id}`)),
+      projectText.split("\n").find((line) => line.endsWith(`^${id}`)),
+    );
+  }
+  const dayAfter = editor.getValue();
+  assert.match(dayAfter, /~~\[\[job_email_recruiters#\^luzern\]\]~~/);
+  assert.equal((dayAfter.match(/\[\[job_email_recruiters#/g) || []).length, 1);
+});
+
 test("KM26: own-note Ctrl+Enter offers keep-moving with notice v2 card and v1 plain text", async () => {
   for (const noticeVersion of [2, 1]) {
     notices.length = 0;

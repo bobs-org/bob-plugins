@@ -2084,18 +2084,19 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type] {
   padding: 0.06em 0.28em 0.06em 1.28em;
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark) {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark):not(.bob-prj-task-mark):not(.bob-hide-tag-mark) {
   min-width: 0;
   padding: 0.06em 0.28em;
 }
 
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark)::before {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark):not(.bob-prj-task-mark):not(.bob-hide-tag-mark)::before {
   display: none;
 }
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-ref-task-mark::before,
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-pre-task-mark::before,
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::before {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::before,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-prj-task-mark::before {
   inset: 0.06em auto 0.06em 0.14em;
   width: 1.08em;
 }
@@ -2113,7 +2114,8 @@ body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type]::after {
 
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-ref-task-mark::after,
 body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-pre-task-mark::after,
-body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::after {
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-post-task-mark::after,
+body.bob-task-tag-marks .bob-task-tag-mark[data-bob-type].bob-prj-task-mark::after {
   content: attr(data-bob-type);
 }
 
@@ -2188,6 +2190,9 @@ body {
   --bob-ref-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 4.5C6.6 3.4 4.6 3 2.8 3.3v9c1.8-.3 3.8.1 5.2 1.2M8 4.5c1.4-1.1 3.4-1.5 5.2-1.2v9c-1.8-.3-3.8.1-5.2 1.2'/%3E%3C/svg%3E");
   --bob-pre-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.4 12.2h13.2M3.8 12.2a4.2 4.2 0 0 1 8.4 0M8 3.9v2.4M2.13 6.33l1.7 1.7M13.87 6.33l-1.7 1.7'/%3E%3C/svg%3E");
   --bob-post-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 14.2V2.3M3.6 2.9h8.6l-2.1 3.2 2.1 3.2H3.6'/%3E%3C/svg%3E");
+  --bob-prj-task-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='5.7'/%3E%3Ccircle cx='8' cy='8' r='1.7'/%3E%3C/svg%3E");
+  --bob-hide-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.9 8c1.7-3 3.9-4.4 6.1-4.4s4.4 1.4 6.1 4.4c-1.7 3-3.9 4.4-6.1 4.4S3.6 11 1.9 8Z'/%3E%3Ccircle cx='8' cy='8' r='1.9'/%3E%3Cpath d='M2.6 2.6l10.8 10.8'/%3E%3C/svg%3E");
+  --bob-hide-tag-ink: var(--text-muted);
 }
 
 /* Ref variant: the book replaces the hash wherever the shared host
@@ -2212,6 +2217,28 @@ body.bob-task-tag-marks .bob-task-tag-mark.bob-post-task-mark::before {
   mask-image: var(--bob-post-task-glyph);
 }
 
+body.bob-task-tag-marks .bob-task-tag-mark.bob-prj-task-mark::before {
+  -webkit-mask-image: var(--bob-prj-task-glyph);
+  mask-image: var(--bob-prj-task-glyph);
+}
+
+/* Hide variant: the eye-off reuses the shared host rules with the
+   quiet metadata grey the date marks use (`--text-muted`). */
+
+body.bob-task-tag-marks .bob-task-tag-mark.bob-hide-tag-mark {
+  --bob-task-tag-ink: var(--bob-hide-tag-ink);
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark.bob-hide-tag-mark::before {
+  -webkit-mask-image: var(--bob-hide-tag-glyph);
+  mask-image: var(--bob-hide-tag-glyph);
+}
+
+body.bob-task-tag-marks .bob-task-tag-mark.bob-hide-tag-mark:hover,
+body.bob-task-tag-marks a.tag.bob-task-tag-mark.bob-hide-tag-mark:hover {
+  --bob-task-tag-ink: var(--bob-hide-tag-ink);
+}
+
 /* Resting: a closed reading task rests at the same faint mix as a
    closed hash (40% toward `--text-faint`), on every surface. Stated
    again for the variant so the book never stays full-ink on a done
@@ -2232,6 +2259,10 @@ li.task-list-item[data-task="-"] .bob-task-tag-mark.bob-ref-task-mark,
    copy, Dataview round-trips, and toggle restore. */
 
 body.bob-task-tag-marks a.tag.bob-ref-task-hidden {
+  display: none;
+}
+
+body.bob-task-tag-marks a.tag.bob-prj-task-hidden {
   display: none;
 }
 
@@ -2359,6 +2390,9 @@ body.bob-task-tag-marks .plugin-tasks-list-item .task-description:has(a.tag:is([
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="x"] .task-description a.tag:is([data-tag-name="#ref" i], [href="#ref" i])::before,
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="X"] .task-description a.tag:is([data-tag-name="#ref" i], [href="#ref" i])::before,
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="-"] .task-description a.tag:is([data-tag-name="#ref" i], [href="#ref" i])::before,
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="x"] .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i])::before,
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="X"] .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i])::before,
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="-"] .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i])::before,
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="x"] .task-description:has(a.tag:is([data-tag-name="#gtd" i], [href="#gtd" i])):has(a.tag:is([data-tag-name="#pre" i], [href="#pre" i])):not(:has(a.tag:is([data-tag-name="#post" i], [href="#post" i]))) a.tag:is([data-tag-name="#pre" i], [href="#pre" i])::before,
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="X"] .task-description:has(a.tag:is([data-tag-name="#gtd" i], [href="#gtd" i])):has(a.tag:is([data-tag-name="#pre" i], [href="#pre" i])):not(:has(a.tag:is([data-tag-name="#post" i], [href="#post" i]))) a.tag:is([data-tag-name="#pre" i], [href="#pre" i])::before,
 body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="-"] .task-description:has(a.tag:is([data-tag-name="#gtd" i], [href="#gtd" i])):has(a.tag:is([data-tag-name="#pre" i], [href="#pre" i])):not(:has(a.tag:is([data-tag-name="#post" i], [href="#post" i]))) a.tag:is([data-tag-name="#pre" i], [href="#pre" i])::before,
@@ -2412,6 +2446,78 @@ body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data
   mask-position: center;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
+}
+
+/* Tasks query results: `#task` stays hidden while the `#prj` pill
+   renders as the project target and the `#hide` pill renders as the
+   eye-off, CSS-only like the `#ref` book. `#prj` is case-insensitive
+   (matching the pair rule); `#hide` is exact. */
+
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i]),
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"]) {
+  display: inline-block;
+  position: relative;
+  width: 1.08em;
+  height: 1.08em;
+  padding: 0.06em 0.14em;
+  margin: 0 0.08em;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: transparent;
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-decoration: none;
+  vertical-align: -0.1em;
+  opacity: 0.9;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i])::before,
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"])::before {
+  content: "";
+  position: absolute;
+  inset: 0.06em 0.14em;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#prj" i], [href="#prj" i])::before {
+  background-color: var(--bob-task-tag-color, var(--bob-task-tag-hue));
+  -webkit-mask-image: var(--bob-prj-task-glyph);
+  mask-image: var(--bob-prj-task-glyph);
+}
+
+body.bob-task-tag-marks .plugin-tasks-list-item .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"])::before {
+  background-color: var(--bob-hide-tag-ink);
+  -webkit-mask-image: var(--bob-hide-tag-glyph);
+  mask-image: var(--bob-hide-tag-glyph);
+}
+
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="x"] .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"])::before,
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="X"] .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"])::before,
+body.bob-task-tag-marks li.plugin-tasks-list-item[data-task="-"] .task-description a.tag:is([data-tag-name="#hide"], [href="#hide"])::before {
+  background-color: color-mix(in srgb, var(--bob-hide-tag-ink) 40%, var(--text-faint));
+  opacity: 0.75;
+}
+
+li.task-list-item[data-task="x"] .bob-task-tag-mark.bob-hide-tag-mark,
+li.task-list-item[data-task="X"] .bob-task-tag-mark.bob-hide-tag-mark,
+li.task-list-item[data-task="-"] .bob-task-tag-mark.bob-hide-tag-mark,
+.HyperMD-task-line[data-task="x"] .bob-task-tag-mark.bob-hide-tag-mark,
+.HyperMD-task-line[data-task="X"] .bob-task-tag-mark.bob-hide-tag-mark,
+.HyperMD-task-line[data-task="-"] .bob-task-tag-mark.bob-hide-tag-mark {
+  --bob-task-tag-ink: color-mix(in srgb, var(--bob-hide-tag-ink) 40%, var(--text-faint));
+  opacity: 0.75;
 }
 
 @media (prefers-reduced-motion: reduce) {

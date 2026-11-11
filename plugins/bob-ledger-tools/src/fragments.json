@@ -26,6 +26,7 @@
   "137-ledger-type-marks.js",
   "138-task-tag-marks.js",
   "138-checklist-task-marks.js",
+  "138-prj-hide-marks.js",
   "138-task-type-identity.js",
   "139-unblocked-glyph.js",
   "140-dependency-model.js",
@@ -189,5 +190,6 @@
   "320-plan-lane-and-config.js",
   "330-note-ready-model.js",
   "340-dashboard-views-and-plan-block.js",
-  "350-exports.js"
+  "350-exports.js",
+  "351-exports-prj-hide.js"
 ]

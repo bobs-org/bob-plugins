@@ -89,7 +89,9 @@ class BobLedgerToolsTaskTagMarksMixin {
           editorLivePreviewField &&
           TaskTagMarkWidget &&
           RefTaskMarkWidget &&
-          ChecklistTaskMarkWidget,
+          ChecklistTaskMarkWidget &&
+          PrjTaskMarkWidget &&
+          HideTagMarkWidget,
       );
     } catch (error) {
       return false;
@@ -243,7 +245,14 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (!this.taskTagMarksEnabled) {
         return Decoration.none;
       }
-      if (!Decoration || !RangeSetBuilder || !TaskTagMarkWidget || !RefTaskMarkWidget) {
+      if (
+        !Decoration ||
+        !RangeSetBuilder ||
+        !TaskTagMarkWidget ||
+        !RefTaskMarkWidget ||
+        !PrjTaskMarkWidget ||
+        !HideTagMarkWidget
+      ) {
         return Decoration.none;
       }
       if (!editorInfoField || !editorLivePreviewField) {
@@ -412,7 +421,11 @@ class BobLedgerToolsTaskTagMarksMixin {
                           )
                         : source && source.kind === "ref"
                           ? new RefTaskMarkWidget(identity, inheritedEnabled)
-                          : new TaskTagMarkWidget(identity, inheritedEnabled);
+                          : source && source.kind === "prj"
+                            ? new PrjTaskMarkWidget(identity, inheritedEnabled)
+                            : source && source.kind === "hide"
+                              ? new HideTagMarkWidget()
+                              : new TaskTagMarkWidget(identity, inheritedEnabled);
                     builder.add(
                       absFrom,
                       absTo,
@@ -526,6 +539,15 @@ class BobLedgerToolsTaskTagMarksMixin {
       if (partner) {
         return annotateRefTaskMark(anchor, partner, identity, shownInherited);
       }
+      let prjPartner = null;
+      try {
+        prjPartner = prjTaskPairAnchor(anchor);
+      } catch (error) {
+        prjPartner = null;
+      }
+      if (prjPartner) {
+        return annotatePrjTaskMark(anchor, prjPartner, identity, shownInherited);
+      }
       const checklistRun = checklistTaskRunAnchors(anchor);
       if (checklistRun) {
         const ok = annotateChecklistTaskMark(
@@ -565,11 +587,20 @@ class BobLedgerToolsTaskTagMarksMixin {
           if (!anchor) {
             continue;
           }
-          if (!taskTagMarkElementEligible(anchor, el)) {
-            continue;
+          if (taskTagMarkElementEligible(anchor, el)) {
+            const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
+            this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, el);
           }
-          const identity = this.taskTagIdentityForRenderedAnchor(anchor, ctx);
-          this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, ctx, el);
+          try {
+            if (
+              typeof hideTagMarkElementEligible === "function" &&
+              hideTagMarkElementEligible(anchor, el)
+            ) {
+              annotateHideTagMark(anchor);
+            }
+          } catch (error) {
+            // Hide annotation is best-effort.
+          }
         } catch (error) {
           continue;
         }
@@ -598,6 +629,18 @@ class BobLedgerToolsTaskTagMarksMixin {
             if (this.annotateTaskTagAnchor(anchor, identity, inheritedEnabled, null, root)) {
               count += 1;
             }
+          }
+          try {
+            if (
+              typeof hideTagMarkElementEligible === "function" &&
+              hideTagMarkElementEligible(anchor, root)
+            ) {
+              if (annotateHideTagMark(anchor)) {
+                count += 1;
+              }
+            }
+          } catch (error) {
+            // Hide annotation is best-effort.
           }
         } catch (error) {
           continue;
@@ -635,6 +678,15 @@ class BobLedgerToolsTaskTagMarksMixin {
             ),
           );
           try {
+            hidden = hidden.concat(
+              Array.prototype.slice.call(
+                root.querySelectorAll("a.tag." + PRJ_TASK_HIDDEN_CLASS),
+              ),
+            );
+          } catch (inner) {
+            // Project hidden partners are best-effort.
+          }
+          try {
             stageLabels = Array.prototype.slice.call(
               root.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
             );
@@ -656,6 +708,15 @@ class BobLedgerToolsTaskTagMarksMixin {
               document.querySelectorAll("a.tag." + CHECKLIST_TASK_HIDDEN_CLASS),
             ),
           );
+          try {
+            hidden = hidden.concat(
+              Array.prototype.slice.call(
+                document.querySelectorAll("a.tag." + PRJ_TASK_HIDDEN_CLASS),
+              ),
+            );
+          } catch (inner) {
+            // Project hidden partners are best-effort.
+          }
           try {
             stageLabels = Array.prototype.slice.call(
               document.querySelectorAll("span." + CHECKLIST_STAGE_LABEL_CLASS),
@@ -696,7 +757,8 @@ class BobLedgerToolsTaskTagMarksMixin {
                       candidates.push(child);
                     } else if (
                       parts.indexOf(REF_TASK_HIDDEN_CLASS) !== -1 ||
-                      parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1
+                      parts.indexOf(CHECKLIST_TASK_HIDDEN_CLASS) !== -1 ||
+                      parts.indexOf(PRJ_TASK_HIDDEN_CLASS) !== -1
                     ) {
                       hidden.push(child);
                     } else if (
@@ -735,7 +797,16 @@ class BobLedgerToolsTaskTagMarksMixin {
         try {
           const strippedRef = stripRefTaskHidden(partner);
           const strippedChecklist = stripChecklistTaskHidden(partner);
-          if (strippedRef || strippedChecklist) {
+          let strippedPrj = false;
+          try {
+            strippedPrj =
+              typeof stripPrjTaskHidden === "function"
+                ? stripPrjTaskHidden(partner)
+                : false;
+          } catch (error) {
+            strippedPrj = false;
+          }
+          if (strippedRef || strippedChecklist || strippedPrj) {
             count += 1;
           }
         } catch (error) {

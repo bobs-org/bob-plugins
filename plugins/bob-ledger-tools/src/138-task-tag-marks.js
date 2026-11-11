@@ -10,8 +10,10 @@
 // fragments. The mark is truthful, never guessing: only exact, whole
 // `#task` tags on task lines get a mark. A `#task` tag immediately
 // followed by one whitespace run and `#ref` (any case) is a reference
-// reading task and gets the open-book mark instead; a canonical
-// `#task #gtd #pre|#post` run gets its checklist identity glyph.
+// reading task and gets the open-book mark instead; a `#task #prj`
+// pair (any case on the partner) gets the project-target mark; a
+// canonical `#task #gtd #pre|#post` run gets its checklist identity
+// glyph; an exact `#hide` token on a task line gets the eye-off mark.
 
 // The exact, case-sensitive tracked-task tag.
 const TASK_TAG_MARK_TEXT = "#task";
@@ -156,11 +158,12 @@ function refTaskPairEnd(text, taskTo) {
 // A Live Preview line's task-tag-mark ranges, in line order: the
 // boundary tokens gated by the task-line check
 // (`freshnessTaskStatus(lineText) !== null`, quote-aware, so
-// callouts and numbered lists count). Ref pairs keep precedence;
-// canonical `#gtd` plus `#pre`/`#post` partner runs become one range
-// over the three tags. Code exclusion is applied by the decoration
-// builder via `freshnessMarkPosInCode`. Returns frozen
-// `{ from, to, kind }` ranges, where kind is `task | ref | pre | post`.
+// callouts and numbered lists count). Ref pairs keep precedence,
+// then `#task #prj` pairs, then canonical `#gtd` plus `#pre`/`#post`
+// partner runs. Exact `#hide` tokens become their own `hide` ranges.
+// Code exclusion is applied by the decoration builder via
+// `freshnessMarkPosInCode`. Returns frozen `{ from, to, kind }`
+// ranges, where kind is `task | ref | pre | post | prj | hide`.
 // Never throws.
 function taskTagMarkRanges(lineText) {
   try {
@@ -206,20 +209,59 @@ function taskTagMarkRanges(lineText) {
             }),
           );
         } else {
-          const checklistRun = checklistTaskRunEnd(lineText, token.to);
-          found.push(
-            Object.freeze({
-              from: token.from,
-              to: checklistRun ? checklistRun.to : token.to,
-              kind: checklistRun ? checklistRun.kind : "task",
-              type,
-              fieldState,
-            }),
-          );
+          let prjEnd = -1;
+          try {
+            prjEnd =
+              typeof prjTaskPairEnd === "function"
+                ? prjTaskPairEnd(lineText, token.to)
+                : -1;
+          } catch (error) {
+            prjEnd = -1;
+          }
+          if (prjEnd !== -1) {
+            found.push(
+              Object.freeze({
+                from: token.from,
+                to: prjEnd,
+                kind: "prj",
+                type,
+                fieldState,
+              }),
+            );
+          } else {
+            const checklistRun = checklistTaskRunEnd(lineText, token.to);
+            found.push(
+              Object.freeze({
+                from: token.from,
+                to: checklistRun ? checklistRun.to : token.to,
+                kind: checklistRun ? checklistRun.kind : "task",
+                type,
+                fieldState,
+              }),
+            );
+          }
         }
       } catch (error) {
         // One bad token never breaks the scan.
       }
+    }
+    try {
+      if (typeof appendHideTagMarkRanges === "function") {
+        appendHideTagMarkRanges(found, lineText);
+      }
+    } catch (error) {
+      // Hide tokens are best-effort.
+    }
+    try {
+      found.sort((a, b) => {
+        try {
+          return a.from - b.from;
+        } catch (error) {
+          return 0;
+        }
+      });
+    } catch (error) {
+      // Sort is best-effort; append order is already line order.
     }
     return Object.freeze(found);
   } catch (error) {
@@ -654,6 +696,16 @@ function stripTaskTagMark(el) {
         el.classList.remove(REF_TASK_MARK_CLASS);
         el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.pre);
         el.classList.remove(CHECKLIST_TASK_MARK_CLASSES.post);
+        try {
+          if (typeof PRJ_TASK_MARK_CLASS === "string") {
+            el.classList.remove(PRJ_TASK_MARK_CLASS);
+          }
+          if (typeof HIDE_TAG_MARK_CLASS === "string") {
+            el.classList.remove(HIDE_TAG_MARK_CLASS);
+          }
+        } catch (error) {
+          // New variant classes are best-effort.
+        }
       } else if (typeof el.className === "string") {
         el.className = el.className
           .split(/\s+/)
@@ -663,7 +715,9 @@ function stripTaskTagMark(el) {
               part !== "bob-task-tag-mark" &&
               part !== REF_TASK_MARK_CLASS &&
               part !== CHECKLIST_TASK_MARK_CLASSES.pre &&
-              part !== CHECKLIST_TASK_MARK_CLASSES.post,
+              part !== CHECKLIST_TASK_MARK_CLASSES.post &&
+              part !== PRJ_TASK_MARK_CLASS &&
+              part !== HIDE_TAG_MARK_CLASS,
           )
           .join(" ");
       }
@@ -748,6 +802,18 @@ function buildTaskTagMarkElement(doc, kind, identity, inheritedEnabled) {
         span.setAttribute("aria-label", typedAria || REF_TASK_MARK_LABEL);
         span.setAttribute("title", typedTooltip || REF_TASK_MARK_TOOLTIP);
         span.setAttribute("data-tooltip-position", "top");
+      } else if (kind === "prj") {
+        span.setAttribute("class", "bob-task-tag-mark " + PRJ_TASK_MARK_CLASS);
+        span.setAttribute("role", "img");
+        span.setAttribute("aria-label", typedAria || PRJ_TASK_MARK_LABEL);
+        span.setAttribute("title", typedTooltip || PRJ_TASK_MARK_TOOLTIP);
+        span.setAttribute("data-tooltip-position", "top");
+      } else if (kind === "hide") {
+        span.setAttribute("class", "bob-task-tag-mark " + HIDE_TAG_MARK_CLASS);
+        span.setAttribute("role", "img");
+        span.setAttribute("aria-label", HIDE_TAG_MARK_LABEL);
+        span.setAttribute("title", HIDE_TAG_MARK_TOOLTIP);
+        span.setAttribute("data-tooltip-position", "top");
       } else {
         span.setAttribute("class", "bob-task-tag-mark");
         span.setAttribute("role", "img");
@@ -757,7 +823,9 @@ function buildTaskTagMarkElement(doc, kind, identity, inheritedEnabled) {
           span.setAttribute("title", typedTooltip);
         }
       }
-      applyTaskTagTypeAttrs(span, identity, inheritedEnabled);
+      if (kind !== "hide") {
+        applyTaskTagTypeAttrs(span, identity, inheritedEnabled);
+      }
     } catch (error) {
       return null;
     }

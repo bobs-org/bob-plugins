@@ -183,6 +183,24 @@ const {
   REF_TASK_MARK_LABEL,
   REF_TASK_MARK_CLASS,
   REF_TASK_HIDDEN_CLASS,
+  PRJ_TASK_TAG_TEXT,
+  PRJ_TASK_MARK_TOOLTIP,
+  PRJ_TASK_MARK_LABEL,
+  PRJ_TASK_MARK_CLASS,
+  PRJ_TASK_HIDDEN_CLASS,
+  HIDE_TAG_TEXT,
+  HIDE_TAG_MARK_TOOLTIP,
+  HIDE_TAG_MARK_LABEL,
+  HIDE_TAG_MARK_CLASS,
+  prjTaskPairEnd,
+  hideTagTokenRanges,
+  isPrjTagAnchor,
+  isHideTagAnchor,
+  prjTaskPairAnchor,
+  hideTagMarkElementEligible,
+  annotatePrjTaskMark,
+  annotateHideTagMark,
+  stripPrjTaskHidden,
   CHECKLIST_TASK_MARK_CLASSES,
   CHECKLIST_TASK_MARK_LABELS,
   CHECKLIST_TASK_MARK_TOOLTIPS,
@@ -1011,7 +1029,7 @@ test("styles.css contract: teal identity ink, glyph, both hosts, hover, hide in 
   assert.ok(css.indexOf("prefers-reduced-motion") !== -1);
   assert.ok(css.indexOf("color: transparent") !== -1);
   assert.ok(css.indexOf('content: "#" attr(data-bob-type);') !== -1);
-  assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark)::before") !== -1);
+  assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type]:not(.bob-ref-task-mark):not(.bob-pre-task-mark):not(.bob-post-task-mark):not(.bob-prj-task-mark):not(.bob-hide-tag-mark)::before") !== -1);
   assert.ok(css.indexOf("min-width: 0;\n  padding: 0.06em 0.28em;") !== -1);
   assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type].bob-ref-task-mark::after") !== -1);
   assert.ok(css.indexOf("content: attr(data-bob-type)") !== -1, "book and checklist marks keep glyph plus name");
@@ -1934,4 +1952,404 @@ test("SL stage label CSS contract: small caps teal, Tasks rows untouched, closed
   assert.ok(css.includes('.HyperMD-task-line[data-task="x"] .bob-checklist-stage-label'));
   assert.ok(css.includes("opacity: 0.75"));
   assert.equal(css.includes(".plugin-tasks-list-item") && css.includes("bob-checklist-stage-label") && /plugin-tasks-list-item[^}]*bob-checklist-stage-label/.test(css), false);
+});
+
+const PRJ_TOOLTIP =
+  "#task #prj \u00b7 project lifecycle task\nStates what done means for this project";
+const PRJ_LABEL = "Project task";
+const HIDE_TOOLTIP =
+  "#hide \u00b7 hidden from review and lanes\nbob writes and removes this tag";
+const HIDE_LABEL = "Hidden from review";
+
+function kindSpans(line) {
+  return taskTagMarkRanges(line).map((range) => [range.from, range.to, range.kind]);
+}
+
+test("PJ vectors verbatim: the #task #prj pair yields one prj range spanning both tokens", () => {
+  assert.equal(PRJ_TASK_TAG_TEXT, "#prj");
+  assert.equal(PRJ_TASK_MARK_TOOLTIP, PRJ_TOOLTIP);
+  assert.equal(PRJ_TASK_MARK_LABEL, PRJ_LABEL);
+  assert.ok(PRJ_TOOLTIP.indexOf("::") === -1);
+  assert.ok(PRJ_LABEL.indexOf("::") === -1);
+
+  assert.deepEqual(kindSpans("- [ ] #task #prj Ship the project outcome! ^prj"), [
+    [6, 16, "prj"],
+  ]);
+  assert.deepEqual(kindSpans("- [x] #task #prj Done project ^prj"), [[6, 16, "prj"]]);
+  assert.deepEqual(kindSpans("- [ ] #task #PRJ Loud ^prj"), [[6, 16, "prj"]]);
+  assert.deepEqual(kindSpans("- [ ] #task   #prj Extra spaces ^prj"), [[6, 18, "prj"]]);
+  assert.deepEqual(kindSpans("- [ ] #task #project Not a project"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #task #prj_is_blocked Odd"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #prj #task Reversed"), [[11, 16, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #task Fix the #prj renderer"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- #task #prj Not a task line"), []);
+  assert.deepEqual(kindSpans("- [ ] #task #ref #prj Odd"), [[6, 16, "ref"]]);
+  assert.deepEqual(kindSpans("- [ ] Note `#task #prj` here"), []);
+  assert.equal(prjTaskPairEnd("- [ ] #task #prj Ship", 11), 16);
+  assert.equal(prjTaskPairEnd("- [ ] #task #project No", 11), -1);
+  assert.equal(prjTaskPairEnd("- [ ] #task #prj_is_blocked No", 11), -1);
+  assert.equal(prjTaskPairEnd("- [ ] #task#prj No", 11), -1);
+  assert.equal(prjTaskPairEnd("- [ ] #task", 11), -1);
+  assert.equal(prjTaskPairEnd(null, 11), -1);
+});
+
+test("HD vectors: exact #hide tokens on task lines become hide ranges", () => {
+  assert.equal(HIDE_TAG_TEXT, "#hide");
+  assert.equal(HIDE_TAG_MARK_TOOLTIP, HIDE_TOOLTIP);
+  assert.equal(HIDE_TAG_MARK_LABEL, HIDE_LABEL);
+  assert.ok(HIDE_TOOLTIP.indexOf("::") === -1);
+  assert.ok(HIDE_LABEL.indexOf("::") === -1);
+
+  const hd1 = "- [ ] #task #prj Ship it [scheduled:: 2026-07-16] #hide ^prj";
+  const hideAt = hd1.indexOf("#hide");
+  assert.deepEqual(kindSpans(hd1), [
+    [6, 16, "prj"],
+    [hideAt, hideAt + 5, "hide"],
+  ]);
+  const hd2 = "- [ ] #task #ref [[lib/papers/x.pdf]] #hide ^ref";
+  const hide2 = hd2.indexOf("#hide");
+  assert.deepEqual(kindSpans(hd2), [
+    [6, 16, "ref"],
+    [hide2, hide2 + 5, "hide"],
+  ]);
+  const hd3 = "- [ ] #task Plan trip #hide [priority:: high] ^trip";
+  const hide3 = hd3.indexOf("#hide");
+  assert.deepEqual(kindSpans(hd3), [
+    [6, 11, "task"],
+    [hide3, hide3 + 5, "hide"],
+  ]);
+  assert.deepEqual(kindSpans("- [ ] #task A #hidden B"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #task A #hideaway B"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #task A #hide/x B"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- [ ] #task A #Hide B"), [[6, 11, "task"]]);
+  assert.deepEqual(kindSpans("- #hide bullet"), []);
+  assert.deepEqual(kindSpans("Paragraph #hide text"), []);
+  assert.deepEqual(kindSpans("- [ ] #task Note `#hide` here"), [[6, 11, "task"]]);
+  assert.deepEqual(
+    hideTagTokenRanges("- [ ] #task A #hide B").map((range) => [range.from, range.to]),
+    [[14, 19]],
+  );
+  assert.deepEqual(hideTagTokenRanges("- [ ] #task A #hidden B"), []);
+  assert.deepEqual(hideTagTokenRanges(null), []);
+});
+
+test("Live Preview prj decorations replace the whole pair; hide is its own widget", () => {
+  const plugin = pluginWithTaskTag();
+  const line = "- [ ] #task #prj Ship the project outcome! ^prj";
+  const built = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(built.adds.length, 1);
+  assert.equal(built.adds[0].from, 6);
+  assert.equal(built.adds[0].to, 16);
+  const widget = built.adds[0].value.widget;
+  assert.match(widget.key, /^prj-task-mark\|/);
+  const rebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [line] }));
+  assert.equal(widget.eq(rebuilt.adds[0].value.widget), true);
+  const hash = plugin.buildTaskTagMarkDecorations(
+    makeView({ lines: ["- [ ] #task Plain"] }),
+  ).adds[0].value.widget;
+  assert.equal(widget.eq(hash), false);
+
+  for (const sel of [
+    { from: 6, to: 6 },
+    { from: 11, to: 11 },
+    { from: 12, to: 12 },
+    { from: 16, to: 16 },
+    { from: 0, to: 20 },
+  ]) {
+    assert.equal(
+      plugin.buildTaskTagMarkDecorations(makeView({ lines: [line], selection: [sel] }))
+        .adds.length,
+      0,
+      JSON.stringify(sel),
+    );
+  }
+  assert.equal(
+    plugin.buildTaskTagMarkDecorations(
+      makeView({ lines: ["- [ ] Note `#task #prj` here"], treeTag: "inline" }),
+    ).adds.length,
+    0,
+  );
+
+  const hideLine = "- [ ] #task Plan trip #hide [priority:: high] ^trip";
+  const hideFrom = hideLine.indexOf("#hide");
+  const hideBuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [hideLine] }));
+  assert.deepEqual(
+    hideBuilt.adds.map((add) => [add.from, add.to, add.value.widget.key.split("|")[0]]),
+    [
+      [6, 11, "task-tag-mark"],
+      [hideFrom, hideFrom + 5, "hide-tag-mark"],
+    ],
+  );
+  const hideWidget = hideBuilt.adds[1].value.widget;
+  const hideRebuilt = plugin.buildTaskTagMarkDecorations(makeView({ lines: [hideLine] }));
+  assert.equal(hideWidget.eq(hideRebuilt.adds[1].value.widget), true);
+  assert.equal(hideWidget.eq(hash), false);
+  assert.equal(
+    plugin.buildTaskTagMarkDecorations(
+      makeView({ lines: [hideLine], selection: [{ from: hideFrom, to: hideFrom }] }),
+    ).adds.length,
+    1,
+  );
+});
+
+test("prj and hide element structure: classes, labels, tooltips, no double colon", () => {
+  const doc = fakeElementDoc();
+  const prj = buildTaskTagMarkElement(doc, "prj");
+  assert.ok(prj);
+  assert.equal(prj.attrs.class, "bob-task-tag-mark " + PRJ_TASK_MARK_CLASS);
+  assert.equal(prj.attrs.role, "img");
+  assert.equal(prj.attrs["aria-label"], PRJ_LABEL);
+  assert.equal(prj.attrs.title, PRJ_TOOLTIP);
+  assert.equal(prj.attrs["data-tooltip-position"], "top");
+  assert.equal(prj.children.length, 0);
+  const hide = buildTaskTagMarkElement(doc, "hide");
+  assert.ok(hide);
+  assert.equal(hide.attrs.class, "bob-task-tag-mark " + HIDE_TAG_MARK_CLASS);
+  assert.equal(hide.attrs.role, "img");
+  assert.equal(hide.attrs["aria-label"], HIDE_LABEL);
+  assert.equal(hide.attrs.title, HIDE_TOOLTIP);
+  assert.equal(hide.attrs["data-bob-type"], undefined);
+});
+
+function makePrjPairTree({ prjText = "#prj", gap = " ", taskText = "#task" } = {}) {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = "task-list-item";
+  fx.root.appendChild(li);
+  const task = makeAnchor(fx, { text: taskText, href: taskText });
+  li.appendChild(task);
+  li.appendChild(fx.doc.createTextNode(gap));
+  const prj = makeAnchor(fx, { text: prjText, href: prjText });
+  li.appendChild(prj);
+  return { fx, li, task, prj };
+}
+
+function makeHideTree({ hideText = "#hide", inTask = true, tasksRow = false } = {}) {
+  const fx = fakeRenderTree();
+  const li = fx.makeEl("li");
+  li.className = tasksRow
+    ? "plugin-tasks-list-item"
+    : inTask
+      ? "task-list-item"
+      : "plain";
+  fx.root.appendChild(li);
+  let host = li;
+  if (tasksRow) {
+    const desc = fx.makeEl("span");
+    desc.className = "task-description";
+    li.appendChild(desc);
+    host = desc;
+  }
+  const hide = makeAnchor(fx, { text: hideText, href: hideText });
+  host.appendChild(hide);
+  return { fx, li, hide };
+}
+
+test("PR1-PR4: the #task anchor becomes the target and the adjacent #prj anchor hides", () => {
+  const plugin = pluginWithTaskTag();
+  const ctx = { sourcePath: "a.md" };
+  const { fx, task, prj } = makePrjPairTree();
+  assert.equal(taskTagMarkElementEligible(task, fx.root), true);
+  assert.equal(isPrjTagAnchor(prj), true);
+  assert.equal(prjTaskPairAnchor(task), prj);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  const classes = String(task.className || "").split(/\s+/);
+  assert.ok(classes.includes("bob-task-tag-mark"));
+  assert.ok(classes.includes(PRJ_TASK_MARK_CLASS));
+  assert.equal(task.getAttribute("aria-label"), PRJ_LABEL);
+  assert.equal(task.getAttribute("title"), PRJ_TOOLTIP);
+  assert.ok(
+    String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+  );
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  assert.ok(
+    String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+  );
+
+  const loud = makePrjPairTree({ prjText: "#PRJ", gap: "  " });
+  assert.equal(prjTaskPairAnchor(loud.task), loud.prj);
+  plugin.renderTaskTagMarksIn(loud.fx.root, ctx);
+  assert.ok(
+    String(loud.task.className || "").split(/\s+/).includes(PRJ_TASK_MARK_CLASS),
+  );
+
+  const broken = makePrjPairTree({ gap: " and " });
+  assert.equal(prjTaskPairAnchor(broken.task), null);
+  plugin.renderTaskTagMarksIn(broken.fx.root, ctx);
+  const brokenClasses = String(broken.task.className || "").split(/\s+/);
+  assert.ok(brokenClasses.includes("bob-task-tag-mark"));
+  assert.ok(!brokenClasses.includes(PRJ_TASK_MARK_CLASS));
+  assert.ok(
+    !String(broken.prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+  );
+
+  const rev = fakeRenderTree();
+  const revLi = rev.makeEl("li");
+  revLi.className = "task-list-item";
+  rev.root.appendChild(revLi);
+  const first = makeAnchor(rev, { text: "#prj", href: "#prj" });
+  revLi.appendChild(first);
+  revLi.appendChild(rev.doc.createTextNode(" "));
+  const second = makeAnchor(rev);
+  revLi.appendChild(second);
+  plugin.renderTaskTagMarksIn(rev.root, ctx);
+  assert.ok(
+    String(second.className || "").split(/\s+/).includes("bob-task-tag-mark"),
+  );
+  assert.ok(
+    !String(second.className || "").split(/\s+/).includes(PRJ_TASK_MARK_CLASS),
+  );
+  assert.ok(
+    !String(first.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+  );
+});
+
+test("HR1-HR3: #hide annotates in place on a task li and stays CSS-only in Tasks rows", () => {
+  const plugin = pluginWithTaskTag();
+  const ctx = { sourcePath: "a.md" };
+  const { fx, hide } = makeHideTree();
+  assert.equal(isHideTagAnchor(hide), true);
+  assert.equal(hideTagMarkElementEligible(hide, fx.root), true);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  const classes = String(hide.className || "").split(/\s+/);
+  assert.ok(classes.includes("bob-task-tag-mark"));
+  assert.ok(classes.includes(HIDE_TAG_MARK_CLASS));
+  assert.equal(hide.getAttribute("aria-label"), HIDE_LABEL);
+  assert.equal(hide.getAttribute("title"), HIDE_TOOLTIP);
+  assert.equal(hide.getAttribute("data-bob-type"), null);
+  plugin.renderTaskTagMarksIn(fx.root, ctx);
+  assert.ok(String(hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS));
+
+  const plain = makeHideTree({ inTask: false });
+  assert.equal(hideTagMarkElementEligible(plain.hide, plain.fx.root), false);
+  plugin.renderTaskTagMarksIn(plain.fx.root, ctx);
+  assert.ok(
+    !String(plain.hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS),
+  );
+
+  const tasks = makeHideTree({ tasksRow: true });
+  assert.equal(hideTagMarkElementEligible(tasks.hide, tasks.fx.root), false);
+  plugin.renderTaskTagMarksIn(tasks.fx.root, ctx);
+  assert.ok(
+    !String(tasks.hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS),
+  );
+  assert.equal(isHideTagAnchor(makeAnchor(fakeRenderTree(), { text: "#Hide", href: "#Hide" })), false);
+});
+
+test("PR3/HR4 toggle strips project and hide marks document-wide and re-annotates", () => {
+  const savedDocument = global.document;
+  const { fx, task, prj } = makePrjPairTree();
+  const hideTree = makeHideTree();
+  fx.root.appendChild(hideTree.li);
+  const body = fx.root;
+  body.querySelectorAll = (selector) => {
+    const wants = String(selector || "")
+      .split(".")
+      .filter((part) => part !== "" && part !== "a" && part !== "tag" && part !== "span");
+    const found = [];
+    const stack = [body];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node.nodeType === 1) {
+        const classes = String(node.className || "").split(/\s+/);
+        if (wants.every((want) => classes.includes(want))) {
+          found.push(node);
+        }
+      }
+      for (const child of node.childNodes || []) {
+        stack.push(child);
+      }
+    }
+    return found;
+  };
+  global.document = { body, createElement: fx.doc.createElement.bind(fx.doc) };
+  try {
+    const plugin = pluginWithTaskTag();
+    plugin.renderTaskTagMarksIn(fx.root, { sourcePath: "a.md" });
+    assert.ok(String(task.className || "").split(/\s+/).includes(PRJ_TASK_MARK_CLASS));
+    assert.ok(
+      String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+    );
+    assert.ok(
+      String(hideTree.hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS),
+    );
+    assert.equal(plugin.toggleTaskTagMarks(), false);
+    assert.ok(
+      !String(task.className || "").split(/\s+/).includes(PRJ_TASK_MARK_CLASS),
+    );
+    assert.ok(
+      !String(task.className || "").split(/\s+/).includes("bob-task-tag-mark"),
+    );
+    assert.ok(
+      !String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+    );
+    assert.ok(
+      !String(hideTree.hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS),
+    );
+    assert.equal(plugin.toggleTaskTagMarks(), true);
+    assert.ok(String(task.className || "").split(/\s+/).includes(PRJ_TASK_MARK_CLASS));
+    assert.ok(
+      String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+    );
+    assert.ok(
+      String(hideTree.hide.className || "").split(/\s+/).includes(HIDE_TAG_MARK_CLASS),
+    );
+    assert.equal(annotatePrjTaskMark(task, prj), true);
+    assert.equal(stripPrjTaskHidden(prj), true);
+    assert.ok(
+      !String(prj.className || "").split(/\s+/).includes(PRJ_TASK_HIDDEN_CLASS),
+    );
+    assert.equal(annotatePrjTaskMark(null, prj), false);
+    assert.equal(stripPrjTaskHidden(null), false);
+    assert.equal(prjTaskPairAnchor(null), null);
+    assert.equal(isPrjTagAnchor(null), false);
+    assert.equal(annotateHideTagMark(null), false);
+    assert.equal(isHideTagAnchor(null), false);
+  } finally {
+    if (savedDocument === undefined) {
+      delete global.document;
+    } else {
+      global.document = savedDocument;
+    }
+  }
+});
+
+test("styles.css contract for project and hidden marks: glyphs, variants, ink, Tasks rows", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"),
+    "utf8",
+  );
+  const count = (needle) => css.split(needle).length - 1;
+  assert.equal(count("--bob-prj-task-glyph:"), 1);
+  assert.equal(count("--bob-hide-tag-glyph:"), 1);
+  const prjGlyphAt = css.indexOf("--bob-prj-task-glyph:");
+  const prjGlyphLine = css.slice(prjGlyphAt, css.indexOf(";", prjGlyphAt) + 1);
+  assert.ok(prjGlyphLine.indexOf("viewBox='0 0 16 16'") !== -1);
+  assert.ok(prjGlyphLine.indexOf("stroke-width='1.8'") !== -1);
+  assert.ok(prjGlyphLine.indexOf("cx='8' cy='8' r='5.7'") !== -1);
+  assert.ok(prjGlyphLine.indexOf("cx='8' cy='8' r='1.7'") !== -1);
+  const hideGlyphAt = css.indexOf("--bob-hide-tag-glyph:");
+  const hideGlyphLine = css.slice(hideGlyphAt, css.indexOf(";", hideGlyphAt) + 1);
+  assert.ok(hideGlyphLine.indexOf("M1.9 8") !== -1);
+  assert.ok(hideGlyphLine.indexOf("M2.6 2.6") !== -1);
+  assert.ok(css.indexOf("--bob-hide-tag-ink: var(--text-muted)") !== -1);
+  assert.ok(
+    css.indexOf("body.bob-task-tag-marks .bob-task-tag-mark.bob-prj-task-mark::before") !== -1,
+  );
+  assert.ok(css.indexOf("mask-image: var(--bob-prj-task-glyph)") !== -1);
+  assert.ok(
+    css.indexOf("body.bob-task-tag-marks .bob-task-tag-mark.bob-hide-tag-mark::before") !== -1,
+  );
+  assert.ok(css.indexOf("mask-image: var(--bob-hide-tag-glyph)") !== -1);
+  assert.ok(
+    css.indexOf("body.bob-task-tag-marks a.tag.bob-prj-task-hidden") !== -1,
+  );
+  const hiddenAt = css.indexOf("body.bob-task-tag-marks a.tag.bob-prj-task-hidden");
+  assert.ok(css.slice(hiddenAt, hiddenAt + 300).indexOf("display: none") !== -1);
+  assert.ok(css.indexOf('[data-tag-name="#prj" i]') !== -1);
+  assert.ok(css.indexOf('[data-tag-name="#hide"]') !== -1);
+  assert.ok(css.indexOf(".bob-task-tag-mark[data-bob-type].bob-prj-task-mark::after") !== -1);
+  assert.ok(
+    css.indexOf(".bob-task-tag-mark[data-bob-type].bob-hide-tag-mark::after") === -1,
+  );
 });

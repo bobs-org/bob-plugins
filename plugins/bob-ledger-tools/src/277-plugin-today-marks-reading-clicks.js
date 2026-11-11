@@ -4,6 +4,21 @@
 // so helpers across fragments resolve. Contract: bob-cli `docs/today-marks.md`.
 
 class BobLedgerToolsTodayMarksReadingClicksMixin {
+  todayMarkIsPrjAnchor(node) {
+    try {
+      if (!node || this.todayMarkTag(node) !== "A") {
+        return false;
+      }
+      const text = String(node.textContent || "").trim().toLowerCase();
+      if (text === "#prj") {
+        return true;
+      }
+      return this.todayMarkHasClass(node, "bob-prj-task-hidden");
+    } catch (error) {
+      return false;
+    }
+  }
+
   todayMarkSetRowPlace(li, atBody) {
     try {
       if (!li) {
@@ -46,6 +61,9 @@ class BobLedgerToolsTodayMarksReadingClicksMixin {
       if (tag) {
         const partner = this.todayMarkNextElementSkippingWhitespace(tag);
         if (partner && this.todayMarkIsRefAnchor(partner)) {
+          return partner;
+        }
+        if (partner && this.todayMarkIsPrjAnchor(partner)) {
           return partner;
         }
         const checklistRun = checklistTaskRunAnchors(tag);

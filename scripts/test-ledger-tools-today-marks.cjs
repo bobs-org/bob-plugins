@@ -378,19 +378,19 @@ test("insert offset: #task first lands before the title", () => {
   );
 });
 
-test("insert offset: TM16 #task #ref spans the pair, #prj sits between", () => {
+test("insert offset: TM16 #task #ref and #task #prj both span the pair", () => {
   const refLine = "- [ ] #task #ref Read ^read";
   assert.equal(todayMarkInsertOffset(refLine), 17);
   assert.equal(refLine.slice(17), "Read ^read");
   const prjLine = "- [ ] #task #prj Work ^work";
-  assert.equal(todayMarkInsertOffset(prjLine), 12);
-  assert.equal(prjLine.slice(12), "#prj Work ^work");
+  assert.equal(todayMarkInsertOffset(prjLine), 17);
+  assert.equal(prjLine.slice(17), "Work ^work");
   const refCandidate = todayMarkLineCandidate(refLine);
   assert.ok(refCandidate);
   assert.equal(refCandidate.insertCh, 17);
   const prjCandidate = todayMarkLineCandidate(prjLine);
   assert.ok(prjCandidate);
-  assert.equal(prjCandidate.insertCh, 12);
+  assert.equal(prjCandidate.insertCh, 17);
 });
 
 test("insert offset: mid-body #task falls back to the body start", () => {
@@ -823,7 +823,7 @@ test("Live Preview applies the TM1-TM22 line, cache, and refresh vectors", () =>
   assert.equal(
     liveMarkRanges(markPlugin, "- [ ] #task #prj Work ^fix", fields)
       .ranges[0].from,
-    12,
+    17,
   );
   assert.equal(
     markPlugin.todayMarkShouldRebuild({ selectionSet: true }),

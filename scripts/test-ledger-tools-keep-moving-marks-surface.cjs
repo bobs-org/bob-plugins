@@ -66,11 +66,11 @@ const TODAY = "2026-11-02";
 const DAILY = "2026/20261102.md";
 const PROJECT = "job_email_recruiters.md";
 
-// KB7: the screenshot project. No Sub-projects marker, so it is a leaf;
+// KB7: the screenshot project. A sub-project under job_2026;
 // X is the only live link and four Next residents stay offerable.
 function projectText(extra = "") {
   return [
-    "---", 'type: "[[project]]"', "status: wip", 'parent: "[[job]]"', "---",
+    "---", 'type: "[[project]]"', "status: wip", 'parent: "[[job_2026]]"', "---",
     "- [ ] #task Root ^prj",
     "- [*] #task Reply to Luzern ^luzern",
     "- [*] #task Ecogpt ^ecogpt",
@@ -108,8 +108,9 @@ function makePlugin(day, projectSource, opts = {}) {
   plugin.keepMovingMarksEnabled = opts.enabled !== false;
   const texts = { [PROJECT]: projectSource, [DAILY]: day, "job.md": "---\ntype: [[area]]\n---\n" };
   const frontmatter = {
-    [PROJECT]: { type: "[[project]]", status: "wip", parent: "[[job]]" },
+    [PROJECT]: { type: "[[project]]", status: "wip", parent: opts.parent || "[[job_2026]]" },
     "job.md": { type: "[[area]]" },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
   };
   const requested = [];
   plugin.app = {
@@ -117,12 +118,13 @@ function makePlugin(day, projectSource, opts = {}) {
       getCache: (notePath) => (frontmatter[notePath] ? { frontmatter: frontmatter[notePath] } : null),
       getFirstLinkpathDest: (target) => {
         const stem = String(target || "").split("|")[0].split("#")[0].replace(/\.md$/i, "");
+        if (stem === "job_2026") return { path: "job_2026.md" };
         if (stem === "job") return { path: "job.md" };
         if (stem === "job_email_recruiters") return { path: PROJECT };
         return null;
       },
     },
-    vault: { getMarkdownFiles: () => [{ path: PROJECT }, { path: "job.md" }, { path: DAILY }] },
+    vault: { getMarkdownFiles: () => [{ path: PROJECT }, { path: "job_2026.md" }, { path: "job.md" }, { path: DAILY }] },
     workspace: {},
   };
   plugin.texts = texts;
@@ -190,6 +192,14 @@ test("KP1/KB7: Live Preview widget sits at the link end with side 3 and the scre
   assert.match(widget.tooltip, /It's the last job_email_recruiters task planned today/);
   assert.match(widget.tooltip, /• Ecogpt · Next\n• Ray Lyles · Next\n• Product Engineer · Next\n\+1 more/);
   assert.match(widget.tooltip, /ready in job_email_recruiters · not dependents/);
+});
+
+test("KB6: a standalone project under an area renders no mark", () => {
+  const day = dailyText();
+  const source = projectText().replace('parent: "[[job_2026]]"', 'parent: "[[job]]"');
+  const plugin = makePlugin(day, source, { parent: "[[job]]" });
+  const decorations = plugin.buildKeepMovingMarkDecorations(makeView(day));
+  assert.equal(decorations.adds.length, 0);
 });
 
 test("KB2/KB3: a sibling link suppresses the mark and striking it passes the baton with one tick", () => {
@@ -490,10 +500,10 @@ test("200-link / 50-target Live Preview build memoizes targets and stays near th
   const decorations = plugin.buildKeepMovingMarkDecorations(makeView(day));
   const elapsed = performance.now() - start;
   assert.equal(decorations.adds.length, 200);
-  assert.equal(resolutions, 0); // No marker, so the leaf check never walks parents.
+  assert.equal(resolutions, 1); // One ancestor resolution is shared by all 200 links.
   assert.ok(elapsed < 250, `200-link build took ${elapsed.toFixed(1)} ms`);
 });
 
 function projectTextHeader() {
-  return ["---", 'type: "[[project]]"', "status: wip", 'parent: "[[job]]"', "---", ""].join("\n");
+  return ["---", 'type: "[[project]]"', "status: wip", 'parent: "[[job_2026]]"', "---", ""].join("\n");
 }

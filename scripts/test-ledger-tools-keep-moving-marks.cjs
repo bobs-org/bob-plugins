@@ -10,7 +10,7 @@ const PROJECT_PATH = "job_email_recruiters.md";
 
 function note(residents = [], opts = {}) {
   const lines = ["---", 'type: "[[project]]"', "status: " + (opts.status || "wip")];
-  if (opts.parent) lines.push("parent: " + opts.parent);
+  lines.push("parent: " + (opts.parent ?? "[[job_2026]]"));
   if (opts.root) lines.push("root: true");
   if (opts.scheduled) lines.push("scheduled: " + opts.scheduled);
   lines.push("---", opts.rootLine || "- [ ] #task Root #prj ^prj");
@@ -40,15 +40,17 @@ function tasksFor(path, source) {
 }
 
 function ctxFor(source, opts = {}) {
-  const paths = [PROJECT_PATH, ...(opts.paths || [])];
+  const paths = [PROJECT_PATH, "job_2026.md", "job.md", ...(opts.paths || [])];
   const texts = { [PROJECT_PATH]: source, ...(opts.notes || {}) };
   const frontmatter = {
     [PROJECT_PATH]: {
-      type: "[[project]]", status: "wip", parent: "[[job]]",
+      type: "[[project]]", status: "wip", parent: opts.parent ?? "[[job_2026]]",
       ...(opts.root ? { root: true } : {}),
       ...(opts.scheduled ? { scheduled: opts.scheduled } : {}),
       ...(opts.frontmatter || {}),
     },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
+    "job.md": { type: "[[area]]" },
     ...(opts.frontmatterByPath || {}),
   };
   return {
@@ -108,6 +110,8 @@ test("KB2–KB6/KB9/KB10: live-link, root, folds, and final-close gates", () => 
     day: "## Pomodoros\n- [ ] () — WRITE\n\t- [[job_email_recruiters#^x]]\n\t- [[job_email_recruiters#^prj]]",
   }).state, "zero"); // KB5
   assert.equal(count(["- [ ] #task A ^a"], { root: true, marker: "[[child]]" }).state, "zero"); // KB6
+  assert.equal(count(["- [ ] #task A ^a"], { root: true }).state, "zero");
+  assert.equal(count(["- [ ] #task A ^a"], { parent: "[[job]]" }).state, "zero");
   const folded = count(["- [?] #task B ^b", "- [ ] #task S [scheduled:: 2026-11-03] ^s", "- [ ] #task H #hide ^h"]);
   assert.deepEqual(folded.folded, { blocked: 1, scheduled: 1, hidden: 1 }); // KB9
   assert.equal(count([]).state, "zero"); // KB10
@@ -208,60 +212,25 @@ test("KB16–KB22: duplicate marks, reference rows, residency, and candidate gat
   const stemSource = note(["- [ ] #task A ^a"], { marker: "[[child]]" });
   const stemContext = (paths) => ({
     ...ctxFor(stemSource),
-    markdownPaths: () => [PROJECT_PATH, "job.md", ...paths],
-    frontmatterFor: (path) => path === "job.md"
+    markdownPaths: () => [PROJECT_PATH, "job_2026.md", ...paths],
+    frontmatterFor: (path) => path === "job_2026.md"
       ? { type: "[[project]]" }
-      : { type: "[[project]]", parent: "[[job]]" },
+      : { type: "[[project]]", parent: "[[job_2026]]" },
     noteTextFor: (path) => path === PROJECT_PATH ? stemSource : "parent note",
-    resolveLinkpath: (target) => target === "job" ? { path: "job.md" } : null,
+    resolveLinkpath: (target) => target === "job_2026" ? { path: "job_2026.md" } : null,
   });
   const withoutGenerated = h.keepMovingMarkLeafProject(PROJECT_PATH, stemSource, stemContext([]));
   const withGenerated = h.keepMovingMarkLeafProject(PROJECT_PATH, stemSource,
-    stemContext(["_generated/tag_pages/topic/job.md"]));
+    stemContext(["_generated/tag_pages/topic/job_2026.md"]));
+  assert.equal(withoutGenerated, true);
   assert.equal(withGenerated, withoutGenerated); // KB17: generated paths don't create parent ambiguity.
 });
 
-test("LP1–LP17: leaf projects follow the direct marker and root-parent walk", () => {
-  const baseText = (extra = "") => ["---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
-    "- [ ] #task Root #prj ^prj", extra].filter(Boolean).join("\n");
-  const ctxForLeaf = (metadata = {}, morePaths = []) => ({
-    ...ctxFor(baseText()),
-    markdownPaths: () => [PROJECT_PATH, "job.md", ...morePaths],
-    frontmatterFor: (path) => ({
-      [PROJECT_PATH]: { type: "[[project]]", parent: "[[job]]", ...metadata.project },
-      "job.md": { type: "[[area]]", ...metadata.job },
-      ...(metadata.byPath || {}),
-    }[path] || null),
-    noteTextFor: (path) => path === PROJECT_PATH ? baseText() : "parent",
-    resolveLinkpath: (target) => {
-      const wanted = String(target).replace(/\.md$/i, "");
-      const found = [PROJECT_PATH, "job.md", ...morePaths].filter((path) =>
-        path.replace(/\.md$/i, "") === wanted || path.split("/").pop().replace(/\.md$/i, "") === wanted,
-      );
-      return found.length === 1 ? { path: found[0] } : null;
-    },
-  });
-  const leaf = (text = baseText(), ctx = ctxForLeaf()) => h.keepMovingMarkLeafProject(PROJECT_PATH, text, ctx);
-  assert.equal(leaf(), true); // LP1: recognized project with no marker.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), ctxForLeaf({ project: { root: true } })), false); // LP2.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** ~~[[gone]]~~"), ctxForLeaf({ project: { root: true } })), false); // LP3: struck marker still lists.
-  assert.equal(leaf(baseText(), ctxForLeaf({ job: { type: "[[project]]" } })), true); // LP4: parent project is a non-self root.
-  assert.equal(leaf(baseText(), ctxForLeaf({ job: { type: "[[area]]" } })), true); // LP5: standalone top-level project.
-  assert.equal(leaf(baseText().replace("parent: [[job]]\n", ""), ctxForLeaf({ project: { parent: "" } })), true); // LP6: no parent.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), ctxForLeaf({ project: { parent: "[[missing]]" } })), false); // LP7.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), ctxForLeaf({ project: { parent: "[[job]]" } })), false); // LP8: unresolved child list stays umbrella.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), ctxForLeaf({ project: { parent: "[[job]]" }, job: { type: "[[project]]" } })), true); // LP9.
-  assert.equal(leaf(baseText(), ctxForLeaf({ project: { root: true } })), true); // LP10: root without marker is a leaf.
-  assert.equal(h.keepMovingMarkLeafProject("job.md", baseText(), ctxForLeaf()), false); // LP11: areas are not projects.
-  const cycleCtx = ctxForLeaf({ project: { parent: "[[wrapper]]" }, byPath: {
-    "wrapper.md": { type: "other", parent: "[[job_email_recruiters]]" },
-  } }, ["wrapper.md"]);
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), cycleCtx), true); // LP12: bounded cycle reaches itself.
-  assert.equal(leaf(baseText("\t- 🧩 **Sub-projects:** [[child]]"), ctxForLeaf({ project: { parent: "[[job]]" }, job: { type: "[[project]]" } })), true); // LP13: nested project is leaf.
-  assert.equal(leaf(baseText(), ctxForLeaf({ project: { root: " TRUE " } })), true); // LP14.
-  assert.equal(leaf("", ctxForLeaf()), false); // LP15: missing content is neutral.
-  assert.equal(leaf(baseText("See 🧩 **Sub-projects:** [[child]]"), ctxForLeaf()), true); // LP16: prose is ignored.
-  assert.equal(leaf(baseText("```\n\t- 🧩 **Sub-projects:** [[child]]\n```"), ctxForLeaf()), true); // LP17: fenced marker is ignored.
+test("LP1–LP17: the root-parent rule matches the documented vectors", () => {
+  const { leafFixtures } = require("./keep-moving-leaf-fixtures.cjs");
+  for (const { id, path, text, ctx, expected } of leafFixtures()) {
+    assert.equal(h.keepMovingMarkLeafProject(path, text, ctx), expected, id);
+  }
 });
 
 test("KT1–KT8: tooltip, accessible element, config cache, and bounded counting", () => {

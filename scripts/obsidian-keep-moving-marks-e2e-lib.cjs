@@ -255,15 +255,14 @@ function expectedAllTooltip() {
   ].join("\n");
 }
 
-// KB7: the screenshot project. A standalone top-level project with no
-// Sub-projects marker, so it is a leaf under the umbrella rule; X is its
+// KB7: the screenshot project is a sub-project of job_2026; X is its
 // only live link and four Next residents stay offerable.
 function recruiterNote() {
   return [
     "---",
     'type: "[[project]]"',
     "status: wip",
-    'parent: "[[job]]"',
+    'parent: "[[job_2026]]"',
     "---",
     "- [ ] #task Root ^prj",
     "- [*] #task Reply to Luzern ^luzern",
@@ -284,6 +283,11 @@ function jobNote() {
   ].join("\n");
 }
 
+function jobProjectNote() {
+  return ["---", 'type: "[[project]]"', 'parent: "[[job]]"', "status: wip", "---",
+    "- [ ] #task Job 2026 ^prj", "\t- 🧩 **Sub-projects:** [[job_email_recruiters]] • [[km_all]]", ""].join("\n");
+}
+
 // KP2: one row wearing every mark — 🔓 (unblocked today), 🔑 (one dependent),
 // ⏭ (one offered sibling), and the off chip (tagged #off).
 function allNote(dates) {
@@ -292,6 +296,7 @@ function allNote(dates) {
     "---",
     'type: "[[project]]"',
     "status: wip",
+    'parent: "[[job_2026]]"',
     "---",
     "- [ ] #task All root ^prj",
     `- [x] #task All done [id:: alldone] [completion:: ${d.today}] ^alldone`,
@@ -318,6 +323,12 @@ function umbrellaNote() {
   ].join("\n");
 }
 
+// KB6: a standalone project under an area has no mark even with residents.
+function standaloneNote() {
+  return ["---", 'type: "[[project]]"', 'parent: "[[job]]"', "status: wip", "---",
+    "- [ ] #task Standalone ^prj", "- [*] #task Planned ^standalone", "- [*] #task Remaining ^remaining", ""].join("\n");
+}
+
 function dailyNote(dates) {
   const d = dates || fixtureDates();
   return [
@@ -330,6 +341,9 @@ function dailyNote(dates) {
     "",
     "- [ ] () — EVERYTHING",
     "\t- [[km_all#^allx]]",
+    "",
+    "- [ ] () — ROOT",
+    "\t- [[standalone#^standalone]]",
     "",
     "- [ ] () — UMBRELLA",
     "\t- [[um#^umtask]]",
@@ -360,12 +374,14 @@ function siblingLine() {
 }
 
 const EXPECTED_MARKS = Object.freeze([
+  Object.freeze({ id: "ROOT", blockId: "standalone", count: 0, context: /standalone#\^standalone|standalone > \^standalone/ }),
   Object.freeze({ id: "KM4", blockId: "luzern", count: 4, context: /job_email_recruiters#\^luzern|job_email_recruiters > \^luzern/ }),
   Object.freeze({ id: "KMALL", blockId: "allx", count: 1, context: /km_all#\^allx|km_all > \^allx/, unblocked: true }),
   Object.freeze({ id: "UMBRELLA", blockId: "umtask", count: 0, context: /um#\^umtask|um > \^umtask/ }),
 ]);
 
 const BARE_ROWS = Object.freeze([
+  Object.freeze({ id: "KM6-root", needle: /standalone#\^standalone|standalone > \^standalone/, label: "standalone root project link" }),
   Object.freeze({ id: "KM6-umbrella", needle: /um#\^umtask|um > \^umtask/, label: "umbrella project link" }),
   Object.freeze({ id: "KMFL6", needle: /Struck|~~/, label: "struck link" }),
   Object.freeze({ id: "KMFL7", needle: /^Embed:|!\[\[/, label: "embed link" }),
@@ -398,8 +414,10 @@ module.exports = {
   expectedAllTooltip,
   recruiterNote,
   jobNote,
+  jobProjectNote,
   allNote,
   umbrellaNote,
+  standaloneNote,
   dailyNote,
   struckSiblingLine,
   siblingLine,

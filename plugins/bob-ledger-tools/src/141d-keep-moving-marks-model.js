@@ -114,9 +114,14 @@ function keepMovingMarkRootFlag(frontmatter) {
 
 function keepMovingMarkParentTarget(frontmatter) {
   try {
-    let raw = frontmatter && frontmatter.parent;
-    if (Array.isArray(raw) && raw.length === 1) raw = raw[0];
-    if (typeof raw !== "string") return "";
+    const value = frontmatter && frontmatter.parent;
+    let raw = "";
+    if (typeof value === "string") {
+      raw = value;
+    } else if (Array.isArray(value) && value.length === 1 && Array.isArray(value[0]) &&
+        value[0].length === 1 && typeof value[0][0] === "string") {
+      raw = value[0][0];
+    }
     const match = raw.trim().match(/^\[\[([^\]]+)\]\]$/);
     return match ? match[1].split("|")[0].split("#")[0].trim() : "";
   } catch (error) {
@@ -335,11 +340,7 @@ function keepMovingMarkParseProject(path, text, ctx = {}) {
 function keepMovingMarkLeafProject(path, text, ctx = {}) {
   try {
     const project = keepMovingMarkParseProject(path, text, ctx);
-    if (!project) return false;
-    const listed = typeof projectMarkerListedChildren === "function"
-      ? projectMarkerListedChildren(project.text.split(/\r?\n/), project.root.line).length
-      : keepMovingMarkHasSubprojectMarker(project.text.split(/\r?\n/), project.root.line);
-    if (!listed) return true;
+    if (!project || keepMovingMarkTypeName(project.frontmatter) !== "project") return false;
     if (keepMovingMarkRootFlag(project.frontmatter)) return false;
     const seen = new Set([project.path]);
     let currentPath = project.path;
@@ -360,28 +361,6 @@ function keepMovingMarkLeafProject(path, text, ctx = {}) {
       if (parentType === "project") return true;
       seen.add(parentPath);
       currentPath = parentPath;
-    }
-    return false;
-  } catch (error) {
-    return false;
-  }
-}
-
-function keepMovingMarkHasSubprojectMarker(lines, prjLine) {
-  try {
-    const parentIndent = String(lines[prjLine] || "").match(/^[ \t]*/)[0].length;
-    const fenced = keepMovingMarkFencedLines(lines);
-    for (let line = prjLine + 1; line < lines.length; line += 1) {
-      const text = String(lines[line] || "");
-      if (!text.trim()) break;
-      if (fenced.has(line) || /^\s*>/.test(text) || /^\s*%%/.test(text)) continue;
-      const prefix = text.match(/^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+/);
-      if (!prefix) continue;
-      const indent = prefix[1].length;
-      if (indent <= parentIndent) break;
-      const body = text.slice(prefix[0].length).trimStart();
-      if (!body.startsWith("🧩 **Sub-projects:**")) continue;
-      return /\[\[[^\]\n]+\]\]/.test(body);
     }
     return false;
   } catch (error) {

@@ -9,7 +9,7 @@ const PROJECT_PATH = "job_email_recruiters.md";
 
 function projectText(closed = false) {
   return [
-    "---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
+    "---", 'type: "[[project]]"', "status: wip", "parent: [[job_2026]]", "---",
     "- [ ] #task Root #prj ^prj",
     closed ? "- [x] #task Trigger ^x" : "- [*] #task Trigger ^x",
     "- [ ] #task Ready ^ready",
@@ -27,7 +27,7 @@ function dayText() {
     "\t- [[job_email_recruiters#^x]]"].join("\n");
 }
 
-test("keep-moving mark identities equal the full successor planner's final keep_moving set", () => {
+for (const root of [false, true]) test(`KB24: mark identities and folds equal the full planner for a ${root ? "root" : "sub-project"}`, () => {
   const before = projectText(false);
   const after = projectText(true);
   const day = dayText();
@@ -45,6 +45,20 @@ test("keep-moving mark identities equal the full successor planner's final keep_
       tags: [],
     }));
   const memo = { tasks: memoTasks, warm: true, dateText: TODAY };
+  const fm = {
+    [PROJECT_PATH]: { type: "[[project]]", status: "wip", parent: root ? "[[job]]" : "[[job_2026]]" },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
+    "job.md": { type: "[[area]]" },
+  };
+  const paths = Object.keys(fm);
+  const resolve = (target) => {
+    const path = String(target).split("#")[0].replace(/\.md$/i, "") + ".md";
+    return fm[path] ? { path } : null;
+  };
+  const app = {
+    vault: { getMarkdownFiles: () => paths.map((path) => ({ path })) },
+    metadataCache: { getCache: (path) => fm[path] ? { frontmatter: fm[path] } : null, getFirstLinkpathDest: resolve },
+  };
   const markContext = {
     memo,
     dayText: day,
@@ -52,10 +66,9 @@ test("keep-moving mark identities equal the full successor planner's final keep_
     today: TODAY,
     config: { keepMoving: true, linkUnblocked: true, successorLabels: [] },
     noteTextFor: (path) => path === PROJECT_PATH ? before : "",
-    frontmatterFor: () => ({ type: "[[project]]", status: "wip", parent: "[[job]]" }),
-    markdownPaths: () => [PROJECT_PATH],
-    resolveLinkpath: (target) => String(target).split("#")[0].replace(/\.md$/i, "") === "job_email_recruiters"
-      ? { path: PROJECT_PATH } : null,
+    frontmatterFor: (path) => fm[path] || null,
+    markdownPaths: () => paths,
+    resolveLinkpath: resolve,
   };
   const closing = memoTasks.find((task) => /\^x$/.test(task.blockLink));
   const markModel = markHelpers.keepMovingMarkCount(closing, { path: PROJECT_PATH, text: before }, markContext);
@@ -73,14 +86,23 @@ test("keep-moving mark identities equal the full successor planner's final keep_
     notePaths: [PROJECT_PATH],
     keepMoving: true,
     dependencySnapshotAvailable: true,
-    leafProject: () => true,
+    app,
     selection: [],
   });
 
   const identities = (rows) => rows.map((row) => `${row.path || row.task?.path || PROJECT_PATH}\0${row.blockId || row.block_id}`).sort();
-  assert.equal(markModel.state, "positive");
-  assert.deepEqual(identities(markModel.rows), identities(plan.keep_moving));
-  assert.deepEqual(markModel.rows.map((row) => row.blockId).sort(),
-    ["pending", "next", "ready", "reference"].sort());
+  assert.equal(markModel.state, root ? "zero" : "positive");
+  assert.deepEqual(identities(markModel.rows || []), identities(plan.keep_moving));
+  assert.deepEqual((markModel.rows || []).map((row) => row.blockId).sort(),
+    (root ? [] : ["pending", "next", "ready", "reference"]).sort());
   assert.equal(plan.rows.length, plan.keep_moving.length);
+  assert.deepEqual(markModel.folded, plan.foldedByProject.get(PROJECT_PATH) || { blocked: 0, scheduled: 0, hidden: 0 });
+});
+
+test("LP1–LP17: ledger leafness agrees with the reverted cycler walk", () => {
+  const { leafFixtures } = require("./keep-moving-leaf-fixtures.cjs");
+  for (const { id, path, text, ctx, app, expected } of leafFixtures()) {
+    assert.equal(cyclerHelpers.successorLeafProject(app, path), expected, `cycler ${id}`);
+    assert.equal(markHelpers.keepMovingMarkLeafProject(path, text, ctx), expected, `ledger ${id}`);
+  }
 });

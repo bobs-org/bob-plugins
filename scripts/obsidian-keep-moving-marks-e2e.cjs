@@ -181,8 +181,10 @@ function buildFixture(vaultDir, dates) {
   const dailyPath = asserts.dailyPathFor(d);
   writeNote(path.join(vaultDir, "job_email_recruiters.md"), asserts.recruiterNote(d));
   writeNote(path.join(vaultDir, "job.md"), asserts.jobNote(d));
+  writeNote(path.join(vaultDir, "job_2026.md"), asserts.jobProjectNote(d));
   writeNote(path.join(vaultDir, "km_all.md"), asserts.allNote(d));
   writeNote(path.join(vaultDir, "um.md"), asserts.umbrellaNote(d));
+  writeNote(path.join(vaultDir, "standalone.md"), asserts.standaloneNote(d));
   writeNote(path.join(vaultDir, dailyPath), asserts.dailyNote(d));
 
   const enabled = [];
@@ -803,10 +805,13 @@ function runSelfTest() {
       if (!daily.includes(token)) throw new Error(`daily note missing ${token}`);
     }
     const recruiter = fs.readFileSync(path.join(tmp, fixture.recruiter), "utf8");
-    for (const token of ["- [ ] #task Root ^prj", "- [*] #task Reply to Luzern ^luzern", "- [*] #task Ecogpt ^ecogpt", "- [*] #task Ray Lyles ^ray-lyles", "- [*] #task Product Engineer ^product-engineer-dan-dowd", "- [*] #task Senior Rust ^senior-rust-java-engineer", 'parent: "[[job]]"']) {
+    for (const token of ["- [ ] #task Root ^prj", "- [*] #task Reply to Luzern ^luzern", "- [*] #task Ecogpt ^ecogpt", "- [*] #task Ray Lyles ^ray-lyles", "- [*] #task Product Engineer ^product-engineer-dan-dowd", "- [*] #task Senior Rust ^senior-rust-java-engineer", 'parent: "[[job_2026]]"']) {
       if (!recruiter.includes(token)) throw new Error(`recruiter note missing ${token}`);
     }
-    if (/🧩 \*\*Sub-projects:\*\*/.test(recruiter)) throw new Error("the KB7 project must have no Sub-projects marker");
+    const parent = fs.readFileSync(path.join(tmp, "job_2026.md"), "utf8");
+    if (!parent.includes('parent: "[[job]]"') || !parent.includes("[[job_email_recruiters]]")) throw new Error("KB7 needs a project parent under job");
+    const standalone = fs.readFileSync(path.join(tmp, "standalone.md"), "utf8");
+    if (!standalone.includes('parent: "[[job]]"') || standalone.includes("Sub-projects")) throw new Error("KB6 needs a standalone root without a marker");
     const all = fs.readFileSync(path.join(tmp, fixture.all), "utf8");
     for (const token of ["[id:: allx]", "[dependsOn:: alldone]", "[completion::", "#off", "[dependsOn:: allx]", "^ally", "^prj"]) {
       if (!all.includes(token)) throw new Error(`km_all note missing ${token}`);

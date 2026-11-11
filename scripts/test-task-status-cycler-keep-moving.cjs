@@ -145,7 +145,7 @@ test("KM2-K8/K10/K12: only the pre-close own link behind the last live project l
 
 test("KM6/K7/K14/K16/K19/K20/K29: root, project-group, empty, blocked, disabled, and cancel exclusions", () => {
   const residents = ["- [ ] #task Ready work ^ready"];
-  assert.equal(purePlan({ residents, options: { leafProject: () => false } }).plan.keep_moving.length, 0); // KM6: umbrella -> nothing.
+  assert.equal(purePlan({ residents, options: { leafProject: () => false } }).plan.keep_moving.length, 0); // KM6: root project -> nothing.
   const ownRoot = purePlan({ residents, rootLine: "- [ ] #task Badge project ^prj", options: { leafProject: () => false } });
   assert.equal(ownRoot.plan.keep_moving.length, 0);
   const blockedRoots = [
@@ -282,16 +282,16 @@ test("KM6 umbrella: a marked root offers nothing while an unmarked top-level pro
     noteTexts: umbrellaNotes,
     keepMoving: true,
     dependencySnapshotAvailable: true,
-    leafProject: (path, text) => helpers.successorLeafProject(umbrellaApp, path, text ?? umbrellaNotes[path]),
+    leafProject: (path) => helpers.successorLeafProject(umbrellaApp, path),
   });
-  assert.equal(umbrellaPlan.keep_moving.length, 0); // KM6: umbrella -> nothing.
+  assert.equal(umbrellaPlan.keep_moving.length, 0); // KM6: root project -> nothing.
 
-  // KM33: standalone top-level project (project -> area, no marker) with four
+  // KM33: recruiter sub-project (project -> project -> area) with four
   // Next residents offers all four rows, mirroring the screenshot ledger.
   const notePath = "job_email_recruiters.md";
   const screenshotNotes = {
     [notePath]: [
-      "---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
+      "---", 'type: "[[project]]"', "status: wip", "parent: [[job_2026]]", "---",
       "- [ ] #task Job email recruiters ^prj",
       "- [x] #task Reply to Luzern ^luzern",
       "- [*] #task Ecogpt ^ecogpt",
@@ -302,7 +302,8 @@ test("KM6 umbrella: a marked root offers nothing while an unmarked top-level pro
   };
   const screenshotFm = {
     "job.md": { type: "[[area]]" },
-    [notePath]: { type: "[[project]]", parent: "[[job]]" },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
+    [notePath]: { type: "[[project]]", parent: "[[job_2026]]" },
   };
   const screenshotApp = fakeMetadataApp(screenshotFm);
   const screenshotDay = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — WRITE", `\t- [[job_email_recruiters#^luzern]]`].join("\n");
@@ -316,7 +317,7 @@ test("KM6 umbrella: a marked root offers nothing while an unmarked top-level pro
     noteTexts: screenshotNotes,
     keepMoving: true,
     dependencySnapshotAvailable: true,
-    leafProject: (path, text) => helpers.successorLeafProject(screenshotApp, path, text ?? screenshotNotes[path]),
+    leafProject: (path) => helpers.successorLeafProject(screenshotApp, path),
   });
   assert.equal(screenshotPlan.keep_moving.length, 4); // KM33.
   assert.deepEqual(
@@ -391,7 +392,7 @@ function fakeMetadataApp(frontmatterByPath, extraPaths = []) {
   };
 }
 
-// Umbrella-rule note texts: an open ^prj with the marker directly beneath it
+// Marker-independence note texts: an open ^prj with the marker directly beneath it
 // (two-space indent, as sync maintains) lists sub-projects; anything else is
 // not a direct-child marker (LP17).
 function leafNoteText({ marker = null, extra = [], rootLine = "- [ ] #task Leaf project ^prj" } = {}) {
@@ -411,7 +412,7 @@ function leafNoteText({ marker = null, extra = [], rootLine = "- [ ] #task Leaf 
 const LEAF_OPEN_MARKER = "  - 🧩 **Sub-projects:** [[some_child]]";
 const LEAF_STRUCK_MARKER = "  - 🧩 **Sub-projects:** ~~[[gone_a]]~~ ✅ ~~[[gone_b]]~~ ❌";
 
-test("LP1-LP17: umbrella rule (any project except an umbrella)", () => {
+test("LP1-LP17: sub-projects have a different R2 root parent", () => {
   const fm = {
     "dev.md": { type: "[[area]]" },
     "sase.md": { type: "[[project]]", parent: "[[dev]]" },
@@ -431,53 +432,52 @@ test("LP1-LP17: umbrella rule (any project except an umbrella)", () => {
     "y/dup.md": { type: "[[project]]", parent: "[[dev]]" },
     "ambiguous.md": { type: "[[project]]", parent: "[[dup]]" },
     "job.md": { type: "[[area]]" },
-    "job_email_recruiters.md": { type: "[[project]]", parent: "[[job]]" },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
+    "job_email_recruiters.md": { type: "[[project]]", parent: "[[job_2026]]" },
     "rooted_lone.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
     "umbrella_closed.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
     "root_prose.md": { type: "[[project]]", root: "true", parent: "[[dev]]" },
   };
   const texts = {
-    "sase_goals.md": leafNoteText(), // LP1: no marker -> leaf.
+    "sase_goals.md": leafNoteText(), // LP1: sub-project -> leaf.
     "sase.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[sase_goals]]" }), // LP2: umbrella.
     "sase_blog.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[sase_pre_blog]]" }), // LP3: umbrella.
     "sase_pre_blog.md": leafNoteText(), // LP4: leaf.
-    "p.md": leafNoteText(), // LP5: standalone top-level -> leaf (was no).
-    "o.md": leafNoteText(), // LP6: orphan -> leaf (was no).
+    "p.md": leafNoteText(), // LP5: standalone top-level -> root.
+    "o.md": leafNoteText(), // LP6: orphan -> root.
     "k.md": leafNoteText(), // LP8: wrapper walked through -> leaf.
     "m.md": leafNoteText({ marker: "  - 🧩 **Sub-projects:** [[m_child]]" }), // LP9: middle with child -> leaf.
     "a.md": leafNoteText(), // LP12: non-self cycle -> leaf.
-    "missing.md": leafNoteText(), // LP7: unresolved parent, no marker -> leaf.
-    "ambiguous.md": leafNoteText(), // LP7: ambiguous parent, no marker -> leaf.
+    "missing.md": leafNoteText(), // LP7: unresolved parent -> root.
+    "ambiguous.md": leafNoteText(), // LP7: ambiguous parent -> root.
     "job_email_recruiters.md": leafNoteText(), // LP13: screenshot -> leaf.
-    "rooted_lone.md": leafNoteText(), // LP14: root:true without marker -> leaf.
+    "rooted_lone.md": leafNoteText(), // LP14: root:true without marker -> root.
     "umbrella_closed.md": leafNoteText({ marker: LEAF_STRUCK_MARKER }), // LP15: struck children still count.
   };
   const app = fakeMetadataApp(fm);
-  const leaf = (path, text) => helpers.successorLeafProject(app, path, text);
+  const leaf = (path, text) => helpers.successorLeafProject(app, path);
   assert.equal(leaf("sase_goals.md", texts["sase_goals.md"]), true); // LP1
   assert.equal(leaf("sase.md", texts["sase.md"]), false); // LP2
   assert.equal(leaf("sase_blog.md", texts["sase_blog.md"]), false); // LP3
   assert.equal(leaf("sase_pre_blog.md", texts["sase_pre_blog.md"]), true); // LP4
-  assert.equal(leaf("p.md", texts["p.md"]), true); // LP5
-  assert.equal(leaf("o.md", texts["o.md"]), true); // LP6
-  assert.equal(leaf("missing.md", texts["missing.md"]), true); // LP7 no marker -> leaf
-  assert.equal(leaf("ambiguous.md", texts["ambiguous.md"]), true); // LP7 no marker -> leaf
-  assert.equal(leaf("missing.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> umbrella
-  assert.equal(leaf("ambiguous.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> umbrella
+  assert.equal(leaf("p.md", texts["p.md"]), false); // LP5
+  assert.equal(leaf("o.md", texts["o.md"]), false); // LP6
+  assert.equal(leaf("missing.md", texts["missing.md"]), false); // LP7 no marker -> root
+  assert.equal(leaf("ambiguous.md", texts["ambiguous.md"]), false); // LP7 no marker -> root
+  assert.equal(leaf("missing.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> root
+  assert.equal(leaf("ambiguous.md", leafNoteText({ marker: LEAF_OPEN_MARKER })), false); // LP7 marker -> root
   assert.equal(leaf("k.md", texts["k.md"]), true); // LP8
   assert.equal(leaf("m.md", texts["m.md"]), true); // LP9
   assert.equal(leaf("sase_goals.md", texts["sase_goals.md"]), true); // LP10: [root::] never changes its note.
   assert.equal(leaf("dev.md", leafNoteText()), false); // LP11: area never a leaf.
   assert.equal(leaf("a.md", texts["a.md"]), true); // LP12
   assert.equal(leaf("job_email_recruiters.md", texts["job_email_recruiters.md"]), true); // LP13
-  assert.equal(leaf("rooted_lone.md", texts["rooted_lone.md"]), true); // LP14
+  assert.equal(leaf("rooted_lone.md", texts["rooted_lone.md"]), false); // LP14
   assert.equal(leaf("umbrella_closed.md", texts["umbrella_closed.md"]), false); // LP15
-  assert.equal(leaf("sase_goals.md", ""), false); // missing text is neutral.
-  assert.equal(leaf("sase_goals.md", null), false); // missing text is neutral.
   // LP17: prose, fenced, and sibling-task markers are not R's direct-child marker.
-  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["See the 🧩 **Sub-projects:** [[child]] discussion above."] })), true); // LP17 prose.
-  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["```", "🧩 **Sub-projects:** [[child]]", "```"] })), true); // LP17 fenced.
-  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["- [ ] #task Other work ^other", "  - 🧩 **Sub-projects:** [[child]]"] })), true); // LP17 sibling child.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["See the 🧩 **Sub-projects:** [[child]] discussion above."] })), false); // LP17 prose.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["```", "🧩 **Sub-projects:** [[child]]", "```"] })), false); // LP17 fenced.
+  assert.equal(leaf("root_prose.md", leafNoteText({ extra: ["- [ ] #task Other work ^other", "  - 🧩 **Sub-projects:** [[child]]"] })), false); // LP17 sibling child.
   assert.equal(helpers.successorKeepMovingRootFlag({ root: true }), true);
   assert.equal(helpers.successorKeepMovingRootFlag({ root: " tRuE " }), true);
   assert.equal(helpers.successorKeepMovingRootFlag({ root: "yes" }), false);
@@ -747,7 +747,7 @@ test("KM33: Ctrl+Enter on the screenshot link opens a 4-row Keep group and Esc w
   helpers.resetSuccessorKeepMovingCache();
   const notePath = "job_email_recruiters.md";
   const projectText = [
-    "---", 'type: "[[project]]"', "status: wip", "parent: [[job]]", "---",
+    "---", 'type: "[[project]]"', "status: wip", "parent: [[job_2026]]", "---",
     "- [ ] #task #prj Email all recruiters back! #hide ^prj",
     "- [*] #task Reply to Luzern [id:: job_email_recruiters__luzern] ^luzern",
     "- [*] #task Ecogpt ^ecogpt",
@@ -756,10 +756,11 @@ test("KM33: Ctrl+Enter on the screenshot link opens a 4-row Keep group and Esc w
     "- [*] #task Senior rust java engineer ^senior-rust-java-engineer",
   ].join("\n");
   const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — WRITE", "\t- [[job_email_recruiters#^luzern]]"].join("\n");
-  const harness = createInMemoryObsidianApp({ [notePath]: projectText, "job.md": "", [DAY_PATH]: day });
+  const harness = createInMemoryObsidianApp({ [notePath]: projectText, "job.md": "", "job_2026.md": "", [DAY_PATH]: day });
   const frontmatter = {
-    [notePath]: { type: "[[project]]", parent: "[[job]]" },
+    [notePath]: { type: "[[project]]", parent: "[[job_2026]]" },
     "job.md": { type: "[[area]]" },
+    "job_2026.md": { type: "[[project]]", parent: "[[job]]" },
   };
   harness.app.metadataCache.getCache = (path) => frontmatter[path] ? { frontmatter: frontmatter[path] } : null;
   const editor = createTextEditor(day, { line: 4, ch: 5 });

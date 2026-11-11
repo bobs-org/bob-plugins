@@ -590,8 +590,7 @@ function planSuccessors(options = {}) {
       dependencySnapshotAvailable: options.dependencySnapshotAvailable,
       existingMarks: successorMarks,
       leafProject: options.leafProject || (options.app
-        ? (path, text) => successorLeafProject(options.app, path,
-          typeof text === "string" ? text : projectNoteTextFor(options.noteTexts, path))
+        ? (path) => successorLeafProject(options.app, path)
         : null),
       closingEntry,
       anchorHints: options.keepMovingAnchorHints,
@@ -676,8 +675,7 @@ function planSuccessors(options = {}) {
         dependencySnapshotAvailable: options.dependencySnapshotAvailable,
         existingMarks: [],
         leafProject: options.leafProject || (options.app
-          ? (path, text) => successorLeafProject(options.app, path,
-            typeof text === "string" ? text : projectNoteTextFor(options.noteTexts, path))
+          ? (path) => successorLeafProject(options.app, path)
           : null),
         closingEntry,
       });

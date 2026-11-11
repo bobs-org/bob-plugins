@@ -5,6 +5,8 @@ description: "Navigate and edit Bob notes with keyboard commands."
 
 Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob notes.
 
+`Cmd+Y` opens the [Copy card](copy-card.md): one key per path, block ID, or template row.
+
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
 
@@ -29,7 +31,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Close tabs to the left | `close-tabs-left` | — |
 | Close tabs to the right | `close-tabs-right` | — |
 | Commit to Next / release to Ready | `toggle-task-lane` | Alt+N |
-| Copy active file path | `copy-active-file-path` | Mod+Y |
+| Copy card: path, block ID, or template | `copy-active-file-path` | Mod+Y |
 | Create notebook here | `create-notebook-here` | — |
 | Create project note | `create-project-note` | — |
 | Create project note from task | `create-project-note-from-task` | — |
@@ -85,6 +87,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Yank basename without extension | `yank-basename-without-extension` | — |
 | Yank parent directory | `yank-parent-directory` | — |
 | Yank relative path | `yank-relative-path` | — |
+| Yank task block ID | `yank-block-id` | — |
 | Zoom image on cursor line | `zoom-image-on-line` | — |
 <!-- END GENERATED: commands -->
 

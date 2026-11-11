@@ -68,6 +68,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysPomodoroThemesManagerMixin,
   BobNavigationHotkeysRelationLabelsManagerMixin,
   BobNavigationHotkeysNotesMoveMixin,
+  BobNavigationHotkeysCopyCardMixin,
   BobNavigationHotkeysMoveCommitMixin,
   BobNavigationHotkeysInboxRouteMixin,
   BobNavigationHotkeysProjectNoteMixin,

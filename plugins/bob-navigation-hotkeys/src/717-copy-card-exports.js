@@ -9,4 +9,5 @@ Object.assign(module.exports.helpers, {
   formatCopiedNotice,
   loadCopyCardTemplates,
   resetCopyCardTemplatesCache,
+  CopyCardModal,
 });

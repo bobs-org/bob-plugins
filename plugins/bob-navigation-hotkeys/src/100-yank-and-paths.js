@@ -39,27 +39,6 @@ function getYankPathText(kind, relativePath, basePath, homePath) {
   }
 }
 
-function getYankPathPreviewText(result) {
-  if (!result || !result.ok) {
-    return result && result.message ? result.message : "Unavailable";
-  }
-
-  return result.text === "" ? "(empty string)" : result.text;
-}
-
-function createYankPathPickerItem(plugin, command, file) {
-  const result = plugin.getActiveFileYankPath(command.kind, file);
-  const available = !!(result && result.ok);
-
-  return {
-    kind: command.kind,
-    title: YANK_PATH_PICKER_TITLES[command.kind] || command.name,
-    preview: getYankPathPreviewText(result),
-    actionLabel: available ? "Copy" : "Unavailable",
-    available,
-  };
-}
-
 function getCreatedNoteNoticeText(file, fallbackPath) {
   const path = file && file.path ? file.path : fallbackPath;
   const displayPath = String(path || "").trim();

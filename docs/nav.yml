@@ -28,6 +28,8 @@
   path: task-relations.md
 - title: Task Card
   path: task-card.md
+- title: Copy Card
+  path: copy-card.md
 - title: Decay ladder live verification
   path: decay-ladder.md
 - title: Go to task URI

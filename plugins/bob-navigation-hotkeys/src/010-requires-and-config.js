@@ -252,15 +252,6 @@ const YANK_PATH_NOTICE_LABELS = {
   relative: "relative path",
 };
 
-const YANK_PATH_PICKER_TITLES = {
-  "absolute-tilde": "Absolute path with tilde",
-  absolute: "Absolute path",
-  basename: "Basename",
-  "basename-no-extension": "Basename without extension",
-  "parent-directory": "Parent directory",
-  relative: "Relative path",
-};
-
 const BULLET_PROPERTY_CONFIG_RELATIVE_PATH = "bob/config.yml";
 const BULLET_PROPERTY_CONFIG_MOBILE_NOTICE =
   "Bullet properties are only available on desktop";

@@ -450,9 +450,15 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "copy-active-file-path",
-      name: "Copy active file path",
+      name: "Copy card: path, block ID, or template",
       hotkeys: [{ modifiers: ["Mod"], key: "Y" }],
-      callback: () => this.openYankPathPicker(),
+      callback: () => this.openCopyCard(),
+    });
+
+    this.addCommand({
+      id: "yank-block-id",
+      name: "Yank task block ID",
+      callback: () => this.yankTaskBlockId(),
     });
 
     YANK_PATH_COMMANDS.forEach((command) => {

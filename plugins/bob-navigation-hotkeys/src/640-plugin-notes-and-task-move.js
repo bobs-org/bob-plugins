@@ -1,14 +1,5 @@
 class BobNavigationHotkeysNotesMoveMixin {
 
-  openYankPathPicker() {
-    const file = this.getActiveMarkdownFile();
-    if (!file) {
-      return;
-    }
-
-    new YankPathPickerModal(this.app, this, file).open();
-  }
-
   collectChildNotes(parentFile) {
     if (!this.isMarkdownFile(parentFile)) {
       return [];
@@ -120,7 +111,7 @@ class BobNavigationHotkeysNotesMoveMixin {
 
     try {
       await clipboard.writeText(text);
-      new Notice(`Copied ${label}`);
+      new Notice(formatCopiedNotice(text));
       return true;
     } catch (error) {
       new Notice(`Could not copy ${label}`);

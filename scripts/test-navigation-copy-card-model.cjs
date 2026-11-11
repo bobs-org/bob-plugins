@@ -708,6 +708,17 @@ test("keys: reserved and duplicate collisions are keyless but copyable", () => {
   assert.equal(loaded.templates[1].reason, "key w is also Twin's");
   assert.equal(loaded.templates[2].key, null);
   assert.equal(loaded.templates[2].reason, "key w is also Also wiki's");
+  const configuredModel = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: loaded.templates,
+  });
+  const configuredCollision = row(configuredModel, "template-1");
+  assert.equal(configuredCollision.state, "collision");
+  assert.equal(configuredCollision.key, null);
+  assert.equal(configuredCollision.value, "[[bob]]");
   const model = buildCopyCardModel({
     filePath: "bob.md",
     basePath: BRYAN_VAULT,

@@ -216,7 +216,7 @@ class CopyCardModal extends Modal {
           cls: "bob-copy-card-template",
           text: String(row.preview || ""),
         });
-        rowEl.createDiv({
+        valueEl.createDiv({
           cls: "bob-copy-card-reason",
           text: String(row.reason || ""),
         });

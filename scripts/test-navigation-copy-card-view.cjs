@@ -151,6 +151,11 @@ test("styles: copy card tokens exist and shared key-card rules are untouched", (
   ]) {
     assert.ok(STYLES.includes(token), token);
   }
+  assert.match(
+    STYLES,
+    /@media \(max-width: 480px\)[\s\S]*?\.bob-copy-card-label\s*\{[^}]*white-space: normal/s,
+    "narrow labels wrap instead of truncating",
+  );
   assert.ok(STYLES.includes("width: min(600px, 92vw)"));
   assert.ok(STYLES.includes("max-height: min(75vh, 840px)"));
   assert.ok(STYLES.includes(".bob-key-card-key"));
@@ -222,6 +227,8 @@ test("render: dimmed, error, and collision rows", () => {
   const collision = rows.find((row) => flattenText(row).includes("Twin"));
   assert.ok(collision.classes.includes("is-collision"));
   assert.match(flattenText(collision), /key p is Path's/);
+  assert.equal(collision.children.length, 4, "collision reason stays in the value column");
+  assert.equal(byClass(collision, "bob-copy-card-reason").length, 1);
   modal.close();
 });
 

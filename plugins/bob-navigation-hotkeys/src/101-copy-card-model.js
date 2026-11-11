@@ -5,6 +5,7 @@
 
 const COPY_CARD_NOTICE_VALUE_LIMIT = 60;
 const COPY_CARD_NEWLINE_MARK = "⏎";
+const COPY_CARD_NORMALIZED_TEMPLATE = Symbol("bob-copy-card-normalized-template");
 const COPY_CARD_VARIABLE_NAMES = Object.freeze([
   "path",
   "absolute_path",
@@ -398,6 +399,17 @@ function copyCardTemplateLabel(raw, index) {
 
 function normalizeCopyCardTemplates(list) {
   const source = Array.isArray(list) ? list : [];
+  if (
+    source.length > 0 &&
+    source.every(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        entry[COPY_CARD_NORMALIZED_TEMPLATE] === true,
+    )
+  ) {
+    return source;
+  }
   const templates = [];
   for (let index = 0; index < source.length; index += 1) {
     const entry = source[index];
@@ -510,8 +522,15 @@ function normalizeCopyCardTemplates(list) {
 
   return freezeCopyCardValue(
     templates.map((template) => {
+      const preserve = (value) => {
+        const copy = { ...value };
+        Object.defineProperty(copy, COPY_CARD_NORMALIZED_TEMPLATE, {
+          value: true,
+        });
+        return freezeCopyCardValue(copy);
+      };
       if (!template.key || template.state === "error") {
-        return template;
+        return preserve(template);
       }
       const claimed = owners.get(template.key) || [];
       const others = claimed.filter(
@@ -520,7 +539,7 @@ function normalizeCopyCardTemplates(list) {
       const uniqueTemplate =
         claimed.length === 1 && claimed[0].kind === "template";
       if (uniqueTemplate || others.length === 0) {
-        return template;
+        return preserve(template);
       }
       const builtin = others.find((owner) => owner.kind === "builtin");
       const otherTemplate = others.find((owner) => owner.kind === "template");
@@ -531,7 +550,7 @@ function normalizeCopyCardTemplates(list) {
       } else {
         reason = `key ${originalKey} is also ${otherTemplate.label}'s`;
       }
-      return freezeCopyCardValue({
+      return preserve({
         ...template,
         key: null,
         state: "collision",

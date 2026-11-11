@@ -2356,6 +2356,12 @@
   .bob-copy-card-row {
     grid-template-columns: 28px 7em minmax(0, 1fr) 20px;
   }
+
+  .bob-copy-card-label {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {

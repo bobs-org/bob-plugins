@@ -107,41 +107,33 @@ only surface, and its actions open the existing stages and writers. On an inbox
 task every non-closing answer asks where the task goes before writing and moves
 there.
 
-`Ctrl+Shift+B` is `Ctrl+Shift+P` then `b`: it opens the Task Card's Depends on
-stage for the task under the cursor, a dedicated Task Link's linked task, or a
-counted batch. `Ctrl+Shift+Alt+B` is `Ctrl+Shift+P` then `⇧B`: it opens the
-Blocks stage for a task or Task Link, supports counted batches, and works from
-Depends-On and BLOCKS lines, where `Ctrl+Shift+P` on a BLOCKS line opens the
-owner's stage directly.
+`Ctrl+Shift+B` opens the Task Card's Depends on stage for the task under
+the cursor, a dedicated Task Link's linked task, or a counted batch.
+`Ctrl+Shift+Alt+B` opens the Blocks stage for a task or Task Link, supports
+counted batches, and works from Depends-On and BLOCKS lines, where
+`Ctrl+Shift+P` on a BLOCKS line opens the owner's stage directly.
 `Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open Links / Linked from for a dedicated
 Task Link's linked task after focusing its note, and open the owner's stage on
 a Depends-On or BLOCKS line. On a LINKS or LINKED FROM line,
 `Ctrl+Shift+B` / `Ctrl+Shift+Alt+B` open the owner's Depends on / Blocks stage.
 
-Any card gesture that writes closes the card. The card offers a Type row (`t`, `Enter` to open): Use default first with its inherited reason, then Today, Recent, and a validated typed name; any type including PLAN is choosable. `Ctrl+D` on the Type row clears to Use default through the same relocate path without touching hide state. Type edits set `[type:: ...]`, then relocate the live Task Link (D8, absorb) with a consequence line and one gesture; they preserve status and freshness and never advance the review walk. The card's Cancel action (`x`)
-closes the task as Cancelled with an optional reason kept in a first-child
-Cancel Log, pruning its links from today's open Pomodoros. The card level strip
-and priority notices render the shared signal-bar priority mark, falling back
-to Lucide signal icons without the ledger-tools namespace.
+Any card gesture that writes closes the card. The card offers a Type row (`t`, `Enter` to open): Use default first with its inherited reason, then Today, Recent, and a validated typed name; any type including PLAN is choosable. `Ctrl+D` on the Type row clears to Use default through the same relocate path without touching hide state. Type edits set `[type:: ...]`, then relocate the live Task Link (D8, absorb) with a consequence line and one gesture; they preserve status and freshness and never advance the review walk. The card's
+Cancel action (`x`) also prunes the task's links from today's open Pomodoros.
 
 ## Navigation and counts
 
 `Ctrl+Shift+J/K` navigates Ready, In Progress, and Next `#task` lines while
 skipping Blocked `[?]` tasks — except on an open current or future Pomodoro
 entry, where the same chord instead moves that Pomodoro and everything it owns
-down or up among adjacent future Pomodoros, keeping the current slot's time
-range with whichever entry is promoted there and refusing (with a notice,
-without jumping) to cross the current/history boundary or the last future
-Pomodoro. A `N<Ctrl+Shift+J/K>` count moves a current or future Pomodoro
-exactly N positions atomically, or jumps to the Nth circular navigation target
-elsewhere.
+among adjacent future Pomodoros (the current slot keeps its time range;
+crossing the current/history boundary or the last future Pomodoro is refused
+with a notice). A counted chord moves a Pomodoro exactly N positions
+atomically, or jumps to the Nth circular navigation target elsewhere.
 
 Normal-mode Enter on a link records a file-aware jump in a 100-entry session
 history shared with native jumps: `Ctrl+O` returns to the originating note and
-exact cursor, `Ctrl+I` goes forward without undoing the move, counts traverse
-multiple entries, new jumps replace the forward branch, and same-note
-heading/block and already-open tabs round-trip. Tab, insert, and visual Vim
-behavior is unchanged.
+exact cursor, `Ctrl+I` goes forward, counts traverse multiple entries, and
+same-note heading/block and already-open tabs round-trip.
 
 ## Parent note
 
@@ -206,9 +198,8 @@ open Pomodoro keeps the existing whole-entry move/delete behavior, typing a new
 name renames the entry in place, and `Ctrl+X` on a highlighted open
 current/future Pomodoro merges entries in one undoable edit (a current timed
 entry survives and absorbs the selected future one; names combine
-survivor-first by component, de-duplicating matching components while keeping
-the first spelling; calendar-owned MEET entries cannot be merged. Any count
-is accepted but ignored since the operation is whole-entry.
+survivor-first with first-spelling kept; calendar-owned MEET entries cannot
+merge; counts are ignored).
 
 Both pickers keep today's open Pomodoros first and offer recent task types for
 new destinations or renames when the Ledger Tools type catalog is available.
@@ -239,8 +230,7 @@ link count, a footer previewing the lineup (`BUILD + READ · FIX ↓`), and
 applies the marked rows else the highlighted row, and `Esc` cancels. Closed
 entries, MEET entries, single-type entries (`BUILD has one type — nothing to
 split`), and containers (`LATER holds any type — nothing to split`) are
-refused with a notice and no edit. The cursor stays on its own line and
-follows a moved bullet. The **Bob: Split Pomodoro by type**
+refused with a notice and no edit. The **Bob: Split Pomodoro by type**
 (`split-pomodoro-by-type`) palette command does the same with no default
 hotkey.
 
@@ -366,9 +356,7 @@ asks where the task goes right before it writes: refusals come first, a Pending
 release keeps its Work Log prompt first, then the route picker opens (`commit
 to Next` / `release to Ready`; `N tasks · then …` for counted runs). `↵` acts
 and then moves the task there, `⇧↵` applies in place and keeps it in the inbox,
-and `Esc` cancels the whole gesture with nothing written. `Alt+[` / `Alt+]` on a
-Pomodoro Task Link toggles the linked task between Next and In Progress,
-asking once for an optional Work Log summary when moving back to Next.
+and `Esc` cancels the whole gesture with nothing written.
 
 ## Review walk
 
@@ -385,9 +373,6 @@ origin, `]S` enters the first nonempty group and `[S` enters the last.
 ends. Group jumps never return to the current review task. Vault mappings still
 bind `[S` / `]S` to the legacy command IDs `jump-to-first-due-task` /
 `jump-to-last-due-task`.
-After any review-walk key or command, `]]` / `[[` repeat the `]s` / `[s` walk
-forward / backward.
-
 Before a same-pane note switch, the plugin saves the active note and checks its
 disk text against the editor. A failed save or mismatch keeps the current note
 open. The landing warning fires only when the pane switched to the new note but
@@ -399,29 +384,25 @@ docs under “Clobbered notes” for recovery steps.
 
 `Alt+F` and `Ctrl+Alt+F` stamp the cursor task, or the target of a dedicated
 Task Link, through Ledger Tools' `keepLine`; a count also includes the next N
-targets. A due WIP (`[/]`) keep asks “Why keep it in WIP?” and a due Next
-(`[*]`) keep asks “Why keep it in Next?”, each with its rung allowance
-(`keep 1 of 2 in Next`; `keep 2 of 2` names the decay card for Ready).
-Every counted keep on every rung writes one rung-qualified Rotten Log entry
-(`kept N× in WIP / in Next / in Ready`, `kept N× at P2`) under
+targets. An exact due keep counts once per review day on its rung (WIP,
+Next, Ready, or P-level); uncounted keeps preserve the streak. A due WIP
+(`[/]`) keep asks “Why keep it in WIP?” and a due Next (`[*]`) keep asks
+“Why keep it in Next?”, each with its rung allowance (`keep 1 of 2 in
+Next`; `keep 2 of 2` names the decay card for Ready). The prompt also shows
+per-rung tallies, previews the exact entry, and lists up to three earlier
+reasons. Every counted keep on every rung writes one rung-qualified Rotten
+Log entry (`kept N× in WIP / in Next / in Ready`, `kept N× at P2`) under
 `🥀 **ROTTEN LOG**` in the same undo step as the stamp; a blank reason logs
-`🤷 no reason given`. Early and Today-linked WIP/Next keeps stamp quietly
-with an “early · not counted” notice: no prompt and no entry. Esc writes
-nothing. Alt+F stays, while Ctrl+Alt+F advances after a landed walk answer.
+`🤷 no reason given`. Enter stamps and increments the streak. A counted
+keep whose entry cannot be written (duplicate `🥀 ROTTEN LOG` markers,
+unreadable history) writes nothing at all. Early and Today-linked keeps
+stamp quietly with an “early · not counted” notice: no prompt and no entry.
+Esc writes nothing and retains the walk position. Alt+F stays, while
+Ctrl+Alt+F advances after a landed walk answer.
 For P-levels, `<Rung>` is the configured level label (such as P2), never the
-stored `[priority::]` value.
-If the note or local day changes while a prompt is open, the write is
-refused. Freshness gestures never ask for or write a Work Log summary.
-
-An exact due keep counts once per review day on its rung (WIP, Next, Ready,
-or P-level); uncounted keeps preserve the streak. A single counted keep
-asks “Why keep it in <rung>? / at <level>?”. The prompt shows the rung
-allowance and the per-rung tallies, previews the exact entry, and shows up
-to three earlier reasons. Enter stamps, increments the streak, and writes
-one dated entry under `🥀 **ROTTEN LOG**` in one undo step. A blank reason
-logs `🤷 no reason given`; Esc writes nothing and retains the walk
-position. A counted keep whose entry cannot be written (duplicate
-`🥀 ROTTEN LOG` markers, unreadable history) writes nothing at all.
+stored `[priority::]` value. While a prompt is open the active note, each
+linked note, and the local day are rechecked, and the write is refused if
+any changed. Freshness gestures never ask for or write a Work Log summary.
 
 NEW, early/FRESH, Today-linked, PROJECTS, recurring, checklist, closed, and
 unblock-tickler rows stamp without counting and write no Rotten Log entry.
@@ -433,10 +414,9 @@ before any keep-reason prompt. The card follows the task's current rung:
 Enter steps WIP → Next → Ready → the configured priority ladder, with the
 bottom level rolling in place; Alt+F opens the in-card Stay reason stage.
 Ready also offers Less often and explicit level picks; every rung offers
-Reword and Drop. Step, Stay, and Drop write a dated rung-qualified Rotten Log
-event with the task change in one undo step. Stay stamps and clears the keep
-count; blank reason text logs `🤷 no reason given`. Lane steps write no Work
-Log. The card header shows per-rung tallies (`🥀 WIP 2 · Next 1 · last
+Reword and Drop. Step, Stay, and Drop write a dated rung-qualified Rotten Log event with
+the task change in one undo step; Stay also stamps and clears the keep
+count. Lane steps write no Work Log. The card header shows per-rung tallies (`🥀 WIP 2 · Next 1 · last
 <date> — <reason>`) when the task has logged keeps. Esc returns from the Stay
 stage to the choices; a second Esc writes nothing. If the card is
 unavailable, the single keep uses the reason prompt and combined log write.
@@ -444,8 +424,7 @@ Counted `N<Alt+F>` and Task Link sessions show one Keep reason prompt when
 counted keeps are present; one Enter submits it, writing one rung-qualified
 entry per counted target. Ready at-limit targets still skip unstamped and
 unlogged with `N needs a decision`; duplicate Task Links to the same source
-are handled once. If any prompt is open,
-the active note, each linked note, and the local day are rechecked before writing.
+are handled once.
 
 On the exact PRE/POST row the walk just landed on, `Ctrl+Enter` completes
 through the cycler and advances within the group. `Alt+F` completes a
@@ -459,10 +438,8 @@ pauses at a stage boundary. A resolving commit on a landed review row
 advances once to the next item. `Alt+N` also answers any due walk row
 matching the pre-write note and line, advances once to its successor, and
 keeps PRE/POST and RECURRING in place; other answers remain landing-gated.
-Every `]s` landing on an
-eligible row ends its toast with the `Alt+P` roll preview (for example
-`Alt+P roll P2 1/1 · 8–30d`), naming the level, step or decay, and window
-the key would use. An unprioritized row previews `Alt+P set P1 · 2–7d`. `↑`/`↓` and `Ctrl+N`/`Ctrl+P` move the successor picker's highlight without marking. In the successor picker,
+An unprioritized row previews `Alt+P set P1 · 2–7d`. `↑`/`↓` and
+`Ctrl+N`/`Ctrl+P` move the successor picker's highlight without marking. In the successor picker,
 `Ctrl+Shift+Enter` retargets through the Block ID Prompt picker (one picker
 per target, in displayed order; a cancelled, missing, or changed source
 leaves overrides, marks, and selection unchanged). Enter merges the task type;
@@ -472,11 +449,9 @@ same key clears, `Tab` on a verdict makes it Pull in, `Ctrl+A` skips verdicts,
 `Enter` applies both with no highlight fallback, and two-step `Esc` discards.
 The merge card stays pull-in-only.
 
-`Alt+N`, the Task Card property rows, and `Ctrl+Shift+M` moves stamp every
-rewritten open task through the ledger-tools stamper. The Task Card's Review
-every action sets or clears `[refresh:: N]` through the same namespace,
-reading lane intervals with the task's own refresh kept as the once-Ready
-return value.
+The Task Card's Review every action sets or clears `[refresh:: N]` through the
+ledger-tools stamper, reading lane intervals with the task's own refresh kept
+as the once-Ready return value.
 
 ## Lane walk
 
@@ -494,9 +469,8 @@ entry, else from today's anchor when the anchored task is still listed in
 the same lane, else by inserting the anchor's `(lane, path, line)` tuple
 into the current sort order and continuing from there. When the cursor or
 a live anchor resolves to a task whose current lane differs from the
-anchor's lane (for example after `Alt+N` released a landed NEXT task to
-Ready), the origin stays the anchor tuple in the **anchor's** lane, so the
-walk does not teleport into the new lane. With no origin, `]w` lands on
+anchor's lane, the origin stays the anchor tuple in the **anchor's** lane,
+so the walk does not teleport into the new lane. With no origin, `]w` lands on
 the first entry and `[w` on the last. Steps wrap at the ends and the toast
 names the wrap. `N]w` / `N[w` take N steps in one landing.
 
@@ -510,8 +484,8 @@ marks the wrap.
 Each landing shows a lane-colored toast with the lane pill and `laneRank of
 laneTotal`, the whole-walk `rank/total` receipt, a walk rail (dots up to 30
 entries, a split bar beyond that highlights the current lane), the task
-title, the note name, the latest Work Log entry with its stamp time (`🛠️ Nov 1 14:32 — summary`, or `🛠️ Oct 28 — summary` for older dated entries, or the created date when there is no Work Log), and
-a lane-aware hint: PENDING / NEXT keep `Ctrl+Shift+Enter today · Alt+N
+title, the note name, the latest Work Log entry with its stamp time (or the
+created date when there is no Work Log), and a lane-aware hint: PENDING / NEXT keep `Ctrl+Shift+Enter today · Alt+N
 release`; READY uses `Ctrl+Shift+Enter today · Alt+N next`. The READY
 toast uses the READY chip's blue and an empty `[ ]` checkbox glyph. When
 Ready tasks are waiting in NEW or ROTTEN the empty card reads `Ready tasks
@@ -520,9 +494,6 @@ Pending, Next, and Ready task is on today's plan it reads `Lanes clear`
 with a `TODAY m` chip; with none of those tasks at all it reads `No
 Pending, Next, or Ready tasks`. The walk never writes and never sets or
 advances the `]s` review walk.
-
-`]]` / `[[` also repeat the `]w` / `[w` walk after any lane-walk key or
-command, forward / backward.
 
 ## Bracket repeat
 
@@ -561,10 +532,9 @@ Templater template to a period note. Without that namespace it shows
 `No <name> note yet — bob periods ensure creates period notes` and creates
 nothing.
 
-The selected type is stored in device-local Obsidian local storage. It is per
-device and per vault, and survives plugin reloads and Obsidian restarts. With
-no saved or used type, either repeat key shows
-`Nothing to repeat yet — press ]s, ]w, or ]n first`. A repeat adds no landing
+The selected type is stored per device and per vault in Obsidian local
+storage, surviving reloads and restarts. With no saved or used type, either
+repeat key shows `Nothing to repeat yet — press ]s, ]w, or ]n first`. A repeat adds no landing
 toast; the walk's own toast identifies the action.
 
 Only the family command callbacks and a click on a footer letter record a
@@ -579,8 +549,8 @@ freshness stamps.
 The desktop status bar always shows `[[ s w n ]]` with the active walk lit, so
 `]]` / `[[` never surprise. With no saved or used type there is no thumb, and
 the tooltip carries the empty-notice text. The thumb slides between letters;
-its first appearance fades in place. `]]` briefly lights the `]]` glyph and
-`[[` lights the `[[` glyph, while a cold press lights the three letters.
+`]]` / `[[` briefly light their glyphs on use, while a cold press lights the
+three letters.
 Clicking a letter selects that family and persists it per device. The click
 never runs a walk, shows no notice, writes nothing, and keeps editor focus, so
 the very next `]]` repeats the chosen family. Desktop only; mobile shows no
@@ -605,9 +575,8 @@ Escape or changing the query or selection disarms the confirm.
 Committing a merge label previews through `bob task merge --dry-run` (the
 Bob Ledger Tools `api.taskMerge` namespace, desktop only) and fills the
 consequence strip from the preview: `⤵ Merges “S” into “T” · copies N notes ·
-cancels “S” · …`. The strip shows `⤵ previewing…` while the `bob` subprocess
-runs. When the preview reports offers, the existing successor offer picker
-opens; the commit then runs `bob task merge` with the picks and shows an
+cancels “S” · …`. When the preview reports offers, the existing successor
+offer picker opens; the commit then runs `bob task merge` with the picks and shows an
 **Undo merge** notice that restores the applied notes only while they still
 match the post-merge text. Merging two or more sources waits for a second
 Return behind the same batch banner. An already-closed source takes the plain
@@ -631,15 +600,9 @@ behavior.
 The plugin opens and manages related notes and tabs, including pinned-tab
 preserving sibling closes, and registers the read-only `obsidian://bob-goto-task`
 and `obsidian://bob-open-notes` protocol handlers so external picks land the
-caret without writing the vault. `Cmd+Enter` on a reading task, Task Link, or
-managed embed opens its PDF in Highlights without vault writes; other targets
-keep Obsidian's new-tab behavior. In Vim normal mode, `Z` opens the image on
-the cursor line in a viewer, importing a bullet holding only an image path
-through bob first; only `r` writes, replacing just the picked link. Bare and counted `!` only toggle
-transclusion markers and are refused on dependency lines with a notice pointing
-to `Ctrl+Shift+P`. Managed reference notes under `ref/` with a nonempty
-`source_pdf` must be renamed with `bob ref rename`; ordinary file rename does
-not move their PDF, reading task, and links together.
+caret without writing the vault. In Vim normal mode, `Z` opens the image on
+the cursor line in a viewer (see [image-zoom](image-zoom.md)); only `r`
+writes, replacing just the picked link.
 
 Three keyboard layers are in play, and they are not the same thing:
 
@@ -651,8 +614,7 @@ Three keyboard layers are in play, and they are not the same thing:
 - **Custom vault bindings** live in the vault's `.obsidian/hotkeys.json` or
   `obsidian_vimrc.md`, not in this plugin. In particular, the vimrc maps `Z`
   to `bob-navigation-hotkeys:zoom-image-on-line`, and the vault binds
-  `bob-navigation-hotkeys:open-reference-pdf-in-highlights` to `Meta+Enter`;
-  that binding is custom vault configuration, not a registered plugin default.
+  `bob-navigation-hotkeys:open-reference-pdf-in-highlights` to `Meta+Enter`.
   The vimrc maps `[n` / `]n` to `open-prev-link` / `open-next-link` and `[[` /
   `]]` to the two repeat commands; these are vault configuration, not registered
   defaults.

@@ -39,6 +39,22 @@ function seedNote() {
     "",
     "Plain prose for the file-only Copy card state.",
     "",
+    "- [ ] 2026-11-01 grocery store",
+    "",
+    "- [ ] #task Fence parent ^fence-parent",
+    "  ```",
+    "  - [ ] #task Fence example ^fence-example",
+    "  ```",
+    "  - code:",
+    "    ~~~~",
+    "    - [ ] #task Four-space example ^four-space",
+    "    ~~~~",
+    "",
+    "- [ ] #task Tilde parent ^tilde-parent",
+    "  ~~~",
+    "  - [ ] #task Tilde example ^tilde-example",
+    "  ~~~",
+    "",
   ].join("\n");
 }
 
@@ -58,7 +74,7 @@ function fullConfigYaml() {
     "  templates:",
     "    - label: Task ref",
     "      key: t",
-    '      template: "the ^{block_id} task in the {path}"',
+    '      template: "the ^{block_id} task in the {path} file"',
     "    - label: Note link",
     '      template: "[[{note_name}]]"',
     "    - label: Broken task ref",
@@ -86,7 +102,7 @@ function expectedValues(vaultDir, homeDir) {
     fileName: NOTE,
     noteName: path.basename(NOTE, path.extname(NOTE)),
     blockId: "^" + TASKS.id.blockId,
-    taskRef: "the ^" + TASKS.id.blockId + " task in the " + compact,
+    taskRef: "the ^" + TASKS.id.blockId + " task in the " + compact + " file",
     noteLink: "[[" + path.basename(NOTE, path.extname(NOTE)) + "]]",
     closedBlockId: "^" + TASKS.closed.blockId,
   });
@@ -147,8 +163,25 @@ function assertProbe(probe, expected) {
   return { ok: failures.length === 0, failures, rows };
 }
 
+function overflowConfigYaml() {
+  const lines = ["copy:", "  templates:"];
+  for (let index = 1; index <= 12; index += 1) {
+    lines.push("    - label: Overflow " + index);
+    lines.push('      template: "{note_name}-' + index + '"');
+  }
+  return lines.join("\n") + "\n";
+}
+
 function expectedScreenshotNames() {
-  const states = ["prose", "identified-task", "no-id", "broken-collision", "narrow-460"];
+  const states = [
+    "prose",
+    "identified-task",
+    "no-id",
+    "broken-collision",
+    "narrow-460",
+    "long-list",
+    "visible-refusal",
+  ];
   return states.flatMap((state) => [
     "copy-card-" + state + "-light.png",
     "copy-card-" + state + "-dark.png",
@@ -171,5 +204,6 @@ module.exports = {
   expectedValues,
   fullConfigYaml,
   notePath,
+  overflowConfigYaml,
   seedNote,
 };

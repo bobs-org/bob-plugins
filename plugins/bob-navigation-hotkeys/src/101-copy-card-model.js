@@ -277,6 +277,79 @@ function copyCardSelectionIsEmpty(anchor, head) {
   return anchor.line === head.line && anchor.ch === head.ch;
 }
 
+const COPY_CARD_NESTED_FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+const COPY_CARD_NESTED_FENCE_CLOSE_RE = /^(\s*)(`{3,}|~{3,})\s*$/;
+
+function copyCardNestedFenceOpening(line) {
+  const match = String(line).match(COPY_CARD_NESTED_FENCE_OPEN_RE);
+  if (!match) {
+    return null;
+  }
+  const marker = match[2];
+  const info = match[3] || "";
+  if (marker.charAt(0) === "`" && info.includes("`")) {
+    return null;
+  }
+  return {
+    indent: match[1].length,
+    markerChar: marker.charAt(0),
+    markerLength: marker.length,
+  };
+}
+
+function copyCardNestedFenceCloses(line, opening) {
+  const match = String(line).match(COPY_CARD_NESTED_FENCE_CLOSE_RE);
+  if (!match || !opening) {
+    return false;
+  }
+  if (match[2].charAt(0) !== opening.markerChar) {
+    return false;
+  }
+  if (match[2].length < opening.markerLength) {
+    return false;
+  }
+  return match[1].length <= opening.indent + 3;
+}
+
+function copyCardLineIsInFence(lines, lineIndex) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  if (
+    !Number.isInteger(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= sourceLines.length
+  ) {
+    return false;
+  }
+  const contexts = getMarkdownLineContextsForLines(sourceLines);
+  if (contexts[lineIndex] && contexts[lineIndex].inFence) {
+    return true;
+  }
+  let inFence = null;
+  for (let index = 0; index <= lineIndex; index += 1) {
+    const line = String(sourceLines[index] || "");
+    if (inFence) {
+      const atTarget = index === lineIndex;
+      if (copyCardNestedFenceCloses(line, inFence)) {
+        inFence = null;
+      }
+      if (atTarget) {
+        return true;
+      }
+      continue;
+    }
+    const opening = copyCardNestedFenceOpening(line);
+    if (opening) {
+      inFence = opening;
+      if (index === lineIndex) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function resolveCopyCardTask(lines, selections) {
   const sourceLines = Array.isArray(lines)
     ? lines
@@ -289,6 +362,15 @@ function resolveCopyCardTask(lines, selections) {
   const head = copyCardSelectionPoint(selection.head || selection);
   const anchor = copyCardSelectionPoint(selection.anchor || selection.head || selection);
   if (!head || !anchor) {
+    return COPY_CARD_NONE_TASK;
+  }
+  if (copyCardLineIsInFence(sourceLines, head.line)) {
+    return COPY_CARD_NONE_TASK;
+  }
+  if (
+    !copyCardSelectionIsEmpty(anchor, head) &&
+    copyCardLineIsInFence(sourceLines, anchor.line)
+  ) {
     return COPY_CARD_NONE_TASK;
   }
   const headOwner = findOwningTaskLine(sourceLines, head.line);
@@ -324,68 +406,47 @@ function copyCardPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function copyCardNormalizeKey(raw, index) {
-  if (raw === null || raw === undefined) {
-    const position = index + 1;
-    if (position > 9) {
-      return Object.freeze({
-        key: null,
-        reason: "add key: to bind",
-        invalid: false,
-      });
-    }
+function copyCardInvalidKey() {
+  return Object.freeze({
+    key: null,
+    reason: "key must be one letter or digit",
+    invalid: true,
+  });
+}
+
+function copyCardPositionalKey(index) {
+  const position = index + 1;
+  if (position > 9) {
     return Object.freeze({
-      key: String(position),
-      reason: null,
+      key: null,
+      reason: "add key: to bind",
       invalid: false,
     });
+  }
+  return Object.freeze({
+    key: String(position),
+    reason: null,
+    invalid: false,
+  });
+}
+
+function copyCardNormalizeKey(raw, index, supplied) {
+  if (supplied !== true) {
+    return copyCardPositionalKey(index);
   }
   let text = "";
   if (typeof raw === "number") {
     if (!Number.isInteger(raw) || raw < 0) {
-      return Object.freeze({
-        key: null,
-        reason: "key must be one letter or digit",
-        invalid: true,
-      });
+      return copyCardInvalidKey();
     }
     text = String(raw);
   } else if (typeof raw === "string") {
-    text = raw.trim().toLowerCase();
-  } else if (typeof raw === "boolean") {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
+    text = raw.toLowerCase();
   } else {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
-  }
-  if (!text) {
-    const position = index + 1;
-    if (position > 9) {
-      return Object.freeze({
-        key: null,
-        reason: "add key: to bind",
-        invalid: false,
-      });
-    }
-    return Object.freeze({
-      key: String(position),
-      reason: null,
-      invalid: false,
-    });
+    return copyCardInvalidKey();
   }
   if (!/^[a-z0-9]$/.test(text)) {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
+    return copyCardInvalidKey();
   }
   return Object.freeze({ key: text, reason: null, invalid: false });
 }
@@ -435,7 +496,8 @@ function normalizeCopyCardTemplates(list) {
     const label = labelText || fallbackLabel;
     const labelReason = labelText ? null : "add a label";
     const parsed = parseCopyTemplate(entry.template);
-    const keyInfo = copyCardNormalizeKey(entry.key, index);
+    const keySupplied = Object.prototype.hasOwnProperty.call(entry, "key");
+    const keyInfo = copyCardNormalizeKey(entry.key, index, keySupplied);
     if (!parsed.ok) {
       templates.push(
         freezeCopyCardValue({

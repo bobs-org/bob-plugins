@@ -108,9 +108,6 @@ function loadCopyCardTemplates(options = {}) {
     return remember({ templates: [] });
   }
   const copy = parsed.copy;
-  if (copy === null || copy === undefined) {
-    return remember({ templates: [] });
-  }
   if (!copyCardPlainObject(copy)) {
     return remember({
       templates: [],

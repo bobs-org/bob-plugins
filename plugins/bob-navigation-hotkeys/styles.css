@@ -2130,6 +2130,12 @@
   max-width: min(600px, 92vw);
   height: auto;
   max-height: min(75vh, 840px);
+  overflow: hidden;
+}
+
+.modal.bob-copy-card-modal .modal-content {
+  overflow: hidden;
+  max-height: min(75vh, 840px);
 }
 
 .bob-copy-card {
@@ -2138,9 +2144,10 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  min-height: 0;
   max-height: min(75vh, 840px);
   padding: 12px 16px 8px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .bob-copy-card-header {
@@ -2148,6 +2155,7 @@
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 8px;
+  flex: 0 0 auto;
 }
 
 .bob-copy-card-icon {
@@ -2182,6 +2190,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .bob-copy-card-row {
@@ -2268,6 +2279,7 @@
   color: var(--text-faint);
   font-style: italic;
   font-family: var(--font-interface);
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -2331,8 +2343,13 @@
   align-items: center;
   gap: 12px;
   margin-top: 8px;
+  flex: 0 0 auto;
   color: var(--text-faint, var(--text-muted));
   font-size: 0.85em;
+}
+
+.bob-copy-card-status {
+  flex: 0 0 auto;
 }
 
 .bob-copy-card-status:empty {

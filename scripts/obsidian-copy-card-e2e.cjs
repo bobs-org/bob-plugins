@@ -112,6 +112,8 @@ function makeFixture(runRoot) {
   fs.mkdirSync(profileDir, { recursive: true });
   const noteFile = path.join(vaultDir, fixture.notePath());
   fs.writeFileSync(noteFile, fixture.seedNote());
+  const otherFile = path.join(vaultDir, "Other note.md");
+  fs.writeFileSync(otherFile, "# Other note\n\nSwitched-to file for the frozen Copy card.\n");
   const noteBytes = fs.readFileSync(noteFile);
   const configPath = writeConfig(configHome, fixture.baseConfigYaml());
   copyPlugin(path.join(repoRoot, "plugins", "bob-navigation-hotkeys"), pluginDir);
@@ -298,9 +300,11 @@ async function waitFor(client, expression, predicate, label, timeoutMs) {
   throw new Error("timed out waiting for " + label + ": " + JSON.stringify(last));
 }
 
-async function openNote(client, notePath) {
+async function openNote(client, notePath, options) {
   const note = JSON.stringify(notePath);
-  const expression = "(() => (async()=>{ const file=window.app.vault.getAbstractFileByPath(" + note + "); if(!file)return {ok:false,error:'missing note'}; const leaf=window.app.workspace.getLeaf(false); await leaf.openFile(file,{state:{mode:'source',source:true}}); const view=leaf.view; if(view&&view.setState){ const state=view.getState?view.getState():{}; await view.setState(Object.assign({},state,{mode:'source',source:true}),{history:false}); } await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); return {ok:true,mode:view&&view.getMode?view.getMode():null}; })())()";
+  const livePreview = options && options.livePreview === true;
+  const sourceFlag = livePreview ? "false" : "true";
+  const expression = "(() => (async()=>{ const file=window.app.vault.getAbstractFileByPath(" + note + "); if(!file)return {ok:false,error:'missing note'}; const leaf=window.app.workspace.getLeaf(false); await leaf.openFile(file,{state:{mode:'source',source:" + sourceFlag + "}}); const view=leaf.view; if(view&&view.setState){ const state=view.getState?view.getState():{}; await view.setState(Object.assign({},state,{mode:'source',source:" + sourceFlag + "}),{history:false}); } await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); return {ok:true,mode:view&&view.getMode?view.getMode():null,livePreview:" + (livePreview ? "true" : "false") + ",state:view&&view.getState?view.getState():null}; })())()";
   return client.evaluate(expression, 15_000);
 }
 
@@ -392,7 +396,12 @@ async function setTheme(client, theme) {
   await sleep(180);
 }
 
+async function dismissNotices(client) {
+  await client.evaluate("(() => { const doc=" + appDocProbe() + "; Array.from(doc.querySelectorAll('.notice')).forEach((el) => el.remove()); return true; })()").catch(() => true);
+}
+
 async function capturePair(client, outDir, slug, report) {
+  await dismissNotices(client);
   for (const theme of ["light", "dark"]) {
     await setTheme(client, theme);
     const output = path.join(outDir, "copy-card-" + slug + "-" + theme + ".png");
@@ -424,15 +433,21 @@ function runSelfTest() {
   assert.ok(text.includes("- [x] #task " + fixture.TASKS.closed.title));
   assert.ok(text.includes("[[Copy card e2e#^" + fixture.TASKS.id.blockId));
   assert.ok(text.includes("Plain prose"));
+  assert.ok(text.includes("Fence example"));
+  assert.ok(text.includes("Four-space example"));
+  assert.ok(text.includes("Tilde example"));
+  assert.ok(text.includes("- [ ] 2026-11-01 grocery store"));
   const base = fixture.baseConfigYaml();
   const full = fixture.fullConfigYaml();
+  const overflow = fixture.overflowConfigYaml();
   assert.match(base, /template: "\[\[\{note_name\}\]\]"/);
-  assert.match(full, /the \^\{block_id\} task in the \{path\}/);
+  assert.match(full, /the \^\{block_id\} task in the \{path\} file/);
   assert.match(full, /template: \{ path: value \}/);
   assert.match(full, /key: p/);
+  assert.match(overflow, /Overflow 12/);
   const values = fixture.expectedValues("/tmp/home/bob", "/tmp/home");
   assert.equal(values.path, "~/bob/Copy card e2e.md");
-  assert.equal(values.taskRef, "the ^bank-records task in the ~/bob/Copy card e2e.md");
+  assert.equal(values.taskRef, "the ^bank-records task in the ~/bob/Copy card e2e.md file");
   assert.equal(values.absolute, "/tmp/home/bob/Copy card e2e.md");
   const probe = {
     open: true,
@@ -603,15 +618,28 @@ async function runE2e(args) {
     await client.call("Emulation.clearDeviceMetricsOverride").catch(() => ({}));
     await closeCard(client);
 
-    const initialClip = await writeClipboard(client, "copy-card-sentinel");
-    record("clipboard-seed", initialClip && initialClip.ok === true, JSON.stringify(initialClip));
+    async function seedClipboard(name) {
+      const sentinel = "copy-card-sentinel-" + name + "-" + Date.now() + "-" + Math.random().toString(16).slice(2, 8);
+      const result = await writeClipboard(client, sentinel);
+      return { sentinel, ok: Boolean(result && result.ok) };
+    }
+
+    const initialClip = await seedClipboard("start");
+    record("clipboard-seed", initialClip.ok === true, initialClip.sentinel);
 
     async function copyByKey(name, needle, key, value, options) {
+      const seeded = await seedClipboard(name);
       await openCardAt(client, needle, true);
       await dispatchKey(client, { key, ctrl: options && options.ctrl === true });
       const closed = await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "card close after " + key);
       const copied = await readClipboard(client);
-      const ok = Boolean(closed && copied && copied.ok && copied.value === value);
+      const ok = Boolean(
+        closed &&
+        copied &&
+        copied.ok &&
+        copied.value === value &&
+        copied.value !== seeded.sentinel,
+      );
       record(name, ok, copied && copied.ok ? copied.value : copied && copied.error || "clipboard unavailable");
       record(name + "-notice", Boolean(closed && /^Copied /.test(closed.notice || "")), closed && closed.notice || "");
     }
@@ -626,37 +654,41 @@ async function runE2e(args) {
     await copyByKey("collision-row-does-not-steal-P", fixture.TASKS.id.title, "p", expected.path);
     await copyByKey("closed-task-block-id-I", fixture.TASKS.closed.title, "i", expected.closedBlockId);
 
+    const enterSeed = await seedClipboard("enter");
     await openCardAt(client, fixture.TASKS.id.title, true);
     await dispatchKey(client, { key: "Enter" });
     await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "Enter copy");
     const enterClip = await readClipboard(client);
-    record("copy-enter-default-path", Boolean(enterClip && enterClip.ok && enterClip.value === expected.path), enterClip && enterClip.value || "");
+    record("copy-enter-default-path", Boolean(enterClip && enterClip.ok && enterClip.value === expected.path && enterClip.value !== enterSeed.sentinel), enterClip && enterClip.value || "");
 
+    const downSeed = await seedClipboard("arrow-down-enter");
     await openCardAt(client, fixture.TASKS.id.title, true);
     await dispatchKey(client, { key: "ArrowDown" });
     await dispatchKey(client, { key: "Enter" });
     await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "ArrowDown Enter copy");
     const downClip = await readClipboard(client);
-    record("copy-arrow-down-enter", Boolean(downClip && downClip.ok && downClip.value === expected.absolute), downClip && downClip.value || "");
+    record("copy-arrow-down-enter", Boolean(downClip && downClip.ok && downClip.value === expected.absolute && downClip.value !== downSeed.sentinel), downClip && downClip.value || "");
 
+    const ctrlNSeed = await seedClipboard("ctrl-n-enter");
     await openCardAt(client, fixture.TASKS.id.title, true);
     await dispatchKey(client, { key: "n", ctrl: true });
     await dispatchKey(client, { key: "Enter" });
     await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "Ctrl+N Enter copy");
     const ctrlNClip = await readClipboard(client);
-    record("copy-ctrl-n-enter", Boolean(ctrlNClip && ctrlNClip.ok && ctrlNClip.value === expected.absolute), ctrlNClip && ctrlNClip.value || "");
+    record("copy-ctrl-n-enter", Boolean(ctrlNClip && ctrlNClip.ok && ctrlNClip.value === expected.absolute && ctrlNClip.value !== ctrlNSeed.sentinel), ctrlNClip && ctrlNClip.value || "");
 
-    await writeClipboard(client, "copy-card-escape-sentinel");
+    const escapeSeed = await seedClipboard("escape");
     await openCardAt(client, fixture.TASKS.id.title, true);
     await closeCard(client);
     const escapeClip = await readClipboard(client);
-    record("escape-closes-without-copy", Boolean(escapeClip && escapeClip.ok && escapeClip.value === "copy-card-escape-sentinel"), escapeClip && escapeClip.value || "");
+    record("escape-closes-without-copy", Boolean(escapeClip && escapeClip.ok && escapeClip.value === escapeSeed.sentinel), escapeClip && escapeClip.value || "");
 
+    const twiceSeed = await seedClipboard("mod-y-twice");
     await openCardAt(client, fixture.TASKS.id.title, true);
     await dispatchKey(client, { key: "y", ctrl: true });
     const twiceClosed = await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "Cmd+Y Cmd+Y copy");
     const twiceClip = await readClipboard(client);
-    record("fresh-mod-y-copies-highlight", Boolean(twiceClosed && twiceClip && twiceClip.ok && twiceClip.value === expected.path), twiceClip && twiceClip.value || "");
+    record("fresh-mod-y-copies-highlight", Boolean(twiceClosed && twiceClip && twiceClip.ok && twiceClip.value === expected.path && twiceClip.value !== twiceSeed.sentinel), twiceClip && twiceClip.value || "");
 
     await writeClipboard(client, "copy-card-repeat-sentinel");
     await dispatchHeldModYThenRepeat(client);
@@ -681,6 +713,53 @@ async function runE2e(args) {
     card = await client.evaluate(cardProbeExpression());
     const hiddenClip = await readClipboard(client);
     record("hidden-reserved-I-is-consumed", Boolean(card && card.open && !card.taskDivider && hiddenClip && hiddenClip.ok && hiddenClip.value === "copy-card-hidden-I-sentinel"), hiddenClip && hiddenClip.value || "");
+    await closeCard(client);
+
+    async function assertFenceHasNoTask(name, needle) {
+      card = await openCardAt(client, needle, true);
+      record(name, Boolean(card && card.open && !card.taskDivider && card.taskState === "none"), JSON.stringify(card && { divider: card.taskDivider, state: card.taskState, title: card.taskTitle }));
+      await closeCard(client);
+    }
+    await assertFenceHasNoTask("source-nested-backtick-fence-is-file-only", "Fence example");
+    await assertFenceHasNoTask("source-four-space-fence-is-file-only", "Four-space example");
+    await assertFenceHasNoTask("source-nested-tilde-fence-is-file-only", "Tilde example");
+    await assertFenceHasNoTask("bank-checkbox-without-task-is-file-only", "2026-11-01 grocery store");
+
+    const liveOpened = await openNote(client, fixture.notePath(), { livePreview: true });
+    record("live-preview-open", Boolean(liveOpened && liveOpened.ok && liveOpened.mode === "source"), JSON.stringify(liveOpened));
+    await assertFenceHasNoTask("live-preview-nested-fence-is-file-only", "Fence example");
+    await openNote(client, fixture.notePath());
+
+    card = await openCardAt(client, fixture.TASKS.id.title, true);
+    const frozenPath = (card.rows || []).find((row) => row.id === "path");
+    const switched = await openNote(client, "Other note.md");
+    const stillOpen = await client.evaluate(cardProbeExpression());
+    record("file-switch-while-open-keeps-snapshot", Boolean(
+      switched &&
+      switched.ok &&
+      stillOpen &&
+      stillOpen.open &&
+      frozenPath &&
+      (stillOpen.rows || []).some((row) => row.id === "path" && row.value === frozenPath.value),
+    ), JSON.stringify({ switched, path: stillOpen && (stillOpen.rows || []).find((row) => row.id === "path") }));
+    if (stillOpen && stillOpen.open) await closeCard(client);
+    await openNote(client, fixture.notePath());
+
+    fs.writeFileSync(scratch.configPath, fixture.overflowConfigYaml());
+    await sleep(30);
+    card = await openCardAt(client, "Plain prose for the file-only", true);
+    record("long-list-open", Boolean(card && card.open && (card.rows || []).some((row) => row.label === "Overflow 12")), JSON.stringify(card && { count: (card.rows || []).length }));
+    await capturePair(client, outDir, "long-list", report);
+    await dispatchKey(client, { key: "ArrowUp" });
+    card = await client.evaluate(cardProbeExpression());
+    record("long-list-wraps-to-last-copyable", Boolean(card && card.open && (card.rows || []).some((row) => row.selected && /Overflow 12/.test(row.label || ""))), JSON.stringify(card && { selected: (card.rows || []).find((row) => row.selected) }));
+    await closeCard(client);
+
+    card = await openCardAt(client, fixture.TASKS.noId.title, true);
+    await dispatchKey(client, { key: "i" });
+    card = await waitFor(client, cardProbeExpression(), (state) => state && state.open && /Ctrl\+6/.test(state.live), "overflow refused Block ID");
+    record("visible-refusal-on-overflow", Boolean(card && card.live.includes("Ctrl+6") && (card.rows || []).some((row) => row.id === "block-id" && row.selected)), JSON.stringify({ live: card && card.live }));
+    await capturePair(client, outDir, "visible-refusal", report);
     await closeCard(client);
 
     const afterBytes = fs.readFileSync(scratch.noteFile);

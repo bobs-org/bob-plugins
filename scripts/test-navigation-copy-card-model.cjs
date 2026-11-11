@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 
 const { helpers } = require("./navigation-hotkeys-harness.cjs");
 
@@ -91,6 +92,28 @@ function makeFs(contents, extras = {}) {
       return body;
     },
   };
+}
+
+function parseRealYaml(text) {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      "import json, sys\ntext = sys.stdin.read()\ntry:\n    import yaml\n    json.dump(yaml.safe_load(text), sys.stdout)\nexcept Exception:\n    sys.exit(2)\n",
+    ],
+    { input: String(text), encoding: "utf8" },
+  );
+  if (result.status === 0 && result.stdout) {
+    return JSON.parse(result.stdout);
+  }
+  const trimmed = String(text).replace(/\r\n/g, "\n").trimEnd();
+  if (trimmed === "copy: null" || trimmed === "copy: ~" || trimmed === "copy:") {
+    return { copy: null };
+  }
+  if (trimmed === "copy: {}") {
+    return { copy: {} };
+  }
+  throw new Error(result.stderr || "yaml parse failed");
 }
 
 function loadTemplates(parsed, extras = {}) {
@@ -189,6 +212,61 @@ test("task rule: cursor inside a code fence is none", () => {
   const outside = resolveCopyCardTask(lines, cursor(3));
   assert.equal(outside.state, "ready");
   assert.equal(outside.blockId, "outside");
+});
+
+test("task rule: list-nested backtick fence is none, not the parent", () => {
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  ```",
+    "  - [ ] #task Example ^example",
+    "  ```",
+  ];
+  assert.equal(resolveCopyCardTask(lines, cursor(1)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(2)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(3)).state, "none");
+  const parent = resolveCopyCardTask(lines, cursor(0));
+  assert.equal(parent.state, "ready");
+  assert.equal(parent.blockId, "parent");
+});
+
+test("task rule: four-space fence under a child bullet is none", () => {
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  - code:",
+    "    ```",
+    "    - [ ] #task Example ^example",
+    "    ```",
+  ];
+  assert.equal(resolveCopyCardTask(lines, cursor(2)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(3)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(4)).state, "none");
+  const parent = resolveCopyCardTask(lines, cursor(0));
+  assert.equal(parent.state, "ready");
+  assert.equal(parent.blockId, "parent");
+  const child = resolveCopyCardTask(lines, cursor(1));
+  assert.equal(child.state, "ready");
+  assert.equal(child.blockId, "parent");
+});
+
+test("task rule: list-nested tilde fence is none", () => {
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  ~~~",
+    "  - [ ] #task Example ^example",
+    "  ~~~",
+  ];
+  assert.equal(resolveCopyCardTask(lines, cursor(1)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(2)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(3)).state, "none");
+});
+
+test("task rule: a bank checkbox without #task is none", () => {
+  const lines = [
+    "- [ ] 2026-11-01 grocery store",
+    "- [ ] #task Real task ^real",
+  ];
+  assert.equal(resolveCopyCardTask(lines, cursor(0)).state, "none");
+  assert.equal(resolveCopyCardTask(lines, cursor(1)).blockId, "real");
 });
 
 test("task rule: Pomodoro Task Link line is none", () => {
@@ -761,26 +839,99 @@ test("keys: busy consumes every key", () => {
 
 test("keys: Mod+Y copies the highlighted row (cmd_y_twice)", () => {
   const model = bryanModel();
-  const ui = { highlightId: "note", busy: false };
+  const linux = { highlightId: "note", busy: false, platform: "linux" };
+  const mac = { highlightId: "note", busy: false, platform: "darwin" };
   assert.deepEqual(
-    resolveCopyCardKey(model, keyEvent("y", { metaKey: true }), ui),
+    resolveCopyCardKey(model, keyEvent("Y", { ctrlKey: true }), linux),
     { type: "copy", rowId: "note" },
   );
+  assert.equal(
+    resolveCopyCardKey(model, keyEvent("y", { metaKey: true }), linux),
+    null,
+  );
+  assert.equal(
+    resolveCopyCardKey(
+      model,
+      keyEvent("y", { ctrlKey: true, metaKey: true }),
+      linux,
+    ),
+    null,
+  );
   assert.deepEqual(
-    resolveCopyCardKey(model, keyEvent("Y", { ctrlKey: true }), ui),
+    resolveCopyCardKey(model, keyEvent("y", { metaKey: true }), mac),
     { type: "copy", rowId: "note" },
+  );
+  assert.equal(
+    resolveCopyCardKey(model, keyEvent("y", { ctrlKey: true }), mac),
+    null,
   );
   assert.equal(
     resolveCopyCardKey(
       model,
       keyEvent("y", { metaKey: true, repeat: true }),
-      ui,
+      mac,
     ),
     null,
   );
-  assert.deepEqual(resolveCopyCardKey(model, keyEvent("Escape"), ui), {
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("Escape"), linux), {
     type: "close",
   });
+  assert.equal(
+    resolveCopyCardKey(model, keyEvent("Escape", { altKey: true }), linux),
+    null,
+  );
+  assert.equal(
+    resolveCopyCardKey(model, keyEvent("Escape", { shiftKey: true }), linux),
+    null,
+  );
+  assert.equal(
+    resolveCopyCardKey(
+      model,
+      keyEvent("n", { ctrlKey: true, shiftKey: true }),
+      linux,
+    ),
+    null,
+  );
+});
+
+test("keys: explicit blank, whitespace, padded, and null keys are invalid", () => {
+  const loaded = loadTemplates({
+    copy: {
+      templates: [
+        { label: "Empty", key: "", template: "[[{note_name}]]" },
+        { label: "Spaces", key: "  ", template: "[[{note_name}]]" },
+        { label: "Padded", key: " t ", template: "[[{note_name}]]" },
+        { label: "Null", key: null, template: "[[{note_name}]]" },
+        { label: "Omitted", template: "[[{note_name}]]" },
+      ],
+    },
+  });
+  assert.equal(loaded.templates[0].state, "error");
+  assert.equal(loaded.templates[0].reason, "key must be one letter or digit");
+  assert.equal(loaded.templates[1].state, "error");
+  assert.equal(loaded.templates[1].reason, "key must be one letter or digit");
+  assert.equal(loaded.templates[2].state, "error");
+  assert.equal(loaded.templates[2].reason, "key must be one letter or digit");
+  assert.equal(loaded.templates[3].state, "error");
+  assert.equal(loaded.templates[3].reason, "key must be one letter or digit");
+  assert.equal(loaded.templates[4].key, "5");
+  assert.equal(loaded.templates[4].state, "ready");
+});
+
+test("configured Task ref template keeps the file suffix", () => {
+  const model = bryanModel({
+    templates: [
+      {
+        label: "Task ref",
+        key: "t",
+        template: "the ^{block_id} task in the {path} file",
+      },
+    ],
+  });
+  assert.equal(
+    row(model, "template-1").value,
+    "the ^bank-records task in the ~/bob/bob.md file",
+  );
 });
 
 test("keys: YAML number 1 is the digit key", () => {
@@ -838,6 +989,10 @@ test("config: invalid YAML, non-mapping copy, and non-list templates diagnose", 
   assert.equal(notMapping.diagnostic, "copy must be a mapping");
   assert.deepEqual(notMapping.templates, []);
 
+  const copyNull = loadTemplates({ copy: null });
+  assert.equal(copyNull.diagnostic, "copy must be a mapping");
+  assert.deepEqual(copyNull.templates, []);
+
   const notList = loadTemplates({ copy: { templates: { label: "x" } } });
   assert.equal(notList.diagnostic, "copy.templates must be a list");
 
@@ -853,6 +1008,40 @@ test("config: invalid YAML, non-mapping copy, and non-list templates diagnose", 
   assert.equal(diagnosticRow.state, "error");
   assert.equal(diagnosticRow.reason, "copy.templates must be a list");
   assert.equal(row(model, "path").state, "ready");
+});
+
+test("config: YAML copy null, tilde, and blank diagnose mapping", () => {
+  for (const yaml of ["copy: null\n", "copy: ~\n", "copy:\n"]) {
+    resetCopyCardTemplatesCache();
+    const parsed = parseRealYaml(yaml);
+    assert.equal(parsed.copy, null, yaml);
+    const result = loadCopyCardTemplates({
+      configPath: "/yaml-null.yml",
+      fsModule: makeFs(yaml, { mtimeMs: yaml.length, size: yaml.length }),
+      parseYaml: parseRealYaml,
+    });
+    assert.equal(result.diagnostic, "copy must be a mapping");
+    assert.deepEqual(result.templates, []);
+  }
+});
+
+test("config: YAML copy null reloads after the file becomes a mapping", () => {
+  resetCopyCardTemplatesCache();
+  const empty = "copy: null\n";
+  const mapped = "copy: {}\n";
+  const first = loadCopyCardTemplates({
+    configPath: "/yaml-reload.yml",
+    fsModule: makeFs(empty, { mtimeMs: 1, size: empty.length }),
+    parseYaml: parseRealYaml,
+  });
+  assert.equal(first.diagnostic, "copy must be a mapping");
+  const second = loadCopyCardTemplates({
+    configPath: "/yaml-reload.yml",
+    fsModule: makeFs(mapped, { mtimeMs: 2, size: mapped.length }),
+    parseYaml: parseRealYaml,
+  });
+  assert.equal(second.diagnostic, undefined);
+  assert.deepEqual(second.templates, []);
 });
 
 test("config: mapping and number templates, blank label, and non-mapping entry", () => {

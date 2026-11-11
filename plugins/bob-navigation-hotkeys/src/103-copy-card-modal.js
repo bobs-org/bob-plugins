@@ -115,6 +115,7 @@ class CopyCardModal extends Modal {
 
     this.renderRows();
     this.renderFooter();
+    this.revealCopyCardRow(this.highlightId);
 
     const scope = ensureCopyCardScope(this);
     this.scopeHandler = scope.register(null, null, (event) => {
@@ -211,20 +212,17 @@ class CopyCardModal extends Modal {
           cls: "bob-copy-card-path-tail",
           text: String(row.previewParts.tail || ""),
         });
-      } else if (row.state === "collision") {
+      } else if (row.state === "ready" || row.state === "collision") {
         valueEl.createDiv({
           cls: "bob-copy-card-template",
           text: String(row.preview || ""),
         });
-        valueEl.createDiv({
-          cls: "bob-copy-card-reason",
-          text: String(row.reason || ""),
-        });
-      } else if (row.state === "ready") {
-        valueEl.createDiv({
-          cls: "bob-copy-card-template",
-          text: String(row.preview || ""),
-        });
+        if (row.reason) {
+          valueEl.createDiv({
+            cls: "bob-copy-card-reason",
+            text: String(row.reason),
+          });
+        }
       } else {
         valueEl.createDiv({
           cls: "bob-copy-card-reason-text",
@@ -299,11 +297,49 @@ class CopyCardModal extends Modal {
     }
   }
 
+  revealCopyCardRow(rowId) {
+    const rowEl = this.rowEls ? this.rowEls.get(rowId) : null;
+    if (!rowEl) {
+      return;
+    }
+    const container = this.rowsEl;
+    const hasGeometry =
+      container &&
+      typeof container.clientHeight === "number" &&
+      container.clientHeight > 0 &&
+      typeof rowEl.offsetTop === "number";
+    if (hasGeometry) {
+      const rowTop = rowEl.offsetTop;
+      const rowBottom = rowTop + (rowEl.offsetHeight || 0);
+      const viewTop = container.scrollTop || 0;
+      const viewBottom = viewTop + container.clientHeight;
+      if (rowTop < viewTop) {
+        container.scrollTop = rowTop;
+      } else if (rowBottom > viewBottom) {
+        container.scrollTop = Math.max(0, rowBottom - container.clientHeight);
+      }
+      return;
+    }
+    if (typeof rowEl.scrollIntoView !== "function") {
+      return;
+    }
+    try {
+      rowEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (_error) {
+      try {
+        rowEl.scrollIntoView();
+      } catch (_ignored) {
+        // Best effort: FakeNode and some hosts lack geometry.
+      }
+    }
+  }
+
   setHighlight(rowId) {
     this.highlightId = rowId;
     this.failure = null;
     this.renderRows();
     this.renderFooter();
+    this.revealCopyCardRow(rowId);
   }
 
   announce(reason) {
@@ -356,6 +392,7 @@ class CopyCardModal extends Modal {
     const action = resolveCopyCardKey(this.copyCardModel, event, {
       highlightId: this.highlightId,
       busy: this.busy,
+      platform: this.copyCardPlatform,
     });
     if (!action || typeof action !== "object") {
       return false;
@@ -433,6 +470,13 @@ class CopyCardModal extends Modal {
       (result && (result.reason || result.message)) || "copy failed";
     this.failure = `Couldn't copy: ${reason}`;
     this.renderStatus();
+    if (this.statusEl && typeof this.statusEl.scrollIntoView === "function") {
+      try {
+        this.statusEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_error) {
+        // Best effort: keep the failure visible above the overflowing list.
+      }
+    }
   }
 
   onClose() {

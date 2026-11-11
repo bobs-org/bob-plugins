@@ -19,7 +19,25 @@ function copyCardKeyAction(type, extra) {
   return freezeCopyCardValue({ type, ...(extra || {}) });
 }
 
-function isCopyCardModY(event) {
+function copyCardPlatformName(override) {
+  if (override != null && String(override)) {
+    return String(override);
+  }
+  if (typeof process !== "undefined" && process.platform) {
+    return String(process.platform);
+  }
+  if (typeof navigator !== "undefined" && navigator.platform) {
+    return String(navigator.platform);
+  }
+  return "";
+}
+
+function copyCardModUsesMeta(platform) {
+  const name = copyCardPlatformName(platform);
+  return name === "darwin" || /^mac/i.test(name);
+}
+
+function isCopyCardModY(event, platform) {
   const key = String(event && event.key ? event.key : "").toLowerCase();
   if (key !== "y") {
     return false;
@@ -27,7 +45,10 @@ function isCopyCardModY(event) {
   if (event.altKey === true || event.shiftKey === true) {
     return false;
   }
-  return event.metaKey === true || event.ctrlKey === true;
+  if (copyCardModUsesMeta(platform)) {
+    return event.metaKey === true && event.ctrlKey !== true;
+  }
+  return event.ctrlKey === true && event.metaKey !== true;
 }
 
 function isCopyCardCtrlLetter(event, letter) {
@@ -99,10 +120,18 @@ function resolveCopyCardKey(model, event, ui) {
   if (COPY_CARD_MODIFIER_KEYS.has(key)) {
     return null;
   }
+  const modified =
+    event.altKey === true ||
+    event.ctrlKey === true ||
+    event.metaKey === true ||
+    event.shiftKey === true;
   if (key === "Escape") {
+    if (modified) {
+      return null;
+    }
     return copyCardKeyAction("close");
   }
-  if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event)) {
+  if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event, state.platform)) {
     const row =
       copyCardRowById(model, state.highlightId) ||
       copyCardRowById(model, model.defaultRowId);

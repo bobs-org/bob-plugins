@@ -7,7 +7,7 @@ description: "Reference for the Cmd+Y Copy card: keys, task rows, template gramm
 Copy card: a compact, filter-less card where every row copies with one key.
 `P` stays the `↵` default. The cursor's task contributes an `I` Block ID
 row, and `copy.templates` in `~/.config/bob/config.yml` adds rows such as
-`the ^{block_id} task in the {path}`. Preview and clipboard never disagree,
+`the ^{block_id} task in the {path} file`. Preview and clipboard never disagree,
 and copying never writes the vault.
 
 ## Keys
@@ -19,7 +19,7 @@ and copying never writes the vault.
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
 | `I` | Block ID (task group) | `^bank-records` |
-| `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md` |
+| `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
 `P A F N I` are reserved even when their row is hidden, so a key never
 changes meaning. Letters are case-insensitive. `Shift+letter` is ignored.
@@ -29,8 +29,12 @@ they have in `copy.templates`. The highlight starts on Path, or on the
 first copyable row when Path is unavailable. `↵` copies the highlighted
 row. `↑` / `↓` and `Ctrl+P` / `Ctrl+N` move the highlight among copyable
 rows and wrap. A fresh second `Cmd+Y` on the open card copies the
-highlighted row. Pressing the key of a dimmed row moves the highlight
-there, nudges the row, and announces the reason instead of copying.
+highlighted row (Ctrl+Y on Linux, Cmd+Y on macOS). Other modified chords
+are ignored except exact `Ctrl+N` / `Ctrl+P`; `Alt+Escape` does not close.
+Pressing the key of a dimmed row moves the highlight there, nudges the
+row, and announces the reason instead of copying. Keyboard selection and
+refused keys scroll the row nearest into view, and a failed clipboard
+write keeps its status visible above an overflowing list.
 
 The palette `yank-*` commands (`yank-absolute-path-tilde`,
 `yank-absolute-path`, `yank-basename`, `yank-basename-without-extension`,
@@ -45,7 +49,10 @@ The resolver runs once, before the card opens, against the live editor
 buffer, not the metadata cache. It uses the active `MarkdownView` only in
 an editing mode with one selection; reading view, multiple cursors, or no
 editor mean no task. The owner covers the task line, its child notes, and
-its Depends-On, BLOCKS, LINKS, and LINKED FROM lines, and skips fences. A
+its Depends-On, BLOCKS, LINKS, and LINKED FROM lines, and skips fences,
+including list-nested backtick and tilde fences and a four-space fence
+under a child bullet. A cursor inside a fence is no task; it never falls
+back to the surrounding parent. A checkbox without `#task` is no task. A
 non-empty selection needs equal owners at both ends, or there is no task.
 Any checkbox status is accepted. Pomodoro rows are not `#task` lines, so
 they have no owner. The same-file invariant holds: a `[[other#^id]]` link
@@ -73,7 +80,7 @@ copy:
   templates:
     - label: Task ref # required
       key: t # optional: one letter or digit
-      template: "the ^{block_id} task in the {path}" # always quote templates
+      template: "the ^{block_id} task in the {path} file" # always quote templates
 ```
 
 `{name}` substitutes one variable (`[a-z_]+`). `{{` and `}}` are literal
@@ -85,6 +92,11 @@ empty or non-string templates (`quote the template`), blank labels
 (`add a label`), non-mapping entries (`expected label and template`),
 missing values (`needs a block ID`, `needs an absolute vault path`), and
 collisions (`key p is Path's`) which stay copyable by `↑↓ ↵` or click.
-Entries past the ninth need `key:` or they stay keyless
-(`add key: to bind`). A broken `copy` block adds one diagnostic row; the
+An explicit `key:` must be one letter or digit after lowercasing, with no
+trimming: blank, whitespace, padded, and null keys are invalid. Only an
+omitted `key` gets the positional `1`–`9` default. Entries past the ninth
+need `key:` or they stay keyless and still show `add key: to bind` without
+disabling the row or changing the clipboard payload. A present `copy:` that
+is not a mapping — including YAML `null`, `~`, or a blank value — diagnoses
+`copy must be a mapping`. A broken `copy` block adds one diagnostic row; the
 built-in rows always work.

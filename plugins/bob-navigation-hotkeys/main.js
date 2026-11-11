@@ -13077,6 +13077,79 @@ function copyCardSelectionIsEmpty(anchor, head) {
   return anchor.line === head.line && anchor.ch === head.ch;
 }
 
+const COPY_CARD_NESTED_FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+const COPY_CARD_NESTED_FENCE_CLOSE_RE = /^(\s*)(`{3,}|~{3,})\s*$/;
+
+function copyCardNestedFenceOpening(line) {
+  const match = String(line).match(COPY_CARD_NESTED_FENCE_OPEN_RE);
+  if (!match) {
+    return null;
+  }
+  const marker = match[2];
+  const info = match[3] || "";
+  if (marker.charAt(0) === "`" && info.includes("`")) {
+    return null;
+  }
+  return {
+    indent: match[1].length,
+    markerChar: marker.charAt(0),
+    markerLength: marker.length,
+  };
+}
+
+function copyCardNestedFenceCloses(line, opening) {
+  const match = String(line).match(COPY_CARD_NESTED_FENCE_CLOSE_RE);
+  if (!match || !opening) {
+    return false;
+  }
+  if (match[2].charAt(0) !== opening.markerChar) {
+    return false;
+  }
+  if (match[2].length < opening.markerLength) {
+    return false;
+  }
+  return match[1].length <= opening.indent + 3;
+}
+
+function copyCardLineIsInFence(lines, lineIndex) {
+  const sourceLines = Array.isArray(lines)
+    ? lines
+    : String(lines || "").split(/\r?\n/);
+  if (
+    !Number.isInteger(lineIndex) ||
+    lineIndex < 0 ||
+    lineIndex >= sourceLines.length
+  ) {
+    return false;
+  }
+  const contexts = getMarkdownLineContextsForLines(sourceLines);
+  if (contexts[lineIndex] && contexts[lineIndex].inFence) {
+    return true;
+  }
+  let inFence = null;
+  for (let index = 0; index <= lineIndex; index += 1) {
+    const line = String(sourceLines[index] || "");
+    if (inFence) {
+      const atTarget = index === lineIndex;
+      if (copyCardNestedFenceCloses(line, inFence)) {
+        inFence = null;
+      }
+      if (atTarget) {
+        return true;
+      }
+      continue;
+    }
+    const opening = copyCardNestedFenceOpening(line);
+    if (opening) {
+      inFence = opening;
+      if (index === lineIndex) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function resolveCopyCardTask(lines, selections) {
   const sourceLines = Array.isArray(lines)
     ? lines
@@ -13089,6 +13162,15 @@ function resolveCopyCardTask(lines, selections) {
   const head = copyCardSelectionPoint(selection.head || selection);
   const anchor = copyCardSelectionPoint(selection.anchor || selection.head || selection);
   if (!head || !anchor) {
+    return COPY_CARD_NONE_TASK;
+  }
+  if (copyCardLineIsInFence(sourceLines, head.line)) {
+    return COPY_CARD_NONE_TASK;
+  }
+  if (
+    !copyCardSelectionIsEmpty(anchor, head) &&
+    copyCardLineIsInFence(sourceLines, anchor.line)
+  ) {
     return COPY_CARD_NONE_TASK;
   }
   const headOwner = findOwningTaskLine(sourceLines, head.line);
@@ -13124,68 +13206,47 @@ function copyCardPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function copyCardNormalizeKey(raw, index) {
-  if (raw === null || raw === undefined) {
-    const position = index + 1;
-    if (position > 9) {
-      return Object.freeze({
-        key: null,
-        reason: "add key: to bind",
-        invalid: false,
-      });
-    }
+function copyCardInvalidKey() {
+  return Object.freeze({
+    key: null,
+    reason: "key must be one letter or digit",
+    invalid: true,
+  });
+}
+
+function copyCardPositionalKey(index) {
+  const position = index + 1;
+  if (position > 9) {
     return Object.freeze({
-      key: String(position),
-      reason: null,
+      key: null,
+      reason: "add key: to bind",
       invalid: false,
     });
+  }
+  return Object.freeze({
+    key: String(position),
+    reason: null,
+    invalid: false,
+  });
+}
+
+function copyCardNormalizeKey(raw, index, supplied) {
+  if (supplied !== true) {
+    return copyCardPositionalKey(index);
   }
   let text = "";
   if (typeof raw === "number") {
     if (!Number.isInteger(raw) || raw < 0) {
-      return Object.freeze({
-        key: null,
-        reason: "key must be one letter or digit",
-        invalid: true,
-      });
+      return copyCardInvalidKey();
     }
     text = String(raw);
   } else if (typeof raw === "string") {
-    text = raw.trim().toLowerCase();
-  } else if (typeof raw === "boolean") {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
+    text = raw.toLowerCase();
   } else {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
-  }
-  if (!text) {
-    const position = index + 1;
-    if (position > 9) {
-      return Object.freeze({
-        key: null,
-        reason: "add key: to bind",
-        invalid: false,
-      });
-    }
-    return Object.freeze({
-      key: String(position),
-      reason: null,
-      invalid: false,
-    });
+    return copyCardInvalidKey();
   }
   if (!/^[a-z0-9]$/.test(text)) {
-    return Object.freeze({
-      key: null,
-      reason: "key must be one letter or digit",
-      invalid: true,
-    });
+    return copyCardInvalidKey();
   }
   return Object.freeze({ key: text, reason: null, invalid: false });
 }
@@ -13235,7 +13296,8 @@ function normalizeCopyCardTemplates(list) {
     const label = labelText || fallbackLabel;
     const labelReason = labelText ? null : "add a label";
     const parsed = parseCopyTemplate(entry.template);
-    const keyInfo = copyCardNormalizeKey(entry.key, index);
+    const keySupplied = Object.prototype.hasOwnProperty.call(entry, "key");
+    const keyInfo = copyCardNormalizeKey(entry.key, index, keySupplied);
     if (!parsed.ok) {
       templates.push(
         freezeCopyCardValue({
@@ -13713,7 +13775,25 @@ function copyCardKeyAction(type, extra) {
   return freezeCopyCardValue({ type, ...(extra || {}) });
 }
 
-function isCopyCardModY(event) {
+function copyCardPlatformName(override) {
+  if (override != null && String(override)) {
+    return String(override);
+  }
+  if (typeof process !== "undefined" && process.platform) {
+    return String(process.platform);
+  }
+  if (typeof navigator !== "undefined" && navigator.platform) {
+    return String(navigator.platform);
+  }
+  return "";
+}
+
+function copyCardModUsesMeta(platform) {
+  const name = copyCardPlatformName(platform);
+  return name === "darwin" || /^mac/i.test(name);
+}
+
+function isCopyCardModY(event, platform) {
   const key = String(event && event.key ? event.key : "").toLowerCase();
   if (key !== "y") {
     return false;
@@ -13721,7 +13801,10 @@ function isCopyCardModY(event) {
   if (event.altKey === true || event.shiftKey === true) {
     return false;
   }
-  return event.metaKey === true || event.ctrlKey === true;
+  if (copyCardModUsesMeta(platform)) {
+    return event.metaKey === true && event.ctrlKey !== true;
+  }
+  return event.ctrlKey === true && event.metaKey !== true;
 }
 
 function isCopyCardCtrlLetter(event, letter) {
@@ -13793,10 +13876,18 @@ function resolveCopyCardKey(model, event, ui) {
   if (COPY_CARD_MODIFIER_KEYS.has(key)) {
     return null;
   }
+  const modified =
+    event.altKey === true ||
+    event.ctrlKey === true ||
+    event.metaKey === true ||
+    event.shiftKey === true;
   if (key === "Escape") {
+    if (modified) {
+      return null;
+    }
     return copyCardKeyAction("close");
   }
-  if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event)) {
+  if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event, state.platform)) {
     const row =
       copyCardRowById(model, state.highlightId) ||
       copyCardRowById(model, model.defaultRowId);
@@ -13971,9 +14062,6 @@ function loadCopyCardTemplates(options = {}) {
     return remember({ templates: [] });
   }
   const copy = parsed.copy;
-  if (copy === null || copy === undefined) {
-    return remember({ templates: [] });
-  }
   if (!copyCardPlainObject(copy)) {
     return remember({
       templates: [],
@@ -14127,6 +14215,7 @@ class CopyCardModal extends Modal {
 
     this.renderRows();
     this.renderFooter();
+    this.revealCopyCardRow(this.highlightId);
 
     const scope = ensureCopyCardScope(this);
     this.scopeHandler = scope.register(null, null, (event) => {
@@ -14223,20 +14312,17 @@ class CopyCardModal extends Modal {
           cls: "bob-copy-card-path-tail",
           text: String(row.previewParts.tail || ""),
         });
-      } else if (row.state === "collision") {
+      } else if (row.state === "ready" || row.state === "collision") {
         valueEl.createDiv({
           cls: "bob-copy-card-template",
           text: String(row.preview || ""),
         });
-        valueEl.createDiv({
-          cls: "bob-copy-card-reason",
-          text: String(row.reason || ""),
-        });
-      } else if (row.state === "ready") {
-        valueEl.createDiv({
-          cls: "bob-copy-card-template",
-          text: String(row.preview || ""),
-        });
+        if (row.reason) {
+          valueEl.createDiv({
+            cls: "bob-copy-card-reason",
+            text: String(row.reason),
+          });
+        }
       } else {
         valueEl.createDiv({
           cls: "bob-copy-card-reason-text",
@@ -14311,11 +14397,49 @@ class CopyCardModal extends Modal {
     }
   }
 
+  revealCopyCardRow(rowId) {
+    const rowEl = this.rowEls ? this.rowEls.get(rowId) : null;
+    if (!rowEl) {
+      return;
+    }
+    const container = this.rowsEl;
+    const hasGeometry =
+      container &&
+      typeof container.clientHeight === "number" &&
+      container.clientHeight > 0 &&
+      typeof rowEl.offsetTop === "number";
+    if (hasGeometry) {
+      const rowTop = rowEl.offsetTop;
+      const rowBottom = rowTop + (rowEl.offsetHeight || 0);
+      const viewTop = container.scrollTop || 0;
+      const viewBottom = viewTop + container.clientHeight;
+      if (rowTop < viewTop) {
+        container.scrollTop = rowTop;
+      } else if (rowBottom > viewBottom) {
+        container.scrollTop = Math.max(0, rowBottom - container.clientHeight);
+      }
+      return;
+    }
+    if (typeof rowEl.scrollIntoView !== "function") {
+      return;
+    }
+    try {
+      rowEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (_error) {
+      try {
+        rowEl.scrollIntoView();
+      } catch (_ignored) {
+        // Best effort: FakeNode and some hosts lack geometry.
+      }
+    }
+  }
+
   setHighlight(rowId) {
     this.highlightId = rowId;
     this.failure = null;
     this.renderRows();
     this.renderFooter();
+    this.revealCopyCardRow(rowId);
   }
 
   announce(reason) {
@@ -14368,6 +14492,7 @@ class CopyCardModal extends Modal {
     const action = resolveCopyCardKey(this.copyCardModel, event, {
       highlightId: this.highlightId,
       busy: this.busy,
+      platform: this.copyCardPlatform,
     });
     if (!action || typeof action !== "object") {
       return false;
@@ -14445,6 +14570,13 @@ class CopyCardModal extends Modal {
       (result && (result.reason || result.message)) || "copy failed";
     this.failure = `Couldn't copy: ${reason}`;
     this.renderStatus();
+    if (this.statusEl && typeof this.statusEl.scrollIntoView === "function") {
+      try {
+        this.statusEl.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } catch (_error) {
+        // Best effort: keep the failure visible above the overflowing list.
+      }
+    }
   }
 
   onClose() {

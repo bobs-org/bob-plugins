@@ -23,7 +23,13 @@ function parseTestYaml(text) {
     if (!match) {
       throw new Error("malformed yaml");
     }
-    result[match[1].trim()] = match[2].trim() || null;
+    const key = match[1].trim();
+    let value = match[2].trim();
+    if (value === "" || value === "null" || value === "~") {
+      result[key] = null;
+    } else {
+      result[key] = value;
+    }
   }
   return result;
 }
@@ -65,6 +71,7 @@ const {
   buildCopyCardModel,
   resolveCopyCardKey,
   formatCopiedNotice,
+  resetCopyCardTemplatesCache,
 } = helpers;
 
 const STYLES = fs.readFileSync(
@@ -148,9 +155,15 @@ test("styles: copy card tokens exist and shared key-card rules are untouched", (
     ".bob-copy-card-live",
     "@media (max-width: 480px)",
     "is-nudge",
+    "overflow: auto",
   ]) {
     assert.ok(STYLES.includes(token), token);
   }
+  assert.match(
+    STYLES,
+    /\.bob-copy-card-rows\s*\{[^}]*overflow:\s*auto/s,
+    "the row list scrolls while the status and footer stay pinned",
+  );
   assert.match(
     STYLES,
     /@media \(max-width: 480px\)[\s\S]*?\.bob-copy-card-label\s*\{[^}]*white-space: normal/s,
@@ -274,11 +287,16 @@ test("rejected write keeps the card open with the error", async () => {
     bryanModel(),
     async () => ({ ok: false, reason: "denied" }),
   );
+  const statusScrolls = [];
+  modal.statusEl.scrollIntoView = function scrollStatus(options) {
+    statusScrolls.push(options);
+  };
   modal.handleCopyCardKey(keyEvent("p"));
   await nextTurn();
   await nextTurn();
   assert.equal(modal.isOpen, true);
   assert.match(flattenText(modal.statusEl), /Couldn't copy: denied/);
+  assert.deepEqual(statusScrolls[0], { block: "nearest", inline: "nearest" });
   modal.close();
 });
 
@@ -304,17 +322,118 @@ test("double press during an in-flight write writes once", async () => {
 });
 
 test("snapshot: the card copies the frozen file after the active file switches", async () => {
+  const os = require("node:os");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "copy-card-snap-"));
+  const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousHome = process.env.HOME;
   const writes = [];
-  const modelA = bryanModel();
-  const modal = openCard(modelA, async (row) => {
-    writes.push(row.value);
-    return { ok: true };
-  });
-  modal.handleCopyCardKey(keyEvent("p"));
-  await nextTurn();
-  await nextTurn();
-  assert.deepEqual(writes, ["~/bob/bob.md"]);
-  assert.equal(modal.isOpen, false);
+  global.navigator = global.navigator || {};
+  const previousClipboard = global.navigator.clipboard;
+  try {
+    process.env.XDG_CONFIG_HOME = tmp;
+    process.env.HOME = "/Users/bbugyi";
+    fs.mkdirSync(path.join(tmp, "bob"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "bob", "config.yml"), "plan:\n  max_ready_per_note: 5\n");
+    resetCopyCardTemplatesCache();
+    global.navigator.clipboard = {
+      writeText: async (text) => {
+        writes.push(text);
+      },
+    };
+
+    const state = {
+      activeFile: { path: "a.md", extension: "md" },
+      editor: singleCursorEditor("- [ ] #task Ship A ^ship-a\n", [
+        { anchor: { line: 0, ch: 3 }, head: { line: 0, ch: 3 } },
+      ]),
+    };
+    state.view = {
+      file: state.activeFile,
+      editor: state.editor,
+      getMode: () => "source",
+    };
+    openedModals.length = 0;
+    const { plugin } = makePluginForGuards({
+      activeFile: state.activeFile,
+      editor: state.editor,
+      view: state.view,
+    });
+    plugin.app.workspace.getActiveFile = () => state.activeFile;
+    plugin.app.workspace.getActiveViewOfType = () => state.view;
+
+    plugin.openCopyCard();
+    assert.equal(openedModals.length, 1);
+    const modal = openedModals[0];
+    const pathRow = modal.copyCardModel.rows.find((entry) => entry.id === "path");
+    const blockRow = modal.copyCardModel.rows.find((entry) => entry.id === "block-id");
+    assert.equal(pathRow.value, "~/bob/a.md");
+    assert.equal(blockRow.value, "^ship-a");
+    assert.equal(modal.copyCardModel.task.state, "ready");
+
+    const switchToB = () => {
+      state.activeFile = { path: "b.md", extension: "md" };
+      state.editor = singleCursorEditor("- [ ] #task Ship B ^ship-b\n", [
+        { anchor: { line: 0, ch: 3 }, head: { line: 0, ch: 3 } },
+      ]);
+      state.view = {
+        file: state.activeFile,
+        editor: state.editor,
+        getMode: () => "source",
+      };
+    };
+    switchToB();
+    assert.equal(
+      modal.copyCardModel.rows.find((entry) => entry.id === "path").value,
+      "~/bob/a.md",
+    );
+    assert.equal(
+      modal.copyCardModel.rows.find((entry) => entry.id === "block-id").value,
+      "^ship-a",
+    );
+    modal.handleCopyCardKey(keyEvent("p"));
+    await nextTurn();
+    await nextTurn();
+    assert.deepEqual(writes, ["~/bob/a.md"]);
+    assert.equal(modal.isOpen, false);
+
+    state.activeFile = { path: "a.md", extension: "md" };
+    state.editor = singleCursorEditor("- [ ] #task Ship A ^ship-a\n", [
+      { anchor: { line: 0, ch: 3 }, head: { line: 0, ch: 3 } },
+    ]);
+    state.view = {
+      file: state.activeFile,
+      editor: state.editor,
+      getMode: () => "source",
+    };
+    openedModals.length = 0;
+    writes.length = 0;
+    plugin.openCopyCard();
+    const second = openedModals[0];
+    switchToB();
+    assert.equal(
+      second.copyCardModel.rows.find((entry) => entry.id === "block-id").value,
+      "^ship-a",
+    );
+    second.handleCopyCardKey(keyEvent("i"));
+    await nextTurn();
+    await nextTurn();
+    assert.deepEqual(writes, ["^ship-a"]);
+    assert.equal(second.isOpen, false);
+  } finally {
+    if (previousXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = previousXdg;
+    }
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    global.navigator.clipboard = previousClipboard;
+    resetCopyCardTemplatesCache();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("refused key moves the highlight and fills the live region", () => {
@@ -504,5 +623,164 @@ test("yank-block-id copies ^id, and reports no task or no id", async () => {
   const none = await prose.plugin.yankTaskBlockId();
   assert.equal(none, false);
   assert.match(notices.at(-1), /No task at the cursor/);
+  delete global.navigator.clipboard;
+});
+
+test("render: tenth keyless template shows add key: to bind and stays copyable", async () => {
+  const templates = [];
+  for (let index = 0; index < 10; index += 1) {
+    templates.push({
+      label: `Row ${index + 1}`,
+      template: `{note_name}-${index + 1}`,
+    });
+  }
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: "/Users/bbugyi/bob",
+    homePath: "/Users/bbugyi",
+    task: { state: "none" },
+    templates,
+  });
+  const tenth = model.rows.find((entry) => entry.id === "template-10");
+  assert.equal(tenth.state, "ready");
+  assert.equal(tenth.key, null);
+  assert.equal(tenth.reason, "add key: to bind");
+  assert.equal(tenth.value, "bob-10");
+  const writes = [];
+  const modal = openCard(model, async (row) => {
+    writes.push(row.value);
+    return { ok: true };
+  });
+  const rowEl = byClass(modal.contentEl, "bob-copy-card-row").find((entry) =>
+    flattenText(entry).includes("Row 10"),
+  );
+  assert.match(flattenText(rowEl), /add key: to bind/);
+  assert.equal(rowEl.classes.includes("is-unavailable"), false);
+  assert.equal(byClass(rowEl, "bob-copy-card-reason").length, 1);
+  modal.setHighlight("template-10");
+  modal.handleCopyCardKey(keyEvent("Enter"));
+  await nextTurn();
+  await nextTurn();
+  assert.deepEqual(writes, ["bob-10"]);
+});
+
+test("selection and refusal scroll the row nearest into view", () => {
+  const templates = [];
+  for (let index = 0; index < 10; index += 1) {
+    templates.push({
+      label: `Row ${index + 1}`,
+      template: `{note_name}-${index + 1}`,
+    });
+  }
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: "/Users/bbugyi/bob",
+    homePath: "/Users/bbugyi",
+    task: { state: "no-id", line: 0, blockId: null, title: "Add event note" },
+    templates,
+  });
+  const modal = openCard(model);
+  const seen = [];
+  const originalReveal = modal.revealCopyCardRow.bind(modal);
+  modal.revealCopyCardRow = function reveal(rowId) {
+    seen.push(rowId);
+    originalReveal(rowId);
+  };
+  modal.setHighlight("template-10");
+  assert.equal(modal.highlightId, "template-10");
+  assert.equal(seen.at(-1), "template-10");
+  const tenthEl = modal.rowEls.get("template-10");
+  const tenthScrolls = [];
+  tenthEl.scrollIntoView = function scrollRow(options) {
+    tenthScrolls.push(options);
+  };
+  modal.revealCopyCardRow("template-10");
+  assert.deepEqual(tenthScrolls[0], { block: "nearest", inline: "nearest" });
+  modal.handleCopyCardKey(keyEvent("i"));
+  assert.equal(modal.highlightId, "block-id");
+  assert.equal(seen.at(-1), "block-id");
+  modal.close();
+});
+
+test("hover does not move the keyboard highlight", () => {
+  const modal = openCard(bryanModel());
+  assert.equal(modal.highlightId, "path");
+  const absolute = byClass(modal.contentEl, "bob-copy-card-row").find((entry) =>
+    flattenText(entry).includes("Absolute"),
+  );
+  for (const type of ["mouseover", "mouseenter", "pointerover"]) {
+    if (typeof absolute.listeners?.[type] === "function") {
+      absolute.listeners[type]({ type });
+    }
+  }
+  assert.equal(modal.highlightId, "path");
+  modal.close();
+});
+
+test("keys wrap among copyable rows and refused T stays on the dimmed row", () => {
+  const noId = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: "/Users/bbugyi/bob",
+    homePath: "/Users/bbugyi",
+    task: { state: "no-id", line: 0, blockId: null, title: "Add event note" },
+    templates: [
+      { label: "Task ref", key: "t", template: "the ^{block_id} task in the {path} file" },
+    ],
+  });
+  const modal = openCard(noId);
+  const copyable = noId.rows.filter((entry) => entry.state === "ready" || entry.state === "collision");
+  modal.setHighlight(copyable[copyable.length - 1].id);
+  modal.handleCopyCardKey(keyEvent("ArrowDown"));
+  assert.equal(modal.highlightId, copyable[0].id);
+  modal.handleCopyCardKey(keyEvent("ArrowUp"));
+  assert.equal(modal.highlightId, copyable[copyable.length - 1].id);
+  modal.handleCopyCardKey(keyEvent("t"));
+  assert.equal(modal.highlightId, "template-1");
+  assert.match(modal.liveEl.textContent, /needs a block ID/);
+  assert.equal(modal.isOpen, true);
+  modal.close();
+});
+
+test("openCopyCard and yank-block-id reject a fenced nested example", async () => {
+  const content = [
+    "- [ ] #task Parent ^parent",
+    "  ```",
+    "  - [ ] #task Example ^example",
+    "  ```",
+    "  - code:",
+    "    ~~~~",
+    "    - [ ] #task Nested ^nested",
+    "    ~~~~",
+    "",
+  ].join("\n");
+  global.navigator = global.navigator || {};
+  const writes = [];
+  global.navigator.clipboard = {
+    writeText: async (text) => {
+      writes.push(text);
+    },
+  };
+  for (const line of [2, 6]) {
+    const selections = [{ anchor: { line, ch: 4 }, head: { line, ch: 4 } }];
+    openedModals.length = 0;
+    notices.length = 0;
+    const { plugin } = makePluginForGuards({
+      editor: singleCursorEditor(content, selections),
+      view: {
+        file: { path: "bob.md" },
+        editor: singleCursorEditor(content, selections),
+        getMode: () => "source",
+      },
+    });
+    plugin.openCopyCard();
+    const modal = openedModals[0];
+    assert.equal(modal.copyCardModel.task.state, "none");
+    assert.ok(modal.copyCardModel.rows.every((row) => row.group === "file"));
+    modal.close();
+    const yanked = await plugin.yankTaskBlockId();
+    assert.equal(yanked, false);
+    assert.match(notices.at(-1), /No task at the cursor/);
+  }
+  assert.equal(writes.length, 0);
   delete global.navigator.clipboard;
 });

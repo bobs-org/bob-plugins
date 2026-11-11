@@ -100,25 +100,17 @@ the best-ranked tab and leaves that tab's scroll position untouched.
 
 ## Task Card
 
-`Ctrl+Shift+P` always opens the Task Card: a focused first screen with exact
-priority previews that closes on `Esc`, `q`, or `Ctrl+[`. There is no plugin
-setting, no activation date, and no filtered property list — the card is the
-only surface, and its actions open the existing stages and writers. On an inbox
-task every non-closing answer asks where the task goes before writing and moves
-there.
+`Ctrl+Shift+P` opens the Task Card: a focused first screen with exact priority
+previews that closes on `Esc`, `q`, or `Ctrl+[`. There is no plugin setting, no
+activation date, and no filtered property list. Inbox answers that write ask
+where the task goes and move there. See [Task Card](task-card.md) for the
+stages, Type row, Cancel log, and recommendation keys.
 
-`Ctrl+Shift+B` opens the Task Card's Depends on stage for the task under
-the cursor, a dedicated Task Link's linked task, or a counted batch.
-`Ctrl+Shift+Alt+B` opens the Blocks stage for a task or Task Link, supports
-counted batches, and works from Depends-On and BLOCKS lines, where
-`Ctrl+Shift+P` on a BLOCKS line opens the owner's stage directly.
-`Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open Links / Linked from for a dedicated
-Task Link's linked task after focusing its note, and open the owner's stage on
-a Depends-On or BLOCKS line. On a LINKS or LINKED FROM line,
-`Ctrl+Shift+B` / `Ctrl+Shift+Alt+B` open the owner's Depends on / Blocks stage.
-
-Any card gesture that writes closes the card. The card offers a Type row (`t`, `Enter` to open): Use default first with its inherited reason, then Today, Recent, and a validated typed name; any type including PLAN is choosable. `Ctrl+D` on the Type row clears to Use default through the same relocate path without touching hide state. Type edits set `[type:: ...]`, then relocate the live Task Link (D8, absorb) with a consequence line and one gesture; they preserve status and freshness and never advance the review walk. The card's
-Cancel action (`x`) also prunes the task's links from today's open Pomodoros.
+`Ctrl+Shift+B` is `Ctrl+Shift+P` then `b` (Depends on). `Ctrl+Shift+Alt+B` is
+`Ctrl+Shift+P` then `⇧B` (Blocks). `Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open
+Links / Linked from. A Task Link opens the linked task's stage; a Depends-On,
+BLOCKS, LINKS, or LINKED FROM line opens the owner's. Any writing gesture
+closes the card.
 
 ## Navigation and counts
 
@@ -604,7 +596,7 @@ caret without writing the vault. In Vim normal mode, `Z` opens the image on
 the cursor line in a viewer (see [image-zoom](image-zoom.md)); only `r`
 writes, replacing just the picked link.
 
-Three keyboard layers are in play, and they are not the same thing:
+Three keyboard layers are in play:
 
 - **Registered palette commands with defaults** are listed in the generated
   table above (`Alt+N`, `Ctrl+0`, `Ctrl+Alt+J/K`,
@@ -649,6 +641,7 @@ This plugin adds no settings tab. It honors the shared bob config file
 
 ## Related
 
+- [Copy card](copy-card.md) — Cmd+Y path, block ID, and template copy.
 - [Task Card](task-card.md) — property editing controls and scheduling input.
 - [BLOCKS dependency mirrors](blocks-mirrors.md) — reverse dependency rows.
 - [Go to task URI](goto-task-uri.md) — open a note at a searched line.

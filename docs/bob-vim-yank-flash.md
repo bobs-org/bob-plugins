@@ -93,3 +93,19 @@ never stored or logged.
 
 - [Bob Vim Surround](bob-vim-surround.md) — its `ys` operator deletes and
   re-inserts text rather than yanking it, so surround gestures never flash.
+
+## Verification
+
+Run the isolated real-Obsidian check on athena after an Obsidian upgrade. It
+uses an owned scratch vault and profile, drives Vim through CDP, and writes a
+structured report plus light and dark screenshots:
+
+```bash
+xvfb-run -a node scripts/obsidian-vim-yank-flash-e2e.cjs \
+  -e /snap/bin/obsidian \
+  -r /tmp/bob-yank-flash-e2e.json \
+  -o /tmp/bob-yank-flash-e2e-shots
+```
+
+`node scripts/obsidian-vim-yank-flash-e2e.cjs --self-test` is an offline
+fixture check only; it does not prove compatibility with Obsidian.

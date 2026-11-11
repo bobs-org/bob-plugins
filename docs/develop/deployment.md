@@ -144,6 +144,23 @@ the exact command, the report path, and the verdict; a missing host or
 missing prerequisite stays visible as a limitation and never converts into a
 pass.
 
+### Obsidian upgrade check
+
+Bob Vim Yank Flash wraps undocumented Vim adapter internals. After every
+Obsidian upgrade, run its real-Obsidian CDP check on athena so a changed hook
+or selection contract fails visibly instead of silently stopping the flash:
+
+```bash
+xvfb-run -a node scripts/obsidian-vim-yank-flash-e2e.cjs \
+  -e /snap/bin/obsidian \
+  -r /tmp/bob-yank-flash-e2e.json \
+  -o /tmp/bob-yank-flash-e2e-shots
+```
+
+The check launches an owned scratch vault and profile, installs all repo
+plugins, and never opens the live vault. Review the report's per-case verdicts
+and screenshots; a skipped pop-out case remains explicitly skipped.
+
 ## Distribution scope
 
 This monorepo is a development source and vault sync target, not a package

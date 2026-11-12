@@ -139,6 +139,14 @@ Their links never become Pomodoro Task Links or successor offers. `Ctrl+Enter`
 and `Alt+]` / `Alt+[` on one act on the selected task root-only; the line is
 never struck, restored, tree-closed, or reformatted.
 
+Bank month-note rows are ordinary acknowledgment checkboxes, not tasks: cycle,
+complete, counted and Vim toggles, completion handlers, transclusion writers,
+and demotion paths all refuse them with a notice instead of stamping
+freshness, status fields, or completion metadata. Open/done flips on a bank
+row change only `[ ]` to `[x]` as plain bytes. The guard stays active when
+Bob Ledger Tools is disabled. See [Bob Ledger Tools](bob-ledger-tools.md) for
+the bank cards, commands, and ID-less acknowledgment semantics.
+
 ## Successor offers and take-backs
 
 Closing a planned task recovers what it unblocked and offers to pull in

@@ -68,9 +68,7 @@ Album owner cards, group navigation, and sync controls are described in
 
 ## Bank cards and the daily chip
 
-Add a `bob-bank` fence (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`). Month frontmatter must match the filename. Navigation opens only existing headings. Queue rows group by day; acknowledgment uses the IDs shown when drawn. The daily chip follows the Day strip, jumps with `bob bank ensure`, and defaults on (`stats.bank_chip: false` hides it).
-
-Canonical month rows and day headings get tabular amounts, chips, waiting bars, and Out/In badges. `toggle-bank-marks` and `stats.bank_marks` (default on) control them in every window. Bank-row `$` amounts never render as math. The `bank` property hides only on `bank.md`.
+Add a `bob-bank` fence (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`): frontmatter matches the filename, navigation opens only existing headings, empty months teach. Queue rows group oldest-first; day buttons carry the drawn IDs. **Bank: open today** ensures today at the next row; **Bank: acknowledge this day** acks that day's snapshot; no default hotkeys. ID-less rows tick only when verified; bulk ack reports leftovers, never a full day, never `ack -D`. Month-note Enter continues rows, clears empty stubs; `[cat:: ` inserts ordered keys. The chip follows the Day strip, jumps via ensure, hides without `bank.md`, defaults on (`stats.bank_chip: false`). `toggle-bank-marks` with persistent `stats.bank_marks` (default on) gates decorations; `$` never renders as math; the `bank` property hides only on `bank.md`.
 
 ## Snippets and the plan block
 

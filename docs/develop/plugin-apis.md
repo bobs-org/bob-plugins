@@ -72,6 +72,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `relationIndex` | 1 | Read the live, source-authoritative task relation index and label suggestions. |
 | `relationLabels` | 1 | Read the relation-label catalog and delegate hide, unhide, and previewed rename writes to bob. |
 | `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
+| `bank` | 1 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment actions. |
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -112,6 +113,18 @@ attachments }`, with bob's saved path, embed, reuse result, and source details.
 Both methods return `{ ok: false, code, message }` on failure and refuse to
 spawn bob outside the desktop app. The namespace version is 1; the root api
 version stays unchanged.
+
+`bank.fetch(options)` returns cached, generation-guarded `list` / `report`
+documents; `subscribe(spec, subscriber)` registers a mount's date or month
+requirements and `invalidate(reason)` revalidates on hub or canonical month
+vault events, focus, local day rollover, or successful ensure and ack.
+`monthPaths()` lists existing canonical month notes from the file catalogue,
+`locateHeading(source, month, date)` resolves a real day heading, and
+`recognize(path, source, line)` classifies a canonical bank row. Actions are
+`ensureOpenDay(day, options)`, `ackDayAtCursor(editor, view)`,
+`ackIds(ids, options)`, and `toggleIdLessRowAtCursor(editor,
+expectedLineText)`; acknowledgment submits only the drawn snapshot's IDs and
+ID-less toggles verify the exact row before flipping one byte.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.

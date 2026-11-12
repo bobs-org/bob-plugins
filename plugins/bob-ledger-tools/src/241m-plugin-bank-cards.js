@@ -505,7 +505,7 @@ class BobLedgerToolsBankCardsMixin {
       let result = null;
       try {
         if (row.id) {
-          result = await this.apiBank().ackIds([row.id], { label: row.date });
+          result = await this.bankApi().ackIds([row.id], { label: row.date });
         } else {
           result = await this.bankCardToggleIdLessRow(row);
         }
@@ -610,7 +610,7 @@ class BobLedgerToolsBankCardsMixin {
   async bankCardAckSnapshot(day) {
     const ids = bankCardDedupeIds(day && day.ids);
     if (!ids.length) return { ok: false, reason: "empty-selection" };
-    return this.apiBank().ackIds(ids, { label: day.date, idLess: day.idLess });
+    return this.bankApi().ackIds(ids, { label: day.date, idLess: day.idLess });
   }
 
   async bankCardToggleIdLessRow(row) {
@@ -622,6 +622,6 @@ class BobLedgerToolsBankCardsMixin {
     if (!editor || typeof editor.getLine !== "function") return { ok: false, reason: "editor-unavailable" };
     const expected = current.current.spans && current.current.spans.line && current.current.spans.line.text;
     if (editor.getLine(current.current.line - 1) !== expected) return { ok: false, reason: "stale-snapshot" };
-    return this.apiBank().toggleIdLessRowAtCursor(editor, expected);
+    return this.bankApi().toggleIdLessRowAtCursor(editor, expected);
   }
 }

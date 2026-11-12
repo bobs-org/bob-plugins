@@ -53,6 +53,9 @@ The offline wrapper `scripts/test-obsidian-vim-yank-flash-e2e.cjs` is part of
 run the real CDP check on athena after an Obsidian upgrade, as described in
 [Bob Vim Yank Flash](../bob-vim-yank-flash.md#verification).
 
+The offline wrapper `scripts/test-obsidian-bank-ui-e2e.cjs` is part of `npm test`;
+run the real CDP walkthrough with `xvfb-run -a node scripts/obsidian-bank-ui-e2e.cjs`.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

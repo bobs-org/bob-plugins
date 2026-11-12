@@ -216,7 +216,7 @@ class BobLedgerToolsBankDailyChipMixin {
     if (button) {
       if (result.stale) bankCardSetData(button, "stale", "true");
       bankCardListen(button, "click", () => {
-        if (!record.unloaded) void this.apiBank().ensureOpenDay(record.day);
+        if (!record.unloaded) void this.bankApi().ensureOpenDay(record.day);
       });
     }
     if (result.error) {

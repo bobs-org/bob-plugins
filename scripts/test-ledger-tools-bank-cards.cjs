@@ -359,7 +359,7 @@ test("queue card keeps account caveats visible, lists bounded report months, and
     assert.equal(nodes(card, ".bob-bank-queue-row").length, 2);
     const day = helpers.bankCardQueueModel(listDecoded.report).days[0];
     const captured = [];
-    plugin.apiBank = () => ({ ackIds: async (ids, options) => { captured.push([ids, options]); return { ok: true }; } });
+    plugin.bankApi = () => ({ ackIds: async (ids, options) => { captured.push([ids, options]); return { ok: true }; } });
     await plugin.bankCardAckSnapshot({ date: day.date, ids: ["^bank-AbC", "abc", "abc"], idLess: 1 });
     assert.deepEqual(captured, [[ ["^bank-AbC"], { label: day.date, idLess: 1 } ]]);
     assert.match(textOf(card), /typed row needs its individual checkbox|typed rows need their individual checkbox/);
@@ -394,7 +394,7 @@ test("daily chip mounts after the day strip even when it is disabled, and clicks
     const view = { el, sourcePath: "2026/20261112.md", dayStripHost: strip };
     plugin.planBlockViews = new Set([view]);
     let ensured = null;
-    plugin.apiBank = () => ({ ensureOpenDay: async (day) => { ensured = day; return { ok: true }; } });
+    plugin.bankApi = () => ({ ensureOpenDay: async (day) => { ensured = day; return { ok: true }; } });
     plugin.bankSyncPlanHost(view);
     await drain();
     assert.equal(el.children[0], strip);
@@ -464,4 +464,14 @@ test("bank UI keeps narrow-pane stacking and native keyboard focus styles", () =
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*\.bob-bank-summary \{ grid-template-columns: 1fr;/);
   assert.match(css, /\.bob-bank-card button:focus-visible/);
   assert.match(css, /\.bob-bank-daily-chip:focus-visible/);
+});
+
+test("cards and daily chip call the public bankApi, never a missing apiBank alias", () => {
+  const srcDir = path.join(__dirname, "../plugins/bob-ledger-tools/src");
+  const cards = fs.readFileSync(path.join(srcDir, "241m-plugin-bank-cards.js"), "utf8");
+  const chip = fs.readFileSync(path.join(srcDir, "241n-plugin-bank-daily-chip.js"), "utf8");
+  assert.equal((cards.match(/this\.bankApi\(\)/g) || []).length, 3);
+  assert.equal((chip.match(/this\.bankApi\(\)/g) || []).length, 1);
+  assert.doesNotMatch(cards, /this\.apiBank\s*\(/);
+  assert.doesNotMatch(chip, /this\.apiBank\s*\(/);
 });

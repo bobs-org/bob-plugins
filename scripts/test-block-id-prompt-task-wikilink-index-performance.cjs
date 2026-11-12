@@ -3,6 +3,11 @@
 // `index` of plan 202610/obsidian_task_wikilinks.md, in the style of
 // `test-navigation-dependencies-stage-performance.cjs`.
 //
+// npm test runs this file only in the serial `test:perf` stage after
+// the parallel `test:unit` pass. process.cpuUsage includes V8 helper
+// threads, so overlapping allocation-heavy siblings inflate the
+// snapshot budget even when main-thread CPU stays well under 50 ms.
+//
 // A synthetic vault of 6,500 notes bearing 5,000 tasks proves:
 // - the cold build completes in at most 1.5 s, in chunks of at most 16 ms;
 // - a warm snapshot plus order takes at most 50 ms;

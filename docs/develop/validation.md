@@ -16,10 +16,17 @@ npm run validate
 ```
 
 `npm test` first checks bundle freshness and generated documentation,
-then runs the explicit Node test list in `package.json`. The list
-includes inventory scanner tests; keeping it explicit makes suite membership
-reviewable. It also runs focused tests for plugin behavior, source builds, API
-boundaries, and navigation and picker workflows.
+then runs the explicit Node test list in `package.json` (`test:unit`),
+then runs CPU-budget files serially (`test:perf`). Both stages always
+run after the freshness checks; the combined exit status is nonzero if
+either stage fails. The unit list includes inventory scanner tests;
+keeping membership explicit makes the suite reviewable. Each test file
+belongs to exactly one stage. The serial stage is
+`scripts/test-block-id-prompt-task-wikilink-index-performance.cjs`,
+because `process.cpuUsage` charges V8 helper threads that inflate under
+parallel allocation-heavy siblings. It also runs focused tests for plugin
+behavior, source builds, API boundaries, and navigation and picker
+workflows.
 
 `npm run validate` exits non-zero if any plugin's bundle, inventory, or
 manifest validation fails, so it is safe to use in CI or a pre-commit

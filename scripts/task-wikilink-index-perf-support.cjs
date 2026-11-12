@@ -1,7 +1,8 @@
 // Shared fixture and CPU sampler for the Task Wikilink Index
 // performance tests and the developer diagnostic runner. Keep this
 // module limited: the npm-test budgets still live in
-// test-block-id-prompt-task-wikilink-index-performance.cjs.
+// test-block-id-prompt-task-wikilink-index-performance.cjs, which
+// npm test runs only from the serial test:perf stage.
 
 const { helpers } = require("./block-id-prompt-harness.cjs");
 

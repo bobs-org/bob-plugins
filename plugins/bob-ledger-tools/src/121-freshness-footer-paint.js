@@ -455,6 +455,7 @@ function freshnessFooterPaint(el, view) {
     "bob-freshness-due",
     "bob-freshness-clear",
     "bob-freshness-budget",
+    "bob-freshness-lanes",
     "bob-freshness-hidden",
   ];
   const wanted = visible
@@ -486,6 +487,7 @@ function freshnessFooterPaint(el, view) {
     }
   }
   if (!visible) {
+    freshnessFooterSetText(parts.icon, "⟳");
     freshnessFooterSetText(parts.due, "");
     freshnessFooterSetText(parts.context, "");
     freshnessFooterSetText(parts.detail, "");
@@ -494,10 +496,11 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterSetText(parts.meter, "");
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
     freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
-    freshnessFooterSetAttr(parts.button, "aria-label", "Review footer hidden");
+    freshnessFooterSetAttr(parts.button, "aria-label", "Walker footer hidden");
     freshnessFooterSetAttr(el, "title", "");
     return parts;
   }
+  freshnessFooterSetText(parts.icon, view.glyph || "⟳");
   freshnessFooterSetText(parts.due, view.dueText);
   freshnessFooterSetText(parts.context, view.contextText);
   freshnessFooterSetText(parts.detail, view.detailText);
@@ -508,32 +511,36 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterSetOmitted(parts.detail, !view.detailText);
   freshnessFooterSetOmitted(parts.hint, !view.hintText);
   freshnessFooterSetOmitted(parts.meter, !view.meterText);
-  freshnessFooterToggleClass(
-    parts.context,
-    "bob-freshness-tier",
-    Boolean(view.current),
-  );
-  if (
+  const currentLane =
+    view.panel === "lanes" &&
     view.current &&
-    FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
-  ) {
+    ["pending", "next", "ready"].includes(view.current.lane)
+      ? view.current.lane
+      : null;
+  const currentTier =
+    currentLane ||
+    (view.current && FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
+      ? view.current.tier
+      : null);
+  freshnessFooterToggleClass(parts.context, "bob-freshness-tier", Boolean(currentTier));
+  if (currentTier) {
     freshnessFooterSetAttr(
       parts.context,
       "data-review-tier",
-      view.current.tier,
+      currentTier,
     );
   } else {
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
   }
   if (
     view.current &&
-    view.current.stage &&
-    FRESHNESS_FOOTER_TIERS.includes(view.current.tier)
+    ((view.current.stage && FRESHNESS_FOOTER_TIERS.includes(view.current.tier)) ||
+      currentLane)
   ) {
     freshnessFooterSetAttr(
       parts.detail,
       "data-review-tier",
-      view.current.tier,
+      currentLane || view.current.tier,
     );
   } else {
     freshnessFooterRemoveAttr(parts.detail, "data-review-tier");

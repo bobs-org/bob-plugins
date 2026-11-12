@@ -449,6 +449,9 @@ a.bob-plan-ready:hover {
 .bob-freshness [data-review-tier="next"] {
   --bob-review-hue: var(--task-status-next, var(--color-green, #08b94e));
 }
+.bob-freshness [data-review-tier="ready"] {
+  --bob-review-hue: var(--task-status-todo, var(--color-blue, #086ddd));
+}
 .bob-freshness [data-review-tier="recurring"] {
   --bob-review-hue: var(--color-pink, #d53984);
 }

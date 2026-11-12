@@ -279,10 +279,124 @@ class BobLedgerToolsFreshnessStatusMixin {
       return;
     }
     try {
-      // Walker-footer host (plan 202611/walker_footers.md, phase host):
-      // `w`, `n`, and unset hide in this phase; their panels land in the
-      // lanes and links phases. The missing-nav legacy path paints below.
       const route = walkerFooterWalkMode(this);
+      const contextOnly = options && options.contextOnly === true;
+      if (!route.legacy && route.mode === "w") {
+        let queue = null;
+        try {
+          const laneApi =
+            typeof this.laneWalkApi === "function" ? this.laneWalkApi() : null;
+          if (
+            laneApi &&
+            Number(laneApi.version) >= 2 &&
+            typeof laneApi.queue === "function"
+          ) {
+            // One immutable snapshot supplies both counts and positions.
+            queue = laneApi.queue();
+          }
+        } catch (error) {
+          queue = null;
+        }
+        let cursor = this.freshnessFooterCursor(false);
+        const entries =
+          queue && queue.available === true && Array.isArray(queue.entries)
+            ? queue.entries
+            : [];
+        const current =
+          cursor && typeof cursor.sourceLine === "string"
+            ? freshnessMatchQueueCursor(entries, cursor)
+            : null;
+        const previewable = Boolean(
+          cursor &&
+            typeof cursor.sourceLine === "string" &&
+            POMODORO_CLOCK_TASK_LINE_RE.test(cursor.sourceLine),
+        );
+        let workLog = null;
+        let quickRoll = null;
+        if (cursor && (current || previewable)) {
+          const source = this.freshnessFooterCursor(true);
+          if (
+            source &&
+            source.path === cursor.path &&
+            source.line0 === cursor.line0 &&
+            source.sourceLine === cursor.sourceLine &&
+            Array.isArray(source.sourceLines)
+          ) {
+            cursor = source;
+            if (current) {
+              workLog = laneWalkerFooterReadLatestWorkLog(
+                source.sourceLines,
+                current.lineNumber,
+              );
+            }
+            if (previewable) {
+              try {
+                const nav =
+                  typeof this.dependencyNavApi === "function"
+                    ? this.dependencyNavApi()
+                    : null;
+                const namespace =
+                  nav && nav.quickRoll && typeof nav.quickRoll === "object"
+                    ? nav.quickRoll
+                    : null;
+                if (
+                  namespace &&
+                  Number(namespace.version) >= 1 &&
+                  typeof namespace.preview === "function"
+                ) {
+                  quickRoll = namespace.preview({
+                    lines: source.sourceLines,
+                    line: source.line0,
+                    ...(current
+                      ? { tier: freshnessReviewMachineTier(current) }
+                      : {}),
+                  });
+                }
+              } catch (error) {
+                quickRoll = null;
+              }
+            }
+          }
+        }
+        let caps = this.laneWalkerFooterCaps;
+        if (!caps || !contextOnly) {
+          try {
+            caps = loadPlanCaps().caps;
+          } catch (error) {
+            caps = defaultPlanCaps();
+          }
+          this.laneWalkerFooterCaps = caps;
+        }
+        const view = laneWalkerFooterView(queue, {
+          caps,
+          cursor,
+          workLog,
+          quickRoll,
+        });
+        const paintKey = [
+          "walker:w",
+          view.visible ? "1" : "0",
+          view.mode,
+          view.dueText,
+          view.contextText,
+          view.detailText,
+          view.hintText,
+          view.groupsText,
+          view.meterText,
+          view.tooltip,
+          view.current && view.current.key ? view.current.key : "",
+        ].join("\0");
+        if (paintKey === this.freshnessFooterPaintKey && this.freshnessFooterParts) {
+          return;
+        }
+        this.freshnessFooterLastView = view;
+        this.freshnessFooterPaintKey = paintKey;
+        this.freshnessFooterParts = freshnessFooterPaint(
+          this.freshnessStatusEl,
+          view,
+        );
+        return;
+      }
       if (!route.legacy && route.mode !== "s") {
         const key = "walker:" + String(route.mode) + ":hidden";
         if (key === this.freshnessFooterPaintKey && this.freshnessFooterParts) {
@@ -294,7 +408,6 @@ class BobLedgerToolsFreshnessStatusMixin {
         this.freshnessFooterParts = freshnessFooterPaint(el, hidden);
         return;
       }
-      const contextOnly = options && options.contextOnly === true;
       let memo = null;
       if (contextOnly) {
         memo = this.freshnessMemo;
@@ -437,6 +550,24 @@ class BobLedgerToolsFreshnessStatusMixin {
   freshnessStatusClicked() {
     try {
       const commands = this.app && this.app.commands;
+      const route = walkerFooterWalkMode(this);
+      if (!route.legacy && route.mode === "w") {
+        const laneCommandId =
+          "bob-navigation-hotkeys:repeat-next-bracket-walk";
+        const laneCommandExists = Boolean(
+          commands &&
+            ((commands.commands && commands.commands[laneCommandId]) ||
+              (typeof commands.findCommand === "function" &&
+                commands.findCommand(laneCommandId))),
+        );
+        if (
+          laneCommandExists &&
+          typeof commands.executeCommandById === "function"
+        ) {
+          commands.executeCommandById(laneCommandId);
+        }
+        return;
+      }
       const commandId = "bob-navigation-hotkeys:jump-to-next-due-task";
       let exists = false;
       try {

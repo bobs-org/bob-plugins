@@ -1,6 +1,6 @@
 ---
 title: "Album cards"
-description: "Live album counts, group peeks, last-added ages, and repair controls in owner notes."
+description: "Live album counts, record-index folds, date chips, and repair controls in owner and album notes."
 ---
 
 Bob Ledger Tools decorates the generated `[!albums]` catalog in area and project
@@ -35,6 +35,21 @@ Albums heading or title, with a body anchor when neither exists.
 Painting, peeking, navigation, and day-rollover age refreshes do not change note
 bytes. **Sync albums** explicitly invokes Bob's existing writer. Relevant
 frontmatter edits also use the shared service's three-second sync debounce.
+
+The generated `[!records]` index on an album note keeps Bob's tally, group
+order, subgroup labels, facets, links, and empty-album teaching line. The first
+top-level group starts expanded. Later groups start folded only when they hold
+more than twelve **records** (the group's stored count, not its subgroup
+headings). Fold choices stay in that pane's view state, keyed by album and
+group, so a refresh keeps them and a second pane of the same album starts from
+the defaults. A group jump from an owner card expands that group in the
+destination pane before it scrolls.
+
+Each record row may show age chips from cached `visited` and `watched_on`
+frontmatter. Both dates, when valid, appear with their own **Visited** and
+**Watched** tooltips. Missing, invalid, and future dates stay off the row.
+Chips refresh when that metadata changes and at local midnight. Folding,
+peeking, and date chips never rewrite the note.
 
 For stored album/record structure and capture routes, see
 [Records](https://bobs-org.github.io/bob/records/).

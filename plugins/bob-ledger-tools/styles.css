@@ -8565,3 +8565,81 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 @container bob-albums (max-width: 440px) {
   .bob-album-chips { flex: 1 1 100%; margin-inline-start: 0; }
 }
+
+/* Record index cards: tally, view-only folds, and date chips. */
+.callout[data-callout="records"] {
+  --callout-icon: lucide-list;
+  --bob-album-hue: var(--text-muted);
+  container-type: inline-size;
+  container-name: bob-records;
+  overflow: visible;
+  background: color-mix(in srgb, var(--bob-album-hue) 9%, var(--background-secondary));
+  border: 1px solid color-mix(in srgb, var(--bob-album-hue) 28%, var(--background-modifier-border));
+  border-radius: var(--radius-l, 8px);
+  padding: 0.55em 0.9em 0.7em;
+  box-shadow: none;
+}
+.callout[data-callout="records"][data-root-hue="blue"] { --bob-album-hue: var(--bob-area-blue); }
+.callout[data-callout="records"][data-root-hue="orange"] { --bob-album-hue: var(--bob-area-orange); }
+.callout[data-callout="records"][data-root-hue="aqua"] { --bob-album-hue: var(--bob-area-aqua); }
+.callout[data-callout="records"][data-root-hue="yellow"] { --bob-album-hue: var(--bob-area-yellow); }
+.callout[data-callout="records"][data-root-hue="magenta"] { --bob-album-hue: var(--bob-area-magenta); }
+.callout[data-callout="records"][data-root-hue="green"] { --bob-album-hue: var(--bob-area-green); }
+.callout[data-callout="records"][data-root-hue="violet"] { --bob-album-hue: var(--bob-area-violet); }
+.callout[data-callout="records"][data-root-hue="red"] { --bob-album-hue: var(--bob-area-red); }
+.callout[data-callout="records"] > .callout-title {
+  color: var(--bob-album-hue);
+  gap: 0.4em;
+  flex-wrap: wrap;
+  font-size: 0.95em;
+  font-weight: 600;
+}
+.callout[data-callout="records"] .callout-content { padding: 0.15em 0 0; overflow: visible; }
+.callout[data-callout="records"] .callout-content ul { margin: 0; padding-inline-start: 0; list-style: none; }
+.callout[data-callout="records"] .callout-content ul ul {
+  margin: 0.15em 0 0 0.35em;
+  padding-inline-start: 0.85em;
+  border-inline-start: 1px solid color-mix(in srgb, var(--bob-album-hue) 38%, var(--background-modifier-border));
+}
+.callout[data-callout="records"] .callout-content li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25em 0.5em;
+  padding-block: 0.28em;
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.callout[data-callout="records"] .callout-content li > ul { flex: 1 1 100%; }
+.callout[data-callout="records"] li[data-bob-records-folded="true"] > ul { display: none; }
+.callout[data-callout="records"] a.internal-link { color: var(--text-normal); font-weight: 600; }
+.bob-records-fold {
+  appearance: none;
+  flex: 0 0 auto;
+  height: auto;
+  margin: 0;
+  padding: 0.05em 0.3em;
+  box-shadow: none;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font: 0.85em var(--font-interface);
+  line-height: 1.2;
+  cursor: pointer;
+}
+.bob-records-ages {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3em 0.45em;
+  margin-inline-start: auto;
+  font: 0.8em var(--font-interface);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.bob-records-age { white-space: nowrap; }
+.bob-records-fold:focus-visible, .bob-records-age:focus-visible {
+  outline: 2px solid var(--interactive-accent); outline-offset: 2px;
+}

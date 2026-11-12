@@ -31741,7 +31741,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupNotebookHeader();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
 
@@ -31862,7 +31862,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownNotebookHeader(); } catch (error) {}
     try {
-      this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
+      this.teardownAlbumRecords(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }
@@ -65296,6 +65296,463 @@ class BobLedgerToolsAlbumCatalogMixin {
       new Notice("Could not open the album's Records region.");
       return { ok: false };
     }
+  }
+}
+// ---- src/241r-plugin-album-records-model.js ----
+// Record-index presentation: group folds and date chips. Bob owns the
+// stored `[!records]` bytes; this fragment never writes notes or parses YAML.
+const ALBUM_RECORDS_FOLD_AFTER = 12;
+const ALBUM_RECORDS_DATE_RE = /^(\d{4}-\d{2}-\d{2})/;
+
+function albumRecordsNormalizeLabel(label) {
+  return String(label || "").replace(/\s+/g, " ").trim();
+}
+
+function albumRecordsSourceAlbum(state, sourcePath) {
+  return state?.report?.albumsByPath?.get(albumReportPath(sourcePath)) || null;
+}
+
+function albumRecordsShouldPaint(state, sourcePath) {
+  if (!state || !state.report) return true;
+  return Boolean(albumRecordsSourceAlbum(state, sourcePath));
+}
+
+function albumRecordsDefaultFolded(index, count) {
+  return index > 0 && Number(count) > ALBUM_RECORDS_FOLD_AFTER;
+}
+
+function albumRecordsFoldKey(albumPath, identity) {
+  return `${albumReportPath(albumPath)}\0${identity}`;
+}
+
+function albumRecordsIsFolded(folds, albumPath, identity, index, count) {
+  const key = albumRecordsFoldKey(albumPath, identity);
+  if (folds instanceof Map && folds.has(key)) return Boolean(folds.get(key));
+  return albumRecordsDefaultFolded(index, count);
+}
+
+function albumRecordsGroupIdentity(album, label, index) {
+  const wanted = albumRecordsNormalizeLabel(label);
+  const groups = album && Array.isArray(album.groups) ? album.groups : [];
+  const matches = groups.filter((group) => albumRecordsNormalizeLabel(group.label) === wanted);
+  if (matches.length === 1 && matches[0].value) return String(matches[0].value);
+  return wanted || String(index);
+}
+
+function albumRecordsChromeNode(node) {
+  return notebookDomHasClass(node, "bob-records-fold")
+    || notebookDomHasClass(node, "bob-records-ages")
+    || notebookDomHasClass(node, "bob-records-age");
+}
+
+function albumRecordsHeadingText(li) {
+  let text = "";
+  const walk = (node) => {
+    if (!node || albumRecordsChromeNode(node)) return;
+    if (node.nodeType === 3) {
+      text += typeof node.nodeValue === "string" ? node.nodeValue : String(node.textContent || "");
+      return;
+    }
+    const tag = notebookDomTag(node);
+    if (tag === "UL" || tag === "OL") return;
+    for (const child of node.childNodes || []) walk(child);
+  };
+  for (const child of notebookLiOwnNodes(li)) walk(child);
+  return text;
+}
+
+function albumRecordsParseGroupHeading(li) {
+  if (!li || notebookLiOwnLink(li)) return null;
+  const text = albumRecordsNormalizeLabel(albumRecordsHeadingText(li));
+  const match = /^(.*)\s+·\s+(\d+)$/.exec(text);
+  if (!match) return null;
+  const label = albumRecordsNormalizeLabel(match[1]);
+  const count = Number(match[2]);
+  if (!label || !Number.isInteger(count) || count < 0) return null;
+  return { label, count };
+}
+
+function albumRecordsCalendarDate(value) {
+  if (typeof value !== "string") return "";
+  const match = ALBUM_RECORDS_DATE_RE.exec(value.trim());
+  return match ? notebookCalendarDate(match[1]) : "";
+}
+
+function albumRecordsAgeChips(frontmatter, today) {
+  const data = frontmatter && typeof frontmatter === "object" ? frontmatter : {};
+  const chips = [];
+  const visited = albumRecordsCalendarDate(data.visited);
+  const watched = albumRecordsCalendarDate(data.watched_on);
+  const visitedAge = visited ? notebookAgeChip(visited, today) : null;
+  const watchedAge = watched ? notebookAgeChip(watched, today) : null;
+  if (visitedAge) {
+    chips.push({ kind: "visited", age: visitedAge, date: visited, title: `Visited: ${visited}` });
+  }
+  if (watchedAge) {
+    chips.push({ kind: "watched", age: watchedAge, date: watched, title: `Watched: ${watched}` });
+  }
+  return chips;
+}
+
+function albumRecordFile(target, sourcePath, metadataCache, vault) {
+  const name = notebookWikilinkTarget(target);
+  if (!name) return null;
+  let file = null;
+  try { file = metadataCache?.getFirstLinkpathDest?.(name, sourcePath); } catch (_) {}
+  if (!file) {
+    try {
+      const path = /\.md$/i.test(name) ? name : `${name}.md`;
+      file = vault?.getAbstractFileByPath?.(path);
+    } catch (_) {}
+  }
+  return file || null;
+}
+
+function albumRecordCachedFrontmatter(file, metadataCache) {
+  try {
+    const cache = metadataCache?.getFileCache?.(file);
+    return cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : {};
+  } catch (_) {
+    return {};
+  }
+}
+// ---- src/241s-plugin-album-records-dom.js ----
+// Keyed, presentation-only records chrome. Fold choices live in view
+// state; painting never mutates the note or hides rows after cleanup.
+const ALBUM_RECORDS_FOLD = "bob-records-fold";
+const ALBUM_RECORDS_AGES = "bob-records-ages";
+
+function albumFindRecordCallouts(root) {
+  const selector = '[data-callout="records"]';
+  const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
+  if (notebookDomAttr(root, "data-callout") === "records") nodes.unshift(root);
+  return nodes.filter((node) => !notebookInsideCode(node));
+}
+
+function albumRecordsPlaceChrome(host, cls, key, build, start) {
+  const old = Array.from(host?.children || []).find((node) => notebookDomHasClass(node, cls));
+  if (old && old.getAttribute("data-paint-key") === key) return old;
+  const doc = notebookDomDoc(host);
+  const focus = old && doc?.activeElement && old.contains?.(doc.activeElement)
+    ? doc.activeElement.getAttribute("data-focus-key") : null;
+  old?.remove();
+  if (!key) return null;
+  const node = notebookCreateEl(doc, "span", cls);
+  if (!node) return null;
+  node.setAttribute("data-paint-key", key);
+  build(node, doc);
+  if (start && host.firstChild) host.insertBefore(node, host.firstChild);
+  else host.appendChild(node);
+  if (focus) {
+    Array.from(node.querySelectorAll("[data-focus-key]")).find((item) => item.getAttribute("data-focus-key") === focus)?.focus?.({ preventScroll: true });
+  }
+  return node;
+}
+
+function albumRecordsRootList(callout) {
+  const content = callout.querySelector?.(".callout-content") || callout;
+  for (const child of content.children || []) {
+    const tag = notebookDomTag(child);
+    if (tag === "UL" || tag === "OL") return child;
+  }
+  return null;
+}
+
+function albumRecordsTopGroups(callout) {
+  const root = albumRecordsRootList(callout);
+  if (!root) return [];
+  const groups = [];
+  for (const child of root.children || []) {
+    if (notebookDomTag(child) !== "LI") continue;
+    const heading = albumRecordsParseGroupHeading(child);
+    if (heading) groups.push({ li: child, ...heading });
+  }
+  return groups;
+}
+
+function albumRecordsRecordRows(callout) {
+  const rows = [];
+  for (const li of callout.querySelectorAll?.("li") || []) {
+    if (albumRecordsParseGroupHeading(li)) continue;
+    const link = notebookLiOwnLink(li);
+    if (link) rows.push({ li, link });
+  }
+  return rows;
+}
+
+function albumPaintRecordsFold(li, model, handlers) {
+  albumRecordsPlaceChrome(li, ALBUM_RECORDS_FOLD, model.key, (host) => {
+    host.setAttribute("data-focus-key", "fold");
+    host.setAttribute("aria-expanded", model.folded ? "false" : "true");
+    host.setAttribute("aria-label", model.folded
+      ? `Expand ${model.label}, ${model.count} records`
+      : `Collapse ${model.label}, ${model.count} records`);
+    notebookSetText(host, model.folded ? "▸" : "▾");
+    notebookBindAction(host, () => handlers.toggleFold(model.identity, !model.folded));
+  }, true);
+  albumSetAttr(li, "data-bob-records-folded", model.folded ? "true" : null);
+  albumSetAttr(li, "data-bob-records-group", model.identity);
+}
+
+function albumPaintRecordAges(li, chips) {
+  const key = chips.length ? JSON.stringify(chips) : "";
+  albumRecordsPlaceChrome(li, ALBUM_RECORDS_AGES, key, (host, doc) => {
+    for (const chip of chips) {
+      const node = albumAppendText(doc, host, "span", `bob-records-age bob-records-age-${chip.kind}`, chip.age, chip.title);
+      if (node) node.setAttribute("data-kind", chip.kind);
+    }
+  });
+}
+
+function albumPaintRecordsCallout(callout, options) {
+  albumSetAttr(callout, "data-bob-records-card", "true");
+  albumSetAttr(callout, "data-root-hue", options.hue);
+  const groups = albumRecordsTopGroups(callout);
+  groups.forEach((group, index) => {
+    const identity = albumRecordsGroupIdentity(options.album, group.label, index);
+    const folded = albumRecordsIsFolded(options.folds, options.sourcePath, identity, index, group.count);
+    albumPaintRecordsFold(group.li, {
+      key: JSON.stringify({ identity, folded, label: group.label, count: group.count }),
+      identity,
+      folded,
+      label: group.label,
+      count: group.count,
+    }, options.handlers);
+  });
+  for (const row of albumRecordsRecordRows(callout)) {
+    const file = albumRecordFile(notebookLinkHref(row.link), options.sourcePath, options.metadataCache, options.vault);
+    const frontmatter = file ? albumRecordCachedFrontmatter(file, options.metadataCache) : {};
+    albumPaintRecordAges(row.li, albumRecordsAgeChips(frontmatter, options.today));
+  }
+}
+
+function albumCleanRecordsDom(root) {
+  notebookRemovePainted(root, ALBUM_RECORDS_FOLD);
+  notebookRemovePainted(root, ALBUM_RECORDS_AGES);
+  for (const callout of albumFindRecordCallouts(root)) {
+    if (notebookDomAttr(callout, "data-bob-records-card")) {
+      for (const name of ["data-bob-records-card", "data-root-hue"]) callout.removeAttribute(name);
+    }
+  }
+  for (const li of root.querySelectorAll?.("li[data-bob-records-folded], li[data-bob-records-group]") || []) {
+    li.removeAttribute("data-bob-records-folded");
+    li.removeAttribute("data-bob-records-group");
+  }
+}
+// ---- src/241t-plugin-album-records.js ----
+// Record index cards in Reading view and Live Preview. Folds and date
+// chips are view state; only bob albums sync writes the stored index.
+let albumRecordsRefreshEffect = null;
+function ensureAlbumRecordsRefresh() {
+  if (!albumRecordsRefreshEffect && StateEffect?.define) albumRecordsRefreshEffect = StateEffect.define();
+  return albumRecordsRefreshEffect;
+}
+
+class BobLedgerToolsAlbumRecordsMixin {
+  setupAlbumRecords() {
+    this.albumRecordsActive = true;
+    this.albumRecordsReading = new Set();
+    this.albumRecordsEditors = new Set();
+    this.albumRecordsFoldByView = new WeakMap();
+    this.albumRecordsPendingExpand = null;
+    this.albumRecordsRefreshTimer = null;
+    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAlbumRecordsInReading(el, ctx), 52);
+    const extension = this.createAlbumRecordsExtension();
+    if (extension) this.registerEditorExtension?.(extension);
+    this.albumRecordsUnsubscribe = this.apiAlbumSubscribe(() => this.scheduleAlbumRecordsRefresh());
+  }
+
+  teardownAlbumRecords() {
+    this.albumRecordsActive = false;
+    this.albumRecordsUnsubscribe?.();
+    this.albumRecordsUnsubscribe = null;
+    this.albumClearTimeout(this.albumRecordsRefreshTimer);
+    this.albumRecordsRefreshTimer = null;
+    this.albumRecordsPendingExpand = null;
+    for (const widget of this.albumRecordsReading || []) albumCleanRecordsDom(widget.el);
+    for (const view of this.albumRecordsEditors || []) albumCleanRecordsDom(view.dom);
+    this.albumRecordsReading?.clear();
+    this.albumRecordsEditors?.clear();
+  }
+
+  albumRecordsFoldMap(host) {
+    if (!(this.albumRecordsFoldByView instanceof WeakMap)) this.albumRecordsFoldByView = new WeakMap();
+    let folds = this.albumRecordsFoldByView.get(host);
+    if (!(folds instanceof Map)) {
+      folds = new Map();
+      this.albumRecordsFoldByView.set(host, folds);
+    }
+    return folds;
+  }
+
+  albumRecordsApplyPending(path, folds, el) {
+    const pending = this.albumRecordsPendingExpand;
+    if (!pending || albumReportPath(pending.path) !== albumReportPath(path)) return;
+    if (Date.now() - pending.at > 8000) return;
+    if (pending.container && el && pending.container !== el) {
+      if (typeof pending.container.contains !== "function" || !pending.container.contains(el)) return;
+    }
+    folds.set(albumRecordsFoldKey(path, pending.identity), false);
+    if (pending.label && pending.label !== pending.identity) {
+      folds.set(albumRecordsFoldKey(path, pending.label), false);
+    }
+  }
+
+  albumRecordsLivePath(view) {
+    return this.albumRecordsActive ? this.notebookCatalogLivePath(view) : null;
+  }
+
+  albumRecordsOptions(sourcePath, folds, handlers) {
+    const state = this.albumReportState();
+    return {
+      sourcePath,
+      state,
+      album: albumRecordsSourceAlbum(state, sourcePath),
+      hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
+      today: state.today,
+      folds,
+      metadataCache: this.app?.metadataCache,
+      vault: this.app?.vault,
+      handlers,
+    };
+  }
+
+  albumRecordsHandlers(sourcePath, folds, surface) {
+    return {
+      toggleFold: (identity, folded) => {
+        folds.set(albumRecordsFoldKey(sourcePath, identity), Boolean(folded));
+        if (surface && surface.view) this.paintAlbumRecordsEditor(surface.view);
+        else if (surface && surface.el) this.paintAlbumRecordsReading(surface.el, sourcePath, folds);
+      },
+    };
+  }
+
+  paintAlbumRecordsReading(el, sourcePath, folds) {
+    if (!albumRecordsShouldPaint(this.albumReportState(), sourcePath)) {
+      albumCleanRecordsDom(el);
+      return;
+    }
+    this.albumRecordsApplyPending(sourcePath, folds, el);
+    const options = this.albumRecordsOptions(sourcePath, folds, this.albumRecordsHandlers(sourcePath, folds, { el }));
+    for (const callout of albumFindRecordCallouts(el)) {
+      if (!callout.closest?.(".cm-editor")) albumPaintRecordsCallout(callout, options);
+    }
+  }
+
+  renderAlbumRecordsInReading(el, ctx) {
+    if (!this.albumRecordsActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    if (el.closest?.(".cm-editor")) return;
+    const folds = this.albumRecordsFoldMap(el);
+    this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+    const existing = Array.from(this.albumRecordsReading || []).find((widget) => widget.el === el);
+    if (existing) {
+      if (existing.path !== ctx.sourcePath) {
+        albumCleanRecordsDom(el);
+        this.paintAlbumRecordsReading(el, ctx.sourcePath, folds);
+      }
+      existing.path = ctx.sourcePath;
+      return;
+    }
+    const widget = { el, path: ctx.sourcePath, folds };
+    this.albumRecordsReading.add(widget);
+    if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+      const child = new MarkdownRenderChild(el);
+      child.onunload = () => {
+        albumCleanRecordsDom(el);
+        this.albumRecordsReading?.delete(widget);
+      };
+      ctx.addChild(child);
+    }
+  }
+
+  paintAlbumRecordsEditor(view) {
+    const path = this.albumRecordsLivePath(view);
+    if (!path || !albumRecordsShouldPaint(this.albumReportState(), path)) {
+      albumCleanRecordsDom(view.dom);
+      return;
+    }
+    const folds = this.albumRecordsFoldMap(view);
+    this.albumRecordsApplyPending(path, folds, view.dom);
+    const options = this.albumRecordsOptions(path, folds, this.albumRecordsHandlers(path, folds, { view }));
+    for (const callout of albumFindRecordCallouts(view.dom)) {
+      if (!callout.closest?.(".markdown-embed")) albumPaintRecordsCallout(callout, options);
+    }
+  }
+
+  createAlbumRecordsExtension() {
+    if (!ViewPlugin?.fromClass || !Decoration) return null;
+    const plugin = this;
+    const refresh = ensureAlbumRecordsRefresh();
+    return ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.view = view;
+        this.path = plugin.albumRecordsLivePath(view);
+        this.decorations = Decoration.none;
+        plugin.albumRecordsEditors.add(view);
+        this.schedulePaint();
+      }
+      schedulePaint() {
+        if (this.timer != null) return;
+        this.timer = plugin.albumSetTimeout(() => {
+          this.timer = null;
+          if (plugin.albumRecordsActive) plugin.paintAlbumRecordsEditor(this.view);
+        }, 0);
+      }
+      update(update) {
+        const path = plugin.albumRecordsLivePath(update.view);
+        const changed = path !== this.path;
+        if (changed) albumCleanRecordsDom(update.view.dom);
+        this.path = path;
+        const notified = (update.transactions || []).some((tx) => (tx.effects || []).some((effect) => effect.is?.(refresh)));
+        if (changed || update.docChanged || notified) this.decorations = Decoration.none;
+        this.schedulePaint();
+      }
+      destroy() {
+        plugin.albumClearTimeout(this.timer);
+        albumCleanRecordsDom(this.view.dom);
+        plugin.albumRecordsEditors.delete(this.view);
+      }
+    }, { decorations: (value) => value.decorations });
+  }
+
+  scheduleAlbumRecordsRefresh() {
+    if (!this.albumRecordsActive || this.albumRecordsRefreshTimer != null) return;
+    this.albumRecordsRefreshTimer = this.albumSetTimeout(() => {
+      this.albumRecordsRefreshTimer = null;
+      if (!this.albumRecordsActive) return;
+      for (const widget of this.albumRecordsReading) {
+        this.paintAlbumRecordsReading(widget.el, widget.path, widget.folds);
+      }
+      const effect = ensureAlbumRecordsRefresh();
+      for (const view of this.albumRecordsEditors) {
+        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
+        this.paintAlbumRecordsEditor(view);
+      }
+    }, 100);
+  }
+
+  async albumRevealRecordGroup(view, target = {}) {
+    if (this.albumRecordsActive === false || !target.path) return { ok: false };
+    const identity = target.value || target.label;
+    if (!identity) return { ok: false, ...target };
+    this.albumRecordsPendingExpand = {
+      path: albumReportPath(target.path),
+      identity,
+      label: target.label || "",
+      at: Date.now(),
+      container: view?.contentEl || view?.containerEl || view?.previewMode?.containerEl || view?.dom || null,
+    };
+    for (const widget of this.albumRecordsReading || []) {
+      if (albumReportPath(widget.path) !== albumReportPath(target.path)) continue;
+      this.albumRecordsApplyPending(widget.path, widget.folds, widget.el);
+      this.paintAlbumRecordsReading(widget.el, widget.path, widget.folds);
+    }
+    for (const editor of this.albumRecordsEditors || []) {
+      if (albumReportPath(this.albumRecordsLivePath(editor) || "") !== albumReportPath(target.path)) continue;
+      this.paintAlbumRecordsEditor(editor);
+    }
+    if (view?.editor?.cm) this.paintAlbumRecordsEditor(view.editor.cm);
+    return { ok: true, ...target };
   }
 }
 // ---- src/241e-plugin-notebook-header-model.js ----
@@ -107335,6 +107792,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
+  BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,
@@ -110517,6 +110975,24 @@ try {
       albumFindCallouts,
       albumPaintCallout,
       albumCleanCatalogDom,
+      ALBUM_RECORDS_FOLD_AFTER,
+      albumRecordsNormalizeLabel,
+      albumRecordsSourceAlbum,
+      albumRecordsShouldPaint,
+      albumRecordsDefaultFolded,
+      albumRecordsFoldKey,
+      albumRecordsIsFolded,
+      albumRecordsGroupIdentity,
+      albumRecordsParseGroupHeading,
+      albumRecordsCalendarDate,
+      albumRecordsAgeChips,
+      albumRecordFile,
+      albumRecordCachedFrontmatter,
+      albumFindRecordCallouts,
+      albumRecordsTopGroups,
+      albumRecordsRecordRows,
+      albumPaintRecordsCallout,
+      albumCleanRecordsDom,
     });
   }
 } catch (error) {

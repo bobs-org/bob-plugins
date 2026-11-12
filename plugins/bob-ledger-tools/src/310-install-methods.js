@@ -41,6 +41,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
+  BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,

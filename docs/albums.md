@@ -51,5 +51,19 @@ frontmatter. Both dates, when valid, appear with their own **Visited** and
 Chips refresh when that metadata changes and at local midnight. Folding,
 peeking, and date chips never rewrite the note.
 
+Album notes also show a breadcrumb from their resolved area/project ancestry
+and a read-only **Record schema** card in both Reading view and Live Preview.
+The card follows the field declaration order and shows each label, kind, list
+and required markers, and choice labels. Schema edits remain ordinary
+frontmatter edits; the card does not change the YAML. The album's `record`
+property is hidden only in that album's rendered Properties surface, and stays
+editable in Source mode.
+
+The **＋ noun** button copies the exact `Name @stem/` capture starter for the
+album. It does not open capture or create a record. Invalid schemas or capture
+routes leave the header visible and disable the button with the report's
+reason. Owner links use resolved note paths; incomplete or cyclic ancestry
+shows only confirmed links.
+
 For stored album/record structure and capture routes, see
 [Records](https://bobs-org.github.io/bob/records/).

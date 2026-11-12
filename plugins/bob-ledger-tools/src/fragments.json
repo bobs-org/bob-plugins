@@ -124,6 +124,8 @@
   "241r-plugin-album-records-model.js",
   "241s-plugin-album-records-dom.js",
   "241t-plugin-album-records.js",
+  "241u-plugin-album-header-model.js",
+  "241v-plugin-album-header.js",
   "241e-plugin-notebook-header-model.js",
   "241f-plugin-notebook-header.js",
   "241g-plugin-notebook-header-live.js",

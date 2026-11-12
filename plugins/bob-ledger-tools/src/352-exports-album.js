@@ -58,6 +58,17 @@ try {
       albumRecordsRecordRows,
       albumPaintRecordsCallout,
       albumCleanRecordsDom,
+      ALBUM_HEADER_CLASS,
+      ALBUM_HEADER_SURFACE_CLASS,
+      ALBUM_HEADER_CRUMB_CLASS,
+      albumHeaderPath,
+      albumHeaderEntry,
+      albumHeaderSourceType,
+      albumHeaderIsAlbumSource,
+      albumHeaderOwnerChain,
+      albumHeaderRouteReason,
+      albumHeaderModel,
+      albumHeaderSignature,
     });
   }
 } catch (error) {

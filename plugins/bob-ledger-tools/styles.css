@@ -8276,6 +8276,135 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   }
 }
 
+/* Album header chrome is report-backed and view-only. The record property
+   stays editable in Source mode and remains scoped to an album surface. */
+.bob-album-header-surface .metadata-property[data-property-key="record"] {
+  display: none !important;
+}
+.bob-album-header {
+  --bob-album-accent: var(--bob-area-ink, var(--interactive-accent));
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 0.9em;
+  padding: 0.65em 0.8em;
+  border: 1px solid color-mix(in srgb, var(--bob-album-accent) 30%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-album-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bob-album-accent) 8%, var(--background-primary));
+  font-family: var(--font-interface);
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.bob-album-header[data-root-hue="aqua"] { --bob-album-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="blue"] { --bob-album-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="green"] { --bob-album-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="magenta"] { --bob-album-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="orange"] { --bob-album-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="red"] { --bob-album-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="violet"] { --bob-album-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-album-header[data-root-hue="yellow"] { --bob-album-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-album-header-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  min-width: 0;
+  color: var(--text-muted);
+}
+.bob-album-header-crumb {
+  color: var(--text-normal);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.bob-album-header-current {
+  font-weight: 700;
+}
+.bob-album-header-actions {
+  margin-top: 0.45em;
+}
+.bob-album-header-copy {
+  padding: 0.2em 0.65em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  color: var(--text-normal);
+  background: var(--background-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.bob-album-header-copy:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+.bob-album-header-crumb:focus-visible,
+.bob-album-header-copy:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-album-schema-card {
+  margin-top: 0.55em;
+  padding-top: 0.45em;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bob-album-schema-title {
+  margin: 0 0 0.35em;
+  font-size: 0.92em;
+  font-weight: 650;
+}
+.bob-album-schema-fields {
+  display: grid;
+  gap: 0.2em;
+  margin: 0;
+}
+.bob-album-schema-field {
+  display: grid;
+  grid-template-columns: minmax(6em, 0.7fr) minmax(0, 1.3fr);
+  gap: 0.5em;
+  min-width: 0;
+}
+.bob-album-schema-label {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.bob-album-schema-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2em 0.55em;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+}
+.bob-album-schema-kind {
+  color: var(--text-faint);
+}
+.bob-album-schema-required {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.bob-album-schema-choices {
+  overflow-wrap: anywhere;
+}
+.bob-album-schema-empty,
+.bob-album-header-ancestry-note {
+  margin: 0.2em 0 0;
+  color: var(--text-muted);
+}
+.bob-album-schema-issues {
+  margin: 0.45em 0 0;
+  padding-inline-start: 1.4em;
+  color: var(--text-warning);
+}
+.bob-album-schema-issue.is-info {
+  color: var(--text-muted);
+}
+@media (max-width: 420px) {
+  .bob-album-schema-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
 /* Bank month/queue cards and the quiet daily-note bank chip. All amounts
    arrive from `bob bank`; CSS only supplies the statement-like layout. */
 .bob-bank-card {

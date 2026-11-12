@@ -45,8 +45,10 @@ Module._load = originalLoad;
 const {
   normalizeBracketRepeatType,
   planBracketRepeat,
+  BRACKET_REPEAT_UPPERCASE_PLANS,
   BRACKET_REPEAT_STORAGE_KEY,
   BRACKET_REPEAT_EMPTY_NOTICE,
+  BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
 } = helpers;
 
 function createLoadedPlugin({ storage = new Map() } = {}) {
@@ -381,4 +383,198 @@ test("other navigation, internal advances, and blank-line commands do not record
 
   assert.equal(plugin.bracketRepeatType, "w");
   assert.equal(saves.length, initialSaves);
+});
+
+test("uppercase planner returns group and lane jumps; n has no uppercase plan", () => {
+  assert.ok(Object.isFrozen(BRACKET_REPEAT_UPPERCASE_PLANS));
+  const rows = [
+    ["s", 1, "jumpToDueTask", [1, { groupJump: true }]],
+    ["s", -1, "jumpToDueTask", [-1, { groupJump: true }]],
+    ["w", 1, "jumpToLaneTask", [1, { laneJump: true }]],
+    ["w", -1, "jumpToLaneTask", [-1, { laneJump: true }]],
+  ];
+  for (const [type, direction, method, args] of rows) {
+    const plan = planBracketRepeat(type, direction, { uppercase: true });
+    assert.deepEqual(plan, { method, args });
+    assert.ok(Object.isFrozen(plan));
+    assert.ok(Object.isFrozen(plan.args));
+  }
+  assert.equal(planBracketRepeat("n", 1, { uppercase: true }), null);
+  assert.equal(planBracketRepeat("n", -1, { uppercase: true }), null);
+  assert.equal(planBracketRepeat("unknown", 1, { uppercase: true }), null);
+  assert.equal(
+    BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
+    "No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W",
+  );
+});
+
+test("registration adds uppercase repeat commands with no hotkeys", () => {
+  const { commands } = createLoadedPlugin();
+  const next = command(commands, "repeat-next-uppercase-bracket-walk");
+  const prev = command(commands, "repeat-prev-uppercase-bracket-walk");
+  assert.equal(next.name, "Repeat last bracket walk forward, uppercase (]S or ]W)");
+  assert.equal(prev.name, "Repeat last bracket walk backward, uppercase ([S or [W)");
+  assert.equal(Object.hasOwn(next, "hotkeys"), false);
+  assert.equal(Object.hasOwn(prev, "hotkeys"), false);
+  const legacyNext = command(commands, "repeat-next-bracket-walk");
+  const legacyPrev = command(commands, "repeat-prev-bracket-walk");
+  assert.equal(legacyNext.name, "Repeat last bracket walk forward (]s, ]w, or ]n)");
+  assert.equal(legacyPrev.name, "Repeat last bracket walk backward ([s, [w, or [n)");
+});
+
+test("uppercase repeat delegates with fresh unfrozen options objects", () => {
+  const rows = [
+    ["s", 1, "jumpToDueTask", [1, { groupJump: true }]],
+    ["s", -1, "jumpToDueTask", [-1, { groupJump: true }]],
+    ["w", 1, "jumpToLaneTask", [1, { laneJump: true }]],
+    ["w", -1, "jumpToLaneTask", [-1, { laneJump: true }]],
+  ];
+  for (const [type, direction, method, expectedArgs] of rows) {
+    const { plugin } = makeBarePlugin();
+    const seen = [];
+    const result = {};
+    plugin.rememberBracketRepeatType(type);
+    plugin[method] = (...args) => {
+      seen.push(args);
+      for (const arg of args) {
+        if (arg !== null && typeof arg === "object") {
+          assert.equal(Object.isFrozen(arg), false);
+        }
+      }
+      return result;
+    };
+    assert.strictEqual(plugin.repeatBracketWalk(direction, { uppercase: true }), result);
+    assert.deepEqual(seen, [expectedArgs]);
+    const firstOptions = seen[0].find((arg) => arg !== null && typeof arg === "object");
+    const secondSeen = [];
+    plugin[method] = (...args) => {
+      secondSeen.push(args);
+      return result;
+    };
+    plugin.repeatBracketWalk(direction, { uppercase: true });
+    const secondOptions = secondSeen[0].find((arg) => arg !== null && typeof arg === "object");
+    assert.notStrictEqual(firstOptions, secondOptions);
+    assert.deepEqual(secondOptions, firstOptions);
+  }
+});
+
+test("uppercase sequence keeps family and writes no new storage", () => {
+  const { plugin, commands, storage } = createLoadedPlugin();
+  const writes = [];
+  plugin.app.saveLocalStorage = (key, value) => {
+    writes.push([key, value]);
+    storage.set(key, value);
+  };
+  plugin.jumpToDueTask = () => true;
+  command(commands, "jump-to-prev-due-task").callback();
+  const dueCalls = [];
+  plugin.jumpToDueTask = (...args) => dueCalls.push(args);
+  const saveCount = writes.length;
+  command(commands, "repeat-next-uppercase-bracket-walk").callback();
+  assert.deepEqual(dueCalls, [[1, { groupJump: true }]]);
+  assert.equal(plugin.bracketRepeatType, "s");
+  assert.equal(writes.length, saveCount);
+
+  command(commands, "jump-to-next-lane-task").callback();
+  const laneCalls = [];
+  plugin.jumpToLaneTask = (...args) => laneCalls.push(args);
+  const laneSaveCount = writes.length;
+  command(commands, "repeat-prev-uppercase-bracket-walk").callback();
+  assert.deepEqual(laneCalls, [[-1, { laneJump: true }]]);
+  assert.equal(plugin.bracketRepeatType, "w");
+  assert.equal(storage.get(BRACKET_REPEAT_STORAGE_KEY), "w");
+  assert.equal(writes.length, laneSaveCount);
+});
+
+test("uppercase cold start shows the empty notice; n shows the no-uppercase notice", () => {
+  for (const stored of [undefined, "garbage"]) {
+    notices.length = 0;
+    const storage = new Map();
+    if (stored !== undefined) {
+      storage.set(BRACKET_REPEAT_STORAGE_KEY, stored);
+    }
+    const { plugin } = makeBarePlugin({ storage });
+    let moved = false;
+    plugin.jumpToDueTask = () => {
+      moved = true;
+    };
+    plugin.jumpToLaneTask = () => {
+      moved = true;
+    };
+    assert.equal(plugin.repeatBracketWalk(1, { uppercase: true }), false);
+    assert.equal(moved, false);
+    assert.deepEqual(notices, [BRACKET_REPEAT_EMPTY_NOTICE]);
+    notices.length = 0;
+    assert.equal(plugin.repeatBracketWalk(-1, { uppercase: true }), false);
+    assert.deepEqual(notices, [BRACKET_REPEAT_EMPTY_NOTICE]);
+  }
+  for (const direction of [1, -1]) {
+    notices.length = 0;
+    const { plugin } = makeBarePlugin();
+    plugin.rememberBracketRepeatType("n");
+    let moved = false;
+    plugin.jumpToDueTask = () => {
+      moved = true;
+    };
+    plugin.jumpToLaneTask = () => {
+      moved = true;
+    };
+    plugin.openLabeledBodyLink = () => {
+      moved = true;
+    };
+    assert.equal(plugin.repeatBracketWalk(direction, { uppercase: true }), false);
+    assert.equal(moved, false);
+    assert.deepEqual(notices, [BRACKET_REPEAT_NO_UPPERCASE_NOTICE]);
+  }
+});
+
+test("uppercase repeat delegates synchronously so Vim count is consumed before landing", async () => {
+  const entries = [
+    { ...laneEntry(1, "one"), lane: "pending" },
+    { ...laneEntry(2, "two"), lane: "next" },
+    { ...laneEntry(3, "three"), lane: "ready" },
+  ];
+  const queue = {
+    available: true,
+    entries,
+    counts: { pending: 1, next: 1, ready: 1, total: 3, todayPending: 0, todayNext: 0, todayReady: 0, reviewReady: 0 },
+  };
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const order = [];
+  const landings = [];
+  plugin.app = {
+    plugins: { plugins: { "bob-ledger-tools": { api: { laneWalk: { version: 2, queue: () => queue } } } } },
+    loadLocalStorage: () => "w",
+    vault: { getAbstractFileByPath: () => null },
+  };
+  plugin.bracketRepeatType = undefined;
+  plugin.laneWalkAnchor = null;
+  plugin.laneWalkChain = Promise.resolve();
+  plugin.reviewWalkBusy = () => false;
+  plugin.consumePendingLaneWalkRepeat = () => {
+    order.push("count");
+    return 2;
+  };
+  plugin.getReviewJumpCursor = () => ({
+    path: entries[0].path,
+    line: entries[0].line,
+    text: entries[0].originalMarkdown,
+  });
+  plugin.getReviewWalkOriginCursor = () => null;
+  plugin.laneReleaseDateText = () => "2026-10-28";
+  plugin.getActiveMarkdownView = () => null;
+  plugin.landOnWalkEntry = async (entry) => {
+    order.push("land");
+    landings.push(entry.key);
+    return { ok: true, stale: false, settled: Promise.resolve(true) };
+  };
+  plugin.readLinkPickerNoteContent = async () => null;
+  plugin.showLaneWalkNotice = () => {};
+
+  const pending = plugin.repeatBracketWalk(1, { uppercase: true });
+  assert.equal(typeof pending.then, "function");
+  assert.deepEqual(order, ["count"]);
+  await pending;
+  assert.deepEqual(landings, [entries[2].key]);
+  assert.deepEqual(order, ["count", "land"]);
 });

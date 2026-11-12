@@ -185,6 +185,18 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "repeat-next-uppercase-bracket-walk",
+      name: "Repeat last bracket walk forward, uppercase (]S or ]W)",
+      callback: () => this.repeatBracketWalk(1, { uppercase: true }),
+    });
+
+    this.addCommand({
+      id: "repeat-prev-uppercase-bracket-walk",
+      name: "Repeat last bracket walk backward, uppercase ([S or [W)",
+      callback: () => this.repeatBracketWalk(-1, { uppercase: true }),
+    });
+
+    this.addCommand({
       id: "toggle-line-transclusions",
       name: "Toggle line transclusions",
       editorCallback: (editor) => this.toggleCurrentLineTransclusions(editor),

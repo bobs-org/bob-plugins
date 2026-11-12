@@ -25,7 +25,7 @@ See [plugin deployment](https://bobs-org.github.io/develop/plugins/deployment/) 
 | [Bob Emoji](bob-emoji.md) | 0.1.0 | 1.8.7 | No |
 | [Bob Ledger Tools](bob-ledger-tools.md) | 1.113.0 | 1.8.7 | No |
 | [Bob Mail](bob-mail.md) | 0.2.0 | 1.8.7 | Yes |
-| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.80.0 | 1.8.7 | No |
+| [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) | 2.81.0 | 1.8.7 | No |
 | [Bob Project Tasks](bob-project-tasks.md) | 1.1.0 | 1.8.7 | No |
 | [Bob Vim Surround](bob-vim-surround.md) | 1.5.2 | 1.8.7 | No |
 | [Bob Vim Yank Flash](bob-vim-yank-flash.md) | 0.1.0 | 1.8.7 | No |

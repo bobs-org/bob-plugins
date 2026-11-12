@@ -8,6 +8,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "review walk",
     keys: "]s / [s",
     tooltip: "]] / [[ repeat the review walk (]s / [s)",
+    upperTooltip: "]} / [{ jump to the next / previous review group (]S / [S)",
     segmentAria: "Review walk (]s / [s)",
   }),
   Object.freeze({
@@ -16,6 +17,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "lane walk",
     keys: "]w / [w",
     tooltip: "]] / [[ repeat the lane walk (]w / [w)",
+    upperTooltip: "]} / [{ jump to the next / previous lane (]W / [W)",
     segmentAria: "Lane walk (]w / [w)",
   }),
   Object.freeze({
@@ -24,6 +26,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "links",
     keys: "]n / [n",
     tooltip: "]] / [[ open the next / previous link (]n / [n)",
+    upperTooltip: "]} / [{ have no link variant (no ]N / [N)",
     segmentAria: "Links (]n / [n)",
   }),
 ]);
@@ -99,7 +102,7 @@ function buildBracketModeView(type) {
     mode: normalized,
     index,
     ariaLabel: `Bracket repeat mode: ${family.name}`,
-    tooltip: `${family.tooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
+    tooltip: `${family.tooltip}\n${family.upperTooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
     segments: Object.freeze(segments),
   });
 }

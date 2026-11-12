@@ -76375,6 +76375,18 @@ class BobNavigationHotkeysPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "repeat-next-uppercase-bracket-walk",
+      name: "Repeat last bracket walk forward, uppercase (]S or ]W)",
+      callback: () => this.repeatBracketWalk(1, { uppercase: true }),
+    });
+
+    this.addCommand({
+      id: "repeat-prev-uppercase-bracket-walk",
+      name: "Repeat last bracket walk backward, uppercase ([S or [W)",
+      callback: () => this.repeatBracketWalk(-1, { uppercase: true }),
+    });
+
+    this.addCommand({
       id: "toggle-line-transclusions",
       name: "Toggle line transclusions",
       editorCallback: (editor) => this.toggleCurrentLineTransclusions(editor),
@@ -87256,9 +87268,13 @@ class BobNavigationHotkeysReviewJournalMixin {
 }
 // ---- src/546-plugin-bracket-repeat.js ----
 // `]]` / `[[` repeat the last bracket-walk family command used in this vault.
+// `]}` / `[{` repeat that family's uppercase jump (`]S` / `[S` review groups,
+// `]W` / `[W` lanes); links (`n`) have no uppercase walk.
 const BRACKET_REPEAT_STORAGE_KEY = "bob-navigation-hotkeys-bracket-repeat";
 const BRACKET_REPEAT_EMPTY_NOTICE =
   "Nothing to repeat yet — press ]s, ]w, or ]n first";
+const BRACKET_REPEAT_NO_UPPERCASE_NOTICE =
+  "No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W";
 
 function normalizeBracketRepeatType(value) {
   return value === "s" || value === "w" || value === "n" ? value : null;
@@ -87279,10 +87295,41 @@ const BRACKET_REPEAT_PLANS = Object.freeze({
   }),
 });
 
-function planBracketRepeat(type, direction) {
+const BRACKET_REPEAT_UPPERCASE_PLANS = Object.freeze({
+  s: Object.freeze({
+    forward: Object.freeze({
+      method: "jumpToDueTask",
+      args: Object.freeze([1, Object.freeze({ groupJump: true })]),
+    }),
+    backward: Object.freeze({
+      method: "jumpToDueTask",
+      args: Object.freeze([-1, Object.freeze({ groupJump: true })]),
+    }),
+  }),
+  w: Object.freeze({
+    forward: Object.freeze({
+      method: "jumpToLaneTask",
+      args: Object.freeze([1, Object.freeze({ laneJump: true })]),
+    }),
+    backward: Object.freeze({
+      method: "jumpToLaneTask",
+      args: Object.freeze([-1, Object.freeze({ laneJump: true })]),
+    }),
+  }),
+  n: null,
+});
+
+function planBracketRepeat(type, direction, options = {}) {
   const normalized = normalizeBracketRepeatType(type);
   if (normalized === null) {
     return null;
+  }
+  if (options && options.uppercase === true) {
+    const entry = BRACKET_REPEAT_UPPERCASE_PLANS[normalized];
+    if (entry === null || entry === undefined) {
+      return null;
+    }
+    return entry[direction < 0 ? "backward" : "forward"];
   }
   return BRACKET_REPEAT_PLANS[normalized][direction < 0 ? "backward" : "forward"];
 }
@@ -87329,10 +87376,20 @@ class BobNavigationHotkeysBracketRepeatMixin {
     return this.bracketRepeatType;
   }
 
-  repeatBracketWalk(direction) {
-    const plan = planBracketRepeat(this.readBracketRepeatType(), direction);
+  repeatBracketWalk(direction, options = {}) {
+    const uppercase = Boolean(options && options.uppercase === true);
+    const type = this.readBracketRepeatType();
+    const plan = planBracketRepeat(
+      type,
+      direction,
+      uppercase ? { uppercase: true } : {},
+    );
     if (!plan) {
-      new Notice(BRACKET_REPEAT_EMPTY_NOTICE);
+      const message =
+        uppercase && type !== null
+          ? BRACKET_REPEAT_NO_UPPERCASE_NOTICE
+          : BRACKET_REPEAT_EMPTY_NOTICE;
+      new Notice(message);
       try {
         if (typeof this.flashBracketModeIndicator === "function") {
           this.flashBracketModeIndicator("empty");
@@ -87342,7 +87399,14 @@ class BobNavigationHotkeysBracketRepeatMixin {
       }
       return false;
     }
-    const result = this[plan.method](...plan.args);
+    const args = plan.args.map((arg) =>
+      arg !== null &&
+      typeof arg === "object" &&
+      Array.isArray(arg) === false
+        ? { ...arg }
+        : arg,
+    );
+    const result = this[plan.method](...args);
     try {
       if (typeof this.flashBracketModeIndicator === "function") {
         this.flashBracketModeIndicator(direction < 0 ? "backward" : "forward");
@@ -87364,6 +87428,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "review walk",
     keys: "]s / [s",
     tooltip: "]] / [[ repeat the review walk (]s / [s)",
+    upperTooltip: "]} / [{ jump to the next / previous review group (]S / [S)",
     segmentAria: "Review walk (]s / [s)",
   }),
   Object.freeze({
@@ -87372,6 +87437,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "lane walk",
     keys: "]w / [w",
     tooltip: "]] / [[ repeat the lane walk (]w / [w)",
+    upperTooltip: "]} / [{ jump to the next / previous lane (]W / [W)",
     segmentAria: "Lane walk (]w / [w)",
   }),
   Object.freeze({
@@ -87380,6 +87446,7 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     name: "links",
     keys: "]n / [n",
     tooltip: "]] / [[ open the next / previous link (]n / [n)",
+    upperTooltip: "]} / [{ have no link variant (no ]N / [N)",
     segmentAria: "Links (]n / [n)",
   }),
 ]);
@@ -87455,7 +87522,7 @@ function buildBracketModeView(type) {
     mode: normalized,
     index,
     ariaLabel: `Bracket repeat mode: ${family.name}`,
-    tooltip: `${family.tooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
+    tooltip: `${family.tooltip}\n${family.upperTooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
     segments: Object.freeze(segments),
   });
 }
@@ -116933,8 +117000,8 @@ module.exports.helpers = {
   renderLaneWalkNoticeFragment,
   renderLaneWalkEmptyFragment,
   showLaneWalkNotice,
-  normalizeBracketRepeatType, planBracketRepeat,
-  BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE,
+  normalizeBracketRepeatType, planBracketRepeat, BRACKET_REPEAT_UPPERCASE_PLANS,
+  BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE, BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
   BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS,
   buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator,
 };

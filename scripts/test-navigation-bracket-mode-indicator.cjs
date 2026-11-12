@@ -46,6 +46,7 @@ const {
   normalizeBracketRepeatType,
   BRACKET_REPEAT_STORAGE_KEY,
   BRACKET_REPEAT_EMPTY_NOTICE,
+  BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
   BRACKET_MODE_FAMILIES,
   BRACKET_MODE_FLASH_MS,
   buildBracketModeView,
@@ -259,19 +260,21 @@ test("family table is frozen and ordered s, w, n", () => {
 
 test("view model covers s, w, n, null, and garbage", () => {
   const expectations = [
-    ["s", 0, "review walk", "]] / [[ repeat the review walk (]s / [s)", "Review walk (]s / [s)"],
-    ["w", 1, "lane walk", "]] / [[ repeat the lane walk (]w / [w)", "Lane walk (]w / [w)"],
-    ["n", 2, "links", "]] / [[ open the next / previous link (]n / [n)", "Links (]n / [n)"],
+    ["s", 0, "review walk", "]] / [[ repeat the review walk (]s / [s)", "]} / [{ jump to the next / previous review group (]S / [S)", "Review walk (]s / [s)"],
+    ["w", 1, "lane walk", "]] / [[ repeat the lane walk (]w / [w)", "]} / [{ jump to the next / previous lane (]W / [W)", "Lane walk (]w / [w)"],
+    ["n", 2, "links", "]] / [[ open the next / previous link (]n / [n)", "]} / [{ have no link variant (no ]N / [N)", "Links (]n / [n)"],
   ];
-  for (const [type, index, name, firstLine, segmentAria] of expectations) {
+  for (const [type, index, name, firstLine, secondLine, segmentAria] of expectations) {
     const view = buildBracketModeView(type);
     assert.equal(view.mode, type);
     assert.equal(view.index, index);
     assert.equal(view.ariaLabel, `Bracket repeat mode: ${name}`);
     assert.ok(view.tooltip.startsWith(firstLine), `${type} first line`);
+    const lines = view.tooltip.split("\n");
+    assert.equal(lines[1], secondLine, `${type} second line`);
     assert.ok(
       view.tooltip.includes("s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to switch"),
-      `${type} second line`,
+      `${type} hint line`,
     );
     assert.ok(Object.isFrozen(view));
     assert.ok(Object.isFrozen(view.segments));
@@ -594,4 +597,35 @@ test("onunload clears flash and instant timers", async () => {
   plugin.onunload();
   assert.equal(plugin.bracketModeFlashTimer, null);
   assert.equal(plugin.bracketModeInstantFrame, null);
+});
+
+test("uppercase repeat flashes forward and backward; no-uppercase flashes empty", async () => {
+  const { plugin } = createMountedPlugin();
+  plugin.rememberBracketRepeatType("s");
+  plugin.jumpToDueTask = () => true;
+  assert.strictEqual(plugin.repeatBracketWalk(1, { uppercase: true }), true);
+  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "forward");
+  await sleep(BRACKET_MODE_FLASH_MS.forward + 60);
+  plugin.rememberBracketRepeatType("w");
+  plugin.jumpToLaneTask = () => true;
+  assert.strictEqual(plugin.repeatBracketWalk(-1, { uppercase: true }), true);
+  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "backward");
+  await sleep(BRACKET_MODE_FLASH_MS.backward + 60);
+  notices.length = 0;
+  plugin.rememberBracketRepeatType("n");
+  let walked = false;
+  plugin.jumpToDueTask = () => {
+    walked = true;
+  };
+  plugin.jumpToLaneTask = () => {
+    walked = true;
+  };
+  plugin.openLabeledBodyLink = () => {
+    walked = true;
+  };
+  assert.equal(plugin.repeatBracketWalk(1, { uppercase: true }), false);
+  assert.equal(walked, false);
+  assert.deepEqual(notices, [BRACKET_REPEAT_NO_UPPERCASE_NOTICE]);
+  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "empty");
+  await sleep(BRACKET_MODE_FLASH_MS.empty + 60);
 });

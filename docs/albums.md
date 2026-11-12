@@ -82,7 +82,7 @@ reason. Owner links use resolved note paths; incomplete or cyclic ancestry
 shows only confirmed links.
 
 For stored album/record structure and capture routes, see
-[Records](https://bobs-org.github.io/bob/records/).
+[Records](https://bobs-org.github.io/records/).
 
 ## Verification
 

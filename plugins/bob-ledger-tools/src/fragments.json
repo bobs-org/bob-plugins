@@ -17,6 +17,7 @@
   "110-freshness-queue.js",
   "120-freshness-footer.js",
   "121-freshness-footer-paint.js",
+  "122-walker-footer-host.js",
   "130-freshness-marks.js",
   "135-freshness-rotten-log.js",
   "135-priority-marks.js",

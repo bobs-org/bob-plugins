@@ -2138,3 +2138,375 @@ test("the footer stylesheet defines the TICK answer chip", () => {
   assert.equal(css.includes("@keyframes bob-freshness-answer-land"), true);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.bob-freshness \.bob-freshness-answer[\s\S]*?animation: none/);
 });
+
+// Walker-footer host (plan 202611/walker_footers.md, phase host): one
+// ledger status item follows the persisted bracket family. These tests
+// drive the plugin through `updateFreshnessStatusBar` with a fake nav
+// api, the same way the status-bar tests above drive the legacy path.
+
+const WALK_MODE_COMMAND = "bob-navigation-hotkeys:jump-to-next-due-task";
+
+function makeWalkerWorkspace() {
+  const listeners = new Map();
+  const layoutCbs = [];
+  return {
+    listeners,
+    layoutCbs,
+    on(event, handler) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(handler);
+      return { event, handler };
+    },
+    offref() {},
+    onLayoutReady(cb) {
+      layoutCbs.push(cb);
+      return {};
+    },
+    getActiveFile: () => null,
+    getActiveViewOfType: () => null,
+    trigger: () => {},
+    fire(event) {
+      for (const handler of listeners.get(event) || []) handler();
+    },
+    count(event) {
+      return (listeners.get(event) || []).length;
+    },
+  };
+}
+
+function makeWalkerNav({ mode = "s", walkVersion = 1, navVersion = 3, quickRoll = null } = {}) {
+  const api = { version: navVersion };
+  if (walkVersion !== null) {
+    api.walkMode = {
+      version: walkVersion,
+      current: () => mode,
+    };
+  }
+  if (quickRoll) {
+    api.quickRoll = { version: 1, preview: () => quickRoll };
+  }
+  return { api };
+}
+
+function makeWalkerApp({ tasks, nav = null, workspace = null, navCommand = true } = {}) {
+  const ws = workspace || makeWalkerWorkspace();
+  const plugins = {
+    "obsidian-tasks-plugin": { getTasks: () => tasks },
+  };
+  if (nav) {
+    plugins["bob-navigation-hotkeys"] = nav;
+  }
+  return {
+    app: {
+      vault: {
+        getAbstractFileByPath: () => null,
+        cachedRead: () => Promise.resolve(null),
+      },
+      workspace: ws,
+      metadataCache: {
+        on: () => ({}),
+        getCache: () => null,
+        getFileCache: () => ({}),
+        getFirstLinkpathDest: () => null,
+      },
+      commands: navCommand ? { commands: { [WALK_MODE_COMMAND]: {} } } : {},
+      plugins: { plugins },
+    },
+    workspace: ws,
+  };
+}
+
+function setupWalkerPlugin({ tasks, nav = null, navCommand = true } = {}) {
+  const workspace = makeWalkerWorkspace();
+  const { app } = makeWalkerApp({ tasks, nav, workspace, navCommand });
+  const el = makeStatusEl();
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.addStatusBarItem = makeStatusItemFactory(el);
+  plugin.onload();
+  return { app, workspace, el, plugin };
+}
+
+function dueTextOf(el) {
+  const node = findChild(el, "bob-freshness-due");
+  return node ? node.textContent : null;
+}
+
+test("walker host keeps the same status item and marks it", () => {
+  withMissingConfig(() => {
+    const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()] });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(plugin.freshnessStatusEl, el);
+      assert.equal(el.classList.has("bob-freshness"), true);
+      assert.equal(el.classList.has("bob-walker-footer"), true);
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("gated s panel keeps the review footer with ]] next hints", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "s" });
+    const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(dueTextOf(el), "Review 1 due");
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]] next");
+      assert.ok(plugin.freshnessFooterLastView.tooltip.includes("]] next"));
+      assert.ok(plugin.freshnessFooterLastView.ariaLabel.includes("]] next"));
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("w, n, and unset hide the panel in this phase", () => {
+  withMissingConfig(() => {
+    for (const mode of ["w", "n", null]) {
+      const nav = makeWalkerNav({ mode });
+      const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+      try {
+        plugin.updateFreshnessStatusBar();
+        assert.equal(el.classList.has("bob-freshness-hidden"), true, `mode ${mode} hides`);
+        assert.equal(plugin.freshnessFooterLastView.visible, false);
+      } finally {
+        plugin.onunload();
+      }
+    }
+  });
+});
+
+test("an invalid stored family never paints as s", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "bogus" });
+    const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), true);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("doorbell repaints synchronously on family change", () => {
+  withMissingConfig(() => {
+    let mode = "s";
+    const nav = makeWalkerNav({ mode: "s" });
+    nav.api.walkMode.current = () => mode;
+    const { el, workspace, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      assert.equal(workspace.count("bob-navigation-hotkeys:walk-mode"), 1);
+      plugin.updateFreshnessStatusBar();
+      assert.equal(dueTextOf(el), "Review 1 due");
+      mode = "w";
+      workspace.fire("bob-navigation-hotkeys:walk-mode");
+      assert.equal(el.classList.has("bob-freshness-hidden"), true);
+      assert.equal(dueTextOf(el), "");
+      mode = "s";
+      workspace.fire("bob-navigation-hotkeys:walk-mode");
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(dueTextOf(el), "Review 1 due");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("empty queue paints Review clear while s is selected", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "s" });
+    const { el, plugin } = setupWalkerPlugin({ tasks: [], nav });
+    try {
+      plugin.updateFreshnessStatusBar();
+      const view = plugin.freshnessFooterLastView;
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(view.visible, true);
+      assert.equal(view.mode, "clear");
+      assert.equal(view.dueText, "Review clear");
+      assert.match(view.meterText, /^✓ (\d+)(\/\d+)? today$/);
+      assert.equal(el.classList.has("bob-freshness-clear"), true);
+      assert.equal(dueTextOf(el), "Review clear");
+      assert.ok(!view.tooltip.includes("Nothing due"));
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("clear state keeps the prioritized Alt+P preview", () => {
+  withMissingConfig(() => {
+    const preview = {
+      ok: true,
+      kind: "roll",
+      compact: "Alt+P roll P2 1/1",
+      detail: "Alt+P: roll P2 again (1 of 1)",
+    };
+    const nav = makeWalkerNav({ mode: "s", quickRoll: preview });
+    const workspace = makeWalkerWorkspace();
+    const fakeView = new TestMarkdownView();
+    fakeView.editor = {
+      getCursor: () => ({ line: 0 }),
+      getLine: () => "- [ ] #task Do it",
+      getValue: () => "- [ ] #task Do it\n",
+    };
+    fakeView.file = { path: "notes/a.md" };
+    workspace.getActiveViewOfType = () => fakeView;
+    const { app } = makeWalkerApp({ tasks: [], nav, workspace });
+    const el = makeStatusEl();
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.addStatusBarItem = makeStatusItemFactory(el);
+    plugin.onload();
+    try {
+      plugin.updateFreshnessStatusBar();
+      const view = plugin.freshnessFooterLastView;
+      assert.equal(view.visible, true);
+      assert.equal(view.dueText, "Review clear");
+      assert.equal(view.hintText, "Alt+P roll P2 1/1");
+      assert.ok(view.tooltip.includes("Alt+P: roll P2 again (1 of 1)"));
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("legacy fallback without nav paints today's footer byte-identical", () => {
+  withMissingConfig(() => {
+    const { plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav: null, navCommand: false });
+    try {
+      plugin.updateFreshnessStatusBar();
+      const memo = plugin.freshnessMemo;
+      const expected = freshnessFooterView(memo, {
+        current: null,
+        navAvailable: false,
+        todayText: memo.dateText,
+        mostOverdue: null,
+        queue: memo.queue,
+        quickRoll: null,
+      });
+      assert.deepEqual(plugin.freshnessFooterLastView, expected);
+      assert.equal(plugin.freshnessFooterLastView.hintText, "open review");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("old nav without walkMode keeps the ]s next legacy footer", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "s", walkVersion: 0 });
+    const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(dueTextOf(el), "Review 1 due");
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]s next");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("late nav arrival gates the footer; nav removal restores legacy", () => {
+  withMissingConfig(() => {
+    const { app, el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()] });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(dueTextOf(el), "Review 1 due");
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]s next");
+      app.plugins.plugins["bob-navigation-hotkeys"] = makeWalkerNav({ mode: "w" });
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), true);
+      app.plugins.plugins["bob-navigation-hotkeys"].api.walkMode.current = () => "s";
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]] next");
+      delete app.plugins.plugins["bob-navigation-hotkeys"];
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]s next");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("unload and reload mount one item and one doorbell subscription", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "s" });
+    const workspace = makeWalkerWorkspace();
+    const { app } = makeWalkerApp({ tasks: [makeFreshnessTask()], nav, workspace });
+    let items = 0;
+    const els = [];
+    const plugin = new LedgerToolsPlugin(app, {});
+    plugin.addStatusBarItem = () => {
+      items += 1;
+      const el = makeStatusEl();
+      els.push(el);
+      return el;
+    };
+    plugin.onload();
+    // First cycle mounts two items: the walker footer plus the pre-existing
+    // Keep inbox item. The Keep item survives unload (its element is never
+    // nulled), so the second cycle mounts only the footer again.
+    assert.equal(items, 2);
+    assert.equal(workspace.count("bob-navigation-hotkeys:walk-mode"), 1);
+    const firstFooterEl = plugin.freshnessStatusEl;
+    plugin.onunload();
+    plugin.onload();
+    try {
+      assert.equal(items, 3);
+      assert.equal(workspace.count("bob-navigation-hotkeys:walk-mode"), 2);
+      assert.notEqual(plugin.freshnessStatusEl, firstFooterEl);
+      assert.equal(plugin.freshnessStatusEl, els[els.length - 1]);
+      assert.equal(plugin.freshnessStatusEl.classList.has("bob-walker-footer"), true);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("a throwing doorbell path never breaks setup or painting", () => {
+  withMissingConfig(() => {
+    const nav = makeWalkerNav({ mode: "s" });
+    const { app, el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      // A workspace without events still gets a mounted footer: the
+      // doorbell subscribe path never throws.
+      const realWorkspace = plugin.app.workspace;
+      const throwingWorkspace = makeWalkerWorkspace();
+      throwingWorkspace.on = () => {
+        throw new Error("no events");
+      };
+      plugin.app.workspace = throwingWorkspace;
+      try {
+        plugin.subscribeWalkerFooterDoorbell();
+      } finally {
+        plugin.app.workspace = realWorkspace;
+      }
+      assert.equal(plugin.freshnessStatusEl, el);
+      const throwingNav = {
+        api: {
+          version: 3,
+          walkMode: {
+            version: 1,
+            current: () => {
+              throw new Error("no storage");
+            },
+          },
+        },
+      };
+      app.plugins.plugins["bob-navigation-hotkeys"] = throwingNav;
+      plugin.updateFreshnessStatusBar();
+      assert.equal(el.classList.has("bob-freshness-hidden"), false);
+      assert.equal(plugin.freshnessFooterLastView.hintText, "]s next");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

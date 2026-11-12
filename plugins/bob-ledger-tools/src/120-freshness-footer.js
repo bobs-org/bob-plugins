@@ -712,7 +712,17 @@ function freshnessFooterView(memo, options = {}) {
         : freshnessFooterHiddenView();
     }
     const action = navAvailable ? "jump" : "review";
-    const hintDefault = navAvailable ? "]s next" : "open review";
+    // Walker-footer host (plan 202611/walker_footers.md): the gated `s`
+    // panel teaches the repeat key, so it hints `]] next` via
+    // `options.repeatHint`. Absent, the hint is today's `]s next` and the
+    // legacy fallback stays byte-compatible.
+    const repeatHint =
+      options &&
+      typeof options.repeatHint === "string" &&
+      options.repeatHint
+        ? options.repeatHint
+        : "]s next";
+    const hintDefault = navAvailable ? repeatHint : "open review";
     let current = null;
     const currentEntry =
       options.current && typeof options.current === "object"

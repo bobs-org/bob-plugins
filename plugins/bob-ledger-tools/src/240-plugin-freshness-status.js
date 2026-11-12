@@ -32,11 +32,13 @@ class BobLedgerToolsFreshnessStatusMixin {
         if (typeof el.addClass === "function") {
           el.addClass("bob-freshness");
           el.addClass("bob-freshness-hidden");
+          el.addClass("bob-walker-footer");
         } else if (el.classList && typeof el.classList.add === "function") {
           el.classList.add("bob-freshness");
           el.classList.add("bob-freshness-hidden");
+          el.classList.add("bob-walker-footer");
         } else if (typeof el.className === "string") {
-          el.className = (el.className + " bob-freshness bob-freshness-hidden").trim();
+          el.className = (el.className + " bob-freshness bob-freshness-hidden bob-walker-footer").trim();
         }
         if (typeof el.setAttribute === "function") {
           el.setAttribute("aria-hidden", "true");
@@ -71,9 +73,62 @@ class BobLedgerToolsFreshnessStatusMixin {
         // A status bar without a click still shows the counts.
       }
       this.observeFreshnessFooterWidth(el);
+      this.subscribeWalkerFooterDoorbell();
+      this.refreshWalkerFooterOnLayoutReady();
     } catch (error) {
       this.freshnessStatusEl = null;
       this.freshnessFooterParts = null;
+    }
+  }
+
+  // Walker-footer host (plan 202611/walker_footers.md, phase host): the
+  // same status-bar item follows the persisted bracket family. Ledger
+  // loads before nav, so the mode is resolved on layout-ready and on
+  // every doorbell event; receivers re-read
+  // `api.walkMode.current()`, so a stale payload can never win. A mode
+  // event repaints synchronously, bypassing the data debounce.
+  subscribeWalkerFooterDoorbell() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.on !== "function") {
+        return;
+      }
+      const self = this;
+      const ref = workspace.on(WALKER_FOOTER_DOORBELL_EVENT, () => {
+        try {
+          self.updateFreshnessStatusBar();
+        } catch (error) {
+          // A mode event never breaks the footer.
+        }
+      });
+      if (ref && typeof this.registerEvent === "function") {
+        try {
+          this.registerEvent(ref);
+        } catch (error) {
+          // Obsidian still cleans up workspace events on unload.
+        }
+      }
+    } catch (error) {
+      // No doorbell, no gating: the legacy fallback still paints.
+    }
+  }
+
+  refreshWalkerFooterOnLayoutReady() {
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (!workspace || typeof workspace.onLayoutReady !== "function") {
+        return;
+      }
+      const self = this;
+      workspace.onLayoutReady(() => {
+        try {
+          self.scheduleFreshnessStatusBar();
+        } catch (error) {
+          // Layout refresh is best-effort; cursor events still repaint.
+        }
+      });
+    } catch (error) {
+      // Layout refresh is best-effort.
     }
   }
 
@@ -224,6 +279,21 @@ class BobLedgerToolsFreshnessStatusMixin {
       return;
     }
     try {
+      // Walker-footer host (plan 202611/walker_footers.md, phase host):
+      // `w`, `n`, and unset hide in this phase; their panels land in the
+      // lanes and links phases. The missing-nav legacy path paints below.
+      const route = walkerFooterWalkMode(this);
+      if (!route.legacy && route.mode !== "s") {
+        const key = "walker:" + String(route.mode) + ":hidden";
+        if (key === this.freshnessFooterPaintKey && this.freshnessFooterParts) {
+          return;
+        }
+        const hidden = freshnessFooterHiddenView();
+        this.freshnessFooterLastView = hidden;
+        this.freshnessFooterPaintKey = key;
+        this.freshnessFooterParts = freshnessFooterPaint(el, hidden);
+        return;
+      }
       const contextOnly = options && options.contextOnly === true;
       let memo = null;
       if (contextOnly) {
@@ -317,15 +387,23 @@ class BobLedgerToolsFreshnessStatusMixin {
       } catch (error) {
         quickRoll = null;
       }
-      const view = freshnessFooterView(memo, {
+      // Legacy fallback (A11): nav absent or older than walkMode v1
+      // paints today's review footer exactly as now — ungated, with
+      // `]s next` hints and hide-on-empty. The gated `s` panel routes
+      // through the walker host for `]] next` hints and the clear state.
+      const viewOptions = {
         current,
         navAvailable: this.freshnessNavigationAvailable(),
         todayText: memo.dateText,
         mostOverdue,
         queue,
         quickRoll,
-      });
+      };
+      const view = route.legacy
+        ? freshnessFooterView(memo, viewOptions)
+        : walkerFooterReviewView(memo, viewOptions);
       const paintKey = [
+        route.legacy ? "legacy" : "s",
         view.visible ? "1" : "0",
         view.mode,
         view.dueText,

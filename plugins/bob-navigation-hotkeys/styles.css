@@ -4172,6 +4172,7 @@
 }
 
 button.bob-bracket-mode-seg {
+  position: relative;
   appearance: none;
   -webkit-appearance: none;
   width: var(--bob-bm-seg);
@@ -4189,6 +4190,27 @@ button.bob-bracket-mode-seg {
   cursor: pointer;
   z-index: 1;
 }
+
+button.bob-bracket-mode-seg.has-attention::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--status-bar-background, var(--background-primary));
+  border-radius: 50%;
+  background: var(--bob-review-attention, var(--text-accent));
+  content: "";
+  pointer-events: none;
+}
+
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="pre"] { --bob-review-attention: var(--color-red); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="new"] { --bob-review-attention: var(--color-orange); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="projects"] { --bob-review-attention: var(--color-yellow); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="pending"] { --bob-review-attention: var(--color-blue); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="next"] { --bob-review-attention: var(--color-purple); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="recurring"] { --bob-review-attention: var(--color-cyan); }
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="tickler"] { --bob-review-attention: var(--color-green); }
 
 button.bob-bracket-mode-seg:hover {
   color: var(--text-normal);
@@ -4270,6 +4292,12 @@ button.bob-bracket-mode-seg:focus-visible {
 
   button.bob-bracket-mode-seg.is-active {
     color: HighlightText;
+  }
+
+  button.bob-bracket-mode-seg.has-attention::after {
+    border-color: Canvas;
+    background: Highlight;
+    forced-color-adjust: none;
   }
 
   .bob-bracket-mode-key {

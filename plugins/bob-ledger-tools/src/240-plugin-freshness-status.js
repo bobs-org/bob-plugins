@@ -313,6 +313,17 @@ class BobLedgerToolsFreshnessStatusMixin {
     try {
       const route = walkerFooterWalkMode(this);
       const contextOnly = options && options.contextOnly === true;
+      let attentionMemo = this.freshnessMemo;
+      if (!contextOnly || !attentionMemo) {
+        try {
+          attentionMemo = typeof this.freshnessEnsureMemo === "function"
+            ? this.freshnessEnsureMemo()
+            : attentionMemo;
+        } catch (_error) {
+          attentionMemo = null;
+        }
+      }
+      walkerFooterPushReviewAttention(this, route, attentionMemo);
       if (!route.legacy && route.mode === "n") {
         linksWalkerFooterRequest(this);
         return;

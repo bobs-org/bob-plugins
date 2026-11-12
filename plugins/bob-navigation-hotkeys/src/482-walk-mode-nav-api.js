@@ -1,4 +1,4 @@
-// Additive nav `api.walkMode` v2: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v3: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -8,6 +8,7 @@
 // never throws. `links({path, content})` v2 previews the first prev/next
 // body links with the exact matcher behind `[n`/`]n`; it is read-only and
 // reports resolved or creation-eligible paths without opening or creating.
+// v3 adds display-only review attention for the selector's `s` letter.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -29,7 +30,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 2,
+    version: 3,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -63,6 +64,39 @@ function createWalkModeApi(plugin) {
         plugin.rememberBracketRepeatType(normalized);
         return Object.freeze({ ok: true });
       } catch (error) {
+        return Object.freeze({ ok: false, reason: "api-failed" });
+      }
+    },
+    setAttention(type, value) {
+      try {
+        if (type !== "s") {
+          return Object.freeze({ ok: false, reason: "invalid-type" });
+        }
+        let attention = null;
+        if (value !== null && value !== undefined) {
+          if (!value || typeof value !== "object") {
+            return Object.freeze({ ok: false, reason: "invalid-value" });
+          }
+          const tier = typeof value.tier === "string" ? value.tier.trim().toLowerCase() : "";
+          const label = typeof value.label === "string" ? value.label.trim() : "";
+          if (!tier || !label) {
+            return Object.freeze({ ok: false, reason: "invalid-value" });
+          }
+          attention = Object.freeze({ tier, label });
+        }
+        if (!plugin) {
+          return Object.freeze({ ok: false, reason: "unavailable" });
+        }
+        plugin.bracketModeAttention = attention;
+        try {
+          if (typeof plugin.refreshBracketModeIndicator === "function") {
+            plugin.refreshBracketModeIndicator();
+          }
+        } catch (_error) {
+          // Attention is display-only and never blocks selection or walking.
+        }
+        return Object.freeze({ ok: true });
+      } catch (_error) {
         return Object.freeze({ ok: false, reason: "api-failed" });
       }
     },

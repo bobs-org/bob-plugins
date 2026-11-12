@@ -9,6 +9,58 @@
 const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
+// Push only the commitment tiers; ROTTEN and POST are upkeep and must not
+// light the review selector. This is a display projection over the existing
+// memo and never changes task or walk state.
+function walkerFooterPushReviewAttention(plugin, route, memo) {
+  try {
+    const api = plugin && typeof plugin.dependencyNavApi === "function"
+      ? plugin.dependencyNavApi()
+      : null;
+    const walkMode = api && api.walkMode;
+    if (
+      !walkMode ||
+      Number(walkMode.version) < 3 ||
+      typeof walkMode.setAttention !== "function"
+    ) {
+      return;
+    }
+    if (!route || route.legacy || route.mode === "s") {
+      walkMode.setAttention("s", null);
+      return;
+    }
+    let snapshot = memo;
+    if (!snapshot || typeof snapshot !== "object") {
+      snapshot = typeof plugin.freshnessEnsureMemo === "function"
+        ? plugin.freshnessEnsureMemo()
+        : plugin.freshnessMemo;
+    }
+    if (!snapshot || snapshot.tasksAvailable === false) {
+      walkMode.setAttention("s", null);
+      return;
+    }
+    const read = freshnessFooterReadTiers(snapshot.counts || snapshot);
+    const commitments = read.commitments;
+    if (commitments <= 0) {
+      walkMode.setAttention("s", null);
+      return;
+    }
+    const tier = FRESHNESS_FOOTER_COMMITMENT_TIERS.find((key) => read.tiers[key] > 0);
+    if (!tier) {
+      walkMode.setAttention("s", null);
+      return;
+    }
+    const due = read.walk;
+    const dueLabel = freshnessTierFooterLabel(tier);
+    walkMode.setAttention("s", {
+      tier,
+      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first; click to show`,
+    });
+  } catch (_error) {
+    // A stale or throwing nav listener never blocks footer painting.
+  }
+}
+
 // Resolve which panel the host should paint. `legacy: true` means nav
 // is missing or predates `api.walkMode` v1, so the caller paints the
 // ungated review footer. Otherwise `mode` is the persisted family

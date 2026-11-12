@@ -76113,7 +76113,7 @@ function planReviewGroupJump(queue, options = {}) {
   });
 }
 // ---- src/482-walk-mode-nav-api.js ----
-// Additive nav `api.walkMode` v2: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v3: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -76123,6 +76123,7 @@ function planReviewGroupJump(queue, options = {}) {
 // never throws. `links({path, content})` v2 previews the first prev/next
 // body links with the exact matcher behind `[n`/`]n`; it is read-only and
 // reports resolved or creation-eligible paths without opening or creating.
+// v3 adds display-only review attention for the selector's `s` letter.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -76144,7 +76145,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 2,
+    version: 3,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -76178,6 +76179,39 @@ function createWalkModeApi(plugin) {
         plugin.rememberBracketRepeatType(normalized);
         return Object.freeze({ ok: true });
       } catch (error) {
+        return Object.freeze({ ok: false, reason: "api-failed" });
+      }
+    },
+    setAttention(type, value) {
+      try {
+        if (type !== "s") {
+          return Object.freeze({ ok: false, reason: "invalid-type" });
+        }
+        let attention = null;
+        if (value !== null && value !== undefined) {
+          if (!value || typeof value !== "object") {
+            return Object.freeze({ ok: false, reason: "invalid-value" });
+          }
+          const tier = typeof value.tier === "string" ? value.tier.trim().toLowerCase() : "";
+          const label = typeof value.label === "string" ? value.label.trim() : "";
+          if (!tier || !label) {
+            return Object.freeze({ ok: false, reason: "invalid-value" });
+          }
+          attention = Object.freeze({ tier, label });
+        }
+        if (!plugin) {
+          return Object.freeze({ ok: false, reason: "unavailable" });
+        }
+        plugin.bracketModeAttention = attention;
+        try {
+          if (typeof plugin.refreshBracketModeIndicator === "function") {
+            plugin.refreshBracketModeIndicator();
+          }
+        } catch (_error) {
+          // Attention is display-only and never blocks selection or walking.
+        }
+        return Object.freeze({ ok: true });
+      } catch (_error) {
         return Object.freeze({ ok: false, reason: "api-failed" });
       }
     },
@@ -87629,7 +87663,14 @@ function bracketModeFamilyFor(type) {
   return null;
 }
 
-function buildBracketModeView(type) {
+function bracketModeViewKey(view) {
+  const attention = view && Array.isArray(view.segments)
+    ? view.segments.find((segment) => segment.type === "s" && segment.attention)
+    : null;
+  return `${view && view.mode || "none"}\0${attention ? attention.attentionLabel : ""}`;
+}
+
+function buildBracketModeView(type, attention = null) {
   let normalized = null;
   try {
     if (typeof normalizeBracketRepeatType === "function") {
@@ -87656,7 +87697,17 @@ function buildBracketModeView(type) {
         letter: family.letter,
         name: family.name,
         active: false,
-        ariaLabel: family.segmentAria,
+        ariaLabel:
+          family.type === "s" && attention
+            ? `${family.segmentAria}. ${String(attention.label || "Review commitments are due")}`
+            : family.segmentAria,
+        attention: family.type === "s" && normalized !== "s" && Boolean(attention),
+        attentionTier: family.type === "s" && normalized !== "s" && attention
+          ? String(attention.tier || "")
+          : "",
+        attentionLabel: family.type === "s" && normalized !== "s" && attention
+          ? String(attention.label || "Review commitments are due")
+          : "",
       }),
     );
     return Object.freeze({
@@ -87675,7 +87726,17 @@ function buildBracketModeView(type) {
       letter: item.letter,
       name: item.name,
       active: item.type === normalized,
-      ariaLabel: item.segmentAria,
+      ariaLabel:
+        item.type === "s" && normalized !== "s" && attention
+          ? `${item.segmentAria}. ${String(attention.label || "Review commitments are due")}`
+          : item.segmentAria,
+      attention: item.type === "s" && normalized !== "s" && Boolean(attention),
+      attentionTier: item.type === "s" && normalized !== "s" && attention
+        ? String(attention.tier || "")
+        : "",
+      attentionLabel: item.type === "s" && normalized !== "s" && attention
+        ? String(attention.label || "Review commitments are due")
+        : "",
     }),
   );
   return Object.freeze({
@@ -88038,7 +88099,8 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
   if (!safe || (safe.mode !== "s" && safe.mode !== "w" && safe.mode !== "n" && safe.mode !== "none")) {
     return parts;
   }
-  if (safe.mode === previousMode && el._bobBracketModePaintKey === safe.mode) {
+  const viewKey = bracketModeViewKey(safe);
+  if (safe.mode === previousMode && el._bobBracketModePaintKey === viewKey) {
     return parts;
   }
   if (safe.mode === previousMode && previousMode !== undefined && el._bobBracketModePaintKey === undefined) {
@@ -88087,8 +88149,19 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     }
     const active = expected.active === true;
     bracketModeToggleClass(node, "is-active", active);
+    bracketModeToggleClass(node, "has-attention", expected.attention === true);
+    if (expected.attention === true) {
+      bracketModeSetAttr(node, "data-attention-tier", expected.attentionTier || "");
+    } else {
+      bracketModeRemoveAttr(node, "data-attention-tier");
+    }
     bracketModeSetAttr(node, "aria-pressed", active ? "true" : "false");
     bracketModeSetAttr(node, "aria-label", expected.ariaLabel || "");
+    if (expected.attention === true && expected.attentionLabel) {
+      bracketModeSetAttr(node, "title", expected.attentionLabel);
+    } else {
+      bracketModeRemoveAttr(node, "title");
+    }
   }
   const fresh =
     previousMode === undefined ||
@@ -88136,7 +88209,7 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     // Instant handling never blocks the paint.
   }
   try {
-    el._bobBracketModePaintKey = safe.mode;
+    el._bobBracketModePaintKey = viewKey;
   } catch (error) {
     // Cache is best-effort.
   }
@@ -88276,9 +88349,10 @@ class BobNavigationHotkeysBracketModeIndicatorMixin {
       } catch (error) {
         current = null;
       }
-      const view = buildBracketModeView(current);
+      const view = buildBracketModeView(current, this.bracketModeAttention);
       const previous = this.bracketModePaintKey;
-      if (view.mode === previous && this.bracketModeParts) {
+      const viewKey = bracketModeViewKey(view);
+      if (view.mode === previous && this.bracketModeLastViewKey === viewKey && this.bracketModeParts) {
         return;
       }
       let parts = this.bracketModeParts;
@@ -88302,6 +88376,7 @@ class BobNavigationHotkeysBracketModeIndicatorMixin {
       if (painted) {
         this.bracketModeParts = painted;
       }
+      this.bracketModeLastViewKey = viewKey;
       try {
         this.bracketModeInstantFrame = el._bobBracketModeInstantFrame || null;
       } catch (error) {

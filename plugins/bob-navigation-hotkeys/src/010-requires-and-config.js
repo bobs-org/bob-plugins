@@ -86,6 +86,8 @@ const NOTE_TEMPLATE_MISSING_NOTICES = Object.freeze({
 const PROJECT_TYPE_WIKILINK = "[[project]]";
 const AREA_TYPE_WIKILINK = "[[area]]";
 const NOTEBOOK_TYPE_WIKILINK = "[[notebook]]";
+const ALBUM_TYPE_WIKILINK = "[[album]]";
+const RECORD_TYPE_WIKILINK = "[[record]]";
 const PROJECT_TEMPLATE_PATH = "_templates/new_project.md";
 const PROJECT_COMPLETION_PLACEHOLDER =
   "(REPLACE WITH PROJECT COMPLETION CRITERIA)";
@@ -208,6 +210,22 @@ const NOTEBOOK_PRESENTATION = Object.freeze({
   emoji: "📓",
   label: "Notebook",
   variant: "notebook",
+});
+// An album note (`type: "[[album]]"`, plan 202611/album_plugin_ui.md). Albums
+// hang under an area or project of any status; records hang under albums.
+// Both kinds stay out of task-move and inbox-route destinations, which remain
+// keyed to area and project kinds.
+const ALBUM_PRESENTATION = Object.freeze({
+  icon: "album",
+  emoji: "",
+  label: "Album",
+  variant: "album",
+});
+const RECORD_PRESENTATION = Object.freeze({
+  icon: "file-text",
+  emoji: "",
+  label: "Record",
+  variant: "record",
 });
 
 const YANK_PATH_COMMANDS = [

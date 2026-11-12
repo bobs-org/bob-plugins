@@ -10,12 +10,15 @@ const PARENT_BREADCRUMB_MAX = 5;
 const PARENT_ANCESTRY_MAX_HOPS = 16;
 const PARENT_WORD_SEPARATORS = " _-./";
 
-// Notebook parent rules (plan 202611/bob_notebooks.md): an area, project,
-// reference, or record note never names a notebook as its parent, and a
-// notebook's parent is an area, a project, or another notebook. The kind comes
-// from the `type:` frontmatter, mirroring bob's classification: area, project,
-// notebook, ref, then any other typed note except the reserved non-record
-// types, which are record notes.
+// Notebook parent rules (plan 202611/bob_notebooks.md) plus album and record
+// parent rules (plan 202611/album_plugin_ui.md): an area, project, reference,
+// record, or album note never names a notebook as its parent, and a
+// notebook's parent is an area, a project, or another notebook. An album's
+// parent is an area or a project of any status; a record's parent is an
+// album. The kind comes from the `type:` frontmatter, mirroring bob's
+// classification: area, project, notebook, ref, album, then `[[record]]` and
+// any other typed note except the reserved non-record types, which are
+// record notes.
 const PARENT_RULE_NON_RECORD_TYPES = new Set([
   "article",
   "mail",
@@ -50,7 +53,7 @@ function parentRuleTypeNames(frontmatter) {
   return names;
 }
 
-// "area" | "project" | "notebook" | "reference" | "record" | "other".
+// "area" | "project" | "notebook" | "reference" | "album" | "record" | "other".
 function parentRuleKindOf(frontmatter) {
   const names = parentRuleTypeNames(frontmatter);
   if (names.includes("area")) {
@@ -65,6 +68,15 @@ function parentRuleKindOf(frontmatter) {
   if (names.includes("ref")) {
     return "reference";
   }
+  // Albums are explicit before the legacy record fallback: without this,
+  // every album would read as a record. `[[record]]` stays a record through
+  // the fallback below, alongside existing noun-typed records.
+  if (names.includes("album")) {
+    return "album";
+  }
+  if (names.includes("record")) {
+    return "record";
+  }
   if (names.some((name) => !PARENT_RULE_NON_RECORD_TYPES.has(name))) {
     return "record";
   }
@@ -75,6 +87,7 @@ const PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS = new Set([
   "area",
   "project",
   "reference",
+  "album",
   "record",
 ]);
 const PARENT_RULE_NOTEBOOK_PARENT_KINDS = new Set([
@@ -85,19 +98,35 @@ const PARENT_RULE_NOTEBOOK_PARENT_KINDS = new Set([
 
 // Why `candidateKind` cannot be the parent of a `sourceKind` note, or null
 // when the pair is allowed: "notebook" (the source can never hang under a
-// notebook) or "not-notebook-parent" (a notebook hangs only under an area,
-// project, or notebook).
+// notebook), "not-notebook-parent" (a notebook hangs only under an area,
+// project, or notebook), "not-album-parent" (an album hangs only under an
+// area or a project of any status), or "not-record-parent" (a record hangs
+// only under an album).
 function parentKindRefusal(sourceKind, candidateKind) {
   if (sourceKind === "notebook") {
     return PARENT_RULE_NOTEBOOK_PARENT_KINDS.has(candidateKind)
       ? null
       : "not-notebook-parent";
   }
+  // A notebook candidate stays a notebook refusal for every ruled-out
+  // source — including albums and records — so typing a notebook name always
+  // teaches the same rule.
   if (
     candidateKind === "notebook" &&
     PARENT_RULE_NO_NOTEBOOK_PARENT_KINDS.has(sourceKind)
   ) {
     return "notebook";
+  }
+  // An album's parent is an area or a project of any status — never a
+  // notebook, another album, or a record (or anything else).
+  if (sourceKind === "album") {
+    return candidateKind === "area" || candidateKind === "project"
+      ? null
+      : "not-album-parent";
+  }
+  // A record's parent is an album, and nothing else.
+  if (sourceKind === "record") {
+    return candidateKind === "album" ? null : "not-record-parent";
   }
   return null;
 }
@@ -105,10 +134,16 @@ function parentKindRefusal(sourceKind, candidateKind) {
 function parentKindRefusalText(refusal, candidateName) {
   const name = candidateName || "that note";
   if (refusal === "notebook") {
-    return `${name} is a notebook — areas, projects, references, and record notes can't hang under one`;
+    return `${name} is a notebook — areas, projects, references, albums, and record notes can't hang under one`;
   }
   if (refusal === "not-notebook-parent") {
     return `${name} can't hold a notebook — a notebook hangs under an area, a project, or another notebook`;
+  }
+  if (refusal === "not-album-parent") {
+    return `${name} can't hold an album — an album hangs under an area or a project`;
+  }
+  if (refusal === "not-record-parent") {
+    return `${name} can't hold a record — a record hangs under an album`;
   }
   return "";
 }
@@ -266,8 +301,8 @@ function buildParentPickerIndex(records, context = {}) {
   }
   const source = sourcePath ? byPath.get(sourcePath) : null;
   const sourceRuleKind = source ? source.ruleKind : "other";
-  // Candidates the notebook parent rules rule out, kept apart from the
-  // subtree exclusions so the empty state can teach the right reason.
+  // Candidates the notebook/album/record parent rules rule out, kept apart
+  // from the subtree exclusions so the empty state can teach the right reason.
   const hiddenByKind = new Map();
   for (const record of byPath.values()) {
     if (excluded.has(record.path)) {
@@ -485,7 +520,8 @@ function parentChangeWouldCycle(index, sourcePath, candidatePath) {
 }
 
 // The commit-time check against the live index: the notice text when the
-// notebook parent rules forbid `candidatePath` as `sourcePath`'s parent.
+// notebook/album/record parent rules forbid `candidatePath` as
+// `sourcePath`'s parent.
 function parentChangeKindRefusal(index, sourcePath, candidatePath) {
   const byPath = (index && index.byPath) || new Map();
   const source = byPath.get(sourcePath);
@@ -509,7 +545,7 @@ function parentNameLastSegment(target) {
 }
 
 // `kindRefusal` / `kindRefusalName` come from `rankParentCandidates` when
-// every match was ruled out by the notebook parent rules.
+// every match was ruled out by the notebook/album/record parent rules.
 function parentEmptyStateText(query, excludedOnly, kindRefusal, kindRefusalName) {
   const shown = String(query || "").trim();
   if (excludedOnly) {

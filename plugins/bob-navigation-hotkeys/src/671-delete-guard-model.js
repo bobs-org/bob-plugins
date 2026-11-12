@@ -224,6 +224,12 @@ function deleteGuardKindLabel(frontmatter) {
   if (kind === "notebook") {
     return childNoteKindAriaLabel({ kind: "notebook" });
   }
+  if (kind === "album") {
+    return childNoteKindAriaLabel({ kind: "album" });
+  }
+  if (kind === "record") {
+    return childNoteKindAriaLabel({ kind: "record" });
+  }
   if (kind === "project") {
     return "Project note";
   }

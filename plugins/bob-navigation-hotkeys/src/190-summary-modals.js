@@ -268,6 +268,30 @@ function isNotebookType(value) {
   return false;
 }
 
+function isAlbumType(value) {
+  if (typeof value === "string") {
+    return value.trim() === ALBUM_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isAlbumType(item));
+  }
+
+  return false;
+}
+
+function isRecordType(value) {
+  if (typeof value === "string") {
+    return value.trim() === RECORD_TYPE_WIKILINK;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => isRecordType(item));
+  }
+
+  return false;
+}
+
 function stripSurroundingQuotes(value) {
   const text = String(value === null || value === undefined ? "" : value).trim();
   if (text.length < 2) {
@@ -494,6 +518,40 @@ function getChildNoteInfo(frontmatter, now = new Date(), inlineSchedule) {
     };
   }
 
+  // Albums and records are explicit `[[album]]` / `[[record]]` types (plan
+  // 202611/album_plugin_ui.md). Legacy noun-typed records keep their parent
+  // rules through `parentRuleKindOf` but stay plain here, matching how
+  // `[[ref]]` stays plain: this surface only decorates exact type links.
+  if (Boolean(frontmatter) && isAlbumType(frontmatter.type)) {
+    return {
+      kind: "album",
+      decorated: true,
+      statusKey: "",
+      label: ALBUM_PRESENTATION.label,
+      emoji: ALBUM_PRESENTATION.emoji,
+      icon: ALBUM_PRESENTATION.icon,
+      variant: ALBUM_PRESENTATION.variant,
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
+    };
+  }
+
+  if (Boolean(frontmatter) && isRecordType(frontmatter.type)) {
+    return {
+      kind: "record",
+      decorated: true,
+      statusKey: "",
+      label: RECORD_PRESENTATION.label,
+      emoji: RECORD_PRESENTATION.emoji,
+      icon: RECORD_PRESENTATION.icon,
+      variant: RECORD_PRESENTATION.variant,
+      scheduled: false,
+      scheduledDate: "",
+      scheduledLabel: "",
+    };
+  }
+
   return {
     kind: "plain",
     decorated: false,
@@ -533,6 +591,12 @@ function childNoteKindAriaLabel(noteInfo) {
   if (noteInfo && noteInfo.kind === "notebook") {
     return "Notebook";
   }
+  if (noteInfo && noteInfo.kind === "album") {
+    return "Album";
+  }
+  if (noteInfo && noteInfo.kind === "record") {
+    return "Record";
+  }
   return `Project status: ${noteInfo ? noteInfo.label : ""}`;
 }
 
@@ -540,6 +604,8 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
   let projectCount = 0;
   let areaCount = 0;
   let notebookCount = 0;
+  let albumCount = 0;
+  let recordCount = 0;
   let futureScheduledCount = 0;
   const statusCounts = new Map();
 
@@ -556,6 +622,16 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
 
     if (info.kind === "notebook") {
       notebookCount += 1;
+      return;
+    }
+
+    if (info.kind === "album") {
+      albumCount += 1;
+      return;
+    }
+
+    if (info.kind === "record") {
+      recordCount += 1;
       return;
     }
 
@@ -611,6 +687,14 @@ function getChildNoteSummary(childFiles, noteInfoByPath) {
     parts.push(`${notebookCount} notebook${notebookCount === 1 ? "" : "s"}`);
   }
 
+  if (albumCount > 0) {
+    parts.push(`${albumCount} album${albumCount === 1 ? "" : "s"}`);
+  }
+
+  if (recordCount > 0) {
+    parts.push(`${recordCount} record${recordCount === 1 ? "" : "s"}`);
+  }
+
   return parts;
 }
 
@@ -632,6 +716,10 @@ function getChildNoteSearchText(file, noteInfo) {
     parts.push("area", noteInfo.label);
   } else if (noteInfo && noteInfo.kind === "notebook") {
     parts.push("notebook", noteInfo.label);
+  } else if (noteInfo && noteInfo.kind === "album") {
+    parts.push("album", noteInfo.label);
+  } else if (noteInfo && noteInfo.kind === "record") {
+    parts.push("record", noteInfo.label);
   }
 
   return parts

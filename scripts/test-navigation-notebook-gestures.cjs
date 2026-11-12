@@ -190,12 +190,23 @@ test("parentRuleKindOf mirrors bob's note classification", () => {
   assert.equal(kind({ type: "[[project]]" }), "project");
   assert.equal(kind({ type: "[[notebook]]" }), "notebook");
   assert.equal(kind({ type: "[[ref]]" }), "reference");
+  assert.equal(kind({ type: "[[album]]" }), "album");
+  assert.equal(kind({ type: "[[record]]" }), "record");
   assert.equal(kind({ type: "[[restaurant]]" }), "record");
   assert.equal(kind({ type: "[[eat/restaurant|Restaurant]]" }), "record");
   assert.equal(kind({ type: ["[[notebook]]"] }), "notebook");
   // YAML reads an unquoted [[x]] as a nested list.
   assert.equal(kind({ type: [["notebook"]] }), "notebook");
   assert.equal(kind({ type: "notebook" }), "notebook");
+  // Albums are explicit before the legacy record fallback, in every type
+  // form the vault uses: scalar, list, nested-list, bare, and aliased.
+  assert.equal(kind({ type: ["[[album]]"] }), "album");
+  assert.equal(kind({ type: [["album"]] }), "album");
+  assert.equal(kind({ type: "album" }), "album");
+  // An aliased unknown noun still reads as a record, like bob.
+  assert.equal(kind({ type: "[[eat|Eat]]" }), "record");
+  assert.equal(kind({ type: ["[[record]]"] }), "record");
+  assert.equal(kind({ type: "record" }), "record");
   for (const reserved of ["article", "mail", "day", "done", "type"]) {
     assert.equal(kind({ type: `[[${reserved}]]` }), "other", reserved);
   }
@@ -203,12 +214,17 @@ test("parentRuleKindOf mirrors bob's note classification", () => {
   assert.equal(kind(null), "other");
   // Area wins over a record-looking second type, like bob.
   assert.equal(kind({ type: ["[[restaurant]]", "[[area]]"] }), "area");
+  // Album wins over a record-looking second type; area still wins over both.
+  assert.equal(kind({ type: ["[[restaurant]]", "[[album]]"] }), "album");
+  assert.equal(kind({ type: ["[[album]]", "[[area]]"] }), "area");
 });
 
 test("parentKindRefusal encodes the notebook parent rules", () => {
   const refusal = helpers.parentKindRefusal;
-  for (const source of ["area", "project", "reference", "record"]) {
+  for (const source of ["area", "project", "reference", "album", "record"]) {
     assert.equal(refusal(source, "notebook"), "notebook", source);
+  }
+  for (const source of ["area", "project", "reference"]) {
     assert.equal(refusal(source, "area"), null, source);
     assert.equal(refusal(source, "other"), null, source);
   }
@@ -219,7 +235,11 @@ test("parentKindRefusal encodes the notebook parent rules", () => {
   for (const candidate of ["other", "reference", "record"]) {
     assert.equal(refusal("notebook", candidate), "not-notebook-parent", candidate);
   }
+  // Albums hang under notebooks no more than records do, and the teaching
+  // names them alongside records.
+  assert.equal(refusal("notebook", "album"), "not-notebook-parent");
   assert.match(helpers.parentKindRefusalText("notebook", "dev_git"), /dev_git is a notebook/);
+  assert.match(helpers.parentKindRefusalText("notebook", "dev_git"), /albums/);
   assert.match(
     helpers.parentKindRefusalText("not-notebook-parent", "plain_note"),
     /can't hold a notebook/,
@@ -248,8 +268,10 @@ function visiblePaths(index, query = "") {
   return helpers.rankParentCandidates(index, query).items.map((item) => item.path);
 }
 
-test("areas, projects, references, and record notes never see notebooks", () => {
-  for (const source of ["area_note.md", "project_note.md", "ref_note.md", "record_note.md"]) {
+test("areas, projects, and references never see notebooks", () => {
+  // Record notes moved to the album/record rules below: a record now sees
+  // only albums, so it no longer belongs in this area-seeing group.
+  for (const source of ["area_note.md", "project_note.md", "ref_note.md"]) {
     const index = helpers.buildParentPickerIndex(pickerRecords(), { sourcePath: source });
     const empty = visiblePaths(index);
     assert.ok(!empty.includes("dev_git.md"), `${source} empty query`);
@@ -305,7 +327,7 @@ test("the empty state teaches which parent rule hid every match", () => {
   assert.equal(ranked.kindRefusalName, "dev_git");
   assert.equal(
     helpers.parentEmptyStateText("dev_git", false, ranked.kindRefusal, ranked.kindRefusalName),
-    "dev_git is a notebook — areas, projects, references, and record notes can't hang under one",
+    "dev_git is a notebook — areas, projects, references, albums, and record notes can't hang under one",
   );
 
   const notebookIndex = helpers.buildParentPickerIndex(pickerRecords(), {

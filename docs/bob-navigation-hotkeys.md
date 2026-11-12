@@ -140,8 +140,10 @@ parents. As you type, existing notes rank by exact, prefix, word-start,
 substring, path, then fuzzy match, with the current parent, areas and open
 projects, child count, and recency as tie-breaks. Rows reuse the child-picker
 badges and add `current` / `up a level` / `recent` chips plus a faint child
-count. A live **MOVES TO** (or **STAYS UNDER**) breadcrumb previews the new
-ancestry.
+count. Albums show an `album` icon and **Album** badge, records a `file-text`
+icon and **Record** badge. A live **MOVES TO** (or **STAYS UNDER**) breadcrumb
+previews the new ancestry. An album hangs under an area or a project of any
+status; a record hangs under an album.
 
 Enter or click writes only the `parent:` frontmatter line. The value is always a
 canonical double-quoted wikilink (`"[[name]]"` at the vault root,
@@ -149,7 +151,9 @@ canonical double-quoted wikilink (`"[[name]]"` at the vault root,
 endings stay put. A missing key is inserted first in the YAML block; a note with
 no frontmatter gets a three-line block. The panel refuses cycles, stale edits,
 unclosed frontmatter, duplicate `parent:` keys, unquotable names, and
-[notebook parent rules](notebook-gestures.md), and never creates a note. One undo reverts the write when the note is open in
+[notebook parent rules](notebook-gestures.md); typing a ruled-out name explains
+why, and Enter re-checks the live vault before writing, so a stale pick is
+refused with the same wording. It never creates a note. One undo reverts the write when the note is open in
 the editor.
 
 Root-parent grouping is computed from the new tree at read time. Inherited
@@ -303,8 +307,9 @@ the moved task; `N<Ctrl+Shift+M>` moves it plus the next N movable tasks. A
 move never advances the review walk, even from a landed row: the next `]s` /
 `[s` resumes at the moved row's walk neighbour, with `Ctrl+O` returning to the
 post-removal source seam and `Ctrl+I` returning to the first moved task without
-undoing the move. The move and inbox-route destination lists, and Open child
-note, never offer `bob vault-sync` conflict copies under `_conflicts/`; Open
+undoing the move. The move and inbox-route destination lists admit only areas
+and open projects, so albums and records are never offered. The move and
+inbox-route destination lists, and Open child note, never offer `bob vault-sync` conflict copies under `_conflicts/`; Open
 child note also hides `_generated/` notes.
 
 Project conversion and reversal keep Depends-On and inline dates on task lines.

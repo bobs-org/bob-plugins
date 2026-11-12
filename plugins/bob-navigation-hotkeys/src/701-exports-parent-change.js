@@ -12,6 +12,8 @@ Object.assign(module.exports.helpers, {
   parentKindRefusalText,
   parentChangeKindRefusal,
   isNotebookType,
+  isAlbumType,
+  isRecordType,
   NOTEBOOK_CREATE_SUMMARY_SOFT_MAX,
   notebookCreateHostRefusal,
   notebookCreateFileStem,

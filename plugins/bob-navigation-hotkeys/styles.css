@@ -462,6 +462,18 @@
   background-color: color-mix(in srgb, var(--color-cyan) 10%, transparent);
 }
 
+.bob-cnp-row-status.is-status-album {
+  color: var(--color-yellow);
+  border-color: color-mix(in srgb, var(--color-yellow) 45%, transparent);
+  background-color: color-mix(in srgb, var(--color-yellow) 10%, transparent);
+}
+
+.bob-cnp-row-status.is-status-record {
+  color: var(--color-blue);
+  border-color: color-mix(in srgb, var(--color-blue) 45%, transparent);
+  background-color: color-mix(in srgb, var(--color-blue) 10%, transparent);
+}
+
 .bob-cnp-row-status.is-status-muted {
   color: var(--text-muted);
   border-color: var(--background-modifier-border);
@@ -497,6 +509,16 @@
 .bob-cnp-row-icon.is-status-notebook,
 .bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-notebook {
   color: var(--color-cyan);
+}
+
+.bob-cnp-row-icon.is-status-album,
+.bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-album {
+  color: var(--color-yellow);
+}
+
+.bob-cnp-row-icon.is-status-record,
+.bob-cnp-row.is-selected .bob-cnp-row-icon.is-status-record {
+  color: var(--color-blue);
 }
 
 .bob-cnp-row-icon.is-status-muted,

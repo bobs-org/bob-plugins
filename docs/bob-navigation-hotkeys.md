@@ -502,7 +502,7 @@ walk moved. The active type is:
 
 | Type | Keys that set it | Commands and other surfaces |
 | --- | --- | --- |
-| `s` | `[s` / `]s`, `[S` / `]S` | `jump-to-next/prev/first/last-due-task`; `Ctrl+Alt+J/K`; the Ledger Tools review footer |
+| `s` | `[s` / `]s`, `[S` / `]S` | `jump-to-next/prev/first/last-due-task`; `Ctrl+Alt+J/K`; the Ledger Tools walker footer's `s` review panel |
 | `w` | `[w` / `]w`, `[W` / `]W` | `jump-to-next/prev-lane-task`, `jump-to-next/prev-lane` |
 | `n` | `[n` / `]n` | `open-prev-link`, `open-next-link` |
 
@@ -572,6 +572,17 @@ Clicking a letter selects that family and persists it per device. The click
 never runs a walk, shows no notice, writes nothing, and keeps editor focus, so
 the very next `]]` repeats the chosen family. Desktop only; mobile shows no
 item. The indicator never writes notes.
+
+The persisted family is published via additive nav `api.walkMode`
+(top-level version unchanged): v1 `current()` (`s` / `w` / `n` / null) and
+`select(type)` (like a letter click — records, never walks); v2 read-only
+`links({path, content})` prev/next preview; v3 `setAttention(type, value)`
+display-only commitment push. Ledger feature-detects per member. Each real
+change — plus once at setup — fires the
+`bob-navigation-hotkeys:walk-mode` doorbell; receivers re-read `current()`.
+Off-`s` review commitments paint a quiet tier-tinted dot on the selector's
+`s` (counts in tooltip / `aria-label`, `Highlight` under forced colors, no
+motion); it clears on `s` or when commitments do.
 
 ## Relation-label stage
 

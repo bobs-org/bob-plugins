@@ -187,21 +187,21 @@ the block, or a value is missing or invalid. The block re-renders live when the
 daily note or the Tasks cache changes and shows `–` placeholders, never an
 error, when there is no daily note, no Pomodoros section, or no Tasks plugin.
 
-The desktop footer lists nonempty walk groups (PRE → NEW → PROJECTS → PENDING
-→ NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN), omitting
-the active tier from its summary. It hides if Tasks is unavailable. The button
-jumps to the next due task or opens `rotten`. On review rows, nav
-`api.quickRoll` v1 supplies Alt+P's hint and tooltip. Off-walk, open prioritized
-tasks show that preview; other lines show `]s next`. With nothing due, only
-those tasks keep a hint-only `⟳ Nothing due · <preview>` footer. On a TICKLER
-row the preview renders as a tier-tinted answer chip with an `Alt+P` keycap
-(red when the recommendation is cancel); hovering the chip shows its own
-preview sentence while the bar keeps the full footer tooltip.
-Each group and the current tier wear their own tier color, with a hairline
-divider between commitment groups and ROTTEN/POST. Narrow bars omit trailing
-groups before hints and meters, except on TICKLER rows, where the meter drops
-before the chip; counts drop before stage labels. PRE/POST rows
-show uppercase stages; landing toasts use tier colors.
+One walker footer follows the bracket walk (`s`/`w`/`n`), routed through
+nav `api.walkMode` v1 and the walk-mode doorbell. The `s` panel is the review
+footer, gated on `s`: nonempty walk groups (PRE → NEW → PROJECTS →
+PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN)
+minus the active tier, tier-colored with a commitment/ROTTEN hairline,
+shedding groups, detail, hint, meter. The button jumps like `]s`; TICK rows
+show a tinted `Alt+P` chip (red when cancel). Empty shows
+`⟳ Review clear · ✓ N today`, keeping the Alt+P preview on prioritized rows;
+hints read `]] next` (`]s next` in the legacy no-nav footer). The `w` lane
+footer shows `api.laneWalk` v2 counts (`Lanes N`, validated-row position,
+`Lanes clear` / `REVIEW n` / `No Pending…` states, `n/cap` only over cap);
+`Lanes` acts like `]]`, counts never filter. The `n` links compass previews
+via `walkMode.links()` v2 with `[n` / `]n` arms. Hidden when unset, indexing,
+loading, or mobile. Off-`s` review commitments arrive via `setAttention` (v3)
+as a quiet dot on the selector's `s`.
 
 ## Marks and rendered blocks
 

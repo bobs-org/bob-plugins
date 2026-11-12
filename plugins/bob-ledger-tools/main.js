@@ -21,6 +21,7 @@ function isDoneArchivePath(path) {
 const {
   MarkdownRenderChild,
   MarkdownView,
+  Modal,
   Notice,
   Platform,
   Plugin,
@@ -56571,10 +56572,19 @@ function albumIssueRows(value) {
   );
 }
 
+function albumOptionalBool(value) {
+  return value === undefined || value === null || typeof value === "boolean";
+}
+
+function albumOptionalCount(value) {
+  return value === undefined || value === null || albumJsonCount(value);
+}
+
 function albumChoiceShape(choice) {
   return albumJsonObject(choice) &&
     typeof choice.value === "string" &&
-    typeof choice.label === "string";
+    typeof choice.label === "string" &&
+    albumOptionalCount(choice.count);
 }
 
 function albumFieldShape(field) {
@@ -56584,7 +56594,12 @@ function albumFieldShape(field) {
     typeof field.kind === "string" &&
     typeof field.required === "boolean" &&
     typeof field.list === "boolean" &&
-    Array.isArray(field.choices) && field.choices.every(albumChoiceShape);
+    Array.isArray(field.choices) && field.choices.every(albumChoiceShape) &&
+    (field.suggest === undefined || typeof field.suggest === "boolean") &&
+    albumOptionalCount(field.line) &&
+    albumOptionalCount(field.filled) &&
+    (field.min === undefined || field.min === null || typeof field.min === "number") &&
+    (field.max === undefined || field.max === null || typeof field.max === "number");
 }
 
 function albumGroupShape(group) {
@@ -56610,6 +56625,9 @@ function albumEntryShape(entry) {
     albumNullableString(entry.noun) &&
     albumNullableString(entry.label) &&
     albumNullableString(entry.plural) &&
+    albumOptionalBool(entry.dated_notes) &&
+    (entry.legacy === undefined || entry.legacy === null || albumStringArray(entry.legacy)) &&
+    (entry.schema_fingerprint === undefined || entry.schema_fingerprint === null || typeof entry.schema_fingerprint === "string") &&
     albumNullableString(entry.parent) &&
     albumNullableString(entry.parent_kind) &&
     albumNullableString(entry.owner) &&
@@ -66149,6 +66167,86 @@ function albumHeaderRouteReason(entry) {
   return "";
 }
 
+function albumHeaderHumanize(value) {
+  const text = String(value || "").replace(/[_-]+/g, " ").trim();
+  if (!text) return "";
+  return text.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
+}
+
+function albumHeaderOptionalCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function albumHeaderOptionalNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function albumHeaderChoiceModel(choice) {
+  if (!choice || typeof choice !== "object") {
+    const label = String(choice || "");
+    return { value: "", label, count: null };
+  }
+  return {
+    value: String(choice.value || ""),
+    label: String(choice.label ?? choice.value ?? ""),
+    count: albumHeaderOptionalCount(choice.count),
+  };
+}
+
+function albumHeaderFieldModel(field) {
+  return {
+    key: String(field?.key || ""),
+    label: String(field?.label || field?.key || ""),
+    kind: String(field?.kind || ""),
+    list: field?.list === true,
+    required: field?.required === true,
+    suggest: field?.suggest === true,
+    min: albumHeaderOptionalNumber(field?.min),
+    max: albumHeaderOptionalNumber(field?.max),
+    line: albumHeaderOptionalCount(field?.line),
+    filled: albumHeaderOptionalCount(field?.filled),
+    choices: (Array.isArray(field?.choices) ? field.choices : []).map(albumHeaderChoiceModel),
+  };
+}
+
+function albumHeaderIssueModel(issue) {
+  return {
+    severity: String(issue?.severity || "info"),
+    code: String(issue?.code || ""),
+    message: String(issue?.message || ""),
+    line: albumHeaderOptionalCount(issue?.line),
+    keyPath: issue?.key_path == null ? "" : String(issue.key_path),
+    suggestions: (Array.isArray(issue?.suggestions) ? issue.suggestions : [])
+      .map((item) => String(item || "")).filter(Boolean),
+  };
+}
+
+function albumHeaderSchemaLabel(entry) {
+  const label = String(entry?.label || "").trim();
+  if (label) return label;
+  const noun = albumHeaderHumanize(entry?.noun);
+  if (noun) return noun;
+  return albumHeaderHumanize(entry?.stem) || "Album";
+}
+
+function albumHeaderFieldLabel(fields, key) {
+  const match = (fields || []).find((field) => field.key === key);
+  return match?.label || albumHeaderHumanize(key) || key;
+}
+
+function albumHeaderGroupingClause(entry, fields) {
+  const indexBy = String(entry?.index_by || "").trim();
+  if (!indexBy) return "";
+  const parts = [`grouped by ${albumHeaderFieldLabel(fields, indexBy)}`];
+  const facets = (Array.isArray(entry?.index_facets) ? entry.index_facets : [])
+    .map((item) => String(item || "").trim())
+    .filter((key) => key && key !== indexBy);
+  if (facets.length) {
+    parts.push(`sub-grouped by ${facets.map((key) => albumHeaderFieldLabel(fields, key)).join(", ")}`);
+  }
+  return parts.join(", ");
+}
+
 function albumHeaderModel(report, sourcePath, options = {}) {
   const entry = albumHeaderEntry(report, sourcePath);
   if (!entry) return null;
@@ -66160,15 +66258,9 @@ function albumHeaderModel(report, sourcePath, options = {}) {
   )) return null;
 
   const ancestry = albumHeaderOwnerChain(entry, { ...options, sourcePath });
-  const fields = Array.isArray(entry.fields) ? entry.fields.map((field) => ({
-    key: String(field?.key || ""),
-    label: String(field?.label || field?.key || ""),
-    kind: String(field?.kind || ""),
-    list: field?.list === true,
-    required: field?.required === true,
-    choices: (Array.isArray(field?.choices) ? field.choices : [])
-      .map((choice) => String(choice?.label ?? choice?.value ?? "")),
-  })) : [];
+  const fields = Array.isArray(entry.fields) ? entry.fields.map(albumHeaderFieldModel) : [];
+  const issues = (Array.isArray(entry.issues) ? entry.issues : []).map(albumHeaderIssueModel);
+  const schemaInvalid = issues.some((issue) => issue.severity === "error");
   const routeReason = albumHeaderRouteReason(entry);
   const crumbs = ancestry.crumbs.concat([{
     stem: String(entry.stem || ""),
@@ -66177,11 +66269,24 @@ function albumHeaderModel(report, sourcePath, options = {}) {
     kind: "album",
     current: true,
   }]);
+  const indexBy = String(entry.index_by || "").trim();
+  const indexFacets = (Array.isArray(entry.index_facets) ? entry.index_facets : [])
+    .map((item) => String(item || "").trim()).filter(Boolean);
   return {
     path: albumHeaderPath(entry.path),
     stem: String(entry.stem || ""),
     title: String(entry.title || entry.stem || ""),
+    emoji: entry.emoji == null ? "" : String(entry.emoji),
     noun: entry.noun == null ? null : String(entry.noun),
+    plural: entry.plural == null ? null : String(entry.plural),
+    schemaLabel: albumHeaderSchemaLabel(entry),
+    datedNotes: entry.dated_notes === true,
+    legacy: (Array.isArray(entry.legacy) ? entry.legacy : [])
+      .map((item) => String(item || "")).filter(Boolean),
+    records: albumHeaderOptionalCount(entry.records) ?? 0,
+    indexBy,
+    indexFacets,
+    groupingClause: albumHeaderGroupingClause(entry, fields),
     crumbs,
     broken: ancestry.broken,
     cyclic: ancestry.cyclic,
@@ -66191,18 +66296,15 @@ function albumHeaderModel(report, sourcePath, options = {}) {
       : "",
     fields,
     emptySchema: fields.length === 0,
-    issues: (Array.isArray(entry.issues) ? entry.issues : []).map((issue) => ({
-      severity: String(issue?.severity || "info"),
-      code: String(issue?.code || ""),
-      message: String(issue?.message || ""),
-    })),
+    schemaInvalid,
+    issues,
     routeReason,
     captureText: routeReason ? "" : `Name @${entry.stem}/`,
     captureLabel: routeReason ? "" : String(entry.noun),
   };
 }
 
-function albumHeaderSignature(model) {
+function albumHeaderSignature(model, extra = {}) {
   if (!model) return "none";
   return JSON.stringify({
     path: model.path,
@@ -66213,7 +66315,271 @@ function albumHeaderSignature(model) {
     captureText: model.captureText,
     routeReason: model.routeReason,
     ancestryMessage: model.ancestryMessage,
+    datedNotes: model.datedNotes,
+    groupingClause: model.groupingClause,
+    legacy: model.legacy,
+    records: model.records,
+    schemaInvalid: model.schemaInvalid,
+    expanded: extra.expanded === true,
+    desktop: extra.desktop !== false,
   });
+}
+// ---- src/241w-plugin-album-schema-model.js ----
+// Presentation helpers for the album schema summary, chip rows, and
+// YAML jump targets. Report strings stay plain text; counts are optional
+// so older list JSON without report-additions still paints.
+function albumHeaderSummaryText(model) {
+  if (!model) return "";
+  if (model.schemaInvalid) {
+    const error = (model.issues || []).find((issue) => issue.severity === "error");
+    return String(error?.message || "The album schema is invalid.");
+  }
+  if (model.emptySchema) {
+    const sample = model.captureText || "Name @album/";
+    return `No fields yet — add one so ${sample} can collect facts.`;
+  }
+  const parts = [model.schemaLabel || "Album"];
+  const count = (model.fields || []).length;
+  parts.push(`${count} field${count === 1 ? "" : "s"}`);
+  if (model.datedNotes) parts.push("dated notes");
+  if (model.groupingClause) parts.push(model.groupingClause);
+  return parts.join(" · ");
+}
+
+function albumHeaderRecordCountPhrase(model) {
+  const count = Number.isInteger(model?.records) ? model.records : 0;
+  const noun = String(model?.noun || "record");
+  const plural = String(model?.plural || `${noun}s`);
+  return `${count} ${count === 1 ? noun : plural}`;
+}
+
+function albumHeaderStatsText(model) {
+  if (!model) return "";
+  const parts = [albumHeaderRecordCountPhrase(model)];
+  if (model.datedNotes) parts.push("dated notes");
+  if (model.groupingClause) parts.push(model.groupingClause);
+  return parts.join(" · ");
+}
+
+function albumHeaderKindText(field) {
+  if (!field) return "";
+  const bits = [];
+  const kind = String(field.kind || "text");
+  const hasChoices = Array.isArray(field.choices) && field.choices.length > 0;
+  if (!hasChoices) {
+    if (field.list) bits.push(`list of ${kind || "text"}`);
+    else if (kind === "number" && (field.min != null || field.max != null)) {
+      const min = field.min == null ? "…" : String(field.min);
+      const max = field.max == null ? "…" : String(field.max);
+      bits.push(`number ${min}–${max}`);
+    } else bits.push(kind);
+  }
+  if (field.suggest) bits.push("suggest");
+  return bits.join(" · ");
+}
+
+function albumHeaderChoiceDisplay(choice) {
+  const label = String(choice?.label || choice?.value || "");
+  if (!label) return "";
+  return Number.isInteger(choice?.count) ? `${label} ${choice.count}` : label;
+}
+
+function albumHeaderFilledText(field, records) {
+  if (!Number.isInteger(field?.filled) || !Number.isInteger(records)) return "";
+  return `set on ${field.filled} of ${records}`;
+}
+
+function albumHeaderPresentField(field, model) {
+  const key = String(field?.key || "");
+  const indexBy = String(model?.indexBy || "");
+  const facets = Array.isArray(model?.indexFacets) ? model.indexFacets : [];
+  return {
+    ...field,
+    kindText: albumHeaderKindText(field),
+    filledText: albumHeaderFilledText(field, model?.records),
+    groupsIndex: Boolean(key) && key === indexBy,
+    subgroupsIndex: Boolean(key) && key !== indexBy && facets.includes(key),
+    choices: (Array.isArray(field?.choices) ? field.choices : []).map((choice) => ({
+      ...choice,
+      display: albumHeaderChoiceDisplay(choice),
+    })),
+  };
+}
+
+function albumHeaderYamlLine(model, target = {}) {
+  if (Number.isInteger(target.line) && target.line > 0) return target.line;
+  if (target.fieldKey) {
+    const field = (model?.fields || []).find((item) => item.key === target.fieldKey);
+    if (Number.isInteger(field?.line) && field.line > 0) return field.line;
+  }
+  if (target.issue) {
+    if (Number.isInteger(target.issue.line) && target.issue.line > 0) return target.issue.line;
+  }
+  const firstIssue = (model?.issues || []).find((issue) => Number.isInteger(issue.line) && issue.line > 0);
+  if (firstIssue) return firstIssue.line;
+  const firstField = (model?.fields || []).find((field) => Number.isInteger(field.line) && field.line > 0);
+  return firstField ? firstField.line : null;
+}
+
+function albumHeaderDefaultExpanded(model) {
+  return Boolean(model && model.schemaInvalid);
+}
+
+function albumHeaderIsDesktopPlatform(platform) {
+  try {
+    const host = platform === undefined ? Platform : platform;
+    return Boolean(host && host.isDesktopApp === true);
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/241x-plugin-album-schema-dom.js ----
+// Collapsed schema summary, expandable chip view, and lint marks. All
+// report strings are text nodes. Collapse is a view-state flag; this
+// fragment never writes the vault.
+function albumSchemaBindYaml(node, line, options) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  node.addEventListener("keydown", (event) => {
+    if (!event || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key !== "y" && event.key !== "Y") return;
+    event.preventDefault?.();
+    options?.handlers?.jumpYaml?.(line);
+  });
+}
+
+function albumSchemaPaintChoice(doc, choice) {
+  const chip = notebookCreateEl(doc, "span", "bob-album-schema-choice");
+  notebookSetText(chip, choice.display || choice.label || "");
+  return chip;
+}
+
+function albumSchemaPaintField(doc, field, options) {
+  const row = notebookCreateEl(doc, "div", "bob-album-schema-field");
+  if (!row) return null;
+  row.setAttribute("tabindex", "0");
+  row.setAttribute("data-album-header-focus", `field:${field.key}`);
+  row.setAttribute("data-field-key", field.key);
+  if (Number.isInteger(field.line)) row.setAttribute("data-yaml-line", String(field.line));
+  const label = notebookCreateEl(doc, "span", "bob-album-schema-label");
+  notebookSetText(label, field.label);
+  row.appendChild(label);
+  if (field.required) {
+    const required = notebookCreateEl(doc, "span", "bob-album-schema-required");
+    notebookSetText(required, "*");
+    required.setAttribute("aria-label", "required");
+    row.appendChild(required);
+  }
+  const detail = notebookCreateEl(doc, "span", "bob-album-schema-detail");
+  if (field.kindText) {
+    const kind = notebookCreateEl(doc, "span", "bob-album-schema-kind");
+    notebookSetText(kind, field.kindText);
+    detail.appendChild(kind);
+  }
+  for (const choice of field.choices || []) {
+    if (!choice.display && !choice.label) continue;
+    detail.appendChild(albumSchemaPaintChoice(doc, choice));
+  }
+  if (field.filledText) {
+    const filled = notebookCreateEl(doc, "span", "bob-album-schema-filled");
+    notebookSetText(filled, field.filledText);
+    detail.appendChild(filled);
+  }
+  if (field.groupsIndex) {
+    const note = notebookCreateEl(doc, "span", "bob-album-schema-group");
+    notebookSetText(note, "groups the index");
+    detail.appendChild(note);
+  }
+  if (field.subgroupsIndex) {
+    const note = notebookCreateEl(doc, "span", "bob-album-schema-group");
+    notebookSetText(note, "sub-groups the index");
+    detail.appendChild(note);
+  }
+  row.appendChild(detail);
+  albumSchemaBindYaml(row, field.line, options);
+  return row;
+}
+
+function albumSchemaPaintIssue(doc, issue, options) {
+  const item = notebookCreateEl(doc, "li", `bob-album-schema-issue is-${issue.severity}`);
+  if (!item) return null;
+  item.setAttribute("tabindex", "0");
+  item.setAttribute("data-album-header-focus", `issue:${issue.code || issue.line || "lint"}`);
+  if (Number.isInteger(issue.line)) item.setAttribute("data-yaml-line", String(issue.line));
+  notebookSetText(item, issue.message || issue.code);
+  if (issue.suggestions && issue.suggestions.length) {
+    const tips = notebookCreateEl(doc, "span", "bob-album-schema-suggestions");
+    notebookSetText(tips, issue.suggestions.join(" "));
+    item.appendChild(tips);
+  }
+  albumSchemaBindYaml(item, issue.line, options);
+  return item;
+}
+
+function albumSchemaPaintChips(doc, model, options) {
+  const card = notebookCreateEl(doc, "div", "bob-album-schema-card");
+  if (!card) return null;
+  const stem = String(model.stem || "album");
+  card.setAttribute("id", `bob-album-schema-chips-${stem}`);
+  card.setAttribute("aria-label", "Record schema");
+  if (options?.expanded !== true) card.setAttribute("hidden", "");
+  if (model.emptySchema && !model.schemaInvalid) {
+    const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
+    notebookSetText(empty, albumHeaderSummaryText(model));
+    card.appendChild(empty);
+  } else {
+    for (const field of (model.fields || []).map((item) => albumHeaderPresentField(item, model))) {
+      const row = albumSchemaPaintField(doc, field, options);
+      if (row) card.appendChild(row);
+    }
+    for (const pattern of model.legacy || []) {
+      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
+      notebookSetText(chip, pattern);
+      card.appendChild(chip);
+    }
+  }
+  if ((model.issues || []).length) {
+    const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
+    issues.setAttribute("aria-label", "Album schema issues");
+    for (const issue of model.issues) {
+      const item = albumSchemaPaintIssue(doc, issue, options);
+      if (item) issues.appendChild(item);
+    }
+    card.appendChild(issues);
+  }
+  return card;
+}
+
+function albumSchemaPaintSummary(doc, model, options) {
+  const summary = notebookCreateEl(doc, "button", "bob-album-schema-summary");
+  if (!summary) return null;
+  const expanded = options?.expanded === true;
+  summary.setAttribute("type", "button");
+  summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+  summary.setAttribute("data-album-header-focus", "summary");
+  if (model.schemaInvalid) {
+    const cls = `${summary.getAttribute("class") || ""} is-error`.trim();
+    summary.setAttribute("class", cls);
+  }
+  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${albumHeaderSummaryText(model)}`);
+  summary.addEventListener("click", (event) => {
+    event.preventDefault?.();
+    options?.handlers?.toggleSchema?.(!expanded);
+  });
+  return summary;
+}
+
+function albumSchemaHeaderAppend(header, model, options, doc) {
+  if (!header || !model || !doc) return;
+  const summary = albumSchemaPaintSummary(doc, model, options);
+  const chips = albumSchemaPaintChips(doc, model, options);
+  if (summary && chips?.id) summary.setAttribute("aria-controls", chips.id);
+  if (summary) header.appendChild(summary);
+  if (chips) header.appendChild(chips);
+  if (options?.desktop === false) {
+    const hint = notebookCreateEl(doc, "p", "bob-album-schema-mobile-hint");
+    notebookSetText(hint, "Edit this schema in YAML (Source mode).");
+    header.appendChild(hint);
+  }
 }
 // ---- src/241v-plugin-album-header.js ----
 // Report-driven album headers in Reading view and Live Preview. The only
@@ -66230,6 +66596,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderReading = new Set();
     this.albumHeaderEditors = new Set();
     this.albumHeaderEditorScopes = new Map();
+    this.albumHeaderExpanded = new Map();
     this.albumHeaderRefreshTimer = null;
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAlbumHeaderInReading(el, ctx), 49);
     const extension = this.createAlbumHeaderExtension();
@@ -66246,12 +66613,38 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderUnsubscribe = null;
     this.albumClearTimeout?.(this.albumHeaderRefreshTimer);
     this.albumHeaderRefreshTimer = null;
+    try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
+    this.albumSchemaCardModal = null;
     for (const widget of this.albumHeaderReading || []) {
       this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.albumHeaderEditors || []) this.albumHeaderCleanEditor(view);
     this.albumHeaderReading?.clear();
     this.albumHeaderEditors?.clear();
+    this.albumHeaderExpanded?.clear?.();
+  }
+
+  albumHeaderDesktop() {
+    return albumHeaderIsDesktopPlatform();
+  }
+
+  albumHeaderExpandedMap() {
+    if (!(this.albumHeaderExpanded instanceof Map)) this.albumHeaderExpanded = new Map();
+    return this.albumHeaderExpanded;
+  }
+
+  albumHeaderIsExpanded(path, model) {
+    const key = albumHeaderPath(path);
+    const map = this.albumHeaderExpandedMap();
+    if (key && map.has(key)) return map.get(key) === true;
+    return albumHeaderDefaultExpanded(model);
+  }
+
+  albumHeaderSetExpanded(path, expanded) {
+    const key = albumHeaderPath(path);
+    if (key) this.albumHeaderExpandedMap().set(key, expanded === true);
+    this.refreshAlbumHeaderReading();
+    this.refreshAlbumHeaderEditors();
   }
 
   albumHeaderState() {
@@ -66264,15 +66657,22 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderOptions(sourcePath, state) {
+  albumHeaderOptions(sourcePath, state, model) {
+    const desktop = this.albumHeaderDesktop();
+    const expanded = this.albumHeaderIsExpanded(sourcePath, model);
     return {
       sourcePath,
       hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
+      desktop,
+      expanded,
       handlers: {
         openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
-        copyCapture: (model) => this.albumHeaderCopyCapture(model),
+        copyCapture: (item) => this.albumHeaderCopyCapture(item),
+        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
+        openSchemaCard: (item) => this.openAlbumSchemaCard?.(item, sourcePath),
+        jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
       state,
     };
@@ -66323,6 +66723,60 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) {}
     try { new Notice("Could not open the album owner."); } catch (_) {}
     return { ok: false };
+  }
+
+  albumHeaderMarkdownLeaf(path) {
+    const target = albumHeaderPath(path);
+    try {
+      const leaves = this.app?.workspace?.getLeavesOfType?.("markdown") || [];
+      return leaves.find((leaf) => albumHeaderPath(leaf?.view?.file?.path) === target)
+        || this.app?.workspace?.getMostRecentLeaf?.()
+        || this.app?.workspace?.activeLeaf
+        || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async albumHeaderJumpYaml(sourcePath, line) {
+    const path = albumHeaderPath(sourcePath);
+    if (!path) return { ok: false, reason: "missing path" };
+    const targetLine = Number.isInteger(line) && line > 0 ? line : albumHeaderYamlLine(
+      this.albumHeaderModelFor(path),
+      { line },
+    );
+    try {
+      this.albumSchemaCardModal?.close?.();
+    } catch (_) {}
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
+      const leaf = this.albumHeaderMarkdownLeaf(path);
+      if (leaf && typeof leaf.openFile === "function") {
+        await leaf.openFile(file, { state: { mode: "source" } });
+      } else if (leaf && typeof leaf.setViewState === "function") {
+        const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
+        const next = {
+          ...(current || {}),
+          type: "markdown",
+          state: { ...((current && current.state) || {}), mode: "source", file: path },
+        };
+        await leaf.setViewState(next);
+      } else if (this.app?.workspace?.openLinkText) {
+        await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
+      }
+      const editor = leaf?.view?.editor;
+      const cursorLine = Number.isInteger(targetLine) && targetLine > 0 ? targetLine - 1 : 0;
+      if (editor && typeof editor.setCursor === "function") {
+        editor.setCursor({ line: cursorLine, ch: 0 });
+        if (typeof editor.scrollIntoView === "function") {
+          editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
+        }
+      }
+      return { ok: true, line: cursorLine + 1 };
+    } catch (_) {
+      try { new Notice("Could not open the album schema in Source mode."); } catch (__) {}
+      return { ok: false, reason: "source jump failed" };
+    }
   }
 
   albumHeaderReadingRoot(el) {
@@ -66429,61 +66883,20 @@ class BobLedgerToolsAlbumHeaderMixin {
         if (!copy.disabled) options?.handlers?.copyCapture?.(model);
       });
       actionRow.appendChild(copy);
+      if (options?.desktop !== false) {
+        const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
+        schema.setAttribute?.("type", "button");
+        schema.setAttribute?.("data-album-header-focus", "schema");
+        schema.setAttribute?.("aria-label", "Open schema card");
+        notebookSetText(schema, "⊞ Schema");
+        schema.addEventListener?.("click", (event) => {
+          event.preventDefault?.();
+          options?.handlers?.openSchemaCard?.(model);
+        });
+        actionRow.appendChild(schema);
+      }
       header.appendChild(actionRow);
-
-      const card = notebookCreateEl(doc, "div", "bob-album-schema-card");
-      card.setAttribute?.("aria-label", "Record schema");
-      const heading = notebookCreateEl(doc, "h2", "bob-album-schema-title");
-      notebookSetText(heading, "Record schema");
-      card.appendChild(heading);
-      if (model.emptySchema) {
-        const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
-        notebookSetText(empty, "No fields are declared for this album.");
-        card.appendChild(empty);
-      } else {
-        const list = notebookCreateEl(doc, "dl", "bob-album-schema-fields");
-        for (const field of model.fields) {
-          const row = notebookCreateEl(doc, "div", "bob-album-schema-field");
-          const label = notebookCreateEl(doc, "dt", "bob-album-schema-label");
-          notebookSetText(label, field.label);
-          row.appendChild(label);
-          const description = notebookCreateEl(doc, "dd", "bob-album-schema-detail");
-          const kind = notebookCreateEl(doc, "span", "bob-album-schema-kind");
-          notebookSetText(kind, field.kind);
-          description.appendChild(kind);
-          if (field.list) {
-            const marker = notebookCreateEl(doc, "span", "bob-album-schema-list");
-            notebookSetText(marker, "list");
-            marker.setAttribute?.("aria-label", "list field");
-            description.appendChild(marker);
-          }
-          if (field.required) {
-            const required = notebookCreateEl(doc, "span", "bob-album-schema-required");
-            notebookSetText(required, "required *");
-            required.setAttribute?.("aria-label", "required");
-            description.appendChild(required);
-          }
-          if (field.choices.length) {
-            const choices = notebookCreateEl(doc, "span", "bob-album-schema-choices");
-            notebookSetText(choices, field.choices.join(" · "));
-            description.appendChild(choices);
-          }
-          row.appendChild(description);
-          list.appendChild(row);
-        }
-        card.appendChild(list);
-      }
-      if (model.issues.length) {
-        const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
-        issues.setAttribute?.("aria-label", "Album schema issues");
-        for (const issue of model.issues) {
-          const item = notebookCreateEl(doc, "li", `bob-album-schema-issue is-${issue.severity}`);
-          notebookSetText(item, issue.message || issue.code);
-          issues.appendChild(item);
-        }
-        card.appendChild(issues);
-      }
-      header.appendChild(card);
+      albumSchemaHeaderAppend(header, model, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -66515,7 +66928,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!model) return null;
 
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state), doc);
+    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
     if (!header) {
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       return null;
@@ -66591,12 +67004,20 @@ class BobLedgerToolsAlbumHeaderMixin {
       this.albumHeaderSetEditorScope(view, Boolean(model));
       if (!model) return Decoration.none;
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(path, state), doc);
+      const options = this.albumHeaderOptions(path, state, model);
+      const header = this.albumHeaderBuildEl(model, options, doc);
       if (!header) return Decoration.none;
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
-        constructor() { super(); this.path = path; this.signature = albumHeaderSignature(model); }
+        constructor() {
+          super();
+          this.path = path;
+          this.signature = albumHeaderSignature(model, {
+            expanded: options.expanded,
+            desktop: options.desktop,
+          });
+        }
         eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");
@@ -66700,6 +67121,223 @@ class BobLedgerToolsAlbumHeaderMixin {
       this.refreshAlbumHeaderReading();
       this.refreshAlbumHeaderEditors();
     }, 100);
+  }
+}
+// ---- src/241y-plugin-album-schema-card.js ----
+// Read-only Schema Card: Task Card idiom, report-backed layout, navigation /
+// y / esc only. No write gestures and no vault bytes.
+function albumSchemaCardModalBase() {
+  if (typeof Modal === "function") return Modal;
+  return class AlbumSchemaCardFallback {
+    constructor(app) {
+      this.app = app;
+      const doc = typeof document !== "undefined" ? document : null;
+      this.contentEl = {
+        ownerDocument: doc,
+        children: [],
+        empty() { this.children = []; },
+        addClass() {},
+        setAttribute() {},
+        appendChild(node) { this.children.push(node); return node; },
+        querySelector(sel) {
+          const walk = (nodes) => {
+            for (const node of nodes || []) {
+              if (node.matches?.(sel)) return node;
+              const found = walk(node.children);
+              if (found) return found;
+            }
+            return null;
+          };
+          return walk(this.children);
+        },
+        querySelectorAll(sel) {
+          const found = [];
+          const walk = (nodes) => {
+            for (const node of nodes || []) {
+              if (node.matches?.(sel)) found.push(node);
+              walk(node.children);
+            }
+          };
+          walk(this.children);
+          return found;
+        },
+      };
+      this.modalEl = this.contentEl;
+      this.containerEl = this.contentEl;
+      this.scope = { register() { return {}; } };
+    }
+    open() { this.onOpen?.(); }
+    close() { this.onClose?.(); }
+  };
+}
+
+function albumSchemaCardTitle(model) {
+  const crumbs = (model?.crumbs || []).map((crumb) => crumb.title || crumb.stem).filter(Boolean);
+  const trail = crumbs.join(" › ");
+  const label = model?.schemaLabel || model?.title || "Album";
+  const emoji = String(model?.emoji || "").trim();
+  const head = emoji ? `${emoji} ${label}` : label;
+  return trail ? `${head} · ${trail}` : head;
+}
+
+function albumSchemaCardBuildEl(model, options, doc) {
+  const card = notebookCreateEl(doc, "div", "bob-album-schema-dialog bob-key-card");
+  if (!card) return null;
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.setAttribute("aria-label", "Album schema");
+  const header = notebookCreateEl(doc, "div", "bob-album-schema-dialog-header");
+  const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
+  notebookSetText(title, albumSchemaCardTitle(model));
+  header.appendChild(title);
+  const stats = notebookCreateEl(doc, "p", "bob-album-schema-dialog-stats");
+  notebookSetText(stats, albumHeaderStatsText(model));
+  header.appendChild(stats);
+  card.appendChild(header);
+
+  if ((model.issues || []).length) {
+    const banner = notebookCreateEl(doc, "div", "bob-album-schema-dialog-lint");
+    banner.setAttribute("role", "status");
+    const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
+    issues.setAttribute("aria-label", "Album schema issues");
+    for (const issue of model.issues) {
+      const item = albumSchemaPaintIssue(doc, issue, options);
+      if (item) issues.appendChild(item);
+    }
+    banner.appendChild(issues);
+    card.appendChild(banner);
+  }
+
+  const body = notebookCreateEl(doc, "div", "bob-album-schema-dialog-body");
+  if (model.emptySchema && !model.schemaInvalid) {
+    const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
+    notebookSetText(empty, albumHeaderSummaryText(model));
+    body.appendChild(empty);
+  } else {
+    const presented = (model.fields || []).map((field) => albumHeaderPresentField(field, model));
+    presented.forEach((field, index) => {
+      const row = albumSchemaPaintField(doc, field, options);
+      if (!row) return;
+      if (index === (options?.selectedIndex || 0)) {
+        const cls = `${row.getAttribute("class") || ""} is-selected`.trim();
+        row.setAttribute("class", cls);
+        row.setAttribute("aria-current", "true");
+      }
+      body.appendChild(row);
+    });
+    for (const pattern of model.legacy || []) {
+      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
+      notebookSetText(chip, pattern);
+      body.appendChild(chip);
+    }
+  }
+  card.appendChild(body);
+
+  const footer = notebookCreateEl(doc, "p", "bob-album-schema-dialog-footer bob-key-card-footer");
+  notebookSetText(footer, "↑/↓ navigate   y YAML   esc close");
+  card.appendChild(footer);
+  return card;
+}
+
+class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
+  constructor(app, settings = {}) {
+    super(app);
+    this.schemaModel = settings.model || null;
+    this.schemaSourcePath = settings.sourcePath || settings.model?.path || "";
+    this.schemaPlugin = settings.plugin || null;
+    this.selectedIndex = 0;
+  }
+
+  schemaTargets() {
+    const fields = this.schemaModel?.fields || [];
+    const issues = this.schemaModel?.issues || [];
+    return fields.map((field) => ({ line: field.line, fieldKey: field.key }))
+      .concat(issues.map((issue) => ({ line: issue.line, issue })));
+  }
+
+  schemaJump() {
+    const targets = this.schemaTargets();
+    const current = targets[this.selectedIndex] || targets[0] || {};
+    const line = albumHeaderYamlLine(this.schemaModel, current);
+    return this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line);
+  }
+
+  schemaMove(delta) {
+    const targets = this.schemaTargets();
+    if (!targets.length) return;
+    this.selectedIndex = (this.selectedIndex + delta + targets.length) % targets.length;
+    this.paintSchemaCard();
+  }
+
+  paintSchemaCard() {
+    const host = this.contentEl;
+    if (!host) return;
+    try { host.empty?.(); } catch (_) { while (host.firstChild) host.removeChild(host.firstChild); }
+    const doc = notebookDomDoc(host) || host.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const card = albumSchemaCardBuildEl(this.schemaModel, {
+      selectedIndex: this.selectedIndex,
+      desktop: true,
+      handlers: {
+        jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
+      },
+    }, doc);
+    if (card) host.appendChild(card);
+    const selected = host.querySelector?.(".bob-album-schema-field.is-selected")
+      || host.querySelector?.(".bob-album-schema-issue");
+    try { selected?.focus?.({ preventScroll: true }); } catch (_) {}
+  }
+
+  onOpen() {
+    try {
+      this.modalEl?.addClass?.("bob-album-schema-modal");
+      this.modalEl?.setAttribute?.("role", "dialog");
+      this.modalEl?.setAttribute?.("aria-modal", "true");
+      this.modalEl?.setAttribute?.("aria-label", "Album schema");
+      this.contentEl?.addClass?.("bob-album-schema-dialog");
+      this.contentEl?.addClass?.("bob-key-card");
+    } catch (_) {}
+    this.paintSchemaCard();
+    const scope = this.scope;
+    try {
+      scope?.register?.([], "ArrowUp", () => { this.schemaMove(-1); return false; });
+      scope?.register?.([], "ArrowDown", () => { this.schemaMove(1); return false; });
+      scope?.register?.([], "k", () => { this.schemaMove(-1); return false; });
+      scope?.register?.([], "j", () => { this.schemaMove(1); return false; });
+      scope?.register?.([], "y", () => { void this.schemaJump(); return false; });
+    } catch (_) {}
+    try {
+      this.contentEl?.addEventListener?.("keydown", (event) => {
+        if (!event || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); }
+        else if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); }
+        else if (event.key === "y" || event.key === "Y") { event.preventDefault?.(); void this.schemaJump(); }
+      });
+    } catch (_) {}
+  }
+
+  onClose() {
+    try { this.contentEl?.empty?.(); } catch (_) {}
+    if (this.schemaPlugin && this.schemaPlugin.albumSchemaCardModal === this) {
+      this.schemaPlugin.albumSchemaCardModal = null;
+    }
+  }
+}
+
+class BobLedgerToolsAlbumSchemaCardMixin {
+  openAlbumSchemaCard(model, sourcePath) {
+    if (!this.albumHeaderDesktop()) {
+      return { ok: false, reason: "mobile" };
+    }
+    if (!model) return { ok: false, reason: "missing model" };
+    try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
+    const modal = new AlbumSchemaCardModal(this.app, {
+      model,
+      sourcePath: sourcePath || model.path,
+      plugin: this,
+    });
+    this.albumSchemaCardModal = modal;
+    try { modal.open(); } catch (_) {}
+    return { ok: true, modal };
   }
 }
 // ---- src/241e-plugin-notebook-header-model.js ----
@@ -109058,6 +109696,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
+  BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,
@@ -112268,8 +112907,18 @@ try {
       albumHeaderIsAlbumSource,
       albumHeaderOwnerChain,
       albumHeaderRouteReason,
+      albumHeaderHumanize,
       albumHeaderModel,
       albumHeaderSignature,
+      albumHeaderSummaryText,
+      albumHeaderStatsText,
+      albumHeaderKindText,
+      albumHeaderPresentField,
+      albumHeaderYamlLine,
+      albumHeaderDefaultExpanded,
+      albumHeaderIsDesktopPlatform,
+      albumSchemaCardTitle,
+      albumSchemaCardBuildEl,
     });
   }
 } catch (error) {

@@ -67,8 +67,18 @@ try {
       albumHeaderIsAlbumSource,
       albumHeaderOwnerChain,
       albumHeaderRouteReason,
+      albumHeaderHumanize,
       albumHeaderModel,
       albumHeaderSignature,
+      albumHeaderSummaryText,
+      albumHeaderStatsText,
+      albumHeaderKindText,
+      albumHeaderPresentField,
+      albumHeaderYamlLine,
+      albumHeaderDefaultExpanded,
+      albumHeaderIsDesktopPlatform,
+      albumSchemaCardTitle,
+      albumSchemaCardBuildEl,
     });
   }
 } catch (error) {

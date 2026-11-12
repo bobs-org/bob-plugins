@@ -12,6 +12,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderReading = new Set();
     this.albumHeaderEditors = new Set();
     this.albumHeaderEditorScopes = new Map();
+    this.albumHeaderExpanded = new Map();
     this.albumHeaderRefreshTimer = null;
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAlbumHeaderInReading(el, ctx), 49);
     const extension = this.createAlbumHeaderExtension();
@@ -28,12 +29,38 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderUnsubscribe = null;
     this.albumClearTimeout?.(this.albumHeaderRefreshTimer);
     this.albumHeaderRefreshTimer = null;
+    try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
+    this.albumSchemaCardModal = null;
     for (const widget of this.albumHeaderReading || []) {
       this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.albumHeaderEditors || []) this.albumHeaderCleanEditor(view);
     this.albumHeaderReading?.clear();
     this.albumHeaderEditors?.clear();
+    this.albumHeaderExpanded?.clear?.();
+  }
+
+  albumHeaderDesktop() {
+    return albumHeaderIsDesktopPlatform();
+  }
+
+  albumHeaderExpandedMap() {
+    if (!(this.albumHeaderExpanded instanceof Map)) this.albumHeaderExpanded = new Map();
+    return this.albumHeaderExpanded;
+  }
+
+  albumHeaderIsExpanded(path, model) {
+    const key = albumHeaderPath(path);
+    const map = this.albumHeaderExpandedMap();
+    if (key && map.has(key)) return map.get(key) === true;
+    return albumHeaderDefaultExpanded(model);
+  }
+
+  albumHeaderSetExpanded(path, expanded) {
+    const key = albumHeaderPath(path);
+    if (key) this.albumHeaderExpandedMap().set(key, expanded === true);
+    this.refreshAlbumHeaderReading();
+    this.refreshAlbumHeaderEditors();
   }
 
   albumHeaderState() {
@@ -46,15 +73,22 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderOptions(sourcePath, state) {
+  albumHeaderOptions(sourcePath, state, model) {
+    const desktop = this.albumHeaderDesktop();
+    const expanded = this.albumHeaderIsExpanded(sourcePath, model);
     return {
       sourcePath,
       hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
+      desktop,
+      expanded,
       handlers: {
         openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
-        copyCapture: (model) => this.albumHeaderCopyCapture(model),
+        copyCapture: (item) => this.albumHeaderCopyCapture(item),
+        toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
+        openSchemaCard: (item) => this.openAlbumSchemaCard?.(item, sourcePath),
+        jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
       state,
     };
@@ -105,6 +139,60 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) {}
     try { new Notice("Could not open the album owner."); } catch (_) {}
     return { ok: false };
+  }
+
+  albumHeaderMarkdownLeaf(path) {
+    const target = albumHeaderPath(path);
+    try {
+      const leaves = this.app?.workspace?.getLeavesOfType?.("markdown") || [];
+      return leaves.find((leaf) => albumHeaderPath(leaf?.view?.file?.path) === target)
+        || this.app?.workspace?.getMostRecentLeaf?.()
+        || this.app?.workspace?.activeLeaf
+        || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async albumHeaderJumpYaml(sourcePath, line) {
+    const path = albumHeaderPath(sourcePath);
+    if (!path) return { ok: false, reason: "missing path" };
+    const targetLine = Number.isInteger(line) && line > 0 ? line : albumHeaderYamlLine(
+      this.albumHeaderModelFor(path),
+      { line },
+    );
+    try {
+      this.albumSchemaCardModal?.close?.();
+    } catch (_) {}
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
+      const leaf = this.albumHeaderMarkdownLeaf(path);
+      if (leaf && typeof leaf.openFile === "function") {
+        await leaf.openFile(file, { state: { mode: "source" } });
+      } else if (leaf && typeof leaf.setViewState === "function") {
+        const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
+        const next = {
+          ...(current || {}),
+          type: "markdown",
+          state: { ...((current && current.state) || {}), mode: "source", file: path },
+        };
+        await leaf.setViewState(next);
+      } else if (this.app?.workspace?.openLinkText) {
+        await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
+      }
+      const editor = leaf?.view?.editor;
+      const cursorLine = Number.isInteger(targetLine) && targetLine > 0 ? targetLine - 1 : 0;
+      if (editor && typeof editor.setCursor === "function") {
+        editor.setCursor({ line: cursorLine, ch: 0 });
+        if (typeof editor.scrollIntoView === "function") {
+          editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
+        }
+      }
+      return { ok: true, line: cursorLine + 1 };
+    } catch (_) {
+      try { new Notice("Could not open the album schema in Source mode."); } catch (__) {}
+      return { ok: false, reason: "source jump failed" };
+    }
   }
 
   albumHeaderReadingRoot(el) {
@@ -211,61 +299,20 @@ class BobLedgerToolsAlbumHeaderMixin {
         if (!copy.disabled) options?.handlers?.copyCapture?.(model);
       });
       actionRow.appendChild(copy);
+      if (options?.desktop !== false) {
+        const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
+        schema.setAttribute?.("type", "button");
+        schema.setAttribute?.("data-album-header-focus", "schema");
+        schema.setAttribute?.("aria-label", "Open schema card");
+        notebookSetText(schema, "⊞ Schema");
+        schema.addEventListener?.("click", (event) => {
+          event.preventDefault?.();
+          options?.handlers?.openSchemaCard?.(model);
+        });
+        actionRow.appendChild(schema);
+      }
       header.appendChild(actionRow);
-
-      const card = notebookCreateEl(doc, "div", "bob-album-schema-card");
-      card.setAttribute?.("aria-label", "Record schema");
-      const heading = notebookCreateEl(doc, "h2", "bob-album-schema-title");
-      notebookSetText(heading, "Record schema");
-      card.appendChild(heading);
-      if (model.emptySchema) {
-        const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
-        notebookSetText(empty, "No fields are declared for this album.");
-        card.appendChild(empty);
-      } else {
-        const list = notebookCreateEl(doc, "dl", "bob-album-schema-fields");
-        for (const field of model.fields) {
-          const row = notebookCreateEl(doc, "div", "bob-album-schema-field");
-          const label = notebookCreateEl(doc, "dt", "bob-album-schema-label");
-          notebookSetText(label, field.label);
-          row.appendChild(label);
-          const description = notebookCreateEl(doc, "dd", "bob-album-schema-detail");
-          const kind = notebookCreateEl(doc, "span", "bob-album-schema-kind");
-          notebookSetText(kind, field.kind);
-          description.appendChild(kind);
-          if (field.list) {
-            const marker = notebookCreateEl(doc, "span", "bob-album-schema-list");
-            notebookSetText(marker, "list");
-            marker.setAttribute?.("aria-label", "list field");
-            description.appendChild(marker);
-          }
-          if (field.required) {
-            const required = notebookCreateEl(doc, "span", "bob-album-schema-required");
-            notebookSetText(required, "required *");
-            required.setAttribute?.("aria-label", "required");
-            description.appendChild(required);
-          }
-          if (field.choices.length) {
-            const choices = notebookCreateEl(doc, "span", "bob-album-schema-choices");
-            notebookSetText(choices, field.choices.join(" · "));
-            description.appendChild(choices);
-          }
-          row.appendChild(description);
-          list.appendChild(row);
-        }
-        card.appendChild(list);
-      }
-      if (model.issues.length) {
-        const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
-        issues.setAttribute?.("aria-label", "Album schema issues");
-        for (const issue of model.issues) {
-          const item = notebookCreateEl(doc, "li", `bob-album-schema-issue is-${issue.severity}`);
-          notebookSetText(item, issue.message || issue.code);
-          issues.appendChild(item);
-        }
-        card.appendChild(issues);
-      }
-      header.appendChild(card);
+      albumSchemaHeaderAppend(header, model, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -297,7 +344,7 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!model) return null;
 
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state), doc);
+    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
     if (!header) {
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       return null;
@@ -373,12 +420,20 @@ class BobLedgerToolsAlbumHeaderMixin {
       this.albumHeaderSetEditorScope(view, Boolean(model));
       if (!model) return Decoration.none;
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(path, state), doc);
+      const options = this.albumHeaderOptions(path, state, model);
+      const header = this.albumHeaderBuildEl(model, options, doc);
       if (!header) return Decoration.none;
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
-        constructor() { super(); this.path = path; this.signature = albumHeaderSignature(model); }
+        constructor() {
+          super();
+          this.path = path;
+          this.signature = albumHeaderSignature(model, {
+            expanded: options.expanded,
+            desktop: options.desktop,
+          });
+        }
         eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
         toDOM() {
           header.setAttribute?.("data-cm-widget", "true");

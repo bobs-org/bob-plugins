@@ -64,7 +64,10 @@ class FakeNode {
   removeChild(node) { const i = this.children.indexOf(node); if (i >= 0) this.children.splice(i, 1); node.parentNode = null; return node; }
   remove() { this.parentNode?.removeChild?.(this); }
   addEventListener(type, fn) { const rows = this.listeners.get(type) || []; rows.push(fn); this.listeners.set(type, rows); }
-  fire(type) { for (const fn of this.listeners.get(type) || []) fn({ preventDefault() {} }); }
+  fire(type, event) {
+    const payload = event || { preventDefault() {} };
+    for (const fn of this.listeners.get(type) || []) fn(payload);
+  }
   contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
   focus() { this.ownerDocument.activeElement = this; }
   matches(selector) {
@@ -155,7 +158,7 @@ test("schema model preserves declaration and choice order; empty and invalid rou
     sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
   });
   assert.deepEqual(model.fields.map((field) => field.key), ["status", "tags"]);
-  assert.deepEqual(model.fields[0].choices, ["First", "Second"]);
+  assert.deepEqual(model.fields[0].choices.map((choice) => choice.label), ["First", "Second"]);
   assert.equal(model.fields[1].list, true);
   assert.equal(helpers.albumHeaderModel(report(album({ fields: [] })), "eat.md", {
     sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
@@ -185,7 +188,9 @@ test("broken schema remains visible and disables the capture route with its diag
   plugin.paintAlbumHeaderReading(root, "eat.md");
   const button = root.querySelector(".bob-album-header-copy");
   assert.equal(button.disabled, true);
-  assert.equal(root.querySelector(".bob-album-schema-empty").textContent, "No fields are declared for this album.");
+  assert.match(root.querySelector(".bob-album-schema-summary").textContent, /record\.fields is invalid/);
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+  assert.equal(root.querySelector(".bob-album-schema-empty"), null);
   assert.equal(root.querySelector(".bob-album-schema-issue").textContent, "record.fields is invalid");
 });
 
@@ -300,4 +305,162 @@ test("H1-less albums paint at the start and embeds keep their own property scope
   plugin.paintAlbumHeaderReading(secondPane, "eat.md");
   assert.equal(secondPane.querySelectorAll(".bob-album-header").length, 1);
   assert.equal(parent.children.filter((child) => child.classList.contains("bob-album-header")).length, 0);
+});
+
+test("schema summary stays collapsed by default and expands per album in view state", () => {
+  const { doc, plugin } = fixture(album({
+    label: "Restaurant",
+    dated_notes: true,
+    index_by: "status",
+    index_facets: ["location"],
+    fields: [
+      { key: "status", label: "Status", kind: "choices", required: true, list: false,
+        choices: [{ value: "a", label: "First" }, { value: "b", label: "Second" }] },
+      { key: "location", label: "Location", kind: "text", required: true, list: false, suggest: true, choices: [] },
+    ],
+  }));
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  const summary = root.querySelector(".bob-album-schema-summary");
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.match(summary.textContent, /Restaurant · 2 fields · dated notes · grouped by Status, sub-grouped by Location/);
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
+  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
+  summary.fire("click");
+  const opened = root.querySelector(".bob-album-schema-summary");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
+  assert.equal(opened.getAttribute("aria-expanded"), "true");
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
+  const other = node(doc, "div", "markdown-preview-view");
+  plugin.paintAlbumHeaderReading(other, "eat.md");
+  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+});
+
+test("chip rows cover kinds, flags, grouping, legacy, and empty teaching copy", () => {
+  const { app } = fixture();
+  const fields = [
+    { key: "status", label: "Status", kind: "choices", required: true, list: false,
+      choices: [{ value: "to_try", label: "🔖 To try", count: 11 }, { value: "liked", label: "💚 Liked", count: 86 }] },
+    { key: "category", label: "Category", kind: "text", required: true, list: false, suggest: true, filled: 12, choices: [] },
+    { key: "location", label: "Location", kind: "text", required: true, list: false, suggest: true, choices: [] },
+    { key: "visited", label: "Visited", kind: "date", required: false, list: false, filled: 2, choices: [] },
+    { key: "year", label: "Year", kind: "number", required: false, list: false, min: 1888, max: 2100, choices: [] },
+    { key: "tags", label: "Tags", kind: "text", required: false, list: true, choices: [] },
+    { key: "url", label: "Url", kind: "url", required: false, list: false, filled: 31, choices: [] },
+  ];
+  const model = helpers.albumHeaderModel(report(album({
+    label: "Restaurant", noun: "restaurant", plural: "restaurants", records: 104,
+    dated_notes: true, index_by: "status", index_facets: ["location"], legacy: ["old_status"],
+    fields,
+  })), "eat.md", { sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault });
+  const presented = model.fields.map((field) => helpers.albumHeaderPresentField(field, model));
+  assert.equal(presented[0].groupsIndex, true);
+  assert.equal(presented[2].subgroupsIndex, true);
+  assert.equal(presented[0].choices[0].display, "🔖 To try 11");
+  assert.equal(presented[1].kindText, "text · suggest");
+  assert.equal(presented[4].kindText, "number 1888–2100");
+  assert.equal(presented[5].kindText, "list of text");
+  assert.equal(presented[3].filledText, "set on 2 of 104");
+  const { doc, plugin } = fixture(album({
+    label: "Restaurant", records: 104, dated_notes: true, index_by: "status",
+    index_facets: ["location"], legacy: ["old_status"], fields,
+  }));
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.albumHeaderSetExpanded("eat.md", true);
+  plugin.paintAlbumHeaderReading(root, "eat.md");
+  const header = root.querySelector(".bob-album-header");
+  assert.equal(header.querySelectorAll(".bob-album-schema-field").length, 7);
+  assert.equal(header.querySelector(".bob-album-schema-legacy").textContent, "old_status");
+  assert.equal(header.querySelector(".bob-album-schema-required").getAttribute("aria-label"), "required");
+  const emptyRoot = node(doc, "div", "markdown-preview-view");
+  const empty = fixture(album({ fields: [] }));
+  empty.plugin.paintAlbumHeaderReading(emptyRoot, "eat.md");
+  assert.match(emptyRoot.querySelector(".bob-album-schema-summary").textContent, /No fields yet — add one so Name @eat\/ can collect facts/);
+  assert.match(emptyRoot.querySelector(".bob-album-schema-empty").textContent, /No fields yet/);
+});
+
+test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer", () => {
+  const { app, doc, plugin } = fixture(album({
+    emoji: "🍽️", label: "Restaurant", noun: "restaurant", plural: "restaurants",
+    records: 104, dated_notes: true, index_by: "status",
+    fields: [{
+      key: "status", label: "Status", kind: "choices", required: true, list: false, line: 12,
+      choices: [{ value: "to_try", label: "🔖 To try", count: 11 }],
+    }, {
+      key: "visited", label: "Visited", kind: "date", required: false, list: false, filled: 2, line: 18, choices: [],
+    }],
+    issues: [{ severity: "warning", code: "album_index_stale", message: "index is stale", line: 4, suggestions: ["bob albums sync"] }],
+  }));
+  const model = helpers.albumHeaderModel(report(album({
+    emoji: "🍽️", label: "Restaurant", noun: "restaurant", plural: "restaurants",
+    records: 104, dated_notes: true, index_by: "status",
+    fields: [{
+      key: "status", label: "Status", kind: "choices", required: true, list: false, line: 12,
+      choices: [{ value: "to_try", label: "🔖 To try", count: 11 }],
+    }, {
+      key: "visited", label: "Visited", kind: "date", required: false, list: false, filled: 2, line: 18, choices: [],
+    }],
+    issues: [{ severity: "warning", code: "album_index_stale", message: "index is stale", line: 4, suggestions: ["bob albums sync"] }],
+  })), "eat.md", { sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault });
+  const card = helpers.albumSchemaCardBuildEl(model, { selectedIndex: 0, desktop: true, handlers: {} }, doc);
+  assert.match(card.textContent, /🍽️ Restaurant/);
+  assert.match(card.textContent, /104 restaurants · dated notes · grouped by Status/);
+  assert.match(card.textContent, /🔖 To try 11/);
+  assert.match(card.textContent, /set on 2 of 104/);
+  assert.match(card.textContent, /index is stale/);
+  assert.match(card.textContent, /bob albums sync/);
+  assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /y YAML/);
+  assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /esc close/);
+  assert.equal(card.textContent.includes("Add field"), false);
+  assert.equal(helpers.albumHeaderYamlLine(model, { fieldKey: "visited" }), 18);
+  assert.equal(helpers.albumHeaderYamlLine(model, { issue: model.issues[0] }), 4);
+  const opened = plugin.openAlbumSchemaCard(model, "eat.md");
+  assert.equal(opened.ok, true);
+  plugin.albumHeaderDesktop = () => false;
+  assert.equal(plugin.openAlbumSchemaCard(model, "eat.md").ok, false);
+  const mobile = node(doc, "div", "markdown-preview-view");
+  plugin.paintAlbumHeaderReading(mobile, "eat.md");
+  assert.equal(mobile.querySelector(".bob-album-header-schema"), null);
+  assert.match(mobile.querySelector(".bob-album-schema-mobile-hint").textContent, /Edit this schema in YAML/);
+});
+
+test("y jumps to the field or lint line in Source mode without writing the vault", async () => {
+  const { plugin } = fixture(album({
+    fields: [{ key: "status", label: "Status", kind: "text", required: true, list: false, line: 9, choices: [] }],
+  }));
+  let cursor = null;
+  let opened = null;
+  const leaf = {
+    view: { file: { path: "eat.md" }, editor: {
+      setCursor(value) { cursor = value; },
+      scrollIntoView() {},
+    } },
+    async openFile(file, state) { opened = { file, state }; },
+  };
+  plugin.app.workspace = {
+    getLeavesOfType: () => [leaf],
+    getMostRecentLeaf: () => leaf,
+    activeLeaf: leaf,
+  };
+  const writes = [];
+  plugin.app.vault.adapter = { write(path, text) { writes.push({ path, text }); } };
+  const result = await plugin.albumHeaderJumpYaml("eat.md", 9);
+  assert.equal(result.ok, true);
+  assert.deepEqual(opened.state, { state: { mode: "source" } });
+  assert.deepEqual(cursor, { line: 8, ch: 0 });
+  assert.deepEqual(writes, []);
+});
+
+test("theme accent, schema button, and keyboard labels stay on the header", () => {
+  const { doc, plugin } = fixture(album({
+    fields: [{ key: "status", label: "Status", kind: "text", required: true, list: false, choices: [] }],
+  }));
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.paintAlbumHeaderReading(root, "eat.md");
+  const header = root.querySelector(".bob-album-header");
+  assert.equal(header.tagName, "SECTION");
+  assert.equal(root.querySelector(".bob-album-header-schema").textContent, "⊞ Schema");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
+  const field = root.querySelector(".bob-album-schema-field");
+  assert.equal(field.getAttribute("tabindex"), "0");
 });

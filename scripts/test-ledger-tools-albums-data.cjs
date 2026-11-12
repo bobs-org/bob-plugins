@@ -380,6 +380,42 @@ test("album list and sync use fixed JSON argv and the versioned report decoders"
   assert.equal(albumDecodeSyncReport("unsupported command", "").code, "bad-json");
 });
 
+test("album field and album-entry report additions stay optional", () => {
+  const older = decodedList();
+  assert.equal(older.ok, true);
+  const eat = older.report.albumsByStem.get("eat");
+  assert.equal(eat.dated_notes, undefined);
+  assert.equal(eat.fields[0].choices[0].count, undefined);
+
+  const richer = decodedList({
+    albums: [healthyAlbum({
+      dated_notes: true,
+      legacy: ["old_status"],
+      schema_fingerprint: "sha256:abc",
+      fields: [{
+        key: "status",
+        label: "Status",
+        kind: "choices",
+        required: true,
+        list: false,
+        suggest: false,
+        line: 12,
+        filled: 104,
+        choices: [
+          { value: "to_try", label: "🔖 To try", count: 11 },
+          { value: "liked", label: "💚 Liked", count: 86 },
+        ],
+      }],
+    })],
+  });
+  assert.equal(richer.ok, true);
+  const row = richer.report.albumsByStem.get("eat");
+  assert.equal(row.dated_notes, true);
+  assert.deepEqual(row.legacy, ["old_status"]);
+  assert.equal(row.fields[0].filled, 104);
+  assert.equal(row.fields[0].choices[0].count, 11);
+});
+
 test("catalog-only damage stays visible when no album rows exist", () => {
   const body = {
     ok: false,

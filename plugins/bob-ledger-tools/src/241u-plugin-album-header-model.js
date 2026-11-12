@@ -132,6 +132,86 @@ function albumHeaderRouteReason(entry) {
   return "";
 }
 
+function albumHeaderHumanize(value) {
+  const text = String(value || "").replace(/[_-]+/g, " ").trim();
+  if (!text) return "";
+  return text.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
+}
+
+function albumHeaderOptionalCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function albumHeaderOptionalNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function albumHeaderChoiceModel(choice) {
+  if (!choice || typeof choice !== "object") {
+    const label = String(choice || "");
+    return { value: "", label, count: null };
+  }
+  return {
+    value: String(choice.value || ""),
+    label: String(choice.label ?? choice.value ?? ""),
+    count: albumHeaderOptionalCount(choice.count),
+  };
+}
+
+function albumHeaderFieldModel(field) {
+  return {
+    key: String(field?.key || ""),
+    label: String(field?.label || field?.key || ""),
+    kind: String(field?.kind || ""),
+    list: field?.list === true,
+    required: field?.required === true,
+    suggest: field?.suggest === true,
+    min: albumHeaderOptionalNumber(field?.min),
+    max: albumHeaderOptionalNumber(field?.max),
+    line: albumHeaderOptionalCount(field?.line),
+    filled: albumHeaderOptionalCount(field?.filled),
+    choices: (Array.isArray(field?.choices) ? field.choices : []).map(albumHeaderChoiceModel),
+  };
+}
+
+function albumHeaderIssueModel(issue) {
+  return {
+    severity: String(issue?.severity || "info"),
+    code: String(issue?.code || ""),
+    message: String(issue?.message || ""),
+    line: albumHeaderOptionalCount(issue?.line),
+    keyPath: issue?.key_path == null ? "" : String(issue.key_path),
+    suggestions: (Array.isArray(issue?.suggestions) ? issue.suggestions : [])
+      .map((item) => String(item || "")).filter(Boolean),
+  };
+}
+
+function albumHeaderSchemaLabel(entry) {
+  const label = String(entry?.label || "").trim();
+  if (label) return label;
+  const noun = albumHeaderHumanize(entry?.noun);
+  if (noun) return noun;
+  return albumHeaderHumanize(entry?.stem) || "Album";
+}
+
+function albumHeaderFieldLabel(fields, key) {
+  const match = (fields || []).find((field) => field.key === key);
+  return match?.label || albumHeaderHumanize(key) || key;
+}
+
+function albumHeaderGroupingClause(entry, fields) {
+  const indexBy = String(entry?.index_by || "").trim();
+  if (!indexBy) return "";
+  const parts = [`grouped by ${albumHeaderFieldLabel(fields, indexBy)}`];
+  const facets = (Array.isArray(entry?.index_facets) ? entry.index_facets : [])
+    .map((item) => String(item || "").trim())
+    .filter((key) => key && key !== indexBy);
+  if (facets.length) {
+    parts.push(`sub-grouped by ${facets.map((key) => albumHeaderFieldLabel(fields, key)).join(", ")}`);
+  }
+  return parts.join(", ");
+}
+
 function albumHeaderModel(report, sourcePath, options = {}) {
   const entry = albumHeaderEntry(report, sourcePath);
   if (!entry) return null;
@@ -143,15 +223,9 @@ function albumHeaderModel(report, sourcePath, options = {}) {
   )) return null;
 
   const ancestry = albumHeaderOwnerChain(entry, { ...options, sourcePath });
-  const fields = Array.isArray(entry.fields) ? entry.fields.map((field) => ({
-    key: String(field?.key || ""),
-    label: String(field?.label || field?.key || ""),
-    kind: String(field?.kind || ""),
-    list: field?.list === true,
-    required: field?.required === true,
-    choices: (Array.isArray(field?.choices) ? field.choices : [])
-      .map((choice) => String(choice?.label ?? choice?.value ?? "")),
-  })) : [];
+  const fields = Array.isArray(entry.fields) ? entry.fields.map(albumHeaderFieldModel) : [];
+  const issues = (Array.isArray(entry.issues) ? entry.issues : []).map(albumHeaderIssueModel);
+  const schemaInvalid = issues.some((issue) => issue.severity === "error");
   const routeReason = albumHeaderRouteReason(entry);
   const crumbs = ancestry.crumbs.concat([{
     stem: String(entry.stem || ""),
@@ -160,11 +234,24 @@ function albumHeaderModel(report, sourcePath, options = {}) {
     kind: "album",
     current: true,
   }]);
+  const indexBy = String(entry.index_by || "").trim();
+  const indexFacets = (Array.isArray(entry.index_facets) ? entry.index_facets : [])
+    .map((item) => String(item || "").trim()).filter(Boolean);
   return {
     path: albumHeaderPath(entry.path),
     stem: String(entry.stem || ""),
     title: String(entry.title || entry.stem || ""),
+    emoji: entry.emoji == null ? "" : String(entry.emoji),
     noun: entry.noun == null ? null : String(entry.noun),
+    plural: entry.plural == null ? null : String(entry.plural),
+    schemaLabel: albumHeaderSchemaLabel(entry),
+    datedNotes: entry.dated_notes === true,
+    legacy: (Array.isArray(entry.legacy) ? entry.legacy : [])
+      .map((item) => String(item || "")).filter(Boolean),
+    records: albumHeaderOptionalCount(entry.records) ?? 0,
+    indexBy,
+    indexFacets,
+    groupingClause: albumHeaderGroupingClause(entry, fields),
     crumbs,
     broken: ancestry.broken,
     cyclic: ancestry.cyclic,
@@ -174,18 +261,15 @@ function albumHeaderModel(report, sourcePath, options = {}) {
       : "",
     fields,
     emptySchema: fields.length === 0,
-    issues: (Array.isArray(entry.issues) ? entry.issues : []).map((issue) => ({
-      severity: String(issue?.severity || "info"),
-      code: String(issue?.code || ""),
-      message: String(issue?.message || ""),
-    })),
+    schemaInvalid,
+    issues,
     routeReason,
     captureText: routeReason ? "" : `Name @${entry.stem}/`,
     captureLabel: routeReason ? "" : String(entry.noun),
   };
 }
 
-function albumHeaderSignature(model) {
+function albumHeaderSignature(model, extra = {}) {
   if (!model) return "none";
   return JSON.stringify({
     path: model.path,
@@ -196,5 +280,12 @@ function albumHeaderSignature(model) {
     captureText: model.captureText,
     routeReason: model.routeReason,
     ancestryMessage: model.ancestryMessage,
+    datedNotes: model.datedNotes,
+    groupingClause: model.groupingClause,
+    legacy: model.legacy,
+    records: model.records,
+    schemaInvalid: model.schemaInvalid,
+    expanded: extra.expanded === true,
+    desktop: extra.desktop !== false,
   });
 }

@@ -52,10 +52,19 @@ function albumIssueRows(value) {
   );
 }
 
+function albumOptionalBool(value) {
+  return value === undefined || value === null || typeof value === "boolean";
+}
+
+function albumOptionalCount(value) {
+  return value === undefined || value === null || albumJsonCount(value);
+}
+
 function albumChoiceShape(choice) {
   return albumJsonObject(choice) &&
     typeof choice.value === "string" &&
-    typeof choice.label === "string";
+    typeof choice.label === "string" &&
+    albumOptionalCount(choice.count);
 }
 
 function albumFieldShape(field) {
@@ -65,7 +74,12 @@ function albumFieldShape(field) {
     typeof field.kind === "string" &&
     typeof field.required === "boolean" &&
     typeof field.list === "boolean" &&
-    Array.isArray(field.choices) && field.choices.every(albumChoiceShape);
+    Array.isArray(field.choices) && field.choices.every(albumChoiceShape) &&
+    (field.suggest === undefined || typeof field.suggest === "boolean") &&
+    albumOptionalCount(field.line) &&
+    albumOptionalCount(field.filled) &&
+    (field.min === undefined || field.min === null || typeof field.min === "number") &&
+    (field.max === undefined || field.max === null || typeof field.max === "number");
 }
 
 function albumGroupShape(group) {
@@ -91,6 +105,9 @@ function albumEntryShape(entry) {
     albumNullableString(entry.noun) &&
     albumNullableString(entry.label) &&
     albumNullableString(entry.plural) &&
+    albumOptionalBool(entry.dated_notes) &&
+    (entry.legacy === undefined || entry.legacy === null || albumStringArray(entry.legacy)) &&
+    (entry.schema_fingerprint === undefined || entry.schema_fingerprint === null || typeof entry.schema_fingerprint === "string") &&
     albumNullableString(entry.parent) &&
     albumNullableString(entry.parent_kind) &&
     albumNullableString(entry.owner) &&

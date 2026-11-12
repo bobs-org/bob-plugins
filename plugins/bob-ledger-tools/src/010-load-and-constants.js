@@ -1,6 +1,7 @@
 const {
   MarkdownRenderChild,
   MarkdownView,
+  Modal,
   Notice,
   Platform,
   Plugin,

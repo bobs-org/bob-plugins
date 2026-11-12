@@ -1,6 +1,6 @@
 ---
 title: "Album cards"
-description: "Live album counts, record-index folds, date chips, and repair controls in owner and album notes."
+description: "Live album counts, record-index folds, date chips, a collapsed schema header, and repair controls in owner and album notes."
 ---
 
 Bob Ledger Tools decorates the generated `[!albums]` catalog in area and project
@@ -52,12 +52,28 @@ Chips refresh when that metadata changes and at local midnight. Folding,
 peeking, and date chips never rewrite the note.
 
 Album notes also show a breadcrumb from their resolved area/project ancestry
-and a read-only **Record schema** card in both Reading view and Live Preview.
-The card follows the field declaration order and shows each label, kind, list
-and required markers, and choice labels. Schema edits remain ordinary
-frontmatter edits; the card does not change the YAML. The album's `record`
-property is hidden only in that album's rendered Properties surface, and stays
-editable in Source mode.
+and a collapsed-by-default schema summary in Reading view and Live Preview.
+The summary names the schema, field count, dated notes, and index grouping.
+Expanding it shows one chip row per field in declaration order: human labels,
+kind and flag suffixes, required as a quiet `*`, choice chips with usage
+counts, grouping annotations, and muted `legacy` chips. Collapse state lives
+in view state keyed by the album, never in frontmatter. An invalid schema
+paints the first diagnostic on the summary and expands to the lint list; an
+empty schema teaches how to add fields so `Name @stem/` can collect facts.
+The two states never impersonate each other.
+
+**⊞ Schema** opens a read-only Schema Card in the Task Card idiom: album
+label, record counts, the same chip rows, a lint banner, and a footer of
+navigation keys, `y`, and `esc`. The card has no write gestures. `y` from the
+card or a focused chip/lint row jumps to that field or issue line in Source
+mode. Bob's `issues[]` paint as lint marks with their message and suggestions
+as text. Schema edits remain YAML or a later Schema Card editor; this surface
+does not change note bytes. The album's `record` property is hidden only in
+that album's rendered Properties surface, and stays editable in Source mode.
+
+On Obsidian mobile the summary and chips still render from last-good album
+data with an edit-in-YAML hint. The Schema button and write gestures are
+absent.
 
 The **＋ noun** button copies the exact `Name @stem/` capture starter for the
 album. It does not open capture or create a record. Invalid schemas or capture
@@ -73,5 +89,5 @@ For stored album/record structure and capture routes, see
 The offline wrapper `scripts/test-obsidian-album-ui-e2e.cjs` is part of
 `npm test`; run the real CDP walkthrough with
 `xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs`. It covers owner chips,
-group jump, folds, date chips, the header, property hiding, failure and retry,
-cleanup, byte preservation, and the debounced sync.
+group jump, folds, date chips, the collapsed header, property hiding, failure
+and retry, cleanup, byte preservation, and the debounced sync.

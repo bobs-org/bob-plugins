@@ -1,7 +1,7 @@
 {
   "id": "bob-vim-yank-flash",
   "name": "Bob Vim Yank Flash",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.8.7",
   "description": "Briefly highlight the exact text a Vim yank copies in Obsidian's Vim mode.",
   "author": "Bryan",

@@ -73,8 +73,12 @@ const {
   yankFlashField,
   selectionText,
   lineStartsForRange,
+  lineRangeBounds,
+  normalizedVisibleRanges,
+  visibleLineStarts,
   buildFlashDecorations,
   updateFlashState,
+  YankFlashViewPlugin,
   getRegisterController,
   findEditorView,
   hookRegisterController,
@@ -83,7 +87,7 @@ const {
 Module._load = originalLoad;
 
 // Minimal Text double built from a string: length, lineAt, sliceString.
-function makeDoc(text) {
+function makeDoc(text, counter) {
   const lines = text.split("\n");
   const starts = [];
   let offset = 0;
@@ -94,15 +98,16 @@ function makeDoc(text) {
   return {
     length: text.length,
     lineAt(pos) {
+      if (counter) counter.lineAt = (counter.lineAt || 0) + 1;
       const clamped = Math.max(0, Math.min(text.length, pos));
-      let index = 0;
-      for (let i = 0; i < starts.length; i += 1) {
-        if (starts[i] <= clamped) {
-          index = i;
-        } else {
-          break;
-        }
+      let low = 0;
+      let high = starts.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (starts[middle] <= clamped) low = middle + 1;
+        else high = middle;
       }
+      const index = Math.max(0, low - 1);
       return {
         from: starts[index],
         to: index + 1 < starts.length ? starts[index + 1] - 1 : text.length,
@@ -138,6 +143,7 @@ function makeView(text, pairs, options = {}) {
   const timers = [];
   const view = {
     state,
+    destroyed: options.destroyed === true,
     visibleRanges:
       options.visibleRanges !== undefined
         ? options.visibleRanges
@@ -239,6 +245,96 @@ test("linewise: only rendered lines are decorated across disjoint ranges", () =>
     assert.equal(range.kind, "line");
     assert.equal(range.attrs.class, YANK_FLASH_LINE_CLASS);
   }
+});
+
+test("all selection modes clip to offscreen, partial, disjoint, and empty viewports", () => {
+  const text = "aaaa\nbbbb\ncccc\ndddd\n";
+  const doc = makeDoc(text);
+  const cases = [
+    {
+      name: "linewise",
+      flash: { id: 1, linewise: true, ranges: [{ from: 0, to: 14 }] },
+      offscreen: [{ from: 15, to: 19 }],
+      partial: [{ from: 2, to: 3 }],
+      disjoint: [{ from: 0, to: 2 }, { from: 10, to: 12 }],
+      expectedPartial: [["line", 0]],
+      expectedDisjoint: [["line", 0], ["line", 10]],
+    },
+    {
+      name: "charwise",
+      flash: { id: 1, linewise: false, ranges: [{ from: 0, to: 14 }] },
+      offscreen: [{ from: 15, to: 19 }],
+      partial: [{ from: 2, to: 6 }],
+      disjoint: [{ from: 0, to: 2 }, { from: 10, to: 12 }],
+      expectedPartial: [["mark", 2, 6]],
+      expectedDisjoint: [["mark", 0, 2], ["mark", 10, 12]],
+    },
+    {
+      name: "blockwise",
+      flash: {
+        id: 1,
+        linewise: false,
+        ranges: [{ from: 0, to: 4 }, { from: 5, to: 9 }, { from: 10, to: 14 }],
+      },
+      offscreen: [{ from: 15, to: 19 }],
+      partial: [{ from: 2, to: 6 }],
+      disjoint: [{ from: 0, to: 2 }, { from: 10, to: 12 }],
+      expectedPartial: [["mark", 2, 4], ["mark", 5, 6]],
+      expectedDisjoint: [["mark", 0, 2], ["mark", 10, 12]],
+    },
+  ];
+  for (const item of cases) {
+    const coverage = (visibleRanges) => buildFlashDecorations(doc, item.flash, visibleRanges)
+      .ranges.map((range) => range.kind === "line"
+        ? [range.kind, range.from]
+        : [range.kind, range.from, range.to]);
+    assert.deepEqual(coverage(item.offscreen), [], item.name + " offscreen");
+    assert.deepEqual(coverage(item.partial), item.expectedPartial, item.name + " partial");
+    assert.deepEqual(coverage(item.disjoint), item.expectedDisjoint, item.name + " disjoint");
+    assert.deepEqual(coverage([]), [], item.name + " empty");
+    assert.deepEqual(coverage(undefined), [], item.name + " unavailable");
+  }
+});
+
+test("linewise blank EOF remains visible at an empty viewport", () => {
+  const doc = makeDoc("aaa\n");
+  const flash = { id: 1, linewise: true, ranges: [{ from: 4, to: 4 }] };
+  assert.deepEqual(
+    buildFlashDecorations(doc, flash, [{ from: 4, to: 4 }]).ranges.map((range) => range.from),
+    [4],
+  );
+});
+
+test("viewport changes rebuild decorations from captured source ranges", () => {
+  const text = "aaaa\nbbbb\ncccc\ndddd\n";
+  const flash = { id: 1, linewise: false, ranges: [{ from: 0, to: 19 }] };
+  const view = {
+    state: { doc: makeDoc(text), field: () => flash },
+    visibleRanges: [{ from: 0, to: 4 }],
+  };
+  const plugin = new YankFlashViewPlugin.cls(view);
+  assert.deepEqual(plugin.decorations.ranges.map((range) => [range.from, range.to]), [[0, 4]]);
+  const startState = { field: () => flash };
+  view.visibleRanges = [{ from: 10, to: 14 }];
+  plugin.update({
+    viewportChanged: true,
+    docChanged: false,
+    state: { field: () => flash },
+    startState,
+    view,
+  });
+  assert.deepEqual(plugin.decorations.ranges.map((range) => [range.from, range.to]), [[10, 14]]);
+});
+
+test("large linewise yanks inspect only lines in the visible viewport", () => {
+  const text = Array.from({ length: 20_000 }, () => "x").join("\n");
+  const counter = { lineAt: 0 };
+  const doc = makeDoc(text, counter);
+  const first = 12_345 * 2;
+  const flash = { id: 1, linewise: true, ranges: [{ from: 0, to: text.length }] };
+  const built = buildFlashDecorations(doc, flash, [{ from: first, to: first + 5 }]);
+  assert.deepEqual(built.ranges.map((range) => range.from), [first, first + 2, first + 4]);
+  assert.ok(counter.lineAt < 30, "lineAt calls should follow visible rows, not yank size: " + counter.lineAt);
 });
 
 test("linewise: duplicate and overlapping ranges are de-duplicated", () => {
@@ -571,6 +667,24 @@ test("the original is called once with the same this and args", () => {
   assert.deepEqual(controller._calls[0].args, ['"', "yank", "zzz", false, false]);
 });
 
+test("unnamed, named, append, plus, and star registers retain original hook calls", () => {
+  for (const register of ['"', "a", "A", "+", "*"]) {
+    const plugin = makePlugin();
+    const flashes = [];
+    plugin._flashYankRange = (...args) => flashes.push(args);
+    const controller = makeController(function (...args) {
+      return { thisValue: this, args };
+    });
+    hookRegisterController(controller, plugin);
+    const receiver = { name: "register-controller" };
+    const args = [register, "yank", "copied bytes", true, false];
+    const result = controller.pushText.apply(receiver, args);
+    assert.equal(result.thisValue, receiver, register + " receiver");
+    assert.deepEqual(result.args, args, register + " original args");
+    assert.deepEqual(flashes, [["copied bytes", true, false]], register + " flash");
+  }
+});
+
 test('the black-hole register and non-yank operators never flash', () => {
   const plugin = makePlugin();
   const view = makeView("aaa\n", [[0, 3]]);
@@ -683,7 +797,7 @@ test("the clear is scheduled on the view's own window", () => {
   }
 });
 
-test("no clear is dispatched when the view is disconnected", () => {
+test("an expired detached view is cleared before it can be reattached", () => {
   const plugin = makePlugin();
   const view = makeView("aaa\n", [[0, 3]]);
   const restore = useView(view);
@@ -691,6 +805,23 @@ test("no clear is dispatched when the view is disconnected", () => {
     assert.equal(plugin._flashYankRange("aaa", false, false), true);
     assert.equal(view._timers.length, 1);
     view.dom.isConnected = false;
+    view._timers[0].fn();
+    assert.equal(view._dispatched.length, 2);
+    assert.deepEqual(dispatchEffects(view, 1)[0].value, { id: 1, clear: true });
+    view.dom.isConnected = true;
+    assert.equal(view._dispatched.length, 2);
+  } finally {
+    restore();
+  }
+});
+
+test("an expired timer does not dispatch into a destroyed editor", () => {
+  const plugin = makePlugin();
+  const view = makeView("aaa\n", [[0, 3]]);
+  const restore = useView(view);
+  try {
+    assert.equal(plugin._flashYankRange("aaa", false, false), true);
+    view.destroyed = true;
     view._timers[0].fn();
     assert.equal(view._dispatched.length, 1);
   } finally {

@@ -51,7 +51,7 @@ repository. Set `BOB_CLI_DIR` to the checkout you are working in.
 The offline wrapper `scripts/test-obsidian-vim-yank-flash-e2e.cjs` is part of
 `npm test`. It checks the scratch-vault fixture without launching Obsidian;
 run the real CDP check on athena after an Obsidian upgrade, as described in
-[Bob Vim Yank Flash](../bob-vim-yank-flash.md#verification).
+[Bob Vim Yank Flash](https://bobs-org.github.io/reference/plugins/bob-vim-yank-flash/#verification).
 
 The offline wrapper `scripts/test-obsidian-bank-ui-e2e.cjs` is part of `npm test`;
 run the real CDP walkthrough with `xvfb-run -a node scripts/obsidian-bank-ui-e2e.cjs`.

@@ -41,48 +41,90 @@ function lineStartsForRange(doc, from, to) {
   }
 }
 
-function isLineVisible(doc, lineFrom, visibleRanges) {
-  if (!Array.isArray(visibleRanges) || visibleRanges.length === 0) {
-    return true;
+function lineRangeBounds(doc, from, to) {
+  const first = doc.lineAt(from);
+  if (!(to > from)) {
+    return { from: first.from, to: first.from };
   }
-  const line = doc.lineAt(lineFrom);
-  return visibleRanges.some(
-    (range) => range.from <= line.to && line.from <= range.to,
-  );
+  let last = doc.lineAt(to);
+  if (to === last.from) {
+    last = doc.lineAt(to - 1);
+  }
+  return { from: first.from, to: last.from };
+}
+
+function normalizedVisibleRanges(visibleRanges) {
+  if (!Array.isArray(visibleRanges) || visibleRanges.length === 0) {
+    return [];
+  }
+  const sorted = visibleRanges
+    .filter((range) => range && Number.isFinite(range.from) && Number.isFinite(range.to) && range.to >= range.from)
+    .map((range) => ({ from: range.from, to: range.to }))
+    .sort((left, right) => left.from - right.from || left.to - right.to);
+  const merged = [];
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
+}
+
+function visibleLineStarts(doc, visibleRanges) {
+  const starts = new Set();
+  for (const range of visibleRanges) {
+    const bounds = lineRangeBounds(doc, range.from, range.to);
+    let line = doc.lineAt(bounds.from);
+    for (;;) {
+      starts.add(line.from);
+      if (line.from >= bounds.to || line.to >= doc.length) {
+        break;
+      }
+      line = doc.lineAt(line.to + 1);
+    }
+  }
+  return Array.from(starts).sort((left, right) => left - right);
 }
 
 // Decorations for one flash: whole lines for a linewise yank (blank lines
-// included), one mark per non-empty range otherwise. Only lines inside the
-// rendered visible ranges, de-duplicated across overlapping ranges.
+// included), one mark per visible non-empty range otherwise. Empty or
+// unavailable viewports never broaden paint. Linewise work is bounded by the
+// visible rows, even when the captured yank covers a very large document.
 function buildFlashDecorations(doc, flash, visibleRanges) {
   const out = [];
-  if (flash && flash.linewise) {
+  const visible = normalizedVisibleRanges(visibleRanges);
+  if (!flash || visible.length === 0) {
+    return Decoration.none;
+  }
+  if (flash.linewise) {
+    const covered = flash.ranges.map((range) => lineRangeBounds(doc, range.from, range.to));
     const seen = new Set();
-    for (const range of flash.ranges) {
-      for (const lineFrom of lineStartsForRange(doc, range.from, range.to)) {
+    for (const lineFrom of visibleLineStarts(doc, visible)) {
+      if (covered.some((bounds) => bounds.from <= lineFrom && lineFrom <= bounds.to)) {
         if (seen.has(lineFrom)) {
           continue;
         }
         seen.add(lineFrom);
-        if (!isLineVisible(doc, lineFrom, visibleRanges)) {
-          continue;
-        }
         out.push(
           Decoration.line({ class: YANK_FLASH_LINE_CLASS }).range(lineFrom),
         );
       }
     }
-  } else if (flash) {
+  } else {
     for (const range of flash.ranges) {
       if (!(range.to > range.from)) {
         continue;
       }
-      out.push(
-        Decoration.mark({ class: YANK_FLASH_CLASS }).range(
-          range.from,
-          range.to,
-        ),
-      );
+      for (const viewport of visible) {
+        const from = Math.max(range.from, viewport.from);
+        const to = Math.min(range.to, viewport.to);
+        if (to > from) {
+          out.push(Decoration.mark({ class: YANK_FLASH_CLASS }).range(from, to));
+        }
+      }
     }
   }
   return Decoration.set(out, true);
@@ -135,12 +177,9 @@ const YankFlashViewPlugin = ViewPlugin.fromClass(
       this.decorations = buildDecorationsForView(view);
     }
     update(update) {
-      const changed =
-        update.viewportChanged ||
-        update.docChanged ||
-        update.state.field(yankFlashField) !==
-          update.startState.field(yankFlashField);
-      if (changed) {
+      if (update.state.field(yankFlashField)) {
+        this.decorations = buildDecorationsForView(update.view);
+      } else if (update.startState.field(yankFlashField)) {
         this.decorations = buildDecorationsForView(update.view);
       }
     }
@@ -321,7 +360,7 @@ class BobVimYankFlashPlugin extends Plugin {
     }
     viewWindow.setTimeout(() => {
       try {
-        if (!view.dom || !view.dom.isConnected) {
+        if (view.destroyed === true || typeof view.dispatch !== "function") {
           return;
         }
         view.dispatch({
@@ -344,8 +383,12 @@ BobVimYankFlashPlugin.__test = {
   yankFlashField,
   selectionText,
   lineStartsForRange,
+  lineRangeBounds,
+  normalizedVisibleRanges,
+  visibleLineStarts,
   buildFlashDecorations,
   updateFlashState,
+  YankFlashViewPlugin,
   getRegisterController,
   findEditorView,
   hookRegisterController,

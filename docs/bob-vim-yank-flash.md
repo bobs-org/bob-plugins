@@ -12,7 +12,7 @@ Bob Vim Yank Flash briefly highlights the exact text a Vim yank copies in Obsidi
 | --- | --- |
 | Name | Bob Vim Yank Flash |
 | ID | `bob-vim-yank-flash` |
-| Version | 0.1.0 |
+| Version | 0.1.1 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Briefly highlight the exact text a Vim yank copies in Obsidian's Vim mode. |
@@ -32,12 +32,15 @@ when the live selection exactly equals the yanked text. The flash lasts
 
 | Keys | What highlights |
 | --- | --- |
-| `yy`, `3yy` | Whole lines, blank lines included |
+| `yy`, `3yy`, `yap`, `yG`, `ygg` | Whole lines, blank lines included |
 | `Y` | The whole current line in stock Vim. Bob's vault vimrc maps normal-mode `Y` to `y$`, so there it flashes like `y$` |
-| `yw`, `y$`, `yiw`, `yi(`, `yap`, `yb`, `yG`, `ygg` | The exact charwise range the motion covers |
-| `v…y`, `V…y`, `<C-v>…y`, visual `Y` | The exact visual selection, one mark per block row |
+| `yw`, `y$`, `yiw`, `yi(`, `yb` | The exact charwise range the motion covers |
+| `v…y` | The exact characterwise visual selection |
+| `V…y`, visual `Y` | The whole selected lines, blank lines included |
+| `<C-v>…y` | The selected block, one mark per non-empty row |
 | `"ayy`, `"Ayy` | The lines, like an uncounted `yy` |
-| Counts (`3yw`) and dot-repeat of a yank | The newly yanked range, flashing again |
+| Counts (`3yw`) | The full range copied by the counted motion |
+| `yyp`, `yyP` | The linewise yank flashes; the following paste edits the document and clears it |
 
 ## What never flashes
 

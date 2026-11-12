@@ -8,13 +8,15 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
+const keepMovingFixture = require("./obsidian-keep-moving-marks-e2e-lib.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const FLASH_MS = 200;
 const RPC_TIMEOUT_MS = 20_000;
 const NOTE = "vim-yank-flash-fixture.md";
 const OTHER = "vim-yank-flash-other.md";
-const LINES = [
+const ALBUM_NOTE = "album-widget-fixture.md";
+const BASE_LINES = [
   "# Vim yank flash fixture", "",
   "alpha beta gamma delta", "second alpha line", "third line with tail",
   "fourth line stays here", "- [ ] repeated task row", "- [ ] repeated task row",
@@ -22,9 +24,47 @@ const LINES = [
   "outer (inside parenthesized text) end", "emoji 😀pair and UTF-16 characters",
   "tabs\talpha\tbravo and a long line that wraps when the editor is narrow; this sentence keeps going to force several rendered rows in the default Obsidian window; the yank must still cover the exact underlying range across those wraps",
   "# Heading with a [[Link]]", "- list item with [[Link]]",
-  "paragraph text for Live Preview", "last fixture line",
+  "paragraph text for Live Preview", "inline code around `sourceword` and after",
+  "last fixture line",
 ];
+const DEEP_LINES = Array.from({ length: 90 }, (_, index) => "deep filler row " + String(index + 1).padStart(3, "0"));
+const LINES = BASE_LINES.concat(["", "## Deep Scroll Fixture"], DEEP_LINES, [
+  "deep target row for ygg", "deep target second row", "deep target final row",
+]);
 const BODY = LINES.join("\n");
+const YGG_TARGET_LINE = LINES.findIndex((line) => line === "deep target row for ygg");
+const TASKS_DATA = {
+  globalFilter: "#task",
+  taskFormat: "dataview",
+  statusSettings: {
+    coreStatuses: [
+      { symbol: " ", name: "Ready", type: "TODO" },
+      { symbol: "x", name: "Done", type: "DONE" },
+    ],
+    customStatuses: [
+      { symbol: "*", name: "Next", type: "ON_HOLD" },
+      { symbol: "?", name: "Blocked", type: "TODO" },
+      { symbol: "/", name: "In Progress", type: "IN_PROGRESS" },
+      { symbol: "-", name: "Canceled", type: "CANCELLED" },
+    ],
+  },
+};
+
+function sourceLineStart(lineIndex) {
+  let offset = 0;
+  for (let i = 0; i < lineIndex; i += 1) offset += LINES[i].length + 1;
+  return offset;
+}
+
+function sourceLinewiseRegister(lineIndexes) {
+  return lineIndexes.map((line) => LINES[line]).join("\n") + "\n";
+}
+
+function sourceSpan(needle, offset, length) {
+  const start = BODY.indexOf(needle);
+  if (start < 0) throw new Error("missing expected fixture text: " + needle);
+  return [start + (offset || 0), start + (offset || 0) + length];
+}
 const HELP = [
   "Usage: node scripts/obsidian-vim-yank-flash-e2e.cjs [OPTIONS]",
   "", "Verify Bob Vim Yank Flash in an isolated real Obsidian vault through CDP.",
@@ -100,10 +140,53 @@ function expectedPlugins() {
   return plugins.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function findTasksPluginSource() {
+  const candidate = path.join(os.homedir(), "bob", ".obsidian", "plugins", "obsidian-tasks-plugin");
+  return fs.existsSync(path.join(candidate, "main.js")) && fs.existsSync(path.join(candidate, "manifest.json"))
+    ? candidate : null;
+}
+
+function writeFixtureNote(vault, file, content) {
+  const target = path.join(vault, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+}
+
 function buildFixture(vault, profilePath) {
   fs.mkdirSync(vault, { recursive: true });
   fs.writeFileSync(path.join(vault, NOTE), BODY);
   fs.writeFileSync(path.join(vault, OTHER), "# Other note\n\nA second tab.\n");
+  const today = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const dates = {
+    today: `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`,
+    year: String(today.getFullYear()),
+    stamp: `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}`,
+  };
+  const keepMovingDailyPath = keepMovingFixture.dailyPathFor(dates);
+  const keepMovingNotes = {
+    "job_email_recruiters.md": keepMovingFixture.recruiterNote(dates),
+    "job.md": keepMovingFixture.jobNote(dates),
+    "job_2026.md": keepMovingFixture.jobProjectNote(dates),
+    "km_all.md": keepMovingFixture.allNote(dates),
+    "um.md": keepMovingFixture.umbrellaNote(dates),
+    "standalone.md": keepMovingFixture.standaloneNote(dates),
+    [keepMovingDailyPath]: keepMovingFixture.dailyNote(dates),
+  };
+  for (const [file, content] of Object.entries(keepMovingNotes)) writeFixtureNote(vault, file, content);
+  const [year, month, day] = dates.today.split("-").map(Number);
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(year, month - 1, day).getDay()];
+  const monthName = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month - 1];
+  const bankPath = `bank/${year}-${pad(month)}.md`;
+  const bankBody = [
+    "---", 'type: "[[bank_month]]"', `month: ${year}-${pad(month)}`, "---", "",
+    `## ${weekday} ${monthName} ${day}`, "", "- [ ] $12.34 Yank flash bank-widget row [cat:: groceries]", "",
+  ].join("\n");
+  writeFixtureNote(vault, bankPath, bankBody);
+  const albumBody = [
+    "---", 'type: "[[album]]"', "---", "", "# Album header source row", "body below the header", "",
+  ].join("\n");
+  writeFixtureNote(vault, ALBUM_NOTE, albumBody);
   const obsidian = path.join(vault, ".obsidian");
   fs.mkdirSync(path.join(obsidian, "snippets"), { recursive: true });
   const enabled = [];
@@ -117,22 +200,43 @@ function buildFixture(vault, profilePath) {
     }
     enabled.push(plugin.id);
   }
+  const tasksSource = findTasksPluginSource();
+  if (tasksSource) {
+    const targetDir = path.join(obsidian, "plugins", "obsidian-tasks-plugin");
+    fs.mkdirSync(targetDir, { recursive: true });
+    for (const file of ["manifest.json", "main.js", "styles.css"]) {
+      const source = path.join(tasksSource, file);
+      if (fs.existsSync(source)) fs.copyFileSync(source, path.join(targetDir, file));
+    }
+    fs.writeFileSync(path.join(targetDir, "data.json"), JSON.stringify(TASKS_DATA, null, 2));
+    enabled.push("obsidian-tasks-plugin");
+  }
   fs.writeFileSync(path.join(obsidian, "community-plugins.json"), JSON.stringify(enabled, null, 2));
   fs.writeFileSync(path.join(obsidian, "app.json"), JSON.stringify({
-    livePreview: false, vimMode: true, showLineNumber: false, enabledCssSnippets: ["task-statuses"],
+    livePreview: true, vimMode: true, showLineNumber: false, enabledCssSnippets: ["task-statuses"],
   }, null, 2));
   fs.writeFileSync(path.join(obsidian, "appearance.json"), JSON.stringify({
     cssTheme: "", theme: "moonstone", enabledCssSnippets: ["task-statuses"],
   }, null, 2));
   fs.writeFileSync(path.join(obsidian, "snippets", "task-statuses.css"),
     '.markdown-source-view.mod-cm6 .HyperMD-task-line:is([data-task="/"]) { background: rgba(20, 120, 60, 0.55); }\n');
+  fs.writeFileSync(path.join(obsidian, "core-plugins.json"), JSON.stringify([
+    "file-explorer", "global-search", "switcher", "page-preview", "command-palette",
+    "editor-status", "outline", "daily-notes",
+  ], null, 2));
+  fs.writeFileSync(path.join(obsidian, "daily-notes.json"), JSON.stringify({
+    format: "YYYY/YYYYMMDD", folder: "", template: "",
+  }, null, 2));
   const profile = profilePath || path.join(vault, "..", "profile");
   const id = crypto.randomBytes(8).toString("hex");
   fs.mkdirSync(profile, { recursive: true });
   fs.writeFileSync(path.join(profile, "obsidian.json"), JSON.stringify({
     vaults: { [id]: { path: fs.realpathSync(vault), ts: Date.now(), open: true } },
   }, null, 2));
-  return { enabled, profile };
+  return {
+    enabled, profile, keepMovingDailyPath, keepMovingDailyBody: keepMovingNotes[keepMovingDailyPath],
+    tasksPlugin: Boolean(tasksSource), bankPath, bankBody, albumBody,
+  };
 }
 
 function freePort() {
@@ -281,7 +385,7 @@ async function resetNote(client) {
 async function caret(client, needle, offset) {
   if (typeof needle === "number") {
     const atLine = await client.evaluate(
-      '(()=>{const e=window.app.workspace.activeLeaf.view.editor;const n=' + needle + ';e.setCursor({line:n,ch:' + Number(offset || 0) + '});if(e.focus)e.focus();return{ok:true,line:n};})()',
+      '(()=>{const e=window.app.workspace.activeLeaf.view.editor,cm=e&&e.cm;const n=' + needle + ';e.setCursor({line:n,ch:' + Number(offset || 0) + '});if(cm&&cm.constructor&&typeof cm.constructor.scrollIntoView==="function"){const pos=cm.state.doc.line(n+1).from;cm.dispatch({effects:cm.constructor.scrollIntoView(pos,{y:"center"})});}if(e.focus)e.focus();return{ok:true,line:n};})()',
     );
     if (!atLine || !atLine.ok) throw new Error("could not place caret on line " + needle);
     return atLine;
@@ -301,19 +405,22 @@ const OBSERVER_START = [
   'const w=window.app&&window.app.workspace,l=w&&w.activeLeaf,root=l&&l.view&&l.view.containerEl&&l.view.containerEl.querySelector(".cm-content");',
   'if(!root)return{ok:false,error:"active .cm-content missing"};',
   'if(window.__bobYankFlashObservation)window.__bobYankFlashObservation.stop();',
-  'const e=l&&l.view&&l.view.editor,EditorView=e&&e.cm&&e.cm.constructor,view=EditorView&&EditorView.findFromDOM(root.closest(".cm-editor")),baseline=[];',
-  'if(view)for(const range of view.visibleRanges||[]){let line=view.state.doc.lineAt(range.from);while(line.from<=range.to){const el=root.querySelectorAll(".cm-line")[line.number-1];if(el){const s=getComputedStyle(el);baseline.push({number:line.number,text:el.textContent||"",background:s.backgroundColor,boxShadow:s.boxShadow});}if(line.to>=range.to||line.to>=view.state.doc.length)break;line=view.state.doc.lineAt(line.to+1);}}',
+  'const e=l&&l.view&&l.view.editor,EditorView=e&&e.cm&&e.cm.constructor,view=EditorView&&EditorView.findFromDOM(root.closest(".cm-editor"));',
+  'if(!view)return{ok:false,error:"active CodeMirror view missing"};const doc=view.state.doc;let baseline=[],visibleRanges=[],capturedViewport=null;',
+  'function readViewport(){const ranges=(view.visibleRanges||[]).map(r=>({from:r.from,to:r.to})),rows=[];for(const el of root.querySelectorAll(".cm-line")){let line;try{line=doc.lineAt(view.posAtDOM(el,0,-1));}catch(_){continue;}const style=getComputedStyle(el);rows.push({number:line.number-1,from:line.from,to:line.to,text:line.text,background:style.backgroundColor,boxShadow:style.boxShadow});}return{baseline:rows,visibleRanges:ranges};}',
+  'const initialViewport=readViewport();baseline=initialViewport.baseline;visibleRanges=initialViewport.visibleRanges;',
+  'function sourceSpans(el){const spans=[],walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){let parent=node.parentElement,skip=false;while(parent&&parent!==root){if(parent.classList&&Array.from(parent.classList).some(c=>c.startsWith("bob-")&&c!=="bob-yank-flash"&&c!=="bob-yank-flash-line")){skip=true;break;}if(parent.matches&&parent.matches(".cm-widget,.cm-widgetBuffer")){skip=true;break;}parent=parent.parentElement;}if(skip)continue;try{const from=view.posAtDOM(node,0,-1),to=view.posAtDOM(node,node.nodeValue.length,1);if(Number.isInteger(from)&&Number.isInteger(to)&&to>from)spans.push([from,to]);}catch(_){}}return spans;}',
   'const records=[],seen=new WeakMap();',
-  'const sample=()=>{for(const el of root.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line")){const kind=el.classList.contains("bob-yank-flash-line")?"line":"mark";if(seen.get(el)===kind)continue;seen.set(el,kind);let n=null;try{if(view)n=view.state.doc.lineAt(view.posAtDOM(el)).number;}catch(_){}const s=getComputedStyle(el);records.push({kind,line:n,text:el.textContent||"",background:s.backgroundColor,boxShadow:s.boxShadow,time:performance.now()});}};',
+  'const sample=()=>{const els=root.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line");if(els.length&&!capturedViewport)capturedViewport=readViewport();for(const el of els){const kind=el.classList.contains("bob-yank-flash-line")?"line":"mark";let line=null;try{line=doc.lineAt(view.posAtDOM(el,0,-1)).number-1;}catch(_){}const style=getComputedStyle(el),spans=kind==="mark"?sourceSpans(el):[];const key=kind+"|"+String(line)+"|"+JSON.stringify(spans);if(seen.get(el)===key)continue;seen.set(el,key);records.push({kind,line,spans,text:spans.map(r=>doc.sliceString(r[0],r[1])).join(""),background:style.backgroundColor,boxShadow:style.boxShadow,time:performance.now()});if(spans.length||kind==="line")capturedViewport=readViewport();}};',
   'let frame=0,stopped=false;const tick=()=>{if(stopped)return;sample();frame=requestAnimationFrame(tick);};',
   'const observer=new MutationObserver(sample);observer.observe(root,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["class"]});frame=requestAnimationFrame(tick);sample();',
-  'window.__bobYankFlashObservation={records,baseline,stop(){stopped=true;observer.disconnect();cancelAnimationFrame(frame);},finish(){sample();const remaining=Array.from(root.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line")).map(el=>({kind:el.classList.contains("bob-yank-flash-line")?"line":"mark",text:el.textContent||""}));this.stop();return{records:this.records,baseline:this.baseline,remaining};}};',
+  'window.__bobYankFlashObservation={records,baseline,visibleRanges,stop(){stopped=true;observer.disconnect();cancelAnimationFrame(frame);},finish(){sample();const remaining=Array.from(root.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line")).map(el=>({kind:el.classList.contains("bob-yank-flash-line")?"line":"mark"})),viewport=capturedViewport||readViewport();this.stop();return{records:this.records,baseline:viewport.baseline,visibleRanges:viewport.visibleRanges,remaining};}};',
   'return{ok:true,baseline};})()',
 ].join("\n");
 const OBSERVER_FINISH = '(()=>{const x=window.__bobYankFlashObservation;return x?x.finish():{records:[],baseline:[],remaining:[],error:"observer missing"};})()';
 const EDITOR_STATE = '(()=>{const w=window.app.workspace,v=w.activeLeaf&&w.activeLeaf.view,e=v&&v.editor;if(!e)return{ok:false};' +
-  'const rc=window.CodeMirrorAdapter.Vim.getRegisterController(),r=rc.getRegister(\'"\');let text=typeof r==="string"?r:r&&typeof r.toString==="function"?r.toString():r&&typeof r.text==="string"?r.text:r&&Array.isArray(r.text)?r.text.join(r.linewise?"\\n":""):r&&Array.isArray(r.lines)?r.lines.join(r.linewise?"\\n":""):null;' +
-  'let raw=null,clipboard=null,foldOffsets=null;try{raw=JSON.stringify(r);}catch(_){raw=String(r);}try{clipboard=require("electron").clipboard.readText();}catch(_){}try{foldOffsets=e.getFoldOffsets();}catch(_){}const c=e.getCursor();return{ok:true,text:e.getValue(),cursor:{line:c.line,ch:c.ch},register:text,registerRaw:raw,clipboard,foldOffsets,path:v.file&&v.file.path||null};})()';
+  'const rc=window.CodeMirrorAdapter.Vim.getRegisterController();function regText(r){return typeof r==="string"?r:r&&typeof r.toString==="function"?r.toString():r&&typeof r.text==="string"?r.text:r&&Array.isArray(r.text)?r.text.join(r.linewise?"\\n":"\\n"):r&&Array.isArray(r.lines)?r.lines.join(r.linewise?"\\n":"\\n"):null;}' +
+  'const registers={};for(const name of [\'"\',"a","+","*"]){try{registers[name]=regText(rc.getRegister(name));}catch(_){registers[name]=null;}}const r=rc.getRegister(\'"\');let raw=null,clipboard=null,foldOffsets=null;try{raw=JSON.stringify(r);}catch(_){raw=String(r);}try{clipboard=require("electron").clipboard.readText();}catch(_){}try{foldOffsets=e.getFoldOffsets();}catch(_){}const c=e.getCursor(),cm=e.cm;let visibleLines=[];try{visibleLines=Array.from(cm.dom.querySelectorAll(".cm-line")).map(el=>{try{return cm.state.doc.lineAt(cm.posAtDOM(el,0,-1)).number-1;}catch(_){return null;}}).filter(Number.isInteger);}catch(_){}return{ok:true,text:e.getValue(),cursor:{line:c.line,ch:c.ch},register:registers[\'"\'],registers,registerRaw:raw,clipboard,foldOffsets,scrollTop:cm&&cm.scrollDOM?cm.scrollDOM.scrollTop:null,visibleLines,path:v.file&&v.file.path||null};})()';
 
 async function observed(client, options) {
   await resetNote(client);
@@ -321,6 +428,7 @@ async function observed(client, options) {
   if (!opened || !opened.ok) throw new Error("could not open scratch note");
   await caret(client, options.line == null ? options.needle : options.line, options.offset || 0);
   if (options.beforeKeys) await options.beforeKeys();
+  await waitFor(client, 'document.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line").length===0', (v) => v === true, "previous flash cleared", 5000).catch(() => {});
   const armed = await client.evaluate(OBSERVER_START);
   if (!armed || !armed.ok) throw new Error("could not arm flash observer: " + JSON.stringify(armed));
   await keys(client, options.keys);
@@ -331,27 +439,78 @@ async function observed(client, options) {
   return { observation, state };
 }
 
+async function observedOpenedFile(client, options) {
+  const opened = await openNote(client, options.file, options.mode || "live");
+  if (!opened || !opened.ok) throw new Error("could not open scratch note " + options.file);
+  if (options.waitFor) {
+    await waitFor(client, options.waitFor, Boolean, options.waitLabel || "fixture widget", 20_000);
+  }
+  await caret(client, options.needle, options.offset || 0);
+  if (options.beforeKeys) await options.beforeKeys();
+  await waitFor(client, 'document.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line").length===0', (v) => v === true, "previous flash cleared", 5000).catch(() => {});
+  const armed = await client.evaluate(OBSERVER_START);
+  if (!armed || !armed.ok) throw new Error("could not arm flash observer: " + JSON.stringify(armed));
+  await keys(client, options.keys);
+  await sleep(options.waitMs == null ? FLASH_MS + 180 : options.waitMs);
+  const observation = await client.evaluate(OBSERVER_FINISH);
+  const state = await client.evaluate(EDITOR_STATE);
+  return { observation, state };
+}
+
 function lineAt(needle) { return LINES.findIndex((line) => line.includes(needle)); }
 
-function assertFlash(result, expected, label) {
-  const records = result.observation.records || [];
-  const lines = records.filter((x) => x.kind === "line");
-  const marks = records.filter((x) => x.kind === "mark");
-  if (expected.lines) {
-    const visible = new Set((result.observation.baseline || []).map((x) => x.number));
-    const want = expected.lines.map((x) => x + 1).filter((x) => visible.has(x)).sort((a, b) => a - b);
-    const got = Array.from(new Set(lines.map((x) => x.line))).sort((a, b) => a - b);
-    if (!want.length || JSON.stringify(want) !== JSON.stringify(got)) {
-      throw new Error(label + ": flashed lines " + JSON.stringify(got) + ", expected visible " + JSON.stringify(want));
+function normalizeRanges(ranges) {
+  const sorted = (Array.isArray(ranges) ? ranges : [])
+    .filter((range) => Array.isArray(range) && Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[1] > range[0])
+    .map((range) => [range[0], range[1]])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  const merged = [];
+  for (const range of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1]);
+    else merged.push(range);
+  }
+  return merged;
+}
+
+function clipRanges(ranges, visibleRanges) {
+  const clipped = [];
+  for (const [from, to] of ranges || []) {
+    for (const visible of visibleRanges || []) {
+      const start = Math.max(from, visible.from);
+      const end = Math.min(to, visible.to);
+      if (end > start) clipped.push([start, end]);
     }
-  } else if ((expected.minMarks || 0) > marks.length) {
-    throw new Error(label + ": observed " + marks.length + " marks, expected at least " + expected.minMarks);
-  } else if (!lines.length && !marks.length) throw new Error(label + ": no flash class sampled");
-  if (expected.text && !marks.map((x) => x.text).join("\n").includes(expected.text)) {
-    throw new Error(label + ": observed marks did not contain " + JSON.stringify(expected.text));
+  }
+  return normalizeRanges(clipped);
+}
+
+function assertFlash(result, expected, label) {
+  if (!Object.prototype.hasOwnProperty.call(expected, "lines") && !Object.prototype.hasOwnProperty.call(expected, "spans")) {
+    throw new Error(label + ": expected exact source-line or source-span coverage");
+  }
+  const records = result.observation.records || [];
+  const lines = records.filter((item) => item.kind === "line");
+  const marks = records.filter((item) => item.kind === "mark");
+  const visibleLines = new Set((result.observation.baseline || []).map((item) => item.number));
+  const wantedLines = (expected.lines || []).filter((line) => visibleLines.has(line)).slice().sort((a, b) => a - b);
+  const foundLines = lines.map((item) => item.line).filter(Number.isInteger).sort((a, b) => a - b);
+  if (JSON.stringify(wantedLines) !== JSON.stringify(foundLines)) {
+    throw new Error(label + ": line coverage " + JSON.stringify(foundLines) + ", expected visible source lines " + JSON.stringify(wantedLines));
+  }
+  const wantedSpans = clipRanges(expected.spans || [], result.observation.visibleRanges || []);
+  const foundSpans = normalizeRanges(marks.flatMap((item) => item.spans || []));
+  if (JSON.stringify(wantedSpans) !== JSON.stringify(foundSpans)) {
+    throw new Error(label + ": source coverage " + JSON.stringify(foundSpans) + ", expected " + JSON.stringify(wantedSpans));
   }
   if (!result.state || !result.state.ok || result.state.register == null) {
     throw new Error(label + ": unnamed register could not be read");
+  }
+  if (Object.prototype.hasOwnProperty.call(expected, "register") && result.state.register !== expected.register) {
+    throw new Error(label + ": unnamed register " + JSON.stringify(result.state.register) + ", expected " + JSON.stringify(expected.register));
+  }
+  if (expected.registerName && (!result.state.registers || result.state.registers[expected.registerName] !== expected.registerValue)) {
+    throw new Error(label + ": register " + expected.registerName + " was " + JSON.stringify(result.state.registers && result.state.registers[expected.registerName]) + ", expected " + JSON.stringify(expected.registerValue));
   }
   if ((result.observation.remaining || []).length) throw new Error(label + ": flash remained after timer");
 }
@@ -367,43 +526,54 @@ async function runCase(record, name, action) {
 }
 
 async function mustFlash(client, record) {
+  const linesFromTo = (first, last) => Array.from({ length: last - first + 1 }, (_, index) => first + index);
   const cases = [
-    ["yy", "alpha beta", 0, ["y", "y"], { lines: [lineAt("alpha beta")] }],
-    ["3yy", "after the blank line", 0, ["3", "y", "y"], { lines: [10, 11, 12] }],
-    ["yw", "alpha beta", 0, ["y", "w"], { minMarks: 1 }],
-    ["y$", "alpha beta", 6, ["y", "$"], { minMarks: 1 }],
-    ["yiw", "alpha beta", 0, ["y", "i", "w"], { minMarks: 1, text: "alpha" }],
-    ["yi(", "parenthesized", 0, ["y", "i", "("], { minMarks: 1, text: "inside parenthesized text" }],
-    ["yap", "alpha beta", 0, ["y", "a", "p"], { lines: [2, 3, 4, 5, 6, 7, 8, 9] }],
-    ["yb", "alpha beta", 15, ["y", "b"], { minMarks: 1 }],
-    ["yG", "third line with tail", 0, ["y", "G"], { lines: Array.from({ length: LINES.length - 4 }, (_, i) => i + 4) }],
-    ["ygg", "paragraph text", 0, ["y", "g", "g"], { lines: Array.from({ length: 17 }, (_, i) => i) }],
-    ["Y", "alpha beta", 0, [{ key: "Y", modifiers: 8, text: "Y" }], { lines: [lineAt("alpha beta")] }],
-    ['"ayy', "second alpha", 0, ['"', "a", "y", "y"], { lines: [3] }],
-    ['"Ayy', "third line", 0, ['"', { key: "A", modifiers: 8, text: "A" }, "y", "y"], { lines: [4] }],
-    ["Vjy", "alpha beta", 0, ["V", "j", "y"], { lines: [lineAt("alpha beta"), lineAt("alpha beta") + 1] }],
-    ["vey", "alpha beta", 0, ["v", "e", "y"], { minMarks: 1, text: "alpha" }],
-    ["Ctrl-V j l y", "alpha beta", 0, [{ key: "v", modifiers: 2, text: "" }, "j", "l", "y"], { minMarks: 2 }],
-    ["blank-line yy", "after the blank line", 0, ["y", "y"], { lines: [9] }],
+    ["yy", "alpha beta", 0, ["y", "y"], { lines: [lineAt("alpha beta")], register: sourceLinewiseRegister([lineAt("alpha beta")]) }],
+    ["3yy", "after the blank line", 0, ["3", "y", "y"], { lines: [10, 11, 12], register: sourceLinewiseRegister([10, 11, 12]) }],
+    ["yw", "alpha beta", 0, ["y", "w"], { spans: [sourceSpan("alpha beta", 0, 6)], register: "alpha " }],
+    ["y$", "alpha beta", 6, ["y", "$"], { spans: [sourceSpan("alpha beta", 6, LINES[lineAt("alpha beta")].length - 6)], register: "beta gamma delta" }],
+    ["yiw", "alpha beta", 0, ["y", "i", "w"], { spans: [sourceSpan("alpha beta", 0, 5)], register: "alpha" }],
+    ["yi(", "parenthesized", 0, ["y", "i", "("], { spans: [sourceSpan("outer (inside parenthesized text) end", 7, 25)], register: "inside parenthesized text" }],
+    ["yap", "alpha beta", 0, ["y", "a", "p"], { lines: linesFromTo(2, 9), register: sourceLinewiseRegister(linesFromTo(2, 9)) }],
+    ["yb", "alpha beta", 15, ["y", "b"], { spans: [sourceSpan("alpha beta gamma delta", 11, 4)], register: "gamm" }], // Vim b is exclusive: yb yanks gamm,
+    ["yG", "third line with tail", 0, ["y", "G"], { lines: linesFromTo(4, LINES.length - 1), register: sourceLinewiseRegister(linesFromTo(4, LINES.length - 1)) }],
+    ["ygg", "deep target row for ygg", 0, ["y", "g", "g"], { lines: linesFromTo(0, YGG_TARGET_LINE), register: sourceLinewiseRegister(linesFromTo(0, YGG_TARGET_LINE)) }],
+    ["Y", "alpha beta", 0, [{ key: "Y", modifiers: 8, text: "Y" }], { lines: [lineAt("alpha beta")], register: sourceLinewiseRegister([lineAt("alpha beta")]) }],
+    ['"ayy', "second alpha", 0, ['"', "a", "y", "y"], { lines: [3], register: sourceLinewiseRegister([3]), registerName: "a", registerValue: sourceLinewiseRegister([3]) }],
+    ['"Ayy', "third line", 0, ['"', { key: "A", modifiers: 8, text: "A" }, "y", "y"], { lines: [4], register: sourceLinewiseRegister([3, 4]), registerName: "a", registerValue: sourceLinewiseRegister([3, 4]) }],
+    ["Vjy", "alpha beta", 0, ["V", "j", "y"], { lines: [lineAt("alpha beta"), lineAt("alpha beta") + 1], register: sourceLinewiseRegister([2, 3]) }],
+    ["vey", "alpha beta", 0, ["v", "e", "y"], { spans: [sourceSpan("alpha beta", 0, 5)], register: "alpha" }],
+    ["Ctrl-V j l y", "alpha beta", 0, [{ key: "v", modifiers: 2, text: "" }, "j", "l", "y"], { spans: [sourceSpan("alpha beta", 0, 2), sourceSpan("second alpha line", 0, 2)], register: "al\nse" }],
+    ["blank-line yy", "after the blank line", 0, ["y", "y"], { lines: [9], register: "\n" }],
   ];
   for (const [label, needle, offset, sequence, expected] of cases) {
     await runCase(record, "must-flash/" + label, async () => {
-      const result = await observed(client, { needle: label === "blank-line yy" ? undefined : needle, line: label === "blank-line yy" ? 9 : undefined, offset, keys: sequence });
+      const result = await observed(client, { needle: label === "blank-line yy" || label === "ygg" ? undefined : needle, line: label === "blank-line yy" ? 9 : label === "ygg" ? YGG_TARGET_LINE : undefined, offset, keys: sequence });
       assertFlash(result, expected, label);
-      return "register=" + JSON.stringify(result.state.register);
+      return "exact source coverage and register bytes verified";
     });
   }
+  await runCase(record, "must-flash/inline-code Live Preview", async () => {
+    const result = await observed(client, { mode: "live", needle: "sourceword", keys: ["y", "i", "w"] });
+    const inlineCode = "inline code around " + String.fromCharCode(96) + "sourceword" + String.fromCharCode(96) + " and after";
+    assertFlash(result, { spans: [sourceSpan(inlineCode, 20, 10)], register: "sourceword" }, "inline code");
+    return "inline-code source offsets and copied bytes match";
+  });
   await runCase(record, "must-flash/repeated identical yy", async () => {
     await resetNote(client); await openNote(client, NOTE, "source"); await caret(client, "alpha beta", 0);
+    await client.evaluate('(()=>{const rc=window.CodeMirrorAdapter.Vim.getRegisterController(),original=rc.pushText;window.__bobYankTimes=[];rc.pushText=function(...args){const result=original.apply(this,args);if(args[1]==="yank")window.__bobYankTimes.push(performance.now());return result;};return true;})()');
     const armed = await client.evaluate(OBSERVER_START); if (!armed.ok) throw new Error("observer failed");
-    await keys(client, ["y", "y"]); await sleep(150); await keys(client, ["y", "y"]); await sleep(100);
+    await keys(client, ["y", "y"]); await sleep(20); await keys(client, ["y", "y"]); await sleep(150);
+    const times = await client.evaluate("window.__bobYankTimes.slice()");
+    if (times.length !== 2 || times[1] - times[0] >= FLASH_MS) throw new Error("yanks did not overlap one flash lifetime: " + JSON.stringify(times));
     const live = await client.evaluate('Boolean(document.querySelector(".bob-yank-flash,.bob-yank-flash-line"))');
-    if (!live) throw new Error("second yank did not reset the flash timer");
-    await sleep(180);
+    if (!live) throw new Error("first timer cleared the second yank's flash");
+    const secondAge = await client.evaluate("performance.now()-window.__bobYankTimes[1]");
+    await sleep(Math.max(0, FLASH_MS - secondAge + 30));
     const remaining = await client.evaluate('document.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line").length');
     const obs = await client.evaluate(OBSERVER_FINISH);
-    if (remaining || !obs.records.length) throw new Error("repeated flash did not clear or was not sampled");
-    return "second identical yank reset the timer";
+    if (remaining || !obs.records.length) throw new Error("second flash did not expire or was not sampled");
+    return "two yanks overlapped; the first timer did not clear the second flash";
   });
 }
 
@@ -444,6 +614,23 @@ async function mustNotFlash(client, record) {
     if (result.records.length) throw new Error("path-yank command created a Vim flash");
     return outcome.id + " ran without a flash";
   });
+  await runCase(record, "must-not-flash/Copy card clipboard write", async () => {
+    await resetNote(client); await openNote(client, NOTE, "source"); await caret(client, "alpha beta");
+    const before = await client.evaluate(EDITOR_STATE);
+    const armed = await client.evaluate(OBSERVER_START); if (!armed.ok) throw new Error("observer failed");
+    const value = "copy-card e2e clipboard value";
+    const copied = await client.evaluate(
+      '(()=> (async()=>{const p=window.app.plugins.plugins["bob-navigation-hotkeys"];return p&&typeof p.copyCardRow==="function"?await p.copyCardRow({value:' + JSON.stringify(value) + '}):{ok:false,reason:"Copy card plugin unavailable"};})())()',
+    );
+    if (!copied || !copied.ok) throw new Error("Copy card did not write through navigator.clipboard: " + JSON.stringify(copied));
+    await sleep(FLASH_MS + 80);
+    const observation = await client.evaluate(OBSERVER_FINISH);
+    const after = await client.evaluate(EDITOR_STATE);
+    if (observation.records.length || observation.remaining.length) throw new Error("Copy card created a Vim flash");
+    if (before.text !== after.text || JSON.stringify(before.cursor) !== JSON.stringify(after.cursor)) throw new Error("Copy card changed the editor document or cursor");
+    if (after.clipboard !== value) throw new Error("Copy card's clipboard bytes differ: " + JSON.stringify(after.clipboard));
+    return "clipboard bytes copied with no flash, document edit, or cursor movement";
+  });
 }
 
 async function noticeStart(client) {
@@ -480,29 +667,68 @@ async function behavior(client, record) {
       await sleep(230);
     }
     const a = snapshots.off, b = snapshots.on;
-    if (a.text !== b.text || JSON.stringify(a.cursor) !== JSON.stringify(b.cursor) || a.register !== b.register || a.clipboard !== b.clipboard) {
-      throw new Error("document, cursor, register, or clipboard differs: " + JSON.stringify({ a, b }));
+    if (a.text !== b.text || JSON.stringify(a.cursor) !== JSON.stringify(b.cursor) || a.register !== b.register) {
+      throw new Error("document, cursor, or register differs: " + JSON.stringify({ a, b }));
     }
+    const yankNotices = (list) => (Array.isArray(list) ? list : []).map((entry) => { const match = String(entry).match(/\d+\s+lines?\s+yanked/i); return match ? match[0].toLowerCase() : String(entry); });
+    if (JSON.stringify(yankNotices(a.notices)) !== JSON.stringify(yankNotices(b.notices))) throw new Error("3yy notices differ with plugin disabled/enabled: " + JSON.stringify({ off: a.notices, on: b.notices }));
     const notice = (b.notices || []).join(" ");
     if (!/3\s+lines?\s+yanked/i.test(notice)) throw new Error("3 lines yanked notice not observed: " + JSON.stringify(b.notices));
-    const match = notice.match(/\d+\s+lines?\s+yanked/i);
-    return "document, cursor, register, clipboard, and notice match (" + (match ? match[0] : notice) + ")";
+    if (a.register !== sourceLinewiseRegister([2, 3, 4])) throw new Error("3yy register bytes were not exact: " + JSON.stringify(a.register));
+    return "document, cursor, register bytes, and both notices match";
+  });
+  await runCase(record, "behavior/ygg deep-scroll parity disabled and enabled", async () => {
+    const snapshots = {};
+    const expectedLines = Array.from({ length: YGG_TARGET_LINE + 1 }, (_, index) => index);
+    const expectedRegister = sourceLinewiseRegister(expectedLines);
+    for (const enabled of [false, true]) {
+      await togglePlugin(client, enabled);
+      snapshots[enabled ? "on" : "off"] = await observed(client, { line: YGG_TARGET_LINE, keys: ["y", "g", "g"] });
+      const result = snapshots[enabled ? "on" : "off"];
+      if (result.state.register !== expectedRegister) throw new Error((enabled ? "enabled" : "disabled") + " ygg register bytes differ");
+      if (enabled) assertFlash(result, { lines: expectedLines, register: expectedRegister }, "deep ygg");
+      else if (result.observation.records.length || result.observation.remaining.length) throw new Error("disabled ygg unexpectedly flashed");
+    }
+    const off = snapshots.off.state, on = snapshots.on.state;
+    for (const key of ["text", "cursor", "foldOffsets", "scrollTop", "visibleLines", "register"]) {
+      if (JSON.stringify(off[key]) !== JSON.stringify(on[key])) throw new Error("ygg changed " + key + " with plugin enabled");
+    }
+    if (on.visibleLines.length < 3 || Math.max(...on.visibleLines) < YGG_TARGET_LINE - 15) {
+      throw new Error("deep fixture did not scroll near the ygg target: " + JSON.stringify(on.visibleLines));
+    }
+    return "deep ygg exact bytes, visible coverage, scroll, cursor, fold, and document match";
   });
   for (const paste of ["p", "P"]) {
     await runCase(record, "behavior/yy" + paste, async () => {
-      const result = await observed(client, { needle: "alpha beta", keys: ["y", "y", paste], waitMs: FLASH_MS + 80 });
-      if (!result.state.text.includes("alpha beta")) throw new Error("yank/paste did not preserve the line");
-      if (result.observation.remaining.length) throw new Error("paste left the flash after document change");
-      return "paste completed and document change cleared flash";
+      const snapshots = {};
+      for (const enabled of [false, true]) {
+        await togglePlugin(client, enabled);
+        snapshots[enabled ? "on" : "off"] = await observed(client, { needle: "alpha beta", keys: ["y", "y", paste] });
+      }
+      const expected = LINES.slice();
+      expected.splice(paste === "p" ? 3 : 2, 0, LINES[2]);
+      const expectedCursor = { line: paste === "p" ? 3 : 2, ch: 0 };
+      for (const mode of ["off", "on"]) {
+        const result = snapshots[mode];
+        if (result.state.text !== expected.join("\n")) throw new Error(mode + " paste document differs from the exact expected text");
+        if (JSON.stringify(result.state.cursor) !== JSON.stringify(expectedCursor)) throw new Error(mode + " paste cursor differs: " + JSON.stringify(result.state.cursor));
+        if (result.state.register !== sourceLinewiseRegister([2])) throw new Error(mode + " paste register differs: " + JSON.stringify(result.state.register));
+        if ((result.observation.remaining || []).length) throw new Error(mode + " paste left the flash after document change");
+      }
+      if (snapshots.off.state.text !== snapshots.on.state.text || JSON.stringify(snapshots.off.state.cursor) !== JSON.stringify(snapshots.on.state.cursor) || snapshots.off.state.register !== snapshots.on.state.register) {
+        throw new Error("plugin changed yy" + paste + " document, cursor, or register");
+      }
+      return "exact paste document, cursor, register, and enabled/disabled parity verified";
     });
   }
   await runCase(record, "behavior/undo", async () => {
     await resetNote(client); await openNote(client, NOTE, "source");
-    const before = await client.evaluate(EDITOR_STATE); await caret(client, "alpha beta");
-    await keys(client, ["x", "u"]);
+    await caret(client, "alpha beta");
+    await keys(client, ["y", "y", "p", "u"]);
     const after = await client.evaluate(EDITOR_STATE);
-    if (before.text !== after.text) throw new Error("x then u did not restore the document");
-    return "undo restored the original text";
+    if (after.text !== BODY) throw new Error("undo after actual yank/paste did not restore exact fixture text");
+    if (after.register !== sourceLinewiseRegister([2])) throw new Error("undo changed the copied register");
+    return "one undo after yy/p restored the exact document and retained the register";
   });
   for (const [label, sequence] of [
     ["dot-repeat", ["y", "y", "p", "."]],
@@ -529,8 +755,8 @@ async function behavior(client, record) {
         snapshots[enabled ? "on" : "off"] = await client.evaluate(EDITOR_STATE);
       }
       const off = snapshots.off, on = snapshots.on;
-      if (off.text !== on.text || JSON.stringify(off.cursor) !== JSON.stringify(on.cursor) || off.register !== on.register || off.clipboard !== on.clipboard) {
-        throw new Error(label + " changed document, cursor, register, or clipboard: " + JSON.stringify({ off, on }));
+      if (off.text !== on.text || JSON.stringify(off.cursor) !== JSON.stringify(on.cursor) || off.register !== on.register) {
+        throw new Error(label + " changed document, cursor, or register: " + JSON.stringify({ off, on }));
       }
       if (!(observations.on.records || []).length) throw new Error(label + " did not flash during its yank");
       if ((observations.on.remaining || []).length) throw new Error(label + " left a flash after the wait");
@@ -565,7 +791,7 @@ async function lifetime(client, record) {
     );
     if (!state.ok || !state.marker) throw new Error("split pane did not keep hook: " + JSON.stringify(state));
     const result = await observed(client, { needle: "alpha beta", keys: ["y", "y"] });
-    assertFlash(result, { lines: [lineAt("alpha beta")] }, "split pane");
+    assertFlash(result, { lines: [lineAt("alpha beta")], register: sourceLinewiseRegister([lineAt("alpha beta")]) }, "split pane");
     return "new split editor flashed";
   });
   await runCase(record, "lifetime/pop-out best effort", async () => {
@@ -582,25 +808,24 @@ async function lifetime(client, record) {
     const off = await client.evaluate(
       '(()=>{const rc=window.CodeMirrorAdapter.Vim.getRegisterController();return{own:Object.prototype.hasOwnProperty.call(rc,"pushText"),marker:!!rc.pushText.__bobVimYankFlashWrapped};})()',
     );
-    if (off.own || off.marker) throw new Error("unload left an own property or marker: " + JSON.stringify(off));
+    if (off.marker) throw new Error("unload left our pushText wrapper: " + JSON.stringify(off)); // another plugin may legitimately own pushText after our unload
     await togglePlugin(client, true);
     const marker = await client.evaluate('(()=>{const rc=window.CodeMirrorAdapter.Vim.getRegisterController();return !!rc.pushText.__bobVimYankFlashWrapped;})()');
     if (!marker) throw new Error("re-enable did not install hook");
     const result = await observed(client, { needle: "alpha beta", keys: ["y", "y"] });
-    assertFlash(result, { lines: [lineAt("alpha beta")] }, "re-enabled plugin");
+    assertFlash(result, { lines: [lineAt("alpha beta")], register: sourceLinewiseRegister([lineAt("alpha beta")]) }, "re-enabled plugin");
     return "prototype pushText restored on unload and hook reinstalled";
   });
 }
 
 async function visibleLineStyle(client, needle) {
   const result = await observed(client, { needle, keys: ["y", "y"] });
-  assertFlash(result, { lines: [lineAt(needle)] }, "line style");
+  assertFlash(result, { lines: [lineAt(needle)], register: sourceLinewiseRegister([lineAt(needle)]) }, "line style");
   const line = result.observation.records.find((x) => x.kind === "line");
-  const baseline = result.observation.baseline.find((x) => x.number === line.line);
-  if (!line || !baseline || (line.boxShadow === baseline.boxShadow && line.background === baseline.background)) {
-    throw new Error("computed style did not change on the flashed line");
+  if (!line || !/inset/i.test(line.boxShadow || "") || !/(80,\s*200,\s*120|color-green)/i.test(line.boxShadow || "")) {
+    throw new Error("flashed line lacks the yank-flash inset style: " + JSON.stringify(line));
   }
-  return "line " + line.line + " computed style changed";
+  return "line " + line.line + " shows the yank-flash inset style";
 }
 
 async function screenshot(client, outDir, label, theme, needle, sequence) {
@@ -608,6 +833,7 @@ async function screenshot(client, outDir, label, theme, needle, sequence) {
   await client.evaluate('(()=>{const d=' + JSON.stringify(theme === "obsidian") +
     ';document.body.classList.toggle("theme-dark",d);document.body.classList.toggle("theme-light",!d);return true;})()');
   await caret(client, needle);
+  await waitFor(client, 'document.querySelectorAll(".bob-yank-flash,.bob-yank-flash-line").length===0', (v) => v === true, "previous flash cleared", 5000).catch(() => {});
   const armed = await client.evaluate(OBSERVER_START); if (!armed.ok) throw new Error("screenshot observer failed");
   await keys(client, sequence);
   const image = await client.call("Page.captureScreenshot", { format: "png", fromSurface: true });
@@ -619,21 +845,23 @@ async function screenshot(client, outDir, label, theme, needle, sequence) {
   return file;
 }
 
-async function geometry(client, record, outDir) {
+async function geometry(client, record, outDir, fixture) {
   await runCase(record, "geometry/repeated task row exact position", async () => {
     const row = lineAt("- [ ] repeated task row");
     const result = await observed(client, { needle: "- [ ] repeated task row", offset: 2, keys: ["y", "y"] });
-    assertFlash(result, { lines: [row] }, "repeated task row");
+    assertFlash(result, { lines: [row], register: sourceLinewiseRegister([row]) }, "repeated task row");
     return "only line " + (row + 1) + " flashed";
   });
   await runCase(record, "geometry/emoji UTF-16", async () => {
     const result = await observed(client, { needle: "emoji 😀pair", offset: 6, keys: ["v", "y"] });
-    assertFlash(result, { minMarks: 1, text: "😀" }, "emoji");
+    assertFlash(result, { spans: [sourceSpan("emoji 😀pair and UTF-16 characters", 6, 3)], register: "😀p" }, "emoji"); // visual vy yanks emoji plus following pair char in this adapter
     return "emoji range flashed";
   });
   await runCase(record, "geometry/tabs and wrapped line", async () => {
     const result = await observed(client, { needle: "tabs\talpha", offset: 5, keys: ["y", "$"] });
-    assertFlash(result, { minMarks: 1 }, "tab and wrapped line");
+    const lineStart = sourceSpan("tabs\talpha", 0, 0)[0];
+    const tabLine = LINES[lineAt("tabs\talpha")];
+    assertFlash(result, { spans: [[lineStart + 5, lineStart + tabLine.length]], register: tabLine.slice(5) }, "tab and wrapped line");
     const geometry = await client.evaluate('(()=>{const e=window.app.workspace.activeLeaf.view.editor,v=e.cm,root=v.dom.querySelector(".cm-content");const el=Array.from(root.querySelectorAll(".cm-line")).find(x=>{try{return v.state.doc.lineAt(v.posAtDOM(x)).text.startsWith("tabs") }catch(_){return false}});if(!el)return{ok:false};const r=document.createRange();r.selectNodeContents(el);return{ok:true,rects:r.getClientRects().length};})()');
     if (!geometry.ok || geometry.rects < 2) throw new Error("fixture line did not wrap: " + JSON.stringify(geometry));
     return "tabbed line wrapped into " + geometry.rects + " rendered rows";
@@ -652,8 +880,57 @@ async function geometry(client, record, outDir) {
       record("geometry/folded heading", "skipped", "Obsidian 1.15.0 did not expose an active heading fold through Editor.foldMore");
       return "__skip__";
     }
-    assertFlash(result, { lines: [lineAt("# Heading with")] }, "folded heading");
+    assertFlash(result, { lines: [lineAt("# Heading with")], register: sourceLinewiseRegister([lineAt("# Heading with")]) }, "folded heading");
     return "folded heading line flashed";
+  });
+  await runCase(record, "geometry/bank replaced-span coexistence", async () => {
+    const row = "- [ ] $12.34 Yank flash bank-widget row [cat:: groceries]";
+    const rowIndex = fixture.bankBody.split("\n").indexOf(row);
+    const result = await observedOpenedFile(client, {
+      file: fixture.bankPath,
+      needle: row,
+      keys: ["y", "y"],
+      waitFor: 'Boolean(document.querySelector(".bob-bank-mark-amount"))',
+      waitLabel: "bank amount replacement widget",
+    });
+    assertFlash(result, { lines: [rowIndex], register: row + "\n" }, "bank replaced span");
+    return "bank amount replacement and source line yank coexist";
+  });
+  await runCase(record, "geometry/album header widget coexistence", async () => {
+    const seeded = await client.evaluate(
+      '(()=>{const p=window.app.plugins.plugins["bob-ledger-tools"];if(!p)return false;' +
+      'const state={report:{albums:[{path:' + JSON.stringify(ALBUM_NOTE) + ',stem:"album-widget-fixture",title:"Album Widget Fixture",noun:"record",parent:"",fields:[],issues:[]}]},stale:false};' +
+      'p.albumReportState=()=>state;p.albumHeaderLastState=state;return true;})()',
+    );
+    if (!seeded) throw new Error("could not seed album report state in fixture plugin");
+    const row = "# Album header source row";
+    const rowIndex = fixture.albumBody.split("\n").indexOf(row);
+    const result = await observedOpenedFile(client, {
+      file: ALBUM_NOTE,
+      needle: row,
+      keys: ["y", "y"],
+      waitFor: 'Boolean(document.querySelector(".bob-album-header"))',
+      waitLabel: "album header widget",
+    });
+    assertFlash(result, { lines: [rowIndex], register: row + "\n" }, "album header widget");
+    return "album header widget and source heading yank coexist";
+  });
+  await runCase(record, "geometry/keep-moving widget coexistence", async () => {
+    if (!fixture.tasksPlugin) {
+      record("geometry/keep-moving widget coexistence", "skipped", "the isolated fixture host has no installed obsidian-tasks-plugin to supply Tasks cache rows");
+      return "__skip__";
+    }
+    const linkLine = "\t- [[job_email_recruiters#^luzern]]";
+    const rowIndex = fixture.keepMovingDailyBody.split("\n").indexOf(linkLine);
+    const result = await observedOpenedFile(client, {
+      file: fixture.keepMovingDailyPath,
+      needle: linkLine,
+      keys: ["y", "y"],
+      waitFor: "Boolean(document.querySelector('.bob-keep-moving-mark[data-block-id=\"luzern\"]'))",
+      waitLabel: "keep-moving task widget",
+    });
+    assertFlash(result, { lines: [rowIndex], register: linkLine + "\n" }, "keep-moving widget");
+    return "keep-moving widget and source task link yank coexist";
   });
   for (const [name, needle] of [
     ["paragraph", "paragraph text for Live Preview"],
@@ -663,7 +940,7 @@ async function geometry(client, record, outDir) {
   ]) {
     await runCase(record, "geometry/Live Preview " + name, async () => {
       const result = await observed(client, { mode: "live", needle, keys: ["y", "y"] });
-      assertFlash(result, { lines: [lineAt(needle)] }, name);
+      assertFlash(result, { lines: [lineAt(needle)], register: sourceLinewiseRegister([lineAt(needle)]) }, name);
       return "cursor line flashed";
     });
   }
@@ -682,11 +959,10 @@ async function geometry(client, record, outDir) {
         await caret(client, "alpha beta");
       },
     });
-    assertFlash(result, { lines: [lineAt("alpha beta")] }, "search match");
+    assertFlash(result, { lines: [lineAt("alpha beta")], register: sourceLinewiseRegister([lineAt("alpha beta")]) }, "search match");
     const flash = result.observation.records.find((x) => x.kind === "line");
-    const baseline = result.observation.baseline.find((x) => x.number === flash.line);
-    if (!flash || !baseline || (flash.boxShadow === baseline.boxShadow && flash.background === baseline.background)) {
-      throw new Error("flash style was hidden by the search match");
+    if (!flash || !/inset/i.test(flash.boxShadow || "") || !/(80,\s*200,\s*120|color-green)/i.test(flash.boxShadow || "")) {
+      throw new Error("flash style was hidden by the search match: " + JSON.stringify(flash));
     }
     return "line flash style changed while a search match was active";
   });
@@ -752,7 +1028,7 @@ async function runE2e(args) {
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bob-yank-flash-e2e-"));
   const vault = path.join(runRoot, "vault");
   const profile = path.join(runRoot, "profile");
-  buildFixture(vault, profile);
+  const fixture = buildFixture(vault, profile);
   const fixturePath = fs.realpathSync(vault);
   const port = await freePort();
   const child = spawn(executable, [
@@ -776,6 +1052,13 @@ async function runE2e(args) {
   const report = {
     executable, fixture: fixturePath,
     sourceSha: spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim(),
+    sourceContentSha256: Object.fromEntries([
+      "plugins/bob-vim-yank-flash/main.js",
+      "plugins/bob-vim-yank-flash/manifest.json",
+      "scripts/test-vim-yank-flash.cjs",
+      "scripts/obsidian-vim-yank-flash-e2e.cjs",
+      "scripts/test-obsidian-vim-yank-flash-e2e.cjs",
+    ].map((relative) => [relative, crypto.createHash("sha256").update(fs.readFileSync(path.join(ROOT, relative))).digest("hex")])),
     expectedPlugins: expectedPlugins(), cases, skipped: [], screenshots: [], pass: false,
   };
   try {
@@ -794,12 +1077,13 @@ async function runE2e(args) {
     );
     record("hook/installed", hook.ok && hook.marker ? "pass" : "fail", JSON.stringify(hook));
     if (!hook.ok || !hook.marker) throw new Error("pushText hook not installed");
+    record("clipboard/vimrc-support delivery", "skipped", "The isolated fixture does not install vimrc-support; delivery through its clipboard setting remains unverified.");
     const runners = {
       "must-flash": () => mustFlash(client, record),
       "must-not-flash": () => mustNotFlash(client, record),
       behavior: () => behavior(client, record),
       lifetime: () => lifetime(client, record),
-      geometry: () => geometry(client, record, outDir),
+      geometry: () => geometry(client, record, outDir, fixture),
     };
     for (const group of args.only ? [args.only] : groups) await runners[group]();
     report.skipped = cases.filter((item) => item.status === "skipped");
@@ -837,7 +1121,22 @@ async function main() {
   if (args.selfTest) { selfTest(); return; }
   await runE2e(args);
 }
-main().catch((error) => {
-  console.error((error && error.stack) || error);
-  process.exitCode = error && error.exitCode ? error.exitCode : 1;
-});
+module.exports = {
+  BODY,
+  LINES,
+  sourceLineStart,
+  sourceLinewiseRegister,
+  sourceSpan,
+  normalizeRanges,
+  clipRanges,
+  assertFlash,
+  buildFixture,
+  selfTest,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error((error && error.stack) || error);
+    process.exitCode = error && error.exitCode ? error.exitCode : 1;
+  });
+}

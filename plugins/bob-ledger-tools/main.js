@@ -40209,6 +40209,9 @@ function bobSpawnJson(args, decode, options = {}) {
       detail: "",
       tried,
     });
+    const stdinText = opts.stdin !== undefined && opts.stdin !== null
+      ? String(opts.stdin)
+      : null;
     try {
       const child = execFile(
         resolved.path,
@@ -40236,6 +40239,63 @@ function bobSpawnJson(args, decode, options = {}) {
           finish(decoded);
         },
       );
+      // JSON envelopes travel on stdin, never as shell text: the writer
+      // reads `-i -`, and labels can look like shell (`$(...)`, `;`).
+      // A missing or broken stdin pipe fails the spawn loudly instead of
+      // sending an empty envelope to a mutation.
+      if (stdinText !== null) {
+        try {
+          if (!child || !child.stdin || typeof child.stdin.write !== "function") {
+            finish({
+              ok: false,
+              code: "stdin-failed",
+              message: `${commandLabel} could not receive its request.`,
+              detail: "The update envelope never reached bob; nothing was written.",
+              tried,
+            });
+          } else {
+            let stdinFailed = false;
+            try {
+              child.stdin.on("error", () => {
+                if (!stdinFailed) {
+                  stdinFailed = true;
+                  finish({
+                    ok: false,
+                    code: "stdin-failed",
+                    message: `${commandLabel} could not receive its request.`,
+                    detail: "The update envelope never reached bob; nothing was written.",
+                    tried,
+                  });
+                }
+              });
+            } catch (error) {
+              // Error listeners are best-effort; the write below still guards.
+            }
+            try {
+              child.stdin.write(stdinText);
+              if (typeof child.stdin.end === "function") {
+                child.stdin.end();
+              }
+            } catch (error) {
+              finish({
+                ok: false,
+                code: "stdin-failed",
+                message: `${commandLabel} could not receive its request.`,
+                detail: error && error.message ? String(error.message) : "The update envelope never reached bob; nothing was written.",
+                tried,
+              });
+            }
+          }
+        } catch (error) {
+          finish({
+            ok: false,
+            code: "stdin-failed",
+            message: `${commandLabel} could not receive its request.`,
+            detail: "The update envelope never reached bob; nothing was written.",
+            tried,
+          });
+        }
+      }
       void child;
     } catch (error) {
       if (error && error.code === "ENOENT") {
@@ -58127,7 +58187,14 @@ class BobLedgerToolsAlbumDataMixin {
       this.albumMetadataReady &&
       albumFingerprintNeedsSync(previous, next, path, this.albumKnownStemsStore())
     ) {
-      this.albumScheduleSync(options.syncReason || "frontmatter-change");
+      const ownPaths = this.albumUpdateOwnPaths instanceof Set ? this.albumUpdateOwnPaths : null;
+      if (ownPaths && ownPaths.has(path)) {
+        // The writer's own echo: invalidate the display data (already done
+        // by the caller via apiAlbumInvalidate) but schedule no duplicate
+        // sync or commit for a write the apply lifecycle already owns.
+      } else {
+        this.albumScheduleSync(options.syncReason || "frontmatter-change");
+      }
     }
     return true;
   }
@@ -58212,6 +58279,13 @@ class BobLedgerToolsAlbumDataMixin {
   albumScheduleSync(reason = "frontmatter-change") {
     void reason;
     if (this.albumDataActive === false) {
+      return false;
+    }
+    if (this.albumUpdateFlight || this.albumUpdateBusy) {
+      // A schema apply owns the write lifecycle: never overlap it with a
+      // sync. Unrelated changes are remembered, not discarded, and run as
+      // one trailing sync after the apply and its refresh settle.
+      this.albumSyncTrailing = true;
       return false;
     }
     if (this.albumSyncFlight || this.albumSyncBusy) {
@@ -58365,6 +58439,9 @@ class BobLedgerToolsAlbumDataMixin {
     this.albumSyncError = null;
     this.albumSyncFlight = null;
     this.albumSyncTrailing = false;
+    this.albumUpdateFlight = null;
+    this.albumUpdateBusy = false;
+    this.albumUpdateOwnPaths = new Set();
     this.albumListFlight = null;
     this.albumQueuedGeneration = 0;
     this.albumListWaiters = [];
@@ -58471,7 +58548,938 @@ class BobLedgerToolsAlbumDataMixin {
     this.albumReportError = null;
     this.albumSyncBusy = false;
     this.albumSyncError = null;
+    this.albumUpdateBusy = false;
+    this.albumUpdateFlight = null;
+    if (this.albumUpdateOwnPaths instanceof Set) {
+      this.albumUpdateOwnPaths.clear();
+    }
   }
+}
+// ---- src/241z-plugin-album-update.js ----
+// Album schema update wire helpers. `bob albums update` is the only
+// writer of album schema YAML; these helpers build its argv and envelope
+// and decode its typed result without validating schema semantics.
+// Report decoders stay additive: unknown future keys are preserved by
+// validation of the wire shape, never reinterpreted here.
+const ALBUM_UPDATE_SCHEMA_VERSION = 1;
+// The writer timeout follows the existing guarded sync path, not the
+// list default on its own: an update takes the shared vault lock and
+// runs the same pre-sync lifecycle as `bob albums sync`.
+const ALBUM_UPDATE_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const ALBUM_UPDATE_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+// Typing settles before a preview is submitted; navigation and reopening
+// are reads and never schedule one.
+const ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+// Sync-only recovery after a locally committed write never replays the
+// mutation and never runs `albums sync`: it runs `bob vault-sync` only.
+function albumVaultSyncArgs() {
+  return ["vault-sync"];
+}
+
+function albumUpdateArgs(stem, options = {}) {
+  const opts = albumJsonObject(options) ? options : {};
+  const args = ["albums", "update", String(stem), "-f", "json", "-i", "-"];
+  if (opts.dryRun === true) {
+    args.push("-d");
+  }
+  return args;
+}
+
+// The request body is always JSON on stdin, never shell text: labels,
+// defaults, and inverse metadata can look like shell (`$(...)`, `;`,
+// emoji) and must survive byte-identical.
+function albumUpdateEnvelope(expect, ops) {
+  return {
+    schema_version: ALBUM_UPDATE_SCHEMA_VERSION,
+    expect: String(expect),
+    ops: Array.isArray(ops) ? ops : [],
+  };
+}
+
+function albumUpdateEnvelopeText(expect, ops) {
+  return JSON.stringify(albumUpdateEnvelope(expect, ops));
+}
+
+function albumUpdateCount(value) {
+  return value === null || value === undefined || (Number.isInteger(value) && value >= 0);
+}
+
+function albumUpdateNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
+function albumUpdatePerOpShape(entry) {
+  if (!albumJsonObject(entry)) {
+    return false;
+  }
+  if (!Number.isInteger(entry.index) || entry.index < 0) {
+    return false;
+  }
+  if (typeof entry.op !== "string" || !entry.op) {
+    return false;
+  }
+  if (typeof entry.summary !== "string") {
+    return false;
+  }
+  if (!albumUpdateNullableString(entry.derived_key)) {
+    return false;
+  }
+  if (!albumUpdateCount(entry.filled) || !albumUpdateCount(entry.count)) {
+    return false;
+  }
+  if (!albumUpdateCount(entry.newly_invalid)) {
+    return false;
+  }
+  return true;
+}
+
+function albumUpdateErrorShape(error) {
+  if (error === null || error === undefined) {
+    return true;
+  }
+  if (!albumJsonObject(error)) {
+    return false;
+  }
+  if (typeof error.code !== "string" || !error.code) {
+    return false;
+  }
+  if (typeof error.message !== "string") {
+    return false;
+  }
+  return albumUpdateNullableString(error.hint) &&
+    albumUpdateCount(error.op_index) &&
+    albumUpdateNullableString(error.field) &&
+    albumUpdateNullableString(error.choice) &&
+    albumUpdateNullableString(error.path) &&
+    albumUpdateCount(error.line) &&
+    albumUpdateNullableString(error.key_path) &&
+    albumUpdateCount(error.affected);
+}
+
+function albumUpdateCommitShape(commit) {
+  if (commit === null || commit === undefined) {
+    return true;
+  }
+  return albumJsonObject(commit) &&
+    typeof commit.sha === "string" &&
+    typeof commit.subject === "string";
+}
+
+function albumUpdateSyncShape(sync) {
+  if (sync === null || sync === undefined) {
+    return true;
+  }
+  return albumJsonObject(sync);
+}
+
+function albumUpdateReportShape(body) {
+  if (!albumJsonObject(body)) {
+    return false;
+  }
+  if (body.schema_version !== ALBUM_UPDATE_SCHEMA_VERSION) {
+    return false;
+  }
+  if (body.command !== "update" || typeof body.ok !== "boolean") {
+    return false;
+  }
+  if (typeof body.dry_run !== "boolean" || typeof body.changed !== "boolean") {
+    return false;
+  }
+  if (typeof body.stem !== "string" || typeof body.path !== "string") {
+    return false;
+  }
+  if (typeof body.before_fingerprint !== "string" || typeof body.after_fingerprint !== "string") {
+    return false;
+  }
+  if (typeof body.consequence !== "string") {
+    return false;
+  }
+  if (body.group_before !== null && body.group_before !== undefined && typeof body.group_before !== "string") {
+    return false;
+  }
+  if (body.group_after !== null && body.group_after !== undefined && typeof body.group_after !== "string") {
+    return false;
+  }
+  if (!Array.isArray(body.per_op) || !body.per_op.every(albumUpdatePerOpShape)) {
+    return false;
+  }
+  if (!Array.isArray(body.derived_keys) || !body.derived_keys.every(albumUpdateNullableString)) {
+    return false;
+  }
+  if (!Array.isArray(body.inverse_ops)) {
+    return false;
+  }
+  if (!Array.isArray(body.changes)) {
+    return false;
+  }
+  if (!Array.isArray(body.warnings) || !body.warnings.every((warning) => typeof warning === "string")) {
+    return false;
+  }
+  return albumUpdateCommitShape(body.commit) &&
+    albumUpdateSyncShape(body.sync) &&
+    albumUpdateErrorShape(body.error);
+}
+
+// Decode a typed update result. The wire shape is validated, never the
+// schema semantics inside it. Exit 2 is a valid refusal document and
+// exit 1 may also carry a typed failure, so a decodable body is
+// transport success (`ok: true`) with the operation outcome in
+// `report.ok`; only an undecodable body is a transport failure. All
+// typed refusal detail — `error.affected`, hint, path/line, and
+// operation identity (`op_index`, `field`, `choice`, `key_path`) — is
+// preserved untouched for the card to paint.
+function albumDecodeUpdateReport(stdout, stderr = "", exitCode = null) {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob albums update returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (!albumUpdateReportShape(body)) {
+    if (albumJsonObject(body) && body.schema_version !== ALBUM_UPDATE_SCHEMA_VERSION) {
+      return {
+        ok: false,
+        code: "schema-mismatch",
+        message: "bob albums update uses a different schema.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob albums update returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+function albumIsStaleUpdateCode(code) {
+  return code === "stale_schema" || code === "stale_note";
+}
+
+// Sync-only recovery runs `bob vault-sync` with no JSON contract: exit 0
+// is success and anything else carries the first stderr line. It never
+// replays the mutation and never runs `albums sync`.
+function albumDecodeVaultSyncResult(stdout, stderr = "", exitCode = null) {
+  void stdout;
+  if (exitCode === null || exitCode === undefined || exitCode === 0) {
+    return { ok: true, report: { ok: true, output: String(stdout === undefined ? "" : stdout) } };
+  }
+  return {
+    ok: false,
+    code: "sync-failed",
+    message: "bob vault-sync reported a failure.",
+    detail: statsFirstLine(stderr),
+  };
+}
+
+function albumUpdateErrorModel(result) {
+  const source = albumJsonObject(result) ? result : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Schema editing needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found") {
+    return { code, hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob albums update timed out. Refresh and reconcile before retrying; never blind-retry." };
+  }
+  if (code === "stdin-failed") {
+    return { code, hint: "The update envelope never reached bob. Nothing was written; preview again." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "The schema update failed. Refresh before retrying.",
+  };
+}
+// ---- src/242a-plugin-album-update-service.js ----
+// Album schema update service (mixin half). Preview runs the dry-run
+// writer with no locks and no vault bytes; apply serializes across cards
+// and against auto-sync, suppresses only the writer's own metadata echo,
+// and refreshes through the existing generation-aware revalidation so an
+// older in-flight list can never become the post-write report. Sync-only
+// recovery runs `bob vault-sync` and never replays the mutation.
+class BobLedgerToolsAlbumUpdateMixin {
+  albumUpdateOwnPathsStore() {
+    if (!(this.albumUpdateOwnPaths instanceof Set)) {
+      this.albumUpdateOwnPaths = new Set();
+    }
+    return this.albumUpdateOwnPaths;
+  }
+
+  albumSpawnUpdate(stem, envelopeText, options = {}) {
+    const opts = albumJsonObject(options) ? options : {};
+    const dryRun = opts.dryRun === true;
+    return bobSpawnJson(
+      albumUpdateArgs(stem, { dryRun }),
+      albumDecodeUpdateReport,
+      {
+        ...opts,
+        stdin: typeof envelopeText === "string" ? envelopeText : "",
+        commandLabel: dryRun ? "bob albums update -d" : "bob albums update",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+        getVaultPath: () =>
+          typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+        timeout: ALBUM_UPDATE_TIMEOUT_MS,
+        maxBuffer: ALBUM_UPDATE_MAX_BUFFER,
+        firstLine: statsFirstLine,
+      },
+    );
+  }
+
+  apiAlbumUpdatePreview(stem, envelopeText, options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    return this.albumSpawnUpdate(stem, envelopeText, { ...options, dryRun: true });
+  }
+
+  apiAlbumUpdateApply(stem, envelopeText, options = {}) {
+    const opts = albumJsonObject(options) ? options : {};
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    if (this.albumUpdateFlight) {
+      return Promise.resolve({
+        ok: false,
+        code: "apply-busy",
+        message: "Another schema apply is already running.",
+        hint: "Wait for it to settle, then preview again.",
+      });
+    }
+    const epoch = this.albumDataEpoch || 0;
+    const ownPath = typeof opts.ownPath === "string" && opts.ownPath
+      ? albumReportPath(opts.ownPath)
+      : "";
+    const waitForSync = this.albumSyncFlight && typeof this.albumSyncFlight.then === "function"
+      ? this.albumSyncFlight.catch(() => null)
+      : null;
+    const run = async () => {
+      if (waitForSync) {
+        try {
+          await waitForSync;
+        } catch (error) {
+          // A failed sync still serializes: the apply runs after it settles.
+        }
+      }
+      if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+        return { ok: false, code: "unloaded", message: "Album data has unloaded." };
+      }
+      if (this.albumUpdateFlight && this.albumUpdateFlight !== applyPromise) {
+        return {
+          ok: false,
+          code: "apply-busy",
+          message: "Another schema apply is already running.",
+          hint: "Wait for it to settle, then preview again.",
+        };
+      }
+      this.albumUpdateBusy = true;
+      if (ownPath) {
+        this.albumUpdateOwnPathsStore().add(ownPath);
+      }
+      let outcome;
+      try {
+        outcome = await this.albumSpawnUpdate(stem, envelopeText, { ...opts, dryRun: false });
+      } catch (error) {
+        outcome = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob albums update failed.",
+        };
+      }
+      const wrote = Boolean(
+        outcome && outcome.ok && outcome.report && outcome.report.ok === true &&
+        outcome.report.dry_run === false && outcome.report.changed === true,
+      );
+      const unknown = Boolean(outcome && !outcome.ok && (outcome.code === "timeout" || outcome.code === "failed"));
+      const maybeWrote = wrote || unknown;
+      if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+        if (this.albumUpdateFlight === applyPromise) {
+          this.albumUpdateFlight = null;
+        }
+        this.albumUpdateBusy = false;
+        return { ...outcome, refreshed: this.albumReportState(), wrote, unknown };
+      }
+      this.albumUpdateBusy = false;
+      if (this.albumUpdateFlight === applyPromise) {
+        this.albumUpdateFlight = null;
+      }
+      let refreshed = this.albumReportState();
+      try {
+        // The pre-write list cannot satisfy the post-write display: wait it
+        // out, then force one fresh report. Last-good data stays visible as
+        // stale on refresh failure; editing stays disabled until it lands.
+        refreshed = await this.albumRevalidateAfterSync();
+      } catch (error) {
+        // The last report remains visible as stale/unavailable on failure.
+      }
+      if (!maybeWrote && ownPath) {
+        this.albumUpdateOwnPathsStore().delete(ownPath);
+      } else if (maybeWrote && ownPath) {
+        // The writer's own frontmatter echo has landed in the refreshed
+        // report (or in the pending invalidations it absorbed); stop
+        // suppressing so later external edits on the same note sync again.
+        this.albumUpdateOwnPathsStore().delete(ownPath);
+      }
+      if (
+        this.albumSyncTrailing === true &&
+        this.albumDataActive !== false && (this.albumDataEpoch || 0) === epoch &&
+        !this.albumSyncFlight && !this.albumSyncBusy && !this.albumUpdateFlight
+      ) {
+        // Only unrelated pending invalidations set the trailing flag; the
+        // writer's own echo was suppressed above and never sets it.
+        this.albumSyncTrailing = false;
+        this.albumScheduleSync("trailing-change");
+      }
+      return { ...outcome, refreshed, wrote, unknown };
+    };
+    const applyPromise = Promise.resolve().then(run);
+    this.albumUpdateFlight = applyPromise;
+    void opts;
+    return applyPromise;
+  }
+
+  apiAlbumVaultSyncRetry(options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    if (this.albumSyncFlight) {
+      return this.albumSyncFlight.then((result) => ({ ...result, retried: false }));
+    }
+    return bobSpawnJson(
+      albumVaultSyncArgs(),
+      albumDecodeVaultSyncResult,
+      {
+        ...options,
+        commandLabel: "bob vault-sync",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+        getVaultPath: () =>
+          typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+        timeout: ALBUM_UPDATE_TIMEOUT_MS,
+        maxBuffer: ALBUM_UPDATE_MAX_BUFFER,
+        firstLine: statsFirstLine,
+      },
+    );
+  }
+}
+// ---- src/242b-plugin-album-update-session.js ----
+// Album schema update session: a DOM-independent, dependency-injected
+// edit session over one album. The visible card stays read-only until a
+// later phase wires it; this controller owns draft revisions, the typing
+// debounce, exact-envelope apply gating, editor-save ordering, Undo
+// availability, and sync-only recovery. Every response is keyed by
+// session epoch, draft revision, album identity, fingerprint, and vault
+// generation; superseded responses are ignored.
+function createAlbumUpdateSession(init = {}, deps = {}) {
+  const stem = String(init.stem || "");
+  const albumPath = albumReportPath(init.albumPath || `${stem}.md`);
+  const timers = deps.timers || null;
+  const session = {
+    epoch: 1,
+    closed: false,
+    status: "browsing",
+    revision: 0,
+    draftOps: [],
+    expect: typeof init.expect === "string" ? init.expect : "",
+    preview: null,
+    refusal: null,
+    syncWarning: null,
+    undo: null,
+    applyPromise: null,
+    previewTimer: null,
+    previewFlight: null,
+  };
+
+  function setTimeout(callback, delay) {
+    if (timers && typeof timers.setTimeout === "function") {
+      return timers.setTimeout(callback, delay);
+    }
+    return setTimeout(callback, delay);
+  }
+
+  function clearTimeout(timer) {
+    if (timer === null || timer === undefined) {
+      return;
+    }
+    if (timers && typeof timers.clearTimeout === "function") {
+      timers.clearTimeout(timer);
+      return;
+    }
+    clearTimeout(timer);
+  }
+
+  function notify() {
+    try {
+      if (typeof deps.onChange === "function") {
+        deps.onChange(snapshot());
+      }
+    } catch (error) {
+      // State notification never breaks the session.
+    }
+  }
+
+  function vaultGeneration() {
+    try {
+      const generation = typeof deps.getGeneration === "function" ? deps.getGeneration() : 0;
+      return Number.isInteger(generation) ? generation : 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  function previewMatchesCurrent(preview) {
+    return Boolean(preview) &&
+      preview.epoch === session.epoch &&
+      preview.revision === session.revision &&
+      preview.stem === stem &&
+      preview.expect === session.expect &&
+      preview.generation === vaultGeneration();
+  }
+
+  function canApply() {
+    return session.status === "preview-ready" &&
+      !session.closed &&
+      !session.applyPromise &&
+      previewMatchesCurrent(session.preview) &&
+      Boolean(session.preview && session.preview.report && session.preview.report.ok === true);
+  }
+
+  function snapshot() {
+    const previewReport = session.preview && session.preview.report ? session.preview.report : null;
+    return {
+      status: session.status,
+      stem,
+      albumPath,
+      revision: session.revision,
+      expect: session.expect,
+      draftOps: session.draftOps.slice(),
+      canApply: canApply(),
+      busy: session.status === "preview-pending" || session.status === "applying",
+      consequence: previewReport && session.status === "preview-ready"
+        ? String(previewReport.consequence || "")
+        : "",
+      preview: previewReport,
+      refusal: session.refusal ? { ...session.refusal } : null,
+      undoAvailable: Boolean(session.undo && Array.isArray(session.undo.inverseOps) && session.undo.inverseOps.length > 0),
+      syncWarning: session.syncWarning ? { ...session.syncWarning } : null,
+    };
+  }
+
+  function clearPreviewTimer() {
+    clearTimeout(session.previewTimer);
+    session.previewTimer = null;
+  }
+
+  function schedulePreview(immediate) {
+    if (session.closed || session.draftOps.length === 0) {
+      return;
+    }
+    clearPreviewTimer();
+    if (immediate === true) {
+      void requestPreview();
+      return;
+    }
+    session.status = "preview-pending";
+    session.refusal = null;
+    notify();
+    session.previewTimer = setTimeout(() => {
+      session.previewTimer = null;
+      if (!session.closed) {
+        void requestPreview();
+      }
+    }, ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS);
+  }
+
+  async function requestPreview() {
+    if (session.closed || session.draftOps.length === 0) {
+      return { ok: false, code: "empty-draft", message: "There is nothing to preview." };
+    }
+    const revision = session.revision;
+    const epoch = session.epoch;
+    const expect = session.expect;
+    const generation = vaultGeneration();
+    const envelopeText = albumUpdateEnvelopeText(expect, session.draftOps);
+    session.status = "preview-pending";
+    session.refusal = null;
+    notify();
+    let outcome;
+    try {
+      outcome = await deps.spawnPreview(stem, envelopeText);
+    } catch (error) {
+      outcome = {
+        ok: false,
+        code: "failed",
+        message: error && error.message ? String(error.message) : "The schema preview failed.",
+      };
+    }
+    if (session.closed || session.epoch !== epoch || session.revision !== revision) {
+      return { ok: false, code: "superseded", message: "A newer draft superseded this preview." };
+    }
+    session.previewFlight = null;
+    if (!outcome || outcome.ok !== true || !outcome.report) {
+      session.preview = null;
+      session.status = "refused";
+      session.refusal = {
+        kind: outcome && outcome.code === "timeout" ? "timeout-unknown" : "transport",
+        code: (outcome && outcome.code) || "failed",
+        message: (outcome && outcome.message) || "The schema preview failed.",
+        hint: outcome && (outcome.detail || outcome.hint)
+          ? String(outcome.detail || outcome.hint)
+          : "Nothing was written. Refresh and preview again.",
+      };
+      notify();
+      return { ok: false, ...session.refusal };
+    }
+    const report = outcome.report;
+    if (report.ok !== true) {
+      const failure = albumJsonObject(report.error) ? report.error : {};
+      const code = typeof failure.code === "string" ? failure.code : "refused";
+      session.preview = null;
+      session.status = "refused";
+      session.refusal = {
+        kind: albumIsStaleUpdateCode(code) ? "stale" : "refused",
+        code,
+        message: typeof failure.message === "string" ? failure.message : "The schema preview was refused.",
+        hint: failure.hint == null ? "" : String(failure.hint),
+        opIndex: failure.op_index == null ? null : failure.op_index,
+        field: failure.field == null ? null : String(failure.field),
+        choice: failure.choice == null ? null : String(failure.choice),
+        affected: failure.affected == null ? null : failure.affected,
+      };
+      notify();
+      return { ok: false, ...session.refusal };
+    }
+    session.preview = { epoch, revision, stem, expect, generation, envelopeText, report };
+    session.status = "preview-ready";
+    session.refusal = null;
+    notify();
+    return { ok: true, report };
+  }
+
+  function setDraft(ops) {
+    if (session.closed) {
+      return snapshot();
+    }
+    const next = Array.isArray(ops) ? ops.slice() : [];
+    session.revision += 1;
+    session.draftOps = next;
+    session.preview = null;
+    if (next.length === 0) {
+      session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+      session.refusal = null;
+      clearPreviewTimer();
+      notify();
+      return snapshot();
+    }
+    // A change to the draft invalidates Apply eligibility immediately;
+    // the debounced preview re-arms it only for the new revision.
+    session.status = "draft";
+    session.refusal = null;
+    notify();
+    schedulePreview(false);
+    return snapshot();
+  }
+
+  // A vault generation observed outside the preview (for example the
+  // card's subscription firing) invalidates Apply eligibility at once.
+  function noteGenerationChanged() {
+    if (session.closed) {
+      return snapshot();
+    }
+    if (session.status === "preview-ready" && !previewMatchesCurrent(session.preview)) {
+      session.preview = null;
+      session.status = "refused";
+      session.refusal = {
+        kind: "stale",
+        code: "stale_generation",
+        message: "The vault changed under this preview.",
+        hint: "Preview again before applying; nothing was written.",
+      };
+      notify();
+    }
+    return snapshot();
+  }
+
+  async function apply() {
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (session.applyPromise) {
+      return session.applyPromise;
+    }
+    if (!canApply()) {
+      return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
+    }
+    const preview = session.preview;
+    const epoch = session.epoch;
+    const run = (async () => {
+      session.status = "applying";
+      notify();
+      // Await supported saves of open Markdown editors, including every
+      // pane showing the album, before touching the writer. The original
+      // `expect` is retained through save and apply so a Source edit can
+      // never be silently rebased.
+      if (typeof deps.saveEditors !== "function") {
+        session.status = "refused";
+        session.refusal = {
+          kind: "save",
+          code: "save-unsupported",
+          message: "The album editor could not confirm open panes are saved.",
+          hint: "Save every pane showing the album in Source mode, then preview again. Nothing was written.",
+        };
+        notify();
+        return { ok: false, ...session.refusal };
+      }
+      let saved;
+      try {
+        saved = await deps.saveEditors([albumPath]);
+      } catch (error) {
+        saved = { ok: false, message: error && error.message ? String(error.message) : "Saving failed." };
+      }
+      if (session.closed || session.epoch !== epoch) {
+        return { ok: false, code: "superseded", message: "The session closed during save." };
+      }
+      if (!saved || saved.ok !== true) {
+        session.preview = null;
+        session.status = "refused";
+        session.refusal = {
+          kind: "save",
+          code: (saved && saved.code) || "save-failed",
+          message: (saved && saved.message) || "Saving the open editors failed.",
+          hint: "Apply is refused until every pane showing the album saves. Nothing was written.",
+        };
+        notify();
+        return { ok: false, ...session.refusal };
+      }
+      if (vaultGeneration() !== preview.generation) {
+        // Saving invalidated the preview: show a fresh preview and require
+        // confirmation again instead of applying the old envelope.
+        session.preview = null;
+        session.status = "preview-pending";
+        notify();
+        await requestPreview();
+        return { ok: false, code: "save-invalidated", message: "Saving changed the vault; preview again before applying." };
+      }
+      let outcome;
+      try {
+        outcome = await deps.spawnApply(stem, preview.envelopeText, { ownPath: albumPath });
+      } catch (error) {
+        outcome = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "The schema apply failed.",
+        };
+      }
+      if (session.closed || session.epoch !== epoch || session.revision !== preview.revision) {
+        // Never present a late apply as session state after close or a
+        // superseding draft; the committed transaction itself is not
+        // cancellable and is left to the refreshed report, not claimed here.
+        return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+      }
+      if (!outcome || outcome.ok !== true || !outcome.report) {
+        session.preview = null;
+        session.status = "refused";
+        const unknown = Boolean(outcome && (outcome.code === "timeout" || outcome.unknown === true));
+        session.refusal = {
+          kind: unknown ? "timeout-unknown" : "transport",
+          code: (outcome && outcome.code) || "failed",
+          message: (outcome && outcome.message) || "The schema apply failed.",
+          hint: unknown
+            ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
+            : "Nothing was written. Refresh and preview again.",
+        };
+        notify();
+        return { ok: false, ...session.refusal };
+      }
+      const report = outcome.report;
+      if (report.ok !== true) {
+        const failure = albumJsonObject(report.error) ? report.error : {};
+        const code = typeof failure.code === "string" ? failure.code : "refused";
+        // Stale refreshes land through the service's generation-aware
+        // revalidation; the draft stays unconfirmed and is never retried
+        // automatically.
+        session.preview = null;
+        session.status = "refused";
+        session.refusal = {
+          kind: albumIsStaleUpdateCode(code) ? "stale" : "refused",
+          code,
+          message: typeof failure.message === "string" ? failure.message : "The schema apply was refused.",
+          hint: failure.hint == null ? "" : String(failure.hint),
+          opIndex: failure.op_index == null ? null : failure.op_index,
+          field: failure.field == null ? null : String(failure.field),
+          choice: failure.choice == null ? null : String(failure.choice),
+          affected: failure.affected == null ? null : failure.affected,
+        };
+        notify();
+        return { ok: false, ...session.refusal };
+      }
+      if (report.changed !== true) {
+        // A no-op applies nothing and must not overwrite Undo.
+        session.revision += 1;
+        session.draftOps = [];
+        session.preview = null;
+        session.refusal = null;
+        session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+        notify();
+        return { ok: true, changed: false, report };
+      }
+      // Success: the fresh baseline moves to the returned fingerprint and
+      // the opaque inverse (restoration metadata included) becomes Undo.
+      // Inverse YAML is never reconstructed and git history stays linear.
+      session.expect = String(report.after_fingerprint || session.expect);
+      session.undo = {
+        inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
+        afterFingerprint: String(report.after_fingerprint || ""),
+      };
+      session.revision += 1;
+      session.draftOps = [];
+      session.preview = null;
+      session.refusal = null;
+      const postSyncFailed = Boolean(
+        (report.sync && report.sync.post === "failed") ||
+        (Array.isArray(report.warnings) && report.warnings.some((warning) => /saved locally/i.test(String(warning)))),
+      );
+      if (postSyncFailed) {
+        session.syncWarning = {
+          message: "Saved locally; sync failed.",
+          hint: "The schema edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
+        };
+        session.status = "saved-with-sync-warning";
+      } else {
+        session.syncWarning = null;
+        session.status = "browsing";
+      }
+      notify();
+      return { ok: true, changed: true, report };
+    })();
+    session.applyPromise = run;
+    try {
+      return await run;
+    } finally {
+      if (session.applyPromise === run) {
+        session.applyPromise = null;
+      }
+      if (!session.closed && session.status === "applying") {
+        session.status = "draft";
+        notify();
+      }
+    }
+  }
+
+  // `u` stages the last successful gesture's inverse on the same
+  // preview-and-Enter path. External changes or newly used values can
+  // still refuse it through the backend checks.
+  function stageUndo() {
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (!session.undo || !Array.isArray(session.undo.inverseOps) || session.undo.inverseOps.length === 0) {
+      return { ok: false, code: "nothing-to-undo", message: "There is no schema edit to undo." };
+    }
+    setDraft(session.undo.inverseOps.map((op) => ({ ...op })));
+    return { ok: true, revision: session.revision };
+  }
+
+  async function retrySync() {
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (session.status !== "saved-with-sync-warning") {
+      return { ok: false, code: "nothing-to-retry", message: "There is no failed sync to retry." };
+    }
+    if (typeof deps.spawnVaultSync !== "function") {
+      return { ok: false, code: "sync-unsupported", message: "Sync retry is unavailable here." };
+    }
+    let outcome;
+    try {
+      outcome = await deps.spawnVaultSync();
+    } catch (error) {
+      outcome = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "Sync retry failed." };
+    }
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (outcome && outcome.ok === true) {
+      session.syncWarning = null;
+      session.status = "browsing";
+      notify();
+      return { ok: true };
+    }
+    session.syncWarning = {
+      message: "Saved locally; sync failed.",
+      hint: (outcome && (outcome.detail || outcome.message)) || "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+    };
+    notify();
+    return { ok: false, code: (outcome && outcome.code) || "sync-failed", message: session.syncWarning.hint };
+  }
+
+  function close() {
+    session.epoch += 1;
+    session.closed = true;
+    clearPreviewTimer();
+    session.previewFlight = null;
+    // A committed transaction already running is not cancellable: its
+    // late result is ignored by epoch, never painted as session state.
+  }
+
+  return {
+    setDraft,
+    previewNow: () => {
+      clearPreviewTimer();
+      return requestPreview();
+    },
+    apply,
+    stageUndo,
+    retrySync,
+    noteGenerationChanged,
+    close,
+    getState: snapshot,
+  };
+}
+
+// Adapter from the shared album service to session dependencies. The
+// host still injects `saveEditors` (all panes showing the album) and
+// observes vault generations; the session never touches the vault or
+// the DOM itself.
+function albumUpdateServiceDeps(plugin, options = {}) {
+  const saveEditors = options.saveEditors;
+  return {
+    spawnPreview: (stem, envelopeText) => plugin.apiAlbumUpdatePreview(stem, envelopeText),
+    spawnApply: (stem, envelopeText, applyOptions) => plugin.apiAlbumUpdateApply(stem, envelopeText, applyOptions),
+    spawnVaultSync: () => plugin.apiAlbumVaultSyncRetry(),
+    saveEditors,
+    getGeneration: () => {
+      try {
+        if (plugin && Number.isInteger(plugin.albumVaultGeneration)) {
+          return plugin.albumVaultGeneration;
+        }
+      } catch (error) {
+        // Fall through to zero below.
+      }
+      return 0;
+    },
+    timers: options.timers,
+    onChange: options.onChange,
+  };
 }
 // ---- src/241h-plugin-bank-decode.js ----
 // --- Bank JSON boundary (bob-cli-kd.6.1.1) --------------------------------
@@ -110431,6 +111439,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsAlbumDataMixin,
+  BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsBankCardsMixin,
@@ -113599,6 +114608,20 @@ try {
       albumSyncArgs,
       albumDecodeListReport,
       albumDecodeSyncReport,
+      albumDecodeUpdateReport,
+      albumDecodeVaultSyncResult,
+      albumUpdateArgs,
+      albumUpdateEnvelope,
+      albumUpdateEnvelopeText,
+      albumVaultSyncArgs,
+      albumIsStaleUpdateCode,
+      albumUpdateErrorModel,
+      createAlbumUpdateSession,
+      albumUpdateServiceDeps,
+      ALBUM_UPDATE_SCHEMA_VERSION,
+      ALBUM_UPDATE_TIMEOUT_MS,
+      ALBUM_UPDATE_MAX_BUFFER,
+      ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS,
       albumIndexReport,
       albumReportPath,
       albumDirname,

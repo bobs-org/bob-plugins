@@ -32,6 +32,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsAlbumDataMixin,
+  BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsBankCardsMixin,

@@ -594,6 +594,9 @@ function bobSpawnJson(args, decode, options = {}) {
       detail: "",
       tried,
     });
+    const stdinText = opts.stdin !== undefined && opts.stdin !== null
+      ? String(opts.stdin)
+      : null;
     try {
       const child = execFile(
         resolved.path,
@@ -621,6 +624,63 @@ function bobSpawnJson(args, decode, options = {}) {
           finish(decoded);
         },
       );
+      // JSON envelopes travel on stdin, never as shell text: the writer
+      // reads `-i -`, and labels can look like shell (`$(...)`, `;`).
+      // A missing or broken stdin pipe fails the spawn loudly instead of
+      // sending an empty envelope to a mutation.
+      if (stdinText !== null) {
+        try {
+          if (!child || !child.stdin || typeof child.stdin.write !== "function") {
+            finish({
+              ok: false,
+              code: "stdin-failed",
+              message: `${commandLabel} could not receive its request.`,
+              detail: "The update envelope never reached bob; nothing was written.",
+              tried,
+            });
+          } else {
+            let stdinFailed = false;
+            try {
+              child.stdin.on("error", () => {
+                if (!stdinFailed) {
+                  stdinFailed = true;
+                  finish({
+                    ok: false,
+                    code: "stdin-failed",
+                    message: `${commandLabel} could not receive its request.`,
+                    detail: "The update envelope never reached bob; nothing was written.",
+                    tried,
+                  });
+                }
+              });
+            } catch (error) {
+              // Error listeners are best-effort; the write below still guards.
+            }
+            try {
+              child.stdin.write(stdinText);
+              if (typeof child.stdin.end === "function") {
+                child.stdin.end();
+              }
+            } catch (error) {
+              finish({
+                ok: false,
+                code: "stdin-failed",
+                message: `${commandLabel} could not receive its request.`,
+                detail: error && error.message ? String(error.message) : "The update envelope never reached bob; nothing was written.",
+                tried,
+              });
+            }
+          }
+        } catch (error) {
+          finish({
+            ok: false,
+            code: "stdin-failed",
+            message: `${commandLabel} could not receive its request.`,
+            detail: "The update envelope never reached bob; nothing was written.",
+            tried,
+          });
+        }
+      }
       void child;
     } catch (error) {
       if (error && error.code === "ENOENT") {

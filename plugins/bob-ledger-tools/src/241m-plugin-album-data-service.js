@@ -342,7 +342,14 @@ class BobLedgerToolsAlbumDataMixin {
       this.albumMetadataReady &&
       albumFingerprintNeedsSync(previous, next, path, this.albumKnownStemsStore())
     ) {
-      this.albumScheduleSync(options.syncReason || "frontmatter-change");
+      const ownPaths = this.albumUpdateOwnPaths instanceof Set ? this.albumUpdateOwnPaths : null;
+      if (ownPaths && ownPaths.has(path)) {
+        // The writer's own echo: invalidate the display data (already done
+        // by the caller via apiAlbumInvalidate) but schedule no duplicate
+        // sync or commit for a write the apply lifecycle already owns.
+      } else {
+        this.albumScheduleSync(options.syncReason || "frontmatter-change");
+      }
     }
     return true;
   }
@@ -427,6 +434,13 @@ class BobLedgerToolsAlbumDataMixin {
   albumScheduleSync(reason = "frontmatter-change") {
     void reason;
     if (this.albumDataActive === false) {
+      return false;
+    }
+    if (this.albumUpdateFlight || this.albumUpdateBusy) {
+      // A schema apply owns the write lifecycle: never overlap it with a
+      // sync. Unrelated changes are remembered, not discarded, and run as
+      // one trailing sync after the apply and its refresh settle.
+      this.albumSyncTrailing = true;
       return false;
     }
     if (this.albumSyncFlight || this.albumSyncBusy) {
@@ -580,6 +594,9 @@ class BobLedgerToolsAlbumDataMixin {
     this.albumSyncError = null;
     this.albumSyncFlight = null;
     this.albumSyncTrailing = false;
+    this.albumUpdateFlight = null;
+    this.albumUpdateBusy = false;
+    this.albumUpdateOwnPaths = new Set();
     this.albumListFlight = null;
     this.albumQueuedGeneration = 0;
     this.albumListWaiters = [];
@@ -686,5 +703,10 @@ class BobLedgerToolsAlbumDataMixin {
     this.albumReportError = null;
     this.albumSyncBusy = false;
     this.albumSyncError = null;
+    this.albumUpdateBusy = false;
+    this.albumUpdateFlight = null;
+    if (this.albumUpdateOwnPaths instanceof Set) {
+      this.albumUpdateOwnPaths.clear();
+    }
   }
 }

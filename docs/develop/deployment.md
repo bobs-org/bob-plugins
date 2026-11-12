@@ -101,7 +101,8 @@ never the inherited desktop display.
 
 ```bash
 npm run build:check
-npm test -- scripts/test-obsidian-startup-smoke.cjs
+node --test scripts/test-obsidian-startup-smoke.cjs
+npm test
 npm run smoke:obsidian -- --help
 ```
 

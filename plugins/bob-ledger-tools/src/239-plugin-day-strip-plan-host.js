@@ -277,6 +277,7 @@ class BobLedgerToolsDayStripPlanHostMixin {
   // `{ el, sourcePath }`, following the Where-it-renders conditions.
   dayStripSyncPlanHost(view) {
     try {
+      if (typeof this.bankSyncPlanHost === "function") this.bankSyncPlanHost(view);
       const el = view && view.el ? view.el : null;
       const sourcePath = view && typeof view.sourcePath === "string" ? view.sourcePath : "";
       const detach = () => {
@@ -579,8 +580,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  dayStripReleasePlanHost(view) {
+  dayStripReleasePlanHost(view, options = {}) {
     try {
+      if (options && options.unload === true && typeof this.bankReleasePlanHost === "function") {
+        this.bankReleasePlanHost(view);
+      }
       const record = view && view.dayStripRecord ? view.dayStripRecord : null;
       const host = (view && view.dayStripHost) || (record && record.el) || null;
       const blockEl = view && view.el ? view.el : (host && host.parentNode) || null;
@@ -728,9 +732,31 @@ class BobLedgerToolsDayStripPlanHostMixin {
           }
         }
       }
+      let bankHost = null;
+      try {
+        if (typeof this.bankPlanHostForRepaint === "function") {
+          bankHost = this.bankPlanHostForRepaint(el);
+        }
+      } catch (error) {
+        bankHost = null;
+      }
       if (!host) {
         try {
-          if (typeof el.empty === "function") el.empty();
+          if (bankHost && bankHost.parentNode === el) {
+            const children = Array.isArray(el.children) ? Array.from(el.children) : Array.from(el.childNodes || []);
+            for (const child of children) {
+              if (child === bankHost) continue;
+              try {
+                if (typeof el.removeChild === "function") el.removeChild(child);
+                else dayStripPlanHostRemoveNode(child);
+              } catch (error) {}
+            }
+            if (Array.isArray(el.children)) {
+              el.children = el.children.filter((child) => child === bankHost);
+              bankHost.parentNode = el;
+              if (el.children[0] !== bankHost) el.children.unshift(bankHost);
+            }
+          } else if (typeof el.empty === "function") el.empty();
           else if (Array.isArray(el.children)) {
             for (const child of el.children) child.parentNode = null;
             el.children.length = 0;
@@ -740,12 +766,15 @@ class BobLedgerToolsDayStripPlanHostMixin {
         } catch (error) {
           // Empty is best-effort.
         }
-        return null;
+        return bankHost || null;
       }
+      const preserved = [host, bankHost].filter((entry, index, all) =>
+        entry && entry.parentNode === el && all.indexOf(entry) === index,
+      );
       try {
         const children = Array.isArray(el.children) ? Array.from(el.children) : Array.from(el.childNodes || []);
         for (const child of children) {
-          if (child === host) continue;
+          if (preserved.includes(child)) continue;
           try {
             if (typeof el.removeChild === "function") el.removeChild(child);
             else dayStripPlanHostRemoveNode(child);
@@ -755,20 +784,28 @@ class BobLedgerToolsDayStripPlanHostMixin {
         }
         // FakeNode-style children arrays need an explicit sweep when
         // removeChild is unavailable.
-        if (Array.isArray(el.children) && !el.children.includes(host)) {
-          host.parentNode = el;
-          el.children.push(host);
-        }
         if (Array.isArray(el.children)) {
-          el.children = el.children.filter((child) => child === host);
-          if (el.children[0] !== host) {
-            el.children.unshift(host);
+          for (const entry of preserved) {
+            if (!el.children.includes(entry)) {
+              entry.parentNode = el;
+              el.children.push(entry);
+            }
+          }
+          el.children = el.children.filter((child) => preserved.includes(child));
+          if (host && preserved.includes(host)) {
+            el.children = [host, ...el.children.filter((child) => child !== host)];
+          }
+          if (bankHost && preserved.includes(bankHost)) {
+            const remainder = el.children.filter((child) => child !== bankHost);
+            const index = host && remainder.includes(host) ? remainder.indexOf(host) + 1 : 0;
+            remainder.splice(index, 0, bankHost);
+            el.children = remainder;
           }
         }
       } catch (error) {
         // Preservation is best-effort.
       }
-      return host;
+      return bankHost || host;
     } catch (error) {
       return null;
     }

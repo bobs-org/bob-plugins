@@ -31740,6 +31740,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
+    this.setupBankCards(); this.setupBankDailyChip();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -31855,7 +31856,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankData(); this.teardownBankActions();
+      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankDailyChip(); this.teardownBankData(); this.teardownBankActions();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
@@ -32654,6 +32655,9 @@ class BobLedgerToolsRelationIndexMixin {
       const markdownFiles = vault.getMarkdownFiles();
       if (typeof this.notebookSeedFrontmatterFingerprints === "function") {
         this.notebookSeedFrontmatterFingerprints(markdownFiles);
+      }
+      if (typeof this.albumSeedFrontmatterFingerprints === "function") {
+        this.albumSeedFrontmatterFingerprints(markdownFiles);
       }
       files = markdownFiles.filter((file) => this.relationIndexPrefilter(file));
     } catch (error) {
@@ -50348,6 +50352,7 @@ class BobLedgerToolsDayStripPlanHostMixin {
   // `{ el, sourcePath }`, following the Where-it-renders conditions.
   dayStripSyncPlanHost(view) {
     try {
+      if (typeof this.bankSyncPlanHost === "function") this.bankSyncPlanHost(view);
       const el = view && view.el ? view.el : null;
       const sourcePath = view && typeof view.sourcePath === "string" ? view.sourcePath : "";
       const detach = () => {
@@ -50650,8 +50655,11 @@ class BobLedgerToolsDayStripPlanHostMixin {
     }
   }
 
-  dayStripReleasePlanHost(view) {
+  dayStripReleasePlanHost(view, options = {}) {
     try {
+      if (options && options.unload === true && typeof this.bankReleasePlanHost === "function") {
+        this.bankReleasePlanHost(view);
+      }
       const record = view && view.dayStripRecord ? view.dayStripRecord : null;
       const host = (view && view.dayStripHost) || (record && record.el) || null;
       const blockEl = view && view.el ? view.el : (host && host.parentNode) || null;
@@ -50799,9 +50807,31 @@ class BobLedgerToolsDayStripPlanHostMixin {
           }
         }
       }
+      let bankHost = null;
+      try {
+        if (typeof this.bankPlanHostForRepaint === "function") {
+          bankHost = this.bankPlanHostForRepaint(el);
+        }
+      } catch (error) {
+        bankHost = null;
+      }
       if (!host) {
         try {
-          if (typeof el.empty === "function") el.empty();
+          if (bankHost && bankHost.parentNode === el) {
+            const children = Array.isArray(el.children) ? Array.from(el.children) : Array.from(el.childNodes || []);
+            for (const child of children) {
+              if (child === bankHost) continue;
+              try {
+                if (typeof el.removeChild === "function") el.removeChild(child);
+                else dayStripPlanHostRemoveNode(child);
+              } catch (error) {}
+            }
+            if (Array.isArray(el.children)) {
+              el.children = el.children.filter((child) => child === bankHost);
+              bankHost.parentNode = el;
+              if (el.children[0] !== bankHost) el.children.unshift(bankHost);
+            }
+          } else if (typeof el.empty === "function") el.empty();
           else if (Array.isArray(el.children)) {
             for (const child of el.children) child.parentNode = null;
             el.children.length = 0;
@@ -50811,12 +50841,15 @@ class BobLedgerToolsDayStripPlanHostMixin {
         } catch (error) {
           // Empty is best-effort.
         }
-        return null;
+        return bankHost || null;
       }
+      const preserved = [host, bankHost].filter((entry, index, all) =>
+        entry && entry.parentNode === el && all.indexOf(entry) === index,
+      );
       try {
         const children = Array.isArray(el.children) ? Array.from(el.children) : Array.from(el.childNodes || []);
         for (const child of children) {
-          if (child === host) continue;
+          if (preserved.includes(child)) continue;
           try {
             if (typeof el.removeChild === "function") el.removeChild(child);
             else dayStripPlanHostRemoveNode(child);
@@ -50826,20 +50859,28 @@ class BobLedgerToolsDayStripPlanHostMixin {
         }
         // FakeNode-style children arrays need an explicit sweep when
         // removeChild is unavailable.
-        if (Array.isArray(el.children) && !el.children.includes(host)) {
-          host.parentNode = el;
-          el.children.push(host);
-        }
         if (Array.isArray(el.children)) {
-          el.children = el.children.filter((child) => child === host);
-          if (el.children[0] !== host) {
-            el.children.unshift(host);
+          for (const entry of preserved) {
+            if (!el.children.includes(entry)) {
+              entry.parentNode = el;
+              el.children.push(entry);
+            }
+          }
+          el.children = el.children.filter((child) => preserved.includes(child));
+          if (host && preserved.includes(host)) {
+            el.children = [host, ...el.children.filter((child) => child !== host)];
+          }
+          if (bankHost && preserved.includes(bankHost)) {
+            const remainder = el.children.filter((child) => child !== bankHost);
+            const index = host && remainder.includes(host) ? remainder.indexOf(host) + 1 : 0;
+            remainder.splice(index, 0, bankHost);
+            el.children = remainder;
           }
         }
       } catch (error) {
         // Preservation is best-effort.
       }
-      return host;
+      return bankHost || host;
     } catch (error) {
       return null;
     }
@@ -58585,6 +58626,11 @@ class BobLedgerToolsBankDataMixin {
     return this.bankLatestGeneration;
   }
 
+  bankFetchErrorsStore() {
+    if (!(this.bankFetchErrors instanceof Map)) this.bankFetchErrors = new Map();
+    return this.bankFetchErrors;
+  }
+
   bankCacheGet(key) {
     const store = this.bankCacheStore();
     const entry = store.get(key);
@@ -58769,6 +58815,7 @@ class BobLedgerToolsBankDataMixin {
         const superseded = generation < latest;
         if (result && result.ok) {
           this.bankCacheSet(key, result.report, generation);
+          this.bankFetchErrorsStore().delete(key);
           return {
             report: result.report,
             stale: superseded,
@@ -58778,24 +58825,28 @@ class BobLedgerToolsBankDataMixin {
           };
         }
         const staleReport = this.bankLastGoodReport(key);
+        const fetchError = result || { code: "failed", message: "bob bank failed.", detail: "" };
+        this.bankFetchErrorsStore().set(key, fetchError);
         return {
           report: staleReport,
           stale: Boolean(staleReport),
-          error: result || { code: "failed", message: "bob bank failed.", detail: "" },
+          error: fetchError,
           key,
           generation,
         };
       } catch (error) {
         const staleReport = this.bankLastGoodReport(key);
+        const fetchError = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob bank failed.",
+          detail: "",
+        };
+        this.bankFetchErrorsStore().set(key, fetchError);
         return {
           report: staleReport,
           stale: Boolean(staleReport),
-          error: {
-            ok: false,
-            code: "failed",
-            message: error && error.message ? String(error.message) : "bob bank failed.",
-            detail: "",
-          },
+          error: fetchError,
           key,
           generation,
         };
@@ -58869,7 +58920,7 @@ class BobLedgerToolsBankDataMixin {
             (this.bankLatestStore().get(entry.key) || 0) > (cached.generation || 0)
           ),
         ),
-        error: null,
+        error: this.bankFetchErrorsStore().get(entry.key) || null,
         refreshing: Boolean(flight),
         args: entry.args,
       };
@@ -58917,6 +58968,10 @@ class BobLedgerToolsBankDataMixin {
     }
     this.bankVaultGeneration = (this.bankVaultGeneration || 0) + 1;
     this.bankInvalidationReason = String(reason || "vault");
+    for (const mount of this.bankMountsStore()) {
+      if (!mount || mount.unloaded === true) continue;
+      try { mount.subscriber(this.bankMountState(mount)); } catch (error) {}
+    }
     this.bankScheduleRevalidate(reason);
   }
 
@@ -59016,6 +59071,7 @@ class BobLedgerToolsBankDataMixin {
     this.bankFlights = new Map();
     this.bankPendingFetches = new Map();
     this.bankLatestGeneration = new Map();
+    this.bankFetchErrors = new Map();
     this.bankRevalidateTimer = null;
     this.bankRolloverTimer = null;
     this.bankLocalDay = bankLocalDate();
@@ -59130,6 +59186,7 @@ class BobLedgerToolsBankDataMixin {
     if (this.bankLatestGeneration instanceof Map) {
       this.bankLatestGeneration.clear();
     }
+    if (this.bankFetchErrors instanceof Map) this.bankFetchErrors.clear();
   }
 }
 // ---- src/241k-plugin-bank-actions.js ----
@@ -60067,6 +60124,1203 @@ class BobLedgerToolsBankActionsMixin {
     } catch (error) {
       this.bankCategorySuggest = null;
     }
+  }
+}
+// ---- src/241l-plugin-bank-cards-model.js ----
+// Pure presentation models for the month and queue bank cards, plus the
+// daily-note bank chip. Bob supplies every amount and count.
+
+const BANK_CARD_HUES = ["aqua", "blue", "green", "magenta", "orange", "red", "violet", "yellow"];
+const BANK_CARD_HEAT_LEVELS = 4;
+
+function bankCardParseFence(source) {
+  const values = new Map();
+  const errors = [];
+  const lines = typeof source === "string" ? source.split(/\r?\n/) : [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index].replace(/\s+#.*$/, "").trim();
+    if (!raw || raw.startsWith("#")) continue;
+    const match = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/.exec(raw);
+    if (!match) {
+      errors.push(`Line ${index + 1}: use "view: month" or "view: queue".`);
+      continue;
+    }
+    const key = match[1].toLowerCase();
+    if (key !== "view") {
+      errors.push(`Unknown option "${match[1]}". This fence accepts only "view".`);
+      continue;
+    }
+    if (values.has(key)) {
+      errors.push("Use one view option.");
+      continue;
+    }
+    values.set(key, match[2].replace(/^(?:"([^"]*)"|'([^']*)')$/, (_, a, b) => a || b));
+  }
+  const view = values.get("view");
+  if (!view) errors.push("Add " + '"view: month"' + " or " + '"view: queue"' + ".");
+  else if (view !== "month" && view !== "queue") errors.push(`Unknown view "${view}". Use month or queue.`);
+  return errors.length ? { ok: false, errors } : { ok: true, view };
+}
+
+function bankCardValidateMonthFrontmatter(path, value) {
+  const fileMonth = bankMonthFromPath(path);
+  const month = typeof value === "string" ? value.trim() : "";
+  if (!fileMonth) {
+    return { ok: false, code: "month-path", message: "Month cards belong in bank/YYYY-MM.md." };
+  }
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    return { ok: false, code: "month-frontmatter", message: "Add a month: YYYY-MM value to this note's frontmatter." };
+  }
+  if (month !== fileMonth.key) {
+    return {
+      ok: false,
+      code: "month-mismatch",
+      message: `Frontmatter month ${month} does not match this file's ${fileMonth.key} name.`,
+    };
+  }
+  return { ok: true, month };
+}
+
+function bankCardDate(day) {
+  return typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day)
+    ? day
+    : null;
+}
+
+function bankCardDaysInMonth(month) {
+  if (typeof month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return 0;
+  const [year, monthNumber] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+}
+
+function bankCardIsoDate(month, dayNumber) {
+  if (bankCardDaysInMonth(month) < dayNumber || dayNumber < 1) return null;
+  return `${month}-${String(dayNumber).padStart(2, "0")}`;
+}
+
+function bankCardHeatBuckets(days) {
+  const sorted = (Array.isArray(days) ? days : [])
+    .map((day) => day && day.out_cents)
+    .filter((cents) => Number.isSafeInteger(cents) && cents > 0)
+    .sort((left, right) => left - right);
+  const spans = new Map();
+  for (let index = 0; index < sorted.length; index += 1) {
+    const value = sorted[index];
+    const span = spans.get(value) || { start: index, end: index };
+    span.end = index;
+    spans.set(value, span);
+  }
+  const buckets = new Map();
+  for (const [value, span] of spans) {
+    const midpoint = (span.start + span.end) / 2;
+    const bucket = Math.min(
+      BANK_CARD_HEAT_LEVELS,
+      Math.floor((midpoint / Math.max(sorted.length, 1)) * BANK_CARD_HEAT_LEVELS) + 1,
+    );
+    buckets.set(value, bucket);
+  }
+  return buckets;
+}
+
+function bankCardMonthHeatModel(month, reportDays, options = {}) {
+  const count = bankCardDaysInMonth(month);
+  if (!count) return null;
+  const days = Array.isArray(reportDays) ? reportDays : [];
+  const byDate = new Map(days.filter((day) => day && bankCardDate(day.date)).map((day) => [day.date, day]));
+  const headingDates = options.headingDates instanceof Set
+    ? options.headingDates
+    : new Set(Array.isArray(options.headingDates) ? options.headingDates : []);
+  const today = bankCardDate(options.today) || "";
+  const heatBuckets = bankCardHeatBuckets(days);
+  const cells = [];
+  for (let number = 1; number <= count; number += 1) {
+    const date = bankCardIsoDate(month, number);
+    const source = byDate.get(date) || null;
+    const outCents = source && Number.isSafeInteger(source.out_cents) ? Math.max(0, source.out_cents) : 0;
+    const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
+    cells.push({
+      date,
+      day: number,
+      weekday,
+      outCents,
+      bucket: outCents === 0 ? 0 : (heatBuckets.get(outCents) || 1),
+      waiting: source && Number.isInteger(source.waiting) ? source.waiting : 0,
+      today: date === today,
+      hasHeading: headingDates.has(date),
+      heading: source && typeof source.heading === "string" ? source.heading : "",
+    });
+  }
+  const first = cells[0];
+  return {
+    month,
+    leading: first ? first.weekday : 0,
+    weekdays: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    cells,
+  };
+}
+
+function bankCardMonthModel(report, month, options = {}) {
+  if (report && report.teaching_empty === true) {
+    return { kind: "teaching-empty", command: "report" };
+  }
+  const period = report && report.period;
+  if (
+    !report ||
+    report.command !== "report" ||
+    !period ||
+    period.kind !== "month" ||
+    period.key !== month ||
+    !report.totals ||
+    !Array.isArray(report.breakdown) ||
+    !Array.isArray(report.days)
+  ) {
+    return { kind: "invalid-report", message: "bob bank report did not return this month." };
+  }
+  const heat = bankCardMonthHeatModel(month, report.days, {
+    headingDates: options.headingDates,
+    today: report.today,
+  });
+  if (!heat) return { kind: "invalid-report", message: "This note does not name a valid bank month." };
+  const waitingRows = [];
+  for (const day of report.days) {
+    for (const row of Array.isArray(day.rows) ? day.rows : []) {
+      if (row && row.acknowledged === false) {
+        waitingRows.push({ ...row, date: row.date || day.date, path: row.path || day.path });
+      }
+    }
+  }
+  waitingRows.sort((left, right) =>
+    String(left.date || "").localeCompare(String(right.date || "")) ||
+    Number(left.line || 0) - Number(right.line || 0),
+  );
+  return {
+    kind: "month",
+    month,
+    title: period.label || month,
+    soFar: period.so_far === true,
+    accounts: Array.isArray(report.accounts) ? report.accounts : [],
+    totals: report.totals,
+    waiting: report.waiting && Number.isInteger(report.waiting.period) ? report.waiting.period : 0,
+    flagged: Number.isInteger(report.flagged) ? report.flagged : 0,
+    breakdown: report.breakdown.map((entry) => ({
+      ...entry,
+      share: Math.max(0, Math.min(1, Number.isFinite(entry.share) ? entry.share : 0)),
+    })),
+    days: heat.cells,
+    heat,
+    firstWaiting: waitingRows[0] || null,
+    empty: waitingRows.length === 0 && report.days.every((day) => !day.rows || day.rows.length === 0),
+    monthPaths: Array.isArray(options.monthPaths) ? options.monthPaths : [],
+  };
+}
+
+function bankCardDedupeIds(ids) {
+  return bankDedupeIds(ids);
+}
+
+function bankCardRecentMonths(paths, reports, limit = 6) {
+  const entries = Array.isArray(paths) ? paths : [];
+  const byMonth = reports instanceof Map ? reports : new Map(Object.entries(reports || {}));
+  return entries
+    .filter((entry) => entry && typeof entry.month === "string" && bankMonthFromPath(entry.path))
+    .slice()
+    .sort((left, right) => right.month.localeCompare(left.month))
+    .slice(0, Math.max(0, Math.min(6, Number.isInteger(limit) ? limit : 6)))
+    .map((entry) => {
+      const result = byMonth.get(entry.month) || null;
+      const report = result && result.report ? result.report : result;
+      const valid = report && report.command === "report" && report.period && report.period.key === entry.month && report.period.kind === "month";
+      return {
+        path: entry.path,
+        month: entry.month,
+        report: valid ? report : null,
+        outCents: valid && report.totals && Number.isSafeInteger(report.totals.out_cents) ? report.totals.out_cents : null,
+        label: valid ? (report.period.label || entry.month) : entry.month,
+        stale: Boolean(result && result.stale),
+        error: result && result.error ? result.error : null,
+      };
+    });
+}
+
+function bankCardQueueModel(report, options = {}) {
+  if (report && report.teaching_empty === true) {
+    return { kind: "teaching-empty", command: "list" };
+  }
+  if (!report || report.command !== "list" || !Array.isArray(report.days)) {
+    return { kind: "invalid-report", message: "bob bank list did not return a waiting queue." };
+  }
+  const rows = [];
+  for (const day of report.days) {
+    for (const row of Array.isArray(day.rows) ? day.rows : []) {
+      if (!row || row.acknowledged === true) continue;
+      rows.push({
+        ...row,
+        date: row.date || day.date || "",
+        path: row.path || day.path || "",
+        heading: day.heading || "",
+        dayLine: day.line,
+      });
+    }
+  }
+  rows.sort((left, right) =>
+    String(left.date).localeCompare(String(right.date)) ||
+    String(left.path).localeCompare(String(right.path)) ||
+    Number(left.line || 0) - Number(right.line || 0),
+  );
+  const byDay = new Map();
+  for (const row of rows) {
+    const key = `${row.path}\u0000${row.date}`;
+    if (!byDay.has(key)) {
+      byDay.set(key, {
+        path: row.path,
+        date: row.date,
+        heading: row.heading,
+        line: row.dayLine,
+        rows: [],
+        ids: [],
+        idLess: 0,
+      });
+    }
+    const group = byDay.get(key);
+    group.rows.push(row);
+    if (typeof row.id === "string" && row.id.trim()) group.ids.push(row.id.trim());
+    else group.idLess += 1;
+  }
+  const days = Array.from(byDay.values()).map((day) => ({ ...day, ids: bankCardDedupeIds(day.ids) }));
+  const monthPaths = Array.isArray(options.monthPaths) ? options.monthPaths : [];
+  const recentMonths = bankCardRecentMonths(monthPaths, options.monthReports, 6);
+  return {
+    kind: "queue",
+    today: report.today || "",
+    accounts: Array.isArray(report.accounts) ? report.accounts : [],
+    counts: report.counts || { rows: rows.length, waiting: rows.length, flagged: 0 },
+    rows,
+    days,
+    empty: rows.length === 0,
+    recentMonths,
+  };
+}
+
+function bankCardDailyChipModel(report, date, today) {
+  if (report && report.teaching_empty === true) return { kind: "teaching-empty", date };
+  if (!report || report.command !== "report" || !Array.isArray(report.days)) {
+    return { kind: "invalid-report", date };
+  }
+  const day = report.days.find((entry) => entry && entry.date === date);
+  if (!day || !Number.isSafeInteger(day.out_cents) || !Number.isSafeInteger(day.in_cents)) {
+    return { kind: "day-unavailable", date };
+  }
+  return {
+    kind: "day",
+    date,
+    outCents: day.out_cents,
+    inCents: day.in_cents,
+    waitingAll: date === today && report.waiting && Number.isInteger(report.waiting.all)
+      ? report.waiting.all
+      : null,
+  };
+}
+// ---- src/241m-plugin-bank-cards.js ----
+// `bob-bank` month and queue cards. The renderer consumes only versioned
+// bank JSON and delegates every write to the shared bank action service.
+
+function bankCardAppend(parent, tag, attrs = {}, text = undefined) {
+  const doc = statsDocFor(parent);
+  const node = statsEl(doc, tag, attrs, text);
+  if (node && parent && typeof parent.appendChild === "function") parent.appendChild(node);
+  return node;
+}
+
+function bankCardClear(parent) {
+  try {
+    if (typeof parent.empty === "function") parent.empty();
+    else if (typeof parent.replaceChildren === "function") parent.replaceChildren();
+    else parent.textContent = "";
+  } catch (error) {
+    // A detached Markdown block may reject cleanup; it can render on retry.
+  }
+}
+
+function bankCardListen(node, event, listener) {
+  if (!node || typeof node.addEventListener !== "function" || typeof listener !== "function") return;
+  node.addEventListener(event, listener);
+}
+
+function bankCardSetData(node, name, value) {
+  try {
+    if (node && typeof node.setAttribute === "function") node.setAttribute(`data-${name}`, String(value));
+  } catch (error) {
+    // Styling metadata is cosmetic.
+  }
+}
+
+function bankCardPercent(value) {
+  return `${(Math.max(0, Math.min(1, Number(value) || 0)) * 100).toFixed(1)}%`;
+}
+
+function bankCardDisplayCents(cents, explicitPlus = false) {
+  const value = Number.isSafeInteger(cents) ? bankFormatCents(cents) : null;
+  return value && !explicitPlus ? value.replace(/^\+/, "") : value;
+}
+
+class BobLedgerToolsBankCardsMixin {
+  setupBankCards() {
+    this.bankCardViews = new Set();
+    if (typeof this.registerMarkdownCodeBlockProcessor === "function") {
+      this.registerMarkdownCodeBlockProcessor("bob-bank", (source, el, ctx) =>
+        this.renderBankCard(el, ctx, source),
+      );
+    }
+  }
+
+  teardownBankCards() {
+    if (this.bankCardViews instanceof Set) {
+      for (const view of Array.from(this.bankCardViews)) this.bankCardReleaseView(view);
+      this.bankCardViews.clear();
+    }
+  }
+
+  bankCardReleaseView(view) {
+    if (!view || view.unloaded) return;
+    view.unloaded = true;
+    view.paintGeneration = (view.paintGeneration || 0) + 1;
+    try { if (typeof view.unsubscribe === "function") view.unsubscribe(); } catch (error) {}
+    try { if (typeof view.monthUnsubscribe === "function") view.monthUnsubscribe(); } catch (error) {}
+    view.unsubscribe = null;
+    view.monthUnsubscribe = null;
+    if (this.bankCardViews instanceof Set) this.bankCardViews.delete(view);
+  }
+
+  renderBankCard(el, ctx, source) {
+    if (!el) return;
+    const fence = bankCardParseFence(source);
+    if (!fence.ok) {
+      bankCardClear(el);
+      const error = bankCardAppend(el, "div", {
+        class: "bob-bank-card-error",
+        role: "alert",
+        "aria-label": "Invalid bob-bank options",
+      });
+      if (error) {
+        bankCardAppend(error, "strong", {}, "This bank card needs a valid view.");
+        for (const message of fence.errors) bankCardAppend(error, "div", {}, message);
+      }
+      return;
+    }
+    const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
+    let month = null;
+    if (fence.view === "month") {
+      const frontmatter = this.bankCardFrontmatter(sourcePath);
+      const validated = bankCardValidateMonthFrontmatter(sourcePath, frontmatter && frontmatter.month);
+      if (!validated.ok) {
+        bankCardClear(el);
+        const error = bankCardAppend(el, "div", { class: "bob-bank-card-error", role: "alert" }, validated.message);
+        if (error) error.setAttribute("aria-label", "Invalid bank month note");
+        return;
+      }
+      month = validated.month;
+    }
+    const view = {
+      el,
+      sourcePath,
+      kind: fence.view,
+      month,
+      dataKey: bankCacheKey(fence.view === "month"
+        ? bankBuildArgs({ command: "report", month })
+        : bankBuildArgs({ command: "list" })),
+      dataState: null,
+      monthState: null,
+      monthPaths: [],
+      monthSignature: "",
+      paintGeneration: 0,
+      unloaded: false,
+    };
+    this.bankCardViewsStore().add(view);
+    const release = () => this.bankCardReleaseView(view);
+    if (ctx && typeof ctx.addChild === "function") {
+      let child = null;
+      try {
+        if (typeof MarkdownRenderChild === "function") {
+          child = new MarkdownRenderChild(el);
+          child.onunload = release;
+        }
+      } catch (error) {
+        child = null;
+      }
+      if (!child) child = { unload: release };
+      try { ctx.addChild(child); } catch (error) {}
+    }
+    const spec = fence.view === "month"
+      ? { command: "report", month }
+      : { command: "list" };
+    view.unsubscribe = this.apiBankSubscribe(spec, (state) => {
+      if (view.unloaded) return;
+      view.dataState = state;
+      if (view.kind === "queue") this.bankCardSyncQueueMonths(view);
+      void this.bankCardPaint(view);
+    });
+    if (view.kind === "queue") this.bankCardSyncQueueMonths(view);
+  }
+
+  bankCardViewsStore() {
+    if (!(this.bankCardViews instanceof Set)) this.bankCardViews = new Set();
+    return this.bankCardViews;
+  }
+
+  bankCardFrontmatter(path) {
+    try {
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      const cacheApi = this.app && this.app.metadataCache;
+      const cache = file && cacheApi && typeof cacheApi.getFileCache === "function"
+        ? cacheApi.getFileCache(file)
+        : cacheApi && typeof cacheApi.getCache === "function"
+          ? cacheApi.getCache(path)
+          : null;
+      return cache && cache.frontmatter && typeof cache.frontmatter === "object"
+        ? cache.frontmatter
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankCardMonthPaths() {
+    try {
+      return typeof this.apiBankMonthPaths === "function" ? this.apiBankMonthPaths() : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  bankCardSyncQueueMonths(view) {
+    if (!view || view.unloaded || view.kind !== "queue") return;
+    const paths = this.bankCardMonthPaths()
+      .slice()
+      .sort((left, right) => String(right.month).localeCompare(String(left.month)))
+      .slice(0, 6);
+    const signature = paths.map((entry) => `${entry.month}:${entry.path}`).join("|");
+    if (signature === view.monthSignature) return;
+    view.monthSignature = signature;
+    view.monthPaths = paths;
+    try { if (typeof view.monthUnsubscribe === "function") view.monthUnsubscribe(); } catch (error) {}
+    view.monthUnsubscribe = null;
+    view.monthState = null;
+    if (paths.length === 0) return;
+    const fetches = paths.map((entry) => ({ command: "report", month: entry.month }));
+    view.monthUnsubscribe = this.apiBankSubscribe({ fetches }, (state) => {
+      if (view.unloaded) return;
+      view.monthState = state;
+      void this.bankCardPaint(view);
+    });
+  }
+
+  bankCardCurrentResult(view, state = view && view.dataState, key = view && view.dataKey) {
+    try { return state && state.results && state.results[key] ? state.results[key] : null; } catch (error) { return null; }
+  }
+
+  async bankCardReadSource(path) {
+    try {
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      if (!file || !vault || typeof vault.cachedRead !== "function") return null;
+      const source = await vault.cachedRead(file);
+      return typeof source === "string" ? source : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async bankCardPaint(view) {
+    if (!view || view.unloaded) return;
+    const generation = (view.paintGeneration || 0) + 1;
+    view.paintGeneration = generation;
+    let source = null;
+    let headingDates = new Set();
+    if (view.kind === "month") {
+      source = await this.bankCardReadSource(view.sourcePath);
+      if (source !== null) {
+        const scan = bankScanSource(view.sourcePath, source);
+        headingDates = new Set(scan.days.map((day) => day.date));
+      }
+    }
+    if (view.unloaded || view.paintGeneration !== generation) return;
+    bankCardClear(view.el);
+    const root = bankCardAppend(view.el, "section", {
+      class: `bob-bank-card bob-bank-card-${view.kind}`,
+      role: "region",
+      "aria-label": view.kind === "month" ? "Bank month summary" : "Bank rows waiting for acknowledgment",
+    });
+    if (!root) return;
+    const hue = this.bankCardRootHue(view.sourcePath);
+    if (hue) root.setAttribute("data-root-hue", hue);
+    const keyResult = this.bankCardCurrentResult(view);
+    this.bankCardPaintRefreshState(root, keyResult, view, view.kind === "month"
+      ? { command: "report", month: view.month }
+      : { command: "list" });
+    if (!keyResult || !keyResult.report) {
+      this.bankCardPaintUnavailable(root, keyResult, view.kind);
+      return;
+    }
+    if (keyResult.report.teaching_empty === true) {
+      this.bankCardPaintTeaching(root);
+      return;
+    }
+    if (view.kind === "month") {
+      const model = bankCardMonthModel(keyResult.report, view.month, {
+        headingDates,
+        monthPaths: this.bankCardMonthPaths(),
+      });
+      if (model.kind === "invalid-report") {
+        bankCardAppend(root, "p", { class: "bob-bank-card-error", role: "alert" }, model.message);
+        return;
+      }
+      this.bankCardRenderMonth(root, view, model);
+    } else {
+      const monthReports = new Map();
+      for (const entry of view.monthPaths) {
+        const key = bankCacheKey(bankBuildArgs({ command: "report", month: entry.month }));
+        const result = this.bankCardCurrentResult(view, view.monthState, key);
+        monthReports.set(entry.month, result);
+      }
+      const model = bankCardQueueModel(keyResult.report, {
+        monthPaths: view.monthPaths,
+        monthReports,
+      });
+      if (model.kind === "invalid-report") {
+        bankCardAppend(root, "p", { class: "bob-bank-card-error", role: "alert" }, model.message);
+        return;
+      }
+      this.bankCardRenderQueue(root, view, model);
+    }
+  }
+
+  bankCardRootHue(path) {
+    const candidatePaths = [path, "bank.md"];
+    for (const candidate of candidatePaths) {
+      try {
+        const file = this.app && this.app.vault && this.app.vault.getAbstractFileByPath(candidate);
+        const cacheApi = this.app && this.app.metadataCache;
+        const cache = file && cacheApi && typeof cacheApi.getFileCache === "function"
+          ? cacheApi.getFileCache(file)
+          : null;
+        const hue = cache && cache.frontmatter && cache.frontmatter.color;
+        if (BANK_CARD_HUES.includes(hue)) return hue;
+      } catch (error) {}
+    }
+    return "magenta";
+  }
+
+  bankCardPaintRefreshState(root, result, view, options) {
+    if (result && result.stale) {
+      bankCardAppend(root, "div", { class: "bob-bank-card-status", role: "status" }, "Updating · last good values shown");
+    }
+    if (result && result.error) {
+      const model = bankErrorModel(result.error);
+      const line = bankCardAppend(root, "div", { class: "bob-bank-card-error", role: "status" });
+      if (line) {
+        bankCardAppend(line, "span", {}, `${model.title}: ${model.hint}`);
+        if (model.retry) {
+          const retry = bankCardAppend(line, "button", { type: "button", class: "bob-bank-retry" }, "Retry");
+          bankCardListen(retry, "click", () => {
+            void this.apiBankRefresh(options).then((next) => {
+              if (next && next.error && !view.unloaded) new Notice(next.error.message || "Bank refresh failed");
+            });
+          });
+        }
+      }
+    }
+  }
+
+  bankCardPaintUnavailable(root, result, kind) {
+    if (result && result.error) {
+      const model = bankErrorModel(result.error);
+      bankCardAppend(root, "h2", {}, model.title);
+      bankCardAppend(root, "p", {}, model.hint);
+      return;
+    }
+    bankCardAppend(root, "p", { class: "bob-bank-loading", role: "status" },
+      kind === "month" ? "Loading this month's bank report…" : "Loading rows to acknowledge…");
+  }
+
+  bankCardPaintTeaching(root) {
+    const empty = bankCardAppend(root, "div", { class: "bob-bank-teaching" });
+    if (!empty) return;
+    bankCardAppend(empty, "h2", {}, "Start with the bank hub");
+    bankCardAppend(empty, "p", {}, "Create bank.md and configure at least one account before these views can show totals.");
+    bankCardAppend(empty, "code", {}, "bob bank list -f json");
+  }
+
+  bankCardAccounts(parent, accounts, options = {}) {
+    const section = bankCardAppend(parent, "div", { class: "bob-bank-accounts", "aria-label": "Account status" });
+    if (!section) return;
+    bankCardAppend(section, "span", { class: "bob-bank-section-label" }, "Accounts");
+    for (const account of Array.isArray(accounts) ? accounts : []) {
+      const card = bankCardAppend(section, "div", { class: "bob-bank-account" });
+      if (!card) continue;
+      const label = account.label || account.alias || "Account";
+      const status = account.status || "status unavailable";
+      bankCardAppend(card, "span", { class: "bob-bank-account-name" }, label);
+      bankCardAppend(card, "span", { class: `bob-bank-account-state bob-bank-state-${String(status).replace(/[^a-z0-9_-]/gi, "-")}` }, status);
+      if (account.hint) bankCardAppend(card, "span", { class: "bob-bank-account-hint" }, account.hint);
+      if (options.lastImport && account.last_import) {
+        bankCardAppend(card, "span", { class: "bob-bank-account-import" }, `Last import ${account.last_import}`);
+      } else if (options.lastImport) {
+        bankCardAppend(card, "span", { class: "bob-bank-account-import" }, "No import yet");
+      }
+    }
+  }
+
+  bankCardMoney(parent, label, cents, options = {}) {
+    const metric = bankCardAppend(parent, "div", { class: `bob-bank-metric${options.tone ? ` bob-bank-metric-${options.tone}` : ""}` });
+    if (!metric) return;
+    bankCardAppend(metric, "span", { class: "bob-bank-metric-label" }, label);
+    const value = bankCardDisplayCents(cents, options.explicitPlus === true);
+    bankCardAppend(metric, "strong", { class: "bob-bank-money" }, value || "—");
+  }
+
+  bankCardButton(parent, label, text, handler, options = {}) {
+    const button = bankCardAppend(parent, "button", {
+      type: "button",
+      class: options.class || "bob-bank-button",
+      "aria-label": label,
+      title: options.title,
+    }, text);
+    if (button) {
+      if (options.disabled) button.disabled = true;
+      bankCardListen(button, "click", (event) => {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        if (!options.disabled && typeof handler === "function") void handler(event);
+      });
+    }
+    return button;
+  }
+
+  bankCardRenderMonth(root, view, model) {
+    const header = bankCardAppend(root, "header", { class: "bob-bank-card-header" });
+    bankCardAppend(header, "h2", {}, model.title);
+    if (model.soFar) bankCardAppend(header, "span", { class: "bob-bank-so-far" }, "so far");
+    this.bankCardAccounts(root, model.accounts);
+    const totals = bankCardAppend(root, "div", { class: "bob-bank-summary", "aria-label": "Month totals" });
+    this.bankCardMoney(totals, "Out", model.totals.out_cents);
+    this.bankCardMoney(totals, "In", model.totals.in_cents, { tone: "in", explicitPlus: true });
+    this.bankCardMoney(totals, "Net", model.totals.net_cents, { tone: "net", explicitPlus: true });
+    const counts = bankCardAppend(root, "div", { class: "bob-bank-counts" });
+    const waitingText = `${model.waiting} waiting`;
+    this.bankCardButton(counts, `Jump to first waiting bank row (${model.waiting})`, waitingText, () =>
+      model.firstWaiting ? this.bankCardNavigateRow(model.firstWaiting) : false,
+    { class: "bob-bank-pill bob-bank-waiting", disabled: !model.firstWaiting || model.waiting === 0 });
+    bankCardAppend(counts, "span", { class: "bob-bank-pill bob-bank-flagged" }, `${model.flagged} flagged`);
+    const categories = bankCardAppend(root, "section", { class: "bob-bank-breakdown", "aria-label": "Out by category" });
+    bankCardAppend(categories, "h3", {}, "Out by category");
+    for (const entry of model.breakdown) {
+      const row = bankCardAppend(categories, "div", { class: "bob-bank-category" });
+      bankCardAppend(row, "span", { class: "bob-bank-category-name" }, `${entry.emoji ? `${entry.emoji} ` : ""}${entry.label}`);
+      const track = bankCardAppend(row, "span", {
+        class: "bob-bank-category-track",
+        role: "img",
+        "aria-label": `${entry.label}: ${bankCardPercent(entry.share)} of Out`,
+      });
+      if (track) {
+        const fill = bankCardAppend(track, "span", { class: "bob-bank-category-fill" });
+        if (fill && fill.style) fill.style.width = bankCardPercent(entry.share);
+      }
+      bankCardAppend(row, "span", { class: "bob-bank-money" }, bankCardDisplayCents(entry.out_cents) || "—");
+      bankCardAppend(row, "span", { class: "bob-bank-share" }, bankCardPercent(entry.share));
+    }
+    const extras = bankCardAppend(root, "div", { class: "bob-bank-extra-totals" });
+    bankCardAppend(extras, "span", {}, `Unclassified: ${bankCardDisplayCents(model.totals.unclassified_out_cents) || "—"} out · ${bankCardDisplayCents(model.totals.unclassified_in_cents, true) || "—"} in`);
+    if (model.totals.cash_out_cents > 0) {
+      bankCardAppend(extras, "span", { class: "bob-bank-cash-note" }, `Cash out ${bankCardDisplayCents(model.totals.cash_out_cents)} · destination unknown`);
+    }
+    if (model.empty) {
+      bankCardAppend(root, "p", { class: "bob-bank-empty-month" }, "Nothing posted in this month yet. Add a day heading, then type a checked row such as - [x] $13.71 Shop.");
+    }
+    this.bankCardRenderHeat(root, view, model);
+    this.bankCardRenderMonthFooter(root, view, model);
+  }
+
+  bankCardRenderHeat(root, view, model) {
+    const section = bankCardAppend(root, "section", { class: "bob-bank-heat-section", "aria-label": "Daily Out heat strip" });
+    bankCardAppend(section, "h3", {}, "Daily Out");
+    const grid = bankCardAppend(section, "div", { class: "bob-bank-heat-grid", role: "group", "aria-label": "Monday-first days of the month" });
+    for (const label of model.heat.weekdays) bankCardAppend(grid, "span", { class: "bob-bank-weekday", "aria-hidden": "true" }, label.slice(0, 1));
+    for (let index = 0; index < model.heat.leading; index += 1) bankCardAppend(grid, "span", { class: "bob-bank-heat-pad", "aria-hidden": "true" });
+    for (const day of model.days) {
+      const title = `${day.date} · Out ${bankCardDisplayCents(day.outCents) || "—"}${day.waiting ? ` · ${day.waiting} waiting` : ""}`;
+      const button = this.bankCardButton(grid,
+        day.hasHeading ? `Open ${day.heading || day.date}` : `${day.date}; no day heading in this note`,
+        String(day.day),
+        () => this.bankCardNavigateDay(view.sourcePath, day.date),
+        { class: `bob-bank-heat-day bob-bank-heat-${day.bucket}${day.today ? " is-today" : ""}${day.waiting ? " has-waiting" : ""}`, disabled: !day.hasHeading, title },
+      );
+      if (button) {
+        bankCardSetData(button, "heat", day.bucket);
+        bankCardSetData(button, "date", day.date);
+        if (day.waiting) bankCardAppend(button, "span", { class: "bob-bank-heat-waiting", "aria-hidden": "true" }, "•");
+      }
+    }
+  }
+
+  bankCardRenderMonthFooter(root, view, model) {
+    const footer = bankCardAppend(root, "footer", { class: "bob-bank-card-footer" });
+    const paths = model.monthPaths
+      .filter((entry) => entry && entry.month && entry.month !== model.month)
+      .slice()
+      .sort((left, right) => left.month.localeCompare(right.month));
+    const previous = paths.filter((entry) => entry.month < model.month).slice(-1)[0] || null;
+    const next = paths.find((entry) => entry.month > model.month) || null;
+    if (previous) this.bankCardOpenNoteLink(footer, `← ${previous.month}`, previous.path, view.sourcePath);
+    else bankCardAppend(footer, "span", { class: "bob-bank-footer-muted" }, "No earlier month");
+    if (this.bankCardHasHub()) this.bankCardOpenNoteLink(footer, "Bank hub", "bank.md", view.sourcePath);
+    else bankCardAppend(footer, "span", { class: "bob-bank-footer-muted" }, "Bank hub missing");
+    if (next) this.bankCardOpenNoteLink(footer, `${next.month} →`, next.path, view.sourcePath);
+    else bankCardAppend(footer, "span", { class: "bob-bank-footer-muted" }, "No later month");
+  }
+
+  bankCardRenderQueue(root, view, model) {
+    this.bankCardAccounts(root, model.accounts, { lastImport: true });
+    if (model.empty) {
+      bankCardAppend(root, "p", { class: "bob-bank-empty-queue", role: "status" }, "Nothing to acknowledge");
+    }
+    for (const day of model.days) {
+      const group = bankCardAppend(root, "section", { class: "bob-bank-queue-day" });
+      const header = bankCardAppend(group, "header", { class: "bob-bank-queue-day-header" });
+      this.bankCardButton(header, `Open bank rows for ${day.date}`, day.heading || day.date,
+        () => this.bankCardNavigateDay(day.path, day.date),
+        { class: "bob-bank-day-link" },
+      );
+      const ackButton = this.bankCardButton(header,
+        `Acknowledge ${day.ids.length} displayed imported rows for ${day.date}`,
+        day.ids.length ? `Acknowledge ${day.ids.length} imported` : "No imported rows to acknowledge",
+        () => this.bankCardAckSnapshot(day),
+        { class: "bob-bank-ack-day", disabled: day.ids.length === 0 },
+      );
+      if (day.idLess > 0) {
+        bankCardAppend(group, "p", { class: "bob-bank-idless-note" }, `${day.idLess} typed ${day.idLess === 1 ? "row needs" : "rows need"} its individual checkbox.`);
+      }
+      if (ackButton) bankCardSetData(ackButton, "ack-ids", day.ids.join(" "));
+      for (const row of day.rows) this.bankCardRenderQueueRow(group, view, row);
+    }
+    this.bankCardRenderQueueFooter(root, view, model);
+  }
+
+  bankCardRenderQueueRow(parent, view, row) {
+    const line = bankCardAppend(parent, "div", { class: "bob-bank-queue-row" });
+    const label = bankCardAppend(line, "label", { class: "bob-bank-queue-row-label" });
+    const checkbox = bankCardAppend(label, "input", {
+      type: "checkbox",
+      "aria-label": `Acknowledge ${row.payee} on ${row.date}`,
+    });
+    const cents = bankFormatCents(row.cents) || "—";
+    bankCardAppend(label, "span", { class: "bob-bank-money" }, cents);
+    bankCardAppend(label, "span", { class: "bob-bank-queue-payee" }, row.payee);
+    if (row.category) bankCardAppend(label, "span", { class: "bob-bank-queue-category" }, row.category);
+    const jump = this.bankCardButton(line, `Open ${row.payee} on ${row.date}`, `Line ${row.line}`,
+      () => this.bankCardNavigateRow(row), { class: "bob-bank-row-link" });
+    bankCardListen(checkbox, "change", async () => {
+      if (!checkbox.checked || view.unloaded) return;
+      checkbox.disabled = true;
+      let result = null;
+      try {
+        if (row.id) {
+          result = await this.apiBank().ackIds([row.id], { label: row.date });
+        } else {
+          result = await this.bankCardToggleIdLessRow(row);
+        }
+      } catch (error) {
+        result = { ok: false };
+      }
+      if (!result || result.ok !== true) {
+        checkbox.checked = false;
+        checkbox.disabled = false;
+        if (result && result.reason === "stale-snapshot") new Notice("Bank row changed. Refresh the queue and try again.");
+      }
+    });
+    if (jump) bankCardSetData(jump, "line", row.line);
+  }
+
+  bankCardRenderQueueFooter(root, view, model) {
+    const footer = bankCardAppend(root, "footer", { class: "bob-bank-card-footer bob-bank-queue-footer" });
+    bankCardAppend(footer, "p", { class: "bob-bank-import-command" }, "Weekly import: bob bank import ~/Downloads/*.qfx");
+    const months = bankCardAppend(footer, "div", { class: "bob-bank-recent-months", "aria-label": "Recent bank months" });
+    bankCardAppend(months, "span", { class: "bob-bank-section-label" }, "Recent months");
+    for (const entry of model.recentMonths) {
+      const out = entry.outCents === null
+        ? entry.error ? "Out unavailable" : "Out loading"
+        : `Out ${bankCardDisplayCents(entry.outCents) || "—"}${entry.stale ? " · updating" : ""}`;
+      const link = this.bankCardOpenNoteLink(months, `${entry.month} · ${out}`, entry.path, view.sourcePath);
+      if (link && entry.error) link.setAttribute("title", bankErrorModel(entry.error).hint);
+    }
+    if (model.recentMonths.length === 0) bankCardAppend(months, "span", { class: "bob-bank-footer-muted" }, "No bank month notes yet");
+  }
+
+  bankCardHasHub() {
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.getAbstractFileByPath === "function" && vault.getAbstractFileByPath("bank.md")) return true;
+      return this.bankCardMonthPaths().some((entry) => entry.path === "bank.md");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankCardOpenNoteLink(parent, label, path, sourcePath) {
+    const note = String(path || "").replace(/\.md$/i, "");
+    const link = bankCardAppend(parent, "a", {
+      class: "bob-bank-note-link",
+      href: `#${encodeURIComponent(note)}`,
+      "aria-label": label,
+    }, label);
+    bankCardListen(link, "click", (event) => {
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+      const workspace = this.app && this.app.workspace;
+      try {
+        if (workspace && typeof workspace.openLinkText === "function") {
+          void workspace.openLinkText(note, sourcePath || "", false);
+          return;
+        }
+        const file = this.app && this.app.vault && this.app.vault.getAbstractFileByPath(path);
+        const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+        if (file && leaf && typeof leaf.openFile === "function") void leaf.openFile(file);
+      } catch (error) {
+        new Notice("Bank note could not be opened.");
+      }
+    });
+    return link;
+  }
+
+  async bankCardNavigateDay(path, date) {
+    const month = bankMonthFromPath(path);
+    const source = month ? await this.bankCardReadSource(path) : null;
+    const heading = source === null ? null : bankLocateDayHeading(source, month, date);
+    if (!heading) {
+      new Notice("Bank day heading is missing. Refresh the note before navigating.");
+      return false;
+    }
+    return this.bankOpenMonthPathAtLine(path, heading.line);
+  }
+
+  async bankCardCurrentRow(path, row) {
+    const source = await this.bankCardReadSource(path);
+    const month = bankMonthFromPath(path);
+    if (source === null || !month) return null;
+    const heading = bankLocateDayHeading(source, month, row.date);
+    const current = bankRecognizeRow(path, source, row.line);
+    if (!heading || !current || current.date !== row.date || current.acknowledged || current.cents !== row.cents) return null;
+    if (row.id) {
+      const expected = bankNormalizeAckId(row.id);
+      if (!expected || current.ackId !== expected) return null;
+    } else if (current.ackId) {
+      return null;
+    }
+    return { source, current };
+  }
+
+  async bankCardNavigateRow(row) {
+    const current = await this.bankCardCurrentRow(row.path, row);
+    if (!current) {
+      new Notice("Bank row changed or moved. Refresh the card before navigating.");
+      return false;
+    }
+    return this.bankOpenMonthPathAtLine(row.path, current.current.line);
+  }
+
+  async bankCardAckSnapshot(day) {
+    const ids = bankCardDedupeIds(day && day.ids);
+    if (!ids.length) return { ok: false, reason: "empty-selection" };
+    return this.apiBank().ackIds(ids, { label: day.date, idLess: day.idLess });
+  }
+
+  async bankCardToggleIdLessRow(row) {
+    const current = await this.bankCardCurrentRow(row.path, row);
+    if (!current) return { ok: false, reason: "stale-snapshot" };
+    const opened = await this.bankOpenMonthPathAtLine(row.path, current.current.line);
+    if (!opened || this.bankActiveFilePath() !== row.path) return { ok: false, reason: "open-failed" };
+    const editor = this.bankActiveEditor();
+    if (!editor || typeof editor.getLine !== "function") return { ok: false, reason: "editor-unavailable" };
+    const expected = current.current.spans && current.current.spans.line && current.current.spans.line.text;
+    if (editor.getLine(current.current.line - 1) !== expected) return { ok: false, reason: "stale-snapshot" };
+    return this.apiBank().toggleIdLessRowAtCursor(editor, expected);
+  }
+}
+// ---- src/241n-plugin-bank-daily-chip.js ----
+// A small report-driven chip inside canonical daily-note `bob-plan` blocks.
+// Its persistent `stats.bank_chip` preference is read and cached at setup or
+// on the config poll, never from a Markdown paint callback.
+
+class BobLedgerToolsBankDailyChipMixin {
+  setupBankDailyChip() {
+    this.bankDailyChipConfigLastEnabled = this.bankDailyChipConfigEnabled();
+    this.bankDailyChipTimer = null;
+    this.bankDailyChipViews = new Set();
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "delete", "rename", "modify"]) {
+          this.registerEvent(vault.on(event, (file, oldPath) => {
+            if (bankRelevantPath(file) || bankIsHubPath(oldPath || "")) this.bankRefreshPlanHosts();
+          }));
+        }
+      }
+    } catch (error) {
+      // The bank data service owns refresh; this listener only updates hub visibility.
+    }
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file) => {
+          if (bankIsHubPath(file || "")) this.bankRefreshPlanHosts();
+        }));
+      }
+    } catch (error) {}
+    try {
+      const hasTimerHost = Boolean(
+        (this.bankTimers && typeof this.bankTimers === "object") ||
+        (typeof window !== "undefined" && window),
+      );
+      const timers = hasTimerHost ? this.bankTimerApi() : null;
+      if (timers && typeof timers.setInterval === "function") {
+        this.bankDailyChipTimer = timers.setInterval(() => this.bankDailyChipCheckConfig(), 60 * 1000);
+        if (typeof this.registerInterval === "function") this.registerInterval(this.bankDailyChipTimer);
+      }
+    } catch (error) {
+      this.bankDailyChipTimer = null;
+    }
+    this.bankDailyChipViewsStore();
+  }
+
+  bankDailyChipConfigEnabled() {
+    try {
+      return statsReadConfigValue("bank_chip") !== false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  bankDailyChipEnabled() {
+    if (typeof this.bankDailyChipConfigLastEnabled !== "boolean") {
+      this.bankDailyChipConfigLastEnabled = this.bankDailyChipConfigEnabled();
+    }
+    return this.bankDailyChipConfigLastEnabled;
+  }
+
+  bankDailyChipCheckConfig() {
+    try {
+      const enabled = this.bankDailyChipConfigEnabled();
+      if (enabled === this.bankDailyChipConfigLastEnabled) return false;
+      this.bankDailyChipConfigLastEnabled = enabled;
+      this.bankRefreshPlanHosts();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankDailyChipViewsStore() {
+    if (!(this.bankDailyChipViews instanceof Set)) this.bankDailyChipViews = new Set();
+    return this.bankDailyChipViews;
+  }
+
+  bankDailyHubExists() {
+    try {
+      const vault = this.app && this.app.vault;
+      return Boolean(vault && typeof vault.getAbstractFileByPath === "function" && vault.getAbstractFileByPath("bank.md"));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankDailyChipLocalToday() {
+    return bankLocalDate();
+  }
+
+  bankPlanHostForRepaint(el) {
+    try {
+      if (!el) return null;
+      const view = this.dayStripPlanHostViewFor(el);
+      if (view && view.bankDailyHost && view.bankDailyHost.parentNode === el) return view.bankDailyHost;
+      if (typeof el.querySelector === "function") return el.querySelector(".bob-bank-daily-plan-host");
+      if (Array.isArray(el.children)) {
+        return el.children.find((child) => {
+          const classes = (child && typeof child.getAttribute === "function" ? child.getAttribute("class") : child && child.cls) || "";
+          return String(classes).split(/\s+/).includes("bob-bank-daily-plan-host");
+        }) || null;
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  bankSyncPlanHost(view) {
+    if (!view || !view.el) return;
+    const day = dayStripDayForPath(view.sourcePath || "");
+    const today = this.bankDailyChipLocalToday();
+    if (
+      !day ||
+      (today && day > today) ||
+      !this.bankDailyChipEnabled() ||
+      !this.bankDailyHubExists() ||
+      this.bankDataActive === false
+    ) {
+      this.bankReleasePlanHost(view);
+      return;
+    }
+    const existing = view.bankDailyRecord || null;
+    if (existing && existing.day === day && existing.host && existing.host.parentNode === view.el) {
+      existing.day = day;
+      this.bankDailyChipPaint(existing);
+      return;
+    }
+    this.bankReleasePlanHost(view);
+    let host = null;
+    try {
+      host = statsEl(statsDocFor(view.el), "div", { class: "bob-bank-daily-plan-host" });
+    } catch (error) {
+      host = null;
+    }
+    if (!host) return;
+    try {
+      const hue = typeof this.bankCardRootHue === "function" ? this.bankCardRootHue("bank.md") : "magenta";
+      if (hue) host.setAttribute("data-root-hue", hue);
+    } catch (error) {}
+    const stripHost = view.dayStripHost || (view.dayStripRecord && view.dayStripRecord.el) || null;
+    let attached = false;
+    try {
+      if (stripHost && stripHost.parentNode === view.el && typeof view.el.insertBefore === "function") {
+        let next = stripHost.nextSibling || null;
+        if (!next && Array.isArray(view.el.children)) {
+          const index = view.el.children.indexOf(stripHost);
+          next = index >= 0 ? view.el.children[index + 1] || null : null;
+        }
+        view.el.insertBefore(host, next);
+        attached = true;
+      }
+    } catch (error) {
+      attached = false;
+    }
+    if (!attached) {
+      try {
+        if (Array.isArray(view.el.children)) {
+          const index = stripHost ? view.el.children.indexOf(stripHost) : -1;
+          host.parentNode = view.el;
+          if (index >= 0) view.el.children.splice(index + 1, 0, host);
+          else view.el.children.unshift(host);
+          attached = true;
+        } else if (typeof view.el.prepend === "function") {
+          view.el.prepend(host);
+          attached = true;
+        } else if (typeof view.el.insertBefore === "function") {
+          view.el.insertBefore(host, view.el.firstChild || null);
+          attached = true;
+        }
+      } catch (error) {
+        attached = false;
+      }
+    }
+    if (!attached) return;
+    const key = bankCacheKey(bankBuildArgs({ command: "report", date: day }));
+    const record = { host, day, path: view.sourcePath, key, view, unsubscribe: null, result: null, state: null, unloaded: false };
+    view.bankDailyHost = host;
+    view.bankDailyRecord = record;
+    this.bankDailyChipViewsStore().add(record);
+    record.unsubscribe = this.apiBankSubscribe({ command: "report", date: day }, (state) => {
+      if (record.unloaded || view.unloaded) return;
+      record.state = state;
+      record.result = state && state.results ? state.results[key] || null : null;
+      this.bankDailyChipPaint(record);
+    });
+  }
+
+  bankDailyChipPaint(record) {
+    if (!record || record.unloaded || !record.host) return;
+    const host = record.host;
+    bankCardClear(host);
+    const result = record.result;
+    if (!result || !result.report) {
+      if (result && result.error) {
+        const error = bankErrorModel(result.error);
+        bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-error", role: "status", title: error.hint }, "Bank unavailable");
+      } else {
+        bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-loading", role: "status" }, "Bank · loading");
+      }
+      return;
+    }
+    if (result.report.teaching_empty === true) return;
+    const model = bankCardDailyChipModel(result.report, record.day, record.state && record.state.today || bankLocalDate());
+    if (model.kind !== "day") {
+      bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-error", role: "status" }, "Bank · unavailable");
+      return;
+    }
+    const out = bankCardDisplayCents(Math.abs(model.outCents));
+    const incoming = bankCardDisplayCents(Math.abs(model.inCents), true);
+    const text = `BANK · out ${out} · in ${incoming}${model.waitingAll === null ? "" : ` · ${model.waitingAll} waiting`}`;
+    const button = bankCardAppend(host, "button", {
+      type: "button",
+      class: "bob-plan-chip bob-bank-daily-chip",
+      "aria-label": `Open bank rows for ${record.day}; out ${out}; in ${incoming}${model.waitingAll === null ? "" : `; ${model.waitingAll} waiting across all months`}`,
+      title: result.stale ? "Bank values are being refreshed; last good values shown" : `Open ${record.day} in the bank month note`,
+    }, text);
+    if (button) {
+      if (result.stale) bankCardSetData(button, "stale", "true");
+      bankCardListen(button, "click", () => {
+        if (!record.unloaded) void this.apiBank().ensureOpenDay(record.day);
+      });
+    }
+    if (result.error) {
+      bankCardAppend(host, "span", { class: "bob-bank-chip-refresh-error", role: "status" }, "Refresh failed; values may be stale");
+    }
+  }
+
+  bankRefreshPlanHosts() {
+    try {
+      if (!(this.planBlockViews instanceof Set)) return;
+      for (const view of this.planBlockViews) this.bankSyncPlanHost(view);
+    } catch (error) {
+      // One note never interrupts another plan block.
+    }
+  }
+
+  bankReleasePlanHost(view) {
+    if (!view) return;
+    const record = view.bankDailyRecord || null;
+    if (record) {
+      record.unloaded = true;
+      try { if (typeof record.unsubscribe === "function") record.unsubscribe(); } catch (error) {}
+      if (this.bankDailyChipViews instanceof Set) this.bankDailyChipViews.delete(record);
+    }
+    const host = view.bankDailyHost || (record && record.host) || null;
+    if (host && host.parentNode === view.el) dayStripPlanHostRemoveNode(host);
+    view.bankDailyRecord = null;
+    view.bankDailyHost = null;
+  }
+
+  teardownBankDailyChip() {
+    if (this.planBlockViews instanceof Set) {
+      for (const view of this.planBlockViews) this.bankReleasePlanHost(view);
+    }
+    if (this.bankDailyChipViews instanceof Set) {
+      for (const record of this.bankDailyChipViews) {
+        record.unloaded = true;
+        try { if (typeof record.unsubscribe === "function") record.unsubscribe(); } catch (error) {}
+      }
+      this.bankDailyChipViews.clear();
+    }
+    if (this.bankDailyChipTimer !== null && this.bankDailyChipTimer !== undefined) {
+      try {
+        const hasTimerHost = Boolean(
+          (this.bankTimers && typeof this.bankTimers === "object") ||
+          (typeof window !== "undefined" && window),
+        );
+        const timers = hasTimerHost ? this.bankTimerApi() : null;
+        if (timers && typeof timers.clearInterval === "function") timers.clearInterval(this.bankDailyChipTimer);
+      } catch (error) {}
+    }
+    this.bankDailyChipTimer = null;
+    this.bankDailyChipConfigLastEnabled = null;
   }
 }
 // ---- src/241b-plugin-notebook-catalog-model.js ----
@@ -96404,7 +97658,7 @@ class BobLedgerToolsTodayLocationMixin {
           child.onunload = () => {
             try {
               if (typeof this.dayStripReleasePlanHost === "function") {
-                this.dayStripReleasePlanHost(view);
+                this.dayStripReleasePlanHost(view, { unload: true });
               }
             } catch (error) {
               // Release is best-effort.
@@ -96425,7 +97679,7 @@ class BobLedgerToolsTodayLocationMixin {
           unload: () => {
             try {
               if (typeof this.dayStripReleasePlanHost === "function") {
-                this.dayStripReleasePlanHost(view);
+                this.dayStripReleasePlanHost(view, { unload: true });
               }
             } catch (error) {
               // Release is best-effort.
@@ -104132,6 +105386,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumDataMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
+  BobLedgerToolsBankCardsMixin,
+  BobLedgerToolsBankDailyChipMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
@@ -107238,7 +108494,7 @@ module.exports.helpers = {
   BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
-  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine,
+  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankCardDailyChipModel,
 };
 // ---- src/351-exports-prj-hide.js ----
 // Project and hidden task-tag-mark helpers, exported beside the

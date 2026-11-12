@@ -8275,3 +8275,127 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
     transition: none;
   }
 }
+
+/* Bank month/queue cards and the quiet daily-note bank chip. All amounts
+   arrive from `bob bank`; CSS only supplies the statement-like layout. */
+.bob-bank-card {
+  --bob-bank-accent: var(--interactive-accent);
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0.5rem 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--bob-bank-accent) 28%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-bank-accent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--bob-bank-accent) 14%, var(--background-primary));
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+.bob-bank-card[data-root-hue="aqua"] { --bob-bank-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="blue"] { --bob-bank-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="green"] { --bob-bank-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="magenta"] { --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="orange"] { --bob-bank-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="red"] { --bob-bank-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="violet"] { --bob-bank-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-bank-card[data-root-hue="yellow"] { --bob-bank-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-bank-card h2,
+.bob-bank-card h3,
+.bob-bank-card p { margin-block: 0.25rem 0.6rem; }
+.bob-bank-card h2 { display: inline; font-size: 1.1em; }
+.bob-bank-card h3,
+.bob-bank-section-label { color: var(--text-muted); font-size: 0.72em; font-variant: small-caps; letter-spacing: 0.07em; }
+.bob-bank-card-header { display: flex; align-items: baseline; gap: 0.65em; margin-bottom: 0.55rem; }
+.bob-bank-so-far { color: var(--text-muted); font-size: 0.8em; }
+.bob-bank-card-status { margin: 0.35rem 0; color: var(--text-muted); font-size: 0.82em; }
+.bob-bank-card-error { display: flex; align-items: center; flex-wrap: wrap; gap: 0.45em; margin: 0.35rem 0; color: var(--text-warning, var(--text-muted)); font-size: 0.82em; }
+.bob-bank-card-error[role="alert"] { color: var(--text-error, var(--text-normal)); }
+.bob-bank-accounts { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.4rem; margin: 0.5rem 0; }
+.bob-bank-accounts > .bob-bank-section-label { flex: 0 0 100%; }
+.bob-bank-account { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35em 0.55em; padding: 0.32rem 0.48rem; border-radius: 0.35rem; background: var(--background-modifier-hover); font-size: 0.78em; }
+.bob-bank-account-name { font-weight: 600; }
+.bob-bank-account-state { color: var(--text-muted); }
+.bob-bank-account-hint,
+.bob-bank-account-import { flex-basis: 100%; color: var(--text-faint); font-size: 0.92em; }
+.bob-bank-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; margin: 0.6rem 0; }
+.bob-bank-metric { display: flex; min-width: 0; flex-direction: column; gap: 0.1em; padding: 0.45rem 0.55rem; border-radius: 0.35rem; background: color-mix(in srgb, var(--background-primary) 70%, transparent); }
+.bob-bank-metric-label { color: var(--text-muted); font-size: 0.7em; font-variant: small-caps; letter-spacing: 0.08em; }
+.bob-bank-money { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bob-bank-metric-in strong { color: var(--color-green, var(--text-success)); }
+.bob-bank-counts { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+.bob-bank-pill,
+.bob-bank-button,
+.bob-bank-ack-day,
+.bob-bank-day-link,
+.bob-bank-row-link,
+.bob-bank-retry { border: 1px solid color-mix(in srgb, var(--bob-bank-accent) 28%, var(--background-modifier-border)); border-radius: 999px; padding: 0.28em 0.65em; background: color-mix(in srgb, var(--bob-bank-accent) 10%, var(--background-primary)); color: var(--text-normal); font: inherit; font-size: 0.78em; cursor: pointer; }
+.bob-bank-flagged { display: inline-flex; align-items: center; border: 1px solid var(--background-modifier-border); border-radius: 999px; padding: 0.28em 0.65em; color: var(--text-muted); font-size: 0.78em; }
+.bob-bank-card button:disabled { cursor: default; opacity: 0.62; }
+.bob-bank-card button:focus-visible,
+.bob-bank-card a:focus-visible,
+.bob-bank-daily-chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--bob-bank-accent, var(--interactive-accent)) 70%, transparent); outline-offset: 2px; }
+.bob-bank-breakdown { margin-top: 0.7rem; }
+.bob-bank-category { display: grid; grid-template-columns: minmax(6rem, 1fr) minmax(3rem, 2fr) auto 3.2em; gap: 0.5rem; align-items: center; margin: 0.25rem 0; font-size: 0.82em; }
+.bob-bank-category-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-category-track { display: block; overflow: hidden; height: 0.42rem; border-radius: 999px; background: var(--background-modifier-border); }
+.bob-bank-category-fill { display: block; height: 100%; border-radius: inherit; background: var(--bob-bank-accent); }
+.bob-bank-share { color: var(--text-muted); text-align: end; font-size: 0.9em; }
+.bob-bank-extra-totals { display: flex; flex-wrap: wrap; gap: 0.25em 1em; margin: 0.6rem 0; color: var(--text-muted); font-size: 0.8em; }
+.bob-bank-cash-note { color: var(--text-warning, var(--text-muted)); }
+.bob-bank-empty-month,
+.bob-bank-empty-queue { margin: 0.65rem 0; padding: 0.5rem 0.65rem; border-inline-start: 2px solid var(--bob-bank-accent); color: var(--text-muted); background: color-mix(in srgb, var(--bob-bank-accent) 7%, transparent); font-size: 0.84em; }
+.bob-bank-heat-section { margin-top: 0.8rem; }
+.bob-bank-heat-grid { display: grid; grid-template-columns: repeat(7, minmax(1.45rem, 1fr)); gap: 0.2rem; max-width: 24rem; }
+.bob-bank-weekday { color: var(--text-faint); font-size: 0.65em; text-align: center; }
+.bob-bank-heat-pad { min-height: 1.55rem; }
+.bob-bank-heat-day { position: relative; min-width: 0; min-height: 1.55rem; padding: 0; border: 1px solid transparent; border-radius: 0.25rem; background: color-mix(in srgb, var(--bob-bank-accent) 4%, var(--background-primary)); color: var(--text-normal); font-size: 0.72em; cursor: pointer; }
+.bob-bank-heat-day.bob-bank-heat-1 { background: color-mix(in srgb, var(--bob-bank-accent) 12%, var(--background-primary)); }
+.bob-bank-heat-day.bob-bank-heat-2 { background: color-mix(in srgb, var(--bob-bank-accent) 24%, var(--background-primary)); }
+.bob-bank-heat-day.bob-bank-heat-3 { background: color-mix(in srgb, var(--bob-bank-accent) 38%, var(--background-primary)); }
+.bob-bank-heat-day.bob-bank-heat-4 { background: color-mix(in srgb, var(--bob-bank-accent) 52%, var(--background-primary)); }
+.bob-bank-heat-day.is-today { outline: 2px solid var(--text-normal); outline-offset: 1px; }
+.bob-bank-heat-waiting { position: absolute; inset-inline-end: 0.12em; inset-block-start: -0.18em; color: var(--text-warning, var(--text-normal)); font-size: 1.15em; }
+.bob-bank-card-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.55rem; margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px solid color-mix(in srgb, var(--bob-bank-accent) 24%, var(--background-modifier-border)); font-size: 0.8em; }
+.bob-bank-card-footer a { color: var(--text-accent); text-decoration: none; }
+.bob-bank-card-footer a:hover { text-decoration: underline; }
+.bob-bank-footer-muted { color: var(--text-faint); }
+.bob-bank-queue-day { margin: 0.6rem 0; padding-top: 0.5rem; border-top: 1px solid var(--background-modifier-border); }
+.bob-bank-queue-day-header { display: flex; align-items: center; justify-content: space-between; gap: 0.45rem; margin-bottom: 0.3rem; }
+.bob-bank-day-link { border: 0; padding-inline: 0; background: transparent; color: var(--text-accent); font-weight: 600; }
+.bob-bank-ack-day { flex: 0 0 auto; }
+.bob-bank-queue-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.24rem 0; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 55%, transparent); }
+.bob-bank-queue-row-label { display: flex; min-width: 0; align-items: center; gap: 0.5rem; font-size: 0.84em; }
+.bob-bank-queue-row-label input { flex: 0 0 auto; }
+.bob-bank-queue-payee { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-queue-category { flex: 0 0 auto; color: var(--text-muted); font-size: 0.84em; }
+.bob-bank-row-link { flex: 0 0 auto; border: 0; padding: 0.2em 0.35em; background: transparent; color: var(--text-muted); }
+.bob-bank-idless-note { margin: 0.25rem 0; color: var(--text-warning, var(--text-muted)); font-size: 0.78em; }
+.bob-bank-import-command { margin: 0; color: var(--text-muted); font-family: var(--font-monospace); font-size: 0.9em; }
+.bob-bank-recent-months { display: flex; flex-wrap: wrap; gap: 0.3rem 0.75rem; align-items: center; }
+.bob-bank-recent-months > .bob-bank-section-label { flex-basis: 100%; }
+.bob-bank-teaching { padding: 0.6rem 0; }
+.bob-bank-teaching code { color: var(--text-accent); }
+.bob-bank-daily-plan-host { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.35rem; }
+.bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent)); display: inline-flex; align-items: center; min-width: 0; border: 0; border-inline-start: 2px solid var(--bob-bank-accent); padding: 0.25em 0.55em; background: color-mix(in srgb, var(--bob-bank-accent) 14%, transparent); color: var(--text-muted); font-size: 0.72em; font-variant-numeric: tabular-nums; text-align: start; }
+.bob-bank-daily-plan-host[data-root-hue="aqua"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="blue"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="green"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="magenta"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="orange"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="red"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="violet"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-bank-daily-plan-host[data-root-hue="yellow"] .bob-bank-daily-chip { --bob-bank-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-bank-chip-loading,
+.bob-bank-chip-error,
+.bob-bank-chip-refresh-error { color: var(--text-faint); font-size: 0.72em; }
+.bob-bank-daily-chip[data-stale="true"] { border-style: dashed; }
+@media (max-width: 600px) {
+  .bob-bank-card { padding: 0.65rem; }
+  .bob-bank-summary { grid-template-columns: 1fr; }
+  .bob-bank-category { grid-template-columns: minmax(4rem, 1fr) minmax(2rem, 1.3fr) auto; }
+  .bob-bank-share { display: none; }
+  .bob-bank-queue-day-header { align-items: flex-start; flex-direction: column; }
+  .bob-bank-queue-row { align-items: flex-start; }
+  .bob-bank-queue-row-label { flex-wrap: wrap; }
+  .bob-bank-card-footer { align-items: flex-start; flex-direction: column; }
+}

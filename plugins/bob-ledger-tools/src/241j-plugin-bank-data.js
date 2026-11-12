@@ -64,6 +64,11 @@ class BobLedgerToolsBankDataMixin {
     return this.bankLatestGeneration;
   }
 
+  bankFetchErrorsStore() {
+    if (!(this.bankFetchErrors instanceof Map)) this.bankFetchErrors = new Map();
+    return this.bankFetchErrors;
+  }
+
   bankCacheGet(key) {
     const store = this.bankCacheStore();
     const entry = store.get(key);
@@ -248,6 +253,7 @@ class BobLedgerToolsBankDataMixin {
         const superseded = generation < latest;
         if (result && result.ok) {
           this.bankCacheSet(key, result.report, generation);
+          this.bankFetchErrorsStore().delete(key);
           return {
             report: result.report,
             stale: superseded,
@@ -257,24 +263,28 @@ class BobLedgerToolsBankDataMixin {
           };
         }
         const staleReport = this.bankLastGoodReport(key);
+        const fetchError = result || { code: "failed", message: "bob bank failed.", detail: "" };
+        this.bankFetchErrorsStore().set(key, fetchError);
         return {
           report: staleReport,
           stale: Boolean(staleReport),
-          error: result || { code: "failed", message: "bob bank failed.", detail: "" },
+          error: fetchError,
           key,
           generation,
         };
       } catch (error) {
         const staleReport = this.bankLastGoodReport(key);
+        const fetchError = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob bank failed.",
+          detail: "",
+        };
+        this.bankFetchErrorsStore().set(key, fetchError);
         return {
           report: staleReport,
           stale: Boolean(staleReport),
-          error: {
-            ok: false,
-            code: "failed",
-            message: error && error.message ? String(error.message) : "bob bank failed.",
-            detail: "",
-          },
+          error: fetchError,
           key,
           generation,
         };
@@ -348,7 +358,7 @@ class BobLedgerToolsBankDataMixin {
             (this.bankLatestStore().get(entry.key) || 0) > (cached.generation || 0)
           ),
         ),
-        error: null,
+        error: this.bankFetchErrorsStore().get(entry.key) || null,
         refreshing: Boolean(flight),
         args: entry.args,
       };
@@ -396,6 +406,10 @@ class BobLedgerToolsBankDataMixin {
     }
     this.bankVaultGeneration = (this.bankVaultGeneration || 0) + 1;
     this.bankInvalidationReason = String(reason || "vault");
+    for (const mount of this.bankMountsStore()) {
+      if (!mount || mount.unloaded === true) continue;
+      try { mount.subscriber(this.bankMountState(mount)); } catch (error) {}
+    }
     this.bankScheduleRevalidate(reason);
   }
 
@@ -495,6 +509,7 @@ class BobLedgerToolsBankDataMixin {
     this.bankFlights = new Map();
     this.bankPendingFetches = new Map();
     this.bankLatestGeneration = new Map();
+    this.bankFetchErrors = new Map();
     this.bankRevalidateTimer = null;
     this.bankRolloverTimer = null;
     this.bankLocalDay = bankLocalDate();
@@ -609,5 +624,6 @@ class BobLedgerToolsBankDataMixin {
     if (this.bankLatestGeneration instanceof Map) {
       this.bankLatestGeneration.clear();
     }
+    if (this.bankFetchErrors instanceof Map) this.bankFetchErrors.clear();
   }
 }

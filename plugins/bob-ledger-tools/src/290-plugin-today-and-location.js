@@ -413,7 +413,7 @@ class BobLedgerToolsTodayLocationMixin {
           child.onunload = () => {
             try {
               if (typeof this.dayStripReleasePlanHost === "function") {
-                this.dayStripReleasePlanHost(view);
+                this.dayStripReleasePlanHost(view, { unload: true });
               }
             } catch (error) {
               // Release is best-effort.
@@ -434,7 +434,7 @@ class BobLedgerToolsTodayLocationMixin {
           unload: () => {
             try {
               if (typeof this.dayStripReleasePlanHost === "function") {
-                this.dayStripReleasePlanHost(view);
+                this.dayStripReleasePlanHost(view, { unload: true });
               }
             } catch (error) {
               // Release is best-effort.

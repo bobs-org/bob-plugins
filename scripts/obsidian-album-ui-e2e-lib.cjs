@@ -259,6 +259,71 @@ function fixtureNotes() {
   return notes;
 }
 
+function writerFixtureNotes() {
+  const notes = fixtureNotes();
+  notes["typed.md"] = [
+    "---",
+    'type: "[[album]]"',
+    'parent: "[[body]]"',
+    "summary: Typed checks.",
+    "record:",
+    "  noun: gadget",
+    "  fields:",
+    "    count: {values: number, min: 1, max: 10, default: 2}",
+    "    flag: {required: false}",
+    "    tags: {list: true}",
+    "---",
+    "",
+    "# Typed",
+    "",
+  ].join("\n");
+  return notes;
+}
+
+function writerRequiredNoteNames() {
+  return requiredNoteNames().concat(["typed.md"]);
+}
+
+function assertUpdateShape(result, { dryRun = false } = {}) {
+  if (!result || typeof result !== "object") return { ok: false, reason: "update result is not an object" };
+  if (result.schema_version !== 1) return { ok: false, reason: "schema_version must be 1" };
+  if (result.command !== "update") return { ok: false, reason: "command must be update" };
+  if (typeof result.ok !== "boolean") return { ok: false, reason: "ok must be boolean" };
+  if (result.dry_run !== dryRun) return { ok: false, reason: `dry_run must be ${dryRun}` };
+  if (typeof result.stem !== "string" || !result.stem) return { ok: false, reason: "stem must be nonempty" };
+  if (typeof result.changed !== "boolean") return { ok: false, reason: "changed must be boolean" };
+  if (typeof result.before_fingerprint !== "string" || typeof result.after_fingerprint !== "string") {
+    return { ok: false, reason: "fingerprints must be strings" };
+  }
+  if (!Array.isArray(result.per_op)) return { ok: false, reason: "per_op must be an array" };
+  if (!Array.isArray(result.inverse_ops)) return { ok: false, reason: "inverse_ops must be an array" };
+  if (!Array.isArray(result.warnings)) return { ok: false, reason: "warnings must be an array" };
+  if (!("commit" in result)) return { ok: false, reason: "result must carry commit (possibly null)" };
+  if (!("sync" in result)) return { ok: false, reason: "result must carry sync (possibly null)" };
+  if (!("error" in result)) return { ok: false, reason: "result must carry error (possibly null)" };
+  return { ok: true };
+}
+
+function assertRefusal(result, code) {
+  const shaped = assertUpdateShape(result, { dryRun: result && result.dry_run === true });
+  if (!shaped.ok) return shaped;
+  if (result.ok !== false) return { ok: false, reason: "refusal must report ok:false" };
+  if (!result.error || result.error.code !== code) {
+    return { ok: false, reason: `refusal code must be ${code}, saw ${(result.error && result.error.code) || "none"}` };
+  }
+  if (result.changed !== false) return { ok: false, reason: "refusal must report changed:false" };
+  if (result.commit !== null && result.commit !== undefined) return { ok: false, reason: "refusal must not carry a commit" };
+  return { ok: true };
+}
+
+function assertLinearHistory(subjects) {
+  const bad = (Array.isArray(subjects) ? subjects : []).filter((subject) =>
+    /\brevert\b|\bmerge\b/i.test(String(subject || "")),
+  );
+  if (bad.length) return { ok: false, reason: `history must stay linear, saw: ${bad.slice(0, 3).join(" | ")}` };
+  return { ok: true };
+}
+
 function requiredNoteNames() {
   return [
     "body.md",
@@ -362,6 +427,25 @@ function albumUiProbe() {
       copy: pick(".bob-album-header-copy"),
       schemas: pick(".bob-album-schema-card"),
       schemaFields: pick(".bob-album-schema-field"),
+      schemaOpeners: pick(".bob-album-header-schema"),
+      schemaDialogs: pick(".bob-album-schema-dialog"),
+      schemaTargets: pick("[data-target-key]"),
+      schemaActions: pick("[data-schema-action]"),
+      schemaConsequence: pick(".bob-album-schema-consequence-text"),
+      schemaCounts: pick(".bob-album-schema-consequence-counts"),
+      schemaDerived: pick(".bob-album-schema-derived-keys"),
+      schemaRefusal: pick(".bob-album-schema-refusal"),
+      schemaRefusalHint: pick(".bob-album-schema-refusal-hint"),
+      schemaStage: pick("[data-schema-stage]"),
+      schemaInputs: pick("[data-schema-input]"),
+      schemaToolbar: pick(".bob-album-schema-toolbar"),
+      schemaFooter: pick(".bob-album-schema-dialog-footer"),
+      schemaUndo: pick('[data-schema-action="undo"]'),
+      schemaSyncWarning: pick(".bob-album-schema-sync-warning"),
+      schemaUnlabeled: Array.from(document.querySelectorAll(".bob-album-schema-dialog button")).map((el) => ({
+        text: String(el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+        labeled: Boolean((el.getAttribute("aria-label") || "").trim() || (el.textContent || "").trim()),
+      })).filter((entry) => !entry.labeled),
       recordGroups: pick(".bob-records-group"),
       folds: pick(".bob-records-fold"),
       dateChips: pick(".bob-records-age"),
@@ -388,6 +472,11 @@ module.exports = {
   parseArgs,
   fixtureNotes,
   requiredNoteNames,
+  writerFixtureNotes,
+  writerRequiredNoteNames,
+  assertUpdateShape,
+  assertRefusal,
+  assertLinearHistory,
   assertHasCallout,
   assertListShape,
   assertFoldRule,

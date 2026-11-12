@@ -66,14 +66,29 @@ The two states never impersonate each other.
 label, record counts, the same chip rows, a lint banner, a staged-gesture
 consequence line, and a footer of edit keys, `y`, and `esc`. Every gesture
 dry-runs through `bob albums update` first and Enter applies only the exact
-envelope whose dry run succeeded; `u` previews Undo of the last successful
-gesture and a stale fingerprint repaints instead of retrying. Defaults and
-numeric bounds edit through typed inputs with explicit Unset, and choice
-edits change label and emoji while stored values stay fixed. `y` from the
-card or a focused chip/lint row closes the card and jumps to that field or
-issue line in Source mode. Bob's `issues[]` paint as lint marks with their
-message and suggestions as text. The album's `record` property is hidden only
-in that album's rendered Properties surface, and stays editable in Source mode.
+envelope whose dry run succeeded; the dry run paints bob's consequence,
+affected and newly-invalid counts, and derived keys before Enter can apply,
+and pending, error, or superseded responses never enable it. `u` previews
+Undo of the last successful gesture and applies its inverse ops on a second
+Enter; a stale fingerprint repaints instead of retrying, keeping the retained
+draft unconfirmed and never silently rebasing it. Saved-local post-sync
+failures offer **Retry sync**, which runs only `bob vault-sync` and never
+replays the mutation. Defaults and numeric bounds edit through typed inputs
+with explicit Unset, and choice edits change label and emoji while stored
+values stay fixed. `y` from the card or a focused chip/lint row closes the
+card and jumps to that field or issue line in Source mode. Bob's `issues[]`
+paint as lint marks with their message and suggestions as text. The album's
+`record` property is hidden only in that album's rendered Properties surface,
+and stays editable in Source mode.
+
+The card is keyboard-first with visible button equivalents for every
+gesture: `↑`/`↓` (or `j`/`k`, `←`/`→` across choices) move, `Enter` edits the
+selected row or applies a ready preview, `a` adds a field, `c` adds a choice,
+`!` and `s` stage required/suggest toggles, `Alt+J`/`K` stage moves,
+`Ctrl+D` stages removal, `y` jumps to Source, `u` previews Undo, and `Esc`
+cancels a stage or closes from browsing. Typing inside inputs never triggers
+navigation letters, and composition keystrokes never apply. Consequence and
+refusal paint in a live region with accessible names on every control.
 
 Open the card from the header's **⊞ Schema**, the **Edit album schema**
 palette command, Command Mode's Vault row, or `Ctrl+Shift+P` on an album note
@@ -100,8 +115,16 @@ For stored album/record structure and capture routes, see
 
 ## Verification
 
-The offline wrapper `scripts/test-obsidian-album-ui-e2e.cjs` is part of
-`npm test`; run the real CDP walkthrough with
+The offline wrappers `scripts/test-obsidian-album-ui-e2e.cjs` and
+`scripts/test-obsidian-album-schema-writer-e2e.cjs` are part of `npm test`;
+run the real CDP walkthrough with
 `xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs`. It covers owner chips,
 group jump, folds, date chips, the collapsed header, property hiding, failure
-and retry, cleanup, byte preservation, and the debounced sync.
+and retry, cleanup, byte preservation, the debounced sync, and the Schema
+Card walk: header, palette, record-parent, and album-fallback entry with
+Task Card priority, keyboard-only edit and Undo, previewed apply with a
+double-Apply guard, two-pane stale refusal, YAML Done with invalid repair,
+and light/dark screenshots near 375 px. The writer wrapper proves the
+preview/apply/Undo envelope, stale and used-removal refusals, typed
+semantics, single-commit and linear-history guarantees, sync-only retry, and
+source validation against the real writer in a scratch Git vault.

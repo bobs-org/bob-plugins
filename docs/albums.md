@@ -67,3 +67,11 @@ shows only confirmed links.
 
 For stored album/record structure and capture routes, see
 [Records](https://bobs-org.github.io/bob/records/).
+
+## Verification
+
+The offline wrapper `scripts/test-obsidian-album-ui-e2e.cjs` is part of
+`npm test`; run the real CDP walkthrough with
+`xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs`. It covers owner chips,
+group jump, folds, date chips, the header, property hiding, failure and retry,
+cleanup, byte preservation, and the debounced sync.

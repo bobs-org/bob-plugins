@@ -103,6 +103,8 @@
   "240-plugin-freshness-status.js",
   "241-plugin-reading-board-data.js",
   "241a-plugin-notebook-data.js",
+  "241l-plugin-album-data.js",
+  "241m-plugin-album-data-service.js",
   "241h-plugin-bank-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
@@ -192,5 +194,6 @@
   "330-note-ready-model.js",
   "340-dashboard-views-and-plan-block.js",
   "350-exports.js",
-  "351-exports-prj-hide.js"
+  "351-exports-prj-hide.js",
+  "352-exports-album.js"
 ]

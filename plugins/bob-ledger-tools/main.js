@@ -31739,7 +31739,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupBankData(); this.setupBankActions();
+    this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -31861,10 +31861,9 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownNotebookHeader(); } catch (error) {}
     try {
-      this.teardownNotebookCatalog();
-      this.teardownNotebookData();
+      this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
-      // Notebook catalog/data teardown is best-effort.
+      // Notebook catalog/data and album data teardown is best-effort.
     }
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;
@@ -56215,6 +56214,1200 @@ class BobLedgerToolsNotebookDataMixin {
     this.notebookReportError = null;
     this.notebookSyncBusy = false;
     this.notebookSyncError = null;
+  }
+}
+// ---- src/241l-plugin-album-data.js ----
+// Shared album report and sync service. Bob owns stored `[!albums]`
+// catalog rows and `[!records]` index bytes; this fragment validates its
+// versioned JSON and shares one stale-while-revalidate list report and one
+// sync operation across mounted views. Later album phases consume
+// `apiAlbumReport`/`apiAlbumSubscribe` instead of spawning their own CLI.
+
+const ALBUM_REPORT_SCHEMA_VERSION = 1;
+const ALBUM_LIST_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const ALBUM_LIST_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const ALBUM_REVALIDATE_DEBOUNCE_MS = 300;
+const ALBUM_SYNC_DEBOUNCE_MS = 3000;
+const ALBUM_ROLLOVER_INTERVAL_MS = 60 * 1000;
+
+function albumListArgs() {
+  return ["albums", "list", "-f", "json"];
+}
+
+function albumSyncArgs() {
+  return ["albums", "sync", "-f", "json"];
+}
+
+function albumJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function albumJsonString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function albumNullableString(value) {
+  return value === null || typeof value === "string";
+}
+
+function albumJsonCount(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function albumStringArray(value) {
+  return Array.isArray(value) && value.every((part) => typeof part === "string");
+}
+
+function albumIssueRows(value) {
+  return Array.isArray(value) && value.every((issue) =>
+    albumJsonObject(issue) &&
+    albumJsonString(issue.code) &&
+    (issue.severity === "error" || issue.severity === "warning" || issue.severity === "info") &&
+    albumJsonString(issue.path) &&
+    (issue.line === null || issue.line === undefined || albumJsonCount(issue.line)) &&
+    (issue.key_path === null || issue.key_path === undefined || typeof issue.key_path === "string") &&
+    typeof issue.message === "string" &&
+    Array.isArray(issue.suggestions) && issue.suggestions.every((part) => typeof part === "string"),
+  );
+}
+
+function albumChoiceShape(choice) {
+  return albumJsonObject(choice) &&
+    typeof choice.value === "string" &&
+    typeof choice.label === "string";
+}
+
+function albumFieldShape(field) {
+  return albumJsonObject(field) &&
+    albumJsonString(field.key) &&
+    typeof field.label === "string" &&
+    typeof field.kind === "string" &&
+    typeof field.required === "boolean" &&
+    typeof field.list === "boolean" &&
+    Array.isArray(field.choices) && field.choices.every(albumChoiceShape);
+}
+
+function albumGroupShape(group) {
+  return albumJsonObject(group) &&
+    typeof group.value === "string" &&
+    typeof group.label === "string" &&
+    albumJsonCount(group.count) &&
+    albumStringArray(group.peek);
+}
+
+function albumIndexStateShape(index) {
+  return albumJsonObject(index) &&
+    (index.state === "current" || index.state === "missing" || index.state === "stale" || index.state === "damaged");
+}
+
+function albumEntryShape(entry) {
+  return albumJsonObject(entry) &&
+    albumJsonString(entry.stem) &&
+    albumJsonString(entry.path) &&
+    typeof entry.title === "string" &&
+    albumNullableString(entry.emoji) &&
+    albumNullableString(entry.summary) &&
+    albumNullableString(entry.noun) &&
+    albumNullableString(entry.label) &&
+    albumNullableString(entry.plural) &&
+    albumNullableString(entry.parent) &&
+    albumNullableString(entry.parent_kind) &&
+    albumNullableString(entry.owner) &&
+    albumNullableString(entry.root) &&
+    albumStringArray(entry.breadcrumb) &&
+    Array.isArray(entry.fields) && entry.fields.every(albumFieldShape) &&
+    albumNullableString(entry.group_field) &&
+    albumNullableString(entry.index_by) &&
+    albumStringArray(entry.index_facets) &&
+    albumJsonCount(entry.records) &&
+    Array.isArray(entry.groups) && entry.groups.every(albumGroupShape) &&
+    albumJsonCount(entry.needs_status) &&
+    albumNullableString(entry.last_record) &&
+    albumIndexStateShape(entry.index) &&
+    albumIssueRows(entry.issues);
+}
+
+function albumCatalogShape(catalog) {
+  return albumJsonObject(catalog) &&
+    albumJsonString(catalog.host) &&
+    albumJsonString(catalog.path) &&
+    albumNullableString(catalog.root) &&
+    ["current", "stale", "missing", "damaged"].includes(catalog.state) &&
+    albumJsonCount(catalog.albums) &&
+    albumIssueRows(catalog.issues);
+}
+
+function albumCountsShape(counts, forSync) {
+  if (!albumJsonObject(counts)) {
+    return false;
+  }
+  if (
+    !albumJsonCount(counts.albums) ||
+    !albumJsonCount(counts.records) ||
+    !albumJsonCount(counts.roots)
+  ) {
+    return false;
+  }
+  for (const key of ["errors", "warnings", "damaged"]) {
+    if (counts[key] !== undefined && !albumJsonCount(counts[key])) {
+      return false;
+    }
+  }
+  void forSync;
+  return true;
+}
+
+function albumReportPath(value) {
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function albumIndexReport(report) {
+  const albumsByPath = new Map();
+  const albumsByStem = new Map();
+  const catalogsByHostPath = new Map();
+  for (const album of report.albums) {
+    albumsByPath.set(albumReportPath(album.path), album);
+    albumsByStem.set(album.stem, album);
+  }
+  for (const catalog of report.catalogs) {
+    catalogsByHostPath.set(albumReportPath(catalog.path), catalog);
+  }
+  return { ...report, albumsByPath, albumsByStem, catalogsByHostPath };
+}
+
+function albumDecodeListReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob albums list returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!albumJsonObject(body)) {
+    return { ok: false, code: "bad-shape", message: "bob albums list returned no report object.", detail: statsFirstLine(stderr) };
+  }
+  if (body.schema_version !== ALBUM_REPORT_SCHEMA_VERSION) {
+    return { ok: false, code: "schema-mismatch", message: "bob albums list uses a different schema.", detail: statsFirstLine(stderr) };
+  }
+  if (
+    typeof body.ok !== "boolean" ||
+    !Array.isArray(body.albums) || !body.albums.every(albumEntryShape) ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(albumCatalogShape) ||
+    !albumCountsShape(body.counts, false) ||
+    (body.findings !== undefined && !Array.isArray(body.findings))
+  ) {
+    return { ok: false, code: "bad-shape", message: "bob albums list returned an incomplete report.", detail: statsFirstLine(stderr) };
+  }
+  // `ok: false` is a valid list: invalid albums stay visible with their
+  // counts and issues. Transport failure is different from invalid content.
+  return { ok: true, report: albumIndexReport(body) };
+}
+
+function albumDecodeSyncReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob albums sync returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!albumJsonObject(body)) {
+    return { ok: false, code: "bad-shape", message: "bob albums sync returned no report object.", detail: statsFirstLine(stderr) };
+  }
+  if (body.schema_version !== ALBUM_REPORT_SCHEMA_VERSION) {
+    return { ok: false, code: "schema-mismatch", message: "bob albums sync uses a different schema.", detail: statsFirstLine(stderr) };
+  }
+  if (
+    typeof body.ok !== "boolean" || body.command !== "sync" ||
+    !Array.isArray(body.changed) || !body.changed.every((path) => typeof path === "string") ||
+    !Array.isArray(body.changes) || !body.changes.every((change) => albumJsonObject(change) && typeof change.path === "string") ||
+    !Array.isArray(body.albums) || !body.albums.every(albumEntryShape) ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(albumCatalogShape) ||
+    !Array.isArray(body.findings) ||
+    !albumCountsShape(body.counts, true)
+  ) {
+    return { ok: false, code: "bad-shape", message: "bob albums sync returned an incomplete report.", detail: statsFirstLine(stderr) };
+  }
+  // A well-formed refusal (for example, a damaged catalog or a missing
+  // worktree) is transport success with an operation-level `ok: false`
+  // for the shared sync caller.
+  return { ok: true, report: body };
+}
+
+function albumTypeNames(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((part) => albumTypeNames(part));
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  let text = value.trim();
+  if (!text) {
+    return [];
+  }
+  if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+  if (text.startsWith("[[") && text.endsWith("]]") && /^\[\[[^\[\]]+\]\]$/.test(text)) {
+    text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+  } else if (text.startsWith("[") && text.endsWith("]")) {
+    return text.slice(1, -1).split(",").flatMap((part) => albumTypeNames(part));
+  }
+  if (text.startsWith("- ")) {
+    return albumTypeNames(text.slice(2));
+  }
+  if (text.startsWith("[[") && text.endsWith("]]")) {
+    text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+  }
+  text = text.replace(/\.md$/i, "").trim().toLowerCase();
+  return text ? [text] : [];
+}
+
+function albumNormalizeParent(value) {
+  if (Array.isArray(value)) {
+    return value.map(albumNormalizeParent).filter(Boolean).sort().join("\u0000");
+  }
+  if (albumJsonObject(value) && typeof value.path === "string") {
+    value = value.path;
+  }
+  if (typeof value !== "string") {
+    return "";
+  }
+  let text = value.trim();
+  if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+  if (text.startsWith("[[") && text.endsWith("]]")) {
+    text = text.slice(2, -2).split("|")[0].trim();
+  }
+  text = text.split("#")[0].replace(/\\/g, "/").replace(/\.md$/i, "").trim();
+  return text;
+}
+
+function albumNormalizeSummary(value) {
+  if (Array.isArray(value)) {
+    return value.map(albumNormalizeSummary).filter(Boolean).join("\n");
+  }
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function albumNormalizeText(value) {
+  if (Array.isArray(value)) {
+    return value.map(albumNormalizeText).filter(Boolean).join("\n");
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function albumNormalizeIndexFacets(value) {
+  const list = Array.isArray(value) ? value : (value === null || value === undefined ? [] : [value]);
+  const facets = [];
+  for (const part of list) {
+    if (typeof part !== "string") {
+      continue;
+    }
+    const text = part.trim();
+    if (text) {
+      facets.push(text);
+    }
+  }
+  return facets;
+}
+
+// Order-preserving canonical form for the `record:` schema subtree.
+// Field and choice order is significant to the album contract, so objects
+// keep insertion order at every level instead of sorting keys.
+function albumStableStringify(value, seen) {
+  const guard = seen || new Set();
+  if (value === null || value === undefined) {
+    return "null";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((part) => albumStableStringify(part, guard)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    if (guard.has(value)) {
+      return "\"<cycle>\"";
+    }
+    guard.add(value);
+    const parts = Object.keys(value).map((key) =>
+      `${JSON.stringify(key)}:${albumStableStringify(value[key], guard)}`,
+    );
+    guard.delete(value);
+    return `{${parts.join(",")}}`;
+  }
+  return JSON.stringify(String(value));
+}
+
+function albumFrontmatterFingerprint(frontmatter) {
+  const data = albumJsonObject(frontmatter) ? frontmatter : {};
+  const types = [...new Set(albumTypeNames(data.type))].sort();
+  const indexFacets = albumNormalizeIndexFacets(data.index_facets);
+  return {
+    types,
+    typeKey: types.join("\u0000"),
+    isAlbum: types.includes("album"),
+    isOwner: types.includes("area") || types.includes("project"),
+    parent: albumNormalizeParent(data.parent),
+    summary: albumNormalizeSummary(data.summary),
+    emoji: albumNormalizeText(data.emoji),
+    noun: albumNormalizeText(data.record && albumJsonObject(data.record) ? data.record.noun : data.noun),
+    label: albumNormalizeText(data.record && albumJsonObject(data.record) ? data.record.label : data.label),
+    plural: albumNormalizeText(data.record && albumJsonObject(data.record) ? data.record.plural : data.plural),
+    indexBy: albumNormalizeText(data.index_by),
+    indexFacets,
+    indexFacetsKey: indexFacets.join("\u0000"),
+    recordSignature: albumStableStringify(data.record === undefined ? null : data.record),
+    contentKey: albumStableStringify(data),
+  };
+}
+
+function albumDirname(path) {
+  const slash = path.replace(/\\/g, "/");
+  const index = slash.lastIndexOf("/");
+  return index < 0 ? "" : slash.slice(0, index);
+}
+
+function albumIsMember(fingerprint, path, knownStems) {
+  if (!fingerprint) {
+    return false;
+  }
+  const stems = knownStems instanceof Set ? knownStems : new Set();
+  const folder = albumDirname(albumReportPath(path));
+  const folderBase = folder.includes("/") ? folder.slice(folder.lastIndexOf("/") + 1) : folder;
+  if (folderBase && stems.has(folderBase)) {
+    return true;
+  }
+  if (fingerprint.parent) {
+    const parentBase = fingerprint.parent.includes("/")
+      ? fingerprint.parent.slice(fingerprint.parent.lastIndexOf("/") + 1)
+      : fingerprint.parent;
+    if (stems.has(fingerprint.parent) || (parentBase && stems.has(parentBase))) {
+      return true;
+    }
+    // Before the first report lands there are no known stems yet; treat
+    // any parent-linked note as a potential record member so its first
+    // frontmatter change still invalidates the pending report.
+    if (stems.size === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function albumFingerprintNeedsSync(previous, next, path, knownStems) {
+  const stems = knownStems instanceof Set ? knownStems : new Set();
+  const key = albumReportPath(path);
+  if (!next) {
+    if (!previous) {
+      return false;
+    }
+    return Boolean(
+      previous.isAlbum || previous.isOwner || albumIsMember(previous, key, stems),
+    );
+  }
+  if (!previous) {
+    return Boolean(
+      next.isAlbum || next.isOwner || albumIsMember(next, key, stems),
+    );
+  }
+  if (previous.isAlbum !== next.isAlbum) {
+    return true;
+  }
+  if (next.isAlbum) {
+    // Compare content, never metadata offsets. Unknown or invalid schemas
+    // still refresh: their raw `record:` bytes enter the signature.
+    return (
+      previous.typeKey !== next.typeKey ||
+      previous.parent !== next.parent ||
+      previous.summary !== next.summary ||
+      previous.emoji !== next.emoji ||
+      previous.noun !== next.noun ||
+      previous.label !== next.label ||
+      previous.plural !== next.plural ||
+      previous.indexBy !== next.indexBy ||
+      previous.indexFacetsKey !== next.indexFacetsKey ||
+      previous.recordSignature !== next.recordSignature
+    );
+  }
+  const ownerTransition = previous.isOwner !== next.isOwner;
+  const typeTransition = previous.typeKey !== next.typeKey;
+  if (previous.isOwner || next.isOwner) {
+    // An owner's ancestry or type invalidates the catalogs that list it.
+    // Other owner frontmatter stays out of the sync decision.
+    return Boolean(ownerTransition || typeTransition || previous.parent !== next.parent);
+  }
+  const wasMember = albumIsMember(previous, key, stems);
+  const isMember = albumIsMember(next, key, stems);
+  if (!wasMember && !isMember) {
+    return false;
+  }
+  // Structural record members sync on any frontmatter change: grouping,
+  // counts, and ages all read record fields. Body-only edits never reach
+  // this comparison because the fingerprint is frontmatter-only.
+  return (
+    wasMember !== isMember ||
+    previous.typeKey !== next.typeKey ||
+    previous.parent !== next.parent ||
+    previous.contentKey !== next.contentKey
+  );
+}
+
+function albumIsMarkdownFile(fileOrPath) {
+  const path = typeof fileOrPath === "string"
+    ? fileOrPath
+    : fileOrPath && typeof fileOrPath.path === "string"
+      ? fileOrPath.path
+      : "";
+  return /\.md$/i.test(path);
+}
+
+function albumRelevantPath(fileOrPath) {
+  if (!albumIsMarkdownFile(fileOrPath)) {
+    return false;
+  }
+  const path = albumReportPath(typeof fileOrPath === "string" ? fileOrPath : fileOrPath.path);
+  return !path.split("/").some((part) =>
+    part === ".obsidian" || part === ".bob" || part === "node_modules" || part.startsWith("."),
+  );
+}
+
+function albumLocalDate(now = new Date()) {
+  try {
+    const date = now instanceof Date ? now : new Date(now);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  } catch (error) {
+    return "";
+  }
+}
+
+function albumErrorModel(error) {
+  const source = albumJsonObject(error) ? error : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Album data needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found") {
+    return { code, hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob albums timed out. Retry, then check bob albums list in a terminal." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "Album data is unavailable. Retry bob albums list.",
+  };
+}
+// ---- src/241m-plugin-album-data-service.js ----
+// Album shared report/sync service (mixin half). Helpers live in 241l-plugin-album-data.js.
+class BobLedgerToolsAlbumDataMixin {
+  albumTimerApi() {
+    if (this.albumTimers && typeof this.albumTimers === "object") {
+      return this.albumTimers;
+    }
+    return typeof window !== "undefined" && window ? window : globalThis;
+  }
+
+  albumSetTimeout(callback, delay) {
+    const timers = this.albumTimerApi();
+    const schedule = timers && typeof timers.setTimeout === "function"
+      ? timers.setTimeout.bind(timers)
+      : setTimeout;
+    return schedule(callback, delay);
+  }
+
+  albumClearTimeout(timer) {
+    if (timer === null || timer === undefined) {
+      return;
+    }
+    const timers = this.albumTimerApi();
+    const clear = timers && typeof timers.clearTimeout === "function"
+      ? timers.clearTimeout.bind(timers)
+      : clearTimeout;
+    clear(timer);
+  }
+
+  albumReportState() {
+    const report = this.albumReport || null;
+    return {
+      report,
+      stale: Boolean(report && (this.albumReportStale || (this.albumReportGeneration || 0) < (this.albumVaultGeneration || 0))),
+      unavailable: !report,
+      refreshing: Boolean(this.albumListFlight),
+      error: this.albumReportError || null,
+      errorModel: this.albumReportError ? albumErrorModel(this.albumReportError) : null,
+      generation: this.albumVaultGeneration || 0,
+      reportGeneration: this.albumReportGeneration,
+      today: this.albumLocalDay || albumLocalDate(),
+      syncBusy: Boolean(this.albumSyncBusy),
+      syncError: this.albumSyncError || null,
+      syncErrorModel: this.albumSyncError ? albumErrorModel(this.albumSyncError) : null,
+    };
+  }
+
+  albumNotify() {
+    if (this.albumDataActive === false || !(this.albumSubscribers instanceof Set)) {
+      return;
+    }
+    const state = this.albumReportState();
+    for (const subscriber of this.albumSubscribers) {
+      try {
+        subscriber(state);
+      } catch (error) {
+        // A mounted renderer cannot break shared data refresh for other views.
+      }
+    }
+  }
+
+  albumWaitersStore() {
+    if (!Array.isArray(this.albumListWaiters)) {
+      this.albumListWaiters = [];
+    }
+    return this.albumListWaiters;
+  }
+
+  albumWaitForReportGeneration(generation) {
+    return new Promise((resolve) => {
+      this.albumWaitersStore().push({ generation, resolve });
+    });
+  }
+
+  albumResolveWaiters(generation = Number.POSITIVE_INFINITY) {
+    const waiters = this.albumWaitersStore();
+    const keep = [];
+    const state = this.albumReportState();
+    for (const waiter of waiters) {
+      if (waiter.generation <= generation || this.albumDataActive === false) {
+        try {
+          waiter.resolve(state);
+        } catch (error) {
+          // Waiter cleanup is best-effort.
+        }
+      } else {
+        keep.push(waiter);
+      }
+    }
+    this.albumListWaiters = keep;
+  }
+
+  albumSpawnCommand(args, decoder, options = {}) {
+    return bobSpawnJson(args, decoder, {
+      ...options,
+      commandLabel: args && args[1] === "sync" ? "bob albums sync" : "bob albums list",
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: ALBUM_LIST_TIMEOUT_MS,
+      maxBuffer: ALBUM_LIST_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  albumSpawnList(options = {}) {
+    return this.albumSpawnCommand(albumListArgs(), albumDecodeListReport, options);
+  }
+
+  albumSpawnSync(options = {}) {
+    return this.albumSpawnCommand(albumSyncArgs(), albumDecodeSyncReport, options);
+  }
+
+  albumStartListFetch(generation) {
+    const epoch = this.albumDataEpoch || 0;
+    if ((this.albumQueuedGeneration || 0) <= generation) {
+      this.albumQueuedGeneration = 0;
+    }
+    const flight = { generation, epoch, promise: null };
+    this.albumListFlight = flight;
+    this.albumNotify();
+    const run = async () => {
+      try {
+        const result = await this.albumSpawnList();
+        if (this.albumDataActive === false || this.albumDataEpoch !== epoch) {
+          return this.albumReportState();
+        }
+        if (result && result.ok && result.report) {
+          this.albumReport = result.report;
+          this.albumReportGeneration = generation;
+          this.albumReportStale = generation < (this.albumVaultGeneration || 0);
+          this.albumReportError = null;
+          this.albumRememberStems(result.report);
+        } else {
+          this.albumReportStale = Boolean(this.albumReport);
+          this.albumReportError = result || {
+            code: "failed",
+            message: "bob albums list failed.",
+          };
+        }
+      } catch (error) {
+        if (this.albumDataActive !== false && this.albumDataEpoch === epoch) {
+          this.albumReportStale = Boolean(this.albumReport);
+          this.albumReportError = {
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob albums list failed.",
+          };
+        }
+      }
+      return this.albumReportState();
+    };
+    flight.promise = Promise.resolve()
+      .then(run)
+      .finally(() => {
+        if (this.albumListFlight !== flight) {
+          return;
+        }
+        this.albumListFlight = null;
+        this.albumResolveWaiters(generation);
+        const queued = this.albumQueuedGeneration || 0;
+        if (
+          this.albumDataActive !== false && queued > generation &&
+          this.albumRevalidateTimer === null
+        ) {
+          this.albumQueuedGeneration = 0;
+          this.albumStartListFetch(queued);
+        }
+        this.albumNotify();
+      });
+    return flight;
+  }
+
+  apiAlbumReport(options = {}) {
+    const opts = albumJsonObject(options) ? options : {};
+    if (this.albumDataActive === false) {
+      return Promise.resolve(this.albumReportState());
+    }
+    const target = Math.max(
+      this.albumVaultGeneration || 0,
+      Number.isInteger(opts.requiredGeneration) ? opts.requiredGeneration : 0,
+    );
+    const force = opts.force === true;
+    const wait = opts.wait === true;
+    if (this.albumListFlight) {
+      const flight = this.albumListFlight;
+      if (target > flight.generation) {
+        this.albumQueuedGeneration = Math.max(this.albumQueuedGeneration || 0, target);
+      }
+      if (wait) {
+        return this.albumWaitForReportGeneration(target);
+      }
+      return Promise.resolve(this.albumReportState());
+    }
+    if (
+      !force && this.albumReport && !this.albumReportStale &&
+      (this.albumReportGeneration || 0) >= target
+    ) {
+      return Promise.resolve(this.albumReportState());
+    }
+    if (force && this.albumReport) {
+      this.albumReportStale = true;
+      this.albumNotify();
+    }
+    const generation = Math.max(target, this.albumVaultGeneration || 0);
+    this.albumStartListFetch(generation);
+    if (this.albumReport && !wait) {
+      return Promise.resolve(this.albumReportState());
+    }
+    return this.albumWaitForReportGeneration(generation);
+  }
+
+  albumRevalidateAfterSync() {
+    const flight = this.albumListFlight;
+    if (flight && flight.promise) {
+      // A list started before the write cannot prove the catalogs after it.
+      // Wait for that flight, then force a new report without overlapping it.
+      return flight.promise.then(() => {
+        if (this.albumDataActive === false) {
+          return this.albumReportState();
+        }
+        return this.apiAlbumReport({ force: true, wait: true });
+      });
+    }
+    return this.apiAlbumReport({ force: true, wait: true });
+  }
+
+  apiAlbumSubscribe(subscriber) {
+    if (typeof subscriber !== "function" || this.albumDataActive === false) {
+      return () => {};
+    }
+    if (!(this.albumSubscribers instanceof Set)) {
+      this.albumSubscribers = new Set();
+    }
+    this.albumSubscribers.add(subscriber);
+    try {
+      subscriber(this.albumReportState());
+    } catch (error) {
+      // A subscriber may mount before its renderer is ready.
+    }
+    void this.apiAlbumReport();
+    return () => {
+      this.albumSubscribers.delete(subscriber);
+    };
+  }
+
+  apiAlbumInvalidate(reason = "manual") {
+    if (this.albumDataActive === false) {
+      return this.albumReportState();
+    }
+    this.albumVaultGeneration = (this.albumVaultGeneration || 0) + 1;
+    this.albumInvalidationReason = String(reason || "vault");
+    if (this.albumReport) {
+      this.albumReportStale = true;
+    }
+    if (this.albumListFlight) {
+      this.albumQueuedGeneration = Math.max(
+        this.albumQueuedGeneration || 0,
+        this.albumVaultGeneration,
+      );
+    }
+    this.albumNotify();
+    this.albumScheduleRevalidate(reason);
+    return this.albumReportState();
+  }
+
+  albumScheduleRevalidate(reason = "vault") {
+    void reason;
+    if (
+      this.albumDataActive === false ||
+      !(this.albumSubscribers instanceof Set) ||
+      this.albumSubscribers.size === 0
+    ) {
+      return;
+    }
+    this.albumClearTimeout(this.albumRevalidateTimer);
+    this.albumRevalidateTimer = this.albumSetTimeout(() => {
+      this.albumRevalidateTimer = null;
+      if (this.albumDataActive !== false && this.albumSubscribers.size > 0) {
+        void this.apiAlbumReport({ force: true });
+      }
+    }, ALBUM_REVALIDATE_DEBOUNCE_MS);
+  }
+
+  albumKnownStemsStore() {
+    if (!(this.albumKnownStems instanceof Set)) {
+      this.albumKnownStems = new Set();
+    }
+    return this.albumKnownStems;
+  }
+
+  albumRememberStems(report) {
+    const stems = this.albumKnownStemsStore();
+    if (report && Array.isArray(report.albums)) {
+      for (const album of report.albums) {
+        if (album && typeof album.stem === "string" && album.stem) {
+          stems.add(album.stem);
+        }
+      }
+    }
+  }
+
+  albumFrontmatterFor(file, eventData) {
+    if (eventData && albumJsonObject(eventData.frontmatter)) {
+      return eventData.frontmatter;
+    }
+    try {
+      const cache = this.app && this.app.metadataCache &&
+        typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+      return cache && albumJsonObject(cache.frontmatter) ? cache.frontmatter : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  albumRecordFrontmatter(file, eventData, options = {}) {
+    if (!albumRelevantPath(file)) {
+      return false;
+    }
+    if (!(this.albumFrontmatterByPath instanceof Map)) {
+      this.albumFrontmatterByPath = new Map();
+    }
+    const path = albumReportPath(file.path);
+    const previous = this.albumFrontmatterByPath.get(path) || null;
+    const next = albumFrontmatterFingerprint(this.albumFrontmatterFor(file, eventData));
+    // Store first so generated index writes and any event observed during
+    // a sync do not cause the same metadata transition to schedule again.
+    this.albumFrontmatterByPath.set(path, next);
+    if (next.isAlbum && path) {
+      const stem = path.replace(/\.md$/i, "").split("/").pop();
+      if (stem) {
+        this.albumKnownStemsStore().add(stem);
+      }
+    }
+    if (options.invalidate !== false) {
+      this.apiAlbumInvalidate(options.reason || "markdown-change");
+    }
+    if (
+      this.albumMetadataReady &&
+      albumFingerprintNeedsSync(previous, next, path, this.albumKnownStemsStore())
+    ) {
+      this.albumScheduleSync(options.syncReason || "frontmatter-change");
+    }
+    return true;
+  }
+
+  albumHandleMetadataChanged(file, data) {
+    if (albumRelevantPath(file)) {
+      this.albumRecordFrontmatter(file, data, { reason: "metadata-change" });
+    }
+  }
+
+  albumHandleVaultEvent(event, file, oldPath) {
+    const oldKey = albumReportPath(oldPath);
+    if (event === "delete") {
+      const previous = this.albumFrontmatterByPath instanceof Map
+        ? this.albumFrontmatterByPath.get(albumReportPath(file))
+        : null;
+      if (this.albumFrontmatterByPath instanceof Map) {
+        this.albumFrontmatterByPath.delete(albumReportPath(file));
+      }
+      if (albumRelevantPath(file)) {
+        this.apiAlbumInvalidate("markdown-delete");
+      }
+      if (previous && (previous.isAlbum || previous.isOwner || albumIsMember(previous, file, this.albumKnownStemsStore()))) {
+        this.albumScheduleSync("album-delete");
+      }
+      return;
+    }
+    const currentRelevant = albumRelevantPath(file);
+    const oldRelevant = oldKey ? albumRelevantPath(oldKey) : false;
+    if (!currentRelevant && !oldRelevant) {
+      return;
+    }
+    if (event === "rename" && oldKey && this.albumFrontmatterByPath instanceof Map) {
+      const old = this.albumFrontmatterByPath.get(oldKey) || null;
+      this.albumFrontmatterByPath.delete(oldKey);
+      // Renames cross membership boundaries under either identity: the old
+      // folder or parent link may have owned the record, and the new one
+      // may own it now. Schedule from the old identity; the record below
+      // schedules again when the new identity is relevant.
+      if (old && (old.isAlbum || old.isOwner || albumIsMember(old, oldKey, this.albumKnownStemsStore()))) {
+        this.albumScheduleSync("album-rename");
+      }
+    }
+    if (currentRelevant) {
+      this.albumRecordFrontmatter(file, null, { reason: `markdown-${event}` });
+    } else {
+      this.apiAlbumInvalidate(`markdown-${event}`);
+    }
+  }
+
+  albumSeedFrontmatterFingerprints(files = null) {
+    if (this.albumDataActive === false || this.albumMetadataReady) {
+      return;
+    }
+    const next = new Map();
+    try {
+      const sourceFiles = Array.isArray(files)
+        ? files
+        : this.app && this.app.vault &&
+          typeof this.app.vault.getMarkdownFiles === "function"
+          ? this.app.vault.getMarkdownFiles()
+          : [];
+      for (const file of Array.isArray(sourceFiles) ? sourceFiles : []) {
+        if (albumRelevantPath(file)) {
+          const fingerprint = albumFrontmatterFingerprint(this.albumFrontmatterFor(file));
+          next.set(albumReportPath(file.path), fingerprint);
+          if (fingerprint.isAlbum) {
+            const stem = albumReportPath(file.path).replace(/\.md$/i, "").split("/").pop();
+            if (stem) {
+              this.albumKnownStemsStore().add(stem);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      // Metadata readiness is best-effort; later changes will fill the map.
+    }
+    this.albumFrontmatterByPath = next;
+    this.albumMetadataReady = true;
+  }
+
+  albumScheduleSync(reason = "frontmatter-change") {
+    void reason;
+    if (this.albumDataActive === false) {
+      return false;
+    }
+    if (this.albumSyncFlight || this.albumSyncBusy) {
+      // A real frontmatter change that arrives during a sync is not
+      // discarded: it coalesces into one trailing sync after this flight.
+      this.albumSyncTrailing = true;
+      return false;
+    }
+    this.albumClearTimeout(this.albumSyncDebounceTimer);
+    this.albumSyncDebounceTimer = this.albumSetTimeout(() => {
+      this.albumSyncDebounceTimer = null;
+      if (this.albumDataActive !== false && !this.albumSyncFlight && !this.albumSyncBusy) {
+        void this.apiAlbumSync({ automatic: true });
+      }
+    }, ALBUM_SYNC_DEBOUNCE_MS);
+    return true;
+  }
+
+  apiAlbumSync(options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, error: { code: "unloaded", message: "Album data has unloaded." } });
+    }
+    if (this.albumSyncFlight) {
+      return this.albumSyncFlight;
+    }
+    this.albumClearTimeout(this.albumSyncDebounceTimer);
+    this.albumSyncDebounceTimer = null;
+    this.albumSyncTrailing = false;
+    const epoch = this.albumDataEpoch || 0;
+    this.albumSyncBusy = true;
+    this.albumSyncError = null;
+    this.albumNotify();
+    let syncPromise;
+    const run = async () => {
+      let processResult;
+      try {
+        processResult = await this.albumSpawnSync();
+      } catch (error) {
+        processResult = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob albums sync failed.",
+        };
+      }
+      let operation;
+      if (!processResult || !processResult.ok || !processResult.report) {
+        operation = {
+          ok: false,
+          error: processResult || { code: "failed", message: "bob albums sync failed." },
+          report: null,
+        };
+      } else if (processResult.report.ok !== true) {
+        const failure = processResult.report.error || {};
+        operation = {
+          ok: false,
+          error: {
+            code: typeof failure.code === "string" ? failure.code : "sync-refused",
+            message: typeof failure.message === "string"
+              ? failure.message
+              : "bob albums sync found a damaged catalog or could not complete.",
+            detail: typeof failure.detail === "string"
+              ? failure.detail
+              : typeof failure.hint === "string" ? failure.hint : "",
+          },
+          report: processResult.report,
+        };
+      } else {
+        operation = { ok: true, error: null, report: processResult.report };
+      }
+      if (this.albumDataActive === false || this.albumDataEpoch !== epoch) {
+        if (this.albumSyncFlight === syncPromise) {
+          this.albumSyncFlight = null;
+        }
+        return { ...operation, refreshed: this.albumReportState() };
+      }
+      this.albumSyncBusy = false;
+      this.albumSyncError = operation.error;
+      this.albumLastSyncReport = operation.report;
+      if (this.albumSyncFlight === syncPromise) {
+        this.albumSyncFlight = null;
+      }
+      this.albumNotify();
+      let refreshed = this.albumReportState();
+      try {
+        // Re-read even after a partial/refused sync. Catalog state comes from
+        // the list report, never from the sync command's optimistic result.
+        refreshed = await this.albumRevalidateAfterSync();
+      } catch (error) {
+        // The last report remains visible as stale/unavailable on failure.
+      }
+      if (
+        this.albumSyncTrailing === true &&
+        this.albumDataActive !== false && this.albumDataEpoch === epoch &&
+        !this.albumSyncFlight && !this.albumSyncBusy
+      ) {
+        this.albumSyncTrailing = false;
+        this.albumScheduleSync("trailing-change");
+      }
+      return { ...operation, refreshed };
+    };
+    syncPromise = Promise.resolve().then(run).catch(async (error) => {
+      const failure = {
+        code: "failed",
+        message: error && error.message ? String(error.message) : "bob albums sync failed.",
+      };
+      if (this.albumDataActive !== false && this.albumDataEpoch === epoch) {
+        this.albumSyncBusy = false;
+        this.albumSyncError = failure;
+        if (this.albumSyncFlight === syncPromise) {
+          this.albumSyncFlight = null;
+        }
+        this.albumNotify();
+        try {
+          await this.albumRevalidateAfterSync();
+        } catch (ignored) {}
+        if (
+          this.albumSyncTrailing === true &&
+          this.albumDataActive !== false && this.albumDataEpoch === epoch &&
+          !this.albumSyncFlight && !this.albumSyncBusy
+        ) {
+          this.albumSyncTrailing = false;
+          this.albumScheduleSync("trailing-change");
+        }
+      }
+      return { ok: false, error: failure, report: null, refreshed: this.albumReportState() };
+    });
+    this.albumSyncFlight = syncPromise;
+    void options;
+    return syncPromise;
+  }
+
+  albumRefreshRollover(now = new Date()) {
+    const day = albumLocalDate(now);
+    if (!day || day === this.albumLocalDay) {
+      return false;
+    }
+    this.albumLocalDay = day;
+    this.albumNotify();
+    return true;
+  }
+
+  setupAlbumData() {
+    this.albumDataActive = true;
+    this.albumDataEpoch = (this.albumDataEpoch || 0) + 1;
+    this.albumVaultGeneration = 0;
+    this.albumReport = null;
+    this.albumReportGeneration = -1;
+    this.albumReportStale = true;
+    this.albumReportError = null;
+    this.albumSyncBusy = false;
+    this.albumSyncError = null;
+    this.albumSyncFlight = null;
+    this.albumSyncTrailing = false;
+    this.albumListFlight = null;
+    this.albumQueuedGeneration = 0;
+    this.albumListWaiters = [];
+    this.albumSubscribers = new Set();
+    this.albumFrontmatterByPath = new Map();
+    this.albumKnownStems = new Set();
+    this.albumMetadataReady = false;
+    this.albumRevalidateTimer = null;
+    this.albumSyncDebounceTimer = null;
+    this.albumRolloverTimer = null;
+    this.albumLocalDay = albumLocalDate();
+
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file, data) => this.albumHandleMetadataChanged(file, data)));
+      }
+    } catch (error) {
+      // Metadata-cache notifications are optional on mobile and test hosts.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "modify", "delete", "rename"]) {
+          this.registerEvent(vault.on(event, (file, oldPath) => this.albumHandleVaultEvent(event, file, oldPath)));
+        }
+      }
+    } catch (error) {
+      // Vault notifications are optional on partial app hosts.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        for (const event of ["file-open", "active-leaf-change"]) {
+          this.registerEvent(workspace.on(event, () => this.albumScheduleRevalidate(`workspace-${event}`)));
+        }
+      }
+      if (workspace && typeof workspace.onLayoutReady === "function") {
+        workspace.onLayoutReady(() => this.albumSeedFrontmatterFingerprints());
+      }
+    } catch (error) {
+      // Some test hosts do not implement layout readiness.
+    }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof window !== "undefined" && window) {
+        this.registerDomEvent(window, "focus", () => this.albumScheduleRevalidate("window-focus"));
+        if (typeof document !== "undefined" && document) {
+          this.registerDomEvent(document, "visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+              this.albumScheduleRevalidate("document-visible");
+            }
+          });
+        }
+      }
+    } catch (error) {
+      // Focus and visibility are best-effort on restricted hosts.
+    }
+    try {
+      const timers = this.albumTimerApi();
+      const hasTimerHost = Boolean(
+        (this.albumTimers && typeof this.albumTimers === "object") ||
+        (typeof window !== "undefined" && window),
+      );
+      const setIntervalFn = hasTimerHost && timers && typeof timers.setInterval === "function"
+        ? timers.setInterval.bind(timers)
+        : null;
+      if (setIntervalFn) {
+        this.albumRolloverTimer = setIntervalFn(() => this.albumRefreshRollover(new Date()), ALBUM_ROLLOVER_INTERVAL_MS);
+        if (typeof this.registerInterval === "function") {
+          this.registerInterval(this.albumRolloverTimer);
+        }
+      }
+    } catch (error) {
+      this.albumRolloverTimer = null;
+    }
+  }
+
+  teardownAlbumData() {
+    this.albumDataActive = false;
+    this.albumDataEpoch = (this.albumDataEpoch || 0) + 1;
+    this.albumClearTimeout(this.albumRevalidateTimer);
+    this.albumClearTimeout(this.albumSyncDebounceTimer);
+    this.albumRevalidateTimer = null;
+    this.albumSyncDebounceTimer = null;
+    this.albumSyncTrailing = false;
+    if (this.albumRolloverTimer !== null && this.albumRolloverTimer !== undefined) {
+      const timers = this.albumTimerApi();
+      if (timers && typeof timers.clearInterval === "function") {
+        timers.clearInterval(this.albumRolloverTimer);
+      }
+    }
+    this.albumRolloverTimer = null;
+    this.albumResolveWaiters(0);
+    if (this.albumSubscribers instanceof Set) {
+      this.albumSubscribers.clear();
+    }
+    if (this.albumFrontmatterByPath instanceof Map) {
+      this.albumFrontmatterByPath.clear();
+    }
+    if (this.albumKnownStems instanceof Set) {
+      this.albumKnownStems.clear();
+    }
+    this.albumReport = null;
+    this.albumReportError = null;
+    this.albumSyncBusy = false;
+    this.albumSyncError = null;
   }
 }
 // ---- src/241h-plugin-bank-decode.js ----
@@ -102936,6 +104129,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsStatsClockMixin,
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
+  BobLedgerToolsAlbumDataMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsNotebookCatalogMixin,
@@ -106073,6 +107267,43 @@ try {
       stripPrjTaskHidden,
       PrjTaskMarkWidget,
       HideTagMarkWidget,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/352-exports-album.js ----
+// Album report/sync service helpers, exported beside the existing
+// notebook data surface in `350-exports.js`. Kept in its own fragment so
+// `350-exports.js` stays at or below 1000 lines.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      ALBUM_REPORT_SCHEMA_VERSION,
+      ALBUM_LIST_TIMEOUT_MS,
+      ALBUM_LIST_MAX_BUFFER,
+      ALBUM_REVALIDATE_DEBOUNCE_MS,
+      ALBUM_SYNC_DEBOUNCE_MS,
+      ALBUM_ROLLOVER_INTERVAL_MS,
+      albumListArgs,
+      albumSyncArgs,
+      albumDecodeListReport,
+      albumDecodeSyncReport,
+      albumIndexReport,
+      albumReportPath,
+      albumDirname,
+      albumTypeNames,
+      albumNormalizeParent,
+      albumNormalizeSummary,
+      albumNormalizeText,
+      albumNormalizeIndexFacets,
+      albumStableStringify,
+      albumFrontmatterFingerprint,
+      albumFingerprintNeedsSync,
+      albumIsMember,
+      albumRelevantPath,
+      albumLocalDate,
+      albumErrorModel,
     });
   }
 } catch (error) {

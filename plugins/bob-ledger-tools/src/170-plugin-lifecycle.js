@@ -672,7 +672,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupBankData(); this.setupBankActions();
+    this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupNotebookCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
@@ -794,10 +794,9 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownNotebookHeader(); } catch (error) {}
     try {
-      this.teardownNotebookCatalog();
-      this.teardownNotebookData();
+      this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
-      // Notebook catalog/data teardown is best-effort.
+      // Notebook catalog/data and album data teardown is best-effort.
     }
     this.todayCache = emptyTodayCache();
     this.todayCacheGen = 0;

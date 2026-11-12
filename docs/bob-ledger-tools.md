@@ -46,6 +46,7 @@ Renders task, Pomodoro, freshness, and planning information from Bob notes.
 | Toggle Task Link keep-moving marks | `toggle-keep-moving-marks` | — |
 | Toggle Task Link off-clock chips | `toggle-off-clock-link-chips` | — |
 | Toggle Today marks | `toggle-today-marks` | — |
+| Toggle bank marks | `toggle-bank-marks` | — |
 | Toggle blocked-reason marks | `toggle-block-marks` | — |
 | Toggle calendar event painting | `toggle-calendar-event-painting` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
@@ -64,19 +65,9 @@ Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
 ## Bank cards and the daily chip
 
-Add a `bob-bank` fence to `bank.md` for the queue or `bank/YYYY-MM.md` for a month report:
+Add a `bob-bank` fence (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`). Month frontmatter must match the filename. Navigation opens only existing headings. Queue rows group by day; acknowledgment uses the IDs shown when drawn. The daily chip follows the Day strip, jumps with `bob bank ensure`, and defaults on (`stats.bank_chip: false` hides it).
 
-````markdown
-```bob-bank
-view: queue
-```
-````
-
-Use `view: queue` in the hub or `view: month` in a month note. Month frontmatter must match its filename. Navigation opens only existing headings and month notes.
-
-Queue rows are grouped by day, oldest first. Acknowledgment applies to the IDs shown when drawn; rows without IDs need individual checkboxes. Account and import caveats remain visible, and recent totals cover six months.
-
-The daily chip follows the Day strip and opens its exact date with `bob bank ensure`. Today's chip also shows waiting rows across months. It defaults on; set `stats.bank_chip: false` in `~/.config/bob/config.yml` to hide it. Cards render Bob's reports without writing derived note data.
+Canonical month rows and day headings get tabular amounts, chips, waiting bars, and Out/In badges. `toggle-bank-marks` and `stats.bank_marks` (default on) control them in every window. Bank-row `$` amounts never render as math. The `bank` property hides only on `bank.md`.
 
 ## Snippets and the plan block
 

@@ -8399,3 +8399,65 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   .bob-bank-queue-row-label { flex-wrap: wrap; }
   .bob-bank-card-footer { align-items: flex-start; flex-direction: column; }
 }
+
+.bob-bank-mark-host { position: relative; display: inline; }
+.bob-bank-mark-host .bob-bank-mark-native { display: none; }
+.bob-bank-mark-amount {
+  display: inline-block;
+  min-width: 6.6em;
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+.bob-bank-mark-amount.is-in { color: var(--color-green, var(--text-success)); }
+.bob-bank-mark-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-inline: 0.15em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  padding: 0.05em 0.45em;
+  font-size: 0.82em;
+  line-height: 1.4;
+}
+.bob-bank-mark-cat { background: var(--background-modifier-hover); }
+.bob-bank-mark-acct { color: var(--text-muted); background: transparent; }
+.bob-bank-mark-flag { color: var(--text-warning, var(--text-normal)); }
+.bob-bank-mark-id { color: var(--text-faint); font-size: 0.82em; }
+.bob-bank-mark-heading { margin-inline-start: 0.65em; color: var(--text-muted); font-size: 0.78em; font-weight: 500; font-variant-numeric: tabular-nums; }
+.bob-bank-mark-heading.is-empty { color: var(--text-faint); }
+.bob-bank-mark-waiting-badge {
+  display: inline-flex;
+  margin-inline-start: 0.35em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  padding: 0.05em 0.45em;
+  color: var(--text-warning, var(--text-muted));
+  font-size: 0.92em;
+}
+.cm-line.bob-bank-mark-waiting,
+li.bob-bank-mark-waiting {
+  --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent));
+  border-inline-start: 2px solid var(--bob-bank-accent);
+  padding-inline-start: 0.35em;
+}
+.cm-line.bob-bank-mark-waiting[data-root-hue="aqua"],
+li.bob-bank-mark-waiting[data-root-hue="aqua"] { --bob-bank-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="blue"],
+li.bob-bank-mark-waiting[data-root-hue="blue"] { --bob-bank-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="green"],
+li.bob-bank-mark-waiting[data-root-hue="green"] { --bob-bank-accent: var(--bob-area-green, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="orange"],
+li.bob-bank-mark-waiting[data-root-hue="orange"] { --bob-bank-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="red"],
+li.bob-bank-mark-waiting[data-root-hue="red"] { --bob-bank-accent: var(--bob-area-red, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="violet"],
+li.bob-bank-mark-waiting[data-root-hue="violet"] { --bob-bank-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-waiting[data-root-hue="yellow"],
+li.bob-bank-mark-waiting[data-root-hue="yellow"] { --bob-bank-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.cm-line.bob-bank-mark-acked,
+li.bob-bank-mark-acked { opacity: 0.72; }
+.bob-bank-math-dollar { display: inline; }
+.bob-bank-math-protected { display: inline; font-style: normal; }
+.bob-bank-hub-note .metadata-property[data-property-key="bank"] { display: none !important; }

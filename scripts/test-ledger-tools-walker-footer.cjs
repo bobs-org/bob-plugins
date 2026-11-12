@@ -98,6 +98,7 @@ const {
   dashboardLaneBadgeModel,
   dashboardLaneBudgetFromTasks,
   defaultPlanCaps,
+  freshnessFooterHiddenView,
   freshnessFooterPaint,
   laneWalkQueueFromTasks,
   laneWalkerFooterReadLatestWorkLog,
@@ -105,6 +106,8 @@ const {
   linksWalkerFooterActivate,
   linksWalkerFooterRequest,
   linksWalkerFooterView,
+  walkerFooterClearView,
+  walkerFooterReviewView,
   readyBadgeModel,
   readyBudgetFromTasks,
 } = helpers;
@@ -640,4 +643,75 @@ test("links main button repeats the n walk through the existing bracket command"
   });
   plugin.freshnessStatusClicked();
   assert.deepEqual(calls, ["bob-navigation-hotkeys:repeat-next-bracket-walk"]);
+});
+
+test("walker painter stamps the active family and swaps panels synchronously", () => {
+  const laneQueue = snapshot(
+    [entry("pending", "notes/a.md", 0, { rank: 1, total: 1, laneRank: 1, laneTotal: 1 })],
+    { pending: 1, total: 1 },
+  );
+  const host = new TestElement("div");
+  freshnessFooterPaint(host, laneWalkerFooterView(laneQueue, {}));
+  assert.equal(host.attrs["data-walker-panel"], "w");
+  assert.equal(host.classList.contains("bob-freshness-lanes"), true);
+
+  freshnessFooterPaint(host, linksWalkerFooterView({
+    ok: true,
+    prev: { text: "prev", target: "a", path: "a.md", exists: true },
+    next: { text: "next", target: "b", path: "b.md", exists: true },
+  }));
+  assert.equal(host.attrs["data-walker-panel"], "n");
+  assert.equal(host.classList.contains("bob-freshness-lanes"), false);
+  assert.equal(host.classList.contains("bob-freshness-links"), true);
+
+  freshnessFooterPaint(host, walkerFooterClearView(
+    { counts: { walk: 0, byTier: {} }, tasksAvailable: true },
+    { navAvailable: true },
+  ));
+  assert.equal(host.attrs["data-walker-panel"], "s");
+  assert.equal(host.classList.contains("bob-freshness-links"), false);
+  assert.match(deepText(host), /Review clear/);
+
+  freshnessFooterPaint(host, freshnessFooterHiddenView());
+  assert.equal(host.attrs["data-walker-panel"], "hidden");
+  assert.equal(host.classList.contains("bob-freshness-hidden"), true);
+});
+
+test("walker count-only repaints update text in place without rebuilding the footer", () => {
+  const host = new TestElement("div");
+  const one = snapshot(
+    [entry("pending", "notes/a.md", 0, { rank: 1, total: 1, laneRank: 1, laneTotal: 1 })],
+    { pending: 1, total: 1 },
+  );
+  const parts = freshnessFooterPaint(host, laneWalkerFooterView(one, {}));
+  const slots = host.children.slice();
+  assert.ok(slots.length > 0);
+
+  const two = snapshot(
+    [
+      entry("pending", "notes/a.md", 0, { rank: 1, total: 2, laneRank: 1, laneTotal: 2 }),
+      entry("ready", "notes/b.md", 1, { rank: 2, total: 2, laneRank: 1, laneTotal: 1 }),
+    ],
+    { pending: 2, ready: 1, total: 2 },
+  );
+  const repainted = freshnessFooterPaint(host, laneWalkerFooterView(two, {}));
+  assert.equal(host.attrs["data-walker-panel"], "w");
+  assert.equal(repainted.button, parts.button);
+  assert.equal(repainted.due, parts.due);
+  assert.equal(repainted.context, parts.context);
+  assert.equal(repainted.detail, parts.detail);
+  assert.equal(repainted.hint, parts.hint);
+  assert.equal(repainted.meter, parts.meter);
+  assert.deepEqual(host.children, slots);
+  assert.match(deepText(host), /Lanes 2/);
+});
+
+test("walker review export keeps the gated clear state behind the preview", () => {
+  const view = walkerFooterReviewView(
+    { counts: { walk: 0, byTier: {} }, queue: [], tasksAvailable: true },
+    { navAvailable: true, todayText: "2026-10-28", queue: [] },
+  );
+  assert.equal(view.visible, true);
+  assert.equal(view.mode, "clear");
+  assert.equal(view.dueText, "Review clear");
 });

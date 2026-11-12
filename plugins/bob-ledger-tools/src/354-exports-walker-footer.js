@@ -12,6 +12,8 @@ try {
       laneWalkerFooterReadLatestWorkLog,
       laneWalkerFooterWorkLogLabel,
       laneWalkerFooterAgeLabel,
+      walkerFooterClearView,
+      walkerFooterReviewView,
     });
   }
 } catch (error) {

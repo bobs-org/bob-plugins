@@ -658,6 +658,44 @@ a.bob-plan-ready:hover {
   border-radius: var(--radius-s, 4px);
 }
 
+/* Walker footer (plan 202611/walker_footers.md, phase visual): the host keeps
+   a fixed item height so swapping panels never grows the status bar, and a
+   calm ~120 ms content crossfade plays only when the active family changes.
+   Count-only repaints keep `data-walker-panel`, so counts never animate: the
+   attribute flip (s/w/n) selects a different animation name, which restarts
+   the fade without any JS timing. */
+.bob-freshness {
+  min-height: 1.6em;
+}
+@keyframes bob-walker-panel-in-s {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+@keyframes bob-walker-panel-in-w {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+@keyframes bob-walker-panel-in-n {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bob-freshness[data-walker-panel="s"] .bob-freshness-main {
+    animation: bob-walker-panel-in-s 120ms ease-out;
+  }
+  .bob-freshness[data-walker-panel="w"] .bob-freshness-main {
+    animation: bob-walker-panel-in-w 120ms ease-out;
+  }
+  .bob-freshness[data-walker-panel="n"] .bob-freshness-main {
+    animation: bob-walker-panel-in-n 120ms ease-out;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-freshness[data-walker-panel] .bob-freshness-main {
+    animation: none;
+  }
+}
+
 /* Task freshness mark (api v3): a small theme-native rendering of
    `[fresh:: YYYY-MM-DD]` — `✓ today`, a draining lease ring with its
    age, or `⟳ Nd` when due. Display-only; nothing ever writes it. */

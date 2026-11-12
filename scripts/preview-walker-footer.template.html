@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bob walker footer preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { padding: 0 16px 24px; font: 14px/1.4 system-ui, sans-serif; }
+    body.theme-light {
+      color-scheme: light;
+      --color-red: #e93147; --color-orange: #ec7500; --color-yellow: #e0ac00;
+      --color-green: #08b94e; --color-cyan: #00bfbc; --color-blue: #086ddd;
+      --color-purple: #7852ee; --color-pink: #d53984;
+      --text-normal: #222222; --text-muted: #5c5c5c; --text-faint: #ababab;
+      --background-secondary: #f6f6f6; --background-modifier-hover: #e9e9e9;
+      --background-modifier-border: #d7d7d7; --background-modifier-border-hover: #aaa;
+      --interactive-accent: #7852ee; --radius-s: 4px;
+      --font-interface: system-ui, sans-serif; --font-monospace: ui-monospace, monospace;
+      --font-ui-smaller: 12px;
+      --font-medium: 500; --font-bold: 700;
+      --status-bar-background: #f6f6f6;
+      background: #fff; color: var(--text-normal);
+    }
+    body.theme-dark {
+      color-scheme: dark;
+      --color-red: #fb464c; --color-orange: #e9973f; --color-yellow: #e0de71;
+      --color-green: #44cf6e; --color-cyan: #53dfdd; --color-blue: #027aff;
+      --color-purple: #a882ff; --color-pink: #fa99cd;
+      --text-normal: #dadada; --text-muted: #b3b3b3; --text-faint: #666666;
+      --background-secondary: #262626; --background-modifier-hover: #353535;
+      --background-modifier-border: #484848; --background-modifier-border-hover: #777;
+      --interactive-accent: #a882ff; --radius-s: 4px;
+      --font-interface: system-ui, sans-serif; --font-monospace: ui-monospace, monospace;
+      --font-ui-smaller: 12px;
+      --font-medium: 500; --font-bold: 700;
+      --status-bar-background: #262626;
+      background: #1c1c1c; color: var(--text-normal);
+    }
+    #preview-root { width: 100%; padding: 12px 0; }
+    .preview-title { margin: 0 0 6px; color: var(--text-muted); font-size: 12px; }
+    .preview-case { margin: 0 0 16px; }
+    .preview-status-bar {
+      display: flex; align-items: center; width: 100%; min-width: 0;
+      background: var(--background-secondary); color: var(--text-normal);
+      border: 1px solid var(--background-modifier-border); padding: 5px 8px;
+      overflow: hidden;
+    }
+    .preview-keep {
+      display: inline-flex; align-items: center; gap: 0.3em; flex: 0 0 auto;
+      font-size: var(--font-ui-smaller, 12px); color: var(--text-normal);
+      white-space: nowrap; margin-left: 0.5em;
+    }
+  </style>
+  <style id="obsidian-baseline">
+    :root { --input-height: 30px; }
+    button {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: var(--input-height); padding: 4px 12px;
+      border: 1px solid var(--background-modifier-border);
+      border-radius: 5px; background: var(--background-secondary);
+      color: var(--text-normal); font-family: var(--font-interface);
+      font-size: 13px; font-weight: 500; white-space: nowrap;
+    }
+  </style>
+  <style id="production-footer-css">__PRODUCTION_CSS__</style>
+  <style id="production-nav-css">__NAV_CSS__</style>
+</head>
+<body class="theme-light">
+  <main id="preview-root"></main>
+  <script>
+  window.__previewError = "";
+  window.addEventListener("error", (event) => {
+    window.__previewError = String(event.message || event.error || "script error");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    window.__previewError = String(event.reason || "promise rejection");
+  });
+  (() => {
+    "use strict";
+    const ledgerSource = __LEDGER_SOURCE__;
+    const navSource = __NAV_SOURCE__;
+    const moduleShim = { exports: {} };
+    const stubModules = {
+      obsidian: {
+        Plugin: class {}, MarkdownRenderChild: class {}, MarkdownView: class {},
+        Modal: class {}, Notice: class {}, Platform: { isDesktopApp: false },
+        normalizePath: (value) => value, parseYaml: () => ({}),
+      },
+      "@codemirror/state": {
+        Prec: { highest: (value) => value }, StateEffect: { define: () => ({}) },
+        RangeSetBuilder: class {},
+      },
+      "@codemirror/view": {
+        EditorView: { updateListener: { of: (fn) => ({ fn }) } },
+        keymap: { of: (value) => value },
+      },
+      "@codemirror/language": { syntaxTree: null },
+    };
+    function loadPlugin(source) {
+      const moduleObject = { exports: {} };
+      new Function("require", "module", "exports", "process", source)(
+        (name) => stubModules[name] || {},
+        moduleObject,
+        moduleObject.exports,
+        { env: { HOME: "/" } },
+      );
+      return moduleObject.exports.helpers;
+    }
+    const ledger = loadPlugin(ledgerSource);
+    const nav = loadPlugin(navSource);
+    const tierKeys = [
+      "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
+    ];
+    const labels = {
+      pre: "PRE", new: "NEW", projects: "PROJECTS", pending: "PENDING",
+      next: "NEXT", recurring: "RECURRING", tickler: "TICKLER",
+      rotten: "ROTTEN", post: "POST",
+    };
+    const morning = {
+      pre: 1, new: 2, projects: 1, pending: 1, next: 2,
+      recurring: 1, tickler: 1, rotten: 3, post: 1,
+    };
+    function memoFor(counts, queue) {
+      const byTier = Object.fromEntries(tierKeys.map((key) => [key, counts[key] || 0]));
+      const walk = Object.values(byTier).reduce((sum, count) => sum + count, 0);
+      return {
+        counts: { walk, upkeepToday: 2, budget: 5, budgetMet: false, byTier },
+        queue: queue || [{ key: "preview.md:1", tier: "new", rank: 1 }],
+        tasksAvailable: true,
+      };
+    }
+    function reviewRow(tier, overrides = {}) {
+      const byTier = morning;
+      return {
+        key: "preview.md:1", path: "preview.md", line: 1, lineNumber: 0,
+        originalMarkdown: "- [ ] #task Preview review row", text: "Preview review row",
+        state: tier === "rotten" ? "rotten" : tier === "new" ? "new" : "todo",
+        bucket: tier === "new" ? "new" : "ready", tier, tierLabel: labels[tier],
+        lane: tier === "next" ? "next" : "ready", created: null,
+        fresh: tier === "new" ? null : "2026-10-28", dueOn: "2026-10-30",
+        daysOverdue: tier === "rotten" ? 3 : 0, interval: 7,
+        rank: 3, tierRank: 1, tierTotal: byTier[tier] || 1,
+        ...overrides,
+      };
+    }
+    // Panel s fixtures: a subset of the review states (full matrix stays in
+    // the review preview) plus the gated clear state, which only the walker
+    // host can produce.
+    const reviewTickDecay = {
+      ok: true, kind: "decay", compact: "Alt+P decay P2→P3",
+      detail: "Alt+P: decay P2 → P3, 9–31 days out",
+      parts: { keyLabel: "Alt+P", verb: "decay", fromLabel: "P2", toLabel: "P3", step: null, limit: null },
+    };
+    const reviewFixtures = [
+      { id: "s-all", title: "s · off-row · all nine groups", make: () => ledger.walkerFooterReviewView(memoFor({ pre: 1, new: 1, projects: 1, pending: 1, next: 1, recurring: 1, tickler: 1, rotten: 1, post: 1 }), { navAvailable: true, todayText: "2026-10-30" }) },
+      { id: "s-morning", title: "s · typical morning", make: () => ledger.walkerFooterReviewView(memoFor(morning, [reviewRow("next")]), { current: reviewRow("next"), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("next")] }) },
+      { id: "s-clear", title: "s · empty queue · Review clear", make: () => ledger.walkerFooterReviewView(memoFor({}, []), { navAvailable: true, todayText: "2026-10-30", queue: [] }) },
+      { id: "s-tick-decay", title: "s · TICK decay chip", make: () => ledger.walkerFooterReviewView(memoFor(morning, [reviewRow("tickler", { bucket: "tickler", state: "todo" })]), { current: reviewRow("tickler", { bucket: "tickler", state: "todo" }), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("tickler")], quickRoll: reviewTickDecay }) },
+    ];
+    // Panel w fixtures: every row of the lanes state table, plus stress
+    // cases (huge counts, over-cap everywhere).
+    function laneEntry(lane, path, lineNumber, rank, total, laneRank, laneTotal, overrides = {}) {
+      return {
+        key: `${path}:${lineNumber + 1}`, path, line: lineNumber + 1, lineNumber,
+        originalMarkdown: `- [ ] #task ${lane} task`, text: `${lane} task`,
+        created: "2026-10-20", lane, rank, total, laneRank, laneTotal,
+        ...overrides,
+      };
+    }
+    function laneSnapshot(entries, counts, date = "2026-10-28") {
+      return {
+        available: true, date, entries,
+        counts: {
+          pending: 0, next: 0, ready: 0, total: entries.length,
+          todayPending: 0, todayNext: 0, todayReady: 0, reviewReady: 0,
+          ...counts,
+        },
+      };
+    }
+    const laneCaps = { maxPending: 8, maxNext: 13, maxReady: 21 };
+    const laneSourceLines = [
+      "- [*] #task next task",
+      "  - 🛠️ **WORK LOG**",
+      "    - *2026-10-27 14:15* — shipped the patch",
+    ];
+    const laneFixtures = [
+      { id: "w-offrow", title: "w · off a walk row", make: () => ledger.laneWalkerFooterView(laneSnapshot([
+        laneEntry("pending", "notes/a.md", 0, 1, 20, 1, 10),
+        laneEntry("next", "notes/a.md", 4, 2, 20, 1, 7),
+        laneEntry("ready", "notes/b.md", 1, 3, 20, 1, 3),
+      ], { pending: 10, next: 7, ready: 3, total: 20, todayPending: 4, todayNext: 5, todayReady: 3 }), { caps: laneCaps }) },
+      { id: "w-landed", title: "w · on a validated NEXT row", make: () => {
+        const landed = laneEntry("next", "notes/a.md", 6, 3, 5, 2, 7, { originalMarkdown: laneSourceLines[0] });
+        const entries = [
+          laneEntry("pending", "notes/a.md", 0, 1, 5, 1, 10),
+          laneEntry("pending", "notes/a.md", 2, 2, 5, 2, 10),
+          landed,
+          laneEntry("ready", "notes/b.md", 1, 4, 5, 1, 3),
+          laneEntry("ready", "notes/b.md", 3, 5, 5, 2, 3),
+        ];
+        return ledger.laneWalkerFooterView(
+          laneSnapshot(entries, { pending: 10, next: 7, ready: 3, total: 5, todayPending: 1, todayNext: 1, todayReady: 1 }),
+          { caps: laneCaps, cursor: { path: "notes/a.md", line0: 6, sourceLine: laneSourceLines[0] }, workLog: ledger.laneWalkerFooterReadLatestWorkLog(laneSourceLines, 0) },
+        );
+      } },
+      { id: "w-overcap", title: "w · every lane over cap", make: () => ledger.laneWalkerFooterView(laneSnapshot([
+        laneEntry("pending", "notes/a.md", 0, 1, 30, 1, 12),
+      ], { pending: 12, next: 15, ready: 25, total: 30 }), { caps: laneCaps }) },
+      { id: "w-huge", title: "w · huge counts · minimum-width stress", make: () => ledger.laneWalkerFooterView(laneSnapshot([
+        laneEntry("pending", "notes/a.md", 0, 1, 1400, 1, 248),
+      ], { pending: 248, next: 1024, ready: 128, total: 1400, todayPending: 64, todayNext: 64, todayReady: 64 }), { caps: laneCaps }) },
+      { id: "w-clear-today", title: "w · every lane task on today's plan", make: () => ledger.laneWalkerFooterView(laneSnapshot([], { todayPending: 4, todayNext: 5, todayReady: 3 }), { caps: laneCaps }) },
+      { id: "w-clear-review", title: "w · clear but review waits in ]s", make: () => ledger.laneWalkerFooterView(laneSnapshot([], { reviewReady: 5 }), { caps: laneCaps }) },
+      { id: "w-empty", title: "w · no lane tasks at all", make: () => ledger.laneWalkerFooterView(laneSnapshot([], {}), { caps: laneCaps }) },
+    ];
+    // Panel n fixtures: every row of the links state table, plus long
+    // Unicode destinations and duplicate basenames (path context).
+    const linksBoth = {
+      ok: true,
+      prev: { text: "prev", target: "20251027", path: "2025/20251027.md", exists: true },
+      next: { text: "next", target: "20251029", path: "2025/20251029.md", exists: true },
+    };
+    const linksFixtures = [
+      { id: "n-both", title: "n · both directions exist", make: () => ledger.linksWalkerFooterView(linksBoth) },
+      { id: "n-arrows", title: "n · arrow labels on period notes", make: () => ledger.linksWalkerFooterView({
+        ok: true,
+        prev: { text: "‹ W45", target: "W45", path: "periods/2026-W45.md", exists: true },
+        next: { text: "W47 ›", target: "W47", path: "periods/2026-W47.md", exists: true },
+      }) },
+      { id: "n-create", title: "n · missing target is a dashed create", make: () => ledger.linksWalkerFooterView({
+        ok: true,
+        prev: { text: "prev", target: "20251027", path: "2025/20251027.md", exists: true },
+        next: { text: "next", target: "20251029", path: "2025/20251029.md", exists: false },
+      }) },
+      { id: "n-prev-only", title: "n · one direction only", make: () => ledger.linksWalkerFooterView({
+        ok: true,
+        prev: { text: "prev", target: "20251027", path: "2025/20251027.md", exists: true },
+        next: null,
+      }) },
+      { id: "n-unicode", title: "n · long Unicode names shed end-first", make: () => ledger.linksWalkerFooterView({
+        ok: true,
+        prev: { text: "‹ 研修旅行の計画と振り返りメモのまとめ", target: "研修旅行の計画と振り返りメモのまとめ", path: "notes/研修旅行の計画と振り返りメモのまとめ.md", exists: true },
+        next: { text: "🚀 Launch checklist — final review & sign-off ›", target: "launch", path: "notes/launch.md", exists: true },
+      }) },
+      { id: "n-dupe", title: "n · duplicate basenames keep path context", make: () => ledger.linksWalkerFooterView({
+        ok: true,
+        prev: { text: "prev", target: "log", path: "areas/work/log.md", exists: true },
+        next: { text: "next", target: "log", path: "areas/home/log.md", exists: true },
+      }) },
+      { id: "n-none", title: "n · no matching labels", make: () => ledger.linksWalkerFooterView({ ok: true, prev: null, next: null }) },
+      { id: "n-nonnote", title: "n · non-Markdown view", make: () => ledger.linksWalkerFooterView(null, { state: "open-note" }) },
+      { id: "n-unavailable", title: "n · old nav without links()", make: () => ledger.linksWalkerFooterView(null, { state: "unavailable" }) },
+    ];
+    const panelFixtures = [...reviewFixtures, ...laneFixtures, ...linksFixtures];
+
+    function visible(node) {
+      return Boolean(node)
+        && !node.hasAttribute("hidden")
+        && getComputedStyle(node).display !== "none";
+    }
+    function rgb(text) {
+      const value = String(text);
+      const oklch = /oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(value);
+      if (oklch) {
+        const lightness = Number(oklch[1]);
+        const chroma = Number(oklch[2]);
+        const hue = Number(oklch[3]) * Math.PI / 180;
+        const a = chroma * Math.cos(hue);
+        const b = chroma * Math.sin(hue);
+        const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+        const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+        const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+        const linear = [
+          4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+          -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+        ];
+        return linear.map((channel) => {
+          const clamped = Math.max(0, Math.min(1, channel));
+          const encoded = clamped <= 0.0031308
+            ? 12.92 * clamped
+            : 1.055 * clamped ** (1 / 2.4) - 0.055;
+          return encoded * 255;
+        });
+      }
+      const values = value.match(/[\d.]+/g);
+      return values && values.length >= 3 ? values.slice(0, 3).map(Number) : null;
+    }
+    function luminance(color) {
+      const channels = rgb(color);
+      if (!channels) return null;
+      const linear = channels.map((value) => {
+        const component = value / 255;
+        return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    }
+    function contrast(foreground, background) {
+      const a = luminance(foreground);
+      const b = luminance(background);
+      if (a === null || b === null) return null;
+      return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+    }
+    function resolvedChannels(colorText) {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return rgb(colorText);
+        ctx.fillStyle = String(colorText);
+        ctx.fillRect(0, 0, 1, 1);
+        const data = ctx.getImageData(0, 0, 1, 1).data;
+        return [data[0], data[1], data[2]];
+      } catch (error) {
+        return rgb(colorText);
+      }
+    }
+    function resolvedContrast(foregroundText, backgroundText) {
+      const foreground = resolvedChannels(foregroundText);
+      const background = resolvedChannels(backgroundText);
+      if (!foreground || !background) return null;
+      const linear = (channels) => channels.map((value) => {
+        const component = value / 255;
+        return component <= 0.04045 ? component / 12.92 : ((component + 0.055) / 1.055) ** 2.4;
+      });
+      const lum = (channels) => {
+        const [r, g, b] = linear(channels);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const a = lum(foreground);
+      const b = lum(background);
+      return Math.round(((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)) * 100) / 100;
+    }
+    function chipText(node) {
+      if (!node) return "";
+      let out = "";
+      const walk = (current) => {
+        for (const child of current.childNodes || []) {
+          if (child.nodeType === 3) out += child.textContent || "";
+          else walk(child);
+        }
+      };
+      walk(node);
+      return out;
+    }
+    function textInk(node, background) {
+      if (!node || !visible(node)) return null;
+      return contrast(getComputedStyle(node).color, background);
+    }
+    function measureFooter(footer, view, background) {
+      if (document.getAnimations) {
+        try { document.getAnimations().forEach((anim) => { try { anim.finish(); } catch (ignored) {} }); } catch (ignored) {}
+      }
+      const tokens = Array.from(footer.querySelectorAll(".bob-freshness-group"));
+      const visibleTokens = tokens.filter(visible);
+      const context = footer.querySelector(".bob-freshness-context");
+      const detail = footer.querySelector(".bob-freshness-detail");
+      const hint = footer.querySelector(".bob-freshness-hint");
+      const meter = footer.querySelector(".bob-freshness-meter");
+      const due = footer.querySelector(".bob-freshness-due");
+      const linkPrev = footer.querySelector(".bob-freshness-link-prev");
+      const linkNext = footer.querySelector(".bob-freshness-link-next");
+      const linkStatus = footer.querySelector(".bob-freshness-link-status");
+      const result = {
+        panel: footer.getAttribute("data-walker-panel"),
+        dueText: view && view.dueText ? String(view.dueText) : "",
+        contextText: view && view.contextText ? String(view.contextText) : "",
+        hintText: view && view.hintText ? String(view.hintText) : "",
+        overflow: footer.scrollWidth - footer.clientWidth,
+        hostHeight: footer.getBoundingClientRect().height,
+        dueContrast: textInk(due, background),
+        contextContrast: textInk(context, background),
+        detailContrast: textInk(detail, background),
+        hintContrast: textInk(hint, background),
+        meterContrast: textInk(meter, background),
+        groups: visibleTokens.map((token) => ({
+          key: token.getAttribute("data-review-tier") || token.textContent,
+          contrast: contrast(getComputedStyle(token).color, background),
+        })),
+        allGroupColors: tokens.map((token) => ({
+          key: token.getAttribute("data-review-tier") || token.textContent,
+          color: getComputedStyle(token).color,
+        })),
+        linkPrev: linkPrev && visible(linkPrev) ? {
+          text: chipText(linkPrev),
+          contrast: resolvedContrast(getComputedStyle(linkPrev).color, background),
+          dashed: linkPrev.classList.contains("bob-freshness-link-create"),
+          disabled: linkPrev.disabled === true,
+        } : null,
+        linkNext: linkNext && visible(linkNext) ? {
+          text: chipText(linkNext),
+          contrast: resolvedContrast(getComputedStyle(linkNext).color, background),
+          dashed: linkNext.classList.contains("bob-freshness-link-create"),
+          disabled: linkNext.disabled === true,
+        } : null,
+        linkStatus: linkStatus && visible(linkStatus) ? linkStatus.textContent : "",
+      };
+      if (view && view.panel === "links") {
+        const wantPrev = view.linkPrev ? view.linkPrev.text : null;
+        const wantNext = view.linkNext ? view.linkNext.text : null;
+        result.linksMatch = (result.linkPrev ? result.linkPrev.text : null) === wantPrev
+          && (result.linkNext ? result.linkNext.text : null) === wantNext;
+      }
+      return result;
+    }
+    // Integrated bar: one footer host plus the Keep inbox chip and a
+    // production-rendered selector, mirroring status-bar DOM order (footer,
+    // keep, selector). Repainting modes here proves invariant 7: the
+    // selector rect never moves while panel widths change.
+    function buildIntegratedBar(root) {
+      const bar = document.createElement("div");
+      bar.className = "preview-status-bar";
+      const footer = document.createElement("div");
+      bar.appendChild(footer);
+      const keep = document.createElement("div");
+      keep.className = "preview-keep";
+      keep.textContent = "▢ 3";
+      bar.appendChild(keep);
+      const selector = document.createElement("div");
+      selector.className = "bob-bracket-mode";
+      bar.appendChild(selector);
+      root.appendChild(bar);
+      const selectorParts = nav.ensureBracketModeDom(selector);
+      return { bar, footer, keep, selector, selectorParts };
+    }
+    function paintIntegratedMode(integrated, mode, views, previousMode) {
+      const started = performance.now();
+      ledger.freshnessFooterPaint(integrated.footer, views[mode]);
+      const painted = nav.paintBracketModeIndicator(
+        integrated.selector, integrated.selectorParts, nav.buildBracketModeView(mode), previousMode,
+      );
+      integrated.selectorParts = painted || integrated.selectorParts;
+      const rect = integrated.selector.getBoundingClientRect();
+      const main = integrated.footer.querySelector(".bob-freshness-main");
+      return {
+        mode,
+        panel: integrated.footer.getAttribute("data-walker-panel"),
+        footerWidth: integrated.footer.getBoundingClientRect().width,
+        contentWidth: main ? main.getBoundingClientRect().width : 0,
+        barHeight: integrated.bar.getBoundingClientRect().height,
+        selectorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        swapMs: performance.now() - started,
+      };
+    }
+    function nextFrame() {
+      return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }
+    async function render(width, theme) {
+      document.body.className = `theme-${theme}`;
+      const root = document.querySelector("#preview-root");
+      root.replaceChildren();
+      root.style.width = `${width}px`;
+      const measurement = [];
+      let allTierColors = {};
+      for (const fixture of panelFixtures) {
+        const section = document.createElement("section");
+        section.className = "preview-case";
+        const heading = document.createElement("h2");
+        heading.className = "preview-title";
+        heading.textContent = fixture.title;
+        section.appendChild(heading);
+        const bar = document.createElement("div");
+        bar.className = "preview-status-bar";
+        const footer = document.createElement("div");
+        bar.appendChild(footer);
+        section.appendChild(bar);
+        root.appendChild(section);
+        const view = fixture.make();
+        ledger.freshnessFooterPaint(footer, view);
+        const background = getComputedStyle(bar).backgroundColor;
+        const entry = { id: fixture.id, ...measureFooter(footer, view, background) };
+        if (fixture.id === "s-all") {
+          allTierColors = Object.fromEntries(entry.allGroupColors.map((item) => [item.key, item.color]));
+        }
+        measurement.push(entry);
+      }
+      const integratedRoot = document.createElement("section");
+      integratedRoot.className = "preview-case";
+      const integrated = buildIntegratedBar(integratedRoot);
+      root.appendChild(integratedRoot);
+      const views = {
+        s: reviewFixtures[1].make(),
+        w: laneFixtures[0].make(),
+        n: linksFixtures[0].make(),
+      };
+      const modes = [];
+      let previousMode;
+      for (const mode of ["s", "w", "n"]) {
+        const painted = paintIntegratedMode(integrated, mode, views, previousMode);
+        previousMode = mode;
+        await nextFrame();
+        const rect = integrated.selector.getBoundingClientRect();
+        modes.push({
+          ...painted,
+          settledPanel: integrated.footer.getAttribute("data-walker-panel"),
+          settledSelectorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        });
+      }
+      return { width, theme, fixtures: measurement, allTierColors, integrated: modes };
+    }
+
+    window.walkerFooterPreview = { render, fixtureIds: panelFixtures.map((item) => item.id) };
+    window.__previewReady = true;
+  })();
+  </script>
+</body>
+</html>

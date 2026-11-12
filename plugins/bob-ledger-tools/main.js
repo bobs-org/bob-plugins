@@ -10349,6 +10349,18 @@ function freshnessFooterPaint(el, view) {
   } catch (error) {
     // Classes are cosmetic.
   }
+  // Visual phase (plan 202611/walker_footers.md): a text/shape cue for the
+  // active family that CSS-only crossfade rules key on. Count-only repaints
+  // keep the same value, so counts never animate — only a family switch
+  // changes the attribute and restarts the fade.
+  const walkerPanel = !visible
+    ? "hidden"
+    : view && view.panel === "lanes"
+      ? "w"
+      : view && view.panel === "links"
+        ? "n"
+        : "s";
+  freshnessFooterSetAttr(el, "data-walker-panel", walkerPanel);
   if (parts.button) {
     try {
       parts.button.disabled = !visible;
@@ -116366,6 +116378,8 @@ try {
       laneWalkerFooterReadLatestWorkLog,
       laneWalkerFooterWorkLogLabel,
       laneWalkerFooterAgeLabel,
+      walkerFooterClearView,
+      walkerFooterReviewView,
     });
   }
 } catch (error) {

@@ -29,7 +29,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     if (timers && typeof timers.setTimeout === "function") {
       return timers.setTimeout(callback, delay);
     }
-    return setTimeout(callback, delay);
+    return globalThis.setTimeout(callback, delay);
   }
 
   function clearTimeout(timer) {
@@ -40,7 +40,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       timers.clearTimeout(timer);
       return;
     }
-    clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 
   function notify() {
@@ -151,6 +151,18 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       return { ok: false, code: "superseded", message: "A newer draft superseded this preview." };
     }
     session.previewFlight = null;
+    if (generation !== vaultGeneration()) {
+      session.preview = null;
+      session.status = "refused";
+      session.refusal = {
+        kind: "stale",
+        code: "stale_generation",
+        message: "The vault changed while this preview was running.",
+        hint: "Refresh the album and preview the retained draft against the current schema.",
+      };
+      notify();
+      return { ok: false, ...session.refusal };
+    }
     if (!outcome || outcome.ok !== true || !outcome.report) {
       session.preview = null;
       session.status = "refused";
@@ -179,6 +191,9 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
         opIndex: failure.op_index == null ? null : failure.op_index,
         field: failure.field == null ? null : String(failure.field),
         choice: failure.choice == null ? null : String(failure.choice),
+        path: failure.path == null ? null : String(failure.path),
+        line: failure.line == null ? null : failure.line,
+        keyPath: failure.key_path == null ? null : String(failure.key_path),
         affected: failure.affected == null ? null : failure.affected,
       };
       notify();
@@ -232,6 +247,20 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       };
       notify();
     }
+    return snapshot();
+  }
+
+  // Move a retained draft onto a freshly-read schema only after an explicit
+  // user action. Rebase never previews or applies by itself.
+  function rebase(expect) {
+    if (session.closed) return snapshot();
+    session.expect = typeof expect === "string" ? expect : "";
+    session.revision += 1;
+    session.preview = null;
+    session.refusal = null;
+    session.status = session.draftOps.length ? "draft" : (session.syncWarning ? "saved-with-sync-warning" : "browsing");
+    clearPreviewTimer();
+    notify();
     return snapshot();
   }
 
@@ -343,6 +372,9 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
           opIndex: failure.op_index == null ? null : failure.op_index,
           field: failure.field == null ? null : String(failure.field),
           choice: failure.choice == null ? null : String(failure.choice),
+          path: failure.path == null ? null : String(failure.path),
+          line: failure.line == null ? null : failure.line,
+          keyPath: failure.key_path == null ? null : String(failure.key_path),
           affected: failure.affected == null ? null : failure.affected,
         };
         notify();
@@ -467,6 +499,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     stageUndo,
     retrySync,
     noteGenerationChanged,
+    rebase,
     close,
     getState: snapshot,
   };

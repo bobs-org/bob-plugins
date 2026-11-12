@@ -464,3 +464,221 @@ test("theme accent, schema button, and keyboard labels stay on the header", () =
   const field = root.querySelector(".bob-album-schema-field");
   assert.equal(field.getAttribute("tabindex"), "0");
 });
+
+test("schema edit model preserves typed defaults and stable field and choice targets", () => {
+  const entry = album({
+    schema_fingerprint: "sha256:card",
+    fields: [
+      { key: "status", label: "Status", kind: "choices", required: true, list: false, choices: [
+        { value: "liked", label: "💚 Liked", count: 4 },
+      ] },
+      { key: "amount", label: "Amount", kind: "number", required: false, list: false, default: 0, min: 0, choices: [] },
+      { key: "note", label: "Note", kind: "text", required: false, list: false, default: "", choices: [] },
+      { key: "aliases", label: "Aliases", kind: "text", required: false, list: true, default: ["", "zero"], choices: [] },
+    ],
+  });
+  const { app } = fixture(entry);
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  assert.equal(model.schemaFingerprint, "sha256:card");
+  assert.equal(model.fields[1].defaultPresent, true);
+  assert.equal(model.fields[1].default, 0);
+  assert.equal(model.fields[2].defaultPresent, true);
+  assert.equal(model.fields[2].default, "");
+  assert.deepEqual(model.fields[3].default, ["", "zero"]);
+  assert.equal(helpers.albumSchemaTypedDefault("ignored", { default: false }, false), false);
+  assert.deepEqual(helpers.albumSchemaTypedDefault('["", "new"]', { list: true }), ["", "new"]);
+  assert.deepEqual(helpers.albumSchemaChoiceParts("💚 Liked"), { emoji: "💚", label: "Liked" });
+  assert.deepEqual(helpers.albumSchemaTargets(model).map((target) => target.key), [
+    "stats", "field:status", "choice:status:liked", "add-choice:status",
+    "field:amount", "field:note", "field:aliases", "add-field",
+  ]);
+});
+
+test("Schema Card stages typed edits, previews one op, and applies only after confirmation", async () => {
+  const entry = album({
+    schema_fingerprint: "sha256:card-before",
+    fields: [{
+      key: "amount", label: "Amount", kind: "number", required: false,
+      list: false, default: 2, min: 1, max: 10, choices: [],
+    }],
+  });
+  const { app, plugin, state } = fixture(entry);
+  app.document = makeDoc();
+  app.workspace = { getLeavesOfType: () => [] };
+  const requests = [];
+  const applies = [];
+  plugin.apiAlbumUpdatePreview = async (stem, text) => {
+    requests.push({ stem, body: JSON.parse(text) });
+    return { ok: true, report: { ok: true, consequence: "default becomes 0 · no records change", per_op: [] } };
+  };
+  plugin.apiAlbumUpdateApply = async (stem, text) => {
+    applies.push({ stem, body: JSON.parse(text) });
+    const next = album({ ...entry, schema_fingerprint: "sha256:card-after", fields: [
+      { ...entry.fields[0], default: 0, min: 0 },
+    ] });
+    state.report = report(next);
+    state.generation = 2;
+    state.reportGeneration = 2;
+    return {
+      ok: true,
+      report: {
+        ok: true, changed: true, dry_run: false, after_fingerprint: "sha256:card-after",
+        inverse_ops: [{ op: "field.set", field: "amount", set: { default: 2, min: 1 } }],
+        sync: { post: "ok" }, warnings: [],
+      },
+      refreshed: plugin.albumReportState(),
+    };
+  };
+  plugin.apiAlbumVaultSyncRetry = async () => ({ ok: true });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({
+    ...state, generation: state.generation || 1,
+    reportGeneration: state.reportGeneration || 1,
+    stale: false, refreshing: false,
+  });
+  const model = helpers.albumHeaderModel(state.report, "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const opened = plugin.openAlbumSchemaCard(model, "eat.md");
+  assert.equal(opened.ok, true);
+  const modal = opened.modal;
+  assert.ok(modal.session);
+  assert.equal(modal.selectedKey, "stats");
+
+  modal.schemaStage("field", "field:amount");
+  const label = modal.schemaInput("fieldLabel");
+  modal.schemaOnKeyDown({ key: "s", target: label, preventDefault() {} });
+  assert.equal(modal.session.getState().draftOps.length, 0, "input typing does not trigger suggest hotkey");
+  modal.schemaInput("fieldDefault").value = "0";
+  modal.schemaInput("fieldMin").value = "0";
+  const op = modal.schemaBuildStageOp();
+  assert.deepEqual(op, {
+    op: "field.set", field: "amount", set: { default: 0, min: 0 }, unset: [],
+  });
+  modal.schemaQueueOp(op, "field:amount");
+  assert.equal(modal.session.getState().canApply, false);
+  await modal.session.previewNow();
+  modal.sessionState = modal.session.getState();
+  assert.equal(modal.sessionState.canApply, true);
+  assert.equal(modal.sessionState.consequence, "default becomes 0 · no records change");
+  assert.deepEqual(requests[0].body.ops, [op]);
+  assert.match(modal.contentEl.querySelector(".bob-album-schema-dialog").textContent, /default becomes 0/);
+
+  await modal.schemaApply();
+  assert.equal(applies.length, 1);
+  assert.deepEqual(applies[0].body.ops, [op]);
+  assert.equal(modal.session.getState().undoAvailable, true);
+  assert.equal(modal.session.getState().expect, "sha256:card-after");
+  assert.equal(modal.selectedKey, "field:amount");
+  modal.close();
+});
+
+test("open album panes save in order and missing save support refuses", async () => {
+  const { plugin } = fixture();
+  const order = [];
+  plugin.app.workspace = { getLeavesOfType: () => [
+    { view: { file: { path: "eat.md" }, async save() { order.push("left"); } } },
+    { view: { file: { path: "eat.md" }, async save() { order.push("right"); } } },
+    { view: { file: { path: "other.md" }, async save() { order.push("other"); } } },
+  ] };
+  assert.deepEqual(await helpers.albumSchemaSaveOpenEditors(plugin, ["eat.md"]), { ok: true });
+  assert.deepEqual(order, ["left", "right"]);
+  plugin.app.workspace.getLeavesOfType = () => [{ view: { file: { path: "eat.md" } } }];
+  const unsupported = await helpers.albumSchemaSaveOpenEditors(plugin, ["eat.md"]);
+  assert.equal(unsupported.ok, false);
+  assert.equal(unsupported.code, "save-unsupported");
+});
+
+test("Schema Card maps album, field, choice, ordering, toggle, and removal gestures", () => {
+  const entry = album({
+    schema_fingerprint: "sha256:gestures",
+    fields: [
+      { key: "status", label: "Status", kind: "choices", required: true, suggest: false, list: false,
+        choices: [{ value: "liked", label: "💚 Liked" }, { value: "to_try", label: "🔖 To try" }] },
+      { key: "amount", label: "Amount", kind: "number", required: false, suggest: false, list: false, choices: [] },
+    ],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  plugin.apiAlbumUpdatePreview = async () => ({ ok: true, report: { ok: true, consequence: "preview", per_op: [] } });
+  plugin.apiAlbumUpdateApply = async () => ({ ok: true, report: { ok: true, changed: false } });
+  plugin.apiAlbumVaultSyncRetry = async () => ({ ok: true });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({ report: report(entry), stale: false, generation: 1, reportGeneration: 1 });
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+
+  modal.schemaStage("album", "stats");
+  modal.schemaInput("useLabel").checked = true;
+  modal.schemaInput("albumLabel").value = "Eateries";
+  modal.schemaInput("usePlural").checked = true;
+  modal.schemaInput("albumPlural").value = "eateries";
+  modal.schemaInput("datedNotes").checked = true;
+  assert.deepEqual(modal.schemaBuildStageOp(), {
+    op: "album.set", set: { label: "Eateries", plural: "eateries", dated_notes: true }, unset: [],
+  });
+
+  modal.schemaStage("field-add", "add-field");
+  modal.schemaInput("newFieldLabel").value = "Quality";
+  modal.schemaInput("newFieldKind").value = "choices";
+  modal.schemaInput("newFieldSuggest").checked = true;
+  modal.schemaInput("choiceLabel0").value = "Excellent";
+  modal.schemaInput("choiceEmoji0").value = "✨";
+  assert.deepEqual(modal.schemaBuildStageOp(), {
+    op: "field.add", label: "Quality", kind: "choices", list: false, suggest: true,
+    position: 2, choices: [{ label: "Excellent", emoji: "✨" }],
+  });
+
+  modal.schemaStage("choice-add", "add-choice:status");
+  modal.schemaInput("choiceLabel").value = "Regular";
+  modal.schemaInput("choiceEmoji").value = "🔁";
+  assert.deepEqual(modal.schemaBuildStageOp(), {
+    op: "choice.add", field: "status", label: "Regular", position: 2, emoji: "🔁",
+  });
+
+  modal.schemaStage("choice", "choice:status:liked");
+  modal.schemaInput("choiceLabel").value = "Loved";
+  assert.deepEqual(modal.schemaBuildStageOp(), {
+    op: "choice.set", field: "status", value: "liked", set: { label: "Loved" },
+  }, "label changes preserve the existing emoji");
+  modal.schemaInput("choiceLabel").value = "Liked";
+  modal.schemaInput("choiceEmoji").value = "⭐";
+  assert.deepEqual(modal.schemaBuildStageOp(), {
+    op: "choice.set", field: "status", value: "liked", set: { emoji: "⭐" },
+  }, "emoji changes preserve the existing label");
+
+  modal.stage = null;
+  modal.selectedKey = "field:status";
+  modal.schemaToggleSelected("required");
+  assert.deepEqual(modal.session.getState().draftOps[0], {
+    op: "field.set", field: "status", set: { required: false },
+  });
+  modal.session.setDraft([]);
+  modal.schemaToggleSelected("suggest");
+  assert.deepEqual(modal.session.getState().draftOps[0], {
+    op: "field.set", field: "status", set: { suggest: true },
+  });
+  modal.session.setDraft([]);
+  modal.schemaMoveSelected(1);
+  assert.deepEqual(modal.session.getState().draftOps[0], { op: "field.move", field: "status", position: 1 });
+  modal.session.setDraft([]);
+  modal.selectedKey = "choice:status:liked";
+  modal.schemaMoveSelected(1);
+  assert.deepEqual(modal.session.getState().draftOps[0], {
+    op: "choice.move", field: "status", value: "liked", position: 1,
+  });
+  modal.session.setDraft([]);
+  modal.schemaRemoveSelected();
+  assert.deepEqual(modal.session.getState().draftOps[0], {
+    op: "choice.remove", field: "status", value: "liked",
+  });
+  modal.session.setDraft([]);
+  modal.selectedKey = "field:amount";
+  modal.schemaRemoveSelected();
+  assert.deepEqual(modal.session.getState().draftOps[0], { op: "field.remove", field: "amount" });
+  modal.close();
+});

@@ -159,6 +159,7 @@ function albumHeaderChoiceModel(choice) {
 }
 
 function albumHeaderFieldModel(field) {
+  const hasDefault = Boolean(field && Object.prototype.hasOwnProperty.call(field, "default"));
   return {
     key: String(field?.key || ""),
     label: String(field?.label || field?.key || ""),
@@ -166,6 +167,10 @@ function albumHeaderFieldModel(field) {
     list: field?.list === true,
     required: field?.required === true,
     suggest: field?.suggest === true,
+    // Preserve presence independently from the typed value. In particular,
+    // false, zero, an empty string, and an empty list are all real defaults.
+    defaultPresent: hasDefault,
+    default: hasDefault ? field.default : undefined,
     min: albumHeaderOptionalNumber(field?.min),
     max: albumHeaderOptionalNumber(field?.max),
     line: albumHeaderOptionalCount(field?.line),
@@ -244,6 +249,9 @@ function albumHeaderModel(report, sourcePath, options = {}) {
     emoji: entry.emoji == null ? "" : String(entry.emoji),
     noun: entry.noun == null ? null : String(entry.noun),
     plural: entry.plural == null ? null : String(entry.plural),
+    storedLabel: entry.label == null ? null : String(entry.label),
+    storedPlural: entry.plural == null ? null : String(entry.plural),
+    schemaFingerprint: entry.schema_fingerprint == null ? "" : String(entry.schema_fingerprint),
     schemaLabel: albumHeaderSchemaLabel(entry),
     datedNotes: entry.dated_notes === true,
     legacy: (Array.isArray(entry.legacy) ? entry.legacy : [])
@@ -274,6 +282,9 @@ function albumHeaderSignature(model, extra = {}) {
   return JSON.stringify({
     path: model.path,
     title: model.title,
+    schemaFingerprint: model.schemaFingerprint,
+    storedLabel: model.storedLabel,
+    storedPlural: model.storedPlural,
     crumbs: model.crumbs,
     fields: model.fields,
     issues: model.issues,

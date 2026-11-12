@@ -1,0 +1,56 @@
+.bob-emoji-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.65em;
+  min-height: 2.6em;
+  padding: 0.25em 0.55em;
+}
+
+.bob-emoji-suggestion:hover {
+  background: var(--background-modifier-hover);
+}
+
+.bob-emoji-glyph {
+  display: inline-flex;
+  flex: 0 0 1.8em;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35em;
+  line-height: 1;
+}
+
+.bob-emoji-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 0.65em;
+}
+
+.bob-emoji-shortcode {
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-emoji-match {
+  color: var(--text-accent);
+}
+
+.bob-emoji-aliases {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-emoji-recent::before {
+  width: 0.45em;
+  height: 0.45em;
+  margin-left: -0.35em;
+  border-radius: 50%;
+  background: var(--text-faint);
+  content: "";
+}

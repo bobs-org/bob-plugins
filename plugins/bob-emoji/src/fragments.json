@@ -1,0 +1,11 @@
+[
+  "010-load.js",
+  "020-emoji-catalog-a.js",
+  "021-emoji-catalog-b.js",
+  "022-emoji-catalog-c.js",
+  "023-emoji-catalog-d.js",
+  "030-emoji-model.js",
+  "040-emoji-suggest.js",
+  "050-plugin.js",
+  "060-exports.js"
+]

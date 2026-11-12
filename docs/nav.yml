@@ -22,6 +22,8 @@
   path: block-id-defaults.md
 - title: Notebook gestures
   path: notebook-gestures.md
+- title: Album cards
+  path: albums.md
 - title: BLOCKS dependency mirrors
   path: blocks-mirrors.md
 - title: Task relations

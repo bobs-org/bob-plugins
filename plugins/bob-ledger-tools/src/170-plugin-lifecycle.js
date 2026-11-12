@@ -674,7 +674,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupNotebookHeader();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
 
@@ -795,7 +795,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownNotebookHeader(); } catch (error) {}
     try {
-      this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
+      this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }

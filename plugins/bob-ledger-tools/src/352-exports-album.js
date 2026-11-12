@@ -29,6 +29,17 @@ try {
       albumRelevantPath,
       albumLocalDate,
       albumErrorModel,
+      albumLookupByTarget,
+      albumHostCatalog,
+      albumGroupTally,
+      albumHealthModel,
+      albumRowModel,
+      albumCatalogStatus,
+      albumSourceRegions,
+      albumGroupJumpTarget,
+      albumFindCallouts,
+      albumPaintCallout,
+      albumCleanCatalogDom,
     });
   }
 } catch (error) {

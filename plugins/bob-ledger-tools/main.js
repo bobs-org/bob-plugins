@@ -31741,7 +31741,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupNotebookHeader();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupNotebookHeader();
     this.setupReadingBoardBlock();
   }
 
@@ -31862,7 +31862,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownNotebookHeader(); } catch (error) {}
     try {
-      this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
+      this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }
@@ -64779,6 +64779,516 @@ class BobLedgerToolsNotebookCatalogMixin {
       }
     }
     return { ok: true, focused };
+  }
+}
+// ---- src/241o-plugin-album-catalog-model.js ----
+// Album presentation uses the report's paths and declaration order. No YAML
+// parsing, catalog regeneration, or note writes belong in these helpers.
+function albumLookupByTarget(report, target, sourcePath, metadataCache, vault) {
+  if (!report || !(report.albumsByPath instanceof Map)) return null;
+  const name = notebookWikilinkTarget(target);
+  let file = null;
+  try { file = metadataCache?.getFirstLinkpathDest?.(name, sourcePath); } catch (_) {}
+  if (!file) {
+    try { file = vault?.getAbstractFileByPath?.(/\.md$/i.test(name) ? name : `${name}.md`); } catch (_) {}
+  }
+  // Never fall back to a stem after a different file has resolved: aliases and
+  // duplicate display titles must not turn an ordinary note into an album.
+  return file ? report.albumsByPath.get(albumReportPath(file.path)) || null : null;
+}
+
+function albumHostCatalog(state, sourcePath) {
+  return state?.report?.catalogsByHostPath?.get(albumReportPath(sourcePath)) || null;
+}
+
+function albumLowerLabel(text) {
+  return /^[A-Z]{2}/.test(text) ? text : text.replace(/^./u, (first) => first.toLowerCase());
+}
+
+function albumGroupTally(group) {
+  const label = String(group.label || "").trim();
+  // Match bob's split_icon/lowercase_rest grammar, including acronym labels.
+  const icon = /^[^a-zA-Z0-9\s]+/u.exec(label)?.[0];
+  return icon
+    ? `${icon} ${group.count}${label.slice(icon.length).trim() ? ` ${albumLowerLabel(label.slice(icon.length).trim())}` : ""}`
+    : `${group.count} ${albumLowerLabel(label)}`;
+}
+
+function albumIssueHint(issues) {
+  return (issues || []).map((issue) => {
+    const where = [issue.path, issue.line, issue.key_path].filter((part) => part != null && part !== "").join(":");
+    const suggestions = (issue.suggestions || []).join("; ");
+    return `${where ? `${where}: ` : ""}${issue.message || issue.code}${suggestions ? ` — ${suggestions}` : ""}`;
+  }).join("\n");
+}
+
+function albumHealthModel(album) {
+  const issues = album?.issues || [];
+  const invalid = issues.some((issue) => issue.severity === "error" && issue.code !== "album_index_damaged");
+  const state = album?.index?.state;
+  if (invalid || state === "damaged") {
+    return { label: invalid ? "invalid" : "damaged index", repairable: false,
+      hint: albumIssueHint(issues) || "Repair the album schema or damaged Records region before syncing." };
+  }
+  if (state === "missing" || state === "stale") {
+    return { label: `${state} index`, repairable: true,
+      hint: albumIssueHint(issues) || `The Records index is ${state}. Sync albums to refresh it.` };
+  }
+  if (issues.length) return { label: "check album", repairable: false, hint: albumIssueHint(issues) };
+  return null;
+}
+
+function albumRowModel(album, today) {
+  if (!album) return null;
+  const lead = (album.groups || []).find((group) => group.count > 0) || null;
+  return { path: album.path, title: album.title,
+    count: `${album.records} ${album.plural || "records"}`,
+    lead: lead ? { ...lead, tally: albumGroupTally(lead), peek: (lead.peek || []).slice(0, 3) } : null,
+    age: notebookAgeChip(album.last_record, today), lastAdded: album.last_record,
+    health: albumHealthModel(album) };
+}
+
+function albumCatalogStatus(state, sourcePath) {
+  const catalog = albumHostCatalog(state, sourcePath);
+  const issues = catalog?.issues || [];
+  const messages = [];
+  let action = null;
+  if (!state.report) messages.push(state.errorModel?.hint || "Album data is loading; counts are unavailable.");
+  else if (state.stale) messages.push(state.errorModel?.hint || "Showing cached album data while refreshing.");
+  if (catalog && catalog.state !== "current") {
+    messages.push(`Albums catalog: ${catalog.state}. ${albumIssueHint(issues)}`.trim());
+  }
+  if (state.syncErrorModel) messages.push(state.syncErrorModel.hint);
+  const rows = state.report?.albums || [];
+  const repairable = ["missing", "stale"].includes(catalog?.state)
+    || rows.some((album) => (album.path && (album.owner === sourcePath.replace(/\.md$/, "")
+      || album.root === sourcePath.replace(/\.md$/, ""))) && albumHealthModel(album)?.repairable);
+  if (state.errorModel || (!state.report && !state.refreshing)) {
+    action = { kind: "retry", label: "Retry", hint: state.errorModel?.hint || "Read the album report again.", disabled: state.refreshing };
+  } else if (state.syncBusy || repairable) {
+    action = { kind: "sync", label: state.syncBusy ? "Syncing…" : "Sync albums",
+      hint: "Refresh generated album catalogs and record indexes.", disabled: state.syncBusy };
+  }
+  return { message: messages.join("\n"), action };
+}
+
+// Only real, top-level generated callouts participate, never examples in
+// frontmatter/fences or embedded quote callouts. Positions are zero-based.
+function albumSourceRegions(text, kind = "albums") {
+  const lines = String(text || "").split("\n");
+  const regions = [];
+  let fence = null;
+  for (let i = notebookFrontmatterEnd(lines); i < lines.length; i += 1) {
+    const match = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i]);
+    if (match) {
+      if (!fence) fence = match[1];
+      else if (match[1][0] === fence[0] && match[1].length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence || !new RegExp(`^ {0,3}>\\s*\\[!${kind}\\](?:[-+])?(?:\\s.*)?$`, "i").test(lines[i])) continue;
+    const region = { begin: i, end: i, groups: [] };
+    while (region.end + 1 < lines.length && /^ {0,3}>/.test(lines[region.end + 1])) region.end += 1;
+    for (let row = i + 1; row <= region.end; row += 1) {
+      const group = /^ {0,3}> - \*\*(.*)\*\* · (\d+)\s*$/.exec(lines[row]);
+      if (group) region.groups.push({ line: row, label: group[1].replace(/\\([\s\S])/g, "$1"), count: Number(group[2]) });
+    }
+    regions.push(region);
+    i = region.end;
+  }
+  return regions;
+}
+
+function albumGroupJumpTarget(text, album, value) {
+  const regions = albumSourceRegions(text, "records");
+  const group = (album?.groups || []).find((item) => item.value === value);
+  const label = group?.label?.replace(/\s+/g, " ").trim();
+  const matches = regions.length === 1 && group
+    ? regions[0].groups.filter((item) => item.label === label) : [];
+  // An ambiguous or missing label never targets an unrelated row. Do not use
+  // the live report's group ordinal against an out-of-date stored index.
+  if (matches.length === 1) return { line: matches[0].line, found: true, value, label };
+  const line = regions[0]?.begin ?? notebookFindHeadingLine(text, (row) => /^## Records\s*$/.test(row));
+  return { line: Math.max(0, line), found: false, value, label,
+    hint: "Opened Records. That group is missing or ambiguous; sync albums to refresh the index." };
+}
+
+function albumCatalogAnchorLine(text) {
+  const lines = String(text || "").split("\n");
+  const first = notebookFrontmatterEnd(lines);
+  const body = lines.slice(first).join("\n");
+  const heading = notebookFindHeadingLine(body, (line) => /^## Albums\s*$/.test(line));
+  const title = notebookFindHeadingLine(body, (line) => /^# \S/.test(line));
+  if (heading >= 0) return first + heading;
+  if (title >= 0) return first + title;
+  const nonblank = lines.slice(first).findIndex((line) => line.trim());
+  return first + Math.max(0, nonblank);
+}
+// ---- src/241p-plugin-album-catalog-dom.js ----
+// Keyed, presentation-only DOM. Keeping unchanged buttons alive preserves
+// focus/hover through service notifications and editor selection updates.
+const ALBUM_CHIPS = "bob-album-chips";
+const ALBUM_STATUS = "bob-album-status";
+
+function albumFindCallouts(root) {
+  const selector = '[data-callout="albums"]';
+  const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
+  if (notebookDomAttr(root, "data-callout") === "albums") nodes.unshift(root);
+  return nodes.filter((node) => !notebookInsideCode(node));
+}
+
+function albumSetAttr(node, name, value) {
+  if (value == null || value === false) node.removeAttribute?.(name);
+  else if (node.getAttribute?.(name) !== String(value)) node.setAttribute?.(name, String(value));
+}
+
+function albumAppendText(doc, parent, tag, cls, text, hint) {
+  const node = notebookCreateEl(doc, tag, cls);
+  if (!node) return null;
+  notebookSetText(node, text);
+  if (hint) {
+    node.setAttribute("title", hint);
+    node.setAttribute("aria-label", hint);
+    if (tag !== "button") node.setAttribute("tabindex", "0");
+  }
+  parent.appendChild(node);
+  return node;
+}
+
+function albumReplaceChrome(host, cls, key, build) {
+  const old = Array.from(host?.children || []).find((node) => notebookDomHasClass(node, cls));
+  if (old && old.getAttribute("data-paint-key") === key) return old;
+  const doc = notebookDomDoc(host);
+  const focus = old && doc?.activeElement && old.contains?.(doc.activeElement)
+    ? doc.activeElement.getAttribute("data-focus-key") : null;
+  old?.remove();
+  if (!key) return null;
+  const node = notebookCreateEl(doc, "span", cls);
+  if (!node) return null;
+  node.setAttribute("data-paint-key", key);
+  build(node, doc);
+  host.appendChild(node);
+  if (focus) {
+    Array.from(node.querySelectorAll("[data-focus-key]")).find((item) => item.getAttribute("data-focus-key") === focus)?.focus?.({ preventScroll: true });
+  }
+  return node;
+}
+
+function albumPaintRow(li, model, handlers) {
+  const key = model ? JSON.stringify(model) : "";
+  albumReplaceChrome(li, ALBUM_CHIPS, key, (host, doc) => {
+    host.setAttribute("data-album-path", model.path);
+    albumAppendText(doc, host, "span", "bob-album-count", model.count);
+    if (model.lead) {
+      const hint = [`Open ${model.title}: ${model.lead.label}`, ...model.lead.peek].join("\n");
+      const lead = albumAppendText(doc, host, "button", "bob-album-lead", model.lead.tally, hint);
+      lead.setAttribute("data-focus-key", "lead");
+      notebookBindAction(lead, (event) => handlers.openGroup(model.path, model.lead.value, event));
+      lead.addEventListener("auxclick", (event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        handlers.openGroup(model.path, model.lead.value, event);
+      });
+      // Native title + accessible name work on focus; the CSS peek also makes
+      // all three titles visible without a tooltip delay. Text nodes only.
+      const peek = albumAppendText(doc, lead, "span", "bob-album-peek", model.lead.peek.join("\n"));
+      peek.setAttribute("aria-hidden", "true");
+    }
+    if (model.age) {
+      const age = albumAppendText(doc, host, "span", "bob-album-age", model.age, `Last added: ${model.lastAdded}`);
+      age.setAttribute("data-focus-key", "age");
+    }
+    if (model.health) {
+      const health = albumAppendText(doc, host, "span", "bob-album-health", model.health.label, model.health.hint);
+      health.setAttribute("data-focus-key", "health");
+    }
+  });
+}
+
+function albumPaintStatus(host, model, handlers) {
+  return albumReplaceChrome(host, ALBUM_STATUS, model.message || model.action ? JSON.stringify(model) : "", (node, doc) => {
+    node.setAttribute("role", "status");
+    if (model.message) albumAppendText(doc, node, "span", "bob-album-status-hint", model.message);
+    if (model.action) {
+      const action = model.action;
+      const button = albumAppendText(doc, node, "button", "bob-album-action", action.label, action.hint);
+      button.setAttribute("data-focus-key", action.kind);
+      button.disabled = Boolean(action.disabled);
+      albumSetAttr(button, "aria-busy", action.disabled ? "true" : null);
+      notebookBindAction(button, () => { if (!button.disabled) handlers[action.kind](); });
+    }
+  });
+}
+
+function albumPaintCallout(callout, options) {
+  albumSetAttr(callout, "data-bob-album-card", "true");
+  albumSetAttr(callout, "data-root-hue", options.hue);
+  albumSetAttr(callout, "data-stale", options.state.stale ? "true" : null);
+  for (const li of callout.querySelectorAll("li")) {
+    const link = notebookLiOwnLink(li);
+    const target = link ? notebookLinkHref(link) : "";
+    const group = /^\s*🧩/u.test(notebookLiOwnText(li));
+    const album = !group && target ? albumLookupByTarget(options.state.report, target,
+      options.sourcePath, options.metadataCache, options.vault) : null;
+    albumPaintRow(li, albumRowModel(album, options.state.today), options.handlers);
+  }
+  const title = callout.querySelector(".callout-title") || callout;
+  const model = albumCatalogStatus(options.state, options.sourcePath);
+  // An index can need repair even when its owner's path is qualified. Resolve
+  // rows exactly as above rather than relying on owner display labels.
+  if (!model.action && !options.state.syncBusy) {
+    const repairable = Array.from(callout.querySelectorAll("li")).some((li) => {
+      const link = notebookLiOwnLink(li);
+      const album = link && albumLookupByTarget(options.state.report, notebookLinkHref(link),
+        options.sourcePath, options.metadataCache, options.vault);
+      return albumHealthModel(album)?.repairable;
+    });
+    if (repairable) model.action = { kind: "sync", label: "Sync albums", hint: "Refresh generated album catalogs and record indexes.", disabled: false };
+  }
+  albumPaintStatus(title, model, options.handlers);
+}
+
+function albumCleanCatalogDom(root) {
+  notebookRemovePainted(root, ALBUM_CHIPS);
+  notebookRemovePainted(root, ALBUM_STATUS);
+  notebookRemovePainted(root, "bob-album-anchor");
+  for (const callout of albumFindCallouts(root)) {
+    if (notebookDomAttr(callout, "data-bob-album-card")) {
+      for (const name of ["data-bob-album-card", "data-root-hue", "data-stale"]) callout.removeAttribute(name);
+    }
+  }
+}
+// ---- src/241q-plugin-album-catalog.js ----
+// Owner cards in Reading view and Live Preview share one album subscription.
+let albumCatalogRefreshEffect = null;
+function ensureAlbumCatalogRefresh() {
+  if (!albumCatalogRefreshEffect && StateEffect?.define) albumCatalogRefreshEffect = StateEffect.define();
+  return albumCatalogRefreshEffect;
+}
+
+class BobLedgerToolsAlbumCatalogMixin {
+  setupAlbumCatalog() {
+    this.albumCatalogActive = true;
+    this.albumCatalogReading = new Set();
+    this.albumCatalogEditors = new Set();
+    this.albumCatalogRefreshTimer = null;
+    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAlbumCatalogInReading(el, ctx), 51);
+    const extension = this.createAlbumCatalogExtension();
+    if (extension) this.registerEditorExtension?.(extension);
+    this.albumCatalogUnsubscribe = this.apiAlbumSubscribe(() => this.scheduleAlbumCatalogRefresh());
+  }
+
+  teardownAlbumCatalog() {
+    this.albumCatalogActive = false;
+    this.albumCatalogUnsubscribe?.();
+    this.albumCatalogUnsubscribe = null;
+    this.albumClearTimeout(this.albumCatalogRefreshTimer);
+    this.albumCatalogRefreshTimer = null;
+    for (const widget of this.albumCatalogReading || []) albumCleanCatalogDom(widget.el);
+    for (const view of this.albumCatalogEditors || []) albumCleanCatalogDom(view.dom);
+    this.albumCatalogReading?.clear();
+    this.albumCatalogEditors?.clear();
+  }
+
+  albumCatalogHandlers(sourcePath) {
+    return {
+      openGroup: (path, value, event) => { void this.apiAlbumOpenGroup(path, value, sourcePath, event); },
+      retry: () => { void this.apiAlbumReport({ force: true }); },
+      sync: () => { void this.apiAlbumSync({ automatic: false }); },
+    };
+  }
+
+  albumCatalogOptions(sourcePath) {
+    return { sourcePath, state: this.albumReportState(),
+      hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
+      metadataCache: this.app?.metadataCache, vault: this.app?.vault,
+      handlers: this.albumCatalogHandlers(sourcePath) };
+  }
+
+  paintAlbumCatalogReading(el, sourcePath, allowAnchor = true) {
+    const options = this.albumCatalogOptions(sourcePath);
+    const callouts = albumFindCallouts(el);
+    for (const callout of callouts) albumPaintCallout(callout, options);
+    const catalog = albumHostCatalog(options.state, sourcePath);
+    // Missing catalogs have no callout. Their real heading, H1, or an H1-less
+    // body fragment is the actionable anchor; non-hosts never get an anchor.
+    if (allowAnchor && !callouts.length && catalog && catalog.state !== "current") {
+      const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+        !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+      const title = notebookFindHostTitle(el);
+      const existing = el.querySelector?.(".bob-album-anchor");
+      let host = heading || title || existing;
+      if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
+        host = notebookCreateEl(notebookDomDoc(el), "div", "bob-album-anchor");
+        el.insertBefore(host, el.firstChild);
+      }
+      if (host) albumPaintStatus(host, albumCatalogStatus(options.state, sourcePath), options.handlers);
+    } else {
+      // Clear old missing-catalog fallback chrome without touching the callout.
+      for (const status of Array.from(el.querySelectorAll?.(`.${ALBUM_STATUS}`) || [])) {
+        if (!status.closest?.('[data-callout="albums"]')) status.remove();
+      }
+      notebookRemovePainted(el, "bob-album-anchor");
+    }
+  }
+
+  renderAlbumCatalogInReading(el, ctx) {
+    if (!this.albumCatalogActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    // CodeMirror owns its rendered callouts; its view plugin handles their
+    // lifecycle so a postprocessor child cannot clean another pane's chrome.
+    if (el.closest?.(".cm-editor")) return;
+    const section = ctx.getSectionInfo?.(el);
+    const anchorLine = section?.text ? albumCatalogAnchorLine(section.text) : null;
+    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
+    const existing = Array.from(this.albumCatalogReading || []).find((widget) => widget.el === el);
+    if (existing) {
+      if (existing.path !== ctx.sourcePath) {
+        albumCleanCatalogDom(el);
+        this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
+      }
+      existing.path = ctx.sourcePath;
+      existing.allowAnchor = allowAnchor;
+      return;
+    }
+    const widget = { el, path: ctx.sourcePath, allowAnchor };
+    this.albumCatalogReading.add(widget);
+    if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+      const child = new MarkdownRenderChild(el);
+      child.onunload = () => {
+        albumCleanCatalogDom(el);
+        this.albumCatalogReading?.delete(widget);
+      };
+      ctx.addChild(child);
+    }
+  }
+
+  albumCatalogLivePath(view) {
+    return this.albumCatalogActive ? this.notebookCatalogLivePath(view) : null;
+  }
+
+  paintAlbumCatalogEditor(view) {
+    const path = this.albumCatalogLivePath(view);
+    if (!path) { albumCleanCatalogDom(view.dom); return; }
+    const options = this.albumCatalogOptions(path);
+    for (const callout of albumFindCallouts(view.dom)) {
+      // Embedded notes have their own source identity, never the outer editor's.
+      if (!callout.closest?.(".markdown-embed")) albumPaintCallout(callout, options);
+    }
+  }
+
+  buildAlbumCatalogDecorations(view) {
+    const path = this.albumCatalogLivePath(view);
+    if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    const text = view.state.doc.toString();
+    const regions = albumSourceRegions(text);
+    const state = this.albumReportState();
+    const catalog = albumHostCatalog(state, path);
+    // Rendered callout titles hold their own status. Decorations are needed
+    // only for missing regions and stay outside the editable frontmatter.
+    if (regions.length || !catalog || catalog.state === "current") return Decoration.none;
+    const model = albumCatalogStatus(state, path);
+    if (!model.message && !model.action) return Decoration.none;
+    const plugin = this;
+    const key = JSON.stringify(model);
+    const StatusWidget = class extends WidgetType {
+      constructor() { super(); this.key = key; this.path = path; }
+      eq(other) { return other?.key === this.key && other?.path === this.path; }
+      toDOM() {
+        const host = notebookCreateEl(typeof document !== "undefined" ? document : null, "span", "bob-album-anchor");
+        if (host) albumPaintStatus(host, model, plugin.albumCatalogHandlers(path));
+        return host;
+      }
+      ignoreEvent() { return true; }
+    };
+    const index = albumCatalogAnchorLine(text);
+    const line = view.state.doc.line(Math.min(index + 1, view.state.doc.lines));
+    const builder = new RangeSetBuilder();
+    builder.add(line.to, line.to, Decoration.widget({ widget: new StatusWidget(), side: 1 }));
+    return builder.finish();
+  }
+
+  createAlbumCatalogExtension() {
+    if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
+    const plugin = this;
+    const refresh = ensureAlbumCatalogRefresh();
+    return ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.view = view;
+        this.path = plugin.albumCatalogLivePath(view);
+        this.decorations = plugin.buildAlbumCatalogDecorations(view);
+        plugin.albumCatalogEditors.add(view);
+        this.schedulePaint();
+      }
+      schedulePaint() {
+        if (this.timer != null) return;
+        this.timer = plugin.albumSetTimeout(() => {
+          this.timer = null;
+          if (plugin.albumCatalogActive) plugin.paintAlbumCatalogEditor(this.view);
+        }, 0);
+      }
+      update(update) {
+        const path = plugin.albumCatalogLivePath(update.view);
+        const changed = path !== this.path;
+        if (changed) albumCleanCatalogDom(update.view.dom);
+        this.path = path;
+        const notified = (update.transactions || []).some((tx) => (tx.effects || []).some((effect) => effect.is?.(refresh)));
+        if (changed || update.docChanged || notified) this.decorations = plugin.buildAlbumCatalogDecorations(update.view);
+        this.schedulePaint();
+      }
+      destroy() {
+        plugin.albumClearTimeout(this.timer);
+        albumCleanCatalogDom(this.view.dom);
+        plugin.albumCatalogEditors.delete(this.view);
+      }
+    }, { decorations: (value) => value.decorations });
+  }
+
+  scheduleAlbumCatalogRefresh() {
+    if (!this.albumCatalogActive || this.albumCatalogRefreshTimer != null) return;
+    this.albumCatalogRefreshTimer = this.albumSetTimeout(() => {
+      this.albumCatalogRefreshTimer = null;
+      if (!this.albumCatalogActive) return;
+      for (const widget of this.albumCatalogReading) this.paintAlbumCatalogReading(widget.el, widget.path, widget.allowAnchor);
+      const effect = ensureAlbumCatalogRefresh();
+      for (const view of this.albumCatalogEditors) {
+        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
+        this.paintAlbumCatalogEditor(view);
+      }
+    }, 100);
+  }
+
+  async apiAlbumOpenGroup(path, value, sourcePath, event = {}) {
+    if (this.albumCatalogActive === false) return { ok: false };
+    const workspace = this.app?.workspace;
+    const file = this.app?.vault?.getAbstractFileByPath?.(path);
+    if (!file || !workspace?.openLinkText) return { ok: false };
+    const album = this.albumReportState().report?.albumsByPath?.get(path);
+    let target;
+    try { target = albumGroupJumpTarget(await this.app.vault.cachedRead(file), album, value); }
+    catch (_) { target = { line: 0, found: false, value, hint: "Opened the album. Its Records region could not be read." }; }
+    if (this.albumCatalogActive === false) return { ok: false };
+    const navigation = this.app?.plugins?.plugins?.["bob-navigation-hotkeys"];
+    let jump = null;
+    try { jump = navigation?.captureGoToTaskJumpContext?.(); } catch (_) {}
+    const newLeaf = event.ctrlKey || event.metaKey || event.button === 1 ? (event.shiftKey ? "split" : "tab") : false;
+    try {
+      await workspace.openLinkText(path, sourcePath || "", newLeaf, { eState: { line: target.line } });
+      const view = workspace.activeLeaf?.view;
+      if (view?.file?.path === path) {
+        // records-cards implements this optional hook to expand only this
+        // pane's target group before the native line jump scrolls into view.
+        await this.albumRevealRecordGroup?.(view, { path, ...target });
+        view.setEphemeralState?.({ line: target.line });
+        if (jump) await navigation?.enqueueVimJumpContextTransition?.(jump,
+          { path, line: target.line, ch: 0 }, { expectedPath: path });
+      }
+      if (!target.found) new Notice(target.hint);
+      return { ok: true, ...target };
+    } catch (_) {
+      new Notice("Could not open the album's Records region.");
+      return { ok: false };
+    }
   }
 }
 // ---- src/241e-plugin-notebook-header-model.js ----
@@ -106817,6 +107327,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,
+  BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,
@@ -109988,6 +110499,17 @@ try {
       albumRelevantPath,
       albumLocalDate,
       albumErrorModel,
+      albumLookupByTarget,
+      albumHostCatalog,
+      albumGroupTally,
+      albumHealthModel,
+      albumRowModel,
+      albumCatalogStatus,
+      albumSourceRegions,
+      albumGroupJumpTarget,
+      albumFindCallouts,
+      albumPaintCallout,
+      albumCleanCatalogDom,
     });
   }
 } catch (error) {

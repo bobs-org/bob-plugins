@@ -31,6 +31,7 @@ Album owner cards, group navigation, and sync controls are described in
 | Check Google Keep now | `check-google-keep-now` | — |
 | Cycle Day stats bars | `cycle-day-stats-bars` | — |
 | Cycle period stats charts | `cycle-period-stats-charts` | — |
+| Edit album schema | `edit-album-schema` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
 | Jump to current Pomodoro line | `jump-to-current-pomodoro` | Ctrl+9 |

@@ -87,7 +87,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
         toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
-        openSchemaCard: (item) => this.openAlbumSchemaCard?.(item, sourcePath),
+        openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
         jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
       state,
@@ -167,6 +167,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.albumHeaderMarkdownLeaf(path);
+      let excursionViewState = null;
+      let excursionSelectedKey = "stats";
+      let excursionFingerprint = "";
+      try {
+        excursionViewState = typeof leaf?.getViewState === "function" ? leaf.getViewState() : null;
+        excursionSelectedKey = String(this.albumSchemaCardModal?.selectedKey || "stats");
+        excursionFingerprint = String(this.albumSchemaCardModal?.schemaModel?.schemaFingerprint || this.albumHeaderModelFor(path)?.schemaFingerprint || "");
+      } catch (_) {}
       if (leaf && typeof leaf.openFile === "function") {
         await leaf.openFile(file, { state: { mode: "source" } });
       } else if (leaf && typeof leaf.setViewState === "function") {
@@ -188,6 +196,11 @@ class BobLedgerToolsAlbumHeaderMixin {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
       }
+      try {
+        if (leaf && typeof this.albumYamlExcursionBegin === "function") {
+          this.albumYamlExcursionBegin(leaf, { albumPath: path, viewState: excursionViewState, selectedKey: excursionSelectedKey, fingerprint: excursionFingerprint });
+        }
+      } catch (_) {}
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {
       try { new Notice("Could not open the album schema in Source mode."); } catch (__) {}

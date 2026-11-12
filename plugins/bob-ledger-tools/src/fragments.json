@@ -113,6 +113,8 @@
   "242a-plugin-album-update-service.js",
   "242b-plugin-album-update-session.js",
   "242c-plugin-album-schema-edit.js",
+  "242d-plugin-album-entrypoints.js",
+  "242e-plugin-album-yaml-excursion.js",
   "241h-plugin-bank-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",

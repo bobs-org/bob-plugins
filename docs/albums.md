@@ -62,14 +62,28 @@ paints the first diagnostic on the summary and expands to the lint list; an
 empty schema teaches how to add fields so `Name @stem/` can collect facts.
 The two states never impersonate each other.
 
-**⊞ Schema** opens a read-only Schema Card in the Task Card idiom: album
-label, record counts, the same chip rows, a lint banner, and a footer of
-navigation keys, `y`, and `esc`. The card has no write gestures. `y` from the
-card or a focused chip/lint row jumps to that field or issue line in Source
-mode. Bob's `issues[]` paint as lint marks with their message and suggestions
-as text. Schema edits remain YAML or a later Schema Card editor; this surface
-does not change note bytes. The album's `record` property is hidden only in
-that album's rendered Properties surface, and stays editable in Source mode.
+**⊞ Schema** opens the editable Schema Card in the Task Card idiom: album
+label, record counts, the same chip rows, a lint banner, a staged-gesture
+consequence line, and a footer of edit keys, `y`, and `esc`. Every gesture
+dry-runs through `bob albums update` first and Enter applies only the exact
+envelope whose dry run succeeded; `u` previews Undo of the last successful
+gesture and a stale fingerprint repaints instead of retrying. Defaults and
+numeric bounds edit through typed inputs with explicit Unset, and choice
+edits change label and emoji while stored values stay fixed. `y` from the
+card or a focused chip/lint row closes the card and jumps to that field or
+issue line in Source mode. Bob's `issues[]` paint as lint marks with their
+message and suggestions as text. The album's `record` property is hidden only
+in that album's rendered Properties surface, and stays editable in Source mode.
+
+Open the card from the header's **⊞ Schema**, the **Edit album schema**
+palette command, Command Mode's Vault row, or `Ctrl+Shift+P` on an album note
+where the Task Card has no target. The palette command resolves the owning
+album directly, or a record note's actual `parent:` link; missing, cyclic,
+ambiguous, or non-album parents teach instead of guessing. An invalid album
+still opens with its lint and the YAML path. A **Done** button rides along
+into Source mode for that album's pane: it saves, forces a fresh report, and
+only returns and reopens the card when Bob reports a valid schema, otherwise
+staying put on the diagnostic line.
 
 On Obsidian mobile the summary and chips still render from last-good album
 data with an edit-in-YAML hint. The Schema button and write gestures are

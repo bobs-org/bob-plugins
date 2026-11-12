@@ -106,7 +106,10 @@ the best-ranked tab and leaves that tab's scroll position untouched.
 previews that closes on `Esc`, `q`, or `Ctrl+[`. There is no plugin setting, no
 activation date, and no filtered property list. Inbox answers that write ask
 where the task goes and move there. See [Task Card](task-card.md) for the
-stages, Type row, Cancel log, and recommendation keys.
+stages, Type row, Cancel log, and recommendation keys. On an album note where
+the cursor has no task, Task Link, or dependency/relation target, the same
+chord opens the album Schema Card instead; recognized Task Card targets always
+keep priority.
 
 `Ctrl+Shift+B` is `Ctrl+Shift+P` then `b` (Depends on). `Ctrl+Shift+Alt+B` is
 `Ctrl+Shift+P` then `⇧B` (Blocks). `Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open
@@ -283,7 +286,8 @@ priority level or the pinned roll suggestion writes immediately with its own
 deterministic reason. Giving a task a strictly future `scheduled` date removes
 its live links from today's open Pomodoro entries. `N<Ctrl+Shift+P>` edits the
 current task plus the next N real tasks; on a dedicated Task Link bullet the
-same keymap edits the linked task in its own note instead.
+same keymap edits the linked task in its own note instead. Counted sessions
+never open the album Schema Card.
 
 Dependency writes go through one managed ⛓️ **DEPENDS ON:** first-child line
 per task, committed in one undoable edit: adding an open prerequisite marks

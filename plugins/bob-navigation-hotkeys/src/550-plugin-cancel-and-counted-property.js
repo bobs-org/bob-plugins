@@ -392,6 +392,7 @@ class BobNavigationHotkeysCancelPropertyMixin {
       }
       return true;
     }
+    try { const fallback = typeof this.albumSchemaFallbackForCursor === "function" ? this.albumSchemaFallbackForCursor(cm, content, cursor, lineText, options) : null; if (fallback && fallback.handled) return true; } catch (_) {}
     let taskSession = options.taskSession || null;
     if (options.countExplicit && !taskSession) {
       taskSession = discoverCountedObsidianTaskTargets(

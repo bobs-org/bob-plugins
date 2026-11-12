@@ -41,6 +41,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysDecayCardWriterMixin,
   BobNavigationHotkeysPostCancelEffectsMixin,
   BobNavigationHotkeysCancelPropertyMixin,
+  BobNavigationHotkeysAlbumSchemaFallbackMixin,
   BobNavigationHotkeysCountedRollMixin,
   BobNavigationHotkeysLinkRollScheduleMixin,
   BobNavigationHotkeysPropertyDependencyMixin,

@@ -146,7 +146,7 @@ empty query shows RECENT runs, FOR THIS NOTE rows filled from the active note
 (ref, area, project, and article notes each get their own rows), FROM CLIPBOARD
 rows for an http(s) URL, and one section per catalog section plus surface rows
 that run existing Obsidian commands (daily note, task types manager, stats, tasks,
-relation labels, reading board, article formatting). RECENT rows show the
+relation labels, reading board, album schema editing, article formatting). RECENT rows show the
 command without the bob path; Enter reruns it under the command's preview or
 confirm guard, Ctrl+Enter reruns it now, and a recorded preview reruns as a
 preview. Unavailable rows stay visible and dimmed with their reason. `Enter`

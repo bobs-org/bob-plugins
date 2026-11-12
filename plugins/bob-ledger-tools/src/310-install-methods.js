@@ -44,6 +44,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
+  BobLedgerToolsAlbumEntryMixin,
+  BobLedgerToolsAlbumYamlExcursionMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,

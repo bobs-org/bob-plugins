@@ -33129,7 +33129,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -33248,7 +33248,7 @@ class BobLedgerToolsPlugin extends Plugin {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); } catch (error) {}
+    try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
     } catch (error) {
@@ -60358,6 +60358,606 @@ function albumSchemaTypedDefault(text, field, checked = false) {
 function albumSchemaSameValue(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+// ---- src/242d-plugin-album-entrypoints.js ----
+// Album and record entry points for the Schema Card (schema-entrypoints).
+// One shared resolver: direct album paths resolve through the report;
+// record notes resolve their actual parent link through Obsidian metadata
+// and then a report album identity. Scalar/list/wikilink forms and legacy
+// record types reuse the existing helpers; missing, cyclic, ambiguous, or
+// non-album parents teach instead of guessing. Header and palette share
+// `openAlbumSchemaEntry`; no extra subprocess service. Opening an invalid
+// album still shows lint and the YAML path.
+const ALBUM_SCHEMA_ENTRY_NON_RECORD_TYPES = new Set([
+  "area",
+  "project",
+  "notebook",
+  "ref",
+  "article",
+  "mail",
+  "day",
+  "done",
+  "type",
+]);
+
+function albumSchemaEntryKindOf(frontmatter) {
+  const names = typeof albumTypeNames === "function"
+    ? albumTypeNames(frontmatter && typeof frontmatter === "object" ? frontmatter.type : undefined)
+    : [];
+  if (names.includes("album")) return "album";
+  if (
+    names.includes("area") ||
+    names.includes("project") ||
+    names.includes("notebook") ||
+    names.includes("ref")
+  ) {
+    return "other";
+  }
+  if (names.includes("record")) return "record";
+  if (names.some((name) => !ALBUM_SCHEMA_ENTRY_NON_RECORD_TYPES.has(name))) return "record";
+  return "other";
+}
+
+function albumSchemaEntryParentTarget(rawParent) {
+  if (rawParent === null || rawParent === undefined) return "";
+  try {
+    if (typeof pomodoroHomeParentTarget === "function") return pomodoroHomeParentTarget(rawParent);
+  } catch (_) {}
+  if (typeof rawParent !== "string") return "";
+  const text = rawParent.trim();
+  const match = /^\[\[([^\]]*)\]\]$/.exec(text);
+  if (!match) return "";
+  return String(match[1] || "").split("|")[0].split("#")[0].trim().replace(/\.md$/i, "").trim();
+}
+
+function albumSchemaEntryReportAlbum(report, albumPath) {
+  const path = typeof albumHeaderPath === "function" ? albumHeaderPath(albumPath) : String(albumPath || "");
+  if (!report || !path) return null;
+  if (report.albumsByPath instanceof Map) return report.albumsByPath.get(path) || null;
+  return (Array.isArray(report.albums) ? report.albums : []).find((entry) => {
+    try {
+      return (typeof albumHeaderPath === "function" ? albumHeaderPath(entry?.path) : entry?.path) === path;
+    } catch (_) {
+      return false;
+    }
+  }) || null;
+}
+
+function albumResolveSchemaTargetForFile(filePath, context = {}) {
+  const normalized = typeof albumHeaderPath === "function" ? albumHeaderPath(filePath) : String(filePath || "").replace(/\\/g, "/");
+  if (!normalized) return { ok: false, reason: "missing-path", message: "No active note to resolve." };
+  const frontmatter = context.frontmatter && typeof context.frontmatter === "object" ? context.frontmatter : {};
+  const kind = albumSchemaEntryKindOf(frontmatter);
+  const report = context.report || null;
+  const stem = normalized.split("/").pop().replace(/\.md$/i, "");
+  if (kind === "album") {
+    const entry = albumSchemaEntryReportAlbum(report, normalized);
+    if (!entry) {
+      return {
+        ok: false, reason: "not-in-report", kind,
+        filePath: normalized,
+        message: `${stem || "This note"} is not in the album report — run Sync albums and retry.`,
+      };
+    }
+    return { ok: true, kind: "album", albumPath: normalized, filePath: normalized };
+  }
+  if (kind === "record") {
+    const rawParent = frontmatter.parent;
+    if (rawParent === null || rawParent === undefined || (typeof rawParent === "string" && !rawParent.trim()) || (Array.isArray(rawParent) && rawParent.length === 0)) {
+      return {
+        ok: false, reason: "missing-parent", kind,
+        filePath: normalized,
+        message: `${stem || "This record"} has no parent link — set parent: [[album]] to edit its album schema.`,
+      };
+    }
+    const target = albumSchemaEntryParentTarget(rawParent);
+    if (!target) {
+      return {
+        ok: false, reason: "ambiguous-parent", kind,
+        filePath: normalized,
+        message: `${stem || "This record"}'s parent link is ambiguous — use a single [[album]] wikilink.`,
+      };
+    }
+    let resolvedPath = "";
+    try {
+      const resolved = typeof albumHeaderResolveFile === "function"
+        ? albumHeaderResolveFile(target, normalized, context.metadataCache, context.vault)
+        : null;
+      resolvedPath = resolved && resolved.path
+        ? (typeof albumHeaderPath === "function" ? albumHeaderPath(resolved.path) : String(resolved.path))
+        : "";
+    } catch (_) {
+      resolvedPath = "";
+    }
+    if (!resolvedPath) {
+      try {
+        const guessed = /\.md$/i.test(target) ? target : `${target}.md`;
+        const file = context.vault?.getAbstractFileByPath?.(guessed);
+        if (file && file.path) {
+          resolvedPath = typeof albumHeaderPath === "function" ? albumHeaderPath(file.path) : String(file.path);
+        }
+      } catch (_) {}
+    }
+    try {
+      const vault = context.vault;
+      const metadataCache = context.metadataCache;
+      let exists = false;
+      if (resolvedPath && vault && typeof vault.getAbstractFileByPath === "function") {
+        try { exists = Boolean(vault.getAbstractFileByPath(resolvedPath)); } catch (_) { exists = false; }
+      }
+      if (!exists && resolvedPath && metadataCache && typeof metadataCache.getFirstLinkpathDest === "function") {
+        try {
+          const found = metadataCache.getFirstLinkpathDest(target, filePath);
+          if (found && found.path) {
+            resolvedPath = typeof albumHeaderPath === "function" ? albumHeaderPath(found.path) : String(found.path);
+            exists = true;
+          }
+        } catch (_) {}
+      }
+      if (!exists) resolvedPath = "";
+    } catch (_) { resolvedPath = ""; }
+    if (!resolvedPath) {
+      return {
+        ok: false, reason: "missing-parent", kind,
+        filePath: normalized, parentTarget: target,
+        message: `${stem || "This record"}'s parent [[${target}]] could not be found — check the parent link.`,
+      };
+    }
+    if (resolvedPath.toLocaleLowerCase() === normalized.toLocaleLowerCase()) {
+      return {
+        ok: false, reason: "cyclic-parent", kind,
+        filePath: normalized, albumPath: resolvedPath,
+        message: `${stem || "This record"} links to itself as its parent — fix parent to an album.`,
+      };
+    }
+    const entry = albumSchemaEntryReportAlbum(report, resolvedPath);
+    if (!entry) {
+      const parentStem = resolvedPath.split("/").pop().replace(/\.md$/i, "");
+      return {
+        ok: false, reason: "non-album-parent", kind,
+        filePath: normalized, albumPath: resolvedPath,
+        message: `${stem || "This record"}'s parent ${parentStem || resolvedPath} is not an album — records hang under an album.`,
+      };
+    }
+    return { ok: true, kind: "record-parent", albumPath: resolvedPath, filePath: normalized };
+  }
+  return {
+    ok: false, reason: "not-album-or-record", kind,
+    filePath: normalized,
+    message: `${stem || "This note"} is not an album or record note — open an album or its record.`,
+  };
+}
+
+function albumSchemaEntryTeach(resolution) {
+  if (resolution && typeof resolution.message === "string" && resolution.message) return resolution.message;
+  return "Open an album or its record to edit the album schema.";
+}
+
+class BobLedgerToolsAlbumEntryMixin {
+  setupAlbumSchemaEntrypoints() {
+    if (this.albumSchemaEntrypointsActive) return;
+    this.albumSchemaEntrypointsActive = true;
+    try {
+      this.addCommand({
+        id: "edit-album-schema",
+        name: "Edit album schema",
+        callback: () => {
+          void this.openAlbumSchemaEntry();
+        },
+      });
+    } catch (_) {}
+  }
+
+  teardownAlbumSchemaEntrypoints() {
+    this.albumSchemaEntrypointsActive = false;
+  }
+
+  albumSchemaEntryActiveFilePath(overridePath = "") {
+    if (overridePath) {
+      try {
+        return typeof albumHeaderPath === "function" ? albumHeaderPath(overridePath) : String(overridePath);
+      } catch (_) {
+        return String(overridePath);
+      }
+    }
+    try {
+      const view = typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : this.app?.workspace?.getActiveViewOfType?.(MarkdownView);
+      if (view && view.file && view.file.path) return view.file.path;
+    } catch (_) {}
+    try {
+      const leaf = this.app?.workspace?.activeLeaf;
+      const file = leaf?.view?.file;
+      if (file && file.path) return file.path;
+    } catch (_) {}
+    return "";
+  }
+
+  albumSchemaEntryTargetForFile(filePath) {
+    const normalized = typeof albumHeaderPath === "function" ? albumHeaderPath(filePath) : String(filePath || "");
+    let frontmatter = {};
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(normalized);
+      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      if (cache && cache.frontmatter && typeof cache.frontmatter === "object") frontmatter = cache.frontmatter;
+    } catch (_) {}
+    let report = null;
+    try {
+      const state = typeof this.albumReportState === "function" ? this.albumReportState() : null;
+      report = (state && state.report) || this.albumReport || null;
+    } catch (_) {
+      report = this.albumReport || null;
+    }
+    return albumResolveSchemaTargetForFile(normalized, {
+      frontmatter,
+      metadataCache: this.app?.metadataCache,
+      vault: this.app?.vault,
+      report,
+    });
+  }
+
+  async openAlbumSchemaEntry(options = {}) {
+    if (typeof this.albumHeaderDesktop === "function" && !this.albumHeaderDesktop()) {
+      try { new Notice("Schema editing needs desktop Obsidian."); } catch (_) {}
+      return { ok: false, reason: "mobile" };
+    }
+    const filePath = this.albumSchemaEntryActiveFilePath(options.filePath || options.albumPath || "");
+    if (!filePath) {
+      try { new Notice("No active markdown note."); } catch (_) {}
+      return { ok: false, reason: "missing-path" };
+    }
+    const target = this.albumSchemaEntryTargetForFile(filePath);
+    if (!target.ok) {
+      try { new Notice(albumSchemaEntryTeach(target)); } catch (_) {}
+      return target;
+    }
+    let reportState = null;
+    try {
+      reportState = typeof this.albumReportState === "function" ? this.albumReportState() : null;
+    } catch (_) {}
+    if (!reportState || !reportState.report || reportState.unavailable) {
+      try { new Notice("Album data is unavailable — run Sync albums and retry."); } catch (_) {}
+      return { ok: false, reason: "unavailable", albumPath: target.albumPath };
+    }
+    let model = null;
+    try {
+      model = typeof this.albumHeaderModelFor === "function" ? this.albumHeaderModelFor(target.albumPath) : null;
+    } catch (_) {
+      model = null;
+    }
+    if (!model) {
+      try { new Notice("That album is no longer available — it may have been deleted or retyped."); } catch (_) {}
+      return { ok: false, reason: "unavailable", albumPath: target.albumPath };
+    }
+    try {
+      return this.openAlbumSchemaCard(model, target.albumPath);
+    } catch (error) {
+      try { new Notice("Could not open the Schema Card."); } catch (_) {}
+      return { ok: false, reason: "open-failed", albumPath: target.albumPath };
+    }
+  }
+}
+// ---- src/242e-plugin-album-yaml-excursion.js ----
+// Pane-scoped YAML excursion with validated Done (schema-entrypoints).
+// `y` still closes the card and focuses the exact field/issue line; this
+// fragment adds the per-leaf excursion record (album path, original view
+// state, selected key, session identity) and the small accessible Done
+// affordance for that album's Source surface. Source mode lacks the regular
+// header, so Done has an explicit mount/cleanup lifecycle outside the note
+// text. Done awaits editor save, forces a current report, and only returns
+// to the prior view/reopens the card when bob reports a valid schema.
+function albumYamlErrorFocus(model) {
+  const issues = Array.isArray(model?.issues) ? model.issues : [];
+  const error = issues.find((issue) => issue && issue.severity === "error") || null;
+  if (!error) return null;
+  const line = Number.isInteger(error.line) && error.line > 0 ? error.line : null;
+  const message = String(error.message || "The album schema has errors.");
+  const suggestions = (Array.isArray(error.suggestions) ? error.suggestions : [])
+    .map((item) => String(item || "")).filter(Boolean);
+  return { line, message, suggestions, code: String(error.code || "") };
+}
+
+function albumYamlDoneDecision(input = {}) {
+  if (!input.save || input.save.ok !== true) {
+    const code = input.save && input.save.code ? String(input.save.code) : "save-failed";
+    return {
+      ok: false, reason: code === "save-unsupported" ? "save-unsupported" : "save-failed",
+      message: (input.save && input.save.message) || "Saving the album pane failed — fix it before Done.",
+    };
+  }
+  const state = input.reportState || null;
+  if (!state || !state.report || state.unavailable === true || state.stale === true || state.refreshing === true || state.error) {
+    return { ok: false, reason: "unavailable", message: "Album data is unavailable — fix sync before Done." };
+  }
+  const model = input.model || null;
+  if (!model) {
+    return { ok: false, reason: "unavailable", message: "That album is no longer available — it may have been deleted or retyped." };
+  }
+  const focus = albumYamlErrorFocus(model);
+  if (focus) {
+    const hint = focus.suggestions.length ? ` Suggestions: ${focus.suggestions.join(" ")}` : "";
+    return {
+      ok: false, reason: "schema-errors", focus,
+      message: `${focus.message}${hint}`,
+    };
+  }
+  return { ok: true, reason: "valid" };
+}
+
+function albumYamlDoneButtonDoc(host) {
+  try {
+    if (host && host.ownerDocument) return host.ownerDocument;
+  } catch (_) {}
+  try {
+    if (typeof document !== "undefined") return document;
+  } catch (_) {}
+  return null;
+}
+
+function albumYamlBuildDoneEl(doc, albumPath) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  let button = null;
+  try {
+    button = doc.createElement("button");
+  } catch (_) {
+    return null;
+  }
+  if (!button) return null;
+  button.setAttribute("type", "button");
+  button.setAttribute("class", "bob-album-yaml-done");
+  button.setAttribute("data-album-yaml-done", albumPath || "");
+  button.setAttribute("aria-label", "Done editing album schema");
+  try {
+    button.textContent = "Done";
+  } catch (_) {}
+  return button;
+}
+
+class BobLedgerToolsAlbumYamlExcursionMixin {
+  setupAlbumYamlExcursion() {
+    if (!(this.albumYamlExcursions instanceof Map)) this.albumYamlExcursions = new Map();
+    if (this.albumYamlExcursionWired) return;
+    this.albumYamlExcursionWired = true;
+    try {
+      const workspace = this.app?.workspace;
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(workspace.on("file-open", (file) => {
+          try { this.albumYamlExcursionHandleFileOpen(file); } catch (_) {}
+        }));
+        this.registerEvent(workspace.on("active-leaf-change", (leaf) => {
+          try { this.albumYamlExcursionHandleLeafChange(leaf); } catch (_) {}
+        }));
+        this.registerEvent(workspace.on("layout-change", () => {
+          try { this.albumYamlExcursionPruneClosedLeaves(); } catch (_) {}
+        }));
+      }
+    } catch (_) {}
+  }
+
+  teardownAlbumYamlExcursion() {
+    try {
+      for (const leaf of Array.from(this.albumYamlExcursions?.keys?.() || [])) {
+        try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+      }
+    } catch (_) {}
+    if (this.albumYamlExcursions instanceof Map) this.albumYamlExcursions.clear();
+    this.albumYamlExcursionWired = false;
+  }
+
+  albumYamlExcursionLeafKey(leaf) {
+    return leaf || null;
+  }
+
+  albumYamlExcursionForLeaf(leaf) {
+    if (!leaf || !(this.albumYamlExcursions instanceof Map)) return null;
+    return this.albumYamlExcursions.get(leaf) || null;
+  }
+
+  albumYamlExcursionActiveLeaf() {
+    try {
+      return this.app?.workspace?.activeLeaf || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  albumYamlExcursionBegin(leaf, details = {}) {
+    if (!leaf) return null;
+    if (!(this.albumYamlExcursions instanceof Map)) this.albumYamlExcursions = new Map();
+    const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
+    if (!albumPath) return null;
+    try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+    const record = {
+      albumPath,
+      viewState: details.viewState || null,
+      selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
+      fingerprint: typeof details.fingerprint === "string" ? details.fingerprint : "",
+      startedAt: Date.now(),
+      doneEl: null,
+      container: null,
+    };
+    this.albumYamlExcursions.set(leaf, record);
+    this.albumYamlExcursionMount(leaf, record);
+    return record;
+  }
+
+  albumYamlExcursionMount(leaf, record) {
+    if (!leaf || !record) return null;
+    let container = null;
+    try {
+      container = leaf.view?.containerEl || leaf.containerEl || null;
+    } catch (_) {
+      container = null;
+    }
+    let doc = null;
+    try {
+      doc = container?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    } catch (_) {
+      doc = null;
+    }
+    if (!doc && typeof document !== "undefined") {
+      try { doc = document; } catch (_) {}
+    }
+    const el = albumYamlBuildDoneEl(doc || albumYamlDoneButtonDoc(container), record.albumPath);
+    if (!el) return null;
+    try {
+      el.addEventListener?.("click", (event) => {
+        try { event.preventDefault?.(); } catch (_) {}
+        void this.albumYamlDone({ leaf });
+      });
+    } catch (_) {}
+    try {
+      if (container && typeof container.appendChild === "function") container.appendChild(el);
+      else if (doc?.body && typeof doc.body.appendChild === "function") { doc.body.appendChild(el); container = doc.body; }
+      else return null;
+    } catch (_) {
+      return null;
+    }
+    record.doneEl = el;
+    record.container = container;
+    return el;
+  }
+
+  albumYamlExcursionClear(leaf) {
+    if (!leaf || !(this.albumYamlExcursions instanceof Map)) return false;
+    const record = this.albumYamlExcursions.get(leaf);
+    if (!record) return false;
+    try {
+      const el = record.doneEl;
+      if (el) {
+        if (typeof el.remove === "function") el.remove();
+        else if (el.parentNode && typeof el.parentNode.removeChild === "function") el.parentNode.removeChild(el);
+      }
+    } catch (_) {}
+    try {
+      this.albumYamlExcursions.delete(leaf);
+    } catch (_) {}
+    return true;
+  }
+
+  albumYamlExcursionHandleFileOpen(file) {
+    if (!(this.albumYamlExcursions instanceof Map)) return;
+    const openPath = file && file.path
+      ? (typeof albumHeaderPath === "function" ? albumHeaderPath(file.path) : String(file.path))
+      : "";
+    for (const [leaf, record] of Array.from(this.albumYamlExcursions.entries())) {
+      try {
+        const leafPath = leaf?.view?.file?.path
+          ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
+          : openPath;
+        if (openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
+          this.albumYamlExcursionClear(leaf);
+        } else if (!openPath && !leafPath) {
+          this.albumYamlExcursionClear(leaf);
+        }
+      } catch (_) {}
+    }
+  }
+
+  albumYamlExcursionHandleLeafChange() {
+    try {
+      this.albumYamlExcursionPruneClosedLeaves();
+    } catch (_) {}
+  }
+
+  albumYamlExcursionPruneClosedLeaves() {
+    if (!(this.albumYamlExcursions instanceof Map)) return;
+    let live = null;
+    try {
+      live = this.app?.workspace?.getLeavesOfType?.("markdown") || null;
+    } catch (_) {
+      live = null;
+    }
+    if (!Array.isArray(live)) return;
+    const liveSet = new Set(live);
+    for (const leaf of Array.from(this.albumYamlExcursions.keys())) {
+      if (!liveSet.has(leaf)) {
+        try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+      }
+    }
+  }
+
+  async albumYamlDone(options = {}) {
+    const leaf = options.leaf || this.albumYamlExcursionActiveLeaf();
+    if (!leaf) {
+      try { new Notice("No active album pane for Done."); } catch (_) {}
+      return { ok: false, reason: "missing-leaf" };
+    }
+    const record = this.albumYamlExcursionForLeaf(leaf);
+    if (!record) {
+      try { new Notice("No album YAML excursion in this pane."); } catch (_) {}
+      return { ok: false, reason: "missing-excursion" };
+    }
+    let save = { ok: true };
+    try {
+      save = typeof albumSchemaSaveOpenEditors === "function"
+        ? await albumSchemaSaveOpenEditors(this, [record.albumPath])
+        : { ok: true };
+    } catch (error) {
+      save = { ok: false, code: "save-failed", message: String((error && error.message) || error) };
+    }
+    if (!save || save.ok !== true) {
+      try { new Notice(save?.message || "Saving the album pane failed — fix it before Done."); } catch (_) {}
+      return { ok: false, reason: save?.code || "save-failed" };
+    }
+    let reportState = null;
+    try {
+      reportState = typeof this.apiAlbumReport === "function"
+        ? await this.apiAlbumReport({ force: true, wait: true })
+        : (typeof this.albumReportState === "function" ? this.albumReportState() : null);
+    } catch (_) {
+      reportState = null;
+    }
+    let model = null;
+    try {
+      model = typeof this.albumHeaderModelFor === "function" ? this.albumHeaderModelFor(record.albumPath, reportState) : null;
+    } catch (_) {
+      model = null;
+    }
+    const decision = albumYamlDoneDecision({ save: { ok: true }, reportState, model });
+    if (!decision.ok) {
+      if (decision.reason === "schema-errors" && decision.focus) {
+        try {
+          const editor = leaf?.view?.editor;
+          const line = Number.isInteger(decision.focus.line) && decision.focus.line > 0 ? decision.focus.line - 1 : 0;
+          if (editor && typeof editor.setCursor === "function") {
+            editor.setCursor({ line, ch: 0 });
+            if (typeof editor.scrollIntoView === "function") {
+              editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+            }
+          }
+        } catch (_) {}
+      }
+      try { new Notice(decision.message); } catch (_) {}
+      return { ok: false, reason: decision.reason, focus: decision.focus || null };
+    }
+    try {
+      const prior = record.viewState;
+      if (prior && typeof leaf.setViewState === "function") {
+        await leaf.setViewState(prior);
+      } else if (prior && prior.state && typeof leaf.openFile === "function") {
+        const file = this.app?.vault?.getAbstractFileByPath?.(record.albumPath) || { path: record.albumPath };
+        await leaf.openFile(file, { state: { ...(prior.state || {}), file: record.albumPath } });
+      }
+    } catch (_) {}
+    try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+    try {
+      const fresh = typeof this.albumHeaderModelFor === "function" ? this.albumHeaderModelFor(record.albumPath) : model;
+      const target = fresh || model;
+      if (target) {
+        const opened = this.openAlbumSchemaCard?.(target, record.albumPath);
+        if (opened && opened.modal && record.selectedKey) {
+          try {
+            if (typeof opened.modal.schemaSelect === "function") opened.modal.schemaSelect(record.selectedKey);
+            else { opened.modal.selectedKey = record.selectedKey; }
+          } catch (_) {}
+        }
+        return { ok: true, reopened: true };
+      }
+    } catch (_) {}
+    return { ok: true, reopened: false };
+  }
+}
 // ---- src/241h-plugin-bank-decode.js ----
 // --- Bank JSON boundary (bob-cli-kd.6.1.1) --------------------------------
 // Decode `bob bank list|report -f json` without duplicating accounting.
@@ -69315,7 +69915,7 @@ class BobLedgerToolsAlbumHeaderMixin {
         openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
         toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
-        openSchemaCard: (item) => this.openAlbumSchemaCard?.(item, sourcePath),
+        openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
         jumpYaml: (line) => { void this.albumHeaderJumpYaml(sourcePath, line); },
       },
       state,
@@ -69395,6 +69995,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.albumHeaderMarkdownLeaf(path);
+      let excursionViewState = null;
+      let excursionSelectedKey = "stats";
+      let excursionFingerprint = "";
+      try {
+        excursionViewState = typeof leaf?.getViewState === "function" ? leaf.getViewState() : null;
+        excursionSelectedKey = String(this.albumSchemaCardModal?.selectedKey || "stats");
+        excursionFingerprint = String(this.albumSchemaCardModal?.schemaModel?.schemaFingerprint || this.albumHeaderModelFor(path)?.schemaFingerprint || "");
+      } catch (_) {}
       if (leaf && typeof leaf.openFile === "function") {
         await leaf.openFile(file, { state: { mode: "source" } });
       } else if (leaf && typeof leaf.setViewState === "function") {
@@ -69416,6 +70024,11 @@ class BobLedgerToolsAlbumHeaderMixin {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
       }
+      try {
+        if (leaf && typeof this.albumYamlExcursionBegin === "function") {
+          this.albumYamlExcursionBegin(leaf, { albumPath: path, viewState: excursionViewState, selectedKey: excursionSelectedKey, fingerprint: excursionFingerprint });
+        }
+      } catch (_) {}
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {
       try { new Notice("Could not open the album schema in Source mode."); } catch (__) {}
@@ -113085,6 +113698,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
+  BobLedgerToolsAlbumEntryMixin,
+  BobLedgerToolsAlbumYamlExcursionMixin,
   BobLedgerToolsNotebookHeaderMixin,
   BobLedgerToolsNotebookHeaderLiveMixin,
   BobLedgerToolsReadingBoardBlockMixin,
@@ -116259,6 +116874,15 @@ try {
       albumSchemaTypedDefault,
       albumSchemaSameValue,
       albumSchemaSaveOpenEditors,
+      ALBUM_SCHEMA_ENTRY_NON_RECORD_TYPES,
+      albumSchemaEntryKindOf,
+      albumSchemaEntryParentTarget,
+      albumSchemaEntryReportAlbum,
+      albumResolveSchemaTargetForFile,
+      albumSchemaEntryTeach,
+      albumYamlErrorFocus,
+      albumYamlDoneDecision,
+      albumYamlBuildDoneEl,
       ALBUM_UPDATE_SCHEMA_VERSION,
       ALBUM_UPDATE_TIMEOUT_MS,
       ALBUM_UPDATE_MAX_BUFFER,

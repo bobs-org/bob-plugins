@@ -156,6 +156,7 @@
   "546-plugin-bracket-repeat.js",
   "547-bracket-mode-indicator.js",
   "550-plugin-cancel-and-counted-property.js",
+  "551-plugin-album-schema-fallback.js",
   "551-post-cancel-effects.js",
   "560-plugin-counted-priority-and-roll.js",
   "570-plugin-link-roll-and-schedule.js",
@@ -224,5 +225,6 @@
   "714-highlights-hints-exports.js",
   "715-delete-guard-exports.js",
   "716-reload-history-exports.js",
-  "717-copy-card-exports.js"
+  "717-copy-card-exports.js",
+  "718-album-schema-fallback-exports.js"
 ]

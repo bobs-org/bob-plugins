@@ -62330,7 +62330,14 @@ class BobLedgerToolsBankMarksMixin {
         }));
         this.registerEvent(workspace.on("layout-change", () => this.bankMarkSyncHubProperty()));
       }
-      const timers = this.bankTimerApi ? this.bankTimerApi() : null;
+      // Same timer-host guard as the bank data and daily-chip intervals: without
+      // a window or injected timers (Node tests), never fall back to a real
+      // globalThis interval that would keep the process alive.
+      const hasTimerHost = Boolean(
+        (this.bankTimers && typeof this.bankTimers === "object") ||
+        (typeof window !== "undefined" && window),
+      );
+      const timers = hasTimerHost && this.bankTimerApi ? this.bankTimerApi() : null;
       if (timers && typeof timers.setInterval === "function") {
         this.bankMarksConfigTimer = timers.setInterval(() => this.bankMarksCheckConfig(), 60 * 1000);
         if (typeof this.registerInterval === "function") this.registerInterval(this.bankMarksConfigTimer);

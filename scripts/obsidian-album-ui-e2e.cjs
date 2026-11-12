@@ -227,6 +227,9 @@ function selfTest() {
     if (!notes[name] || !String(notes[name]).trim()) throw new Error(`missing fixture note ${name}`);
   }
   const eat = notes["eat.md"];
+  if (!notes["body.md"].includes('parent: "[[area]]"') || !notes["area.md"].includes('parent: "[[type]]"')) {
+    throw new Error("fixture must exercise the conventional area-to-type ancestry");
+  }
   if (!eat.includes('type: "[[album]]"')) throw new Error("eat must be an album note");
   if (!eat.includes("index_by: location")) throw new Error("eat must declare index_by: location for subgroups");
   if (!eat.includes("status:")) throw new Error("eat must declare the status choice group field");
@@ -822,6 +825,8 @@ async function run(args) {
       return latest;
     });
     report.probes.eatReading = records;
+    const readingHeader = album.assertHeaderIntegrity(records);
+    record("reading-single-header-no-warning", readingHeader.ok, readingHeader.reason || "one header outside records; no ancestry warning");
     record("records-card", (records.recordCards || []).length > 0, `cards=${(records.recordCards || []).length}`);
     record("records-folds-present", (records.folds || []).length > 0, `folds=${(records.folds || []).length}`);
     const foldStates = (records.recordGroups || []).map((item) => item.folded);
@@ -833,6 +838,8 @@ async function run(args) {
     await sleep(700);
     const recordsLive = await client.evaluate(probe);
     report.probes.eatLive = recordsLive;
+    const liveHeader = album.assertHeaderIntegrity(recordsLive);
+    record("live-single-header-no-warning", liveHeader.ok, liveHeader.reason || "one header outside records; no ancestry warning");
     record("records-live-card", (recordsLive.recordCards || []).length > 0, `cards=${(recordsLive.recordCards || []).length}`);
     const liveShot = path.join(outDir, "album-records-live.png");
     await capturePage(client, liveShot);
@@ -875,6 +882,17 @@ async function run(args) {
       return { ok: true, title, disabled: Boolean(disabled), clipboard, clipboardError };
     })())()`).catch((error) => ({ ok: false, error: String(error && error.message || error) }));
     record("header-copy", Boolean(copyResult && copyResult.ok && !copyResult.disabled && (copyResult.clipboard === "Name @eat/" || (copyResult.clipboard == null && String(copyResult.title || "").includes("@eat/")))), JSON.stringify(copyResult).slice(0, 200));
+
+    // The empty records callout previously rendered a header per detached chunk.
+    for (const mode of ["preview", "live"]) {
+      await openNote(client, "empty.md", mode);
+      await sleep(700);
+      const empty = await client.evaluate(probe);
+      report.probes[`empty-${mode}`] = empty;
+      const checked = album.assertHeaderIntegrity(empty);
+      record(`empty-${mode}-single-header-no-warning`, checked.ok, checked.reason || "one header outside the empty records callout");
+      record(`empty-${mode}-records-card`, (empty.recordCards || []).length > 0, "empty generated records callout is rendered");
+    }
 
     // H1-less album still gets one header.
     await openNote(client, "h1less-album.md", "preview");

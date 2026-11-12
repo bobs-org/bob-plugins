@@ -83,10 +83,9 @@ function albumHeaderOwnerChain(entry, options = {}) {
     const cache = metadataCache?.getFileCache?.(current) || null;
     const frontmatter = cache?.frontmatter || {};
     const kind = typeof pomodoroHomeType === "function" ? pomodoroHomeType(frontmatter) : "other";
-    if (kind !== "area" && kind !== "project") {
-      broken = true;
-      break;
-    }
+    // A resolved type-definition or other non-home note ends the owned
+    // tree naturally (top-level areas conventionally parent [[area]]).
+    if (kind !== "area" && kind !== "project") break;
     const stem = path.split("/").pop().replace(/\.md$/i, "");
     chain.push({
       stem,

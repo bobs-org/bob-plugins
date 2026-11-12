@@ -108,7 +108,9 @@ The **＋ noun** button copies the exact `Name @stem/` capture starter for the
 album. It does not open capture or create a record. Invalid schemas or capture
 routes leave the header visible and disable the button with the report's
 reason. Owner links use resolved note paths; incomplete or cyclic ancestry
-shows only confirmed links.
+shows only confirmed links. The breadcrumb ends at the top-level area; an ancestry
+warning appears only when a parent link cannot be resolved, is malformed, cycles,
+or exceeds the depth cap.
 
 For stored album/record structure and capture routes, see
 [Records](https://bobs-org.github.io/records/).

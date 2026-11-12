@@ -127,10 +127,17 @@ function fixture(entry = album()) {
   plugin.albumHeaderActive = true;
   plugin.albumHeaderReading = new Set();
   plugin.albumHeaderEditors = new Set();
-  plugin.albumSetTimeout = setTimeout;
-  plugin.albumClearTimeout = clearTimeout;
+  const timers = new Map();
+  let nextTimer = 0;
+  plugin.albumSetTimeout = (fn) => { timers.set(++nextTimer, fn); return nextTimer; };
+  plugin.albumClearTimeout = (timer) => timers.delete(timer);
+  const flushReading = () => {
+    const callbacks = [...timers.values()];
+    timers.clear();
+    callbacks.forEach((fn) => fn());
+  };
   plugin.notebookCatalogLivePath = (view) => view.path || null;
-  return { app, caches, doc, plugin, state };
+  return { app, caches, doc, files, plugin, state, flushReading, timers };
 }
 
 test("header resolves real parent paths and ignores breadcrumb labels", () => {
@@ -146,6 +153,52 @@ test("header resolves real parent paths and ignores breadcrumb labels", () => {
   });
   assert.equal(broken.broken, true);
   assert.deepEqual(broken.crumbs.map((crumb) => crumb.path), ["eat.md"]);
+});
+
+test("owner ancestry stops without warning at the conventional type note or a direct non-home parent", () => {
+  const { app, caches, files } = fixture();
+  for (const [path, frontmatter] of [
+    ["project.md", { type: "[[project]]", parent: "[[body]]" }],
+    ["area.md", { parent: "[[type]]" }],
+    ["notebook.md", { type: "[[notebook]]", parent: "[[missing]]" }],
+  ]) {
+    files.set(path, { path });
+    caches.set(path, { frontmatter });
+  }
+  caches.get("body.md").frontmatter.parent = "[[area]]";
+  for (const [parent, expected] of [
+    ["project", ["body.md", "project.md", "eat.md"]],
+    ["notebook", ["eat.md"]],
+  ]) {
+    const model = helpers.albumHeaderModel(report(album({ parent })), "eat.md", app);
+    assert.deepEqual(model.crumbs.map((crumb) => crumb.path), expected);
+    assert.equal(model.broken, false);
+    assert.equal(model.cyclic, false);
+    assert.equal(model.truncated, false);
+    assert.equal(model.ancestryMessage, "");
+  }
+});
+
+test("missing, malformed, cyclic, and depth-limited owner chains still warn", () => {
+  for (const [parent, rawParent, flag] of [
+    [null, undefined, "broken"],
+    ["missing", undefined, "broken"],
+    ["body", "[[missing]]", "broken"],
+    ["body", "not a wikilink", "broken"],
+    ["body", { invalid: true }, "broken"],
+    ["body", "[[body]]", "cyclic"],
+    ["body", "[[deep0]]", "truncated"],
+  ]) {
+    const { app, caches, files } = fixture();
+    caches.get("body.md").frontmatter.parent = rawParent;
+    for (let i = 0; i < 9; i += 1) {
+      files.set(`deep${i}.md`, { path: `deep${i}.md` });
+      caches.set(`deep${i}.md`, { frontmatter: { type: "[[project]]", parent: `[[deep${i + 1}]]` } });
+    }
+    const model = helpers.albumHeaderModel(report(album({ parent })), "eat.md", app);
+    assert.equal(model[flag], true, `${parent}: ${JSON.stringify(rawParent)}`);
+    assert.match(model.ancestryMessage, /only confirmed notes are linked/);
+  }
 });
 
 test("schema model preserves declaration and choice order; empty and invalid routes stay explicit", () => {
@@ -277,14 +330,123 @@ test("Live Preview widgets follow album identity and remove the Properties scope
 });
 
 test("Reading lifecycle unload restores Properties visibility", () => {
-  const { doc, plugin } = fixture();
+  const { doc, plugin, flushReading } = fixture();
   const root = node(doc, "div", "markdown-preview-view");
   let child;
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild(value) { child = value; } });
+  flushReading();
   assert.equal(root.classList.contains("bob-album-header-surface"), true);
   child.onunload();
   assert.equal(root.classList.contains("bob-album-header-surface"), false);
   assert.equal(root.querySelectorAll(".bob-album-header").length, 0);
+});
+
+test("detached callout chunks never paint reading headers, including after editor attachment", () => {
+  const { doc, plugin, flushReading, timers } = fixture();
+  const chunks = [node(doc, "div"), node(doc, "div"), node(doc, "div")];
+  const children = [];
+  for (const el of chunks) plugin.renderAlbumHeaderInReading(el, { sourcePath: "eat.md", addChild: (child) => children.push(child) });
+  assert.equal(timers.size, 1, "post-processors coalesce per source");
+  flushReading();
+  for (const el of chunks) assert.equal(el.querySelectorAll(".bob-album-header").length, 0);
+  const editor = node(doc, "div", "cm-editor");
+  const content = node(doc, "div", "cm-content");
+  editor.appendChild(content);
+  chunks.forEach((el) => content.appendChild(el));
+  plugin.refreshAlbumHeaderReading();
+  assert.equal(editor.querySelectorAll(".bob-album-header").length, 0);
+  children.forEach((child) => child.onunload());
+  assert.equal(plugin.albumHeaderReading.size, 0);
+});
+
+test("reading batches pick attached chunks, stay idempotent, and keep pane/embed lifetimes separate", () => {
+  const { doc, plugin, flushReading } = fixture();
+  const preview = node(doc, "div", "markdown-preview-view");
+  preview.appendChild(node(doc, "h1", "", "Restaurants"));
+  const chunk = node(doc, "p");
+  preview.appendChild(chunk);
+  const detached = node(doc, "div");
+  const secondPane = node(doc, "div", "markdown-preview-view");
+  const embed = node(doc, "div", "markdown-embed");
+  preview.appendChild(embed);
+  const children = [];
+  const ctx = { sourcePath: "eat.md", addChild: (child) => children.push(child) };
+  for (const el of [detached, chunk, chunk, secondPane, embed]) plugin.renderAlbumHeaderInReading(el, ctx);
+  flushReading();
+  assert.equal(detached.querySelectorAll(".bob-album-header").length, 0);
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 2, "one own header plus one embedded header");
+  assert.equal(secondPane.querySelectorAll(".bob-album-header").length, 1);
+  const oldChild = children.find((child) => child.containerEl === chunk);
+  plugin.renderAlbumHeaderInReading(chunk, ctx);
+  flushReading();
+  oldChild.onunload();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 2, "old chunk unload cannot remove the new header");
+  children.at(-1).onunload();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 1);
+  assert.equal(embed.querySelectorAll(".bob-album-header").length, 1);
+  assert.equal(secondPane.querySelectorAll(".bob-album-header").length, 1);
+});
+
+test("chunks attaching before the flush share the preview/sizer identity", () => {
+  const { doc, plugin, flushReading } = fixture();
+  const preview = node(doc, "div", "markdown-preview-view");
+  const sizer = node(doc, "div", "markdown-preview-sizer");
+  preview.appendChild(sizer);
+  const chunk = node(doc, "div");
+  const ctx = { sourcePath: "eat.md", addChild() {} };
+  plugin.renderAlbumHeaderInReading(preview, ctx);
+  plugin.renderAlbumHeaderInReading(chunk, ctx);
+  sizer.appendChild(chunk);
+  flushReading();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 1);
+  assert.equal(plugin.albumHeaderReading.size, 1);
+  assert.equal(plugin.albumHeaderReadingRoot(preview), plugin.albumHeaderReadingRoot(chunk));
+});
+
+test("late reading attachment paints on refresh and unload uses the live surface", () => {
+  const { doc, plugin, flushReading } = fixture();
+  const chunk = node(doc, "div");
+  let child;
+  plugin.renderAlbumHeaderInReading(chunk, { sourcePath: "eat.md", addChild(value) { child = value; } });
+  flushReading();
+  const preview = node(doc, "div", "markdown-preview-view");
+  preview.appendChild(chunk);
+  plugin.scheduleAlbumHeaderRefresh();
+  flushReading();
+  plugin.refreshAlbumHeaderReading();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 1);
+  child.onunload();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 0);
+  assert.equal(preview.classList.contains("bob-album-header-surface"), false);
+});
+
+test("repaint sweeps stray reading chrome from editor chunks without removing CM widgets", () => {
+  const { doc, plugin } = fixture();
+  const preview = node(doc, "div", "markdown-preview-view");
+  const content = node(doc, "div", "cm-content");
+  preview.appendChild(content);
+  const stray = node(doc, "section", "bob-album-header");
+  stray.setAttribute("data-album-source", "eat.md");
+  const legitimate = node(doc, "section", "bob-album-header");
+  legitimate.setAttribute("data-album-source", "eat.md");
+  legitimate.setAttribute("data-cm-widget", "true");
+  content.appendChild(stray);
+  content.appendChild(legitimate);
+  plugin.paintAlbumHeaderReading(preview, "eat.md");
+  assert.equal(stray.parentNode, null);
+  assert.equal(legitimate.parentNode, content);
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 2);
+});
+
+test("teardown cancels pending reading batches", () => {
+  const { doc, plugin, flushReading, timers } = fixture();
+  const preview = node(doc, "div", "markdown-preview-view");
+  plugin.renderAlbumHeaderInReading(preview, { sourcePath: "eat.md", addChild() {} });
+  plugin.teardownAlbumHeader();
+  assert.equal(timers.size, 0);
+  flushReading();
+  assert.equal(preview.querySelectorAll(".bob-album-header").length, 0);
+  assert.equal(plugin.albumHeaderReadingPending.size, 0);
 });
 
 test("H1-less albums paint at the start and embeds keep their own property scope", () => {
@@ -308,7 +470,7 @@ test("H1-less albums paint at the start and embeds keep their own property scope
 });
 
 test("schema summary stays collapsed by default and expands per album in view state", () => {
-  const { doc, plugin } = fixture(album({
+  const { doc, plugin, flushReading } = fixture(album({
     label: "Restaurant",
     dated_notes: true,
     index_by: "status",
@@ -321,6 +483,7 @@ test("schema summary stays collapsed by default and expands per album in view st
   }));
   const root = node(doc, "div", "markdown-preview-view");
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
   assert.equal(summary.getAttribute("aria-expanded"), "false");
   assert.match(summary.textContent, /Restaurant · 2 fields · dated notes · grouped by Status, sub-grouped by Location/);

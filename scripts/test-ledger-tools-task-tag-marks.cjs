@@ -918,6 +918,9 @@ test("session toggle and onload wiring", () => {
         (entry) => entry.sortOrder === 50,
       );
       assert.ok(posts.length >= 3);
+      // Other onload features may dispatch their own editor refreshes.
+      // Measure only the explicit task-tag refresh below.
+      dispatched.length = 0;
       plugin.refreshTaskTagMarkEditors();
       assert.equal(dispatched.length, 1);
       assert.ok(dispatched[0].effects);

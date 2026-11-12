@@ -563,16 +563,17 @@ stats-journal events, freshness stamps, or local storage.
 
 ### Footer indicator
 
-The desktop status bar always shows `[[ s w n ]]` with the active walk lit.
-With no saved or used type there is no thumb, and the tooltip carries the
-empty-notice text. Each tooltip's second line teaches the uppercase key: the
-next / previous review group (`]S` / `[S`), the next / previous lane (`]W` /
-`[W`), or no link variant. The thumb slides; `]]` / `[[` light their glyphs, a
-cold press lights all three. `]}` / `[{` reuse the forward / backward flash,
-and the no-uppercase notice reuses the empty flash.
-Clicking a letter selects that family per device. The click never walks,
-notices, writes, or steals focus, so `]]` repeats it. Desktop only; mobile
-shows nothing. The indicator never writes.
+The desktop status bar always shows `[[ s w n ]]` with the active walk lit;
+mobile shows no item. Without a saved or used type, it has no thumb and its tooltip
+carries the empty notice. Each active tooltip's second line names the
+uppercase jump: next / previous review group (`]S` / `[S`), next / previous
+lane (`]W` / `[W`), or no link variant. The thumb slides between letters.
+`]]` / `[[` flash their glyphs;
+a cold press flashes all three letters. `]}` / `[{` reuse the directional
+flash; the no-uppercase notice reuses the empty flash.
+Clicking a letter persists that family per device and keeps editor focus.
+It runs no walk, shows no notice, and writes no notes; the next `]]` uses
+the chosen family.
 
 The persisted family is published via additive nav `api.walkMode`
 (top-level version unchanged): v1 `current()` (`s` / `w` / `n` / null) and

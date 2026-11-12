@@ -10,6 +10,8 @@ class BobLedgerToolsAlbumHeaderMixin {
   setupAlbumHeader() {
     this.albumHeaderActive = true;
     this.albumHeaderReading = new Set();
+    this.albumHeaderReadingPending = new Map();
+    this.albumHeaderReadingTimers = new Map();
     this.albumHeaderEditors = new Set();
     this.albumHeaderEditorScopes = new Map();
     this.albumHeaderExpanded = new Map();
@@ -29,6 +31,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     this.albumHeaderUnsubscribe = null;
     this.albumClearTimeout?.(this.albumHeaderRefreshTimer);
     this.albumHeaderRefreshTimer = null;
+    for (const timer of this.albumHeaderReadingTimers?.values?.() || []) this.albumClearTimeout?.(timer);
+    this.albumHeaderReadingTimers?.clear();
+    this.albumHeaderReadingPending?.clear();
     try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
     this.albumSchemaCardModal = null;
     for (const widget of this.albumHeaderReading || []) {
@@ -210,11 +215,21 @@ class BobLedgerToolsAlbumHeaderMixin {
 
   albumHeaderReadingRoot(el) {
     try {
-      return typeof notebookHeaderReadingSurface === "function"
+      if (!el || el.closest?.(".cm-editor")) return null;
+      const attached = el.closest?.(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed");
+      if (!attached) return null;
+      const root = typeof notebookHeaderReadingSurface === "function"
         ? notebookHeaderReadingSurface(el)
-        : el;
+        : attached;
+      // Calls on the preview and its sizer must share the same identity.
+      if (root.matches?.(".markdown-preview-view")) {
+        const sizer = root.querySelector?.(".markdown-preview-sizer");
+        if (sizer?.closest?.(".markdown-preview-view") === root
+          && sizer.closest?.(".markdown-embed, .internal-embed") === root.closest?.(".markdown-embed, .internal-embed")) return sizer;
+      }
+      return root;
     } catch (_) {
-      return el;
+      return null;
     }
   }
 
@@ -346,6 +361,9 @@ class BobLedgerToolsAlbumHeaderMixin {
     const root = this.albumHeaderReadingRoot(el);
     const scope = this.albumHeaderReadingScope(root);
     if (!root || !sourcePath) return null;
+    // Remove old reading chrome stranded in editor callout chunks, while
+    // leaving the legitimate CodeMirror decoration and other sources alone.
+    this.albumHeaderRemoveStrays(root, sourcePath);
     const model = this.albumHeaderModelFor(sourcePath, state);
     const doc = notebookDomDoc(root) || (typeof document !== "undefined" ? document : null);
     const old = Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])
@@ -373,41 +391,89 @@ class BobLedgerToolsAlbumHeaderMixin {
     return header;
   }
 
-  renderAlbumHeaderInReading(el, ctx) {
-    if (!this.albumHeaderActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
-    if (el?.closest?.(".cm-editor")) return;
-    const root = this.albumHeaderReadingRoot(el);
-    const scope = this.albumHeaderReadingScope(root);
-    let widget = Array.from(this.albumHeaderReading || []).find((item) => item.surface === root);
-    if (!widget || widget.path !== ctx.sourcePath) {
-      if (widget) this.albumHeaderRemoveReading(root, widget.scope, widget.path);
-      this.paintAlbumHeaderReading(root, ctx.sourcePath);
-    }
-    if (!widget) {
-      widget = { el, path: ctx.sourcePath, surface: root, scope };
-      this.albumHeaderReading.add(widget);
-      const boundPath = ctx.sourcePath;
-      if (ctx.addChild) {
-        const child = typeof MarkdownRenderChild === "function"
-          ? new MarkdownRenderChild(el)
-          : { onunload: null };
-        child.onunload = () => {
-          if (widget.path !== boundPath) return;
-          this.albumHeaderRemoveReading(root, scope, boundPath);
-          this.albumHeaderReading?.delete(widget);
-        };
-        try { ctx.addChild(child); } catch (_) {}
-      }
-    } else {
-      widget.el = el;
-      widget.path = ctx.sourcePath;
-      widget.scope = scope;
+  albumHeaderRemoveStrays(root, sourcePath) {
+    for (const node of Array.from(root?.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
+      if (node.getAttribute?.("data-cm-widget") === "true") continue;
+      if (!node.closest?.(".cm-widgetBuffer, .cm-content")) continue;
+      if (albumHeaderPath(node.getAttribute?.("data-album-source")) !== albumHeaderPath(sourcePath)) continue;
+      node.remove?.();
     }
   }
 
+  renderAlbumHeaderInReading(el, ctx) {
+    if (!this.albumHeaderActive || !el || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    if (el.closest?.(".cm-editor")) return;
+    if (!(this.albumHeaderReadingPending instanceof Map)) this.albumHeaderReadingPending = new Map();
+    if (!(this.albumHeaderReadingTimers instanceof Map)) this.albumHeaderReadingTimers = new Map();
+    const path = ctx.sourcePath;
+    const batch = this.albumHeaderReadingPending.get(path) || [];
+    batch.push({ el, ctx });
+    this.albumHeaderReadingPending.set(path, batch);
+    this.albumClearTimeout(this.albumHeaderReadingTimers.get(path));
+    this.albumHeaderReadingTimers.set(path, this.albumSetTimeout(() => {
+      this.albumHeaderReadingTimers.delete(path);
+      const pending = this.albumHeaderReadingPending.get(path) || [];
+      this.albumHeaderReadingPending.delete(path);
+      if (!this.albumHeaderActive) return;
+      const surfaces = new Set();
+      for (const item of pending) {
+        const root = this.albumHeaderReadingRoot(item.el);
+        // Keep detached elements registered for late attachment, but never
+        // paint into them. Separate panes/embeds each own one surface.
+        const key = root || item.el;
+        if (surfaces.has(key)) continue;
+        surfaces.add(key);
+        this.albumHeaderBindReading(item.el, item.ctx, root);
+      }
+      this.refreshAlbumHeaderReading();
+    }, 0));
+  }
+
+  albumHeaderBindReading(el, ctx, root) {
+    let widget = Array.from(this.albumHeaderReading || []).find((item) =>
+      item.el === el || (root && item.surface === root));
+    if (!widget) {
+      widget = { el, path: ctx.sourcePath, surface: root, scope: this.albumHeaderReadingScope(root) };
+      this.albumHeaderReading.add(widget);
+    } else if (widget.path !== ctx.sourcePath) {
+      this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
+    }
+    widget.el = el;
+    widget.path = ctx.sourcePath;
+    // Rebinding makes an earlier chunk's unload harmless after rerender.
+    const binding = {};
+    widget.binding = binding;
+    const child = typeof MarkdownRenderChild === "function"
+      ? new MarkdownRenderChild(el) : {};
+    child.onunload = () => {
+      if (widget.binding !== binding) return;
+      this.albumHeaderReading?.delete(widget);
+      const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
+        item.surface === widget.surface && item.path === widget.path);
+      if (!anotherOwner) this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
+    };
+    try { ctx.addChild?.(child); } catch (_) {}
+  }
+
   refreshAlbumHeaderReading() {
+    // Re-resolve every binding before painting: a later detached binding
+    // must not erase a surface already repainted by an earlier one.
     for (const widget of this.albumHeaderReading || []) {
-      try { this.paintAlbumHeaderReading(widget.surface, widget.path); } catch (_) {}
+      try {
+        const root = this.albumHeaderReadingRoot(widget.el);
+        if (widget.surface && widget.surface !== root) {
+          this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
+        }
+        widget.surface = root;
+        widget.scope = this.albumHeaderReadingScope(root);
+        if (!root) this.albumHeaderRemoveStrays(widget.el, widget.path);
+      } catch (_) {}
+    }
+    const painted = new Set();
+    for (const widget of this.albumHeaderReading || []) {
+      if (!widget.surface || painted.has(widget.surface)) continue;
+      painted.add(widget.surface);
+      try { this.paintAlbumHeaderReading(widget.el, widget.path); } catch (_) {}
     }
   }
 

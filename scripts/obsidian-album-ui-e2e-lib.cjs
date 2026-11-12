@@ -65,7 +65,7 @@ function parseArgs(argv) {
 }
 
 function areaNote(title, extra = "") {
-  return ["---", 'type: "[[area]]"', "---", "", `# ${title}`, "", extra].join("\n");
+  return ["---", 'type: "[[area]]"', 'parent: "[[area]]"', "---", "", `# ${title}`, "", extra].join("\n");
 }
 
 function projectNote(title, parent) {
@@ -113,6 +113,8 @@ function recordNote({ album, noun, title, status, location, created, visited, wa
 
 function fixtureNotes() {
   const notes = {
+    "area.md": '---\nparent: "[[type]]"\n---\n\n# Area\n',
+    "type.md": "# Type\n",
     "body.md": areaNote("Body", "## Albums\n"),
     "proj.md": projectNote("Eating Out", "body"),
     "eat.md": albumNote({
@@ -326,6 +328,8 @@ function assertLinearHistory(subjects) {
 
 function requiredNoteNames() {
   return [
+    "area.md",
+    "type.md",
     "body.md",
     "proj.md",
     "eat.md",
@@ -383,6 +387,19 @@ function assertNoMathLeak({ mathCount }) {
   return { ok: true };
 }
 
+function assertHeaderIntegrity(probe) {
+  if (!Array.isArray(probe?.activeHeaders) || probe.activeHeaders.length !== 1) {
+    return { ok: false, reason: `expected one album header, saw ${probe?.activeHeaders?.length ?? "no probe"}` };
+  }
+  if (!Array.isArray(probe.ancestryWarnings) || probe.ancestryWarnings.length !== 0) {
+    return { ok: false, reason: "resolved owner chain must not show an ancestry warning" };
+  }
+  if (!Array.isArray(probe.headersInRecords) || probe.headersInRecords.length !== 0) {
+    return { ok: false, reason: "records callout must not contain album headers" };
+  }
+  return { ok: true };
+}
+
 function albumUiProbe() {
   return `(() => { try {
     const describe = (el) => {
@@ -410,6 +427,9 @@ function albumUiProbe() {
     const leafView = window.app && window.app.workspace && window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
     const state = leafView && typeof leafView.getState === "function" ? leafView.getState() : {};
     const header = pick(".bob-album-header");
+    const activeSurface = leafView?.containerEl?.querySelector(state.mode === "source"
+      ? ".markdown-source-view" : ".markdown-preview-view");
+    const activePick = (selector) => Array.from(activeSurface?.querySelectorAll(selector) || []).map(describe);
     return {
       path: file && file.path,
       mode: state.mode || null,
@@ -423,6 +443,9 @@ function albumUiProbe() {
       health: pick(".bob-album-health"),
       actions: pick(".bob-album-action"),
       headers: header,
+      activeHeaders: activePick(".bob-album-header"),
+      ancestryWarnings: activePick(".bob-album-header-ancestry-note"),
+      headersInRecords: activePick('[data-callout="records"] .bob-album-header'),
       crumbs: pick(".bob-album-header-crumb, .bob-album-header a.internal-link"),
       copy: pick(".bob-album-header-copy"),
       schemas: pick(".bob-album-schema-card"),
@@ -481,6 +504,7 @@ module.exports = {
   assertListShape,
   assertFoldRule,
   assertNoMathLeak,
+  assertHeaderIntegrity,
   albumUiProbe,
   albumNote,
   recordNote,

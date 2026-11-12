@@ -6596,27 +6596,28 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "missing " + missing };
     }
     const argv = cmSheetRowArgv(row);
+    const runTitle = opts.title || row.recordTitle || row.title;
     const trigger = row.kind === "recent" ? "sheet-recent" : "sheet";
     const entryOpts = row.entryId ? { entryId: row.entryId } : {};
     if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
-      return this.runPreview(row, argv);
+      return this.runPreview({ ...row, title: runTitle }, argv);
     }
     if (row.policy === "confirm" && !opts.force) {
-      this.confirmRow = row;
+      this.confirmRow = { ...row, title: runTitle };
       this.stage = "confirm";
       this.render();
       return { ok: true, stage: "confirm" };
     }
     if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false, trigger });
+      return this.runReport({ ...row, title: runTitle }, argv, { preview: false, trigger });
     }
     if (row.presentation === "inline") {
       this.close();
-      return this.runner().run(argv, { ...entryOpts, title: row.title, trigger });
+      return this.runner().run(argv, { ...entryOpts, title: runTitle, trigger });
     }
     this.close();
     return this.runner().run(argv, {
-      ...entryOpts, title: row.title, trigger,
+      ...entryOpts, title: runTitle, trigger,
       ...(opts.force ? { skipGuards: true } : {}),
     });
   }
@@ -7431,7 +7432,8 @@ CommandModeSheetModal.prototype.recomputeVisible = function recomputeVisibleWith
         policy: cmNormalizePolicy(entry.policy), hasPreview: Array.isArray(entry.preview) && entry.preview.length > 0,
         confirm: entry.confirm || null, required: cmRequiredPositionals(entry), entryId: entry.id,
         argv: [...entry.path, ...(typed.userArgs || [])], userArgs: [...(typed.userArgs || [])],
-        basePath: [...entry.path], fixed: [...(entry.fixed || [])], unavailable: cmSheetEntryUnavailable(entry, this.host),
+        basePath: [...entry.path], fixed: [...(entry.fixed || [])], recordTitle: entry.title,
+        unavailable: cmSheetEntryUnavailable(entry, this.host),
       });
     }
   }
@@ -7570,7 +7572,9 @@ CommandModeSheetModal.prototype.enterArgumentStage = function enterArgumentStage
   const entry = cmEntryById(this.catalog, row && row.entryId);
   if (!entry || !row || !["entry", "typed"].includes(row.kind)) return false;
   this.listQuery = this.query;
-  this.argRow = row;
+  this.argRow = row.kind === "typed"
+    ? { ...row, recordTitle: row.recordTitle || entry.title }
+    : row;
   this.argEntry = entry;
   this.query = (Array.isArray(row.userArgs) ? row.userArgs : []).map(cmQuoteArg).join(" ");
   this.argCompletionGroups = [];
@@ -7859,7 +7863,36 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
   if (action.type === "args") {
     consume();
     const row = this.selectedRow();
-    if (row && (row.kind === "entry" || row.kind === "typed")) this.enterArgumentStage(row);
+    if (row && (row.kind === "entry" || row.kind === "typed")) {
+      this.enterArgumentStage(row);
+    } else {
+      const entry = row && row.kind === "recent" && !row.sequenceId && !String(row.key || "").startsWith("recent-seq:")
+        ? cmEntryById(this.catalog, row.entryId)
+        : null;
+      const path = entry && Array.isArray(entry.path) ? entry.path : [];
+      const argv = row && Array.isArray(row.argv) ? row.argv : [];
+      const eligibleRecent = Boolean(
+        entry && path.length && argv.length >= path.length &&
+        path.every((word, index) => argv[index] === word),
+      );
+      if (eligibleRecent) {
+        this.enterArgumentStage({
+          ...row,
+          kind: "typed",
+          entryId: entry.id,
+          recordTitle: entry.title,
+          path: ["bob", ...argv],
+          basePath: [...path],
+          fixed: [...(entry.fixed || [])],
+          argv: [...argv],
+          userArgs: argv.slice(path.length),
+        });
+      } else {
+        this.hint = "No argument mode here — pick a bob command row";
+        this.render();
+        this.refocusInput();
+      }
+    }
     return true;
   }
   return cmOriginalSheetHandleKeydown.call(this, event);

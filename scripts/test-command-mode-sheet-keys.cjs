@@ -45,6 +45,7 @@ function makeSheet(options = {}) {
         preview: Boolean(spec.preview),
         bobPath: spec.bobPath || "/Users/x/.cargo/bin/bob",
         startedAt: spec.startedAt,
+        sequence: spec.sequence,
       });
       record.outcome = spec.outcome || "completed";
       record.finished_at = spec.finishedAt || spec.startedAt;
@@ -73,6 +74,18 @@ function makeSheet(options = {}) {
 
 function selectedIndex(modal) {
   return modal.visible.findIndex((row) => row && row.key === modal.selectedKey);
+}
+
+function renderedHint(modal) {
+  const pending = [modal.contentEl];
+  while (pending.length) {
+    const node = pending.pop();
+    if (node && Array.isArray(node.classes) && node.classes.includes("bob-cmd-sheet-hint")) {
+      return node.textContent;
+    }
+    pending.push(...((node && node.children) || []));
+  }
+  return null;
 }
 
 test("three Ctrl+N presses move three rows, keep focus, and wrap", () => {
@@ -239,6 +252,124 @@ test("argument mode walks rendered order and Tab accepts the visible first row",
     assert.equal(modal.argSelectedKey, "completion:0");
     modal.moveArgumentCompletion(1);
     assert.equal(modal.argSelectedKey, "completion:1");
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
+test("Tab enters argument mode from entry and typed rows through the modal keydown listener", () => {
+  const { modal, restore } = makeSheet();
+  try {
+    const entry = modal.visible.find((row) => row.kind === "entry" && row.entryId === "ref-create");
+    assert.ok(entry);
+    modal.selectedKey = entry.key;
+    const entryEvent = pressKey(modal, "Tab");
+    assert.equal(entryEvent.defaultPrevented, true);
+    assert.equal(modal.stage, "args");
+    assert.equal(modal.argEntry.id, "ref-create");
+
+    modal.leaveArgumentStage();
+    modal.query = "ref create target";
+    modal.rebuildRows();
+    modal.render();
+    const typed = modal.visible.find((row) => row.kind === "typed");
+    assert.ok(typed);
+    const typedEvent = pressKey(modal, "Tab");
+    assert.equal(typedEvent.defaultPrevented, true);
+    assert.equal(modal.stage, "args");
+    assert.equal(modal.argEntry.id, "ref-create");
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
+test("Tab on an eligible single-run RECENT row prefills its recorded arguments", () => {
+  const BIN = "/Users/x/.cargo/bin/bob";
+  const { modal, restore } = makeSheet({
+    records: [{
+      id: "20261001-000003-recent",
+      argv: [BIN, "ref", "create", "notes/a note.md"],
+      entryId: "ref-create",
+      title: "Create reference",
+      startedAt: "2026-10-26T12:02:00.000Z",
+    }],
+  });
+  try {
+    const recent = modal.visible.find((row) => row.kind === "recent" && row.entryId === "ref-create");
+    assert.ok(recent);
+    assert.ok(!recent.key.startsWith("recent-seq:"));
+    modal.selectedKey = recent.key;
+    const event = pressKey(modal, "Tab");
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(modal.stage, "args");
+    assert.equal(modal.argEntry.id, "ref-create");
+    assert.deepEqual(helpers.cmTokenizedWords(helpers.cmTokenizeBobArgv(modal.query)), ["notes/a note.md"]);
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
+test("Tab hints on surfaces, plain rows, sequence recents, and unmapped recents", () => {
+  const BIN = "/Users/x/.cargo/bin/bob";
+  const { modal, restore } = makeSheet({
+    records: [
+      {
+        id: "20261001-000001-seq",
+        argv: [BIN, "plan"],
+        entryId: "plan",
+        startedAt: "2026-10-26T12:00:00.000Z",
+        sequence: {
+          id: "sequence-one",
+          index: 1,
+          total: 1,
+          started_at: "2026-10-26T12:00:00.000Z",
+          steps: [{ argv: [BIN, "plan"], entry_id: "plan", title: "Today's plan" }],
+        },
+      },
+      {
+        id: "20261001-000002-unmapped",
+        argv: [BIN, "external", "command"],
+        title: "External command",
+        startedAt: "2026-10-26T12:01:00.000Z",
+      },
+    ],
+  });
+  try {
+    const expectedHint = "No argument mode here — pick a bob command row";
+    const unsupported = [
+      modal.visible.find((row) => row.kind === "surface"),
+      modal.visible.find((row) => row.kind === "plain"),
+      modal.visible.find((row) => row.key.startsWith("recent-seq:")),
+      modal.visible.find((row) => row.kind === "recent" && !row.entryId),
+    ];
+    assert.ok(unsupported.every(Boolean));
+    for (const row of unsupported) {
+      modal.hint = null;
+      modal.selectedKey = row.key;
+      modal.render();
+      const event = pressKey(modal, "Tab");
+      assert.equal(event.defaultPrevented, true, row.key);
+      assert.equal(modal.stage, "list", row.key);
+      assert.equal(modal.hint, expectedHint, row.key);
+      assert.equal(renderedHint(modal), expectedHint, row.key);
+    }
+
+    for (const query of ["capture", "42"]) {
+      modal.query = query;
+      modal.rebuildRows();
+      modal.render();
+      const row = modal.visible[0];
+      assert.ok(row && ["excluded", "vim"].includes(row.kind), query);
+      modal.hint = null;
+      modal.selectedKey = row.key;
+      modal.render();
+      pressKey(modal, "Tab");
+      assert.equal(modal.stage, "list", query);
+      assert.equal(renderedHint(modal), expectedHint, query);
+    }
   } finally {
     modal.close();
     restore();

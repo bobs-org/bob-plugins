@@ -411,7 +411,8 @@ CommandModeSheetModal.prototype.recomputeVisible = function recomputeVisibleWith
         policy: cmNormalizePolicy(entry.policy), hasPreview: Array.isArray(entry.preview) && entry.preview.length > 0,
         confirm: entry.confirm || null, required: cmRequiredPositionals(entry), entryId: entry.id,
         argv: [...entry.path, ...(typed.userArgs || [])], userArgs: [...(typed.userArgs || [])],
-        basePath: [...entry.path], fixed: [...(entry.fixed || [])], unavailable: cmSheetEntryUnavailable(entry, this.host),
+        basePath: [...entry.path], fixed: [...(entry.fixed || [])], recordTitle: entry.title,
+        unavailable: cmSheetEntryUnavailable(entry, this.host),
       });
     }
   }
@@ -550,7 +551,9 @@ CommandModeSheetModal.prototype.enterArgumentStage = function enterArgumentStage
   const entry = cmEntryById(this.catalog, row && row.entryId);
   if (!entry || !row || !["entry", "typed"].includes(row.kind)) return false;
   this.listQuery = this.query;
-  this.argRow = row;
+  this.argRow = row.kind === "typed"
+    ? { ...row, recordTitle: row.recordTitle || entry.title }
+    : row;
   this.argEntry = entry;
   this.query = (Array.isArray(row.userArgs) ? row.userArgs : []).map(cmQuoteArg).join(" ");
   this.argCompletionGroups = [];
@@ -839,7 +842,36 @@ CommandModeSheetModal.prototype.handleSheetKeydown = function handleSheetKeydown
   if (action.type === "args") {
     consume();
     const row = this.selectedRow();
-    if (row && (row.kind === "entry" || row.kind === "typed")) this.enterArgumentStage(row);
+    if (row && (row.kind === "entry" || row.kind === "typed")) {
+      this.enterArgumentStage(row);
+    } else {
+      const entry = row && row.kind === "recent" && !row.sequenceId && !String(row.key || "").startsWith("recent-seq:")
+        ? cmEntryById(this.catalog, row.entryId)
+        : null;
+      const path = entry && Array.isArray(entry.path) ? entry.path : [];
+      const argv = row && Array.isArray(row.argv) ? row.argv : [];
+      const eligibleRecent = Boolean(
+        entry && path.length && argv.length >= path.length &&
+        path.every((word, index) => argv[index] === word),
+      );
+      if (eligibleRecent) {
+        this.enterArgumentStage({
+          ...row,
+          kind: "typed",
+          entryId: entry.id,
+          recordTitle: entry.title,
+          path: ["bob", ...argv],
+          basePath: [...path],
+          fixed: [...(entry.fixed || [])],
+          argv: [...argv],
+          userArgs: argv.slice(path.length),
+        });
+      } else {
+        this.hint = "No argument mode here — pick a bob command row";
+        this.render();
+        this.refocusInput();
+      }
+    }
     return true;
   }
   return cmOriginalSheetHandleKeydown.call(this, event);

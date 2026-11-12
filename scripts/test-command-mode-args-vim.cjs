@@ -101,6 +101,27 @@ test("the list pins typed metadata, disabled exclusions, and the explicit Vim fa
   }
 });
 
+test("typed runs pass the catalog title to the run record", async () => {
+  const { modal, base, restore } = makeModal();
+  try {
+    modal.query = "ref create target";
+    modal.rebuildRows();
+    const typed = modal.visible.find((row) => row.kind === "typed");
+    assert.ok(typed);
+    let captured = null;
+    base.runner.run = async (_argv, options) => {
+      captured = options;
+      return { ok: true, outcome: "completed" };
+    };
+    await modal.activateRow(typed);
+    assert.equal(captured.title, typed.recordTitle);
+    assert.equal(captured.title, helpers.cmEntryById(modal.catalog, typed.entryId).title);
+  } finally {
+    modal.close();
+    restore();
+  }
+});
+
 test("Vim-shaped input follows the agreed positive and negative rules", () => {
   for (const input of ["%s/a/b/g", "42", "noh", "sort", "bob_daily", "g/foo/d", "<,'>w"]) {
     assert.equal(helpers.cmIsVimShaped(input, ["bob_daily"]), true, input);

@@ -489,27 +489,28 @@ class CommandModeSheetModal extends Modal {
       return { ok: false, reason: "missing " + missing };
     }
     const argv = cmSheetRowArgv(row);
+    const runTitle = opts.title || row.recordTitle || row.title;
     const trigger = row.kind === "recent" ? "sheet-recent" : "sheet";
     const entryOpts = row.entryId ? { entryId: row.entryId } : {};
     if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
-      return this.runPreview(row, argv);
+      return this.runPreview({ ...row, title: runTitle }, argv);
     }
     if (row.policy === "confirm" && !opts.force) {
-      this.confirmRow = row;
+      this.confirmRow = { ...row, title: runTitle };
       this.stage = "confirm";
       this.render();
       return { ok: true, stage: "confirm" };
     }
     if (row.presentation === "report") {
-      return this.runReport(row, argv, { preview: false, trigger });
+      return this.runReport({ ...row, title: runTitle }, argv, { preview: false, trigger });
     }
     if (row.presentation === "inline") {
       this.close();
-      return this.runner().run(argv, { ...entryOpts, title: row.title, trigger });
+      return this.runner().run(argv, { ...entryOpts, title: runTitle, trigger });
     }
     this.close();
     return this.runner().run(argv, {
-      ...entryOpts, title: row.title, trigger,
+      ...entryOpts, title: runTitle, trigger,
       ...(opts.force ? { skipGuards: true } : {}),
     });
   }

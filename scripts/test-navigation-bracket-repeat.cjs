@@ -631,7 +631,7 @@ test("walkMode api is versioned and the top-level api version is unchanged", () 
   const { plugin } = createDoorbellPlugin();
   assert.equal(plugin.api.version, 3);
   assert.ok(plugin.api.walkMode);
-  assert.equal(plugin.api.walkMode.version, 1);
+  assert.equal(plugin.api.walkMode.version, 2);
   assert.equal(
     WALK_MODE_DOORBELL_EVENT,
     "bob-navigation-hotkeys:walk-mode",
@@ -728,12 +728,16 @@ test("a throwing workspace trigger never breaks recording or selection", () => {
 
 test("walkMode degrades with a null plugin", () => {
   const api = createWalkModeApi(null);
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.ok(Object.isFrozen(api));
   assert.equal(api.current(), null);
   assert.deepEqual(api.select("s"), { ok: false, reason: "unavailable" });
   assert.deepEqual(api.select("bogus"), {
     ok: false,
     reason: "invalid-type",
+  });
+  assert.deepEqual(api.links({ path: "note.md", content: "" }), {
+    ok: false,
+    reason: "unavailable",
   });
 });

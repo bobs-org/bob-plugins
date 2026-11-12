@@ -75740,8 +75740,9 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
-// `walkMode` is the additive bracket-family namespace (v1): `current()`
-// reads the persisted family, `select(type)` records like a letter click.
+// `walkMode` v2: `current()` reads the persisted family, `select(type)` records
+// like a letter click, and `links({path, content})` previews the first rendered
+// prev/next body links through `[n`/`]n`'s matcher, without opening or writing.
 // `openReferencePdf(path, options?)` hands `source_pdf` to Highlights;
 // `options.page` passes through when positive. Version unchanged.
 function createDependencyNavApi(plugin) {
@@ -76112,14 +76113,17 @@ function planReviewGroupJump(queue, options = {}) {
   });
 }
 // ---- src/482-walk-mode-nav-api.js ----
-// Additive nav `api.walkMode` v1: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v2: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
 // exactly like a selector letter click: it refuses anything but s/w/n with
 // `{ok: false, reason: "invalid-type"}`, otherwise records via
 // `rememberBracketRepeatType` (refreshing the indicator, never walking) and
-// never throws. Ledger feature-detects `api.walkMode?.version >= 1`.
+// never throws. `links({path, content})` v2 previews the first prev/next
+// body links with the exact matcher behind `[n`/`]n`; it is read-only and
+// reports resolved or creation-eligible paths without opening or creating.
+// Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
 // carries no authoritative payload: receivers re-read `current()`. A missing
@@ -76140,7 +76144,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 1,
+    version: 2,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -76173,6 +76177,72 @@ function createWalkModeApi(plugin) {
         }
         plugin.rememberBracketRepeatType(normalized);
         return Object.freeze({ ok: true });
+      } catch (error) {
+        return Object.freeze({ ok: false, reason: "api-failed" });
+      }
+    },
+    links(input = {}) {
+      try {
+        const path =
+          input && typeof input.path === "string" ? input.path.trim() : "";
+        const content = input && typeof input.content === "string"
+          ? input.content
+          : null;
+        if (!path || content === null) {
+          return Object.freeze({ ok: false, reason: "invalid-input" });
+        }
+        if (
+          !plugin ||
+          !plugin.app ||
+          !plugin.app.vault ||
+          typeof plugin.app.vault.getAbstractFileByPath !== "function" ||
+          typeof plugin.isMarkdownFile !== "function" ||
+          typeof plugin.findFirstRenderedLink !== "function" ||
+          typeof plugin.toLineLinkCandidate !== "function"
+        ) {
+          return Object.freeze({ ok: false, reason: "unavailable" });
+        }
+        const sourceFile = plugin.app.vault.getAbstractFileByPath(path);
+        if (!plugin.isMarkdownFile(sourceFile)) {
+          return Object.freeze({ ok: false, reason: "invalid-source" });
+        }
+        const resolve = (label) => {
+          const link = plugin.findFirstRenderedLink(content, label);
+          if (!link) {
+            return null;
+          }
+          let candidate = null;
+          try {
+            candidate = plugin.toLineLinkCandidate(
+              {
+                target: link.target,
+                renderedText: link.renderedText,
+              },
+              path,
+              0,
+            );
+          } catch (error) {
+            candidate = null;
+          }
+          return Object.freeze({
+            text: String(link.renderedText || ""),
+            target: String(link.target || ""),
+            path:
+              candidate && typeof candidate.path === "string"
+                ? candidate.path
+                : null,
+            exists: Boolean(
+              candidate &&
+              candidate.actionKind === "open" &&
+              candidate.resolvedFile,
+            ),
+          });
+        };
+        return Object.freeze({
+          ok: true,
+          prev: resolve("prev"),
+          next: resolve("next"),
+        });
       } catch (error) {
         return Object.freeze({ ok: false, reason: "api-failed" });
       }

@@ -2263,9 +2263,20 @@ test("gated s panel keeps the review footer with ]] next hints", () => {
   });
 });
 
-test("w, n, and unset hide the panel in this phase", () => {
+test("n routes to links while w and unset hide the panel", () => {
   withMissingConfig(() => {
-    for (const mode of ["w", "n", null]) {
+    const nav = makeWalkerNav({ mode: "n" });
+    const links = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
+    try {
+      links.plugin.updateFreshnessStatusBar();
+      assert.equal(links.el.classList.has("bob-freshness-hidden"), false, "mode n shows links");
+      assert.equal(links.plugin.freshnessFooterLastView.mode, "links");
+      assert.equal(links.plugin.freshnessFooterLastView.linkState, "open-note");
+    } finally {
+      links.plugin.onunload();
+    }
+
+    for (const mode of ["w", null]) {
       const nav = makeWalkerNav({ mode });
       const { el, plugin } = setupWalkerPlugin({ tasks: [makeFreshnessTask()], nav });
       try {

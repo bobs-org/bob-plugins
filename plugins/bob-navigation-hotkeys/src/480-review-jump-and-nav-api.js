@@ -902,8 +902,9 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
-// `walkMode` is the additive bracket-family namespace (v1): `current()`
-// reads the persisted family, `select(type)` records like a letter click.
+// `walkMode` v2: `current()` reads the persisted family, `select(type)` records
+// like a letter click, and `links({path, content})` previews the first rendered
+// prev/next body links through `[n`/`]n`'s matcher, without opening or writing.
 // `openReferencePdf(path, options?)` hands `source_pdf` to Highlights;
 // `options.page` passes through when positive. Version unchanged.
 function createDependencyNavApi(plugin) {

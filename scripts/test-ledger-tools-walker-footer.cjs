@@ -18,6 +18,8 @@ class TestPlugin {
   }
 }
 
+class TestMarkdownView {}
+
 class TestElement {
   constructor(tag = "div", className = "") {
     this.tagName = tag;
@@ -68,7 +70,7 @@ const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     return {
-      MarkdownView: class {},
+      MarkdownView: TestMarkdownView,
       Notice: class {},
       Platform: { isDesktopApp: true },
       Plugin: TestPlugin,
@@ -100,6 +102,9 @@ const {
   laneWalkQueueFromTasks,
   laneWalkerFooterReadLatestWorkLog,
   laneWalkerFooterView,
+  linksWalkerFooterActivate,
+  linksWalkerFooterRequest,
+  linksWalkerFooterView,
   readyBadgeModel,
   readyBudgetFromTasks,
 } = helpers;
@@ -426,6 +431,213 @@ test("status button repeats the persisted w walk and does not change the mode", 
 
   assert.equal(plugin.freshnessFooterLastView.panel, "lanes");
   assert.equal(plugin.freshnessFooterLastView.dueText, "Lanes 1/1");
+  plugin.freshnessStatusClicked();
+  assert.deepEqual(calls, ["bob-navigation-hotkeys:repeat-next-bracket-walk"]);
+});
+
+test("links panel shows resolved destinations, dashed create targets, and safe clear states", () => {
+  const both = linksWalkerFooterView({
+    ok: true,
+    prev: {
+      text: "prev",
+      target: "2026/20261111",
+      path: "2026/20261111.md",
+      exists: true,
+    },
+    next: {
+      text: "next",
+      target: "2026/20261113",
+      path: "2026/20261113.md",
+      exists: true,
+    },
+  });
+  assert.equal(both.visible, true);
+  assert.equal(both.panel, "links");
+  assert.equal(both.glyph, "⇄");
+  assert.equal(both.linkPrev.text, "‹ Wed Nov 11");
+  assert.equal(both.linkNext.text, "Fri Nov 13 ›");
+  assert.match(both.tooltip, /2026\/20261111\.md/);
+
+  const duplicateBasenames = linksWalkerFooterView({
+    ok: true,
+    prev: {
+      text: "prev",
+      target: "areas/20261111",
+      path: "areas/20261111.md",
+      exists: true,
+    },
+    next: {
+      text: "next",
+      target: "projects/20261111",
+      path: "projects/20261111.md",
+      exists: true,
+    },
+  });
+  assert.match(duplicateBasenames.linkPrev.text, /areas\/Wed Nov 11/);
+  assert.match(duplicateBasenames.linkNext.text, /projects\/Wed Nov 11/);
+
+  const missing = linksWalkerFooterView({
+    ok: true,
+    prev: null,
+    next: {
+      text: "W47 ›",
+      target: "2026/2026-W47",
+      path: "2026/2026-W47.md",
+      exists: false,
+    },
+  });
+  assert.equal(missing.linkState, "next-only");
+  assert.equal(missing.linkNext.text, "W47+ ›");
+  assert.equal(missing.linkNext.createEligible, true);
+  assert.match(missing.linkNext.tooltip, /No W47 note yet — \]\] creates it/);
+  assert.equal(missing.linkStatusText, "no prev");
+
+  const empty = linksWalkerFooterView({ ok: true, prev: null, next: null });
+  assert.equal(empty.linkState, "empty");
+  assert.equal(empty.linkStatusText, "no ‹ / › links in this note");
+  const openNote = linksWalkerFooterView(null, { state: "open-note" });
+  assert.equal(openNote.linkStatusText, "open a note");
+  const unavailable = linksWalkerFooterView(null, { state: "unavailable" });
+  assert.equal(unavailable.linkStatusText, "links unavailable");
+});
+
+test("links panel painter exposes safe direction buttons and dashed creation state", () => {
+  const host = new TestElement("div");
+  const view = linksWalkerFooterView({
+    ok: true,
+    prev: null,
+    next: {
+      text: "W47 ›",
+      target: "2026/2026-W47",
+      path: "2026/2026-W47.md",
+      exists: false,
+    },
+  });
+  const parts = freshnessFooterPaint(host, view);
+  assert.equal(parts.button.children[0].text, "⇄");
+  assert.equal(parts.linkNext.tagName, "button");
+  assert.equal(parts.linkNext.attrs.type, "button");
+  assert.equal(parts.linkNext.attrs["data-walk-link-direction"], "next");
+  assert.equal(parts.linkNext.disabled, false);
+  assert.equal(parts.linkNext.classList.contains("bob-freshness-link-create"), true);
+  assert.equal(parts.linkPrev.attrs.hidden, "hidden");
+  assert.equal(host.classList.contains("bob-freshness-links"), true);
+  assert.match(deepText(host), /W47\+ ›/);
+  assert.doesNotMatch(deepText(host), /<script>/);
+});
+
+function createLinkFooterHarness({ mode = "n", content = "[[target|next]]" } = {}) {
+  const state = { mode, content, path: "notes/source.md" };
+  const view = new TestMarkdownView();
+  view.file = { path: state.path, extension: "md" };
+  view.editor = {
+    getValue: () => state.content,
+    cm: { state: { doc: {} } },
+  };
+  const calls = [];
+  const commands = {
+    commands: {
+      "bob-navigation-hotkeys:repeat-next-bracket-walk": {},
+      "bob-navigation-hotkeys:open-prev-link": {},
+      "bob-navigation-hotkeys:open-next-link": {},
+    },
+    executeCommandById: (id) => calls.push(id),
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    workspace: { getActiveViewOfType: () => view },
+    commands,
+  };
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 2,
+      current: () => state.mode,
+      links: ({ path, content: source }) => ({
+        ok: true,
+        prev: null,
+        next: {
+          text: "next",
+          target: source.includes("changed") ? "changed" : "target",
+          path: source.includes("changed") ? "changed.md" : "target.md",
+          exists: true,
+        },
+        path,
+      }),
+    },
+  });
+  plugin.freshnessStatusEl = new TestElement("div");
+  return { plugin, state, view, calls };
+}
+
+test("async link preview paints only for the still-selected mode and editor revision", async () => {
+  const { plugin, state } = createLinkFooterHarness();
+  let resolvePreview;
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 2,
+      current: () => state.mode,
+      links: () => new Promise((resolve) => { resolvePreview = resolve; }),
+    },
+  });
+  linksWalkerFooterRequest(plugin);
+  await Promise.resolve();
+  assert.equal(typeof resolvePreview, "function");
+  state.mode = "w";
+  resolvePreview({
+    ok: true,
+    prev: null,
+    next: { text: "next", target: "target", path: "target.md", exists: true },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(plugin.freshnessFooterLastView?.panel, "links");
+
+  state.mode = "n";
+  plugin.linkWalkerFooterGeneration = 0;
+  let resolveSecond;
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 2,
+      current: () => state.mode,
+      links: () => new Promise((resolve) => { resolveSecond = resolve; }),
+    },
+  });
+  linksWalkerFooterRequest(plugin);
+  await Promise.resolve();
+  state.content = "[[changed|next]]";
+  resolveSecond({
+    ok: true,
+    prev: null,
+    next: { text: "next", target: "target", path: "target.md", exists: true },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.notEqual(plugin.freshnessFooterLastView?.panel, "links");
+});
+
+test("link direction activation revalidates the preview and calls the existing command", async () => {
+  const { plugin, state, calls } = createLinkFooterHarness();
+  linksWalkerFooterRequest(plugin);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(plugin.freshnessFooterLastView.panel, "links");
+  assert.equal(linksWalkerFooterActivate(plugin, "next"), true);
+  assert.deepEqual(calls, ["bob-navigation-hotkeys:open-next-link"]);
+
+  state.mode = "w";
+  assert.equal(linksWalkerFooterActivate(plugin, "next"), false);
+  assert.deepEqual(calls, ["bob-navigation-hotkeys:open-next-link"]);
+});
+
+test("links main button repeats the n walk through the existing bracket command", () => {
+  const calls = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    commands: {
+      commands: { "bob-navigation-hotkeys:repeat-next-bracket-walk": {} },
+      executeCommandById: (id) => calls.push(id),
+    },
+  };
+  plugin.dependencyNavApi = () => ({
+    walkMode: { version: 2, current: () => "n", links: () => ({ ok: true }) },
+  });
   plugin.freshnessStatusClicked();
   assert.deepEqual(calls, ["bob-navigation-hotkeys:repeat-next-bracket-walk"]);
 });

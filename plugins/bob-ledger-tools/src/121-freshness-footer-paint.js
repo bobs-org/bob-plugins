@@ -131,6 +131,33 @@ function freshnessFooterEnsureDom(el) {
     "span",
     "bob-freshness-context",
   );
+  const linkPrev = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-prev",
+  );
+  const linkSeparator = freshnessFooterCreateChild(
+    el,
+    "span",
+    "bob-freshness-link-separator",
+  );
+  const linkNext = freshnessFooterCreateChild(
+    el,
+    "button",
+    "bob-freshness-link-arm bob-freshness-link-next",
+  );
+  const linkStatus = freshnessFooterCreateChild(
+    el,
+    "span",
+    "bob-freshness-link-status",
+  );
+  freshnessFooterSetAttr(linkPrev, "type", "button");
+  freshnessFooterSetAttr(linkNext, "type", "button");
+  freshnessFooterSetText(linkSeparator, "·");
+  freshnessFooterSetOmitted(linkPrev, true);
+  freshnessFooterSetOmitted(linkSeparator, true);
+  freshnessFooterSetOmitted(linkNext, true);
+  freshnessFooterSetOmitted(linkStatus, true);
   const detail = freshnessFooterCreateChild(
     el,
     "span",
@@ -143,7 +170,20 @@ function freshnessFooterEnsureDom(el) {
     "bob-freshness-groups",
   );
   const meter = freshnessFooterCreateChild(el, "span", "bob-freshness-meter");
-  const parts = { button, icon, due, context, detail, hint, groups, meter };
+  const parts = {
+    button,
+    icon,
+    due,
+    context,
+    linkPrev,
+    linkSeparator,
+    linkNext,
+    linkStatus,
+    detail,
+    hint,
+    groups,
+    meter,
+  };
   el._bobFreshnessParts = parts;
   return parts;
 }
@@ -456,6 +496,7 @@ function freshnessFooterPaint(el, view) {
     "bob-freshness-clear",
     "bob-freshness-budget",
     "bob-freshness-lanes",
+    "bob-freshness-links",
     "bob-freshness-hidden",
   ];
   const wanted = visible
@@ -494,6 +535,7 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterPaintHint(parts.hint, view);
     freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
+    freshnessFooterPaintLinks(parts, null);
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
     freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
     freshnessFooterSetAttr(parts.button, "aria-label", "Walker footer hidden");
@@ -507,6 +549,7 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterPaintHint(parts.hint, view);
   freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
+  freshnessFooterPaintLinks(parts, view.panel === "links" ? view : null);
   freshnessFooterSetOmitted(parts.context, !view.contextText);
   freshnessFooterSetOmitted(parts.detail, !view.detailText);
   freshnessFooterSetOmitted(parts.hint, !view.hintText);
@@ -550,4 +593,59 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterSetAttr(parts.button, "title", view.tooltip);
   freshnessFooterFit(el, parts, view);
   return parts;
+}
+
+function freshnessFooterPaintLinks(parts, view) {
+  if (!parts) {
+    return;
+  }
+  const active = Boolean(view && view.panel === "links");
+  const prev = active ? view.linkPrev : null;
+  const next = active ? view.linkNext : null;
+  const showSeparator = Boolean(prev && next);
+  for (const [button, arm] of [
+    [parts.linkPrev, prev],
+    [parts.linkNext, next],
+  ]) {
+    freshnessFooterSetOmitted(button, !arm);
+    freshnessFooterSetText(button, arm ? arm.text : "");
+    freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
+    freshnessFooterSetAttr(
+      button,
+      "aria-label",
+      arm ? `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}` : "",
+    );
+    freshnessFooterSetAttr(
+      button,
+      "data-walk-link-direction",
+      arm ? arm.direction : "",
+    );
+    freshnessFooterToggleClass(
+      button,
+      "bob-freshness-link-create",
+      Boolean(arm && arm.createEligible),
+    );
+    freshnessFooterToggleClass(
+      button,
+      "bob-freshness-link-unavailable",
+      Boolean(arm && !arm.enabled),
+    );
+    try {
+      if (button) {
+        button.disabled = !arm || arm.enabled !== true;
+        button.tabIndex = arm && arm.enabled === true ? 0 : -1;
+      }
+    } catch (error) {
+      // Focus management is best-effort.
+    }
+  }
+  freshnessFooterSetOmitted(parts.linkSeparator, !showSeparator);
+  freshnessFooterSetText(
+    parts.linkStatus,
+    active ? view.linkStatusText : "",
+  );
+  freshnessFooterSetOmitted(
+    parts.linkStatus,
+    !active || !view.linkStatusText,
+  );
 }

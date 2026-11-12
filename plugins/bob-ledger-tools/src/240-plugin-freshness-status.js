@@ -72,6 +72,38 @@ class BobLedgerToolsFreshnessStatusMixin {
       } catch (error) {
         // A status bar without a click still shows the counts.
       }
+      for (const [direction, button] of [
+        ["prev", parts && parts.linkPrev],
+        ["next", parts && parts.linkNext],
+      ]) {
+        try {
+          if (!button || typeof button.addEventListener !== "function") {
+            continue;
+          }
+          button.addEventListener("click", (event) => {
+            try {
+              if (event && typeof event.preventDefault === "function") {
+                event.preventDefault();
+              }
+              if (event && typeof event.stopPropagation === "function") {
+                event.stopPropagation();
+              }
+            } catch (error) {
+              // Best-effort.
+            }
+            linksWalkerFooterActivate(self, direction);
+          });
+        } catch (error) {
+          // A missing direction-button listener does not break the panel.
+        }
+      }
+      try {
+        if (typeof this.register === "function") {
+          this.register(() => linksWalkerFooterInvalidate(this));
+        }
+      } catch (error) {
+        // Invalidation is repeated by every later family update.
+      }
       this.observeFreshnessFooterWidth(el);
       this.subscribeWalkerFooterDoorbell();
       this.refreshWalkerFooterOnLayoutReady();
@@ -281,6 +313,11 @@ class BobLedgerToolsFreshnessStatusMixin {
     try {
       const route = walkerFooterWalkMode(this);
       const contextOnly = options && options.contextOnly === true;
+      if (!route.legacy && route.mode === "n") {
+        linksWalkerFooterRequest(this);
+        return;
+      }
+      linksWalkerFooterInvalidate(this);
       if (!route.legacy && route.mode === "w") {
         let queue = null;
         try {
@@ -551,6 +588,23 @@ class BobLedgerToolsFreshnessStatusMixin {
     try {
       const commands = this.app && this.app.commands;
       const route = walkerFooterWalkMode(this);
+      if (!route.legacy && route.mode === "n") {
+        const linkCommandId =
+          "bob-navigation-hotkeys:repeat-next-bracket-walk";
+        const linkCommandExists = Boolean(
+          commands &&
+            ((commands.commands && commands.commands[linkCommandId]) ||
+              (typeof commands.findCommand === "function" &&
+                commands.findCommand(linkCommandId))),
+        );
+        if (
+          linkCommandExists &&
+          typeof commands.executeCommandById === "function"
+        ) {
+          commands.executeCommandById(linkCommandId);
+        }
+        return;
+      }
       if (!route.legacy && route.mode === "w") {
         const laneCommandId =
           "bob-navigation-hotkeys:repeat-next-bracket-walk";

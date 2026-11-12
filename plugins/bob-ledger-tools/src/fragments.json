@@ -19,6 +19,7 @@
   "121-freshness-footer-paint.js",
   "122-walker-footer-host.js",
   "123-lane-walker-footer.js",
+  "124-links-walker-footer.js",
   "130-freshness-marks.js",
   "135-freshness-rotten-log.js",
   "135-priority-marks.js",
@@ -221,5 +222,6 @@
   "351-exports-prj-hide.js",
   "352-exports-album.js",
   "353-exports-gmail-open-hint.js",
-  "354-exports-walker-footer.js"
+  "354-exports-walker-footer.js",
+  "355-exports-links-walker-footer.js"
 ]

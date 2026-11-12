@@ -465,6 +465,31 @@ test("Esc closes without writing", async () => {
   assert.equal(modal.isOpen, false);
 });
 
+test("q and Ctrl+[ close without writing", async () => {
+  for (const event of [
+    keyEvent("q"),
+    keyEvent("[", { ctrlKey: true }),
+    keyEvent("x", { ctrlKey: true, code: "BracketLeft" }),
+  ]) {
+    let writes = 0;
+    const modal = openCard(bryanModel(), async () => {
+      writes += 1;
+      return { ok: true };
+    });
+    modal.handleCopyCardKey(event);
+    await nextTurn();
+    assert.equal(writes, 0);
+    assert.equal(modal.isOpen, false);
+  }
+});
+
+test("footer shows q as a close key", () => {
+  const modal = openCard(bryanModel());
+  const footer = flattenText(modal.footerEl);
+  assert.match(footer, /esc.*q.*close/i);
+  modal.close();
+});
+
 test("clicking a copyable row copies it; clicking a dimmed row refuses", async () => {
   const writes = [];
   const noId = buildCopyCardModel({

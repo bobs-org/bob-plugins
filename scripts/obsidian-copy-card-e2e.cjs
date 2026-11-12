@@ -321,7 +321,7 @@ function keyDispatchEvents(options) {
   const events = [];
   if (modifier) events.push({ type: "keyDown", key: modifier.key, code: modifier.code, modifiers: modifier.bit, windowsVirtualKeyCode: modifier.vk, nativeVirtualKeyCode: modifier.vk });
   const mask = modifier ? modifier.bit : 0;
-  const vk = key === "Enter" ? 13 : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
+  const vk = settings.vk == null ? (key === "Enter" ? 13 : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0) : settings.vk;
   events.push({
     type: "keyDown",
     key,
@@ -481,6 +481,10 @@ function runSelfTest() {
   const events = keyDispatchEvents({ key: "y", ctrl: true });
   assert.deepEqual(events.map((event) => event.type), ["keyDown", "keyDown", "keyUp", "keyUp"]);
   assert.ok(events[1].modifiers & 2);
+  const ctrlBracketEvents = keyDispatchEvents({ key: "[", code: "BracketLeft", vk: 219, ctrl: true });
+  assert.equal(ctrlBracketEvents[1].code, "BracketLeft");
+  assert.equal(ctrlBracketEvents[1].windowsVirtualKeyCode, 219);
+  assert.ok(ctrlBracketEvents[1].modifiers & 2);
   console.log("offline self-test complete (not an Obsidian pass)");
 }
 
@@ -682,6 +686,18 @@ async function runE2e(args) {
     await closeCard(client);
     const escapeClip = await readClipboard(client);
     record("escape-closes-without-copy", Boolean(escapeClip && escapeClip.ok && escapeClip.value === escapeSeed.sentinel), escapeClip && escapeClip.value || "");
+
+    for (const closeCase of [
+      { name: "q-closes-without-copy", key: "q" },
+      { name: "ctrl-bracket-closes-without-copy", key: "[", code: "BracketLeft", vk: 219, ctrl: true },
+    ]) {
+      const seeded = await seedClipboard(closeCase.name);
+      await openCardAt(client, fixture.TASKS.id.title, true);
+      await dispatchKey(client, closeCase);
+      const closed = await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, closeCase.name);
+      const copied = await readClipboard(client);
+      record(closeCase.name, Boolean(closed && copied && copied.ok && copied.value === seeded.sentinel), copied && copied.value || "");
+    }
 
     const twiceSeed = await seedClipboard("mod-y-twice");
     await openCardAt(client, fixture.TASKS.id.title, true);

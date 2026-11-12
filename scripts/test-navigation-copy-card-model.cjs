@@ -7,6 +7,7 @@ const { helpers } = require("./navigation-hotkeys-harness.cjs");
 const {
   COPY_CARD_BUILTIN_ROWS,
   COPY_CARD_RESERVED_KEYS,
+  COPY_CARD_CLOSE_KEY,
   resolveCopyCardTask,
   parseCopyTemplate,
   renderCopyTemplate,
@@ -580,6 +581,35 @@ test("keys: letters are case-insensitive", () => {
   });
 });
 
+test("keys: q and Ctrl+[ close the card", () => {
+  const model = bryanModel({
+    templates: [{ label: "Q template", key: "q", template: "{note_name}" }],
+  });
+  const ui = { highlightId: "path", busy: false };
+  assert.equal(COPY_CARD_CLOSE_KEY, "q");
+  for (const event of [
+    keyEvent("q"),
+    keyEvent("Q"),
+    keyEvent("Q", { shiftKey: true }),
+    keyEvent("[", { ctrlKey: true }),
+    keyEvent("x", { ctrlKey: true, code: "BracketLeft" }),
+  ]) {
+    assert.deepEqual(resolveCopyCardKey(model, event, ui), { type: "close" });
+  }
+  for (const event of [
+    keyEvent("[", { ctrlKey: true, shiftKey: true }),
+    keyEvent("[", { altKey: true }),
+    keyEvent("[", { metaKey: true }),
+    keyEvent("q", { ctrlKey: true }),
+    keyEvent("q", { metaKey: true }),
+    keyEvent("q", { altKey: true }),
+    keyEvent("q", { repeat: true }),
+    keyEvent("q", { isComposing: true }),
+  ]) {
+    assert.equal(resolveCopyCardKey(model, event, ui), null);
+  }
+});
+
 test("keys: Shift+letter, repeats, IME, and other modified chords are ignored", () => {
   const model = bryanModel();
   const ui = { highlightId: "path", busy: false };
@@ -819,6 +849,27 @@ test("keys: reserved and duplicate collisions are keyless but copyable", () => {
   );
 });
 
+test("templates: q is reserved for close, including duplicate claims", () => {
+  const loaded = loadTemplates({
+    copy: {
+      templates: [
+        { label: "Q template", key: "q", template: "{note_name}" },
+        { label: "Q twin", key: "Q", template: "{file_name}" },
+      ],
+    },
+  });
+  for (const template of loaded.templates) {
+    assert.equal(template.key, null);
+    assert.equal(template.state, "collision");
+    assert.equal(template.reason, "key q closes the card");
+  }
+  const model = bryanModel({ templates: loaded.templates });
+  assert.deepEqual(
+    resolveCopyCardKey(model, keyEvent("q"), { highlightId: "path", busy: false }),
+    { type: "close" },
+  );
+});
+
 test("keys: busy consumes every key", () => {
   const model = bryanModel();
   const ui = { highlightId: "path", busy: true };
@@ -829,6 +880,12 @@ test("keys: busy consumes every key", () => {
     type: "consume",
   });
   assert.deepEqual(resolveCopyCardKey(model, keyEvent("Escape"), ui), {
+    type: "consume",
+  });
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("q"), ui), {
+    type: "consume",
+  });
+  assert.deepEqual(resolveCopyCardKey(model, keyEvent("[", { ctrlKey: true }), ui), {
     type: "consume",
   });
   assert.deepEqual(

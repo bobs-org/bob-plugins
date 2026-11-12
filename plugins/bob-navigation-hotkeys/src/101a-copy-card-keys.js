@@ -131,6 +131,9 @@ function resolveCopyCardKey(model, event, ui) {
     }
     return copyCardKeyAction("close");
   }
+  if (isTaskCardCloseKeydown(event)) {
+    return copyCardKeyAction("close");
+  }
   if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event, state.platform)) {
     const row =
       copyCardRowById(model, state.highlightId) ||

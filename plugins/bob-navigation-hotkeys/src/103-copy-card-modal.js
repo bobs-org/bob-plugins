@@ -264,7 +264,7 @@ class CopyCardModal extends Modal {
     const chips = [
       { keys: ["↵"], label: `copy ${label}` },
       { keys: ["↑↓"], label: "select" },
-      { keys: ["esc"], label: "close" },
+      { keys: ["esc", "q"], label: "close" },
     ];
     for (const chip of chips) {
       const group = this.footerEl.createDiv({ cls: "bob-cnp-hint" });

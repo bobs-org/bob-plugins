@@ -12864,6 +12864,7 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
 const COPY_CARD_RESERVED_KEYS = Object.freeze(
   COPY_CARD_BUILTIN_ROWS.map((row) => row.key),
 );
+const COPY_CARD_CLOSE_KEY = "q";
 const COPY_CARD_NONE_TASK = Object.freeze({
   state: "none",
   line: null,
@@ -13362,6 +13363,9 @@ function normalizeCopyCardTemplates(list) {
   }
 
   const owners = new Map();
+  owners.set(COPY_CARD_CLOSE_KEY, [
+    Object.freeze({ kind: "close", label: "Close", index: -1 }),
+  ]);
   for (const builtin of COPY_CARD_BUILTIN_ROWS) {
     owners.set(builtin.key, [
       Object.freeze({ kind: "builtin", label: builtin.label, index: -1 }),
@@ -13396,7 +13400,7 @@ function normalizeCopyCardTemplates(list) {
       }
       const claimed = owners.get(template.key) || [];
       const others = claimed.filter(
-        (owner) => owner.kind === "builtin" || owner.index !== template.index,
+        (owner) => owner.kind !== "template" || owner.index !== template.index,
       );
       const uniqueTemplate =
         claimed.length === 1 && claimed[0].kind === "template";
@@ -13404,11 +13408,14 @@ function normalizeCopyCardTemplates(list) {
         return preserve(template);
       }
       const builtin = others.find((owner) => owner.kind === "builtin");
+      const close = others.find((owner) => owner.kind === "close");
       const otherTemplate = others.find((owner) => owner.kind === "template");
       const originalKey = template.key;
       let reason;
       if (builtin) {
         reason = `key ${originalKey} is ${builtin.label}'s`;
+      } else if (close) {
+        reason = `key ${originalKey} closes the card`;
       } else {
         reason = `key ${originalKey} is also ${otherTemplate.label}'s`;
       }
@@ -13885,6 +13892,9 @@ function resolveCopyCardKey(model, event, ui) {
     if (modified) {
       return null;
     }
+    return copyCardKeyAction("close");
+  }
+  if (isTaskCardCloseKeydown(event)) {
     return copyCardKeyAction("close");
   }
   if (COPY_CARD_CMD_Y_TWICE && isCopyCardModY(event, state.platform)) {
@@ -14364,7 +14374,7 @@ class CopyCardModal extends Modal {
     const chips = [
       { keys: ["↵"], label: `copy ${label}` },
       { keys: ["↑↓"], label: "select" },
-      { keys: ["esc"], label: "close" },
+      { keys: ["esc", "q"], label: "close" },
     ];
     for (const chip of chips) {
       const group = this.footerEl.createDiv({ cls: "bob-cnp-hint" });
@@ -117238,6 +117248,7 @@ Object.assign(module.exports.helpers, {
 Object.assign(module.exports.helpers, {
   COPY_CARD_BUILTIN_ROWS,
   COPY_CARD_RESERVED_KEYS,
+  COPY_CARD_CLOSE_KEY,
   resolveCopyCardTask,
   parseCopyTemplate,
   renderCopyTemplate,

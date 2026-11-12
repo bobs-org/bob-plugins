@@ -21,8 +21,10 @@ and copying never writes the vault.
 | `I` | Block ID (task group) | `^bank-records` |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
-`P A F N I` are reserved even when their row is hidden, so a key never
-changes meaning. Letters are case-insensitive. `Shift+letter` is ignored.
+`P A F N I` are reserved even when their row is hidden, and `q` is reserved
+for closing, so a key never changes meaning. `Esc`, `q`, and `Ctrl+[` close
+the card without copying; `Shift+Q` closes like `q`. Other `Shift+letter`
+keys are ignored.
 Row order is fixed: file rows, then file-only templates, then the `TASK`
 group (`I`, then templates that use `{block_id}`). Templates keep the order
 they have in `copy.templates`. The highlight starts on Path, or on the
@@ -30,7 +32,8 @@ first copyable row when Path is unavailable. `↵` copies the highlighted
 row. `↑` / `↓` and `Ctrl+P` / `Ctrl+N` move the highlight among copyable
 rows and wrap. A fresh second `Cmd+Y` on the open card copies the
 highlighted row (Ctrl+Y on Linux, Cmd+Y on macOS). Other modified chords
-are ignored except exact `Ctrl+N` / `Ctrl+P`; `Alt+Escape` does not close.
+are ignored except exact `Ctrl+N` / `Ctrl+P` and `Ctrl+[`; `Alt+Escape`
+does not close.
 Pressing the key of a dimmed row moves the highlight there, nudges the
 row, and announces the reason instead of copying. Keyboard selection and
 refused keys scroll the row nearest into view, and a failed clipboard
@@ -91,7 +94,8 @@ the card, never on the clipboard: unknown variables (with a
 empty or non-string templates (`quote the template`), blank labels
 (`add a label`), non-mapping entries (`expected label and template`),
 missing values (`needs a block ID`, `needs an absolute vault path`), and
-collisions (`key p is Path's`) which stay copyable by `↑↓ ↵` or click.
+collisions (`key p is Path's`, `key q closes the card`) which stay copyable
+by `↑↓ ↵` or click.
 An explicit `key:` must be one letter or digit after lowercasing, with no
 trimming: blank, whitespace, padded, and null keys are invalid. Only an
 omitted `key` gets the positional `1`–`9` default. Entries past the ninth

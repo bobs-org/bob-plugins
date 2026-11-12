@@ -615,6 +615,18 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // nav api v3 (`docs/task-dependencies.md` §9): frozen, versioned, never
     // throws. bob-ledger-tools feature-detects `api?.version >= 1`.
     this.api = createDependencyNavApi(this);
+    // Walk-mode doorbell: announce once at setup so a late-loading
+    // listener still gets one event. On desktop the indicator setup above
+    // already performed the first stored-family read; anywhere else
+    // receivers re-read `api.walkMode.current()`, which lazily loads it.
+    // The event carries no authoritative payload.
+    try {
+      if (typeof fireWalkModeDoorbell === "function") {
+        fireWalkModeDoorbell(this);
+      }
+    } catch (error) {
+      // The doorbell never blocks setup.
+    }
     this.registerOpenTaskJumpInputListeners();
     this.registerReviewRefreshInputListeners();
     this.registerCountedTransclusionToggleInputListeners();

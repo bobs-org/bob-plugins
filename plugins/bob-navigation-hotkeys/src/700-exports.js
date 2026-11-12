@@ -995,6 +995,6 @@ module.exports.helpers = {
   showLaneWalkNotice,
   normalizeBracketRepeatType, planBracketRepeat, BRACKET_REPEAT_UPPERCASE_PLANS,
   BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE, BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
-  BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS,
-  buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator,
+  BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS, WALK_MODE_DOORBELL_EVENT, fireWalkModeDoorbell,
+  buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator, createWalkModeApi,
 };

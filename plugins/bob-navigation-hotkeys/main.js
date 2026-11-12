@@ -75740,6 +75740,8 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
 // works now; `openStage` settles `{ok: false}` until both stage directions
 // land and the namespace rises to v1.
+// `walkMode` is the additive bracket-family namespace (v1): `current()`
+// reads the persisted family, `select(type)` records like a letter click.
 // `openReferencePdf(path, options?)` hands `source_pdf` to Highlights;
 // `options.page` passes through when positive. Version unchanged.
 function createDependencyNavApi(plugin) {
@@ -75772,6 +75774,7 @@ function createDependencyNavApi(plugin) {
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
+    walkMode: createWalkModeApi(plugin),
     openReferencePdf(path, options) {
       if (!plugin || typeof plugin.openReferencePdfPath !== "function") {
         return Promise.resolve({ ok: false, reason: "unavailable" });
@@ -76106,6 +76109,74 @@ function planReviewGroupJump(queue, options = {}) {
     total: remaining.length,
     wrapped: Boolean(stepped.wrapped),
     originTier,
+  });
+}
+// ---- src/482-walk-mode-nav-api.js ----
+// Additive nav `api.walkMode` v1: the persisted bracket-walk family plus a
+// workspace doorbell. `current()` returns the persisted family ("s", "w",
+// "n", or null for unset) via `readBracketRepeatType()`; invalid stored
+// values normalize to null and it never throws. `select(type)` behaves
+// exactly like a selector letter click: it refuses anything but s/w/n with
+// `{ok: false, reason: "invalid-type"}`, otherwise records via
+// `rememberBracketRepeatType` (refreshing the indicator, never walking) and
+// never throws. Ledger feature-detects `api.walkMode?.version >= 1`.
+// The doorbell fires from `rememberBracketRepeatType` only on an actual
+// change and once at plugin setup after the stored value is first read. It
+// carries no authoritative payload: receivers re-read `current()`. A missing
+// workspace trigger or a throwing listener never breaks the walk.
+const WALK_MODE_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
+
+function fireWalkModeDoorbell(plugin) {
+  try {
+    const workspace = plugin && plugin.app ? plugin.app.workspace : null;
+    if (!workspace || typeof workspace.trigger !== "function") {
+      return;
+    }
+    workspace.trigger(WALK_MODE_DOORBELL_EVENT);
+  } catch (error) {
+    // The doorbell never breaks the walk or a selection.
+  }
+}
+
+function createWalkModeApi(plugin) {
+  return Object.freeze({
+    version: 1,
+    current() {
+      try {
+        if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
+          return null;
+        }
+        return plugin.readBracketRepeatType();
+      } catch (error) {
+        return null;
+      }
+    },
+    select(type) {
+      try {
+        let normalized = null;
+        try {
+          normalized =
+            typeof normalizeBracketRepeatType === "function"
+              ? normalizeBracketRepeatType(type)
+              : null;
+        } catch (error) {
+          normalized = null;
+        }
+        if (normalized === null) {
+          return Object.freeze({ ok: false, reason: "invalid-type" });
+        }
+        if (
+          !plugin ||
+          typeof plugin.rememberBracketRepeatType !== "function"
+        ) {
+          return Object.freeze({ ok: false, reason: "unavailable" });
+        }
+        plugin.rememberBracketRepeatType(normalized);
+        return Object.freeze({ ok: true });
+      } catch (error) {
+        return Object.freeze({ ok: false, reason: "api-failed" });
+      }
+    },
   });
 }
 // ---- src/485-blocks-nav-api.js ----
@@ -76805,6 +76876,18 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // nav api v3 (`docs/task-dependencies.md` §9): frozen, versioned, never
     // throws. bob-ledger-tools feature-detects `api?.version >= 1`.
     this.api = createDependencyNavApi(this);
+    // Walk-mode doorbell: announce once at setup so a late-loading
+    // listener still gets one event. On desktop the indicator setup above
+    // already performed the first stored-family read; anywhere else
+    // receivers re-read `api.walkMode.current()`, which lazily loads it.
+    // The event carries no authoritative payload.
+    try {
+      if (typeof fireWalkModeDoorbell === "function") {
+        fireWalkModeDoorbell(this);
+      }
+    } catch (error) {
+      // The doorbell never blocks setup.
+    }
     this.registerOpenTaskJumpInputListeners();
     this.registerReviewRefreshInputListeners();
     this.registerCountedTransclusionToggleInputListeners();
@@ -87355,6 +87438,13 @@ class BobNavigationHotkeysBracketRepeatMixin {
         }
       } catch (error) {
         // The indicator never breaks the walk.
+      }
+      try {
+        if (typeof fireWalkModeDoorbell === "function") {
+          fireWalkModeDoorbell(this);
+        }
+      } catch (error) {
+        // The doorbell never breaks the walk.
       }
     }
     return normalized;
@@ -117002,8 +117092,8 @@ module.exports.helpers = {
   showLaneWalkNotice,
   normalizeBracketRepeatType, planBracketRepeat, BRACKET_REPEAT_UPPERCASE_PLANS,
   BRACKET_REPEAT_STORAGE_KEY, BRACKET_REPEAT_EMPTY_NOTICE, BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
-  BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS,
-  buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator,
+  BRACKET_MODE_FAMILIES, BRACKET_MODE_FLASH_MS, WALK_MODE_DOORBELL_EVENT, fireWalkModeDoorbell,
+  buildBracketModeView, ensureBracketModeDom, paintBracketModeIndicator, createWalkModeApi,
 };
 // ---- src/701-exports-parent-change.js ----
 Object.assign(module.exports.helpers, {

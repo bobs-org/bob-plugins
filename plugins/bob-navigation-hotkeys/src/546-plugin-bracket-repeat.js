@@ -87,6 +87,13 @@ class BobNavigationHotkeysBracketRepeatMixin {
       } catch (error) {
         // The indicator never breaks the walk.
       }
+      try {
+        if (typeof fireWalkModeDoorbell === "function") {
+          fireWalkModeDoorbell(this);
+        }
+      } catch (error) {
+        // The doorbell never breaks the walk.
+      }
     }
     return normalized;
   }

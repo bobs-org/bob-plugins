@@ -578,3 +578,162 @@ test("uppercase repeat delegates synchronously so Vim count is consumed before l
   assert.deepEqual(landings, [entries[2].key]);
   assert.deepEqual(order, ["count", "land"]);
 });
+
+// walkMode v1 (`api.walkMode`) plus the `bob-navigation-hotkeys:walk-mode`
+// doorbell: no visible behavior change, only the additive namespace and the
+// workspace event fired on change and once at setup.
+const {
+  WALK_MODE_DOORBELL_EVENT,
+  createWalkModeApi,
+} = helpers;
+
+function createDoorbellPlugin({ storage = new Map(), trigger = null } = {}) {
+  const events = [];
+  const fire =
+    typeof trigger === "function"
+      ? trigger
+      : (name) => {
+          events.push(String(name));
+        };
+  const plugin = new NavigationHotkeysPlugin();
+  const commands = [];
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => null,
+      on: () => ({}),
+      onLayoutReady: () => {},
+      trigger: fire,
+    },
+    loadLocalStorage: (key) => storage.get(key),
+    saveLocalStorage: (key, value) => storage.set(key, value),
+  };
+  plugin.addCommand = (spec) => commands.push(spec);
+  plugin.register = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerVimJumpHistoryVaultEvents = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerReviewRefreshInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerCountedLaneToggleInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.captureActiveFilePosition = () => {};
+  plugin.refreshDashScrollCaptureTarget = () => {};
+  plugin.ensureTemplaterNewNoteTrigger = () => {};
+  plugin.onload();
+  return { plugin, commands, storage, events };
+}
+
+test("walkMode api is versioned and the top-level api version is unchanged", () => {
+  const { plugin } = createDoorbellPlugin();
+  assert.equal(plugin.api.version, 3);
+  assert.ok(plugin.api.walkMode);
+  assert.equal(plugin.api.walkMode.version, 1);
+  assert.equal(
+    WALK_MODE_DOORBELL_EVENT,
+    "bob-navigation-hotkeys:walk-mode",
+  );
+});
+
+test("doorbell fires once at setup and once per actual change", () => {
+  const { plugin, commands, events } = createDoorbellPlugin();
+  assert.deepEqual(events, [WALK_MODE_DOORBELL_EVENT]);
+  assert.equal(plugin.api.walkMode.current(), null);
+  plugin.jumpToDueTask = () => true;
+  plugin.jumpToLaneTask = () => true;
+  plugin.openLabeledBodyLink = () => true;
+  command(commands, "jump-to-next-due-task").callback();
+  assert.deepEqual(events, [
+    WALK_MODE_DOORBELL_EVENT,
+    WALK_MODE_DOORBELL_EVENT,
+  ]);
+  assert.equal(plugin.api.walkMode.current(), "s");
+  command(commands, "jump-to-prev-due-task").callback();
+  assert.equal(events.length, 2);
+  command(commands, "repeat-next-bracket-walk").callback();
+  command(commands, "repeat-prev-bracket-walk").callback();
+  command(commands, "repeat-next-uppercase-bracket-walk").callback();
+  assert.equal(events.length, 2);
+  command(commands, "jump-to-next-lane-task").callback();
+  assert.equal(events.length, 3);
+  assert.equal(plugin.api.walkMode.current(), "w");
+  command(commands, "jump-to-prev-lane-task").callback();
+  assert.equal(events.length, 3);
+  command(commands, "open-next-link").callback();
+  assert.equal(events.length, 4);
+  assert.equal(plugin.api.walkMode.current(), "n");
+});
+
+test("select records like a letter click without walking; invalid types refuse", () => {
+  const { plugin, storage, events } = createDoorbellPlugin();
+  assert.equal(events.length, 1);
+  const walks = [];
+  plugin.jumpToDueTask = (...args) => {
+    walks.push(["due", args]);
+  };
+  plugin.jumpToLaneTask = (...args) => {
+    walks.push(["lane", args]);
+  };
+  plugin.openLabeledBodyLink = (...args) => {
+    walks.push(["link", args]);
+  };
+  assert.deepEqual(plugin.api.walkMode.select("w"), { ok: true });
+  assert.equal(plugin.bracketRepeatType, "w");
+  assert.equal(storage.get(BRACKET_REPEAT_STORAGE_KEY), "w");
+  assert.equal(plugin.api.walkMode.current(), "w");
+  assert.deepEqual(walks, []);
+  assert.equal(events.length, 2);
+  assert.deepEqual(plugin.api.walkMode.select("w"), { ok: true });
+  assert.equal(events.length, 2);
+  for (const bad of ["S", "x", "", null, undefined, 1, "sw"]) {
+    assert.deepEqual(plugin.api.walkMode.select(bad), {
+      ok: false,
+      reason: "invalid-type",
+    });
+  }
+  assert.equal(plugin.bracketRepeatType, "w");
+  assert.deepEqual(walks, []);
+  assert.equal(events.length, 2);
+});
+
+test("current normalizes invalid stored values to null", () => {
+  for (const stored of ["garbage", "S", "", 0]) {
+    const storage = new Map([[BRACKET_REPEAT_STORAGE_KEY, stored]]);
+    const { plugin, events } = createDoorbellPlugin({ storage });
+    assert.equal(plugin.api.walkMode.current(), null);
+    assert.deepEqual(events, [WALK_MODE_DOORBELL_EVENT]);
+  }
+  const stored = new Map([[BRACKET_REPEAT_STORAGE_KEY, "n"]]);
+  const { plugin } = createDoorbellPlugin({ storage: stored });
+  assert.equal(plugin.api.walkMode.current(), "n");
+});
+
+test("a throwing workspace trigger never breaks recording or selection", () => {
+  const { plugin, commands } = createDoorbellPlugin({
+    trigger: () => {
+      throw new Error("listener blew up");
+    },
+  });
+  plugin.jumpToDueTask = () => true;
+  plugin.jumpToLaneTask = () => true;
+  command(commands, "jump-to-prev-due-task").callback();
+  assert.equal(plugin.bracketRepeatType, "s");
+  assert.deepEqual(plugin.api.walkMode.select("w"), { ok: true });
+  assert.equal(plugin.bracketRepeatType, "w");
+  assert.equal(plugin.api.walkMode.current(), "w");
+});
+
+test("walkMode degrades with a null plugin", () => {
+  const api = createWalkModeApi(null);
+  assert.equal(api.version, 1);
+  assert.ok(Object.isFrozen(api));
+  assert.equal(api.current(), null);
+  assert.deepEqual(api.select("s"), { ok: false, reason: "unavailable" });
+  assert.deepEqual(api.select("bogus"), {
+    ok: false,
+    reason: "invalid-type",
+  });
+});

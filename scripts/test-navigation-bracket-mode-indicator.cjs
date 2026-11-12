@@ -1,6 +1,8 @@
 // Bracket mode footer indicator: status-bar `[[ s w n ]]` with thumb, flash, click.
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 const notices = [];
@@ -49,6 +51,7 @@ const {
   BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
   BRACKET_MODE_FAMILIES,
   BRACKET_MODE_FLASH_MS,
+  bracketModeViewKey,
   buildBracketModeView,
   ensureBracketModeDom,
   paintBracketModeIndicator,
@@ -628,4 +631,83 @@ test("uppercase repeat flashes forward and backward; no-uppercase flashes empty"
   assert.deepEqual(notices, [BRACKET_REPEAT_NO_UPPERCASE_NOTICE]);
   assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-flash"), "empty");
   await sleep(BRACKET_MODE_FLASH_MS.empty + 60);
+});
+
+test("attention lands only on the s segment while another family is selected", () => {
+  const attention = { tier: "next", label: "Review: 9 due" };
+  for (const mode of ["w", "n", null]) {
+    const view = buildBracketModeView(mode, attention);
+    const s = view.segments.find((segment) => segment.type === "s");
+    assert.equal(s.attention, true, `mode ${mode}`);
+    assert.equal(s.attentionTier, "next", `mode ${mode}`);
+    assert.equal(s.attentionLabel, "Review: 9 due", `mode ${mode}`);
+    assert.ok(s.ariaLabel.includes("Review: 9 due"), `mode ${mode}`);
+    for (const other of ["w", "n"]) {
+      const seg = view.segments.find((segment) => segment.type === other);
+      assert.equal(seg.attention, false, `mode ${mode} seg ${other}`);
+      assert.equal(seg.attentionTier, "", `mode ${mode} seg ${other}`);
+      assert.equal(seg.attentionLabel, "", `mode ${mode} seg ${other}`);
+      assert.ok(!seg.ariaLabel.includes("Review: 9 due"), `mode ${mode} seg ${other}`);
+    }
+  }
+  const onS = buildBracketModeView("s", attention);
+  for (const seg of onS.segments) {
+    assert.equal(seg.attention, false, `mode s seg ${seg.type}`);
+  }
+  const none = buildBracketModeView("none", null);
+  assert.ok(none.segments.every((segment) => segment.attention === false));
+});
+
+test("paint sets and clears the s dot without touching instant or animation classes", () => {
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  const attention = { tier: "Pending", label: "  Review: 5 due  " };
+  const view = buildBracketModeView("w", attention);
+  paintBracketModeIndicator(el, parts, view, undefined);
+  const sButton = findSegment(parts, "s");
+  assert.ok(sButton.classes.includes("has-attention"));
+  assert.equal(sButton.attrs["data-attention-tier"], "Pending");
+  assert.equal(sButton.attrs.title, "  Review: 5 due  ");
+  const cleared = buildBracketModeView("w", null);
+  paintBracketModeIndicator(el, parts, cleared, "w");
+  assert.ok(!sButton.classes.includes("has-attention"));
+  assert.equal(sButton.attrs["data-attention-tier"], undefined);
+  assert.equal(sButton.attrs.title, undefined);
+  assert.equal(el.classes.includes("is-instant"), false);
+});
+
+test("attention-only change repaints while an unchanged view key skips DOM writes", () => {
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  const first = buildBracketModeView("w", { tier: "next", label: "one" });
+  const second = buildBracketModeView("w", { tier: "next", label: "two" });
+  assert.notEqual(bracketModeViewKey(first), bracketModeViewKey(second));
+  paintBracketModeIndicator(el, parts, first, undefined);
+  let writes = 0;
+  const sButton = findSegment(parts, "s");
+  const originalSet = sButton.setAttribute.bind(sButton);
+  sButton.setAttribute = (name, value) => {
+    writes += 1;
+    return originalSet(name, value);
+  };
+  paintBracketModeIndicator(el, parts, second, "w");
+  assert.ok(writes > 0);
+  assert.equal(sButton.attrs.title, "two");
+  writes = 0;
+  paintBracketModeIndicator(el, parts, second, "w");
+  assert.equal(writes, 0);
+  assert.equal(bracketModeViewKey(second), bracketModeViewKey(buildBracketModeView("w", { tier: "next", label: "two" })));
+});
+
+test("attention styles carry no motion and forced-colors uses Highlight", () => {
+  const cssPath = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css");
+  const css = fs.readFileSync(cssPath, "utf8");
+  const dotRule = css.match(/button\.bob-bracket-mode-seg\.has-attention::after\s*\{[^}]*\}/);
+  assert.ok(dotRule, "missing has-attention::after rule");
+  assert.doesNotMatch(dotRule[0], /animation\s*:/);
+  assert.doesNotMatch(dotRule[0], /transition\s*:/);
+  assert.ok(css.includes("@media (forced-colors: active)"));
+  const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+  assert.ok(forced.includes("button.bob-bracket-mode-seg.has-attention::after"));
+  assert.ok(forced.includes("Highlight"));
 });

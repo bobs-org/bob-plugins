@@ -108,6 +108,8 @@ const {
   linksWalkerFooterView,
   walkerFooterClearView,
   walkerFooterReviewView,
+  walkerFooterPushReviewAttention,
+  walkerFooterWalkMode,
   readyBadgeModel,
   readyBudgetFromTasks,
 } = helpers;
@@ -714,4 +716,173 @@ test("walker review export keeps the gated clear state behind the preview", () =
   assert.equal(view.visible, true);
   assert.equal(view.mode, "clear");
   assert.equal(view.dueText, "Review clear");
+});
+
+function makePushPlugin({ mode = "w", version = 3, withSetAttention = true, throwing = false } = {}) {
+  const calls = [];
+  const walkMode = { version };
+  if (withSetAttention) {
+    walkMode.current = () => mode;
+    walkMode.setAttention = (type, value) => {
+      calls.push({ type, value });
+      if (throwing) {
+        throw new Error("nav down");
+      }
+      return { ok: true };
+    };
+  }
+  const plugin = {
+    dependencyNavApi: () => ({ walkMode }),
+    freshnessMemo: null,
+  };
+  return { plugin, walkMode, calls };
+}
+
+function commitmentMemo({ byTier = {}, walk = 0, tasksAvailable = true } = {}) {
+  return { counts: { byTier, walk }, tasksAvailable };
+}
+
+test("push sends the first nonzero commitment tier off-s", () => {
+  const { plugin, calls } = makePushPlugin({ mode: "w" });
+  walkerFooterPushReviewAttention(
+    plugin,
+    { legacy: false, mode: "w" },
+    commitmentMemo({ byTier: { pending: 2, next: 1 }, walk: 9 }),
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, "s");
+  assert.equal(calls[0].value.tier, "pending");
+  assert.match(calls[0].value.label, /Review: 9 due/);
+  assert.match(calls[0].value.label, /3 commitments/);
+});
+
+test("rotten-only and post-only queues push null", () => {
+  for (const byTier of [{ rotten: 4, walk: 4 }, { post: 2 }]) {
+    const { plugin, calls } = makePushPlugin({ mode: "w" });
+    walkerFooterPushReviewAttention(plugin, { legacy: false, mode: "w" }, commitmentMemo({ byTier, walk: 4 }));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].value, null);
+  }
+});
+
+test("mode s, legacy routes, and unavailable tasks push null", () => {
+  const { plugin: onS, calls: onSCalls } = makePushPlugin({ mode: "s" });
+  walkerFooterPushReviewAttention(onS, { legacy: false, mode: "s" }, commitmentMemo({ byTier: { next: 1 }, walk: 1 }));
+  assert.deepEqual(onSCalls[0].value, null);
+  const { plugin: legacy, calls: legacyCalls } = makePushPlugin({ mode: "w" });
+  walkerFooterPushReviewAttention(legacy, { legacy: true, mode: null }, commitmentMemo({ byTier: { next: 1 }, walk: 1 }));
+  assert.deepEqual(legacyCalls[0].value, null);
+  const { plugin: noTasks, calls: noTasksCalls } = makePushPlugin({ mode: "w" });
+  walkerFooterPushReviewAttention(noTasks, { legacy: false, mode: "w" }, commitmentMemo({ byTier: { next: 1 }, walk: 1, tasksAvailable: false }));
+  assert.deepEqual(noTasksCalls[0].value, null);
+  const { plugin: noMemo, calls: noMemoCalls } = makePushPlugin({ mode: "w" });
+  noMemo.freshnessMemo = null;
+  noMemo.freshnessEnsureMemo = () => null;
+  walkerFooterPushReviewAttention(noMemo, { legacy: false, mode: "w" }, null);
+  assert.deepEqual(noMemoCalls[0].value, null);
+});
+
+test("old or missing nav attention makes no call and throwing never escapes", () => {
+  const { plugin: old, calls: oldCalls } = makePushPlugin({ mode: "w", version: 2 });
+  walkerFooterPushReviewAttention(old, { legacy: false, mode: "w" }, commitmentMemo({ byTier: { next: 1 }, walk: 1 }));
+  assert.equal(oldCalls.length, 0);
+  const { plugin: missing } = makePushPlugin({ mode: "w" });
+  missing.dependencyNavApi = () => ({});
+  assert.doesNotThrow(() => walkerFooterPushReviewAttention(missing, { legacy: false, mode: "w" }, commitmentMemo({ byTier: { next: 1 }, walk: 1 })));
+  const { plugin: throwing, calls: throwingCalls } = makePushPlugin({ mode: "w", throwing: true });
+  assert.doesNotThrow(() => walkerFooterPushReviewAttention(
+    throwing,
+    { legacy: false, mode: "w" },
+    commitmentMemo({ byTier: { next: 1 }, walk: 1 }),
+  ));
+  assert.equal(throwingCalls.length, 1);
+});
+
+test("updateFreshnessStatusBar pushes non-null off-s and null on s", () => {
+  let mode = "w";
+  const calls = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    commands: { commands: {}, executeCommandById: () => {} },
+    workspace: { getActiveViewOfType: () => null },
+  };
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 3,
+      current: () => mode,
+      setAttention: (type, value) => {
+        calls.push({ mode, type, value });
+        return { ok: true };
+      },
+    },
+  });
+  plugin.laneWalkApi = () => ({ version: 2, queue: () => ({ available: false }) });
+  plugin.freshnessFooterCursor = () => null;
+  plugin.freshnessStatusEl = new TestElement("div");
+  plugin.freshnessEnsureMemo = () => commitmentMemo({ byTier: { next: 2 }, walk: 5 });
+  plugin.freshnessMemo = plugin.freshnessEnsureMemo();
+  mode = "w";
+  plugin.updateFreshnessStatusBar();
+  assert.ok(calls.length >= 1);
+  assert.notEqual(calls.at(-1).value, null);
+  assert.equal(calls.at(-1).value.tier, "next");
+  mode = "s";
+  plugin.updateFreshnessStatusBar();
+  assert.equal(calls.at(-1).value, null);
+  assert.equal(walkerFooterWalkMode(plugin).mode, "s");
+});
+
+test("unload callback clears the dot and tolerates missing or old nav", () => {
+  const seen = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    workspace: { on: () => ({}), onLayoutReady: () => {} },
+    commands: { commands: {} },
+    plugins: { plugins: {} },
+  };
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 3,
+      current: () => "w",
+      setAttention: (type, value) => {
+        seen.push({ type, value });
+        return { ok: true };
+      },
+    },
+  });
+  plugin.addStatusBarItem = () => new TestElement("div");
+  const registered = [];
+  plugin.register = (fn) => registered.push(fn);
+  plugin.registerEvent = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.setupFreshnessStatusBar();
+  assert.ok(registered.length >= 2);
+  for (const fn of registered) {
+    assert.doesNotThrow(fn);
+  }
+  assert.deepEqual(seen.at(-1), { type: "s", value: null });
+  const missing = Object.create(LedgerToolsPlugin.prototype);
+  missing.app = plugin.app;
+  missing.dependencyNavApi = () => null;
+  missing.addStatusBarItem = () => new TestElement("div");
+  const missingRegistered = [];
+  missing.register = (fn) => missingRegistered.push(fn);
+  missing.registerEvent = () => {};
+  missing.registerEditorExtension = () => {};
+  missing.setupFreshnessStatusBar();
+  for (const fn of missingRegistered) {
+    assert.doesNotThrow(fn);
+  }
+  const old = Object.create(LedgerToolsPlugin.prototype);
+  old.app = plugin.app;
+  old.dependencyNavApi = () => ({ walkMode: { version: 2, setAttention: () => { throw new Error("should not be called"); } } });
+  old.addStatusBarItem = () => new TestElement("div");
+  const oldRegistered = [];
+  old.register = (fn) => oldRegistered.push(fn);
+  old.registerEvent = () => {};
+  old.registerEditorExtension = () => {};
+  old.setupFreshnessStatusBar();
+  for (const fn of oldRegistered) {
+    assert.doesNotThrow(fn);
+  }
 });

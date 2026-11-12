@@ -204,7 +204,7 @@ test("walkMode.links matches the first destination [n and ]n would open", async 
     };
     const api = createWalkModeApi(nav);
     const preview = api.links({ path: sourceFile.path, content: liveContent });
-    assert.equal(api.version, 2, fixture.name);
+    assert.equal(api.version, 3, fixture.name);
     assert.equal(preview.ok, true, fixture.name);
     assert.equal(preview.prev && preview.prev.target || null, fixture.expected[0], fixture.name);
     assert.equal(preview.next && preview.next.target || null, fixture.expected[1], fixture.name);

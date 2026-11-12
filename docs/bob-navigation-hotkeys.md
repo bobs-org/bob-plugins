@@ -510,18 +510,17 @@ walk moved. The active type is:
 | `w` | `[w` / `]w`, `[W` / `]W` | `jump-to-next/prev-lane-task`, `jump-to-next/prev-lane` |
 | `n` | `[n` / `]n` | `open-prev-link`, `open-next-link` |
 
-The family command records its type whenever it runs, including from the
-command palette, bob command mode, and other callers. The review footer runs
+The family command records its type whenever it runs. The review footer runs
 `jump-to-next-due-task`, so it selects `s` too. Uppercase `[S` / `]S` cycle
 occupied review groups but still select family `s`, so `]]` / `[[` perform the
 ordinary lowercase review walk while `]}` / `[{` perform the group jump.
 `[W` / `]W` belong to the lane family.
 
-For example, press `]s` once to start the morning review walk, then use `]]`
-to reach the current or next review task and `[[` to step backward. `N]]` and
-`N[[` retain count parity with the selected walk (`N]s` / `N[s`, or `N]w` /
-`N[w`). Repeat delegates synchronously, leaving the pending Vim count for the
-walk to consume. Link type `n` follows `]n` / `[n` behavior and ignores counts.
+For example, press `]s` once, then use `]]` to advance and `[[` to step back.
+`N]]` and `N[[` retain count parity with the selected walk (`N]s` / `N[s`, or
+`N]w` / `N[w`). Repeat delegates synchronously, leaving the pending Vim count
+for the walk to consume. Link type `n` follows `]n` / `[n` behavior and ignores
+counts.
 
 **Uppercase repeat.** `]}` repeats the remembered family's uppercase jump
 forward, and `[{` repeats it backward: the key owns the direction, whichever
@@ -534,8 +533,8 @@ way the last walk moved, and neither key changes the remembered family.
 | `n` | shows `No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W` | same |
 
 `N]}` / `N[{` keep count parity with `N]S` / `N[S` and `N]W` / `N[W`. With no
-saved or used type, both keys show the empty notice; with the links family
-active, both show the no-uppercase notice.
+type, both show the empty notice; with links active, both show the no-uppercase
+notice.
 
 `]n` / `[n` open the first body link (outside frontmatter and code fences)
 whose label is exactly `next` / `prev` — the daily-note nav line — or is an
@@ -564,29 +563,27 @@ stats-journal events, freshness stamps, or local storage.
 
 ### Footer indicator
 
-The desktop status bar always shows `[[ s w n ]]` with the active walk lit, so
-`]]` / `[[` never surprise. With no saved or used type there is no thumb, and
-the tooltip carries the empty-notice text. Each active tooltip's second line
-teaches the uppercase key: the next / previous review group (`]S` / `[S`),
-the next / previous lane (`]W` / `[W`), or no link variant. The thumb slides
-between letters; `]]` / `[[` briefly light their glyphs on use, while a cold
-press lights the three letters. `]}` / `[{` reuse the forward / backward
-flash, and the no-uppercase notice reuses the empty flash.
-Clicking a letter selects that family and persists it per device. The click
-never runs a walk, shows no notice, writes nothing, and keeps editor focus, so
-the very next `]]` repeats the chosen family. Desktop only; mobile shows no
-item. The indicator never writes notes.
+The desktop status bar always shows `[[ s w n ]]` with the active walk lit.
+With no saved or used type there is no thumb, and the tooltip carries the
+empty-notice text. Each tooltip's second line teaches the uppercase key: the
+next / previous review group (`]S` / `[S`), the next / previous lane (`]W` /
+`[W`), or no link variant. The thumb slides; `]]` / `[[` light their glyphs, a
+cold press lights all three. `]}` / `[{` reuse the forward / backward flash,
+and the no-uppercase notice reuses the empty flash.
+Clicking a letter selects that family per device. The click never walks,
+notices, writes, or steals focus, so `]]` repeats it. Desktop only; mobile
+shows nothing. The indicator never writes.
 
 The persisted family is published via additive nav `api.walkMode`
 (top-level version unchanged): v1 `current()` (`s` / `w` / `n` / null) and
 `select(type)` (like a letter click — records, never walks); v2 read-only
 `links({path, content})` prev/next preview; v3 `setAttention(type, value)`
-display-only commitment push. Ledger feature-detects per member. Each real
-change — plus once at setup — fires the
-`bob-navigation-hotkeys:walk-mode` doorbell; receivers re-read `current()`.
-Off-`s` review commitments paint a quiet tier-tinted dot on the selector's
-`s` (counts in tooltip / `aria-label`, `Highlight` under forced colors, no
-motion); it clears on `s` or when commitments do.
+display-only commitment push. Ledger feature-detects per member. Each change
+plus once at setup fires the `bob-navigation-hotkeys:walk-mode` doorbell;
+receivers re-read `current()`. Off-`s` review commitments paint a quiet
+tier-tinted dot on the selector's `s` (counts in tooltip / `aria-label`,
+`Highlight` under forced colors, no motion); it clears on `s` or when
+commitments do.
 
 ## Relation-label stage
 

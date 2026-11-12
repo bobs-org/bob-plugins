@@ -104,6 +104,32 @@ class BobLedgerToolsFreshnessStatusMixin {
       } catch (error) {
         // Invalidation is repeated by every later family update.
       }
+      try {
+        if (typeof this.register === "function") {
+          const selfClear = this;
+          this.register(() => {
+            try {
+              const api =
+                selfClear && typeof selfClear.dependencyNavApi === "function"
+                  ? selfClear.dependencyNavApi()
+                  : null;
+              const walkMode = api && api.walkMode;
+              if (
+                !walkMode ||
+                Number(walkMode.version) < 3 ||
+                typeof walkMode.setAttention !== "function"
+              ) {
+                return;
+              }
+              walkMode.setAttention("s", null);
+            } catch (error) {
+              // Unload clearing never throws.
+            }
+          });
+        }
+      } catch (error) {
+        // Unload clearing is best-effort.
+      }
       this.observeFreshnessFooterWidth(el);
       this.subscribeWalkerFooterDoorbell();
       this.refreshWalkerFooterOnLayoutReady();

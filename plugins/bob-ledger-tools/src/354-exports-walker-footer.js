@@ -14,6 +14,8 @@ try {
       laneWalkerFooterAgeLabel,
       walkerFooterClearView,
       walkerFooterReviewView,
+      walkerFooterPushReviewAttention,
+      walkerFooterWalkMode,
     });
   }
 } catch (error) {

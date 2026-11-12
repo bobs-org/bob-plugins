@@ -58075,6 +58075,7 @@ function albumEntryShape(entry) {
     albumNullableString(entry.noun) &&
     albumNullableString(entry.label) &&
     albumNullableString(entry.plural) &&
+    (entry.singular === undefined || albumNullableString(entry.singular)) &&
     albumOptionalBool(entry.dated_notes) &&
     (entry.legacy === undefined || entry.legacy === null || albumStringArray(entry.legacy)) &&
     (entry.schema_fingerprint === undefined || entry.schema_fingerprint === null || typeof entry.schema_fingerprint === "string") &&
@@ -67523,8 +67524,11 @@ function albumHealthModel(album) {
 function albumRowModel(album, today) {
   if (!album) return null;
   const lead = (album.groups || []).find((group) => group.count > 0) || null;
+  const noun = (album.records === 1 && typeof album.singular === "string" && album.singular)
+    ? album.singular
+    : (album.plural || "records");
   return { path: album.path, title: album.title,
-    count: `${album.records} ${album.plural || "records"}`,
+    count: `${album.records} ${noun}`,
     lead: lead ? { ...lead, tally: albumGroupTally(lead), peek: (lead.peek || []).slice(0, 3) } : null,
     age: notebookAgeChip(album.last_record, today), lastAdded: album.last_record,
     health: albumHealthModel(album) };

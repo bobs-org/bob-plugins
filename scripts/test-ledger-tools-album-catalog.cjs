@@ -494,7 +494,7 @@ function makeEditorView({ text, live = true, path = "dev.md", dom = null }) {
 
 
 function album(overrides = {}) {
-  return { path: 'eat.md', stem: 'eat', title: 'Restaurants', plural: 'restaurants', owner: 'body', root: 'body',
+  return { path: 'eat.md', stem: 'eat', title: 'Restaurants', plural: 'restaurants', singular: 'restaurant', owner: 'body', root: 'body',
     records: 4, groups: [{ value: 'empty', label: 'Empty', count: 0, peek: [] },
       { value: 'to_try', label: '🔖 To try', count: 3, peek: ['Ani', '<img onerror=bad()>', 'Third', 'Fourth'] },
       { value: 'liked', label: '💚 Liked', count: 1, peek: ['Liked'] }],
@@ -554,6 +554,9 @@ test('lead tally respects declared order, grammar, peeks and last-added meaning'
   assert.equal(row.age, '2d');
   assert.equal(helpers.albumRowModel(null), null);
   assert.equal(helpers.albumRowModel(album({ records: 0, groups: [], last_record: null }), '2026-11-12').count, '0 restaurants');
+  assert.equal(helpers.albumRowModel(album({ records: 1, singular: 'restaurant' }), '2026-11-12').count, '1 restaurant');
+  assert.equal(helpers.albumRowModel(album({ records: 1, singular: undefined }), '2026-11-12').count, '1 restaurants');
+  assert.equal(helpers.albumRowModel(album({ records: 4 }), '2026-11-12').count, '4 restaurants');
   assert.equal(helpers.albumGroupTally({ label: 'TV shows', count: 2 }), '2 TV shows');
   assert.equal(helpers.albumGroupTally({ label: '🔖To try', count: 3 }), '🔖 3 to try');
 });

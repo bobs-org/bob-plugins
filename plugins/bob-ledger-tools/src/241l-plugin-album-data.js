@@ -105,6 +105,7 @@ function albumEntryShape(entry) {
     albumNullableString(entry.noun) &&
     albumNullableString(entry.label) &&
     albumNullableString(entry.plural) &&
+    (entry.singular === undefined || albumNullableString(entry.singular)) &&
     albumOptionalBool(entry.dated_notes) &&
     (entry.legacy === undefined || entry.legacy === null || albumStringArray(entry.legacy)) &&
     (entry.schema_fingerprint === undefined || entry.schema_fingerprint === null || typeof entry.schema_fingerprint === "string") &&

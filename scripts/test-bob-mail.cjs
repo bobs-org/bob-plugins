@@ -191,6 +191,154 @@ test("a mail URL under the cursor exposes the email context", () => {
   assert.equal(mail.mailGmailUrlFor(context), "https://mail.google.com/mail/u/0/#all/0123456789abcdef");
 });
 
+function makeMailApp(lines, cursor, files) {
+  const editor = new Editor(lines, cursor);
+  const view = makeView("daily.md", editor);
+  const app = makeApp(view);
+  app.workspace.app = app;
+  app.metadataCache.getFirstLinkpathDest = (target) => {
+    const key = String(target || "").replace(/\.md$/i, "");
+    return files[key] ? { path: `${key}.md`, basename: key.split("/").pop() } : null;
+  };
+  app.metadataCache.getFileCache = (file) => {
+    const key = String(file.path || "").replace(/\.md$/i, "");
+    return { frontmatter: files[key] || null };
+  };
+  return { app, view, editor };
+}
+
+const GMAIL_URL = "https://mail.google.com/mail/u/0/#all/0123456789abcdef";
+const MAIL_FRONTMATTER = { type: "[[mail]]", gmail_url: GMAIL_URL };
+
+test("line-borne context works anywhere on the line and ignores task status", () => {
+  const lines = ["- [ ] #task [[mail/thread|Subject]] trailing"];
+  const { app } = makeMailApp(lines, { line: 0, ch: 2 }, { "mail/thread": MAIL_FRONTMATTER });
+  const context = mail.mailEmailContext(app);
+  assert.equal(context.file.path, "mail/thread.md");
+  assert.equal(mail.mailGmailUrlFor(context), GMAIL_URL);
+
+  const done = makeMailApp(["- [x] #task [[mail/thread|Subject]]"], { line: 0, ch: 0 }, { "mail/thread": MAIL_FRONTMATTER });
+  assert.equal(mail.mailEmailContext(done.app).file.path, "mail/thread.md");
+
+  const plain = makeMailApp(["A plain log bullet [[mail/thread|Subject]]"], { line: 0, ch: 0 }, { "mail/thread": MAIL_FRONTMATTER });
+  assert.equal(mail.mailEmailContext(plain.app).file.path, "mail/thread.md");
+});
+
+test("child hop opens from the task row through a link-only child", () => {
+  const lines = ["- [ ] #task Follow up", "  - [[mail/thread|Subject]]", "  - [[other/note|Other]]"];
+  const { app } = makeMailApp(lines, { line: 0, ch: 4 }, { "mail/thread": MAIL_FRONTMATTER });
+  const context = mail.mailEmailContext(app);
+  assert.equal(context.file.path, "mail/thread.md");
+
+  const onChild = makeMailApp(lines, { line: 1, ch: 2 }, { "mail/thread": MAIL_FRONTMATTER });
+  assert.equal(mail.mailEmailContext(onChild.app).file.path, "mail/thread.md");
+});
+
+test("code, non-mail links, and bad URLs stay silent", () => {
+  const inline = makeMailApp(["- [ ] #task `[[mail/thread|Subject]]`"], { line: 0, ch: 5 }, { "mail/thread": MAIL_FRONTMATTER });
+  assert.equal(mail.mailEmailContext(inline.app), null);
+
+  const fenced = makeMailApp(["```", "[[mail/thread|Subject]]", "```"], { line: 1, ch: 2 }, { "mail/thread": MAIL_FRONTMATTER });
+  assert.equal(mail.mailEmailContext(fenced.app), null);
+
+  const nonMail = makeMailApp(["- [ ] #task [[other/note|Other]]"], { line: 0, ch: 5 }, { "other/note": { type: "note" } });
+  assert.equal(mail.mailEmailContext(nonMail.app), null);
+
+  const missingUrl = makeMailApp(["- [ ] #task [[mail/thread|Subject]]"], { line: 0, ch: 5 }, { "mail/thread": { type: "[[mail]]" } });
+  assert.equal(mail.mailEmailContext(missingUrl.app), null);
+  assert.equal(mail.mailGmailUrlFor({ frontmatter: { type: "[[mail]]" } }), null);
+
+  const badUrl = makeMailApp(["- [ ] #task [[mail/thread|Subject]]"], { line: 0, ch: 5 }, { "mail/thread": { type: "[[mail]]", gmail_url: "https://example.com/x" } });
+  assert.equal(mail.mailEmailContext(badUrl.app), null);
+});
+
+test("first mail link wins and own links beat the child hop", () => {
+  const lines = ["- [ ] #task [[mail/first|A]] [[mail/second|B]]"];
+  const { app } = makeMailApp(lines, { line: 0, ch: 0 }, {
+    "mail/first": MAIL_FRONTMATTER,
+    "mail/second": { type: "[[mail]]", gmail_url: "https://mail.google.com/mail/u/0/#all/second" },
+  });
+  assert.equal(mail.mailEmailContext(app).file.path, "mail/first.md");
+
+  const parentWithOwn = ["- [ ] #task [[mail/first|A]]", "  - [[mail/second|B]]"];
+  const own = makeMailApp(parentWithOwn, { line: 0, ch: 0 }, {
+    "mail/first": MAIL_FRONTMATTER,
+    "mail/second": { type: "[[mail]]", gmail_url: "https://mail.google.com/mail/u/0/#all/second" },
+  });
+  assert.equal(mail.mailEmailContext(own.app).file.path, "mail/first.md");
+});
+
+test("inside a mail note the whole-note fallback still opens", () => {
+  const editor = new Editor(["body text"], { line: 0, ch: 2 });
+  const view = makeView("mail/thread.md", editor, "thread");
+  const app = makeApp(view, MAIL_FRONTMATTER);
+  app.workspace.app = app;
+  const context = mail.mailEmailContext(app);
+  assert.equal(context.file.path, "mail/thread.md");
+  assert.equal(mail.mailGmailUrlFor(context), GMAIL_URL);
+});
+
+test("vim Cmd+Enter mapping registers once and opens exactly gmail_url", () => {
+  const actions = new Map();
+  const mappings = [];
+  const originalWindow = global.window;
+  global.window = {
+    CodeMirrorAdapter: {
+      Vim: {
+        defineAction: (name, handler) => actions.set(name, handler),
+        mapCommand: (...args) => mappings.push(args),
+      },
+    },
+  };
+  try {
+    const { app, view } = makeMailApp(["- [ ] #task [[mail/thread|Subject]]"], { line: 0, ch: 0 }, { "mail/thread": MAIL_FRONTMATTER });
+    const plugin = Object.create(BobMailPlugin.prototype);
+    plugin.app = app;
+    plugin.mailVimMappingsRegistered = false;
+    assert.equal(plugin.registerMailVimMappings(), true);
+    assert.equal(plugin.mailGmailOpenKeymap, 1);
+    assert.equal(plugin.registerMailVimMappings(), true);
+    assert.deepEqual(mappings.map((args) => args[0]).sort(), ["<M-CR>", "<M-Enter>"]);
+    for (const args of mappings) {
+      assert.equal(args[1], "action");
+      assert.equal(args[2], "bobMailOpenGmail");
+      assert.equal(args[4].context, "normal");
+    }
+    let opened = null;
+    plugin.mailOpenGmail = (context) => {
+      opened = mail.mailGmailUrlFor(context);
+      return true;
+    };
+    actions.get("bobMailOpenGmail")();
+    assert.equal(opened, GMAIL_URL);
+
+    const silent = makeMailApp(["no links here"], { line: 0, ch: 0 }, {});
+    const silentPlugin = Object.create(BobMailPlugin.prototype);
+    silentPlugin.app = silent.app;
+    silentPlugin.mailOpenGmail = () => { throw new Error("must not open"); };
+    silentPlugin.handleMailVimOpenGmail();
+  } finally {
+    if (originalWindow === undefined) delete global.window;
+    else global.window = originalWindow;
+  }
+});
+
+test("vim registration fails closed without an adapter", () => {
+  const originalWindow = global.window;
+  global.window = {};
+  try {
+    const plugin = Object.create(BobMailPlugin.prototype);
+    plugin.app = {};
+    plugin.mailVimMappingsRegistered = false;
+    plugin.mailGmailOpenKeymap = 0;
+    assert.equal(plugin.registerMailVimMappings(), false);
+    assert.equal(plugin.mailGmailOpenKeymap, 0);
+  } finally {
+    if (originalWindow === undefined) delete global.window;
+    else global.window = originalWindow;
+  }
+});
+
 test("task links point to the message block under the cursor", () => {
   const note = [
     "## Conversation",

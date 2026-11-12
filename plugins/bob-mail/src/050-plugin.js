@@ -147,6 +147,56 @@ class BobMailPlugin extends Plugin {
         this.mailObservePaste(event, editor, view);
       }));
     }
+    this.mailGmailOpenKeymap = 0;
+    this.mailVimMappingsRegistered = false;
+    if (workspace && typeof workspace.onLayoutReady === "function") {
+      workspace.onLayoutReady(() => {
+        if (this.registerMailVimMappings()) {
+          return;
+        }
+        const ref = workspace.on("active-leaf-change", () => {
+          if (this.registerMailVimMappings()) {
+            workspace.offref(ref);
+          }
+        });
+        this.registerEvent(ref);
+      });
+    }
+  }
+
+  registerMailVimMappings() {
+    if (this.mailVimMappingsRegistered) {
+      return true;
+    }
+    try {
+      const vim = window.CodeMirrorAdapter && window.CodeMirrorAdapter.Vim;
+      if (!vim) {
+        return false;
+      }
+      vim.defineAction("bobMailOpenGmail", () => this.handleMailVimOpenGmail());
+      for (const key of ["<M-CR>", "<M-Enter>"]) {
+        vim.mapCommand(key, "action", "bobMailOpenGmail", {}, {
+          context: "normal",
+        });
+      }
+      this.mailVimMappingsRegistered = true;
+      this.mailGmailOpenKeymap = 1;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  handleMailVimOpenGmail() {
+    try {
+      const view = mailActiveMarkdownView(this.app);
+      if (!view || !view.editor) return;
+      const context = mailEmailContext(this.app, view);
+      if (!context || !mailGmailUrlFor(context)) return;
+      this.mailOpenGmail(context);
+    } catch (error) {
+      // Silent no-op: the chip's absence already said so.
+    }
   }
 
   onunload() {

@@ -22199,6 +22199,265 @@ if (typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/142k-gmail-open-hint.js ----
+// --- Gmail open hint: pure core ------------------------------------------
+// Owned by bob-cli `docs/mail-link-marks.md`. Display-only availability
+// predicate for the `⌘↵ Gmail` chip: this line can open an email via the
+// bob-mail Cmd+Enter keymap. Reads mail note frontmatter through injected
+// resolvers and never writes. Every helper is synchronous and never throws.
+
+const GMAIL_OPEN_HINT_CLASS = "bob-gmail-open-hint";
+const GMAIL_OPEN_HINT_SIDE = 1;
+const GMAIL_OPEN_HINT_ARIA = "Cmd+Enter opens this email in Gmail";
+
+function gmailOpenHintIsGmailUrl(value) {
+  try {
+    const text = String(value || "").trim();
+    if (!text || /\s|[<>]/.test(text)) return false;
+    const url = new URL(text);
+    return (url.protocol === "https:" || url.protocol === "http:") &&
+      url.hostname.toLowerCase() === "mail.google.com" && url.pathname.startsWith("/mail/");
+  } catch (error) {
+    return false;
+  }
+}
+
+function gmailOpenHintIsMac() {
+  try {
+    if (typeof navigator !== "object" || !navigator) return false;
+    const text = String(navigator.platform || navigator.userAgent || "");
+    return /Mac|iPhone|iPad/.test(text);
+  } catch (error) {
+    return false;
+  }
+}
+
+function gmailOpenHintLabel(isMac) {
+  try {
+    return (isMac ? "⌘↵ Gmail" : "M-↵ Gmail");
+  } catch (error) {
+    return "⌘↵ Gmail";
+  }
+}
+
+function gmailOpenHintIsTaskRow(lineText) {
+  try {
+    if (typeof freshnessTaskStatus === "function") {
+      return freshnessTaskStatus(String(lineText || "")) !== null;
+    }
+    return /^\s*(?:>\s*)*[-*+]\s+\[[^\]\r\n]\]/.test(String(lineText || ""));
+  } catch (error) {
+    return false;
+  }
+}
+
+function gmailOpenHintIndent(lineText) {
+  try {
+    const indent = String(lineText || "").match(/^\s*/)[0] || "";
+    return indent.replace(/\t/g, "    ").length;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// First `mail/...` wikilink target on one line, ignoring embedded links and
+// inline code. Strips a trailing `.md`. Reuses the mail-link-marks tokenizer
+// when present so both surfaces share one lookup rule. Never throws.
+function gmailOpenHintFirstMailPath(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (text.indexOf("[[") === -1) return null;
+    if (typeof mailLinkMarkTokens === "function") {
+      const tokens = mailLinkMarkTokens(text);
+      for (const token of tokens) {
+        try {
+          const part = String(token && token.pathPart || "").trim();
+          if (part.startsWith("mail/")) return part;
+        } catch (error) {
+          continue;
+        }
+      }
+      return null;
+    }
+    const visible = typeof blockMarkMaskInlineCode === "function"
+      ? blockMarkMaskInlineCode(text)
+      : text;
+    const pattern = /\[\[(mail\/[^\]#|]+?)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+    let match = pattern.exec(visible);
+    while (match !== null) {
+      try {
+        const start = match.index;
+        if (start > 0 && text[start - 1] === "!") {
+          match = pattern.exec(visible);
+          continue;
+        }
+        let target = String(match[1] || "").trim();
+        if (/\.md$/i.test(target)) target = target.slice(0, -3);
+        if (target) return target;
+      } catch (error) {
+        // One bad token never breaks the scan.
+      }
+      match = pattern.exec(visible);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// A plain bullet whose only content is one wikilink. Returns its target path
+// (before `|`, `#`, `^`) or null. Checkbox rows never qualify. Never throws.
+function gmailOpenHintLinkOnlyTarget(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (gmailOpenHintIsTaskRow(text)) return null;
+    const match = text.match(/^\s*[-*+]\s*(\[\[[^\]]+\]\])\s*$/);
+    if (!match) return null;
+    const inner = match[1].slice(2, -2);
+    const target = inner.split(/[|#^]/)[0].trim().replace(/\.md$/i, "");
+    return target || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmailOpenHintIsMailFrontmatter(frontmatter) {
+  try {
+    if (typeof blockMarkIsMailFrontmatter === "function") {
+      return blockMarkIsMailFrontmatter(frontmatter);
+    }
+    if (!frontmatter || typeof frontmatter !== "object") return false;
+    if (typeof frontmatter.gmail_thread_id === "string") return true;
+    const types = Array.isArray(frontmatter.type) ? frontmatter.type : [frontmatter.type];
+    return types.some((value) => String(value || "").trim().replace(/^\[\[/, "").replace(/\]\]$/, "").trim().toLowerCase() === "mail");
+  } catch (error) {
+    return false;
+  }
+}
+
+function gmailOpenHintResolveMail(pathPart, sourcePath, resolvers) {
+  try {
+    if (!pathPart || typeof pathPart !== "string" || !pathPart.startsWith("mail/")) return null;
+    const hooks = resolvers && typeof resolvers === "object" ? resolvers : {};
+    const getDest = hooks.getDest;
+    const getFrontmatter = hooks.getFrontmatter;
+    if (typeof getDest !== "function" || typeof getFrontmatter !== "function") return null;
+    const file = getDest(pathPart, String(sourcePath || ""));
+    if (!file) return null;
+    const frontmatter = getFrontmatter(file);
+    if (!gmailOpenHintIsMailFrontmatter(frontmatter)) return null;
+    if (!gmailOpenHintIsGmailUrl(frontmatter && frontmatter.gmail_url)) return null;
+    return { file, frontmatter };
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmailOpenHintLineResolves(lineText, sourcePath, resolvers) {
+  try {
+    const target = gmailOpenHintFirstMailPath(lineText);
+    if (!target) return null;
+    return gmailOpenHintResolveMail(target, sourcePath, resolvers);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Direct link-only child hop: the cursor line is a checkbox task row with no
+// mail link of its own, and one of its direct link-only child bullets
+// resolves to a mail note. First such child wins. Never throws.
+function gmailOpenHintChildResolves(lines, line, sourcePath, resolvers) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(line) || line < 0 || line >= lines.length) return null;
+    const parentText = String(lines[line] || "");
+    if (!gmailOpenHintIsTaskRow(parentText)) return null;
+    if (gmailOpenHintFirstMailPath(parentText) !== null) return null;
+    const parentIndent = gmailOpenHintIndent(parentText);
+    const candidates = [];
+    for (let index = line + 1; index < lines.length; index += 1) {
+      const text = String(lines[index] || "");
+      if (!text.trim()) continue;
+      const indent = gmailOpenHintIndent(text);
+      if (indent <= parentIndent) break;
+      if (!/^\s*[-*+]/.test(text)) continue;
+      candidates.push({ text, indent });
+    }
+    if (candidates.length === 0) return null;
+    let directIndent = null;
+    for (const candidate of candidates) {
+      if (directIndent === null || candidate.indent < directIndent) directIndent = candidate.indent;
+    }
+    for (const candidate of candidates) {
+      if (candidate.indent !== directIndent) continue;
+      const target = gmailOpenHintLinkOnlyTarget(candidate.text);
+      if (!target || !target.startsWith("mail/")) continue;
+      const resolved = gmailOpenHintResolveMail(target, sourcePath, resolvers);
+      if (!resolved) continue;
+      return resolved;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// One shared availability predicate: line-borne mail link (any line) or the
+// Gmail Task child hop. Never the whole-note fallback. Never throws.
+function gmailOpenHintCanOpen(lineText, lines, line, sourcePath, resolvers) {
+  try {
+    if (typeof lineText !== "string") return false;
+    if (gmailOpenHintLineResolves(lineText, sourcePath, resolvers)) return true;
+    if (Array.isArray(lines) && Number.isInteger(line)) {
+      if (gmailOpenHintChildResolves(lines, line, sourcePath, resolvers)) return true;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function buildGmailOpenHintElement(doc, label) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !label) {
+      return null;
+    }
+    const host = doc.createElement("span");
+    host.setAttribute("class", GMAIL_OPEN_HINT_CLASS);
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", GMAIL_OPEN_HINT_ARIA);
+    host.setAttribute("data-tooltip-position", "top");
+    host.textContent = String(label);
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+let GmailOpenHintWidget = null;
+if (typeof WidgetType === "function") {
+  GmailOpenHintWidget = class extends WidgetType {
+    constructor(label) {
+      super();
+      this.label = String(label || "");
+      this.key = this.label;
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof GmailOpenHintWidget && other.key === this.key);
+    }
+
+    toDOM() {
+      const doc = typeof document !== "undefined" ? document : null;
+      const dom = buildGmailOpenHintElement(doc, this.label);
+      if (dom) return dom;
+      try {
+        return doc && typeof doc.createElement === "function" ? doc.createElement("span") : null;
+      } catch (error) {
+        return null;
+      }
+    }
+  };
+}
 // ---- src/142d-block-marks-render.js ----
 // --- Blocked-reason marks: miniature renderer ------------------------------
 // Owned by bob-cli `docs/blocked-marks.md`. `buildBlockMarkElement` is the
@@ -81844,6 +82103,318 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
     }
   }
 }
+// ---- src/271i-plugin-gmail-open-hint.js ----
+// --- Gmail open hint: Live Preview chip ----------------------------------
+// Owned by bob-cli `docs/mail-link-marks.md`. Display-only `⌘↵ Gmail` chip at
+// the end of the cursor's line when the bob-mail Cmd+Enter keymap will open
+// an email. Gated by the existing mail-link-marks toggle; the keymap
+// capability flag keeps the chip truthful. Live Preview only: the keymap is
+// editor-only, so reading view shows nothing.
+
+let gmailOpenHintRefreshEffect = null;
+function ensureGmailOpenHintRefresh() {
+  if (gmailOpenHintRefreshEffect) return gmailOpenHintRefreshEffect;
+  try {
+    if (StateEffect && typeof StateEffect.define === "function") {
+      gmailOpenHintRefreshEffect = StateEffect.define();
+    }
+  } catch (error) {
+    gmailOpenHintRefreshEffect = null;
+  }
+  return gmailOpenHintRefreshEffect;
+}
+
+class BobLedgerToolsGmailOpenHintMixin {
+  setupGmailOpenHint() {
+    try {
+      if (typeof this.registerEditorExtension !== "function") return;
+      try {
+        const extension = this.createGmailOpenHintExtension();
+        if (extension) this.registerEditorExtension(extension);
+      } catch (error) {
+        // Live Preview chip is best-effort.
+      }
+      try {
+        this.setupGmailOpenHintListeners();
+      } catch (error) {
+        // Liveness listeners are best-effort.
+      }
+      try {
+        if (!this.gmailOpenHintWrappedToggle && typeof this.toggleMailLinkMarks === "function") {
+          const original = this.toggleMailLinkMarks.bind(this);
+          const plugin = this;
+          this.toggleMailLinkMarks = function wrappedToggleMailLinkMarks() {
+            const result = original();
+            try {
+              plugin.refreshGmailOpenHintEditors();
+            } catch (error) {
+              // Hint refresh is best-effort.
+            }
+            return result;
+          };
+          this.gmailOpenHintWrappedToggle = true;
+        }
+      } catch (error) {
+        // Toggle wrap is best-effort.
+      }
+      if (typeof this.register === "function") {
+        try {
+          this.register(() => this.teardownGmailOpenHint());
+        } catch (error) {
+          // Cleanup is best-effort.
+        }
+      }
+    } catch (error) {
+      // Display-only setup never blocks plugin startup.
+    }
+  }
+
+  gmailOpenHintGateOn() {
+    try {
+      return this.mailLinkMarksEnabled !== false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  gmailOpenHintKeymapLive() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const mail = plugins && plugins["bob-mail"];
+      return Boolean(mail && mail.mailGmailOpenKeymap === 1);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  setupGmailOpenHintListeners() {
+    try {
+      if (typeof this.registerEvent !== "function") return;
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", () => this.scheduleGmailOpenHintRefresh()));
+        this.registerEvent(metadataCache.on("resolved", () => this.scheduleGmailOpenHintRefresh()));
+      }
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("layout-change", () => this.scheduleGmailOpenHintRefresh()));
+      }
+    } catch (error) {
+      // Liveness listeners are best-effort.
+    }
+  }
+
+  gmailOpenHintAvailable() {
+    try {
+      return Boolean(
+        ViewPlugin && Decoration && WidgetType && StateEffect &&
+        typeof StateEffect.define === "function" && RangeSetBuilder &&
+        editorInfoField && editorLivePreviewField && GmailOpenHintWidget,
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  createGmailOpenHintExtension() {
+    try {
+      if (!this.gmailOpenHintAvailable() || !ViewPlugin || typeof ViewPlugin.fromClass !== "function" || !Prec || typeof Prec.highest !== "function") {
+        return null;
+      }
+      const plugin = this;
+      const HintPluginClass = class {
+        constructor(view) {
+          try { this.decorations = plugin.buildGmailOpenHintDecorations(view); }
+          catch (error) { this.decorations = Decoration.none; }
+        }
+        update(update) {
+          try {
+            if (plugin.gmailOpenHintShouldRebuild(update)) {
+              this.decorations = plugin.buildGmailOpenHintDecorations(update.view);
+            }
+          } catch (error) {
+            // Keep the last good decoration set.
+          }
+        }
+      };
+      return Prec.highest(ViewPlugin.fromClass(HintPluginClass, { decorations: (value) => value.decorations }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  gmailOpenHintShouldRebuild(update) {
+    try {
+      if (!update || typeof update !== "object") return false;
+      if (update.docChanged || update.viewportChanged || update.selectionSet) return true;
+      const refresh = ensureGmailOpenHintRefresh();
+      for (const transaction of update.transactions || []) {
+        for (const effect of (transaction && transaction.effects)
+          ? (Array.isArray(transaction.effects) ? transaction.effects : [transaction.effects]) : []) {
+          if (effect === refresh || (refresh && effect && typeof effect.is === "function" && effect.is(refresh))) return true;
+        }
+      }
+      if (editorLivePreviewField && update.startState && update.state &&
+        update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField)) return true;
+      if (editorInfoField && update.startState && update.state) {
+        const before = update.startState.field(editorInfoField);
+        const after = update.state.field(editorInfoField);
+        if ((before && before.file && before.file.path) !== (after && after.file && after.file.path)) return true;
+      }
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  gmailOpenHintDocLines(doc) {
+    try {
+      if (doc && typeof doc.toString === "function") {
+        return String(doc.toString()).split("\n");
+      }
+      if (doc && typeof doc.lineAt === "function" && Number.isInteger(doc.lines)) {
+        const lines = [];
+        for (let number = 1; number <= doc.lines; number += 1) {
+          try {
+            lines.push(String(doc.line(number).text));
+          } catch (error) {
+            lines.push("");
+          }
+        }
+        return lines;
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  buildGmailOpenHintDecorations(view) {
+    try {
+      if (!this.gmailOpenHintGateOn() || !Decoration || !RangeSetBuilder || !GmailOpenHintWidget) {
+        return Decoration.none;
+      }
+      if (!editorInfoField || !editorLivePreviewField) return Decoration.none;
+      if (!view || !view.state || !view.state.field(editorLivePreviewField)) return Decoration.none;
+      const info = view.state.field(editorInfoField);
+      const sourcePath = info && info.file && typeof info.file.path === "string" ? info.file.path : "";
+      if (!sourcePath) return Decoration.none;
+      if (!this.gmailOpenHintKeymapLive()) return Decoration.none;
+      const doc = view.state.doc;
+      if (!doc || typeof doc.lineAt !== "function") return Decoration.none;
+      let head = null;
+      try {
+        head = view.state.selection && view.state.selection.main && view.state.selection.main.head;
+      } catch (error) {
+        head = null;
+      }
+      if (!Number.isInteger(head)) return Decoration.none;
+      let cursorLine = null;
+      try { cursorLine = doc.lineAt(head); } catch (error) { cursorLine = null; }
+      if (!cursorLine || typeof cursorLine.text !== "string") return Decoration.none;
+      if (typeof cursorLine.number !== "number" || typeof cursorLine.from !== "number") return Decoration.none;
+      const lineIndex = cursorLine.number - 1;
+      const lineText = cursorLine.text;
+      const lines = this.gmailOpenHintDocLines(doc);
+      const resolvers = {
+        getDest: (target, source) => {
+          const cache = this.app && this.app.metadataCache;
+          if (!cache || typeof cache.getFirstLinkpathDest !== "function") return null;
+          return cache.getFirstLinkpathDest(target, source);
+        },
+        getFrontmatter: (file) => {
+          try {
+            const cache = this.app && this.app.metadataCache;
+            if (!cache || typeof cache.getFileCache !== "function") return null;
+            return (cache.getFileCache(file) || {}).frontmatter || null;
+          } catch (error) {
+            return null;
+          }
+        },
+      };
+      let canOpen = false;
+      try {
+        canOpen = gmailOpenHintCanOpen(lineText, lines, lineIndex, sourcePath, resolvers);
+      } catch (error) {
+        canOpen = false;
+      }
+      if (!canOpen) return Decoration.none;
+      let tree = null;
+      try {
+        if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);
+      } catch (error) {
+        tree = null;
+      }
+      try {
+        if (tree && typeof freshnessMarkPosInCode === "function") {
+          if (freshnessMarkPosInCode(tree, cursorLine.from + 1)) return Decoration.none;
+        }
+      } catch (error) {
+        // Code guard is best-effort.
+      }
+      const builder = new RangeSetBuilder();
+      let label = "⌘↵ Gmail";
+      try {
+        label = gmailOpenHintLabel(gmailOpenHintIsMac());
+      } catch (error) {
+        label = "⌘↵ Gmail";
+      }
+      builder.add(cursorLine.to, cursorLine.to, Decoration.widget({
+        widget: new GmailOpenHintWidget(label),
+        side: GMAIL_OPEN_HINT_SIDE,
+      }));
+      return builder.finish();
+    } catch (error) {
+      try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  refreshGmailOpenHintEditors() {
+    try {
+      const refresh = ensureGmailOpenHintRefresh();
+      const workspace = this.app && this.app.workspace;
+      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
+        ? workspace.getLeavesOfType("markdown") || []
+        : [];
+      for (const leaf of leaves) {
+        try {
+          const cm = leaf && leaf.view && leaf.view.editor && leaf.view.editor.cm;
+          if (cm && typeof cm.dispatch === "function" && refresh) cm.dispatch({ effects: refresh.of(null) });
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      // Editor refresh is best-effort.
+    }
+  }
+
+  scheduleGmailOpenHintRefresh() {
+    try {
+      if (this.gmailOpenHintTimer !== null && this.gmailOpenHintTimer !== undefined) return;
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout.bind(window)
+        : setTimeout;
+      this.gmailOpenHintTimer = schedule(() => {
+        this.gmailOpenHintTimer = null;
+        this.refreshGmailOpenHintEditors();
+      }, 120);
+    } catch (error) {
+      // No timer host; nothing to schedule.
+    }
+  }
+
+  teardownGmailOpenHint() {
+    try {
+      if (this.gmailOpenHintTimer !== null && this.gmailOpenHintTimer !== undefined) {
+        clearTimeout(this.gmailOpenHintTimer);
+      }
+      this.gmailOpenHintTimer = null;
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
+  }
+}
 // ---- src/271g-plugin-keep-moving-marks.js ----
 // --- Ledger keep-moving marks: Live Preview mixin ------------------------
 // `BobLedgerToolsKeepMovingMarksMixin` renders the quiet `⏭ N` mark after a
@@ -98570,6 +99141,11 @@ class BobLedgerToolsTaskLinkMarksMixin {
       // Mail reply badges are best-effort.
     }
     try {
+      if (typeof this.setupGmailOpenHint === "function") this.setupGmailOpenHint();
+    } catch (error) {
+      // Gmail open hint is best-effort.
+    }
+    try {
       if (typeof this.setupKeepMovingMarks === "function") this.setupKeepMovingMarks();
     } catch (error) {
       // Keep-moving marks are best-effort.
@@ -108540,6 +109116,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsOffClockLinkChipsReadingMixin,
   BobLedgerToolsMailLinkMarksMixin,
   BobLedgerToolsMailLinkMarksReadingMixin,
+  BobLedgerToolsGmailOpenHintMixin,
   BobLedgerToolsKeepMovingMarksMixin,
   BobLedgerToolsKeepMovingMarksReadingMixin,
   BobLedgerToolsDependencyRenderMixin,
@@ -111693,6 +112270,36 @@ try {
       albumHeaderRouteReason,
       albumHeaderModel,
       albumHeaderSignature,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/353-exports-gmail-open-hint.js ----
+// Gmail open hint exports, beside the mail-link-marks surface in
+// `350-exports.js`. Kept in its own fragment so `350-exports.js` stays at
+// or below 1000 lines.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      GMAIL_OPEN_HINT_CLASS,
+      GMAIL_OPEN_HINT_SIDE,
+      GMAIL_OPEN_HINT_ARIA,
+      gmailOpenHintIsGmailUrl,
+      gmailOpenHintIsMac,
+      gmailOpenHintLabel,
+      gmailOpenHintIsTaskRow,
+      gmailOpenHintIndent,
+      gmailOpenHintFirstMailPath,
+      gmailOpenHintLinkOnlyTarget,
+      gmailOpenHintIsMailFrontmatter,
+      gmailOpenHintResolveMail,
+      gmailOpenHintLineResolves,
+      gmailOpenHintChildResolves,
+      gmailOpenHintCanOpen,
+      buildGmailOpenHintElement,
+      GmailOpenHintWidget,
+      ensureGmailOpenHintRefresh,
     });
   }
 } catch (error) {

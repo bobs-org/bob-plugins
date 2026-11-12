@@ -42,6 +42,11 @@ class BobLedgerToolsTaskLinkMarksMixin {
       // Mail reply badges are best-effort.
     }
     try {
+      if (typeof this.setupGmailOpenHint === "function") this.setupGmailOpenHint();
+    } catch (error) {
+      // Gmail open hint is best-effort.
+    }
+    try {
       if (typeof this.setupKeepMovingMarks === "function") this.setupKeepMovingMarks();
     } catch (error) {
       // Keep-moving marks are best-effort.

@@ -38,6 +38,7 @@
   "142c-block-marks-model.js",
   "142i-mail-link-marks.js",
   "142j-no-reply-pills.js",
+  "142k-gmail-open-hint.js",
   "142d-block-marks-render.js",
   "142e-block-marks-runtime.js",
   "142f-block-marks-editor.js",
@@ -155,6 +156,7 @@
   "271d-plugin-off-clock-link-chips-reading.js",
   "271e-plugin-mail-link-marks.js",
   "271f-plugin-mail-link-marks-reading.js",
+  "271i-plugin-gmail-open-hint.js",
   "271g-plugin-keep-moving-marks.js",
   "271h-plugin-keep-moving-marks-reading.js",
   "273-plugin-pomodoro-home-chips.js",
@@ -209,5 +211,6 @@
   "340-dashboard-views-and-plan-block.js",
   "350-exports.js",
   "351-exports-prj-hide.js",
-  "352-exports-album.js"
+  "352-exports-album.js",
+  "353-exports-gmail-open-hint.js"
 ]

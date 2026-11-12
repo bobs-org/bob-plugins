@@ -100,6 +100,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsOffClockLinkChipsReadingMixin,
   BobLedgerToolsMailLinkMarksMixin,
   BobLedgerToolsMailLinkMarksReadingMixin,
+  BobLedgerToolsGmailOpenHintMixin,
   BobLedgerToolsKeepMovingMarksMixin,
   BobLedgerToolsKeepMovingMarksReadingMixin,
   BobLedgerToolsDependencyRenderMixin,

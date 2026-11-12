@@ -314,9 +314,235 @@ function mailLinkUnderCursor(app, view = mailActiveMarkdownView(app)) {
   return null;
 }
 
-function mailEmailContext(app) {
-  const view = mailActiveMarkdownView(app);
-  return mailCurrentNote(app, view) || mailLinkUnderCursor(app, view);
+// Replace inline code spans with spaces while preserving offsets. Same
+// delimiter rule as Markdown: matching backtick runs. Never throws.
+function mailMaskInlineCode(lineText) {
+  try {
+    const text = String(lineText || "");
+    const chars = text.split("");
+    const escapedAt = (index) => {
+      let slashes = 0;
+      for (let at = index - 1; at >= 0 && text[at] === "\\"; at -= 1) {
+        slashes += 1;
+      }
+      return slashes % 2 === 1;
+    };
+    let index = 0;
+    while (index < text.length) {
+      if (text[index] !== "`" || escapedAt(index)) {
+        index += 1;
+        continue;
+      }
+      let delimiterEnd = index + 1;
+      while (text[delimiterEnd] === "`") delimiterEnd += 1;
+      const delimiterLength = delimiterEnd - index;
+      let closeStart = -1;
+      let searchAt = delimiterEnd;
+      while (searchAt < text.length) {
+        const next = text.indexOf("`", searchAt);
+        if (next === -1) break;
+        let nextEnd = next + 1;
+        while (text[nextEnd] === "`") nextEnd += 1;
+        if (
+          nextEnd - next === delimiterLength &&
+          (next === 0 || text[next - 1] !== "`") &&
+          (nextEnd === text.length || text[nextEnd] !== "`")
+        ) {
+          closeStart = next;
+          break;
+        }
+        searchAt = nextEnd;
+      }
+      if (closeStart === -1) {
+        index = delimiterEnd;
+        continue;
+      }
+      const closeEnd = closeStart + delimiterLength;
+      for (let at = index; at < closeEnd; at += 1) chars[at] = " ";
+      index = closeEnd;
+    }
+    return chars.join("");
+  } catch (error) {
+    return String(lineText || "");
+  }
+}
+
+// First `mail/...` wikilink target on one line, ignoring embedded links and
+// inline code. Strips a trailing `.md`. Never throws.
+function mailFirstMailLinkPath(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (text.indexOf("[[") === -1) return null;
+    const visible = mailMaskInlineCode(text);
+    const pattern = /\[\[(mail\/[^\]#|]+?)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+    let match = pattern.exec(visible);
+    while (match !== null) {
+      try {
+        const start = match.index;
+        if (start > 0 && text[start - 1] === "!") {
+          match = pattern.exec(visible);
+          continue;
+        }
+        let target = String(match[1] || "").trim();
+        if (/\.md$/i.test(target)) target = target.slice(0, -3);
+        if (target) return target;
+      } catch (error) {
+        // One bad token never breaks the scan.
+      }
+      match = pattern.exec(visible);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailIsCheckboxTaskLine(lineText) {
+  try {
+    return /^\s*(?:>\s*)*[-*+]\s+\[[^\]\r\n]\]/.test(String(lineText || ""));
+  } catch (error) {
+    return false;
+  }
+}
+
+function mailIndentWidth(lineText) {
+  try {
+    const indent = String(lineText || "").match(/^\s*/)[0] || "";
+    return indent.replace(/\t/g, "    ").length;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// A plain bullet whose only content is one wikilink. Returns its target path
+// (before `|`, `#`, `^`) or null. Checkbox rows never qualify. Never throws.
+function mailLinkOnlyBulletTarget(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (mailIsCheckboxTaskLine(text)) return null;
+    const match = text.match(/^\s*[-*+]\s*(\[\[[^\]]+\]\])\s*$/);
+    if (!match) return null;
+    const inner = match[1].slice(2, -2);
+    const target = inner.split(/[|#^]/)[0].trim().replace(/\.md$/i, "");
+    return target || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailResolveMailFile(app, sourcePath, targetPath) {
+  try {
+    if (!targetPath || typeof targetPath !== "string") return null;
+    if (!targetPath.startsWith("mail/")) return null;
+    const metadataCache = app && app.metadataCache;
+    if (!metadataCache || typeof metadataCache.getFirstLinkpathDest !== "function") return null;
+    const file = metadataCache.getFirstLinkpathDest(targetPath, String(sourcePath || ""));
+    if (!file) return null;
+    const frontmatter = mailFrontmatter(app, file);
+    if (!mailIsMailNote(frontmatter)) return null;
+    if (!mailIsGmailUrl(frontmatter && frontmatter.gmail_url)) return null;
+    return { file, frontmatter };
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailLineInFencedCode(lines, line) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(line) || line < 0 || line >= lines.length) return false;
+    const current = String(lines[line] || "");
+    if (/^\s*(```+|~~~+)/.test(current)) return true;
+    let fenced = false;
+    for (let index = 0; index < line; index += 1) {
+      if (/^\s*(```+|~~~+)/.test(String(lines[index] || ""))) fenced = !fenced;
+    }
+    return fenced;
+  } catch (error) {
+    return false;
+  }
+}
+
+function mailLineBorneMailContext(app, view, line, lineText, lines) {
+  try {
+    if (!view || !view.file || !view.editor) return null;
+    if (!Number.isInteger(line) || typeof lineText !== "string") return null;
+    if (Array.isArray(lines) && mailLineInFencedCode(lines, line)) return null;
+    const target = mailFirstMailLinkPath(lineText);
+    if (!target) return null;
+    const resolved = mailResolveMailFile(app, view.file.path, target);
+    if (!resolved) return null;
+    return { file: resolved.file, frontmatter: resolved.frontmatter, view, editor: view.editor };
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailChildHopMailContext(app, view, line, lines, lineText) {
+  try {
+    if (!view || !view.file || !view.editor) return null;
+    if (!Array.isArray(lines) || !Number.isInteger(line) || line < 0 || line >= lines.length) return null;
+    const parentText = typeof lineText === "string" ? lineText : String(lines[line] || "");
+    if (!mailIsCheckboxTaskLine(parentText)) return null;
+    if (mailFirstMailLinkPath(parentText) !== null) return null;
+    if (mailLineInFencedCode(lines, line)) return null;
+    const parentIndent = mailIndentWidth(parentText);
+    const candidates = [];
+    for (let index = line + 1; index < lines.length; index += 1) {
+      const text = String(lines[index] || "");
+      if (!text.trim()) continue;
+      if (mailLineInFencedCode(lines, index)) continue;
+      const indent = mailIndentWidth(text);
+      if (indent <= parentIndent) break;
+      if (!/^\s*[-*+]/.test(text)) continue;
+      candidates.push({ index, text, indent });
+    }
+    if (candidates.length === 0) return null;
+    let directIndent = null;
+    for (const candidate of candidates) {
+      if (directIndent === null || candidate.indent < directIndent) directIndent = candidate.indent;
+    }
+    for (const candidate of candidates) {
+      if (candidate.indent !== directIndent) continue;
+      const target = mailLinkOnlyBulletTarget(candidate.text);
+      if (!target || !target.startsWith("mail/")) continue;
+      const resolved = mailResolveMailFile(app, view.file.path, target);
+      if (!resolved) continue;
+      return { file: resolved.file, frontmatter: resolved.frontmatter, view, editor: view.editor };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailEmailContext(app, view = mailActiveMarkdownView(app)) {
+  try {
+    const current = mailCurrentNote(app, view);
+    if (current) return current;
+    if (!view || !view.file || !view.editor || typeof view.editor.getLine !== "function") return null;
+    const cursor = mailEditorPosition(view.editor, "head");
+    if (!cursor) return null;
+    const lineText = view.editor.getLine(cursor.line);
+    if (typeof lineText !== "string") return null;
+    let lines = null;
+    try {
+      lines = typeof view.editor.getValue === "function"
+        ? String(view.editor.getValue()).split("\n")
+        : null;
+    } catch (error) {
+      lines = null;
+    }
+    if (!Array.isArray(lines)) lines = null;
+    const lineBorne = mailLineBorneMailContext(app, view, cursor.line, lineText, lines);
+    if (lineBorne) return lineBorne;
+    if (lines) {
+      const hop = mailChildHopMailContext(app, view, cursor.line, lines, lineText);
+      if (hop) return hop;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
 }
 
 function mailGmailUrlFor(context) {
@@ -983,6 +1209,56 @@ class BobMailPlugin extends Plugin {
         this.mailObservePaste(event, editor, view);
       }));
     }
+    this.mailGmailOpenKeymap = 0;
+    this.mailVimMappingsRegistered = false;
+    if (workspace && typeof workspace.onLayoutReady === "function") {
+      workspace.onLayoutReady(() => {
+        if (this.registerMailVimMappings()) {
+          return;
+        }
+        const ref = workspace.on("active-leaf-change", () => {
+          if (this.registerMailVimMappings()) {
+            workspace.offref(ref);
+          }
+        });
+        this.registerEvent(ref);
+      });
+    }
+  }
+
+  registerMailVimMappings() {
+    if (this.mailVimMappingsRegistered) {
+      return true;
+    }
+    try {
+      const vim = window.CodeMirrorAdapter && window.CodeMirrorAdapter.Vim;
+      if (!vim) {
+        return false;
+      }
+      vim.defineAction("bobMailOpenGmail", () => this.handleMailVimOpenGmail());
+      for (const key of ["<M-CR>", "<M-Enter>"]) {
+        vim.mapCommand(key, "action", "bobMailOpenGmail", {}, {
+          context: "normal",
+        });
+      }
+      this.mailVimMappingsRegistered = true;
+      this.mailGmailOpenKeymap = 1;
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  handleMailVimOpenGmail() {
+    try {
+      const view = mailActiveMarkdownView(this.app);
+      if (!view || !view.editor) return;
+      const context = mailEmailContext(this.app, view);
+      if (!context || !mailGmailUrlFor(context)) return;
+      this.mailOpenGmail(context);
+    } catch (error) {
+      // Silent no-op: the chip's absence already said so.
+    }
   }
 
   onunload() {
@@ -1379,6 +1655,15 @@ module.exports.helpers = {
   mailPasteRangeIsCurrent,
   mailReplacePasteRangeIfCurrent,
   mailLinkUnderCursor,
+  mailMaskInlineCode,
+  mailFirstMailLinkPath,
+  mailIsCheckboxTaskLine,
+  mailIndentWidth,
+  mailLinkOnlyBulletTarget,
+  mailResolveMailFile,
+  mailLineInFencedCode,
+  mailLineBorneMailContext,
+  mailChildHopMailContext,
   mailEmailContext,
   mailGmailUrlFor,
   mailEmailLabel,

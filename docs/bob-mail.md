@@ -13,7 +13,7 @@ search and save behavior; the plugin displays its results and inserts links.
 | --- | --- |
 | Name | Bob Mail |
 | ID | `bob-mail` |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
 | Description | Link, open, refresh, and send saved Gmail threads from Obsidian. |
@@ -50,13 +50,25 @@ was and the notice shows Bob's message.
 
 ## Work from an email
 
-- **Bob Mail: Open in Gmail** opens the current mail note's Gmail URL or a
-  `[[mail/…]]` link under the cursor.
+- **Bob Mail: Open in Gmail** opens the current mail note's Gmail URL, a
+  `[[mail/…]]` link anywhere on the cursor's line (first mail link wins;
+  fenced and inline code never count), or — from a checkbox task row with
+  no mail link of its own — a direct link-only child bullet's mail note.
+  Task status does not matter; a missing or invalid `gmail_url` stays a
+  silent no-op.
+- Press **Cmd+Enter** (vim normal mode, `<M-CR>` / `<M-Enter>`) anywhere
+  on the row to open the same thread in the browser. The muted `⌘↵ Gmail`
+  chip (macOS; `M-↵ Gmail` elsewhere) on the cursor's row shows exactly
+  when the keymap is live. The plugin exposes `mailGmailOpenKeymap = 1`
+  only after the vim mappings register, so the chip never advertises a
+  keymap that is not live.
 - **Bob Mail: Refresh this email** saves the open mail note again and reports
   whether new messages were added.
 - **Bob Mail: Task from this email** offers `Follow up: <subject>` as editable
   task text, then captures it with a link to the mail note. When the cursor is
-  in a message card, that link points to the message's `^m-…` block.
+  in a message card, that link points to the message's `^m-…` block. It
+  shares the widened email context above, so it is also available on
+  line-borne and child-hop rows.
 - Bob Command Mode offers **Save this email to Bob Mail** under **FROM
   CLIPBOARD** when the clipboard contains a Gmail URL.
 

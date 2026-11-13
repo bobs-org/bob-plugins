@@ -879,6 +879,29 @@ test("nav api v3 resolves results and never throws", async () => {
       .claimReviewWalkCompletion(editor),
     null,
   );
+
+  const jumps = [];
+  const withJump = helpers.createDependencyNavApi({
+    recordJump(from, to) {
+      jumps.push({ from, to });
+      return true;
+    },
+  });
+  assert.equal(typeof withJump.recordJump, "function");
+  assert.equal(
+    withJump.recordJump({ path: "bank/2026-11.md", line: 1, ch: 8 }, { path: "bank/2026-11.md", line: 2, ch: 8 }),
+    true,
+  );
+  assert.equal(jumps.length, 1);
+  assert.equal(api.recordJump({ path: "A.md", line: 0, ch: 0 }, { path: "B.md", line: 0, ch: 0 }), false);
+  assert.equal(
+    helpers.createDependencyNavApi({
+      recordJump() {
+        throw new Error("boom");
+      },
+    }).recordJump({ path: "A.md", line: 0, ch: 0 }, { path: "B.md", line: 0, ch: 0 }),
+    false,
+  );
 });
 
 test("getDependencyInsertLine lands after a Cancel Log subtree", () => {

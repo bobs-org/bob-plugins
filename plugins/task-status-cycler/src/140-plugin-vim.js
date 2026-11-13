@@ -132,13 +132,11 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
-    // Bank rows bypass the Pomodoro/review-walk machinery entirely: flip
-    // space/x as plain bytes, or refuse with a notice.
+    // Bank rows bypass Pomodoro/review-walk: waiting Ctrl+Enter claims
+    // the Category card, otherwise flip space/x or refuse with a notice.
     const vimBank = this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null);
     if (vimBank) {
-      if (!this.cyclerBankLocalFlip(view.editor, vimBank)) {
-        new Notice(CYCLER_BANK_ROW_NOTICE);
-      }
+      this.cyclerBankHandleOpenDone(view.editor, view, vimBank);
       return;
     }
 

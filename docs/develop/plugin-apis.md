@@ -125,10 +125,14 @@ vault events, focus, local day rollover, or successful ensure and ack.
 `ackIds(ids, options)`, and `toggleIdLessRowAtCursor(editor,
 expectedLineText)`; acknowledgment submits only the drawn snapshot's IDs and
 ID-less toggles verify the exact row before flipping one byte. Version 2 adds
-`claimRowClose(editor, view)`, which returns `true` and opens the Category card
-only for a waiting bank row, and `setCategory(editor, view)`, which opens the
-same card on any bank row without advancing the walk or changing its checkbox.
-Both return `false` when the editor cursor is not on a canonical bank row.
+`claimRowClose(editor, view)`, which is synchronous and never throws: `true`
+when ledger-tools takes Ctrl+Enter (opens or focuses the Category card, or
+swallows the post-landing lock) and `false` when the cursor is not a waiting
+bank row. `setCategory(editor, view)` opens the same card on any bank row
+without advancing or changing its checkbox. Task Status Cycler
+feature-detects `api.bank.version >= 2` and `claimRowClose` on waiting rows
+only; a missing, v1, false, or throwing claim falls back to today's
+`[ ]`↔`[x]` flip. Ticked rows never delegate.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.
@@ -372,6 +376,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `openDependencyStage(ref)` | Root method | Open the task's dependency stage. |
 | `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
 | `claimReviewWalkCompletion(editor)` | Root method | Claim completion handoff for a landed review row. |
+| `recordJump(from, to)` | Additive member | Record one origin→destination transition on the same file-aware Vim jump history `Ctrl+O` uses. Synchronous, never throws, returns `true` when recorded. Feature-detect the method; the root `version` stays 3. |
 
 `inboxRoute` has `isInboxNote(path)`,
 `prompt(request)`, and `commit(request)`.

@@ -142,8 +142,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return false;
   }
 
+  cardRow() {
+    if (!this.context || typeof this.context !== "object") return {};
+    if (this.context.cardRow && typeof this.context.cardRow === "object") return this.context.cardRow;
+    if (this.context.row && typeof this.context.row === "object") return this.context.row;
+    return {};
+  }
+
   currentModel() {
-    const row = this.context && this.context.cardRow ? this.context.cardRow : {};
+    const row = this.cardRow();
     this.model = bankCategoryCardModel({
       mode: this.mode,
       categories: this.categories,
@@ -161,7 +168,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const rows = Array.isArray(report.days)
       ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
       : [];
-    const cardRow = this.context && this.context.cardRow ? this.context.cardRow : null;
+    const cardRow = this.cardRow();
     const match = cardRow ? bankCategoryMatchJsonRow(cardRow, rows) : null;
     this.suggestion = match && match.suggestion ? match.suggestion : null;
     const model = bankCategoryCardModel({
@@ -187,7 +194,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.summary = null;
     this.lock = lock || null;
     this.highlightKey = null;
-    this.paint();
+    this.chord = bankCategoryChordInit(false);
+    try { this.paint(); } catch (_) {}
   }
 
   showSummary(summary) {
@@ -221,6 +229,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       if (this.onChoose) await this.onChoose(categoryKey, kind, this);
       return true;
     } catch (error) {
+      this.waitingRefresh = false;
+      this.busy = false;
       new Notice(`Bank: category could not be filed (${error && error.message ? error.message : error})`);
       return false;
     } finally {

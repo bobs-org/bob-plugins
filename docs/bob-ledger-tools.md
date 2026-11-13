@@ -72,14 +72,15 @@ Album owner cards, group navigation, and sync controls are described in
 
 `bob-bank` fences (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`): frontmatter matches the filename; only existing headings navigate; empty months teach. Queue rows run oldest-first; day buttons carry the drawn IDs. **Bank: open today** ensures today at the next row; **Bank: acknowledge this day** acks that day's snapshot; no default hotkeys. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clears empty stubs; `[cat:: ` inserts ordered keys. The chip follows the Day strip, hides without `bank.md`, defaults on (`stats.bank_chip: false`). `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math; only `bank.md` hides its `bank` property.
 
-On a waiting bank row, Ctrl+Enter opens the Category card. Bob's suggestion is
-highlighted; Enter accepts it, a reported hotkey picks another category, Space
-files without one, and Escape cancels. A filing ticks the row and sets its
-category in one undo step, then advances within that month note. **Bank: set
-category** opens the same card on any row as a correction and leaves its
-checkbox and cursor position alone. Hidden categories stay valid on rows but
-do not appear in the card or `[cat:: ` suggestions. The waiting pill lands at
-the payee start so Ctrl+Enter is ready on arrival.
+On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2
+`claimRowClose`, which opens the Category card. Bob's suggestion is
+highlighted; Enter or a second Ctrl+Enter accepts it, a hotkey picks another
+category, Space files without one, and Escape cancels. A filing ticks and
+categorizes in one undo, advances, and records a `recordJump` so Ctrl+O
+returns to the payee. **Bank: set category** corrects any row without
+changing checkbox or cursor. Hidden categories stay on rows but out of the
+card and `[cat:: ` suggestions. The waiting pill lands at the payee start.
+Older APIs keep the `[ ]`↔`[x]` flip.
 
 ## Snippets and the plan block
 

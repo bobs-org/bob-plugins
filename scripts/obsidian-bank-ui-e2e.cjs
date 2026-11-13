@@ -461,7 +461,7 @@ function runSelfTest() {
     const log = bank.readArgvLog(shimDir);
     if (!log.length || log[0].argv[1] !== "list") throw new Error("shim did not log argv");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math"]) {
+    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "walk-ctrl-enter-c"]) {
       if (!source.includes(token) && token !== "never $0.00") {
         if (token === "never $0.00") continue;
         throw new Error(`e2e source missing ${token}`);
@@ -491,7 +491,7 @@ async function waitArgv(shimDir, startLength, predicate, timeoutMs = 4000) {
 
 function jsonDetail(value) {
   try {
-    return JSON.stringify(value ?? null).slice(0, 220);
+    return JSON.stringify(value ?? null).slice(0, 1600);
   } catch {
     return String(value).slice(0, 220);
   }
@@ -1162,6 +1162,176 @@ async function runE2e(parsed) {
     const toggleOnlyBox = guard && guard.afterToggle && /\[x\]/.test(guard.afterToggle) && !/✅|#task|\[created|\[completion|\[scheduled/.test(guard.afterToggle);
     record("cycler-cycle-no-meta", Boolean(cycleUnchanged), JSON.stringify(guard).slice(0, 200));
     record("cycler-toggle-checkbox-only", Boolean(toggleOnlyBox || cycleUnchanged), JSON.stringify(guard).slice(0, 200));
+
+    const walk = await client.evaluate(`(() => (async () => {
+      const path = "bank/2026-07.md";
+      const cats = [
+        { key: "groceries", label: "Groceries", emoji: "🛒", hotkey: "g", group: "Everyday", hidden: false },
+        { key: "coffee", label: "Coffee", emoji: "☕", hotkey: "c", group: "Everyday", hidden: false },
+      ];
+      const body = [
+        "---",
+        'parent: "[[bank]]"',
+        'type: "[[bank_month]]"',
+        "month: 2026-07",
+        "---",
+        "",
+        "# Bank July 2026",
+        "",
+        "## Wed Jul 1",
+        "",
+        "- [ ] $1.00 Corner Cafe",
+        "- [ ] $2.00 Market",
+        "- [ ] $3.00 Bookstore",
+        "- [ ] $4.00 Hardware",
+        "- [x] $5.00 Already filed",
+        "",
+      ].join("\\n");
+      const existing = window.app.vault.getAbstractFileByPath(path);
+      if (existing) await window.app.vault.modify(existing, body);
+      else await window.app.vault.create(path, body);
+      const abstract = window.app.vault.getAbstractFileByPath(path);
+      const leaf = window.app.workspace.getLeaf(false);
+      await leaf.openFile(abstract);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      if (ledger && ledger.bankCategoryModal && typeof ledger.bankCategoryModal.close === "function") {
+        try { ledger.bankCategoryModal.close(); } catch (error) {}
+      }
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const lineOf = (payee) => editor.getValue().split("\\n").findIndex((line) => line.includes(payee));
+      const cardOpen = () => Boolean(
+        document.querySelector(".bob-bank-category-modal") ||
+        (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true),
+      );
+      const snap = (label) => {
+        const modal = ledger && ledger.bankCategoryModal;
+        return {
+          label,
+          closed: modal ? modal.closed === true : null,
+          busy: modal ? modal.busy === true : null,
+          waitingRefresh: modal ? modal.waitingRefresh === true : null,
+          didInteract: modal ? modal.didInteract === true : null,
+          highlightKey: modal ? modal.highlightKey : null,
+          suggestion: modal && modal.suggestion ? modal.suggestion.category : null,
+          hasCardRow: Boolean(modal && modal.context && modal.context.cardRow),
+          payee: modal && modal.context && modal.context.cardRow && modal.context.cardRow.payee,
+          cats: modal && Array.isArray(modal.categories) ? modal.categories.length : 0,
+        };
+      };
+      const dbg = [];
+      const seed = (extraDays) => {
+        const modal = ledger && ledger.bankCategoryModal;
+        if (!modal || typeof modal.setReport !== "function") return false;
+        return modal.setReport({
+          categories: cats,
+          days: extraDays || [],
+        }) === true;
+      };
+      const key = async (name, opts = {}) => {
+        const modal = ledger && ledger.bankCategoryModal;
+        if (!modal || typeof modal.onKeyDown !== "function") return false;
+        const event = {
+          key: name, ctrlKey: opts.ctrl === true, isComposing: false,
+          preventDefault() {}, stopPropagation() {},
+        };
+        await modal.onKeyDown(event);
+        if ((name === "Enter" || opts.ctrl === true) && typeof modal.onKeyUp === "function") modal.onKeyUp(event);
+        return true;
+      };
+      const toggle = () => {
+        const viaCommand = window.app.commands.executeCommandById("task-status-cycler:toggle-task-open-done");
+        const openNow = Boolean(ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true);
+        const viaApi = !openNow && ledger && ledger.api && ledger.api.bank &&
+          typeof ledger.api.bank.claimRowClose === "function"
+          ? ledger.api.bank.claimRowClose(editor, view)
+          : false;
+        return { viaCommand, viaApi, openNow, hasModal: Boolean(ledger && ledger.bankCategoryModal) };
+      };
+
+      editor.setCursor({ line: lineOf("Corner Cafe"), ch: 8 });
+      const first = toggle();
+      await sleep(80);
+      const seededOpen = seed();
+      const opened = cardOpen();
+      const keyedC = await key("c");
+      await sleep(400);
+      const afterC = editor.getLine(lineOf("Corner Cafe"));
+      const landed = editor.getCursor();
+      const marketLine = lineOf("Market");
+      dbg.push(snap("afterC"));
+
+      const seededLearned = seed([{ rows: [{ path, line: marketLine + 1, cents: -200, payee: "Market", suggestion: { category: "coffee", source: "learned" } }] }]);
+      dbg.push(Object.assign(snap("afterSeed"), { seededOpen, seededLearned }));
+      const second = toggle();
+      const keyedAccept = await key("Enter", { ctrl: true });
+      await sleep(400);
+      const afterAccept = editor.getLine(lineOf("Market"));
+      dbg.push(snap("afterAccept"));
+
+      const keyedSpace = await key(" ");
+      await sleep(400);
+      const afterSpace = editor.getLine(lineOf("Bookstore"));
+      const afterSpaceMarket = editor.getLine(lineOf("Market"));
+      dbg.push(Object.assign(snap("afterSpace"), { keyedSpace, afterSpaceMarket }));
+
+      const hardwareBefore = editor.getLine(lineOf("Hardware"));
+      await key("Escape");
+      const afterEsc = editor.getLine(lineOf("Hardware"));
+
+      editor.setCursor({ line: lineOf("Already filed"), ch: 8 });
+      toggle();
+      const afterUntick = editor.getLine(lineOf("Already filed"));
+
+      editor.setCursor({ line: lineOf("Already filed"), ch: 8 });
+      toggle();
+      await sleep(80);
+      seed();
+      await key(" ");
+      await sleep(400);
+      await key(" ");
+      await sleep(500);
+      const summary = Boolean(
+        (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.summary) ||
+        document.querySelector(".bob-bank-category-summary"),
+      );
+
+      const hardwareFiled = editor.getLine(lineOf("Hardware"));
+      if (typeof editor.undo === "function") editor.undo();
+      else window.app.commands.executeCommandById("editor:undo");
+      await sleep(80);
+      const afterUndo = editor.getLine(lineOf("Hardware"));
+
+      return {
+        dbg,
+        opened,
+        keyedC,
+        keyedAccept,
+        first,
+        second,
+        afterC,
+        landedOnMarket: landed && landed.line === marketLine,
+        afterAccept,
+        afterSpace,
+        hardwareBefore,
+        afterEsc,
+        afterUntick,
+        summary,
+        hardwareFiled,
+        afterUndo,
+        apiV2: Boolean(ledger && ledger.api && ledger.api.bank && ledger.api.bank.version >= 2),
+      };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    record("walk-import-fixture", Boolean(walk && walk.apiV2 && !walk.error), jsonDetail(walk));
+    record("walk-ctrl-enter-c", Boolean(walk && walk.opened && /\[x\]/.test(String(walk.afterC || "")) && /\[cat:: coffee\]/.test(String(walk.afterC || "")) && walk.landedOnMarket), jsonDetail(walk));
+    record("walk-accept-learned", Boolean(walk && /\[x\]/.test(String(walk.afterAccept || "")) && /\[cat:: coffee\]/.test(String(walk.afterAccept || ""))), jsonDetail(walk));
+    record("walk-space", Boolean(walk && /\[x\]/.test(String(walk.afterSpace || "")) && !/\[cat::/.test(String(walk.afterSpace || ""))), jsonDetail(walk));
+    record("walk-esc", Boolean(walk && walk.afterEsc === walk.hardwareBefore), jsonDetail(walk));
+    record("walk-untick-ticked", Boolean(walk && /\[ \]/.test(String(walk.afterUntick || ""))), jsonDetail(walk));
+    record("walk-end-of-run", Boolean(walk && walk.summary), jsonDetail(walk));
+    record("walk-undo", Boolean(walk && walk.afterUndo && walk.afterUndo !== walk.hardwareFiled && /\[ \]/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
 
     await openNote(client, "tasks/ordinary.md", "live");
     const ordinaryCycle = await client.evaluate(`(() => {

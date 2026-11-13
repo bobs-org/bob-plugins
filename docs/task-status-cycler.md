@@ -158,10 +158,12 @@ never struck, restored, tree-closed, or reformatted.
 Bank month-note rows are ordinary acknowledgment checkboxes, not tasks: cycle,
 complete, counted and Vim toggles, completion handlers, transclusion writers,
 and demotion paths all refuse them with a notice instead of stamping
-freshness, status fields, or completion metadata. Open/done flips on a bank
-row change only `[ ]` to `[x]` as plain bytes. The guard stays active when
-Bob Ledger Tools is disabled. See [Bob Ledger Tools](bob-ledger-tools.md) for
-the bank cards, commands, and ID-less acknowledgment semantics.
+freshness, status fields, or completion metadata. Ctrl+Enter on a waiting
+row feature-detects ledger-tools `api.bank` v2 `claimRowClose` and opens the
+Category card; a missing, older, false, or throwing claim falls back to
+today's `[ ]`↔`[x]` flip. A ticked row still unticks. The guard stays active
+when Bob Ledger Tools is disabled. See [Bob Ledger Tools](bob-ledger-tools.md)
+for the Category card, bank commands, and ID-less acknowledgment semantics.
 
 ## Successor offers and take-backs
 

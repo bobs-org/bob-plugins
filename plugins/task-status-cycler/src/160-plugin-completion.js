@@ -131,8 +131,8 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
-    // The only bank-row write: flip space/x with no task metadata,
-    // stamp, successor, or transclusion follow-up.
+    // Bank rows: waiting Ctrl+Enter claims the Category card; otherwise
+    // the only write is a space/x flip with no task metadata.
     const openDoneFile = view.file ||
       (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
         ? this.app.workspace.getActiveFile()
@@ -142,9 +142,7 @@ class TaskStatusCyclerCompletionMixin {
       if (checking) {
         return true;
       }
-      if (!this.cyclerBankLocalFlip(editor, openDoneBank)) {
-        new Notice(CYCLER_BANK_ROW_NOTICE);
-      }
+      this.cyclerBankHandleOpenDone(editor, view, openDoneBank);
       return true;
     }
 

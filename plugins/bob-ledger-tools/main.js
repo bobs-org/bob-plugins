@@ -67683,8 +67683,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return false;
   }
 
+  cardRow() {
+    if (!this.context || typeof this.context !== "object") return {};
+    if (this.context.cardRow && typeof this.context.cardRow === "object") return this.context.cardRow;
+    if (this.context.row && typeof this.context.row === "object") return this.context.row;
+    return {};
+  }
+
   currentModel() {
-    const row = this.context && this.context.cardRow ? this.context.cardRow : {};
+    const row = this.cardRow();
     this.model = bankCategoryCardModel({
       mode: this.mode,
       categories: this.categories,
@@ -67702,7 +67709,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const rows = Array.isArray(report.days)
       ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
       : [];
-    const cardRow = this.context && this.context.cardRow ? this.context.cardRow : null;
+    const cardRow = this.cardRow();
     const match = cardRow ? bankCategoryMatchJsonRow(cardRow, rows) : null;
     this.suggestion = match && match.suggestion ? match.suggestion : null;
     const model = bankCategoryCardModel({
@@ -67728,7 +67735,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.summary = null;
     this.lock = lock || null;
     this.highlightKey = null;
-    this.paint();
+    this.chord = bankCategoryChordInit(false);
+    try { this.paint(); } catch (_) {}
   }
 
   showSummary(summary) {
@@ -67762,6 +67770,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       if (this.onChoose) await this.onChoose(categoryKey, kind, this);
       return true;
     } catch (error) {
+      this.waitingRefresh = false;
+      this.busy = false;
       new Notice(`Bank: category could not be filed (${error && error.message ? error.message : error})`);
       return false;
     } finally {
@@ -67933,7 +67943,29 @@ class BobLedgerToolsBankCategoryMixin {
   }
 
   bankCategoryClaimRowClose(editor, view) {
-    return this.bankCategoryOpenAtCursor(editor, view, "close", true);
+    try {
+      const modal = this.bankCategoryModal;
+      if (modal && modal.closed !== true) {
+        try {
+          if (modal.contentEl && typeof modal.contentEl.focus === "function") {
+            modal.contentEl.focus();
+          }
+        } catch (_) {}
+        try {
+          void modal.onKeyDown({
+            key: "Enter",
+            ctrlKey: true,
+            isComposing: false,
+            preventDefault() {},
+            stopPropagation() {},
+          });
+        } catch (_) {}
+        return true;
+      }
+      return this.bankCategoryOpenAtCursor(editor, view, "close", true) === true;
+    } catch (_) {
+      return false;
+    }
   }
 
   bankCategorySetCategory(editor, view) {
@@ -67966,6 +67998,7 @@ class BobLedgerToolsBankCategoryMixin {
       source,
       scan: current.scan,
       row: cardRow,
+      cardRow,
       token,
       capture: bankCategoryCapture({ path, line: row.line, lineText: current.raw }),
     };
@@ -68097,7 +68130,10 @@ class BobLedgerToolsBankCategoryMixin {
     const scan = bankScanSource(modal.context.path, source);
     const next = bankCategoryNextWaiting({ scan, filedLine: plan.line });
     const month = modal.month;
-    const refresh = Promise.resolve(this.apiBankRefresh({ command: "report", month }));
+    let refresh = Promise.resolve(null);
+    try {
+      refresh = Promise.resolve(this.apiBankRefresh({ command: "report", month }));
+    } catch (_) {}
     if (!next) {
       await this.bankCategoryCompleteWalk(modal, session, refresh);
       return true;
@@ -68109,21 +68145,37 @@ class BobLedgerToolsBankCategoryMixin {
       modal.close();
       return false;
     }
+    const landingCh = nextContext.token.payeeSpan ? nextContext.token.payeeSpan.start : 0;
+    const filedCh = modal.context.token && modal.context.token.payeeSpan
+      ? modal.context.token.payeeSpan.start
+      : 0;
     editor.setCursor?.({
       line: next.row.line - 1,
-      ch: nextContext.token.payeeSpan ? nextContext.token.payeeSpan.start : 0,
+      ch: landingCh,
     });
+    this.bankCategoryRecordJump(
+      { path: modal.context.path, line: plan.line - 1, ch: filedCh },
+      { path: modal.context.path, line: next.row.line - 1, ch: landingCh },
+    );
     const progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(scan).length);
-    modal.setNext(nextContext, progress, bankCategoryLockInit(Date.now()));
-    const refreshResult = await Promise.race([
-      refresh,
-      new Promise((resolve) => setTimeout(() => resolve(null), 800)),
-    ]);
+    let refreshResult = null;
+    try {
+      modal.setNext(nextContext, progress, bankCategoryLockInit(Date.now()));
+      try {
+        refreshResult = await Promise.race([
+          Promise.resolve(refresh).then((result) => result, () => null),
+          new Promise((resolve) => setTimeout(() => resolve(null), 800)),
+        ]);
+      } catch (_) {
+        refreshResult = null;
+      }
+    } finally {
+      modal.waitingRefresh = false;
+      modal.busy = false;
+    }
     if (this.bankCategoryModal !== modal || modal.closed) return true;
-    modal.waitingRefresh = false;
-    modal.busy = false;
     if (refreshResult && refreshResult.report) modal.setReport(refreshResult.report);
-    modal.paint();
+    try { modal.paint(); } catch (_) {}
     if (!refreshResult) {
       void refresh.then((late) => {
         if (this.bankCategoryModal === modal && !modal.didInteract && late && late.report) {
@@ -68138,12 +68190,26 @@ class BobLedgerToolsBankCategoryMixin {
     modal.waitingRefresh = true;
     modal.busy = false;
     modal.paint();
-    const listPromise = Promise.resolve(this.apiBankRefresh({ command: "list", all: true }));
-    const [monthResult, listResult] = await Promise.all([
-      Promise.resolve(monthRefresh).catch(() => null),
-      listPromise.catch(() => null),
-    ]);
-    if (this.bankCategoryModal !== modal || modal.closed) return;
+    let monthResult = null;
+    let listResult = null;
+    try {
+      let listPromise = Promise.resolve(null);
+      try {
+        listPromise = Promise.resolve(this.apiBankRefresh({ command: "list", all: true }));
+      } catch (_) {}
+      [monthResult, listResult] = await Promise.all([
+        Promise.resolve(monthRefresh).then((result) => result, () => null),
+        Promise.race([
+          Promise.resolve(listPromise).then((result) => result, () => null),
+          new Promise((resolve) => setTimeout(() => resolve(null), 800)),
+        ]),
+      ]);
+    } catch (_) {}
+    if (this.bankCategoryModal !== modal || modal.closed) {
+      modal.waitingRefresh = false;
+      modal.busy = false;
+      return;
+    }
     const report = monthResult && monthResult.report;
     const waitingByMonth = new Map();
     for (const day of Array.isArray(listResult?.report?.days) ? listResult.report.days : []) {
@@ -68157,20 +68223,39 @@ class BobLedgerToolsBankCategoryMixin {
         waitingByMonth.set(path, entry);
       }
     }
-    const summary = bankCategoryEndOfRunSummary({
-      monthLabel: report?.period?.label || modal.month,
-      filed: session.filed,
-      elapsedMs: Date.now() - session.startedAt,
-      accepted: session.accepted,
-      picked: session.picked,
-      noCategory: session.noCategory,
-      accounts: report?.accounts || [],
-      waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
-      bobReachable: Boolean(report && !monthResult?.error),
-    });
-    this.bankCategorySession = null;
-    new Notice(summary.line1);
-    modal.showSummary(summary);
+    try {
+      const summary = bankCategoryEndOfRunSummary({
+        monthLabel: report?.period?.label || modal.month,
+        filed: session.filed,
+        elapsedMs: Date.now() - session.startedAt,
+        accepted: session.accepted,
+        picked: session.picked,
+        noCategory: session.noCategory,
+        accounts: report?.accounts || [],
+        waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
+        bobReachable: Boolean(report && !monthResult?.error),
+      });
+      this.bankCategorySession = null;
+      new Notice(summary.line1);
+      modal.showSummary(summary);
+    } catch (_) {
+      modal.waitingRefresh = false;
+      modal.busy = false;
+    }
+  }
+
+  bankCategoryRecordJump(from, to) {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const api = plugins && plugins["bob-navigation-hotkeys"] &&
+        plugins["bob-navigation-hotkeys"].api;
+      if (!api || typeof api.recordJump !== "function") {
+        return false;
+      }
+      return api.recordJump(from, to) === true;
+    } catch (_) {
+      return false;
+    }
   }
 
   async bankCategoryOpenWaitingMonth(path) {

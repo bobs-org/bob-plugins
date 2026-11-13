@@ -183,6 +183,100 @@ test("lower-level writers flip only the target line between space and x", () => 
   assert.equal(editor.getValue(), before);
 });
 
+function installBankApi(plugin, claimRowClose) {
+  const previous = plugin.app.plugins && plugin.app.plugins.plugins
+    ? plugin.app.plugins.plugins
+    : {};
+  plugin.app.plugins = {
+    plugins: {
+      ...previous,
+      "bob-ledger-tools": {
+        api: {
+          version: 3,
+          bank: claimRowClose === undefined
+            ? { version: 1 }
+            : { version: 2, claimRowClose },
+        },
+      },
+    },
+  };
+}
+
+test("Ctrl+Enter delegates waiting rows to ledger-tools v2 and falls back", () => {
+  const plugin = makeBankPlugin();
+  const waiting = createTextEditor(BANK_TEXT, { line: 7, ch: 3 });
+  const view = bankView(plugin, waiting);
+  const calls = [];
+
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, waiting, view), true);
+  assert.equal(waiting.getLine(7), "- [x] $5.00 Typed cash row");
+  waiting.replaceRange(" ", { line: 7, ch: 3 }, { line: 7, ch: 4 });
+  assert.equal(waiting.getLine(7), "- [ ] $5.00 Typed cash row");
+
+  installBankApi(plugin);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, waiting, view), true);
+  assert.equal(waiting.getLine(7), "- [x] $5.00 Typed cash row", "v1 bank still flips");
+  waiting.replaceRange(" ", { line: 7, ch: 3 }, { line: 7, ch: 4 });
+
+  installBankApi(plugin, () => {
+    throw new Error("boom");
+  });
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, waiting, view), true);
+  assert.equal(waiting.getLine(7), "- [x] $5.00 Typed cash row", "throwing claim falls back");
+  waiting.replaceRange(" ", { line: 7, ch: 3 }, { line: 7, ch: 4 });
+
+  installBankApi(plugin, () => false);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, waiting, view), true);
+  assert.equal(waiting.getLine(7), "- [x] $5.00 Typed cash row", "false claim falls back");
+  waiting.replaceRange(" ", { line: 7, ch: 3 }, { line: 7, ch: 4 });
+
+  installBankApi(plugin, (editor, claimedView) => {
+    calls.push({ line: editor.getCursor().line, path: claimedView.file.path });
+    return true;
+  });
+  const before = waiting.getLine(7);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, waiting, view), true);
+  assert.equal(waiting.getLine(7), before, "true claim writes nothing");
+  plugin.handleVimTaskToggleOpenDone();
+  assert.equal(waiting.getLine(7), before, "Vim waiting-row claim writes nothing");
+  assert.deepEqual(calls, [
+    { line: 7, path: "bank/2026-11.md" },
+    { line: 7, path: "bank/2026-11.md" },
+  ]);
+  assert.ok(!waiting.getLine(7).includes("✅"));
+  assert.ok(!waiting.getLine(7).includes("[created"));
+});
+
+test("ticked, stub, and invalid rows never delegate to claimRowClose", () => {
+  const plugin = makeBankPlugin();
+  let claimed = 0;
+  installBankApi(plugin, () => {
+    claimed += 1;
+    return true;
+  });
+
+  const ticked = createTextEditor(BANK_TEXT, { line: 8, ch: 3 });
+  const tickedView = bankView(plugin, ticked);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, ticked, tickedView), true);
+  assert.equal(ticked.getLine(8), "- [ ] $9.99 Done ^bank-bbb222");
+
+  const tickedVim = createTextEditor(BANK_TEXT, { line: 8, ch: 3 });
+  bankView(plugin, tickedVim);
+  plugin.handleVimTaskToggleOpenDone();
+  assert.equal(tickedVim.getLine(8), "- [ ] $9.99 Done ^bank-bbb222");
+
+  const stub = createTextEditor(BANK_TEXT, { line: 9, ch: 6 });
+  bankView(plugin, stub);
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, stub, bankView(plugin, stub)), true);
+  assert.equal(stub.getLine(9), "- [x] $");
+
+  const invalid = createTextEditor(BANK_TEXT, { line: 11, ch: 3 });
+  const beforeInvalid = invalid.getValue();
+  assert.equal(plugin.handleToggleOpenDoneCommand(false, invalid, bankView(plugin, invalid)), true);
+  assert.equal(invalid.getValue(), beforeInvalid);
+  assert.equal(claimed, 0);
+});
+
 test("Vim toggles take the bank path without review-walk or pomodoro work", () => {
   const plugin = makeBankPlugin();
   const editor = createTextEditor(BANK_TEXT, { line: 7, ch: 3 });

@@ -129,9 +129,9 @@ with a notice). A counted chord moves a Pomodoro exactly N positions
 atomically, or jumps to the Nth circular navigation target elsewhere.
 
 Normal-mode Enter on a link records a file-aware jump in a 100-entry session
-history shared with native jumps: `Ctrl+O` returns to the originating note and
-exact cursor, `Ctrl+I` goes forward, counts traverse multiple entries, and
-same-note heading/block and already-open tabs round-trip.
+history shared with native jumps: `Ctrl+O` returns to the origin, `Ctrl+I`
+goes forward, counts traverse, and same-note heading/block and already-open
+tabs round-trip. Bank filings add `api.recordJump`.
 
 ## Parent note
 

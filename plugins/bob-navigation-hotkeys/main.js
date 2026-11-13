@@ -75818,36 +75818,11 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
   }
 }
 
-// nav api v3 (`docs/task-dependencies.md` §9). Dependency calls return Promises
-// resolving to `{ok, reason?}` and never throw; checklist claim synchronously
-// declines with null or returns a settled Promise; `reviewWalk` is the
-// review-walk auto-advance contract (`capture`/`continue`, version 1).
-// `openDependencyStage`
-// opens today's Depends on stage for the owning task of `ref` (`ref`:
-// `{path, line}` — any line of the task block or its Depends-On line);
-// `nav-stage` swaps in the vault-wide stage. `removeDependency` removes one
-// prerequisite through the single-transaction writer (`parentRef`:
-// `{path, line}`, `target`: `{path, blockId}`); it re-reads the dependent
-// and refuses with a notice when stale. `taskLinkLane` is the Pomodoro Task
-// Link lane toggle (plan 202610/in_progress_task_link_marks.md §3): `matches`
-// synchronously reports whether a line is a Pomodoro Task Link line and
-// `toggle` runs the Next <-> In Progress toggle, settling to a result
-// object and never rejecting. Plugins never import each other's
-// `main.js`: bob-ledger-tools feature-detects `api?.version >= 1` and
-// task-status-cycler feature-detects `api?.taskLinkLane?.version >= 1`.
-// `notice` is the additive Unblocked card (`api.notice`, §12.6); v2 adds
-// keep-moving rows (§12.15) and v3 adds `relation_successors` (§12.18).
-// `successors` is the offer picker; v2 accepts `keep_moving` and v3 accepts
-// the `relation` group (§12.13). Callers feature-detect the member
-// versions (`api.notice?.version >= 3`, `api.successors?.version >= 3`).
-// `relations` is the additive LINKS writer (`api.relations` v0): `removeLink`
-// works now; `openStage` settles `{ok: false}` until both stage directions
-// land and the namespace rises to v1.
-// `walkMode` v2: `current()` reads the persisted family, `select(type)` records
-// like a letter click, and `links({path, content})` previews the first rendered
-// prev/next body links through `[n`/`]n`'s matcher, without opening or writing.
-// `openReferencePdf(path, options?)` hands `source_pdf` to Highlights;
-// `options.page` passes through when positive. Version unchanged.
+// nav api v3: frozen, never throws. Feature-detect members (`api.notice?.version`,
+// `api.successors?.version`, `api.recordJump`). Dependency calls return Promises
+// of `{ok, reason?}`. Checklist claim declines with null or a settled Promise.
+// `reviewWalk` is capture/continue v1. `recordJump(from, to)` is additive on
+// the same file-aware Vim jump history Ctrl+O uses; version stays 3.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
     result && typeof result === "object" && "ok" in result
@@ -75935,6 +75910,16 @@ function createDependencyNavApi(plugin) {
           .catch(() => ({ ok: false, reason: "api-failed" }));
       } catch (error) {
         return null;
+      }
+    },
+    recordJump(from, to) {
+      try {
+        if (!plugin || typeof plugin.recordJump !== "function") {
+          return false;
+        }
+        return plugin.recordJump(from, to) === true;
+      } catch (_error) {
+        return false;
       }
     },
   });
@@ -99679,6 +99664,17 @@ class BobNavigationHotkeysVimJumpMixin {
     }
 
     return this.vimJumpHistory;
+  }
+
+  // Additive api.recordJump(from, to): one origin→destination transition on
+  // the same file-aware history Ctrl+O uses. Never throws.
+  recordJump(from, to) {
+    try {
+      this.ensureVimJumpHistory();
+      return recordVimJumpTransition(this.vimJumpHistory, from, to) === true;
+    } catch (error) {
+      return false;
+    }
   }
 
   registerVimJumpHistoryVaultEvents() {

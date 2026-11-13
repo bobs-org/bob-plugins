@@ -699,6 +699,28 @@ test("native fallback runs with empty history and boundaries never replay native
   }
 });
 
+test("recordJump then Ctrl+O returns to the filed row", async () => {
+  const { plugin, editorsByPath } = makePluginWithFiles({
+    files: ["bank/2026-11.md"],
+    activePath: "bank/2026-11.md",
+    activeCursor: { line: 2, ch: 8 },
+  });
+  plugin.api = helpers.createDependencyNavApi(plugin);
+  const editor = editorsByPath.get("bank/2026-11.md");
+  const filed = { path: "bank/2026-11.md", line: 1, ch: 8 };
+  const landing = { path: "bank/2026-11.md", line: 2, ch: 8 };
+  assert.equal(plugin.api.recordJump(filed, landing), true);
+  assert.equal(helpers.getVimJumpHistoryLength(plugin.vimJumpHistory), 2);
+  assert.deepEqual(plugin.vimJumpHistory.entries[0], filed);
+  assert.deepEqual(plugin.vimJumpHistory.entries[1], landing);
+  editor.setCursor(landing);
+  plugin.resolveVimJumpLiveLocation = () => ({ ...landing });
+  assert.equal(await plugin.traverseVimJumpHistory(-1, 1, editor), true);
+  await plugin.vimJumpHistoryChain;
+  assert.equal(plugin.vimJumpHistory.index, 0);
+  assert.deepEqual(editor.getCursor(), { line: 1, ch: 8 });
+});
+
 test("unload restores the native add and keeps a foreign later mapping", () => {
   const { plugin } = makePluginWithFiles({ files: ["A.md"], activePath: "A.md", activeCursor: { line: 0, ch: 0 } });
   const vim = makeVimStub();

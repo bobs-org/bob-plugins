@@ -24108,13 +24108,11 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
-    // Bank rows bypass the Pomodoro/review-walk machinery entirely: flip
-    // space/x as plain bytes, or refuse with a notice.
+    // Bank rows bypass Pomodoro/review-walk: waiting Ctrl+Enter claims
+    // the Category card, otherwise flip space/x or refuse with a notice.
     const vimBank = this.cyclerBankInfoAtCursor(view.editor, (view.file && view.file.path) || null);
     if (vimBank) {
-      if (!this.cyclerBankLocalFlip(view.editor, vimBank)) {
-        new Notice(CYCLER_BANK_ROW_NOTICE);
-      }
+      this.cyclerBankHandleOpenDone(view.editor, view, vimBank);
       return;
     }
 
@@ -25927,8 +25925,8 @@ class TaskStatusCyclerCompletionMixin {
       return false;
     }
 
-    // The only bank-row write: flip space/x with no task metadata,
-    // stamp, successor, or transclusion follow-up.
+    // Bank rows: waiting Ctrl+Enter claims the Category card; otherwise
+    // the only write is a space/x flip with no task metadata.
     const openDoneFile = view.file ||
       (this.app.workspace && typeof this.app.workspace.getActiveFile === "function"
         ? this.app.workspace.getActiveFile()
@@ -25938,9 +25936,7 @@ class TaskStatusCyclerCompletionMixin {
       if (checking) {
         return true;
       }
-      if (!this.cyclerBankLocalFlip(editor, openDoneBank)) {
-        new Notice(CYCLER_BANK_ROW_NOTICE);
-      }
+      this.cyclerBankHandleOpenDone(editor, view, openDoneBank);
       return true;
     }
 
@@ -30213,6 +30209,42 @@ class TaskStatusCyclerBankGuardMixin {
     } catch (error) {
       return false;
     }
+  }
+
+  // Feature-detected bank v2 close: waiting rows only (`kind: "row"` with
+  // status space). Ledger-tools absent, v1, false, or throwing falls
+  // through to today's local flip. Ticked rows never call this.
+  cyclerBankClaimRowClose(editor, view, info) {
+    if (!info || info.kind !== "row" || info.symbol !== " ") {
+      return false;
+    }
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-ledger-tools"];
+      const bank = holder && holder.api && holder.api.bank;
+      if (
+        !bank ||
+        !(Number(bank.version) >= 2) ||
+        typeof bank.claimRowClose !== "function"
+      ) {
+        return false;
+      }
+      return bank.claimRowClose(editor, view) === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Ctrl+Enter on a bank row: waiting rows try the Category card, then
+  // today's space/x flip. Ticked, stub, and invalid rows stay local.
+  cyclerBankHandleOpenDone(editor, view, info) {
+    if (this.cyclerBankClaimRowClose(editor, view, info)) {
+      return true;
+    }
+    if (!this.cyclerBankLocalFlip(editor, info)) {
+      new Notice(CYCLER_BANK_ROW_NOTICE);
+    }
+    return true;
   }
 
   // The only bank-row write the cycler owns: a single status byte between

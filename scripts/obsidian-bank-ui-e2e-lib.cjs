@@ -281,12 +281,13 @@ function checkingAccount(extra = {}) {
 
 function categories() {
   return [
-    { key: "groceries", emoji: "🛒", label: "Groceries", builtin: false },
-    { key: "dining", emoji: "🍽️", label: "Dining", builtin: false },
-    { key: "income", emoji: "💵", label: "Income", builtin: true },
-    { key: "refund", emoji: "↩️", label: "Refund", builtin: true },
-    { key: "transfer", emoji: "🔁", label: "Transfer", builtin: true },
-    { key: "cash", emoji: "🏧", label: "Cash out", builtin: true },
+    { key: "groceries", emoji: "🛒", label: "Groceries", builtin: false, hotkey: "g", group: "Everyday", hidden: false },
+    { key: "dining", emoji: "🍽️", label: "Dining", builtin: false, hotkey: "e", group: "Everyday", hidden: false },
+    { key: "coffee", emoji: "☕", label: "Coffee", builtin: false, hotkey: "c", group: "Everyday", hidden: false },
+    { key: "income", emoji: "💵", label: "Income", builtin: true, hotkey: "i", group: "Money moves", hidden: false },
+    { key: "refund", emoji: "↩️", label: "Refund", builtin: true, hotkey: "r", group: "Money moves", hidden: false },
+    { key: "transfer", emoji: "🔁", label: "Transfer", builtin: true, hotkey: "t", group: "Money moves", hidden: false },
+    { key: "cash", emoji: "🏧", label: "Cash out", builtin: true, hotkey: "a", group: "Money moves", hidden: false },
   ];
 }
 

@@ -343,6 +343,17 @@ class BobNavigationHotkeysVimJumpMixin {
     return this.vimJumpHistory;
   }
 
+  // Additive api.recordJump(from, to): one origin→destination transition on
+  // the same file-aware history Ctrl+O uses. Never throws.
+  recordJump(from, to) {
+    try {
+      this.ensureVimJumpHistory();
+      return recordVimJumpTransition(this.vimJumpHistory, from, to) === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   registerVimJumpHistoryVaultEvents() {
     try {
       const vault = this.app && this.app.vault;

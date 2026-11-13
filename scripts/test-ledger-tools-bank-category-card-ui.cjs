@@ -181,6 +181,120 @@ test("close commits once, refreshes, and lands at the next payee in the same not
   assert.equal(modal.refreshed.categories, CATEGORIES);
 });
 
+test("a rejected month refresh after a successful close still clears waitingRefresh", async () => {
+  const path = "bank/2026-07.md";
+  const editor = editorFor([
+    "## Wed Jul 1",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "",
+  ].join("\n"));
+  const app = { workspace: { getActiveFile: () => ({ path }) } };
+  const plugin = new LedgerToolsPlugin(app);
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  const modal = {
+    mode: "close", editor, context, month: "2026-07", session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    busy: false,
+    setNext(nextContext, progress, lock) {
+      this.next = { context: nextContext, progress, lock };
+      this.waitingRefresh = true;
+      this.busy = true;
+    },
+    setReport(report) { this.refreshed = report; },
+    paint() {},
+    showSummary() {},
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.apiBankRefresh = async () => { throw new Error("no July report"); };
+
+  const committed = await plugin.bankCategoryCommit(modal, "coffee", "pick");
+  assert.equal(committed, true);
+  assert.match(editor.getLine(1), /^- \[x\].*\[cat:: coffee\]/);
+  assert.equal(modal.next.context.row.payee, "Market");
+  assert.equal(modal.waitingRefresh, false);
+  assert.equal(modal.busy, false);
+});
+
+test("a landed context exposes cardRow so a learned report highlights for Ctrl+Enter", () => {
+  const path = "bank/2026-07.md";
+  const editor = editorFor([
+    "## Wed Jul 1",
+    "- [x] $1.00 Corner Cafe [cat:: coffee] ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "",
+  ].join("\n"));
+  const plugin = new LedgerToolsPlugin({ workspace: { getActiveFile: () => ({ path }) } });
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 3);
+  assert.equal(context.row.payee, "Market");
+  assert.equal(context.cardRow.payee, "Market");
+  assert.equal(context.cardRow.line, 3);
+  assert.equal(context.cardRow.cents, -200);
+  const { modal } = makeModal("close", { categories: CATEGORIES });
+  modal.context = context;
+  modal.highlightKey = null;
+  assert.equal(modal.setReport({
+    categories: CATEGORIES,
+    days: [{ rows: [{ path, line: 3, cents: -200, payee: "Market", suggestion: { category: "coffee", source: "learned" } }] }],
+  }), true);
+  assert.equal(modal.highlightKey, "coffee");
+  assert.equal(modal.suggestion.category, "coffee");
+});
+
+test("a close landing records a jump when nav provides recordJump", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor([
+    "## Thu Nov 12",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "",
+  ].join("\n"));
+  const jumps = [];
+  const app = {
+    workspace: { getActiveFile: () => ({ path }) },
+    plugins: { plugins: { "bob-navigation-hotkeys": { api: { recordJump(from, to) { jumps.push({ from, to }); return true; } } } } },
+  };
+  const plugin = new LedgerToolsPlugin(app);
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  const modal = {
+    mode: "close", editor, context, month: "2026-11", session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    setNext(nextContext, progress, lock) { this.next = { context: nextContext, progress, lock }; this.waitingRefresh = true; },
+    setReport(report) { this.refreshed = report; },
+    paint() {},
+    showSummary() {},
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.apiBankRefresh = async () => ({ report: { categories: CATEGORIES, days: [] }, error: null });
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  assert.equal(jumps.length, 1);
+  assert.equal(jumps[0].from.path, path);
+  assert.equal(jumps[0].from.line, 1);
+  assert.equal(jumps[0].to.path, path);
+  assert.equal(jumps[0].to.line, 2);
+});
+
+test("claimRowClose focuses an open card and swallows the lock instead of flipping", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor("## Thu Nov 12\n- [ ] $1.00 Corner Cafe\n- [ ] $2.00 Market\n");
+  const plugin = new LedgerToolsPlugin({ workspace: { getActiveFile: () => ({ path }) } });
+  const keys = [];
+  const modal = {
+    closed: false,
+    contentEl: { focused: false, focus() { this.focused = true; } },
+    lock: h.bankCategoryLockInit(Date.now()),
+    async onKeyDown(event) { keys.push(event && event.key); },
+  };
+  plugin.bankCategoryModal = modal;
+  assert.equal(plugin.bankCategoryClaimRowClose(editor, { file: { path } }), true);
+  assert.equal(modal.contentEl.focused, true);
+  assert.deepEqual(keys, ["Enter"]);
+
+  plugin.bankCategoryModal = null;
+  plugin.bankCategoryOpenAtCursor = () => { throw new Error("boom"); };
+  assert.equal(plugin.bankCategoryClaimRowClose(editor, { file: { path } }), false);
+});
+
 test("set-category replaces the category without ticking or advancing", async () => {
   const path = "bank/2026-11.md";
   const original = [

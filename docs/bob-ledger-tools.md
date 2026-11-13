@@ -617,6 +617,20 @@ in report-listed hosts (or pre-report notes with a real callout); non-hosts
 get none, never at position 0. **Retry** needs a failed refresh or no report;
 lag alone stays silent. Live data needs desktop Obsidian.
 
+## Gmail open hint
+
+A muted `⌘↵ Gmail` capsule (`M-↵ Gmail` off macOS) at the end of the cursor's
+line shows exactly where the vault's Meta+Enter Gmail gesture will open an
+email. It appears for a line-borne `[[mail/…]]` link (any line), a Gmail Task
+child hop from a checkbox task row, or a link-only `[[note#^id]]` Task Link hop
+to a Gmail Task row (exactly one hop, no recursion; embeds and struck links
+stay excluded). The chip is Live Preview only and gated by the mail-link-marks
+toggle. It shows only when bob-mail is loaded and its delivery path is live
+(`mailGmailOpenKeymap = 1`, set when bob-mail's vim mapping registers or the
+navigation dispatcher path is reachable); with bob-mail disabled the chip
+stays absent. Cross-note hop targets resolve through the Tasks memo and a
+bounded file cache with a refresh; a miss stays silent until the next pass.
+
 ## Settings
 
 The **Notebook chips** setting (default on) hides live chips while keeping

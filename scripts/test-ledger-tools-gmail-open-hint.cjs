@@ -287,3 +287,75 @@ test("styles.css contract: muted capsule, quiet ink, toggle hide", () => {
   assert.ok(rules.indexOf("border-radius: 999px") !== -1);
   assert.ok(rules.indexOf("color-mix(in srgb, var(--text-muted) 12%, transparent)") !== -1);
 });
+
+function resolversForHop(targetLinesByPath, frontmatterByPath) {
+  return {
+    getDest: (target, source) => {
+      const key = String(target || "").replace(/\.md$/i, "");
+      if (key === "job") return { path: "job.md" };
+      if (key === "mail/2026/261107_lease_renewal") return { path: "mail/2026/261107_lease_renewal.md" };
+      if (key === "mail/thread") return { path: "mail/thread.md" };
+      return null;
+    },
+    getFrontmatter: (file) => frontmatterByPath[String(file && file.path || "")] || null,
+    getTargetLines: (targetPath) => targetLinesByPath[String(targetPath || "")] || null,
+    getTargetLine: (targetPath, blockId) => {
+      const lines = targetLinesByPath[String(targetPath || "")];
+      if (!Array.isArray(lines)) return null;
+      for (const text of lines) {
+        if (String(text || "").includes("^" + String(blockId || ""))) return String(text);
+      }
+      return null;
+    },
+  };
+}
+
+test("GO12 link-only Task Link hop shows the chip", () => {
+  const blockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [*] #task ${LINK} ^${blockId}`];
+  const dailyLine = `- [[job#^${blockId}]]`;
+  const resolvers = resolversForHop(
+    { "job.md": jobLines },
+    { "mail/2026/261107_lease_renewal.md": MAIL_FACTS },
+  );
+  assert.deepEqual(h.gmailOpenHintTaskLinkHopTarget(dailyLine), { path: "job", blockId });
+  assert.equal(h.gmailOpenHintCanOpen(dailyLine, [dailyLine], 0, "2026/20261113.md", resolvers), true);
+});
+
+test("GO13 multi-link rows stay silent under link_only", () => {
+  const blockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [*] #task ${LINK} ^${blockId}`];
+  const multi = `- [[job#^${blockId}]] [[job#^${blockId}]]`;
+  const resolvers = resolversForHop(
+    { "job.md": jobLines },
+    { "mail/2026/261107_lease_renewal.md": MAIL_FACTS },
+  );
+  assert.equal(h.gmailOpenHintTaskLinkHopTarget(multi), null);
+  assert.equal(h.gmailOpenHintCanOpen(multi, [multi], 0, "2026/20261113.md", resolvers), false);
+});
+
+test("GO14 embeds and struck links stay excluded", () => {
+  const blockId = "ecogpt-founding-engineer-roeje-2";
+  assert.equal(h.gmailOpenHintTaskLinkHopTarget(`- ![[job#^${blockId}]]`), null);
+  assert.equal(h.gmailOpenHintTaskLinkHopTarget(`- ~~[[job#^${blockId}]]~~`), null);
+  assert.equal(h.gmailOpenHintTaskLinkHopTarget(`- [ ] [[job#^${blockId}]]`), null);
+});
+
+test("GO15 Task Link to a non-Gmail task shows nothing", () => {
+  const blockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [ ] #task Just a task ^${blockId}`];
+  const dailyLine = `- [[job#^${blockId}]]`;
+  const resolvers = resolversForHop({ "job.md": jobLines }, {});
+  assert.equal(h.gmailOpenHintCanOpen(dailyLine, [dailyLine], 0, "2026/20261113.md", resolvers), false);
+});
+
+test("GO16 hop-then-child-hop target shows the chip", () => {
+  const blockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [ ] #task Follow up ^${blockId}`, `  - ${LINK}`];
+  const dailyLine = `- [[job#^${blockId}]]`;
+  const resolvers = resolversForHop(
+    { "job.md": jobLines },
+    { "mail/2026/261107_lease_renewal.md": MAIL_FACTS },
+  );
+  assert.equal(h.gmailOpenHintCanOpen(dailyLine, [dailyLine], 0, "2026/20261113.md", resolvers), true);
+});

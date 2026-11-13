@@ -52,16 +52,21 @@ was and the notice shows Bob's message.
 
 - **Bob Mail: Open in Gmail** opens the current mail note's Gmail URL, a
   `[[mail/…]]` link anywhere on the cursor's line (first mail link wins;
-  fenced and inline code never count), or — from a checkbox task row with
-  no mail link of its own — a direct link-only child bullet's mail note.
-  Task status does not matter; a missing or invalid `gmail_url` stays a
-  silent no-op.
-- Press **Cmd+Enter** (vim normal mode, `<M-CR>` / `<M-Enter>`) anywhere
-  on the row to open the same thread in the browser. The muted `⌘↵ Gmail`
-  chip (macOS; `M-↵ Gmail` elsewhere) on the cursor's row shows exactly
-  when the keymap is live. The plugin exposes `mailGmailOpenKeymap = 1`
-  only after the vim mappings register, so the chip never advertises a
-  keymap that is not live.
+  fenced and inline code never count), — from a checkbox task row with
+  no mail link of its own — a direct link-only child bullet's mail note,
+  or — from a plain link-only `[[note#^id]]` Task Link bullet — that task's
+  Gmail thread (exactly one hop, no recursion; embeds and struck links stay
+  excluded). Task status does not matter; a missing or invalid `gmail_url`
+  stays a silent no-op.
+- Press the vault's **Meta+Enter** (`bob-navigation-hotkeys:open-reference-pdf-in-highlights`,
+  which asks bob-mail's `api.mailOpen` when no Highlights target resolves)
+  anywhere on the row to open the same thread in the browser, including from
+  a link-only Task Link row to a Gmail Task. The vim normal-mode `<M-CR>` /
+  `<M-Enter>` mapping remains as a fallback where Meta+Enter is unbound.
+  The muted `⌘↵ Gmail` chip (macOS; `M-↵ Gmail` elsewhere) on the cursor's
+  row shows exactly when a delivery path is live. The plugin exposes
+  `mailGmailOpenKeymap = 1` when the vim mapping registers or the dispatcher
+  path is reachable, so the chip never advertises a gesture that is not live.
 - **Bob Mail: Refresh this email** saves the open mail note again and reports
   whether new messages were added.
 - **Bob Mail: Task from this email** offers `Follow up: <subject>` as editable

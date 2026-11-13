@@ -59,9 +59,13 @@ class BobMailPlugin extends Plugin {
       name: "Bob Mail: Open in Gmail",
       checkCallback: (checking) => {
         const context = mailEmailContext(this.app);
-        if (!context || !mailGmailUrlFor(context)) return false;
-        if (checking) return true;
-        this.mailOpenGmail(context);
+        if (context && mailGmailUrlFor(context)) {
+          if (checking) return true;
+          this.mailOpenGmail(context);
+          return true;
+        }
+        if (checking) return this.mailHasTaskLinkHopShape();
+        void this.mailOpenGmailAtCursor();
         return true;
       },
     });
@@ -81,9 +85,13 @@ class BobMailPlugin extends Plugin {
       name: "Bob Mail: Task from this email",
       checkCallback: (checking) => {
         const context = mailEmailContext(this.app);
-        if (!context) return false;
-        if (checking) return true;
-        void this.mailOpenTaskPrompt(context);
+        if (context) {
+          if (checking) return true;
+          void this.mailOpenTaskPrompt(context);
+          return true;
+        }
+        if (checking) return this.mailHasTaskLinkHopShape();
+        void this.mailOpenTaskPromptAsync();
         return true;
       },
     });
@@ -149,18 +157,89 @@ class BobMailPlugin extends Plugin {
     }
     this.mailGmailOpenKeymap = 0;
     this.mailVimMappingsRegistered = false;
+    try {
+      this.api = Object.freeze({
+        mailOpen: Object.freeze({
+          version: 1,
+          openAtCursor: async (view) => this.mailOpenGmailAtCursor(view),
+        }),
+      });
+    } catch (error) {
+      this.api = null;
+    }
     if (workspace && typeof workspace.onLayoutReady === "function") {
       workspace.onLayoutReady(() => {
+        this.mailUpdateGmailOpenAvailability();
         if (this.registerMailVimMappings()) {
+          this.mailUpdateGmailOpenAvailability();
           return;
         }
         const ref = workspace.on("active-leaf-change", () => {
           if (this.registerMailVimMappings()) {
             workspace.offref(ref);
           }
+          this.mailUpdateGmailOpenAvailability();
         });
         this.registerEvent(ref);
       });
+    }
+  }
+
+  mailNavigationDispatcherAvailable() {
+    try {
+      const holder = this.app && this.app.plugins && this.app.plugins.plugins;
+      return Boolean(holder && holder["bob-navigation-hotkeys"]);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  mailUpdateGmailOpenAvailability() {
+    try {
+      if (this.mailVimMappingsRegistered === true || this.mailNavigationDispatcherAvailable()) {
+        this.mailGmailOpenKeymap = 1;
+        return true;
+      }
+      return this.mailGmailOpenKeymap === 1;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  mailHasTaskLinkHopShape() {
+    try {
+      const view = mailActiveMarkdownView(this.app);
+      if (!view || !view.editor || typeof view.editor.getLine !== "function") return false;
+      const cursor = mailEditorPosition(view.editor, "head");
+      if (!cursor) return false;
+      const lineText = view.editor.getLine(cursor.line);
+      if (typeof lineText !== "string") return false;
+      return mailTaskLinkHopTarget(lineText) !== null;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async mailOpenGmailAtCursor(view) {
+    try {
+      const target = view && view.file && view.editor ? view : mailActiveMarkdownView(this.app);
+      if (!target || !target.editor) return false;
+      const context = await mailEmailContextAsync(this.app, target);
+      if (!context || !mailGmailUrlFor(context)) return false;
+      return this.mailOpenGmail(context);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async mailOpenTaskPromptAsync(view) {
+    try {
+      const target = view && view.file && view.editor ? view : mailActiveMarkdownView(this.app);
+      const context = await mailEmailContextAsync(this.app, target);
+      if (!context) return false;
+      return await this.mailOpenTaskPrompt(context);
+    } catch (error) {
+      return false;
     }
   }
 
@@ -187,11 +266,11 @@ class BobMailPlugin extends Plugin {
     }
   }
 
-  handleMailVimOpenGmail() {
+  async handleMailVimOpenGmail() {
     try {
       const view = mailActiveMarkdownView(this.app);
       if (!view || !view.editor) return;
-      const context = mailEmailContext(this.app, view);
+      const context = await mailEmailContextAsync(this.app, view);
       if (!context || !mailGmailUrlFor(context)) return;
       this.mailOpenGmail(context);
     } catch (error) {

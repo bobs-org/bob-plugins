@@ -210,17 +210,71 @@ class BobLedgerToolsGmailOpenHintMixin {
       const lineIndex = cursorLine.number - 1;
       const lineText = cursorLine.text;
       const lines = this.gmailOpenHintDocLines(doc);
+      const plugin = this;
       const resolvers = {
         getDest: (target, source) => {
-          const cache = this.app && this.app.metadataCache;
+          const cache = plugin.app && plugin.app.metadataCache;
           if (!cache || typeof cache.getFirstLinkpathDest !== "function") return null;
           return cache.getFirstLinkpathDest(target, source);
         },
         getFrontmatter: (file) => {
           try {
-            const cache = this.app && this.app.metadataCache;
+            const cache = plugin.app && plugin.app.metadataCache;
             if (!cache || typeof cache.getFileCache !== "function") return null;
             return (cache.getFileCache(file) || {}).frontmatter || null;
+          } catch (error) {
+            return null;
+          }
+        },
+        getTargetLines: (targetPath) => {
+          try {
+            if (String(targetPath || "") === String(sourcePath || "")) return lines;
+            const cached = plugin._gmailOpenHintHopFileCache &&
+              plugin._gmailOpenHintHopFileCache.get(String(targetPath || ""));
+            if (cached && Array.isArray(cached.lines)) return cached.lines;
+            return null;
+          } catch (error) {
+            return null;
+          }
+        },
+        getTargetLine: (targetPath, blockId) => {
+          try {
+            const path = String(targetPath || "");
+            const id = String(blockId || "");
+            if (!path || !id) return null;
+            if (path === String(sourcePath || "") && Array.isArray(lines)) {
+              for (const text of lines) {
+                if (String(text || "").includes("^" + id)) return String(text);
+              }
+              return null;
+            }
+            try {
+              if (typeof plugin.dependencyTasksIndex === "function") {
+                const index = plugin.dependencyTasksIndex();
+                if (index instanceof Map) {
+                  const hit = index.get(path + "\0" + id);
+                  const markdown = hit && typeof hit.originalMarkdown === "string"
+                    ? hit.originalMarkdown
+                    : null;
+                  if (markdown && String(markdown).includes("^" + id)) return String(markdown);
+                  const lowered = index.get(path + "\0" + id.toLowerCase());
+                  const loweredMarkdown = lowered && typeof lowered.originalMarkdown === "string"
+                    ? lowered.originalMarkdown
+                    : null;
+                  if (loweredMarkdown && String(loweredMarkdown).includes("^" + id)) return String(loweredMarkdown);
+                }
+              }
+            } catch (error) {
+              // Memo miss falls through to the file cache.
+            }
+            const cached = plugin._gmailOpenHintHopFileCache &&
+              plugin._gmailOpenHintHopFileCache.get(path);
+            if (cached && Array.isArray(cached.lines)) {
+              for (const text of cached.lines) {
+                if (String(text || "").includes("^" + id)) return String(text);
+              }
+            }
+            return null;
           } catch (error) {
             return null;
           }
@@ -232,7 +286,14 @@ class BobLedgerToolsGmailOpenHintMixin {
       } catch (error) {
         canOpen = false;
       }
-      if (!canOpen) return Decoration.none;
+      if (!canOpen) {
+        try {
+          this.gmailOpenHintWarmHopCache(lineText, sourcePath);
+        } catch (error) {
+          // Warm is best-effort.
+        }
+        return Decoration.none;
+      }
       let tree = null;
       try {
         if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);
@@ -260,6 +321,39 @@ class BobLedgerToolsGmailOpenHintMixin {
       return builder.finish();
     } catch (error) {
       try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  gmailOpenHintWarmHopCache(lineText, sourcePath) {
+    try {
+      const hop = gmailOpenHintTaskLinkHopTarget(String(lineText || ""));
+      if (!hop || !hop.path) return;
+      const cache = this.app && this.app.metadataCache;
+      if (!cache || typeof cache.getFirstLinkpathDest !== "function") return;
+      let file = null;
+      try {
+        file = cache.getFirstLinkpathDest(hop.path, String(sourcePath || ""));
+      } catch (error) {
+        return;
+      }
+      if (!file || typeof file.path !== "string") return;
+      const path = file.path;
+      if (this._gmailOpenHintHopFileCache && this._gmailOpenHintHopFileCache.has(path)) return;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function") return;
+      vault.cachedRead(file).then((markdown) => {
+        try {
+          if (typeof markdown !== "string") return;
+          if (!this._gmailOpenHintHopFileCache) this._gmailOpenHintHopFileCache = new Map();
+          if (this._gmailOpenHintHopFileCache.size > 50) this._gmailOpenHintHopFileCache.clear();
+          this._gmailOpenHintHopFileCache.set(path, { lines: String(markdown).split("\n") });
+          this.scheduleGmailOpenHintRefresh();
+        } catch (error) {
+          // Cache write is best-effort.
+        }
+      }).catch(() => {});
+    } catch (error) {
+      // Warm is best-effort.
     }
   }
 
@@ -304,6 +398,12 @@ class BobLedgerToolsGmailOpenHintMixin {
         clearTimeout(this.gmailOpenHintTimer);
       }
       this.gmailOpenHintTimer = null;
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
+    try {
+      if (this._gmailOpenHintHopFileCache) this._gmailOpenHintHopFileCache.clear();
+      this._gmailOpenHintHopFileCache = null;
     } catch (error) {
       // Cleanup is best-effort.
     }

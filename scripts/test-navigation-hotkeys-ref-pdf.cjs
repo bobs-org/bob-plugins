@@ -379,7 +379,7 @@ test("command registration is custom-hotkey only", () => {
   const start = source.indexOf('id: "open-reference-pdf-in-highlights"');
   assert.notEqual(start, -1);
   const command = source.slice(start, source.indexOf("    });", start));
-  assert.match(command, /name: "Open in Highlights \(reading task, highlight page, or link in new tab\)"/);
+  assert.match(command, /name: "Open in Highlights \(reading task, highlight page, Gmail thread, or link in new tab\)"/);
   assert.match(command, /callback: \(\) => void this\.openReferencePdfInHighlightsOrLink\(\)/);
   assert.doesNotMatch(command, /hotkeys:/);
 });
@@ -427,4 +427,85 @@ test("nav api openReferencePdf settles to a reason instead of throwing", async (
     ok: false,
     reason: "api-failed",
   });
+});
+
+test("Meta+Enter dispatch prefers Highlights, then Gmail, then new tab", async () => {
+  resetNotices();
+  const reading = makeHarness("- [ ] #task #ref [[ref/chat/x]] ^ref-x", {
+    files: v2Files(),
+  });
+  reading.plugin.app.plugins = {
+    plugins: { "bob-mail": { api: { mailOpen: { version: 1, openAtCursor: async () => true } } } },
+  };
+  await trigger(reading.plugin);
+  assert.equal(reading.launches.length, 1);
+  assert.deepEqual(reading.delegates, []);
+
+  resetNotices();
+  const gmail = makeHarness("- [ ] #task [[mail/thread|Subject]]", {});
+  let gmailOpened = false;
+  gmail.plugin.app.plugins = {
+    plugins: {
+      "bob-mail": {
+        api: {
+          mailOpen: {
+            version: 1,
+            openAtCursor: async () => {
+              gmailOpened = true;
+              return true;
+            },
+          },
+        },
+      },
+    },
+  };
+  await trigger(gmail.plugin);
+  assert.equal(gmailOpened, true);
+  assert.deepEqual(gmail.launches, []);
+  assert.deepEqual(gmail.delegates, []);
+
+  resetNotices();
+  const fallback = makeHarness("# plain prose", {});
+  fallback.plugin.app.plugins = {
+    plugins: { "bob-mail": { api: { mailOpen: { version: 1, openAtCursor: async () => false } } } },
+  };
+  await trigger(fallback.plugin);
+  assert.deepEqual(fallback.delegates, ["editor:open-link-in-new-leaf"]);
+  assert.deepEqual(fallback.launches, []);
+});
+
+test("Meta+Enter dispatch degrades silently without bob-mail", async () => {
+  resetNotices();
+  const absent = makeHarness("- [ ] #task [[mail/thread|Subject]]", {});
+  absent.plugin.app.plugins = { plugins: {} };
+  await trigger(absent.plugin);
+  assert.deepEqual(absent.delegates, ["editor:open-link-in-new-leaf"]);
+  assert.deepEqual(absent.launches, []);
+
+  resetNotices();
+  const unknown = makeHarness("- [ ] #task [[mail/thread|Subject]]", {});
+  unknown.plugin.app.plugins = {
+    plugins: { "bob-mail": { api: { mailOpen: { version: 99, openAtCursor: async () => true } } } },
+  };
+  await trigger(unknown.plugin);
+  assert.deepEqual(unknown.delegates, ["editor:open-link-in-new-leaf"]);
+
+  resetNotices();
+  const throwing = makeHarness("- [ ] #task [[mail/thread|Subject]]", {});
+  throwing.plugin.app.plugins = {
+    plugins: {
+      "bob-mail": {
+        api: {
+          mailOpen: {
+            version: 1,
+            openAtCursor: async () => {
+              throw new Error("boom");
+            },
+          },
+        },
+      },
+    },
+  };
+  await trigger(throwing.plugin);
+  assert.deepEqual(throwing.delegates, ["editor:open-link-in-new-leaf"]);
 });

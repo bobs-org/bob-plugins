@@ -23530,14 +23530,128 @@ function gmailOpenHintChildResolves(lines, line, sourcePath, resolvers) {
   }
 }
 
-// One shared availability predicate: line-borne mail link (any line) or the
-// Gmail Task child hop. Never the whole-note fallback. Never throws.
+// A link-only Task Link hop row (decision `tasklink_hop_scope = link_only`):
+// a plain bullet whose sole content is one `[[note#^id]]` wikilink. Checkbox
+// rows, embeds (`![[...]]`), struck links (`~~...~~`), and multi-link rows
+// never qualify. Returns `{ path, blockId }` or null. Never throws.
+function gmailOpenHintTaskLinkHopTarget(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (gmailOpenHintIsTaskRow(text)) return null;
+    if (text.indexOf("[[") === -1 || text.indexOf("#^") === -1) return null;
+    const match = text.match(/^\s*[-*+]\s*(\[\[[^\]]+\]\])\s*$/);
+    if (!match) return null;
+    const raw = match[1];
+    const start = text.indexOf(raw);
+    if (start > 0 && text[start - 1] === "!") return null;
+    if (/~~/.test(text)) return null;
+    const inner = raw.slice(2, -2);
+    const targetPart = String(inner.split("|")[0] || "").trim();
+    const hop = targetPart.match(/^(.*)#\^([A-Za-z0-9-]+)$/);
+    if (!hop) return null;
+    const path = String(hop[1] || "").trim().replace(/\.md$/i, "");
+    const blockId = hop[2];
+    if (!blockId) return null;
+    if (path.startsWith("mail/")) return null;
+    return { path, blockId };
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmailOpenHintFindBlockLineIndex(targetLines, blockId) {
+  try {
+    if (!Array.isArray(targetLines)) return null;
+    const id = String(blockId || "");
+    if (!id) return null;
+    for (let index = 0; index < targetLines.length; index += 1) {
+      if (String(targetLines[index] || "").includes("^" + id)) return index;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Exactly one Task Link hop (no recursion): the cursor row is a link-only
+// `[[note#^id]]` bullet whose target task row is a Gmail Task row — either
+// its own line carries a `[[mail/…]]` link or a direct link-only child bullet
+// does. Target line text comes from the injected sync resolvers
+// (`getTargetLine(path, blockId)` or `getTargetLines(path)`), so the
+// decoration build stays synchronous; without a sync line source the hop
+// stays silent. Never throws.
+function gmailOpenHintTaskLinkHopResolves(lineText, sourcePath, resolvers) {
+  try {
+    const hop = gmailOpenHintTaskLinkHopTarget(lineText);
+    if (!hop) return null;
+    const hooks = resolvers && typeof resolvers === "object" ? resolvers : {};
+    const getDest = hooks.getDest;
+    if (typeof getDest !== "function") return null;
+    let targetPath = null;
+    try {
+      if (hop.path) {
+        const file = getDest(hop.path, String(sourcePath || ""));
+        if (!file || typeof file.path !== "string") return null;
+        targetPath = file.path;
+      } else {
+        targetPath = String(sourcePath || "");
+      }
+    } catch (error) {
+      return null;
+    }
+    if (!targetPath) return null;
+    let targetLines = null;
+    let targetLineText = null;
+    let targetLineIndex = null;
+    try {
+      if (typeof hooks.getTargetLines === "function") {
+        const found = hooks.getTargetLines(targetPath);
+        if (Array.isArray(found)) targetLines = found;
+      }
+      if (typeof hooks.getTargetLine === "function") {
+        const found = hooks.getTargetLine(targetPath, hop.blockId);
+        if (typeof found === "string" && found) targetLineText = found;
+      }
+      if (targetLineText === null && targetLines) {
+        const index = gmailOpenHintFindBlockLineIndex(targetLines, hop.blockId);
+        if (index !== null) {
+          targetLineIndex = index;
+          targetLineText = String(targetLines[index] || "");
+        }
+      } else if (targetLines && targetLineText !== null) {
+        const index = gmailOpenHintFindBlockLineIndex(targetLines, hop.blockId);
+        if (index !== null) targetLineIndex = index;
+      }
+      if (targetLineText === null) return null;
+    } catch (error) {
+      return null;
+    }
+    if (!targetLineText.includes("^" + hop.blockId)) return null;
+    const direct = gmailOpenHintFirstMailPath(targetLineText);
+    if (direct) {
+      const resolved = gmailOpenHintResolveMail(direct, targetPath, resolvers);
+      if (resolved) return resolved;
+    }
+    if (targetLines && targetLineIndex !== null) {
+      const child = gmailOpenHintChildResolves(targetLines, targetLineIndex, targetPath, resolvers);
+      if (child) return child;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// One shared availability predicate: line-borne mail link (any line), the
+// Gmail Task child hop, or the link-only Task Link hop to a Gmail Task row.
+// Never the whole-note fallback. Never throws.
 function gmailOpenHintCanOpen(lineText, lines, line, sourcePath, resolvers) {
   try {
     if (typeof lineText !== "string") return false;
     if (gmailOpenHintLineResolves(lineText, sourcePath, resolvers)) return true;
     if (Array.isArray(lines) && Number.isInteger(line)) {
       if (gmailOpenHintChildResolves(lines, line, sourcePath, resolvers)) return true;
+      if (gmailOpenHintTaskLinkHopResolves(lineText, sourcePath, resolvers)) return true;
     }
     return false;
   } catch (error) {
@@ -87357,17 +87471,71 @@ class BobLedgerToolsGmailOpenHintMixin {
       const lineIndex = cursorLine.number - 1;
       const lineText = cursorLine.text;
       const lines = this.gmailOpenHintDocLines(doc);
+      const plugin = this;
       const resolvers = {
         getDest: (target, source) => {
-          const cache = this.app && this.app.metadataCache;
+          const cache = plugin.app && plugin.app.metadataCache;
           if (!cache || typeof cache.getFirstLinkpathDest !== "function") return null;
           return cache.getFirstLinkpathDest(target, source);
         },
         getFrontmatter: (file) => {
           try {
-            const cache = this.app && this.app.metadataCache;
+            const cache = plugin.app && plugin.app.metadataCache;
             if (!cache || typeof cache.getFileCache !== "function") return null;
             return (cache.getFileCache(file) || {}).frontmatter || null;
+          } catch (error) {
+            return null;
+          }
+        },
+        getTargetLines: (targetPath) => {
+          try {
+            if (String(targetPath || "") === String(sourcePath || "")) return lines;
+            const cached = plugin._gmailOpenHintHopFileCache &&
+              plugin._gmailOpenHintHopFileCache.get(String(targetPath || ""));
+            if (cached && Array.isArray(cached.lines)) return cached.lines;
+            return null;
+          } catch (error) {
+            return null;
+          }
+        },
+        getTargetLine: (targetPath, blockId) => {
+          try {
+            const path = String(targetPath || "");
+            const id = String(blockId || "");
+            if (!path || !id) return null;
+            if (path === String(sourcePath || "") && Array.isArray(lines)) {
+              for (const text of lines) {
+                if (String(text || "").includes("^" + id)) return String(text);
+              }
+              return null;
+            }
+            try {
+              if (typeof plugin.dependencyTasksIndex === "function") {
+                const index = plugin.dependencyTasksIndex();
+                if (index instanceof Map) {
+                  const hit = index.get(path + "\0" + id);
+                  const markdown = hit && typeof hit.originalMarkdown === "string"
+                    ? hit.originalMarkdown
+                    : null;
+                  if (markdown && String(markdown).includes("^" + id)) return String(markdown);
+                  const lowered = index.get(path + "\0" + id.toLowerCase());
+                  const loweredMarkdown = lowered && typeof lowered.originalMarkdown === "string"
+                    ? lowered.originalMarkdown
+                    : null;
+                  if (loweredMarkdown && String(loweredMarkdown).includes("^" + id)) return String(loweredMarkdown);
+                }
+              }
+            } catch (error) {
+              // Memo miss falls through to the file cache.
+            }
+            const cached = plugin._gmailOpenHintHopFileCache &&
+              plugin._gmailOpenHintHopFileCache.get(path);
+            if (cached && Array.isArray(cached.lines)) {
+              for (const text of cached.lines) {
+                if (String(text || "").includes("^" + id)) return String(text);
+              }
+            }
+            return null;
           } catch (error) {
             return null;
           }
@@ -87379,7 +87547,14 @@ class BobLedgerToolsGmailOpenHintMixin {
       } catch (error) {
         canOpen = false;
       }
-      if (!canOpen) return Decoration.none;
+      if (!canOpen) {
+        try {
+          this.gmailOpenHintWarmHopCache(lineText, sourcePath);
+        } catch (error) {
+          // Warm is best-effort.
+        }
+        return Decoration.none;
+      }
       let tree = null;
       try {
         if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);
@@ -87407,6 +87582,39 @@ class BobLedgerToolsGmailOpenHintMixin {
       return builder.finish();
     } catch (error) {
       try { return Decoration.none; } catch (inner) { return null; }
+    }
+  }
+
+  gmailOpenHintWarmHopCache(lineText, sourcePath) {
+    try {
+      const hop = gmailOpenHintTaskLinkHopTarget(String(lineText || ""));
+      if (!hop || !hop.path) return;
+      const cache = this.app && this.app.metadataCache;
+      if (!cache || typeof cache.getFirstLinkpathDest !== "function") return;
+      let file = null;
+      try {
+        file = cache.getFirstLinkpathDest(hop.path, String(sourcePath || ""));
+      } catch (error) {
+        return;
+      }
+      if (!file || typeof file.path !== "string") return;
+      const path = file.path;
+      if (this._gmailOpenHintHopFileCache && this._gmailOpenHintHopFileCache.has(path)) return;
+      const vault = this.app && this.app.vault;
+      if (!vault || typeof vault.cachedRead !== "function") return;
+      vault.cachedRead(file).then((markdown) => {
+        try {
+          if (typeof markdown !== "string") return;
+          if (!this._gmailOpenHintHopFileCache) this._gmailOpenHintHopFileCache = new Map();
+          if (this._gmailOpenHintHopFileCache.size > 50) this._gmailOpenHintHopFileCache.clear();
+          this._gmailOpenHintHopFileCache.set(path, { lines: String(markdown).split("\n") });
+          this.scheduleGmailOpenHintRefresh();
+        } catch (error) {
+          // Cache write is best-effort.
+        }
+      }).catch(() => {});
+    } catch (error) {
+      // Warm is best-effort.
     }
   }
 
@@ -87451,6 +87659,12 @@ class BobLedgerToolsGmailOpenHintMixin {
         clearTimeout(this.gmailOpenHintTimer);
       }
       this.gmailOpenHintTimer = null;
+    } catch (error) {
+      // Cleanup is best-effort.
+    }
+    try {
+      if (this._gmailOpenHintHopFileCache) this._gmailOpenHintHopFileCache.clear();
+      this._gmailOpenHintHopFileCache = null;
     } catch (error) {
       // Cleanup is best-effort.
     }
@@ -117381,6 +117595,9 @@ try {
       gmailOpenHintResolveMail,
       gmailOpenHintLineResolves,
       gmailOpenHintChildResolves,
+      gmailOpenHintTaskLinkHopTarget,
+      gmailOpenHintFindBlockLineIndex,
+      gmailOpenHintTaskLinkHopResolves,
       gmailOpenHintCanOpen,
       buildGmailOpenHintElement,
       GmailOpenHintWidget,

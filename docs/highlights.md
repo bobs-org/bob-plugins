@@ -15,6 +15,11 @@ cursor is on. One rule covers the old cases and the new ones:
   `ref_history/`) the command opens the PDF at that block's (or piece's)
   page. A cursor on a page caption heading (`### Page 12`) opens that page.
 - A tombstone (`Removed highlight`) explains; nothing launches.
+- When no Highlights target resolves, a Gmail context opens the thread in the
+  system browser via bob-mail's `api.mailOpen` (a Gmail Task row, a line-borne
+  `[[mail/…]]` link, a direct link-only child bullet, or exactly one link-only
+  `[[note#^id]]` Task Link hop to a Gmail Task); bob-mail absent or unknown
+  API degrades silently.
 - Anything else (section cards, outside the region, ordinary links) keeps
   Obsidian's **Open link under cursor in new tab** behavior.
 

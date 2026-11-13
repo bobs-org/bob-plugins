@@ -59,7 +59,7 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Open alternate file | `open-alternate-file` | — |
 | Open child note | `open-child-note` | — |
 | Open dash Tasks section | `open-dash-tasks` | Ctrl+0 |
-| Open in Highlights (reading task, highlight page, or link in new tab) | `open-reference-pdf-in-highlights` | — |
+| Open in Highlights (reading task, highlight page, Gmail thread, or link in new tab) | `open-reference-pdf-in-highlights` | — |
 | Open next link | `open-next-link` | — |
 | Open parent note | `open-parent-note` | — |
 | Open previous link | `open-prev-link` | — |
@@ -653,6 +653,12 @@ Three keyboard layers are in play:
   A registered default would lose to Obsidian's built-in `Mod+Enter`. Do not
   re-record the binding in Obsidian Settings on a Mac: Obsidian may save `Mod`,
   which would claim `Ctrl+Enter` on other platforms.
+- **Meta+Enter dispatch order** for `open-reference-pdf-in-highlights`:
+  Highlights target first (reading tasks keep their behavior), then Gmail
+  context via bob-mail's `api.mailOpen` v1 (Gmail Task rows, line-borne
+  `[[mail/…]]`, direct link-only child hops, and one link-only Task Link hop),
+  then Obsidian's **Open link under cursor in new tab**. The Gmail step
+  degrades silently when bob-mail is absent or its API version is unknown.
 - **Editor and Vim handlers** act below the palette layer. The plugin maps
   `\s` in Vim normal mode to toggling the current tab pin (Bob Ledger Tools
   owns the distinct `\p` mapping for Pomodoro increments), and its

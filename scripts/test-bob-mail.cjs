@@ -278,7 +278,7 @@ test("inside a mail note the whole-note fallback still opens", () => {
   assert.equal(mail.mailGmailUrlFor(context), GMAIL_URL);
 });
 
-test("vim Cmd+Enter mapping registers once and opens exactly gmail_url", () => {
+test("vim Cmd+Enter mapping registers once and opens exactly gmail_url", async () => {
   const actions = new Map();
   const mappings = [];
   const originalWindow = global.window;
@@ -309,14 +309,14 @@ test("vim Cmd+Enter mapping registers once and opens exactly gmail_url", () => {
       opened = mail.mailGmailUrlFor(context);
       return true;
     };
-    actions.get("bobMailOpenGmail")();
+    await actions.get("bobMailOpenGmail")();
     assert.equal(opened, GMAIL_URL);
 
     const silent = makeMailApp(["no links here"], { line: 0, ch: 0 }, {});
     const silentPlugin = Object.create(BobMailPlugin.prototype);
     silentPlugin.app = silent.app;
     silentPlugin.mailOpenGmail = () => { throw new Error("must not open"); };
-    silentPlugin.handleMailVimOpenGmail();
+    await silentPlugin.handleMailVimOpenGmail();
   } finally {
     if (originalWindow === undefined) delete global.window;
     else global.window = originalWindow;
@@ -354,4 +354,113 @@ test("task links point to the message block under the cursor", () => {
   assert.equal(mail.mailFindCardMessageId(note, 6), "eeff0011");
   assert.equal(mail.mailTaskLink({ file: { path: "mail/thread.md", basename: "thread" }, frontmatter: { title: "Subject" } }, "aabbccdd"),
     "[[mail/thread#^m-aabbccdd|Subject]]");
+});
+
+function makeHopApp(dailyLines, dailyCursor, jobLines, jobBlockId) {
+  const dailyEditor = new Editor(dailyLines, dailyCursor);
+  const dailyView = makeView("2026/20261113.md", dailyEditor, "20261113");
+  const app = makeApp(dailyView);
+  app.workspace.app = app;
+  const jobPath = "job.md";
+  const jobFile = { path: jobPath, basename: "job" };
+  const mailFile = { path: "mail/thread.md", basename: "thread" };
+  app.metadataCache.getFirstLinkpathDest = (target, source) => {
+    const key = String(target || "").replace(/\.md$/i, "");
+    if (key === "job" || key === jobPath.replace(/\.md$/i, "")) return jobFile;
+    if (key === "mail/thread") return mailFile;
+    return null;
+  };
+  app.metadataCache.getFileCache = (file) => {
+    if (!file) return { frontmatter: null };
+    if (file.path === jobPath) {
+      return {
+        frontmatter: null,
+        blocks: { [jobBlockId]: { position: { start: { line: 0 } } } },
+      };
+    }
+    if (file.path === "mail/thread.md") return { frontmatter: MAIL_FRONTMATTER };
+    return { frontmatter: null };
+  };
+  app.vault = {
+    cachedRead: async (file) => {
+      if (file && file.path === jobPath) return jobLines.join("\n");
+      if (file && file.path === "2026/20261113.md") return dailyLines.join("\n");
+      return "";
+    },
+  };
+  return { app, dailyView };
+}
+
+test("task-link hop opens the Gmail thread from the daily-note bullet", async () => {
+  const jobBlockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [
+    `- [*] #task [[mail/thread|\u2709\uFE0F EcoGPT - Founding Engineer \u00B7 Roejean Hollon]] follow up ^${jobBlockId}`,
+  ];
+  const dailyLines = [`\t- [[job#^${jobBlockId}]]`];
+  const { app, dailyView } = makeHopApp(dailyLines, { line: 0, ch: 3 }, jobLines, jobBlockId);
+  assert.deepEqual(mail.mailTaskLinkHopTarget(dailyLines[0]), { path: "job", blockId: jobBlockId });
+  const context = await mail.mailEmailContextAsync(app, dailyView);
+  assert.equal(context && context.file.path, "mail/thread.md");
+  assert.equal(mail.mailGmailUrlFor(context), GMAIL_URL);
+});
+
+test("task-link hop rejects multi-link, embed, struck, and non-gmail targets", async () => {
+  const jobBlockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [*] #task [[mail/thread|Subject]] ^${jobBlockId}`];
+  const multi = [`- [[job#^${jobBlockId}]] [[job#^${jobBlockId}]]`];
+  assert.equal(mail.mailTaskLinkHopTarget(multi[0]), null);
+  const embed = [`- ![[job#^${jobBlockId}]]`];
+  assert.equal(mail.mailTaskLinkHopTarget(embed[0]), null);
+  const struck = [`- ~~[[job#^${jobBlockId}]]~~`];
+  assert.equal(mail.mailTaskLinkHopTarget(struck[0]), null);
+  const checkbox = [`- [ ] [[job#^${jobBlockId}]]`];
+  assert.equal(mail.mailTaskLinkHopTarget(checkbox[0]), null);
+
+  const plainTarget = [`- [ ] #task Just a task ^${jobBlockId}`];
+  const { app: plainApp, dailyView: plainView } = makeHopApp(
+    [`- [[job#^${jobBlockId}]]`], { line: 0, ch: 3 }, plainTarget, jobBlockId,
+  );
+  plainApp.metadataCache.getFileCache = (file) => {
+    if (file && file.path === "job.md") {
+      return { frontmatter: null, blocks: { [jobBlockId]: { position: { start: { line: 0 } } } } };
+    }
+    if (file && file.path === "mail/thread.md") return { frontmatter: MAIL_FRONTMATTER };
+    return { frontmatter: null };
+  };
+  assert.equal(await mail.mailEmailContextAsync(plainApp, plainView), null);
+});
+
+test("task-link hop supports hop-then-child-hop targets", async () => {
+  const jobBlockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [
+    `- [ ] #task Follow up ^${jobBlockId}`,
+    `  - [[mail/thread|Subject]]`,
+  ];
+  const dailyLines = [`- [[job#^${jobBlockId}]]`];
+  const { app, dailyView } = makeHopApp(dailyLines, { line: 0, ch: 3 }, jobLines, jobBlockId);
+  const context = await mail.mailEmailContextAsync(app, dailyView);
+  assert.equal(context && context.file.path, "mail/thread.md");
+});
+
+test("mailOpen api v1 opens at the cursor and degrades to false", async () => {
+  const jobBlockId = "ecogpt-founding-engineer-roeje-2";
+  const jobLines = [`- [*] #task [[mail/thread|Subject]] ^${jobBlockId}`];
+  const { app, dailyView } = makeHopApp(
+    [`- [[job#^${jobBlockId}]]`], { line: 0, ch: 3 }, jobLines, jobBlockId,
+  );
+  const plugin = new BobMailPlugin(app);
+  await plugin.onload();
+  let opened = null;
+  plugin.mailOpenGmail = (context) => {
+    opened = mail.mailGmailUrlFor(context);
+    return true;
+  };
+  assert.equal(await plugin.mailOpenGmailAtCursor(dailyView), true);
+  assert.equal(opened, GMAIL_URL);
+  assert.equal(plugin.api.mailOpen.version, 1);
+  assert.equal(await plugin.api.mailOpen.openAtCursor(dailyView), true);
+
+  const emptyEditor = new Editor(["no links"], { line: 0, ch: 1 });
+  const emptyView = makeView("2026/20261113.md", emptyEditor, "20261113");
+  assert.equal(await plugin.mailOpenGmailAtCursor(emptyView), false);
 });

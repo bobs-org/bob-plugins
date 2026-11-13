@@ -409,6 +409,70 @@ function mailLinkOnlyBulletTarget(lineText) {
   }
 }
 
+// A link-only Task Link hop row (decision `tasklink_hop_scope = link_only`):
+// a plain bullet whose sole content is one `[[note#^id]]` wikilink. Checkbox
+// rows, embeds (`![[...]]`), struck links (`~~...~~`), and multi-link rows
+// never qualify. Returns `{ path, blockId }` or null. Never throws.
+function mailTaskLinkHopTarget(lineText) {
+  try {
+    const text = String(lineText || "");
+    if (mailIsCheckboxTaskLine(text)) return null;
+    if (text.indexOf("[[") === -1 || text.indexOf("#^") === -1) return null;
+    const match = text.match(/^\s*[-*+]\s*(\[\[[^\]]+\]\])\s*$/);
+    if (!match) return null;
+    const raw = match[1];
+    const start = text.indexOf(raw);
+    if (start > 0 && text[start - 1] === "!") return null;
+    if (/~~/.test(text)) return null;
+    const inner = raw.slice(2, -2);
+    const targetPart = String(inner.split("|")[0] || "").trim();
+    const hop = targetPart.match(/^(.*)#\^([A-Za-z0-9-]+)$/);
+    if (!hop) return null;
+    const path = String(hop[1] || "").trim().replace(/\.md$/i, "");
+    const blockId = hop[2];
+    if (!blockId) return null;
+    if (path.startsWith("mail/")) return null;
+    return { path, blockId };
+  } catch (error) {
+    return null;
+  }
+}
+
+// The start line of block `id` in a metadata-cache entry, matching the
+// task-link-marks resolver (exact, `^id`, lower-cased, then any block whose
+// own `id` equals it). Returns a 0-based line or null. Never throws.
+function mailTaskLinkBlockLine(cache, blockId) {
+  try {
+    const blocks = cache && cache.blocks;
+    if (!blocks || typeof blocks !== "object") return null;
+    const id = String(blockId || "");
+    if (!id) return null;
+    let block = null;
+    for (const name of [id, "^" + id, id.toLowerCase()]) {
+      if (Object.prototype.hasOwnProperty.call(blocks, name)) {
+        block = blocks[name];
+        break;
+      }
+    }
+    if (!block) {
+      for (const item of Object.values(blocks)) {
+        try {
+          if (item && String(item.id || "").replace(/^\^/u, "") === id) {
+            block = item;
+            break;
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+    const start = block && block.position && block.position.start;
+    return start && Number.isInteger(start.line) ? start.line : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function mailResolveMailFile(app, sourcePath, targetPath) {
   try {
     if (!targetPath || typeof targetPath !== "string") return null;
@@ -456,9 +520,9 @@ function mailLineBorneMailContext(app, view, line, lineText, lines) {
   }
 }
 
-function mailChildHopMailContext(app, view, line, lines, lineText) {
+function mailChildHopMailContextForPath(app, sourcePath, line, lines, lineText, view, editor) {
   try {
-    if (!view || !view.file || !view.editor) return null;
+    if (!view || !editor) return null;
     if (!Array.isArray(lines) || !Number.isInteger(line) || line < 0 || line >= lines.length) return null;
     const parentText = typeof lineText === "string" ? lineText : String(lines[line] || "");
     if (!mailIsCheckboxTaskLine(parentText)) return null;
@@ -484,10 +548,79 @@ function mailChildHopMailContext(app, view, line, lines, lineText) {
       if (candidate.indent !== directIndent) continue;
       const target = mailLinkOnlyBulletTarget(candidate.text);
       if (!target || !target.startsWith("mail/")) continue;
-      const resolved = mailResolveMailFile(app, view.file.path, target);
+      const resolved = mailResolveMailFile(app, String(sourcePath || ""), target);
       if (!resolved) continue;
-      return { file: resolved.file, frontmatter: resolved.frontmatter, view, editor: view.editor };
+      return { file: resolved.file, frontmatter: resolved.frontmatter, view, editor };
     }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailChildHopMailContext(app, view, line, lines, lineText) {
+  try {
+    if (!view || !view.file || !view.editor) return null;
+    return mailChildHopMailContextForPath(app, view.file.path, line, lines, lineText, view, view.editor);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Exactly one Task Link hop (no recursion): the cursor row is a link-only
+// `[[note#^id]]` bullet whose target task row is a Gmail Task row — either
+// its own line carries a `[[mail/…]]` link or a direct link-only child bullet
+// does. Resolves the target line through the file cache's `blocks[id]`
+// position and `vault.cachedRead`. Returns the mail context or null. Never
+// throws synchronously; rejects to null.
+async function mailTaskLinkHopMailContext(app, view, line, lineText, lines) {
+  try {
+    if (!view || !view.file || !view.editor) return null;
+    const hop = mailTaskLinkHopTarget(typeof lineText === "string" ? lineText : String((lines || [])[line] || ""));
+    if (!hop) return null;
+    if (Array.isArray(lines) && mailLineInFencedCode(lines, line)) return null;
+    const metadataCache = app && app.metadataCache;
+    if (!metadataCache || typeof metadataCache.getFirstLinkpathDest !== "function") return null;
+    const sourcePath = view.file.path;
+    let targetFile = null;
+    try {
+      const linkpath = hop.path || sourcePath;
+      targetFile = metadataCache.getFirstLinkpathDest(linkpath, String(sourcePath || ""));
+    } catch (error) {
+      return null;
+    }
+    if (!targetFile || !targetFile.path) return null;
+    let cacheEntry = null;
+    try {
+      cacheEntry = typeof metadataCache.getFileCache === "function"
+        ? metadataCache.getFileCache(targetFile)
+        : null;
+    } catch (error) {
+      cacheEntry = null;
+    }
+    const targetLine = mailTaskLinkBlockLine(cacheEntry, hop.blockId);
+    if (targetLine === null) return null;
+    let targetLines = null;
+    try {
+      const vault = app && app.vault;
+      if (vault && typeof vault.cachedRead === "function") {
+        const markdown = await vault.cachedRead(targetFile);
+        if (typeof markdown === "string") targetLines = String(markdown).split("\n");
+      }
+    } catch (error) {
+      return null;
+    }
+    if (!Array.isArray(targetLines) || targetLine < 0 || targetLine >= targetLines.length) return null;
+    const targetText = String(targetLines[targetLine] || "");
+    if (!targetText.includes("^" + hop.blockId)) return null;
+    const targetPath = targetFile.path;
+    const direct = mailFirstMailLinkPath(targetText);
+    if (direct) {
+      const resolved = mailResolveMailFile(app, targetPath, direct);
+      if (resolved) return { file: resolved.file, frontmatter: resolved.frontmatter, view, editor: view.editor };
+    }
+    const child = mailChildHopMailContextForPath(app, targetPath, targetLine, targetLines, targetText, view, view.editor);
+    if (child) return child;
     return null;
   } catch (error) {
     return null;
@@ -519,6 +652,40 @@ function mailEmailContext(app, view = mailActiveMarkdownView(app)) {
       if (hop) return hop;
     }
     return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Async widening of `mailEmailContext` with exactly one Task Link hop. The
+// sync contexts above stay first; the hop runs last so Highlights-adjacent
+// dispatch keeps its order. Never throws; resolves to null when nothing
+// opens.
+async function mailEmailContextAsync(app, view = mailActiveMarkdownView(app)) {
+  try {
+    const sync = mailEmailContext(app, view);
+    if (sync) return sync;
+    if (!view || !view.file || !view.editor || typeof view.editor.getLine !== "function") return null;
+    const cursor = mailEditorPosition(view.editor, "head");
+    if (!cursor) return null;
+    const lineText = view.editor.getLine(cursor.line);
+    if (typeof lineText !== "string") return null;
+    let lines = null;
+    try {
+      lines = typeof view.editor.getValue === "function"
+        ? String(view.editor.getValue()).split("\n")
+        : null;
+    } catch (error) {
+      lines = null;
+    }
+    if (!Array.isArray(lines)) {
+      try {
+        lines = String(view.editor.getValue()).split("\n");
+      } catch (error) {
+        lines = null;
+      }
+    }
+    return await mailTaskLinkHopMailContext(app, view, cursor.line, lineText, lines);
   } catch (error) {
     return null;
   }

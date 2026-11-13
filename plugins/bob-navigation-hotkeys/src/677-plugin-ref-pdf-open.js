@@ -104,7 +104,41 @@ class BobNavigationHotkeysRefPdfOpenMixin {
     } catch (_error) {
       target = null;
     }
+    if (!target || target.kind === "none") {
+      try {
+        const opened = await this.openGmailAtCursorViaMailPlugin(context);
+        if (opened === true) return;
+      } catch (_error) {
+        // Fall through to the Highlights fallback.
+      }
+    }
     await this.openHighlightsTarget(target);
+  }
+
+  async openGmailAtCursorViaMailPlugin(context) {
+    try {
+      const holder = this.app && this.app.plugins && this.app.plugins.plugins;
+      const mail = holder && holder["bob-mail"];
+      const api = mail && mail.api && mail.api.mailOpen;
+      if (!api || api.version !== 1 || typeof api.openAtCursor !== "function") return false;
+      let view = null;
+      try {
+        const workspace = this.app && this.app.workspace;
+        if (workspace && typeof workspace.getActiveViewOfType === "function") {
+          view = workspace.getActiveViewOfType(MarkdownView);
+        }
+      } catch (_error) {
+        view = null;
+      }
+      const candidate = view && view.file && view.editor
+        ? view
+        : { file: context && context.file, editor: context && context.editor };
+      if (!candidate || !candidate.file || !candidate.editor) return false;
+      const opened = await api.openAtCursor(candidate);
+      return opened === true;
+    } catch (_error) {
+      return false;
+    }
   }
 
   async openHighlightsTarget(target, options = {}) {

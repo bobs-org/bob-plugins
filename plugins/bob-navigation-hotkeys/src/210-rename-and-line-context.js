@@ -642,6 +642,12 @@ function splitProjectNoteForReversal(content) {
       continue;
     }
 
+    const skippedCatalog = skipGeneratedProjectsCatalog(lines, index, contexts);
+    if (skippedCatalog != null) {
+      index = skippedCatalog;
+      continue;
+    }
+
     const line = String(lines[index] || "");
     if (
       context.valid &&
@@ -654,6 +660,15 @@ function splitProjectNoteForReversal(content) {
       const bodyLines = [];
       let bodyIndex = index + 1;
       for (; bodyIndex < lines.length; bodyIndex += 1) {
+        const skippedBodyCatalog = skipGeneratedProjectsCatalog(
+          lines,
+          bodyIndex,
+          contexts,
+        );
+        if (skippedBodyCatalog != null) {
+          bodyIndex = skippedBodyCatalog - 1;
+          continue;
+        }
         const bodyContext = contexts[bodyIndex];
         const bodyLine = String(lines[bodyIndex] || "");
         if (
@@ -690,6 +705,11 @@ function splitProjectNoteForReversal(content) {
             taskLines.push(item);
           }
         }
+      } else if (
+        isGeneratedProjectsSectionHeading(headerText) &&
+        bodyLines.length === 0
+      ) {
+        // Generated `[!projects]` catalog only: drop the heading.
       } else if (bodyLines.length > 0) {
         const title = formatProjectReversalSectionTitle(headerText);
         if (!title) {

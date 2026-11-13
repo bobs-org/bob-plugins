@@ -813,42 +813,7 @@ function computeProjectFoldedAndHeaders(projectInfoByPath, projectRecoveryPaths,
           const markerLine = project.projectTask.line;
           let subCount = 0;
           if (Number.isInteger(markerLine) && markerLine >= 0 && markerLine < lines.length) {
-            const prjIndent = getLineIndentation(String(lines[markerLine] || "")).length;
-            for (let line = markerLine + 1; line < lines.length; line += 1) {
-              const text = String(lines[line] || "");
-              if (!text.trim()) {
-                break;
-              }
-              const indent = getLineIndentation(text).length;
-              if (indent <= prjIndent && parseListItemPrefix(text)) {
-                break;
-              }
-              if (!parseListItemPrefix(text) || !text.includes(PROJECT_SUBPROJECTS_MARKER)) {
-                continue;
-              }
-              PROJECT_WIKILINK_RE.lastIndex = 0;
-              let match;
-              const seen = new Set();
-              while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
-                const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
-                if (!target || seen.has(target)) {
-                  continue;
-                }
-                seen.add(target);
-                const start = match.index;
-                const end = start + match[0].length;
-                const before = text.slice(0, start).trimEnd();
-                const after = text.slice(end).trimStart();
-                if (before.endsWith("~~") && after.startsWith("~~")) {
-                  const marker = after.slice(2).trimStart();
-                  if (marker.startsWith("✅") || marker.startsWith("❌")) {
-                    continue;
-                  }
-                }
-                subCount += 1;
-              }
-              break;
-            }
+            subCount = projectOpenChildCount(lines, markerLine);
           }
           if (subCount > 0) {
             ensureFolded(String(path)).subProjects = subCount;

@@ -292,6 +292,38 @@ test("buildTaskBlockFromProjectNote restores the worked example and round-trips"
   ]);
 });
 
+test("project reversal drops a generated Projects catalog and its blank heading", () => {
+  const content = workedExampleProjectNote({
+    extraSections: [
+      "## Projects",
+      "",
+      "> [!projects]",
+      "> - **[[Health_child]]** — Nested habit",
+      "> - ✅ **[[old_child]]** — Finished",
+      "",
+      "## Requirements",
+      "",
+      "- Must be within walking distance",
+      "",
+      "## Open Questions",
+      "",
+      "- Morning or evening?",
+    ],
+  });
+  const result = helpers.buildTaskBlockFromProjectNote(content, {
+    noteBasename: "Health_gym_habit",
+    parentBasename: "Health",
+  });
+  assert.equal(result.valid, true, result.error);
+  const joined = result.lines.join("\n");
+  assert.equal(/\[!projects\]/.test(joined), false);
+  assert.equal(/\*\*\[\[Health_child\]\]/.test(joined), false);
+  assert.equal(/old_child/.test(joined), false);
+  assert.equal(/^## Projects$/m.test(joined), false);
+  assert.equal(result.lines.some((line) => /Must be within walking distance/.test(line)), true);
+  assert.equal(result.sectionCount, 2);
+});
+
 test("project reversal puts Depends-On first, keeps the inline date, and drops Sub-projects", () => {
   const content = workedExampleProjectNote({
     lifecycle: "- [?] #task #prj Build a gym habit [scheduled::2026-09-01] [id::Health_gym_habit__prj] #hide ^prj",

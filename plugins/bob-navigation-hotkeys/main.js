@@ -34040,6 +34040,12 @@ function splitProjectNoteForReversal(content) {
       continue;
     }
 
+    const skippedCatalog = skipGeneratedProjectsCatalog(lines, index, contexts);
+    if (skippedCatalog != null) {
+      index = skippedCatalog;
+      continue;
+    }
+
     const line = String(lines[index] || "");
     if (
       context.valid &&
@@ -34052,6 +34058,15 @@ function splitProjectNoteForReversal(content) {
       const bodyLines = [];
       let bodyIndex = index + 1;
       for (; bodyIndex < lines.length; bodyIndex += 1) {
+        const skippedBodyCatalog = skipGeneratedProjectsCatalog(
+          lines,
+          bodyIndex,
+          contexts,
+        );
+        if (skippedBodyCatalog != null) {
+          bodyIndex = skippedBodyCatalog - 1;
+          continue;
+        }
         const bodyContext = contexts[bodyIndex];
         const bodyLine = String(lines[bodyIndex] || "");
         if (
@@ -34088,6 +34103,11 @@ function splitProjectNoteForReversal(content) {
             taskLines.push(item);
           }
         }
+      } else if (
+        isGeneratedProjectsSectionHeading(headerText) &&
+        bodyLines.length === 0
+      ) {
+        // Generated `[!projects]` catalog only: drop the heading.
       } else if (bodyLines.length > 0) {
         const title = formatProjectReversalSectionTitle(headerText);
         if (!title) {
@@ -34712,6 +34732,89 @@ function isProjectSubprojectsLine(lineText) {
     return false;
   }
   return /\*\*\s*Sub-projects?\s*:?\s*\*\*/i.test(text);
+}
+
+// Generated `[!projects]` catalog: never copied into a restored task, the
+// destination note, or `## Tasks`. Match the host-catalog opener (≤3 spaces,
+// then `>`, then `[!projects]` case-insensitively).
+function isProjectsCatalogCalloutHead(lineText) {
+  const text = String(lineText || "");
+  let indent = 0;
+  while (indent < text.length && text[indent] === " ") {
+    indent += 1;
+  }
+  if (indent > 3 || !text.startsWith(">", indent)) {
+    return false;
+  }
+  const afterGt = text.slice(indent + 1).replace(/^[ \t]+/, "");
+  if (!afterGt.startsWith("[")) {
+    return false;
+  }
+  const close = afterGt.indexOf("]");
+  if (close === -1) {
+    return false;
+  }
+  const inner = afterGt.slice(1, close).trim();
+  if (!inner.startsWith("!")) {
+    return false;
+  }
+  if (inner.slice(1).toLowerCase() !== "projects") {
+    return false;
+  }
+  let tail = afterGt.slice(close + 1).replace(/^[ \t]+/, "");
+  if (tail.startsWith("-") || tail.startsWith("+")) {
+    tail = tail.slice(1);
+  }
+  return !tail.replace(/^[ \t]+/, "").startsWith("|");
+}
+
+function isProjectsCatalogQuoteLine(lineText) {
+  const text = String(lineText || "");
+  let indent = 0;
+  while (indent < text.length && text[indent] === " ") {
+    indent += 1;
+  }
+  return indent <= 3 && text.startsWith(">", indent);
+}
+
+function isGeneratedProjectsSectionHeading(headerText) {
+  return normalizeProjectSectionTitle(headerText) === "projects";
+}
+
+// Skip one real `[!projects]` callout. Returns the exclusive end index, or
+// null when `index` is not a catalog head.
+function skipGeneratedProjectsCatalog(lines, index, contexts) {
+  const sourceLines = Array.isArray(lines) ? lines : [];
+  const sourceContexts = Array.isArray(contexts) ? contexts : [];
+  const start = Math.floor(Number(index));
+  if (!Number.isInteger(start) || start < 0 || start >= sourceLines.length) {
+    return null;
+  }
+  const context = sourceContexts[start];
+  if (
+    !context ||
+    !context.valid ||
+    context.inFrontmatter ||
+    context.inFence ||
+    !isProjectsCatalogCalloutHead(sourceLines[start])
+  ) {
+    return null;
+  }
+  let end = start + 1;
+  while (end < sourceLines.length) {
+    const bodyContext = sourceContexts[end];
+    if (
+      !bodyContext ||
+      !bodyContext.valid ||
+      bodyContext.inFrontmatter ||
+      bodyContext.inFence ||
+      !isProjectsCatalogQuoteLine(sourceLines[end])
+    ) {
+      break;
+    }
+    end += 1;
+  }
+  return end;
 }
 
 // On reversal, the managed dependency child moves first. The machine-owned

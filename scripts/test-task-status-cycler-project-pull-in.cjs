@@ -171,6 +171,66 @@ test("PP1 links the emptied project's ^prj as Next and strips #hide", () => {
   assert.equal(plan.placements.length, 1);
 });
 
+test("PP29 catalog-only parent pulls in after its last open catalog child closes", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [x] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent]]"'],
+  );
+  const parent = projectNote([
+    "- [ ] #task #prj Parent project ^prj",
+    "## Projects",
+    "> [!projects]",
+    "> - **[[projects/child]]** — Child project",
+  ]);
+  const closed = [{
+    path: childPath,
+    blockId: "prj",
+    taskId: "child__prj",
+    text: "Child project",
+  }];
+  const { plan } = planFixture({
+    day: shipDay("\t- [[projects/child#^prj]]"),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+  });
+  const pulledIn = plan.unblocked.find((row) => row.block_id === "prj");
+  assert.ok(pulledIn, "catalog-only parent becomes empty");
+  assert.equal(pulledIn.note_path, parentPath);
+  assert.equal(pulledIn.trigger, "project_empty");
+});
+
+test("PP29 mixed catalog wins over a stale legacy marker", () => {
+  const childPath = "projects/child.md";
+  const parentPath = "projects/parent.md";
+  const child = projectNote(
+    ["- [x] #task #prj Child project ^prj"],
+    ['parent: "[[projects/parent]]"'],
+  );
+  const parent = projectNote([
+    "- [ ] #task #prj Parent project ^prj",
+    "  - 🧩 **Sub-projects:** [[stale]]",
+    "## Projects",
+    "> [!projects]",
+    "> - **[[projects/child]]** — Child project",
+  ]);
+  const closed = [{
+    path: childPath,
+    blockId: "prj",
+    taskId: "child__prj",
+    text: "Child project",
+  }];
+  const { plan } = planFixture({
+    day: shipDay("\t- [[projects/child#^prj]]"),
+    notes: { [childPath]: child, [parentPath]: parent },
+    closed,
+  });
+  const pulledIn = plan.unblocked.find((row) => row.block_id === "prj");
+  assert.ok(pulledIn, "catalog wins; stale legacy marker is ignored");
+  assert.equal(pulledIn.note_path, parentPath);
+});
+
 test("PP29 closing a child ^prj pulls in its empty parent project", () => {
   const childPath = "projects/child.md";
   const parentPath = "projects/parent.md";

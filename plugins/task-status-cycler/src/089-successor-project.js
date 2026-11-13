@@ -2,12 +2,10 @@
 // Pure code: the cycler mirror of sync's surface predicate, #hide bytes,
 // and the pull-in planner. Consumed by 085-successor-plan.js.
 
-const PROJECT_SUBPROJECTS_MARKER = "🧩 **Sub-projects:**";
 const PROJECT_HIDE_TAG = "#hide";
 const PROJECT_PRJ_TAG = "#prj";
 const PROJECT_BLOCKED_TAG = "#prj_is_blocked";
 const PROJECT_CLOSED_MARKS = new Set(["x", "X", "-"]);
-const PROJECT_WIKILINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
 function projectNoteTextFor(noteTexts, path) {
   if (!noteTexts || !path) {
@@ -188,64 +186,6 @@ function projectHasScanIssue(sourceText) {
   return false;
 }
 
-function projectMarkerHasOpenChild(lines, prjLine, options = {}) {
-  const closedChildPaths = options.closedChildPaths instanceof Set
-    ? options.closedChildPaths
-    : new Set(Array.from(options.closedChildPaths || [], String));
-  const notePaths = Array.isArray(options.notePaths)
-    ? options.notePaths
-    : [];
-  const parentPath = String(options.path || "");
-  const prjIndent = getLineIndentation(String(lines[prjLine] || "")).length;
-  const seen = new Set();
-  for (let line = prjLine + 1; line < lines.length; line += 1) {
-    const text = String(lines[line] || "");
-    if (!text.trim()) {
-      break;
-    }
-    const indent = getLineIndentation(text).length;
-    if (indent <= prjIndent && parseListItemPrefix(text)) {
-      break;
-    }
-    const prefix = parseListItemPrefix(text);
-    if (!prefix) {
-      continue;
-    }
-    const content = text.replace(/^([ \t]*)([-*+]|\d+[.)])[ \t]+/, "").trimStart();
-    if (!content.startsWith(PROJECT_SUBPROJECTS_MARKER)) {
-      continue;
-    }
-    PROJECT_WIKILINK_RE.lastIndex = 0;
-    let match;
-    let foundOpen = false;
-    while ((match = PROJECT_WIKILINK_RE.exec(text)) !== null) {
-      const target = String(match[1] || "").split("|")[0].split("#")[0].trim();
-      const name = target;
-      if (!name || seen.has(name)) {
-        continue;
-      }
-      seen.add(name);
-      const linkedPath = resolveProjectParentPath(target, parentPath, notePaths);
-      if (linkedPath && closedChildPaths.has(linkedPath)) {
-        continue;
-      }
-      const start = match.index;
-      const end = start + match[0].length;
-      const before = text.slice(0, start).trimEnd();
-      const after = text.slice(end).trimStart();
-      if (before.endsWith("~~") && after.startsWith("~~")) {
-        const marker = after.slice(2).trimStart();
-        if (marker.startsWith("✅") || marker.startsWith("❌")) {
-          continue;
-        }
-      }
-      foundOpen = true;
-    }
-    return foundOpen;
-  }
-  return false;
-}
-
 function projectRemainingCount(sourceText, scheduleApplies, skipKeys, notePath) {
   const lines = String(sourceText || "").split(/\r?\n/);
   const fenced = getFencedLineNumbers(lines);
@@ -334,7 +274,7 @@ function projectSurfaceState(text, path, today, options = {}) {
   const skipKeys = options.skipKeys instanceof Set ? options.skipKeys : null;
   const remaining = projectRemainingCount(source, scheduleApplies, skipKeys, notePath);
   const lines = source.split(/\r?\n/);
-  const subopen = projectMarkerHasOpenChild(lines, project.projectTask.line, {
+  const subopen = projectHasOpenChild(lines, project.projectTask.line, {
     path: notePath,
     notePaths: options.notePaths,
     closedChildPaths: options.closedChildPaths,
@@ -601,7 +541,8 @@ function planProjectPullIns(options = {}) {
   }
 
   // Trigger (c): closing a child project's ^prj can empty its parent's
-  // Sub-projects marker. Treat only the closed child links as resolved.
+  // catalog or legacy Sub-projects marker. Treat only the closed child
+  // links as resolved.
   for (const [parentPath, closedChildPaths] of projectPullInParentPathMap(
     closed,
     noteTexts,

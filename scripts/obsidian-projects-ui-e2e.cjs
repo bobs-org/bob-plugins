@@ -162,6 +162,7 @@ function selfTest() {
   if (!notes["one/duplicate.md"] || !notes["two/duplicate.md"]) throw new Error("duplicate-stem fixtures are missing");
   const parsed = parseArgs(["-s", "-o", "/tmp/shots", "-r", "/tmp/report.json"]);
   if (!parsed.selfTest || parsed.out !== "/tmp/shots" || parsed.report !== "/tmp/report.json") throw new Error("argument parser self-test failed");
+  if (process.platform === "linux" && electronTempDir() !== "/tmp") throw new Error("Linux Electron temp path must stay short enough for Chromium singleton sockets");
   const probe = projectsProbeSource();
   for (const selector of [".bob-projects-header", ".bob-projects-closed-toggle", ".bob-projects-children-toggle", ".bob-projects-action"]) {
     if (!probe.includes(selector)) throw new Error(`probe misses ${selector}`);
@@ -218,6 +219,12 @@ function bobEnvironment(vaultDir, profileDir, shimDir, failFile) {
     PATH: `${shimDir}${path.delimiter}${process.env.PATH || ""}`,
     NO_COLOR: "1",
   };
+}
+
+function electronTempDir() {
+  // Snap Electron creates a Chromium singleton Unix socket in TMPDIR. SASE's
+  // workspace TMPDIR can exceed sun_path's limit, so keep that socket path short.
+  return process.platform === "linux" ? "/tmp" : os.tmpdir();
 }
 
 function writeBobShim(shimDir) {
@@ -388,7 +395,7 @@ function projectsProbeSource() {
   return `(() => { try {
     const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; };
     const describe = (el) => ({ text: (el.textContent || "").replace(/\\s+/g, " ").trim(), cls: String(el.className || ""), expanded: el.getAttribute("aria-expanded"), focus: el.getAttribute("data-focus-key"), visible: visible(el), rect: (() => { const r = el.getBoundingClientRect(); return { x:r.x,y:r.y,w:r.width,h:r.height }; })() });
-    const cards = Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter(visible).map((card) => ({
+    return { cards: Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter(visible).map((card) => ({
       text: (card.textContent || "").replace(/\\s+/g, " ").trim(), hue: card.getAttribute("data-root-hue"), stale: card.getAttribute("data-stale"),
       titleDisplay: getComputedStyle(card.querySelector(".callout-title") || card).display,
       header: describe(card.querySelector(".bob-projects-header")),
@@ -452,6 +459,17 @@ async function waitFor(client, expression, predicate, label, timeoutMs = 20_000)
     await sleep(120);
   }
   throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(last).slice(0, 1600)}`);
+}
+
+async function trustCommunityPlugins(client) {
+  return waitFor(client, `(()=>{
+    if(window.app?.plugins?.plugins?.["bob-ledger-tools"]) return "already-loaded";
+    const buttons=Array.from(document.querySelectorAll("button"));
+    const trust=buttons.find((button)=>/Trust author and enable plugins/i.test(button.textContent||""));
+    if(!trust) return null;
+    trust.click();
+    return "trusted";
+  })()`, Boolean, "community plugin trust prompt or plugin startup", 20_000);
 }
 
 async function openNote(client, name, mode = "live") {
@@ -552,9 +570,9 @@ async function run(args) {
     report.noteSafety.afterSeedSync = markdownFilesHash(vaultDir);
 
     const port = await freePort();
-    child = spawn(executable, ["--no-sandbox", `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`, vaultReal], {
+    child = spawn(executable, ["--no-sandbox", `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`, "--remote-allow-origins=http://127.0.0.1/*", vaultReal], {
       stdio: "ignore",
-      env,
+      env: { ...env, TMPDIR: electronTempDir() },
     });
     let exitInfo = null;
     child.once("exit", (code, signal) => { exitInfo = { code, signal }; });
@@ -563,7 +581,7 @@ async function run(args) {
     client = await CdpClient.connect(page.webSocketDebuggerUrl);
     await client.call("Page.enable");
     await client.call("Runtime.enable");
-    await client.evaluate(`(()=>{const buttons=Array.from(document.querySelectorAll("button"));const trust=buttons.find((b)=>/Trust author and enable plugins/i.test(b.textContent||""));if(trust)trust.click();return Boolean(trust);})()`);
+    report.pluginStartup = { trustAction: await trustCommunityPlugins(client) };
     await waitFor(client, `(()=>Boolean(window.app?.plugins?.plugins?.["bob-ledger-tools"]))()`, Boolean, "Bob Ledger Tools loaded", 40_000);
     const opened = await openNote(client, "area.md", "live");
     record("opened-area-live-preview", opened.ok && opened.path === "area.md", opened);

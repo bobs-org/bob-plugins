@@ -112,6 +112,9 @@
   "241m-plugin-album-data-service.js",
   "241aa-plugin-projects-data.js",
   "241ab-plugin-projects-data-service.js",
+  "241ac-plugin-projects-catalog-model.js",
+  "241ad-plugin-projects-catalog-dom.js",
+  "241ae-plugin-projects-catalog.js",
   "241z-plugin-album-update.js",
   "242a-plugin-album-update-service.js",
   "242b-plugin-album-update-session.js",
@@ -238,5 +241,6 @@
   "355-exports-links-walker-footer.js",
   "356-exports-bank-category.js",
   "356-exports-mail-archive-receipts.js",
-  "358-exports-projects.js"
+  "358-exports-projects.js",
+  "359-exports-projects-catalog.js"
 ]

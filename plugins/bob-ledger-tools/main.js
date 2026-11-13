@@ -33570,7 +33570,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -33691,7 +33691,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
-      this.teardownAlbumRecords(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
+      this.teardownAlbumRecords(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }
@@ -61019,6 +61019,1221 @@ class BobLedgerToolsProjectsDataMixin {
     this.projectsReportError = null;
     this.projectsSyncBusy = false;
     this.projectsSyncError = null;
+  }
+}
+// ---- src/241ac-plugin-projects-catalog-model.js ----
+// Projects catalog card: pure host/row/chip/tally/reason/fold models plus
+// the stored `[!projects]` region scan and host copy text. Bob's list report
+// is the authority for rows, order, membership, and counts; these helpers
+// never parse project frontmatter, derive lifecycle state, or write notes.
+
+const PROJECTS_CARD_STATES = ["open", "scheduled", "blocked", "warning", "done", "canceled"];
+const PROJECTS_CARD_CLOSED_STATES = new Set(["done", "canceled"]);
+const PROJECTS_CARD_OPEN_STATES = new Set(["open", "scheduled", "blocked", "warning"]);
+const PROJECTS_CLOSED_PEEK_COUNT = 2;
+const PROJECTS_CARD_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function projectsCardStateOf(entry) {
+  const state = entry && typeof entry.state === "string" ? entry.state : null;
+  return PROJECTS_CARD_STATES.includes(state) ? state : null;
+}
+
+function projectsCardIsClosed(entry) {
+  return PROJECTS_CARD_CLOSED_STATES.has(projectsCardStateOf(entry));
+}
+
+function projectsCardIsCountedBlocked(entry) {
+  // Blocked is a subset of open: scheduled and dependency/inherited blocked
+  // rows stay inside the open lane and are never added twice.
+  const state = projectsCardStateOf(entry);
+  return state === "scheduled" || state === "blocked";
+}
+
+function projectsCardMarker(entry) {
+  const state = projectsCardStateOf(entry);
+  if (state === null) {
+    return { kind: "unknown", glyph: "?", label: "unknown state" };
+  }
+  if (state === "open") {
+    return { kind: "ring", glyph: "", label: "open" };
+  }
+  if (state === "scheduled") {
+    return { kind: "glyph", glyph: "◷", label: "scheduled" };
+  }
+  if (state === "blocked") {
+    return { kind: "glyph", glyph: "⛓", label: "blocked" };
+  }
+  if (state === "warning") {
+    return { kind: "glyph", glyph: "⚠", label: "warning" };
+  }
+  if (state === "done") {
+    return { kind: "glyph", glyph: "✓", label: "done" };
+  }
+  return { kind: "glyph", glyph: "✕", label: "canceled" };
+}
+
+function projectsCardCalendarDate(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return "";
+  }
+  const year = Number(text.slice(0, 4));
+  const month = Number(text.slice(5, 7));
+  const day = Number(text.slice(8, 10));
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return "";
+  }
+  return text;
+}
+
+function projectsCardShortDate(value) {
+  const date = projectsCardCalendarDate(value);
+  if (!date) {
+    return "";
+  }
+  const month = PROJECTS_CARD_MONTHS[Number(date.slice(5, 7)) - 1] || "";
+  const day = Number(date.slice(8, 10));
+  return `${month} ${day}`;
+}
+
+function projectsCardRelativeDay(value, today) {
+  const date = projectsCardCalendarDate(value);
+  const now = projectsCardCalendarDate(today);
+  if (!date || !now) {
+    return "";
+  }
+  let days = null;
+  try {
+    days = freshDateDiffDays(date, now);
+  } catch (error) {
+    return "";
+  }
+  if (!Number.isInteger(days)) {
+    return "";
+  }
+  if (days === 0) {
+    return "today";
+  }
+  // freshDateDiffDays counts to minus from, so a future date reads negative.
+  if (days < 0) {
+    const ahead = -days;
+    if (ahead >= 14) {
+      return `in ${Math.floor(ahead / 7)}w`;
+    }
+    return `in ${ahead}d`;
+  }
+  if (days >= 14) {
+    return `${Math.floor(days / 7)}w overdue`;
+  }
+  return `${days}d overdue`;
+}
+
+function projectsCardBlockedDate(entry) {
+  if (!entry || typeof entry !== "object") {
+    return "";
+  }
+  const blocked = entry.blocked;
+  if (blocked && typeof blocked === "object" && typeof blocked.date === "string") {
+    return projectsCardCalendarDate(blocked.date);
+  }
+  const scheduled = entry.prj && typeof entry.prj === "object" ? entry.prj.scheduled : null;
+  return projectsCardCalendarDate(scheduled);
+}
+
+function projectsCardWaitsOnStem(target) {
+  const text = typeof target === "string" ? target : "";
+  const anchor = text.split("#")[0].replace(/\\/g, "/");
+  const name = (anchor.split("/").pop() || "").replace(/\.md$/i, "").trim();
+  return name || text.trim();
+}
+
+function projectsCardBlockedReason(entry, today) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const blocked = entry.blocked;
+  if (!blocked || typeof blocked !== "object" || typeof blocked.kind !== "string") {
+    return null;
+  }
+  if (blocked.kind === "scheduled") {
+    const date = projectsCardBlockedDate(entry);
+    if (!date) {
+      return { text: "scheduled", hint: "Scheduled, with no usable date in the report." };
+    }
+    const short = projectsCardShortDate(date);
+    const relative = projectsCardRelativeDay(date, today);
+    const text = relative ? `${short} · ${relative}` : short;
+    return { text, hint: `Scheduled ${date}${relative ? ` (${relative})` : ""}.` };
+  }
+  if (blocked.kind === "dependency") {
+    const waits = Array.isArray(blocked.waits_on) ? blocked.waits_on : [];
+    const names = waits.map(projectsCardWaitsOnStem).filter(Boolean);
+    if (!names.length) {
+      return { text: "waits on dependencies", hint: "Blocked on dependencies with no usable targets in the report." };
+    }
+    return { text: `waits on ${names.join(", ")}`, hint: `Blocked on ${names.join(", ")}.` };
+  }
+  if (blocked.kind === "inherited") {
+    return { text: "parent blocked", hint: "Blocked because its parent project is blocked." };
+  }
+  return null;
+}
+
+function projectsCardHost(state, sourcePath) {
+  const report = state && state.report;
+  if (!report || !(report.catalogsByHostPath instanceof Map)) {
+    return null;
+  }
+  const path = projectsReportPath(sourcePath);
+  if (!path) {
+    return null;
+  }
+  return report.catalogsByHostPath.get(path)
+    || report.catalogsByHostPath.get(path.replace(/\.md$/i, "") + ".md")
+    || null;
+}
+
+function projectsCardHostIdentity(catalog, sourcePath) {
+  const host = catalog && typeof catalog.host === "string" && catalog.host
+    ? catalog.host
+    : notebookLinkStem(sourcePath || "");
+  return String(host || "").trim();
+}
+
+function projectsCardCopyText(catalog, sourcePath) {
+  const host = projectsCardHostIdentity(catalog, sourcePath);
+  return host ? `@${host}^` : "";
+}
+
+function projectsCardHostEntry(state, sourcePath) {
+  const report = state && state.report;
+  if (!report || !(report.projectsByPath instanceof Map)) {
+    return null;
+  }
+  const path = projectsReportPath(sourcePath);
+  if (!path) {
+    return null;
+  }
+  return report.projectsByPath.get(path)
+    || report.projectsByPath.get(path.replace(/\.md$/i, "") + ".md")
+    || null;
+}
+
+function projectsCardChildEntries(state, parentPath) {
+  const report = state && state.report;
+  if (!report || !(report.projectsByPath instanceof Map)) {
+    return [];
+  }
+  const want = projectsReportPath(parentPath);
+  const rows = [];
+  for (const entry of report.projectsByPath.values()) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const parent = typeof entry.parent === "string" ? projectsReportPath(entry.parent) : "";
+    if (parent && parent === want) {
+      rows.push(entry);
+    }
+  }
+  return rows;
+}
+
+function projectsCardRowEntries(state, sourcePath) {
+  // Membership comes from Bob's report only: direct children resolve through
+  // each row's stored parent path, never a second JS parent resolution.
+  const direct = projectsCardChildEntries(state, sourcePath);
+  if (direct.length) {
+    return direct;
+  }
+  const host = projectsCardHostEntry(state, sourcePath);
+  const children = host && Array.isArray(host.children) ? host.children : [];
+  const report = state && state.report;
+  if (!children.length || !report || !(report.projectsByPath instanceof Map)) {
+    return direct;
+  }
+  const rows = [];
+  for (const child of children) {
+    const entry = report.projectsByPath.get(projectsReportPath(child));
+    if (entry) {
+      rows.push(entry);
+    }
+  }
+  return rows;
+}
+
+function projectsCardStemCompare(left, right) {
+  const byStem = String(left.stem || "").localeCompare(String(right.stem || ""), undefined, { sensitivity: "base" });
+  if (byStem !== 0) {
+    return byStem;
+  }
+  return projectsReportPath(left.path).localeCompare(projectsReportPath(right.path));
+}
+
+function projectsCardClosedCompare(left, right) {
+  const newer = projectsCardCalendarDate(right.closed_on);
+  const older = projectsCardCalendarDate(left.closed_on);
+  if (newer && older && newer !== older) {
+    return newer < older ? -1 : 1;
+  }
+  // Undated closures sort after dated ones, then A–Z.
+  if (newer && !older) {
+    return 1;
+  }
+  if (older && !newer) {
+    return -1;
+  }
+  return projectsCardStemCompare(left, right);
+}
+
+function projectsCardPartition(rows) {
+  const open = [];
+  const closed = [];
+  for (const entry of Array.isArray(rows) ? rows : []) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if (projectsCardIsClosed(entry)) {
+      closed.push(entry);
+    } else {
+      // Unknown states stay visible in the open lane rather than vanishing.
+      open.push(entry);
+    }
+  }
+  open.sort(projectsCardStemCompare);
+  closed.sort(projectsCardClosedCompare);
+  return { open, closed };
+}
+
+function projectsCardTally(partition) {
+  const open = partition && Array.isArray(partition.open) ? partition.open : [];
+  const closed = partition && Array.isArray(partition.closed) ? partition.closed : [];
+  const blocked = open.filter(projectsCardIsCountedBlocked).length;
+  const full = `${open.length} open · ${blocked} blocked · ${closed.length} closed`;
+  const short = `${open.length}·${blocked}·${closed.length}`;
+  return {
+    open: open.length,
+    blocked,
+    closed: closed.length,
+    full,
+    short,
+    hint: `${open.length} open projects, ${blocked} blocked, ${closed.length} closed.`,
+  };
+}
+
+function projectsCardChips(entry, today) {
+  const chips = [];
+  const tasks = entry && typeof entry === "object" && entry.tasks && typeof entry.tasks === "object"
+    ? entry.tasks
+    : {};
+  if (Number.isInteger(tasks.open)) {
+    chips.push({ kind: "tasks", text: `${tasks.open} tasks`, hint: `${tasks.open} open tasks.` });
+  }
+  if (Number.isInteger(tasks.today) && tasks.today > 0) {
+    chips.push({ kind: "today", text: "● today", hint: `${tasks.today} tasks due today.` });
+  }
+  if (entry && entry.prj && typeof entry.prj === "object" && entry.prj.hidden === false) {
+    chips.push({ kind: "empty", text: "empty", hint: "No hidden project line; this project reads empty." });
+  }
+  const reason = projectsCardBlockedReason(entry, today);
+  if (reason) {
+    chips.push({ kind: "reason", text: reason.text, hint: reason.hint });
+  }
+  return chips;
+}
+
+function projectsCardRowModel(entry, today) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const children = Array.isArray(entry.children) ? entry.children.filter((child) => typeof child === "string") : [];
+  return {
+    path: projectsReportPath(entry.path),
+    stem: typeof entry.stem === "string" ? entry.stem : "",
+    criterion: typeof entry.criterion === "string" ? entry.criterion : "",
+    state: projectsCardStateOf(entry),
+    marker: projectsCardMarker(entry),
+    chips: projectsCardChips(entry, today),
+    children,
+    childCount: children.length,
+    closedOn: projectsCardCalendarDate(entry.closed_on),
+  };
+}
+
+function projectsCardChildTooltip(metadataCache, file) {
+  try {
+    const cache = metadataCache && typeof metadataCache.getFileCache === "function"
+      ? metadataCache.getFileCache(file)
+      : null;
+    const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
+    for (const heading of headings) {
+      if (heading && typeof heading === "object" && heading.level === 1 && typeof heading.heading === "string" && heading.heading.trim()) {
+        return heading.heading.trim();
+      }
+    }
+  } catch (error) {
+    // Tooltips are best-effort.
+  }
+  return "";
+}
+
+function projectsCardLookupByTarget(report, target, sourcePath, metadataCache, vault) {
+  if (!report || !(report.projectsByPath instanceof Map)) {
+    return null;
+  }
+  const name = notebookWikilinkTarget(target);
+  if (!name) {
+    return null;
+  }
+  let file = null;
+  try {
+    file = metadataCache?.getFirstLinkpathDest?.(name, sourcePath) || null;
+  } catch (error) {
+    file = null;
+  }
+  if (!file) {
+    try {
+      file = vault?.getAbstractFileByPath?.(/\.md$/i.test(name) ? name : `${name}.md`) || null;
+    } catch (error) {
+      file = null;
+    }
+  }
+  // Never fall back to a stem after a different file has resolved: duplicate
+  // display titles must not turn an ordinary note into a project row.
+  if (file && typeof file.path === "string" && file.path) {
+    return { entry: report.projectsByPath.get(projectsReportPath(file.path)) || null, file };
+  }
+  return { entry: null, file: null };
+}
+
+function projectsCardHealthModel(catalog) {
+  const issues = (catalog && Array.isArray(catalog.issues) ? catalog.issues : []).filter((issue) => issue && typeof issue === "object");
+  const state = catalog && typeof catalog.state === "string" ? catalog.state : "";
+  if (state === "damaged") {
+    return {
+      label: "damaged catalog",
+      repairable: false,
+      hint: projectsCardIssueHint(issues) || "This projects catalog is damaged. Repair the stored [!projects] block by hand, then sync.",
+    };
+  }
+  if (state === "missing" || state === "stale") {
+    return {
+      label: `${state} catalog`,
+      repairable: true,
+      hint: projectsCardIssueHint(issues) || `This projects catalog is ${state}. Sync projects to refresh it.`,
+    };
+  }
+  if (issues.length) {
+    return { label: "check projects", repairable: false, hint: projectsCardIssueHint(issues) };
+  }
+  return null;
+}
+
+function projectsCardIssueHint(issues) {
+  return (Array.isArray(issues) ? issues : [])
+    .filter((issue) => issue && typeof issue === "object")
+    .map((issue) => {
+      const where = [issue.path, issue.line].filter((part) => part != null && part !== "").join(":");
+      const message = typeof issue.message === "string" && issue.message ? issue.message : (issue.code || "issue");
+      return `${where ? `${where}: ` : ""}${message}`;
+    })
+    .join("\n");
+}
+
+function projectsCardStatus(state, sourcePath) {
+  const catalog = projectsCardHost(state, sourcePath);
+  const issues = catalog && Array.isArray(catalog.issues) ? catalog.issues : [];
+  const findings = state && state.report && Array.isArray(state.report.findings) ? state.report.findings : [];
+  const messages = [];
+  let action = null;
+  if (!state || !state.report) {
+    messages.push((state && state.errorModel && state.errorModel.hint) || "Projects data is loading; counts are unavailable.");
+  } else if (state.stale) {
+    messages.push((state.errorModel && state.errorModel.hint) || "Showing cached projects while refreshing.");
+  }
+  if (catalog && catalog.state !== "current") {
+    const health = projectsCardHealthModel(catalog);
+    messages.push(health ? health.hint : `Projects catalog: ${catalog.state}. ${projectsCardIssueHint(issues)}`.trim());
+  }
+  if (findings.length) {
+    const shown = findings
+      .slice(0, 3)
+      .map((finding) => (finding && typeof finding.message === "string" && finding.message)
+        || (finding && typeof finding.code === "string" && finding.code)
+        || "")
+      .filter(Boolean);
+    if (shown.length) {
+      messages.push(`Findings: ${shown.join("; ")}${findings.length > shown.length ? ` (+${findings.length - shown.length} more)` : ""}`);
+    }
+  }
+  if (state && state.syncErrorModel) {
+    messages.push(state.syncErrorModel.hint);
+  }
+  if ((!state || state.errorModel || (!state.report && !state.refreshing))) {
+    if (!state || !state.report) {
+      action = {
+        kind: "retry",
+        label: "Retry",
+        hint: (state && state.errorModel && state.errorModel.hint) || "Read the projects list again.",
+        disabled: Boolean(state && state.refreshing),
+      };
+    }
+  }
+  if (!action && state && state.report) {
+    const repairable = catalog && (catalog.state === "missing" || catalog.state === "stale");
+    if (state.syncBusy || repairable) {
+      action = {
+        kind: "sync",
+        label: state.syncBusy ? "Syncing…" : "↻ sync",
+        hint: "Run bob projects sync to refresh this catalog.",
+        disabled: Boolean(state.syncBusy),
+      };
+    }
+  }
+  return { message: messages.join("\n"), action };
+}
+
+function projectsCardSourceRegions(text) {
+  const lines = String(text === null || text === undefined ? "" : text).split("\n");
+  const regions = [];
+  let fence = null;
+  for (let index = notebookFrontmatterEnd(lines); index < lines.length; index += 1) {
+    const line = lines[index];
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      if (!fence) {
+        fence = fenceMatch[1];
+      } else if (fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fence || !/^ {0,3}>\s*\[!projects\](?:[-+])?(?:\s.*)?$/i.test(line)) {
+      continue;
+    }
+    const region = { begin: index, end: index };
+    while (region.end + 1 < lines.length && /^ {0,3}>/.test(lines[region.end + 1])) {
+      region.end += 1;
+    }
+    regions.push(region);
+    index = region.end;
+  }
+  return regions;
+}
+
+function projectsCardAnchorLine(text) {
+  const lines = String(text === null || text === undefined ? "" : text).split("\n");
+  const first = notebookFrontmatterEnd(lines);
+  const body = lines.slice(first).join("\n");
+  const heading = notebookFindHeadingLine(body, (line) => /^## Projects\s*$/.test(line));
+  const title = notebookFindHeadingLine(body, (line) => /^# \S/.test(line));
+  if (heading >= 0) {
+    return first + heading;
+  }
+  if (title >= 0) {
+    return first + title;
+  }
+  const nonblank = lines.slice(first).findIndex((line) => line.trim());
+  return first + Math.max(0, nonblank);
+}
+
+function projectsCardClosedFoldKey(hostPath) {
+  return `closed:${projectsReportPath(hostPath)}`;
+}
+
+function projectsCardChildFoldKey(hostPath, childPath) {
+  return `child:${projectsReportPath(hostPath)}:${projectsReportPath(childPath)}`;
+}
+
+function projectsCardFoldMap(host) {
+  if (host instanceof Map) {
+    return host;
+  }
+  return new Map();
+}
+
+function projectsCardIsClosedFolded(folds, hostPath) {
+  // The Closed group defaults folded; an explicit stored false opens it.
+  const map = projectsCardFoldMap(folds);
+  const key = projectsCardClosedFoldKey(hostPath);
+  if (!map.has(key)) {
+    return true;
+  }
+  return map.get(key) !== false;
+}
+
+function projectsCardIsChildExpanded(folds, hostPath, childPath) {
+  const map = projectsCardFoldMap(folds);
+  return map.get(projectsCardChildFoldKey(hostPath, childPath)) === true;
+}
+// ---- src/241ad-plugin-projects-catalog-dom.js ----
+// Projects catalog card: keyed, presentation-only DOM. Keeping unchanged
+// buttons alive preserves focus/hover through service notifications and
+// editor selection updates. Never writes note bytes; generated chrome only.
+
+const PROJECTS_CHIPS_CLASS = "bob-projects-chips";
+const PROJECTS_STATUS_CLASS = "bob-projects-status";
+const PROJECTS_HEADER_CLASS = "bob-projects-header";
+const PROJECTS_CLOSED_CLASS = "bob-projects-closed";
+const PROJECTS_CHILDREN_CLASS = "bob-projects-children";
+const PROJECTS_ANCHOR_CLASS = "bob-projects-anchor";
+const PROJECTS_CRITERION_CLASS = "bob-projects-criterion";
+
+function projectsFindCallouts(root) {
+  const selector = '[data-callout="projects"]';
+  const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
+  if (notebookDomAttr(root, "data-callout") === "projects") {
+    nodes.unshift(root);
+  }
+  return nodes.filter((node) => !notebookInsideCode(node));
+}
+
+function projectsPaintMarker(doc, host, marker) {
+  const node = notebookCreateEl(doc, "span", "bob-projects-marker");
+  if (!node) {
+    return null;
+  }
+  node.setAttribute("data-state", marker && marker.kind === "ring" ? "open" : "other");
+  node.setAttribute("data-focus-key", "marker");
+  if (marker && marker.kind === "ring") {
+    node.setAttribute("aria-hidden", "true");
+  } else {
+    notebookSetText(node, (marker && marker.glyph) || "?");
+    const label = (marker && marker.label) || "unknown state";
+    node.setAttribute("title", label);
+    node.setAttribute("aria-label", `state: ${label}`);
+  }
+  host.appendChild(node);
+  return node;
+}
+
+function projectsPaintChip(doc, host, chip) {
+  const node = notebookCreateEl(doc, "span", `bob-projects-chip bob-projects-chip-${chip.kind}`);
+  if (!node) {
+    return null;
+  }
+  notebookSetText(node, chip.text);
+  if (chip.hint) {
+    node.setAttribute("title", chip.hint);
+  }
+  host.appendChild(node);
+  return node;
+}
+
+function projectsPaintMiniRow(doc, host, model) {
+  const li = notebookCreateEl(doc, "li", "bob-projects-mini");
+  if (!li) {
+    return null;
+  }
+  projectsPaintMarker(doc, li, model.marker);
+  const link = notebookCreateEl(doc, "a", "internal-link");
+  if (link) {
+    link.setAttribute("data-href", model.path);
+    notebookSetText(link, model.stem || model.path);
+    if (model.tooltip) {
+      link.setAttribute("title", model.tooltip);
+    }
+    li.appendChild(link);
+  }
+  host.appendChild(li);
+  return li;
+}
+
+function projectsPaintRow(li, model, context) {
+  const expanded = projectsCardIsChildExpanded(context.folds, context.hostPath, model.path);
+  const key = JSON.stringify([model, expanded]);
+  albumReplaceChrome(li, PROJECTS_CHIPS_CLASS, key, (host, doc) => {
+    host.setAttribute("data-projects-path", model.path);
+    projectsPaintMarker(doc, host, model.marker);
+    for (const chip of model.chips) {
+      projectsPaintChip(doc, host, chip);
+    }
+    if (model.childCount > 0) {
+      const toggle = albumAppendText(doc, host, "button",
+        "bob-projects-children-toggle", `${expanded ? "▾" : "▸"} ${model.childCount}`,
+        expanded ? `Hide ${model.childCount} child projects.` : `Show ${model.childCount} child projects.`);
+      if (toggle) {
+        toggle.setAttribute("data-focus-key", "children");
+        toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+        notebookBindAction(toggle, () => context.handlers.toggleChild(model.path, !expanded));
+      }
+    }
+  });
+  // The stored criterion stays readable: wrap the li's own trailing text
+  // verbatim in a clamped span with the full text on hover and keyboard
+  // focus. Report text never overwrites stored words.
+  projectsPaintCriterion(li);
+  if (model.childCount > 0 && expanded) {
+    projectsPaintChildList(li, model, context);
+  } else {
+    notebookRemovePainted(li, PROJECTS_CHILDREN_CLASS);
+  }
+}
+
+function projectsPaintCriterion(li) {
+  const doc = notebookDomDoc(li);
+  if (!doc) {
+    return;
+  }
+  const existing = Array.from(li.children || []).find((node) => notebookDomHasClass(node, PROJECTS_CRITERION_CLASS));
+  if (existing) {
+    return;
+  }
+  // Collect the li's own trailing text nodes (never nested lists or chrome).
+  const trailing = [];
+  for (const child of Array.from(li.childNodes || [])) {
+    if (child.nodeType !== 3) {
+      continue;
+    }
+    if (!child.nodeValue || !child.nodeValue.trim()) {
+      continue;
+    }
+    trailing.push(child);
+  }
+  if (!trailing.length) {
+    return;
+  }
+  const text = trailing.map((node) => node.nodeValue).join("");
+  if (!text.trim()) {
+    return;
+  }
+  const wrap = notebookCreateEl(doc, "span", PROJECTS_CRITERION_CLASS);
+  if (!wrap) {
+    return;
+  }
+  notebookSetText(wrap, text);
+  wrap.setAttribute("title", text.trim());
+  wrap.setAttribute("tabindex", "0");
+  li.insertBefore(wrap, trailing[0]);
+  for (const node of trailing) {
+    node.remove();
+  }
+}
+
+function projectsPaintChildList(li, model, context) {
+  const key = JSON.stringify(model.children);
+  albumReplaceChrome(li, PROJECTS_CHILDREN_CLASS, key, (host, doc) => {
+    const list = notebookCreateEl(doc, "ul", "bob-projects-child-list");
+    if (!list) {
+      return;
+    }
+    host.appendChild(list);
+    for (const childPath of model.children) {
+      const entry = context.state.report && context.state.report.projectsByPath
+        ? context.state.report.projectsByPath.get(projectsReportPath(childPath))
+        : null;
+      if (!entry) {
+        continue;
+      }
+      const child = projectsCardRowModel(entry, context.state.today);
+      if (!child) {
+        continue;
+      }
+      child.tooltip = projectsCardChildTooltip(context.metadataCache, projectsCardResolveFile(child.path, context));
+      projectsPaintMiniRow(doc, list, child);
+    }
+  });
+}
+
+function projectsCardResolveFile(path, context) {
+  try {
+    return context.vault?.getAbstractFileByPath?.(path) || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function projectsPaintHeader(host, tally, health) {
+  const key = JSON.stringify([tally, health ? health.label : ""]);
+  albumReplaceChrome(host, PROJECTS_HEADER_CLASS, key, (node, doc) => {
+    node.setAttribute("role", "heading");
+    node.setAttribute("aria-level", "2");
+    const title = notebookCreateEl(doc, "span", "bob-projects-title");
+    if (title) {
+      notebookSetText(title, "Projects");
+      node.appendChild(title);
+    }
+    const full = albumAppendText(doc, node, "span", "bob-projects-tally bob-projects-tally-full", tally.full, tally.hint);
+    if (full) {
+      full.setAttribute("aria-hidden", "false");
+    }
+    const short = albumAppendText(doc, node, "span", "bob-projects-tally bob-projects-tally-short", tally.short, tally.hint);
+    if (short) {
+      short.setAttribute("aria-hidden", "false");
+    }
+    if (health) {
+      albumAppendText(doc, node, "span", "bob-projects-health", health.label, health.hint);
+    }
+  });
+}
+
+function projectsPaintClosed(host, closedRows, context) {
+  const folded = projectsCardIsClosedFolded(context.folds, context.hostPath);
+  const newest = closedRows.slice(0, PROJECTS_CLOSED_PEEK_COUNT);
+  const key = JSON.stringify([closedRows.map((row) => row.path), folded, context.state.today]);
+  albumReplaceChrome(host, PROJECTS_CLOSED_CLASS, key, (node, doc) => {
+    const button = albumAppendText(doc, node, "button", "bob-projects-closed-toggle",
+      `Closed · ${closedRows.length}`,
+      folded ? `Show ${closedRows.length} closed projects.` : `Hide closed projects.`);
+    if (button) {
+      button.setAttribute("data-focus-key", "closed");
+      button.setAttribute("aria-expanded", folded ? "false" : "true");
+      notebookBindAction(button, () => context.handlers.toggleClosed(!folded));
+    }
+    const list = notebookCreateEl(doc, "ul", "bob-projects-closed-list");
+    if (!list) {
+      return;
+    }
+    node.appendChild(list);
+    const shown = folded ? newest : closedRows;
+    for (const entry of shown) {
+      const model = projectsCardRowModel(entry, context.state.today);
+      if (!model) {
+        continue;
+      }
+      model.tooltip = projectsCardChildTooltip(context.metadataCache, projectsCardResolveFile(model.path, context));
+      projectsPaintMiniRow(doc, list, model);
+    }
+  });
+}
+
+function projectsPaintStatus(host, model, handlers) {
+  return albumReplaceChrome(host, PROJECTS_STATUS_CLASS, model.message || model.action ? JSON.stringify(model) : "", (node, doc) => {
+    node.setAttribute("role", "status");
+    if (model.message) {
+      albumAppendText(doc, node, "span", "bob-projects-status-hint", model.message);
+    }
+    if (model.action) {
+      const action = model.action;
+      const button = albumAppendText(doc, node, "button", "bob-projects-action", action.label, action.hint);
+      if (button) {
+        button.setAttribute("data-focus-key", action.kind);
+        button.disabled = Boolean(action.disabled);
+        albumSetAttr(button, "aria-busy", action.disabled ? "true" : null);
+        notebookBindAction(button, () => {
+          if (!button.disabled) {
+            handlers[action.kind]();
+          }
+        });
+      }
+    }
+  });
+}
+
+function projectsContentHost(callout) {
+  return callout.querySelector?.(".callout-content") || callout;
+}
+
+function projectsOrderChrome(host) {
+  // The painted header and status stay ahead of the stored rows. Moving live
+  // nodes never drops focus, and keyed repaints keep this order stable.
+  try {
+    const kids = Array.from(host.children || []);
+    const header = kids.find((node) => notebookDomHasClass(node, PROJECTS_HEADER_CLASS));
+    const status = kids.find((node) => notebookDomHasClass(node, PROJECTS_STATUS_CLASS));
+    if (header && host.firstChild !== header) {
+      host.insertBefore(header, host.firstChild);
+    }
+    if (status && header && status.previousSibling !== header) {
+      host.insertBefore(status, header.nextSibling);
+    }
+  } catch (error) {
+    // Order is best-effort.
+  }
+}
+
+function projectsPaintCallout(callout, context) {
+  albumSetAttr(callout, "data-bob-projects-card", "true");
+  albumSetAttr(callout, "data-root-hue", context.hue);
+  albumSetAttr(callout, "data-stale", context.state.stale ? "true" : null);
+  const rows = projectsCardRowEntries(context.state, context.sourcePath);
+  const partition = projectsCardPartition(rows);
+  const tally = projectsCardTally(partition);
+  const catalog = projectsCardHost(context.state, context.sourcePath);
+  const health = catalog ? projectsCardHealthModel(catalog) : null;
+  const content = projectsContentHost(callout);
+  projectsPaintHeader(content, tally, health);
+  const seen = new Set();
+  for (const li of callout.querySelectorAll("li")) {
+    // Generated mini rows (Closed peek, nested children) carry real links
+    // but are never stored rows: repainting them would paint row chrome into
+    // the peek and hide them from their own group.
+    if (notebookDomHasClass(li, "bob-projects-mini")) {
+      continue;
+    }
+    const link = notebookLiOwnLink(li);
+    const target = link ? notebookLinkHref(link) : "";
+    const group = /^\s*🧩/u.test(notebookLiOwnText(li));
+    // Notebook/album 🧩 groups and ordinary same-stem notes are never
+    // painted as project rows.
+    if (group || !target) {
+      notebookRemovePainted(li, PROJECTS_CHIPS_CLASS);
+      notebookRemovePainted(li, PROJECTS_CHILDREN_CLASS);
+      continue;
+    }
+    const resolved = projectsCardLookupByTarget(context.state.report, target,
+      context.sourcePath, context.metadataCache, context.vault);
+    const entry = resolved && resolved.entry;
+    if (!entry) {
+      notebookRemovePainted(li, PROJECTS_CHIPS_CLASS);
+      notebookRemovePainted(li, PROJECTS_CHILDREN_CLASS);
+      continue;
+    }
+    seen.add(projectsReportPath(entry.path));
+    const model = projectsCardRowModel(entry, context.state.today);
+    if (!model) {
+      continue;
+    }
+    if (resolved.file) {
+      const tooltip = projectsCardChildTooltip(context.metadataCache, resolved.file);
+      if (tooltip && !link.getAttribute("title")) {
+        link.setAttribute("title", tooltip);
+      }
+    }
+    projectsPaintRow(li, model, context);
+  }
+  const unlisted = partition.closed.filter((entry) => !seen.has(projectsReportPath(entry.path)));
+  const closedHost = content;
+  if (unlisted.length) {
+    projectsPaintClosed(closedHost, unlisted, context);
+  } else {
+    notebookRemovePainted(closedHost, PROJECTS_CLOSED_CLASS);
+  }
+  // The redundant native callout title stays hidden (see styles.css); the
+  // painted header below carries the accessible heading instead.
+  projectsPaintStatus(content, projectsCardStatus(context.state, context.sourcePath), context.handlers);
+  projectsOrderChrome(content);
+}
+
+function projectsPaintStandalone(host, context) {
+  // Hosts without a stored callout still get a header, status, and Closed
+  // group. With no children at all, no empty card remains: only the repair
+  // status survives, so a missing catalog stays actionable.
+  const rows = projectsCardRowEntries(context.state, context.sourcePath);
+  const partition = projectsCardPartition(rows);
+  if (!partition.open.length && !partition.closed.length) {
+    notebookRemovePainted(host, PROJECTS_HEADER_CLASS);
+    notebookRemovePainted(host, PROJECTS_CLOSED_CLASS);
+    projectsPaintStatus(host, projectsCardStatus(context.state, context.sourcePath), context.handlers);
+    return;
+  }
+  projectsPaintHeader(host, projectsCardTally(partition),
+    context.catalog ? projectsCardHealthModel(context.catalog) : null);
+  if (partition.closed.length) {
+    projectsPaintClosed(host, partition.closed, context);
+  } else {
+    notebookRemovePainted(host, PROJECTS_CLOSED_CLASS);
+  }
+  projectsPaintStatus(host, projectsCardStatus(context.state, context.sourcePath), context.handlers);
+  projectsOrderChrome(host);
+}
+
+function projectsCleanCatalogDom(root) {
+  notebookRemovePainted(root, PROJECTS_CHIPS_CLASS);
+  notebookRemovePainted(root, PROJECTS_STATUS_CLASS);
+  notebookRemovePainted(root, PROJECTS_HEADER_CLASS);
+  notebookRemovePainted(root, PROJECTS_CLOSED_CLASS);
+  notebookRemovePainted(root, PROJECTS_CHILDREN_CLASS);
+  notebookRemovePainted(root, PROJECTS_ANCHOR_CLASS);
+  for (const callout of projectsFindCallouts(root)) {
+    if (notebookDomAttr(callout, "data-bob-projects-card")) {
+      for (const name of ["data-bob-projects-card", "data-root-hue", "data-stale"]) {
+        callout.removeAttribute(name);
+      }
+    }
+  }
+  for (const li of root.querySelectorAll?.("li") || []) {
+    for (const wrap of Array.from(li.children || []).filter((node) => notebookDomHasClass(node, PROJECTS_CRITERION_CLASS))) {
+      const doc = notebookDomDoc(li);
+      const text = doc && typeof doc.createTextNode === "function"
+        ? doc.createTextNode(wrap.textContent || "")
+        : null;
+      if (text && wrap.parentNode === li) {
+        li.insertBefore(text, wrap);
+      }
+      wrap.remove();
+    }
+  }
+}
+// ---- src/241ae-plugin-projects-catalog.js ----
+// Projects catalog cards in Reading view and Live Preview share one
+// projects report subscription. Folds live in per-pane state; painting never
+// mutates the note and never steals focus through refreshes or remounts.
+let projectsCatalogRefreshEffect = null;
+function ensureProjectsCatalogRefresh() {
+  if (!projectsCatalogRefreshEffect && StateEffect?.define) projectsCatalogRefreshEffect = StateEffect.define();
+  return projectsCatalogRefreshEffect;
+}
+
+class BobLedgerToolsProjectsCatalogMixin {
+  setupProjectsCatalog() {
+    this.projectsCatalogActive = true;
+    this.projectsCatalogReading = new Set();
+    this.projectsCatalogEditors = new Set();
+    this.projectsCatalogFoldByView = new WeakMap();
+    this.projectsCatalogRefreshTimer = null;
+    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderProjectsCatalogInReading(el, ctx), 53);
+    const extension = this.createProjectsCatalogExtension();
+    if (extension) this.registerEditorExtension?.(extension);
+    this.projectsCatalogUnsubscribe = this.apiProjectsSubscribe(() => this.scheduleProjectsCatalogRefresh());
+  }
+
+  teardownProjectsCatalog() {
+    this.projectsCatalogActive = false;
+    this.projectsCatalogUnsubscribe?.();
+    this.projectsCatalogUnsubscribe = null;
+    this.projectsClearTimeout(this.projectsCatalogRefreshTimer);
+    this.projectsCatalogRefreshTimer = null;
+    for (const widget of this.projectsCatalogReading || []) projectsCleanCatalogDom(widget.el);
+    for (const view of this.projectsCatalogEditors || []) projectsCleanCatalogDom(view.dom);
+    this.projectsCatalogReading?.clear();
+    this.projectsCatalogEditors?.clear();
+  }
+
+  projectsCatalogFoldMap(host) {
+    if (!(this.projectsCatalogFoldByView instanceof WeakMap)) this.projectsCatalogFoldByView = new WeakMap();
+    let folds = this.projectsCatalogFoldByView.get(host);
+    if (!(folds instanceof Map)) {
+      folds = new Map();
+      this.projectsCatalogFoldByView.set(host, folds);
+    }
+    return folds;
+  }
+
+  projectsCatalogHandlers(sourcePath, folds) {
+    // Fold state is per-pane: handlers repaint only the surfaces that share
+    // this exact folds map, so split views of one note stay independent.
+    const repaintSurface = () => {
+      for (const widget of this.projectsCatalogReading || []) {
+        if (widget.folds === folds) {
+          this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
+      }
+      for (const view of this.projectsCatalogEditors || []) {
+        if (this.projectsCatalogFoldByView instanceof WeakMap && this.projectsCatalogFoldByView.get(view) === folds) {
+          this.paintProjectsCatalogEditor(view);
+        }
+      }
+    };
+    return {
+      retry: () => { void this.apiProjectsReport({ force: true }); },
+      sync: () => { void this.apiProjectsSync({ automatic: false }); },
+      copy: () => { void this.apiProjectsCopyStarter(sourcePath); },
+      toggleClosed: (folded) => {
+        projectsCardFoldMap(folds).set(projectsCardClosedFoldKey(sourcePath), Boolean(folded));
+        repaintSurface();
+      },
+      toggleChild: (childPath, expanded) => {
+        projectsCardFoldMap(folds).set(projectsCardChildFoldKey(sourcePath, childPath), Boolean(expanded));
+        repaintSurface();
+      },
+    };
+  }
+
+  projectsCatalogOptions(sourcePath, folds) {
+    const state = this.projectsReportState();
+    return {
+      sourcePath,
+      hostPath: sourcePath,
+      state,
+      catalog: projectsCardHost(state, sourcePath),
+      hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
+      metadataCache: this.app?.metadataCache,
+      vault: this.app?.vault,
+      handlers: this.projectsCatalogHandlers(sourcePath, folds),
+      folds,
+    };
+  }
+
+  async apiProjectsCopyStarter(sourcePath) {
+    if (this.projectsCatalogActive === false) return { ok: false };
+    const state = this.projectsReportState();
+    const value = projectsCardCopyText(projectsCardHost(state, sourcePath), sourcePath);
+    if (!value) return { ok: false, reason: "No projects host is resolved for this note." };
+    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+    if (!clipboard || typeof clipboard.writeText !== "function") {
+      try { new Notice("Clipboard is unavailable."); } catch (_) {}
+      return { ok: false, reason: "clipboard is unavailable" };
+    }
+    try {
+      await clipboard.writeText(value);
+      try { new Notice(`Copied ${value}.`); } catch (_) {}
+      return { ok: true, value };
+    } catch (_) {
+      try { new Notice("Could not copy the project starter."); } catch (_) {}
+      return { ok: false, reason: "clipboard write failed" };
+    }
+  }
+
+  paintProjectsCatalogReading(el, sourcePath, folds, allowAnchor = true) {
+    const options = this.projectsCatalogOptions(sourcePath, folds);
+    const callouts = projectsFindCallouts(el);
+    for (const callout of callouts) projectsPaintCallout(callout, options);
+    // Hosts without a stored callout get an actionable anchor at their
+    // Projects heading, H1, or safe body position. With no children and a
+    // current catalog, no empty card remains.
+    const rows = projectsCardRowEntries(options.state, sourcePath);
+    const catalog = options.catalog;
+    const needsAnchor = allowAnchor && !callouts.length
+      && ((catalog && catalog.state !== "current") || rows.length > 0);
+    if (!needsAnchor) {
+      // Clear stale standalone chrome only; callout chrome shares these
+      // classes and must survive.
+      for (const cls of [PROJECTS_STATUS_CLASS, PROJECTS_ANCHOR_CLASS, PROJECTS_HEADER_CLASS, PROJECTS_CLOSED_CLASS]) {
+        for (const node of Array.from(el.querySelectorAll?.(`.${cls}`) || [])) {
+          if (!node.closest?.('[data-callout="projects"]')) node.remove();
+        }
+      }
+      return;
+    }
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Projects\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+    const title = notebookFindHostTitle(el);
+    const existing = el.querySelector?.(`.${PROJECTS_ANCHOR_CLASS}`);
+    let host = heading || title || existing;
+    if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
+      host = notebookCreateEl(notebookDomDoc(el), "div", PROJECTS_ANCHOR_CLASS);
+      el.insertBefore(host, el.firstChild);
+    }
+    if (host) {
+      albumSetAttr(host, "data-bob-projects-card", "true");
+      projectsPaintStandalone(host, options);
+    }
+  }
+
+  renderProjectsCatalogInReading(el, ctx) {
+    if (!this.projectsCatalogActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    // CodeMirror owns its rendered callouts; its view plugin handles their
+    // lifecycle so a postprocessor child cannot clean another pane's chrome.
+    if (el.closest?.(".cm-editor")) return;
+    const section = ctx.getSectionInfo?.(el);
+    const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
+    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const folds = this.projectsCatalogFoldMap(el);
+    this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+    const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
+    if (existing) {
+      if (existing.path !== ctx.sourcePath) {
+        projectsCleanCatalogDom(el);
+        this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
+      }
+      existing.path = ctx.sourcePath;
+      existing.allowAnchor = allowAnchor;
+      return;
+    }
+    const widget = { el, path: ctx.sourcePath, folds, allowAnchor };
+    this.projectsCatalogReading.add(widget);
+    if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+      const child = new MarkdownRenderChild(el);
+      child.onunload = () => {
+        projectsCleanCatalogDom(el);
+        this.projectsCatalogReading?.delete(widget);
+      };
+      ctx.addChild(child);
+    }
+  }
+
+  projectsCatalogLivePath(view) {
+    return this.projectsCatalogActive ? this.notebookCatalogLivePath(view) : null;
+  }
+
+  paintProjectsCatalogEditor(view) {
+    const path = this.projectsCatalogLivePath(view);
+    if (!path) {
+      projectsCleanCatalogDom(view.dom);
+      return;
+    }
+    const options = this.projectsCatalogOptions(path, this.projectsCatalogFoldMap(view));
+    for (const callout of projectsFindCallouts(view.dom)) {
+      // Embedded notes have their own source identity, never the outer editor's.
+      if (!callout.closest?.(".markdown-embed")) projectsPaintCallout(callout, options);
+    }
+  }
+
+  buildProjectsCatalogDecorations(view) {
+    const path = this.projectsCatalogLivePath(view);
+    if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    const text = view.state.doc.toString();
+    const regions = projectsCardSourceRegions(text);
+    const state = this.projectsReportState();
+    const catalog = projectsCardHost(state, path);
+    const rows = projectsCardRowEntries(state, path);
+    // Rendered callout titles hold their own status. Decorations are needed
+    // only for missing regions and stay outside the editable frontmatter.
+    if (regions.length || !catalog || (catalog.state === "current" && rows.length > 0)) return Decoration.none;
+    const standalone = projectsCardStatus(state, path);
+    if (!standalone.message && !standalone.action) return Decoration.none;
+    const plugin = this;
+    const key = JSON.stringify(standalone);
+    const StatusWidget = class extends WidgetType {
+      constructor() { super(); this.key = key; this.path = path; }
+      eq(other) { return other?.key === this.key && other?.path === this.path; }
+      toDOM() {
+        const host = notebookCreateEl(typeof document !== "undefined" ? document : null, "span", PROJECTS_ANCHOR_CLASS);
+        if (host) {
+          albumSetAttr(host, "data-bob-projects-card", "true");
+          projectsPaintStandalone(host, plugin.projectsCatalogOptions(path, plugin.projectsCatalogFoldMap(view)));
+        }
+        return host;
+      }
+      ignoreEvent() { return true; }
+    };
+    const index = projectsCardAnchorLine(text);
+    const line = view.state.doc.line(Math.min(index + 1, view.state.doc.lines));
+    const builder = new RangeSetBuilder();
+    builder.add(line.to, line.to, Decoration.widget({ widget: new StatusWidget(), side: 1 }));
+    return builder.finish();
+  }
+
+  createProjectsCatalogExtension() {
+    if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
+    const plugin = this;
+    const refresh = ensureProjectsCatalogRefresh();
+    return ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.view = view;
+        this.path = plugin.projectsCatalogLivePath(view);
+        this.decorations = plugin.buildProjectsCatalogDecorations(view);
+        plugin.projectsCatalogEditors.add(view);
+        this.schedulePaint();
+      }
+      schedulePaint() {
+        if (this.timer != null) return;
+        this.timer = plugin.projectsSetTimeout(() => {
+          this.timer = null;
+          if (plugin.projectsCatalogActive) plugin.paintProjectsCatalogEditor(this.view);
+        }, 0);
+      }
+      update(update) {
+        const path = plugin.projectsCatalogLivePath(update.view);
+        const changed = path !== this.path;
+        if (changed) projectsCleanCatalogDom(update.view.dom);
+        this.path = path;
+        const notified = (update.transactions || []).some((tx) => (tx.effects || []).some((effect) => effect.is?.(refresh)));
+        if (changed || update.docChanged || notified) this.decorations = plugin.buildProjectsCatalogDecorations(update.view);
+        this.schedulePaint();
+      }
+      destroy() {
+        plugin.projectsClearTimeout(this.timer);
+        projectsCleanCatalogDom(this.view.dom);
+        plugin.projectsCatalogEditors.delete(this.view);
+      }
+    }, { decorations: (value) => value.decorations });
+  }
+
+  scheduleProjectsCatalogRefresh() {
+    if (!this.projectsCatalogActive || this.projectsCatalogRefreshTimer != null) return;
+    this.projectsCatalogRefreshTimer = this.projectsSetTimeout(() => {
+      this.projectsCatalogRefreshTimer = null;
+      if (!this.projectsCatalogActive) return;
+      for (const widget of this.projectsCatalogReading) {
+        this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+      }
+      const effect = ensureProjectsCatalogRefresh();
+      for (const view of this.projectsCatalogEditors) {
+        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
+        this.paintProjectsCatalogEditor(view);
+      }
+    }, 100);
   }
 }
 // ---- src/241z-plugin-album-update.js ----
@@ -117866,6 +119081,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
+  BobLedgerToolsProjectsCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
@@ -121330,6 +122546,52 @@ try {
       projectsEntryShape,
       projectsListCatalogShape,
       projectsSyncCatalogShape,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/359-exports-projects-catalog.js ----
+// Projects catalog card helpers, exported beside the projects report/sync
+// data surface. Kept in its own fragment so `350-exports.js` stays at or
+// below 1000 lines.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      PROJECTS_CARD_CLOSED_STATES,
+      PROJECTS_CLOSED_PEEK_COUNT,
+      projectsCardStateOf,
+      projectsCardIsClosed,
+      projectsCardIsCountedBlocked,
+      projectsCardMarker,
+      projectsCardCalendarDate,
+      projectsCardShortDate,
+      projectsCardRelativeDay,
+      projectsCardBlockedReason,
+      projectsCardHost,
+      projectsCardHostIdentity,
+      projectsCardCopyText,
+      projectsCardHostEntry,
+      projectsCardChildEntries,
+      projectsCardRowEntries,
+      projectsCardPartition,
+      projectsCardTally,
+      projectsCardChips,
+      projectsCardRowModel,
+      projectsCardChildTooltip,
+      projectsCardLookupByTarget,
+      projectsCardHealthModel,
+      projectsCardStatus,
+      projectsCardSourceRegions,
+      projectsCardAnchorLine,
+      projectsCardClosedFoldKey,
+      projectsCardChildFoldKey,
+      projectsCardIsClosedFolded,
+      projectsCardIsChildExpanded,
+      projectsFindCallouts,
+      projectsPaintCallout,
+      projectsPaintStandalone,
+      projectsCleanCatalogDom,
     });
   }
 } catch (error) {

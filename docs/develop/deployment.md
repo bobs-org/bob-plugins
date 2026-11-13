@@ -8,6 +8,10 @@ plugins before syncing so committed `main.js` files are current.
 The sync command copies managed plugin files into the vault's
 `.obsidian/plugins/<id>/` directories.
 
+`bob plugins sync` deploys only the plugin ids listed in `plugins.sync` in
+bob's config file, so a new plugin must be added there before the sync deploys
+it. Syncing one id with `-p` also refuses an id the list leaves out.
+
 ```bash
 bob plugins list
 bob plugins sync --dry-run

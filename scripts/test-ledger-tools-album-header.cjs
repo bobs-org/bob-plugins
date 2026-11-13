@@ -62,6 +62,7 @@ class FakeNode {
   appendChild(node) { node.parentNode?.removeChild?.(node); node.parentNode = this; this.children.push(node); return node; }
   insertBefore(node, before) { node.parentNode?.removeChild?.(node); node.parentNode = this; const i = this.children.indexOf(before); this.children.splice(i < 0 ? this.children.length : i, 0, node); return node; }
   removeChild(node) { const i = this.children.indexOf(node); if (i >= 0) this.children.splice(i, 1); node.parentNode = null; return node; }
+  empty() { while (this.firstChild) this.removeChild(this.firstChild); }
   remove() { this.parentNode?.removeChild?.(this); }
   addEventListener(type, fn) { const rows = this.listeners.get(type) || []; rows.push(fn); this.listeners.set(type, rows); }
   fire(type, event) {
@@ -69,14 +70,30 @@ class FakeNode {
     for (const fn of this.listeners.get(type) || []) fn(payload);
   }
   contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
-  focus() { this.ownerDocument.activeElement = this; }
+  focus() { if (!this.disabled) this.ownerDocument.activeElement = this; }
+  setSelectionRange(start, end, direction = "none") { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
+  dispatchEvent(event) {
+    const payload = event || {};
+    if (!payload.target) payload.target = this;
+    let current = this;
+    while (current) {
+      for (const callback of current.listeners?.get?.(payload.type) || []) callback(payload);
+      current = current.parentNode;
+    }
+    return true;
+  }
+  click() { if (!this.disabled) this.dispatchEvent({ type: "click", preventDefault() {} }); }
   matches(selector) {
     return String(selector).split(",").some((part) => {
       const value = part.trim();
       const cls = /^\.([\w-]+)$/.exec(value);
       const tag = /^[a-z][\w-]*$/i.exec(value);
-      const attr = /^\[([\w-]+)="([^"]+)"\]$/.exec(value);
-      return Boolean((cls && this.classList.contains(cls[1])) || (tag && this.tagName === tag[0].toUpperCase()) || (attr && this.getAttribute(attr[1]) === attr[2]));
+      const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(value);
+      const taggedAttr = /^([a-z][\w-]*)\[([\w-]+)(?:="([^"]*)")?\]$/i.exec(value);
+      const hasAttr = (name, expected) => this.attrs.has(name) && (expected === undefined || this.getAttribute(name) === expected);
+      return Boolean((cls && this.classList.contains(cls[1])) || (tag && this.tagName === tag[0].toUpperCase()) ||
+        (attr && hasAttr(attr[1], attr[2])) ||
+        (taggedAttr && this.tagName === taggedAttr[1].toUpperCase() && hasAttr(taggedAttr[2], taggedAttr[3])));
     });
   }
   closest(selector) { let node = this; while (node) { if (node.nodeType === 1 && node.matches(selector)) return node; node = node.parentNode; } return null; }
@@ -91,6 +108,7 @@ function makeDoc() {
     createTextNode(text) { return new FakeNode("", this, String(text)); },
   };
 }
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function node(doc, tag, cls = "", text = "") {
   const item = doc.createElement(tag);
   if (cls) item.setAttribute("class", cls);
@@ -659,6 +677,234 @@ test("schema edit model preserves typed defaults and stable field and choice tar
   ]);
 });
 
+test("Schema Card uses bob's singular display label for one record and keeps the legacy fallback", () => {
+  const { app } = fixture();
+  const makeModel = (overrides) => {
+    const entry = album({ noun: "tv_show", plural: "TV shows", ...overrides });
+    return helpers.albumHeaderModel(report(entry), "eat.md", {
+      sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+    });
+  };
+  assert.equal(helpers.albumHeaderStatsText(makeModel({ records: 0, singular: "TV show" })), "0 TV shows");
+  assert.equal(helpers.albumHeaderStatsText(makeModel({ records: 1, singular: "TV show" })), "1 TV show");
+  assert.equal(helpers.albumHeaderStatsText(makeModel({ records: 2, singular: "TV show" })), "2 TV shows");
+  assert.equal(helpers.albumHeaderStatsText(makeModel({ records: 1 })), "1 tv_show", "old bob JSON keeps the catalog's prior noun fallback");
+});
+
+test("Schema Card key events reorder fields and choices while plain navigation stays read-only", () => {
+  const entry = album({
+    schema_fingerprint: "sha256:key-events",
+    fields: [
+      { key: "one", label: "One", kind: "text", choices: [] },
+      { key: "two", label: "Two", kind: "text", choices: [] },
+      { key: "status", label: "Status", kind: "choices", choices: [
+        { value: "first", label: "First" }, { value: "second", label: "Second" },
+      ] },
+    ],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  plugin.apiAlbumUpdatePreview = async () => ({ ok: true, report: { ok: true, consequence: "preview", per_op: [] } });
+  plugin.apiAlbumUpdateApply = async () => ({ ok: true, report: { ok: true, changed: false } });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({ report: report(entry), stale: false, generation: 1, reportGeneration: 1 });
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  const key = (targetKey, event) => {
+    const target = modal.contentEl.querySelector(`[data-target-key="${targetKey}"]`);
+    assert.ok(target, `target ${targetKey} exists`);
+    target.dispatchEvent({ type: "keydown", ...event, preventDefault() {} });
+  };
+
+  modal.schemaSelect("field:one");
+  key("field:one", { key: "j", altKey: true });
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "field.move", field: "one", position: 1 }]);
+  modal.session.setDraft([]);
+  modal.schemaSelect("field:two");
+  key("field:two", { key: "k", altKey: true });
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "field.move", field: "two", position: 0 }]);
+  modal.session.setDraft([]);
+  modal.schemaSelect("choice:status:first");
+  key("choice:status:first", { key: "j", altKey: true });
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "choice.move", field: "status", value: "first", position: 1 }]);
+  modal.session.setDraft([]);
+  const before = modal.selectedKey;
+  key("choice:status:first", { key: "j" });
+  assert.notEqual(modal.selectedKey, before);
+  assert.deepEqual(modal.session.getState().draftOps, [], "plain j changes the landing only");
+  modal.close();
+});
+
+test("Schema Card preserves typed draft, caret, and focus through report repaint and debounces edits", async () => {
+  const entry = album({
+    schema_fingerprint: "sha256:stage-paint",
+    fields: [{ key: "status", label: "Status", kind: "text", choices: [] }],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  app.workspace = { getLeavesOfType: () => [] };
+  const requests = [];
+  plugin.apiAlbumUpdatePreview = async (_stem, text) => {
+    requests.push(JSON.parse(text));
+    return { ok: true, report: { ok: true, consequence: "label updated · no record changes", per_op: [] } };
+  };
+  plugin.apiAlbumUpdateApply = async () => ({ ok: true, report: { ok: true, changed: false } });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({ report: report(entry), stale: false, refreshing: false, generation: 1, reportGeneration: 1 });
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  modal.schemaStage("field", "field:status");
+  let input = modal.schemaInput("fieldLabel");
+  input.focus();
+  input.value = "New draft";
+  input.setSelectionRange(5, 5, "forward");
+  input.dispatchEvent({ type: "input" });
+  modal.schemaAlbumState(plugin.albumReportState());
+  input = modal.schemaInput("fieldLabel");
+  assert.equal(input.value, "New draft");
+  assert.equal(app.document.activeElement, input, "repaint restores the same input focus");
+  assert.equal(input.selectionStart, 5, "repaint restores the caret");
+  input.value = "New draft v2";
+  input.setSelectionRange(12, 12, "none");
+  input.dispatchEvent({ type: "input" });
+  await pause(350);
+  assert.equal(requests.length, 1, "typing bursts coalesce into one preview");
+  assert.deepEqual(requests[0].ops, [{ op: "field.set", field: "status", set: { label: "New draft v2" }, unset: [] }]);
+  const current = modal.schemaInput("fieldLabel");
+  assert.equal(current.value, "New draft v2");
+  assert.equal(app.document.activeElement, current, "preview repaint leaves typing focus in place");
+  assert.equal(current.selectionStart, 12);
+  assert.equal(modal.session.getState().canApply, true);
+  modal.close();
+});
+
+test("Schema Card Enter is gated by current preview across pending, refused, stale, and duplicate input events", async () => {
+  const entry = album({
+    schema_fingerprint: "sha256:gate-before",
+    fields: [{ key: "status", label: "Status", kind: "text", choices: [] }],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  app.workspace = { getLeavesOfType: () => [] };
+  const state = { report: report(entry), stale: false, refreshing: false, generation: 1, reportGeneration: 1 };
+  const previews = [];
+  let applies = 0;
+  plugin.apiAlbumUpdatePreview = async (_stem, text) => new Promise((resolve) => previews.push({ request: JSON.parse(text), resolve }));
+  plugin.apiAlbumUpdateApply = async () => {
+    applies += 1;
+    return { ok: true, report: { ok: true, changed: false } };
+  };
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumVaultGeneration = 1;
+  plugin.albumReportState = () => state;
+  const model = helpers.albumHeaderModel(state.report, "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  modal.schemaStage("field", "field:status");
+  const typeLabel = (value) => {
+    const input = modal.schemaInput("fieldLabel");
+    input.value = value;
+    input.dispatchEvent({ type: "input" });
+  };
+  const enter = () => modal.schemaInput("fieldLabel").dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+
+  typeLabel("Refused draft");
+  await pause(300);
+  assert.equal(previews.length, 1);
+  assert.equal(modal.session.getState().status, "preview-pending");
+  enter();
+  await pause(0);
+  assert.equal(applies, 0, "Enter cannot apply while the preview is pending");
+  previews[0].resolve({ ok: true, report: { ok: false, error: { code: "used_choice", message: "refused" } } });
+  await pause(0);
+  enter();
+  await pause(0);
+  assert.equal(modal.session.getState().status, "refused");
+  assert.equal(applies, 0, "Enter cannot apply a refused preview");
+
+  typeLabel("Stale draft");
+  await pause(300);
+  assert.equal(previews.length, 2);
+  state.generation = 2;
+  state.reportGeneration = 2;
+  plugin.albumVaultGeneration = 2;
+  const updated = album({ ...entry, schema_fingerprint: "sha256:gate-current" });
+  state.report = report(updated);
+  modal.schemaAlbumState(state);
+  previews[1].resolve({ ok: true, report: { ok: true, consequence: "shown", per_op: [] } });
+  await pause(0);
+  assert.equal(modal.session.getState().refusal.kind, "stale");
+  enter();
+  assert.equal(applies, 0, "a generation-stale preview cannot apply");
+
+  const rebasing = modal.schemaRebaseAndPreview();
+  await pause(0);
+  assert.equal(previews.length, 3);
+  previews[2].resolve({ ok: true, report: { ok: true, consequence: "current consequence", per_op: [] } });
+  await rebasing;
+  assert.equal(modal.session.getState().canApply, true);
+  assert.match(modal.contentEl.querySelector(".bob-album-schema-consequence").textContent, /current consequence/);
+  enter();
+  enter();
+  await pause(20);
+  assert.equal(applies, 1, "duplicate Enter events share the session apply guard");
+  modal.close();
+});
+
+test("new choice field rows keep live order and values as early and middle choices are removed", () => {
+  const entry = album({ schema_fingerprint: "sha256:choice-rows", fields: [] });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  plugin.apiAlbumUpdatePreview = async () => ({ ok: true, report: { ok: true, consequence: "preview", per_op: [] } });
+  plugin.apiAlbumUpdateApply = async () => ({ ok: true, report: { ok: true, changed: false } });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({ report: report(entry), stale: false, generation: 1, reportGeneration: 1 });
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  modal.schemaStage("field-add", "add-field");
+  const emit = (name, value) => {
+    const input = modal.schemaInput(name);
+    assert.ok(input, `${name} exists`);
+    if (input.getAttribute("type") === "checkbox") input.checked = value;
+    else input.value = value;
+    input.dispatchEvent({ type: "input" });
+  };
+  emit("newFieldLabel", "Rating");
+  emit("newFieldKind", "choices");
+  modal.schemaStageAddInitialChoice();
+  modal.schemaStageAddInitialChoice();
+  modal.schemaStageAddInitialChoice();
+  const setRow = (index, label, emoji) => {
+    emit(`choiceLabel${index}`, label);
+    emit(`choiceEmoji${index}`, emoji);
+  };
+  setRow(0, "Alpha", "🅰️");
+  setRow(1, "Bravo", "🅱️");
+  setRow(2, "Charlie", "©️");
+  setRow(3, "Delta", "🔻");
+  const remove = (index) => {
+    const button = modal.contentEl.querySelector(`[data-schema-action="remove-initial-choice:${index}"]`);
+    assert.ok(button, `remove button ${index} exists`);
+    button.click();
+  };
+  remove(0);
+  setRow(0, "Bravo edited", "🅱️");
+  setRow(1, "Charlie edited", "©️");
+  setRow(2, "Delta edited", "🔻");
+  remove(1);
+  remove(1);
+  assert.deepEqual(modal.schemaBuildStageOp().choices, [{ label: "Bravo edited", emoji: "🅱️" }]);
+  assert.equal(modal.stageDraft.initialChoices.length, 1);
+  modal.close();
+});
+
 test("Schema Card stages typed edits, previews one op, and applies only after confirmation", async () => {
   const entry = album({
     schema_fingerprint: "sha256:card-before",
@@ -714,6 +960,14 @@ test("Schema Card stages typed edits, previews one op, and applies only after co
   const label = modal.schemaInput("fieldLabel");
   modal.schemaOnKeyDown({ key: "s", target: label, preventDefault() {} });
   assert.equal(modal.session.getState().draftOps.length, 0, "input typing does not trigger suggest hotkey");
+  let escapeStopped = false;
+  modal.schemaOnKeyDown({
+    key: "Escape", target: label, preventDefault() {},
+    stopPropagation() { escapeStopped = true; },
+  });
+  assert.equal(escapeStopped, true, "Escape cancels the stage without closing the outer Obsidian modal");
+  assert.equal(modal.stage, null);
+  modal.schemaStage("field", "field:amount");
   modal.schemaInput("fieldDefault").value = "0";
   modal.schemaInput("fieldMin").value = "0";
   const op = modal.schemaBuildStageOp();

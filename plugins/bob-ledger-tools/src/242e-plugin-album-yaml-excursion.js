@@ -26,7 +26,10 @@ function albumYamlDoneDecision(input = {}) {
     };
   }
   const state = input.reportState || null;
-  if (!state || !state.report || state.unavailable === true || state.stale === true || state.refreshing === true || state.error) {
+  const generation = Number.isInteger(state?.generation) ? state.generation : null;
+  const reportGeneration = Number.isInteger(state?.reportGeneration) ? state.reportGeneration : generation;
+  if (!state || !state.report || state.unavailable === true || state.stale === true || state.refreshing === true || state.error ||
+      (generation !== null && reportGeneration !== generation)) {
     return { ok: false, reason: "unavailable", message: "Album data is unavailable — fix sync before Done." };
   }
   const model = input.model || null;
@@ -75,6 +78,7 @@ function albumYamlBuildDoneEl(doc, albumPath) {
 
 class BobLedgerToolsAlbumYamlExcursionMixin {
   setupAlbumYamlExcursion() {
+    this.albumYamlExcursionDisposed = false;
     if (!(this.albumYamlExcursions instanceof Map)) this.albumYamlExcursions = new Map();
     if (this.albumYamlExcursionWired) return;
     this.albumYamlExcursionWired = true;
@@ -95,6 +99,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   }
 
   teardownAlbumYamlExcursion() {
+    this.albumYamlExcursionDisposed = true;
     try {
       for (const leaf of Array.from(this.albumYamlExcursions?.keys?.() || [])) {
         try { this.albumYamlExcursionClear(leaf); } catch (_) {}
@@ -111,6 +116,24 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   albumYamlExcursionForLeaf(leaf) {
     if (!leaf || !(this.albumYamlExcursions instanceof Map)) return null;
     return this.albumYamlExcursions.get(leaf) || null;
+  }
+
+  albumYamlExcursionStillCurrent(leaf, record) {
+    if (this.albumYamlExcursionDisposed === true || !leaf || !record ||
+        this.albumYamlExcursionForLeaf(leaf) !== record) return false;
+    let path = "";
+    try {
+      path = leaf?.view?.file?.path
+        ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
+        : "";
+    } catch (_) {}
+    return Boolean(path && path === record.albumPath);
+  }
+
+  albumYamlSaveExcursionEditors(paths) {
+    return typeof albumSchemaSaveOpenEditors === "function"
+      ? albumSchemaSaveOpenEditors(this, paths)
+      : Promise.resolve({ ok: true });
   }
 
   albumYamlExcursionActiveLeaf() {
@@ -135,6 +158,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
       startedAt: Date.now(),
       doneEl: null,
       container: null,
+      completionPromise: null,
     };
     this.albumYamlExcursions.set(leaf, record);
     this.albumYamlExcursionMount(leaf, record);
@@ -248,14 +272,25 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
       try { new Notice("No album YAML excursion in this pane."); } catch (_) {}
       return { ok: false, reason: "missing-excursion" };
     }
+    if (record.completionPromise) return record.completionPromise;
+    const completion = this.albumYamlDoneAttempt(leaf, record);
+    record.completionPromise = completion;
+    try {
+      return await completion;
+    } finally {
+      if (record.completionPromise === completion) record.completionPromise = null;
+    }
+  }
+
+  async albumYamlDoneAttempt(leaf, record) {
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };
     try {
-      save = typeof albumSchemaSaveOpenEditors === "function"
-        ? await albumSchemaSaveOpenEditors(this, [record.albumPath])
-        : { ok: true };
+      save = await this.albumYamlSaveExcursionEditors([record.albumPath]);
     } catch (error) {
       save = { ok: false, code: "save-failed", message: String((error && error.message) || error) };
     }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     if (!save || save.ok !== true) {
       try { new Notice(save?.message || "Saving the album pane failed — fix it before Done."); } catch (_) {}
       return { ok: false, reason: save?.code || "save-failed" };
@@ -268,6 +303,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     } catch (_) {
       reportState = null;
     }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let model = null;
     try {
       model = typeof this.albumHeaderModelFor === "function" ? this.albumHeaderModelFor(record.albumPath, reportState) : null;
@@ -291,6 +327,8 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
       try { new Notice(decision.message); } catch (_) {}
       return { ok: false, reason: decision.reason, focus: decision.focus || null };
     }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    let restoreError = null;
     try {
       const prior = record.viewState;
       if (prior && typeof leaf.setViewState === "function") {
@@ -299,7 +337,13 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         const file = this.app?.vault?.getAbstractFileByPath?.(record.albumPath) || { path: record.albumPath };
         await leaf.openFile(file, { state: { ...(prior.state || {}), file: record.albumPath } });
       }
-    } catch (_) {}
+    } catch (error) {
+      restoreError = error;
+    }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    if (restoreError) {
+      return { ok: false, reason: "restore-failed", message: String(restoreError.message || restoreError) };
+    }
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
     try {
       const fresh = typeof this.albumHeaderModelFor === "function" ? this.albumHeaderModelFor(record.albumPath) : model;

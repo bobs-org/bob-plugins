@@ -107,6 +107,10 @@ function runBob(bobBin, vaultDir, args, stdin) {
   });
 }
 
+function runBobSync(bobBin, vaultDir) {
+  return runBob(bobBin, vaultDir, ["albums", "sync", "-f", "json"]);
+}
+
 function runJson(bobBin, vaultDir, args, stdin) {
   const result = runBob(bobBin, vaultDir, args, stdin);
   let parsed = null;
@@ -180,11 +184,13 @@ function check(shaped, label) {
 }
 
 function selfTest() {
-  const bobBin = findRealBob();
+  const bobBin = process.env.BOB_BIN ? path.resolve(process.env.BOB_BIN) : "";
   if (!bobBin) {
-    process.stdout.write("offline schema-writer self-test complete (bob unavailable; skipped real-bob fixture assertions)\n");
+    process.stdout.write("UNRUN: offline schema-writer self-test skipped real-bob assertions (set BOB_BIN)\n");
     return;
   }
+  try { fs.accessSync(bobBin, fs.constants.X_OK); }
+  catch { fail(`BOB_BIN is not executable: ${bobBin}`); }
 
   // Acceptance fixtures: healthy grouped, empty schema, invalid schema,
   // unrelated `record` property, record-note parent entry, typed album.
@@ -470,7 +476,39 @@ function selfTest() {
       fail("repaired source must report no issues");
     }
 
-    process.stdout.write("offline schema-writer self-test complete\n");
+    // Undo is tied to the after-fingerprint that produced its inverse ops.
+    // If another writer changes the schema first, Bob must refuse the saved
+    // Undo envelope without replaying or rebasing it.
+    const undoSeed = albumFingerprint(bobBin, vaultDir, "eat");
+    const undoable = update("eat", {
+      schema_version: 1,
+      expect: undoSeed.fingerprint,
+      ops: [{ op: "choice.add", field: "status", label: "ExternalRace", position: 2 }],
+    });
+    if (undoable.parsed.ok !== true || !undoable.parsed.inverse_ops?.length) fail("Undo race fixture must first apply");
+    const undoAfterFingerprint = undoable.parsed.after_fingerprint;
+    const externalText = fs.readFileSync(eatPath, "utf8").replace("  noun: restaurant", "  noun: diner");
+    if (externalText === fs.readFileSync(eatPath, "utf8")) fail("external Undo race edit target missing");
+    fs.writeFileSync(eatPath, externalText);
+    const externalState = albumFingerprint(bobBin, vaultDir, "eat");
+    if (externalState.fingerprint === undoAfterFingerprint) fail("external edit must advance Undo's after-fingerprint");
+    const beforeStaleUndo = hashNotes(vaultDir);
+    const commitsBeforeStaleUndo = commitCount();
+    const staleUndo = update("eat", {
+      schema_version: 1,
+      expect: undoAfterFingerprint,
+      ops: undoable.parsed.inverse_ops,
+    });
+    check(album.assertRefusal(staleUndo.parsed, "stale_schema"), "stale Undo fingerprint");
+    if (staleUndo.result.status !== 2) fail("stale Undo must exit 2");
+    const afterStaleUndo = hashNotes(vaultDir);
+    for (const name of Object.keys(beforeStaleUndo)) {
+      if (beforeStaleUndo[name] !== afterStaleUndo[name]) fail(`stale Undo changed vault bytes: ${name}`);
+    }
+    if (commitCount() !== commitsBeforeStaleUndo) fail("stale Undo must not create another commit");
+
+    const version = spawnSync(bobBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
+    process.stdout.write(`offline schema-writer self-test complete (BOB_BIN=${bobBin}; ${String(version.stdout || version.stderr || "").trim()})\n`);
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }

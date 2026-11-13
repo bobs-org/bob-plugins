@@ -24,3 +24,17 @@ test("missing plugin disables the surface row with an enable hint", () => {
   const on = gated.find((item) => item.surfaceId === "bob-ledger-tools:open-today-daily-note");
   assert.equal(on.unavailable, null);
 });
+
+test("Command Mode executes the album schema surface through Obsidian's command route", async () => {
+  const calls = [];
+  const modal = Object.create(helpers.CommandModeSheetModal.prototype);
+  modal.app = { commands: { executeCommandById: async (id) => calls.push(id) } };
+  let closed = false;
+  modal.close = () => { closed = true; };
+  const result = await modal.activateRow({
+    kind: "surface", surfaceId: "bob-ledger-tools:edit-album-schema", unavailable: null,
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(calls, ["bob-ledger-tools:edit-album-schema"]);
+  assert.equal(closed, true, "the sheet closes before executing the registered surface");
+});

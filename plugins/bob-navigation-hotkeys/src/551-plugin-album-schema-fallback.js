@@ -18,7 +18,6 @@ function albumSchemaFallbackGate(state = {}) {
   if (state.isTask === true) return { attempt: false, reason: "task" };
   if (state.isLink === true) return { attempt: false, reason: "task-link" };
   if (state.hasDependencyEntry === true) return { attempt: false, reason: "dependency" };
-  if (state.isBullet !== true) return { attempt: false, reason: "not-bullet" };
   return { attempt: true, reason: "album-fallback" };
 }
 
@@ -113,6 +112,7 @@ class BobNavigationHotkeysAlbumSchemaFallbackMixin {
       target = null;
     }
     if (!target || target.ok !== true) return { handled: false, reason: target?.reason || "not-album" };
+    if (target.kind !== "album") return { handled: false, reason: "not-direct-album" };
     try {
       void ledger.openAlbumSchemaEntry({ filePath });
     } catch (_) {}

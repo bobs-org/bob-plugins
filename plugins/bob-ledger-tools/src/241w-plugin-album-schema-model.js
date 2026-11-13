@@ -22,8 +22,9 @@ function albumHeaderSummaryText(model) {
 function albumHeaderRecordCountPhrase(model) {
   const count = Number.isInteger(model?.records) ? model.records : 0;
   const noun = String(model?.noun || "record");
+  const singular = String(model?.singular || noun);
   const plural = String(model?.plural || `${noun}s`);
-  return `${count} ${count === 1 ? noun : plural}`;
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function albumHeaderStatsText(model) {

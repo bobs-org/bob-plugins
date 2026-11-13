@@ -264,11 +264,13 @@ function selfTest() {
   }
   if (!album.albumUiProbe().includes("bob-album-header")) throw new Error("album probe must cover the header");
 
-  const bobBin = findRealBob();
+  const bobBin = process.env.BOB_BIN ? path.resolve(process.env.BOB_BIN) : "";
   if (!bobBin) {
-    process.stdout.write("offline self-test complete (bob unavailable; skipped real-bob fixture assertions)\n");
+    process.stdout.write("UNRUN: offline self-test skipped real-bob fixture assertions (set BOB_BIN)\n");
     return;
   }
+  try { fs.accessSync(bobBin, fs.constants.X_OK); }
+  catch { throw new Error(`BOB_BIN is not executable: ${bobBin}`); }
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-album-e2e-self-"));
   try {
     const vaultDir = path.join(scratch, "vault");
@@ -334,7 +336,8 @@ function selfTest() {
     }
     const mathLeak = album.assertNoMathLeak({ mathCount: 0 });
     if (!mathLeak.ok) throw new Error(mathLeak.reason);
-    process.stdout.write("offline self-test complete\n");
+    const version = spawnSync(bobBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
+    process.stdout.write(`offline self-test complete (BOB_BIN=${bobBin}; ${String(version.stdout || version.stderr || "").trim()})\n`);
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
@@ -468,9 +471,17 @@ class CdpClient {
 }
 
 const VAULT_PATH_PROBE = `(() => { try {
-  const adapter = window.app && window.app.vault && window.app.vault.adapter;
-  if (adapter && typeof adapter.basePath === "string" && adapter.basePath) return adapter.basePath;
-  return null;
+  const app = window.app;
+  const adapter = app && app.vault && app.vault.adapter;
+  const view = app?.workspace?.activeLeaf?.view;
+  return {
+    basePath: adapter && typeof adapter.basePath === "string" && adapter.basePath ? adapter.basePath : null,
+    url: String(location.href || ""), title: String(document.title || ""),
+    appDocumentMatches: app?.document === document,
+    workspaceDocumentMatches: app?.workspace?.containerEl?.ownerDocument === document,
+    activeViewDocumentMatches: view?.containerEl?.ownerDocument === document,
+    activeFile: view?.file?.path || null,
+  };
 } catch { return null; } })()`;
 
 function markdownViewState(mode) {
@@ -482,6 +493,9 @@ function markdownViewState(mode) {
 async function selectOwnedTarget(cdpPort, fixtureRealPath, shouldStop) {
   const deadline = Date.now() + lib.CONNECT_TIMEOUT_MS * 2;
   let lastError = "";
+  let firstOwnedPage = null;
+  let activeViewOwnedPage = null;
+  let targetInventory = [];
   while (Date.now() < deadline) {
     if (shouldStop && shouldStop()) throw new Error("owned Obsidian process exited while waiting for the fixture vault window");
     let targets = [];
@@ -494,19 +508,53 @@ async function selectOwnedTarget(cdpPort, fixtureRealPath, shouldStop) {
       continue;
     }
     const pages = (Array.isArray(targets) ? targets : []).filter((item) => item && item.type === "page" && item.webSocketDebuggerUrl);
+    targetInventory = [];
     for (const page of pages) {
       let probeClient = null;
       try {
         probeClient = await CdpClient.connect(page.webSocketDebuggerUrl, 5000);
-        const vaultPath = await probeClient.evaluate(VAULT_PATH_PROBE, 5000);
-        if (lib.verifyVaultPath(vaultPath, fixtureRealPath)) return page;
+        const context = await probeClient.evaluate(VAULT_PATH_PROBE, 5000);
+        targetInventory.push({
+          id: page.id || null,
+          title: page.title || "",
+          url: page.url || "",
+          context: context || null,
+        });
+        if (context && lib.verifyVaultPath(context.basePath, fixtureRealPath)) {
+          page.bobAlbumContext = context;
+          page.bobAlbumTargetInventory = targetInventory;
+          if (!firstOwnedPage) firstOwnedPage = page;
+          if (context.activeViewDocumentMatches) {
+            activeViewOwnedPage = page;
+            if (context.workspaceDocumentMatches && context.appDocumentMatches) {
+              page.bobAlbumTargetInventory = targetInventory;
+              return page;
+            }
+          }
+        }
       } catch (error) {
         lastError = error && error.message ? error.message : String(error);
       } finally {
         if (probeClient) probeClient.close();
       }
     }
+    if (activeViewOwnedPage) {
+      activeViewOwnedPage.bobAlbumTargetInventory = targetInventory;
+      return activeViewOwnedPage;
+    }
+    if (firstOwnedPage) {
+      firstOwnedPage.bobAlbumTargetInventory = targetInventory;
+      return firstOwnedPage;
+    }
     await sleep(500);
+  }
+  if (activeViewOwnedPage) {
+    activeViewOwnedPage.bobAlbumTargetInventory = targetInventory;
+    return activeViewOwnedPage;
+  }
+  if (firstOwnedPage) {
+    firstOwnedPage.bobAlbumTargetInventory = targetInventory;
+    return firstOwnedPage;
   }
   throw new Error(`no CDP page target reports the fixture vault${lastError ? `; last probe: ${lastError.slice(0, 160)}` : ""}`);
 }
@@ -596,6 +644,15 @@ function hashNotes(vaultDir) {
   return out;
 }
 
+function gitHead(vaultDir) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: vaultDir,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return result.status === 0 ? String(result.stdout || "").trim() : "";
+}
+
 function writeLoggingShim(shimDir, realBob) {
   fs.mkdirSync(shimDir, { recursive: true });
   const shimPath = path.join(shimDir, "bob");
@@ -606,7 +663,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const root = path.dirname(__filename);
 const argv = process.argv.slice(2);
-fs.appendFileSync(path.join(root, "argv.jsonl"), JSON.stringify({ t: Date.now(), argv }) + "\\n");
+let input = "";
+const inputArg = argv.findIndex((arg) => arg === "-i" || arg === "--input");
+const expectsInput = inputArg >= 0 && argv[inputArg + 1] === "-";
+if (expectsInput) {
+  try { input = fs.readFileSync(0, "utf8"); } catch {}
+}
+let inputJsonValid = false;
+try { JSON.parse(input); inputJsonValid = true; } catch {}
+fs.appendFileSync(path.join(root, "argv.jsonl"), JSON.stringify({
+  t: Date.now(), argv, expectsInput, stdinBytes: Buffer.byteLength(input), inputJsonValid,
+}) + "\\n");
 let control = { mode: "passthrough" };
 try { control = JSON.parse(fs.readFileSync(path.join(root, "control.json"), "utf8")); } catch {}
 const mode = (control && control.mode) || "passthrough";
@@ -616,7 +683,7 @@ if (mode === "failure") {
   process.exit(0);
 }
 const env = { ...process.env, NO_COLOR: "1" };
-const spawned = spawnSync(${JSON.stringify(realBob)}, argv, { encoding: "utf8", env, timeout: 30000, maxBuffer: 32 * 1024 * 1024 });
+const spawned = spawnSync(${JSON.stringify(realBob)}, argv, { encoding: "utf8", env, input, timeout: 30000, maxBuffer: 32 * 1024 * 1024 });
 if (spawned.stdout) process.stdout.write(spawned.stdout);
 if (spawned.stderr) process.stderr.write(spawned.stderr);
 process.exit(spawned.status == null ? 1 : spawned.status);
@@ -651,6 +718,26 @@ function shimLogLength(shimDir) {
   }
 }
 
+function shimEntries(shimDir) {
+  try {
+    return fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function shimInvocationSummary(shimDir) {
+  return shimEntries(shimDir).map((entry) => ({
+    argv: entry.argv,
+    expectsInput: entry.expectsInput === true,
+    stdinBytes: Number(entry.stdinBytes) || 0,
+    inputJsonValid: entry.inputJsonValid === true,
+  }));
+}
+
 async function run(args) {
   const executable = findExecutable(args.executable);
   const probed = probeExecutable(executable);
@@ -662,8 +749,10 @@ async function run(args) {
   if (!process.env.DISPLAY && !process.env.XVFB_RUN_TMPDIR) {
     fail("unrun: no X display; rerun under xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs", 2);
   }
-  const bobBin = findRealBob();
-  if (!bobBin) fail("unrun: no bob binary found (set BOB_BIN); build the primary checkout first", 2);
+  const bobBin = process.env.BOB_BIN ? path.resolve(process.env.BOB_BIN) : "";
+  if (!bobBin) fail("unrun: set BOB_BIN to the verified bob binary for this workspace", 2);
+  try { fs.accessSync(bobBin, fs.constants.X_OK); }
+  catch { fail(`unrun: BOB_BIN is not executable: ${bobBin}`, 2); }
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "bob-album-ui-e2e-"));
   const vaultDir = path.join(scratch, "vault");
@@ -694,7 +783,13 @@ async function run(args) {
   seedProfileVault(profileDir, fixtureRealPath);
   const shimPath = writeLoggingShim(shimDir, bobBin);
 
-  const report = { pass: false, executable, vault: fixtureRealPath, realBob: bobBin, checks: [], screenshots: [], probes: {} };
+  const bobVersion = spawnSync(bobBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
+  const report = {
+    pass: false, executable, vault: fixtureRealPath, realBob: bobBin,
+    bobVersion: String(bobVersion.stdout || bobVersion.stderr || "").trim(),
+    bobSource: fs.realpathSync(path.dirname(findWorkspaceManifest() || repoRoot)),
+    checks: [], screenshots: [], probes: {},
+  };
   const record = (name, ok, detail) => {
     report.checks.push({ name, ok: Boolean(ok), detail: detail == null ? "" : String(detail) });
   };
@@ -745,11 +840,219 @@ async function run(args) {
     }
     record("plugin-loaded", loaded, loaded ? "bob-ledger-tools" : "did not load");
     if (!loaded) throw new Error("bob-ledger-tools did not load in the scratch vault");
+    report.probes.cdpTargetContext = page.bobAlbumContext || null;
+    report.probes.cdpTargetInventory = page.bobAlbumTargetInventory || [];
+    await client.evaluate(`(() => {
+      window.__bobAlbumE2eTargetContext = ${JSON.stringify(page.bobAlbumContext || null)};
+      window.__bobAlbumE2eTargetInventory = ${JSON.stringify(page.bobAlbumTargetInventory || [])};
+      return true;
+    })()`).catch(() => false);
     // Widen the shim PATH inside Obsidian so the plugin resolves our logging bob.
     await client.evaluate(`(() => { try { window.__bobAlbumE2eShim = ${JSON.stringify(shimPath)}; return true; } catch { return false; } })()`).catch(() => false);
 
     const beforeHashes = hashNotes(vaultDir);
     const probe = album.albumUiProbe();
+    const clickActiveSchemaOpener = () => client.evaluate(`(() => (async () => {
+      const leaf = window.app?.workspace?.activeLeaf;
+      const view = leaf?.view;
+      const state = view && typeof view.getState === "function" ? view.getState() : {};
+      const selector = state.mode === "source" ? ".markdown-source-view" : ".markdown-preview-view";
+      const surface = view?.containerEl?.querySelector(selector);
+      const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const buttons = Array.from(surface?.querySelectorAll(".bob-album-header-schema") || [])
+        .filter((button) => button.isConnected);
+      const button = buttons.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (!button) return {
+        ok: false,
+        path: view?.file?.path || null,
+        mode: state.mode || null,
+        source: state.source,
+        activeSurface: Boolean(surface),
+        openers: buttons.length,
+        diagnostics: {
+          cdpTargetContext: window.__bobAlbumE2eTargetContext || null,
+          modalOpen: { observed: false, reason: "no visible schema opener" },
+          onOpen: { observed: false, reason: "no schema modal instance" },
+          contentRoot: null,
+          activeViewDocument: {
+            matchesCdpDocument: view?.containerEl?.ownerDocument === document,
+            title: view?.containerEl?.ownerDocument?.title || "",
+            url: view?.containerEl?.ownerDocument?.URL || "",
+          },
+          targetCount: 0,
+          bobPath: plugin?.apiStatsBobPath?.() || null,
+          albumReportState: (() => {
+            try {
+              const value = plugin?.albumReportState?.();
+              return value ? {
+                unavailable: value.unavailable,
+                refreshing: value.refreshing,
+                stale: value.stale,
+                error: value.error,
+                errorModel: value.errorModel,
+                reportGeneration: value.reportGeneration,
+                generation: value.generation,
+                hasReport: Boolean(value.report),
+              } : null;
+            } catch (error) {
+              return { error: String(error?.stack || error) };
+            }
+          })(),
+        },
+      };
+      const original = plugin?.openAlbumSchemaEntry;
+      const hadOwn = Boolean(plugin && Object.prototype.hasOwnProperty.call(plugin, "openAlbumSchemaEntry"));
+      const ownDescriptor = hadOwn ? Object.getOwnPropertyDescriptor(plugin, "openAlbumSchemaEntry") : null;
+      const ModalCtor = window.Modal;
+      const originalModalOpen = ModalCtor?.prototype?.open;
+      let onOpenDiagnostic = null;
+      if (typeof originalModalOpen === "function") {
+        ModalCtor.prototype.open = function(...args) {
+          const isSchemaModal = this?.constructor?.name === "AlbumSchemaCardModal";
+          const originalOnOpen = this?.onOpen;
+          if (isSchemaModal && typeof originalOnOpen === "function") {
+            this.onOpen = function(...onOpenArgs) {
+              try {
+                const result = originalOnOpen.apply(this, onOpenArgs);
+                onOpenDiagnostic = { ok: true };
+                return result;
+              } catch (error) {
+                onOpenDiagnostic = {
+                  ok: false,
+                  error: String(error?.stack || error),
+                };
+                throw error;
+              } finally {
+                this.onOpen = originalOnOpen;
+              }
+            };
+          }
+          return originalModalOpen.apply(this, args);
+        };
+      }
+      let entryPromise = null;
+      let entryResult = null;
+      let entryError = null;
+      if (plugin && typeof original === "function") {
+        plugin.openAlbumSchemaEntry = function(...args) {
+          entryPromise = Promise.resolve(original.apply(this, args)).then((result) => {
+            entryResult = result;
+            return result;
+          }, (error) => {
+            entryError = String(error?.stack || error);
+            throw error;
+          });
+          return entryPromise;
+        };
+      }
+      try {
+        button.click();
+        if (entryPromise) await entryPromise.catch(() => null);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const modal = plugin?.albumSchemaCardModal;
+        const content = modal?.contentEl;
+        const root = content?.getRootNode?.();
+        const contentDocument = content?.ownerDocument || document;
+        const activeViewDocument = view?.containerEl?.ownerDocument || null;
+        const rect = content?.getBoundingClientRect?.();
+        const style = content && typeof (contentDocument.defaultView || window).getComputedStyle === "function"
+          ? (contentDocument.defaultView || window).getComputedStyle(content) : null;
+        const modalState = modal ? {
+          className: modal.modalEl?.className || "",
+          contentClass: modal.contentEl?.className || "",
+          modalConnected: Boolean(modal.modalEl?.isConnected),
+          contentConnected: Boolean(modal.contentEl?.isConnected),
+          hasOnOpen: typeof modal.onOpen === "function",
+          constructor: modal.constructor?.name || "",
+          onOpenDiagnostic,
+          root: root === document ? "document" : root?.host ? "shadow-root" : root?.nodeName || null,
+          rootHost: root?.host?.tagName || null,
+          ownerDocumentMatches: contentDocument === document,
+          ownerDocumentMatchesActiveView: contentDocument === activeViewDocument,
+          ownerDocumentTitle: contentDocument.title || "",
+          ownerDocumentUrl: contentDocument.URL || "",
+          activeViewDocumentMatches: activeViewDocument === document,
+          appDocumentMatches: window.app?.document === document,
+          workspaceDocumentMatches: window.app?.workspace?.containerEl?.ownerDocument === document,
+          viewContainerDocumentTitle: activeViewDocument?.title || "",
+          viewContainerDocumentUrl: activeViewDocument?.URL || "",
+          childCount: content?.children?.length ?? null,
+          targetCount: content?.querySelectorAll?.("[data-target-key]")?.length ?? null,
+          text: String(content?.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 500),
+          display: style?.display || null,
+          visibility: style?.visibility || null,
+          opacity: style?.opacity || null,
+          zIndex: style?.zIndex || null,
+          bounds: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+        } : null;
+        return {
+          ok: Boolean(entryResult?.ok && modal),
+          path: view?.file?.path || null,
+          mode: state.mode || null,
+          openers: buttons.length,
+          label: button.getAttribute("aria-label") || button.textContent || "",
+          entryInvoked: Boolean(entryPromise),
+          entryResult: entryResult ? { ok: Boolean(entryResult.ok), reason: entryResult.reason || null, albumPath: entryResult.albumPath || null } : null,
+          entryError,
+          diagnostics: {
+            cdpTargetContext: window.__bobAlbumE2eTargetContext || null,
+            modalOpen: {
+              hookInstalled: typeof originalModalOpen === "function",
+              observedByConnectedElement: Boolean(modal?.modalEl?.isConnected && content?.isConnected),
+              constructor: modal?.constructor?.name || null,
+            },
+            onOpen: {
+              methodPresent: typeof modal?.onOpen === "function",
+              diagnostic: onOpenDiagnostic,
+              inferredFromPaintedTargets: Boolean(content?.querySelector?.(".bob-album-schema-dialog")
+                && content?.querySelectorAll?.("[data-target-key]")?.length),
+            },
+            contentRoot: {
+              kind: root === document ? "document" : root?.host ? "shadow-root" : root?.nodeName || null,
+              host: root?.host?.tagName || null,
+            },
+            activeViewDocument: {
+              matchesCdpDocument: activeViewDocument === document,
+              matchesContentDocument: contentDocument === activeViewDocument,
+              title: activeViewDocument?.title || "",
+              url: activeViewDocument?.URL || "",
+            },
+            albumReportState: (() => {
+              try {
+                const value = plugin?.albumReportState?.();
+                return value ? {
+                  unavailable: value.unavailable,
+                  refreshing: value.refreshing,
+                  stale: value.stale,
+                  error: value.error,
+                  errorModel: value.errorModel,
+                  reportGeneration: value.reportGeneration,
+                  generation: value.generation,
+                  hasReport: Boolean(value.report),
+                  album: (value.report?.albums || []).find((item) => item?.stem === "eat") || null,
+                } : null;
+              } catch (error) {
+                return { error: String(error?.stack || error) };
+              }
+            })(),
+            targetInventory: window.__bobAlbumE2eTargetInventory || [],
+            targetCount: content?.querySelectorAll?.("[data-target-key]")?.length ?? 0,
+          },
+          modal: modalState,
+          dialogCount: contentDocument.querySelectorAll(".bob-album-schema-dialog").length,
+          topLevelDialogCount: document.querySelectorAll(".bob-album-schema-dialog").length,
+        };
+      } finally {
+        if (ModalCtor && typeof originalModalOpen === "function") ModalCtor.prototype.open = originalModalOpen;
+        if (plugin) {
+          if (hadOwn) Object.defineProperty(plugin, "openAlbumSchemaEntry", ownDescriptor);
+          else delete plugin.openAlbumSchemaEntry;
+        }
+      }
+    })())()`);
 
     await setViewport(client, 1280, 800);
     for (const [file, mode, label] of [["body.md", "preview", "owner-reading"], ["body.md", "live", "owner-live"]]) {
@@ -987,20 +1290,26 @@ async function run(args) {
         const lines = fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(updateShimBase);
         let dry = 0;
         let apply = 0;
+        const requests = [];
         for (const line of lines) {
           try {
             const entry = JSON.parse(line);
             if (Array.isArray(entry.argv) && entry.argv[0] === "albums" && entry.argv[1] === "update") {
               if (entry.argv.includes("-d")) dry += 1;
               else apply += 1;
+              requests.push({
+                args: entry.argv,
+                stdinBytes: Number(entry.stdinBytes) || 0,
+                inputJsonValid: entry.inputJsonValid === true,
+              });
             }
           } catch {
             // A torn log line must not fail the walk.
           }
         }
-        return { dry, apply };
+        return { dry, apply, requests };
       } catch {
-        return { dry: 0, apply: 0 };
+        return { dry: 0, apply: 0, requests: [] };
       }
     };
     const ledgerEval = (body) => client.evaluate(`(() => {
@@ -1017,13 +1326,8 @@ async function run(args) {
 
     await openNote(client, "eat.md", "preview");
     await sleep(800);
-    const openerClicked = await client.evaluate(`(() => {
-      const button = document.querySelector(".bob-album-header-schema");
-      if (!button) return { ok: false };
-      button.click();
-      return { ok: true };
-    })()`);
-    record("schema-open-header", Boolean(openerClicked && openerClicked.ok), "header button opens the card");
+    const openerClicked = await clickActiveSchemaOpener();
+    record("schema-open-header", Boolean(openerClicked && openerClicked.ok), JSON.stringify(openerClicked));
     const dialog = await waitFor(client, probe, (value) => value && (value.schemaDialogs || []).length > 0, "schema-dialog", 16_000).catch(async () => client.evaluate(probe));
     report.probes.schemaDialog = dialog;
     record("schema-dialog-targets", (dialog.schemaTargets || []).length > 3, `targets=${(dialog.schemaTargets || []).length}`);
@@ -1035,29 +1339,43 @@ async function run(args) {
       const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const modal = ledger && ledger.albumSchemaCardModal;
       if (!modal) return { ok: false };
-      const first = document.querySelector(".bob-album-schema-dialog [data-target-key]");
+      const root = modal.contentEl || document;
+      const first = root.querySelector(".bob-album-schema-dialog [data-target-key]");
       if (!first) return { ok: false };
       const before = modal.selectedKey;
       first.focus();
       first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
       const moved = modal.selectedKey;
-      first.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      const staged = Boolean(document.querySelector(".bob-album-schema-dialog [data-schema-stage]"));
+      const selected = root.querySelector('.bob-album-schema-dialog [data-target-key].is-selected') || first;
+      selected.focus();
+      selected.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      const staged = Boolean(root.querySelector(".bob-album-schema-dialog [data-schema-stage]"));
       const draftAfterEnter = (modal.session?.getState?.().draftOps || []).length;
-      const input = document.querySelector(".bob-album-schema-dialog [data-schema-input]");
+      const input = root.querySelector(".bob-album-schema-dialog [data-schema-input]");
       if (input) {
         input.focus();
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
       }
       const draftAfterType = (modal.session?.getState?.().draftOps || []).length;
-      const target = document.querySelector(".bob-album-schema-dialog [data-target-key]");
+      const target = root.querySelector(".bob-album-schema-dialog [data-target-key]");
       if (target) target.dispatchEvent(new KeyboardEvent("keydown", { key: "x", keyCode: 229, bubbles: true }));
       const afterIme = modal.selectedKey;
       if (input) input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      const cancelled = !document.querySelector(".bob-album-schema-dialog [data-schema-stage]");
-      const focus = document.activeElement && document.activeElement.getAttribute
-        ? document.activeElement.getAttribute("data-target-key") : null;
-      return { ok: true, before, moved, staged, draftAfterEnter, draftAfterType, afterIme, cancelled, focus };
+      const cancelled = !root.querySelector(".bob-album-schema-dialog [data-schema-stage]");
+      const modalAfterEscape = ledger?.albumSchemaCardModal || null;
+      const rootAfterEscape = modalAfterEscape?.contentEl || null;
+      const activeElement = root.ownerDocument?.activeElement || null;
+      const focus = activeElement && root.contains(activeElement) && activeElement.getAttribute
+        ? activeElement.getAttribute("data-target-key") : null;
+      return { ok: true, before, moved, staged, draftAfterEnter, draftAfterType, afterIme, cancelled, focus,
+        modalSurvivedEscape: modalAfterEscape === modal,
+        targetCountAfterEscape: rootAfterEscape?.querySelectorAll?.("[data-target-key]")?.length ?? 0,
+        targetKeysAfterEscape: Array.from(rootAfterEscape?.querySelectorAll?.("[data-target-key]") || [])
+          .map((target) => target.getAttribute("data-target-key")),
+        selectedAfterEscape: modalAfterEscape?.selectedKey || null,
+        stageAfterEscape: modalAfterEscape?.stage?.kind || null,
+        contentDocumentAfterEscape: rootAfterEscape?.ownerDocument?.title || "",
+        activeElement: activeElement ? { tag: activeElement.tagName, className: String(activeElement.className || ""), inModal: root.contains(activeElement) } : null };
     })()`);
     report.probes.schemaKeys = keyState;
     record("schema-keyboard-nav", Boolean(keyState && keyState.ok && keyState.before !== keyState.moved), `selection ${keyState.before} -> ${keyState.moved}`);
@@ -1070,16 +1388,25 @@ async function run(args) {
     const preEditFp = await schemaFp();
     record("schema-pre-fingerprint", typeof preEditFp === "string" && preEditFp.startsWith("sha256:"), "preview starts from a fresh report");
     const stagedPreview = await client.evaluate(`(() => (async () => {
-      const pick = (sel) => document.querySelector(".bob-album-schema-dialog " + sel);
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
       const addChoice = pick('[data-target-key="add-choice:status"]');
-      if (!addChoice) return { ok: false, error: "add-choice target missing" };
+      if (!addChoice) return { ok: false, error: "add-choice target missing",
+        modalPresent: Boolean(modal), targetCount: root.querySelectorAll?.("[data-target-key]")?.length ?? 0,
+        targetKeys: Array.from(root.querySelectorAll?.("[data-target-key]") || []).map((target) => target.getAttribute("data-target-key")),
+        documentTitle: root.ownerDocument?.title || "", documentUrl: root.ownerDocument?.URL || "",
+        dialogText: String(root.querySelector(".bob-album-schema-dialog")?.textContent || "").slice(0, 400) };
       addChoice.click();
+      root.querySelector(".bob-album-schema-dialog")?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 250));
       const label = pick('[data-schema-input="choiceLabel"]');
-      const emoji = pick('[data-schema-input="choiceEmoji"]');
       if (!label) return { ok: false, error: "choice stage inputs missing" };
       label.value = "CDP";
       label.dispatchEvent(new Event("input", { bubbles: true }));
+      const emoji = pick('[data-schema-input="choiceEmoji"]');
       if (emoji) {
         emoji.value = "🆕";
         emoji.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1087,15 +1414,37 @@ async function run(args) {
       const submit = pick('[data-schema-action="submit-stage"]');
       if (!submit) return { ok: false, error: "submit-stage action missing" };
       submit.click();
-      return { ok: true };
+      const state = modal.session?.getState?.() || {};
+      return { ok: true, stage: modal.stage || null, draftOps: state.draftOps?.length || 0,
+        input: Boolean(pick('[data-schema-input="choiceLabel"]')) };
     })())()`);
-    record("schema-stage-choice", Boolean(stagedPreview && stagedPreview.ok), "choice stage stages from the UI");
+    record("schema-stage-choice", Boolean(stagedPreview && stagedPreview.ok), JSON.stringify(stagedPreview));
+    if (!stagedPreview?.ok) throw new Error(`could not stage choice preview: ${stagedPreview?.error || "unknown failure"}`);
     const previewed = await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /cdp/.test(item.text || "")),
       "schema-consequence", 20_000).catch(async () => client.evaluate(probe));
     report.probes.schemaPreview = previewed;
+    const previewCalls = updateShimEdits();
+    report.probes.schemaUpdateCalls = previewCalls;
+    const previewRequests = previewCalls.requests.filter((request) => request.args.includes("-d"));
+    record("schema-preview-envelope-forwarded", previewRequests.length > 0
+      && previewRequests.every((request) => request.stdinBytes > 0 && request.inputJsonValid),
+      `dry requests=${previewRequests.length}; stdin bytes=${previewRequests.map((request) => request.stdinBytes).join(",")}`);
     record("schema-consequence", (previewed.schemaConsequence || []).some((item) => /cdp/.test(item.text || "")), "consequence names the derived value");
     record("schema-counts", (previewed.schemaCounts || []).length > 0, "preview reports per-op counts");
     record("schema-derived", (previewed.schemaDerived || []).some((item) => /cdp/.test(item.text || "")), "preview lists derived keys");
+    const previewState = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      const state = modal?.session?.getState?.() || {};
+      const root = modal?.contentEl;
+      const apply = root?.querySelector?.('[data-schema-action="apply"]');
+      return { status: state.status || null, canApply: state.canApply === true,
+        previewOk: state.preview?.report?.ok === true, refusal: state.refusal || null,
+        draftOps: (state.draftOps || []).length, applyDisabled: apply ? apply.disabled === true : null };`);
+    report.probes.schemaPreviewState = previewState;
+    record("schema-preview-ready", Boolean(previewState && previewState.canApply
+      && previewState.previewOk && previewState.applyDisabled === false), JSON.stringify(previewState));
+    if (!previewState?.canApply || !previewState?.previewOk || previewState.applyDisabled !== false) {
+      throw new Error(`schema choice preview did not become applicable: ${JSON.stringify(previewState)}`);
+    }
     const narrowConsequence = path.join(outDir, "album-schema-consequence-375-light.png");
     await setViewport(client, 375, 812);
     await sleep(300);
@@ -1103,7 +1452,9 @@ async function run(args) {
     report.screenshots.push(narrowConsequence);
 
     await client.evaluate(`(() => {
-      const pick = (sel) => document.querySelector(".bob-album-schema-dialog " + sel);
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
       const apply = pick('[data-schema-action="apply"]');
       if (apply) apply.click();
       const again = pick('[data-schema-action="apply"]');
@@ -1121,14 +1472,18 @@ async function run(args) {
     record("schema-fingerprint-advanced", Boolean(postEditFp && preEditFp && postEditFp !== preEditFp), "apply advances the fingerprint");
 
     await client.evaluate(`(() => {
-      const undo = document.querySelector('.bob-album-schema-dialog [data-schema-action="undo"]');
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const undo = root.querySelector('.bob-album-schema-dialog [data-schema-action="undo"]');
       if (undo) undo.click();
       return true;
     })()`);
     await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /remov/.test(item.text || "")),
       "schema-undo-preview", 20_000).catch(() => null);
     await client.evaluate(`(() => {
-      const apply = document.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const apply = root.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
       if (apply) apply.click();
       return true;
     })()`);
@@ -1147,7 +1502,9 @@ async function run(args) {
     const paletteEat = await client.evaluate(`(() => (async () => {
       await window.app.commands.executeCommandById("bob-ledger-tools:edit-album-schema");
       await new Promise((resolve) => setTimeout(resolve, 800));
-      return { dialog: Boolean(document.querySelector(".bob-album-schema-dialog")) };
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      return { dialog: Boolean(doc.querySelector(".bob-album-schema-dialog")) };
     })())()`);
     record("schema-entry-palette", Boolean(paletteEat && paletteEat.dialog), "palette opens the card on the album");
     await closeSchemaCard();
@@ -1156,8 +1513,10 @@ async function run(args) {
     const paletteRecord = await client.evaluate(`(() => (async () => {
       await window.app.commands.executeCommandById("bob-ledger-tools:edit-album-schema");
       await new Promise((resolve) => setTimeout(resolve, 800));
-      const title = document.querySelector(".bob-album-schema-dialog-title");
-      return { dialog: Boolean(document.querySelector(".bob-album-schema-dialog")), title: title ? title.textContent : "" };
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      const title = doc.querySelector(".bob-album-schema-dialog-title");
+      return { dialog: Boolean(doc.querySelector(".bob-album-schema-dialog")), title: title ? title.textContent : "" };
     })())()`);
     record("schema-entry-record", Boolean(paletteRecord && paletteRecord.dialog && /Eat/.test(paletteRecord.title || "")), "record notes resolve their album parent");
     await closeSchemaCard();
@@ -1166,7 +1525,9 @@ async function run(args) {
     const paletteUnrelated = await client.evaluate(`(() => (async () => {
       await window.app.commands.executeCommandById("bob-ledger-tools:edit-album-schema");
       await new Promise((resolve) => setTimeout(resolve, 800));
-      return { dialog: Boolean(document.querySelector(".bob-album-schema-dialog")) };
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      return { dialog: Boolean(doc.querySelector(".bob-album-schema-dialog")) };
     })())()`);
     record("schema-entry-unrelated", Boolean(paletteUnrelated && !paletteUnrelated.dialog), "unrelated notes teach instead of opening");
     const commandIds = await client.evaluate(`(() => {
@@ -1181,98 +1542,211 @@ async function run(args) {
       if (!file) return false;
       const text = await window.app.vault.read(file);
       if (text.includes("- [ ] probe task")) return true;
-      await window.app.vault.modify(file, text.replace(/\s*$/, "\n\n- [ ] probe task\n- probe bullet\n"));
+      await window.app.vault.modify(file, text.replace(/\\s*$/, ${JSON.stringify("\n\n- [ ] probe task\n- probe bullet\n")}));
       return true;
     })())()`);
     await openNote(client, "eat.md", "live");
     await sleep(800);
     const fallbackVerdicts = await client.evaluate(`(() => (async () => {
       const nav = window.app?.plugins?.plugins?.["bob-navigation-hotkeys"];
+      const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const view = window.app?.workspace?.activeLeaf?.view;
       const editor = view && view.editor;
-      if (!nav || typeof nav.albumSchemaFallbackForCursor !== "function" || !editor) {
+      if (!nav || !ledger || !editor) {
         return { ok: false };
       }
       const value = editor.getValue();
       const lines = value.split("\\n");
       const taskLine = lines.findIndex((line) => line.includes("- [ ] probe task"));
-      const bulletLine = lines.findIndex((line) => line.includes("- probe bullet"));
-      if (taskLine < 0 || bulletLine < 0) return { ok: false, error: "probe lines missing" };
+      const titleLine = lines.findIndex((line) => line === "# Eat");
+      if (taskLine < 0 || titleLine < 0) return { ok: false, error: "probe lines missing" };
       editor.setCursor({ line: taskLine, ch: 4 });
-      const onTask = nav.albumSchemaFallbackForCursor(editor, editor.getValue(),
-        editor.getCursor(), editor.getLine(taskLine), {});
-      editor.setCursor({ line: bulletLine, ch: 2 });
-      const onBullet = nav.albumSchemaFallbackForCursor(editor, editor.getValue(),
-        editor.getCursor(), editor.getLine(bulletLine), {});
+      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const taskCard = Boolean(nav.activeBulletPropertyPicker);
+      const taskSchema = Boolean(ledger.albumSchemaCardModal);
+      try { nav.activeBulletPropertyPicker?.close?.(); } catch {}
+      editor.setCursor({ line: titleLine, ch: 2 });
+      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const titleSchema = Boolean(ledger.albumSchemaCardModal);
       try { window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal?.close?.(); } catch {}
-      return { ok: true, onTask, onBullet };
+      editor.setCursor({ line: titleLine + 1, ch: 0 });
+      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const blankSchema = Boolean(ledger.albumSchemaCardModal);
+      try { window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal?.close?.(); } catch {}
+      return { ok: true, taskCard, taskSchema, titleSchema, blankSchema };
     })())()`);
     report.probes.schemaFallback = fallbackVerdicts;
     record("schema-task-priority", Boolean(fallbackVerdicts && fallbackVerdicts.ok
-      && fallbackVerdicts.onTask && fallbackVerdicts.onTask.handled === false && fallbackVerdicts.onTask.reason === "task"),
-      `task row: ${JSON.stringify((fallbackVerdicts && fallbackVerdicts.onTask) || {})}`.slice(0, 120));
-    record("schema-fallback-bullet", Boolean(fallbackVerdicts && fallbackVerdicts.ok
-      && fallbackVerdicts.onBullet && fallbackVerdicts.onBullet.handled === true),
-      `bullet row: ${JSON.stringify((fallbackVerdicts && fallbackVerdicts.onBullet) || {})}`.slice(0, 120));
+      && fallbackVerdicts.taskCard && !fallbackVerdicts.taskSchema),
+      `task card=${Boolean(fallbackVerdicts && fallbackVerdicts.taskCard)}; schema=${Boolean(fallbackVerdicts && fallbackVerdicts.taskSchema)}`);
+    record("schema-fallback-title", Boolean(fallbackVerdicts && fallbackVerdicts.ok && fallbackVerdicts.titleSchema),
+      "the registered Task Card command opens the album Schema Card on the album title row");
+    record("schema-fallback-blank", Boolean(fallbackVerdicts && fallbackVerdicts.ok && fallbackVerdicts.blankSchema),
+      "the registered Task Card command opens the album Schema Card on a blank album row");
     await closeSchemaCard();
 
     await openNote(client, "eat.md", "preview");
     await sleep(800);
-    await client.evaluate(`(() => {
-      const button = document.querySelector(".bob-album-header-schema");
-      if (button) button.click();
-      return true;
-    })()`);
+    const reopenClicked = await clickActiveSchemaOpener();
+    record("schema-reopen-header", Boolean(reopenClicked && reopenClicked.ok), JSON.stringify(reopenClicked));
     await waitFor(client, probe, (value) => (value.schemaDialogs || []).length > 0, "schema-dialog-reopen", 16_000);
-    await client.evaluate(`(() => (async () => {
-      const pick = (sel) => document.querySelector(".bob-album-schema-dialog " + sel);
+    const staleStageResult = await client.evaluate(`(() => (async () => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
       const addChoice = pick('[data-target-key="add-choice:status"]');
-      if (!addChoice) return false;
+      if (!addChoice) return { ok: false, error: "add-choice target missing" };
       addChoice.click();
+      root.querySelector(".bob-album-schema-dialog")?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 250));
       const label = pick('[data-schema-input="choiceLabel"]');
-      if (!label) return false;
+      if (!label) return { ok: false, error: "choice stage input missing", stage: modal.stage || null };
       label.value = "Stale";
       label.dispatchEvent(new Event("input", { bubbles: true }));
-      pick('[data-schema-action="submit-stage"]')?.click();
-      return true;
+      const submit = pick('[data-schema-action="submit-stage"]');
+      if (!submit) return { ok: false, error: "stage preview action missing", stage: modal.stage || null };
+      submit.click();
+      return { ok: true, stage: modal.stage || null };
     })())()`);
+    record("schema-stale-draft-staged", Boolean(staleStageResult && staleStageResult.ok), JSON.stringify(staleStageResult));
+    if (!staleStageResult?.ok) throw new Error(`could not stage stale draft: ${staleStageResult?.error || "unknown failure"}`);
     await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /stale/.test(item.text || "")),
       "schema-stale-preview", 20_000).catch(() => null);
     const staleBase = updateShimEdits().apply;
-    const staleGen = await ledgerEval(`return { generation: (typeof plugin.albumReportState === "function" ? plugin.albumReportState() : {}).generation || 0 };`);
-    await client.evaluate(`(() => (async () => {
-      const vault = window.app.vault;
-      const file = vault.getAbstractFileByPath("eat.md");
-      const text = await vault.read(file);
-      const marker = "\\n  fields:";
-      const index = text.indexOf(marker);
-      if (index < 0) return false;
-      const next = text.slice(0, index + marker.length) + "\\n    mood: {required: false}" + text.slice(index + marker.length);
-      await vault.modify(file, next);
-      return true;
+    const staleHeadBefore = gitHead(vaultDir);
+    const staleBytesBefore = fs.readFileSync(path.join(vaultDir, "eat.md"), "utf8");
+    const saveRaceSetup = await client.evaluate(`(() => (async () => {
+      const workspace = window.app?.workspace;
+      const file = window.app?.vault?.getAbstractFileByPath("eat.md");
+      const first = workspace?.activeLeaf;
+      if (!workspace || !file || !first || typeof workspace.getLeaf !== "function") {
+        return { ok: false, error: "workspace or album pane unavailable" };
+      }
+      const second = workspace.getLeaf("split", "vertical");
+      if (!second || second === first) return { ok: false, error: "Obsidian did not create a second pane" };
+      await second.openFile(file, { state: ${JSON.stringify(markdownViewState("source"))} });
+      const view = second.view;
+      if (!view || !view.editor || view.file?.path !== "eat.md" || typeof view.save !== "function") {
+        return { ok: false, error: "second Source pane has no supported Markdown save" };
+      }
+      if (typeof view.setState === "function") {
+        const state = (view.getState && view.getState()) || {};
+        await view.setState(Object.assign({}, state, ${JSON.stringify(markdownViewState("source"))}), { history: false });
+      }
+      const originalText = view.editor.getValue();
+      const beforeDisk = await window.app.vault.read(file);
+      const from = "    category: {required: true, suggest: true}";
+      const to = "    category: {required: false, suggest: true}";
+      const editedText = originalText.replace(from, to);
+      if (editedText === originalText) return { ok: false, error: "expected category schema line was not found" };
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const originalSave = view.save;
+      let savePromise = null;
+      const race = {
+        view,
+        applyRequested: false,
+        saveStarted: false,
+        calls: 0,
+        applySaveCalls: 0,
+        release: () => release(),
+        restore: () => { view.save = originalSave; },
+      };
+      view.save = async function(...args) {
+        race.calls += 1;
+        if (race.applyRequested) race.applySaveCalls += 1;
+        race.saveStarted = true;
+        if (!savePromise) {
+          savePromise = (async () => {
+            await gate;
+            return await originalSave.apply(view, args);
+          })();
+        }
+        return savePromise;
+      };
+      window.__bobAlbumSaveRace = race;
+      view.editor.setValue(editedText);
+      const sameNotePanes = workspace.getLeavesOfType("markdown")
+        .filter((leaf) => leaf?.view?.file?.path === "eat.md").length;
+      const state = view.getState && view.getState();
+      return {
+        ok: true,
+        sameNotePanes,
+        sourceMode: Boolean(state && (state.mode === "source" || state.source === true)),
+        dirtySchema: view.editor.getValue() !== beforeDisk,
+        beforeDisk,
+        editedText,
+      };
     })())()`);
-    await waitFor(client, `(() => (async () => {
-      const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
-      const state = plugin && typeof plugin.albumReportState === "function" ? plugin.albumReportState() : {};
-      return state.generation || 0;
-    })())()`, (value) => Number(value) > Number((staleGen && staleGen.generation) || 0), "schema-stale-refresh", 20_000).catch(() => null);
+    record("schema-two-pane-source-edit", Boolean(saveRaceSetup && saveRaceSetup.ok
+      && saveRaceSetup.sameNotePanes >= 2 && saveRaceSetup.sourceMode && saveRaceSetup.dirtySchema),
+      `setup=${JSON.stringify({ ok: saveRaceSetup?.ok, panes: saveRaceSetup?.sameNotePanes, source: saveRaceSetup?.sourceMode, dirty: saveRaceSetup?.dirtySchema, error: saveRaceSetup?.error })}`);
+    if (!saveRaceSetup?.ok) throw new Error(`could not set up real two-pane save race: ${saveRaceSetup?.error || "unknown failure"}`);
+
+    const applyWhileSaving = await client.evaluate(`(() => {
+      const race = window.__bobAlbumSaveRace;
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const apply = root.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
+      if (!race || !apply || apply.disabled) return { ok: false, error: "Apply is not enabled for the successful preview" };
+      race.applyRequested = true;
+      apply.click();
+      return { ok: true };
+    })()`);
+    record("schema-save-race-apply-started", Boolean(applyWhileSaving && applyWhileSaving.ok), applyWhileSaving?.error || "confirmed Apply began before the delayed pane save");
+    if (!applyWhileSaving?.ok) throw new Error(`could not start save race: ${applyWhileSaving?.error || "Apply unavailable"}`);
+
+    const saveWait = await waitFor(client, `(() => {
+      const race = window.__bobAlbumSaveRace;
+      return race ? { started: race.saveStarted, applyCalls: race.applySaveCalls, calls: race.calls } : null;
+    })()`, (value) => Boolean(value && value.started && value.applyCalls > 0), "schema-two-pane-supported-save-wait", 12_000);
+    const beforeReleaseBytes = fs.readFileSync(path.join(vaultDir, "eat.md"), "utf8");
+    const applyAttemptsBeforeRelease = updateShimEdits().apply - staleBase;
+    record("schema-save-race-waits-for-supported-save", Boolean(saveWait && saveWait.applyCalls > 0
+      && beforeReleaseBytes === staleBytesBefore && applyAttemptsBeforeRelease === 0),
+      `save calls=${saveWait?.calls}; disk unchanged=${beforeReleaseBytes === staleBytesBefore}; writer applies=${applyAttemptsBeforeRelease}`);
+
     await client.evaluate(`(() => {
-      const apply = document.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
-      if (apply) apply.click();
-      return true;
+      const race = window.__bobAlbumSaveRace;
+      if (race) race.release();
+      return Boolean(race);
     })()`);
     const staleRefused = await waitFor(client, probe, (value) => (value.schemaRefusal || []).some((item) => /stale|fingerprint|changed/i.test((item.text || "") + " " + JSON.stringify(value.schemaRefusal))),
       "schema-stale-refusal", 20_000).catch(async () => client.evaluate(probe));
     report.probes.schemaStale = staleRefused;
-    record("schema-stale-refusal", (staleRefused.schemaRefusal || []).length > 0, "delayed Source save refuses instead of rebasing");
-    const staleAttempts = updateShimEdits().apply - staleBase;
-    const staleSession = await ledgerEval(`(() => {
+    const staleSession = await ledgerEval(`return (() => {
       const modal = plugin.albumSchemaCardModal;
       const state = modal && modal.session ? modal.session.getState() : {};
       return { kind: (state.refusal && state.refusal.kind) || null, drafts: (state.draftOps || []).length, canApply: state.canApply === true };
+    })();`);
+    const staleAttempts = updateShimEdits().apply - staleBase;
+    const staleHeadAfter = gitHead(vaultDir);
+    const staleBytesAfter = fs.readFileSync(path.join(vaultDir, "eat.md"), "utf8");
+    await client.evaluate(`(() => {
+      const race = window.__bobAlbumSaveRace;
+      if (race) race.restore();
+      delete window.__bobAlbumSaveRace;
+      return true;
     })()`);
-    record("schema-stale-no-retry", staleAttempts === 1, `writer attempts=${staleAttempts}; the refusal is never retried`);
+    report.probes.schemaSaveRace = {
+      setup: saveRaceSetup,
+      saveWait,
+      applyAttemptsBeforeRelease,
+      applyAttemptsAfterRelease: staleAttempts,
+      headBefore: staleHeadBefore,
+      headAfter: staleHeadAfter,
+      sourceBytesMatchSupportedSave: staleBytesAfter === saveRaceSetup.editedText,
+      staleSession,
+    };
+    record("schema-stale-refusal", (staleRefused.schemaRefusal || []).length > 0, "the delayed second-pane Source save invalidates the old schema preview");
+    record("schema-stale-no-write-or-retry", staleAttempts === 0 && staleHeadAfter === staleHeadBefore
+      && staleBytesAfter === saveRaceSetup.editedText,
+      `writer applies=${staleAttempts}; commit unchanged=${staleHeadAfter === staleHeadBefore}; source save preserved=${staleBytesAfter === saveRaceSetup.editedText}`);
     record("schema-stale-draft-retained", Boolean(staleSession && staleSession.kind === "stale"
       && staleSession.drafts === 1 && staleSession.canApply === false), `draft stays unconfirmed: ${JSON.stringify(staleSession)}`);
     const staleShot = path.join(outDir, "album-schema-stale-375-light.png");
@@ -1282,7 +1756,9 @@ async function run(args) {
     report.screenshots.push(staleShot);
 
     const yamlJumped = await client.evaluate(`(() => {
-      const action = document.querySelector('.bob-album-schema-dialog [data-schema-action="yaml"]');
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const action = root.querySelector('.bob-album-schema-dialog [data-schema-action="yaml"]');
       if (action) action.click();
       return true;
     })()`);
@@ -1291,7 +1767,8 @@ async function run(args) {
     const yamlState = await client.evaluate(`(() => {
       const view = window.app?.workspace?.activeLeaf?.view;
       const state = view && typeof view.getState === "function" ? view.getState() : {};
-      const done = document.querySelector("[data-album-yaml-done]");
+      const doc = view?.containerEl?.ownerDocument || document;
+      const done = doc.querySelector("[data-album-yaml-done]");
       return { mode: state.mode || null, source: state.source, done: Boolean(done) };
     })()`);
     report.probes.schemaYaml = yamlState;
@@ -1300,18 +1777,19 @@ async function run(args) {
       const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const view = window.app?.workspace?.activeLeaf?.view;
       const editor = view && view.editor;
+      const doc = view?.containerEl?.ownerDocument || document;
       if (!editor) return { ok: false, error: "no editor" };
       editor.setCursor({ line: Math.max(0, editor.lineCount() - 1), ch: 0 });
       const before = editor.getCursor();
       const valid = editor.getValue();
       const corrupted = valid.replace("\\n  fields:", "\\n  fields: []\\n  orphan: true\\n  fields:");
       editor.setValue(corrupted);
-      const done = document.querySelector("[data-album-yaml-done]");
+      const done = doc.querySelector("[data-album-yaml-done]");
       if (!done) return { ok: false, error: "Done button missing" };
       done.click();
       await new Promise((resolve) => setTimeout(resolve, 2500));
       const after = editor.getCursor();
-      const dialog = Boolean(document.querySelector(".bob-album-schema-dialog"));
+      const dialog = Boolean(ledger?.albumSchemaCardModal?.contentEl?.querySelector(".bob-album-schema-dialog"));
       const state = view && typeof view.getState === "function" ? view.getState() : {};
       window.__bobSchemaRepair = valid;
       return { ok: true, before, after, dialog, source: state.source === true };
@@ -1323,24 +1801,29 @@ async function run(args) {
     const doneRepaired = await client.evaluate(`(() => (async () => {
       const view = window.app?.workspace?.activeLeaf?.view;
       const editor = view && view.editor;
+      const doc = view?.containerEl?.ownerDocument || document;
       if (!editor || !window.__bobSchemaRepair) return { ok: false };
       editor.setValue(window.__bobSchemaRepair);
-      const done = document.querySelector("[data-album-yaml-done]");
+      const done = doc.querySelector("[data-album-yaml-done]");
       if (!done) return { ok: false, error: "Done button missing after repair" };
       done.click();
       await new Promise((resolve) => setTimeout(resolve, 2500));
-      return { ok: true, dialog: Boolean(document.querySelector(".bob-album-schema-dialog")) };
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      return { ok: true, dialog: Boolean(root.querySelector(".bob-album-schema-dialog")) };
     })())()`);
     record("schema-done-repair", Boolean(doneRepaired && doneRepaired.dialog), "repair then Done returns to the card");
     const typedStage = await client.evaluate(`(() => (async () => {
-      const pick = (sel) => document.querySelector(".bob-album-schema-dialog " + sel);
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const root = modal?.contentEl || document;
+      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
       const stats = pick('[data-target-key="stats"]');
       if (stats) stats.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
       const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
-      (document.querySelector('.bob-album-schema-dialog [data-target-key="stats"]') || stats).dispatchEvent(enter);
+      (pick('[data-target-key="stats"]') || stats).dispatchEvent(enter);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      return { staged: Boolean(document.querySelector(".bob-album-schema-dialog [data-schema-stage]")) };
+      return { staged: Boolean(pick("[data-schema-stage]")) };
     })())()`);
     record("schema-typed-stage", Boolean(typedStage && typedStage.staged), "album stage exposes typed inputs");
     const typedShot = path.join(outDir, "album-schema-typed-375-light.png");
@@ -1348,20 +1831,45 @@ async function run(args) {
     await sleep(300);
     await capturePage(client, typedShot);
     report.screenshots.push(typedShot);
-    await client.evaluate(`(() => { document.body.classList.add("theme-dark"); return true; })()`);
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      doc.body.classList.add("theme-dark");
+      return true;
+    })()`);
     await sleep(200);
     const schemaDarkShot = path.join(outDir, "album-schema-375-dark.png");
     await capturePage(client, schemaDarkShot);
     report.screenshots.push(schemaDarkShot);
-    await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); return true; })()`);
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      doc.body.classList.remove("theme-dark");
+      return true;
+    })()`);
     await closeSchemaCard();
 
+    report.probes.bobInvocations = shimInvocationSummary(shimDir);
     const failures = report.checks.filter((item) => !item.ok);
     report.pass = failures.length === 0;
     report.failures = failures.map((item) => item.name);
     if (args.report) fs.writeFileSync(args.report, JSON.stringify(report, null, 2));
     process.stdout.write(`${report.pass ? "PASS" : "FAIL"} album UI e2e (${report.checks.length} checks, ${failures.length} failed)\\n`);
     if (!report.pass) process.exitCode = 1;
+  } catch (error) {
+    report.fatalError = String((error && error.stack) || error);
+    report.probes.bobInvocations = shimInvocationSummary(shimDir);
+    record("fatal", false, String((error && error.message) || error));
+    report.failures = report.checks.filter((item) => !item.ok).map((item) => item.name);
+    if (client) {
+      const failureShot = path.join(outDir, "album-ui-failure.png");
+      try {
+        await capturePage(client, failureShot);
+        report.screenshots.push(failureShot);
+      } catch (_) {}
+    }
+    if (args.report) fs.writeFileSync(args.report, JSON.stringify(report, null, 2));
+    throw error;
   } finally {
     clearTimeout(overall);
     if (client) client.close();

@@ -405,7 +405,7 @@ function albumUiProbe() {
     const describe = (el) => {
       if (!el) return null;
       const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
+      const style = (el.ownerDocument?.defaultView || window).getComputedStyle(el);
       return {
         className: String(el.className || ""),
         text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 220),
@@ -421,9 +421,12 @@ function albumUiProbe() {
         embed: Boolean(el.closest && el.closest(".markdown-embed, .internal-embed")),
       };
     };
-    const pick = (sel) => Array.from(document.querySelectorAll(sel)).map(describe);
     const file = window.app && window.app.workspace && window.app.workspace.getActiveFile && window.app.workspace.getActiveFile();
     const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
+    const schemaRoot = plugin?.albumSchemaCardModal?.contentEl || document;
+    const schemaDoc = schemaRoot.ownerDocument || document;
+    const pick = (sel) => Array.from(document.querySelectorAll(sel)).map(describe);
+    const schemaPick = (sel) => Array.from(schemaRoot.querySelectorAll(sel)).map(describe);
     const leafView = window.app && window.app.workspace && window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
     const state = leafView && typeof leafView.getState === "function" ? leafView.getState() : {};
     const header = pick(".bob-album-header");
@@ -451,21 +454,21 @@ function albumUiProbe() {
       schemas: pick(".bob-album-schema-card"),
       schemaFields: pick(".bob-album-schema-field"),
       schemaOpeners: pick(".bob-album-header-schema"),
-      schemaDialogs: pick(".bob-album-schema-dialog"),
-      schemaTargets: pick("[data-target-key]"),
-      schemaActions: pick("[data-schema-action]"),
-      schemaConsequence: pick(".bob-album-schema-consequence-text"),
-      schemaCounts: pick(".bob-album-schema-consequence-counts"),
-      schemaDerived: pick(".bob-album-schema-derived-keys"),
-      schemaRefusal: pick(".bob-album-schema-refusal"),
-      schemaRefusalHint: pick(".bob-album-schema-refusal-hint"),
-      schemaStage: pick("[data-schema-stage]"),
-      schemaInputs: pick("[data-schema-input]"),
-      schemaToolbar: pick(".bob-album-schema-toolbar"),
-      schemaFooter: pick(".bob-album-schema-dialog-footer"),
-      schemaUndo: pick('[data-schema-action="undo"]'),
-      schemaSyncWarning: pick(".bob-album-schema-sync-warning"),
-      schemaUnlabeled: Array.from(document.querySelectorAll(".bob-album-schema-dialog button")).map((el) => ({
+      schemaDialogs: schemaPick(".bob-album-schema-dialog"),
+      schemaTargets: schemaPick("[data-target-key]"),
+      schemaActions: schemaPick("[data-schema-action]"),
+      schemaConsequence: schemaPick(".bob-album-schema-consequence-text"),
+      schemaCounts: schemaPick(".bob-album-schema-consequence-counts"),
+      schemaDerived: schemaPick(".bob-album-schema-derived-keys"),
+      schemaRefusal: schemaPick(".bob-album-schema-refusal"),
+      schemaRefusalHint: schemaPick(".bob-album-schema-refusal-hint"),
+      schemaStage: schemaPick("[data-schema-stage]"),
+      schemaInputs: schemaPick("[data-schema-input]"),
+      schemaToolbar: schemaPick(".bob-album-schema-toolbar"),
+      schemaFooter: schemaPick(".bob-album-schema-dialog-footer"),
+      schemaUndo: schemaPick('[data-schema-action="undo"]'),
+      schemaSyncWarning: schemaPick(".bob-album-schema-sync-warning"),
+      schemaUnlabeled: Array.from(schemaRoot.querySelectorAll(".bob-album-schema-dialog button")).map((el) => ({
         text: String(el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
         labeled: Boolean((el.getAttribute("aria-label") || "").trim() || (el.textContent || "").trim()),
       })).filter((entry) => !entry.labeled),
@@ -477,10 +480,10 @@ function albumUiProbe() {
       status: pick(".bob-album-status"),
       retry: pick(".bob-album-action[data-action-kind=\\"retry\\"], button.bob-album-action"),
       plugin: Boolean(plugin),
-      active: document.activeElement ? {
-        tag: document.activeElement.tagName,
-        className: String(document.activeElement.className || ""),
-        href: document.activeElement.getAttribute && document.activeElement.getAttribute("data-href"),
+      active: (schemaDoc.activeElement || document.activeElement) ? {
+        tag: (schemaDoc.activeElement || document.activeElement).tagName,
+        className: String((schemaDoc.activeElement || document.activeElement).className || ""),
+        href: (schemaDoc.activeElement || document.activeElement).getAttribute && (schemaDoc.activeElement || document.activeElement).getAttribute("data-href"),
       } : null,
     };
   } catch (e) { return { error: String(e && e.message || e) }; } })()`;

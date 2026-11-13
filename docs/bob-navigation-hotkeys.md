@@ -108,8 +108,9 @@ activation date, and no filtered property list. Inbox answers that write ask
 where the task goes and move there. See [Task Card](task-card.md) for the
 stages, Type row, Cancel log, and recommendation keys. On an album note where
 the cursor has no task, Task Link, or dependency/relation target, the same
-chord opens the album Schema Card instead; recognized Task Card targets always
-keep priority.
+chord opens the album Schema Card on any row, including the title and blank
+rows. This fallback resolves direct album notes only; recognized Task Card
+targets always keep priority.
 
 `Ctrl+Shift+B` is `Ctrl+Shift+P` then `b` (Depends on). `Ctrl+Shift+Alt+B` is
 `Ctrl+Shift+P` then `⇧B` (Blocks). `Ctrl+Shift+L` / `Ctrl+Shift+Alt+L` open

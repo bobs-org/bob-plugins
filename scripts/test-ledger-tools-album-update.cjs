@@ -653,6 +653,27 @@ test("a save that invalidates the preview requires confirmation again", async ()
   }
 });
 
+test("an in-flight save cannot apply its captured envelope after a newer draft arrives", async () => {
+  const deps = makeSessionDeps();
+  const save = deferred();
+  deps.setSaveImpl(() => save.promise);
+  const session = await previewReadySession(deps);
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    assert.equal(session.getState().status, "applying");
+    session.setDraft([{ op: "field.set", field: "status", set: { label: "newer draft" } }]);
+    save.resolve({ ok: true });
+    const result = await applying;
+    assert.equal(result.code, "superseded-during-save");
+    assert.equal(deps.calls.apply, 0, "the captured pre-edit envelope never reaches bob");
+    assert.deepEqual(session.getState().draftOps, [{ op: "field.set", field: "status", set: { label: "newer draft" } }]);
+    assert.equal(session.getState().canApply, false);
+  } finally {
+    session.close();
+  }
+});
+
 test("double Enter and parallel applies share one apply guard", async () => {
   const deps = makeSessionDeps();
   const flight = deferred();
@@ -707,8 +728,10 @@ test("u stages the inverse on the preview-and-Enter path without reconstruction"
   const session = await previewReadySession(deps);
   try {
     await session.apply();
+    session.rebase("sha256:external-fp3");
     const staged = session.stageUndo();
     assert.equal(staged.ok, true);
+    assert.equal(session.getState().expect, "sha256:after", "Undo keeps the original post-write fingerprint after an external rebase");
     assert.deepEqual(
       JSON.parse(deps.calls.lastPreviewEnvelope || '{"ops":[]}').ops,
       draftOps(),
@@ -717,6 +740,7 @@ test("u stages the inverse on the preview-and-Enter path without reconstruction"
     deps.timers.tick(ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS);
     await flushMicrotasks();
     assert.equal(session.getState().status, "preview-ready");
+    assert.equal(JSON.parse(deps.calls.lastPreviewEnvelope).expect, "sha256:after");
     const stagedOps = JSON.parse(deps.calls.lastPreviewEnvelope).ops;
     assert.deepEqual(stagedOps, [{ op: "choice.remove", field: "status", value: "regular" }]);
     await session.apply();

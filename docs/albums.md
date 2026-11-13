@@ -81,6 +81,12 @@ paint as lint marks with their message and suggestions as text. The album's
 `record` property is hidden only in that album's rendered Properties surface,
 and stays editable in Source mode.
 
+The card keeps typed stage drafts, choice rows, focus, and caret through its
+debounced previews; adding or removing a staged initial choice never loses
+other row edits. Undo carries the fingerprint from the successful apply, so
+an intervening schema edit leaves the inverse draft unconfirmed until an
+explicit rebase.
+
 The card is keyboard-first with visible button equivalents for every
 gesture: `↑`/`↓` (or `j`/`k`, `←`/`→` across choices) move, `Enter` edits the
 selected row or applies a ready preview, `a` adds a field, `c` adds a choice,
@@ -92,13 +98,16 @@ refusal paint in a live region with accessible names on every control.
 
 Open the card from the header's **⊞ Schema**, the **Edit album schema**
 palette command, Command Mode's Vault row, or `Ctrl+Shift+P` on an album note
-where the Task Card has no target. The palette command resolves the owning
-album directly, or a record note's actual `parent:` link; missing, cyclic,
+where the Task Card has no target, including its title or a blank row. The
+chord fallback resolves direct album notes only. The palette command resolves
+the owning album directly, or a record note's actual `parent:` link; missing, cyclic,
 ambiguous, or non-album parents teach instead of guessing. An invalid album
 still opens with its lint and the YAML path. A **Done** button rides along
-into Source mode for that album's pane: it saves, forces a fresh report, and
-only returns and reopens the card when Bob reports a valid schema, otherwise
-staying put on the diagnostic line.
+into Source mode for that album's pane: it shares a pending save across clicks,
+checks pane identity after each asynchronous step, forces a fresh report, and
+only returns and reopens the card when Bob reports a valid schema. Navigation,
+pane close, or unload during save/report/restore abandons the excursion without
+reopening a stale card; invalid schemas stay on the diagnostic line.
 
 On Obsidian mobile the summary and chips still render from last-good album
 data with an edit-in-YAML hint. The Schema button and write gestures are
@@ -119,14 +128,18 @@ For stored album/record structure and capture routes, see
 
 The offline wrappers `scripts/test-obsidian-album-ui-e2e.cjs` and
 `scripts/test-obsidian-album-schema-writer-e2e.cjs` are part of `npm test`;
-run the real CDP walkthrough with
-`xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs`. It covers owner chips,
+run the real CDP walkthrough with an explicitly verified Bob binary:
+`BOB_BIN=/path/to/bob xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs -e /snap/bin/obsidian -r /tmp/album-schema.json -o /tmp/album-schema-shots`.
+Its JSON report records Bob's path and version. Run the writer acceptance with
+`BOB_BIN=/path/to/bob node scripts/obsidian-album-schema-writer-e2e.cjs --self-test`.
+The wrappers report their real-Bob checks as skipped when `BOB_BIN` is absent.
+The walkthrough covers owner chips,
 group jump, folds, date chips, the collapsed header, property hiding, failure
 and retry, cleanup, byte preservation, the debounced sync, and the Schema
-Card walk: header, palette, record-parent, and album-fallback entry with
+Card walk: header, palette, record-parent, title-row album fallback with
 Task Card priority, keyboard-only edit and Undo, previewed apply with a
 double-Apply guard, two-pane stale refusal, YAML Done with invalid repair,
-and light/dark screenshots near 375 px. The writer wrapper proves the
+async Done navigation/unload guards, and light/dark screenshots near 375 px. The writer wrapper proves the
 preview/apply/Undo envelope, stale and used-removal refusals, typed
 semantics, single-commit and linear-history guarantees, sync-only retry, and
-source validation against the real writer in a scratch Git vault.
+source validation plus stale-Undo refusal against the real writer in a scratch Git vault.

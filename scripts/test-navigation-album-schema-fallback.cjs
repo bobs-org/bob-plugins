@@ -1,14 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { helpers } = require("./navigation-hotkeys-harness.cjs");
+const { helpers, NavigationHotkeysPlugin } = require("./navigation-hotkeys-harness.cjs");
 
 test("fallback yields to tasks, links, dependencies, counts, and direct stages", () => {
   const base = {
     countExplicit: false, hasTaskSession: false,
     initialProperty: null, initialTaskCardRow: null, directStage: false,
     reopenBlocks: false, reopenLinks: false, reopenLinkedFrom: false,
-    isTask: false, isLink: false, hasDependencyEntry: false, isBullet: true,
+    isTask: false, isLink: false, hasDependencyEntry: false,
   };
   assert.deepEqual(helpers.albumSchemaFallbackGate(base), { attempt: true, reason: "album-fallback" });
   // A real task row in an album keeps the Task Card.
@@ -33,17 +33,35 @@ test("fallback yields to tasks, links, dependencies, counts, and direct stages",
   }
 });
 
-test("fallback only fires on bullets; prose and unrelated notes fall through", () => {
+test("fallback is available on any unclaimed row; direct target resolution stays album-only", () => {
   const base = {
     countExplicit: false, hasTaskSession: false,
     initialProperty: null, initialTaskCardRow: null, directStage: false,
     reopenBlocks: false, reopenLinks: false, reopenLinkedFrom: false,
     isTask: false, isLink: false, hasDependencyEntry: false,
   };
-  // A non-task album row (a bullet) attempts the album fallback.
-  assert.equal(helpers.albumSchemaFallbackGate({ ...base, isBullet: true }).attempt, true);
-  // Prose without a bullet falls through to the existing Task Card notice.
-  const prose = helpers.albumSchemaFallbackGate({ ...base, isBullet: false });
-  assert.equal(prose.attempt, false);
-  assert.equal(prose.reason, "not-bullet");
+  assert.equal(helpers.albumSchemaFallbackGate(base).attempt, true);
+  assert.equal(helpers.albumSchemaFallbackGate({ ...base, isBullet: false }).attempt, true);
+});
+
+test("Task Card command routes a title row to the direct album Schema Card", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const opens = [];
+  const ledger = {
+    albumHeaderDesktop: () => true,
+    albumSchemaEntryTargetForFile: (filePath) => ({
+      ok: true, kind: filePath === "eat.md" ? "album" : "record", albumPath: "eat.md",
+    }),
+    openAlbumSchemaEntry: (options) => { opens.push(options); return { ok: true }; },
+  };
+  const editor = {
+    getValue: () => "# Eat\n\n- [ ] task",
+    getLine: (line) => ["# Eat", "", "- [ ] task"][line] ?? null,
+    getCursor: () => ({ line: 0, ch: 2 }),
+  };
+  plugin.app = { plugins: { plugins: { "bob-ledger-tools": ledger } } };
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "eat.md" } });
+
+  assert.equal(plugin.openBulletPropertyPicker(editor), true);
+  assert.deepEqual(opens, [{ filePath: "eat.md" }]);
 });

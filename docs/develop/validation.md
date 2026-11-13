@@ -56,8 +56,14 @@ run the real CDP check on athena after an Obsidian upgrade, as described in
 The offline wrapper `scripts/test-obsidian-bank-ui-e2e.cjs` is part of `npm test`;
 run the real CDP walkthrough with `xvfb-run -a node scripts/obsidian-bank-ui-e2e.cjs`.
 
-The offline wrapper `scripts/test-obsidian-album-ui-e2e.cjs` is part of `npm test`;
-run the real CDP walkthrough with `xvfb-run -a node scripts/obsidian-album-ui-e2e.cjs`.
+The album UI and schema-writer wrappers are part of `npm test`; their real-Bob
+checks are reported as skipped when `BOB_BIN` is absent. For acceptance, set
+`BOB_BIN` to the verified current checkout binary. Run the isolated real-CDP
+walkthrough with `BOB_BIN=/path/to/bob xvfb-run -a node
+scripts/obsidian-album-ui-e2e.cjs -e /snap/bin/obsidian -r /tmp/album-schema.json
+-o /tmp/album-schema-shots`; its JSON report records the binary path and version.
+Run the writer matrix with `BOB_BIN=/path/to/bob node
+scripts/obsidian-album-schema-writer-e2e.cjs --self-test`.
 
 ## Focused suites
 

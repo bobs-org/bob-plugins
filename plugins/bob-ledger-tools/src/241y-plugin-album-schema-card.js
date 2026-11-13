@@ -1,350 +1,5 @@
 // Keyboard-first, editable album Schema Card. It stages one gesture at a
 // time, asks bob for a dry-run consequence, and applies only that preview.
-function albumSchemaCardModalBase() {
-  if (typeof Modal === "function") return Modal;
-  return class AlbumSchemaCardFallback {
-    constructor(app) {
-      this.app = app;
-      const doc = app?.document || (typeof document !== "undefined" ? document : null);
-      this.contentEl = {
-        ownerDocument: doc,
-        children: [],
-        listeners: new Map(),
-        empty() { this.children = []; },
-        addClass() {},
-        setAttribute() {},
-        appendChild(node) { this.children.push(node); return node; },
-        addEventListener(type, callback) {
-          const listeners = this.listeners.get(type) || [];
-          listeners.push(callback);
-          this.listeners.set(type, listeners);
-        },
-        querySelector(sel) {
-          const walk = (nodes) => {
-            for (const node of nodes || []) {
-              if (node.matches?.(sel)) return node;
-              const found = walk(node.children);
-              if (found) return found;
-            }
-            return null;
-          };
-          return walk(this.children);
-        },
-        querySelectorAll(sel) {
-          const found = [];
-          const walk = (nodes) => {
-            for (const node of nodes || []) {
-              if (node.matches?.(sel)) found.push(node);
-              walk(node.children);
-            }
-          };
-          walk(this.children);
-          return found;
-        },
-      };
-      this.modalEl = this.contentEl;
-      this.containerEl = this.contentEl;
-    }
-    open() { this.onOpen?.(); }
-    close() { this.onClose?.(); }
-  };
-}
-
-function albumSchemaCardTitle(model) {
-  const crumbs = (model?.crumbs || []).map((crumb) => crumb.title || crumb.stem).filter(Boolean);
-  const trail = crumbs.join(" › ");
-  const label = model?.schemaLabel || model?.title || "Album";
-  const emoji = String(model?.emoji || "").trim();
-  const head = emoji ? `${emoji} ${label}` : label;
-  return trail ? `${head} · ${trail}` : head;
-}
-
-function albumSchemaCardButton(doc, host, text, options = {}) {
-  const button = notebookCreateEl(doc, "button", options.className || "bob-album-schema-target");
-  button.setAttribute("type", "button");
-  if (options.targetKey) button.setAttribute("data-target-key", options.targetKey);
-  if (options.action) button.setAttribute("data-schema-action", options.action);
-  button.setAttribute("aria-label", options.ariaLabel || text);
-  if (options.current) {
-    const cls = `${button.getAttribute("class") || ""} is-selected`.trim();
-    button.setAttribute("class", cls);
-    button.setAttribute("aria-current", "true");
-  }
-  if (options.disabled) button.disabled = true;
-  notebookSetText(button, text);
-  host.appendChild(button);
-  return button;
-}
-
-function albumSchemaCardBuildEl(model, options, doc) {
-  const card = notebookCreateEl(doc, "div", "bob-album-schema-dialog bob-key-card");
-  if (!card) return null;
-  const state = options?.state || {};
-  const editable = options?.editable === true;
-  card.setAttribute("role", "dialog");
-  card.setAttribute("aria-modal", "true");
-  card.setAttribute("aria-label", "Album schema editor");
-
-  const header = notebookCreateEl(doc, "div", "bob-album-schema-dialog-header");
-  const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
-  notebookSetText(title, albumSchemaCardTitle(model));
-  header.appendChild(title);
-  const stats = notebookCreateEl(doc, "p", "bob-album-schema-dialog-stats");
-  notebookSetText(stats, albumHeaderStatsText(model));
-  header.appendChild(stats);
-  card.appendChild(header);
-
-  if ((model.issues || []).length) {
-    const banner = notebookCreateEl(doc, "div", "bob-album-schema-dialog-lint");
-    banner.setAttribute("role", "status");
-    const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
-    issues.setAttribute("aria-label", "Album schema issues");
-    for (const issue of model.issues) {
-      const item = albumSchemaPaintIssue(doc, issue, options);
-      if (item) issues.appendChild(item);
-    }
-    banner.appendChild(issues);
-    card.appendChild(banner);
-  }
-
-  const body = notebookCreateEl(doc, "div", "bob-album-schema-dialog-body");
-  if (model.emptySchema && !model.schemaInvalid) {
-    const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
-    notebookSetText(empty, albumHeaderSummaryText(model));
-    body.appendChild(empty);
-  }
-
-  if (editable) {
-    const selectedKey = options.selectedKey || "stats";
-    albumSchemaCardButton(doc, body, albumHeaderStatsText(model), {
-      targetKey: "stats", className: "bob-album-schema-stats-target",
-      ariaLabel: "Album details", current: selectedKey === "stats",
-    });
-    for (const field of model.fields || []) {
-      const presented = albumHeaderPresentField(field, model);
-      const fieldText = [presented.label, presented.required ? "*" : "", presented.kindText]
-        .filter(Boolean).join(" · ");
-      const fieldRow = albumSchemaCardButton(doc, body, fieldText, {
-        targetKey: `field:${field.key}`, className: "bob-album-schema-field",
-        ariaLabel: `Field ${presented.label}${presented.required ? ", required" : ""}${presented.kindText ? `, ${presented.kindText}` : ""}`,
-        current: selectedKey === `field:${field.key}`,
-      });
-      fieldRow.setAttribute("data-field-key", field.key);
-      if (field.line != null) fieldRow.setAttribute("data-yaml-line", String(field.line));
-      const fieldDetails = [];
-      if (presented.filledText) fieldDetails.push(presented.filledText);
-      if (presented.groupsIndex) fieldDetails.push("groups the index");
-      if (presented.subgroupsIndex) fieldDetails.push("sub-groups the index");
-      if (fieldDetails.length) {
-        const detail = notebookCreateEl(doc, "span", "bob-album-schema-target-detail");
-        notebookSetText(detail, fieldDetails.join(" · "));
-        fieldRow.appendChild(detail);
-      }
-      for (const choice of presented.choices || []) {
-        const key = `choice:${field.key}:${choice.value}`;
-        const chip = albumSchemaCardButton(doc, body, choice.display || choice.label, {
-          targetKey: key, className: "bob-album-schema-choice bob-album-schema-choice-button",
-          ariaLabel: `Choice ${choice.label} on ${presented.label}${Number.isInteger(choice.count) ? `, used by ${choice.count} records` : ""}`,
-          current: selectedKey === key,
-        });
-        chip.setAttribute("data-field-key", field.key);
-        chip.setAttribute("data-choice-value", choice.value);
-      }
-      if (field.kind === "choices") {
-        const key = `add-choice:${field.key}`;
-        albumSchemaCardButton(doc, body, "+ Add choice", {
-          targetKey: key, className: "bob-album-schema-add-choice",
-          ariaLabel: `Add choice to ${presented.label}`, current: selectedKey === key,
-        });
-      }
-    }
-    for (const pattern of model.legacy || []) {
-      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
-      notebookSetText(chip, pattern);
-      body.appendChild(chip);
-    }
-    for (const issue of model.issues || []) {
-      albumSchemaCardButton(doc, body, issue.message || issue.code, {
-        targetKey: `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
-        className: `bob-album-schema-issue is-${issue.severity}`,
-        ariaLabel: `Schema issue: ${issue.message || issue.code}`,
-        current: selectedKey === `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
-      });
-    }
-    albumSchemaCardButton(doc, body, "+ Add field", {
-      targetKey: "add-field", className: "bob-album-schema-add-field",
-      ariaLabel: "Add field", current: selectedKey === "add-field",
-    });
-  } else if (!model.emptySchema || model.schemaInvalid) {
-    const presented = (model.fields || []).map((field) => albumHeaderPresentField(field, model));
-    presented.forEach((field, index) => {
-      const row = albumSchemaPaintField(doc, field, options);
-      if (!row) return;
-      if (index === (options?.selectedIndex || 0)) {
-        const cls = `${row.getAttribute("class") || ""} is-selected`.trim();
-        row.setAttribute("class", cls);
-        row.setAttribute("aria-current", "true");
-      }
-      body.appendChild(row);
-    });
-    for (const pattern of model.legacy || []) {
-      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
-      notebookSetText(chip, pattern);
-      body.appendChild(chip);
-    }
-  }
-  card.appendChild(body);
-
-  if (editable && options.stage) {
-    const panel = albumSchemaStageBuildEl(options.stage, model, options, doc);
-    if (panel) card.appendChild(panel);
-  }
-
-  const status = notebookCreateEl(doc, "div", "bob-album-schema-consequence");
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  const report = state.preview || null;
-  if (report) {
-    const consequence = notebookCreateEl(doc, "p", "bob-album-schema-consequence-text");
-    notebookSetText(consequence, state.consequence || report.consequence || "No schema changes.");
-    status.appendChild(consequence);
-    for (const op of Array.isArray(report.per_op) ? report.per_op : []) {
-      const details = [];
-      if (Number.isInteger(op.filled)) details.push(`${op.filled} filled`);
-      if (Number.isInteger(op.count)) details.push(`${op.count} affected`);
-      if (Number.isInteger(op.newly_invalid) && op.newly_invalid > 0) details.push(`${op.newly_invalid} newly invalid`);
-      if (!details.length) continue;
-      const line = notebookCreateEl(doc, "p", "bob-album-schema-consequence-counts");
-      notebookSetText(line, `${op.summary}: ${details.join(" · ")}`);
-      status.appendChild(line);
-    }
-    const derivedKeys = Array.isArray(report.derived_keys) ? report.derived_keys.filter((key) => typeof key === "string" && key) : [];
-    const perOpKeys = (Array.isArray(report.per_op) ? report.per_op : [])
-      .map((op) => op?.derived_key).filter((key) => typeof key === "string" && key);
-    const keys = [...new Set(derivedKeys.concat(perOpKeys))];
-    if (keys.length) {
-      const derived = notebookCreateEl(doc, "p", "bob-album-schema-derived-keys");
-      notebookSetText(derived, `bob will use key${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}`);
-      status.appendChild(derived);
-    }
-  } else if (state.busy) {
-    notebookSetText(status, state.status === "applying" ? "Saving the schema edit…" : "Previewing this edit…");
-  } else if (state.refusal) {
-    const message = notebookCreateEl(doc, "p", "bob-album-schema-refusal");
-    notebookSetText(message, state.refusal.message || "The schema edit was refused.");
-    status.appendChild(message);
-    const identity = [
-      state.refusal.field ? `field ${state.refusal.field}` : "",
-      state.refusal.choice ? `choice ${state.refusal.choice}` : "",
-      state.refusal.keyPath ? `at ${state.refusal.keyPath}` : "",
-      state.refusal.path ? `${state.refusal.path}${Number.isInteger(state.refusal.line) ? `:${state.refusal.line}` : ""}` : "",
-    ].filter(Boolean);
-    if (identity.length) {
-      const detail = notebookCreateEl(doc, "p", "bob-album-schema-refusal-identity");
-      notebookSetText(detail, identity.join(" · "));
-      status.appendChild(detail);
-    }
-    if (state.refusal.hint) {
-      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
-      notebookSetText(hint, state.refusal.hint);
-      status.appendChild(hint);
-    }
-    if (Number.isInteger(state.refusal.affected)) {
-      const count = notebookCreateEl(doc, "p", "bob-album-schema-refusal-count");
-      notebookSetText(count, `${state.refusal.affected} records are affected.`);
-      status.appendChild(count);
-    }
-  } else if (options.editingUnavailable) {
-    notebookSetText(status, options.editingUnavailable);
-  }
-  if (state.syncWarning) {
-    const warning = notebookCreateEl(doc, "p", "bob-album-schema-sync-warning");
-    notebookSetText(warning, state.syncWarning.message || "Saved locally; sync failed.");
-    status.appendChild(warning);
-    if (state.syncWarning.hint) {
-      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
-      notebookSetText(hint, state.syncWarning.hint);
-      status.appendChild(hint);
-    }
-  }
-  card.appendChild(status);
-
-  if (editable) {
-    const actions = notebookCreateEl(doc, "div", "bob-album-schema-toolbar");
-    const target = albumSchemaTargetByKey(model, options.selectedKey);
-    const fresh = options.fresh === true;
-    const disabled = !fresh || Boolean(state.busy) || Boolean(options.stage);
-    const action = (text, name, blocked = disabled) => albumSchemaCardButton(doc, actions, text, {
-      action: name, className: "bob-album-schema-action", ariaLabel: text,
-      disabled: blocked,
-    });
-    action("Edit", "edit", disabled || !["stats", "field", "choice"].includes(target?.kind));
-    action("Add field", "add-field", disabled);
-    action("Add choice", "add-choice", disabled || !["field", "choice", "add-choice"].includes(target?.kind));
-    action("Toggle required", "toggle-required", disabled || target?.kind !== "field");
-    action("Toggle suggest", "toggle-suggest", disabled || target?.kind !== "field");
-    action("Move up", "move-up", disabled || !["field", "choice"].includes(target?.kind));
-    action("Move down", "move-down", disabled || !["field", "choice"].includes(target?.kind));
-    action("Remove", "remove", disabled || !["field", "choice"].includes(target?.kind));
-    action("YAML", "yaml", false);
-    action("Undo", "undo", disabled || !state.undoAvailable);
-    if (state.syncWarning) action("Retry sync", "retry-sync", Boolean(state.busy));
-    if (state.canApply && fresh && !options.stage) action("Apply", "apply", false);
-    if (state.refusal?.kind === "stale") {
-      action(options.hasFreshReplacement ? "Preview retained edit against updated schema" : "Refresh schema", "rebase-preview", Boolean(state.busy));
-    } else if (state.refusal?.kind === "timeout-unknown") {
-      action(options.hasFreshReplacement ? "Preview retained edit after refresh" : "Refresh to reconcile outcome", options.hasFreshReplacement ? "rebase-preview" : "refresh-schema", Boolean(state.busy));
-    } else if (state.status === "refused" && state.draftOps?.length && fresh) {
-      action("Preview again", "preview", Boolean(state.busy));
-    }
-    if (options.stage) action("Cancel stage", "cancel-stage", false);
-    action("Close", "close", false);
-    card.appendChild(actions);
-  }
-
-  const footer = notebookCreateEl(doc, "p", "bob-album-schema-dialog-footer bob-key-card-footer");
-  notebookSetText(footer, editable
-    ? "⏎ edit / apply   a add field   c add choice   ! required   s suggest   ⌥J/K move   ⌃D remove   y YAML   u undo   esc cancel / close"
-    : "↑/↓ navigate   y YAML   esc close");
-  card.appendChild(footer);
-  return card;
-}
-
-function albumSchemaSaveOpenEditors(plugin, paths) {
-  const wanted = new Set((Array.isArray(paths) ? paths : []).map(albumReportPath));
-  const workspace = plugin?.app?.workspace;
-  if (!workspace || typeof workspace.getLeavesOfType !== "function") {
-    return Promise.resolve({
-      ok: false, code: "save-unsupported",
-      message: "Obsidian could not confirm whether the album is open in Markdown panes.",
-    });
-  }
-  let leaves;
-  try { leaves = workspace.getLeavesOfType("markdown") || []; }
-  catch (_) { leaves = null; }
-  if (!Array.isArray(leaves)) {
-    return Promise.resolve({ ok: false, code: "save-unsupported", message: "Obsidian could not list open Markdown panes." });
-  }
-  const views = leaves.map((leaf) => leaf?.view).filter((view) => wanted.has(albumReportPath(view?.file?.path)));
-  if (views.some((view) => typeof view.save !== "function")) {
-    return Promise.resolve({
-      ok: false, code: "save-unsupported",
-      message: "An open Markdown pane for this album has no supported save method.",
-    });
-  }
-  return (async () => {
-    try {
-      for (const view of views) await view.save();
-      return { ok: true };
-    } catch (error) {
-      return {
-        ok: false, code: "save-failed",
-        message: error && error.message ? String(error.message) : "Saving an open album pane failed.",
-      };
-    }
-  })();
-}
-
 class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   constructor(app, settings = {}) {
     super(app);
@@ -354,6 +9,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.selectedKey = "stats";
     this.selectedIndex = 0;
     this.stage = null;
+    this.stageDraft = null;
     this.session = null;
     this.sessionState = null;
     this.latestSchemaModel = null;
@@ -412,15 +68,62 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaStage(kind, targetKey = this.selectedKey) {
-    if (!this.session || !this.schemaFresh()) {
+    if (!this.session || !this.schemaFresh() || this.sessionState?.busy) {
       this.paintSchemaCard();
       return false;
     }
     this.stage = { kind, targetKey };
+    this.stageDraft = this.schemaCreateStageDraft(this.stage);
     this.paintSchemaCard();
-    const input = this.contentEl?.querySelector?.(".bob-album-schema-stage [data-schema-input]");
-    try { input?.focus?.(); } catch (_) {}
     return true;
+  }
+
+  schemaCreateStageDraft(stage) {
+    const target = albumSchemaTargetByKey(this.schemaModel, stage?.targetKey);
+    const values = {};
+    const initialChoices = null;
+    let first = "";
+    if (stage?.kind === "album") {
+      Object.assign(values, {
+        useLabel: this.schemaModel.storedLabel != null,
+        albumLabel: this.schemaModel.storedLabel || "",
+        usePlural: this.schemaModel.storedPlural != null,
+        albumPlural: this.schemaModel.storedPlural || "",
+        datedNotes: this.schemaModel.datedNotes === true,
+      });
+      first = "albumLabel";
+    } else if (stage?.kind === "field") {
+      const field = target?.field || {};
+      const defaultValue = Array.isArray(field.default) ? JSON.stringify(field.default) : field.default;
+      Object.assign(values, {
+        fieldLabel: field.label || "",
+        defaultPresent: field.defaultPresent === true,
+        fieldDefault: field.defaultPresent ? (defaultValue == null ? "" : String(defaultValue)) : "",
+        minPresent: field.min != null,
+        fieldMin: field.min == null ? "" : String(field.min),
+        maxPresent: field.max != null,
+        fieldMax: field.max == null ? "" : String(field.max),
+      });
+      first = "fieldLabel";
+    } else if (stage?.kind === "field-add") {
+      Object.assign(values, { newFieldLabel: "", newFieldKind: "text", newFieldList: false, newFieldSuggest: false });
+      first = "newFieldLabel";
+    } else if (stage?.kind === "choice") {
+      const parts = albumSchemaChoiceParts(target?.choice?.label);
+      Object.assign(values, { choiceLabel: parts.label, choiceEmoji: parts.emoji });
+      first = "choiceLabel";
+    } else if (stage?.kind === "choice-add") {
+      Object.assign(values, { choiceLabel: "", choiceEmoji: "" });
+      first = "choiceLabel";
+    }
+    return {
+      values,
+      initialChoices: stage?.kind === "field-add" ? [{ label: "", emoji: "" }] : initialChoices,
+      focusName: first,
+      selectionStart: null,
+      selectionEnd: null,
+      selectionDirection: "none",
+    };
   }
 
   schemaEditable() {
@@ -453,6 +156,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       editingUnavailable: this.schemaUnavailable || (!this.schemaFresh() ? "Editing waits for a fresh album report." : ""),
       state,
       stage: this.stage,
+      stageDraft: this.stageDraft,
+      stageLocked: state.status === "applying" || !this.schemaFresh(),
       hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
       handlers: {
         jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
@@ -460,8 +165,15 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }, doc);
     if (card) host.appendChild(card);
     if (this.stage) {
-      const input = host.querySelector?.(".bob-album-schema-stage [data-schema-input]");
+      const wanted = this.stageDraft?.focusName;
+      const input = wanted
+        ? host.querySelector?.(`[data-schema-input="${wanted}"]`)
+        : host.querySelector?.(".bob-album-schema-stage [data-schema-input]");
       try { input?.focus?.({ preventScroll: true }); } catch (_) {}
+      if (input && this.stageDraft && Number.isInteger(this.stageDraft.selectionStart) &&
+          typeof input.setSelectionRange === "function") {
+        try { input.setSelectionRange(this.stageDraft.selectionStart, this.stageDraft.selectionEnd, this.stageDraft.selectionDirection || "none"); } catch (_) {}
+      }
     } else {
       const selected = host.querySelector?.(`[data-target-key="${this.selectedKey}"]`)
         || host.querySelector?.(".bob-album-schema-field.is-selected")
@@ -549,19 +261,138 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     return this.contentEl?.querySelector?.(`[data-schema-input="${name}"]`) || null;
   }
 
+  schemaInputIsCheckbox(input) {
+    return String(input?.type || input?.getAttribute?.("type") || "").toLowerCase() === "checkbox";
+  }
+
+  schemaStageRead(name) {
+    const values = this.stageDraft?.values || {};
+    if (Object.prototype.hasOwnProperty.call(values, name)) return values[name];
+    const input = this.schemaInput(name);
+    return this.schemaInputIsCheckbox(input) ? input.checked === true : input?.value;
+  }
+
   schemaChecked(name) {
-    return this.schemaInput(name)?.checked === true;
+    return this.schemaStageRead(name) === true;
   }
 
   schemaString(name) {
-    const value = this.schemaInput(name)?.value;
+    const value = this.schemaStageRead(name);
     return value == null ? "" : String(value);
+  }
+
+  schemaCaptureStageValuesFromDom() {
+    if (!this.stage || !this.stageDraft) return;
+    const panel = this.contentEl?.querySelector?.(".bob-album-schema-stage");
+    const inputs = panel?.querySelectorAll?.("[data-schema-input]") || [];
+    for (const input of Array.from(inputs)) {
+      const name = input.getAttribute?.("data-schema-input");
+      if (!name) continue;
+      const value = this.schemaInputIsCheckbox(input) ? input.checked === true : String(input.value ?? "");
+      this.stageDraft.values[name] = value;
+      const label = /^choiceLabel(\d+)$/.exec(name);
+      const emoji = /^choiceEmoji(\d+)$/.exec(name);
+      if (label || emoji) {
+        const index = Number((label || emoji)[1]);
+        if (!Array.isArray(this.stageDraft.initialChoices)) this.stageDraft.initialChoices = [];
+        while (this.stageDraft.initialChoices.length <= index) this.stageDraft.initialChoices.push({ label: "", emoji: "" });
+        this.stageDraft.initialChoices[index][label ? "label" : "emoji"] = value;
+      }
+    }
+    const active = this.contentEl?.ownerDocument?.activeElement;
+    if (active?.getAttribute?.("data-schema-input")) this.schemaStageRememberFocus(active);
+  }
+
+  schemaStageRememberFocus(input) {
+    if (!this.stageDraft || !input) return;
+    const name = input.getAttribute?.("data-schema-input");
+    if (!name) return;
+    this.stageDraft.focusName = name;
+    try {
+      this.stageDraft.selectionStart = Number.isInteger(input.selectionStart) ? input.selectionStart : null;
+      this.stageDraft.selectionEnd = Number.isInteger(input.selectionEnd) ? input.selectionEnd : null;
+      this.stageDraft.selectionDirection = input.selectionDirection || "none";
+    } catch (_) {
+      this.stageDraft.selectionStart = null;
+      this.stageDraft.selectionEnd = null;
+      this.stageDraft.selectionDirection = "none";
+    }
+  }
+
+  schemaStageInput(event) {
+    if (!this.stage || !this.stageDraft || this.sessionState?.status === "applying" || this.schemaComposing) return;
+    const input = event?.target;
+    const name = input?.getAttribute?.("data-schema-input");
+    if (!name) return;
+    const value = this.schemaInputIsCheckbox(input) ? input.checked === true : String(input.value ?? "");
+    const previous = this.stageDraft.values[name];
+    this.stageDraft.values[name] = value;
+    const label = /^choiceLabel(\d+)$/.exec(name);
+    const emoji = /^choiceEmoji(\d+)$/.exec(name);
+    if (label || emoji) {
+      const index = Number((label || emoji)[1]);
+      if (!Array.isArray(this.stageDraft.initialChoices)) this.stageDraft.initialChoices = [];
+      while (this.stageDraft.initialChoices.length <= index) this.stageDraft.initialChoices.push({ label: "", emoji: "" });
+      this.stageDraft.initialChoices[index][label ? "label" : "emoji"] = value;
+    }
+    this.schemaStageRememberFocus(input);
+    if (Object.is(previous, value)) return;
+    this.schemaQueueStagePreview(false);
+  }
+
+  schemaQueueStagePreview(immediate = false) {
+    if (!this.stage || !this.stageDraft || !this.session || this.sessionState?.status === "applying") return;
+    this.schemaCaptureStageValuesFromDom();
+    const op = this.schemaBuildStageOp();
+    const next = op ? [op] : [];
+    const current = this.session.getState().draftOps || [];
+    const changed = JSON.stringify(current) !== JSON.stringify(next);
+    if (changed) this.sessionState = this.session.setDraft(next);
+    if (immediate && next.length) void this.session.previewNow();
+    if (!changed && !immediate) this.paintSchemaCard();
+  }
+
+  schemaStageAddInitialChoice() {
+    if (!this.stageDraft || this.sessionState?.status === "applying") return;
+    if (!Array.isArray(this.stageDraft.initialChoices)) this.stageDraft.initialChoices = [];
+    this.stageDraft.initialChoices.push({ label: "", emoji: "" });
+    const index = this.stageDraft.initialChoices.length - 1;
+    this.stageDraft.focusName = `choiceLabel${index}`;
+    this.stageDraft.selectionStart = null;
+    this.stageDraft.selectionEnd = null;
+    this.paintSchemaCard();
+    this.schemaQueueStagePreview(false);
+  }
+
+  schemaStageRemoveInitialChoice(index) {
+    if (!this.stageDraft || this.sessionState?.status === "applying" || !Array.isArray(this.stageDraft.initialChoices)) return;
+    if (!Number.isInteger(index) || index < 0 || index >= this.stageDraft.initialChoices.length) return;
+    this.stageDraft.initialChoices.splice(index, 1);
+    this.stageDraft.values = Object.fromEntries(Object.entries(this.stageDraft.values || {}).filter(([name]) => !/^choice(?:Label|Emoji)\d+$/.test(name)));
+    this.stageDraft.initialChoices.forEach((choice, next) => {
+      this.stageDraft.values[`choiceLabel${next}`] = choice.label || "";
+      this.stageDraft.values[`choiceEmoji${next}`] = choice.emoji || "";
+    });
+    const nextIndex = Math.min(index, this.stageDraft.initialChoices.length - 1);
+    this.stageDraft.focusName = nextIndex >= 0 ? `choiceLabel${nextIndex}` : "newFieldLabel";
+    this.stageDraft.selectionStart = null;
+    this.stageDraft.selectionEnd = null;
+    this.paintSchemaCard();
+    this.schemaQueueStagePreview(false);
+  }
+
+  schemaStageEnter() {
+    const state = this.session?.getState?.() || {};
+    if (state.canApply === true) {
+      void this.schemaApply();
+    }
   }
 
   schemaBuildStageOp() {
     const stage = this.stage;
     const target = albumSchemaTargetByKey(this.schemaModel, stage?.targetKey);
     if (!stage) return null;
+    this.schemaCaptureStageValuesFromDom();
     if (stage.kind === "album") {
       const set = {};
       const unset = [];
@@ -586,8 +417,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       if (label !== field.label) set.label = label;
       const useDefault = this.schemaChecked("defaultPresent");
       if (useDefault) {
-        const defaultInput = this.schemaInput("fieldDefault");
-        const value = albumSchemaTypedDefault(defaultInput?.value, field, defaultInput?.checked);
+        const value = albumSchemaTypedDefault(this.schemaString("fieldDefault"), field, this.schemaChecked("fieldDefault"));
         if (!field.defaultPresent || !albumSchemaSameValue(value, field.default)) set.default = value;
       } else if (field.defaultPresent) unset.push("default");
       for (const [flag, input, key, current] of [
@@ -606,8 +436,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         : null;
     }
     if (stage.kind === "field-add") {
-      const kindInput = this.schemaInput("newFieldKind");
-      const kind = String(kindInput?.value || "text");
+      const kind = String(this.schemaStageRead("newFieldKind") || "text");
       const selectedField = target?.field || null;
       const fields = Array.isArray(this.schemaModel.fields) ? this.schemaModel.fields : [];
       const fieldIndex = selectedField ? fields.findIndex((field) => field.key === selectedField.key) : -1;
@@ -620,12 +449,11 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         position: fieldIndex < 0 ? fields.length : fieldIndex + 1,
       };
       if (kind === "choices") {
-        const rows = this.contentEl?.querySelectorAll?.(".bob-album-schema-initial-choice") || [];
-        op.choices = Array.from(rows).map((row, index) => {
-          const label = row.querySelector?.(`[data-schema-input="choiceLabel${index}"]`);
-          const emoji = row.querySelector?.(`[data-schema-input="choiceEmoji${index}"]`);
-          const choice = { label: String(label?.value ?? "") };
-          if (String(emoji?.value || "").trim()) choice.emoji = String(emoji.value);
+        const rows = Array.isArray(this.stageDraft?.initialChoices) ? this.stageDraft.initialChoices : [];
+        op.choices = rows.map((row) => {
+          const choice = { label: String(row?.label ?? "") };
+          const emoji = String(row?.emoji || "");
+          if (emoji.trim()) choice.emoji = emoji;
           return choice;
         });
       }
@@ -664,11 +492,12 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaQueueOp(op, selectedKey = this.selectedKey) {
-    if (!this.session || !this.schemaFresh()) {
+    if (!this.session || !this.schemaFresh() || this.sessionState?.status === "applying") {
       this.paintSchemaCard();
       return { ok: false, code: "editing-unavailable", message: "Editing waits for a fresh album report." };
     }
     this.stage = null;
+    this.stageDraft = null;
     if (!op) {
       this.paintSchemaCard();
       return { ok: false, code: "empty-stage", message: "No schema values changed." };
@@ -740,6 +569,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const result = await this.session.apply();
     this.sessionState = this.session.getState();
     if (result?.ok && result.changed) {
+      this.stage = null;
+      this.stageDraft = null;
       try { new Notice("Album schema saved. Press u to preview Undo."); } catch (_) {}
     }
     const state = this.schemaPlugin?.albumReportState?.();
@@ -775,7 +606,11 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaCancelStage() {
+    if (this.stage && this.session && (this.session.getState().draftOps || []).length) {
+      this.sessionState = this.session.setDraft([]);
+    }
     this.stage = null;
+    this.stageDraft = null;
     if (!this.sessionState?.draftOps?.length && this.latestSchemaModel && this.schemaFresh()) {
       this.schemaModel = this.latestSchemaModel;
       this.latestSchemaModel = null;
@@ -794,6 +629,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       const name = action === "unset-default" ? "defaultPresent" : action === "unset-minimum" ? "minPresent" : "maxPresent";
       const input = this.schemaInput(name);
       if (input) input.checked = false;
+      if (this.stageDraft) this.stageDraft.values[name] = false;
+      this.schemaQueueStagePreview(false);
       return;
     }
     if (action === "edit") { this.schemaEditSelected(); return; }
@@ -814,25 +651,14 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (action === "preview") { await this.session?.previewNow?.(); return; }
     if (action === "refresh-schema") { await this.schemaRefresh(); return; }
     if (action === "rebase-preview") { await this.schemaRebaseAndPreview(); return; }
-    if (action === "submit-stage") { this.schemaQueueOp(this.schemaBuildStageOp(), this.stage?.targetKey); return; }
+    if (action === "submit-stage") { this.schemaQueueStagePreview(true); return; }
     if (action === "add-initial-choice") {
-      const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
-      const rows = host?.querySelectorAll?.(".bob-album-schema-initial-choice") || [];
-      albumSchemaAddInitialChoiceRow(notebookDomDoc(host) || host?.ownerDocument, host, rows.length);
+      this.schemaStageAddInitialChoice();
       return;
     }
     if (action.startsWith("remove-initial-choice:")) {
       const index = Number(action.split(":").pop());
-      const rows = this.contentEl?.querySelectorAll?.(".bob-album-schema-initial-choice") || [];
-      rows[index]?.remove?.();
-      rows.forEach((row, rowIndex) => {
-        const oldIndex = Number(row.getAttribute("data-choice-index"));
-        row.setAttribute("data-choice-index", String(rowIndex));
-        const label = row.querySelector?.(`[data-schema-input="choiceLabel${oldIndex}"]`);
-        const emoji = row.querySelector?.(`[data-schema-input="choiceEmoji${oldIndex}"]`);
-        if (label) label.setAttribute("data-schema-input", `choiceLabel${rowIndex}`);
-        if (emoji) emoji.setAttribute("data-schema-input", `choiceEmoji${rowIndex}`);
-      });
+      this.schemaStageRemoveInitialChoice(index);
     }
   }
 
@@ -851,15 +677,20 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaOnKeyDown(event) {
     if (!event || event.isComposing || event.keyCode === 229) return;
+    if (this.sessionState?.status === "applying") return;
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
     const targetButton = target?.closest?.("button[data-target-key]") || null;
     const inButton = Boolean(target?.closest?.("button"));
     if (inInput) {
-      if (event.key === "Escape") { event.preventDefault?.(); this.schemaCancelStage(); }
+      if (event.key === "Escape") {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        this.schemaCancelStage();
+      }
       else if (event.key === "Enter" && target.tagName !== "TEXTAREA" && this.stage) {
         event.preventDefault?.();
-        void this.schemaAction("submit-stage");
+        this.schemaStageEnter();
       }
       return;
     }
@@ -868,8 +699,12 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.selectedIndex = this.schemaTargets().findIndex((item) => item.key === this.selectedKey);
     } else if (inButton) return;
     if (this.stage) {
-      if (event.key === "Escape") { event.preventDefault?.(); this.schemaCancelStage(); }
-      else if (event.key === "Enter") { event.preventDefault?.(); void this.schemaAction("submit-stage"); }
+      if (event.key === "Escape") {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        this.schemaCancelStage();
+      }
+      else if (event.key === "Enter") { event.preventDefault?.(); this.schemaStageEnter(); }
       return;
     }
     if (event.key === "Escape") {
@@ -887,12 +722,12 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaEditSelected();
       return;
     }
+    if (event.altKey && (event.key === "j" || event.key === "J")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
+    if (event.altKey && (event.key === "k" || event.key === "K")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
     if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowRight") { event.preventDefault?.(); this.schemaMove(1); return; }
-    if (event.altKey && (event.key === "j" || event.key === "J")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
-    if (event.altKey && (event.key === "k" || event.key === "K")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
     if (event.ctrlKey && event.key.toLowerCase() === "d") { event.preventDefault?.(); this.schemaRemoveSelected(); return; }
     if (!event.altKey && !event.ctrlKey && !event.metaKey) {
       if (event.key === "a") { event.preventDefault?.(); void this.schemaAction("add-field"); return; }
@@ -918,6 +753,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.schemaClickListener = (event) => this.schemaOnClick(event);
     this.schemaKeyListener = (event) => this.schemaOnKeyDown(event);
     this.schemaFocusListener = (event) => {
+      const input = event?.target?.closest?.("[data-schema-input]");
+      if (input) this.schemaStageRememberFocus(input);
       const target = event?.target?.closest?.("[data-target-key]");
       if (target) {
         this.selectedKey = target.getAttribute("data-target-key");
@@ -927,6 +764,13 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.contentEl?.addEventListener?.("click", this.schemaClickListener);
     this.contentEl?.addEventListener?.("keydown", this.schemaKeyListener);
     this.contentEl?.addEventListener?.("focusin", this.schemaFocusListener);
+    this.contentEl?.addEventListener?.("input", (event) => this.schemaStageInput(event));
+    this.contentEl?.addEventListener?.("change", (event) => this.schemaStageInput(event));
+    this.contentEl?.addEventListener?.("compositionstart", () => { this.schemaComposing = true; });
+    this.contentEl?.addEventListener?.("compositionend", (event) => {
+      this.schemaComposing = false;
+      this.schemaStageInput(event);
+    });
     this.schemaUnsubscribe = this.schemaPlugin?.apiAlbumSubscribe?.((state) => this.schemaAlbumState(state)) || null;
   }
 

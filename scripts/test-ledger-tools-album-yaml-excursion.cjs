@@ -87,6 +87,7 @@ test("Done refuses unavailable or stale reports", () => {
     reportState({ report: null }),
     reportState({ unavailable: true }),
     reportState({ stale: true }),
+    reportState({ generation: 8, reportGeneration: 7 }),
     reportState({ refreshing: true }),
     reportState({ error: { code: "failed" } }),
   ]) {
@@ -97,6 +98,85 @@ test("Done refuses unavailable or stale reports", () => {
   const gone = helpers.albumYamlDoneDecision({ save: { ok: true }, reportState: reportState(), model: null });
   assert.equal(gone.ok, false);
   assert.equal(gone.reason, "unavailable");
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function excursionHarness() {
+  const leaf = {
+    view: { file: { path: "eat.md" }, editor: { setCursor() {} } },
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  const opened = [];
+  plugin.albumYamlExcursions = new Map();
+  plugin.albumYamlExcursionDisposed = false;
+  plugin.app = { workspace: { activeLeaf: leaf } };
+  plugin.apiAlbumReport = async () => reportState();
+  plugin.albumHeaderModelFor = () => modelWith([]);
+  plugin.openAlbumSchemaCard = (...args) => { opened.push(args); return { modal: { schemaSelect() {} } }; };
+  const record = {
+    albumPath: "eat.md", viewState: null, selectedKey: "stats", fingerprint: "sha256:before",
+    doneEl: null, container: null, completionPromise: null,
+  };
+  plugin.albumYamlExcursions.set(leaf, record);
+  return { plugin, leaf, record, opened };
+}
+
+test("Done shares one pending save across concurrent clicks", async () => {
+  const { plugin, leaf, opened } = excursionHarness();
+  const save = deferred();
+  let saves = 0;
+  let reports = 0;
+  plugin.albumYamlSaveExcursionEditors = () => { saves += 1; return save.promise; };
+  plugin.apiAlbumReport = async () => { reports += 1; return reportState(); };
+
+  const first = plugin.albumYamlDone({ leaf });
+  const second = plugin.albumYamlDone({ leaf });
+  assert.equal(saves, 1);
+  save.resolve({ ok: true });
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results.map((item) => item.ok), [true, true]);
+  assert.equal(reports, 1);
+  assert.equal(opened.length, 1);
+});
+
+test("Done abandons delayed saves after navigation, pane close, or plugin unload", async () => {
+  for (const invalidate of [
+    ({ leaf }) => { leaf.view.file.path = "other.md"; },
+    ({ plugin, leaf }) => { plugin.albumYamlExcursionClear(leaf); },
+    ({ plugin }) => { plugin.teardownAlbumYamlExcursion(); },
+  ]) {
+    const harness = excursionHarness();
+    const save = deferred();
+    let reports = 0;
+    harness.plugin.albumYamlSaveExcursionEditors = () => save.promise;
+    harness.plugin.apiAlbumReport = async () => { reports += 1; return reportState(); };
+    const completion = harness.plugin.albumYamlDone({ leaf: harness.leaf });
+    invalidate(harness);
+    save.resolve({ ok: true });
+    assert.deepEqual(await completion, { ok: false, reason: "stale-excursion" });
+    assert.equal(reports, 0);
+    assert.equal(harness.opened.length, 0);
+  }
+});
+
+test("Done does not reopen the card if its pane navigates during view restoration", async () => {
+  const { plugin, leaf, record, opened } = excursionHarness();
+  const restoring = deferred();
+  let restoreStarted = false;
+  record.viewState = { state: { mode: "preview" } };
+  leaf.setViewState = async () => { restoreStarted = true; return restoring.promise; };
+  plugin.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  const completion = plugin.albumYamlDone({ leaf });
+  while (!restoreStarted) await new Promise((resolve) => setImmediate(resolve));
+  leaf.view.file.path = "other.md";
+  restoring.resolve();
+  assert.deepEqual(await completion, { ok: false, reason: "stale-excursion" });
+  assert.equal(opened.length, 0);
 });
 
 test("Done keeps Source mode on schema errors and paints the diagnostic line", () => {

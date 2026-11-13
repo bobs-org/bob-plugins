@@ -315,7 +315,15 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
         notify();
         return { ok: false, ...session.refusal };
       }
-      if (vaultGeneration() !== preview.generation) {
+      if (session.revision !== preview.revision ||
+          (session.preview !== preview && vaultGeneration() === preview.generation) ||
+          session.expect !== preview.expect || session.epoch !== preview.epoch) {
+        // A draft changed or a same-generation preview was superseded while
+        // the supported save awaited. Keep that newer session state and never
+        // send the old bytes.
+        return { ok: false, code: "superseded-during-save", message: "The schema draft changed while panes were saving; preview the current draft before applying." };
+      }
+      if (vaultGeneration() !== preview.generation || !previewMatchesCurrent(preview)) {
         // Saving invalidated the preview: show a fresh preview and require
         // confirmation again instead of applying the old envelope.
         session.preview = null;
@@ -443,6 +451,10 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     if (!session.undo || !Array.isArray(session.undo.inverseOps) || session.undo.inverseOps.length === 0) {
       return { ok: false, code: "nothing-to-undo", message: "There is no schema edit to undo." };
     }
+    // The inverse is guarded by the exact post-image of the write that
+    // created it. A later report refresh cannot silently bless an external
+    // edit as the Undo baseline.
+    if (session.undo.afterFingerprint) session.expect = session.undo.afterFingerprint;
     setDraft(session.undo.inverseOps.map((op) => ({ ...op })));
     return { ok: true, revision: session.revision };
   }

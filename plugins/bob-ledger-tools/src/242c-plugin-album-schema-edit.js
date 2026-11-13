@@ -78,12 +78,13 @@ function albumSchemaStageAction(doc, host, text, action, className = "") {
   return button;
 }
 
-function albumSchemaAddInitialChoiceRow(doc, host, index, draft = {}) {
+function albumSchemaAddInitialChoiceRow(doc, host, index, draft = {}, options = {}) {
   const row = notebookCreateEl(doc, "div", "bob-album-schema-initial-choice");
   row.setAttribute("data-choice-index", String(index));
-  albumSchemaControl(doc, row, `Choice ${index + 1} label`, "text", `choiceLabel${index}`, draft.label || "");
-  albumSchemaControl(doc, row, `Choice ${index + 1} emoji`, "text", `choiceEmoji${index}`, draft.emoji || "");
-  albumSchemaStageAction(doc, row, `Remove choice ${index + 1}`, `remove-initial-choice:${index}`, "is-quiet");
+  albumSchemaControl(doc, row, `Choice ${index + 1} label`, "text", `choiceLabel${index}`, draft.label || "", { disabled: options.disabled });
+  albumSchemaControl(doc, row, `Choice ${index + 1} emoji`, "text", `choiceEmoji${index}`, draft.emoji || "", { disabled: options.disabled });
+  const remove = albumSchemaStageAction(doc, row, `Remove choice ${index + 1}`, `remove-initial-choice:${index}`, "is-quiet");
+  if (options.disabled) remove.disabled = true;
   host.appendChild(row);
   return row;
 }
@@ -96,6 +97,9 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
   const title = notebookCreateEl(doc, "h3", "bob-album-schema-stage-title");
   title.setAttribute("id", "bob-album-schema-stage-title");
   const target = albumSchemaTargetByKey(model, stage.targetKey);
+  const values = options?.stageDraft?.values || {};
+  const read = (name, fallback) => Object.prototype.hasOwnProperty.call(values, name) ? values[name] : fallback;
+  const locked = options?.stageLocked === true;
   const heading = stage.kind === "album" ? "Edit album details"
     : stage.kind === "field" ? `Edit ${target?.field?.label || "field"}`
       : stage.kind === "field-add" ? "Add field"
@@ -108,32 +112,35 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
     const identity = notebookCreateEl(doc, "p", "bob-album-schema-identity-note");
     notebookSetText(identity, `Record type ${model.noun || ""} is a fixed identity; edit it in YAML (y) or wait for the migration flow.`);
     panel.appendChild(identity);
-    albumSchemaControl(doc, panel, "Use explicit album label", "checkbox", "useLabel", model.storedLabel != null);
-    albumSchemaControl(doc, panel, "Album label", "text", "albumLabel", model.storedLabel || "");
-    albumSchemaControl(doc, panel, "Use explicit plural", "checkbox", "usePlural", model.storedPlural != null);
-    albumSchemaControl(doc, panel, "Plural", "text", "albumPlural", model.storedPlural || "");
-    albumSchemaControl(doc, panel, "Dated notes", "checkbox", "datedNotes", model.datedNotes === true);
+    albumSchemaControl(doc, panel, "Use explicit album label", "checkbox", "useLabel", read("useLabel", model.storedLabel != null), { disabled: locked });
+    albumSchemaControl(doc, panel, "Album label", "text", "albumLabel", read("albumLabel", model.storedLabel || ""), { disabled: locked });
+    albumSchemaControl(doc, panel, "Use explicit plural", "checkbox", "usePlural", read("usePlural", model.storedPlural != null), { disabled: locked });
+    albumSchemaControl(doc, panel, "Plural", "text", "albumPlural", read("albumPlural", model.storedPlural || ""), { disabled: locked });
+    albumSchemaControl(doc, panel, "Dated notes", "checkbox", "datedNotes", read("datedNotes", model.datedNotes === true), { disabled: locked });
   } else if (stage.kind === "field") {
     const field = target?.field || {};
     const identity = notebookCreateEl(doc, "p", "bob-album-schema-identity-note");
     notebookSetText(identity, `Stored key ${field.key} and kind ${field.kind || "text"} stay fixed. Edit keys or kinds in YAML (y) or wait for the migration flow.`);
     panel.appendChild(identity);
-    albumSchemaControl(doc, panel, "Field label", "text", "fieldLabel", field.label || "");
-    albumSchemaControl(doc, panel, "Use a default", "checkbox", "defaultPresent", field.defaultPresent === true);
+    albumSchemaControl(doc, panel, "Field label", "text", "fieldLabel", read("fieldLabel", field.label || ""), { disabled: locked });
+    albumSchemaControl(doc, panel, "Use a default", "checkbox", "defaultPresent", read("defaultPresent", field.defaultPresent === true), { disabled: locked });
     const defaultValue = Array.isArray(field.default) ? JSON.stringify(field.default) : field.default;
     albumSchemaControl(doc, panel, "Default value (JSON list for list fields)",
       field.list ? "textarea" : typeof field.default === "boolean" ? "checkbox" : field.kind === "number" ? "number" : "text",
-      "fieldDefault", field.defaultPresent ? defaultValue : "", { step: field.kind === "number" ? "any" : "" });
-    albumSchemaStageAction(doc, panel, "Unset default", "unset-default", "is-quiet");
-    albumSchemaControl(doc, panel, "Use minimum", "checkbox", "minPresent", field.min != null);
-    albumSchemaControl(doc, panel, "Minimum", "number", "fieldMin", field.min, { step: "any" });
-    albumSchemaStageAction(doc, panel, "Unset minimum", "unset-minimum", "is-quiet");
-    albumSchemaControl(doc, panel, "Use maximum", "checkbox", "maxPresent", field.max != null);
-    albumSchemaControl(doc, panel, "Maximum", "number", "fieldMax", field.max, { step: "any" });
-    albumSchemaStageAction(doc, panel, "Unset maximum", "unset-maximum", "is-quiet");
+      "fieldDefault", read("fieldDefault", field.defaultPresent ? defaultValue : ""), { step: field.kind === "number" ? "any" : "", disabled: locked });
+    const unsetDefault = albumSchemaStageAction(doc, panel, "Unset default", "unset-default", "is-quiet");
+    if (locked) unsetDefault.disabled = true;
+    albumSchemaControl(doc, panel, "Use minimum", "checkbox", "minPresent", read("minPresent", field.min != null), { disabled: locked });
+    albumSchemaControl(doc, panel, "Minimum", "number", "fieldMin", read("fieldMin", field.min), { step: "any", disabled: locked });
+    const unsetMinimum = albumSchemaStageAction(doc, panel, "Unset minimum", "unset-minimum", "is-quiet");
+    if (locked) unsetMinimum.disabled = true;
+    albumSchemaControl(doc, panel, "Use maximum", "checkbox", "maxPresent", read("maxPresent", field.max != null), { disabled: locked });
+    albumSchemaControl(doc, panel, "Maximum", "number", "fieldMax", read("fieldMax", field.max), { step: "any", disabled: locked });
+    const unsetMaximum = albumSchemaStageAction(doc, panel, "Unset maximum", "unset-maximum", "is-quiet");
+    if (locked) unsetMaximum.disabled = true;
   } else if (stage.kind === "field-add") {
-    albumSchemaControl(doc, panel, "Field label", "text", "newFieldLabel", "", { required: true });
-    const kind = albumSchemaControl(doc, panel, "Field kind", "select", "newFieldKind", "text");
+    albumSchemaControl(doc, panel, "Field label", "text", "newFieldLabel", read("newFieldLabel", ""), { required: true, disabled: locked });
+    const kind = albumSchemaControl(doc, panel, "Field kind", "select", "newFieldKind", read("newFieldKind", "text"), { disabled: locked });
     // `select` uses the same element path as a normal input so the card
     // works with the small DOM harness and Obsidian's native controls.
     for (const value of ["text", "choices", "date", "link", "url", "number"]) {
@@ -142,14 +149,16 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
       notebookSetText(option, value);
       kind.appendChild(option);
     }
-    kind.value = "text";
-    albumSchemaControl(doc, panel, "List field", "checkbox", "newFieldList", false);
-    albumSchemaControl(doc, panel, "Suggest existing values", "checkbox", "newFieldSuggest", false);
+    kind.value = read("newFieldKind", "text");
+    albumSchemaControl(doc, panel, "List field", "checkbox", "newFieldList", read("newFieldList", false), { disabled: locked });
+    albumSchemaControl(doc, panel, "Suggest existing values", "checkbox", "newFieldSuggest", read("newFieldSuggest", false), { disabled: locked });
     const choices = notebookCreateEl(doc, "div", "bob-album-schema-initial-choices");
     choices.setAttribute("data-schema-initial-choices", "");
-    albumSchemaAddInitialChoiceRow(doc, choices, 0);
+    const initialChoices = Array.isArray(options?.stageDraft?.initialChoices) ? options.stageDraft.initialChoices : [{ label: "", emoji: "" }];
+    initialChoices.forEach((choice, index) => albumSchemaAddInitialChoiceRow(doc, choices, index, choice, { disabled: locked }));
     panel.appendChild(choices);
-    albumSchemaStageAction(doc, panel, "Add initial choice", "add-initial-choice", "is-quiet");
+    const addChoice = albumSchemaStageAction(doc, panel, "Add initial choice", "add-initial-choice", "is-quiet");
+    if (locked) addChoice.disabled = true;
   } else if (stage.kind === "choice" || stage.kind === "choice-add") {
     const value = target?.choice || {};
     if (stage.kind === "choice") {
@@ -158,13 +167,14 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
       panel.appendChild(identity);
     }
     const parts = albumSchemaChoiceParts(value.label);
-    albumSchemaControl(doc, panel, "Choice label", "text", "choiceLabel", stage.kind === "choice" ? parts.label : "", { required: true });
-    albumSchemaControl(doc, panel, "Choice emoji", "text", "choiceEmoji", stage.kind === "choice" ? parts.emoji : "");
+    albumSchemaControl(doc, panel, "Choice label", "text", "choiceLabel", read("choiceLabel", stage.kind === "choice" ? parts.label : ""), { required: true, disabled: locked });
+    albumSchemaControl(doc, panel, "Choice emoji", "text", "choiceEmoji", read("choiceEmoji", stage.kind === "choice" ? parts.emoji : ""), { disabled: locked });
   }
 
   const buttons = notebookCreateEl(doc, "div", "bob-album-schema-stage-actions");
-  albumSchemaStageAction(doc, buttons, "Preview this edit", "submit-stage", "is-primary");
-  albumSchemaStageAction(doc, buttons, "Cancel stage", "cancel-stage");
+  const preview = albumSchemaStageAction(doc, buttons, "Preview this edit", "submit-stage", "is-primary");
+  const cancel = albumSchemaStageAction(doc, buttons, "Cancel stage", "cancel-stage");
+  if (locked) { preview.disabled = true; cancel.disabled = true; }
   panel.appendChild(buttons);
   return panel;
 }

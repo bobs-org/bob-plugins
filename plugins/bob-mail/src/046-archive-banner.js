@@ -72,11 +72,12 @@ function mailArchiveHasTrustedBanner(text) {
   }
 }
 
-// Explicit undo argv: exact recorded identity only, `--` before the note
-// operand so hostile paths never parse as flags, JSON for typed outcomes.
+// Explicit undo argv: exact recorded identity only. Options come first and
+// `--` immediately precedes the note operand, so hostile paths never parse
+// as flags and nothing after `--` becomes an extra operand.
 function mailArchiveUnarchiveArgs(notePath) {
   const target = String(notePath || "");
-  return ["gmail", "unarchive", "--", target, "-f", "json"];
+  return ["gmail", "unarchive", "-f", "json", "--", target];
 }
 
 function mailArchiveIsValidReceipt(entry) {

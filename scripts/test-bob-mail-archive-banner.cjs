@@ -161,8 +161,10 @@ test("fake banners without markers and damaged spans stay untrusted", () => {
 // --- undo argv ----------------------------------------------------------------
 
 test("unarchive argv pins the exact note behind -- with JSON output", () => {
-  assert.deepEqual(mail.mailArchiveUnarchiveArgs(NOTE), ["gmail", "unarchive", "--", NOTE, "-f", "json"]);
-  assert.deepEqual(mail.mailArchiveUnarchiveArgs("--evil.md")[3], "--evil.md");
+  assert.deepEqual(mail.mailArchiveUnarchiveArgs(NOTE), ["gmail", "unarchive", "-f", "json", "--", NOTE]);
+  const hostile = mail.mailArchiveUnarchiveArgs("--evil.md");
+  assert.equal(hostile[hostile.length - 2], "--");
+  assert.equal(hostile[hostile.length - 1], "--evil.md");
 });
 
 // --- receipt snapshot decoding -------------------------------------------------
@@ -520,7 +522,7 @@ test("banner click runs one exact unarchive, ignores doubles, then reloads state
   const second = plugin.mailArchiveUnarchiveFromBanner(NOTE);
   assert.equal(await second, false);
   assert.equal(await first, true);
-  assert.deepEqual(calls[0], ["gmail", "unarchive", "--", NOTE, "-f", "json"]);
+  assert.deepEqual(calls[0], ["gmail", "unarchive", "-f", "json", "--", NOTE]);
   assert.deepEqual(calls[1], ["gmail", "list", "-a", "-f", "json"]);
   assert.ok(notices.slice(before).some((message) => message.includes("Moved back to Inbox · t1")));
   assert.equal(plugin.mailArchiveCache.byNote.has(NOTE), true);

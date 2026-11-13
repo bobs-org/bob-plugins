@@ -226,6 +226,7 @@ class BobLedgerToolsGmailSyncMixin {
       maxBuffer: 1024 * 1024,
     });
     if (result && result.ok) {
+      this.gmailArchiveLatestSyncReport = result.report;
       if (typeof this.mailArchiveScheduleReceiptRefresh === "function") {
         this.mailArchiveScheduleReceiptRefresh("sync");
       }
@@ -241,4 +242,5 @@ class BobLedgerToolsGmailSyncMixin {
     console.info(`bob gmail sync skipped${suffix}: ${(result && (result.message || result.code)) || "failed"}`);
     return false;
   }
+
 }

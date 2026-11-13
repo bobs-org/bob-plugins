@@ -267,6 +267,7 @@ class BobLedgerToolsPlugin extends Plugin {
         bobPath: () => this.apiStatsBobPath(),
       }),
       pomodoroClock: this.pomodoroClockApi(),
+      gmailArchiveCloseNotice: Object.freeze({ version: 1, showForTask: (task) => gmailEventsShowCloseNotice(this, task) }),
       // Themes namespace v1: cached history, sync hue/history/near-duplicate
       // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),

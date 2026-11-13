@@ -392,6 +392,7 @@ class TaskStatusCyclerEditorEditsMixin {
       ) {
         this.stampFreshnessOnEditorLine(editor, taskStatus.line);
       }
+      if (nextSymbol === "x") taskStatusCyclerNotifyGmailClose(this, taskStatus);
       return true;
     }
     return false;

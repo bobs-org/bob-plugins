@@ -72,7 +72,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `relationIndex` | 1 | Read the live, source-authoritative task relation index and label suggestions. |
 | `relationLabels` | 1 | Read the relation-label catalog and delegate hide, unhide, and previewed rename writes to bob. |
 | `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
-| `bank` | 1 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment actions. |
+| `bank` | 2 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment and Category card actions. |
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -124,7 +124,11 @@ vault events, focus, local day rollover, or successful ensure and ack.
 `ensureOpenDay(day, options)`, `ackDayAtCursor(editor, view)`,
 `ackIds(ids, options)`, and `toggleIdLessRowAtCursor(editor,
 expectedLineText)`; acknowledgment submits only the drawn snapshot's IDs and
-ID-less toggles verify the exact row before flipping one byte.
+ID-less toggles verify the exact row before flipping one byte. Version 2 adds
+`claimRowClose(editor, view)`, which returns `true` and opens the Category card
+only for a waiting bank row, and `setCategory(editor, view)`, which opens the
+same card on any bank row without advancing the walk or changing its checkbox.
+Both return `false` when the editor cursor is not on a canonical bank row.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.

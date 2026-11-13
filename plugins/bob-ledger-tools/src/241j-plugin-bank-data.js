@@ -426,7 +426,7 @@ class BobLedgerToolsBankDataMixin {
 
   bankApi() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       fetch: (options) => this.apiBankFetch(options),
       refresh: (options) => this.apiBankRefresh(options),
       subscribe: (spec, subscriber) => this.apiBankSubscribe(spec, subscriber),

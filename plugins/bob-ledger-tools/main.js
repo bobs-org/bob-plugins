@@ -63084,7 +63084,7 @@ class BobLedgerToolsBankDataMixin {
 
   bankApi() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       fetch: (options) => this.apiBankFetch(options),
       refresh: (options) => this.apiBankRefresh(options),
       subscribe: (spec, subscriber) => this.apiBankSubscribe(spec, subscriber),
@@ -63728,6 +63728,9 @@ function bankCategoryCompletions(categories, query) {
     if (!entry || typeof entry.key !== "string" || !entry.key) {
       continue;
     }
+    if (entry.hidden === true) {
+      continue;
+    }
     const haystack = `${entry.key} ${bankActionText(entry.label)} ${bankActionText(entry.emoji)}`.toLowerCase();
     if (needle && haystack.indexOf(needle) === -1) {
       continue;
@@ -63783,6 +63786,15 @@ class BobLedgerToolsBankActionsMixin {
         });
       },
     });
+    this.addCommand({
+      id: "bank-set-category",
+      name: "Bank: set category",
+      editorCallback: (editor, view) => {
+        if (!this.bankCategorySetCategory(editor, view)) {
+          new Notice("Bank: put the cursor on a bank row first");
+        }
+      },
+    });
     if (typeof this.registerEditorExtension === "function" && keymap && typeof keymap.of === "function") {
       this.registerEditorExtension(
         keymap.of([
@@ -63794,6 +63806,7 @@ class BobLedgerToolsBankActionsMixin {
       );
     }
     this.setupBankCategorySuggest();
+    this.setupBankCategoryUi();
   }
 
   teardownBankActions() {
@@ -63806,16 +63819,19 @@ class BobLedgerToolsBankActionsMixin {
       // Suggest teardown is best-effort.
     }
     this.bankCategorySuggest = null;
+    this.teardownBankCategoryUi();
   }
 
   apiBankActions() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       ensureOpenDay: (day, options) => this.bankEnsureOpenDay(day, options),
       ackDayAtCursor: (editor, view) => this.bankAckDayAtCursor(editor, view),
       ackIds: (ids, options) => this.bankAckIds(ids, options),
       toggleIdLessRowAtCursor: (editor, expectedLineText) =>
         this.bankToggleIdLessRowAtCursor(editor, expectedLineText),
+      claimRowClose: (editor, view) => this.bankCategoryClaimRowClose(editor, view),
+      setCategory: (editor, view) => this.bankCategorySetCategory(editor, view),
     });
   }
 
@@ -63882,7 +63898,7 @@ class BobLedgerToolsBankActionsMixin {
     return { ok: true, report };
   }
 
-  async bankOpenMonthPathAtLine(path, oneBasedLine) {
+  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0) {
     const target = bankActionText(path);
     if (!target) {
       return false;
@@ -63942,7 +63958,7 @@ class BobLedgerToolsBankActionsMixin {
     const zeroBased = Math.max(0, Number(oneBasedLine || 1) - 1);
     try {
       if (typeof editor.setCursor === "function") {
-        editor.setCursor({ line: zeroBased, ch: 0 });
+        editor.setCursor({ line: zeroBased, ch: Number.isInteger(column) && column > 0 ? column : 0 });
       }
       if (typeof editor.focus === "function") {
         editor.focus();
@@ -65114,7 +65130,14 @@ class BobLedgerToolsBankCardsMixin {
     } else if (current.ackId) {
       return null;
     }
-    return { source, current };
+    const token = bankCategoryCurrentToken(path, source, current.line);
+    return {
+      source,
+      current,
+      payeeStart: token && token.token && token.token.payeeSpan
+        ? token.token.payeeSpan.start
+        : 0,
+    };
   }
 
   async bankCardNavigateRow(row) {
@@ -65123,7 +65146,7 @@ class BobLedgerToolsBankCardsMixin {
       new Notice("Bank row changed or moved. Refresh the card before navigating.");
       return false;
     }
-    return this.bankOpenMonthPathAtLine(row.path, current.current.line);
+    return this.bankOpenMonthPathAtLine(row.path, current.current.line, current.payeeStart);
   }
 
   async bankCardAckSnapshot(day) {
@@ -67514,6 +67537,655 @@ function bankCategoryMatchJsonRow(cardRow, jsonRows) {
     return null;
   }
   return candidate;
+}
+// ---- src/247-plugin-bank-category-card-ui.js ----
+// Keyboard-first Category card. The card renders Bob's categories and
+// suggestions, while the action mixin owns the one editor transaction.
+
+function bankCategoryCardModalBase() {
+  if (typeof Modal === "function") return Modal;
+  return class BankCategoryCardFallback {
+    constructor(app) {
+      this.app = app;
+      this.contentEl = {
+        ownerDocument: app && app.document ? app.document : null,
+        listeners: new Map(),
+        addClass() {},
+        setAttribute() {},
+        addEventListener(type, callback) {
+          const listeners = this.listeners.get(type) || [];
+          listeners.push(callback);
+          this.listeners.set(type, listeners);
+        },
+        removeEventListener(type, callback) {
+          this.listeners.set(type, (this.listeners.get(type) || []).filter((entry) => entry !== callback));
+        },
+        empty() {},
+        appendChild() {},
+      };
+      this.modalEl = this.contentEl;
+    }
+    open() { this.onOpen?.(); }
+    close() { this.onClose?.(); }
+  };
+}
+
+function bankCategoryUiEl(doc, tag, className, text, attrs = {}) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  const node = doc.createElement(tag);
+  if (!node) return null;
+  if (className) node.className = className;
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "disabled") node.disabled = value === true;
+    else if (typeof node.setAttribute === "function") node.setAttribute(key, String(value));
+  }
+  if (text !== null && text !== undefined) node.textContent = String(text);
+  return node;
+}
+
+function bankCategoryUiAppend(parent, tag, className, text, attrs = {}) {
+  const doc = parent && parent.ownerDocument;
+  const node = bankCategoryUiEl(doc, tag, className, text, attrs);
+  if (node && parent && typeof parent.appendChild === "function") parent.appendChild(node);
+  return node;
+}
+
+function bankCategoryUiConsume(event) {
+  try { event?.preventDefault?.(); } catch (_) {}
+  try { event?.stopPropagation?.(); } catch (_) {}
+}
+
+function bankCategoryUiEventKey(event) {
+  if (!event || typeof event.key !== "string") return "";
+  if (event.ctrlKey && event.key === "[") return "Ctrl+[";
+  if (event.ctrlKey && event.key === "Enter") return "Ctrl+Enter";
+  if (event.ctrlKey && (event.key === "n" || event.key === "N")) return "Ctrl+N";
+  if (event.ctrlKey && (event.key === "p" || event.key === "P")) return "Ctrl+P";
+  return event.key;
+}
+
+// Apply the pure planner's character edits without disturbing the rest of the
+// row. The caller replaces that whole line once, producing one undo step.
+function bankCategoryApplyLineEdits(lineText, plan) {
+  if (!plan || plan.ok !== true || !Array.isArray(plan.edits)) return null;
+  let output = String(lineText || "");
+  const edits = plan.edits.slice().sort((left, right) => right.fromCh - left.fromCh);
+  for (const edit of edits) {
+    if (!edit || !Number.isInteger(edit.fromCh) || !Number.isInteger(edit.toCh) ||
+        edit.fromCh < 0 || edit.toCh < edit.fromCh || edit.toCh > output.length ||
+        typeof edit.insert !== "string") return null;
+    output = output.slice(0, edit.fromCh) + edit.insert + output.slice(edit.toCh);
+  }
+  return output;
+}
+
+class BankCategoryCardModal extends bankCategoryCardModalBase() {
+  constructor(app, options = {}) {
+    super(app);
+    this.pluginRef = options.plugin || null;
+    this.mode = options.mode === "set" ? "set" : "close";
+    this.context = options.context || null;
+    this.categories = Array.isArray(options.categories) ? options.categories : null;
+    this.suggestion = options.suggestion || null;
+    this.progress = options.progress || null;
+    this.highlightKey = null;
+    this.didInteract = false;
+    this.busy = false;
+    this.waitingRefresh = false;
+    this.closed = false;
+    this.summary = null;
+    this.lock = null;
+    this.chord = bankCategoryChordInit(options.openedWithCtrlEnter === true);
+    this.onChoose = typeof options.onChoose === "function" ? options.onChoose : null;
+    this.onMonth = typeof options.onMonth === "function" ? options.onMonth : null;
+    this.clickListener = (event) => this.onClick(event);
+    this.keyListener = (event) => this.onKeyDown(event);
+    this.keyupListener = (event) => this.onKeyUp(event);
+    this.keyupTarget = null;
+    this.model = null;
+  }
+
+  onOpen() {
+    try {
+      this.modalEl?.addClass?.("bob-bank-category-modal");
+      this.modalEl?.setAttribute?.("role", "dialog");
+      this.modalEl?.setAttribute?.("aria-modal", "true");
+      this.modalEl?.setAttribute?.("aria-label", "Bank Category card");
+      this.contentEl?.addClass?.("bob-bank-category-dialog");
+      this.contentEl?.addClass?.("bob-key-card");
+      this.contentEl?.addEventListener?.("click", this.clickListener);
+      this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
+      this.contentEl?.addEventListener?.("keyup", this.keyupListener, true);
+      const doc = this.contentEl?.ownerDocument || this.app?.document ||
+        (typeof document !== "undefined" ? document : null);
+      if (doc && typeof doc.addEventListener === "function") {
+        this.keyupTarget = doc;
+        doc.addEventListener("keyup", this.keyupListener, true);
+      }
+    } catch (_) {}
+    this.paint();
+  }
+
+  onClose() {
+    this.closed = true;
+    try { this.contentEl?.removeEventListener?.("click", this.clickListener); } catch (_) {}
+    try { this.contentEl?.removeEventListener?.("keydown", this.keyListener, true); } catch (_) {}
+    try { this.contentEl?.removeEventListener?.("keyup", this.keyupListener, true); } catch (_) {}
+    try { this.keyupTarget?.removeEventListener?.("keyup", this.keyupListener, true); } catch (_) {}
+    this.keyupTarget = null;
+    try { this.pluginRef?.bankCategoryModalClosed?.(this); } catch (_) {}
+  }
+
+  onEscapeKey(event) {
+    bankCategoryUiConsume(event);
+    if (!this.busy) this.close();
+    return false;
+  }
+
+  currentModel() {
+    const row = this.context && this.context.cardRow ? this.context.cardRow : {};
+    this.model = bankCategoryCardModel({
+      mode: this.mode,
+      categories: this.categories,
+      suggestion: this.suggestion,
+      row,
+      progress: this.progress,
+    });
+    if (this.highlightKey === null) this.highlightKey = this.model.highlightKey;
+    return this.model;
+  }
+
+  setReport(report) {
+    if (!report || this.didInteract || this.closed) return false;
+    if (Array.isArray(report.categories)) this.categories = report.categories;
+    const rows = Array.isArray(report.days)
+      ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
+      : [];
+    const cardRow = this.context && this.context.cardRow ? this.context.cardRow : null;
+    const match = cardRow ? bankCategoryMatchJsonRow(cardRow, rows) : null;
+    this.suggestion = match && match.suggestion ? match.suggestion : null;
+    const model = bankCategoryCardModel({
+      mode: this.mode,
+      categories: this.categories,
+      suggestion: this.suggestion,
+      row: cardRow || {},
+      progress: this.progress,
+    });
+    this.highlightKey = model.highlightKey;
+    this.model = model;
+    this.paint();
+    return true;
+  }
+
+  setNext(context, progress, lock) {
+    this.context = context;
+    this.progress = progress || null;
+    this.suggestion = null;
+    this.didInteract = false;
+    this.waitingRefresh = true;
+    this.busy = false;
+    this.summary = null;
+    this.lock = lock || null;
+    this.highlightKey = null;
+    this.paint();
+  }
+
+  showSummary(summary) {
+    this.waitingRefresh = false;
+    this.busy = false;
+    this.summary = summary || null;
+    this.paint();
+  }
+
+  flatTiles(model = this.currentModel()) {
+    return (Array.isArray(model.sections) ? model.sections : [])
+      .flatMap((section) => Array.isArray(section.tiles) ? section.tiles : []);
+  }
+
+  moveHighlight(direction) {
+    const model = this.currentModel();
+    const next = bankCategoryMoveHighlight(this.highlightKey, this.flatTiles(model), direction);
+    if (!next) return false;
+    this.highlightKey = next;
+    this.didInteract = true;
+    this.paint();
+    return true;
+  }
+
+  async choose(categoryKey, kind) {
+    if (this.busy || this.closed || this.summary) return false;
+    this.didInteract = true;
+    this.busy = true;
+    this.paint();
+    try {
+      if (this.onChoose) await this.onChoose(categoryKey, kind, this);
+      return true;
+    } catch (error) {
+      new Notice(`Bank: category could not be filed (${error && error.message ? error.message : error})`);
+      return false;
+    } finally {
+      if (!this.closed && !this.waitingRefresh) {
+        this.busy = false;
+        this.paint();
+      }
+    }
+  }
+
+  async onKeyDown(event) {
+    if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+    const key = bankCategoryUiEventKey(event);
+    if (!key) return;
+    if (key === "Escape") {
+      bankCategoryUiConsume(event);
+      this.close();
+      return;
+    }
+    const table = bankCategoryKeyTable(this.categories);
+    const action = bankCategoryResolveCardKey({ key, table });
+    if (action.action === "ignore") return;
+    bankCategoryUiConsume(event);
+    if (this.busy || this.waitingRefresh || this.summary) return;
+    if (key === "Ctrl+Enter" && bankCategoryLockActive(this.lock, Date.now())) return;
+    if ((key === "Enter" || key === "Ctrl+Enter") && bankCategoryChordShouldSwallow(this.chord, "Enter")) return;
+    this.didInteract = true;
+    if (action.action === "cancel") {
+      this.close();
+    } else if (action.action === "move") {
+      const backwards = action.key === "ArrowLeft" || action.key === "ArrowUp" || action.key === "Ctrl+P";
+      this.moveHighlight(backwards ? "back" : "forward");
+    } else if (action.action === "no-category") {
+      await this.choose(null, "no-category");
+    } else if (action.action === "file") {
+      await this.choose(action.category, "pick");
+    } else if (action.action === "accept") {
+      if (this.highlightKey) await this.choose(this.highlightKey, "accept");
+    }
+  }
+
+  onKeyUp(event) {
+    if (event && (event.key === "Enter" || event.code === "NumpadEnter")) {
+      this.chord = bankCategoryChordKeyup(this.chord);
+    }
+  }
+
+  onClick(event) {
+    const target = event && event.target;
+    const tile = target && typeof target.closest === "function"
+      ? target.closest("button[data-category-key]")
+      : null;
+    if (tile && !tile.disabled) {
+      bankCategoryUiConsume(event);
+      const key = tile.getAttribute("data-category-key");
+      this.highlightKey = key;
+      void this.choose(key, "pick");
+      return;
+    }
+    const month = target && typeof target.closest === "function"
+      ? target.closest("button[data-bank-month-path]")
+      : null;
+    if (month && !month.disabled) {
+      bankCategoryUiConsume(event);
+      const path = month.getAttribute("data-bank-month-path");
+      this.close();
+      if (path && this.onMonth) void this.onMonth(path);
+    }
+  }
+
+  paintSummary(root, doc) {
+    const summary = this.summary || {};
+    bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title", "Bank filing complete");
+    bankCategoryUiAppend(root, "p", "bob-bank-category-summary", summary.line1 || "Bank filing complete");
+    if (summary.detail) bankCategoryUiAppend(root, "p", "bob-bank-category-detail", summary.detail);
+    if (summary.line2) bankCategoryUiAppend(root, "p", "bob-bank-category-summary-detail", summary.line2);
+    const links = Array.isArray(summary.waitingLinks) ? summary.waitingLinks : [];
+    if (links.length) {
+      const section = bankCategoryUiAppend(root, "section", "bob-bank-category-other-months");
+      bankCategoryUiAppend(section, "h3", "bob-bank-category-group", "Other months with waiting rows");
+      for (const entry of links) {
+        const button = bankCategoryUiAppend(section, "button", "bob-bank-category-month-link",
+          `${entry.month} · ${entry.waiting} waiting →`, { type: "button", "data-bank-month-path": entry.path });
+        if (button) button.disabled = this.busy;
+      }
+    }
+    const close = bankCategoryUiAppend(root, "button", "bob-bank-category-close", "Close", { type: "button" });
+    if (close) close.addEventListener?.("click", () => this.close());
+    void doc;
+  }
+
+  paint() {
+    const content = this.contentEl;
+    if (!content) return;
+    try {
+      if (typeof content.empty === "function") content.empty();
+      else if (typeof content.replaceChildren === "function") content.replaceChildren();
+      else content.textContent = "";
+    } catch (_) {}
+    const doc = content.ownerDocument || this.app?.document ||
+      (typeof document !== "undefined" ? document : null);
+    const root = bankCategoryUiEl(doc, "section", "bob-bank-category bob-key-card", null, {
+      role: "dialog", "aria-modal": "true", "aria-label": "Bank Category card",
+    });
+    if (!root) return;
+    if (typeof content.appendChild === "function") content.appendChild(root);
+    if (this.summary) {
+      this.paintSummary(root, doc);
+      return;
+    }
+    const model = this.currentModel();
+    const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title", "Category");
+    if (title) title.id = "bob-bank-category-title";
+    const header = model.header || {};
+    const payee = header.payee || "Bank row";
+    const amount = Number.isSafeInteger(header.cents) ? bankFormatCents(header.cents) : "";
+    bankCategoryUiAppend(root, "p", "bob-bank-category-payee", `${payee}${amount ? ` · ${amount}` : ""}`);
+    const meta = [header.date, header.account, header.flagged ? "⚑ flagged" : null,
+      this.mode === "set" ? (header.state === "acknowledged" ? "acknowledged" : "waiting") : null]
+      .filter(Boolean).join(" · ");
+    if (meta) bankCategoryUiAppend(root, "p", "bob-bank-category-meta", meta);
+    if (model.progress) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-progress", `Row ${model.progress.filed} of ${model.progress.total}`);
+    }
+    if (model.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.hint, { role: "status" });
+    if (this.waitingRefresh) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint", "Refreshing suggestions…", { role: "status" });
+    }
+    for (const sectionModel of Array.isArray(model.sections) ? model.sections : []) {
+      const section = bankCategoryUiAppend(root, "section", "bob-bank-category-section");
+      if (!section) continue;
+      if (sectionModel.group) bankCategoryUiAppend(section, "h3", "bob-bank-category-group", sectionModel.group);
+      const grid = bankCategoryUiAppend(section, "div", "bob-bank-category-tiles", null, { role: "group" });
+      for (const tile of Array.isArray(sectionModel.tiles) ? sectionModel.tiles : []) {
+        const selected = tile.key === this.highlightKey;
+        const button = bankCategoryUiAppend(grid, "button",
+          `bob-bank-category-tile${selected ? " is-highlighted" : ""}${tile.dimmed ? " is-dimmed" : ""}`,
+          `${tile.hotkey ? `${tile.hotkey} · ` : ""}${tile.text || tile.label || tile.key}`,
+          { type: "button", "data-category-key": tile.key, "aria-pressed": selected ? "true" : "false" });
+        if (button) button.disabled = this.busy || this.waitingRefresh;
+      }
+    }
+    bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
+    if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
+    const keys = this.mode === "close"
+      ? "↵ accept · letter choose · Space no category · Esc cancel"
+      : "↵ accept · letter choose · Space remove category · Esc cancel";
+    bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
+  }
+}
+// ---- src/248-plugin-bank-category-card-actions.js ----
+// Category card lifecycle, version-2 bank API actions, and the note-local
+// filing walk. Bob supplies suggestions and totals; the editor changes one row.
+
+class BobLedgerToolsBankCategoryMixin {
+  setupBankCategoryUi() {
+    this.bankCategoryModal = null;
+    this.bankCategorySession = null;
+  }
+
+  teardownBankCategoryUi() {
+    try { this.bankCategoryModal?.close?.(); } catch (_) {}
+    this.bankCategoryModal = null;
+    this.bankCategorySession = null;
+  }
+
+  bankCategoryModalClosed(modal) {
+    if (this.bankCategoryModal === modal) this.bankCategoryModal = null;
+  }
+
+  bankCategoryClaimRowClose(editor, view) {
+    return this.bankCategoryOpenAtCursor(editor, view, "close", true);
+  }
+
+  bankCategorySetCategory(editor, view) {
+    return this.bankCategoryOpenAtCursor(editor, view, "set", false);
+  }
+
+  bankCategoryContextAt(editor, view, lineNumber) {
+    const path = this.bankActiveFilePath(view);
+    if (!editor || typeof editor.getValue !== "function" || bankMonthFromPath(path) === null) return null;
+    const source = editor.getValue();
+    const current = bankCategoryCurrentToken(path, source, lineNumber);
+    if (!current || !current.token || !current.row) return null;
+    const token = current.token;
+    const row = current.row;
+    const cardRow = {
+      path,
+      line: row.line,
+      date: row.date,
+      cents: token.cents,
+      payee: token.payee,
+      category: token.category && token.category.key ? token.category.key : null,
+      account: token.account && token.account.alias ? token.account.alias : null,
+      flagged: token.flagged === true,
+      acknowledged: token.acknowledged === true,
+      id: row.ackId || null,
+    };
+    return {
+      path,
+      month: bankMonthFromPath(path).key,
+      source,
+      scan: current.scan,
+      row: cardRow,
+      token,
+      capture: bankCategoryCapture({ path, line: row.line, lineText: current.raw }),
+    };
+  }
+
+  bankCategoryOpenAtCursor(editor, view, mode, openedWithCtrlEnter) {
+    const activeEditor = editor || this.bankActiveEditor(view);
+    if (!activeEditor || typeof activeEditor.getCursor !== "function") return false;
+    const cursor = activeEditor.getCursor();
+    if (!cursor || !Number.isInteger(cursor.line)) return false;
+    const context = this.bankCategoryContextAt(activeEditor, view, cursor.line + 1);
+    if (!context || (mode === "close" && context.row.acknowledged)) return false;
+    if (this.bankCategoryModal) {
+      try { this.bankCategoryModal.close(); } catch (_) {}
+    }
+    let session = null;
+    let progress = null;
+    if (mode === "close") {
+      const now = Date.now();
+      session = this.bankCategorySession;
+      if (!session || session.path !== context.path || bankCategorySessionIdleExpired(session, now)) {
+        session = bankCategorySessionStart(context.path, now);
+      }
+      this.bankCategorySession = session;
+      progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(context.scan).length);
+    }
+    const cached = this.bankCategoryCachedReport(context.month);
+    const categories = cached && Array.isArray(cached.categories) ? cached.categories : null;
+    const modal = new BankCategoryCardModal(this.app, {
+      plugin: this,
+      mode,
+      context,
+      categories,
+      progress,
+      openedWithCtrlEnter,
+      onChoose: (categoryKey, kind, activeModal) =>
+        this.bankCategoryCommit(activeModal, categoryKey, kind),
+      onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
+    });
+    modal.editor = activeEditor;
+    modal.session = session;
+    modal.month = context.month;
+    this.bankCategoryModal = modal;
+    modal.open();
+    if (cached) modal.setReport(cached);
+    void Promise.resolve(this.apiBankRefresh({ command: "report", month: context.month }))
+      .then((result) => {
+        if (this.bankCategoryModal === modal && !modal.didInteract && result && result.report) {
+          modal.setReport(result.report);
+        }
+      })
+      .catch(() => {});
+    return true;
+  }
+
+  bankCategoryCachedReport(month) {
+    try {
+      const key = bankCacheKey(bankBuildArgs({ command: "report", month }));
+      return this.bankLastGoodReport(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bankCategoryReportRows(report) {
+    const out = [];
+    for (const day of Array.isArray(report?.days) ? report.days : []) {
+      for (const row of Array.isArray(day?.rows) ? day.rows : []) {
+        out.push({ ...row, path: row.path || day.path, date: row.date || day.date });
+      }
+    }
+    return out;
+  }
+
+  bankCategoryApplyEdits(editor, plan) {
+    if (!editor || typeof editor.replaceRange !== "function" || !plan || plan.ok !== true) return false;
+    const lineIndex = plan.line - 1;
+    const raw = typeof editor.getLine === "function"
+      ? editor.getLine(lineIndex)
+      : String(editor.getValue() || "").split("\n")[lineIndex]?.replace(/\r$/, "");
+    if (typeof raw !== "string") return false;
+    const replacement = bankCategoryApplyLineEdits(raw, plan);
+    if (replacement === null) return false;
+    if (replacement !== raw) {
+      // A single whole-line replacement joins checkbox and category edits into
+      // one CodeMirror transaction and therefore one undo step.
+      editor.replaceRange(replacement,
+        { line: lineIndex, ch: 0 },
+        { line: lineIndex, ch: raw.length });
+    }
+    return true;
+  }
+
+  async bankCategoryCommit(modal, categoryKey, kind) {
+    if (!modal || modal.closed || modal !== this.bankCategoryModal) return false;
+    const editor = modal.editor;
+    if (!editor || typeof editor.getValue !== "function") {
+      new Notice("Bank: the row is no longer open");
+      return false;
+    }
+    const currentPath = this.bankActiveFilePath();
+    const currentSource = editor.getValue();
+    const plan = bankCategoryWritePlan({
+      mode: modal.mode,
+      capture: modal.context && modal.context.capture,
+      currentPath,
+      currentSource,
+      categoryKey,
+    });
+    if (!plan.ok) {
+      new Notice(plan.message || BANK_CATEGORY_WRITE_REFUSAL);
+      return false;
+    }
+    if (!this.bankCategoryApplyEdits(editor, plan)) {
+      new Notice(BANK_CATEGORY_WRITE_REFUSAL);
+      return false;
+    }
+    if (modal.mode === "set") {
+      modal.close();
+      new Notice(plan.action === "noop" ? "Bank: row has no category" : "Bank: category updated");
+      return true;
+    }
+
+    const now = Date.now();
+    const session = bankCategorySessionRecord(modal.session, kind, now);
+    modal.session = session;
+    this.bankCategorySession = session;
+    const source = editor.getValue();
+    const scan = bankScanSource(modal.context.path, source);
+    const next = bankCategoryNextWaiting({ scan, filedLine: plan.line });
+    const month = modal.month;
+    const refresh = Promise.resolve(this.apiBankRefresh({ command: "report", month }));
+    if (!next) {
+      await this.bankCategoryCompleteWalk(modal, session, refresh);
+      return true;
+    }
+
+    const nextContext = this.bankCategoryContextAt(editor, { file: { path: modal.context.path } }, next.row.line);
+    if (!nextContext) {
+      new Notice(BANK_CATEGORY_WRITE_REFUSAL);
+      modal.close();
+      return false;
+    }
+    editor.setCursor?.({
+      line: next.row.line - 1,
+      ch: nextContext.token.payeeSpan ? nextContext.token.payeeSpan.start : 0,
+    });
+    const progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(scan).length);
+    modal.setNext(nextContext, progress, bankCategoryLockInit(Date.now()));
+    const refreshResult = await Promise.race([
+      refresh,
+      new Promise((resolve) => setTimeout(() => resolve(null), 800)),
+    ]);
+    if (this.bankCategoryModal !== modal || modal.closed) return true;
+    modal.waitingRefresh = false;
+    modal.busy = false;
+    if (refreshResult && refreshResult.report) modal.setReport(refreshResult.report);
+    modal.paint();
+    if (!refreshResult) {
+      void refresh.then((late) => {
+        if (this.bankCategoryModal === modal && !modal.didInteract && late && late.report) {
+          modal.setReport(late.report);
+        }
+      }).catch(() => {});
+    }
+    return true;
+  }
+
+  async bankCategoryCompleteWalk(modal, session, monthRefresh) {
+    modal.waitingRefresh = true;
+    modal.busy = false;
+    modal.paint();
+    const listPromise = Promise.resolve(this.apiBankRefresh({ command: "list", all: true }));
+    const [monthResult, listResult] = await Promise.all([
+      Promise.resolve(monthRefresh).catch(() => null),
+      listPromise.catch(() => null),
+    ]);
+    if (this.bankCategoryModal !== modal || modal.closed) return;
+    const report = monthResult && monthResult.report;
+    const waitingByMonth = new Map();
+    for (const day of Array.isArray(listResult?.report?.days) ? listResult.report.days : []) {
+      for (const row of Array.isArray(day?.rows) ? day.rows : []) {
+        if (!row || row.acknowledged !== false) continue;
+        const path = row.path || day.path;
+        const month = bankMonthFromPath(path);
+        if (!month || path === modal.context.path) continue;
+        const entry = waitingByMonth.get(path) || { month: month.key, path, waiting: 0 };
+        entry.waiting += 1;
+        waitingByMonth.set(path, entry);
+      }
+    }
+    const summary = bankCategoryEndOfRunSummary({
+      monthLabel: report?.period?.label || modal.month,
+      filed: session.filed,
+      elapsedMs: Date.now() - session.startedAt,
+      accepted: session.accepted,
+      picked: session.picked,
+      noCategory: session.noCategory,
+      accounts: report?.accounts || [],
+      waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
+      bobReachable: Boolean(report && !monthResult?.error),
+    });
+    this.bankCategorySession = null;
+    new Notice(summary.line1);
+    modal.showSummary(summary);
+  }
+
+  async bankCategoryOpenWaitingMonth(path) {
+    const month = bankMonthFromPath(path);
+    if (!month) return false;
+    const result = await this.apiBankFetch({ command: "report", month: month.key });
+    const rows = this.bankCategoryReportRows(result && result.report);
+    const first = rows.filter((row) => row.acknowledged === false)
+      .sort((left, right) => Number(left.line) - Number(right.line))[0];
+    if (!first) {
+      new Notice("Bank: no waiting rows in that month");
+      return false;
+    }
+    return this.bankCardNavigateRow(first);
+  }
 }
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
@@ -115760,6 +116432,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
+  BobLedgerToolsBankCategoryMixin,
   BobLedgerToolsBankCardsMixin,
   BobLedgerToolsBankDailyChipMixin,
   BobLedgerToolsBankMarksMixin,
@@ -118879,6 +119552,18 @@ module.exports.helpers = {
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
   bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankCardDailyChipModel, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
 };
+// ---- src/357-exports-bank-category-ui.js ----
+// UI-level test helpers for the Category card. Kept apart from the pure
+// models so the fragment manifest remains the source of truth.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BankCategoryCardModal,
+      bankCategoryUiEventKey,
+      bankCategoryApplyLineEdits,
+    });
+  }
+} catch (_) {}
 // ---- src/351-exports-prj-hide.js ----
 // Project and hidden task-tag-mark helpers, exported beside the
 // existing task-tag-mark surface in `350-exports.js`. Kept in its own

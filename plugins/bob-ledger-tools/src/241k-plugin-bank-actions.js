@@ -440,6 +440,9 @@ function bankCategoryCompletions(categories, query) {
     if (!entry || typeof entry.key !== "string" || !entry.key) {
       continue;
     }
+    if (entry.hidden === true) {
+      continue;
+    }
     const haystack = `${entry.key} ${bankActionText(entry.label)} ${bankActionText(entry.emoji)}`.toLowerCase();
     if (needle && haystack.indexOf(needle) === -1) {
       continue;
@@ -495,6 +498,15 @@ class BobLedgerToolsBankActionsMixin {
         });
       },
     });
+    this.addCommand({
+      id: "bank-set-category",
+      name: "Bank: set category",
+      editorCallback: (editor, view) => {
+        if (!this.bankCategorySetCategory(editor, view)) {
+          new Notice("Bank: put the cursor on a bank row first");
+        }
+      },
+    });
     if (typeof this.registerEditorExtension === "function" && keymap && typeof keymap.of === "function") {
       this.registerEditorExtension(
         keymap.of([
@@ -506,6 +518,7 @@ class BobLedgerToolsBankActionsMixin {
       );
     }
     this.setupBankCategorySuggest();
+    this.setupBankCategoryUi();
   }
 
   teardownBankActions() {
@@ -518,16 +531,19 @@ class BobLedgerToolsBankActionsMixin {
       // Suggest teardown is best-effort.
     }
     this.bankCategorySuggest = null;
+    this.teardownBankCategoryUi();
   }
 
   apiBankActions() {
     return Object.freeze({
-      version: 1,
+      version: 2,
       ensureOpenDay: (day, options) => this.bankEnsureOpenDay(day, options),
       ackDayAtCursor: (editor, view) => this.bankAckDayAtCursor(editor, view),
       ackIds: (ids, options) => this.bankAckIds(ids, options),
       toggleIdLessRowAtCursor: (editor, expectedLineText) =>
         this.bankToggleIdLessRowAtCursor(editor, expectedLineText),
+      claimRowClose: (editor, view) => this.bankCategoryClaimRowClose(editor, view),
+      setCategory: (editor, view) => this.bankCategorySetCategory(editor, view),
     });
   }
 
@@ -594,7 +610,7 @@ class BobLedgerToolsBankActionsMixin {
     return { ok: true, report };
   }
 
-  async bankOpenMonthPathAtLine(path, oneBasedLine) {
+  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0) {
     const target = bankActionText(path);
     if (!target) {
       return false;
@@ -654,7 +670,7 @@ class BobLedgerToolsBankActionsMixin {
     const zeroBased = Math.max(0, Number(oneBasedLine || 1) - 1);
     try {
       if (typeof editor.setCursor === "function") {
-        editor.setCursor({ line: zeroBased, ch: 0 });
+        editor.setCursor({ line: zeroBased, ch: Number.isInteger(column) && column > 0 ? column : 0 });
       }
       if (typeof editor.focus === "function") {
         editor.focus();

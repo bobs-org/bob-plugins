@@ -28,6 +28,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- | --- |
 | Bank: acknowledge this day | `bank-ack-day` | — |
 | Bank: open today | `bank-open-today` | — |
+| Bank: set category | `bank-set-category` | — |
 | Check Google Keep now | `check-google-keep-now` | — |
 | Cycle Day stats bars | `cycle-day-stats-bars` | — |
 | Cycle period stats charts | `cycle-period-stats-charts` | — |
@@ -70,6 +71,15 @@ Album owner cards, group navigation, and sync controls are described in
 ## Bank cards and the daily chip
 
 `bob-bank` fences (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`): frontmatter matches the filename; only existing headings navigate; empty months teach. Queue rows run oldest-first; day buttons carry the drawn IDs. **Bank: open today** ensures today at the next row; **Bank: acknowledge this day** acks that day's snapshot; no default hotkeys. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clears empty stubs; `[cat:: ` inserts ordered keys. The chip follows the Day strip, hides without `bank.md`, defaults on (`stats.bank_chip: false`). `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math; only `bank.md` hides its `bank` property.
+
+On a waiting bank row, Ctrl+Enter opens the Category card. Bob's suggestion is
+highlighted; Enter accepts it, a reported hotkey picks another category, Space
+files without one, and Escape cancels. A filing ticks the row and sets its
+category in one undo step, then advances within that month note. **Bank: set
+category** opens the same card on any row as a correction and leaves its
+checkbox and cursor position alone. Hidden categories stay valid on rows but
+do not appear in the card or `[cat:: ` suggestions. The waiting pill lands at
+the payee start so Ctrl+Enter is ready on arrival.
 
 ## Snippets and the plan block
 

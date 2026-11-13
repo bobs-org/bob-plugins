@@ -595,7 +595,14 @@ class BobLedgerToolsBankCardsMixin {
     } else if (current.ackId) {
       return null;
     }
-    return { source, current };
+    const token = bankCategoryCurrentToken(path, source, current.line);
+    return {
+      source,
+      current,
+      payeeStart: token && token.token && token.token.payeeSpan
+        ? token.token.payeeSpan.start
+        : 0,
+    };
   }
 
   async bankCardNavigateRow(row) {
@@ -604,7 +611,7 @@ class BobLedgerToolsBankCardsMixin {
       new Notice("Bank row changed or moved. Refresh the card before navigating.");
       return false;
     }
-    return this.bankOpenMonthPathAtLine(row.path, current.current.line);
+    return this.bankOpenMonthPathAtLine(row.path, current.current.line, current.payeeStart);
   }
 
   async bankCardAckSnapshot(day) {

@@ -429,7 +429,7 @@ test("headless setup does not keep the process alive with a browser rollover tim
   try {
     assert.equal(plugin.bankRolloverTimer, null);
     const api = plugin.bankApi();
-    assert.equal(api.version, 1);
+    assert.equal(api.version, 2);
     assert.equal(typeof api.fetch, "function");
     assert.equal(typeof api.subscribe, "function");
     assert.equal(typeof api.invalidate, "function");

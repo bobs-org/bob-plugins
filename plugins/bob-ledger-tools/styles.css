@@ -8897,6 +8897,32 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-bank-chip-error,
 .bob-bank-chip-refresh-error { color: var(--text-faint); font-size: 0.72em; }
 .bob-bank-daily-chip[data-stale="true"] { border-style: dashed; }
+.bob-bank-category-modal .modal-content { --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-bank-category-dialog { max-width: 40rem; }
+.bob-bank-category { --bob-bank-accent: var(--bob-area-magenta, var(--interactive-accent)); color: var(--text-normal); }
+.bob-bank-category-title { margin: 0 0 0.45rem; color: var(--text-normal); font-size: 1.2em; }
+.bob-bank-category-payee { margin: 0.2rem 0; font-weight: 650; font-size: 1.02em; }
+.bob-bank-category-meta,
+.bob-bank-category-progress,
+.bob-bank-category-hint { margin: 0.2rem 0; color: var(--text-muted); font-size: 0.8em; }
+.bob-bank-category-progress { color: var(--bob-bank-accent); font-variant-numeric: tabular-nums; }
+.bob-bank-category-section { margin-top: 0.65rem; }
+.bob-bank-category-group { margin: 0 0 0.3rem; color: var(--text-muted); font-size: 0.72em; font-variant: small-caps; letter-spacing: 0.07em; }
+.bob-bank-category-tiles { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.bob-bank-category-tile,
+.bob-bank-category-month-link,
+.bob-bank-category-close { border: 1px solid color-mix(in srgb, var(--bob-bank-accent) 34%, var(--background-modifier-border)); border-radius: 0.4rem; padding: 0.42rem 0.62rem; background: color-mix(in srgb, var(--bob-bank-accent) 8%, var(--background-primary)); color: var(--text-normal); font: inherit; font-size: 0.86em; cursor: pointer; }
+.bob-bank-category-tile.is-highlighted { border-color: var(--bob-bank-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bob-bank-accent) 32%, transparent); background: color-mix(in srgb, var(--bob-bank-accent) 18%, var(--background-primary)); }
+.bob-bank-category-tile.is-dimmed { opacity: 0.68; }
+.bob-bank-category-tile:disabled { cursor: default; opacity: 0.55; }
+.bob-bank-category-footer { margin: 0.7rem 0 0.25rem; color: var(--bob-bank-accent); font-size: 0.84em; }
+.bob-bank-category-keys { margin: 0.2rem 0 0; color: var(--text-faint); font-size: 0.72em; }
+.bob-bank-category-summary { font-size: 1.05em; font-weight: 650; }
+.bob-bank-category-detail,
+.bob-bank-category-summary-detail { color: var(--text-muted); font-size: 0.83em; }
+.bob-bank-category-other-months { display: grid; gap: 0.35rem; margin-top: 0.8rem; }
+.bob-bank-category-other-months .bob-bank-category-group { margin-bottom: 0.15rem; }
+.bob-bank-category-close { margin-top: 0.85rem; }
 @media (max-width: 600px) {
   .bob-bank-card { padding: 0.65rem; }
   .bob-bank-summary { grid-template-columns: 1fr; }

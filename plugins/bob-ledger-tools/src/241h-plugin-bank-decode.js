@@ -146,6 +146,41 @@ function bankParseBody(stdout, stderr, commandLabel) {
   return { ok: true, body };
 }
 
+function bankNormalizeHotkey(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string" || value.length !== 1) {
+    return null;
+  }
+  return value.toLowerCase();
+}
+
+function bankNormalizeGroup(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  return value;
+}
+
+function bankNormalizeSuggestion(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!bankJsonObject(value)) {
+    return null;
+  }
+  const category = bankText(value.category);
+  const source = bankText(value.source);
+  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank")) {
+    return null;
+  }
+  return { category, source };
+}
+
 function bankNormalizeCategory(value) {
   if (!bankJsonObject(value) || bankText(value.key) === null || bankText(value.label) === null) {
     return null;
@@ -155,6 +190,9 @@ function bankNormalizeCategory(value) {
     emoji: bankText(value.emoji) || "",
     label: value.label,
     builtin: value.builtin === true,
+    hotkey: bankNormalizeHotkey(value.hotkey),
+    group: bankNormalizeGroup(value.group),
+    hidden: value.hidden === true,
   };
 }
 
@@ -215,6 +253,7 @@ function bankNormalizeRow(value) {
     acknowledged: value.acknowledged === true,
     id: value.id === null || value.id === undefined ? null : bankString(value.id),
     origin: bankString(value.origin),
+    suggestion: bankNormalizeSuggestion(value.suggestion),
   };
 }
 

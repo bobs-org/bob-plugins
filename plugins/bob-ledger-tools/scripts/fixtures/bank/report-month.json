@@ -3,11 +3,51 @@
   "schema_version": 1,
   "today": "2026-11-12",
   "categories": [
-    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "builtin": false },
-    { "key": "cash", "emoji": "🏧", "label": "Cash out", "builtin": true },
-    { "key": "income", "emoji": "💵", "label": "Income", "builtin": true },
-    { "key": "refund", "emoji": "↩️", "label": "Refund", "builtin": true },
-    { "key": "transfer", "emoji": "🔁", "label": "Transfer", "builtin": true }
+    {
+      "key": "groceries",
+      "emoji": "🛒",
+      "label": "Groceries",
+      "builtin": false,
+      "hotkey": "g",
+      "group": null,
+      "hidden": false
+    },
+    {
+      "key": "cash",
+      "emoji": "🏧",
+      "label": "Cash out",
+      "builtin": true,
+      "hotkey": "a",
+      "group": "Money moves",
+      "hidden": false
+    },
+    {
+      "key": "income",
+      "emoji": "💵",
+      "label": "Income",
+      "builtin": true,
+      "hotkey": "i",
+      "group": "Money moves",
+      "hidden": false
+    },
+    {
+      "key": "refund",
+      "emoji": "↩️",
+      "label": "Refund",
+      "builtin": true,
+      "hotkey": "r",
+      "group": "Money moves",
+      "hidden": false
+    },
+    {
+      "key": "transfer",
+      "emoji": "🔁",
+      "label": "Transfer",
+      "builtin": true,
+      "hotkey": "t",
+      "group": "Money moves",
+      "hidden": false
+    }
   ],
   "accounts": [
     {
@@ -37,7 +77,10 @@
       "hint": "Cash destination unknown until traced"
     }
   ],
-  "issues": { "errors": 0, "warnings": 0 },
+  "issues": {
+    "errors": 0,
+    "warnings": 0
+  },
   "period": {
     "kind": "month",
     "key": "2026-11",
@@ -60,9 +103,30 @@
     "unclassified_in_cents": 999
   },
   "breakdown": [
-    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "out_cents": 129876, "share": 0.9532, "rows": 3 },
-    { "key": "cash", "emoji": "🏧", "label": "Cash out", "out_cents": 6350, "share": 0.0466, "rows": 1 },
-    { "key": "unclassified", "emoji": "·", "label": "Unclassified", "out_cents": 30, "share": 0.0002, "rows": 2 }
+    {
+      "key": "groceries",
+      "emoji": "🛒",
+      "label": "Groceries",
+      "out_cents": 129876,
+      "share": 0.9532,
+      "rows": 3
+    },
+    {
+      "key": "cash",
+      "emoji": "🏧",
+      "label": "Cash out",
+      "out_cents": 6350,
+      "share": 0.0466,
+      "rows": 1
+    },
+    {
+      "key": "unclassified",
+      "emoji": "·",
+      "label": "Unclassified",
+      "out_cents": 30,
+      "share": 0.0002,
+      "rows": 2
+    }
   ],
   "days": [
     {
@@ -97,7 +161,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": "1c0e77aa",
-          "origin": "imported"
+          "origin": "imported",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -112,7 +177,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -127,7 +193,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -142,7 +209,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -157,7 +225,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -172,7 +241,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -187,7 +257,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -202,7 +273,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -217,7 +289,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -232,7 +305,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -247,7 +321,8 @@
           "flagged": false,
           "acknowledged": true,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         },
         {
           "path": "bank/2026-11.md",
@@ -257,18 +332,28 @@
           "cents": -6120,
           "payee": "ShopRite",
           "category": "groceries",
-          "links": ["[[shoprite]]"],
+          "links": [
+            "[[shoprite]]"
+          ],
           "note": "with Kelly",
           "flagged": true,
           "acknowledged": false,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": {
+            "category": "groceries",
+            "source": "learned"
+          }
         }
       ],
       "waiting": 1,
       "flagged": 1
     }
   ],
-  "waiting": { "period": 1, "all": 2, "oldest": "2026-10-31" },
+  "waiting": {
+    "period": 1,
+    "all": 2,
+    "oldest": "2026-10-31"
+  },
   "flagged": 1
 }

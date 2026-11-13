@@ -125,6 +125,8 @@
   "241o-plugin-bank-marks-model.js",
   "241p-plugin-bank-marks.js",
   "241q-plugin-bank-marks-reading.js",
+  "245-plugin-bank-category-card-model.js",
+  "246-plugin-bank-category-card-write.js",
   "241b-plugin-notebook-catalog-model.js",
   "241c-plugin-notebook-catalog-dom.js",
   "241d-plugin-notebook-catalog.js",
@@ -227,5 +229,6 @@
   "352-exports-album.js",
   "353-exports-gmail-open-hint.js",
   "354-exports-walker-footer.js",
-  "355-exports-links-walker-footer.js"
+  "355-exports-links-walker-footer.js",
+  "356-exports-bank-category.js"
 ]

@@ -61313,6 +61313,41 @@ function bankParseBody(stdout, stderr, commandLabel) {
   return { ok: true, body };
 }
 
+function bankNormalizeHotkey(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string" || value.length !== 1) {
+    return null;
+  }
+  return value.toLowerCase();
+}
+
+function bankNormalizeGroup(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  return value;
+}
+
+function bankNormalizeSuggestion(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!bankJsonObject(value)) {
+    return null;
+  }
+  const category = bankText(value.category);
+  const source = bankText(value.source);
+  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank")) {
+    return null;
+  }
+  return { category, source };
+}
+
 function bankNormalizeCategory(value) {
   if (!bankJsonObject(value) || bankText(value.key) === null || bankText(value.label) === null) {
     return null;
@@ -61322,6 +61357,9 @@ function bankNormalizeCategory(value) {
     emoji: bankText(value.emoji) || "",
     label: value.label,
     builtin: value.builtin === true,
+    hotkey: bankNormalizeHotkey(value.hotkey),
+    group: bankNormalizeGroup(value.group),
+    hidden: value.hidden === true,
   };
 }
 
@@ -61382,6 +61420,7 @@ function bankNormalizeRow(value) {
     acknowledged: value.acknowledged === true,
     id: value.id === null || value.id === undefined ? null : bankString(value.id),
     origin: bankString(value.origin),
+    suggestion: bankNormalizeSuggestion(value.suggestion),
   };
 }
 
@@ -66468,6 +66507,669 @@ class BobLedgerToolsBankMarksReadingMixin {
       return false;
     }
   }
+}
+// ---- src/245-plugin-bank-category-card-model.js ----
+// Pure Category card view model, key table, session, and end-of-run summary
+// (bank_weekly_category_walk card-model). No DOM, no spawns: card-ui renders
+// what these return. Bob owns categories, hotkeys, groups, and suggestions.
+
+const BANK_CATEGORY_MONEY_GROUP = "Money moves";
+const BANK_CATEGORY_SOURCES = ["rule", "learned", "bank"];
+const BANK_CATEGORY_LOCK_MS = 300;
+const BANK_CATEGORY_SESSION_IDLE_MS = 15 * 60 * 1000;
+
+function bankCategoryText(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function bankCategoryVisible(categories) {
+  return (Array.isArray(categories) ? categories : []).filter(
+    (entry) => entry && typeof entry.key === "string" && entry.key && entry.hidden !== true,
+  );
+}
+
+function bankCategoryByKey(categories, key) {
+  if (!key || !Array.isArray(categories)) {
+    return null;
+  }
+  return categories.find((entry) => entry && entry.key === key) || null;
+}
+
+// Hotkey table in declared order. `q` never files: it cancels the card.
+function bankCategoryKeyTable(categories) {
+  const byKey = new Map();
+  for (const entry of bankCategoryVisible(categories)) {
+    const hotkey = typeof entry.hotkey === "string" && entry.hotkey.length === 1
+      ? entry.hotkey.toLowerCase()
+      : null;
+    if (!hotkey || hotkey === "q" || byKey.has(hotkey)) {
+      continue;
+    }
+    byKey.set(hotkey, entry.key);
+  }
+  return byKey;
+}
+
+function bankCategoryTileLabel(entry) {
+  const emoji = typeof entry.emoji === "string" ? entry.emoji : "";
+  const label = typeof entry.label === "string" ? entry.label : entry.key;
+  return `${emoji ? `${emoji} ` : ""}${label}`;
+}
+
+function bankCategorySections(categories, options = {}) {
+  const inflow = options.inflow === true;
+  const visible = bankCategoryVisible(categories);
+  const sections = [];
+  const indexByGroup = new Map();
+  const untitledKey = "";
+  for (const entry of visible) {
+    const group = typeof entry.group === "string" && entry.group.trim() ? entry.group : null;
+    const mapKey = group || untitledKey;
+    let section = indexByGroup.has(mapKey) ? sections[indexByGroup.get(mapKey)] : null;
+    if (!section) {
+      section = { group, tiles: [], dimmed: false };
+      indexByGroup.set(mapKey, sections.length);
+      sections.push(section);
+    }
+    const hotkey = typeof entry.hotkey === "string" && entry.hotkey.length === 1
+      ? entry.hotkey.toLowerCase()
+      : null;
+    section.tiles.push({
+      key: entry.key,
+      hotkey,
+      keycap: hotkey ? hotkey.toUpperCase() : null,
+      emoji: typeof entry.emoji === "string" ? entry.emoji : "",
+      label: typeof entry.label === "string" ? entry.label : entry.key,
+      text: bankCategoryTileLabel(entry),
+      dimmed: false,
+    });
+  }
+  if (inflow) {
+    const moneyIndex = sections.findIndex((section) => section.group === BANK_CATEGORY_MONEY_GROUP);
+    if (moneyIndex > 0) {
+      const [money] = sections.splice(moneyIndex, 1);
+      sections.unshift(money);
+    }
+    for (const section of sections) {
+      if (section.group !== BANK_CATEGORY_MONEY_GROUP) {
+        section.dimmed = true;
+        for (const tile of section.tiles) {
+          tile.dimmed = true;
+        }
+      }
+    }
+  }
+  return sections;
+}
+
+function bankCategoryHighlightKey(categories, rowCategoryKey, suggestion) {
+  const visible = bankCategoryVisible(categories);
+  const visibleKeys = new Set(visible.map((entry) => entry.key));
+  if (rowCategoryKey && visibleKeys.has(rowCategoryKey)) {
+    return rowCategoryKey;
+  }
+  if (suggestion && visibleKeys.has(suggestion.category)) {
+    return suggestion.category;
+  }
+  return null;
+}
+
+// Footer variants: row+suggestion agree, row wins, suggestion only, neither.
+function bankCategoryCardFooter(rowCategoryKey, rowCategoryLabel, suggestion, suggestionLabel) {
+  if (rowCategoryKey && suggestion && suggestion.category === rowCategoryKey) {
+    return {
+      kind: "agree",
+      highlightKey: rowCategoryKey,
+      origin: "suggestion",
+      source: suggestion.source,
+      text: `↵ ${rowCategoryLabel} · ${suggestion.source}`,
+    };
+  }
+  if (rowCategoryKey) {
+    return {
+      kind: "row",
+      highlightKey: rowCategoryKey,
+      origin: "row",
+      source: null,
+      text: `↵ ${rowCategoryLabel} · on the row`,
+    };
+  }
+  if (suggestion) {
+    return {
+      kind: "suggestion",
+      highlightKey: suggestion.category,
+      origin: "suggestion",
+      source: suggestion.source,
+      text: `↵ ${suggestionLabel} · ${suggestion.source}`,
+    };
+  }
+  return { kind: "none", highlightKey: null, origin: null, source: null, text: "pick a category" };
+}
+
+function bankCategoryOldBob(categories) {
+  if (!Array.isArray(categories) || categories.length === 0) {
+    return false;
+  }
+  return !categories.some(
+    (entry) => entry && typeof entry.hotkey === "string" && entry.hotkey.length === 1,
+  );
+}
+
+function bankCategoryRowLabel(categories, key) {
+  const entry = bankCategoryByKey(categories, key);
+  if (!entry) {
+    return key;
+  }
+  return bankCategoryTileLabel(entry);
+}
+
+function bankCategoryCardModel(input = {}) {
+  const mode = input.mode === "set" ? "set" : "close";
+  const categories = Array.isArray(input.categories) ? input.categories : null;
+  const row = input.row && typeof input.row === "object" ? input.row : {};
+  if (!categories) {
+    return {
+      kind: "restricted",
+      mode,
+      reason: bankCategoryText(input.reason) || "categories unavailable",
+      header: {
+        cents: Number.isSafeInteger(row.cents) ? row.cents : null,
+        payee: bankCategoryText(row.payee) || "",
+        date: bankCategoryText(row.date) || null,
+        flagged: row.flagged === true,
+        account: bankCategoryText(row.account) || null,
+      },
+      footer: { kind: "restricted", text: "␣ acknowledge · esc cancel" },
+      hint: `Categories unavailable — ${bankCategoryText(input.reason) || "categories unavailable"}`,
+    };
+  }
+  const inflow = Number.isSafeInteger(row.cents) && row.cents > 0;
+  const sections = bankCategorySections(categories, { inflow });
+  const suggestion = input.suggestion && typeof input.suggestion === "object" &&
+      typeof input.suggestion.category === "string" && BANK_CATEGORY_SOURCES.includes(input.suggestion.source)
+    ? { category: input.suggestion.category, source: input.suggestion.source }
+    : null;
+  const visibleKeys = new Set(bankCategoryVisible(categories).map((entry) => entry.key));
+  const rowCategoryKey = typeof row.category === "string" && visibleKeys.has(row.category)
+    ? row.category
+    : (typeof row.category === "string" && row.category ? row.category : null);
+  const highlightableRowKey = rowCategoryKey && visibleKeys.has(rowCategoryKey) ? rowCategoryKey : null;
+  const highlightableSuggestion = suggestion && visibleKeys.has(suggestion.category) ? suggestion : null;
+  const highlightKey = highlightableRowKey || (highlightableSuggestion ? highlightableSuggestion.category : null);
+  const rowLabel = rowCategoryKey ? bankCategoryRowLabel(categories, rowCategoryKey) : null;
+  const suggestionLabel = highlightableSuggestion
+    ? bankCategoryRowLabel(categories, highlightableSuggestion.category)
+    : null;
+  const footer = bankCategoryCardFooter(
+    highlightableRowKey ? highlightableRowKey : null,
+    highlightableRowKey ? bankCategoryRowLabel(categories, highlightableRowKey) : null,
+    highlightableSuggestion,
+    highlightableSuggestion ? bankCategoryRowLabel(categories, highlightableSuggestion.category) : null,
+  );
+  void rowLabel;
+  void suggestionLabel;
+  const oldBob = bankCategoryOldBob(categories);
+  return {
+    kind: "card",
+    mode,
+    inflow,
+    oldBob,
+    header: {
+      cents: Number.isSafeInteger(row.cents) ? row.cents : null,
+      payee: bankCategoryText(row.payee) || "",
+      date: bankCategoryText(row.date) || null,
+      flagged: row.flagged === true,
+      account: bankCategoryText(row.account) || null,
+      state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
+    },
+    sections,
+    highlightKey,
+    footer: oldBob
+      ? { ...footer, hint: "update bob for one-key filing" }
+      : footer,
+    progress: mode === "close" && input.progress ? { ...input.progress } : null,
+  };
+}
+
+// Single-key resolution. Returns a pure action descriptor; rendering and the
+// editor transaction belong to card-ui.
+function bankCategoryResolveCardKey(input = {}) {
+  const key = typeof input.key === "string" ? input.key : "";
+  const table = input.table instanceof Map ? input.table : bankCategoryKeyTable(input.categories);
+  if (key === "Enter" || key === "Ctrl+Enter") {
+    return { action: "accept" };
+  }
+  if (key === " ") {
+    return { action: "no-category" };
+  }
+  if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
+    return { action: "cancel" };
+  }
+  if (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown" ||
+    key === "Ctrl+N" || key === "Ctrl+P") {
+    return { action: "move", key };
+  }
+  if (key.length === 1) {
+    const lower = key.toLowerCase();
+    if (lower === "q") {
+      return { action: "cancel" };
+    }
+    if (table.has(lower)) {
+      return { action: "file", category: table.get(lower) };
+    }
+  }
+  return { action: "ignore" };
+}
+
+function bankCategoryMoveHighlight(highlightKey, tiles, direction) {
+  const order = (Array.isArray(tiles) ? tiles : []).map((tile) => tile.key);
+  if (order.length === 0) {
+    return null;
+  }
+  const at = order.indexOf(highlightKey);
+  if (at < 0) {
+    return direction === "back" ? order[order.length - 1] : order[0];
+  }
+  if (direction === "back") {
+    return order[(at - 1 + order.length) % order.length];
+  }
+  return order[(at + 1) % order.length];
+}
+
+// Opening chord: the held or repeating Enter that opened the card never
+// accepts. A second Ctrl+Enter counts only after the opening Enter keyup.
+function bankCategoryChordInit(openedWithEnter) {
+  return { swallowEnter: openedWithEnter === true, enterUpSeen: false };
+}
+
+function bankCategoryChordKeyup(state) {
+  return { swallowEnter: false, enterUpSeen: true, prev: state || null };
+}
+
+function bankCategoryChordShouldSwallow(state, key) {
+  if (!state || state.swallowEnter !== true) {
+    return false;
+  }
+  return key === "Enter";
+}
+
+// Gesture lock: for ~300ms after a landing, Ctrl+Enter is swallowed.
+function bankCategoryLockInit(nowMs) {
+  return { lockedUntil: Number.isFinite(nowMs) ? nowMs + BANK_CATEGORY_LOCK_MS : 0 };
+}
+
+function bankCategoryLockActive(lock, nowMs) {
+  if (!lock || !Number.isFinite(nowMs)) {
+    return false;
+  }
+  return nowMs < lock.lockedUntil;
+}
+
+// Walk session: per note path, counts filed/accepted/picked/no-category.
+function bankCategorySessionStart(path, nowMs) {
+  return {
+    path: typeof path === "string" ? path : "",
+    startedAt: Number.isFinite(nowMs) ? nowMs : Date.now(),
+    lastActivity: Number.isFinite(nowMs) ? nowMs : Date.now(),
+    filed: 0,
+    accepted: 0,
+    picked: 0,
+    noCategory: 0,
+  };
+}
+
+function bankCategorySessionRecord(session, kind, nowMs) {
+  if (!session) {
+    return session;
+  }
+  const next = { ...session, lastActivity: Number.isFinite(nowMs) ? nowMs : session.lastActivity };
+  next.filed += 1;
+  if (kind === "accept") {
+    next.accepted += 1;
+  } else if (kind === "pick") {
+    next.picked += 1;
+  } else if (kind === "no-category") {
+    next.noCategory += 1;
+  }
+  return next;
+}
+
+function bankCategorySessionProgress(session, stillWaiting) {
+  const filed = session && Number.isInteger(session.filed) ? session.filed : 0;
+  const waiting = Number.isInteger(stillWaiting) && stillWaiting >= 0 ? stillWaiting : 0;
+  return { filed: filed + 1, total: filed + waiting, waiting };
+}
+
+function bankCategorySessionIdleExpired(session, nowMs) {
+  if (!session || !Number.isFinite(nowMs)) {
+    return false;
+  }
+  return nowMs - session.lastActivity > BANK_CATEGORY_SESSION_IDLE_MS;
+}
+
+function bankCategoryElapsedText(elapsedMs) {
+  const totalSeconds = Math.max(0, Math.floor((Number.isFinite(elapsedMs) ? elapsedMs : 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function bankCategoryAccountLine(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  const importable = list.filter((account) => account && account.kind !== "cash");
+  if (importable.length === 0) {
+    return null;
+  }
+  const parts = [];
+  for (const account of importable) {
+    const label = account.label || account.alias || "Account";
+    const status = typeof account.status === "string" ? account.status : null;
+    if (status && status !== "balanced" && status !== "ok") {
+      if (/stale/i.test(status)) {
+        parts.push(`${label} ⚠ import stale`);
+      } else if (/gap/i.test(status)) {
+        parts.push(`${label} ⚠ gap`);
+      } else if (/delta/i.test(status)) {
+        const hint = typeof account.hint === "string" && account.hint ? ` ${account.hint}` : "";
+        parts.push(`${label} Δ${hint}`);
+      } else {
+        const hint = typeof account.hint === "string" && account.hint ? ` · ${account.hint}` : "";
+        parts.push(`${label} ${status}${hint}`);
+      }
+      continue;
+    }
+    if (typeof account.hint === "string" && account.hint) {
+      parts.push(`${label} ${account.hint}`);
+      continue;
+    }
+    parts.push(`${label} ✓ balanced`);
+  }
+  return parts.join(" · ");
+}
+
+// End-of-run notice model. Bob owns every number; only line one shows when
+// bob is unreachable.
+function bankCategoryEndOfRunSummary(input = {}) {
+  const monthLabel = bankCategoryText(input.monthLabel) || "Month";
+  const filed = Number.isInteger(input.filed) && input.filed >= 0 ? input.filed : 0;
+  const elapsedText = bankCategoryElapsedText(input.elapsedMs);
+  const accepted = Number.isInteger(input.accepted) ? input.accepted : 0;
+  const picked = Number.isInteger(input.picked) ? input.picked : 0;
+  const noCategory = Number.isInteger(input.noCategory) ? input.noCategory : 0;
+  const line1 = `🏦 ${monthLabel} filed — ${filed} row${filed === 1 ? "" : "s"} in ${elapsedText}`;
+  if (input.bobReachable === false) {
+    return { line1, line2: null, waitingLinks: [], counts: { accepted, picked, noCategory } };
+  }
+  const accountLine = bankCategoryAccountLine(input.accounts);
+  const waitingLinks = (Array.isArray(input.waitingByMonth) ? input.waitingByMonth : [])
+    .filter((entry) => entry && Number.isInteger(entry.waiting) && entry.waiting > 0 &&
+      bankCategoryText(entry.month))
+    .map((entry) => ({ month: entry.month, waiting: entry.waiting, path: entry.path || `bank/${entry.month}.md` }));
+  const countsLine = `${accepted} accepted · ${picked} picked · ${noCategory} without a category`;
+  const line2parts = [];
+  if (accountLine) {
+    line2parts.push(accountLine);
+  }
+  for (const link of waitingLinks) {
+    line2parts.push(`${link.waiting} waiting in ${link.month} →`);
+  }
+  return {
+    line1,
+    line2: line2parts.length > 0 ? line2parts.join("   ") : null,
+    detail: countsLine,
+    waitingLinks,
+    counts: { accepted, picked, noCategory },
+  };
+}
+// ---- src/246-plugin-bank-category-card-write.js ----
+// Pure Category card write planner, next-waiting finder, and JSON row match
+// (bank_weekly_category_walk card-model). Reuses bankScanSource and
+// bankTokenizeLine; every byte the plugin does not own is preserved.
+
+const BANK_CATEGORY_WRITE_REFUSAL = "Bank: the row changed — nothing written";
+
+function bankCategoryCapture(input = {}) {
+  const lineText = typeof input.lineText === "string" ? input.lineText : "";
+  const match = String(lineText).match(/[ \t]+\^([A-Za-z0-9-]+)[ \t]*$/);
+  const blockId = match ? match[1] : null;
+  const ackMatch = blockId ? blockId.match(/^bank-([0-9a-fA-F]+)$/i) : null;
+  return {
+    path: typeof input.path === "string" ? input.path : "",
+    line: Number.isInteger(input.line) ? input.line : null,
+    lineText,
+    bankId: ackMatch ? ackMatch[1].toLowerCase() : null,
+  };
+}
+
+function bankCategoryCountCatFields(lineText) {
+  const matches = String(lineText || "").match(/\[cat::/g);
+  return matches ? matches.length : 0;
+}
+
+function bankCategoryCurrentToken(path, source, line) {
+  if (typeof source !== "string" || !Number.isInteger(line) || line < 1) {
+    return null;
+  }
+  try {
+    const scan = bankScanSource(path, source);
+    if (!scan || !scan.month) {
+      return null;
+    }
+    const row = scan.rows.find((entry) => entry && entry.line === line);
+    if (!row) {
+      return null;
+    }
+    const lines = String(source).replace(/^\uFEFF/, "").split("\n");
+    const raw = (lines[line - 1] || "").replace(/\r$/, "");
+    const token = bankTokenizeLine(raw);
+    if (!token) {
+      return null;
+    }
+    return { scan, row, raw, token };
+  } catch (error) {
+    return null;
+  }
+}
+
+function bankCategoryResolveForCommit(capture, currentPath, currentSource) {
+  if (!capture || capture.path !== currentPath) {
+    return { ok: false, reason: "file-changed", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  if (typeof currentSource !== "string") {
+    return { ok: false, reason: "no-source", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  const lines = String(currentSource).replace(/^\uFEFF/, "").split("\n");
+  if (capture.bankId) {
+    let scan = null;
+    try {
+      scan = bankScanSource(currentPath, currentSource);
+    } catch (error) {
+      scan = null;
+    }
+    if (!scan || !scan.month) {
+      return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+    }
+    const matches = scan.rows.filter((row) => row && row.ackId === capture.bankId);
+    if (matches.length !== 1) {
+      return { ok: false, reason: "moved-or-edited", message: BANK_CATEGORY_WRITE_REFUSAL };
+    }
+    const resolved = matches[0];
+    const raw = (lines[resolved.line - 1] || "").replace(/\r$/, "");
+    let token = null;
+    try {
+      token = bankTokenizeLine(raw);
+    } catch (error) {
+      token = null;
+    }
+    if (!token) {
+      return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+    }
+    return { ok: true, line: resolved.line, raw, token };
+  }
+  if (!Number.isInteger(capture.line) || capture.line < 1 || capture.line > lines.length) {
+    return { ok: false, reason: "moved-or-edited", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  const raw = (lines[capture.line - 1] || "").replace(/\r$/, "");
+  if (raw !== capture.lineText) {
+    return { ok: false, reason: "moved-or-edited", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  let token = null;
+  try {
+    token = bankTokenizeLine(raw);
+  } catch (error) {
+    token = null;
+  }
+  if (!token) {
+    return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  return { ok: true, line: capture.line, raw, token };
+}
+
+// One editor transaction plan: status byte plus insert/replace/remove of a
+// single [cat:: key] right after the payee span. Space removes with one
+// leading space. Returns character edits within the resolved line.
+function bankCategoryWritePlan(input = {}) {
+  const mode = input.mode === "set" ? "set" : "close";
+  const capture = input.capture && typeof input.capture === "object" ? input.capture : null;
+  const categoryKey = input.categoryKey === null || input.categoryKey === undefined
+    ? null
+    : (typeof input.categoryKey === "string" && input.categoryKey ? input.categoryKey : null);
+  if (input.categoryKey !== null && input.categoryKey !== undefined && categoryKey === null) {
+    return { ok: false, reason: "bad-category", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  const resolved = bankCategoryResolveForCommit(capture, input.currentPath, input.currentSource);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  const { line, raw, token } = resolved;
+  if (bankCategoryCountCatFields(raw) >= 2) {
+    return { ok: false, reason: "duplicate-cat", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  if (mode === "close" && token.acknowledged) {
+    return { ok: false, reason: "not-waiting", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  const edits = [];
+  if (mode === "close") {
+    const checkbox = token.checkbox;
+    if (!checkbox || !Number.isInteger(checkbox.start)) {
+      return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+    }
+    const statusAt = checkbox.start + 1;
+    const current = raw[statusAt];
+    if (current !== "x" && current !== "X") {
+      edits.push({ line, fromCh: statusAt, toCh: statusAt + 1, insert: "x" });
+    }
+  }
+  const existing = token.category;
+  if (categoryKey === null) {
+    if (existing && existing.span && Number.isInteger(existing.span.start)) {
+      let fromCh = existing.span.start;
+      if (fromCh > 0 && raw[fromCh - 1] === " ") {
+        fromCh -= 1;
+      }
+      edits.push({ line, fromCh, toCh: existing.span.end, insert: "" });
+      return { ok: true, mode, line, action: "remove", edits, tick: mode === "close" };
+    }
+    if (mode === "close" && edits.length > 0) {
+      return { ok: true, mode, line, action: "tick", edits, tick: true };
+    }
+    if (mode === "set") {
+      return { ok: true, mode, line, action: "noop", edits, tick: false };
+    }
+    return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  const replacement = `[cat:: ${categoryKey}]`;
+  if (existing && existing.span && Number.isInteger(existing.span.start)) {
+    edits.push({ line, fromCh: existing.span.start, toCh: existing.span.end, insert: replacement });
+    return { ok: true, mode, line, action: "replace", edits, tick: mode === "close" };
+  }
+  const payeeSpan = token.payeeSpan;
+  if (!payeeSpan || !Number.isInteger(payeeSpan.end)) {
+    return { ok: false, reason: "not-a-row", message: BANK_CATEGORY_WRITE_REFUSAL };
+  }
+  edits.push({ line, fromCh: payeeSpan.end, toCh: payeeSpan.end, insert: ` ${replacement}` });
+  return { ok: true, mode, line, action: "insert", edits, tick: mode === "close" };
+}
+
+function bankCategoryWaitingRows(scan) {
+  const rows = scan && Array.isArray(scan.rows) ? scan.rows : [];
+  return rows
+    .filter((row) => row && row.acknowledged === false && Number.isSafeInteger(row.cents))
+    .slice()
+    .sort((left, right) => Number(left.line || 0) - Number(right.line || 0));
+}
+
+// Next waiting row in document order after the filed line; wraps once to
+// the first waiting row above. Never opens another file.
+function bankCategoryNextWaiting(input = {}) {
+  const filedLine = Number.isInteger(input.filedLine) ? input.filedLine : null;
+  if (filedLine === null) {
+    return null;
+  }
+  let scan = input.scan || null;
+  if (!scan && typeof input.source === "string" && typeof input.path === "string") {
+    try {
+      scan = bankScanSource(input.path, input.source);
+    } catch (error) {
+      scan = null;
+    }
+  }
+  if (!scan || !scan.month) {
+    return null;
+  }
+  const waiting = bankCategoryWaitingRows(scan);
+  if (waiting.length === 0) {
+    return null;
+  }
+  const below = waiting.find((row) => Number(row.line) > filedLine);
+  if (below) {
+    return { row: below, wrapped: false };
+  }
+  const first = waiting[0];
+  if (Number(first.line) === filedLine) {
+    return null;
+  }
+  return { row: first, wrapped: true };
+}
+
+// Match the card row to bob JSON: by ^bank- ID, else path+line with equal
+// cents and payee. No match still files; the card shows no suggestion.
+function bankCategoryMatchJsonRow(cardRow, jsonRows) {
+  const rows = Array.isArray(jsonRows) ? jsonRows : [];
+  if (!cardRow || typeof cardRow !== "object") {
+    return null;
+  }
+  const cardId = typeof cardRow.id === "string" && cardRow.id ? cardRow.id.toLowerCase() : null;
+  const cardAck = typeof cardRow.ackId === "string" && cardRow.ackId
+    ? cardRow.ackId.toLowerCase()
+    : cardId;
+  if (cardAck) {
+    const byId = rows.filter((row) => row &&
+      typeof row.id === "string" && row.id.toLowerCase() === cardAck);
+    if (byId.length === 1) {
+      return byId[0];
+    }
+    if (byId.length > 1) {
+      return null;
+    }
+  }
+  const candidates = rows.filter((row) => row &&
+    row.path === cardRow.path && Number(row.line) === Number(cardRow.line));
+  if (candidates.length !== 1) {
+    return null;
+  }
+  const candidate = candidates[0];
+  if (Number(candidate.cents) !== Number(cardRow.cents)) {
+    return null;
+  }
+  if (typeof candidate.payee === "string" && typeof cardRow.payee === "string" &&
+    candidate.payee !== cardRow.payee) {
+    return null;
+  }
+  return candidate;
 }
 // ---- src/241b-plugin-notebook-catalog-model.js ----
 // Pure notebook catalog presentation: chips, source regions, hue, and
@@ -117646,6 +118348,56 @@ try {
       linksWalkerFooterRequest,
       linksWalkerFooterInvalidate,
       linksWalkerFooterActivate,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/356-exports-bank-category.js ----
+// Test helpers for the pure Category card models (bank_weekly_category_walk
+// card-model). Kept separate from the crowded base export fragment so every
+// hand-edited fragment stays below 1000 lines.
+try {
+  if (
+    typeof module !== "undefined" &&
+    module.exports &&
+    typeof module.exports === "function"
+  ) {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      bankNormalizeHotkey,
+      bankNormalizeGroup,
+      bankNormalizeSuggestion,
+      BANK_CATEGORY_MONEY_GROUP,
+      BANK_CATEGORY_LOCK_MS,
+      BANK_CATEGORY_SESSION_IDLE_MS,
+      bankCategoryVisible,
+      bankCategoryKeyTable,
+      bankCategorySections,
+      bankCategoryHighlightKey,
+      bankCategoryCardFooter,
+      bankCategoryOldBob,
+      bankCategoryCardModel,
+      bankCategoryResolveCardKey,
+      bankCategoryMoveHighlight,
+      bankCategoryChordInit,
+      bankCategoryChordKeyup,
+      bankCategoryChordShouldSwallow,
+      bankCategoryLockInit,
+      bankCategoryLockActive,
+      bankCategorySessionStart,
+      bankCategorySessionRecord,
+      bankCategorySessionProgress,
+      bankCategorySessionIdleExpired,
+      bankCategoryElapsedText,
+      bankCategoryAccountLine,
+      bankCategoryEndOfRunSummary,
+      BANK_CATEGORY_WRITE_REFUSAL,
+      bankCategoryCapture,
+      bankCategoryCountCatFields,
+      bankCategoryWritePlan,
+      bankCategoryWaitingRows,
+      bankCategoryNextWaiting,
+      bankCategoryMatchJsonRow,
     });
   }
 } catch (error) {

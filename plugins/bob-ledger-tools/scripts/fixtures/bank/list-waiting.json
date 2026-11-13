@@ -3,8 +3,24 @@
   "schema_version": 1,
   "today": "2026-11-12",
   "categories": [
-    { "key": "groceries", "emoji": "🛒", "label": "Groceries", "builtin": false },
-    { "key": "cash", "emoji": "🏧", "label": "Cash out", "builtin": true }
+    {
+      "key": "groceries",
+      "emoji": "🛒",
+      "label": "Groceries",
+      "builtin": false,
+      "hotkey": "g",
+      "group": null,
+      "hidden": false
+    },
+    {
+      "key": "cash",
+      "emoji": "🏧",
+      "label": "Cash out",
+      "builtin": true,
+      "hotkey": "a",
+      "group": "Money moves",
+      "hidden": false
+    }
   ],
   "accounts": [
     {
@@ -21,7 +37,10 @@
       "hint": "No import yet — bob bank import FILE"
     }
   ],
-  "issues": { "errors": 0, "warnings": 0 },
+  "issues": {
+    "errors": 0,
+    "warnings": 0
+  },
   "filter": "waiting",
   "month": null,
   "days": [
@@ -44,7 +63,8 @@
           "flagged": false,
           "acknowledged": false,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         }
       ]
     },
@@ -67,10 +87,15 @@
           "flagged": false,
           "acknowledged": false,
           "id": null,
-          "origin": "typed"
+          "origin": "typed",
+          "suggestion": null
         }
       ]
     }
   ],
-  "counts": { "rows": 2, "waiting": 2, "flagged": 0 }
+  "counts": {
+    "rows": 2,
+    "waiting": 2,
+    "flagged": 0
+  }
 }

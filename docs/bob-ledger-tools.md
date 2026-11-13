@@ -619,17 +619,10 @@ lag alone stays silent. Live data needs desktop Obsidian.
 
 ## Gmail open hint
 
-A muted `⌘↵ Gmail` capsule (`M-↵ Gmail` off macOS) at the end of the cursor's
-line shows exactly where the vault's Meta+Enter Gmail gesture will open an
-email. It appears for a line-borne `[[mail/…]]` link (any line), a Gmail Task
-child hop from a checkbox task row, or a link-only `[[note#^id]]` Task Link hop
-to a Gmail Task row (exactly one hop, no recursion; embeds and struck links
-stay excluded). The chip is Live Preview only and gated by the mail-link-marks
-toggle. It shows only when bob-mail is loaded and its delivery path is live
-(`mailGmailOpenKeymap = 1`, set when bob-mail's vim mapping registers or the
-navigation dispatcher path is reachable); with bob-mail disabled the chip
-stays absent. Cross-note hop targets resolve through the Tasks memo and a
-bounded file cache with a refresh; a miss stays silent until the next pass.
+`⌘↵ Gmail` (`M-↵` elsewhere) marks the line's Gmail target: a `[[mail/…]]`
+link, Gmail Task child, or one link-only Task Link hop. Live Preview requires
+the mail-link-marks toggle and bob-mail's live open API. Embeds, struck links,
+and unresolved hops stay quiet.
 
 ## Settings
 
@@ -638,23 +631,14 @@ styling, links, and sync. The plugin also reads the shared bob config file.
 
 ## Related
 
-- [Plan](https://bobs-org.github.io/plan/) — the lane model behind the plan
-  block and badges.
-- [Freshness](https://bobs-org.github.io/freshness/) — the stamp model behind
-  freshness marks and review.
-- [Task dependencies](https://bobs-org.github.io/task-dependencies/) — the
-  Depends-On lines behind chips and BLOCKS rows.
-- [Task tag marks](https://bobs-org.github.io/task-tag-marks/) — the tag-mark
-  rendering contract, including `#TYPE` identity and ledger agreement marks.
-- [Date marks](https://bobs-org.github.io/date-marks/) — the date-mark
-  rendering contract.
-- [Today marks](https://bobs-org.github.io/today-marks/) — the Today-mark
-  rendering contract.
-- [Dashboard](https://bobs-org.github.io/dashboard/) — the dashboard badges.
-- [Stats](https://bobs-org.github.io/stats/) — the Stats block data.
-- [Pomodoro homes](https://bobs-org.github.io/pomodoro-homes/) — the home-chip
-  model.
-- [Bob Navigation Hotkeys](bob-navigation-hotkeys.md) — the review walk and
-  Task Card this plugin feeds.
-- [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/) — the versioned planning,
-  freshness, stats, and mark interfaces.
+- [Plan](https://bobs-org.github.io/plan/)
+- [Freshness](https://bobs-org.github.io/freshness/)
+- [Task dependencies](https://bobs-org.github.io/task-dependencies/)
+- [Task tag marks](https://bobs-org.github.io/task-tag-marks/)
+- [Date marks](https://bobs-org.github.io/date-marks/)
+- [Today marks](https://bobs-org.github.io/today-marks/)
+- [Dashboard](https://bobs-org.github.io/dashboard/)
+- [Stats](https://bobs-org.github.io/stats/)
+- [Pomodoro homes](https://bobs-org.github.io/pomodoro-homes/)
+- [Bob Navigation Hotkeys](bob-navigation-hotkeys.md)
+- [Cross-plugin APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/)

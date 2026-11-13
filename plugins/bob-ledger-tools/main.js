@@ -61099,9 +61099,26 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     }
     let reportState = null;
     try {
-      reportState = typeof this.apiAlbumReport === "function"
-        ? await this.apiAlbumReport({ force: true, wait: true })
-        : (typeof this.albumReportState === "function" ? this.albumReportState() : null);
+      if (typeof this.apiAlbumReport === "function") {
+        // A vault event can advance the generation while the forced list is
+        // running. In that case its waiter can receive a report that is
+        // already stale by the time it resolves; join a fresh flight before
+        // deciding whether Done may return to the card.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          reportState = await this.apiAlbumReport({ force: true, wait: true });
+          const generation = Number.isInteger(reportState?.generation) ? reportState.generation : null;
+          const reportGeneration = Number.isInteger(reportState?.reportGeneration)
+            ? reportState.reportGeneration
+            : generation;
+          if (reportState?.report && reportState.unavailable !== true
+              && reportState.stale !== true && reportState.refreshing !== true
+              && !reportState.error
+              && (generation === null || reportGeneration >= generation)) break;
+          if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+        }
+      } else {
+        reportState = typeof this.albumReportState === "function" ? this.albumReportState() : null;
+      }
     } catch (_) {
       reportState = null;
     }
@@ -71725,6 +71742,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.stageDraft = null;
     this.session = null;
     this.sessionState = null;
+    this.schemaApplyPromise = null;
+    this.schemaApplyNotice = "";
     this.latestSchemaModel = null;
     this.schemaUnsubscribe = null;
     this.schemaStaleRefresh = null;
@@ -71866,7 +71885,9 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       desktop: true,
       editable: Boolean(this.session),
       fresh: this.schemaFresh(),
-      editingUnavailable: this.schemaUnavailable || (!this.schemaFresh() ? "Editing waits for a fresh album report." : ""),
+      editingUnavailable: this.schemaUnavailable || (!this.schemaFresh()
+        ? this.schemaApplyNotice || "Editing waits for a fresh album report."
+        : ""),
       state,
       stage: this.stage,
       stageDraft: this.stageDraft,
@@ -72233,7 +72254,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaEditSelected() {
-    if (this.sessionState?.canApply && this.schemaFresh()) {
+    const state = this.schemaState();
+    if (state.canApply || (state.status === "preview-ready" && !this.schemaFresh())) {
       void this.schemaApply();
       return;
     }
@@ -72277,8 +72299,37 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.schemaQueueOp({ op: "field.set", field: field.key, set: { [property]: field[property] !== true } }, target.key);
   }
 
-  async schemaApply() {
-    if (!this.session || !this.sessionState?.canApply || !this.schemaFresh()) return;
+  schemaApply() {
+    if (this.schemaApplyPromise) return this.schemaApplyPromise;
+    const work = this.schemaApplyCurrentPreview();
+    const guarded = work.finally(() => {
+      if (this.schemaApplyPromise === guarded) this.schemaApplyPromise = null;
+    });
+    this.schemaApplyPromise = guarded;
+    return guarded;
+  }
+
+  async schemaApplyCurrentPreview() {
+    if (!this.session) return { ok: false, code: "unavailable" };
+    let current = this.session.getState();
+    this.sessionState = current;
+    let fresh = this.schemaFresh();
+    if (!fresh || (current.status === "preview-ready" && !current.canApply)) {
+      current = this.session.noteGenerationChanged?.() || this.session.getState();
+      this.sessionState = current;
+      fresh = this.schemaFresh();
+      this.schemaApplyNotice = current.refusal
+        ? ""
+        : "This preview is stale. Refresh the album report before applying.";
+      void this.schemaRefreshAfterStale();
+      this.paintSchemaCard();
+      return { ok: false, code: "stale", message: current.refusal?.message || this.schemaApplyNotice };
+    }
+    this.schemaApplyNotice = "";
+    if (!current.canApply || !fresh) {
+      this.paintSchemaCard();
+      return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
+    }
     const result = await this.session.apply();
     this.sessionState = this.session.getState();
     if (result?.ok && result.changed) {
@@ -72290,6 +72341,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (state) this.schemaAlbumState(state);
     if (this.sessionState.refusal?.kind === "stale") void this.schemaRefreshAfterStale();
     this.paintSchemaCard();
+    return result;
   }
 
   async schemaRetrySync() {

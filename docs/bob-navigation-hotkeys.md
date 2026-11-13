@@ -630,12 +630,11 @@ behavior.
 
 ## Notes, tabs, and keyboard layers
 
-The plugin opens and manages related notes and tabs, including pinned-tab
-preserving sibling closes, and registers the read-only `obsidian://bob-goto-task`
-and `obsidian://bob-open-notes` protocol handlers so external picks land the
-caret without writing the vault. In Vim normal mode, `Z` opens the image on
-the cursor line in a viewer (see [image-zoom](image-zoom.md)); only `r`
-writes, replacing just the picked link.
+Opens related notes/tabs, preserves pinned tabs on sibling close, and registers
+read-only `obsidian://bob-goto-task` and `obsidian://bob-open-notes` handlers
+that place external picks without vault writes. In Vim normal mode, `Z` opens
+the cursor-line image in a viewer (see [image-zoom](image-zoom.md)); only `r`
+writes, replacing the picked link.
 
 Three keyboard layers are in play:
 
@@ -648,19 +647,14 @@ Three keyboard layers are in play:
   `obsidian_vimrc.md`, not in this plugin. In particular, the vimrc maps `Z`
   to `bob-navigation-hotkeys:zoom-image-on-line`, and the vault binds
   `bob-navigation-hotkeys:open-reference-pdf-in-highlights` to `Meta+Enter`.
-  The vimrc maps `[n` / `]n` to `open-prev-link` / `open-next-link`, `[[` /
-  `]]` to the two repeat commands, and `[{` / `]}` to the two uppercase
-  repeat commands; these are vault configuration, not registered
-  defaults.
+  It also maps `[n` / `]n` to previous/next link, `[[` / `]]` and `[{` /
+  `]}` to repeat commands. These are vault settings.
   A registered default would lose to Obsidian's built-in `Mod+Enter`. Do not
   re-record the binding in Obsidian Settings on a Mac: Obsidian may save `Mod`,
   which would claim `Ctrl+Enter` on other platforms.
-- **Meta+Enter dispatch order** for `open-reference-pdf-in-highlights`:
-  Highlights target first (reading tasks keep their behavior), then Gmail
-  context via bob-mail's `api.mailOpen` v1 (Gmail Task rows, line-borne
-  `[[mail/…]]`, direct link-only child hops, and one link-only Task Link hop),
-  then Obsidian's **Open link under cursor in new tab**. The Gmail step
-  degrades silently when bob-mail is absent or its API version is unknown.
+- **Meta+Enter:** open Highlights targets first, then Gmail context through
+  bob-mail `api.mailOpen` v1, then Obsidian's link opener. Unknown or missing
+  mail APIs fall through silently.
 - **Editor and Vim handlers** act below the palette layer. The plugin maps
   `\s` in Vim normal mode to toggling the current tab pin (Bob Ledger Tools
   owns the distinct `\p` mapping for Pomodoro increments), and its

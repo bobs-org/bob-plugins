@@ -144,6 +144,23 @@ test("Done shares one pending save across concurrent clicks", async () => {
   assert.equal(opened.length, 1);
 });
 
+test("Done retries when a vault generation advances during the forced report", async () => {
+  const { plugin, leaf, opened } = excursionHarness();
+  let reports = 0;
+  plugin.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  plugin.apiAlbumReport = async () => {
+    reports += 1;
+    return reports === 1
+      ? reportState({ stale: true, generation: 19, reportGeneration: 18 })
+      : reportState({ generation: 19, reportGeneration: 19 });
+  };
+
+  const result = await plugin.albumYamlDone({ leaf });
+  assert.deepEqual(result, { ok: true, reopened: true });
+  assert.equal(reports, 2, "Done waits for a report covering the latest vault generation");
+  assert.equal(opened.length, 1);
+});
+
 test("Done abandons delayed saves after navigation, pane close, or plugin unload", async () => {
   for (const invalidate of [
     ({ leaf }) => { leaf.view.file.path = "other.md"; },

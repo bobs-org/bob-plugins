@@ -620,8 +620,50 @@ async function openNote(client, file, mode) {
 }
 
 async function capturePage(client, output) {
+  const candidatesSeen = [];
+  if (Number.isInteger(client?.cdpPort) && client?.vaultPath) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${client.cdpPort}/json/list`);
+      const targets = response.ok ? await response.json() : [];
+      for (const target of Array.isArray(targets) ? targets : []) {
+        if (!target || target.type !== "page" || !target.webSocketDebuggerUrl) continue;
+        let candidate = null;
+        try {
+          candidate = await CdpClient.connect(target.webSocketDebuggerUrl, 5000);
+          await candidate.call("Runtime.enable", {});
+          const context = await candidate.evaluate(`(() => {
+            const app = window.app;
+            const cards = Array.from(document.querySelectorAll(".bob-album-schema-dialog"));
+            return { basePath: app?.vault?.adapter?.basePath || null,
+              title: document.title || "", url: String(location.href || ""),
+              cardCount: cards.length, cardWidth: cards[0]?.getBoundingClientRect?.().width || 0 };
+          })()`);
+          candidatesSeen.push({ id: target.id || null, context: context || null });
+          if (context?.cardCount > 0 && context?.title?.includes("vault")) {
+            await candidate.call("Page.enable", {});
+            await setViewport(candidate, 375, 812);
+            await sleep(180);
+            const screenshot = await candidate.call("Page.captureScreenshot", { format: "png", fromSurface: true });
+            fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
+            client.lastScreenshotContext = context;
+            if (!Array.isArray(client.screenshotContexts)) client.screenshotContexts = [];
+            client.screenshotContexts.push({ output, selected: context, candidates: candidatesSeen });
+            return;
+          }
+        } catch (_) {
+          // The primary view remains the fallback when no modal-owned target is available.
+        } finally {
+          if (candidate) candidate.close();
+        }
+      }
+    } catch (_) {
+      // Keep the screenshot path usable if the target list is temporarily unavailable.
+    }
+  }
   const screenshot = await client.call("Page.captureScreenshot", { format: "png", fromSurface: true });
   fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
+  if (!Array.isArray(client.screenshotContexts)) client.screenshotContexts = [];
+  client.screenshotContexts.push({ output, selected: null, candidates: candidatesSeen });
 }
 
 async function setViewport(client, width, height) {
@@ -764,6 +806,14 @@ async function run(args) {
   fs.mkdirSync(vaultDir, { recursive: true });
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
+  const bobConfigDir = path.join(configDir, "bob");
+  fs.mkdirSync(bobConfigDir, { recursive: true });
+  fs.writeFileSync(path.join(bobConfigDir, "config.yml"), [
+    "properties:",
+    "  - name: priority",
+    "    values: [P1, P2]",
+    "",
+  ].join("\n"));
   const owned = buildAuthoredFixture(vaultDir);
   void owned;
   const synced = runBobSync(bobBin, vaultDir);
@@ -829,6 +879,8 @@ async function run(args) {
     });
     const page = await selectOwnedTarget(cdpPort, fixtureRealPath, () => Boolean(exitInfo));
     client = await CdpClient.connect(page.webSocketDebuggerUrl, 8000);
+    client.cdpPort = cdpPort;
+    client.vaultPath = fixtureRealPath;
     await client.call("Page.enable", {});
     await client.call("Runtime.enable", {});
     await dismissTrustModal(client);
@@ -1007,7 +1059,8 @@ async function run(args) {
             onOpen: {
               methodPresent: typeof modal?.onOpen === "function",
               diagnostic: onOpenDiagnostic,
-              inferredFromPaintedTargets: Boolean(content?.querySelector?.(".bob-album-schema-dialog")
+            inferredFromPaintedTargets: Boolean((content?.matches?.(".bob-album-schema-dialog")
+              || content?.querySelector?.(".bob-album-schema-dialog"))
                 && content?.querySelectorAll?.("[data-target-key]")?.length),
             },
             contentRoot: {
@@ -1340,28 +1393,28 @@ async function run(args) {
       const modal = ledger && ledger.albumSchemaCardModal;
       if (!modal) return { ok: false };
       const root = modal.contentEl || document;
-      const first = root.querySelector(".bob-album-schema-dialog [data-target-key]");
+      const first = root.querySelector("[data-target-key]");
       if (!first) return { ok: false };
       const before = modal.selectedKey;
       first.focus();
       first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
       const moved = modal.selectedKey;
-      const selected = root.querySelector('.bob-album-schema-dialog [data-target-key].is-selected') || first;
+      const selected = root.querySelector('[data-target-key].is-selected') || first;
       selected.focus();
       selected.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      const staged = Boolean(root.querySelector(".bob-album-schema-dialog [data-schema-stage]"));
+      const staged = Boolean(root.querySelector("[data-schema-stage]"));
       const draftAfterEnter = (modal.session?.getState?.().draftOps || []).length;
-      const input = root.querySelector(".bob-album-schema-dialog [data-schema-input]");
+      const input = root.querySelector("[data-schema-input]");
       if (input) {
         input.focus();
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }));
       }
       const draftAfterType = (modal.session?.getState?.().draftOps || []).length;
-      const target = root.querySelector(".bob-album-schema-dialog [data-target-key]");
+      const target = root.querySelector("[data-target-key]");
       if (target) target.dispatchEvent(new KeyboardEvent("keydown", { key: "x", keyCode: 229, bubbles: true }));
       const afterIme = modal.selectedKey;
       if (input) input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      const cancelled = !root.querySelector(".bob-album-schema-dialog [data-schema-stage]");
+      const cancelled = !root.querySelector("[data-schema-stage]");
       const modalAfterEscape = ledger?.albumSchemaCardModal || null;
       const rootAfterEscape = modalAfterEscape?.contentEl || null;
       const activeElement = root.ownerDocument?.activeElement || null;
@@ -1390,7 +1443,7 @@ async function run(args) {
     const stagedPreview = await client.evaluate(`(() => (async () => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
+      const pick = (sel) => root.querySelector(sel);
       const addChoice = pick('[data-target-key="add-choice:status"]');
       if (!addChoice) return { ok: false, error: "add-choice target missing",
         modalPresent: Boolean(modal), targetCount: root.querySelectorAll?.("[data-target-key]")?.length ?? 0,
@@ -1398,9 +1451,7 @@ async function run(args) {
         documentTitle: root.ownerDocument?.title || "", documentUrl: root.ownerDocument?.URL || "",
         dialogText: String(root.querySelector(".bob-album-schema-dialog")?.textContent || "").slice(0, 400) };
       addChoice.click();
-      root.querySelector(".bob-album-schema-dialog")?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
+      root.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 250));
       const label = pick('[data-schema-input="choiceLabel"]');
       if (!label) return { ok: false, error: "choice stage inputs missing" };
@@ -1451,17 +1502,70 @@ async function run(args) {
     await capturePage(client, narrowConsequence);
     report.screenshots.push(narrowConsequence);
 
-    await client.evaluate(`(() => {
+    const enterFocusedSchemaControl = async () => client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
-      const root = modal?.contentEl || document;
-      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
-      const apply = pick('[data-schema-action="apply"]');
-      if (apply) apply.click();
-      const again = pick('[data-schema-action="apply"]');
-      if (again) again.click();
-      return true;
+      const stageInput = modal?.contentEl?.querySelector?.("[data-schema-input]");
+      const selectedKey = String(modal?.selectedKey || "");
+      const selectedRow = (selectedKey
+        ? modal?.contentEl?.querySelector?.('[data-target-key="' + selectedKey + '"]')
+        : null) || modal?.contentEl?.querySelector?.("[data-target-key].is-selected")
+        || modal?.contentEl?.querySelector?.("[data-target-key]");
+      const active = modal?.contentEl?.ownerDocument?.activeElement || null;
+      const activeInModal = Boolean(active && (active === modal?.contentEl || modal?.contentEl?.contains?.(active)));
+      const activeInput = activeInModal && active?.matches?.("[data-schema-input]") ? active : null;
+      const target = (activeInput && !activeInput.disabled ? activeInput : null)
+        || (stageInput && !stageInput.disabled ? stageInput : null)
+        || selectedRow || (activeInModal ? active : null);
+      target?.focus?.();
+      const diagnostics = {
+        modalStage: modal?.stage?.kind || null,
+        selectedKey: modal?.selectedKey || null,
+        rootConnected: modal?.contentEl?.isConnected === true,
+        rootDocument: modal?.contentEl?.ownerDocument?.title || null,
+        stageInputCount: modal?.contentEl?.querySelectorAll?.("[data-schema-input]")?.length || 0,
+        targetCount: modal?.contentEl?.querySelectorAll?.("[data-target-key]")?.length || 0,
+        activeClass: active?.className || null,
+        activeInModal,
+      };
+      const connectedBeforeDispatch = target?.isConnected === true;
+      if (!target || !connectedBeforeDispatch) return {
+        ...diagnostics,
+        connected: false, target: null, dispatched: false,
+        stageInputs: modal?.contentEl?.querySelectorAll?.("[data-schema-input]")?.length || 0,
+        targetRows: modal?.contentEl?.querySelectorAll?.("[data-target-key]")?.length || 0,
+        selectedKey: modal?.selectedKey || null,
+      };
+      const KeyboardEventCtor = target.ownerDocument?.defaultView?.KeyboardEvent || KeyboardEvent;
+      const event = new KeyboardEventCtor("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return {
+        ...diagnostics,
+        connected: connectedBeforeDispatch,
+        connectedAfterDispatch: target.isConnected === true,
+        dispatched: true,
+        defaultPrevented: event.defaultPrevented,
+        target: target?.getAttribute?.("data-schema-input") || target?.getAttribute?.("data-target-key") || null,
+      };
     })()`);
-    await waitFor(client, probe, (value) => (value.schemaUndo || []).length > 0, "schema-undo", 20_000).catch(() => null);
+    const firstEnterTarget = await enterFocusedSchemaControl();
+    report.probes.schemaApplyGestureFirst = firstEnterTarget;
+    if (!firstEnterTarget?.connected || !firstEnterTarget?.dispatched) throw new Error(`Apply gesture has no focused connected Schema Card control: ${JSON.stringify(firstEnterTarget)}`);
+    await sleep(40);
+    const secondEnterTarget = await enterFocusedSchemaControl();
+    if (!secondEnterTarget?.connected || !secondEnterTarget?.dispatched) throw new Error(`Second Apply Enter has no connected Schema Card control after repaint: ${JSON.stringify(secondEnterTarget)}`);
+    report.probes.schemaApplyGesture = { first: firstEnterTarget, second: secondEnterTarget };
+    const appliedState = await waitFor(client, `(() => {
+      const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const state = plugin?.albumSchemaCardModal?.session?.getState?.() || {};
+      const report = plugin?.albumReportState?.()?.report;
+      const entry = (report?.albums || []).find((item) => item?.stem === "eat");
+      return { status: state.status || null, undoAvailable: state.undoAvailable === true,
+        fingerprint: entry?.schema_fingerprint || null };
+    })()`, (value) => Boolean(value && value.status !== "applying"
+      && value.undoAvailable && value.fingerprint && value.fingerprint !== preEditFp), "schema-apply-settled", 30_000);
+    report.probes.schemaApplySettled = appliedState;
+    record("schema-apply-settled", Boolean(appliedState && appliedState.fingerprint !== preEditFp), JSON.stringify(appliedState));
+    if (!appliedState || appliedState.fingerprint === preEditFp) throw new Error("Apply did not settle with an advanced schema fingerprint");
     const afterApply = await client.evaluate(probe);
     report.probes.schemaApplied = afterApply;
     const editsAfterApply = updateShimEdits();
@@ -1479,7 +1583,7 @@ async function run(args) {
     await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const undo = root.querySelector('.bob-album-schema-dialog [data-schema-action="undo"]');
+      const undo = root.querySelector('[data-schema-action="undo"]');
       if (undo) undo.click();
       return true;
     })()`);
@@ -1488,16 +1592,17 @@ async function run(args) {
     await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const apply = root.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
+      const apply = root.querySelector('[data-schema-action="apply"]');
       if (apply) apply.click();
       return true;
     })()`);
     const restoredFp = await waitFor(client, `(() => (async () => {
       const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const session = plugin?.albumSchemaCardModal?.session?.getState?.() || {};
       const state = plugin && typeof plugin.albumReportState === "function" ? plugin.albumReportState() : {};
       const entry = state && state.report && (state.report.albums || []).find((item) => item && item.stem === "eat");
-      return entry ? entry.schema_fingerprint : null;
-    })())()`, (value) => value === preEditFp, "schema-fingerprint-restore", 20_000).catch(() => null);
+      return entry && session.status !== "applying" ? entry.schema_fingerprint : null;
+    })())()`, (value) => value === preEditFp, "schema-fingerprint-restore", 30_000).catch(() => null);
     const editsAfterUndo = updateShimEdits();
     record("schema-undo-restores", restoredFp === preEditFp, "Undo replays inverse ops to the original fingerprint");
     record("schema-undo-one-commit", editsAfterUndo.apply === 2, `non-dry applies=${editsAfterUndo.apply}`);
@@ -1543,16 +1648,16 @@ async function run(args) {
     record("schema-commands-registered", commandIds.includes("bob-ledger-tools:edit-album-schema"), commandIds.join(","));
 
     await client.evaluate(`(() => (async () => {
-      const file = window.app.vault.getAbstractFileByPath("eat.md");
+      const file = window.app.vault.getAbstractFileByPath("body.md");
       if (!file) return false;
       const text = await window.app.vault.read(file);
-      if (text.includes("- [ ] probe task")) return true;
-      await window.app.vault.modify(file, text.replace(/\\s*$/, ${JSON.stringify("\n\n- [ ] probe task\n- probe bullet\n")}));
+      if (text.includes("- [ ] probe task #task")) return true;
+      await window.app.vault.modify(file, text.replace(/\\s*$/, ${JSON.stringify("\n\n- [ ] probe task #task\n- probe bullet\n")}));
       return true;
     })())()`);
-    await openNote(client, "eat.md", "live");
+    await openNote(client, "body.md", "live");
     await sleep(800);
-    const fallbackVerdicts = await client.evaluate(`(() => (async () => {
+    const taskPriorityVerdict = await client.evaluate(`(() => (async () => {
       const nav = window.app?.plugins?.plugins?.["bob-navigation-hotkeys"];
       const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const view = window.app?.workspace?.activeLeaf?.view;
@@ -1563,26 +1668,68 @@ async function run(args) {
       const value = editor.getValue();
       const lines = value.split("\\n");
       const taskLine = lines.findIndex((line) => line.includes("- [ ] probe task"));
-      const titleLine = lines.findIndex((line) => line === "# Eat");
-      if (taskLine < 0 || titleLine < 0) return { ok: false, error: "probe lines missing" };
+      if (taskLine < 0) return { ok: false, error: "probe task line missing" };
+      const taskLineText = lines[taskLine];
+      const taskPredicate = /(?:^|\\s)#task(?:\\s|$)/.test(taskLineText);
+      const command = window.app.commands.commands?.["bob-navigation-hotkeys:set-bullet-property"];
+      const runTaskCardCommand = () => typeof command?.editorCallback === "function"
+        ? { registered: true, result: command.editorCallback(editor) }
+        : { registered: false, result: window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property") };
       editor.setCursor({ line: taskLine, ch: 4 });
-      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const taskCard = Boolean(nav.activeBulletPropertyPicker);
-      const taskSchema = Boolean(ledger.albumSchemaCardModal);
-      try { nav.activeBulletPropertyPicker?.close?.(); } catch {}
-      editor.setCursor({ line: titleLine, ch: 2 });
-      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
+      const taskCommand = runTaskCardCommand();
       await new Promise((resolve) => setTimeout(resolve, 800));
-      const titleSchema = Boolean(ledger.albumSchemaCardModal);
-      try { window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal?.close?.(); } catch {}
-      editor.setCursor({ line: titleLine + 1, ch: 0 });
-      await window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property");
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      const blankSchema = Boolean(ledger.albumSchemaCardModal);
-      try { window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal?.close?.(); } catch {}
-      return { ok: true, taskCard, taskSchema, titleSchema, blankSchema };
+      const taskPicker = nav.activeBulletPropertyPicker;
+      const taskCard = taskPicker?.pickerOpen === true;
+      const taskSchema = Boolean(ledger.albumSchemaCardModal?.modalEl?.isConnected);
+      try { taskPicker?.close?.(); } catch {}
+      return {
+        ok: true, taskLineText, taskPredicate,
+        taskCard, taskPickerOpen: taskPicker?.pickerOpen ?? null,
+        taskPickerClass: taskPicker?.constructor?.name || null,
+        taskPickerStage: taskPicker?.stage || null,
+        taskPickerConnected: Boolean(taskPicker?.modalEl?.isConnected && taskPicker?.contentEl?.isConnected),
+        taskCommand: { registered: taskCommand.registered, result: typeof taskCommand.result === "boolean" ? taskCommand.result : String(taskCommand.result ?? "") },
+        taskSchema,
+      };
     })())()`);
+    await openNote(client, "eat.md", "live");
+    await sleep(800);
+    const albumFallbackVerdict = await client.evaluate(`(() => (async () => {
+      const nav = window.app?.plugins?.plugins?.["bob-navigation-hotkeys"];
+      const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const view = window.app?.workspace?.activeLeaf?.view;
+      const editor = view && view.editor;
+      if (!nav || !ledger || !editor) return { ok: false };
+      const lines = editor.getValue().split("\\n");
+      const titleLine = lines.findIndex((line) => line === "# Eat");
+      if (titleLine < 0) return { ok: false, error: "album title line missing" };
+      const command = window.app.commands.commands?.["bob-navigation-hotkeys:set-bullet-property"];
+      const runCommand = () => typeof command?.editorCallback === "function"
+        ? { registered: true, result: command.editorCallback(editor) }
+        : { registered: false, result: window.app.commands.executeCommandById("bob-navigation-hotkeys:set-bullet-property") };
+      const schemaIsOpen = () => {
+        const modal = ledger.albumSchemaCardModal;
+        const content = modal?.contentEl;
+        return Boolean(content?.isConnected && modal?.modalEl?.isConnected
+          && (content.matches?.(".bob-album-schema-dialog") || content.querySelector?.(".bob-album-schema-dialog")));
+      };
+      editor.setCursor({ line: titleLine, ch: 2 });
+      const titleCommand = runCommand();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const titleSchema = schemaIsOpen();
+      try { ledger.albumSchemaCardModal?.close?.(); } catch {}
+      editor.setCursor({ line: titleLine + 1, ch: 0 });
+      const blankCommand = runCommand();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const blankSchema = schemaIsOpen();
+      try { ledger.albumSchemaCardModal?.close?.(); } catch {}
+      return {
+        ok: true, titleSchema, blankSchema,
+        titleCommand: { registered: titleCommand.registered, result: typeof titleCommand.result === "boolean" ? titleCommand.result : String(titleCommand.result ?? "") },
+        blankCommand: { registered: blankCommand.registered, result: typeof blankCommand.result === "boolean" ? blankCommand.result : String(blankCommand.result ?? "") },
+      };
+    })())()`);
+    const fallbackVerdicts = { ...taskPriorityVerdict, ...albumFallbackVerdict };
     report.probes.schemaFallback = fallbackVerdicts;
     record("schema-task-priority", Boolean(fallbackVerdicts && fallbackVerdicts.ok
       && fallbackVerdicts.taskCard && !fallbackVerdicts.taskSchema),
@@ -1601,13 +1748,11 @@ async function run(args) {
     const staleStageResult = await client.evaluate(`(() => (async () => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
+      const pick = (sel) => root.querySelector(sel);
       const addChoice = pick('[data-target-key="add-choice:status"]');
       if (!addChoice) return { ok: false, error: "add-choice target missing" };
       addChoice.click();
-      root.querySelector(".bob-album-schema-dialog")?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-      );
+      root.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 250));
       const label = pick('[data-schema-input="choiceLabel"]');
       if (!label) return { ok: false, error: "choice stage input missing", stage: modal.stage || null };
@@ -1622,6 +1767,19 @@ async function run(args) {
     if (!staleStageResult?.ok) throw new Error(`could not stage stale draft: ${staleStageResult?.error || "unknown failure"}`);
     await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /stale/.test(item.text || "")),
       "schema-stale-preview", 20_000).catch(() => null);
+    const stalePreviewState = await waitFor(client, `(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const state = modal?.session?.getState?.() || {};
+      const root = modal?.contentEl;
+      const apply = root?.querySelector?.('[data-schema-action="apply"]');
+      return { status: state.status || null, canApply: state.canApply === true,
+        previewOk: state.preview?.ok === true, applyDisabled: apply ? apply.disabled === true : null,
+        refusal: state.refusal || null, previewError: state.preview?.error || null,
+        drafts: state.draftOps || [], stage: modal?.stage?.kind || null,
+        rootConnected: root?.isConnected === true };
+    })()`, (value) => Boolean(value && value.canApply && value.previewOk && value.applyDisabled === false),
+    "schema-stale-preview-ready", 20_000);
+    report.probes.schemaStalePreviewState = stalePreviewState;
     const staleBase = updateShimEdits().apply;
     const staleHeadBefore = gitHead(vaultDir);
     const staleBytesBefore = fs.readFileSync(path.join(vaultDir, "eat.md"), "utf8");
@@ -1697,8 +1855,15 @@ async function run(args) {
       const race = window.__bobAlbumSaveRace;
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const apply = root.querySelector('.bob-album-schema-dialog [data-schema-action="apply"]');
-      if (!race || !apply || apply.disabled) return { ok: false, error: "Apply is not enabled for the successful preview" };
+      const apply = root.querySelector('[data-schema-action="apply"]');
+      const state = modal?.session?.getState?.() || {};
+      if (!race || !apply || apply.disabled) return {
+        ok: false, error: "Apply is not enabled for the successful preview",
+        hasRace: Boolean(race), hasApply: Boolean(apply), applyDisabled: apply?.disabled ?? null,
+        status: state.status || null, canApply: state.canApply === true,
+        previewOk: state.preview?.ok === true, stage: modal?.stage?.kind || null,
+        rootConnected: root?.isConnected === true,
+      };
       race.applyRequested = true;
       apply.click();
       return { ok: true };
@@ -1763,7 +1928,7 @@ async function run(args) {
     const yamlJumped = await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const action = root.querySelector('.bob-album-schema-dialog [data-schema-action="yaml"]');
+      const action = root.querySelector('[data-schema-action="yaml"]');
       if (action) action.click();
       return true;
     })()`);
@@ -1794,7 +1959,9 @@ async function run(args) {
       done.click();
       await new Promise((resolve) => setTimeout(resolve, 2500));
       const after = editor.getCursor();
-      const dialog = Boolean(ledger?.albumSchemaCardModal?.contentEl?.querySelector(".bob-album-schema-dialog"));
+      const content = ledger?.albumSchemaCardModal?.contentEl;
+      const dialog = Boolean(content && (content.matches?.(".bob-album-schema-dialog")
+        || content.querySelector?.(".bob-album-schema-dialog")));
       const state = view && typeof view.getState === "function" ? view.getState() : {};
       window.__bobSchemaRepair = valid;
       return { ok: true, before, after, dialog, source: state.source === true };
@@ -1803,34 +1970,84 @@ async function run(args) {
     record("schema-done-blocked", Boolean(doneBlocked && doneBlocked.ok && !doneBlocked.dialog && doneBlocked.source
       && doneBlocked.after && doneBlocked.before && doneBlocked.after.line !== doneBlocked.before.line),
       `cursor moves to the diagnostic line ${JSON.stringify((doneBlocked && doneBlocked.after) || {})}`);
-    const doneRepaired = await client.evaluate(`(() => (async () => {
+    const doneRepairClicked = await client.evaluate(`(() => (async () => {
+      const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const view = window.app?.workspace?.activeLeaf?.view;
       const editor = view && view.editor;
       const doc = view?.containerEl?.ownerDocument || document;
       if (!editor || !window.__bobSchemaRepair) return { ok: false };
+      if (typeof ledger?.albumYamlDone !== "function") return { ok: false, error: "Done handler missing" };
+      if (!ledger.__albumYamlDoneE2eWrapped) {
+        const originalDone = ledger.albumYamlDone;
+        const originalReport = ledger.apiAlbumReport;
+        ledger.albumYamlDone = async function(options) {
+          const result = await originalDone.call(this, options);
+          window.__bobSchemaDoneResult = result || null;
+          return result;
+        };
+        ledger.apiAlbumReport = async function(options) {
+          const state = await originalReport.call(this, options);
+          if (options?.force === true && options?.wait === true) {
+            window.__bobSchemaDoneReportState = {
+              stale: state?.stale === true, unavailable: state?.unavailable === true,
+              refreshing: state?.refreshing === true, error: state?.error || null,
+              generation: state?.generation ?? null, reportGeneration: state?.reportGeneration ?? null,
+              hasReport: Boolean(state?.report), hasEat: (state?.report?.albums || []).some((item) => item?.path === "eat.md" || item?.stem === "eat"),
+            };
+          }
+          return state;
+        };
+        ledger.__albumYamlDoneE2eWrapped = true;
+      }
+      window.__bobSchemaDoneResult = null;
+      window.__bobSchemaDoneReportState = null;
       editor.setValue(window.__bobSchemaRepair);
       const done = doc.querySelector("[data-album-yaml-done]");
       if (!done) return { ok: false, error: "Done button missing after repair" };
       done.click();
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
-      const root = modal?.contentEl || document;
-      return { ok: true, dialog: Boolean(root.querySelector(".bob-album-schema-dialog")) };
+      return { ok: true, handlerAvailable: true };
     })())()`);
-    record("schema-done-repair", Boolean(doneRepaired && doneRepaired.dialog), "repair then Done returns to the card");
+    if (!doneRepairClicked?.ok) throw new Error(`could not click Done after repair: ${doneRepairClicked?.error || "unknown failure"}`);
+    const doneRepaired = await waitFor(client, `(() => {
+      const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const content = modal?.contentEl;
+      const view = window.app?.workspace?.activeLeaf?.view;
+      const state = view && typeof view.getState === "function" ? view.getState() : {};
+      return { doneResult: window.__bobSchemaDoneResult || null,
+        reportState: window.__bobSchemaDoneReportState || null,
+        dialog: Boolean(content?.isConnected && modal?.modalEl?.isConnected
+          && (content.matches?.(".bob-album-schema-dialog") || content.querySelector?.(".bob-album-schema-dialog"))),
+        targetCount: content?.querySelectorAll?.("[data-target-key]")?.length || 0,
+        mode: state.mode || null, source: state.source === true };
+    })()`, (value) => Boolean(value && value.doneResult), "schema-done-result", 30_000);
+    report.probes.schemaDoneRepair = doneRepaired;
+    record("schema-done-repair", Boolean(doneRepaired && doneRepaired.doneResult?.ok
+      && doneRepaired.dialog && doneRepaired.targetCount > 3), JSON.stringify(doneRepaired));
+    if (!doneRepaired?.doneResult?.ok || !doneRepaired.dialog || doneRepaired.targetCount <= 3) {
+      throw new Error(`repair then Done did not reopen the card: ${JSON.stringify(doneRepaired)}`);
+    }
     const typedStage = await client.evaluate(`(() => (async () => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const root = modal?.contentEl || document;
-      const pick = (sel) => root.querySelector(".bob-album-schema-dialog " + sel);
+      const pick = (sel) => root.querySelector(sel);
       const stats = pick('[data-target-key="stats"]');
+      if (!stats) return { staged: false, error: "stats target missing after YAML Done", modalOpen: Boolean(modal?.modalEl?.isConnected), rootConnected: root?.isConnected === true, targetCount: root?.querySelectorAll?.("[data-target-key]")?.length || 0 };
       if (stats) stats.click();
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
-      (pick('[data-target-key="stats"]') || stats).dispatchEvent(enter);
+      const target = pick('[data-target-key="stats"]') || stats;
+      const KeyboardEventCtor = target.ownerDocument?.defaultView?.KeyboardEvent || KeyboardEvent;
+      const enter = new KeyboardEventCtor("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      target.focus?.();
+      target.dispatchEvent(enter);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      return { staged: Boolean(pick("[data-schema-stage]")) };
+      return { staged: Boolean(pick("[data-schema-stage]")), stage: modal?.stage?.kind || null,
+        selectedKey: modal?.selectedKey || null, eventDefaultPrevented: enter.defaultPrevented,
+        targetConnected: target.isConnected === true, targetCount: root?.querySelectorAll?.("[data-target-key]")?.length || 0,
+        inputCount: root?.querySelectorAll?.("[data-schema-input]")?.length || 0 };
     })())()`);
-    record("schema-typed-stage", Boolean(typedStage && typedStage.staged), "album stage exposes typed inputs");
+    report.probes.schemaTypedStage = typedStage;
+    record("schema-typed-stage", Boolean(typedStage && typedStage.staged), JSON.stringify(typedStage));
     const typedShot = path.join(outDir, "album-schema-typed-375-light.png");
     await setViewport(client, 375, 812);
     await sleep(300);
@@ -1856,6 +2073,7 @@ async function run(args) {
 
     report.probes.bobInvocations = shimInvocationSummary(shimDir);
     const failures = report.checks.filter((item) => !item.ok);
+    report.probes.screenshotContexts = client?.screenshotContexts || [];
     report.pass = failures.length === 0;
     report.failures = failures.map((item) => item.name);
     if (args.report) fs.writeFileSync(args.report, JSON.stringify(report, null, 2));

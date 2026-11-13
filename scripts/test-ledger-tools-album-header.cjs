@@ -856,6 +856,109 @@ test("Schema Card Enter is gated by current preview across pending, refused, sta
   modal.close();
 });
 
+test("a repainted Apply preview uses live session state and double Enter applies once", async () => {
+  const entry = album({
+    schema_fingerprint: "sha256:apply-live-before",
+    fields: [{ key: "status", label: "Status", kind: "text", choices: [] }],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  app.workspace = { getLeavesOfType: () => [] };
+  const state = { report: report(entry), stale: false, refreshing: false, generation: 1, reportGeneration: 1 };
+  let applies = 0;
+  plugin.apiAlbumUpdatePreview = async () => ({
+    ok: true, report: { ok: true, consequence: "label changes; records stay unchanged", per_op: [] },
+  });
+  plugin.apiAlbumUpdateApply = async () => {
+    applies += 1;
+    const next = album({ ...entry, schema_fingerprint: "sha256:apply-live-after" });
+    state.report = report(next);
+    state.generation = 2;
+    state.reportGeneration = 2;
+    plugin.albumVaultGeneration = 2;
+    return {
+      ok: true,
+      report: {
+        ok: true, changed: true, after_fingerprint: "sha256:apply-live-after",
+        inverse_ops: [{ op: "field.set", field: "status", set: { label: "Status" } }],
+        sync: { post: "ok" }, warnings: [],
+      },
+      refreshed: state,
+    };
+  };
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumVaultGeneration = 1;
+  plugin.albumReportState = () => state;
+  const model = helpers.albumHeaderModel(state.report, "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  modal.schemaStage("field", "field:status");
+  const input = modal.schemaInput("fieldLabel");
+  input.value = "Status revised";
+  input.dispatchEvent({ type: "input" });
+  await pause(300);
+  assert.equal(modal.session.getState().canApply, true, "the asynchronous preview has settled");
+  assert.match(modal.contentEl.querySelector(".bob-album-schema-consequence")?.textContent || "", /label changes; records stay unchanged/);
+
+  // Keep the already-enabled UI while simulating a stale modal cache. Obsidian's
+  // preview completion and a report repaint can cross this event boundary.
+  modal.sessionState = { ...modal.sessionState, status: "draft", canApply: false };
+  const stageInput = modal.schemaInput("fieldLabel");
+  assert.ok(stageInput && stageInput.parentNode, "the focused stage input is connected after preview repaint");
+  stageInput.dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+  const selected = modal.contentEl.querySelector('[data-target-key="field:status"]');
+  assert.ok(selected && selected.parentNode, "a connected card row is reacquired after the applying repaint");
+  selected.focus();
+  selected.dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+  await pause(20);
+  assert.equal(applies, 1, "the double Enter gesture sends one non-dry update");
+  assert.equal(modal.session.getState().expect, "sha256:apply-live-after");
+  assert.equal(modal.session.getState().undoAvailable, true, "Undo follows the successful apply");
+  modal.close();
+});
+
+test("an enabled Apply control routes a newly stale preview to a visible refusal", async () => {
+  const entry = album({
+    schema_fingerprint: "sha256:apply-stale-before",
+    fields: [{ key: "status", label: "Status", kind: "text", choices: [] }],
+  });
+  const { app, plugin } = fixture(entry);
+  app.document = makeDoc();
+  app.workspace = { getLeavesOfType: () => [] };
+  const state = { report: report(entry), stale: false, refreshing: false, generation: 1, reportGeneration: 1 };
+  let applies = 0;
+  plugin.apiAlbumUpdatePreview = async () => ({ ok: true, report: { ok: true, consequence: "shown", per_op: [] } });
+  plugin.apiAlbumUpdateApply = async () => { applies += 1; return { ok: true, report: { ok: true, changed: false } }; };
+  plugin.apiAlbumReport = () => new Promise(() => {});
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumVaultGeneration = 1;
+  plugin.albumReportState = () => state;
+  const model = helpers.albumHeaderModel(state.report, "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  modal.schemaStage("field", "field:status");
+  const input = modal.schemaInput("fieldLabel");
+  input.value = "Stale edit";
+  input.dispatchEvent({ type: "input" });
+  await pause(300);
+  assert.equal(modal.session.getState().canApply, true);
+  const enabledApply = modal.contentEl.querySelector('[data-schema-action="apply"]');
+  assert.ok(enabledApply && !enabledApply.disabled);
+
+  state.stale = true;
+  state.generation = 2;
+  plugin.albumVaultGeneration = 2;
+  enabledApply.click();
+  await pause(0);
+  assert.equal(applies, 0, "a stale preview never reaches the writer");
+  assert.equal(modal.session.getState().refusal?.kind, "stale");
+  assert.match(modal.contentEl.querySelector(".bob-album-schema-refusal")?.textContent || "", /changed under this preview/);
+  assert.ok(modal.contentEl.querySelector('[data-schema-action="rebase-preview"]'), "the stale recovery action is visible");
+  modal.close();
+});
+
 test("new choice field rows keep live order and values as early and middle choices are removed", () => {
   const entry = album({ schema_fingerprint: "sha256:choice-rows", fields: [] });
   const { app, plugin } = fixture(entry);

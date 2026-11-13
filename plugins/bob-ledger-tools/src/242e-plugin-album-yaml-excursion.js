@@ -297,9 +297,26 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     }
     let reportState = null;
     try {
-      reportState = typeof this.apiAlbumReport === "function"
-        ? await this.apiAlbumReport({ force: true, wait: true })
-        : (typeof this.albumReportState === "function" ? this.albumReportState() : null);
+      if (typeof this.apiAlbumReport === "function") {
+        // A vault event can advance the generation while the forced list is
+        // running. In that case its waiter can receive a report that is
+        // already stale by the time it resolves; join a fresh flight before
+        // deciding whether Done may return to the card.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          reportState = await this.apiAlbumReport({ force: true, wait: true });
+          const generation = Number.isInteger(reportState?.generation) ? reportState.generation : null;
+          const reportGeneration = Number.isInteger(reportState?.reportGeneration)
+            ? reportState.reportGeneration
+            : generation;
+          if (reportState?.report && reportState.unavailable !== true
+              && reportState.stale !== true && reportState.refreshing !== true
+              && !reportState.error
+              && (generation === null || reportGeneration >= generation)) break;
+          if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+        }
+      } else {
+        reportState = typeof this.albumReportState === "function" ? this.albumReportState() : null;
+      }
     } catch (_) {
       reportState = null;
     }

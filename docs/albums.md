@@ -92,7 +92,9 @@ gesture: `↑`/`↓` (or `j`/`k`, `←`/`→` across choices) move, `Enter` edit
 selected row or applies a ready preview, `a` adds a field, `c` adds a choice,
 `!` and `s` stage required/suggest toggles, `Alt+J`/`K` stage moves,
 `Ctrl+D` stages removal, `y` jumps to Source, `u` previews Undo, and `Esc`
-cancels a stage or closes from browsing. Typing inside inputs never triggers
+cancels an open stage, then clears a pending draft, then closes from plain
+browsing through one dispatch that survives Obsidian's capture-phase close.
+Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.
 

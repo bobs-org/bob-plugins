@@ -1437,7 +1437,7 @@ async function run(args) {
       const root = modal?.contentEl;
       const apply = root?.querySelector?.('[data-schema-action="apply"]');
       return { status: state.status || null, canApply: state.canApply === true,
-        previewOk: state.preview?.report?.ok === true, refusal: state.refusal || null,
+        previewOk: state.preview?.ok === true, refusal: state.refusal || null,
         draftOps: (state.draftOps || []).length, applyDisabled: apply ? apply.disabled === true : null };`);
     report.probes.schemaPreviewState = previewState;
     record("schema-preview-ready", Boolean(previewState && previewState.canApply
@@ -1465,7 +1465,12 @@ async function run(args) {
     const afterApply = await client.evaluate(probe);
     report.probes.schemaApplied = afterApply;
     const editsAfterApply = updateShimEdits();
-    record("schema-apply-once", editsAfterApply.apply === 1, `non-dry applies=${editsAfterApply.apply} after double Apply`);
+    const applyState = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      const state = modal?.session?.getState?.() || null;
+      const leaves = (() => { try { return (plugin.app?.workspace?.getLeavesOfType?.("markdown") || []).map((leaf) => ({ path: leaf?.view?.file?.path || null, hasSave: typeof leaf?.view?.save === "function" })); } catch (e) { return [{ error: String(e) }]; } })();
+      return { status: state?.status || null, refusal: state?.refusal || null, canApply: state?.canApply === true, drafts: (state?.draftOps || []).length, leaves };`);
+    report.probes.schemaApplyState = applyState;
+    record("schema-apply-once", editsAfterApply.apply === 1, `non-dry applies=${editsAfterApply.apply} after double Apply; state=${JSON.stringify(applyState)}`);
     record("schema-apply-previewed", editsAfterApply.dry >= 1, `dry runs=${editsAfterApply.dry}`);
     record("schema-undo-available", (afterApply.schemaUndo || []).length > 0, "Undo is offered after a successful apply");
     const postEditFp = await schemaFp();

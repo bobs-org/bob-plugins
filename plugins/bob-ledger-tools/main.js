@@ -71517,6 +71517,51 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.paintSchemaCard();
   }
 
+  schemaHandleEscape() {
+    if (this.sessionState?.status === "applying") return "ignore";
+    if (this.stage) {
+      this.schemaCancelStage();
+      return "stay";
+    }
+    const state = this.session?.getState?.() || this.sessionState || {};
+    if ((state.draftOps || []).length) {
+      try { this.session.setDraft([]); } catch (_) {}
+      try { this.sessionState = this.session.getState(); } catch (_) {}
+      this.paintSchemaCard();
+      return "stay";
+    }
+    return "close";
+  }
+
+  schemaMarkEscapeHandled(event) {
+    if (!event) return;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { event.stopPropagation?.(); } catch (_) {}
+    if (!event.defaultPrevented) {
+      try { Object.defineProperty(event, "defaultPrevented", { value: true, configurable: true }); }
+      catch (_) { try { event.defaultPrevented = true; } catch (_) {} }
+    }
+    try { event.__schemaEscapeHandled = true; } catch (_) {}
+  }
+
+  // Obsidian binds this scope's Escape to Modal's onEscapeKey at construction, and
+  // the scope chain is first-registered-wins, so an appended contentEl keydown
+  // handler can never preempt the default close. Overriding onEscapeKey instead:
+  // a stage cancels and the modal stays open, a pending draft clears, otherwise
+  // close exactly like Modal does. (The global key handler runs in the capture
+  // phase, before the contentEl listener, so the contentEl Escape branch only
+  // fires in tests unless onEscapeKey already handled it.)
+  onEscapeKey(event) {
+    const action = this.schemaHandleEscape();
+    if (action === "ignore" || action === "stay") {
+      this.schemaMarkEscapeHandled(event);
+      return false;
+    }
+    if (event && (event.defaultPrevented || event.__schemaEscapeHandled)) return;
+    this.schemaMarkEscapeHandled(event);
+    this.close();
+  }
+
   async schemaAction(action) {
     if (!action) return;
     if (action === "close") { this.close(); return; }
@@ -71574,6 +71619,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaOnKeyDown(event) {
     if (!event || event.isComposing || event.keyCode === 229) return;
+    if (event.defaultPrevented || event.__schemaEscapeHandled) return;
     if (this.sessionState?.status === "applying") return;
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
@@ -71581,9 +71627,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const inButton = Boolean(target?.closest?.("button"));
     if (inInput) {
       if (event.key === "Escape") {
-        event.preventDefault?.();
-        event.stopPropagation?.();
-        this.schemaCancelStage();
+        const action = this.schemaHandleEscape();
+        if (action === "ignore") return;
+        this.schemaMarkEscapeHandled(event);
+        if (action === "close") this.close();
       }
       else if (event.key === "Enter" && target.tagName !== "TEXTAREA" && this.stage) {
         event.preventDefault?.();
@@ -71597,21 +71644,19 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     } else if (inButton) return;
     if (this.stage) {
       if (event.key === "Escape") {
-        event.preventDefault?.();
-        event.stopPropagation?.();
-        this.schemaCancelStage();
+        const action = this.schemaHandleEscape();
+        if (action === "ignore") return;
+        this.schemaMarkEscapeHandled(event);
+        if (action === "close") this.close();
       }
       else if (event.key === "Enter") { event.preventDefault?.(); this.schemaStageEnter(); }
       return;
     }
     if (event.key === "Escape") {
-      event.preventDefault?.();
-      const state = this.session?.getState?.() || {};
-      if (state.draftOps?.length) {
-        this.session.setDraft([]);
-        this.sessionState = this.session.getState();
-        this.paintSchemaCard();
-      } else this.close();
+      const action = this.schemaHandleEscape();
+      if (action === "ignore") return;
+      this.schemaMarkEscapeHandled(event);
+      if (action === "close") this.close();
       return;
     }
     if (event.key === "Enter") {

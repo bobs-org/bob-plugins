@@ -1099,3 +1099,73 @@ test("Schema Card maps album, field, choice, ordering, toggle, and removal gestu
   assert.deepEqual(modal.session.getState().draftOps[0], { op: "field.remove", field: "amount" });
   modal.close();
 });
+
+test("Schema Card Escape follows one dispatch: stage cancel, draft clear, then close", () => {
+  const entry = album({
+    schema_fingerprint: "sha256:escape-single-dispatch",
+    fields: [{ key: "amount", label: "Amount", kind: "number", choices: [] }],
+  });
+  const { app, plugin } = fixture(entry);
+  const doc = makeDoc();
+  app.document = doc;
+  plugin.apiAlbumUpdatePreview = async () => ({ ok: true, report: { ok: true, consequence: "preview", per_op: [] } });
+  plugin.apiAlbumUpdateApply = async () => ({ ok: true, report: { ok: true, changed: false } });
+  plugin.apiAlbumVaultSyncRetry = async () => ({ ok: true });
+  plugin.apiAlbumSubscribe = () => () => {};
+  plugin.albumReportState = () => ({ report: report(entry), stale: false, generation: 1, reportGeneration: 1 });
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault,
+  });
+  const modal = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  let closes = 0;
+  const originalClose = modal.close.bind(modal);
+  modal.close = () => { closes += 1; return originalClose(); };
+  const makeEscape = (target) => {
+    const event = {
+      key: "Escape",
+      target,
+      defaultPrevented: false,
+      __schemaEscapeHandled: false,
+      preventDefault() { event.defaultPrevented = true; },
+      stopPropagation() {},
+    };
+    return event;
+  };
+  // Drives Escape the way Obsidian does: capture-phase onEscapeKey first, then
+  // the same event bubbles to contentEl.
+  const obsidianEscape = (target) => {
+    const event = makeEscape(target);
+    modal.onEscapeKey(event);
+    modal.schemaOnKeyDown(event);
+    return event;
+  };
+
+  modal.schemaSelect("field:amount");
+  modal.schemaStage("field", "field:amount");
+  assert.ok(modal.stage, "stage is open");
+  const input = modal.schemaInput("fieldLabel");
+  assert.ok(input, "stage input exists");
+  obsidianEscape(input);
+  assert.equal(modal.stage, null, "first Escape cancels the stage");
+  assert.ok(modal.session, "modal stays open after stage cancel");
+  assert.equal(closes, 0, "no close on stage cancel");
+  assert.deepEqual(modal.session.getState().draftOps || [], [], "no draft after stage cancel");
+  const focused = doc.activeElement;
+  assert.ok(focused, "focus lands somewhere after stage cancel");
+  assert.equal(focused.getAttribute("data-target-key"), "field:amount", "focus returns to the selected row");
+
+  modal.schemaQueueOp({ op: "field.set", field: "amount", set: { label: "Total" } }, "field:amount");
+  assert.equal(modal.session.getState().draftOps.length, 1, "pending draft queued");
+  assert.equal(modal.stage, null);
+  const selected = modal.contentEl.querySelector('[data-target-key="field:amount"]');
+  assert.ok(selected, "selected row exists for draft Escape");
+  obsidianEscape(selected);
+  assert.deepEqual(modal.session.getState().draftOps || [], [], "second Escape clears the pending draft");
+  assert.ok(modal.session, "modal stays open after draft clear");
+  assert.equal(closes, 0, "no close on draft clear and no double handling");
+
+  const browsing = modal.contentEl.querySelector('[data-target-key="field:amount"]');
+  obsidianEscape(browsing);
+  assert.equal(closes, 1, "third Escape closes the card");
+  assert.equal(modal.session, null, "session torn down on close");
+});

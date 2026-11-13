@@ -98,10 +98,64 @@ function gmailEventsShowFailureNotice(state, now = new Date(), notice) {
   }
 }
 
+function gmailEventsRecentArchiveCount(report) {
+  try {
+    const recent = report && report.recent_archive;
+    if (!recent || typeof recent !== "object" || Array.isArray(recent)) return null;
+    if (typeof recent.since !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(recent.since) ||
+        !Number.isFinite(Date.parse(recent.since))) return null;
+    if (!Number.isInteger(recent.count) || recent.count < 0 || !Array.isArray(recent.items) || recent.items.length !== recent.count) return null;
+    const threads = new Set();
+    for (const item of recent.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item) ||
+          typeof item.thread_id !== "string" || !item.thread_id || threads.has(item.thread_id) ||
+          typeof item.note !== "string" || !item.note ||
+          typeof item.archived_at !== "string" || !Number.isFinite(Date.parse(item.archived_at)) ||
+          !Number.isInteger(item.message_count) || item.message_count < 1 ||
+          !item.label || typeof item.label !== "object" || typeof item.label.name !== "string" || !item.label.name ||
+          !["archived", "let_go", "restored"].includes(item.state)) return null;
+      threads.add(item.thread_id);
+    }
+    return recent.count;
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmailEventsShowRecentArchiveNotice(state, report, file, now = new Date(), notice) {
+  try {
+    const count = gmailEventsRecentArchiveCount(report);
+    const notePath = file && typeof file.path === "string" ? file.path : "";
+    if (!count || !notePath || !(now instanceof Date) || Number.isNaN(now.getTime())) return false;
+    if (!state || typeof state !== "object") return false;
+    if (!(state.gmailArchiveNoticeKeys instanceof Set)) state.gmailArchiveNoticeKeys = new Set();
+    const day = formatLocalDate(now);
+    if (state.gmailArchiveNoticeDay !== day) {
+      state.gmailArchiveNoticeKeys.clear();
+      state.gmailArchiveNoticeDay = day;
+    }
+    if (state.gmailArchiveNoticeKeys.has(notePath)) return false;
+    state.gmailArchiveNoticeKeys.add(notePath);
+    const noun = count === 1 ? "thread" : "threads";
+    const text = `⤓ Bob archived ${count} Gmail ${noun} since yesterday — tasks you closed.`;
+    try {
+      if (typeof notice === "function") notice(text);
+      else new Notice(text);
+    } catch (error) {
+      // Notice delivery is best-effort after a completed sync.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 class BobLedgerToolsGmailSyncMixin {
   setupGmailSyncOnCreate() {
     if (typeof this.gmailSyncOnCreateEnabled !== "boolean") this.gmailSyncOnCreateEnabled = true;
     if (!this.gmailSyncNoticeDays) this.gmailSyncNoticeDays = new Set();
+    if (!(this.gmailArchiveNoticeKeys instanceof Set)) this.gmailArchiveNoticeKeys = new Set();
     try {
       this.addCommand({
         id: "toggle-gmail-sync-on-create",
@@ -171,7 +225,13 @@ class BobLedgerToolsGmailSyncMixin {
       timeout: GMAIL_EVENTS_SYNC_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     });
-    if (result && result.ok) return true;
+    if (result && result.ok) {
+      if (typeof this.mailArchiveScheduleReceiptRefresh === "function") {
+        this.mailArchiveScheduleReceiptRefresh("sync");
+      }
+      gmailEventsShowRecentArchiveNotice(this, result.report, file);
+      return true;
+    }
     const kind = gmailEventsFailureKind(result);
     if (kind === "notice") {
       gmailEventsShowFailureNotice(this);

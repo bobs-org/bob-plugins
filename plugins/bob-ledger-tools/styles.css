@@ -8073,6 +8073,36 @@ body:not(.bob-mail-link-marks) .bob-mail-reply-badge {
   display: none;
 }
 
+/* Gmail archive receipt chips: display-only receipt details on closed Gmail
+   Task rows. The same mail-link-marks gate controls reply and archive marks. */
+body.bob-mail-link-marks .bob-mail-archive-chip {
+  display: inline-block;
+  margin-inline-start: 0.35em;
+  padding: 0.05em 0.45em;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: color-mix(in srgb, var(--text-muted) 70%, var(--text-normal));
+  font-family: var(--font-interface);
+  font-size: 0.8em;
+  font-weight: 400;
+  line-height: inherit;
+  white-space: nowrap;
+  vertical-align: baseline;
+  user-select: none;
+  cursor: default;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+body.bob-mail-link-marks .bob-mail-archive-chip + .bob-mail-archive-chip {
+  margin-inline-start: 0.25em;
+}
+
+body:not(.bob-mail-link-marks) .bob-mail-archive-chip {
+  display: none;
+}
+
 /* Gmail open hint: muted `⌘↵ Gmail` capsule at the end of the cursor's line
    when the bob-mail Cmd+Enter keymap will open an email. Gated by
    `body.bob-mail-link-marks`, like the reply badge. Live Preview only. */

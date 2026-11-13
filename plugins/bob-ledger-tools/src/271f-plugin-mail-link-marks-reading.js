@@ -89,6 +89,26 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
     }
   }
 
+  mailArchiveReadingOwnedHosts(li) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function"
+        ? li.querySelectorAll(".bob-mail-archive-chip-group")
+        : [];
+      const hosts = [];
+      for (const host of found || []) {
+        let owner = host;
+        let guard = 0;
+        while (owner && guard++ < 40) {
+          if (owner === li) { hosts.push(host); break; }
+          owner = owner.parentNode || null;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
   sweepMailLinkMarksReadingView(record) {
     try {
       const root = record && record.el;
@@ -99,8 +119,12 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       const allHosts = typeof root.querySelectorAll === "function"
         ? Array.from(root.querySelectorAll("." + MAIL_REPLY_BADGE_CLASS))
         : [];
+      const allArchiveHosts = typeof root.querySelectorAll === "function"
+        ? Array.from(root.querySelectorAll(".bob-mail-archive-chip-group"))
+        : [];
       if (!this.mailLinkMarksEnabled) {
         for (const host of allHosts) this.removeMailReplyBadgeHost(host);
+        for (const host of allArchiveHosts) this.removeMailReplyBadgeHost(host);
         return true;
       }
       let today = null;
@@ -108,14 +132,30 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       const now = new Date();
       const items = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll("li.task-list-item")) : [];
       const seen = new Set();
+      const seenArchive = new Set();
       for (const li of items) {
         try {
+          const archiveHosts = this.mailArchiveReadingOwnedHosts(li);
           const existing = this.mailLinkMarkReadingOwnedHosts(li);
           const info = record.ctx && typeof record.ctx.getSectionInfo === "function"
             ? record.ctx.getSectionInfo(li) || record.ctx.getSectionInfo(root)
             : null;
           let lineText = info && typeof info.text === "string" ? info.text : "";
-          if (!lineText && typeof li.textContent === "string") lineText = "- [ ] " + li.textContent;
+          const sourceLines = lineText ? lineText.split(/\r?\n/) : [];
+          const archiveLineIndex = sourceLines.length > 0 && mailArchiveReceiptTaskStatus(sourceLines[0])
+            ? 0
+            : -1;
+          const archiveModels = archiveLineIndex >= 0
+            ? this.mailArchiveReceiptModelsForTask(sourceLines, archiveLineIndex, sourcePath, this.dateMarksToday())
+            : Object.freeze([]);
+          for (const host of archiveHosts) this.removeMailReplyBadgeHost(host);
+          if (archiveModels.length > 0) {
+            const group = buildMailArchiveChipGroupElement(doc, archiveModels);
+            if (group && typeof li.appendChild === "function") {
+              li.appendChild(group);
+              seenArchive.add(group);
+            }
+          }
           const facts = this.mailNoteFacts(lineText, sourcePath);
           const model = mailReplyBadgeModel(lineText, facts, today, now);
           if (!model) {
@@ -144,6 +184,9 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       }
       for (const host of allHosts) {
         if (!seen.has(host)) this.removeMailReplyBadgeHost(host);
+      }
+      for (const host of allArchiveHosts) {
+        if (!seenArchive.has(host)) this.removeMailReplyBadgeHost(host);
       }
       return true;
     } catch (error) {

@@ -664,6 +664,18 @@ test("shared cache api serves plain JSON for ledger tools", async () => {
   assert.equal(plugin.api.mailArchive.stateForNote("mail/2026/missing.md").status, "unknown-note");
 });
 
+test("shared cache api notifies Ledger Tools after a completed snapshot refresh", async () => {
+  const plugin = await archivePlugin({}, []);
+  let changes = 0;
+  const dispose = plugin.api.mailArchive.onChange(() => { changes += 1; });
+  assert.equal(typeof dispose, "function");
+  plugin.mailArchiveNotifyChanged();
+  assert.equal(changes, 1);
+  dispose();
+  plugin.mailArchiveNotifyChanged();
+  assert.equal(changes, 1);
+});
+
 test("unload clears banner hosts, views, and pending bits", async () => {
   const calls = [];
   const plugin = await archivePlugin({ [NOTE]: { frontmatter: mailNote().frontmatter, markdown: bannerMarkdown("2026-11-13") } }, calls);

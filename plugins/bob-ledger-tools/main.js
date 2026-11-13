@@ -23701,6 +23701,333 @@ if (typeof WidgetType === "function") {
     }
   };
 }
+// ---- src/142l-mail-archive-receipts.js ----
+// --- Gmail archive receipts: closed-task chip core -----------------------
+// Display-only projection of bob's offline `gmail list -a -f json` data.
+// Ownership comes from active archive receipts; frontmatter supplies only
+// the newest archive timestamp and the exact note identity.
+
+const MAIL_ARCHIVE_CHIP_CLASS = "bob-mail-archive-chip";
+const MAIL_ARCHIVE_CHIP_SIDE = 1;
+const MAIL_ARCHIVE_LIST_ARGS = Object.freeze(["gmail", "list", "-a", "-f", "json"]);
+
+function mailArchiveReceiptDatePart(value) {
+  try {
+    const text = String(value || "").trim();
+    const match = text.match(/^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/);
+    if (!match || !Number.isFinite(Date.parse(text))) return null;
+    if (typeof parseFreshDateStrict === "function") {
+      return parseFreshDateStrict(match[1]);
+    }
+    const date = new Date(`${match[1]}T00:00:00Z`);
+    return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== match[1]
+      ? null
+      : match[1];
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailArchiveReceiptIsValid(entry) {
+  try {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    if (typeof entry.archive_event_id !== "string" || !entry.archive_event_id) return false;
+    if (!mailArchiveReceiptDatePart(entry.archived_at)) return false;
+    if (!Number.isInteger(entry.message_count) || entry.message_count < 1) return false;
+    const label = entry.label;
+    return Boolean(
+      label && typeof label === "object" && !Array.isArray(label) &&
+      typeof label.name === "string" && label.name.trim() &&
+      (typeof label.id === "string" || label.id === null),
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+function mailArchiveNoteIdentityFromFrontmatter(frontmatter) {
+  try {
+    if (!frontmatter || typeof frontmatter !== "object" || Array.isArray(frontmatter)) return null;
+    if (typeof blockMarkIsMailFrontmatter === "function" && !blockMarkIsMailFrontmatter(frontmatter)) return null;
+    const account = typeof frontmatter.gmail_account === "string" ? frontmatter.gmail_account.trim() : "";
+    const threadId = typeof frontmatter.gmail_thread_id === "string" ? frontmatter.gmail_thread_id.trim() : "";
+    const archivedAt = typeof frontmatter.gmail_archived === "string" ? frontmatter.gmail_archived.trim() : "";
+    if (!account || !threadId) return null;
+    return { account, threadId, archivedAt };
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailArchiveReceiptTaskStatus(lineText) {
+  try {
+    const status = typeof freshnessTaskStatus === "function"
+      ? freshnessTaskStatus(String(lineText || ""))
+      : null;
+    if (status !== "x" && status !== "X" && status !== "-") return null;
+    if (typeof taskTagMarkTokenRanges !== "function" || taskTagMarkTokenRanges(String(lineText || "")).length === 0) {
+      return null;
+    }
+    return status;
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailArchiveReceiptTooltip(receipts) {
+  try {
+    if (!Array.isArray(receipts) || receipts.length === 0) return "";
+    const detail = receipts.map((entry) => {
+      const count = entry.message_count;
+      const messages = `${count} saved message${count === 1 ? "" : "s"}`;
+      return `${entry.archived_at}: ${messages} under ${entry.label.name}`;
+    }).join("; ");
+    return `Bob archived this mail. ${detail}. Move it back to Inbox with Bob Mail, or run bob gmail unarchive for this note.`;
+  } catch (error) {
+    return "Bob archived this mail. Move it back to Inbox with Bob Mail.";
+  }
+}
+
+function mailArchiveReceiptChipModel(lineText, frontmatter, state, today) {
+  try {
+    if (!mailArchiveReceiptTaskStatus(lineText)) return null;
+    const identity = mailArchiveNoteIdentityFromFrontmatter(frontmatter);
+    if (!identity || !identity.archivedAt) return null;
+    if (!state || state.kind !== "receipts" || state.status !== "ready" || !Array.isArray(state.receipts)) return null;
+    const receipts = state.receipts.filter(mailArchiveReceiptIsValid).slice();
+    if (receipts.length === 0 || receipts.length !== state.receipts.length) return null;
+    const newest = receipts.reduce((latest, receipt) => {
+      return Date.parse(receipt.archived_at) > Date.parse(latest.archived_at) ? receipt : latest;
+    }, receipts[0]);
+    if (Date.parse(newest.archived_at) !== Date.parse(identity.archivedAt)) return null;
+    const date = mailArchiveReceiptDatePart(identity.archivedAt);
+    if (!date) return null;
+    const shortDate = typeof freshnessShortDate === "function"
+      ? freshnessShortDate(date, String(today || ""))
+      : date;
+    const tooltip = mailArchiveReceiptTooltip(receipts);
+    if (!tooltip) return null;
+    return Object.freeze({
+      text: `⤓ archived ${shortDate || date}`,
+      tooltip,
+      account: identity.account,
+      threadId: identity.threadId,
+      date,
+      receipts: Object.freeze(receipts),
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function mailArchiveReceiptModelsForTask(lineText, targets, today) {
+  try {
+    if (!mailArchiveReceiptTaskStatus(lineText) || !Array.isArray(targets)) return Object.freeze([]);
+    const seen = new Set();
+    const models = [];
+    for (const target of targets) {
+      try {
+        const notePath = String(target && target.notePath || "");
+        const identity = target && target.identity;
+        if (!notePath || !identity) continue;
+        const key = `${notePath}\u0000${String(identity.account || "").toLowerCase()}\u0000${String(identity.threadId || "").toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const model = mailArchiveReceiptChipModel(lineText, {
+          type: "[[mail]]",
+          gmail_account: identity.account,
+          gmail_thread_id: identity.threadId,
+          gmail_archived: identity.archivedAt,
+        }, target.state, today);
+        if (model) models.push(Object.freeze({ ...model, notePath }));
+      } catch (error) {
+        continue;
+      }
+    }
+    return Object.freeze(models);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+function mailArchiveReceiptDecodeList(document) {
+  try {
+    if (!document || typeof document !== "object" || Array.isArray(document) ||
+        document.schema_version !== 1 || document.ok !== true || !Array.isArray(document.threads)) {
+      return { ok: false, code: "bad-shape" };
+    }
+    const byNote = new Map();
+    const unavailable = new Set();
+    for (const row of document.threads) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return { ok: false, code: "bad-shape" };
+      const notePath = typeof row.path === "string" ? row.path : "";
+      const account = typeof row.account === "string" ? row.account.trim() : "";
+      const threadId = typeof row.thread_id === "string" ? row.thread_id.trim() : "";
+      if (!notePath || !account || !threadId || byNote.has(notePath) || unavailable.has(notePath)) {
+        return { ok: false, code: "bad-shape" };
+      }
+      const raw = row.archive_receipts;
+      if (!Array.isArray(raw) || raw.some((entry) => !mailArchiveReceiptIsValid(entry))) {
+        unavailable.add(notePath);
+        continue;
+      }
+      byNote.set(notePath, {
+        account,
+        threadId,
+        receipts: raw.map((entry) => ({
+          archive_event_id: entry.archive_event_id,
+          archived_at: entry.archived_at,
+          message_count: entry.message_count,
+          label: { name: entry.label.name, id: entry.label.id },
+        })),
+      });
+    }
+    return { ok: true, byNote, unavailable };
+  } catch (error) {
+    return { ok: false, code: "bad-shape" };
+  }
+}
+
+function mailArchiveReceiptDecodeListOutput(stdout) {
+  try {
+    const document = JSON.parse(String(stdout || ""));
+    return mailArchiveReceiptDecodeList(document).ok
+      ? { ok: true, document }
+      : { ok: false, code: "bad-shape", message: "bob gmail list returned unavailable archive receipt data." };
+  } catch (error) {
+    return { ok: false, code: "bad-json", message: "bob gmail list returned invalid JSON." };
+  }
+}
+
+function mailArchiveReceiptCacheCreate() {
+  return { status: "unloaded", byNote: new Map(), unavailable: new Set(), promise: null, revision: 0, refreshAgain: false };
+}
+
+function mailArchiveReceiptCacheInvalidate(cache) {
+  try {
+    if (!cache || typeof cache !== "object") return false;
+    cache.revision = (Number(cache.revision) || 0) + 1;
+    cache.status = "unloaded";
+    cache.byNote = new Map();
+    cache.unavailable = new Set();
+    if (cache.promise) cache.refreshAgain = true;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function mailArchiveReceiptCacheRefresh(cache, runList) {
+  try {
+    if (!cache || typeof cache !== "object") return Promise.resolve(null);
+    if (cache.promise) return cache.promise;
+    if (typeof runList !== "function") {
+      cache.status = "unavailable";
+      return Promise.resolve(cache);
+    }
+    const revision = Number(cache.revision) || 0;
+    cache.status = "loading";
+    cache.promise = Promise.resolve()
+      .then(() => runList())
+      .then((result) => {
+        const decoded = result && result.ok && result.document
+          ? mailArchiveReceiptDecodeList(result.document)
+          : { ok: false };
+        if (revision === (Number(cache.revision) || 0)) {
+          cache.status = decoded.ok ? "ready" : result && result.oldBob ? "old-bob" : "unavailable";
+          cache.byNote = decoded.ok ? decoded.byNote : new Map();
+          cache.unavailable = decoded.ok ? decoded.unavailable : new Set();
+        }
+        const again = cache.refreshAgain;
+        cache.refreshAgain = false;
+        cache.promise = null;
+        return again ? mailArchiveReceiptCacheRefresh(cache, runList) : cache;
+      })
+      .catch(() => {
+        if (revision === (Number(cache.revision) || 0)) {
+          cache.status = "unavailable";
+          cache.byNote = new Map();
+          cache.unavailable = new Set();
+        }
+        const again = cache.refreshAgain;
+        cache.refreshAgain = false;
+        cache.promise = null;
+        return again ? mailArchiveReceiptCacheRefresh(cache, runList) : cache;
+      });
+    return cache.promise;
+  } catch (error) {
+    return Promise.resolve(null);
+  }
+}
+
+function mailArchiveReceiptCacheStateForNote(cache, notePath, account, threadId) {
+  try {
+    const path = String(notePath || "");
+    if (!cache || cache.status !== "ready" || !path) return { kind: "unavailable", status: cache && cache.status || "unavailable" };
+    if (cache.unavailable && cache.unavailable.has(path)) return { kind: "unavailable", status: "unavailable" };
+    const row = cache.byNote && cache.byNote.get(path);
+    if (!row) return { kind: "unavailable", status: "unknown-note" };
+    if (String(row.account || "").toLowerCase() !== String(account || "").toLowerCase() ||
+        String(row.threadId || "").toLowerCase() !== String(threadId || "").toLowerCase()) {
+      return { kind: "unavailable", status: "identity-mismatch" };
+    }
+    return row.receipts.length
+      ? { kind: "receipts", status: "ready", receipts: row.receipts.slice() }
+      : { kind: "none", status: "ready", receipts: [] };
+  } catch (error) {
+    return { kind: "unavailable", status: "unavailable" };
+  }
+}
+
+function buildMailArchiveChipElement(doc, model) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !model || !model.text) return null;
+    const host = doc.createElement("span");
+    host.setAttribute("class", MAIL_ARCHIVE_CHIP_CLASS);
+    host.setAttribute("role", "img");
+    host.setAttribute("aria-label", String(model.tooltip || model.text));
+    host.setAttribute("data-tooltip-position", "top");
+    host.textContent = String(model.text);
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildMailArchiveChipGroupElement(doc, models) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !Array.isArray(models) || models.length === 0) return null;
+    const group = doc.createElement("span");
+    group.setAttribute("class", "bob-mail-archive-chip-group");
+    for (const model of models) {
+      const chip = buildMailArchiveChipElement(doc, model);
+      if (chip && typeof group.appendChild === "function") group.appendChild(chip);
+    }
+    return group;
+  } catch (error) {
+    return null;
+  }
+}
+
+let MailArchiveChipWidget = null;
+if (typeof WidgetType === "function") {
+  MailArchiveChipWidget = class extends WidgetType {
+    constructor(models) {
+      super();
+      this.models = Array.isArray(models) ? models.map((model) => ({ ...model })) : [];
+      this.key = this.models.map((model) => `${model.text}\u0000${model.tooltip}`).join("\u0001");
+    }
+
+    eq(other) {
+      return Boolean(other && other instanceof MailArchiveChipWidget && other.key === this.key);
+    }
+
+    toDOM() {
+      const doc = typeof document !== "undefined" ? document : null;
+      return buildMailArchiveChipGroupElement(doc, this.models);
+    }
+  };
+}
 // ---- src/142d-block-marks-render.js ----
 // --- Blocked-reason marks: miniature renderer ------------------------------
 // Owned by bob-cli `docs/blocked-marks.md`. `buildBlockMarkElement` is the
@@ -87553,7 +87880,7 @@ class BobLedgerToolsMailLinkMarksMixin {
         if (typeof this.addCommand === "function") {
           this.addCommand({
             id: "toggle-mail-link-marks",
-            name: "Toggle mail reply badges",
+            name: "Toggle mail link marks",
             callback: () => this.toggleMailLinkMarks(),
           });
         }
@@ -87574,6 +87901,7 @@ class BobLedgerToolsMailLinkMarksMixin {
         // Reading view is best-effort.
       }
       this.setupMailLinkMarkListeners();
+      this.setupMailArchiveReceiptCache();
       if (typeof this.register === "function") this.register(() => this.teardownMailLinkMarks());
     } catch (error) {
       // Display-only setup never blocks plugin startup.
@@ -87624,6 +87952,255 @@ class BobLedgerToolsMailLinkMarksMixin {
       }
     } catch (error) {
       // Liveness listeners are best-effort.
+    }
+  }
+
+  mailArchiveReceiptSharedApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const owner = plugins && plugins["bob-mail"];
+      const api = owner && owner.api && owner.api.mailArchive;
+      return api && Number(api.version) >= 1 &&
+        typeof api.refresh === "function" && typeof api.stateForNote === "function"
+        ? api
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  mailArchiveSubscribeSharedApi() {
+    try {
+      const api = this.mailArchiveReceiptSharedApi();
+      if (!api) return false;
+      if (this.mailArchiveReceiptSubscribedApi === api) return true;
+      try {
+        if (typeof this.mailArchiveReceiptUnsubscribe === "function") this.mailArchiveReceiptUnsubscribe();
+      } catch (error) {}
+      this.mailArchiveReceiptSubscribedApi = api;
+      this.mailArchiveReceiptUnsubscribe = null;
+      if (typeof api.onChange === "function") {
+        const dispose = api.onChange(() => {
+          this.mailArchiveReceiptSnapshotStale = false;
+          this.scheduleMailLinkMarksRefresh();
+        });
+        if (typeof dispose === "function") this.mailArchiveReceiptUnsubscribe = dispose;
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  setupMailArchiveReceiptCache() {
+    try {
+      if (!this.mailArchiveReceiptCache || typeof this.mailArchiveReceiptCache !== "object") {
+        this.mailArchiveReceiptCache = mailArchiveReceiptCacheCreate();
+      }
+      this.mailArchiveReceiptRefreshTimer = null;
+      this.mailArchiveReceiptSnapshotStale = true;
+      const register = typeof this.registerEvent === "function";
+      const metadataCache = this.app && this.app.metadataCache;
+      if (register && metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file) => {
+          if (this.mailArchiveReceiptRelevantFile(file)) this.mailArchiveScheduleReceiptRefresh("metadata");
+        }));
+        this.registerEvent(metadataCache.on("resolved", () => this.mailArchiveScheduleReceiptRefresh("metadata")));
+      }
+      const vault = this.app && this.app.vault;
+      if (register && vault && typeof vault.on === "function") {
+        for (const event of ["modify", "create", "delete", "rename"]) {
+          this.registerEvent(vault.on(event, (file, oldPath) => {
+            if (this.mailArchiveReceiptRelevantFile(file) || this.mailArchiveReceiptRelevantFile(oldPath)) {
+              this.mailArchiveScheduleReceiptRefresh("journal");
+            }
+          }));
+        }
+      }
+      const workspace = this.app && this.app.workspace;
+      if (register && workspace && typeof workspace.on === "function") {
+        this.registerEvent(workspace.on("active-leaf-change", () => this.mailArchiveScheduleReceiptRefresh("activation")));
+      }
+      if (typeof this.register === "function") {
+        this.register(() => {
+          try { if (typeof this.mailArchiveReceiptUnsubscribe === "function") this.mailArchiveReceiptUnsubscribe(); } catch (error) {}
+        });
+      }
+      this.mailArchiveScheduleReceiptRefresh("startup");
+    } catch (error) {
+      // Missing receipt data stays unavailable; it never blocks the existing marks.
+    }
+  }
+
+  mailArchiveReceiptRelevantFile(file) {
+    try {
+      const path = typeof file === "string" ? file : String(file && file.path || "");
+      if (path.startsWith("mail/") || path.includes(".bob/gmail/")) return true;
+      const metadataCache = this.app && this.app.metadataCache;
+      const frontmatter = file && metadataCache && typeof metadataCache.getFileCache === "function"
+        ? (metadataCache.getFileCache(file) || {}).frontmatter
+        : null;
+      return Boolean(mailArchiveNoteIdentityFromFrontmatter(frontmatter));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  mailArchiveScheduleReceiptRefresh(reason) {
+    try {
+      const explicit = reason === "startup" || reason === "activation" || reason === "sync" || reason === "undo";
+      this.mailArchiveReceiptSnapshotStale = true;
+      if (!this.mailArchiveReceiptCache || typeof this.mailArchiveReceiptCache !== "object") {
+        this.mailArchiveReceiptCache = mailArchiveReceiptCacheCreate();
+      }
+      mailArchiveReceiptCacheInvalidate(this.mailArchiveReceiptCache);
+      if (this.mailArchiveReceiptRefreshTimer !== null && this.mailArchiveReceiptRefreshTimer !== undefined) {
+        return;
+      }
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function"
+        ? window.setTimeout.bind(window)
+        : setTimeout;
+      const delay = explicit ? 0 : 400;
+      this.mailArchiveReceiptRefreshTimer = schedule(() => {
+        this.mailArchiveReceiptRefreshTimer = null;
+        void this.mailArchiveRefreshReceiptSnapshot(reason);
+      }, delay);
+    } catch (error) {
+      // The cached marks will remain absent until a later view activation.
+    }
+  }
+
+  mailArchiveRefreshReceiptSnapshot(reason) {
+    try {
+      this.mailArchiveSubscribeSharedApi();
+      const api = this.mailArchiveReceiptSharedApi();
+      if (api) {
+        return Promise.resolve(api.refresh())
+          .then(() => {
+            this.mailArchiveReceiptSnapshotStale = false;
+            this.scheduleMailLinkMarksRefresh();
+            return api;
+          })
+          .catch(() => {
+            this.mailArchiveReceiptSnapshotStale = false;
+            this.scheduleMailLinkMarksRefresh();
+            return api;
+          });
+      }
+      const spawn = typeof this.bobSpawnJson === "function" ? this.bobSpawnJson.bind(this) : bobSpawnJson;
+      return mailArchiveReceiptCacheRefresh(this.mailArchiveReceiptCache, () => spawn(
+        [...MAIL_ARCHIVE_LIST_ARGS],
+        mailArchiveReceiptDecodeListOutput,
+        {
+          commandLabel: "bob gmail list",
+          resolveBobPath: () => typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+          getVaultPath: () => typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+        },
+      )).then((cache) => {
+        this.mailArchiveReceiptSnapshotStale = false;
+        this.scheduleMailLinkMarksRefresh();
+        return cache;
+      });
+    } catch (error) {
+      this.mailArchiveReceiptSnapshotStale = false;
+      return Promise.resolve(null);
+    }
+  }
+
+  mailArchiveReceiptStateForNote(notePath, identity) {
+    try {
+      if (this.mailArchiveReceiptSnapshotStale) return { kind: "unavailable", status: "stale" };
+      const api = this.mailArchiveReceiptSharedApi();
+      if (api) return api.stateForNote(String(notePath || ""));
+      return mailArchiveReceiptCacheStateForNote(
+        this.mailArchiveReceiptCache,
+        notePath,
+        identity && identity.account,
+        identity && identity.threadId,
+      );
+    } catch (error) {
+      return { kind: "unavailable", status: "unavailable" };
+    }
+  }
+
+  mailArchiveResolveReceiptTarget(pathPart, sourcePath) {
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (!metadataCache || typeof metadataCache.getFirstLinkpathDest !== "function" ||
+          typeof metadataCache.getFileCache !== "function") return null;
+      const file = metadataCache.getFirstLinkpathDest(String(pathPart || ""), String(sourcePath || ""));
+      if (!file || typeof file.path !== "string") return null;
+      const frontmatter = (metadataCache.getFileCache(file) || {}).frontmatter;
+      const identity = mailArchiveNoteIdentityFromFrontmatter(frontmatter);
+      if (!identity) return null;
+      const state = this.mailArchiveReceiptStateForNote(file.path, identity);
+      return { notePath: file.path, identity, state };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  mailArchiveReceiptTargetsForTask(lines, lineIndex, sourcePath, tree, lineFrom) {
+    try {
+      if (!Array.isArray(lines) || !Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return [];
+      const lineText = String(lines[lineIndex] || "");
+      if (!mailArchiveReceiptTaskStatus(lineText)) return [];
+      const targets = [];
+      const seen = new Set();
+      const add = (pathPart) => {
+        const target = this.mailArchiveResolveReceiptTarget(pathPart, sourcePath);
+        if (!target) return;
+        const key = `${target.notePath}\u0000${target.identity.account.toLowerCase()}\u0000${target.identity.threadId.toLowerCase()}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        targets.push(target);
+      };
+      for (const token of mailLinkMarkTokens(lineText)) {
+        try {
+          if (tree && typeof freshnessMarkPosInCode === "function" && Number.isInteger(lineFrom) &&
+              freshnessMarkPosInCode(tree, lineFrom + token.start + 1)) continue;
+          add(token.pathPart);
+        } catch (error) {
+          continue;
+        }
+      }
+      const parentIndent = typeof gmailOpenHintIndent === "function" ? gmailOpenHintIndent(lineText) : (lineText.match(/^\s*/)[0] || "").length;
+      const children = [];
+      for (let index = lineIndex + 1; index < lines.length; index += 1) {
+        const child = String(lines[index] || "");
+        if (!child.trim()) continue;
+        const indent = typeof gmailOpenHintIndent === "function" ? gmailOpenHintIndent(child) : (child.match(/^\s*/)[0] || "").length;
+        if (indent <= parentIndent) break;
+        if (/^\s*[-*+]/.test(child)) children.push({ text: child, indent });
+      }
+      let directIndent = null;
+      for (const child of children) {
+        if (directIndent === null || child.indent < directIndent) directIndent = child.indent;
+      }
+      for (const child of children) {
+        if (child.indent !== directIndent) continue;
+        const target = typeof gmailOpenHintLinkOnlyTarget === "function"
+          ? gmailOpenHintLinkOnlyTarget(child.text)
+          : null;
+        if (target) add(target);
+      }
+      return targets;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  mailArchiveReceiptModelsForTask(lines, lineIndex, sourcePath, today, tree, lineFrom) {
+    try {
+      const lineText = String(Array.isArray(lines) ? lines[lineIndex] || "" : "");
+      const targets = this.mailArchiveReceiptTargetsForTask(lines, lineIndex, sourcePath, tree, lineFrom);
+      return mailArchiveReceiptModelsForTask(lineText, targets, today);
+    } catch (error) {
+      return Object.freeze([]);
     }
   }
 
@@ -87714,6 +88291,8 @@ class BobLedgerToolsMailLinkMarksMixin {
       const ranges = view.visibleRanges || [];
       const builder = new RangeSetBuilder();
       const docLength = typeof doc.length === "number" ? doc.length : Number.MAX_SAFE_INTEGER;
+      const lines = typeof doc.toString === "function" ? String(doc.toString()).split("\n") : null;
+      const archiveLines = new Set();
       for (const range of ranges) {
         try {
           if (!range || typeof range.from !== "number") continue;
@@ -87726,6 +88305,16 @@ class BobLedgerToolsMailLinkMarksMixin {
             try { line = doc.lineAt(pos); } catch (error) { break; }
             if (!line || typeof line.text !== "string") break;
             try {
+              if (line.text.indexOf("#task") !== -1 && lines && typeof line.number === "number" && !archiveLines.has(line.number)) {
+                archiveLines.add(line.number);
+                const models = this.mailArchiveReceiptModelsForTask(lines, line.number - 1, sourcePath, today, tree, line.from);
+                if (models.length > 0 && MailArchiveChipWidget) {
+                  builder.add(line.to, line.to, Decoration.widget({
+                    widget: new MailArchiveChipWidget(models),
+                    side: MAIL_ARCHIVE_CHIP_SIDE,
+                  }));
+                }
+              }
               if (line.text.indexOf("[[") !== -1 && line.text.indexOf("#task") !== -1) {
                 const tokens = mailLinkMarkTokens(line.text);
                 const facts = tokens.length ? this.mailNoteFacts(line.text, sourcePath) : null;
@@ -87838,6 +88427,14 @@ class BobLedgerToolsMailLinkMarksMixin {
         clearTimeout(this.mailLinkMarksTimer);
       }
       this.mailLinkMarksTimer = null;
+      if (this.mailArchiveReceiptRefreshTimer !== null && this.mailArchiveReceiptRefreshTimer !== undefined) {
+        clearTimeout(this.mailArchiveReceiptRefreshTimer);
+      }
+      this.mailArchiveReceiptRefreshTimer = null;
+      try { if (typeof this.mailArchiveReceiptUnsubscribe === "function") this.mailArchiveReceiptUnsubscribe(); } catch (error) {}
+      this.mailArchiveReceiptUnsubscribe = null;
+      this.mailArchiveReceiptSubscribedApi = null;
+      if (this.mailArchiveReceiptCache) mailArchiveReceiptCacheInvalidate(this.mailArchiveReceiptCache);
       if (this.mailLinkMarksReadingViews instanceof Map) this.mailLinkMarksReadingViews.clear();
       this.applyMarkGateClass("bob-mail-link-marks", false);
     } catch (error) {
@@ -87937,6 +88534,26 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
     }
   }
 
+  mailArchiveReadingOwnedHosts(li) {
+    try {
+      const found = li && typeof li.querySelectorAll === "function"
+        ? li.querySelectorAll(".bob-mail-archive-chip-group")
+        : [];
+      const hosts = [];
+      for (const host of found || []) {
+        let owner = host;
+        let guard = 0;
+        while (owner && guard++ < 40) {
+          if (owner === li) { hosts.push(host); break; }
+          owner = owner.parentNode || null;
+        }
+      }
+      return hosts;
+    } catch (error) {
+      return [];
+    }
+  }
+
   sweepMailLinkMarksReadingView(record) {
     try {
       const root = record && record.el;
@@ -87947,8 +88564,12 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       const allHosts = typeof root.querySelectorAll === "function"
         ? Array.from(root.querySelectorAll("." + MAIL_REPLY_BADGE_CLASS))
         : [];
+      const allArchiveHosts = typeof root.querySelectorAll === "function"
+        ? Array.from(root.querySelectorAll(".bob-mail-archive-chip-group"))
+        : [];
       if (!this.mailLinkMarksEnabled) {
         for (const host of allHosts) this.removeMailReplyBadgeHost(host);
+        for (const host of allArchiveHosts) this.removeMailReplyBadgeHost(host);
         return true;
       }
       let today = null;
@@ -87956,14 +88577,30 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       const now = new Date();
       const items = typeof root.querySelectorAll === "function" ? Array.from(root.querySelectorAll("li.task-list-item")) : [];
       const seen = new Set();
+      const seenArchive = new Set();
       for (const li of items) {
         try {
+          const archiveHosts = this.mailArchiveReadingOwnedHosts(li);
           const existing = this.mailLinkMarkReadingOwnedHosts(li);
           const info = record.ctx && typeof record.ctx.getSectionInfo === "function"
             ? record.ctx.getSectionInfo(li) || record.ctx.getSectionInfo(root)
             : null;
           let lineText = info && typeof info.text === "string" ? info.text : "";
-          if (!lineText && typeof li.textContent === "string") lineText = "- [ ] " + li.textContent;
+          const sourceLines = lineText ? lineText.split(/\r?\n/) : [];
+          const archiveLineIndex = sourceLines.length > 0 && mailArchiveReceiptTaskStatus(sourceLines[0])
+            ? 0
+            : -1;
+          const archiveModels = archiveLineIndex >= 0
+            ? this.mailArchiveReceiptModelsForTask(sourceLines, archiveLineIndex, sourcePath, this.dateMarksToday())
+            : Object.freeze([]);
+          for (const host of archiveHosts) this.removeMailReplyBadgeHost(host);
+          if (archiveModels.length > 0) {
+            const group = buildMailArchiveChipGroupElement(doc, archiveModels);
+            if (group && typeof li.appendChild === "function") {
+              li.appendChild(group);
+              seenArchive.add(group);
+            }
+          }
           const facts = this.mailNoteFacts(lineText, sourcePath);
           const model = mailReplyBadgeModel(lineText, facts, today, now);
           if (!model) {
@@ -87992,6 +88629,9 @@ class BobLedgerToolsMailLinkMarksReadingMixin {
       }
       for (const host of allHosts) {
         if (!seen.has(host)) this.removeMailReplyBadgeHost(host);
+      }
+      for (const host of allArchiveHosts) {
+        if (!seenArchive.has(host)) this.removeMailReplyBadgeHost(host);
       }
       return true;
     } catch (error) {
@@ -109108,10 +109748,64 @@ function gmailEventsShowFailureNotice(state, now = new Date(), notice) {
   }
 }
 
+function gmailEventsRecentArchiveCount(report) {
+  try {
+    const recent = report && report.recent_archive;
+    if (!recent || typeof recent !== "object" || Array.isArray(recent)) return null;
+    if (typeof recent.since !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(recent.since) ||
+        !Number.isFinite(Date.parse(recent.since))) return null;
+    if (!Number.isInteger(recent.count) || recent.count < 0 || !Array.isArray(recent.items) || recent.items.length !== recent.count) return null;
+    const threads = new Set();
+    for (const item of recent.items) {
+      if (!item || typeof item !== "object" || Array.isArray(item) ||
+          typeof item.thread_id !== "string" || !item.thread_id || threads.has(item.thread_id) ||
+          typeof item.note !== "string" || !item.note ||
+          typeof item.archived_at !== "string" || !Number.isFinite(Date.parse(item.archived_at)) ||
+          !Number.isInteger(item.message_count) || item.message_count < 1 ||
+          !item.label || typeof item.label !== "object" || typeof item.label.name !== "string" || !item.label.name ||
+          !["archived", "let_go", "restored"].includes(item.state)) return null;
+      threads.add(item.thread_id);
+    }
+    return recent.count;
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmailEventsShowRecentArchiveNotice(state, report, file, now = new Date(), notice) {
+  try {
+    const count = gmailEventsRecentArchiveCount(report);
+    const notePath = file && typeof file.path === "string" ? file.path : "";
+    if (!count || !notePath || !(now instanceof Date) || Number.isNaN(now.getTime())) return false;
+    if (!state || typeof state !== "object") return false;
+    if (!(state.gmailArchiveNoticeKeys instanceof Set)) state.gmailArchiveNoticeKeys = new Set();
+    const day = formatLocalDate(now);
+    if (state.gmailArchiveNoticeDay !== day) {
+      state.gmailArchiveNoticeKeys.clear();
+      state.gmailArchiveNoticeDay = day;
+    }
+    if (state.gmailArchiveNoticeKeys.has(notePath)) return false;
+    state.gmailArchiveNoticeKeys.add(notePath);
+    const noun = count === 1 ? "thread" : "threads";
+    const text = `⤓ Bob archived ${count} Gmail ${noun} since yesterday — tasks you closed.`;
+    try {
+      if (typeof notice === "function") notice(text);
+      else new Notice(text);
+    } catch (error) {
+      // Notice delivery is best-effort after a completed sync.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 class BobLedgerToolsGmailSyncMixin {
   setupGmailSyncOnCreate() {
     if (typeof this.gmailSyncOnCreateEnabled !== "boolean") this.gmailSyncOnCreateEnabled = true;
     if (!this.gmailSyncNoticeDays) this.gmailSyncNoticeDays = new Set();
+    if (!(this.gmailArchiveNoticeKeys instanceof Set)) this.gmailArchiveNoticeKeys = new Set();
     try {
       this.addCommand({
         id: "toggle-gmail-sync-on-create",
@@ -109181,7 +109875,13 @@ class BobLedgerToolsGmailSyncMixin {
       timeout: GMAIL_EVENTS_SYNC_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     });
-    if (result && result.ok) return true;
+    if (result && result.ok) {
+      if (typeof this.mailArchiveScheduleReceiptRefresh === "function") {
+        this.mailArchiveScheduleReceiptRefresh("sync");
+      }
+      gmailEventsShowRecentArchiveNotice(this, result.report, file);
+      return true;
+    }
     const kind = gmailEventsFailureKind(result);
     if (kind === "notice") {
       gmailEventsShowFailureNotice(this);
@@ -118450,6 +119150,37 @@ try {
       bankCategoryWaitingRows,
       bankCategoryNextWaiting,
       bankCategoryMatchJsonRow,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/356-exports-mail-archive-receipts.js ----
+// Test exports for the display-only Gmail archive receipt chips and notice.
+try {
+  if (typeof module !== "undefined" && module.exports && module.exports.helpers && typeof module.exports === "function") {
+    Object.assign(module.exports.helpers, {
+      MAIL_ARCHIVE_CHIP_CLASS,
+      MAIL_ARCHIVE_CHIP_SIDE,
+      MAIL_ARCHIVE_LIST_ARGS,
+      mailArchiveReceiptDatePart,
+      mailArchiveReceiptIsValid,
+      mailArchiveNoteIdentityFromFrontmatter,
+      mailArchiveReceiptTaskStatus,
+      mailArchiveReceiptTooltip,
+      mailArchiveReceiptChipModel,
+      mailArchiveReceiptModelsForTask,
+      mailArchiveReceiptDecodeList,
+      mailArchiveReceiptDecodeListOutput,
+      mailArchiveReceiptCacheCreate,
+      mailArchiveReceiptCacheInvalidate,
+      mailArchiveReceiptCacheRefresh,
+      mailArchiveReceiptCacheStateForNote,
+      buildMailArchiveChipElement,
+      buildMailArchiveChipGroupElement,
+      MailArchiveChipWidget,
+      gmailEventsRecentArchiveCount,
+      gmailEventsShowRecentArchiveNotice,
     });
   }
 } catch (error) {

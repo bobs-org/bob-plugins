@@ -2400,6 +2400,16 @@ function mailArchiveApiFor(plugin) {
     return Object.freeze({
       version: MAIL_ARCHIVE_API_VERSION,
       refresh: () => plugin.mailArchiveRefreshReceipts("api"),
+      onChange: (listener) => {
+        try {
+          if (typeof listener !== "function") return () => false;
+          if (!(plugin.mailArchiveChangeListeners instanceof Set)) plugin.mailArchiveChangeListeners = new Set();
+          plugin.mailArchiveChangeListeners.add(listener);
+          return () => plugin.mailArchiveChangeListeners.delete(listener);
+        } catch (error) {
+          return () => false;
+        }
+      },
       stateForNote: (notePath) => {
         try {
           const state = mailArchiveStateForNote(plugin.mailArchiveCache, notePath);
@@ -2434,6 +2444,7 @@ Object.assign(BobMailPlugin.prototype, {
       }
       if (!(this.mailArchivePending instanceof Set)) this.mailArchivePending = new Set();
       if (!(this.mailArchiveReadingViews instanceof Map)) this.mailArchiveReadingViews = new Map();
+      if (!(this.mailArchiveChangeListeners instanceof Set)) this.mailArchiveChangeListeners = new Set();
       this.mailArchiveSnapshotTimer = null;
       this.mailArchiveSnapshotExplicit = false;
       this.mailArchiveDisplayTimer = null;
@@ -2562,6 +2573,11 @@ Object.assign(BobMailPlugin.prototype, {
     } catch (error) {
       // Cleanup is best effort.
     }
+    try {
+      if (this.mailArchiveChangeListeners instanceof Set) this.mailArchiveChangeListeners.clear();
+    } catch (error) {
+      // Cleanup is best effort.
+    }
   },
 
   mailArchiveFileForPath(sourcePath) {
@@ -2584,6 +2600,7 @@ Object.assign(BobMailPlugin.prototype, {
       const plugin = this;
       return mailArchiveRefreshCache(this.mailArchiveCache, () => plugin.mailCall([...MAIL_ARCHIVE_LIST_ARGS]))
         .then((cache) => {
+          plugin.mailArchiveNotifyChanged();
           try {
             plugin.mailArchiveRefreshLiveEditors();
           } catch (error) {
@@ -2594,6 +2611,18 @@ Object.assign(BobMailPlugin.prototype, {
         .catch(() => this.mailArchiveCache);
     } catch (error) {
       return Promise.resolve(this.mailArchiveCache || null);
+    }
+  },
+
+  mailArchiveNotifyChanged() {
+    try {
+      if (!(this.mailArchiveChangeListeners instanceof Set)) return false;
+      for (const listener of Array.from(this.mailArchiveChangeListeners)) {
+        try { listener(); } catch (error) { continue; }
+      }
+      return true;
+    } catch (error) {
+      return false;
     }
   },
 

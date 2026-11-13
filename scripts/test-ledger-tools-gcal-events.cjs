@@ -136,6 +136,8 @@ const {
   gmailEventsSyncArgs,
   gmailEventsFailureKind,
   gmailEventsShowFailureNotice,
+  gmailEventsRecentArchiveCount,
+  gmailEventsShowRecentArchiveNotice,
   GMAIL_EVENTS_SYNC_TIMEOUT_MS,
 } = LedgerToolsPlugin.helpers;
 
@@ -1121,6 +1123,48 @@ test("gmailEventsFailureKind routes exit 1 to a Notice and exit 2 / unknown subc
   assert.equal(gmailEventsShowFailureNotice(plugin, now, (text) => notices.push(text)), true);
   assert.equal(gmailEventsShowFailureNotice(plugin, now, (text) => notices.push(text)), false);
   assert.deepEqual(notices, ["Gmail sync failed · run `bob gmail doctor`"]);
+});
+
+test("morning archive notice validates the snapshot and deduplicates by local day and note", () => {
+  const item = (thread_id) => ({
+    thread_id,
+    note: `mail/2026/${thread_id}.md`,
+    archived_at: "2026-11-13T08:15:00-05:00",
+    message_count: 2,
+    label: { name: "bob/closed", id: "Label_42" },
+    state: "archived",
+  });
+  const report = {
+    recent_archive: {
+      since: "2026-11-12T00:00:00-05:00",
+      count: 1,
+      items: [item("thread-a")],
+    },
+  };
+  assert.equal(gmailEventsRecentArchiveCount(report), 1);
+  const notices = [];
+  const state = {};
+  const day = new Date(2026, 10, 13, 9, 0, 0);
+  const file = { path: "2026/20261113.md" };
+  assert.equal(gmailEventsShowRecentArchiveNotice(state, report, file, day, (text) => notices.push(text)), true);
+  assert.equal(gmailEventsShowRecentArchiveNotice(state, report, file, day, (text) => notices.push(text)), false);
+  assert.deepEqual(notices, ["⤓ Bob archived 1 Gmail thread since yesterday — tasks you closed."]);
+  assert.equal(gmailEventsShowRecentArchiveNotice(state, report, { path: "2026/20261113-copy.md" }, day, (text) => notices.push(text)), true);
+  assert.equal(gmailEventsShowRecentArchiveNotice(state, report, file, new Date(2026, 10, 14, 9), (text) => notices.push(text)), true);
+
+  const plural = { recent_archive: { ...report.recent_archive, count: 2, items: [item("thread-a"), item("thread-b")] } };
+  assert.equal(gmailEventsRecentArchiveCount(plural), 2);
+  assert.equal(gmailEventsShowRecentArchiveNotice({}, plural, file, day, (text) => notices.push(text)), true);
+  assert.equal(notices.at(-1), "⤓ Bob archived 2 Gmail threads since yesterday — tasks you closed.");
+  for (const malformed of [
+    {},
+    { recent_archive: { since: "bad", count: 1, items: [item("thread-a")] } },
+    { recent_archive: { since: report.recent_archive.since, count: 2, items: [item("thread-a")] } },
+    { recent_archive: { ...report.recent_archive, items: [{ ...item("thread-a"), state: "would_archive" }] } },
+  ]) {
+    assert.equal(gmailEventsRecentArchiveCount(malformed), null);
+    assert.equal(gmailEventsShowRecentArchiveNotice({}, malformed, file, day, (text) => notices.push(text)), false);
+  }
 });
 
 test("shared create listener runs gmail after gcal, and gmail when gcal is off", async () => {

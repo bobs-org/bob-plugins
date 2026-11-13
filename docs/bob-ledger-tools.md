@@ -55,7 +55,7 @@ Album owner cards, group navigation, and sync controls are described in
 | Toggle calendar event painting | `toggle-calendar-event-painting` | — |
 | Toggle dependency chips | `toggle-dependency-chips` | — |
 | Toggle inherited task types | `toggle-inherited-task-types` | — |
-| Toggle mail reply badges | `toggle-mail-link-marks` | — |
+| Toggle mail link marks | `toggle-mail-link-marks` | — |
 | Toggle root marks | `toggle-root-marks` | — |
 | Toggle task date marks | `toggle-date-marks` | — |
 | Toggle task freshness marks | `toggle-freshness-marks` | — |
@@ -623,6 +623,15 @@ lag alone stays silent. Live data needs desktop Obsidian.
 link, Gmail Task child, or one link-only Task Link hop. Live Preview requires
 the mail-link-marks toggle and bob-mail's live open API. Embeds, struck links,
 and unresolved hops stay quiet.
+
+## Gmail archive receipts
+
+Closed Gmail tasks may show `⤓ archived <day>` chips when linked mail notes
+have active Bob receipts. The cached offline snapshot keeps row rendering
+local; **Toggle mail link marks** hides these chips with reply badges. Daily
+Gmail sync can report Bob's `recent_archive` count. The exact identity,
+placement, cache, and notice contracts live in [bob-cli's mail link marks
+guide](../../mail-link-marks.md).
 
 ## Settings
 

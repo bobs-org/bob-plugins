@@ -42,6 +42,7 @@
   "142i-mail-link-marks.js",
   "142j-no-reply-pills.js",
   "142k-gmail-open-hint.js",
+  "142l-mail-archive-receipts.js",
   "142d-block-marks-render.js",
   "142e-block-marks-runtime.js",
   "142f-block-marks-editor.js",
@@ -230,5 +231,6 @@
   "353-exports-gmail-open-hint.js",
   "354-exports-walker-footer.js",
   "355-exports-links-walker-footer.js",
-  "356-exports-bank-category.js"
+  "356-exports-bank-category.js",
+  "356-exports-mail-archive-receipts.js"
 ]

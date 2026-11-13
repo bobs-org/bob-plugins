@@ -239,6 +239,26 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    if (
+      owningPomodoroContext &&
+      owningPomodoroContext.taskStatus.symbol === "x"
+    ) {
+      const selectedBlockLink = this.getActiveLineTaskBlockLinkTarget(
+        view.editor,
+        activeFile.path,
+      );
+      if (selectedBlockLink) {
+        // Closed-entry Task Link: close or reopen the linked task and
+        // retire or restore the selected occurrence. Never complete or
+        // reopen the Pomodoro row, whether the link resolved or not.
+        settleReviewOrigin(null);
+        void this.handleActiveTaskBlockLinkOpenDone(view.editor, activeFile)
+          .then(() => false)
+          .catch(() => false);
+        return;
+      }
+    }
+
     if (this.isOpenDoneTaskStatus(taskStatus)) {
       if (reviewOrigin) {
         // `closing` is read before the write; the chained toggle already

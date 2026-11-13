@@ -342,21 +342,61 @@ function findSelectedBlockLinkCandidate(lineText, selection) {
 
 function strikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
   const line = String(lineText || "");
-  const candidate = findSelectedBlockLinkCandidate(line, selection);
+  const keepPomodoroMarker = !!(options && options.keepPomodoroMarker);
+  let workingLine = line;
+  let workingSelection = selection;
+  if (keepPomodoroMarker) {
+    const prepared = findSelectedBlockLinkCandidate(line, selection);
+    if (!prepared) {
+      return null;
+    }
+    const prefix = getPomodoroMarkerPrefix(line, prepared.startIndex);
+    if (prefix.count === 0) {
+      const marker = `${POMODORO_MARKER} `;
+      workingLine = `${line.slice(0, prepared.startIndex)}${marker}${line.slice(prepared.startIndex)}`;
+      workingSelection = Number.isInteger(selection && selection.startIndex)
+        ? { ...selection, startIndex: selection.startIndex + marker.length }
+        : selection;
+    }
+  }
+  const candidate = findSelectedBlockLinkCandidate(workingLine, workingSelection);
   if (!candidate) {
     return null;
   }
-  const strikeSpans = getStrikethroughSpans(line);
-  const pomodoro = !!(options && options.pomodoro);
-  const edit = buildRetiredBlockLinkEdit(line, candidate, strikeSpans, pomodoro);
+  const strikeSpans = getStrikethroughSpans(workingLine);
+  const pomodoro = !keepPomodoroMarker && !!(options && options.pomodoro);
+  const edit = buildRetiredBlockLinkEdit(
+    workingLine,
+    candidate,
+    strikeSpans,
+    pomodoro,
+  );
   if (!edit) {
     return null;
   }
-  const nextLine = `${line.slice(0, edit.start)}${edit.text}${line.slice(edit.end)}`;
+  const nextLine = `${workingLine.slice(0, edit.start)}${edit.text}${workingLine.slice(edit.end)}`;
   return nextLine === line ? null : nextLine;
 }
 
-function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
+// Rewrite an exact `~~[[X]]~~` strike to a live plain link. Under a closed
+// Pomodoro, add a canonical `🍅 ` when the occurrence has no marker prefix
+// (`getPomodoroMarkerPrefix` at `exactStrike.start - 2`). Existing markers
+// stay. Returns `{ start, end, text }` for in-place splicing.
+function buildRestoredExactStrikeEdit(lineText, exactStrike, wikilink, options = {}) {
+  const line = String(lineText || "");
+  const strikeStart = exactStrike.start - 2;
+  const strikeEnd = exactStrike.end + 2;
+  const closedPomodoro = !!(options && options.closedPomodoro);
+  const prefix = getPomodoroMarkerPrefix(line, strikeStart);
+  const addMarker = closedPomodoro && prefix.count === 0;
+  return {
+    start: strikeStart,
+    end: strikeEnd,
+    text: addMarker ? `${POMODORO_MARKER} ${wikilink}` : wikilink,
+  };
+}
+
+function unstrikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
   const line = String(lineText || "");
   if (!selection || typeof selection.blockId !== "string") {
     return null;
@@ -392,7 +432,10 @@ function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
     return null;
   }
   const wikilink = line.slice(best.startIndex, best.endIndex);
-  const nextLine = `${line.slice(0, exactStrike.start - 2)}${wikilink}${line.slice(exactStrike.end + 2)}`;
+  const edit = buildRestoredExactStrikeEdit(line, exactStrike, wikilink, {
+    closedPomodoro: !!(options && options.closedPomodoro),
+  });
+  const nextLine = `${line.slice(0, edit.start)}${edit.text}${line.slice(edit.end)}`;
   return nextLine === line ? null : nextLine;
 }
 

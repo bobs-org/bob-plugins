@@ -5610,21 +5610,61 @@ function findSelectedBlockLinkCandidate(lineText, selection) {
 
 function strikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
   const line = String(lineText || "");
-  const candidate = findSelectedBlockLinkCandidate(line, selection);
+  const keepPomodoroMarker = !!(options && options.keepPomodoroMarker);
+  let workingLine = line;
+  let workingSelection = selection;
+  if (keepPomodoroMarker) {
+    const prepared = findSelectedBlockLinkCandidate(line, selection);
+    if (!prepared) {
+      return null;
+    }
+    const prefix = getPomodoroMarkerPrefix(line, prepared.startIndex);
+    if (prefix.count === 0) {
+      const marker = `${POMODORO_MARKER} `;
+      workingLine = `${line.slice(0, prepared.startIndex)}${marker}${line.slice(prepared.startIndex)}`;
+      workingSelection = Number.isInteger(selection && selection.startIndex)
+        ? { ...selection, startIndex: selection.startIndex + marker.length }
+        : selection;
+    }
+  }
+  const candidate = findSelectedBlockLinkCandidate(workingLine, workingSelection);
   if (!candidate) {
     return null;
   }
-  const strikeSpans = getStrikethroughSpans(line);
-  const pomodoro = !!(options && options.pomodoro);
-  const edit = buildRetiredBlockLinkEdit(line, candidate, strikeSpans, pomodoro);
+  const strikeSpans = getStrikethroughSpans(workingLine);
+  const pomodoro = !keepPomodoroMarker && !!(options && options.pomodoro);
+  const edit = buildRetiredBlockLinkEdit(
+    workingLine,
+    candidate,
+    strikeSpans,
+    pomodoro,
+  );
   if (!edit) {
     return null;
   }
-  const nextLine = `${line.slice(0, edit.start)}${edit.text}${line.slice(edit.end)}`;
+  const nextLine = `${workingLine.slice(0, edit.start)}${edit.text}${workingLine.slice(edit.end)}`;
   return nextLine === line ? null : nextLine;
 }
 
-function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
+// Rewrite an exact `~~[[X]]~~` strike to a live plain link. Under a closed
+// Pomodoro, add a canonical `🍅 ` when the occurrence has no marker prefix
+// (`getPomodoroMarkerPrefix` at `exactStrike.start - 2`). Existing markers
+// stay. Returns `{ start, end, text }` for in-place splicing.
+function buildRestoredExactStrikeEdit(lineText, exactStrike, wikilink, options = {}) {
+  const line = String(lineText || "");
+  const strikeStart = exactStrike.start - 2;
+  const strikeEnd = exactStrike.end + 2;
+  const closedPomodoro = !!(options && options.closedPomodoro);
+  const prefix = getPomodoroMarkerPrefix(line, strikeStart);
+  const addMarker = closedPomodoro && prefix.count === 0;
+  return {
+    start: strikeStart,
+    end: strikeEnd,
+    text: addMarker ? `${POMODORO_MARKER} ${wikilink}` : wikilink,
+  };
+}
+
+function unstrikeSelectedTaskBlockLinkInLine(lineText, selection, options = {}) {
   const line = String(lineText || "");
   if (!selection || typeof selection.blockId !== "string") {
     return null;
@@ -5660,7 +5700,10 @@ function unstrikeSelectedTaskBlockLinkInLine(lineText, selection) {
     return null;
   }
   const wikilink = line.slice(best.startIndex, best.endIndex);
-  const nextLine = `${line.slice(0, exactStrike.start - 2)}${wikilink}${line.slice(exactStrike.end + 2)}`;
+  const edit = buildRestoredExactStrikeEdit(line, exactStrike, wikilink, {
+    closedPomodoro: !!(options && options.closedPomodoro),
+  });
+  const nextLine = `${line.slice(0, edit.start)}${edit.text}${line.slice(edit.end)}`;
   return nextLine === line ? null : nextLine;
 }
 
@@ -5733,7 +5776,7 @@ function hasEligibleRetirementAncestor(
 ) {
   const candidate = parseRetirementListLine(lines[lineNumber]);
   if (!candidate || candidate.indentation === 0) {
-    return { eligible: false, pomodoro: false };
+    return { eligible: false, pomodoro: false, pomodoroClosed: false };
   }
   let indentation = candidate.indentation;
   for (let line = lineNumber - 1; line >= 0; line -= 1) {
@@ -5756,23 +5799,58 @@ function hasEligibleRetirementAncestor(
     }
     indentation = ancestor.indentation;
     if (ancestor.taskStatus && lineMatchesTasksGlobalFilterText(text)) {
-      return { eligible: true, pomodoro: false };
+      return { eligible: true, pomodoro: false, pomodoroClosed: false };
     }
     if (
       ancestor.taskStatus &&
       ancestor.indentation === 0 &&
       lineIsInPomodorosSection(pomodoros, line)
     ) {
+      // getTaskStatusForLine normalizes X → x; cancelled [-] stays "-".
+      const closed = ancestor.taskStatus.symbol === "x";
       return {
         eligible: true,
         pomodoro: true,
+        pomodoroClosed: closed,
       };
     }
     if (indentation === 0) {
       break;
     }
   }
-  return { eligible: false, pomodoro: false };
+  return { eligible: false, pomodoro: false, pomodoroClosed: false };
+}
+
+// Live plain Task Link under a closed Pomodoro whose target is already Done:
+// retire in place (`🍅 ~~[[X]]~~`) with no task write. Struck, embedded,
+// dependency, and relation lines keep today's reopen/close paths.
+function staleDoneLinkShouldRetire(candidate, resolvedTarget, lines) {
+  if (
+    !candidate ||
+    candidate.embedded ||
+    isTaskLinkGestureLine(candidate.activeLineText) ||
+    !resolvedTarget ||
+    !isTranscludedReopenableStatus(resolvedTarget.taskStatus)
+  ) {
+    return false;
+  }
+  const strikeSpans = getStrikethroughSpans(candidate.activeLineText);
+  const exactStrike = strikeSpans.find(
+    (span) =>
+      candidate.startIndex === span.start && candidate.endIndex === span.end,
+  );
+  if (exactStrike || !Array.isArray(lines) || !Number.isInteger(candidate.activeLine)) {
+    return false;
+  }
+  const fenced = getFencedLineNumbers(lines);
+  const pomodoros = findPomodorosSectionInLines(lines);
+  const ancestry = hasEligibleRetirementAncestor(
+    lines,
+    candidate.activeLine,
+    fenced,
+    pomodoros,
+  );
+  return !!ancestry.pomodoroClosed;
 }
 
 function retirementIdentityKey(path, blockId) {
@@ -6513,11 +6591,15 @@ function restoreReopenedTaskReferencesInText(
       const wikilink = line.slice(candidate.startIndex, candidate.endIndex);
       edits.push(
         exactStrike
-          ? {
-              start: exactStrike.start - 2,
-              end: exactStrike.end + 2,
-              text: ancestry.pomodoro ? wikilink : `!${wikilink}`,
-            }
+          ? ancestry.pomodoro
+            ? buildRestoredExactStrikeEdit(line, exactStrike, wikilink, {
+                closedPomodoro: ancestry.pomodoroClosed,
+              })
+            : {
+                start: exactStrike.start - 2,
+                end: exactStrike.end + 2,
+                text: `!${wikilink}`,
+              }
           : {
               start: candidate.startIndex,
               end: candidate.startIndex,
@@ -19170,7 +19252,7 @@ class TaskStatusCyclerReferencesMixin {
     return { lines, targetLine: null };
   }
 
-  async strikeActiveSelectedTaskBlockLink(editor, activePath, candidate) {
+  async strikeActiveSelectedTaskBlockLink(editor, activePath, candidate, options = {}) {
     if (
       !editor ||
       typeof editor.getLine !== "function" ||
@@ -19180,17 +19262,25 @@ class TaskStatusCyclerReferencesMixin {
       return false;
     }
     return this.enqueueTaskReferenceMutation(async () => {
+      const keepPomodoroMarker = !!(options && options.keepPomodoroMarker);
       const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
       let targetLine = located.targetLine;
       let lines = located.lines;
       if (targetLine === null) {
         const retiredForms = new Set();
-        for (const pomodoro of [true, false]) {
+        const variants = keepPomodoroMarker
+          ? [
+              { keepPomodoroMarker: true },
+              { pomodoro: true },
+              { pomodoro: false },
+            ]
+          : [{ pomodoro: true }, { pomodoro: false }];
+        for (const variant of variants) {
           try {
             const retired = strikeSelectedTaskBlockLinkInLine(
               candidate.activeLineText,
               candidate,
-              { pomodoro },
+              variant,
             );
             if (retired && retired !== candidate.activeLineText) {
               retiredForms.add(retired);
@@ -19240,7 +19330,9 @@ class TaskStatusCyclerReferencesMixin {
       const nextLineText = strikeSelectedTaskBlockLinkInLine(
         currentLineText,
         candidate,
-        { pomodoro: ancestry.pomodoro },
+        keepPomodoroMarker
+          ? { keepPomodoroMarker: true }
+          : { pomodoro: ancestry.pomodoro },
       );
       if (!nextLineText || nextLineText === currentLineText) {
         return false;
@@ -19279,21 +19371,27 @@ class TaskStatusCyclerReferencesMixin {
       const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
       let targetLine = located.targetLine;
       if (targetLine === null) {
-        let restoredForm = null;
-        try {
-          restoredForm = unstrikeSelectedTaskBlockLinkInLine(
-            candidate.activeLineText,
-            candidate,
-          );
-        } catch (error) {
-          restoredForm = null;
+        const restoredForms = new Set();
+        for (const closedPomodoro of [true, false]) {
+          try {
+            const restored = unstrikeSelectedTaskBlockLinkInLine(
+              candidate.activeLineText,
+              candidate,
+              { closedPomodoro },
+            );
+            if (restored && restored !== candidate.activeLineText) {
+              restoredForms.add(restored);
+            }
+          } catch (error) {
+            // Best effort: one restore variant failing must not block the other.
+          }
         }
-        if (restoredForm && restoredForm !== candidate.activeLineText) {
+        if (restoredForms.size > 0) {
           const lines = this.getEditorLineTexts(editor);
           const restoredMatches = [];
           for (let line = 0; line < lines.length; line += 1) {
             if (
-              lines[line] === restoredForm &&
+              restoredForms.has(lines[line]) &&
               this.lineHasSelectedTaskBlockLink(lines[line], candidate)
             ) {
               restoredMatches.push(line);
@@ -19309,9 +19407,17 @@ class TaskStatusCyclerReferencesMixin {
       if (targetLine < 0 || targetLine >= lines.length) {
         return false;
       }
-      if (getFencedLineNumbers(lines).has(targetLine)) {
+      const fenced = getFencedLineNumbers(lines);
+      if (fenced.has(targetLine)) {
         return false;
       }
+      const pomodoros = findPomodorosSectionInLines(lines);
+      const ancestry = hasEligibleRetirementAncestor(
+        lines,
+        targetLine,
+        fenced,
+        pomodoros,
+      );
       const currentLineText = typeof editor.getLine === "function"
         ? editor.getLine(targetLine) || ""
         : lines[targetLine] || "";
@@ -19321,6 +19427,7 @@ class TaskStatusCyclerReferencesMixin {
       const nextLineText = unstrikeSelectedTaskBlockLinkInLine(
         currentLineText,
         candidate,
+        { closedPomodoro: ancestry.pomodoroClosed },
       );
       if (!nextLineText || nextLineText === currentLineText) {
         return false;
@@ -23757,6 +23864,26 @@ class TaskStatusCyclerVimMixin {
       return;
     }
 
+    if (
+      owningPomodoroContext &&
+      owningPomodoroContext.taskStatus.symbol === "x"
+    ) {
+      const selectedBlockLink = this.getActiveLineTaskBlockLinkTarget(
+        view.editor,
+        activeFile.path,
+      );
+      if (selectedBlockLink) {
+        // Closed-entry Task Link: close or reopen the linked task and
+        // retire or restore the selected occurrence. Never complete or
+        // reopen the Pomodoro row, whether the link resolved or not.
+        settleReviewOrigin(null);
+        void this.handleActiveTaskBlockLinkOpenDone(view.editor, activeFile)
+          .then(() => false)
+          .catch(() => false);
+        return;
+      }
+    }
+
     if (this.isOpenDoneTaskStatus(taskStatus)) {
       if (reviewOrigin) {
         // `closing` is read before the write; the chained toggle already
@@ -25933,6 +26060,26 @@ class TaskStatusCyclerCompletionMixin {
         return { resolved: true, changed: false };
       }
       return { resolved: false, changed: false };
+    }
+
+    // A live plain link under a closed Pomodoro whose target is already Done
+    // is retired in place as `🍅 ~~[[X]]~~`. No task write, post-close pass,
+    // or successor offers. A second press hits the struck form and reopens.
+    if (
+      !onDependencyLine &&
+      staleDoneLinkShouldRetire(
+        candidate,
+        resolvedTarget,
+        this.getEditorLineTexts(editor),
+      )
+    ) {
+      const wrote = await this.strikeActiveSelectedTaskBlockLink(
+        editor,
+        activePath,
+        candidate,
+        { keepPomodoroMarker: true },
+      );
+      return { resolved: true, changed: !!wrote };
     }
 
     // Reopen always wins after resolution and is deliberately root-only, even
@@ -30137,6 +30284,7 @@ module.exports.helpers = {
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,
   buildRetiredBlockLinkEdit,
+  buildRestoredExactStrikeEdit,
   strikeSelectedTaskBlockLinkInLine,
   unstrikeSelectedTaskBlockLinkInLine,
   retireClosedTaskReferencesInText,

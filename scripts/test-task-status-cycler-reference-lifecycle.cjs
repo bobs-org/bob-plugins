@@ -239,7 +239,7 @@ test("reopened-reference restoration is ancestry-aware, conservative, and idempo
   assert.match(result.text, /```md\r\n- \[ \] #task Example\r\n\t- ~~\[\[Alpha/);
   assert.match(
     result.text,
-    /🍅 \[\[Alpha#\^review\|History alias\]\] and \[\[Alpha#\^review\|Again\]\]/,
+    /🍅 \[\[Alpha#\^review\|History alias\]\] and 🍅 \[\[Alpha#\^review\|Again\]\]/,
   );
   assert.match(
     result.text,

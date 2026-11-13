@@ -576,7 +576,7 @@ class TaskStatusCyclerReferencesMixin {
     return { lines, targetLine: null };
   }
 
-  async strikeActiveSelectedTaskBlockLink(editor, activePath, candidate) {
+  async strikeActiveSelectedTaskBlockLink(editor, activePath, candidate, options = {}) {
     if (
       !editor ||
       typeof editor.getLine !== "function" ||
@@ -586,17 +586,25 @@ class TaskStatusCyclerReferencesMixin {
       return false;
     }
     return this.enqueueTaskReferenceMutation(async () => {
+      const keepPomodoroMarker = !!(options && options.keepPomodoroMarker);
       const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
       let targetLine = located.targetLine;
       let lines = located.lines;
       if (targetLine === null) {
         const retiredForms = new Set();
-        for (const pomodoro of [true, false]) {
+        const variants = keepPomodoroMarker
+          ? [
+              { keepPomodoroMarker: true },
+              { pomodoro: true },
+              { pomodoro: false },
+            ]
+          : [{ pomodoro: true }, { pomodoro: false }];
+        for (const variant of variants) {
           try {
             const retired = strikeSelectedTaskBlockLinkInLine(
               candidate.activeLineText,
               candidate,
-              { pomodoro },
+              variant,
             );
             if (retired && retired !== candidate.activeLineText) {
               retiredForms.add(retired);
@@ -646,7 +654,9 @@ class TaskStatusCyclerReferencesMixin {
       const nextLineText = strikeSelectedTaskBlockLinkInLine(
         currentLineText,
         candidate,
-        { pomodoro: ancestry.pomodoro },
+        keepPomodoroMarker
+          ? { keepPomodoroMarker: true }
+          : { pomodoro: ancestry.pomodoro },
       );
       if (!nextLineText || nextLineText === currentLineText) {
         return false;
@@ -685,21 +695,27 @@ class TaskStatusCyclerReferencesMixin {
       const located = this.findActiveSelectedTaskBlockLinkLine(editor, candidate);
       let targetLine = located.targetLine;
       if (targetLine === null) {
-        let restoredForm = null;
-        try {
-          restoredForm = unstrikeSelectedTaskBlockLinkInLine(
-            candidate.activeLineText,
-            candidate,
-          );
-        } catch (error) {
-          restoredForm = null;
+        const restoredForms = new Set();
+        for (const closedPomodoro of [true, false]) {
+          try {
+            const restored = unstrikeSelectedTaskBlockLinkInLine(
+              candidate.activeLineText,
+              candidate,
+              { closedPomodoro },
+            );
+            if (restored && restored !== candidate.activeLineText) {
+              restoredForms.add(restored);
+            }
+          } catch (error) {
+            // Best effort: one restore variant failing must not block the other.
+          }
         }
-        if (restoredForm && restoredForm !== candidate.activeLineText) {
+        if (restoredForms.size > 0) {
           const lines = this.getEditorLineTexts(editor);
           const restoredMatches = [];
           for (let line = 0; line < lines.length; line += 1) {
             if (
-              lines[line] === restoredForm &&
+              restoredForms.has(lines[line]) &&
               this.lineHasSelectedTaskBlockLink(lines[line], candidate)
             ) {
               restoredMatches.push(line);
@@ -715,9 +731,17 @@ class TaskStatusCyclerReferencesMixin {
       if (targetLine < 0 || targetLine >= lines.length) {
         return false;
       }
-      if (getFencedLineNumbers(lines).has(targetLine)) {
+      const fenced = getFencedLineNumbers(lines);
+      if (fenced.has(targetLine)) {
         return false;
       }
+      const pomodoros = findPomodorosSectionInLines(lines);
+      const ancestry = hasEligibleRetirementAncestor(
+        lines,
+        targetLine,
+        fenced,
+        pomodoros,
+      );
       const currentLineText = typeof editor.getLine === "function"
         ? editor.getLine(targetLine) || ""
         : lines[targetLine] || "";
@@ -727,6 +751,7 @@ class TaskStatusCyclerReferencesMixin {
       const nextLineText = unstrikeSelectedTaskBlockLinkInLine(
         currentLineText,
         candidate,
+        { closedPomodoro: ancestry.pomodoroClosed },
       );
       if (!nextLineText || nextLineText === currentLineText) {
         return false;

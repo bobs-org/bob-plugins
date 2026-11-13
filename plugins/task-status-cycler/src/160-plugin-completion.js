@@ -617,6 +617,26 @@ class TaskStatusCyclerCompletionMixin {
       return { resolved: false, changed: false };
     }
 
+    // A live plain link under a closed Pomodoro whose target is already Done
+    // is retired in place as `🍅 ~~[[X]]~~`. No task write, post-close pass,
+    // or successor offers. A second press hits the struck form and reopens.
+    if (
+      !onDependencyLine &&
+      staleDoneLinkShouldRetire(
+        candidate,
+        resolvedTarget,
+        this.getEditorLineTexts(editor),
+      )
+    ) {
+      const wrote = await this.strikeActiveSelectedTaskBlockLink(
+        editor,
+        activePath,
+        candidate,
+        { keepPomodoroMarker: true },
+      );
+      return { resolved: true, changed: !!wrote };
+    }
+
     // Reopen always wins after resolution and is deliberately root-only, even
     // for an embedded child beneath a Pomodoro.
     if (isTranscludedReopenableStatus(resolvedTarget.taskStatus)) {

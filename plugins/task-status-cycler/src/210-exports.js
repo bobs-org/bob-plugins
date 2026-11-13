@@ -347,6 +347,7 @@ module.exports.helpers = {
   rewritePomodoroMarkersInText,
   stripPomodoroMarkersFromLine,
   buildRetiredBlockLinkEdit,
+  buildRestoredExactStrikeEdit,
   strikeSelectedTaskBlockLinkInLine,
   unstrikeSelectedTaskBlockLinkInLine,
   retireClosedTaskReferencesInText,

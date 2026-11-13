@@ -263,6 +263,46 @@ test("strike and unstrike helpers are idempotent, alias-preserving, and marker-a
     helpers.unstrikeSelectedTaskBlockLinkInLine(struck, selection),
     "\t- [[Tasks#^a|A]]",
   );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(struck, selection, {}),
+    "\t- [[Tasks#^a|A]]",
+  );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(
+      "\t- ~~[[Tasks#^a]]~~",
+      selection,
+      { closedPomodoro: true },
+    ),
+    "\t- 🍅 [[Tasks#^a]]",
+  );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(
+      "\t- 🍅 ~~[[Tasks#^a]]~~",
+      selection,
+      { closedPomodoro: true },
+    ),
+    "\t- 🍅 [[Tasks#^a]]",
+  );
+  assert.equal(
+    helpers.unstrikeSelectedTaskBlockLinkInLine(
+      "\t- ~~[[Tasks#^a]]~~",
+      selection,
+      { closedPomodoro: false },
+    ),
+    "\t- [[Tasks#^a]]",
+  );
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- [[Tasks#^a]]", selection, {
+      keepPomodoroMarker: true,
+    }),
+    "\t- 🍅 ~~[[Tasks#^a]]~~",
+  );
+  assert.equal(
+    helpers.strikeSelectedTaskBlockLinkInLine("\t- 🍅 [[Tasks#^a]]", selection, {
+      keepPomodoroMarker: true,
+    }),
+    "\t- 🍅 ~~[[Tasks#^a]]~~",
+  );
 });
 
 test("completeTaskAtCursor closes each open symbol through the Tasks command", async () => {

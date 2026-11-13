@@ -18,7 +18,7 @@ function hasEligibleRetirementAncestor(
 ) {
   const candidate = parseRetirementListLine(lines[lineNumber]);
   if (!candidate || candidate.indentation === 0) {
-    return { eligible: false, pomodoro: false };
+    return { eligible: false, pomodoro: false, pomodoroClosed: false };
   }
   let indentation = candidate.indentation;
   for (let line = lineNumber - 1; line >= 0; line -= 1) {
@@ -41,23 +41,58 @@ function hasEligibleRetirementAncestor(
     }
     indentation = ancestor.indentation;
     if (ancestor.taskStatus && lineMatchesTasksGlobalFilterText(text)) {
-      return { eligible: true, pomodoro: false };
+      return { eligible: true, pomodoro: false, pomodoroClosed: false };
     }
     if (
       ancestor.taskStatus &&
       ancestor.indentation === 0 &&
       lineIsInPomodorosSection(pomodoros, line)
     ) {
+      // getTaskStatusForLine normalizes X → x; cancelled [-] stays "-".
+      const closed = ancestor.taskStatus.symbol === "x";
       return {
         eligible: true,
         pomodoro: true,
+        pomodoroClosed: closed,
       };
     }
     if (indentation === 0) {
       break;
     }
   }
-  return { eligible: false, pomodoro: false };
+  return { eligible: false, pomodoro: false, pomodoroClosed: false };
+}
+
+// Live plain Task Link under a closed Pomodoro whose target is already Done:
+// retire in place (`🍅 ~~[[X]]~~`) with no task write. Struck, embedded,
+// dependency, and relation lines keep today's reopen/close paths.
+function staleDoneLinkShouldRetire(candidate, resolvedTarget, lines) {
+  if (
+    !candidate ||
+    candidate.embedded ||
+    isTaskLinkGestureLine(candidate.activeLineText) ||
+    !resolvedTarget ||
+    !isTranscludedReopenableStatus(resolvedTarget.taskStatus)
+  ) {
+    return false;
+  }
+  const strikeSpans = getStrikethroughSpans(candidate.activeLineText);
+  const exactStrike = strikeSpans.find(
+    (span) =>
+      candidate.startIndex === span.start && candidate.endIndex === span.end,
+  );
+  if (exactStrike || !Array.isArray(lines) || !Number.isInteger(candidate.activeLine)) {
+    return false;
+  }
+  const fenced = getFencedLineNumbers(lines);
+  const pomodoros = findPomodorosSectionInLines(lines);
+  const ancestry = hasEligibleRetirementAncestor(
+    lines,
+    candidate.activeLine,
+    fenced,
+    pomodoros,
+  );
+  return !!ancestry.pomodoroClosed;
 }
 
 function retirementIdentityKey(path, blockId) {
@@ -798,11 +833,15 @@ function restoreReopenedTaskReferencesInText(
       const wikilink = line.slice(candidate.startIndex, candidate.endIndex);
       edits.push(
         exactStrike
-          ? {
-              start: exactStrike.start - 2,
-              end: exactStrike.end + 2,
-              text: ancestry.pomodoro ? wikilink : `!${wikilink}`,
-            }
+          ? ancestry.pomodoro
+            ? buildRestoredExactStrikeEdit(line, exactStrike, wikilink, {
+                closedPomodoro: ancestry.pomodoroClosed,
+              })
+            : {
+                start: exactStrike.start - 2,
+                end: exactStrike.end + 2,
+                text: `!${wikilink}`,
+              }
           : {
               start: candidate.startIndex,
               end: candidate.startIndex,

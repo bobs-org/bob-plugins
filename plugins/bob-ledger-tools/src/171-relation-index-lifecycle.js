@@ -592,6 +592,9 @@ class BobLedgerToolsRelationIndexMixin {
       if (typeof this.albumSeedFrontmatterFingerprints === "function") {
         this.albumSeedFrontmatterFingerprints(markdownFiles);
       }
+      if (typeof this.projectsSeedFingerprints === "function") {
+        this.projectsSeedFingerprints(markdownFiles);
+      }
       files = markdownFiles.filter((file) => this.relationIndexPrefilter(file));
     } catch (error) {
       this.relationIndexReadyFlag = true;

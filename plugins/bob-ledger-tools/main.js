@@ -33568,7 +33568,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupAlbumData(); this.setupBankData(); this.setupBankActions();
+    this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions();
     this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
@@ -33691,7 +33691,7 @@ class BobLedgerToolsPlugin extends Plugin {
     }
     try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
-      this.teardownAlbumRecords(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData();
+      this.teardownAlbumRecords(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }
@@ -34487,6 +34487,9 @@ class BobLedgerToolsRelationIndexMixin {
       }
       if (typeof this.albumSeedFrontmatterFingerprints === "function") {
         this.albumSeedFrontmatterFingerprints(markdownFiles);
+      }
+      if (typeof this.projectsSeedFingerprints === "function") {
+        this.projectsSeedFingerprints(markdownFiles);
       }
       files = markdownFiles.filter((file) => this.relationIndexPrefilter(file));
     } catch (error) {
@@ -59678,6 +59681,1344 @@ class BobLedgerToolsAlbumDataMixin {
     if (this.albumUpdateOwnPaths instanceof Set) {
       this.albumUpdateOwnPaths.clear();
     }
+  }
+}
+// ---- src/241aa-plugin-projects-data.js ----
+// Shared projects report and sync service. Bob owns stored `[!projects]`
+// catalog bytes; this fragment validates the versioned list and sync JSON
+// and fingerprints project identity, scalar parent, status, and the real
+// lifecycle `^prj` checkbox. The mixin in 241ab shares one stale-while-
+// revalidate list report and one trailing sync across mounted views.
+
+const PROJECTS_REPORT_SCHEMA_VERSION = 1;
+const PROJECTS_LIST_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const PROJECTS_LIST_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const PROJECTS_REVALIDATE_DEBOUNCE_MS = 300;
+const PROJECTS_SYNC_DEBOUNCE_MS = 3000;
+const PROJECTS_ROLLOVER_INTERVAL_MS = 60 * 1000;
+const PROJECTS_ROW_STATES = new Set([
+  "open",
+  "scheduled",
+  "blocked",
+  "warning",
+  "done",
+  "canceled",
+]);
+const PROJECTS_CATALOG_STATES = new Set(["current", "stale", "missing", "damaged"]);
+const PROJECTS_CATALOG_KINDS = new Set(["area", "project"]);
+const PROJECTS_ISSUE_SEVERITIES = new Set(["error", "warning", "info"]);
+
+function projectsListArgs() {
+  return ["projects", "list", "-f", "json"];
+}
+
+function projectsSyncArgs() {
+  return ["projects", "sync", "-f", "json"];
+}
+
+function projectsJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function projectsJsonString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function projectsNullableString(value) {
+  return value === null || typeof value === "string";
+}
+
+function projectsJsonCount(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function projectsNullableCount(value) {
+  return value === null || projectsJsonCount(value);
+}
+
+function projectsNullableBool(value) {
+  return value === null || typeof value === "boolean";
+}
+
+function projectsStringArray(value) {
+  return Array.isArray(value) && value.every((part) => typeof part === "string");
+}
+
+function projectsListIssueShape(issue) {
+  return projectsJsonObject(issue) &&
+    projectsJsonString(issue.code) &&
+    PROJECTS_ISSUE_SEVERITIES.has(issue.severity) &&
+    (issue.line === null || issue.line === undefined || projectsJsonCount(issue.line)) &&
+    typeof issue.message === "string";
+}
+
+function projectsSyncIssueShape(issue) {
+  return projectsJsonObject(issue) &&
+    projectsJsonString(issue.code) &&
+    (issue.line === null || issue.line === undefined || projectsJsonCount(issue.line)) &&
+    typeof issue.message === "string";
+}
+
+function projectsPrjShape(prj) {
+  return projectsJsonObject(prj) &&
+    projectsNullableCount(prj.line) &&
+    projectsNullableString(prj.mark) &&
+    projectsNullableBool(prj.hidden) &&
+    projectsNullableString(prj.scheduled);
+}
+
+function projectsBlockedShape(blocked) {
+  if (blocked === null) {
+    return true;
+  }
+  if (!projectsJsonObject(blocked) || typeof blocked.kind !== "string") {
+    return false;
+  }
+  if (blocked.kind === "scheduled") {
+    return projectsNullableString(blocked.date);
+  }
+  if (blocked.kind === "dependency") {
+    return projectsStringArray(blocked.waits_on);
+  }
+  return blocked.kind === "inherited";
+}
+
+function projectsTasksShape(tasks) {
+  return projectsJsonObject(tasks) &&
+    projectsNullableCount(tasks.open) &&
+    projectsNullableCount(tasks.shown) &&
+    projectsNullableCount(tasks.today);
+}
+
+function projectsEntryShape(entry) {
+  return projectsJsonObject(entry) &&
+    projectsJsonString(entry.path) &&
+    projectsJsonString(entry.stem) &&
+    typeof entry.status === "string" &&
+    (entry.state === null || PROJECTS_ROW_STATES.has(entry.state)) &&
+    projectsNullableString(entry.criterion) &&
+    projectsNullableString(entry.parent) &&
+    projectsStringArray(entry.children) &&
+    projectsNullableString(entry.closed_on) &&
+    projectsPrjShape(entry.prj) &&
+    projectsBlockedShape(entry.blocked) &&
+    projectsTasksShape(entry.tasks);
+}
+
+function projectsListCatalogShape(catalog) {
+  return projectsJsonObject(catalog) &&
+    projectsJsonString(catalog.host) &&
+    projectsJsonString(catalog.path) &&
+    PROJECTS_CATALOG_KINDS.has(catalog.kind) &&
+    PROJECTS_CATALOG_STATES.has(catalog.state) &&
+    projectsJsonObject(catalog.rows) &&
+    projectsJsonCount(catalog.rows.open) &&
+    projectsJsonCount(catalog.rows.blocked) &&
+    projectsJsonCount(catalog.rows.warning) &&
+    projectsJsonCount(catalog.rows.closed) &&
+    Array.isArray(catalog.issues) && catalog.issues.every(projectsListIssueShape);
+}
+
+function projectsSyncCatalogShape(catalog) {
+  return projectsJsonObject(catalog) &&
+    projectsJsonString(catalog.host) &&
+    projectsJsonString(catalog.path) &&
+    (catalog.kind === undefined || PROJECTS_CATALOG_KINDS.has(catalog.kind)) &&
+    PROJECTS_CATALOG_STATES.has(catalog.state) &&
+    projectsJsonCount(catalog.open) &&
+    projectsJsonCount(catalog.blocked) &&
+    projectsJsonCount(catalog.warning) &&
+    projectsJsonCount(catalog.closed) &&
+    Array.isArray(catalog.issues) && catalog.issues.every(projectsSyncIssueShape);
+}
+
+function projectsListCountsShape(counts) {
+  return projectsJsonObject(counts) &&
+    projectsJsonCount(counts.projects) &&
+    projectsJsonCount(counts.catalogs) &&
+    projectsJsonCount(counts.errors) &&
+    projectsJsonCount(counts.warnings);
+}
+
+function projectsChangeShape(change) {
+  return projectsJsonObject(change) && typeof change.path === "string";
+}
+
+function projectsReportPath(value) {
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function projectsIndexReport(report) {
+  const projectsByPath = new Map();
+  const projectsByStem = new Map();
+  const catalogsByHostPath = new Map();
+  for (const project of report.projects) {
+    const path = projectsReportPath(project.path);
+    projectsByPath.set(path, project);
+    const stem = project.stem;
+    const rows = projectsByStem.get(stem);
+    if (rows) {
+      rows.push(project);
+    } else {
+      projectsByStem.set(stem, [project]);
+    }
+  }
+  for (const catalog of report.catalogs) {
+    catalogsByHostPath.set(projectsReportPath(catalog.path), catalog);
+  }
+  return { ...report, projectsByPath, projectsByStem, catalogsByHostPath };
+}
+
+function projectsDecodeListReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob projects list returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!projectsJsonObject(body)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob projects list returned no report object.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.schema_version !== PROJECTS_REPORT_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      code: "schema-mismatch",
+      message: "bob projects list uses a different schema.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (
+    typeof body.ok !== "boolean" ||
+    body.command !== "list" ||
+    typeof body.today !== "string" ||
+    !Array.isArray(body.projects) || !body.projects.every(projectsEntryShape) ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(projectsListCatalogShape) ||
+    !Array.isArray(body.findings) ||
+    !projectsListCountsShape(body.counts)
+  ) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob projects list returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  // `ok: false` is a valid list: damaged catalogs and warning rows stay
+  // visible. Transport failure is different from invalid content.
+  return { ok: true, report: projectsIndexReport(body) };
+}
+
+function projectsDecodeSyncReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob projects sync returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (!projectsJsonObject(body)) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob projects sync returned no report object.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.schema_version !== PROJECTS_REPORT_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      code: "schema-mismatch",
+      message: "bob projects sync uses a different schema.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (
+    typeof body.ok !== "boolean" || body.command !== "sync" ||
+    typeof body.dry_run !== "boolean" ||
+    !Array.isArray(body.changed) || !body.changed.every((path) => typeof path === "string") ||
+    !Array.isArray(body.changes) || !body.changes.every(projectsChangeShape) ||
+    !Array.isArray(body.events) ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(projectsSyncCatalogShape) ||
+    !Array.isArray(body.findings) ||
+    !Array.isArray(body.warnings) ||
+    (body.commit !== null && body.commit !== undefined && !projectsJsonObject(body.commit)) ||
+    (body.sync !== null && body.sync !== undefined && !projectsJsonObject(body.sync)) ||
+    (body.error !== undefined && body.error !== null && !projectsJsonObject(body.error))
+  ) {
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob projects sync returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+    };
+  }
+  // A well-formed refusal (damaged catalog, lock busy, missing worktree)
+  // is transport success with an operation-level `ok: false`.
+  return { ok: true, report: body };
+}
+
+function projectsTypeNames(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((part) => projectsTypeNames(part));
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  let text = value.trim();
+  if (!text) {
+    return [];
+  }
+  if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+  if (text.startsWith("[[") && text.endsWith("]]") && /^\[\[[^\[\]]+\]\]$/.test(text)) {
+    text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+  } else if (text.startsWith("[") && text.endsWith("]")) {
+    return text.slice(1, -1).split(",").flatMap((part) => projectsTypeNames(part));
+  }
+  if (text.startsWith("- ")) {
+    return projectsTypeNames(text.slice(2));
+  }
+  if (text.startsWith("[[") && text.endsWith("]]")) {
+    text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+  }
+  text = text.replace(/\.md$/i, "").trim().toLowerCase();
+  return text ? [text] : [];
+}
+
+function projectsNormalizeScalarParent(value) {
+  if (projectsJsonObject(value) && typeof value.path === "string") {
+    value = value.path;
+  }
+  if (typeof value !== "string") {
+    return "";
+  }
+  let text = value.trim();
+  if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+  if (text.startsWith("[[") && text.endsWith("]]")) {
+    text = text.slice(2, -2).split("|")[0].trim();
+  }
+  text = text.split("#")[0].replace(/\\/g, "/").replace(/\.md$/i, "").trim();
+  return text;
+}
+
+function projectsNormalizeParent(value) {
+  if (Array.isArray(value)) {
+    return "\u0001list:" + value.map(projectsNormalizeScalarParent).filter(Boolean).sort().join("\u0000");
+  }
+  return projectsNormalizeScalarParent(value);
+}
+
+function projectsNormalizeStatus(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return "\u0001value:" + String(value);
+  }
+  if (Array.isArray(value)) {
+    return "\u0001list:" + value.map(projectsNormalizeStatus).join("\u0000");
+  }
+  return "\u0001other";
+}
+
+function projectsBodyStart(lines) {
+  if (!/^\s*---\s*$/.test(lines[0] || "")) {
+    return 0;
+  }
+  for (let index = 1; index < lines.length; index += 1) {
+    if (/^\s*---\s*$/.test(lines[index])) {
+      return index + 1;
+    }
+  }
+  return lines.length;
+}
+
+function projectsFencedLines(lines) {
+  const fenced = new Set();
+  let opening = null;
+  for (let line = 0; line < lines.length; line += 1) {
+    const text = String(lines[line] || "");
+    if (!opening) {
+      const match = text.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+      if (match) {
+        opening = { marker: match[1][0], length: match[1].length };
+        fenced.add(line);
+      }
+      continue;
+    }
+    fenced.add(line);
+    const close = text.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+    if (close && close[1][0] === opening.marker && close[1].length >= opening.length) {
+      opening = null;
+    }
+  }
+  return fenced;
+}
+
+function projectsIsPrjAnchor(raw) {
+  return raw === "^prj" || raw.endsWith(" ^prj") || raw.endsWith("\t^prj");
+}
+
+function projectsCheckboxMark(raw) {
+  const match = String(raw || "").match(/^\s*[-+*]\s+\[([^\]]*)\]/);
+  return match ? match[1] : "";
+}
+
+function projectsLifecycleFingerprint(text) {
+  const source = typeof text === "string" ? text : "";
+  if (!source) {
+    return { kind: "missing", mark: null, count: 0 };
+  }
+  const lines = source.split(/\r?\n/);
+  const start = projectsBodyStart(lines);
+  const fenced = projectsFencedLines(lines);
+  const hits = [];
+  for (let line = start; line < lines.length; line += 1) {
+    if (fenced.has(line)) {
+      continue;
+    }
+    const raw = String(lines[line] || "").replace(/[ \t]+$/, "");
+    if (!projectsIsPrjAnchor(raw)) {
+      continue;
+    }
+    hits.push(projectsCheckboxMark(raw));
+  }
+  if (hits.length === 0) {
+    return { kind: "missing", mark: null, count: 0 };
+  }
+  if (hits.length > 1) {
+    return { kind: "duplicate", mark: null, count: hits.length };
+  }
+  return { kind: "one", mark: hits[0], count: 1 };
+}
+
+function projectsFingerprint(frontmatter, text) {
+  const data = projectsJsonObject(frontmatter) ? frontmatter : {};
+  const types = [...new Set(projectsTypeNames(data.type))].sort();
+  const lifecycle = projectsLifecycleFingerprint(text);
+  return {
+    types,
+    typeKey: types.join("\u0000"),
+    isProject: types.includes("project"),
+    isArea: types.includes("area"),
+    isHost: types.includes("project") || types.includes("area"),
+    parent: projectsNormalizeParent(data.parent),
+    status: projectsNormalizeStatus(data.status),
+    prjKind: lifecycle.kind,
+    prjMark: lifecycle.mark,
+    prjCount: lifecycle.count,
+  };
+}
+
+function projectsFingerprintNeedsSync(previous, next) {
+  if (!next) {
+    return Boolean(previous && (previous.isProject || previous.isHost));
+  }
+  if (!previous) {
+    return Boolean(next.isProject || next.isHost);
+  }
+  if (previous.isProject !== next.isProject || previous.isArea !== next.isArea) {
+    return true;
+  }
+  if (next.isProject) {
+    return (
+      previous.typeKey !== next.typeKey ||
+      previous.parent !== next.parent ||
+      previous.status !== next.status ||
+      previous.prjKind !== next.prjKind ||
+      previous.prjMark !== next.prjMark ||
+      previous.prjCount !== next.prjCount
+    );
+  }
+  if (previous.isHost || next.isHost) {
+    return previous.typeKey !== next.typeKey || previous.parent !== next.parent;
+  }
+  return false;
+}
+
+function projectsIsMarkdownFile(fileOrPath) {
+  const path = typeof fileOrPath === "string"
+    ? fileOrPath
+    : fileOrPath && typeof fileOrPath.path === "string"
+      ? fileOrPath.path
+      : "";
+  return /\.md$/i.test(path);
+}
+
+function projectsRelevantPath(fileOrPath) {
+  if (!projectsIsMarkdownFile(fileOrPath)) {
+    return false;
+  }
+  const path = projectsReportPath(typeof fileOrPath === "string" ? fileOrPath : fileOrPath.path);
+  if (typeof isDoneArchivePath === "function" && isDoneArchivePath(path)) {
+    return false;
+  }
+  return !path.split("/").some((part) =>
+    part === ".obsidian" || part === ".bob" || part === "node_modules" || part.startsWith("."),
+  );
+}
+
+function projectsLocalDate(now = new Date()) {
+  try {
+    const date = now instanceof Date ? now : new Date(now);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  } catch (error) {
+    return "";
+  }
+}
+
+function projectsErrorModel(error) {
+  const source = projectsJsonObject(error) ? error : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Projects data needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found") {
+    return { code, hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob projects timed out. Retry, then check bob projects list in a terminal." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "Projects data is unavailable. Retry bob projects list.",
+  };
+}
+
+function projectsEventPayload(eventData) {
+  if (typeof eventData === "string") {
+    return { text: eventData, frontmatter: null };
+  }
+  if (!projectsJsonObject(eventData)) {
+    return { text: null, frontmatter: null };
+  }
+  const text = typeof eventData.text === "string"
+    ? eventData.text
+    : typeof eventData.data === "string"
+      ? eventData.data
+      : null;
+  const frontmatter = projectsJsonObject(eventData.frontmatter) ? eventData.frontmatter : null;
+  return { text, frontmatter };
+}
+// ---- src/241ab-plugin-projects-data-service.js ----
+// Projects shared report/sync service (mixin half). Helpers live in
+// 241aa-plugin-projects-data.js.
+class BobLedgerToolsProjectsDataMixin {
+  projectsTimerApi() {
+    if (this.projectsTimers && typeof this.projectsTimers === "object") {
+      return this.projectsTimers;
+    }
+    return typeof window !== "undefined" && window ? window : globalThis;
+  }
+
+  projectsSetTimeout(callback, delay) {
+    const timers = this.projectsTimerApi();
+    const schedule = timers && typeof timers.setTimeout === "function"
+      ? timers.setTimeout.bind(timers)
+      : setTimeout;
+    return schedule(callback, delay);
+  }
+
+  projectsClearTimeout(timer) {
+    if (timer === null || timer === undefined) {
+      return;
+    }
+    const timers = this.projectsTimerApi();
+    const clear = timers && typeof timers.clearTimeout === "function"
+      ? timers.clearTimeout.bind(timers)
+      : clearTimeout;
+    clear(timer);
+  }
+
+  projectsReportState() {
+    const report = this.projectsReport || null;
+    return {
+      report,
+      stale: Boolean(report && (this.projectsReportStale || (this.projectsReportGeneration || 0) < (this.projectsVaultGeneration || 0))),
+      unavailable: !report,
+      refreshing: Boolean(this.projectsListFlight),
+      error: this.projectsReportError || null,
+      errorModel: this.projectsReportError ? projectsErrorModel(this.projectsReportError) : null,
+      generation: this.projectsVaultGeneration || 0,
+      reportGeneration: this.projectsReportGeneration,
+      today: this.projectsLocalDay || projectsLocalDate(),
+      syncBusy: Boolean(this.projectsSyncBusy),
+      syncError: this.projectsSyncError || null,
+      syncErrorModel: this.projectsSyncError ? projectsErrorModel(this.projectsSyncError) : null,
+    };
+  }
+
+  projectsNotify() {
+    if (this.projectsDataActive === false || !(this.projectsSubscribers instanceof Set)) {
+      return;
+    }
+    const state = this.projectsReportState();
+    for (const subscriber of this.projectsSubscribers) {
+      try {
+        subscriber(state);
+      } catch (error) {
+        // A mounted renderer cannot break shared data refresh for other views.
+      }
+    }
+  }
+
+  projectsWaitersStore() {
+    if (!Array.isArray(this.projectsListWaiters)) {
+      this.projectsListWaiters = [];
+    }
+    return this.projectsListWaiters;
+  }
+
+  projectsWaitForReportGeneration(generation) {
+    return new Promise((resolve) => {
+      this.projectsWaitersStore().push({ generation, resolve });
+    });
+  }
+
+  projectsResolveWaiters(generation = Number.POSITIVE_INFINITY) {
+    const waiters = this.projectsWaitersStore();
+    const keep = [];
+    const state = this.projectsReportState();
+    for (const waiter of waiters) {
+      if (waiter.generation <= generation || this.projectsDataActive === false) {
+        try {
+          waiter.resolve(state);
+        } catch (error) {
+          // Waiter cleanup is best-effort.
+        }
+      } else {
+        keep.push(waiter);
+      }
+    }
+    this.projectsListWaiters = keep;
+  }
+
+  projectsSpawnCommand(args, decoder, options = {}) {
+    return bobSpawnJson(args, decoder, {
+      ...options,
+      commandLabel: args && args[1] === "sync" ? "bob projects sync" : "bob projects list",
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: PROJECTS_LIST_TIMEOUT_MS,
+      maxBuffer: PROJECTS_LIST_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  projectsSpawnList(options = {}) {
+    return this.projectsSpawnCommand(projectsListArgs(), projectsDecodeListReport, options);
+  }
+
+  projectsSpawnSync(options = {}) {
+    return this.projectsSpawnCommand(projectsSyncArgs(), projectsDecodeSyncReport, options);
+  }
+
+  projectsStartListFetch(generation) {
+    const epoch = this.projectsDataEpoch || 0;
+    if ((this.projectsQueuedGeneration || 0) <= generation) {
+      this.projectsQueuedGeneration = 0;
+    }
+    const flight = { generation, epoch, promise: null };
+    this.projectsListFlight = flight;
+    this.projectsNotify();
+    const run = async () => {
+      try {
+        const result = await this.projectsSpawnList();
+        if (this.projectsDataActive === false || this.projectsDataEpoch !== epoch) {
+          return this.projectsReportState();
+        }
+        if (result && result.ok && result.report) {
+          this.projectsReport = result.report;
+          this.projectsReportGeneration = generation;
+          this.projectsReportStale = generation < (this.projectsVaultGeneration || 0);
+          this.projectsReportError = null;
+        } else {
+          this.projectsReportStale = Boolean(this.projectsReport);
+          this.projectsReportError = result || {
+            code: "failed",
+            message: "bob projects list failed.",
+          };
+        }
+      } catch (error) {
+        if (this.projectsDataActive !== false && this.projectsDataEpoch === epoch) {
+          this.projectsReportStale = Boolean(this.projectsReport);
+          this.projectsReportError = {
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob projects list failed.",
+          };
+        }
+      }
+      return this.projectsReportState();
+    };
+    flight.promise = Promise.resolve()
+      .then(run)
+      .finally(() => {
+        if (this.projectsListFlight !== flight) {
+          return;
+        }
+        this.projectsListFlight = null;
+        this.projectsResolveWaiters(generation);
+        const queued = this.projectsQueuedGeneration || 0;
+        if (
+          this.projectsDataActive !== false && queued > generation &&
+          this.projectsRevalidateTimer === null
+        ) {
+          this.projectsQueuedGeneration = 0;
+          this.projectsStartListFetch(queued);
+        }
+        this.projectsNotify();
+      });
+    return flight;
+  }
+
+  apiProjectsReport(options = {}) {
+    const opts = projectsJsonObject(options) ? options : {};
+    if (this.projectsDataActive === false) {
+      return Promise.resolve(this.projectsReportState());
+    }
+    const target = Math.max(
+      this.projectsVaultGeneration || 0,
+      Number.isInteger(opts.requiredGeneration) ? opts.requiredGeneration : 0,
+    );
+    const force = opts.force === true;
+    const wait = opts.wait === true;
+    if (this.projectsListFlight) {
+      const flight = this.projectsListFlight;
+      if (target > flight.generation) {
+        this.projectsQueuedGeneration = Math.max(this.projectsQueuedGeneration || 0, target);
+      }
+      if (wait) {
+        return this.projectsWaitForReportGeneration(target);
+      }
+      return Promise.resolve(this.projectsReportState());
+    }
+    if (
+      !force && this.projectsReport && !this.projectsReportStale &&
+      (this.projectsReportGeneration || 0) >= target
+    ) {
+      return Promise.resolve(this.projectsReportState());
+    }
+    if (force && this.projectsReport) {
+      this.projectsReportStale = true;
+      this.projectsNotify();
+    }
+    const generation = Math.max(target, this.projectsVaultGeneration || 0);
+    this.projectsStartListFetch(generation);
+    if (this.projectsReport && !wait) {
+      return Promise.resolve(this.projectsReportState());
+    }
+    return this.projectsWaitForReportGeneration(generation);
+  }
+
+  projectsRevalidateAfterSync() {
+    const flight = this.projectsListFlight;
+    if (flight && flight.promise) {
+      return flight.promise.then(() => {
+        if (this.projectsDataActive === false) {
+          return this.projectsReportState();
+        }
+        return this.apiProjectsReport({ force: true, wait: true });
+      });
+    }
+    return this.apiProjectsReport({ force: true, wait: true });
+  }
+
+  apiProjectsSubscribe(subscriber) {
+    if (typeof subscriber !== "function" || this.projectsDataActive === false) {
+      return () => {};
+    }
+    if (!(this.projectsSubscribers instanceof Set)) {
+      this.projectsSubscribers = new Set();
+    }
+    this.projectsSubscribers.add(subscriber);
+    try {
+      subscriber(this.projectsReportState());
+    } catch (error) {
+      // A subscriber may mount before its renderer is ready.
+    }
+    void this.apiProjectsReport();
+    return () => {
+      this.projectsSubscribers.delete(subscriber);
+    };
+  }
+
+  apiProjectsInvalidate(reason = "manual") {
+    if (this.projectsDataActive === false) {
+      return this.projectsReportState();
+    }
+    this.projectsVaultGeneration = (this.projectsVaultGeneration || 0) + 1;
+    this.projectsInvalidationReason = String(reason || "vault");
+    if (this.projectsReport) {
+      this.projectsReportStale = true;
+    }
+    if (this.projectsListFlight) {
+      this.projectsQueuedGeneration = Math.max(
+        this.projectsQueuedGeneration || 0,
+        this.projectsVaultGeneration,
+      );
+    }
+    this.projectsNotify();
+    this.projectsScheduleRevalidate(reason);
+    return this.projectsReportState();
+  }
+
+  projectsScheduleRevalidate(reason = "vault") {
+    void reason;
+    if (
+      this.projectsDataActive === false ||
+      !(this.projectsSubscribers instanceof Set) ||
+      this.projectsSubscribers.size === 0
+    ) {
+      return;
+    }
+    this.projectsClearTimeout(this.projectsRevalidateTimer);
+    this.projectsRevalidateTimer = this.projectsSetTimeout(() => {
+      this.projectsRevalidateTimer = null;
+      if (this.projectsDataActive !== false && this.projectsSubscribers.size > 0) {
+        void this.apiProjectsReport({ force: true });
+      }
+    }, PROJECTS_REVALIDATE_DEBOUNCE_MS);
+  }
+
+  projectsFingerprintStore() {
+    if (!(this.projectsFingerprintByPath instanceof Map)) {
+      this.projectsFingerprintByPath = new Map();
+    }
+    return this.projectsFingerprintByPath;
+  }
+
+  projectsGenerationStore() {
+    if (!(this.projectsFingerprintGeneration instanceof Map)) {
+      this.projectsFingerprintGeneration = new Map();
+    }
+    return this.projectsFingerprintGeneration;
+  }
+
+  projectsBeginFingerprint(path) {
+    const generations = this.projectsGenerationStore();
+    const next = (generations.get(path) || 0) + 1;
+    generations.set(path, next);
+    return next;
+  }
+
+  projectsFingerprintIsCurrent(path, generation) {
+    return this.projectsGenerationStore().get(path) === generation;
+  }
+
+  projectsFrontmatterFor(file, eventData) {
+    const payload = projectsEventPayload(eventData);
+    if (payload.frontmatter) {
+      return payload.frontmatter;
+    }
+    try {
+      const cache = this.app && this.app.metadataCache &&
+        typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+      return cache && projectsJsonObject(cache.frontmatter) ? cache.frontmatter : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  projectsCachedText(file) {
+    try {
+      const cache = this.app && this.app.metadataCache &&
+        typeof this.app.metadataCache.getFileCache === "function"
+        ? this.app.metadataCache.getFileCache(file)
+        : null;
+      if (cache && typeof cache.text === "string") {
+        return cache.text;
+      }
+    } catch (error) {
+      // Cache text is optional; vault reads fill it when needed.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.cachedRead === "function") {
+        return vault.cachedRead(file);
+      }
+      if (vault && typeof vault.read === "function") {
+        return vault.read(file);
+      }
+    } catch (error) {
+      return "";
+    }
+    return "";
+  }
+
+  projectsFinishSeedRead() {
+    this.projectsSeedPending = Math.max(0, (this.projectsSeedPending || 0) - 1);
+    if (
+      this.projectsSeeding !== true &&
+      (this.projectsSeedPending || 0) === 0 &&
+      this.projectsMetadataReady !== true &&
+      this.projectsDataActive !== false
+    ) {
+      this.projectsMetadataReady = true;
+    }
+  }
+
+  projectsApplyFingerprint(path, next, options = {}) {
+    const store = this.projectsFingerprintStore();
+    const previous = store.get(path) || null;
+    store.set(path, next);
+    if (options.invalidate !== false) {
+      this.apiProjectsInvalidate(options.reason || "markdown-change");
+    }
+    if (
+      this.projectsMetadataReady &&
+      options.sync !== false &&
+      projectsFingerprintNeedsSync(previous, next)
+    ) {
+      this.projectsScheduleSync(options.syncReason || "fingerprint-change");
+    }
+    return true;
+  }
+
+  projectsIngestFile(file, eventData, options = {}) {
+    if (this.projectsDataActive === false) {
+      return false;
+    }
+    const path = projectsReportPath(file && file.path);
+    if (!path || !projectsRelevantPath(file)) {
+      return false;
+    }
+    const generation = this.projectsBeginFingerprint(path);
+    const payload = projectsEventPayload(eventData);
+    const frontmatter = this.projectsFrontmatterFor(file, eventData);
+    const applyText = (text) => {
+      if (this.projectsDataActive === false || !this.projectsFingerprintIsCurrent(path, generation)) {
+        return false;
+      }
+      return this.projectsApplyFingerprint(
+        path,
+        projectsFingerprint(frontmatter, text),
+        options,
+      );
+    };
+    if (payload.text !== null) {
+      return applyText(payload.text);
+    }
+    let read;
+    try {
+      read = this.projectsCachedText(file);
+    } catch (error) {
+      read = "";
+    }
+    if (read && typeof read.then === "function") {
+      if (options.seed) {
+        this.projectsSeedPending = (this.projectsSeedPending || 0) + 1;
+      }
+      Promise.resolve(read).then((text) => {
+        applyText(typeof text === "string" ? text : "");
+        if (options.seed) {
+          this.projectsFinishSeedRead();
+        }
+      }, () => {
+        if (this.projectsFingerprintIsCurrent(path, generation)) {
+          applyText("");
+        }
+        if (options.seed) {
+          this.projectsFinishSeedRead();
+        }
+      });
+      return true;
+    }
+    return applyText(typeof read === "string" ? read : "");
+  }
+
+  projectsHandleMetadataChanged(file, data) {
+    if (this.projectsLayoutReady !== true || this.projectsDataActive === false) {
+      return;
+    }
+    if (projectsRelevantPath(file)) {
+      this.projectsIngestFile(file, data, { reason: "metadata-change" });
+    }
+  }
+
+  projectsHandleVaultEvent(event, file, oldPath) {
+    if (this.projectsLayoutReady !== true || this.projectsDataActive === false) {
+      return;
+    }
+    const oldKey = projectsReportPath(oldPath);
+    if (event === "delete") {
+      const path = projectsReportPath(file);
+      const previous = this.projectsFingerprintStore().get(path) || null;
+      this.projectsFingerprintStore().delete(path);
+      this.projectsBeginFingerprint(path);
+      if (projectsRelevantPath(file) || previous) {
+        this.apiProjectsInvalidate("markdown-delete");
+      }
+      if (previous && (previous.isProject || previous.isHost)) {
+        this.projectsScheduleSync("project-delete");
+      }
+      return;
+    }
+    const currentRelevant = projectsRelevantPath(file);
+    const oldRelevant = oldKey ? projectsRelevantPath(oldKey) : false;
+    if (!currentRelevant && !oldRelevant) {
+      return;
+    }
+    if (event === "rename" && oldKey) {
+      const old = this.projectsFingerprintStore().get(oldKey) || null;
+      this.projectsFingerprintStore().delete(oldKey);
+      this.projectsBeginFingerprint(oldKey);
+      if (old && (old.isProject || old.isHost)) {
+        this.projectsScheduleSync("project-rename");
+      }
+    }
+    if (currentRelevant) {
+      this.projectsIngestFile(file, null, { reason: `markdown-${event}` });
+    } else {
+      this.apiProjectsInvalidate(`markdown-${event}`);
+    }
+  }
+
+  projectsSeedFingerprints(files = null) {
+    if (
+      this.projectsDataActive === false ||
+      this.projectsMetadataReady ||
+      this.projectsSeedStarted
+    ) {
+      return;
+    }
+    this.projectsSeedStarted = true;
+    this.projectsLayoutReady = true;
+    this.projectsFingerprintByPath = new Map();
+    this.projectsSeedPending = 0;
+    this.projectsSeeding = true;
+    try {
+      const sourceFiles = Array.isArray(files)
+        ? files
+        : this.app && this.app.vault &&
+          typeof this.app.vault.getMarkdownFiles === "function"
+          ? this.app.vault.getMarkdownFiles()
+          : [];
+      for (const file of Array.isArray(sourceFiles) ? sourceFiles : []) {
+        if (projectsRelevantPath(file)) {
+          this.projectsIngestFile(file, null, {
+            invalidate: false,
+            sync: false,
+            seed: true,
+            reason: "seed",
+          });
+        }
+      }
+    } catch (error) {
+      // Metadata readiness is best-effort; later changes will fill the map.
+    }
+    this.projectsSeeding = false;
+    if ((this.projectsSeedPending || 0) === 0) {
+      this.projectsMetadataReady = true;
+    }
+  }
+
+  projectsScheduleSync(reason = "fingerprint-change") {
+    void reason;
+    if (this.projectsDataActive === false) {
+      return false;
+    }
+    if (this.projectsSyncFlight || this.projectsSyncBusy) {
+      this.projectsSyncTrailing = true;
+      return false;
+    }
+    this.projectsClearTimeout(this.projectsSyncDebounceTimer);
+    this.projectsSyncDebounceTimer = this.projectsSetTimeout(() => {
+      this.projectsSyncDebounceTimer = null;
+      if (this.projectsDataActive !== false && !this.projectsSyncFlight && !this.projectsSyncBusy) {
+        void this.apiProjectsSync({ automatic: true });
+      }
+    }, PROJECTS_SYNC_DEBOUNCE_MS);
+    return true;
+  }
+
+  apiProjectsSync(options = {}) {
+    if (this.projectsDataActive === false) {
+      return Promise.resolve({
+        ok: false,
+        error: { code: "unloaded", message: "Projects data has unloaded." },
+      });
+    }
+    if (this.projectsSyncFlight) {
+      return this.projectsSyncFlight;
+    }
+    this.projectsClearTimeout(this.projectsSyncDebounceTimer);
+    this.projectsSyncDebounceTimer = null;
+    this.projectsSyncTrailing = false;
+    const epoch = this.projectsDataEpoch || 0;
+    this.projectsSyncBusy = true;
+    this.projectsSyncError = null;
+    this.projectsNotify();
+    let syncPromise;
+    const run = async () => {
+      let processResult;
+      try {
+        processResult = await this.projectsSpawnSync();
+      } catch (error) {
+        processResult = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob projects sync failed.",
+        };
+      }
+      let operation;
+      if (!processResult || !processResult.ok || !processResult.report) {
+        operation = {
+          ok: false,
+          error: processResult || { code: "failed", message: "bob projects sync failed." },
+          report: null,
+        };
+      } else if (processResult.report.ok !== true) {
+        const failure = processResult.report.error || {};
+        operation = {
+          ok: false,
+          error: {
+            code: typeof failure.code === "string" ? failure.code : "sync-refused",
+            message: typeof failure.message === "string"
+              ? failure.message
+              : "bob projects sync found a damaged catalog or could not complete.",
+            detail: typeof failure.detail === "string"
+              ? failure.detail
+              : typeof failure.hint === "string" ? failure.hint : "",
+          },
+          report: processResult.report,
+        };
+      } else {
+        operation = { ok: true, error: null, report: processResult.report };
+      }
+      if (this.projectsDataActive === false || this.projectsDataEpoch !== epoch) {
+        if (this.projectsSyncFlight === syncPromise) {
+          this.projectsSyncFlight = null;
+        }
+        return { ...operation, refreshed: this.projectsReportState() };
+      }
+      this.projectsSyncBusy = false;
+      this.projectsSyncError = operation.error;
+      this.projectsLastSyncReport = operation.report;
+      if (this.projectsSyncFlight === syncPromise) {
+        this.projectsSyncFlight = null;
+      }
+      this.projectsNotify();
+      let refreshed = this.projectsReportState();
+      try {
+        refreshed = await this.projectsRevalidateAfterSync();
+      } catch (error) {
+        // The last list report remains visible as stale/unavailable.
+      }
+      if (
+        this.projectsSyncTrailing === true &&
+        this.projectsDataActive !== false && this.projectsDataEpoch === epoch &&
+        !this.projectsSyncFlight && !this.projectsSyncBusy
+      ) {
+        this.projectsSyncTrailing = false;
+        this.projectsScheduleSync("trailing-change");
+      }
+      return { ...operation, refreshed };
+    };
+    syncPromise = Promise.resolve().then(run).catch(async (error) => {
+      const failure = {
+        code: "failed",
+        message: error && error.message ? String(error.message) : "bob projects sync failed.",
+      };
+      if (this.projectsDataActive !== false && this.projectsDataEpoch === epoch) {
+        this.projectsSyncBusy = false;
+        this.projectsSyncError = failure;
+        if (this.projectsSyncFlight === syncPromise) {
+          this.projectsSyncFlight = null;
+        }
+        this.projectsNotify();
+        try {
+          await this.projectsRevalidateAfterSync();
+        } catch (ignored) {}
+        if (
+          this.projectsSyncTrailing === true &&
+          this.projectsDataActive !== false && this.projectsDataEpoch === epoch &&
+          !this.projectsSyncFlight && !this.projectsSyncBusy
+        ) {
+          this.projectsSyncTrailing = false;
+          this.projectsScheduleSync("trailing-change");
+        }
+      }
+      return { ok: false, error: failure, report: null, refreshed: this.projectsReportState() };
+    });
+    this.projectsSyncFlight = syncPromise;
+    void options;
+    return syncPromise;
+  }
+
+  projectsRefreshRollover(now = new Date()) {
+    const day = projectsLocalDate(now);
+    if (!day || day === this.projectsLocalDay) {
+      return false;
+    }
+    this.projectsLocalDay = day;
+    this.apiProjectsInvalidate("day-rollover");
+    return true;
+  }
+
+  setupProjectsData() {
+    this.projectsDataActive = true;
+    this.projectsDataEpoch = (this.projectsDataEpoch || 0) + 1;
+    this.projectsVaultGeneration = 0;
+    this.projectsReport = null;
+    this.projectsReportGeneration = -1;
+    this.projectsReportStale = true;
+    this.projectsReportError = null;
+    this.projectsSyncBusy = false;
+    this.projectsSyncError = null;
+    this.projectsSyncFlight = null;
+    this.projectsSyncTrailing = false;
+    this.projectsListFlight = null;
+    this.projectsQueuedGeneration = 0;
+    this.projectsListWaiters = [];
+    this.projectsSubscribers = new Set();
+    this.projectsFingerprintByPath = new Map();
+    this.projectsFingerprintGeneration = new Map();
+    this.projectsMetadataReady = false;
+    this.projectsLayoutReady = false;
+    this.projectsSeedStarted = false;
+    this.projectsSeedPending = 0;
+    this.projectsSeeding = false;
+    this.projectsRevalidateTimer = null;
+    this.projectsSyncDebounceTimer = null;
+    this.projectsRolloverTimer = null;
+    this.projectsLocalDay = projectsLocalDate();
+
+    try {
+      const metadataCache = this.app && this.app.metadataCache;
+      if (metadataCache && typeof metadataCache.on === "function") {
+        this.registerEvent(metadataCache.on("changed", (file, data) => this.projectsHandleMetadataChanged(file, data)));
+      }
+    } catch (error) {
+      // Metadata-cache notifications are optional on mobile and test hosts.
+    }
+    try {
+      const vault = this.app && this.app.vault;
+      if (vault && typeof vault.on === "function") {
+        for (const event of ["create", "modify", "delete", "rename"]) {
+          this.registerEvent(vault.on(event, (file, oldPath) => this.projectsHandleVaultEvent(event, file, oldPath)));
+        }
+      }
+    } catch (error) {
+      // Vault notifications are optional on partial app hosts.
+    }
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        for (const event of ["file-open", "active-leaf-change"]) {
+          this.registerEvent(workspace.on(event, () => this.projectsScheduleRevalidate(`workspace-${event}`)));
+        }
+      }
+      if (workspace && typeof workspace.onLayoutReady === "function") {
+        workspace.onLayoutReady(() => {
+          this.projectsLayoutReady = true;
+          this.projectsSeedFingerprints();
+        });
+      }
+    } catch (error) {
+      // Some test hosts do not implement layout readiness.
+    }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof window !== "undefined" && window) {
+        this.registerDomEvent(window, "focus", () => this.projectsScheduleRevalidate("window-focus"));
+        if (typeof document !== "undefined" && document) {
+          this.registerDomEvent(document, "visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+              this.projectsScheduleRevalidate("document-visible");
+            }
+          });
+        }
+      }
+    } catch (error) {
+      // Focus and visibility are best-effort on restricted hosts.
+    }
+    try {
+      const timers = this.projectsTimerApi();
+      const hasTimerHost = Boolean(
+        (this.projectsTimers && typeof this.projectsTimers === "object") ||
+        (typeof window !== "undefined" && window),
+      );
+      const setIntervalFn = hasTimerHost && timers && typeof timers.setInterval === "function"
+        ? timers.setInterval.bind(timers)
+        : null;
+      if (setIntervalFn) {
+        this.projectsRolloverTimer = setIntervalFn(() => this.projectsRefreshRollover(new Date()), PROJECTS_ROLLOVER_INTERVAL_MS);
+        if (typeof this.registerInterval === "function") {
+          this.registerInterval(this.projectsRolloverTimer);
+        }
+      }
+    } catch (error) {
+      this.projectsRolloverTimer = null;
+    }
+  }
+
+  teardownProjectsData() {
+    this.projectsDataActive = false;
+    this.projectsLayoutReady = false;
+    this.projectsSeedStarted = false;
+    this.projectsDataEpoch = (this.projectsDataEpoch || 0) + 1;
+    this.projectsClearTimeout(this.projectsRevalidateTimer);
+    this.projectsClearTimeout(this.projectsSyncDebounceTimer);
+    this.projectsRevalidateTimer = null;
+    this.projectsSyncDebounceTimer = null;
+    this.projectsSyncTrailing = false;
+    if (this.projectsRolloverTimer !== null && this.projectsRolloverTimer !== undefined) {
+      const timers = this.projectsTimerApi();
+      if (timers && typeof timers.clearInterval === "function") {
+        timers.clearInterval(this.projectsRolloverTimer);
+      }
+    }
+    this.projectsRolloverTimer = null;
+    this.projectsResolveWaiters(0);
+    if (this.projectsSubscribers instanceof Set) {
+      this.projectsSubscribers.clear();
+    }
+    if (this.projectsFingerprintByPath instanceof Map) {
+      this.projectsFingerprintByPath.clear();
+    }
+    if (this.projectsFingerprintGeneration instanceof Map) {
+      this.projectsFingerprintGeneration.clear();
+    }
+    this.projectsReport = null;
+    this.projectsReportError = null;
+    this.projectsSyncBusy = false;
+    this.projectsSyncError = null;
   }
 }
 // ---- src/241z-plugin-album-update.js ----
@@ -116514,6 +117855,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsReadingBoardDataMixin,
   BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsAlbumDataMixin,
+  BobLedgerToolsProjectsDataMixin,
   BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
@@ -119951,6 +121293,43 @@ try {
       MailArchiveChipWidget,
       gmailEventsRecentArchiveCount,
       gmailEventsShowRecentArchiveNotice,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/358-exports-projects.js ----
+// Projects report/sync service helpers, exported beside the album and
+// notebook data surfaces. Kept in its own fragment so `350-exports.js`
+// stays at or below 1000 lines.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      PROJECTS_REPORT_SCHEMA_VERSION,
+      PROJECTS_LIST_TIMEOUT_MS,
+      PROJECTS_LIST_MAX_BUFFER,
+      PROJECTS_REVALIDATE_DEBOUNCE_MS,
+      PROJECTS_SYNC_DEBOUNCE_MS,
+      PROJECTS_ROLLOVER_INTERVAL_MS,
+      projectsListArgs,
+      projectsSyncArgs,
+      projectsDecodeListReport,
+      projectsDecodeSyncReport,
+      projectsIndexReport,
+      projectsReportPath,
+      projectsTypeNames,
+      projectsNormalizeParent,
+      projectsNormalizeStatus,
+      projectsLifecycleFingerprint,
+      projectsFingerprint,
+      projectsFingerprintNeedsSync,
+      projectsRelevantPath,
+      projectsLocalDate,
+      projectsErrorModel,
+      projectsEventPayload,
+      projectsEntryShape,
+      projectsListCatalogShape,
+      projectsSyncCatalogShape,
     });
   }
 } catch (error) {

@@ -86,6 +86,7 @@ function hubNote() {
     "  categories:",
     "    groceries: 🛒 Groceries",
     "    dining: 🍽️ Dining",
+    "    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }",
     "---",
     "",
     "# 🏦 Bank",

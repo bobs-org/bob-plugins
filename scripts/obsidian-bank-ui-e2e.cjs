@@ -461,7 +461,7 @@ function runSelfTest() {
     const log = bank.readArgvLog(shimDir);
     if (!log.length || log[0].argv[1] !== "list") throw new Error("shim did not log argv");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "walk-ctrl-enter-c"]) {
+    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-card.png"]) {
       if (!source.includes(token) && token !== "never $0.00") {
         if (token === "never $0.00") continue;
         throw new Error(`e2e source missing ${token}`);
@@ -1332,6 +1332,146 @@ async function runE2e(parsed) {
     record("walk-untick-ticked", Boolean(walk && /\[ \]/.test(String(walk.afterUntick || ""))), jsonDetail(walk));
     record("walk-end-of-run", Boolean(walk && walk.summary), jsonDetail(walk));
     record("walk-undo", Boolean(walk && walk.afterUndo && walk.afterUndo !== walk.hardwareFiled && /\[ \]/.test(String(walk.afterUndo || ""))), jsonDetail(walk));
+
+    const learnOpen = await client.evaluate(`(() => (async () => {
+      const path = "bank/2026-12.md";
+      const body = [
+        "---",
+        'parent: "[[bank]]"',
+        'type: "[[bank_month]]"',
+        "month: 2026-12",
+        "---",
+        "",
+        "# Bank December 2026",
+        "",
+        "## Tue Dec 1",
+        "",
+        "- [ ] $6.45 Corner Cafe",
+        "- [ ] $12.90 Corner Cafe",
+        "- [ ] $4.00 Unrelated Shop",
+        "",
+      ].join("\\n");
+      const existing = window.app.vault.getAbstractFileByPath(path);
+      if (existing) await window.app.vault.modify(existing, body);
+      else await window.app.vault.create(path, body);
+      const abstract = window.app.vault.getAbstractFileByPath(path);
+      const leaf = window.app.workspace.getLeaf(false);
+      await leaf.openFile(abstract);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      if (ledger && ledger.bankCategoryModal && typeof ledger.bankCategoryModal.close === "function") {
+        try { ledger.bankCategoryModal.close(); } catch (error) {}
+      }
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const lineOf = (payee) => editor.getValue().split("\\n").findIndex((line) => line.includes(payee));
+      editor.setCursor({ line: lineOf("$6.45 Corner Cafe"), ch: 8 });
+      window.app.commands.executeCommandById("task-status-cycler:toggle-task-open-done");
+      await sleep(120);
+      if (!(ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true) &&
+          ledger && ledger.api && ledger.api.bank && typeof ledger.api.bank.claimRowClose === "function") {
+        ledger.api.bank.claimRowClose(editor, view);
+        await sleep(80);
+      }
+      const findCard = () => {
+        const modal = ledger && ledger.bankCategoryModal;
+        const fromContent = modal && modal.contentEl && typeof modal.contentEl.querySelector === "function"
+          ? modal.contentEl.querySelector(".bob-bank-category-card")
+          : null;
+        return document.querySelector(".bob-bank-category-card")
+          || fromContent
+          || (modal && modal.contentEl && /bob-bank-category-card/.test(String(modal.contentEl.className || ""))
+            ? modal.contentEl
+            : null);
+      };
+      let card = findCard();
+      const openDeadline = Date.now() + 1500;
+      while (!card && Date.now() < openDeadline) {
+        await sleep(50);
+        card = findCard();
+      }
+      const tiles = card && card.querySelector(".bob-bank-category-tiles");
+      const style = card && window.getComputedStyle(card);
+      const cardRect = card && card.getBoundingClientRect();
+      const tilesRect = tiles && tiles.getBoundingClientRect();
+      return {
+        opened: Boolean(card || (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true)),
+        className: card ? String(card.className || "") : "",
+        display: style ? style.display : null,
+        tilesDisplay: tiles ? window.getComputedStyle(tiles).display : null,
+        cardWidth: cardRect ? cardRect.width : 0,
+        tilesWidth: tilesRect ? tilesRect.width : 0,
+        tilesSpan: Boolean(cardRect && tilesRect && tilesRect.width > 0 &&
+          Math.abs(cardRect.width - tilesRect.width) < 24),
+      };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    record("walk-card-layout", Boolean(
+      learnOpen && learnOpen.opened && learnOpen.display !== "grid" &&
+      /bob-bank-category-card/.test(String(learnOpen.className || "")) &&
+      !/(^|\s)bob-bank-category(\s|$)/.test(String(learnOpen.className || "")) &&
+      learnOpen.tilesSpan,
+    ), jsonDetail(learnOpen));
+    const walkCardShot = path.join(outDir, "walk-card.png");
+    await capturePage(client, walkCardShot);
+    report.screenshots.push(walkCardShot);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
+    await sleep(200);
+    const walkCardDark = path.join(outDir, "walk-card-dark.png");
+    await capturePage(client, walkCardDark);
+    report.screenshots.push(walkCardDark);
+    await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+    const learn = await client.evaluate(`(() => (async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      const modal = ledger && ledger.bankCategoryModal;
+      const lineOf = (payee) => editor.getValue().split("\\n").findIndex((line) => line.includes(payee));
+      const key = async (name, opts = {}) => {
+        const active = ledger && ledger.bankCategoryModal;
+        if (!active || typeof active.onKeyDown !== "function") return false;
+        const event = {
+          key: name, ctrlKey: opts.ctrl === true, isComposing: false,
+          preventDefault() {}, stopPropagation() {},
+        };
+        await active.onKeyDown(event);
+        if ((name === "Enter" || opts.ctrl === true) && typeof active.onKeyUp === "function") active.onKeyUp(event);
+        return true;
+      };
+      const keyedC = await key("c");
+      let suggestion = null;
+      let source = null;
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const current = ledger && ledger.bankCategoryModal;
+        if (current && current.suggestion && current.suggestion.category === "coffee") {
+          suggestion = current.suggestion.category;
+          source = current.suggestion.source;
+          break;
+        }
+        await sleep(100);
+      }
+      await sleep(350);
+      const keyedEnter = await key("Enter");
+      await sleep(400);
+      return {
+        keyedC,
+        keyedEnter,
+        suggestion,
+        source,
+        first: editor.getLine(lineOf("$6.45 Corner Cafe")),
+        second: editor.getLine(lineOf("$12.90 Corner Cafe")),
+        payee: modal && modal.context && modal.context.cardRow && modal.context.cardRow.payee,
+      };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    record("walk-learn-coffee", Boolean(
+      learn && /\[x\]/.test(String(learn.first || "")) && /\[cat:: coffee\]/.test(String(learn.first || "")) &&
+      learn.suggestion === "coffee" && learn.source === "learned",
+    ), jsonDetail(learn));
+    record("walk-learn-accept", Boolean(
+      learn && /\[x\]/.test(String(learn.second || "")) && /\[cat:: coffee\]/.test(String(learn.second || "")),
+    ), jsonDetail(learn));
 
     await openNote(client, "tasks/ordinary.md", "live");
     const ordinaryCycle = await client.evaluate(`(() => {

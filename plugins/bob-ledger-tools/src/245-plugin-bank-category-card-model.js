@@ -11,6 +11,46 @@ function bankCategoryText(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+const BANK_CATEGORY_MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function bankCategoryMonthLabel(pathOrKey) {
+  const fromPath = typeof pathOrKey === "string" ? bankMonthFromPath(pathOrKey) : null;
+  const key = fromPath
+    ? fromPath.key
+    : (typeof pathOrKey === "string" && /^\d{4}-\d{2}$/.test(pathOrKey) ? pathOrKey : null);
+  if (!key) return null;
+  const month = Number(key.slice(5, 7));
+  return BANK_CATEGORY_MONTH_NAMES[month - 1] || key;
+}
+
+function bankCategoryDayLabel(date) {
+  if (typeof date !== "string") return null;
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return bankCategoryText(date);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const abbr = typeof BANK_MONTHS_ABBR !== "undefined" ? BANK_MONTHS_ABBR[month - 1] : null;
+  return abbr ? `${abbr} ${day}` : date;
+}
+
+function bankCategoryProgressModel(mode, progress, pathOrKey) {
+  if (mode !== "close" || !progress || typeof progress !== "object") return null;
+  const month = bankCategoryText(progress.month) || bankCategoryMonthLabel(pathOrKey);
+  return month ? { ...progress, month } : { ...progress };
+}
+
+function bankCategoryAnnounceText(input = {}) {
+  const amount = bankCategoryText(input.amount) || "";
+  const label = bankCategoryText(input.categoryLabel);
+  const nextAmount = bankCategoryText(input.nextAmount);
+  const filed = label ? `Filed ${amount} as ${label}` : `Filed ${amount} · no category`;
+  if (nextAmount) return `${filed} · next ${nextAmount} waiting`;
+  return filed;
+}
+
 function bankCategoryVisible(categories) {
   return (Array.isArray(categories) ? categories : []).filter(
     (entry) => entry && typeof entry.key === "string" && entry.key && entry.hidden !== true,
@@ -157,19 +197,24 @@ function bankCategoryCardModel(input = {}) {
   const categories = Array.isArray(input.categories) ? input.categories : null;
   const row = input.row && typeof input.row === "object" ? input.row : {};
   if (!categories) {
+    const reason = bankCategoryText(input.reason) || "categories unavailable";
     return {
       kind: "restricted",
       mode,
-      reason: bankCategoryText(input.reason) || "categories unavailable",
+      inflow: Number.isSafeInteger(row.cents) && row.cents > 0,
+      reason,
       header: {
         cents: Number.isSafeInteger(row.cents) ? row.cents : null,
         payee: bankCategoryText(row.payee) || "",
         date: bankCategoryText(row.date) || null,
+        day: bankCategoryDayLabel(row.date),
         flagged: row.flagged === true,
         account: bankCategoryText(row.account) || null,
+        state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
       },
       footer: { kind: "restricted", text: "␣ acknowledge · esc cancel" },
-      hint: `Categories unavailable — ${bankCategoryText(input.reason) || "categories unavailable"}`,
+      hint: reason,
+      progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
     };
   }
   const inflow = Number.isSafeInteger(row.cents) && row.cents > 0;
@@ -207,6 +252,7 @@ function bankCategoryCardModel(input = {}) {
       cents: Number.isSafeInteger(row.cents) ? row.cents : null,
       payee: bankCategoryText(row.payee) || "",
       date: bankCategoryText(row.date) || null,
+      day: bankCategoryDayLabel(row.date),
       flagged: row.flagged === true,
       account: bankCategoryText(row.account) || null,
       state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
@@ -216,7 +262,7 @@ function bankCategoryCardModel(input = {}) {
     footer: oldBob
       ? { ...footer, hint: "update bob for one-key filing" }
       : footer,
-    progress: mode === "close" && input.progress ? { ...input.progress } : null,
+    progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
   };
 }
 

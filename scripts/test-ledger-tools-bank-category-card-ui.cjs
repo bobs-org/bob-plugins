@@ -295,6 +295,184 @@ test("claimRowClose focuses an open card and swallows the lock instead of flippi
   assert.equal(plugin.bankCategoryClaimRowClose(editor, { file: { path } }), false);
 });
 
+class FakeNode {
+  constructor(tag, doc) {
+    this.tagName = String(tag).toUpperCase();
+    this.ownerDocument = doc;
+    this.parentNode = null;
+    this.children = [];
+    this.attrs = new Map();
+    this.listeners = new Map();
+    this.style = {};
+    this._text = "";
+    this.disabled = false;
+  }
+
+  set className(value) { this.setAttribute("class", String(value || "")); }
+  get className() { return this.getAttribute("class") || ""; }
+  set textContent(value) {
+    this._text = String(value);
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+  }
+  get textContent() {
+    return [this._text, ...this.children.map((child) => child.textContent)].filter(Boolean).join(" ");
+  }
+  setAttribute(name, value) { this.attrs.set(name, String(value)); }
+  getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+  appendChild(child) {
+    if (child.parentNode && Array.isArray(child.parentNode.children)) {
+      const old = child.parentNode.children.indexOf(child);
+      if (old >= 0) child.parentNode.children.splice(old, 1);
+    }
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
+  replaceChildren(...nodes) {
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+    this._text = "";
+    for (const child of nodes) this.appendChild(child);
+  }
+  empty() { this.replaceChildren(); }
+  addEventListener(event, callback) {
+    const handlers = this.listeners.get(event) || [];
+    handlers.push(callback);
+    this.listeners.set(event, handlers);
+  }
+  classTokens() {
+    return (this.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+  }
+  matches(selector) {
+    const tokens = this.classTokens();
+    const classOk = Array.from(String(selector).matchAll(/\.([\w-]+)/g))
+      .every((match) => tokens.includes(match[1]));
+    const attrOk = Array.from(String(selector).matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g))
+      .every((match) => {
+        const value = this.getAttribute(match[1]);
+        return value !== null && (match[2] === undefined || match[2] === value);
+      });
+    return classOk && attrOk;
+  }
+  querySelectorAll(selector) {
+    const found = [];
+    const visit = (node) => {
+      for (const child of node.children) {
+        if (child.matches(selector)) found.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return found;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+}
+
+function paintModal(mode, options = {}) {
+  const doc = { createElement: (tag) => new FakeNode(tag, doc) };
+  const content = new FakeNode("div", doc);
+  const { modal, actions } = makeModal(mode, options);
+  modal.contentEl = content;
+  modal.app = { document: doc };
+  if (options.progress) modal.progress = options.progress;
+  if (options.context) modal.context = options.context;
+  if (options.row) {
+    modal.context = {
+      path: options.path || "bank/2026-11.md",
+      cardRow: options.row,
+    };
+  }
+  if (options.reason !== undefined) modal.reason = options.reason;
+  modal.paint();
+  return { modal, actions, content };
+}
+
+test("the painted root uses bob-bank-category-card and not the month-card token", () => {
+  const { content } = paintModal("close", {
+    progress: { filed: 1, total: 3, waiting: 2 },
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
+  });
+  const root = content.querySelector(".bob-bank-category-card");
+  assert.ok(root);
+  const tokens = root.classTokens();
+  assert.ok(tokens.includes("bob-bank-category-card"));
+  assert.ok(tokens.includes("bob-key-card"));
+  assert.equal(tokens.includes("bob-bank-category"), false);
+  assert.equal(content.querySelector(".bob-bank-category"), null);
+});
+
+test("the header puts amount first, inflows show +, and progress names the month", () => {
+  const outflow = paintModal("close", {
+    progress: { filed: 2, total: 5, waiting: 3 },
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12", flagged: true, account: "cash" },
+  });
+  const header = outflow.content.querySelector(".bob-bank-category-header");
+  assert.match(header.textContent, /^\$6\.45 Corner Cafe Nov 12/);
+  assert.equal(outflow.content.querySelector(".bob-bank-category-amount.is-inflow"), null);
+  assert.match(outflow.content.querySelector(".bob-bank-category-progress").textContent, /2 of 5 · November/);
+  assert.ok(outflow.content.querySelector(".bob-bank-category-meter"));
+  assert.ok(outflow.content.querySelector(".bob-bank-category-chip"));
+
+  const inflow = paintModal("close", {
+    progress: { filed: 1, total: 1, waiting: 0 },
+    row: { payee: "Payroll", cents: 250000, date: "2026-11-12" },
+  });
+  const amount = inflow.content.querySelector(".bob-bank-category-amount");
+  assert.equal(amount.textContent, "+$2,500.00");
+  assert.ok(amount.classTokens().includes("is-inflow"));
+  assert.match(inflow.content.querySelector(".bob-bank-category-header").textContent, /^\+\$2,500\.00 Payroll/);
+
+  const setMode = paintModal("set", {
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12", acknowledged: true },
+  });
+  assert.match(setMode.content.querySelector(".bob-bank-category-state").textContent, /acknowledged/);
+  assert.equal(setMode.content.querySelector(".bob-bank-category-meter"), null);
+});
+
+test("tiles render keycaps, aria-keyshortcuts, and a live region after filing", () => {
+  const { modal, content } = paintModal("close", {
+    progress: { filed: 1, total: 2, waiting: 1 },
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
+    highlightKey: "coffee",
+  });
+  const coffee = content.querySelectorAll(".bob-bank-category-tile")
+    .find((tile) => tile.getAttribute("data-category-key") === "coffee");
+  assert.ok(coffee);
+  assert.equal(coffee.getAttribute("aria-keyshortcuts"), "c");
+  assert.equal(coffee.getAttribute("aria-pressed"), "true");
+  const keycap = coffee.querySelector(".bob-bank-category-keycap");
+  assert.equal(keycap.textContent, "C");
+  assert.match(coffee.textContent, /↵/);
+  modal.announce("Filed $6.45 as Coffee · next $12.90 waiting");
+  const live = content.querySelector(".bob-bank-category-live");
+  assert.equal(live.getAttribute("aria-live"), "polite");
+  assert.equal(live.textContent, "Filed $6.45 as Coffee · next $12.90 waiting");
+  modal.paint();
+  assert.equal(modal.liveRegion, live);
+  assert.equal(content.querySelector(".bob-bank-category-live").textContent,
+    "Filed $6.45 as Coffee · next $12.90 waiting");
+});
+
+test("restricted mode shows only acknowledge keys and the loading reason", () => {
+  const loading = paintModal("close", {
+    categories: null,
+    reason: "loading…",
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
+  });
+  assert.match(loading.content.querySelector(".bob-bank-category-keys").textContent, /acknowledge/);
+  assert.doesNotMatch(loading.content.querySelector(".bob-bank-category-keys").textContent, /letter choose/);
+  assert.equal(loading.content.querySelector(".bob-bank-category-hint").textContent, "loading…");
+
+  const failed = paintModal("close", {
+    categories: null,
+    reason: "bob bank failed.",
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
+  });
+  assert.equal(failed.content.querySelector(".bob-bank-category-hint").textContent, "bob bank failed.");
+  assert.doesNotMatch(failed.content.querySelector(".bob-bank-category-hint").textContent, /unavailable —/);
+});
+
 test("set-category replaces the category without ticking or advancing", async () => {
   const path = "bank/2026-11.md";
   const original = [
@@ -318,4 +496,72 @@ test("set-category replaces the category without ticking or advancing", async ()
   assert.equal(editor.getLine(1), "- [x] $1.00 Corner Cafe [cat:: groceries] ^bank-aaa111");
   assert.equal(editor.cursor.line, 1);
   assert.equal(closed, true);
+});
+
+test("a successful close saves the note before requesting a refresh", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor([
+    "## Thu Nov 12",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "",
+  ].join("\n"));
+  const order = [];
+  const app = { workspace: { getActiveFile: () => ({ path }) } };
+  const plugin = new LedgerToolsPlugin(app);
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  const announcements = [];
+  const modal = {
+    mode: "close", editor, context, month: "2026-11",
+    session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    categories: CATEGORIES,
+    view: { file: { path }, async save() { order.push("save"); } },
+    setNext(nextContext, progress, lock) { this.next = { context: nextContext, progress, lock }; this.waitingRefresh = true; },
+    setReport(report) { this.refreshed = report; },
+    paint() {},
+    showSummary() {},
+    announce(text) { announcements.push(text); },
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.apiBankRefresh = async () => {
+    order.push("refresh");
+    return { report: { categories: CATEGORIES, days: [] }, error: null };
+  };
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  assert.deepEqual(order, ["save", "refresh"]);
+  assert.match(announcements[0] || "", /Filed \$1\.00 as .*Coffee/);
+  assert.match(announcements[0] || "", /next \$2\.00 waiting/);
+});
+
+test("a throwing save still refreshes after a successful close", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor([
+    "## Thu Nov 12",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "",
+  ].join("\n"));
+  const order = [];
+  const app = { workspace: { getActiveFile: () => ({ path }) } };
+  const plugin = new LedgerToolsPlugin(app);
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  const modal = {
+    mode: "close", editor, context, month: "2026-11",
+    session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    view: { file: { path }, async save() { order.push("save"); throw new Error("disk"); } },
+    setNext(nextContext, progress, lock) { this.next = { context: nextContext, progress, lock }; this.waitingRefresh = true; },
+    setReport(report) { this.refreshed = report; },
+    paint() {},
+    showSummary() {},
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.apiBankRefresh = async () => {
+    order.push("refresh");
+    return { report: { categories: CATEGORIES, days: [] }, error: null };
+  };
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  assert.deepEqual(order, ["save", "refresh"]);
+  assert.equal(modal.next.context.row.payee, "Market");
 });

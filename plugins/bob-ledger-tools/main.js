@@ -69445,6 +69445,46 @@ function bankCategoryText(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+const BANK_CATEGORY_MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function bankCategoryMonthLabel(pathOrKey) {
+  const fromPath = typeof pathOrKey === "string" ? bankMonthFromPath(pathOrKey) : null;
+  const key = fromPath
+    ? fromPath.key
+    : (typeof pathOrKey === "string" && /^\d{4}-\d{2}$/.test(pathOrKey) ? pathOrKey : null);
+  if (!key) return null;
+  const month = Number(key.slice(5, 7));
+  return BANK_CATEGORY_MONTH_NAMES[month - 1] || key;
+}
+
+function bankCategoryDayLabel(date) {
+  if (typeof date !== "string") return null;
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return bankCategoryText(date);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const abbr = typeof BANK_MONTHS_ABBR !== "undefined" ? BANK_MONTHS_ABBR[month - 1] : null;
+  return abbr ? `${abbr} ${day}` : date;
+}
+
+function bankCategoryProgressModel(mode, progress, pathOrKey) {
+  if (mode !== "close" || !progress || typeof progress !== "object") return null;
+  const month = bankCategoryText(progress.month) || bankCategoryMonthLabel(pathOrKey);
+  return month ? { ...progress, month } : { ...progress };
+}
+
+function bankCategoryAnnounceText(input = {}) {
+  const amount = bankCategoryText(input.amount) || "";
+  const label = bankCategoryText(input.categoryLabel);
+  const nextAmount = bankCategoryText(input.nextAmount);
+  const filed = label ? `Filed ${amount} as ${label}` : `Filed ${amount} · no category`;
+  if (nextAmount) return `${filed} · next ${nextAmount} waiting`;
+  return filed;
+}
+
 function bankCategoryVisible(categories) {
   return (Array.isArray(categories) ? categories : []).filter(
     (entry) => entry && typeof entry.key === "string" && entry.key && entry.hidden !== true,
@@ -69591,19 +69631,24 @@ function bankCategoryCardModel(input = {}) {
   const categories = Array.isArray(input.categories) ? input.categories : null;
   const row = input.row && typeof input.row === "object" ? input.row : {};
   if (!categories) {
+    const reason = bankCategoryText(input.reason) || "categories unavailable";
     return {
       kind: "restricted",
       mode,
-      reason: bankCategoryText(input.reason) || "categories unavailable",
+      inflow: Number.isSafeInteger(row.cents) && row.cents > 0,
+      reason,
       header: {
         cents: Number.isSafeInteger(row.cents) ? row.cents : null,
         payee: bankCategoryText(row.payee) || "",
         date: bankCategoryText(row.date) || null,
+        day: bankCategoryDayLabel(row.date),
         flagged: row.flagged === true,
         account: bankCategoryText(row.account) || null,
+        state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
       },
       footer: { kind: "restricted", text: "␣ acknowledge · esc cancel" },
-      hint: `Categories unavailable — ${bankCategoryText(input.reason) || "categories unavailable"}`,
+      hint: reason,
+      progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
     };
   }
   const inflow = Number.isSafeInteger(row.cents) && row.cents > 0;
@@ -69641,6 +69686,7 @@ function bankCategoryCardModel(input = {}) {
       cents: Number.isSafeInteger(row.cents) ? row.cents : null,
       payee: bankCategoryText(row.payee) || "",
       date: bankCategoryText(row.date) || null,
+      day: bankCategoryDayLabel(row.date),
       flagged: row.flagged === true,
       account: bankCategoryText(row.account) || null,
       state: mode === "set" ? (row.acknowledged === true ? "acknowledged" : "waiting") : null,
@@ -69650,7 +69696,7 @@ function bankCategoryCardModel(input = {}) {
     footer: oldBob
       ? { ...footer, hint: "update bob for one-key filing" }
       : footer,
-    progress: mode === "close" && input.progress ? { ...input.progress } : null,
+    progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
   };
 }
 
@@ -70182,9 +70228,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.pluginRef = options.plugin || null;
     this.mode = options.mode === "set" ? "set" : "close";
     this.context = options.context || null;
+    this.view = options.view || null;
     this.categories = Array.isArray(options.categories) ? options.categories : null;
     this.suggestion = options.suggestion || null;
     this.progress = options.progress || null;
+    this.reason = options.reason || (this.categories ? null : "loading…");
     this.highlightKey = null;
     this.didInteract = false;
     this.busy = false;
@@ -70192,6 +70240,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.closed = false;
     this.summary = null;
     this.lock = null;
+    this.liveRegion = null;
+    this.liveText = "";
+    this.reportGen = 0;
     this.chord = bankCategoryChordInit(options.openedWithCtrlEnter === true);
     this.onChoose = typeof options.onChoose === "function" ? options.onChoose : null;
     this.onMonth = typeof options.onMonth === "function" ? options.onMonth : null;
@@ -70209,6 +70260,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       this.modalEl?.setAttribute?.("aria-modal", "true");
       this.modalEl?.setAttribute?.("aria-label", "Bank Category card");
       this.contentEl?.addClass?.("bob-bank-category-dialog");
+      this.contentEl?.addClass?.("bob-bank-category-card");
       this.contentEl?.addClass?.("bob-key-card");
       this.contentEl?.addEventListener?.("click", this.clickListener);
       this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
@@ -70254,6 +70306,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       suggestion: this.suggestion,
       row,
       progress: this.progress,
+      reason: this.reason || (this.categories ? null : "loading…"),
+      path: this.context && this.context.path,
     });
     if (this.highlightKey === null) this.highlightKey = this.model.highlightKey;
     return this.model;
@@ -70268,12 +70322,14 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const cardRow = this.cardRow();
     const match = cardRow ? bankCategoryMatchJsonRow(cardRow, rows) : null;
     this.suggestion = match && match.suggestion ? match.suggestion : null;
+    this.reason = null;
     const model = bankCategoryCardModel({
       mode: this.mode,
       categories: this.categories,
       suggestion: this.suggestion,
       row: cardRow || {},
       progress: this.progress,
+      path: this.context && this.context.path,
     });
     this.highlightKey = model.highlightKey;
     this.model = model;
@@ -70293,6 +70349,16 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
     try { this.paint(); } catch (_) {}
+  }
+
+  setReason(reason) {
+    this.reason = typeof reason === "string" && reason ? reason : "categories unavailable";
+    try { this.paint(); } catch (_) {}
+  }
+
+  announce(text) {
+    this.liveText = typeof text === "string" ? text : "";
+    if (this.liveRegion) this.liveRegion.textContent = this.liveText;
   }
 
   showSummary(summary) {
@@ -70419,17 +70485,110 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     void doc;
   }
 
+  ensureLiveRegion(content, doc) {
+    if (this.liveRegion && this.liveRegion.parentNode === content) {
+      if (this.liveText && this.liveRegion.textContent !== this.liveText) {
+        this.liveRegion.textContent = this.liveText;
+      }
+      return this.liveRegion;
+    }
+    const node = bankCategoryUiEl(doc, "div", "bob-bank-category-live", this.liveText || "", {
+      role: "status", "aria-live": "polite", "aria-atomic": "true",
+    });
+    this.liveRegion = node;
+    if (node && content && typeof content.appendChild === "function") content.appendChild(node);
+    return node;
+  }
+
+  paintHeader(root, model) {
+    const header = model.header || {};
+    const row = bankCategoryUiAppend(root, "div", "bob-bank-category-header");
+    if (!row) return;
+    const amount = Number.isSafeInteger(header.cents) ? bankFormatCents(header.cents) : "";
+    if (amount) {
+      const amountClass = model.inflow
+        ? "bob-bank-category-amount is-inflow"
+        : "bob-bank-category-amount";
+      bankCategoryUiAppend(row, "span", amountClass, amount);
+    }
+    bankCategoryUiAppend(row, "span", "bob-bank-category-payee", header.payee || "Bank row");
+    const day = header.day || header.date;
+    if (day) bankCategoryUiAppend(row, "span", "bob-bank-category-day", day);
+    const chips = [];
+    if (header.flagged) chips.push("⚑ flagged");
+    if (header.account) chips.push(header.account);
+    if (chips.length) {
+      const chipRow = bankCategoryUiAppend(root, "div", "bob-bank-category-chips");
+      for (const chip of chips) {
+        bankCategoryUiAppend(chipRow, "span", "bob-bank-category-chip", chip);
+      }
+    }
+  }
+
+  paintProgress(root, model) {
+    if (this.mode === "set") {
+      const state = model.header && model.header.state === "acknowledged"
+        ? "✓ acknowledged"
+        : "waiting";
+      bankCategoryUiAppend(root, "p", "bob-bank-category-state", state);
+      return;
+    }
+    const progress = model.progress;
+    if (!progress) return;
+    const month = progress.month ? ` · ${progress.month}` : "";
+    bankCategoryUiAppend(root, "p", "bob-bank-category-progress",
+      `${progress.filed} of ${progress.total}${month}`);
+    const total = Number(progress.total);
+    const filed = Number(progress.filed);
+    if (Number.isFinite(total) && total > 0) {
+      const meter = bankCategoryUiAppend(root, "div", "bob-bank-category-meter", null, {
+        "aria-hidden": "true",
+      });
+      const width = Math.max(0, Math.min(100, (filed / total) * 100));
+      const fill = bankCategoryUiAppend(meter, "span", "bob-bank-category-meter-fill");
+      if (fill && fill.style) fill.style.width = `${width}%`;
+      else if (fill && typeof fill.setAttribute === "function") fill.setAttribute("style", `width: ${width}%`);
+    }
+  }
+
+  paintTile(grid, tile, selected, disabled) {
+    const attrs = {
+      type: "button",
+      "data-category-key": tile.key,
+      "aria-pressed": selected ? "true" : "false",
+    };
+    if (tile.hotkey) attrs["aria-keyshortcuts"] = tile.hotkey;
+    const button = bankCategoryUiAppend(grid, "button",
+      `bob-bank-category-tile${selected ? " is-highlighted" : ""}${tile.dimmed ? " is-dimmed" : ""}`,
+      null, attrs);
+    if (!button) return;
+    button.disabled = disabled;
+    if (tile.keycap) {
+      bankCategoryUiAppend(button, "kbd", "bob-bank-category-keycap", tile.keycap);
+    }
+    const label = `${tile.emoji ? `${tile.emoji} ` : ""}${tile.label || tile.key}`;
+    bankCategoryUiAppend(button, "span", "bob-bank-category-tile-label", label);
+    if (selected) bankCategoryUiAppend(button, "span", "bob-bank-category-enter", "↵");
+  }
+
   paint() {
     const content = this.contentEl;
     if (!content) return;
+    const live = this.liveRegion && this.liveRegion.parentNode === content ? this.liveRegion : null;
     try {
-      if (typeof content.empty === "function") content.empty();
-      else if (typeof content.replaceChildren === "function") content.replaceChildren();
-      else content.textContent = "";
+      if (typeof content.empty === "function") {
+        content.empty();
+        if (live && typeof content.appendChild === "function") content.appendChild(live);
+      } else if (typeof content.replaceChildren === "function") {
+        content.replaceChildren(...(live ? [live] : []));
+      } else {
+        content.textContent = "";
+      }
     } catch (_) {}
     const doc = content.ownerDocument || this.app?.document ||
       (typeof document !== "undefined" ? document : null);
-    const root = bankCategoryUiEl(doc, "section", "bob-bank-category bob-key-card", null, {
+    this.ensureLiveRegion(content, doc);
+    const root = bankCategoryUiEl(doc, "section", "bob-bank-category-card bob-key-card", null, {
       role: "dialog", "aria-modal": "true", "aria-label": "Bank Category card",
     });
     if (!root) return;
@@ -70441,40 +70600,29 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const model = this.currentModel();
     const title = bankCategoryUiAppend(root, "h2", "bob-bank-category-title bob-key-card-title", "Category");
     if (title) title.id = "bob-bank-category-title";
-    const header = model.header || {};
-    const payee = header.payee || "Bank row";
-    const amount = Number.isSafeInteger(header.cents) ? bankFormatCents(header.cents) : "";
-    bankCategoryUiAppend(root, "p", "bob-bank-category-payee", `${payee}${amount ? ` · ${amount}` : ""}`);
-    const meta = [header.date, header.account, header.flagged ? "⚑ flagged" : null,
-      this.mode === "set" ? (header.state === "acknowledged" ? "acknowledged" : "waiting") : null]
-      .filter(Boolean).join(" · ");
-    if (meta) bankCategoryUiAppend(root, "p", "bob-bank-category-meta", meta);
-    if (model.progress) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-progress", `Row ${model.progress.filed} of ${model.progress.total}`);
-    }
+    this.paintHeader(root, model);
+    this.paintProgress(root, model);
     if (model.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.hint, { role: "status" });
     if (this.waitingRefresh) {
       bankCategoryUiAppend(root, "p", "bob-bank-category-hint", "Refreshing suggestions…", { role: "status" });
     }
+    const disabled = this.busy || this.waitingRefresh;
     for (const sectionModel of Array.isArray(model.sections) ? model.sections : []) {
       const section = bankCategoryUiAppend(root, "section", "bob-bank-category-section");
       if (!section) continue;
       if (sectionModel.group) bankCategoryUiAppend(section, "h3", "bob-bank-category-group", sectionModel.group);
       const grid = bankCategoryUiAppend(section, "div", "bob-bank-category-tiles", null, { role: "group" });
       for (const tile of Array.isArray(sectionModel.tiles) ? sectionModel.tiles : []) {
-        const selected = tile.key === this.highlightKey;
-        const button = bankCategoryUiAppend(grid, "button",
-          `bob-bank-category-tile${selected ? " is-highlighted" : ""}${tile.dimmed ? " is-dimmed" : ""}`,
-          `${tile.hotkey ? `${tile.hotkey} · ` : ""}${tile.text || tile.label || tile.key}`,
-          { type: "button", "data-category-key": tile.key, "aria-pressed": selected ? "true" : "false" });
-        if (button) button.disabled = this.busy || this.waitingRefresh;
+        this.paintTile(grid, tile, tile.key === this.highlightKey, disabled);
       }
     }
     bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
     if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
-    const keys = this.mode === "close"
-      ? "↵ accept · letter choose · Space no category · Esc cancel"
-      : "↵ accept · letter choose · Space remove category · Esc cancel";
+    const keys = model.kind === "restricted"
+      ? (model.footer?.text || "␣ acknowledge · esc cancel")
+      : (this.mode === "close"
+        ? "↵ accept · letter choose · Space no category · Esc cancel"
+        : "↵ accept · letter choose · Space remove category · Esc cancel");
     bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
   }
 }
@@ -70595,19 +70743,59 @@ class BobLedgerToolsBankCategoryMixin {
       onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
     });
     modal.editor = activeEditor;
+    modal.view = view || modal.view;
     modal.session = session;
     modal.month = context.month;
     this.bankCategoryModal = modal;
     modal.open();
     if (cached) modal.setReport(cached);
+    const reportGen = modal.reportGen || 0;
     void Promise.resolve(this.apiBankRefresh({ command: "report", month: context.month }))
       .then((result) => {
-        if (this.bankCategoryModal === modal && !modal.didInteract && result && result.report) {
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return;
+        if (modal.reportGen !== reportGen) return;
+        if (result && result.report) {
           modal.setReport(result.report);
+          return;
+        }
+        if (!modal.categories) {
+          const message = result && result.error && result.error.message
+            ? result.error.message
+            : "categories unavailable";
+          modal.setReason(message);
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed || modal.categories) {
+          return;
+        }
+        if (modal.reportGen !== reportGen) return;
+        modal.setReason(error && error.message ? error.message : "categories unavailable");
+      });
     return true;
+  }
+
+  async bankCategorySaveNote(modal) {
+    try {
+      const path = modal && modal.context && modal.context.path;
+      if (!path) return;
+      const view = modal.view;
+      if (view && view.file && view.file.path === path && typeof view.save === "function") {
+        await view.save();
+        return;
+      }
+      const leaves = this.app && this.app.workspace &&
+        typeof this.app.workspace.getLeavesOfType === "function"
+        ? this.app.workspace.getLeavesOfType("markdown")
+        : [];
+      for (const leaf of Array.isArray(leaves) ? leaves : []) {
+        const leafView = leaf && leaf.view;
+        if (leafView && leafView.file && leafView.file.path === path &&
+            typeof leafView.save === "function") {
+          await leafView.save();
+        }
+      }
+    } catch (_) {}
   }
 
   bankCategoryCachedReport(month) {
@@ -70672,7 +70860,9 @@ class BobLedgerToolsBankCategoryMixin {
       new Notice(BANK_CATEGORY_WRITE_REFUSAL);
       return false;
     }
+    const saved = this.bankCategorySaveNote(modal);
     if (modal.mode === "set") {
+      await saved;
       modal.close();
       new Notice(plan.action === "noop" ? "Bank: row has no category" : "Bank: category updated");
       return true;
@@ -70686,11 +70876,24 @@ class BobLedgerToolsBankCategoryMixin {
     const scan = bankScanSource(modal.context.path, source);
     const next = bankCategoryNextWaiting({ scan, filedLine: plan.line });
     const month = modal.month;
-    let refresh = Promise.resolve(null);
-    try {
-      refresh = Promise.resolve(this.apiBankRefresh({ command: "report", month }));
-    } catch (_) {}
+    modal.reportGen = (modal.reportGen || 0) + 1;
+    const reportGen = modal.reportGen;
+    const refresh = Promise.resolve(saved).then(() => {
+      try {
+        return this.apiBankRefresh({ command: "report", month });
+      } catch (_) {
+        return null;
+      }
+    }).catch(() => null);
+    const filedCents = modal.context && modal.context.row && Number.isSafeInteger(modal.context.row.cents)
+      ? modal.context.row.cents
+      : null;
+    const amount = Number.isSafeInteger(filedCents) ? bankFormatCents(filedCents) : "";
+    const categoryLabel = categoryKey ? bankCategoryRowLabel(modal.categories, categoryKey) : null;
     if (!next) {
+      try {
+        modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount: null }));
+      } catch (_) {}
       await this.bankCategoryCompleteWalk(modal, session, refresh);
       return true;
     }
@@ -70701,6 +70904,13 @@ class BobLedgerToolsBankCategoryMixin {
       modal.close();
       return false;
     }
+    const nextCents = nextContext.row && Number.isSafeInteger(nextContext.row.cents)
+      ? nextContext.row.cents
+      : null;
+    const nextAmount = Number.isSafeInteger(nextCents) ? bankFormatCents(nextCents) : null;
+    try {
+      modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount }));
+    } catch (_) {}
     const landingCh = nextContext.token.payeeSpan ? nextContext.token.payeeSpan.start : 0;
     const filedCh = modal.context.token && modal.context.token.payeeSpan
       ? modal.context.token.payeeSpan.start
@@ -70730,11 +70940,14 @@ class BobLedgerToolsBankCategoryMixin {
       modal.busy = false;
     }
     if (this.bankCategoryModal !== modal || modal.closed) return true;
-    if (refreshResult && refreshResult.report) modal.setReport(refreshResult.report);
+    if (refreshResult && refreshResult.report && modal.reportGen === reportGen) {
+      modal.setReport(refreshResult.report);
+    }
     try { modal.paint(); } catch (_) {}
     if (!refreshResult) {
       void refresh.then((late) => {
-        if (this.bankCategoryModal === modal && !modal.didInteract && late && late.report) {
+        if (this.bankCategoryModal === modal && !modal.didInteract &&
+            modal.reportGen === reportGen && late && late.report) {
           modal.setReport(late.report);
         }
       }).catch(() => {});
@@ -122456,6 +122669,9 @@ try {
       bankCategoryHighlightKey,
       bankCategoryCardFooter,
       bankCategoryOldBob,
+      bankCategoryMonthLabel,
+      bankCategoryDayLabel,
+      bankCategoryAnnounceText,
       bankCategoryCardModel,
       bankCategoryResolveCardKey,
       bankCategoryMoveHighlight,

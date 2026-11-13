@@ -114,19 +114,59 @@ class BobLedgerToolsBankCategoryMixin {
       onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
     });
     modal.editor = activeEditor;
+    modal.view = view || modal.view;
     modal.session = session;
     modal.month = context.month;
     this.bankCategoryModal = modal;
     modal.open();
     if (cached) modal.setReport(cached);
+    const reportGen = modal.reportGen || 0;
     void Promise.resolve(this.apiBankRefresh({ command: "report", month: context.month }))
       .then((result) => {
-        if (this.bankCategoryModal === modal && !modal.didInteract && result && result.report) {
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed) return;
+        if (modal.reportGen !== reportGen) return;
+        if (result && result.report) {
           modal.setReport(result.report);
+          return;
+        }
+        if (!modal.categories) {
+          const message = result && result.error && result.error.message
+            ? result.error.message
+            : "categories unavailable";
+          modal.setReason(message);
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (this.bankCategoryModal !== modal || modal.didInteract || modal.closed || modal.categories) {
+          return;
+        }
+        if (modal.reportGen !== reportGen) return;
+        modal.setReason(error && error.message ? error.message : "categories unavailable");
+      });
     return true;
+  }
+
+  async bankCategorySaveNote(modal) {
+    try {
+      const path = modal && modal.context && modal.context.path;
+      if (!path) return;
+      const view = modal.view;
+      if (view && view.file && view.file.path === path && typeof view.save === "function") {
+        await view.save();
+        return;
+      }
+      const leaves = this.app && this.app.workspace &&
+        typeof this.app.workspace.getLeavesOfType === "function"
+        ? this.app.workspace.getLeavesOfType("markdown")
+        : [];
+      for (const leaf of Array.isArray(leaves) ? leaves : []) {
+        const leafView = leaf && leaf.view;
+        if (leafView && leafView.file && leafView.file.path === path &&
+            typeof leafView.save === "function") {
+          await leafView.save();
+        }
+      }
+    } catch (_) {}
   }
 
   bankCategoryCachedReport(month) {
@@ -191,7 +231,9 @@ class BobLedgerToolsBankCategoryMixin {
       new Notice(BANK_CATEGORY_WRITE_REFUSAL);
       return false;
     }
+    const saved = this.bankCategorySaveNote(modal);
     if (modal.mode === "set") {
+      await saved;
       modal.close();
       new Notice(plan.action === "noop" ? "Bank: row has no category" : "Bank: category updated");
       return true;
@@ -205,11 +247,24 @@ class BobLedgerToolsBankCategoryMixin {
     const scan = bankScanSource(modal.context.path, source);
     const next = bankCategoryNextWaiting({ scan, filedLine: plan.line });
     const month = modal.month;
-    let refresh = Promise.resolve(null);
-    try {
-      refresh = Promise.resolve(this.apiBankRefresh({ command: "report", month }));
-    } catch (_) {}
+    modal.reportGen = (modal.reportGen || 0) + 1;
+    const reportGen = modal.reportGen;
+    const refresh = Promise.resolve(saved).then(() => {
+      try {
+        return this.apiBankRefresh({ command: "report", month });
+      } catch (_) {
+        return null;
+      }
+    }).catch(() => null);
+    const filedCents = modal.context && modal.context.row && Number.isSafeInteger(modal.context.row.cents)
+      ? modal.context.row.cents
+      : null;
+    const amount = Number.isSafeInteger(filedCents) ? bankFormatCents(filedCents) : "";
+    const categoryLabel = categoryKey ? bankCategoryRowLabel(modal.categories, categoryKey) : null;
     if (!next) {
+      try {
+        modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount: null }));
+      } catch (_) {}
       await this.bankCategoryCompleteWalk(modal, session, refresh);
       return true;
     }
@@ -220,6 +275,13 @@ class BobLedgerToolsBankCategoryMixin {
       modal.close();
       return false;
     }
+    const nextCents = nextContext.row && Number.isSafeInteger(nextContext.row.cents)
+      ? nextContext.row.cents
+      : null;
+    const nextAmount = Number.isSafeInteger(nextCents) ? bankFormatCents(nextCents) : null;
+    try {
+      modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount }));
+    } catch (_) {}
     const landingCh = nextContext.token.payeeSpan ? nextContext.token.payeeSpan.start : 0;
     const filedCh = modal.context.token && modal.context.token.payeeSpan
       ? modal.context.token.payeeSpan.start
@@ -249,11 +311,14 @@ class BobLedgerToolsBankCategoryMixin {
       modal.busy = false;
     }
     if (this.bankCategoryModal !== modal || modal.closed) return true;
-    if (refreshResult && refreshResult.report) modal.setReport(refreshResult.report);
+    if (refreshResult && refreshResult.report && modal.reportGen === reportGen) {
+      modal.setReport(refreshResult.report);
+    }
     try { modal.paint(); } catch (_) {}
     if (!refreshResult) {
       void refresh.then((late) => {
-        if (this.bankCategoryModal === modal && !modal.didInteract && late && late.report) {
+        if (this.bankCategoryModal === modal && !modal.didInteract &&
+            modal.reportGen === reportGen && late && late.report) {
           modal.setReport(late.report);
         }
       }).catch(() => {});

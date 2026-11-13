@@ -129,7 +129,34 @@ test("highlight follows row category then suggestion; each footer variant", () =
   assert.equal(setModel.progress, null);
   const restricted = h.bankCategoryCardModel({ categories: null, row: row(), mode: "close", reason: "bob missing" });
   assert.equal(restricted.kind, "restricted");
+  assert.equal(restricted.reason, "bob missing");
+  assert.equal(restricted.hint, "bob missing");
   assert.match(restricted.footer.text, /acknowledge/);
+  const loading = h.bankCategoryCardModel({ categories: null, row: row(), mode: "close", reason: "loading…" });
+  assert.equal(loading.hint, "loading…");
+  const duplicated = h.bankCategoryCardModel({ categories: null, row: row(), mode: "close" });
+  assert.equal(duplicated.hint, "categories unavailable");
+  assert.doesNotMatch(duplicated.hint, /categories unavailable —/);
+  const progressed = h.bankCategoryCardModel({
+    categories: cats, row: row(), mode: "close",
+    progress: { filed: 2, total: 5, waiting: 3 },
+    path: "bank/2026-11.md",
+  });
+  assert.equal(progressed.progress.month, "November");
+  assert.equal(h.bankCategoryMonthLabel("bank/2026-07.md"), "July");
+  assert.equal(h.bankCategoryDayLabel("2026-11-12"), "Nov 12");
+  assert.equal(
+    h.bankCategoryAnnounceText({ amount: "$6.45", categoryLabel: "Coffee", nextAmount: "$12.90" }),
+    "Filed $6.45 as Coffee · next $12.90 waiting",
+  );
+  assert.equal(
+    h.bankCategoryAnnounceText({ amount: "$6.45", categoryLabel: null, nextAmount: "$12.90" }),
+    "Filed $6.45 · no category · next $12.90 waiting",
+  );
+  assert.equal(
+    h.bankCategoryAnnounceText({ amount: "$6.45", categoryLabel: "Coffee" }),
+    "Filed $6.45 as Coffee",
+  );
 });
 
 test("key table is case-insensitive; q/Esc cancel; chord and lock are pure state", () => {

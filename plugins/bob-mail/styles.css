@@ -132,3 +132,27 @@
 .bob-mail-send-empty {
   color: var(--text-muted);
 }
+
+.bob-mail-archive-banner {
+  display: inline-block;
+  margin-inline-start: 0.6rem;
+}
+
+.bob-mail-archive-unarchive {
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-smaller);
+  cursor: pointer;
+}
+
+.bob-mail-archive-unarchive:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+}
+
+.bob-mail-archive-unarchive:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

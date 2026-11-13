@@ -77,6 +77,30 @@ was and the notice shows Bob's message.
 - Bob Command Mode offers **Save this email to Bob Mail** under **FROM
   CLIPBOARD** when the clipboard contains a Gmail URL.
 
+## Archived mail
+
+When Bob archives a thread on task close, its mail note carries one
+`gmail_archived` timestamp plus a short Bob-owned banner above the first
+message card. The banner text stays readable with this plugin absent; with
+the plugin enabled, both Reading view and Live Preview enhance the trusted
+banner span with a **Move back to Inbox** button. The button runs one
+explicit `bob gmail unarchive -- <note>` call through `bob`, disables while
+the undo is pending, and reloads Bob's authoritative receipt state when the
+call finishes — including when Bob reports the note projection still needs
+repair. A second click while one undo is in flight is ignored.
+
+The tooltip names the archive date, the exact recorded message count, and
+the receipt label when Bob's offline snapshot is available. That snapshot is
+one coalesced `bob gmail list -a -f json` call, refreshed when mail notes
+or the archive journal change, after an undo completes, and when a mail
+note becomes active; the banner never spawns per-row processes or Gmail
+requests, and it never writes the vault itself. An unavailable or older
+`bob` shows the banner with a details-unavailable tooltip instead of
+guessed counts; older versions show the quiet notice
+**Update bob to use Bob Mail**. Only mail notes whose source carries Bob's
+exact receipt markers get the button — typed lookalikes and damaged spans
+stay inert text.
+
 ## Write and send email
 
 - **Bob Mail: New email** asks for To and Subject, creates the compose note

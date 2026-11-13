@@ -4,6 +4,8 @@
   "030-picker-modal.js",
   "040-task-modal.js",
   "045-compose.js",
+  "046-archive-banner.js",
   "050-plugin.js",
+  "055-plugin-archive-banner.js",
   "060-exports.js"
 ]

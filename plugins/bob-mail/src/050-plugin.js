@@ -167,6 +167,11 @@ class BobMailPlugin extends Plugin {
     } catch (error) {
       this.api = null;
     }
+    try {
+      this.setupMailArchiveBanner();
+    } catch (error) {
+      // The banner setup failure never blocks the mail commands.
+    }
     if (workspace && typeof workspace.onLayoutReady === "function") {
       workspace.onLayoutReady(() => {
         this.mailUpdateGmailOpenAvailability();
@@ -281,6 +286,11 @@ class BobMailPlugin extends Plugin {
   onunload() {
     for (const timer of this.mailPasteTimers || []) clearTimeout(timer);
     if (this.mailPasteTimers) this.mailPasteTimers.clear();
+    try {
+      this.teardownMailArchiveBanner();
+    } catch (error) {
+      // Banner teardown is best effort.
+    }
   }
 
   mailBobResolution() {

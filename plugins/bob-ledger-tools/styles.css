@@ -9206,7 +9206,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bob-projects-children-toggle, .bob-projects-closed-toggle, .bob-projects-action {
+.bob-projects-children-toggle, .bob-projects-closed-toggle, .bob-projects-action, .bob-projects-copy {
   appearance: none;
   height: auto;
   margin: 0;
@@ -9230,7 +9230,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-projects-status { display: inline-flex; gap: 0.4em; flex-wrap: wrap; font-size: 0.85em; font-weight: normal; }
 .bob-projects-status-hint { color: var(--text-muted); white-space: pre-line; overflow-wrap: anywhere; }
 .bob-projects-action:disabled { opacity: 0.6; cursor: wait; }
-.bob-projects-chips > :focus-visible, .bob-projects-action:focus-visible,
+.bob-projects-chips > :focus-visible, .bob-projects-action:focus-visible, .bob-projects-copy:focus-visible,
 .bob-projects-closed-toggle:focus-visible, .bob-projects-children-toggle:focus-visible,
 .bob-projects-criterion:focus-visible {
   outline: 2px solid var(--interactive-accent); outline-offset: 2px;

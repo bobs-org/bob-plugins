@@ -229,7 +229,7 @@ function projectsPaintClosed(host, closedRows, context) {
 }
 
 function projectsPaintStatus(host, model, handlers) {
-  return albumReplaceChrome(host, PROJECTS_STATUS_CLASS, model.message || model.action ? JSON.stringify(model) : "", (node, doc) => {
+  return albumReplaceChrome(host, PROJECTS_STATUS_CLASS, model.message || model.action || model.copy ? JSON.stringify(model) : "", (node, doc) => {
     node.setAttribute("role", "status");
     if (model.message) {
       albumAppendText(doc, node, "span", "bob-projects-status-hint", model.message);
@@ -246,6 +246,13 @@ function projectsPaintStatus(host, model, handlers) {
             handlers[action.kind]();
           }
         });
+      }
+    }
+    if (model.copy) {
+      const button = albumAppendText(doc, node, "button", "bob-projects-copy", model.copy.label, model.copy.hint);
+      if (button) {
+        button.setAttribute("data-focus-key", "copy");
+        notebookBindAction(button, () => handlers.copy());
       }
     }
   });

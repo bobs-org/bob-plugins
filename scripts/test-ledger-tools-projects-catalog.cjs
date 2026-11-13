@@ -728,6 +728,11 @@ test("Reading cards match aliases and paths, skip group rows and unrelated stems
   assert.match(header.textContent, /Projects/);
   assert.match(header.querySelector(".bob-projects-tally-full").textContent, /6 open · 2 blocked · 3 closed/);
   assert.equal(header.querySelector(".bob-projects-tally-short").getAttribute("aria-label"), header.querySelector(".bob-projects-tally-full").getAttribute("aria-label"));
+  f.plugin.apiProjectsCopyStarter = (sourcePath) => { f.plugin.copied = sourcePath; return Promise.resolve({ ok: true }); };
+  const copy = f.callout.querySelector(".bob-projects-copy");
+  assert.equal(copy.textContent, "＋ project");
+  copy.fire("click");
+  assert.equal(f.plugin.copied, "body.md");
   assert.equal(f.callout.querySelector(".callout-content").firstChild.className, "bob-projects-header");
   assert.equal(f.writes.length, 0);
   assert.ok(f.doc.nodes.every((node) => node.innerHTMLWrites.length === 0));

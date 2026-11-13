@@ -61442,6 +61442,7 @@ function projectsCardIssueHint(issues) {
 
 function projectsCardStatus(state, sourcePath) {
   const catalog = projectsCardHost(state, sourcePath);
+  const hostEntry = projectsCardHostEntry(state, sourcePath);
   const issues = catalog && Array.isArray(catalog.issues) ? catalog.issues : [];
   const findings = state && state.report && Array.isArray(state.report.findings) ? state.report.findings : [];
   const messages = [];
@@ -61490,7 +61491,10 @@ function projectsCardStatus(state, sourcePath) {
       };
     }
   }
-  return { message: messages.join("\n"), action };
+  const copy = state && state.report && (catalog || (hostEntry && Array.isArray(hostEntry.children) && hostEntry.children.length > 0))
+    ? { label: "＋ project", hint: `Copy @${projectsCardHostIdentity(catalog, sourcePath)}^ to start a project capture.` }
+    : null;
+  return { message: messages.join("\n"), action, copy };
 }
 
 function projectsCardSourceRegions(text) {
@@ -61798,7 +61802,7 @@ function projectsPaintClosed(host, closedRows, context) {
 }
 
 function projectsPaintStatus(host, model, handlers) {
-  return albumReplaceChrome(host, PROJECTS_STATUS_CLASS, model.message || model.action ? JSON.stringify(model) : "", (node, doc) => {
+  return albumReplaceChrome(host, PROJECTS_STATUS_CLASS, model.message || model.action || model.copy ? JSON.stringify(model) : "", (node, doc) => {
     node.setAttribute("role", "status");
     if (model.message) {
       albumAppendText(doc, node, "span", "bob-projects-status-hint", model.message);
@@ -61815,6 +61819,13 @@ function projectsPaintStatus(host, model, handlers) {
             handlers[action.kind]();
           }
         });
+      }
+    }
+    if (model.copy) {
+      const button = albumAppendText(doc, node, "button", "bob-projects-copy", model.copy.label, model.copy.hint);
+      if (button) {
+        button.setAttribute("data-focus-key", "copy");
+        notebookBindAction(button, () => handlers.copy());
       }
     }
   });

@@ -417,6 +417,7 @@ function projectsCardIssueHint(issues) {
 
 function projectsCardStatus(state, sourcePath) {
   const catalog = projectsCardHost(state, sourcePath);
+  const hostEntry = projectsCardHostEntry(state, sourcePath);
   const issues = catalog && Array.isArray(catalog.issues) ? catalog.issues : [];
   const findings = state && state.report && Array.isArray(state.report.findings) ? state.report.findings : [];
   const messages = [];
@@ -465,7 +466,10 @@ function projectsCardStatus(state, sourcePath) {
       };
     }
   }
-  return { message: messages.join("\n"), action };
+  const copy = state && state.report && (catalog || (hostEntry && Array.isArray(hostEntry.children) && hostEntry.children.length > 0))
+    ? { label: "＋ project", hint: `Copy @${projectsCardHostIdentity(catalog, sourcePath)}^ to start a project capture.` }
+    : null;
+  return { message: messages.join("\n"), action, copy };
 }
 
 function projectsCardSourceRegions(text) {

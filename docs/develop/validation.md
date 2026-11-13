@@ -65,6 +65,26 @@ scripts/obsidian-album-ui-e2e.cjs -e /snap/bin/obsidian -r /tmp/album-schema.jso
 Run the writer matrix with `BOB_BIN=/path/to/bob node
 scripts/obsidian-album-schema-writer-e2e.cjs --self-test`.
 
+The Projects UI offline wrapper is part of `npm test`; it validates the fixture
+and probes without launching Obsidian. For acceptance, build Bob from the
+current bob-cli checkout and provide both `BOB_BIN` and `BOB_CLI_DIR` so the
+runner can verify and record the binary's source checkout. It seeds an isolated
+Git vault, invokes real projects JSON commands, opens only that vault in an
+owned Obsidian process/profile, and records a JSON report and screenshots. Run
+the real walkthrough under an independent Xvfb display:
+
+```bash
+BOB_BIN=<bob-cli-cargo-target>/debug/bob \
+BOB_CLI_DIR=<bob-cli-checkout> \
+xvfb-run -a node scripts/obsidian-projects-ui-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/projects-ui-e2e.json -o /tmp/projects-ui-e2e-shots
+```
+
+Review every screenshot and the report's checks, note-byte hashes, and logged
+Bob sync/list calls. The offline self-test is fixture coverage only; it does
+not count as real Obsidian acceptance.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

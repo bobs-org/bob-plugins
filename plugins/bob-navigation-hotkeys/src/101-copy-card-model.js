@@ -724,7 +724,7 @@ function buildCopyCardBuiltinRow(spec, values, taskState) {
       });
     }
     const blockId = copyCardAvailableValue(values.block_id);
-    const value = blockId ? `^${blockId}` : null;
+    const value = blockId || null;
     if (!value) {
       const reason = "none yet · Ctrl+6 on the task line names one";
       return buildCopyCardRow({

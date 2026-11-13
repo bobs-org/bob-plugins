@@ -426,7 +426,7 @@ test("model: Bryan's Task ref template renders the exact clipboard string", () =
   assert.equal(row(model, "absolute").value, "/Users/bbugyi/bob/bob.md");
   assert.equal(row(model, "file").value, "bob.md");
   assert.equal(row(model, "note").value, "bob");
-  assert.equal(row(model, "block-id").value, "^bank-records");
+  assert.equal(row(model, "block-id").value, "bank-records");
   const taskRef = row(model, "template-1");
   assert.equal(taskRef.label, "Task ref");
   assert.equal(taskRef.key, "t");
@@ -480,7 +480,7 @@ test("model: no base path dims path rows and defaults to File name", () => {
   assert.equal(row(model, "template-1").reason, "needs an absolute vault path");
 });
 
-test("model: TASK group hidden for none, dimmed for no-id, I copies ^id", () => {
+test("model: TASK group hidden for none, dimmed for no-id, I copies the bare ID", () => {
   const noneModel = bryanModel({ task: { state: "none" } });
   assert.equal(row(noneModel, "block-id"), null);
   assert.equal(row(noneModel, "template-1"), null);
@@ -508,8 +508,10 @@ test("model: TASK group hidden for none, dimmed for no-id, I copies ^id", () => 
   assert.equal(noId.task.title, "Add event note to the recruiter Google event");
 
   const ready = bryanModel();
-  assert.equal(row(ready, "block-id").value, "^bank-records");
-  assert.equal(row(ready, "block-id").state, "ready");
+  const readyId = row(ready, "block-id");
+  assert.equal(readyId.value, "bank-records");
+  assert.equal(readyId.preview, readyId.value);
+  assert.equal(readyId.state, "ready");
 });
 
 test("model: path previewParts split at the final slash", () => {

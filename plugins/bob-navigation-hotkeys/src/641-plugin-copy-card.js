@@ -155,6 +155,6 @@ class BobNavigationHotkeysCopyCardMixin {
       new Notice("This task has no block ID yet · Ctrl+6 on the task line names one");
       return false;
     }
-    return this.writeTextToClipboard(`^${task.blockId}`, "block ID");
+    return this.writeTextToClipboard(task.blockId, "block ID");
   }
 }

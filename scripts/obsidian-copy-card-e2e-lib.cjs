@@ -101,10 +101,10 @@ function expectedValues(vaultDir, homeDir) {
     absolute,
     fileName: NOTE,
     noteName: path.basename(NOTE, path.extname(NOTE)),
-    blockId: "^" + TASKS.id.blockId,
+    blockId: TASKS.id.blockId,
     taskRef: "the ^" + TASKS.id.blockId + " task in the " + compact + " file",
     noteLink: "[[" + path.basename(NOTE, path.extname(NOTE)) + "]]",
-    closedBlockId: "^" + TASKS.closed.blockId,
+    closedBlockId: TASKS.closed.blockId,
   });
 }
 

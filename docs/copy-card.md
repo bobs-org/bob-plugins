@@ -18,8 +18,10 @@ and copying never writes the vault.
 | `A` | Absolute path | `/home/alex/bob/bob.md` |
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
-| `I` | Block ID (task group) | `^bank-records` |
+| `I` | Block ID (task group) | `bank-records` |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
+
+A template like `^{block_id}` copies the caret form for anyone who wants it.
 
 `P A F N I` are reserved even when their row is hidden, and `q` is reserved
 for closing, so a key never changes meaning. `Esc`, `q`, and `Ctrl+[` close
@@ -43,8 +45,8 @@ The palette `yank-*` commands (`yank-absolute-path-tilde`,
 `yank-absolute-path`, `yank-basename`, `yank-basename-without-extension`,
 plus the kept `yank-parent-directory` and `yank-relative-path`) report the
 copied value, and `yank-block-id` (command
-`bob-navigation-hotkeys:yank-block-id`, no hotkey) copies `^id` for the
-cursor's owning task.
+`bob-navigation-hotkeys:yank-block-id`, no hotkey) copies the bare block
+ID (`id`) for the cursor's owning task, not `^id`.
 
 ## Which task
 

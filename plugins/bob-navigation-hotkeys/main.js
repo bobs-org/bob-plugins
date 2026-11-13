@@ -13542,7 +13542,7 @@ function buildCopyCardBuiltinRow(spec, values, taskState) {
       });
     }
     const blockId = copyCardAvailableValue(values.block_id);
-    const value = blockId ? `^${blockId}` : null;
+    const value = blockId || null;
     if (!value) {
       const reason = "none yet · Ctrl+6 on the task line names one";
       return buildCopyCardRow({
@@ -102310,7 +102310,7 @@ class BobNavigationHotkeysCopyCardMixin {
       new Notice("This task has no block ID yet · Ctrl+6 on the task line names one");
       return false;
     }
-    return this.writeTextToClipboard(`^${task.blockId}`, "block ID");
+    return this.writeTextToClipboard(task.blockId, "block ID");
   }
 }
 // ---- src/650-plugin-move-commit.js ----

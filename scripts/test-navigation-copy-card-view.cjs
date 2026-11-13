@@ -367,7 +367,7 @@ test("snapshot: the card copies the frozen file after the active file switches",
     const pathRow = modal.copyCardModel.rows.find((entry) => entry.id === "path");
     const blockRow = modal.copyCardModel.rows.find((entry) => entry.id === "block-id");
     assert.equal(pathRow.value, "~/bob/a.md");
-    assert.equal(blockRow.value, "^ship-a");
+    assert.equal(blockRow.value, "ship-a");
     assert.equal(modal.copyCardModel.task.state, "ready");
 
     const switchToB = () => {
@@ -388,7 +388,7 @@ test("snapshot: the card copies the frozen file after the active file switches",
     );
     assert.equal(
       modal.copyCardModel.rows.find((entry) => entry.id === "block-id").value,
-      "^ship-a",
+      "ship-a",
     );
     modal.handleCopyCardKey(keyEvent("p"));
     await nextTurn();
@@ -412,12 +412,12 @@ test("snapshot: the card copies the frozen file after the active file switches",
     switchToB();
     assert.equal(
       second.copyCardModel.rows.find((entry) => entry.id === "block-id").value,
-      "^ship-a",
+      "ship-a",
     );
     second.handleCopyCardKey(keyEvent("i"));
     await nextTurn();
     await nextTurn();
-    assert.deepEqual(writes, ["^ship-a"]);
+    assert.deepEqual(writes, ["ship-a"]);
     assert.equal(second.isOpen, false);
   } finally {
     if (previousXdg === undefined) {
@@ -595,7 +595,7 @@ test("openCopyCard: reading view, multiple cursors, and no editor yield no TASK 
   }
 });
 
-test("yank-block-id copies ^id, and reports no task or no id", async () => {
+test("yank-block-id copies the bare id, and reports no task or no id", async () => {
   global.navigator = global.navigator || {};
   const writes = [];
   global.navigator.clipboard = {
@@ -616,8 +616,8 @@ test("yank-block-id copies ^id, and reports no task or no id", async () => {
   notices.length = 0;
   const ok = await plugin.yankTaskBlockId();
   assert.equal(ok, true);
-  assert.deepEqual(writes, ["^ship"]);
-  assert.match(notices.at(-1), /Copied \^ship/);
+  assert.deepEqual(writes, ["ship"]);
+  assert.match(notices.at(-1), /Copied ship\b/);
 
   writes.length = 0;
   notices.length = 0;

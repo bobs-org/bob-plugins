@@ -270,7 +270,7 @@ async function withFakeObserver(run) {
   }
 }
 
-test("strip then badge hosts land on day and period fences, never on parts or embeds", async () => {
+test("strip, badge, and period hosts land on period fences; day fences keep two", async () => {
   await withMissingConfig(async () => {
     const plugin = makePlugin();
     try {
@@ -284,13 +284,16 @@ test("strip then badge hosts land on day and period fences, never on parts or em
       ];
       for (const [language, sourcePath, source] of cases) {
         const { el } = mount(plugin, language, sourcePath, source);
-        assert.equal(el.children.length, 2, sourcePath);
+        const hasPeriodPanel = language === "bob-stats-strip" && !/\/\d{8}\.md$/.test(sourcePath);
+        assert.equal(el.children.length, hasPeriodPanel ? 3 : 2, sourcePath);
         assert.match(hostClasses(el)[0], /bob-stats-strip-host|bob-day-strip/);
         assert.equal(hostClasses(el)[1], "bob-bank-badge-host");
+        if (hasPeriodPanel) assert.equal(hostClasses(el)[2], "bob-bank-period-host");
         const record = stripRecord(plugin, el);
         assert.ok(record, sourcePath);
         assert.equal(record.el, el.children[0]);
         assert.equal(record.badgeHost, el.children[1]);
+        assert.equal(record.periodHost || null, hasPeriodPanel ? el.children[2] : null);
       }
       const table = mount(plugin, "bob-period-parts", "2026/2026-Q4.md");
       assert.equal(table.el.querySelector(".bob-bank-badge-host"), null);
@@ -337,6 +340,10 @@ test("each strip kind fetches the matching bank report args", async () => {
       assert.ok(keys.includes("bank report -p 2026-Q4 -s -f json"), keys.join(" | "));
       assert.ok(keys.includes("bank report -p 2026 -s -f json"), keys.join(" | "));
       assert.ok(keys.includes("bank report -p all -s -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p 2026-W46 -s -c -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p 2026-Q4 -s -c -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p 2026 -s -c -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p all -s -c -f json"), keys.join(" | "));
     } finally {
       plugin.onunload();
     }
@@ -374,14 +381,19 @@ test("older bob -p refusals hide the host and warn once", async () => {
     console.warn = (message) => warns.push(String(message));
     const plugin = makePlugin({
       spawn: (args) => {
-        if (args.includes("-p")) {
+        if (args.includes("-c")) {
           return {
             ok: false,
             code: "bad-json",
             message: "bob bank report returned output that is not JSON.",
-            detail: "error: unexpected argument '-p' found",
+            detail: "error: unexpected argument '-c' found",
             exitCode: 2,
           };
+        }
+        const periodIndex = args.indexOf("-p");
+        if (periodIndex >= 0) {
+          const id = args[periodIndex + 1];
+          return { ok: true, report: reportFor(/^\d{4}-Q/.test(id) ? "quarter" : "year", id) };
         }
         return { ok: true, report: reportFor("week", "2026-W46") };
       },
@@ -390,11 +402,12 @@ test("older bob -p refusals hide the host and warn once", async () => {
       const quarter = mount(plugin, "bob-stats-strip", "2026/2026-Q4.md");
       const year = mount(plugin, "bob-stats-strip", "2026.md");
       await drain();
-      assert.equal(quarter.el.querySelector(".bob-bank-badge"), null);
-      assert.equal(year.el.querySelector(".bob-bank-badge"), null);
-      assert.equal(quarter.el.querySelector(".bob-bank-badge-unavailable"), null);
+      assert.ok(quarter.el.querySelector(".bob-bank-badge"), "the badge remains available because -p works");
+      assert.ok(year.el.querySelector(".bob-bank-badge"), "the badge remains available because -p works");
+      assert.equal(quarter.el.querySelector(".bob-bank-period"), null);
+      assert.equal(year.el.querySelector(".bob-bank-period"), null);
       assert.equal(warns.length, 1);
-      assert.match(warns[0], /bank report -p/);
+      assert.match(warns[0], /bank report -c/);
     } finally {
       console.warn = original;
       plugin.onunload();
@@ -439,6 +452,7 @@ test("hidden fences subscribe once they become visible without an observer", asy
         const fenceEl = record.fenceEl || record.el;
         // Simulate a hidden-at-mount fence that never subscribed.
         plugin.bankReleaseFenceBadge(record, { keepHost: true });
+        plugin.bankReleaseFencePeriod(record, { keepHost: true });
         plugin.__spawns.length = 0;
         fenceEl.isShown = () => shown;
         plugin.periodStripCheckAll();
@@ -448,8 +462,10 @@ test("hidden fences subscribe once they become visible without an observer", asy
         shown = true;
         plugin.periodStripCheckAll();
         await drain();
-        const w46 = plugin.__spawns.filter((args) => args.includes("2026-W46"));
-        assert.equal(w46.length, 1, "exactly one W46 bank report request");
+        const badgeW46 = plugin.__spawns.filter((args) => args.includes("-w") && args.includes("2026-W46"));
+        const panelW46 = plugin.__spawns.filter((args) => args.includes("-p") && args.includes("-c") && args.includes("2026-W46"));
+        assert.equal(badgeW46.length, 1, "exactly one badge W46 request");
+        assert.equal(panelW46.length, 1, "exactly one independent chart W46 request");
         const before = plugin.__spawns.length;
         plugin.periodStripCheckAll();
         await drain();

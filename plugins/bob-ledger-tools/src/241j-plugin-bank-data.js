@@ -157,6 +157,7 @@ class BobLedgerToolsBankDataMixin {
         year: opts.year,
         period: opts.period,
         summary: opts.summary === true,
+        charts: opts.charts === true,
       });
     }
     if (fetches.length === 0 && (opts.month || opts.date || opts.day)) {
@@ -529,6 +530,9 @@ class BobLedgerToolsBankDataMixin {
     try {
       const vault = this.app && this.app.vault;
       if (vault && typeof vault.on === "function") {
+        // The bank preference journal is under the hidden `.bob` directory;
+        // do not rely on vault events for it. Focus and visibility revalidation
+        // below refreshes subscriptions after another host changes that journal.
         for (const event of ["create", "modify", "delete", "rename"]) {
           this.registerEvent(vault.on(event, (file, oldPath) => this.bankHandleFileEvent(file, oldPath)));
         }

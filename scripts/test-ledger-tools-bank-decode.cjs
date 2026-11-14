@@ -56,7 +56,10 @@ test("bank argv is keyed by command and exact flags", () => {
   assert.deepEqual(bankBuildArgs({ command: "report", period: "all", summary: true }), [
     "bank", "report", "-p", "all", "-s", "-f", "json",
   ]);
-  assert.equal(BANK_CACHE_SIZE, 24);
+  assert.deepEqual(bankBuildArgs({ command: "report", period: "2026-W46", summary: true, charts: true }), [
+    "bank", "report", "-p", "2026-W46", "-s", "-c", "-f", "json",
+  ]);
+  assert.equal(BANK_CACHE_SIZE, 32);
   assert.equal(
     bankCacheKey(bankBuildArgs({ command: "report", month: "2026-10" })),
     JSON.stringify(["bank", "report", "-m", "2026-10", "-f", "json"]),

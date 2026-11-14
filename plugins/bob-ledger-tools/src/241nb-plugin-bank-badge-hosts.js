@@ -11,7 +11,7 @@ function bankBadgeCopyOwnerDocument(from, node) {
 }
 
 class BobLedgerToolsBankBadgeHostsMixin {
-  bankBadgeAttachFenceHosts(fenceEl) {
+  bankBadgeAttachFenceHosts(fenceEl, options = {}) {
     if (!fenceEl) return null;
     try {
       if (typeof fenceEl.empty === "function") fenceEl.empty();
@@ -31,14 +31,26 @@ class BobLedgerToolsBankBadgeHostsMixin {
     const doc = statsDocFor(fenceEl);
     const stripHost = bankBadgeCopyOwnerDocument(fenceEl, statsEl(doc, "div", { class: "bob-stats-strip-host" }));
     const badgeHost = bankBadgeCopyOwnerDocument(fenceEl, statsEl(doc, "div", { class: "bob-bank-badge-host" }));
-    if (!stripHost || !badgeHost || typeof fenceEl.appendChild !== "function") return null;
+    const periodKind = options.periodKind;
+    const periodId = options.periodId;
+    const periodStart = options.period === true ? bankBadgePeriodStart(periodKind, periodId) : null;
+    const today = typeof this.bankBadgeLocalToday === "function" ? this.bankBadgeLocalToday() : bankLocalDate();
+    const futurePeriod = Boolean(periodStart && today && periodStart > today);
+    const attachPeriod = options.period === true
+      && ["week", "quarter", "year", "all", "all_time"].includes(periodKind)
+      && !futurePeriod;
+    const periodHost = attachPeriod
+      ? bankBadgeCopyOwnerDocument(fenceEl, statsEl(doc, "div", { class: "bob-bank-period-host" }))
+      : null;
+    if (!stripHost || !badgeHost || (attachPeriod && !periodHost) || typeof fenceEl.appendChild !== "function") return null;
     try {
       fenceEl.appendChild(stripHost);
       fenceEl.appendChild(badgeHost);
+      if (periodHost) fenceEl.appendChild(periodHost);
     } catch (error) {
       return null;
     }
-    return { stripHost, badgeHost };
+    return { stripHost, badgeHost, periodHost };
   }
 
   bankBadgeFenceIsVisible(record) {
@@ -65,6 +77,11 @@ class BobLedgerToolsBankBadgeHostsMixin {
       this.bankSyncFenceBadge(record);
     } catch (error) {
       // Badge subscribe is best-effort.
+    }
+    try {
+      if (typeof this.bankSyncFencePeriod === "function") this.bankSyncFencePeriod(record);
+    } catch (error) {
+      // Period-chart subscribe is best-effort and independent of the badge.
     }
   }
 

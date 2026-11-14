@@ -542,6 +542,9 @@ class BobLedgerToolsPeriodStripMixin {
           if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
             this.bankSyncFenceBadge(record);
           }
+          if (record.periodHost && typeof this.bankSyncFencePeriod === "function") {
+            this.bankSyncFencePeriod(record);
+          }
         } catch (error) {
           // Badge retry is best-effort and never triggers a strip fetch.
         }
@@ -562,6 +565,9 @@ class BobLedgerToolsPeriodStripMixin {
       try {
         if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
           this.bankSyncFenceBadge(record);
+        }
+        if (record.periodHost && typeof this.bankSyncFencePeriod === "function") {
+          this.bankSyncFencePeriod(record);
         }
       } catch (error) {
         // Badge retry is best-effort and never triggers a strip fetch.
@@ -666,6 +672,7 @@ class BobLedgerToolsPeriodStripMixin {
           el: stripEl,
           fenceEl: el,
           badgeHost: hosts ? hosts.badgeHost : null,
+          periodHost: null,
           badgeKind: "day",
           badgeId: day,
           day,
@@ -709,13 +716,14 @@ class BobLedgerToolsPeriodStripMixin {
       if (!this.periodStripCanSpawn()) return;
       const isTable = surface === "table";
       const hosts = !isTable && typeof this.bankBadgeAttachFenceHosts === "function"
-        ? this.bankBadgeAttachFenceHosts(el)
+        ? this.bankBadgeAttachFenceHosts(el, { period: true, periodKind: parsed.kind, periodId: parsed.id })
         : null;
       const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
       const record = {
         el: stripEl,
         fenceEl: el,
         badgeHost: hosts ? hosts.badgeHost : null,
+        periodHost: hosts ? hosts.periodHost : null,
         badgeKind: parsed.kind,
         badgeId: parsed.id,
         periodId: parsed.id,
@@ -887,6 +895,11 @@ class BobLedgerToolsPeriodStripMixin {
           if (typeof this.bankReleaseFenceBadge === "function") this.bankReleaseFenceBadge(record);
         } catch (error) {
           // Badge release is best-effort.
+        }
+        try {
+          if (typeof this.bankReleaseFencePeriod === "function") this.bankReleaseFencePeriod(record);
+        } catch (error) {
+          // Period-chart release is best-effort.
         }
       }
       this.periodStripViewsStore().delete(record);

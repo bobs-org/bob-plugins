@@ -87,6 +87,9 @@ function bankBadgePaint(host, model, handlers = {}) {
 class BobLedgerToolsBankBadgeMixin {
   setupBankBadge() {
     this.bankBadgeConfigLastEnabled = this.bankBadgeConfigEnabled();
+    this.bankPeriodConfigLastEnabled = typeof this.bankPeriodConfigEnabled === "function"
+      ? this.bankPeriodConfigEnabled()
+      : true;
     this.bankBadgeTimer = null;
     this.bankBadgeHostsStore();
     try {
@@ -145,8 +148,14 @@ class BobLedgerToolsBankBadgeMixin {
   bankBadgeCheckConfig() {
     try {
       const enabled = this.bankBadgeConfigEnabled();
-      if (enabled === this.bankBadgeConfigLastEnabled) return false;
+      const periodEnabled = typeof this.bankPeriodConfigEnabled === "function"
+        ? this.bankPeriodConfigEnabled()
+        : true;
+      const changed = enabled !== this.bankBadgeConfigLastEnabled
+        || periodEnabled !== this.bankPeriodConfigLastEnabled;
       this.bankBadgeConfigLastEnabled = enabled;
+      this.bankPeriodConfigLastEnabled = periodEnabled;
+      if (!changed) return false;
       this.bankRefreshBadgeHosts();
       return true;
     } catch (error) {
@@ -344,6 +353,7 @@ class BobLedgerToolsBankBadgeMixin {
         if (this.periodStripViews instanceof Set) {
           for (const record of Array.from(this.periodStripViews)) {
             try { this.bankSyncFenceBadge(record); } catch (error) {}
+            try { if (typeof this.bankSyncFencePeriod === "function") this.bankSyncFencePeriod(record); } catch (error) {}
           }
         }
       }
@@ -375,6 +385,9 @@ class BobLedgerToolsBankBadgeMixin {
   }
 
   teardownBankBadge() {
+    if (typeof this.teardownBankPeriodHosts === "function") {
+      try { this.teardownBankPeriodHosts(); } catch (error) {}
+    }
     if (this.planBlockViews instanceof Set) {
       for (const view of this.planBlockViews) this.bankReleasePlanHost(view);
     }
@@ -397,6 +410,7 @@ class BobLedgerToolsBankBadgeMixin {
     }
     this.bankBadgeTimer = null;
     this.bankBadgeConfigLastEnabled = null;
+    this.bankPeriodConfigLastEnabled = null;
     this.bankBadgeOlderBobWarned = null;
   }
 }

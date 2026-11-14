@@ -10080,6 +10080,74 @@ function freshnessFooterPaintGroups(container, groups) {
   }
 }
 
+function freshnessFooterPaintBankDue(parts, view) {
+  if (!parts || !parts.due) {
+    return;
+  }
+  const dueText = view && view.dueText ? String(view.dueText) : "";
+  const scopeWord = view && view.scope === "waiting"
+    ? "WAITING"
+    : (view && view.scope === "all" ? "ALL" : "");
+  let rest = dueText;
+  if (scopeWord && dueText.startsWith(scopeWord)) {
+    rest = dueText.slice(scopeWord.length);
+  }
+  try {
+    if (typeof parts.due.empty === "function") {
+      parts.due.empty();
+    } else if ("textContent" in parts.due) {
+      parts.due.textContent = "";
+    }
+  } catch (error) {
+    // Rebuild below.
+  }
+  const scopeNode = freshnessFooterCreateChild(parts.due, "span", "bob-freshness-scope");
+  freshnessFooterSetText(scopeNode, scopeWord);
+  const restNode = freshnessFooterCreateChild(parts.due, "span", "bob-freshness-due-rest");
+  freshnessFooterSetText(restNode, rest);
+  try {
+    parts.due.text = dueText;
+  } catch (error) {
+    // Fake DOM width probes read `.text`; live DOM uses the child spans.
+  }
+}
+
+function freshnessFooterPaintBankDetail(parts, detailText, compactText, inflow) {
+  if (!parts || !parts.detail) {
+    return;
+  }
+  const full = detailText == null ? "" : String(detailText);
+  const amount = compactText == null ? "" : String(compactText);
+  let payee = "";
+  if (amount && full.startsWith(amount)) {
+    payee = full.slice(amount.length).replace(/^\s+/, "");
+  } else if (full && full !== amount) {
+    payee = full;
+  }
+  try {
+    if (typeof parts.detail.empty === "function") {
+      parts.detail.empty();
+    } else if ("textContent" in parts.detail) {
+      parts.detail.textContent = "";
+    }
+  } catch (error) {
+    // Rebuild below.
+  }
+  const amountNode = freshnessFooterCreateChild(parts.detail, "span", "bob-freshness-amount");
+  freshnessFooterSetText(amountNode, amount || (payee ? "" : full));
+  freshnessFooterToggleClass(amountNode, "bob-freshness-inflow", Boolean(inflow));
+  if (payee) {
+    const payeeNode = freshnessFooterCreateChild(parts.detail, "span", "bob-freshness-payee");
+    freshnessFooterSetText(payeeNode, amount ? ` ${payee}` : payee);
+  }
+  freshnessFooterToggleClass(parts.detail, "bob-freshness-inflow", false);
+  try {
+    parts.detail.text = full;
+  } catch (error) {
+    // Fake DOM width probes read `.text`; live DOM uses the child spans.
+  }
+}
+
 function freshnessFooterPaintHint(node, view) {
   if (!node) {
     return;
@@ -10239,7 +10307,16 @@ function freshnessFooterFit(el, parts, view) {
   const showArms = Boolean(bankPanel && (view.linkPrev || view.linkNext));
   let arms = showArms;
   const apply = () => {
-    freshnessFooterSetText(parts.detail, detailText);
+    if (bankPanel) {
+      freshnessFooterPaintBankDetail(
+        parts,
+        detailText,
+        compactDetail,
+        view && view.inflow,
+      );
+    } else {
+      freshnessFooterSetText(parts.detail, detailText);
+    }
     freshnessFooterSetOmitted(groupContainer, shown === 0);
     nodes.forEach((node, index) => {
       freshnessFooterSetOmitted(node, index >= shown);
@@ -10419,9 +10496,15 @@ function freshnessFooterPaint(el, view) {
     return parts;
   }
   freshnessFooterSetText(parts.icon, view.glyph || "⟳");
-  freshnessFooterSetText(parts.due, view.dueText);
+  if (view.panel === "bank") {
+    freshnessFooterPaintBankDue(parts, view);
+  } else {
+    freshnessFooterSetText(parts.due, view.dueText);
+  }
   freshnessFooterSetText(parts.context, view.contextText);
-  freshnessFooterSetText(parts.detail, view.detailText);
+  if (view.panel !== "bank") {
+    freshnessFooterSetText(parts.detail, view.detailText);
+  }
   freshnessFooterPaintHint(parts.hint, view);
   freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
@@ -10429,11 +10512,9 @@ function freshnessFooterPaint(el, view) {
     parts,
     view.panel === "links" || view.panel === "bank" ? view : null,
   );
-  freshnessFooterToggleClass(
-    parts.detail,
-    "bob-freshness-inflow",
-    Boolean(view.panel === "bank" && view.inflow),
-  );
+  if (view.panel !== "bank") {
+    freshnessFooterToggleClass(parts.detail, "bob-freshness-inflow", false);
+  }
   freshnessFooterToggleClass(
     parts.meter,
     "bob-freshness-meter-warn",
@@ -11815,7 +11896,7 @@ function bankWalkerFooterView(snapshot, options = {}) {
       const payee = typeof entry.payee === "string" ? entry.payee : "";
       detailText = [amount, payee].filter(Boolean).join(" ");
       detailCompactText = amount;
-      hintText = scope === "waiting" ? "Ctrl+Enter file" : "]} next day";
+      hintText = scope === "waiting" ? "Ctrl+Enter file" : "";
       inflow = entry.inflow === true || (Number.isSafeInteger(entry.cents) && entry.cents > 0);
     } else if (inBank) {
       const total = scope === "waiting" ? waiting : rows;
@@ -11998,14 +12079,23 @@ function bankWalkerFooterNavVersion(plugin) {
   }
 }
 
+function bankWalkerFooterListCacheKey() {
+  try {
+    if (typeof bankCacheKey !== "function" || typeof bankBuildArgs !== "function") {
+      return null;
+    }
+    return bankCacheKey(bankBuildArgs({ command: "list" }));
+  } catch (error) {
+    return null;
+  }
+}
+
 function bankWalkerFooterCachedList(plugin) {
   try {
     if (typeof plugin.bankCacheGet !== "function") {
       return null;
     }
-    const key = typeof bankCacheKey === "function"
-      ? bankCacheKey(["bank", "list"])
-      : null;
+    const key = bankWalkerFooterListCacheKey();
     if (!key) {
       return null;
     }
@@ -12019,8 +12109,36 @@ function bankWalkerFooterCachedList(plugin) {
   }
 }
 
+function bankWalkerFooterMeterEligible(result, current) {
+  if (!result || !result.report) {
+    return false;
+  }
+  if (result.error) {
+    return false;
+  }
+  if (result.stale === true) {
+    return false;
+  }
+  return (result.generation || 0) >= current;
+}
+
+function bankWalkerFooterHoldResult(result, generation) {
+  const resultGen = Number.isInteger(result && result.generation)
+    ? result.generation
+    : generation;
+  return {
+    report: result && result.report ? result.report : null,
+    generation: resultGen,
+    error: result && result.error ? result.error : null,
+    stale: Boolean(result && result.stale),
+  };
+}
+
 function bankWalkerFooterRequestList(plugin, generation) {
   try {
+    if (plugin.bankWalkerFooterMeterAttempted === generation) {
+      return;
+    }
     if (
       plugin.bankWalkerFooterMeterWanted === generation &&
       plugin.bankWalkerFooterMeterPending
@@ -12032,27 +12150,14 @@ function bankWalkerFooterRequestList(plugin, generation) {
     }
     plugin.bankWalkerFooterMeterWanted = generation;
     plugin.bankWalkerFooterMeterPending = true;
+    plugin.bankWalkerFooterMeterAttempted = generation;
     Promise.resolve(plugin.apiBankFetch({ command: "list" }))
       .then((result) => {
         if (plugin.bankWalkerFooterMeterWanted !== generation) {
           return;
         }
         plugin.bankWalkerFooterMeterPending = false;
-        if (result && result.report) {
-          const resultGen = Number.isInteger(result.generation)
-            ? result.generation
-            : generation;
-          const heldGen = plugin.bankWalkerFooterMeterResult
-            && Number.isInteger(plugin.bankWalkerFooterMeterResult.generation)
-            ? plugin.bankWalkerFooterMeterResult.generation
-            : 0;
-          if (resultGen >= heldGen) {
-            plugin.bankWalkerFooterMeterResult = {
-              report: result.report,
-              generation: resultGen,
-            };
-          }
-        }
+        plugin.bankWalkerFooterMeterResult = bankWalkerFooterHoldResult(result, generation);
         try {
           const route = walkerFooterWalkMode(plugin);
           if (route.legacy || route.mode !== "b") {
@@ -12068,6 +12173,12 @@ function bankWalkerFooterRequestList(plugin, generation) {
       .catch(() => {
         if (plugin.bankWalkerFooterMeterWanted === generation) {
           plugin.bankWalkerFooterMeterPending = false;
+          plugin.bankWalkerFooterMeterResult = {
+            report: null,
+            generation,
+            error: { code: "failed" },
+            stale: false,
+          };
         }
       });
   } catch (error) {
@@ -12081,24 +12192,29 @@ function bankWalkerFooterTakeMeter(plugin) {
       ? plugin.bankVaultGeneration
       : 0;
     const held = plugin && plugin.bankWalkerFooterMeterResult;
-    if (held && held.report && (held.generation || 0) >= current) {
+    if (bankWalkerFooterMeterEligible(held, current)) {
       return bankWalkerFooterMeterFromReport(held.report, {
         currentGeneration: current,
         resultGeneration: held.generation || 0,
       });
     }
     const cached = bankWalkerFooterCachedList(plugin);
-    if (cached && (cached.generation || 0) >= current) {
+    if (bankWalkerFooterMeterEligible(cached, current)) {
       return bankWalkerFooterMeterFromReport(cached.report, {
         currentGeneration: current,
         resultGeneration: cached.generation || 0,
       });
     }
     const stale = Boolean(
-      (held && held.report && (held.generation || 0) < current) ||
+      (held && (held.generation || 0) < current) ||
       (cached && (cached.generation || 0) < current),
     );
-    bankWalkerFooterRequestList(plugin, current);
+    if (plugin.bankWalkerFooterMeterAttempted !== current) {
+      bankWalkerFooterRequestList(plugin, current);
+    }
+    if (held && held.report && (held.error || held.stale === true) && (held.generation || 0) >= current) {
+      return { text: "", state: held.error ? "error" : "stale", lines: [] };
+    }
     return {
       text: "",
       state: stale ? "stale-generation" : "pending",
@@ -74862,6 +74978,7 @@ function bankWalkBuildEntries(allRows) {
       label: bankWalkLongDayLabel(e.date),
       short: bankWalkShortDayLabel(e.date),
       month: bankWalkMonthKeyFromPath(e.path),
+      monthLabel: bankWalkMonthLabel(bankWalkMonthKeyFromPath(e.path)),
       waiting: e.waiting,
       cents: e.cents,
       amountText: bankFormatCents(e.cents),
@@ -74915,7 +75032,26 @@ function bankWalkBuildEntries(allRows) {
   return { entries, days, scope };
 }
 
-function bankWalkBuildSnapshotFromContents(fileContents, generation) {
+function bankWalkScanSourceMemo(path, content, cache) {
+  if (cache instanceof Map) {
+    const hit = cache.get(path);
+    if (hit && hit.content === content) {
+      return hit.scan;
+    }
+  }
+  let scan = null;
+  try {
+    scan = bankScanSource(path, content);
+  } catch (error) {
+    scan = null;
+  }
+  if (cache instanceof Map) {
+    cache.set(path, { content, scan });
+  }
+  return scan;
+}
+
+function bankWalkBuildSnapshotFromContents(fileContents, generation, scanCache) {
   // fileContents: [{ path, content }] already merged (overlay wins).
   // Returns a frozen snapshot or an indexing/empty shape.
   const files = {};
@@ -74930,12 +75066,7 @@ function bankWalkBuildSnapshotFromContents(fileContents, generation) {
     if (!bankMonthFromPath(path)) {
       continue;
     }
-    let scan = null;
-    try {
-      scan = bankScanSource(path, content);
-    } catch (error) {
-      scan = null;
-    }
+    const scan = bankWalkScanSourceMemo(path, content, scanCache);
     if (!scan || !scan.month) {
       continue;
     }
@@ -75150,6 +75281,82 @@ function bankWalkApplyRepeatToRow(entries, days, base, direction, repeat, origin
   return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
 }
 
+function bankWalkMonthFloorDate(path) {
+  const monthKey = bankWalkMonthKeyFromPath(path);
+  return monthKey ? `${monthKey}-00` : "";
+}
+
+function bankWalkStepFromTuple(entries, days, tuple, request) {
+  const direction = request && request.direction < 0 ? -1 : 1;
+  const dayJump = request && request.dayJump === true;
+  const repeat = bankWalkNormalizeRepeat(request && request.repeat);
+  const origin = request && typeof request.origin === "string" ? request.origin : "cursor-gap";
+  const scope = request && request.scope === "all" ? "all" : "waiting";
+  const gap = {
+    date: typeof (tuple && tuple.date) === "string" ? tuple.date : "",
+    path: tuple && tuple.path,
+    line: Number.isInteger(tuple && tuple.line) ? tuple.line : 1,
+  };
+  if (dayJump) {
+    let pos = days.length;
+    if (!gap.date) {
+      pos = 0;
+    } else {
+      for (let i = 0; i < days.length; i += 1) {
+        if (days[i].date > gap.date) {
+          pos = i;
+          break;
+        }
+        if (days[i].date === gap.date) {
+          pos = i;
+          break;
+        }
+      }
+    }
+    if (days[pos] && days[pos].date === gap.date) {
+      const base = pos + direction;
+      const rawFinal = base + direction * (repeat - 1);
+      const wrapped = rawFinal < 0 || rawFinal >= days.length;
+      const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+      return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+    }
+    if (direction > 0) {
+      const base = pos >= days.length ? 0 : pos;
+      const baseWrapped = pos >= days.length;
+      const rawFinal = base + (repeat - 1);
+      const wrapped = baseWrapped || rawFinal >= days.length;
+      const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+      return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+    }
+    const base = pos <= 0 ? days.length - 1 : pos - 1;
+    const baseWrapped = pos <= 0;
+    const rawFinal = base - (repeat - 1);
+    const wrapped = baseWrapped || rawFinal < 0;
+    const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+    return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+  }
+  if (direction > 0) {
+    const base = bankWalkInsertionForTuple(entries, gap);
+    const baseWrapped = base >= entries.length;
+    const at0 = base >= entries.length ? 0 : base;
+    const rawFinal = at0 + (repeat - 1);
+    const wrapped = baseWrapped || rawFinal >= entries.length;
+    const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+    return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
+  }
+  const base = bankWalkLastBeforeTuple(entries, gap);
+  if (base < 0) {
+    const at0 = entries.length - 1;
+    const rawFinal = at0 - (repeat - 1);
+    const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+    return bankWalkFinishJump(entries, days, at, true, origin, scope);
+  }
+  const rawFinal = base - (repeat - 1);
+  const wrapped = rawFinal < 0;
+  const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+  return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
+}
+
 // Pure jump planner. options: { direction: 1|-1, dayJump, repeat,
 // cursor: { path, line0 }|null, anchor, dailyDate? }. anchor: { key, path,
 // line, date, text, day }. Returns { kind: "jump", ... } or
@@ -75196,106 +75403,54 @@ function bankWalkPlan(snapshot, options = {}) {
           return bankWalkFinishJump(entries, days, at, wrapped, "cursor", scope);
         }
       }
-      // Gap: insert the cursor tuple and step from there.
       const gap = {
-        date: located.date || "",
+        date: located.date || bankWalkMonthFloorDate(located.path),
         path: located.path,
         line: (Number.isInteger(located.line0) ? located.line0 + 1 : 1),
       };
-      if (dayJump) {
-        // Day-granularity insertion.
-        let pos = days.length;
-        if (!gap.date) {
-          pos = 0;
-        } else {
-          for (let i = 0; i < days.length; i += 1) {
-            if (days[i].date > gap.date) {
-              pos = i;
-              break;
-            }
-            if (days[i].date === gap.date) {
-              pos = i;
-              break;
-            }
-          }
-          // If gap date matches a day, stepping moves off it; if it falls
-          // between days, pos is already the next day.
-          if (days[pos] && days[pos].date === gap.date) {
-            // From inside the day, a day jump leaves it.
-            const raw = pos + direction * repeat;
-            // For a gap inside a day, the first jump leaves the day, so the
-            // base is pos + direction, then repeat-1 more.
-            const base = pos + direction;
-            const rest = repeat - 1;
-            const rawFinal = base + direction * rest;
-            const wrapped = rawFinal < 0 || rawFinal >= days.length;
-            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-            const at = days[targetDay].first;
-            return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-          }
-        }
-        if (direction > 0) {
-          const base = pos >= days.length ? 0 : pos;
-          const baseWrapped = pos >= days.length;
-          const rawFinal = base + (repeat - 1);
-          const wrapped = baseWrapped || rawFinal >= days.length;
-          const targetDay = rawFinal % days.length;
-          const at = days[targetDay].first;
-          return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-        }
-        const base = pos <= 0 ? days.length - 1 : pos - 1;
-        const baseWrapped = pos <= 0;
-        const rawFinal = base - (repeat - 1);
-        const wrapped = baseWrapped || rawFinal < 0;
-        const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-        const at = days[targetDay].first;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      if (direction > 0) {
-        const base = bankWalkInsertionForTuple(entries, gap);
-        const baseWrapped = base >= entries.length;
-        const at0 = base >= entries.length ? 0 : base;
-        const rawFinal = at0 + (repeat - 1);
-        const wrapped = baseWrapped || rawFinal >= entries.length;
-        const at = rawFinal % entries.length;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      const base = bankWalkLastBeforeTuple(entries, gap);
-      if (base < 0) {
-        const at0 = entries.length - 1;
-        const rawFinal = at0 - (repeat - 1);
-        const wrapped = true || rawFinal < 0;
-        const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      const rawFinal = base - (repeat - 1);
-      const wrapped = rawFinal < 0;
-      const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-      return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
+      return bankWalkStepFromTuple(entries, days, gap, {
+        direction,
+        dayJump,
+        repeat,
+        origin: "cursor-gap",
+        scope,
+      });
     }
 
-    // 2. Daily note whose date has scope rows.
-    if (located && !located.inBank && cursor && typeof cursor.path === "string") {
-      const dailyDate = bankWalkDailyDateFromPath(cursor.path);
+    // 2. Daily note whose date has scope rows. Keyed on the YYYYMMDD stem,
+    // even when locate is null because line0 is missing.
+    const cursorPath = cursor && typeof cursor.path === "string" ? cursor.path : "";
+    if (cursorPath) {
+      const dailyDate = bankWalkDailyDateFromPath(cursorPath);
       if (dailyDate) {
         const dayPos = days.findIndex((d) => d.date === dailyDate);
         if (dayPos >= 0) {
           const day = days[dayPos];
-          if (direction > 0 || dayJump) {
-            // ]b / ]B / [B land its first scope row.
+          if (dayJump) {
+            const rawFinal = dayPos + direction * (repeat - 1);
+            const wrapped = rawFinal < 0 || rawFinal >= days.length;
+            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+            return bankWalkFinishJump(
+              entries,
+              days,
+              days[targetDay].first,
+              wrapped,
+              "daily",
+              scope,
+            );
+          }
+          if (direction > 0) {
             const base = day.first;
             const rawFinal = base + (repeat - 1);
-            const wrapped = rawFinal >= entries.length || (rawFinal - base >= day.count && repeat > day.count);
-            // Repeat spills past the day into following rows.
-            const at = rawFinal % entries.length;
-            const spilled = repeat > day.count;
-            return bankWalkFinishJump(entries, days, at, false, "daily", scope);
+            const wrapped = rawFinal < 0 || rawFinal >= entries.length;
+            const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+            return bankWalkFinishJump(entries, days, at, wrapped, "daily", scope);
           }
-          // [b lands its last scope row.
           const base = day.first + day.count - 1;
           const rawFinal = base - (repeat - 1);
+          const wrapped = rawFinal < 0 || rawFinal >= entries.length;
           const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-          return bankWalkFinishJump(entries, days, at, false, "daily", scope);
+          return bankWalkFinishJump(entries, days, at, wrapped, "daily", scope);
         }
       }
     }
@@ -75328,59 +75483,19 @@ function bankWalkPlan(snapshot, options = {}) {
         }
         if (typeof anchor.path === "string" && Number.isInteger(anchor.line)) {
           const gap = {
-            date: typeof anchor.date === "string" ? anchor.date : "",
+            date: typeof anchor.date === "string" && anchor.date
+              ? anchor.date
+              : bankWalkMonthFloorDate(anchor.path),
             path: bankNormalizePath(anchor.path),
             line: anchor.line,
           };
-          if (dayJump) {
-            let pos = days.length;
-            if (!gap.date) {
-              pos = 0;
-            } else {
-              for (let i = 0; i < days.length; i += 1) {
-                if (days[i].date >= gap.date) {
-                  pos = i;
-                  break;
-                }
-              }
-            }
-            if (direction > 0) {
-              const base = pos >= days.length ? 0 : pos;
-              const baseWrapped = pos >= days.length;
-              const rawFinal = base + (repeat - 1);
-              const wrapped = baseWrapped || rawFinal >= days.length;
-              const targetDay = rawFinal % days.length;
-              const at = days[targetDay].first;
-              return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-            }
-            const base = pos <= 0 ? days.length - 1 : pos - 1;
-            const baseWrapped = pos <= 0;
-            const rawFinal = base - (repeat - 1);
-            const wrapped = baseWrapped || rawFinal < 0;
-            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-            const at = days[targetDay].first;
-            return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-          }
-          if (direction > 0) {
-            const base = bankWalkInsertionForTuple(entries, gap);
-            const baseWrapped = base >= entries.length;
-            const at0 = base >= entries.length ? 0 : base;
-            const rawFinal = at0 + (repeat - 1);
-            const wrapped = baseWrapped || rawFinal >= entries.length;
-            const at = rawFinal % entries.length;
-            return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-          }
-          const base = bankWalkLastBeforeTuple(entries, gap);
-          if (base < 0) {
-            const at0 = entries.length - 1;
-            const rawFinal = at0 - (repeat - 1);
-            const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-            return bankWalkFinishJump(entries, days, at, true, "anchor-gap", scope);
-          }
-          const rawFinal = base - (repeat - 1);
-          const wrapped = rawFinal < 0;
-          const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-          return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
+          return bankWalkStepFromTuple(entries, days, gap, {
+            direction,
+            dayJump,
+            repeat,
+            origin: "anchor-gap",
+            scope,
+          });
         }
       }
     }
@@ -75390,49 +75505,29 @@ function bankWalkPlan(snapshot, options = {}) {
     if (scope === "waiting") {
       if (direction > 0) {
         if (dayJump) {
-          const base = 0;
-          const daySteps = repeat - 1;
-          const targetDay = daySteps % days.length;
-          const at = days[targetDay].first + 0;
-          // Repeat day jumps from the oldest waiting day.
-          const rawFinal = 0 + daySteps;
-          const atFinal = days[rawFinal % days.length].first;
-          return bankWalkFinishJump(entries, days, atFinal, false, "entry", scope);
+          const targetDay = (repeat - 1) % days.length;
+          return bankWalkFinishJump(entries, days, days[targetDay].first, false, "entry", scope);
         }
         const at = (repeat - 1) % entries.length;
         return bankWalkFinishJump(entries, days, at, false, "entry", scope);
       }
       if (dayJump) {
-        // [B: first waiting row of the newest waiting day.
-        const base = lastDay.first;
-        const daySteps = repeat - 1;
-        const targetDayIdx = days.length - 1 - daySteps;
+        const targetDayIdx = days.length - 1 - (repeat - 1);
         const wrappedIdx = ((targetDayIdx % days.length) + days.length) % days.length;
-        const at = days[wrappedIdx].first;
-        return bankWalkFinishJump(entries, days, at, false, "entry", scope);
+        return bankWalkFinishJump(entries, days, days[wrappedIdx].first, false, "entry", scope);
       }
       const at = entries.length - 1 - ((repeat - 1) % entries.length);
       return bankWalkFinishJump(entries, days, at, false, "entry", scope);
     }
-    // scope all
     if (direction > 0 || dayJump) {
-      // ]b / ]B / [B land the first row of the newest occupied day.
-      const daySteps = repeat - 1;
-      const targetDayIdx = days.length - 1 + (direction > 0 ? daySteps : -daySteps);
-      // Entry never wraps: clamp repeat within one pass for entry origin.
-      // For repeat past the day, spill into following rows (row jumps) or
-      // wrap days only when repeat exceeds the day count (day jumps). Keep
-      // it simple: spill forward/backward linearly without wrap.
       if (dayJump) {
-        const idx = days.length - 1 + daySteps * 1;
-        // [B from entry is defined as newest day; repeat moves backward.
-        // Direction -1 with dayJump from entry still lands newest day first.
-        const target = direction > 0 ? (days.length - 1 + daySteps) % days.length : (days.length - 1 - daySteps + days.length * 100) % days.length;
-        const at = days[target].first;
-        return bankWalkFinishJump(entries, days, at, false, "entry", scope);
+        const daySteps = repeat - 1;
+        const target = direction > 0
+          ? (days.length - 1 + daySteps) % days.length
+          : (days.length - 1 - daySteps + days.length * 100) % days.length;
+        return bankWalkFinishJump(entries, days, days[target].first, false, "entry", scope);
       }
-      const base = lastDay.first;
-      const at = Math.min(base + (repeat - 1), entries.length - 1);
+      const at = Math.min(lastDay.first + (repeat - 1), entries.length - 1);
       return bankWalkFinishJump(entries, days, at, false, "entry", scope);
     }
     const at = entries.length - 1 - ((repeat - 1) % entries.length);
@@ -75525,6 +75620,11 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkGeneration = 0;
     this.bankWalkDisk = new Map();
     this.bankWalkReadTokens = new Map();
+    this.bankWalkOverlays = new Map();
+    this.bankWalkPathSeq = new Map();
+    this.bankWalkReadScheduleSeq = new Map();
+    this.bankWalkPendingReads = new Set();
+    this.bankWalkScanCache = new Map();
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
@@ -75542,7 +75642,7 @@ class BobLedgerToolsBankWalkMixin {
     if (vault && typeof vault.on === "function") {
       for (const event of ["create", "modify", "delete", "rename"]) {
         try {
-          this.registerEvent(vault.on(event, (file, oldPath) => this.bankWalkHandleVaultEvent(file, oldPath)));
+          this.registerEvent(vault.on(event, (file, oldPath) => this.bankWalkHandleVaultEvent(event, file, oldPath)));
         } catch (error) {}
       }
     }
@@ -75569,6 +75669,21 @@ class BobLedgerToolsBankWalkMixin {
     }
     if (this.bankWalkReadTokens instanceof Map) {
       this.bankWalkReadTokens.clear();
+    }
+    if (this.bankWalkOverlays instanceof Map) {
+      this.bankWalkOverlays.clear();
+    }
+    if (this.bankWalkPathSeq instanceof Map) {
+      this.bankWalkPathSeq.clear();
+    }
+    if (this.bankWalkReadScheduleSeq instanceof Map) {
+      this.bankWalkReadScheduleSeq.clear();
+    }
+    if (this.bankWalkPendingReads instanceof Set) {
+      this.bankWalkPendingReads.clear();
+    }
+    if (this.bankWalkScanCache instanceof Map) {
+      this.bankWalkScanCache.clear();
     }
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
@@ -75598,7 +75713,7 @@ class BobLedgerToolsBankWalkMixin {
     }
     for (const listener of Array.from(this.bankWalkListeners)) {
       try {
-        listener(info || { generation: this.bankWalkGeneration || 0 });
+        listener(info || { generation: this.bankWalkGeneration });
       } catch (error) {}
     }
   }
@@ -75634,7 +75749,41 @@ class BobLedgerToolsBankWalkMixin {
     }
   }
 
-  bankWalkHandleVaultEvent(file, oldPath) {
+  bankWalkDropPath(path, reason) {
+    try {
+      const norm = bankNormalizePath(path);
+      if (!norm) {
+        return;
+      }
+      if (this.bankWalkDisk instanceof Map) {
+        this.bankWalkDisk.delete(norm);
+      }
+      if (this.bankWalkOverlays instanceof Map) {
+        this.bankWalkOverlays.delete(norm);
+      }
+      if (this.bankWalkScanCache instanceof Map) {
+        this.bankWalkScanCache.delete(norm);
+      }
+      if (this.bankWalkPendingReads instanceof Set) {
+        this.bankWalkPendingReads.delete(norm);
+      }
+      if (this.bankWalkPathSeq instanceof Map) {
+        this.bankWalkPathSeq.delete(norm);
+      }
+      if (this.bankWalkReadScheduleSeq instanceof Map) {
+        this.bankWalkReadScheduleSeq.delete(norm);
+      }
+      const tok = (this.bankWalkReadTokens instanceof Map ? this.bankWalkReadTokens.get(norm) : 0) || 0;
+      if (this.bankWalkReadTokens instanceof Map) {
+        this.bankWalkReadTokens.set(norm, tok + 1);
+      }
+      this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
+      this.bankWalkMemoKey = null;
+      this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: reason || "vault", path: norm });
+    } catch (error) {}
+  }
+
+  bankWalkHandleVaultEvent(event, file, oldPath) {
     try {
       if (this.bankWalkActive === false) {
         return;
@@ -75646,28 +75795,35 @@ class BobLedgerToolsBankWalkMixin {
       if (!curMonth && !prevMonth) {
         return;
       }
-      // Rename: drop the old path immediately; the new path re-reads below.
-      if (previous && prevMonth && previous !== current) {
-        try {
-          const norm = bankNormalizePath(previous);
-          if (this.bankWalkDisk instanceof Map && this.bankWalkDisk.has(norm)) {
-            this.bankWalkDisk.delete(norm);
-          }
-          const tok = (this.bankWalkReadTokens instanceof Map ? this.bankWalkReadTokens.get(norm) : 0) || 0;
-          if (this.bankWalkReadTokens instanceof Map) {
-            this.bankWalkReadTokens.set(norm, tok + 1);
-          }
-        } catch (error) {}
+      if (event === "delete") {
+        const gone = curMonth ? current : (prevMonth ? previous : "");
+        if (gone) {
+          this.bankWalkDropPath(gone, "delete");
+        }
+        return;
+      }
+      if (event === "rename" && previous && prevMonth && previous !== current) {
+        this.bankWalkDropPath(previous, "rename");
       }
       if (current && curMonth) {
         this.bankWalkScheduleFileRead(current);
-      } else {
-        // Delete without a current month path: bump and notify.
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkMemoKey = null;
-        this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "vault" });
       }
     } catch (error) {}
+  }
+
+  bankWalkClearTimer() {
+    if (this.bankWalkRevalidateTimer === null || this.bankWalkRevalidateTimer === undefined) {
+      return;
+    }
+    try {
+      const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
+      if (timers && typeof timers.clearTimeout === "function") {
+        timers.clearTimeout(this.bankWalkRevalidateTimer);
+      } else {
+        clearTimeout(this.bankWalkRevalidateTimer);
+      }
+    } catch (error) {}
+    this.bankWalkRevalidateTimer = null;
   }
 
   bankWalkScheduleFileRead(fileOrPath) {
@@ -75680,24 +75836,30 @@ class BobLedgerToolsBankWalkMixin {
         return;
       }
       const path = bankNormalizePath(raw);
-      if (!(this.bankWalkReadTokens instanceof Map)) {
-        this.bankWalkReadTokens = new Map();
+      if (!(this.bankWalkPendingReads instanceof Set)) {
+        this.bankWalkPendingReads = new Set();
       }
-      // Coalesce rapid vault events; the timer below does the read.
-      if (this.bankWalkRevalidateTimer !== null && this.bankWalkRevalidateTimer !== undefined) {
-        try {
-          const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
-          if (timers && typeof timers.clearTimeout === "function") {
-            timers.clearTimeout(this.bankWalkRevalidateTimer);
-          } else {
-            clearTimeout(this.bankWalkRevalidateTimer);
-          }
-        } catch (error) {}
-        this.bankWalkRevalidateTimer = null;
+      if (!(this.bankWalkReadScheduleSeq instanceof Map)) {
+        this.bankWalkReadScheduleSeq = new Map();
       }
+      this.bankWalkPendingReads.add(path);
+      const overlay = this.bankWalkOverlays instanceof Map ? this.bankWalkOverlays.get(path) : null;
+      const seq = overlay && Number.isInteger(overlay.seq)
+        ? overlay.seq
+        : ((this.bankWalkPathSeq instanceof Map ? this.bankWalkPathSeq.get(path) : 0) || 0);
+      this.bankWalkReadScheduleSeq.set(path, seq);
+      this.bankWalkClearTimer();
       const run = () => {
         this.bankWalkRevalidateTimer = null;
-        this.bankWalkReadSingleMonth(path);
+        const pending = this.bankWalkPendingReads instanceof Set
+          ? Array.from(this.bankWalkPendingReads)
+          : [];
+        if (this.bankWalkPendingReads instanceof Set) {
+          this.bankWalkPendingReads.clear();
+        }
+        for (const item of pending) {
+          this.bankWalkReadSingleMonth(item);
+        }
       };
       try {
         const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
@@ -75712,14 +75874,34 @@ class BobLedgerToolsBankWalkMixin {
     } catch (error) {}
   }
 
+  bankWalkRetireOverlay(path, scheduledSeq) {
+    try {
+      const overlay = this.bankWalkOverlays instanceof Map ? this.bankWalkOverlays.get(path) : null;
+      if (!overlay) {
+        return;
+      }
+      const seq = Number.isInteger(overlay.seq) ? overlay.seq : 0;
+      const scheduled = Number.isInteger(scheduledSeq) ? scheduledSeq : 0;
+      if (seq <= scheduled) {
+        this.bankWalkOverlays.delete(path);
+      }
+    } catch (error) {}
+  }
+
   bankWalkReadSingleMonth(path) {
     try {
       if (this.bankWalkActive === false) {
         return;
       }
       const norm = bankNormalizePath(path);
+      if (!(this.bankWalkReadTokens instanceof Map)) {
+        this.bankWalkReadTokens = new Map();
+      }
       const token = ((this.bankWalkReadTokens.get(norm) || 0) + 1);
       this.bankWalkReadTokens.set(norm, token);
+      const scheduledSeq = this.bankWalkReadScheduleSeq instanceof Map
+        ? (this.bankWalkReadScheduleSeq.get(norm) || 0)
+        : 0;
       const vault = this.app && this.app.vault;
       const read = vault && (vault.cachedRead || vault.read);
       if (typeof read !== "function") {
@@ -75746,11 +75928,63 @@ class BobLedgerToolsBankWalkMixin {
           this.bankWalkDisk = new Map();
         }
         this.bankWalkDisk.set(norm, text);
+        this.bankWalkRetireOverlay(norm, scheduledSeq);
         this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
         this.bankWalkMemoKey = null;
         this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "vault", path: norm });
       }).catch(() => {});
     } catch (error) {}
+  }
+
+  bankWalkListMonthFiles() {
+    const empty = { files: [], usedMarkdownWalk: false };
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault) {
+        return empty;
+      }
+      const hasFolderByPath = typeof vault.getFolderByPath === "function";
+      const hasAbstract = typeof vault.getAbstractFileByPath === "function";
+      if (hasFolderByPath || hasAbstract) {
+        let folder = null;
+        try {
+          if (hasFolderByPath) {
+            folder = vault.getFolderByPath("bank");
+          }
+        } catch (error) {
+          folder = null;
+        }
+        if (!folder && hasAbstract) {
+          try {
+            folder = vault.getAbstractFileByPath("bank");
+          } catch (error) {
+            folder = null;
+          }
+        }
+        if (!folder) {
+          return { files: [], usedMarkdownWalk: false };
+        }
+        const children = folder && Array.isArray(folder.children) ? folder.children : [];
+        return { files: children, usedMarkdownWalk: false };
+      }
+      if (typeof vault.getMarkdownFiles === "function") {
+        try {
+          return { files: vault.getMarkdownFiles() || [], usedMarkdownWalk: true };
+        } catch (error) {
+          return { files: [], usedMarkdownWalk: true };
+        }
+      }
+      return empty;
+    } catch (error) {
+      return empty;
+    }
+  }
+
+  bankWalkMarkReady(reason) {
+    this.bankWalkReady = true;
+    this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
+    this.bankWalkMemoKey = null;
+    this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: reason || "ready" });
   }
 
   bankWalkStartInitialScan() {
@@ -75759,44 +75993,27 @@ class BobLedgerToolsBankWalkMixin {
         return;
       }
       const vault = this.app && this.app.vault;
-      if (!vault || typeof vault.getMarkdownFiles !== "function") {
-        this.bankWalkReady = true;
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "ready" });
-        return;
-      }
-      let files = [];
-      try {
-        files = vault.getMarkdownFiles() || [];
-      } catch (error) {
-        files = [];
-      }
+      const listed = this.bankWalkListMonthFiles();
       let months = [];
       try {
-        months = bankDiscoverMonthPaths(files);
+        months = bankDiscoverMonthPaths(listed.files);
       } catch (error) {
         months = [];
       }
       if (!months.length) {
-        this.bankWalkReady = true;
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkMemoKey = null;
-        this.bankWalkFireChange({ generation: this.bankGeneration || this.bankWalkGeneration, reason: "ready" });
+        this.bankWalkMarkReady("ready");
         return;
       }
-      const read = vault.cachedRead || vault.read;
+      const read = vault && (vault.cachedRead || vault.read);
       if (typeof read !== "function") {
-        this.bankWalkReady = true;
+        this.bankWalkMarkReady("ready");
         return;
       }
       let pending = months.length;
       const finishOne = () => {
         pending -= 1;
         if (pending <= 0) {
-          this.bankWalkReady = true;
-          this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-          this.bankWalkMemoKey = null;
-          this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "ready" });
+          this.bankWalkMarkReady("ready");
         }
       };
       for (const entry of months) {
@@ -75836,12 +76053,33 @@ class BobLedgerToolsBankWalkMixin {
     }
   }
 
+  bankWalkRememberOverlay(path, content) {
+    if (!(this.bankWalkOverlays instanceof Map)) {
+      this.bankWalkOverlays = new Map();
+    }
+    if (!(this.bankWalkPathSeq instanceof Map)) {
+      this.bankWalkPathSeq = new Map();
+    }
+    const text = String(content);
+    const existing = this.bankWalkOverlays.get(path);
+    if (existing && existing.content === text) {
+      return existing;
+    }
+    const seq = ((existing && Number.isInteger(existing.seq) ? existing.seq : (this.bankWalkPathSeq.get(path) || 0)) || 0) + 1;
+    const record = { content: text, seq };
+    this.bankWalkOverlays.set(path, record);
+    this.bankWalkPathSeq.set(path, seq);
+    return record;
+  }
+
   bankWalkCollectOverlays() {
-    const overlays = new Map();
+    if (!(this.bankWalkOverlays instanceof Map)) {
+      this.bankWalkOverlays = new Map();
+    }
     try {
       const workspace = this.app && this.app.workspace;
       if (!workspace || typeof workspace.getLeavesOfType !== "function") {
-        return overlays;
+        return this.bankWalkOverlays;
       }
       let leaves = [];
       try {
@@ -75864,11 +76102,11 @@ class BobLedgerToolsBankWalkMixin {
             continue;
           }
           const path = bankNormalizePath(file.path);
-          overlays.set(path, String(editor.getValue()));
+          this.bankWalkRememberOverlay(path, editor.getValue());
         } catch (error) {}
       }
     } catch (error) {}
-    return overlays;
+    return this.bankWalkOverlays;
   }
 
   bankWalkSnapshot() {
@@ -75881,9 +76119,8 @@ class BobLedgerToolsBankWalkMixin {
       }
       const overlays = this.bankWalkCollectOverlays();
       const disk = this.bankWalkDisk instanceof Map ? this.bankWalkDisk : new Map();
-      // Overlay signature: sorted paths with exact content.
       const overlayParts = Array.from(overlays.entries()).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-      const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, c]) => `${p}\u0000${c.length}\u0000${c}`).join("\u0001")}`;
+      const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001")}`;
       if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
         return this.bankWalkMemoSnapshot;
       }
@@ -75891,27 +76128,31 @@ class BobLedgerToolsBankWalkMixin {
       const seen = new Set();
       for (const [path, content] of disk.entries()) {
         const norm = bankNormalizePath(path);
-        const text = overlays.has(norm) ? overlays.get(norm) : (typeof content === "string" ? content : "");
+        const overlay = overlays.get(norm);
+        const text = overlay && typeof overlay.content === "string"
+          ? overlay.content
+          : (typeof content === "string" ? content : "");
         merged.push({ path: norm, content: text });
         seen.add(norm);
       }
-      for (const [path, content] of overlays.entries()) {
+      for (const [path, record] of overlays.entries()) {
         if (!seen.has(path)) {
-          merged.push({ path, content });
+          merged.push({ path, content: record && typeof record.content === "string" ? record.content : "" });
           seen.add(path);
         }
       }
+      if (!(this.bankWalkScanCache instanceof Map)) {
+        this.bankWalkScanCache = new Map();
+      }
       let snapshot = null;
       try {
-        snapshot = bankWalkBuildSnapshotFromContents(merged, this.bankWalkGeneration || 0);
+        snapshot = bankWalkBuildSnapshotFromContents(merged, this.bankWalkGeneration || 0, this.bankWalkScanCache);
       } catch (error) {
         return Object.freeze({ available: false, reason: "indexing" });
       }
-      // Detect overlay-only change for repaint listeners.
       const prevSig = this.bankWalkOverlaySignature;
-      const overlaySigOnly = overlayParts.map(([p, c]) => `${p}\u0000${c}`).join("\u0001");
+      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
       if (prevSig !== null && prevSig !== overlaySigOnly) {
-        // Fire async so snapshot() stays sync and cheap.
         try {
           setTimeout(() => this.bankWalkFireChange({ generation: this.bankWalkGeneration || 0, reason: "overlay" }), 0);
         } catch (error) {}
@@ -127884,6 +128125,8 @@ try {
       bankWalkPayeeStart,
       bankWalkBuildEntries,
       bankWalkBuildSnapshotFromContents,
+      bankWalkScanSourceMemo,
+      bankWalkStepFromTuple,
       bankWalkOtherMonthLine,
       bankWalkLocate,
       bankWalkPlan,
@@ -127908,6 +128151,9 @@ try {
       bankWalkerFooterActivate,
       bankWalkerFooterRequest,
       bankWalkerFooterTakeMeter,
+      bankWalkerFooterRequestList,
+      bankWalkerFooterCachedList,
+      bankWalkerFooterListCacheKey,
       walkerFooterPushBankAttention,
     });
   }

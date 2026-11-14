@@ -3902,11 +3902,14 @@
 .bob-nh-notice.bob-nh-lane-walk.is-clear {
   --bob-nh-level-color: var(--color-green, #3f8f5f);
 }
+.bob-nh-notice.bob-nh-bank-walk {
+  --bob-nh-bank-hue: var(--bob-area-magenta, var(--interactive-accent));
+}
 .bob-nh-notice.bob-nh-bank-walk.is-waiting {
   --bob-nh-level-color: var(--text-warning, var(--color-orange, #d9822b));
 }
 .bob-nh-notice.bob-nh-bank-walk.is-all {
-  --bob-nh-level-color: var(--text-accent, var(--interactive-accent));
+  --bob-nh-level-color: var(--text-normal);
 }
 .bob-nh-notice.bob-nh-bank-walk.is-clear {
   --bob-nh-level-color: var(--text-muted);
@@ -3917,25 +3920,73 @@
   justify-content: center;
   width: 14px;
   height: 14px;
-  border: 1px solid var(--bob-nh-level-color);
+  border: 1px solid var(--bob-nh-bank-hue);
   border-radius: 50%;
-  color: var(--bob-nh-level-color);
+  color: var(--bob-nh-bank-hue);
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
   flex: 0 0 auto;
 }
+.bob-nh-bank-walk-banner {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  margin-bottom: 4px;
+}
 .bob-nh-bank-walk-rail {
-  height: 3px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  overflow: hidden;
+  min-height: 8px;
   margin: 7px 0 9px;
+}
+.bob-nh-bank-walk-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: color-mix(in srgb, var(--bob-nh-bank-hue) 30%, transparent);
+}
+.bob-nh-bank-walk-dot.is-current {
+  width: 8px;
+  height: 8px;
+  background-color: var(--bob-nh-bank-hue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bob-nh-bank-hue) 30%, transparent);
+}
+.bob-nh-bank-walk-bar {
+  display: flex;
+  width: 100%;
+  height: 8px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--background-modifier-border);
 }
-.bob-nh-bank-walk-progress {
+.bob-nh-bank-walk-bar-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--bob-nh-level-color);
+  background: var(--bob-nh-bank-hue);
+}
+.bob-nh-bank-walk-day,
+.bob-nh-bank-walk-footer {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.bob-nh-bank-walk-money {
+  display: flex;
+  gap: 0.5em;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-variant-numeric: tabular-nums;
+}
+.bob-nh-bank-walk-amount.is-inflow {
+  color: var(--bob-bank-in-ink, var(--color-green, #3f8f5f));
+}
+.bob-nh-bank-walk-footer {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 4px;
 }
 .bob-nh-bank-walk-title {
   color: var(--text-normal);

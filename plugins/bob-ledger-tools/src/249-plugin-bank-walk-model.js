@@ -225,6 +225,7 @@ function bankWalkBuildEntries(allRows) {
       label: bankWalkLongDayLabel(e.date),
       short: bankWalkShortDayLabel(e.date),
       month: bankWalkMonthKeyFromPath(e.path),
+      monthLabel: bankWalkMonthLabel(bankWalkMonthKeyFromPath(e.path)),
       waiting: e.waiting,
       cents: e.cents,
       amountText: bankFormatCents(e.cents),
@@ -278,7 +279,26 @@ function bankWalkBuildEntries(allRows) {
   return { entries, days, scope };
 }
 
-function bankWalkBuildSnapshotFromContents(fileContents, generation) {
+function bankWalkScanSourceMemo(path, content, cache) {
+  if (cache instanceof Map) {
+    const hit = cache.get(path);
+    if (hit && hit.content === content) {
+      return hit.scan;
+    }
+  }
+  let scan = null;
+  try {
+    scan = bankScanSource(path, content);
+  } catch (error) {
+    scan = null;
+  }
+  if (cache instanceof Map) {
+    cache.set(path, { content, scan });
+  }
+  return scan;
+}
+
+function bankWalkBuildSnapshotFromContents(fileContents, generation, scanCache) {
   // fileContents: [{ path, content }] already merged (overlay wins).
   // Returns a frozen snapshot or an indexing/empty shape.
   const files = {};
@@ -293,12 +313,7 @@ function bankWalkBuildSnapshotFromContents(fileContents, generation) {
     if (!bankMonthFromPath(path)) {
       continue;
     }
-    let scan = null;
-    try {
-      scan = bankScanSource(path, content);
-    } catch (error) {
-      scan = null;
-    }
+    const scan = bankWalkScanSourceMemo(path, content, scanCache);
     if (!scan || !scan.month) {
       continue;
     }
@@ -513,6 +528,82 @@ function bankWalkApplyRepeatToRow(entries, days, base, direction, repeat, origin
   return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
 }
 
+function bankWalkMonthFloorDate(path) {
+  const monthKey = bankWalkMonthKeyFromPath(path);
+  return monthKey ? `${monthKey}-00` : "";
+}
+
+function bankWalkStepFromTuple(entries, days, tuple, request) {
+  const direction = request && request.direction < 0 ? -1 : 1;
+  const dayJump = request && request.dayJump === true;
+  const repeat = bankWalkNormalizeRepeat(request && request.repeat);
+  const origin = request && typeof request.origin === "string" ? request.origin : "cursor-gap";
+  const scope = request && request.scope === "all" ? "all" : "waiting";
+  const gap = {
+    date: typeof (tuple && tuple.date) === "string" ? tuple.date : "",
+    path: tuple && tuple.path,
+    line: Number.isInteger(tuple && tuple.line) ? tuple.line : 1,
+  };
+  if (dayJump) {
+    let pos = days.length;
+    if (!gap.date) {
+      pos = 0;
+    } else {
+      for (let i = 0; i < days.length; i += 1) {
+        if (days[i].date > gap.date) {
+          pos = i;
+          break;
+        }
+        if (days[i].date === gap.date) {
+          pos = i;
+          break;
+        }
+      }
+    }
+    if (days[pos] && days[pos].date === gap.date) {
+      const base = pos + direction;
+      const rawFinal = base + direction * (repeat - 1);
+      const wrapped = rawFinal < 0 || rawFinal >= days.length;
+      const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+      return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+    }
+    if (direction > 0) {
+      const base = pos >= days.length ? 0 : pos;
+      const baseWrapped = pos >= days.length;
+      const rawFinal = base + (repeat - 1);
+      const wrapped = baseWrapped || rawFinal >= days.length;
+      const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+      return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+    }
+    const base = pos <= 0 ? days.length - 1 : pos - 1;
+    const baseWrapped = pos <= 0;
+    const rawFinal = base - (repeat - 1);
+    const wrapped = baseWrapped || rawFinal < 0;
+    const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+    return bankWalkFinishJump(entries, days, days[targetDay].first, wrapped, origin, scope);
+  }
+  if (direction > 0) {
+    const base = bankWalkInsertionForTuple(entries, gap);
+    const baseWrapped = base >= entries.length;
+    const at0 = base >= entries.length ? 0 : base;
+    const rawFinal = at0 + (repeat - 1);
+    const wrapped = baseWrapped || rawFinal >= entries.length;
+    const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+    return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
+  }
+  const base = bankWalkLastBeforeTuple(entries, gap);
+  if (base < 0) {
+    const at0 = entries.length - 1;
+    const rawFinal = at0 - (repeat - 1);
+    const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+    return bankWalkFinishJump(entries, days, at, true, origin, scope);
+  }
+  const rawFinal = base - (repeat - 1);
+  const wrapped = rawFinal < 0;
+  const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+  return bankWalkFinishJump(entries, days, at, wrapped, origin, scope);
+}
+
 // Pure jump planner. options: { direction: 1|-1, dayJump, repeat,
 // cursor: { path, line0 }|null, anchor, dailyDate? }. anchor: { key, path,
 // line, date, text, day }. Returns { kind: "jump", ... } or
@@ -559,106 +650,54 @@ function bankWalkPlan(snapshot, options = {}) {
           return bankWalkFinishJump(entries, days, at, wrapped, "cursor", scope);
         }
       }
-      // Gap: insert the cursor tuple and step from there.
       const gap = {
-        date: located.date || "",
+        date: located.date || bankWalkMonthFloorDate(located.path),
         path: located.path,
         line: (Number.isInteger(located.line0) ? located.line0 + 1 : 1),
       };
-      if (dayJump) {
-        // Day-granularity insertion.
-        let pos = days.length;
-        if (!gap.date) {
-          pos = 0;
-        } else {
-          for (let i = 0; i < days.length; i += 1) {
-            if (days[i].date > gap.date) {
-              pos = i;
-              break;
-            }
-            if (days[i].date === gap.date) {
-              pos = i;
-              break;
-            }
-          }
-          // If gap date matches a day, stepping moves off it; if it falls
-          // between days, pos is already the next day.
-          if (days[pos] && days[pos].date === gap.date) {
-            // From inside the day, a day jump leaves it.
-            const raw = pos + direction * repeat;
-            // For a gap inside a day, the first jump leaves the day, so the
-            // base is pos + direction, then repeat-1 more.
-            const base = pos + direction;
-            const rest = repeat - 1;
-            const rawFinal = base + direction * rest;
-            const wrapped = rawFinal < 0 || rawFinal >= days.length;
-            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-            const at = days[targetDay].first;
-            return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-          }
-        }
-        if (direction > 0) {
-          const base = pos >= days.length ? 0 : pos;
-          const baseWrapped = pos >= days.length;
-          const rawFinal = base + (repeat - 1);
-          const wrapped = baseWrapped || rawFinal >= days.length;
-          const targetDay = rawFinal % days.length;
-          const at = days[targetDay].first;
-          return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-        }
-        const base = pos <= 0 ? days.length - 1 : pos - 1;
-        const baseWrapped = pos <= 0;
-        const rawFinal = base - (repeat - 1);
-        const wrapped = baseWrapped || rawFinal < 0;
-        const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-        const at = days[targetDay].first;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      if (direction > 0) {
-        const base = bankWalkInsertionForTuple(entries, gap);
-        const baseWrapped = base >= entries.length;
-        const at0 = base >= entries.length ? 0 : base;
-        const rawFinal = at0 + (repeat - 1);
-        const wrapped = baseWrapped || rawFinal >= entries.length;
-        const at = rawFinal % entries.length;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      const base = bankWalkLastBeforeTuple(entries, gap);
-      if (base < 0) {
-        const at0 = entries.length - 1;
-        const rawFinal = at0 - (repeat - 1);
-        const wrapped = true || rawFinal < 0;
-        const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-        return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
-      }
-      const rawFinal = base - (repeat - 1);
-      const wrapped = rawFinal < 0;
-      const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-      return bankWalkFinishJump(entries, days, at, wrapped, "cursor-gap", scope);
+      return bankWalkStepFromTuple(entries, days, gap, {
+        direction,
+        dayJump,
+        repeat,
+        origin: "cursor-gap",
+        scope,
+      });
     }
 
-    // 2. Daily note whose date has scope rows.
-    if (located && !located.inBank && cursor && typeof cursor.path === "string") {
-      const dailyDate = bankWalkDailyDateFromPath(cursor.path);
+    // 2. Daily note whose date has scope rows. Keyed on the YYYYMMDD stem,
+    // even when locate is null because line0 is missing.
+    const cursorPath = cursor && typeof cursor.path === "string" ? cursor.path : "";
+    if (cursorPath) {
+      const dailyDate = bankWalkDailyDateFromPath(cursorPath);
       if (dailyDate) {
         const dayPos = days.findIndex((d) => d.date === dailyDate);
         if (dayPos >= 0) {
           const day = days[dayPos];
-          if (direction > 0 || dayJump) {
-            // ]b / ]B / [B land its first scope row.
+          if (dayJump) {
+            const rawFinal = dayPos + direction * (repeat - 1);
+            const wrapped = rawFinal < 0 || rawFinal >= days.length;
+            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
+            return bankWalkFinishJump(
+              entries,
+              days,
+              days[targetDay].first,
+              wrapped,
+              "daily",
+              scope,
+            );
+          }
+          if (direction > 0) {
             const base = day.first;
             const rawFinal = base + (repeat - 1);
-            const wrapped = rawFinal >= entries.length || (rawFinal - base >= day.count && repeat > day.count);
-            // Repeat spills past the day into following rows.
-            const at = rawFinal % entries.length;
-            const spilled = repeat > day.count;
-            return bankWalkFinishJump(entries, days, at, false, "daily", scope);
+            const wrapped = rawFinal < 0 || rawFinal >= entries.length;
+            const at = ((rawFinal % entries.length) + entries.length) % entries.length;
+            return bankWalkFinishJump(entries, days, at, wrapped, "daily", scope);
           }
-          // [b lands its last scope row.
           const base = day.first + day.count - 1;
           const rawFinal = base - (repeat - 1);
+          const wrapped = rawFinal < 0 || rawFinal >= entries.length;
           const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-          return bankWalkFinishJump(entries, days, at, false, "daily", scope);
+          return bankWalkFinishJump(entries, days, at, wrapped, "daily", scope);
         }
       }
     }
@@ -691,59 +730,19 @@ function bankWalkPlan(snapshot, options = {}) {
         }
         if (typeof anchor.path === "string" && Number.isInteger(anchor.line)) {
           const gap = {
-            date: typeof anchor.date === "string" ? anchor.date : "",
+            date: typeof anchor.date === "string" && anchor.date
+              ? anchor.date
+              : bankWalkMonthFloorDate(anchor.path),
             path: bankNormalizePath(anchor.path),
             line: anchor.line,
           };
-          if (dayJump) {
-            let pos = days.length;
-            if (!gap.date) {
-              pos = 0;
-            } else {
-              for (let i = 0; i < days.length; i += 1) {
-                if (days[i].date >= gap.date) {
-                  pos = i;
-                  break;
-                }
-              }
-            }
-            if (direction > 0) {
-              const base = pos >= days.length ? 0 : pos;
-              const baseWrapped = pos >= days.length;
-              const rawFinal = base + (repeat - 1);
-              const wrapped = baseWrapped || rawFinal >= days.length;
-              const targetDay = rawFinal % days.length;
-              const at = days[targetDay].first;
-              return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-            }
-            const base = pos <= 0 ? days.length - 1 : pos - 1;
-            const baseWrapped = pos <= 0;
-            const rawFinal = base - (repeat - 1);
-            const wrapped = baseWrapped || rawFinal < 0;
-            const targetDay = ((rawFinal % days.length) + days.length) % days.length;
-            const at = days[targetDay].first;
-            return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-          }
-          if (direction > 0) {
-            const base = bankWalkInsertionForTuple(entries, gap);
-            const baseWrapped = base >= entries.length;
-            const at0 = base >= entries.length ? 0 : base;
-            const rawFinal = at0 + (repeat - 1);
-            const wrapped = baseWrapped || rawFinal >= entries.length;
-            const at = rawFinal % entries.length;
-            return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
-          }
-          const base = bankWalkLastBeforeTuple(entries, gap);
-          if (base < 0) {
-            const at0 = entries.length - 1;
-            const rawFinal = at0 - (repeat - 1);
-            const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-            return bankWalkFinishJump(entries, days, at, true, "anchor-gap", scope);
-          }
-          const rawFinal = base - (repeat - 1);
-          const wrapped = rawFinal < 0;
-          const at = ((rawFinal % entries.length) + entries.length) % entries.length;
-          return bankWalkFinishJump(entries, days, at, wrapped, "anchor-gap", scope);
+          return bankWalkStepFromTuple(entries, days, gap, {
+            direction,
+            dayJump,
+            repeat,
+            origin: "anchor-gap",
+            scope,
+          });
         }
       }
     }
@@ -753,49 +752,29 @@ function bankWalkPlan(snapshot, options = {}) {
     if (scope === "waiting") {
       if (direction > 0) {
         if (dayJump) {
-          const base = 0;
-          const daySteps = repeat - 1;
-          const targetDay = daySteps % days.length;
-          const at = days[targetDay].first + 0;
-          // Repeat day jumps from the oldest waiting day.
-          const rawFinal = 0 + daySteps;
-          const atFinal = days[rawFinal % days.length].first;
-          return bankWalkFinishJump(entries, days, atFinal, false, "entry", scope);
+          const targetDay = (repeat - 1) % days.length;
+          return bankWalkFinishJump(entries, days, days[targetDay].first, false, "entry", scope);
         }
         const at = (repeat - 1) % entries.length;
         return bankWalkFinishJump(entries, days, at, false, "entry", scope);
       }
       if (dayJump) {
-        // [B: first waiting row of the newest waiting day.
-        const base = lastDay.first;
-        const daySteps = repeat - 1;
-        const targetDayIdx = days.length - 1 - daySteps;
+        const targetDayIdx = days.length - 1 - (repeat - 1);
         const wrappedIdx = ((targetDayIdx % days.length) + days.length) % days.length;
-        const at = days[wrappedIdx].first;
-        return bankWalkFinishJump(entries, days, at, false, "entry", scope);
+        return bankWalkFinishJump(entries, days, days[wrappedIdx].first, false, "entry", scope);
       }
       const at = entries.length - 1 - ((repeat - 1) % entries.length);
       return bankWalkFinishJump(entries, days, at, false, "entry", scope);
     }
-    // scope all
     if (direction > 0 || dayJump) {
-      // ]b / ]B / [B land the first row of the newest occupied day.
-      const daySteps = repeat - 1;
-      const targetDayIdx = days.length - 1 + (direction > 0 ? daySteps : -daySteps);
-      // Entry never wraps: clamp repeat within one pass for entry origin.
-      // For repeat past the day, spill into following rows (row jumps) or
-      // wrap days only when repeat exceeds the day count (day jumps). Keep
-      // it simple: spill forward/backward linearly without wrap.
       if (dayJump) {
-        const idx = days.length - 1 + daySteps * 1;
-        // [B from entry is defined as newest day; repeat moves backward.
-        // Direction -1 with dayJump from entry still lands newest day first.
-        const target = direction > 0 ? (days.length - 1 + daySteps) % days.length : (days.length - 1 - daySteps + days.length * 100) % days.length;
-        const at = days[target].first;
-        return bankWalkFinishJump(entries, days, at, false, "entry", scope);
+        const daySteps = repeat - 1;
+        const target = direction > 0
+          ? (days.length - 1 + daySteps) % days.length
+          : (days.length - 1 - daySteps + days.length * 100) % days.length;
+        return bankWalkFinishJump(entries, days, days[target].first, false, "entry", scope);
       }
-      const base = lastDay.first;
-      const at = Math.min(base + (repeat - 1), entries.length - 1);
+      const at = Math.min(lastDay.first + (repeat - 1), entries.length - 1);
       return bankWalkFinishJump(entries, days, at, false, "entry", scope);
     }
     const at = entries.length - 1 - ((repeat - 1) % entries.length);

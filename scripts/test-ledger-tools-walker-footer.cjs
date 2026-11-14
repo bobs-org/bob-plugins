@@ -123,6 +123,11 @@ const {
   bankWalkerFooterActivate,
   bankWalkerFooterRequest,
   bankWalkerFooterTakeMeter,
+  bankWalkerFooterRequestList,
+  bankWalkerFooterCachedList,
+  bankWalkerFooterListCacheKey,
+  bankCacheKey,
+  bankBuildArgs,
 } = helpers;
 
 const DAY = new Date(2026, 9, 28);
@@ -1065,7 +1070,7 @@ test("bank panel paints every WAITING and ALL state from one snapshot", () => {
   assert.equal(allRow.dueText, `ALL ${coffee.rank}/${all.entries.length}`);
   assert.match(allRow.contextText, /Nov 4 /);
   assert.equal(allRow.detailText, "$12.40 Coffee");
-  assert.equal(allRow.hintText, "]} next day");
+  assert.equal(allRow.hintText, "");
   assert.equal(allRow.linkPrev.text, "‹ Nov 3");
   assert.equal(allRow.linkNext.text, "Nov 5 ›");
 
@@ -1275,6 +1280,9 @@ test("bank painter stamps family b, hue, scope, inflow, and arm labels", () => {
   assert.equal(parts.linkNext.disabled, false);
   assert.equal(parts.detail.classList.contains("bob-freshness-inflow"), false);
   assert.equal(parts.meter.classList.contains("bob-freshness-meter-warn"), true);
+  const scope = parts.due.children.find((child) => child.classList.contains("bob-freshness-scope"));
+  assert.ok(scope);
+  assert.equal(scope.text, "WAITING");
   const payrollRows = ALL_ROWS.map((row) => ({ ...row }));
   const all = bankSnap(payrollRows);
   const payroll = all.entries.find((entry) => entry.payee === "Payroll inflow");
@@ -1283,9 +1291,12 @@ test("bank painter stamps family b, hue, scope, inflow, and arm labels", () => {
     arms: bankArms(all, { path: payroll.path, line0: payroll.line - 1 }),
     meter: bankMeterOk(),
   });
-  freshnessFooterPaint(host, inflowView);
+  const inflowParts = freshnessFooterPaint(host, inflowView);
   assert.equal(host.attrs["data-bank-scope"], "all");
-  assert.equal(host.classList.contains("bob-freshness-inflow") || parts.detail.classList.contains("bob-freshness-inflow"), true);
+  assert.equal(inflowParts.detail.classList.contains("bob-freshness-inflow"), false);
+  const amount = inflowParts.detail.children.find((child) => child.classList.contains("bob-freshness-amount"));
+  assert.ok(amount);
+  assert.equal(amount.classList.contains("bob-freshness-inflow"), true);
 });
 
 function makeBankFooterPlugin({ mode = "b", version = 4, snapshot = null, cursor = null } = {}) {
@@ -1444,6 +1455,110 @@ test("bank paint fetches list through the data service and never writes or spawn
   assert.equal(spawns.length, 0);
 });
 
+test("an error or stale list result never paints balanced", async () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const { plugin } = makeBankFooterPlugin({
+    mode: "b",
+    snapshot: waiting,
+    cursor: { path: shop.path, line0: shop.line - 1 },
+  });
+  const balanced = {
+    today: "2026-11-14",
+    accounts: [{ label: "Checking", kind: "checking", status: "balanced" }],
+  };
+  plugin.apiBankFetch = () => Promise.resolve({
+    report: balanced,
+    generation: plugin.bankVaultGeneration,
+    error: { code: "failed" },
+    stale: true,
+  });
+  bankWalkerFooterRequest(plugin);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(plugin.freshnessFooterLastView.meterText, "");
+  assert.notEqual(plugin.freshnessFooterLastView.meterText, "✓ balanced");
+
+  const { plugin: stalePlugin } = makeBankFooterPlugin({
+    mode: "b",
+    snapshot: waiting,
+    cursor: { path: shop.path, line0: shop.line - 1 },
+  });
+  stalePlugin.bankCacheGet = () => ({
+    report: balanced,
+    generation: 2,
+    error: null,
+    stale: false,
+  });
+  stalePlugin.bankVaultGeneration = 5;
+  stalePlugin.bankWalkerFooterMeterAttempted = 5;
+  const meter = bankWalkerFooterTakeMeter(stalePlugin);
+  assert.equal(meter.text, "");
+  assert.equal(meter.state, "stale-generation");
+});
+
+test("list fetches once per vault generation even when overlapping or failing", async () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const { plugin, fetches } = makeBankFooterPlugin({
+    mode: "b",
+    snapshot: waiting,
+    cursor: { path: shop.path, line0: shop.line - 1 },
+  });
+  let finish;
+  plugin.apiBankFetch = (options) => {
+    fetches.push(options);
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  bankWalkerFooterRequest(plugin);
+  bankWalkerFooterRequest(plugin);
+  bankWalkerFooterTakeMeter(plugin);
+  assert.equal(fetches.length, 1);
+  finish({
+    report: null,
+    generation: plugin.bankVaultGeneration,
+    error: { code: "failed" },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  bankWalkerFooterRequest(plugin);
+  assert.equal(fetches.length, 1);
+  plugin.bankVaultGeneration += 1;
+  let finishNext;
+  plugin.apiBankFetch = (options) => {
+    fetches.push(options);
+    return new Promise((resolve) => { finishNext = resolve; });
+  };
+  bankWalkerFooterRequest(plugin);
+  assert.equal(fetches.length, 2);
+  finishNext({
+    report: {
+      today: "2026-11-14",
+      accounts: [{ label: "Checking", kind: "checking", status: "balanced" }],
+    },
+    generation: plugin.bankVaultGeneration,
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+});
+
+test("the footer list cache key matches the data-service args", () => {
+  const expected = bankCacheKey(bankBuildArgs({ command: "list" }));
+  assert.equal(bankWalkerFooterListCacheKey(), expected);
+  const waiting = bankSnap(WAITING_ROWS);
+  const { plugin } = makeBankFooterPlugin({ mode: "b", snapshot: waiting });
+  const keys = [];
+  plugin.bankCacheGet = (key) => {
+    keys.push(key);
+    return null;
+  };
+  plugin.bankWalkerFooterMeterAttempted = plugin.bankVaultGeneration;
+  bankWalkerFooterCachedList(plugin);
+  bankWalkerFooterTakeMeter(plugin);
+  assert.ok(keys.includes(expected));
+  assert.notEqual(expected, bankCacheKey(["bank", "list"]));
+});
+
 test("unload on walkMode v4 clears the bank attention without changing v3", () => {
   const seen = [];
   const plugin = Object.create(LedgerToolsPlugin.prototype);
@@ -1486,6 +1601,9 @@ test("bank walker footer stylesheet defines the b crossfade and bank tones", () 
   assert.match(css, /data-walker-panel="b"/);
   assert.match(css, /data-bank-scope="waiting"/);
   assert.match(css, /bob-freshness-inflow/);
+  assert.match(css, /bob-freshness-amount\.bob-freshness-inflow/);
+  assert.match(css, /bob-freshness-scope/);
+  assert.match(css, /--bob-bank-in-ink/);
   assert.match(css, /bob-freshness-meter-warn/);
   assert.match(css, /font-variant-numeric:\s*tabular-nums/);
 });

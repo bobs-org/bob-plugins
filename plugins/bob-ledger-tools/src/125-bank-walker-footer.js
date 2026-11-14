@@ -268,7 +268,7 @@ function bankWalkerFooterView(snapshot, options = {}) {
       const payee = typeof entry.payee === "string" ? entry.payee : "";
       detailText = [amount, payee].filter(Boolean).join(" ");
       detailCompactText = amount;
-      hintText = scope === "waiting" ? "Ctrl+Enter file" : "]} next day";
+      hintText = scope === "waiting" ? "Ctrl+Enter file" : "";
       inflow = entry.inflow === true || (Number.isSafeInteger(entry.cents) && entry.cents > 0);
     } else if (inBank) {
       const total = scope === "waiting" ? waiting : rows;
@@ -451,14 +451,23 @@ function bankWalkerFooterNavVersion(plugin) {
   }
 }
 
+function bankWalkerFooterListCacheKey() {
+  try {
+    if (typeof bankCacheKey !== "function" || typeof bankBuildArgs !== "function") {
+      return null;
+    }
+    return bankCacheKey(bankBuildArgs({ command: "list" }));
+  } catch (error) {
+    return null;
+  }
+}
+
 function bankWalkerFooterCachedList(plugin) {
   try {
     if (typeof plugin.bankCacheGet !== "function") {
       return null;
     }
-    const key = typeof bankCacheKey === "function"
-      ? bankCacheKey(["bank", "list"])
-      : null;
+    const key = bankWalkerFooterListCacheKey();
     if (!key) {
       return null;
     }
@@ -472,8 +481,36 @@ function bankWalkerFooterCachedList(plugin) {
   }
 }
 
+function bankWalkerFooterMeterEligible(result, current) {
+  if (!result || !result.report) {
+    return false;
+  }
+  if (result.error) {
+    return false;
+  }
+  if (result.stale === true) {
+    return false;
+  }
+  return (result.generation || 0) >= current;
+}
+
+function bankWalkerFooterHoldResult(result, generation) {
+  const resultGen = Number.isInteger(result && result.generation)
+    ? result.generation
+    : generation;
+  return {
+    report: result && result.report ? result.report : null,
+    generation: resultGen,
+    error: result && result.error ? result.error : null,
+    stale: Boolean(result && result.stale),
+  };
+}
+
 function bankWalkerFooterRequestList(plugin, generation) {
   try {
+    if (plugin.bankWalkerFooterMeterAttempted === generation) {
+      return;
+    }
     if (
       plugin.bankWalkerFooterMeterWanted === generation &&
       plugin.bankWalkerFooterMeterPending
@@ -485,27 +522,14 @@ function bankWalkerFooterRequestList(plugin, generation) {
     }
     plugin.bankWalkerFooterMeterWanted = generation;
     plugin.bankWalkerFooterMeterPending = true;
+    plugin.bankWalkerFooterMeterAttempted = generation;
     Promise.resolve(plugin.apiBankFetch({ command: "list" }))
       .then((result) => {
         if (plugin.bankWalkerFooterMeterWanted !== generation) {
           return;
         }
         plugin.bankWalkerFooterMeterPending = false;
-        if (result && result.report) {
-          const resultGen = Number.isInteger(result.generation)
-            ? result.generation
-            : generation;
-          const heldGen = plugin.bankWalkerFooterMeterResult
-            && Number.isInteger(plugin.bankWalkerFooterMeterResult.generation)
-            ? plugin.bankWalkerFooterMeterResult.generation
-            : 0;
-          if (resultGen >= heldGen) {
-            plugin.bankWalkerFooterMeterResult = {
-              report: result.report,
-              generation: resultGen,
-            };
-          }
-        }
+        plugin.bankWalkerFooterMeterResult = bankWalkerFooterHoldResult(result, generation);
         try {
           const route = walkerFooterWalkMode(plugin);
           if (route.legacy || route.mode !== "b") {
@@ -521,6 +545,12 @@ function bankWalkerFooterRequestList(plugin, generation) {
       .catch(() => {
         if (plugin.bankWalkerFooterMeterWanted === generation) {
           plugin.bankWalkerFooterMeterPending = false;
+          plugin.bankWalkerFooterMeterResult = {
+            report: null,
+            generation,
+            error: { code: "failed" },
+            stale: false,
+          };
         }
       });
   } catch (error) {
@@ -534,24 +564,29 @@ function bankWalkerFooterTakeMeter(plugin) {
       ? plugin.bankVaultGeneration
       : 0;
     const held = plugin && plugin.bankWalkerFooterMeterResult;
-    if (held && held.report && (held.generation || 0) >= current) {
+    if (bankWalkerFooterMeterEligible(held, current)) {
       return bankWalkerFooterMeterFromReport(held.report, {
         currentGeneration: current,
         resultGeneration: held.generation || 0,
       });
     }
     const cached = bankWalkerFooterCachedList(plugin);
-    if (cached && (cached.generation || 0) >= current) {
+    if (bankWalkerFooterMeterEligible(cached, current)) {
       return bankWalkerFooterMeterFromReport(cached.report, {
         currentGeneration: current,
         resultGeneration: cached.generation || 0,
       });
     }
     const stale = Boolean(
-      (held && held.report && (held.generation || 0) < current) ||
+      (held && (held.generation || 0) < current) ||
       (cached && (cached.generation || 0) < current),
     );
-    bankWalkerFooterRequestList(plugin, current);
+    if (plugin.bankWalkerFooterMeterAttempted !== current) {
+      bankWalkerFooterRequestList(plugin, current);
+    }
+    if (held && held.report && (held.error || held.stale === true) && (held.generation || 0) >= current) {
+      return { text: "", state: held.error ? "error" : "stale", lines: [] };
+    }
     return {
       text: "",
       state: stale ? "stale-generation" : "pending",

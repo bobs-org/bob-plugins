@@ -1,9 +1,13 @@
 // Ledger api.bankWalk v1 — index, overlay, snapshot, planners, resolver.
-// Fixture month notes in scripts/fixtures/bank-walk/bank/ plus
-// bob-bank-list-all.json captured with:
-//   TMP=$(mktemp -d); cp scripts/fixtures/bank-walk/bank.md $TMP/bank.md;
-//   mkdir -p $TMP/bank; cp scripts/fixtures/bank-walk/bank/*.md $TMP/bank/;
-//   BOB_DIR=$TMP bob bank list -a -f json > scripts/fixtures/bank-walk/bob-bank-list-all.json
+// Fixture month notes live in plugins/bob-ledger-tools/scripts/fixtures/bank-walk/
+// (this file is scripts/test-ledger-tools-bank-walk.cjs at the bob-plugins
+// repo root). Capture bob-bank-list-all.json from that repo root with:
+//   TMP=$(mktemp -d)
+//   cp plugins/bob-ledger-tools/scripts/fixtures/bank-walk/bank.md $TMP/bank.md
+//   mkdir -p $TMP/bank
+//   cp plugins/bob-ledger-tools/scripts/fixtures/bank-walk/bank/*.md $TMP/bank/
+//   BOB_DIR=$TMP bob bank list -a -f json \
+//     > plugins/bob-ledger-tools/scripts/fixtures/bank-walk/bob-bank-list-all.json
 // Regenerate the JSON with that exact command after editing the fixtures,
 // then assert parity (rows + waiting flags) below.
 const assert = require("node:assert/strict");
@@ -92,6 +96,11 @@ test("snapshot: waiting scope, order, keys, labels, counts", () => {
   assert.equal(halloween.label, "Sat Oct 31");
   assert.equal(halloween.short, "Oct 31");
   assert.equal(halloween.month, "2026-10");
+  assert.equal(halloween.monthLabel, "October 2026");
+  const novRow = snap.entries.find((e) => e.path === "bank/2026-11.md");
+  assert.ok(novRow);
+  assert.equal(novRow.monthLabel, "November 2026");
+  assert.equal(h.bankWalkMonthLabel("2026-11"), "November 2026");
   const inflow = snap.entries.find((e) => e.payee === "Payroll inflow");
   assert.ok(inflow);
   assert.equal(inflow.inflow, true);
@@ -115,18 +124,34 @@ test("snapshot: waiting scope, order, keys, labels, counts", () => {
   assert.ok(Object.isFrozen(snap) && Object.isFrozen(snap.entries) && Object.isFrozen(snap.days));
 });
 test("parity: index rows and waiting flags equal bob bank list -a", () => {
-  const snap = freshSnapshot();
+  const snap = h.bankWalkBuildSnapshotFromContents(monthContents(), 7);
   const doc = JSON.parse(readFixture("bob-bank-list-all.json"));
   assert.equal(doc.ok, true);
-  const bobRows = doc.days.flatMap((d) => d.rows.map((r) => ({ path: r.path, line: r.line, date: r.date, waiting: r.acknowledged === false })));
-  const diskRows = monthContents().flatMap((f) => {
-    const scan = h.bankScanSource(f.path, f.content);
-    return scan.rows.filter((r) => h.bankWalkIsRow(r)).map((r) => ({ path: r.path, line: r.line, date: r.date, waiting: r.acknowledged === false }));
-  });
+  const bobRows = doc.days.flatMap((d) => d.rows.map((r) => ({
+    path: r.path,
+    line: r.line,
+    date: r.date,
+    waiting: r.acknowledged === false,
+  })));
   const key = (r) => `${r.path}|${r.line}|${r.date}|${r.waiting ? 1 : 0}`;
-  assert.deepEqual(new Set(diskRows.map(key)), new Set(bobRows.map(key)));
-  assert.equal(diskRows.length, bobRows.length);
-  assert.equal(diskRows.length, doc.counts.rows);
+  assert.equal(snap.counts.rows, doc.counts.rows);
+  assert.equal(snap.counts.waiting, doc.counts.waiting);
+  assert.equal(snap.counts.rows, bobRows.length);
+  const waiting = bobRows.filter((r) => r.waiting).map((r) => ({
+    path: r.path,
+    line: r.line,
+    date: r.date,
+    waiting: true,
+  }));
+  const indexed = snap.entries.map((e) => ({
+    path: e.path,
+    line: e.line,
+    date: e.date,
+    waiting: e.waiting === true,
+  }));
+  assert.deepEqual(new Set(indexed.map(key)), new Set(waiting.map(key)));
+  assert.equal(indexed.length, waiting.length);
+  assert.equal(indexed.length, doc.counts.waiting);
 });
 test("scope flips to all when nothing waits", () => {
   const contents = monthContents().map((f) => {
@@ -208,6 +233,9 @@ test("origins: cursor gap, daily, anchor, entry", () => {
   assert.equal(dailyWith.entry.date, "2026-11-13");
   const dailyFirst = snap.days.find((d) => d.date === "2026-11-13").first;
   assert.equal(dailyWith.entry.key, snap.entries[dailyFirst].key);
+  const dailyNoLine = h.bankWalkPlan(snap, { direction: 1, cursor: { path: "2026/20261113.md" } });
+  assert.equal(dailyNoLine.origin, "daily");
+  assert.equal(dailyNoLine.entry.key, snap.entries[dailyFirst].key);
   const dailyLast = h.bankWalkPlan(snap, { direction: -1, cursor: { path: "2026/20261113.md", line0: 0 } });
   const dayEntries = snap.entries.filter((e) => e.date === "2026-11-13");
   assert.equal(dailyLast.entry.key, dayEntries[dayEntries.length - 1].key);
@@ -334,4 +362,133 @@ test("mixin snapshot: indexing until ready, overlay signature memo, change regis
   plugin2.bankWalkFireChange({ generation: 2 });
   assert.equal(fired, 1);
   plugin2.teardownBankWalk();
+});
+test("scan memo reuses the same path content and rescans only a changed month", () => {
+  const files = monthContents();
+  const cache = new Map();
+  h.bankWalkBuildSnapshotFromContents(files, 1, cache);
+  const oct = cache.get("bank/2026-10.md");
+  const nov = cache.get("bank/2026-11.md");
+  assert.ok(oct && nov);
+  assert.equal(h.bankWalkScanSourceMemo("bank/2026-10.md", oct.content, cache), oct.scan);
+  const changed = files.map((file) => (
+    file.path === "bank/2026-11.md"
+      ? { path: file.path, content: `${file.content}\n` }
+      : file
+  ));
+  h.bankWalkBuildSnapshotFromContents(changed, 2, cache);
+  assert.equal(cache.get("bank/2026-10.md").scan, oct.scan);
+  assert.notEqual(cache.get("bank/2026-11.md").scan, nov.scan);
+});
+test("cursor above November's first heading stays in November", () => {
+  const snap = freshSnapshot();
+  const cursor = { path: "bank/2026-11.md", line0: 0 };
+  const firstNov = snap.entries.find((entry) => entry.date >= "2026-11-01");
+  assert.ok(firstNov);
+  const nextRow = h.bankWalkPlan(snap, { direction: 1, cursor });
+  assert.equal(nextRow.origin, "cursor-gap");
+  assert.equal(nextRow.entry.key, firstNov.key);
+  assert.equal(nextRow.wrapped, false);
+  const nextDay = h.bankWalkPlan(snap, { direction: 1, dayJump: true, cursor });
+  assert.equal(nextDay.origin, "cursor-gap");
+  assert.equal(nextDay.entry.date, firstNov.date);
+  assert.equal(nextDay.entry.dayRank, 1);
+  assert.equal(nextDay.wrapped, false);
+  const lastOct = [...snap.entries].reverse().find((entry) => entry.date < "2026-11-01");
+  assert.ok(lastOct);
+  const prevRow = h.bankWalkPlan(snap, { direction: -1, cursor });
+  assert.equal(prevRow.origin, "cursor-gap");
+  assert.equal(prevRow.entry.key, lastOct.key);
+  assert.equal(prevRow.wrapped, false);
+  const prevDay = h.bankWalkPlan(snap, { direction: -1, dayJump: true, cursor });
+  assert.equal(prevDay.origin, "cursor-gap");
+  assert.equal(prevDay.entry.date, lastOct.date);
+  assert.equal(prevDay.entry.dayRank, 1);
+  assert.equal(prevDay.wrapped, false);
+});
+test("anchor-gap day jumps leave a day that still has rows", () => {
+  const snap = freshSnapshot();
+  const shop = snap.entries.find((entry) => entry.payee === "ShopRite" && entry.date === "2026-11-12");
+  assert.ok(shop);
+  const sameDay = snap.entries.filter((entry) => entry.date === shop.date);
+  assert.ok(sameDay.length > 1);
+  const anchor = {
+    key: "bank:gone",
+    path: shop.path,
+    line: shop.line,
+    date: shop.date,
+    text: shop.text,
+    day: h.bankLocalDate(),
+  };
+  const nextDay = h.bankWalkPlan(snap, { direction: 1, dayJump: true, anchor });
+  assert.equal(nextDay.origin, "anchor-gap");
+  assert.equal(nextDay.entry.date, "2026-11-13");
+  assert.equal(nextDay.entry.dayRank, 1);
+  assert.equal(nextDay.wrapped, false);
+  const prevDay = h.bankWalkPlan(snap, { direction: -1, dayJump: true, anchor });
+  assert.equal(prevDay.origin, "anchor-gap");
+  assert.equal(prevDay.entry.date, "2026-11-04");
+  assert.equal(prevDay.entry.dayRank, 1);
+  assert.equal(prevDay.wrapped, false);
+});
+test("counted daily jumps move days and rows from the day's first landing", () => {
+  const snap = freshSnapshot();
+  const cursor = { path: "2026/20261113.md" };
+  const day = snap.days.find((item) => item.date === "2026-11-13");
+  assert.ok(day);
+  const dayPos = snap.days.findIndex((item) => item.date === "2026-11-13");
+  const first = h.bankWalkPlan(snap, { direction: 1, dayJump: true, repeat: 1, cursor });
+  assert.equal(first.origin, "daily");
+  assert.equal(first.entry.key, snap.entries[day.first].key);
+  assert.equal(first.wrapped, false);
+  const twoDays = h.bankWalkPlan(snap, { direction: 1, dayJump: true, repeat: 2, cursor });
+  assert.equal(twoDays.entry.date, snap.days[dayPos + 1].date);
+  assert.equal(twoDays.entry.dayRank, 1);
+  assert.equal(twoDays.wrapped, false);
+  const wrapDays = h.bankWalkPlan(snap, { direction: 1, dayJump: true, repeat: snap.days.length - dayPos + 1, cursor });
+  assert.equal(wrapDays.wrapped, true);
+  assert.equal(wrapDays.entry.date, snap.days[0].date);
+  const backDays = h.bankWalkPlan(snap, { direction: -1, dayJump: true, repeat: 2, cursor });
+  assert.equal(backDays.entry.date, snap.days[dayPos - 1].date);
+  assert.equal(backDays.entry.dayRank, 1);
+  const wrapBack = h.bankWalkPlan(snap, { direction: -1, dayJump: true, repeat: dayPos + 2, cursor });
+  assert.equal(wrapBack.wrapped, true);
+  const firstRow = h.bankWalkPlan(snap, { direction: 1, repeat: 1, cursor });
+  assert.equal(firstRow.entry.key, snap.entries[day.first].key);
+  const secondRow = h.bankWalkPlan(snap, { direction: 1, repeat: 2, cursor });
+  assert.equal(secondRow.entry.key, snap.entries[day.first + 1].key);
+  const lastRow = h.bankWalkPlan(snap, { direction: -1, repeat: 1, cursor });
+  assert.equal(lastRow.entry.key, snap.entries[day.first + day.count - 1].key);
+  const beforeLast = h.bankWalkPlan(snap, { direction: -1, repeat: 2, cursor });
+  assert.equal(beforeLast.entry.key, snap.entries[day.first + day.count - 2].key);
+  const wrapRows = h.bankWalkPlan(snap, { direction: 1, repeat: snap.entries.length - day.first + 1, cursor });
+  assert.equal(wrapRows.wrapped, true);
+  const wrapBackRows = h.bankWalkPlan(snap, { direction: -1, repeat: day.first + day.count + 1, cursor });
+  assert.equal(wrapBackRows.wrapped, true);
+});
+test("bankWalkStepFromTuple is the shared cursor-gap and anchor-gap stepper", () => {
+  const snap = freshSnapshot();
+  const tuple = { date: "2026-11-12", path: "bank/2026-11.md", line: 39 };
+  const fromHelper = h.bankWalkStepFromTuple(snap.entries, snap.days, tuple, {
+    direction: 1,
+    dayJump: true,
+    repeat: 1,
+    origin: "anchor-gap",
+    scope: snap.scope,
+  });
+  const fromPlan = h.bankWalkPlan(snap, {
+    direction: 1,
+    dayJump: true,
+    anchor: {
+      key: "bank:gone",
+      path: tuple.path,
+      line: tuple.line,
+      date: tuple.date,
+      text: "- [ ] gone",
+      day: h.bankLocalDate(),
+    },
+  });
+  assert.equal(fromHelper.origin, "anchor-gap");
+  assert.equal(fromHelper.entry.key, fromPlan.entry.key);
+  assert.equal(fromHelper.entry.date, "2026-11-13");
 });

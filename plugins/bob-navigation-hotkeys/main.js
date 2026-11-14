@@ -76833,7 +76833,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-bank-row",
-      name: "Jump to next bank row",
+      name: "Jump to next bank row (waiting rows first)",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(1);
@@ -76842,7 +76842,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-prev-bank-row",
-      name: "Jump to previous bank row",
+      name: "Jump to previous bank row (waiting rows first)",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(-1);
@@ -76851,7 +76851,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-bank-day",
-      name: "Jump to the first bank row of the next day",
+      name: "Jump to the first row of the next bank day",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(1, { dayJump: true });
@@ -76860,7 +76860,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-prev-bank-day",
-      name: "Jump to the first bank row of the previous day",
+      name: "Jump to the first row of the previous bank day",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(-1, { dayJump: true });
@@ -87271,8 +87271,8 @@ class BobNavigationHotkeysDecayCardWriterMixin {
 // the session anchor. This path never writes the vault or starts bob.
 const BANK_WALK_REQUIRED_API_VERSION = 1;
 const BANK_WALK_API_REQUIRED_NOTICE = "Bob Ledger Tools bank walk api required";
-const BANK_WALK_INDEXING_NOTICE = "Bank walk unavailable — still indexing";
-const BANK_WALK_EMPTY_NOTICE = "No bank rows — bob bank import";
+const BANK_WALK_INDEXING_NOTICE = "Bank walk unavailable — still indexing bank notes";
+const BANK_WALK_EMPTY_NOTICE = "No bank rows yet — bob bank import adds them";
 const BANK_WALK_STALE_NOTICE = "Bank rows changed — try again";
 const BANK_WALK_JUMP_FAILURE_NOTICE = "Could not jump to bank row";
 
@@ -87358,17 +87358,28 @@ class BobNavigationHotkeysBankWalkMixin {
     }
   }
 
-  bankWalkObserveScope(scope) {
+  bankWalkObserveScope(scope, snapshot) {
     const normalized = scope === "all" ? "all" : "waiting";
     const previous = this.lastBankWalkScope;
     this.lastBankWalkScope = normalized;
     if (!previous || previous === normalized) {
+      return null;
+    }
+    if (normalized === "all") {
+      return "Nothing waiting — ]b now walks every row";
+    }
+    const waiting = snapshot && snapshot.counts && Number.isInteger(snapshot.counts.waiting)
+      ? snapshot.counts.waiting
+      : 0;
+    return `${waiting} waiting — ]b now walks waiting rows`;
+  }
+
+  bankWalkShowFlipBanner(banner) {
+    if (!banner) {
       return;
     }
     try {
-      new Notice(normalized === "all"
-        ? "Nothing waiting — ]b now walks every row"
-        : "Bank rows waiting — ]b now walks the queue");
+      new Notice(banner);
     } catch (_error) {
       // Scope feedback never blocks navigation.
     }
@@ -87473,13 +87484,15 @@ class BobNavigationHotkeysBankWalkMixin {
         return false;
       }
       let snapshot = snapshotAtPress;
+      let banner = null;
       if (queued) {
         const latest = bankWalkSnapshot(api);
         if (this.bankWalkUnavailable(latest)) {
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(latest));
+        banner = this.bankWalkObserveScope(bankWalkScope(latest), latest);
         if (bankWalkScope(latest) !== capturedScope) {
+          this.bankWalkShowFlipBanner(banner);
           return false;
         }
         snapshot = latest;
@@ -87487,14 +87500,16 @@ class BobNavigationHotkeysBankWalkMixin {
         if (this.bankWalkUnavailable(snapshot)) {
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(snapshot));
+        banner = this.bankWalkObserveScope(bankWalkScope(snapshot), snapshot);
       }
       if (this.bankWalkUnavailable(snapshot)) {
+        this.bankWalkShowFlipBanner(banner);
         return false;
       }
 
       let plan = this.bankWalkPlan(api, snapshot, request);
       if (!plan || plan.kind !== "jump") {
+        this.bankWalkShowFlipBanner(banner);
         try {
           showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
         } catch (_error) {
@@ -87507,18 +87522,27 @@ class BobNavigationHotkeysBankWalkMixin {
       if (!landed.ok && landed.stale) {
         snapshot = bankWalkSnapshot(api);
         if (this.bankWalkUnavailable(snapshot)) {
+          this.bankWalkShowFlipBanner(banner);
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(snapshot));
+        const retryBanner = this.bankWalkObserveScope(bankWalkScope(snapshot), snapshot);
+        if (retryBanner) {
+          banner = retryBanner;
+        }
         plan = this.bankWalkPlan(api, snapshot, request);
         if (!plan || plan.kind !== "jump") {
+          this.bankWalkShowFlipBanner(banner);
           showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
           return false;
         }
         landed = await this.landBankWalkPlan(api, plan, jumpOrigin);
       }
       if (!landed.ok) {
-        new Notice(landed.stale ? BANK_WALK_STALE_NOTICE : BANK_WALK_JUMP_FAILURE_NOTICE);
+        this.bankWalkShowFlipBanner(banner);
+        const path = plan && plan.entry && typeof plan.entry.path === "string" ? plan.entry.path : "";
+        new Notice(landed.stale
+          ? BANK_WALK_STALE_NOTICE
+          : (path ? `Could not open ${path}` : BANK_WALK_JUMP_FAILURE_NOTICE));
         return false;
       }
       try {
@@ -87527,8 +87551,9 @@ class BobNavigationHotkeysBankWalkMixin {
         // The ledger anchor is session-only convenience.
       }
       try {
-        showBankWalkNotice(this, buildBankWalkNoticeModel(snapshot, plan));
+        showBankWalkNotice(this, buildBankWalkNoticeModel(snapshot, plan, banner));
       } catch (_error) {
+        this.bankWalkShowFlipBanner(banner);
         new Notice(BANK_WALK_JUMP_FAILURE_NOTICE);
       }
       return true;
@@ -87545,35 +87570,95 @@ class BobNavigationHotkeysBankWalkMixin {
 }
 // ---- src/549a-bank-walk-notice.js ----
 // Bank-walk landing toast. The single notice is replaced on each landing.
-function buildBankWalkNoticeModel(snapshot, plan) {
+const BANK_WALK_NOTICE_MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function bankWalkNoticeMonthLabel(entry) {
+  if (entry && typeof entry.monthLabel === "string" && entry.monthLabel.trim()) {
+    return entry.monthLabel.trim();
+  }
+  const month = entry && typeof entry.month === "string" ? entry.month : "";
+  const match = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!match) {
+    return month;
+  }
+  const name = BANK_WALK_NOTICE_MONTH_NAMES[Number(match[2]) - 1];
+  return name ? `${name} ${match[1]}` : month;
+}
+
+function buildBankWalkNoticeModel(snapshot, plan, banner) {
   const entry = plan && plan.entry ? plan.entry : {};
   const scope = bankWalkScope(snapshot);
   const rank = Number.isInteger(plan && plan.rank) ? plan.rank : 1;
   const total = Number.isInteger(plan && plan.total) ? plan.total : 1;
   const dayRank = Number.isInteger(plan && plan.dayRank) ? plan.dayRank : 1;
   const dayTotal = Number.isInteger(plan && plan.dayTotal) ? plan.dayTotal : 1;
+  const dayIndex = Number.isInteger(plan && plan.dayIndex) ? plan.dayIndex : 0;
+  const dayCount = Number.isInteger(plan && plan.dayCount)
+    ? plan.dayCount
+    : (snapshot && Array.isArray(snapshot.days) ? snapshot.days.length : 0);
   const waiting = snapshot && snapshot.counts && Number.isInteger(snapshot.counts.waiting)
     ? snapshot.counts.waiting
     : 0;
-  const title = String(entry.payee || "Bank row").trim() || "Bank row";
-  const date = String(entry.date || "");
+  const payee = String(entry.payee || "Bank row").trim() || "Bank row";
+  const label = String(entry.label || entry.date || "").trim();
   const amount = String(entry.amountText || "");
-  const text = `${scope.toUpperCase()} ${rank}/${total} · ${date}${amount ? ` · ${amount}` : ""} ${title}${plan && plan.wrapped ? " · ↻ wrapped" : ""}`.trim();
+  const monthLabel = bankWalkNoticeMonthLabel(entry);
+  const hint = scope === "waiting" ? "Ctrl+Enter file" : "]} next day";
+  const wrapped = Boolean(plan && plan.wrapped);
+  const scopeWord = scope === "waiting" ? "WAITING" : "ALL";
+  const bannerText = typeof banner === "string" && banner ? banner : "";
+  const header = `$ ${scopeWord} ${rank}/${total}${wrapped ? " ↻ wrapped" : ""}`;
+  const dayLine = label ? `${label} · ${dayRank} of ${dayTotal}` : `${dayRank} of ${dayTotal}`;
+  const moneyLine = [amount, payee].filter(Boolean).join("  ");
+  const lastLine = [monthLabel, hint].filter(Boolean).join(" · ");
+  const text = [bannerText, header, dayLine, moneyLine, lastLine].filter(Boolean).join(" · ");
   return Object.freeze({
     empty: false,
     text,
+    banner: bannerText || null,
     scope,
     rank,
     total,
     dayRank,
     dayTotal,
+    dayIndex,
+    dayCount,
     waiting,
-    title,
-    date,
+    title: payee,
+    label,
+    date: String(entry.date || ""),
     amount,
+    payee,
     inflow: entry.inflow === true,
-    wrapped: Boolean(plan && plan.wrapped),
+    monthLabel,
+    hint,
+    wrapped,
   });
+}
+
+function renderBankWalkDayRail(rail, model) {
+  const count = Number.isInteger(model.dayCount) ? model.dayCount : 0;
+  const lit = Number.isInteger(model.dayIndex) ? model.dayIndex : 0;
+  if (count > 30) {
+    const bar = rail.createDiv({ cls: "bob-nh-bank-walk-bar" });
+    const fill = bar.createDiv({ cls: "bob-nh-bank-walk-bar-fill" });
+    const percent = count > 0 ? Math.max(4, Math.min(100, ((lit + 0.5) / count) * 100)) : 4;
+    try {
+      fill.setAttribute("style", `width: ${percent}%`);
+    } catch (_error) {}
+    return;
+  }
+  const dots = count > 0 ? count : 1;
+  for (let i = 0; i < dots; i += 1) {
+    const current = i === lit;
+    rail.createSpan({
+      cls: `bob-nh-bank-walk-dot${current ? " is-current" : ""}`,
+      attr: { "aria-hidden": "true" },
+    });
+  }
 }
 
 function renderBankWalkNoticeFragment(model, root) {
@@ -87582,30 +87667,41 @@ function renderBankWalkNoticeFragment(model, root) {
     cls: `bob-nh-notice bob-nh-bank-walk is-${scope}`,
     attr: { "aria-label": model.text },
   });
+  if (model.banner) {
+    card.createDiv({ cls: "bob-nh-bank-walk-banner", text: model.banner });
+  }
   const header = card.createDiv({ cls: "bob-nh-notice-header" });
   header.createSpan({ cls: "bob-nh-bank-walk-glyph", text: "$", attr: { "aria-hidden": "true" } });
   header.createSpan({ cls: "bob-nh-notice-level", text: scope === "waiting" ? "WAITING" : "ALL" });
   header.createSpan({ cls: "bob-nh-notice-count", text: `${model.rank}/${model.total}` });
-  header.createSpan({ cls: "bob-nh-notice-receipt", text: `${model.dayRank}/${model.dayTotal}` });
+  if (model.wrapped) {
+    header.createSpan({ cls: "bob-nh-notice-receipt", text: "↻ wrapped" });
+  }
   const rail = card.createDiv({ cls: "bob-nh-bank-walk-rail", attr: { "aria-hidden": "true" } });
-  const progress = rail.createDiv({ cls: "bob-nh-bank-walk-progress" });
-  progress.setAttribute("style", `width: ${Math.max(3, Math.min(100, (model.rank / Math.max(1, model.total)) * 100))}%`);
-  card.createDiv({ cls: "bob-nh-bank-walk-title", text: model.title });
-  const chips = card.createDiv({ cls: "bob-nh-notice-chips" });
-  if (model.date) chips.createSpan({ cls: "bob-nh-notice-chip", text: model.date });
-  if (model.amount) chips.createSpan({ cls: `bob-nh-notice-chip ${model.inflow ? "is-info" : ""}`, text: model.amount });
-  if (model.wrapped) chips.createSpan({ cls: "bob-nh-notice-chip is-info", text: "↻ wrapped" });
-  if (model.waiting > 0) chips.createSpan({ cls: "bob-nh-notice-chip", text: `${model.waiting} waiting` });
-  const hint = card.createDiv({ cls: "bob-nh-lane-walk-hint" });
-  hint.createSpan({ cls: "bob-nh-lane-walk-key", text: "]b / [b" });
-  hint.createSpan({ text: " rows · " });
-  hint.createSpan({ cls: "bob-nh-lane-walk-key", text: "]B / [B" });
-  hint.createSpan({ text: " days" });
+  renderBankWalkDayRail(rail, model);
+  card.createDiv({ cls: "bob-nh-bank-walk-day", text: model.label ? `${model.label} · ${model.dayRank} of ${model.dayTotal}` : `${model.dayRank} of ${model.dayTotal}` });
+  const money = card.createDiv({ cls: "bob-nh-bank-walk-money" });
+  if (model.amount) {
+    money.createSpan({
+      cls: `bob-nh-bank-walk-amount${model.inflow ? " is-inflow" : ""}`,
+      text: model.amount,
+    });
+  }
+  if (model.payee) {
+    money.createSpan({ cls: "bob-nh-bank-walk-payee", text: model.payee });
+  }
+  const footer = card.createDiv({ cls: "bob-nh-bank-walk-footer" });
+  if (model.monthLabel) {
+    footer.createSpan({ cls: "bob-nh-bank-walk-month", text: model.monthLabel });
+  }
+  if (model.hint) {
+    footer.createSpan({ cls: "bob-nh-bank-walk-hint", text: model.hint });
+  }
   return card;
 }
 
 function showBankWalkEmptyNotice(plugin, text) {
-  showBankWalkNotice(plugin, { empty: true, text: String(text || "No bank rows — bob bank import") });
+  showBankWalkNotice(plugin, { empty: true, text: String(text || "No bank rows yet — bob bank import adds them") });
 }
 
 function showBankWalkNotice(plugin, model) {
@@ -118472,8 +118568,10 @@ try {
       getBankWalkApi,
       bankWalkSnapshot,
       bankWalkScope,
+      bankWalkNoticeMonthLabel,
       buildBankWalkNoticeModel,
       renderBankWalkNoticeFragment,
+      renderBankWalkDayRail,
       showBankWalkNotice,
       showBankWalkEmptyNotice,
       bracketModeAttentionMap,

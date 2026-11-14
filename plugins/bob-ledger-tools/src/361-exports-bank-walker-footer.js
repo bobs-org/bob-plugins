@@ -12,6 +12,9 @@ try {
       bankWalkerFooterActivate,
       bankWalkerFooterRequest,
       bankWalkerFooterTakeMeter,
+      bankWalkerFooterRequestList,
+      bankWalkerFooterCachedList,
+      bankWalkerFooterListCacheKey,
       walkerFooterPushBankAttention,
     });
   }

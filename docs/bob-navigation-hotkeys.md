@@ -41,17 +41,17 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Insert blank line above | `insert-blank-line-above` | — |
 | Insert blank line below | `insert-blank-line-below` | — |
 | Jump to next Pending, Next, or Ready task off today's plan | `jump-to-next-lane-task` | — |
-| Jump to next bank row | `jump-to-next-bank-row` | — |
+| Jump to next bank row (waiting rows first) | `jump-to-next-bank-row` | — |
 | Jump to next open task or move a Pomodoro down | `jump-to-next-open-task` | — |
 | Jump to next section header | `jump-to-next-section-header` | — |
 | Jump to next task due for freshness review | `jump-to-next-due-task` | Ctrl+Alt+J |
 | Jump to previous Pending, Next, or Ready task off today's plan | `jump-to-prev-lane-task` | — |
-| Jump to previous bank row | `jump-to-prev-bank-row` | — |
+| Jump to previous bank row (waiting rows first) | `jump-to-prev-bank-row` | — |
 | Jump to previous open task or move a Pomodoro up | `jump-to-prev-open-task` | — |
 | Jump to previous section header | `jump-to-prev-section-header` | — |
 | Jump to previous task due for freshness review | `jump-to-prev-due-task` | Ctrl+Alt+K |
-| Jump to the first bank row of the next day | `jump-to-next-bank-day` | — |
-| Jump to the first bank row of the previous day | `jump-to-prev-bank-day` | — |
+| Jump to the first row of the next bank day | `jump-to-next-bank-day` | — |
+| Jump to the first row of the previous bank day | `jump-to-prev-bank-day` | — |
 | Jump to the first task of the next lane off today's plan | `jump-to-next-lane` | — |
 | Jump to the first task of the next review group | `jump-to-last-due-task` | — |
 | Jump to the first task of the previous lane off today's plan | `jump-to-prev-lane` | — |
@@ -501,12 +501,11 @@ order; `N` rows with a count). Scope: WAITING while any row waits
 day's first scope row (duplicates merged across months; from mid-day `[B`
 takes the previous day). Steps wrap (`↻`).
 
-Origin: cursor row/tuple, daily note's day, live anchor, else oldest-waiting
-row or newest day. Landing parks at the payee start (`<C-o>` jump; one re-plan
-when stale). The toast leads with the scope word: position, day rail, amount,
-payee (`Ctrl+Enter file` when waiting). Never writes, never runs `bob`,
-no-ops with the Category card open. (Vim's `[b` means `:bprevious`; here it
-walks bank rows.)
+Origin: cursor, daily note, live anchor, else oldest waiting or newest day.
+Lands on the payee (`<C-o>`; one stale re-plan). Toast: scope, position, day
+rail, day and amount, month and hint (`Ctrl+Enter file` waiting, `]} next day`
+in ALL). Never writes or runs `bob`; no-ops with the Category card open.
+(Vim's `[b` is `:bprevious`; here it walks bank rows.)
 
 ## Bracket repeat
 
@@ -541,7 +540,7 @@ way the last walk moved, and neither key changes the remembered family.
 | --- | --- | --- |
 | `s` | first task of the next occupied review group (`]S`) | first task of the previous occupied review group (`[S`) |
 | `w` | first task of the next lane (`]W`) | first task of the previous lane (`[W`) |
-| `b` | first bank row of the next day (`]B`) | first bank row of the previous day (`[B`) |
+| `b` | first row of the next bank day (`]B`) | first row of the previous bank day (`[B`) |
 | `n` | shows `No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B` | same |
 
 `N]}` / `N[{` keep count parity with `N]S` / `N[S`, `N]W` / `N[W`, and `N]B` / `N[B`. With no

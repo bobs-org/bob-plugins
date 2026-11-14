@@ -9,6 +9,11 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkGeneration = 0;
     this.bankWalkDisk = new Map();
     this.bankWalkReadTokens = new Map();
+    this.bankWalkOverlays = new Map();
+    this.bankWalkPathSeq = new Map();
+    this.bankWalkReadScheduleSeq = new Map();
+    this.bankWalkPendingReads = new Set();
+    this.bankWalkScanCache = new Map();
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
@@ -26,7 +31,7 @@ class BobLedgerToolsBankWalkMixin {
     if (vault && typeof vault.on === "function") {
       for (const event of ["create", "modify", "delete", "rename"]) {
         try {
-          this.registerEvent(vault.on(event, (file, oldPath) => this.bankWalkHandleVaultEvent(file, oldPath)));
+          this.registerEvent(vault.on(event, (file, oldPath) => this.bankWalkHandleVaultEvent(event, file, oldPath)));
         } catch (error) {}
       }
     }
@@ -53,6 +58,21 @@ class BobLedgerToolsBankWalkMixin {
     }
     if (this.bankWalkReadTokens instanceof Map) {
       this.bankWalkReadTokens.clear();
+    }
+    if (this.bankWalkOverlays instanceof Map) {
+      this.bankWalkOverlays.clear();
+    }
+    if (this.bankWalkPathSeq instanceof Map) {
+      this.bankWalkPathSeq.clear();
+    }
+    if (this.bankWalkReadScheduleSeq instanceof Map) {
+      this.bankWalkReadScheduleSeq.clear();
+    }
+    if (this.bankWalkPendingReads instanceof Set) {
+      this.bankWalkPendingReads.clear();
+    }
+    if (this.bankWalkScanCache instanceof Map) {
+      this.bankWalkScanCache.clear();
     }
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
@@ -82,7 +102,7 @@ class BobLedgerToolsBankWalkMixin {
     }
     for (const listener of Array.from(this.bankWalkListeners)) {
       try {
-        listener(info || { generation: this.bankWalkGeneration || 0 });
+        listener(info || { generation: this.bankWalkGeneration });
       } catch (error) {}
     }
   }
@@ -118,7 +138,41 @@ class BobLedgerToolsBankWalkMixin {
     }
   }
 
-  bankWalkHandleVaultEvent(file, oldPath) {
+  bankWalkDropPath(path, reason) {
+    try {
+      const norm = bankNormalizePath(path);
+      if (!norm) {
+        return;
+      }
+      if (this.bankWalkDisk instanceof Map) {
+        this.bankWalkDisk.delete(norm);
+      }
+      if (this.bankWalkOverlays instanceof Map) {
+        this.bankWalkOverlays.delete(norm);
+      }
+      if (this.bankWalkScanCache instanceof Map) {
+        this.bankWalkScanCache.delete(norm);
+      }
+      if (this.bankWalkPendingReads instanceof Set) {
+        this.bankWalkPendingReads.delete(norm);
+      }
+      if (this.bankWalkPathSeq instanceof Map) {
+        this.bankWalkPathSeq.delete(norm);
+      }
+      if (this.bankWalkReadScheduleSeq instanceof Map) {
+        this.bankWalkReadScheduleSeq.delete(norm);
+      }
+      const tok = (this.bankWalkReadTokens instanceof Map ? this.bankWalkReadTokens.get(norm) : 0) || 0;
+      if (this.bankWalkReadTokens instanceof Map) {
+        this.bankWalkReadTokens.set(norm, tok + 1);
+      }
+      this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
+      this.bankWalkMemoKey = null;
+      this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: reason || "vault", path: norm });
+    } catch (error) {}
+  }
+
+  bankWalkHandleVaultEvent(event, file, oldPath) {
     try {
       if (this.bankWalkActive === false) {
         return;
@@ -130,28 +184,35 @@ class BobLedgerToolsBankWalkMixin {
       if (!curMonth && !prevMonth) {
         return;
       }
-      // Rename: drop the old path immediately; the new path re-reads below.
-      if (previous && prevMonth && previous !== current) {
-        try {
-          const norm = bankNormalizePath(previous);
-          if (this.bankWalkDisk instanceof Map && this.bankWalkDisk.has(norm)) {
-            this.bankWalkDisk.delete(norm);
-          }
-          const tok = (this.bankWalkReadTokens instanceof Map ? this.bankWalkReadTokens.get(norm) : 0) || 0;
-          if (this.bankWalkReadTokens instanceof Map) {
-            this.bankWalkReadTokens.set(norm, tok + 1);
-          }
-        } catch (error) {}
+      if (event === "delete") {
+        const gone = curMonth ? current : (prevMonth ? previous : "");
+        if (gone) {
+          this.bankWalkDropPath(gone, "delete");
+        }
+        return;
+      }
+      if (event === "rename" && previous && prevMonth && previous !== current) {
+        this.bankWalkDropPath(previous, "rename");
       }
       if (current && curMonth) {
         this.bankWalkScheduleFileRead(current);
-      } else {
-        // Delete without a current month path: bump and notify.
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkMemoKey = null;
-        this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "vault" });
       }
     } catch (error) {}
+  }
+
+  bankWalkClearTimer() {
+    if (this.bankWalkRevalidateTimer === null || this.bankWalkRevalidateTimer === undefined) {
+      return;
+    }
+    try {
+      const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
+      if (timers && typeof timers.clearTimeout === "function") {
+        timers.clearTimeout(this.bankWalkRevalidateTimer);
+      } else {
+        clearTimeout(this.bankWalkRevalidateTimer);
+      }
+    } catch (error) {}
+    this.bankWalkRevalidateTimer = null;
   }
 
   bankWalkScheduleFileRead(fileOrPath) {
@@ -164,24 +225,30 @@ class BobLedgerToolsBankWalkMixin {
         return;
       }
       const path = bankNormalizePath(raw);
-      if (!(this.bankWalkReadTokens instanceof Map)) {
-        this.bankWalkReadTokens = new Map();
+      if (!(this.bankWalkPendingReads instanceof Set)) {
+        this.bankWalkPendingReads = new Set();
       }
-      // Coalesce rapid vault events; the timer below does the read.
-      if (this.bankWalkRevalidateTimer !== null && this.bankWalkRevalidateTimer !== undefined) {
-        try {
-          const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
-          if (timers && typeof timers.clearTimeout === "function") {
-            timers.clearTimeout(this.bankWalkRevalidateTimer);
-          } else {
-            clearTimeout(this.bankWalkRevalidateTimer);
-          }
-        } catch (error) {}
-        this.bankWalkRevalidateTimer = null;
+      if (!(this.bankWalkReadScheduleSeq instanceof Map)) {
+        this.bankWalkReadScheduleSeq = new Map();
       }
+      this.bankWalkPendingReads.add(path);
+      const overlay = this.bankWalkOverlays instanceof Map ? this.bankWalkOverlays.get(path) : null;
+      const seq = overlay && Number.isInteger(overlay.seq)
+        ? overlay.seq
+        : ((this.bankWalkPathSeq instanceof Map ? this.bankWalkPathSeq.get(path) : 0) || 0);
+      this.bankWalkReadScheduleSeq.set(path, seq);
+      this.bankWalkClearTimer();
       const run = () => {
         this.bankWalkRevalidateTimer = null;
-        this.bankWalkReadSingleMonth(path);
+        const pending = this.bankWalkPendingReads instanceof Set
+          ? Array.from(this.bankWalkPendingReads)
+          : [];
+        if (this.bankWalkPendingReads instanceof Set) {
+          this.bankWalkPendingReads.clear();
+        }
+        for (const item of pending) {
+          this.bankWalkReadSingleMonth(item);
+        }
       };
       try {
         const timers = (this.bankTimerApi && typeof this.bankTimerApi === "function") ? this.bankTimerApi() : (typeof window !== "undefined" ? window : globalThis);
@@ -196,14 +263,34 @@ class BobLedgerToolsBankWalkMixin {
     } catch (error) {}
   }
 
+  bankWalkRetireOverlay(path, scheduledSeq) {
+    try {
+      const overlay = this.bankWalkOverlays instanceof Map ? this.bankWalkOverlays.get(path) : null;
+      if (!overlay) {
+        return;
+      }
+      const seq = Number.isInteger(overlay.seq) ? overlay.seq : 0;
+      const scheduled = Number.isInteger(scheduledSeq) ? scheduledSeq : 0;
+      if (seq <= scheduled) {
+        this.bankWalkOverlays.delete(path);
+      }
+    } catch (error) {}
+  }
+
   bankWalkReadSingleMonth(path) {
     try {
       if (this.bankWalkActive === false) {
         return;
       }
       const norm = bankNormalizePath(path);
+      if (!(this.bankWalkReadTokens instanceof Map)) {
+        this.bankWalkReadTokens = new Map();
+      }
       const token = ((this.bankWalkReadTokens.get(norm) || 0) + 1);
       this.bankWalkReadTokens.set(norm, token);
+      const scheduledSeq = this.bankWalkReadScheduleSeq instanceof Map
+        ? (this.bankWalkReadScheduleSeq.get(norm) || 0)
+        : 0;
       const vault = this.app && this.app.vault;
       const read = vault && (vault.cachedRead || vault.read);
       if (typeof read !== "function") {
@@ -230,11 +317,63 @@ class BobLedgerToolsBankWalkMixin {
           this.bankWalkDisk = new Map();
         }
         this.bankWalkDisk.set(norm, text);
+        this.bankWalkRetireOverlay(norm, scheduledSeq);
         this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
         this.bankWalkMemoKey = null;
         this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "vault", path: norm });
       }).catch(() => {});
     } catch (error) {}
+  }
+
+  bankWalkListMonthFiles() {
+    const empty = { files: [], usedMarkdownWalk: false };
+    try {
+      const vault = this.app && this.app.vault;
+      if (!vault) {
+        return empty;
+      }
+      const hasFolderByPath = typeof vault.getFolderByPath === "function";
+      const hasAbstract = typeof vault.getAbstractFileByPath === "function";
+      if (hasFolderByPath || hasAbstract) {
+        let folder = null;
+        try {
+          if (hasFolderByPath) {
+            folder = vault.getFolderByPath("bank");
+          }
+        } catch (error) {
+          folder = null;
+        }
+        if (!folder && hasAbstract) {
+          try {
+            folder = vault.getAbstractFileByPath("bank");
+          } catch (error) {
+            folder = null;
+          }
+        }
+        if (!folder) {
+          return { files: [], usedMarkdownWalk: false };
+        }
+        const children = folder && Array.isArray(folder.children) ? folder.children : [];
+        return { files: children, usedMarkdownWalk: false };
+      }
+      if (typeof vault.getMarkdownFiles === "function") {
+        try {
+          return { files: vault.getMarkdownFiles() || [], usedMarkdownWalk: true };
+        } catch (error) {
+          return { files: [], usedMarkdownWalk: true };
+        }
+      }
+      return empty;
+    } catch (error) {
+      return empty;
+    }
+  }
+
+  bankWalkMarkReady(reason) {
+    this.bankWalkReady = true;
+    this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
+    this.bankWalkMemoKey = null;
+    this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: reason || "ready" });
   }
 
   bankWalkStartInitialScan() {
@@ -243,44 +382,27 @@ class BobLedgerToolsBankWalkMixin {
         return;
       }
       const vault = this.app && this.app.vault;
-      if (!vault || typeof vault.getMarkdownFiles !== "function") {
-        this.bankWalkReady = true;
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "ready" });
-        return;
-      }
-      let files = [];
-      try {
-        files = vault.getMarkdownFiles() || [];
-      } catch (error) {
-        files = [];
-      }
+      const listed = this.bankWalkListMonthFiles();
       let months = [];
       try {
-        months = bankDiscoverMonthPaths(files);
+        months = bankDiscoverMonthPaths(listed.files);
       } catch (error) {
         months = [];
       }
       if (!months.length) {
-        this.bankWalkReady = true;
-        this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-        this.bankWalkMemoKey = null;
-        this.bankWalkFireChange({ generation: this.bankGeneration || this.bankWalkGeneration, reason: "ready" });
+        this.bankWalkMarkReady("ready");
         return;
       }
-      const read = vault.cachedRead || vault.read;
+      const read = vault && (vault.cachedRead || vault.read);
       if (typeof read !== "function") {
-        this.bankWalkReady = true;
+        this.bankWalkMarkReady("ready");
         return;
       }
       let pending = months.length;
       const finishOne = () => {
         pending -= 1;
         if (pending <= 0) {
-          this.bankWalkReady = true;
-          this.bankWalkGeneration = (this.bankWalkGeneration || 0) + 1;
-          this.bankWalkMemoKey = null;
-          this.bankWalkFireChange({ generation: this.bankWalkGeneration, reason: "ready" });
+          this.bankWalkMarkReady("ready");
         }
       };
       for (const entry of months) {
@@ -320,12 +442,33 @@ class BobLedgerToolsBankWalkMixin {
     }
   }
 
+  bankWalkRememberOverlay(path, content) {
+    if (!(this.bankWalkOverlays instanceof Map)) {
+      this.bankWalkOverlays = new Map();
+    }
+    if (!(this.bankWalkPathSeq instanceof Map)) {
+      this.bankWalkPathSeq = new Map();
+    }
+    const text = String(content);
+    const existing = this.bankWalkOverlays.get(path);
+    if (existing && existing.content === text) {
+      return existing;
+    }
+    const seq = ((existing && Number.isInteger(existing.seq) ? existing.seq : (this.bankWalkPathSeq.get(path) || 0)) || 0) + 1;
+    const record = { content: text, seq };
+    this.bankWalkOverlays.set(path, record);
+    this.bankWalkPathSeq.set(path, seq);
+    return record;
+  }
+
   bankWalkCollectOverlays() {
-    const overlays = new Map();
+    if (!(this.bankWalkOverlays instanceof Map)) {
+      this.bankWalkOverlays = new Map();
+    }
     try {
       const workspace = this.app && this.app.workspace;
       if (!workspace || typeof workspace.getLeavesOfType !== "function") {
-        return overlays;
+        return this.bankWalkOverlays;
       }
       let leaves = [];
       try {
@@ -348,11 +491,11 @@ class BobLedgerToolsBankWalkMixin {
             continue;
           }
           const path = bankNormalizePath(file.path);
-          overlays.set(path, String(editor.getValue()));
+          this.bankWalkRememberOverlay(path, editor.getValue());
         } catch (error) {}
       }
     } catch (error) {}
-    return overlays;
+    return this.bankWalkOverlays;
   }
 
   bankWalkSnapshot() {
@@ -365,9 +508,8 @@ class BobLedgerToolsBankWalkMixin {
       }
       const overlays = this.bankWalkCollectOverlays();
       const disk = this.bankWalkDisk instanceof Map ? this.bankWalkDisk : new Map();
-      // Overlay signature: sorted paths with exact content.
       const overlayParts = Array.from(overlays.entries()).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-      const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, c]) => `${p}\u0000${c.length}\u0000${c}`).join("\u0001")}`;
+      const sig = `${this.bankWalkGeneration || 0}\u0000${overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001")}`;
       if (this.bankWalkMemoKey === sig && this.bankWalkMemoSnapshot) {
         return this.bankWalkMemoSnapshot;
       }
@@ -375,27 +517,31 @@ class BobLedgerToolsBankWalkMixin {
       const seen = new Set();
       for (const [path, content] of disk.entries()) {
         const norm = bankNormalizePath(path);
-        const text = overlays.has(norm) ? overlays.get(norm) : (typeof content === "string" ? content : "");
+        const overlay = overlays.get(norm);
+        const text = overlay && typeof overlay.content === "string"
+          ? overlay.content
+          : (typeof content === "string" ? content : "");
         merged.push({ path: norm, content: text });
         seen.add(norm);
       }
-      for (const [path, content] of overlays.entries()) {
+      for (const [path, record] of overlays.entries()) {
         if (!seen.has(path)) {
-          merged.push({ path, content });
+          merged.push({ path, content: record && typeof record.content === "string" ? record.content : "" });
           seen.add(path);
         }
       }
+      if (!(this.bankWalkScanCache instanceof Map)) {
+        this.bankWalkScanCache = new Map();
+      }
       let snapshot = null;
       try {
-        snapshot = bankWalkBuildSnapshotFromContents(merged, this.bankWalkGeneration || 0);
+        snapshot = bankWalkBuildSnapshotFromContents(merged, this.bankWalkGeneration || 0, this.bankWalkScanCache);
       } catch (error) {
         return Object.freeze({ available: false, reason: "indexing" });
       }
-      // Detect overlay-only change for repaint listeners.
       const prevSig = this.bankWalkOverlaySignature;
-      const overlaySigOnly = overlayParts.map(([p, c]) => `${p}\u0000${c}`).join("\u0001");
+      const overlaySigOnly = overlayParts.map(([p, rec]) => `${p}\u0000${rec && rec.seq ? rec.seq : 0}`).join("\u0001");
       if (prevSig !== null && prevSig !== overlaySigOnly) {
-        // Fire async so snapshot() stays sync and cheap.
         try {
           setTimeout(() => this.bankWalkFireChange({ generation: this.bankWalkGeneration || 0, reason: "overlay" }), 0);
         } catch (error) {}

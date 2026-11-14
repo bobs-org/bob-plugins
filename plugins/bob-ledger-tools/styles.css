@@ -737,19 +737,19 @@ a.bob-plan-ready:hover {
 .bob-freshness-bank .bob-freshness-icon {
   color: var(--bob-bank-footer-hue);
 }
-.bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-due,
+.bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-scope,
 .bob-freshness-bank .bob-freshness-meter.bob-freshness-meter-warn {
   color: var(--text-warning, #9a4e00);
 }
-.theme-dark .bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-due,
+.theme-dark .bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-scope,
 .theme-dark .bob-freshness-bank .bob-freshness-meter.bob-freshness-meter-warn {
   color: var(--text-warning, #e9973f);
 }
-.bob-freshness-bank .bob-freshness-detail.bob-freshness-inflow {
-  color: #0b7a38;
+.bob-freshness-bank .bob-freshness-amount.bob-freshness-inflow {
+  color: var(--bob-bank-in-ink, #0b7a38);
 }
-.theme-dark .bob-freshness-bank .bob-freshness-detail.bob-freshness-inflow {
-  color: var(--color-green, #44cf6e);
+.theme-dark .bob-freshness-bank .bob-freshness-amount.bob-freshness-inflow {
+  color: var(--bob-bank-in-ink, var(--color-green, #44cf6e));
 }
 .bob-freshness-bank .bob-freshness-due,
 .bob-freshness-bank .bob-freshness-detail,

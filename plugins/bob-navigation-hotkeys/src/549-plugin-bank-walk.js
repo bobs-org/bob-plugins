@@ -3,8 +3,8 @@
 // the session anchor. This path never writes the vault or starts bob.
 const BANK_WALK_REQUIRED_API_VERSION = 1;
 const BANK_WALK_API_REQUIRED_NOTICE = "Bob Ledger Tools bank walk api required";
-const BANK_WALK_INDEXING_NOTICE = "Bank walk unavailable — still indexing";
-const BANK_WALK_EMPTY_NOTICE = "No bank rows — bob bank import";
+const BANK_WALK_INDEXING_NOTICE = "Bank walk unavailable — still indexing bank notes";
+const BANK_WALK_EMPTY_NOTICE = "No bank rows yet — bob bank import adds them";
 const BANK_WALK_STALE_NOTICE = "Bank rows changed — try again";
 const BANK_WALK_JUMP_FAILURE_NOTICE = "Could not jump to bank row";
 
@@ -90,17 +90,28 @@ class BobNavigationHotkeysBankWalkMixin {
     }
   }
 
-  bankWalkObserveScope(scope) {
+  bankWalkObserveScope(scope, snapshot) {
     const normalized = scope === "all" ? "all" : "waiting";
     const previous = this.lastBankWalkScope;
     this.lastBankWalkScope = normalized;
     if (!previous || previous === normalized) {
+      return null;
+    }
+    if (normalized === "all") {
+      return "Nothing waiting — ]b now walks every row";
+    }
+    const waiting = snapshot && snapshot.counts && Number.isInteger(snapshot.counts.waiting)
+      ? snapshot.counts.waiting
+      : 0;
+    return `${waiting} waiting — ]b now walks waiting rows`;
+  }
+
+  bankWalkShowFlipBanner(banner) {
+    if (!banner) {
       return;
     }
     try {
-      new Notice(normalized === "all"
-        ? "Nothing waiting — ]b now walks every row"
-        : "Bank rows waiting — ]b now walks the queue");
+      new Notice(banner);
     } catch (_error) {
       // Scope feedback never blocks navigation.
     }
@@ -205,13 +216,15 @@ class BobNavigationHotkeysBankWalkMixin {
         return false;
       }
       let snapshot = snapshotAtPress;
+      let banner = null;
       if (queued) {
         const latest = bankWalkSnapshot(api);
         if (this.bankWalkUnavailable(latest)) {
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(latest));
+        banner = this.bankWalkObserveScope(bankWalkScope(latest), latest);
         if (bankWalkScope(latest) !== capturedScope) {
+          this.bankWalkShowFlipBanner(banner);
           return false;
         }
         snapshot = latest;
@@ -219,14 +232,16 @@ class BobNavigationHotkeysBankWalkMixin {
         if (this.bankWalkUnavailable(snapshot)) {
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(snapshot));
+        banner = this.bankWalkObserveScope(bankWalkScope(snapshot), snapshot);
       }
       if (this.bankWalkUnavailable(snapshot)) {
+        this.bankWalkShowFlipBanner(banner);
         return false;
       }
 
       let plan = this.bankWalkPlan(api, snapshot, request);
       if (!plan || plan.kind !== "jump") {
+        this.bankWalkShowFlipBanner(banner);
         try {
           showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
         } catch (_error) {
@@ -239,18 +254,27 @@ class BobNavigationHotkeysBankWalkMixin {
       if (!landed.ok && landed.stale) {
         snapshot = bankWalkSnapshot(api);
         if (this.bankWalkUnavailable(snapshot)) {
+          this.bankWalkShowFlipBanner(banner);
           return false;
         }
-        this.bankWalkObserveScope(bankWalkScope(snapshot));
+        const retryBanner = this.bankWalkObserveScope(bankWalkScope(snapshot), snapshot);
+        if (retryBanner) {
+          banner = retryBanner;
+        }
         plan = this.bankWalkPlan(api, snapshot, request);
         if (!plan || plan.kind !== "jump") {
+          this.bankWalkShowFlipBanner(banner);
           showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
           return false;
         }
         landed = await this.landBankWalkPlan(api, plan, jumpOrigin);
       }
       if (!landed.ok) {
-        new Notice(landed.stale ? BANK_WALK_STALE_NOTICE : BANK_WALK_JUMP_FAILURE_NOTICE);
+        this.bankWalkShowFlipBanner(banner);
+        const path = plan && plan.entry && typeof plan.entry.path === "string" ? plan.entry.path : "";
+        new Notice(landed.stale
+          ? BANK_WALK_STALE_NOTICE
+          : (path ? `Could not open ${path}` : BANK_WALK_JUMP_FAILURE_NOTICE));
         return false;
       }
       try {
@@ -259,8 +283,9 @@ class BobNavigationHotkeysBankWalkMixin {
         // The ledger anchor is session-only convenience.
       }
       try {
-        showBankWalkNotice(this, buildBankWalkNoticeModel(snapshot, plan));
+        showBankWalkNotice(this, buildBankWalkNoticeModel(snapshot, plan, banner));
       } catch (_error) {
+        this.bankWalkShowFlipBanner(banner);
         new Notice(BANK_WALK_JUMP_FAILURE_NOTICE);
       }
       return true;

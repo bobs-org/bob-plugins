@@ -20,6 +20,8 @@ try {
       bankWalkPayeeStart,
       bankWalkBuildEntries,
       bankWalkBuildSnapshotFromContents,
+      bankWalkScanSourceMemo,
+      bankWalkStepFromTuple,
       bankWalkOtherMonthLine,
       bankWalkLocate,
       bankWalkPlan,

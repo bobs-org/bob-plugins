@@ -45,7 +45,7 @@ const ledger = LedgerToolsPlugin.helpers;
 const { TransactionEditor } = require("./navigation-hotkeys-harness.cjs");
 Module._load = originalLoad;
 
-function bankEntry({ key, date = "2026-11-13", line = 2, path = "bank/2026-11.md", text, payee, ackId }) {
+function bankEntry({ key, date = "2026-11-13", line = 2, path = "bank/2026-11.md", text, payee, ackId, label, month, monthLabel, inflow, amountText }) {
   return {
     key,
     date,
@@ -53,13 +53,41 @@ function bankEntry({ key, date = "2026-11-13", line = 2, path = "bank/2026-11.md
     path,
     text: text || `- [ ] $12.34 ${payee || key}`,
     payee: payee || key,
-    amountText: "-$12.34",
-    inflow: false,
+    amountText: amountText || "-$12.34",
+    inflow: inflow === true,
     acknowledged: false,
     ackId: ackId || null,
+    label: label || "Fri Nov 13",
+    month: month || "2026-11",
+    monthLabel: monthLabel || "November 2026",
     dayRank: 1,
     dayTotal: 1,
   };
+}
+
+function fakeNode() {
+  const node = {
+    children: [],
+    cls: "",
+    text: "",
+    attr: {},
+    attrs: {},
+    createDiv(options = {}) {
+      const child = fakeNode();
+      child.cls = options.cls || "";
+      child.text = options.text || "";
+      child.attr = options.attr || {};
+      this.children.push(child);
+      return child;
+    },
+    createSpan(options = {}) {
+      return this.createDiv(options);
+    },
+    setAttribute(name, value) {
+      this.attrs[name] = String(value);
+    },
+  };
+  return node;
 }
 
 function bankSnapshot(scope, entries, generation = 1) {
@@ -222,7 +250,7 @@ test("busy and unavailable states do not move the cursor", async () => {
   notices.length = 0;
   const indexing = makeRuntimePlugin({ snapshots: [{ available: false, reason: "indexing", scope: "waiting" }] });
   assert.equal(await indexing.plugin.jumpToBankRow(1), false);
-  assert.deepEqual(notices, ["Bank walk unavailable — still indexing"]);
+  assert.deepEqual(notices, ["Bank walk unavailable — still indexing bank notes"]);
 });
 
 test("empty walk reports import guidance without a phantom landing", async () => {
@@ -230,7 +258,7 @@ test("empty walk reports import guidance without a phantom landing", async () =>
   const state = makeRuntimePlugin({ snapshots: [bankSnapshot("all", [])] });
   assert.equal(await state.plugin.jumpToBankRow(1), false);
   assert.deepEqual(state.landings, []);
-  assert.ok(notices.some((notice) => notice.includes("No bank rows — bob bank import")));
+  assert.ok(notices.some((notice) => notice === "No bank rows yet — bob bank import adds them"));
 });
 
 function landingHarness(activePath, targetContent) {
@@ -284,4 +312,151 @@ test("shared bank resolver refuses a stale row instead of clamping its old line"
     resolve: () => ({ ok: false }),
   });
   assert.deepEqual(resolved, { ok: false, source: "resolver" });
+});
+
+test("palette names match the bank-walk contract", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const commands = [];
+  plugin.app = {
+    workspace: {
+      getActiveFile: () => null,
+      on: () => ({}),
+      onLayoutReady: () => {},
+    },
+    loadLocalStorage: () => null,
+    saveLocalStorage: () => {},
+  };
+  plugin.addCommand = (spec) => commands.push(spec);
+  plugin.register = () => {};
+  plugin.registerEvent = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.registerVimMappingsWhenReady = () => {};
+  plugin.registerVimJumpHistoryVaultEvents = () => {};
+  plugin.registerOpenTaskJumpInputListeners = () => {};
+  plugin.registerReviewRefreshInputListeners = () => {};
+  plugin.registerCountedTransclusionToggleInputListeners = () => {};
+  plugin.registerCountedBulletPropertyInputListeners = () => {};
+  plugin.registerCountedTaskMoveInputListeners = () => {};
+  plugin.registerCountedLaneToggleInputListeners = () => {};
+  plugin.registerClearSearchHighlightInputListeners = () => {};
+  plugin.captureActiveFilePosition = () => {};
+  plugin.refreshDashScrollCaptureTarget = () => {};
+  plugin.ensureTemplaterNewNoteTrigger = () => {};
+  plugin.onload();
+  const name = (id) => {
+    const found = commands.find((item) => item.id === id);
+    assert.ok(found, id);
+    return found.name;
+  };
+  assert.equal(name("jump-to-next-bank-row"), "Jump to next bank row (waiting rows first)");
+  assert.equal(name("jump-to-prev-bank-row"), "Jump to previous bank row (waiting rows first)");
+  assert.equal(name("jump-to-next-bank-day"), "Jump to the first row of the next bank day");
+  assert.equal(name("jump-to-prev-bank-day"), "Jump to the first row of the previous bank day");
+});
+
+test("scope flip banner is shown once and folds into the landing toast", async () => {
+  const waitingEntry = bankEntry({ key: "wait", payee: "Waiting" });
+  const allEntry = bankEntry({ key: "all", payee: "Archive" });
+  const waiting = bankSnapshot("waiting", [waitingEntry], 1);
+  waiting.counts.waiting = 1;
+  const all = bankSnapshot("all", [allEntry], 2);
+  all.counts.waiting = 0;
+  let current = waiting;
+  const state = makeRuntimePlugin({ snapshots: () => current });
+  notices.length = 0;
+  state.plugin.lastBankWalkScope = "waiting";
+  current = all;
+  assert.equal(await state.plugin.jumpToBankRow(1), true);
+  const first = notices.filter((notice) => String(notice).includes("Nothing waiting — ]b now walks every row"));
+  assert.equal(first.length, 1);
+  assert.equal(notices.includes("Nothing waiting — ]b now walks every row"), false);
+  notices.length = 0;
+  assert.equal(await state.plugin.jumpToBankRow(1), true);
+  assert.equal(notices.some((notice) => String(notice).includes("Nothing waiting — ]b now walks every row")), false);
+
+  notices.length = 0;
+  state.plugin.lastBankWalkScope = "all";
+  current = waiting;
+  assert.equal(await state.plugin.jumpToBankRow(1), true);
+  assert.equal(notices.filter((notice) => String(notice).includes("1 waiting — ]b now walks waiting rows")).length, 1);
+  notices.length = 0;
+  assert.equal(await state.plugin.jumpToBankRow(1), true);
+  assert.equal(notices.some((notice) => String(notice).includes("]b now walks waiting rows")), false);
+});
+
+test("a flip that lands nothing still shows the banner as a Notice", async () => {
+  const waiting = bankSnapshot("waiting", [bankEntry({ key: "wait" })], 1);
+  const empty = bankSnapshot("all", [], 2);
+  empty.counts.waiting = 0;
+  let current = waiting;
+  const state = makeRuntimePlugin({ snapshots: () => current });
+  notices.length = 0;
+  state.plugin.lastBankWalkScope = "waiting";
+  current = empty;
+  assert.equal(await state.plugin.jumpToBankRow(1), false);
+  assert.ok(notices.includes("Nothing waiting — ]b now walks every row"));
+  assert.ok(notices.includes("No bank rows yet — bob bank import adds them"));
+});
+
+test("a failed open names the target path", async () => {
+  const entry = bankEntry({ key: "shop", path: "bank/2026-11.md", payee: "ShopRite" });
+  const state = makeRuntimePlugin({ snapshots: [bankSnapshot("waiting", [entry])] });
+  state.plugin.landOnWalkEntry = async () => ({ ok: false, stale: false });
+  notices.length = 0;
+  assert.equal(await state.plugin.jumpToBankRow(1), false);
+  assert.ok(notices.includes("Could not open bank/2026-11.md"));
+});
+
+test("toast model paints the day rail, day line, month, and hint", () => {
+  const shop = bankEntry({
+    key: "shop",
+    date: "2026-11-13",
+    payee: "ShopRite",
+    amountText: "$42.50",
+    label: "Fri Nov 13",
+  });
+  const payroll = bankEntry({
+    key: "pay",
+    date: "2026-11-13",
+    line: 4,
+    payee: "Payroll",
+    amountText: "+$1,200.00",
+    inflow: true,
+    label: "Fri Nov 13",
+  });
+  const waiting = bankSnapshot("waiting", [shop, payroll]);
+  waiting.counts.waiting = 2;
+  const plan = ledger.bankWalkPlan(waiting, { direction: 1 });
+  const banner = "Nothing waiting — ]b now walks every row";
+  const model = helpers.buildBankWalkNoticeModel(waiting, plan, banner);
+  assert.equal(model.banner, banner);
+  assert.equal(model.scope, "waiting");
+  assert.equal(model.rank, 1);
+  assert.equal(model.total, 2);
+  assert.equal(model.dayRank, 1);
+  assert.equal(model.dayTotal, 2);
+  assert.equal(model.dayIndex, 0);
+  assert.equal(model.dayCount, 1);
+  assert.equal(model.monthLabel, "November 2026");
+  assert.equal(model.hint, "Ctrl+Enter file");
+  assert.match(model.text, /Fri Nov 13 · 1 of 2/);
+  assert.equal(helpers.bankWalkNoticeMonthLabel({ month: "2026-10" }), "October 2026");
+
+  const all = bankSnapshot("all", [shop, payroll]);
+  all.scope = "all";
+  const allPlan = ledger.bankWalkPlan(all, { direction: 1 });
+  const allModel = helpers.buildBankWalkNoticeModel(all, allPlan);
+  assert.equal(allModel.hint, "]} next day");
+  assert.equal(allModel.banner, null);
+
+  const rail = fakeNode();
+  helpers.renderBankWalkDayRail(rail, { dayCount: 5, dayIndex: 2 });
+  assert.equal(rail.children.length, 5);
+  assert.equal(rail.children[2].cls.includes("is-current"), true);
+  assert.equal(rail.children.filter((child) => child.cls.includes("bob-nh-bank-walk-dot")).length, 5);
+
+  const bar = fakeNode();
+  helpers.renderBankWalkDayRail(bar, { dayCount: 31, dayIndex: 10 });
+  assert.equal(bar.children.length, 1);
+  assert.equal(bar.children[0].cls, "bob-nh-bank-walk-bar");
 });

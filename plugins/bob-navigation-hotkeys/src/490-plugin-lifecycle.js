@@ -349,7 +349,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-bank-row",
-      name: "Jump to next bank row",
+      name: "Jump to next bank row (waiting rows first)",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(1);
@@ -358,7 +358,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-prev-bank-row",
-      name: "Jump to previous bank row",
+      name: "Jump to previous bank row (waiting rows first)",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(-1);
@@ -367,7 +367,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-next-bank-day",
-      name: "Jump to the first bank row of the next day",
+      name: "Jump to the first row of the next bank day",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(1, { dayJump: true });
@@ -376,7 +376,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "jump-to-prev-bank-day",
-      name: "Jump to the first bank row of the previous day",
+      name: "Jump to the first row of the previous bank day",
       callback: () => {
         this.rememberBracketRepeatType("b");
         return this.jumpToBankRow(-1, { dayJump: true });

@@ -250,6 +250,74 @@ function freshnessFooterPaintGroups(container, groups) {
   }
 }
 
+function freshnessFooterPaintBankDue(parts, view) {
+  if (!parts || !parts.due) {
+    return;
+  }
+  const dueText = view && view.dueText ? String(view.dueText) : "";
+  const scopeWord = view && view.scope === "waiting"
+    ? "WAITING"
+    : (view && view.scope === "all" ? "ALL" : "");
+  let rest = dueText;
+  if (scopeWord && dueText.startsWith(scopeWord)) {
+    rest = dueText.slice(scopeWord.length);
+  }
+  try {
+    if (typeof parts.due.empty === "function") {
+      parts.due.empty();
+    } else if ("textContent" in parts.due) {
+      parts.due.textContent = "";
+    }
+  } catch (error) {
+    // Rebuild below.
+  }
+  const scopeNode = freshnessFooterCreateChild(parts.due, "span", "bob-freshness-scope");
+  freshnessFooterSetText(scopeNode, scopeWord);
+  const restNode = freshnessFooterCreateChild(parts.due, "span", "bob-freshness-due-rest");
+  freshnessFooterSetText(restNode, rest);
+  try {
+    parts.due.text = dueText;
+  } catch (error) {
+    // Fake DOM width probes read `.text`; live DOM uses the child spans.
+  }
+}
+
+function freshnessFooterPaintBankDetail(parts, detailText, compactText, inflow) {
+  if (!parts || !parts.detail) {
+    return;
+  }
+  const full = detailText == null ? "" : String(detailText);
+  const amount = compactText == null ? "" : String(compactText);
+  let payee = "";
+  if (amount && full.startsWith(amount)) {
+    payee = full.slice(amount.length).replace(/^\s+/, "");
+  } else if (full && full !== amount) {
+    payee = full;
+  }
+  try {
+    if (typeof parts.detail.empty === "function") {
+      parts.detail.empty();
+    } else if ("textContent" in parts.detail) {
+      parts.detail.textContent = "";
+    }
+  } catch (error) {
+    // Rebuild below.
+  }
+  const amountNode = freshnessFooterCreateChild(parts.detail, "span", "bob-freshness-amount");
+  freshnessFooterSetText(amountNode, amount || (payee ? "" : full));
+  freshnessFooterToggleClass(amountNode, "bob-freshness-inflow", Boolean(inflow));
+  if (payee) {
+    const payeeNode = freshnessFooterCreateChild(parts.detail, "span", "bob-freshness-payee");
+    freshnessFooterSetText(payeeNode, amount ? ` ${payee}` : payee);
+  }
+  freshnessFooterToggleClass(parts.detail, "bob-freshness-inflow", false);
+  try {
+    parts.detail.text = full;
+  } catch (error) {
+    // Fake DOM width probes read `.text`; live DOM uses the child spans.
+  }
+}
+
 function freshnessFooterPaintHint(node, view) {
   if (!node) {
     return;
@@ -409,7 +477,16 @@ function freshnessFooterFit(el, parts, view) {
   const showArms = Boolean(bankPanel && (view.linkPrev || view.linkNext));
   let arms = showArms;
   const apply = () => {
-    freshnessFooterSetText(parts.detail, detailText);
+    if (bankPanel) {
+      freshnessFooterPaintBankDetail(
+        parts,
+        detailText,
+        compactDetail,
+        view && view.inflow,
+      );
+    } else {
+      freshnessFooterSetText(parts.detail, detailText);
+    }
     freshnessFooterSetOmitted(groupContainer, shown === 0);
     nodes.forEach((node, index) => {
       freshnessFooterSetOmitted(node, index >= shown);
@@ -589,9 +666,15 @@ function freshnessFooterPaint(el, view) {
     return parts;
   }
   freshnessFooterSetText(parts.icon, view.glyph || "⟳");
-  freshnessFooterSetText(parts.due, view.dueText);
+  if (view.panel === "bank") {
+    freshnessFooterPaintBankDue(parts, view);
+  } else {
+    freshnessFooterSetText(parts.due, view.dueText);
+  }
   freshnessFooterSetText(parts.context, view.contextText);
-  freshnessFooterSetText(parts.detail, view.detailText);
+  if (view.panel !== "bank") {
+    freshnessFooterSetText(parts.detail, view.detailText);
+  }
   freshnessFooterPaintHint(parts.hint, view);
   freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
@@ -599,11 +682,9 @@ function freshnessFooterPaint(el, view) {
     parts,
     view.panel === "links" || view.panel === "bank" ? view : null,
   );
-  freshnessFooterToggleClass(
-    parts.detail,
-    "bob-freshness-inflow",
-    Boolean(view.panel === "bank" && view.inflow),
-  );
+  if (view.panel !== "bank") {
+    freshnessFooterToggleClass(parts.detail, "bob-freshness-inflow", false);
+  }
   freshnessFooterToggleClass(
     parts.meter,
     "bob-freshness-meter-warn",

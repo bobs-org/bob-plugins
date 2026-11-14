@@ -325,6 +325,18 @@ class BobLedgerToolsBankBadgeMixin {
       if (this.planBlockViews instanceof Set) {
         for (const view of Array.from(this.planBlockViews)) this.bankSyncPlanHost(view);
       }
+      if (typeof this.bankSyncFenceBadge === "function") {
+        if (this.dayStripViews instanceof Set) {
+          for (const record of Array.from(this.dayStripViews)) {
+            try { this.bankSyncFenceBadge(record); } catch (error) {}
+          }
+        }
+        if (this.periodStripViews instanceof Set) {
+          for (const record of Array.from(this.periodStripViews)) {
+            try { this.bankSyncFenceBadge(record); } catch (error) {}
+          }
+        }
+      }
       for (const record of Array.from(this.bankBadgeHostsStore())) {
         try { record.sync(); } catch (error) {}
       }
@@ -375,5 +387,6 @@ class BobLedgerToolsBankBadgeMixin {
     }
     this.bankBadgeTimer = null;
     this.bankBadgeConfigLastEnabled = null;
+    this.bankBadgeOlderBobWarned = null;
   }
 }

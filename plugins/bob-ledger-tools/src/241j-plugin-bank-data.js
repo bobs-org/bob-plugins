@@ -144,7 +144,10 @@ class BobLedgerToolsBankDataMixin {
     if (opts.list === true || opts.command === "list") {
       fetches.push({ command: "list", all: opts.all === true, month: opts.month });
     }
-    if (opts.command === "report" || opts.report === true || opts.month || opts.date || opts.day) {
+    if (
+      opts.command === "report" || opts.report === true ||
+      opts.month || opts.date || opts.day || opts.week || opts.year || opts.period
+    ) {
       fetches.push({
         command: "report",
         month: opts.month,
@@ -152,6 +155,8 @@ class BobLedgerToolsBankDataMixin {
         day: opts.day,
         week: opts.week,
         year: opts.year,
+        period: opts.period,
+        summary: opts.summary === true,
       });
     }
     if (fetches.length === 0 && (opts.month || opts.date || opts.day)) {

@@ -5,7 +5,7 @@
 // computed.
 
 const BANK_SCHEMA_VERSION = 1;
-const BANK_CACHE_SIZE = 16;
+const BANK_CACHE_SIZE = 24;
 const BANK_REVALIDATE_DEBOUNCE_MS = 400;
 const BANK_ROLLOVER_INTERVAL_MS = 60 * 1000;
 
@@ -144,12 +144,67 @@ function bankBuildArgs(options = {}) {
       args.push("-y", opts.year.trim());
     } else if (bankString(opts.month)) {
       args.push("-m", opts.month.trim());
+    } else if (bankString(opts.period)) {
+      args.push("-p", opts.period.trim());
+    }
+    if (opts.summary === true) {
+      args.push("-s");
     }
   } else if (bankString(opts.month)) {
     args.push("-m", opts.month.trim());
   }
   args.push("-f", "json");
   return args;
+}
+
+// Fetch spec for a stats-strip badge. Day and week keep -D/-w so they work
+// on an older bob; quarter, ISO year, and all time need -p/-s.
+function bankBadgeSpecForStrip(kind, id) {
+  const key = typeof id === "string" ? id.trim() : "";
+  if (!key) return null;
+  if (kind === "day") return { command: "report", date: key };
+  if (kind === "week") return { command: "report", week: key };
+  if (kind === "quarter" || kind === "year") return { command: "report", period: key, summary: true };
+  if (kind === "all" || kind === "all_time") return { command: "report", period: "all", summary: true };
+  return null;
+}
+
+// First calendar day of a strip's period, or null when the period is not
+// in the future (all time) or cannot be dated. Quarter = Monday of week
+// (q-1)*13+1; year = Monday of W01.
+function bankBadgePeriodStart(kind, id) {
+  try {
+    if (kind === "day") return /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : null;
+    if (kind === "all" || kind === "all_time") return null;
+    if (typeof periodNotesIsoWeekMonday !== "function") return null;
+    if (kind === "week") {
+      const match = /^(\d{4})-W(\d{2})$/.exec(id);
+      return match ? periodNotesIsoWeekMonday(Number(match[1]), Number(match[2])) : null;
+    }
+    if (kind === "quarter") {
+      const match = /^(\d{4})-Q([1-4])$/.exec(id);
+      return match ? periodNotesIsoWeekMonday(Number(match[1]), (Number(match[2]) - 1) * 13 + 1) : null;
+    }
+    if (kind === "year") {
+      const year = Number(id);
+      return Number.isInteger(year) ? periodNotesIsoWeekMonday(year, 1) : null;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function bankBadgeOlderBobRefusal(error, args) {
+  if (!error) return false;
+  const argv = Array.isArray(args) ? args : [];
+  const usesPeriod = argv.includes("-p") || argv.includes("--period") || argv.includes("-s") || argv.includes("--summary");
+  if (!usesPeriod) return false;
+  const text = [error.message, error.detail, error.stderr, error.stdout]
+    .filter((part) => typeof part === "string" && part)
+    .join("\n");
+  if (/(?:unexpected argument|unknown).{0,40}(?:-p|--period|-s|--summary)/i.test(text)) return true;
+  return error.exitCode === 2 && (error.code === "bad-json" || /not JSON/i.test(String(error.message || "")));
 }
 
 function bankFail(code, message, stderr) {

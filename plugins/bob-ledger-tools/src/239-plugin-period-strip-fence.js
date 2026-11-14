@@ -644,15 +644,74 @@ class BobLedgerToolsPeriodStripMixin {
           return;
         }
         if (!this.periodStripCanSpawn()) return;
-        const record = { el, day, path: sourcePath, kind: "fence", observer: null, visible: true };
+        const hosts = typeof this.bankBadgeAttachFenceHosts === "function"
+          ? this.bankBadgeAttachFenceHosts(el)
+          : null;
+        const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
+        const record = {
+          el: stripEl,
+          fenceEl: el,
+          badgeHost: hosts ? hosts.badgeHost : null,
+          badgeKind: "day",
+          badgeId: day,
+          day,
+          path: sourcePath,
+          kind: "fence",
+          observer: null,
+          visible: true,
+          badgeSeen: false,
+        };
         this.periodStripViewsStore().add(record);
+        if (ctx && typeof ctx.addChild === "function") {
+          let child = null;
+          try {
+            if (typeof MarkdownRenderChild === "function") {
+              child = new MarkdownRenderChild(el);
+              child.onunload = () => {
+                this.periodStripReleaseRecord(record);
+              };
+            }
+          } catch (error) {
+            child = null;
+          }
+          if (!child) {
+            child = {
+              unload: () => {
+                this.periodStripReleaseRecord(record);
+              },
+            };
+          }
+          try {
+            ctx.addChild(child);
+          } catch (error) {
+            // Older hosts may reject the child.
+          }
+        }
         this.periodStripObserve(record);
         this.periodStripPaint(record);
         this.periodStripCheck(record);
         return;
       }
       if (!this.periodStripCanSpawn()) return;
-      const record = { el, periodId: parsed.id, kind: parsed.kind, surface: surface === "table" ? "table" : "strip", path: sourcePath, observer: null, visible: true };
+      const isTable = surface === "table";
+      const hosts = !isTable && typeof this.bankBadgeAttachFenceHosts === "function"
+        ? this.bankBadgeAttachFenceHosts(el)
+        : null;
+      const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
+      const record = {
+        el: stripEl,
+        fenceEl: el,
+        badgeHost: hosts ? hosts.badgeHost : null,
+        badgeKind: parsed.kind,
+        badgeId: parsed.id,
+        periodId: parsed.id,
+        kind: parsed.kind,
+        surface: isTable ? "table" : "strip",
+        path: sourcePath,
+        observer: null,
+        visible: true,
+        badgeSeen: false,
+      };
       this.periodStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;
@@ -808,7 +867,14 @@ class BobLedgerToolsPeriodStripMixin {
       } catch (error) {
         // Observer cleanup is best-effort.
       }
-      if (record) record.observer = null;
+      if (record) {
+        record.observer = null;
+        try {
+          if (typeof this.bankReleaseFenceBadge === "function") this.bankReleaseFenceBadge(record);
+        } catch (error) {
+          // Badge release is best-effort.
+        }
+      }
       this.periodStripViewsStore().delete(record);
     } catch (error) {
       // Release is best-effort.
@@ -825,7 +891,9 @@ class BobLedgerToolsPeriodStripMixin {
         Observer = null;
       }
       if (typeof Observer !== "function") {
-        record.visible = true;
+        this.bankBadgeMarkFenceVisible
+          ? this.bankBadgeMarkFenceVisible(record)
+          : (record.visible = true);
         return;
       }
       try {
@@ -842,6 +910,9 @@ class BobLedgerToolsPeriodStripMixin {
           if (record.visible !== false) {
             record.visible = true;
             this.periodStripCheck(record);
+            try {
+              if (typeof this.bankBadgeMarkFenceVisible === "function") this.bankBadgeMarkFenceVisible(record);
+            } catch (error) {}
           }
         } catch (error) {
           // Observation is best-effort.

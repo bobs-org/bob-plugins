@@ -294,6 +294,12 @@ function mountFence(plugin, { source = "", sourcePath = "" } = {}) {
   return { el, ctx, added };
 }
 
+function fenceRecord(plugin, el) {
+  return Array.from(plugin.dayStripViews || []).find((entry) =>
+    entry.fenceEl === el || entry.el === el || (entry.el && entry.el.parentNode === el),
+  );
+}
+
 async function settle(ms = 30) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -845,7 +851,8 @@ test("future days render nothing and spawn nothing", async () => {
         sourcePath: "notes/weekly.md",
       });
       await settle(20);
-      assert.equal(el.children.length, 0);
+      assert.equal(el.children.length, 2, "future fences still split strip and badge hosts");
+      assert.equal(el.querySelector(".bob-bank-badge"), null);
       assert.equal(spawns.length, 1);
     } finally {
       plugin.onunload();
@@ -976,9 +983,7 @@ test("the fence parses day:, falls back to the note date, or explains itself", a
       });
       await settle(60);
       for (const mounted of [explicit, implicit, yamlish]) {
-        const [record] = Array.from(plugin.dayStripViews).filter(
-          (entry) => entry.el === mounted.el,
-        );
+        const record = fenceRecord(plugin, mounted.el);
         assert.ok(record, "each fence registers a host record");
         assert.equal(record.day, day);
       }
@@ -1025,9 +1030,7 @@ test("the fence skips hover popovers and embeds, and unregisters on unload", asy
           addChild: () => {},
         });
         assert.equal(plugin.dayStripViews.size, before);
-        const [record] = Array.from(plugin.dayStripViews).filter(
-          (entry) => entry.el === el,
-        );
+        const record = fenceRecord(plugin, el);
         assert.ok(record, "only the real host registers");
         assert.ok(!record.observer || !record.observer.disconnected);
         // The MarkdownRenderChild unload path releases the record.

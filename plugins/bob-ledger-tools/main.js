@@ -51633,6 +51633,11 @@ class BobLedgerToolsDayStripMixin {
       }
       if (record) {
         record.observer = null;
+        try {
+          if (typeof this.bankReleaseFenceBadge === "function") this.bankReleaseFenceBadge(record);
+        } catch (error) {
+          // Badge release is best-effort.
+        }
       }
       this.dayStripViewsStore().delete(record);
     } catch (error) {
@@ -51655,7 +51660,9 @@ class BobLedgerToolsDayStripMixin {
         Observer = null;
       }
       if (typeof Observer !== "function") {
-        record.visible = true;
+        this.bankBadgeMarkFenceVisible
+          ? this.bankBadgeMarkFenceVisible(record)
+          : (record.visible = true);
         return;
       }
       try {
@@ -51701,6 +51708,9 @@ class BobLedgerToolsDayStripMixin {
           if (record.visible !== false) {
             record.visible = true;
             this.dayStripCheck(record);
+            try {
+              if (typeof this.bankBadgeMarkFenceVisible === "function") this.bankBadgeMarkFenceVisible(record);
+            } catch (error) {}
           }
         } catch (error) {
           // Observation is best-effort.
@@ -51772,13 +51782,22 @@ class BobLedgerToolsDayStripFenceMixin {
       if (!this.dayStripCanSpawn()) {
         return;
       }
+      const hosts = typeof this.bankBadgeAttachFenceHosts === "function"
+        ? this.bankBadgeAttachFenceHosts(el)
+        : null;
+      const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
       const record = {
-        el,
+        el: stripEl,
+        fenceEl: el,
+        badgeHost: hosts ? hosts.badgeHost : null,
+        badgeKind: "day",
+        badgeId: day,
         day,
         path: sourcePath,
         kind: "fence",
         observer: null,
         visible: true,
+        badgeSeen: false,
       };
       this.dayStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {
@@ -54867,15 +54886,74 @@ class BobLedgerToolsPeriodStripMixin {
           return;
         }
         if (!this.periodStripCanSpawn()) return;
-        const record = { el, day, path: sourcePath, kind: "fence", observer: null, visible: true };
+        const hosts = typeof this.bankBadgeAttachFenceHosts === "function"
+          ? this.bankBadgeAttachFenceHosts(el)
+          : null;
+        const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
+        const record = {
+          el: stripEl,
+          fenceEl: el,
+          badgeHost: hosts ? hosts.badgeHost : null,
+          badgeKind: "day",
+          badgeId: day,
+          day,
+          path: sourcePath,
+          kind: "fence",
+          observer: null,
+          visible: true,
+          badgeSeen: false,
+        };
         this.periodStripViewsStore().add(record);
+        if (ctx && typeof ctx.addChild === "function") {
+          let child = null;
+          try {
+            if (typeof MarkdownRenderChild === "function") {
+              child = new MarkdownRenderChild(el);
+              child.onunload = () => {
+                this.periodStripReleaseRecord(record);
+              };
+            }
+          } catch (error) {
+            child = null;
+          }
+          if (!child) {
+            child = {
+              unload: () => {
+                this.periodStripReleaseRecord(record);
+              },
+            };
+          }
+          try {
+            ctx.addChild(child);
+          } catch (error) {
+            // Older hosts may reject the child.
+          }
+        }
         this.periodStripObserve(record);
         this.periodStripPaint(record);
         this.periodStripCheck(record);
         return;
       }
       if (!this.periodStripCanSpawn()) return;
-      const record = { el, periodId: parsed.id, kind: parsed.kind, surface: surface === "table" ? "table" : "strip", path: sourcePath, observer: null, visible: true };
+      const isTable = surface === "table";
+      const hosts = !isTable && typeof this.bankBadgeAttachFenceHosts === "function"
+        ? this.bankBadgeAttachFenceHosts(el)
+        : null;
+      const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
+      const record = {
+        el: stripEl,
+        fenceEl: el,
+        badgeHost: hosts ? hosts.badgeHost : null,
+        badgeKind: parsed.kind,
+        badgeId: parsed.id,
+        periodId: parsed.id,
+        kind: parsed.kind,
+        surface: isTable ? "table" : "strip",
+        path: sourcePath,
+        observer: null,
+        visible: true,
+        badgeSeen: false,
+      };
       this.periodStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {
         let child = null;
@@ -55031,7 +55109,14 @@ class BobLedgerToolsPeriodStripMixin {
       } catch (error) {
         // Observer cleanup is best-effort.
       }
-      if (record) record.observer = null;
+      if (record) {
+        record.observer = null;
+        try {
+          if (typeof this.bankReleaseFenceBadge === "function") this.bankReleaseFenceBadge(record);
+        } catch (error) {
+          // Badge release is best-effort.
+        }
+      }
       this.periodStripViewsStore().delete(record);
     } catch (error) {
       // Release is best-effort.
@@ -55048,7 +55133,9 @@ class BobLedgerToolsPeriodStripMixin {
         Observer = null;
       }
       if (typeof Observer !== "function") {
-        record.visible = true;
+        this.bankBadgeMarkFenceVisible
+          ? this.bankBadgeMarkFenceVisible(record)
+          : (record.visible = true);
         return;
       }
       try {
@@ -55065,6 +55152,9 @@ class BobLedgerToolsPeriodStripMixin {
           if (record.visible !== false) {
             record.visible = true;
             this.periodStripCheck(record);
+            try {
+              if (typeof this.bankBadgeMarkFenceVisible === "function") this.bankBadgeMarkFenceVisible(record);
+            } catch (error) {}
           }
         } catch (error) {
           // Observation is best-effort.
@@ -64119,7 +64209,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
 // computed.
 
 const BANK_SCHEMA_VERSION = 1;
-const BANK_CACHE_SIZE = 16;
+const BANK_CACHE_SIZE = 24;
 const BANK_REVALIDATE_DEBOUNCE_MS = 400;
 const BANK_ROLLOVER_INTERVAL_MS = 60 * 1000;
 
@@ -64258,12 +64348,67 @@ function bankBuildArgs(options = {}) {
       args.push("-y", opts.year.trim());
     } else if (bankString(opts.month)) {
       args.push("-m", opts.month.trim());
+    } else if (bankString(opts.period)) {
+      args.push("-p", opts.period.trim());
+    }
+    if (opts.summary === true) {
+      args.push("-s");
     }
   } else if (bankString(opts.month)) {
     args.push("-m", opts.month.trim());
   }
   args.push("-f", "json");
   return args;
+}
+
+// Fetch spec for a stats-strip badge. Day and week keep -D/-w so they work
+// on an older bob; quarter, ISO year, and all time need -p/-s.
+function bankBadgeSpecForStrip(kind, id) {
+  const key = typeof id === "string" ? id.trim() : "";
+  if (!key) return null;
+  if (kind === "day") return { command: "report", date: key };
+  if (kind === "week") return { command: "report", week: key };
+  if (kind === "quarter" || kind === "year") return { command: "report", period: key, summary: true };
+  if (kind === "all" || kind === "all_time") return { command: "report", period: "all", summary: true };
+  return null;
+}
+
+// First calendar day of a strip's period, or null when the period is not
+// in the future (all time) or cannot be dated. Quarter = Monday of week
+// (q-1)*13+1; year = Monday of W01.
+function bankBadgePeriodStart(kind, id) {
+  try {
+    if (kind === "day") return /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : null;
+    if (kind === "all" || kind === "all_time") return null;
+    if (typeof periodNotesIsoWeekMonday !== "function") return null;
+    if (kind === "week") {
+      const match = /^(\d{4})-W(\d{2})$/.exec(id);
+      return match ? periodNotesIsoWeekMonday(Number(match[1]), Number(match[2])) : null;
+    }
+    if (kind === "quarter") {
+      const match = /^(\d{4})-Q([1-4])$/.exec(id);
+      return match ? periodNotesIsoWeekMonday(Number(match[1]), (Number(match[2]) - 1) * 13 + 1) : null;
+    }
+    if (kind === "year") {
+      const year = Number(id);
+      return Number.isInteger(year) ? periodNotesIsoWeekMonday(year, 1) : null;
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function bankBadgeOlderBobRefusal(error, args) {
+  if (!error) return false;
+  const argv = Array.isArray(args) ? args : [];
+  const usesPeriod = argv.includes("-p") || argv.includes("--period") || argv.includes("-s") || argv.includes("--summary");
+  if (!usesPeriod) return false;
+  const text = [error.message, error.detail, error.stderr, error.stdout]
+    .filter((part) => typeof part === "string" && part)
+    .join("\n");
+  if (/(?:unexpected argument|unknown).{0,40}(?:-p|--period|-s|--summary)/i.test(text)) return true;
+  return error.exitCode === 2 && (error.code === "bad-json" || /not JSON/i.test(String(error.message || "")));
 }
 
 function bankFail(code, message, stderr) {
@@ -65465,7 +65610,10 @@ class BobLedgerToolsBankDataMixin {
     if (opts.list === true || opts.command === "list") {
       fetches.push({ command: "list", all: opts.all === true, month: opts.month });
     }
-    if (opts.command === "report" || opts.report === true || opts.month || opts.date || opts.day) {
+    if (
+      opts.command === "report" || opts.report === true ||
+      opts.month || opts.date || opts.day || opts.week || opts.year || opts.period
+    ) {
       fetches.push({
         command: "report",
         month: opts.month,
@@ -65473,6 +65621,8 @@ class BobLedgerToolsBankDataMixin {
         day: opts.day,
         week: opts.week,
         year: opts.year,
+        period: opts.period,
+        summary: opts.summary === true,
       });
     }
     if (fetches.length === 0 && (opts.month || opts.date || opts.day)) {
@@ -68421,6 +68571,18 @@ class BobLedgerToolsBankBadgeMixin {
       if (this.planBlockViews instanceof Set) {
         for (const view of Array.from(this.planBlockViews)) this.bankSyncPlanHost(view);
       }
+      if (typeof this.bankSyncFenceBadge === "function") {
+        if (this.dayStripViews instanceof Set) {
+          for (const record of Array.from(this.dayStripViews)) {
+            try { this.bankSyncFenceBadge(record); } catch (error) {}
+          }
+        }
+        if (this.periodStripViews instanceof Set) {
+          for (const record of Array.from(this.periodStripViews)) {
+            try { this.bankSyncFenceBadge(record); } catch (error) {}
+          }
+        }
+      }
       for (const record of Array.from(this.bankBadgeHostsStore())) {
         try { record.sync(); } catch (error) {}
       }
@@ -68471,6 +68633,179 @@ class BobLedgerToolsBankBadgeMixin {
     }
     this.bankBadgeTimer = null;
     this.bankBadgeConfigLastEnabled = null;
+    this.bankBadgeOlderBobWarned = null;
+  }
+}
+// ---- src/241nb-plugin-bank-badge-hosts.js ----
+// Fence adapters for the Bank Badge: a sibling host after every Day and
+// period strip so a strip repaint never blanks the badge.
+
+function bankBadgeCopyOwnerDocument(from, node) {
+  try {
+    if (from && node && from.ownerDocument && !node.ownerDocument) node.ownerDocument = from.ownerDocument;
+  } catch (error) {
+    // Fake-DOM tests set ownerDocument after createElement.
+  }
+  return node;
+}
+
+class BobLedgerToolsBankBadgeHostsMixin {
+  bankBadgeAttachFenceHosts(fenceEl) {
+    if (!fenceEl) return null;
+    try {
+      if (typeof fenceEl.empty === "function") fenceEl.empty();
+      else if (typeof fenceEl.replaceChildren === "function") fenceEl.replaceChildren();
+      else if (Array.isArray(fenceEl.children)) {
+        for (const child of fenceEl.children.slice()) {
+          try { child.parentNode = null; } catch (error) {}
+        }
+        fenceEl.children.length = 0;
+        try { fenceEl.textContent = ""; } catch (error) {}
+      } else if ("textContent" in fenceEl) {
+        fenceEl.textContent = "";
+      }
+    } catch (error) {
+      // Clearing a detached fence is best-effort.
+    }
+    const doc = statsDocFor(fenceEl);
+    const stripHost = bankBadgeCopyOwnerDocument(fenceEl, statsEl(doc, "div", { class: "bob-stats-strip-host" }));
+    const badgeHost = bankBadgeCopyOwnerDocument(fenceEl, statsEl(doc, "div", { class: "bob-bank-badge-host" }));
+    if (!stripHost || !badgeHost || typeof fenceEl.appendChild !== "function") return null;
+    try {
+      fenceEl.appendChild(stripHost);
+      fenceEl.appendChild(badgeHost);
+    } catch (error) {
+      return null;
+    }
+    return { stripHost, badgeHost };
+  }
+
+  bankBadgeFenceIsVisible(record) {
+    try {
+      if (record && record.visible === false) return false;
+    } catch (error) {}
+    try {
+      if (record && record.observer) return record.badgeSeen === true;
+    } catch (error) {}
+    try {
+      return statsBlockViewIsShown({ el: record && (record.fenceEl || record.el) });
+    } catch (error) {
+      return true;
+    }
+  }
+
+  bankBadgeMarkFenceVisible(record) {
+    try {
+      if (!record) return;
+      record.visible = true;
+      record.badgeSeen = true;
+    } catch (error) {}
+    try {
+      this.bankSyncFenceBadge(record);
+    } catch (error) {
+      // Badge subscribe is best-effort.
+    }
+  }
+
+  bankSyncFenceBadge(record) {
+    if (!record || !record.badgeHost) return;
+    const kind = record.badgeKind || (record.day ? "day" : record.kind);
+    const id = record.badgeId || record.day || record.periodId;
+    const today = typeof this.bankBadgeLocalToday === "function" ? this.bankBadgeLocalToday() : bankLocalDate();
+    const start = bankBadgePeriodStart(kind, id);
+    const future = Boolean(start && today && start > today);
+    const spawnOk = typeof this.dayStripCanSpawn !== "function" || this.dayStripCanSpawn();
+    const gatedOff = future
+      || !this.bankBadgeEnabled()
+      || !this.bankBadgeHubExists()
+      || !spawnOk
+      || this.bankDataActive === false
+      || !this.bankBadgeFenceIsVisible(record);
+    if (gatedOff) {
+      this.bankReleaseFenceBadge(record, { keepHost: true });
+      return;
+    }
+    const spec = bankBadgeSpecForStrip(kind, id);
+    if (!spec) {
+      this.bankReleaseFenceBadge(record, { keepHost: true });
+      return;
+    }
+    const key = bankCacheKey(bankBuildArgs(spec));
+    const existing = record.bankBadgeRecord || null;
+    if (existing && existing.key === key && existing.host === record.badgeHost && existing.unloaded !== true) return;
+
+    this.bankReleaseFenceBadge(record, { keepHost: true });
+    const badgeRecord = {
+      host: record.badgeHost,
+      kind,
+      id,
+      key,
+      spec,
+      parent: record,
+      unsubscribe: null,
+      result: null,
+      state: null,
+      unloaded: false,
+      sync: () => this.bankBadgePaintFenceRecord(badgeRecord),
+    };
+    record.bankBadgeRecord = badgeRecord;
+    this.bankBadgeRegisterHost(badgeRecord);
+    if (typeof this.apiBankSubscribe !== "function") return;
+    badgeRecord.unsubscribe = this.apiBankSubscribe(spec, (state) => {
+      if (badgeRecord.unloaded) return;
+      badgeRecord.state = state;
+      badgeRecord.result = state && state.results ? state.results[key] || null : null;
+      badgeRecord.sync();
+    });
+  }
+
+  bankBadgePaintFenceRecord(record) {
+    if (!record || record.unloaded || !record.host) return;
+    const result = record.result;
+    const args = record.spec ? bankBuildArgs(record.spec) : [];
+    if (result && result.error && bankBadgeOlderBobRefusal(result.error, args)) {
+      if (this.bankBadgeOlderBobWarned !== true) {
+        this.bankBadgeOlderBobWarned = true;
+        try {
+          console.warn("Bank badges for quarter, year, and all-time need a bob with `bank report -p`.");
+        } catch (error) {}
+      }
+      bankBadgePaint(record.host, { state: "hidden", reason: "older-bob" });
+      return;
+    }
+    if (!result || !result.report) {
+      const model = result && result.error
+        ? { state: "unavailable", reason: "fetch-failed", hint: bankErrorModel(result.error).hint }
+        : null;
+      bankBadgePaint(record.host, model);
+      return;
+    }
+    const model = bankBadgeModel(result.report, {
+      kind: record.kind,
+      day: record.kind === "day" ? record.id : undefined,
+      today: record.state && record.state.today || bankLocalDate(),
+      stale: result.stale === true,
+      refreshFailed: Boolean(result.error),
+    });
+    bankBadgePaint(record.host, model, {
+      activate: (target, newLeaf) => {
+        if (!record.unloaded) void this.bankBadgeNavigate(target, newLeaf);
+      },
+    });
+  }
+
+  bankReleaseFenceBadge(record, opts = {}) {
+    if (!record) return;
+    const badge = record.bankBadgeRecord || null;
+    if (badge) {
+      badge.unloaded = true;
+      this.bankBadgeUnregisterHost(badge);
+      try { if (typeof badge.unsubscribe === "function") badge.unsubscribe(); } catch (error) {}
+    }
+    record.bankBadgeRecord = null;
+    if (opts.keepHost === true && record.badgeHost) {
+      try { bankCardClear(record.badgeHost); } catch (error) {}
+    }
   }
 }
 // ---- src/241o-plugin-bank-marks-model.js ----
@@ -119792,6 +120127,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankCategoryMixin,
   BobLedgerToolsBankCardsMixin,
   BobLedgerToolsBankBadgeMixin,
+  BobLedgerToolsBankBadgeHostsMixin,
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,
@@ -122905,7 +123241,7 @@ module.exports.helpers = {
   ensureTaskThemeMarksRefresh,
   taskThemeFallbackFold,
   ensurePomodoroThemeChipsRefresh,
-  BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport,
+  BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport, bankBadgeSpecForStrip, bankBadgePeriodStart, bankBadgeOlderBobRefusal,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
   bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,

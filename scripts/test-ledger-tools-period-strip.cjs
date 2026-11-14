@@ -65,10 +65,11 @@ class FakeNode {
 }
 
 function fakeDocument() {
-  return {
-    createElement(tag) { return new FakeNode(tag, null); },
-    createElementNS(ns, tag) { return new FakeNode(tag, null); },
+  const doc = {
+    createElement(tag) { return new FakeNode(tag, doc); },
+    createElementNS(ns, tag) { return new FakeNode(tag, doc); },
   };
+  return doc;
 }
 
 function findAll(root, predicate, result = []) {

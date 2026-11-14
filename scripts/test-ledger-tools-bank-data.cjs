@@ -215,7 +215,7 @@ test("shared bob spawn maps missing binary and timeout failures", async () => {
   });
 });
 
-test("bank cache returns stale data while revalidating and keeps a 16-entry LRU", async () => {
+test("bank cache returns stale data while revalidating and keeps a bounded LRU", async () => {
   const { plugin } = makeBankPlugin();
   try {
     let spawns = 0;

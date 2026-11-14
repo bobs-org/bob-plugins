@@ -39,6 +39,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankCategoryMixin,
   BobLedgerToolsBankCardsMixin,
   BobLedgerToolsBankBadgeMixin,
+  BobLedgerToolsBankBadgeHostsMixin,
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,

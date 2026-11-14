@@ -1,0 +1,397 @@
+// Fence hosts for the Bank Badge: sibling strip + badge hosts after every
+// Day and period strip, visibility-gated fetches, future skip, older-bob.
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const { LedgerToolsPlugin, makeFreshnessApp, withMissingConfig } = require("./ledger-tools-harness.cjs");
+
+const helpers = LedgerToolsPlugin.helpers;
+const fixtureDir = path.join(__dirname, "../plugins/bob-ledger-tools/scripts/fixtures/bank");
+const reportDoc = JSON.parse(fs.readFileSync(path.join(fixtureDir, "report-month.json"), "utf8"));
+const reportDecoded = helpers.bankDecodeReport(JSON.stringify(reportDoc), "");
+
+function flush() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function drain() {
+  for (let index = 0; index < 16; index += 1) await Promise.resolve();
+  await flush();
+}
+
+class FakeNode {
+  constructor(tag, ownerDocument) {
+    this.tagName = String(tag).toUpperCase();
+    this.ownerDocument = ownerDocument;
+    this.parentNode = null;
+    this.children = [];
+    this.attrs = new Map();
+    this.listeners = new Map();
+    this.style = {};
+    this._text = "";
+    this._closest = null;
+  }
+  set textContent(value) {
+    this._text = String(value);
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+  }
+  get textContent() {
+    return [this._text, ...this.children.map((child) => child.textContent)].filter(Boolean).join("");
+  }
+  get firstChild() { return this.children[0] || null; }
+  setAttribute(name, value) { this.attrs.set(name, String(value)); }
+  getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+  removeAttribute(name) { this.attrs.delete(name); }
+  appendChild(child) {
+    if (child.parentNode && Array.isArray(child.parentNode.children)) {
+      const old = child.parentNode.children.indexOf(child);
+      if (old >= 0) child.parentNode.children.splice(old, 1);
+    }
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
+  insertBefore(child, before) {
+    if (child.parentNode && Array.isArray(child.parentNode.children)) {
+      const old = child.parentNode.children.indexOf(child);
+      if (old >= 0) child.parentNode.children.splice(old, 1);
+    }
+    child.parentNode = this;
+    const index = before ? this.children.indexOf(before) : -1;
+    if (index < 0) this.children.push(child);
+    else this.children.splice(index, 0, child);
+    return child;
+  }
+  removeChild(child) {
+    const index = this.children.indexOf(child);
+    if (index >= 0) this.children.splice(index, 1);
+    child.parentNode = null;
+    return child;
+  }
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+    this._text = "";
+    for (const child of children) this.appendChild(child);
+  }
+  empty() { this.replaceChildren(); }
+  closest() { return this._closest; }
+  addEventListener(type, handler) {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(handler);
+  }
+  dispatch(type, init = {}) {
+    const event = { type, target: this, currentTarget: null, ...init, preventDefault() {}, stopPropagation() {} };
+    let node = this;
+    while (node) {
+      event.currentTarget = node;
+      for (const handler of node.listeners.get(type) || []) handler(event);
+      node = node.parentNode;
+    }
+    return event;
+  }
+  querySelector(selector) {
+    const found = this.querySelectorAll(selector);
+    return found.length ? found[0] : null;
+  }
+  querySelectorAll(selector, found = []) {
+    const wanted = String(selector || "").startsWith(".") ? String(selector).slice(1) : null;
+    if (wanted && (this.getAttribute("class") || "").split(/\s+/).includes(wanted)) found.push(this);
+    for (const child of this.children) {
+      if (child instanceof FakeNode) child.querySelectorAll(selector, found);
+    }
+    return found;
+  }
+}
+
+function fakeDocument() {
+  const doc = {
+    createElement(tag) { return new FakeNode(tag, doc); },
+    createElementNS(ns, tag) { return new FakeNode(tag, doc); },
+  };
+  return doc;
+}
+
+function fakeHost() {
+  const doc = fakeDocument();
+  const el = new FakeNode("div", doc);
+  el.ownerDocument = doc;
+  return el;
+}
+
+function hostClasses(el) {
+  return el.children.map((child) => child.getAttribute("class") || "");
+}
+
+function reportFor(kind, id, extra = {}) {
+  const starts = {
+    day: id,
+    week: helpers.bankBadgePeriodStart("week", id) || "2026-11-09",
+    quarter: helpers.bankBadgePeriodStart("quarter", id) || "2026-09-28",
+    year: helpers.bankBadgePeriodStart("year", id) || "2025-12-29",
+    all: "2026-11-11",
+    iso_year: helpers.bankBadgePeriodStart("year", id) || "2025-12-29",
+    all_time: "2026-11-11",
+  };
+  const reportKind = kind === "year" ? "iso_year" : kind === "all" ? "all_time" : kind;
+  return {
+    ...reportDecoded.report,
+    period: {
+      kind: reportKind,
+      key: id,
+      start: extra.start || starts[kind] || starts[reportKind] || id,
+      end: extra.end || id,
+      label: extra.label || id,
+      so_far: extra.so_far !== false,
+      note: null,
+    },
+  };
+}
+
+function makePlugin(options = {}) {
+  const files = new Map();
+  if (options.hub !== false) files.set("bank.md", { path: "bank.md" });
+  const app = makeFreshnessApp({ tasks: [] });
+  app.vault = {
+    ...app.vault,
+    getAbstractFileByPath: (name) => files.get(name) || null,
+    getMarkdownFiles: () => Array.from(files.values()),
+    on: () => ({}),
+  };
+  app.metadataCache = {
+    ...app.metadataCache,
+    on: () => ({}),
+  };
+  app.loadLocalStorage = () => null;
+  app.saveLocalStorage = () => {};
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.onload();
+  plugin.bankBadgeLocalToday = () => options.today || "2026-11-14";
+  plugin.bankLocalDay = options.today || "2026-11-14";
+  plugin.dayStripCanSpawn = () => options.canSpawn !== false;
+  plugin.periodStripCanSpawn = () => options.canSpawn !== false;
+  plugin.periodStripSpawnShow = async (periodId) => ({
+    ok: true,
+    report: { schema_version: 1, ok: true, period: { id: periodId, kind: "week", start: "2026-11-09", end: "2026-11-15", state: "current" }, facts: [], columns: [], children: [] },
+  });
+  const spawns = [];
+  plugin.bankSpawnFetch = async (args) => {
+    spawns.push(args.slice());
+    if (typeof options.spawn === "function") return options.spawn(args, spawns);
+    const periodIndex = args.indexOf("-p");
+    const weekIndex = args.indexOf("-w");
+    const dayIndex = args.indexOf("-D");
+    if (periodIndex >= 0) {
+      const id = args[periodIndex + 1];
+      const kind = id === "all" ? "all" : /^\d{4}-Q/.test(id) ? "quarter" : "year";
+      return { ok: true, report: reportFor(kind, id) };
+    }
+    if (weekIndex >= 0) return { ok: true, report: reportFor("week", args[weekIndex + 1]) };
+    if (dayIndex >= 0) return { ok: true, report: reportFor("day", args[dayIndex + 1], { end: args[dayIndex + 1] }) };
+    return { ok: true, report: reportDecoded.report };
+  };
+  plugin.__spawns = spawns;
+  plugin.__files = files;
+  return plugin;
+}
+
+function mount(plugin, language, sourcePath, source = "") {
+  const el = fakeHost();
+  const added = [];
+  plugin.codeBlocks[language](source, el, { sourcePath, addChild: (child) => added.push(child) });
+  return { el, added };
+}
+
+function stripRecord(plugin, el) {
+  const fromDay = Array.from(plugin.dayStripViews || []).find((entry) =>
+    entry.fenceEl === el || entry.el === el || (entry.el && entry.el.parentNode === el),
+  );
+  if (fromDay) return fromDay;
+  return Array.from(plugin.periodStripViews || []).find((entry) =>
+    entry.fenceEl === el || entry.el === el || (entry.el && entry.el.parentNode === el),
+  );
+}
+
+const observers = [];
+class FakeIntersectionObserver {
+  constructor(callback) {
+    this.callback = callback;
+    this.targets = [];
+    this.disconnected = false;
+    observers.push(this);
+  }
+  observe(el) { this.targets.push(el); }
+  disconnect() { this.disconnected = true; }
+  trigger(isIntersecting) {
+    this.callback(this.targets.map((target) => ({ isIntersecting, target })));
+  }
+}
+
+async function withFakeObserver(run) {
+  const prior = globalThis.IntersectionObserver;
+  observers.length = 0;
+  globalThis.IntersectionObserver = FakeIntersectionObserver;
+  try {
+    return await run();
+  } finally {
+    if (prior === undefined) delete globalThis.IntersectionObserver;
+    else globalThis.IntersectionObserver = prior;
+  }
+}
+
+test("strip then badge hosts land on day and period fences, never on parts or embeds", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const cases = [
+        ["bob-stats-strip", "2026/2026-W46.md", ""],
+        ["bob-stats-strip", "2026/2026-Q4.md", ""],
+        ["bob-stats-strip", "2026.md", ""],
+        ["bob-stats-strip", "all_time.md", ""],
+        ["bob-stats-strip", "2026/20261114.md", ""],
+        ["bob-day-stats", "2026/20261114.md", ""],
+      ];
+      for (const [language, sourcePath, source] of cases) {
+        const { el } = mount(plugin, language, sourcePath, source);
+        assert.equal(el.children.length, 2, sourcePath);
+        assert.match(hostClasses(el)[0], /bob-stats-strip-host|bob-day-strip/);
+        assert.equal(hostClasses(el)[1], "bob-bank-badge-host");
+        const record = stripRecord(plugin, el);
+        assert.ok(record, sourcePath);
+        assert.equal(record.el, el.children[0]);
+        assert.equal(record.badgeHost, el.children[1]);
+      }
+      const table = mount(plugin, "bob-period-parts", "2026/2026-Q4.md");
+      assert.equal(table.el.querySelector(".bob-bank-badge-host"), null);
+      const popover = fakeHost();
+      popover._closest = popover;
+      plugin.codeBlocks["bob-stats-strip"]("", popover, { sourcePath: "2026/2026-W46.md", addChild: () => {} });
+      assert.equal(popover.querySelector(".bob-bank-badge-host"), null);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("a strip repaint keeps the badge node", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const { el } = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+      const badge = el.children[1];
+      const record = stripRecord(plugin, el);
+      record.paintedKey = null;
+      plugin.periodStripPaint(record);
+      assert.equal(el.children[1], badge);
+      assert.equal(el.children[0], record.el);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("each strip kind fetches the matching bank report args", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      mount(plugin, "bob-day-stats", "2026/20261114.md");
+      mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+      mount(plugin, "bob-stats-strip", "2026/2026-Q4.md");
+      mount(plugin, "bob-stats-strip", "2026.md");
+      mount(plugin, "bob-stats-strip", "all_time.md");
+      await drain();
+      const keys = plugin.__spawns.map((args) => args.join(" "));
+      assert.ok(keys.includes("bank report -D 2026-11-14 -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -w 2026-W46 -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p 2026-Q4 -s -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p 2026 -s -f json"), keys.join(" | "));
+      assert.ok(keys.includes("bank report -p all -s -f json"), keys.join(" | "));
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("fence badges wait for visibility and skip future periods", async () => {
+  await withMissingConfig(async () => {
+    await withFakeObserver(async () => {
+      const plugin = makePlugin();
+      try {
+        const visible = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+        assert.equal(plugin.__spawns.length, 0, "no bank spawn before the observer fires");
+        observers.at(-1).trigger(true);
+        await drain();
+        assert.ok(plugin.__spawns.some((args) => args.includes("2026-W46")));
+        const before = plugin.__spawns.length;
+        mount(plugin, "bob-stats-strip", "2027/2027-W01.md");
+        observers.at(-1).trigger(true);
+        await drain();
+        assert.equal(plugin.__spawns.length, before, "a future week never spawns bob bank");
+        const future = stripRecord(plugin, mount(plugin, "bob-stats-strip", "2027/2027-W01.md").el);
+        assert.equal(future.badgeHost.textContent, "");
+      } finally {
+        plugin.onunload();
+      }
+    });
+  });
+});
+
+test("older bob -p refusals hide the host and warn once", async () => {
+  await withMissingConfig(async () => {
+    const warns = [];
+    const original = console.warn;
+    console.warn = (message) => warns.push(String(message));
+    const plugin = makePlugin({
+      spawn: (args) => {
+        if (args.includes("-p")) {
+          return {
+            ok: false,
+            code: "bad-json",
+            message: "bob bank report returned output that is not JSON.",
+            detail: "error: unexpected argument '-p' found",
+            exitCode: 2,
+          };
+        }
+        return { ok: true, report: reportFor("week", "2026-W46") };
+      },
+    });
+    try {
+      const quarter = mount(plugin, "bob-stats-strip", "2026/2026-Q4.md");
+      const year = mount(plugin, "bob-stats-strip", "2026.md");
+      await drain();
+      assert.equal(quarter.el.querySelector(".bob-bank-badge"), null);
+      assert.equal(year.el.querySelector(".bob-bank-badge"), null);
+      assert.equal(quarter.el.querySelector(".bob-bank-badge-unavailable"), null);
+      assert.equal(warns.length, 1);
+      assert.match(warns[0], /bank report -p/);
+    } finally {
+      console.warn = original;
+      plugin.onunload();
+    }
+  });
+});
+
+test("unload unsubscribes and pref off clears every fence badge", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const week = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+      const day = mount(plugin, "bob-day-stats", "2026/20261114.md");
+      await drain();
+      assert.ok(week.el.querySelector(".bob-bank-badge"));
+      assert.ok(day.el.querySelector(".bob-bank-badge"));
+      const mounts = plugin.bankMountsStore().size;
+      assert.ok(week.added.length, "the strip registers a render child");
+      week.added[0].unload();
+      assert.ok(plugin.bankMountsStore().size < mounts);
+      plugin.bankBadgeConfigEnabled = () => false;
+      plugin.bankBadgeCheckConfig();
+      assert.equal(day.el.querySelector(".bob-bank-badge"), null);
+      assert.equal(day.el.querySelector(".bob-bank-badge-host").textContent, "");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

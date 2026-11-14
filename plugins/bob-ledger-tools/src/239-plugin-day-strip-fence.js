@@ -50,13 +50,22 @@ class BobLedgerToolsDayStripFenceMixin {
       if (!this.dayStripCanSpawn()) {
         return;
       }
+      const hosts = typeof this.bankBadgeAttachFenceHosts === "function"
+        ? this.bankBadgeAttachFenceHosts(el)
+        : null;
+      const stripEl = hosts && hosts.stripHost ? hosts.stripHost : el;
       const record = {
-        el,
+        el: stripEl,
+        fenceEl: el,
+        badgeHost: hosts ? hosts.badgeHost : null,
+        badgeKind: "day",
+        badgeId: day,
         day,
         path: sourcePath,
         kind: "fence",
         observer: null,
         visible: true,
+        badgeSeen: false,
       };
       this.dayStripViewsStore().add(record);
       if (ctx && typeof ctx.addChild === "function") {

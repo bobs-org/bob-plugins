@@ -884,6 +884,11 @@ class BobLedgerToolsDayStripMixin {
       }
       if (record) {
         record.observer = null;
+        try {
+          if (typeof this.bankReleaseFenceBadge === "function") this.bankReleaseFenceBadge(record);
+        } catch (error) {
+          // Badge release is best-effort.
+        }
       }
       this.dayStripViewsStore().delete(record);
     } catch (error) {
@@ -906,7 +911,9 @@ class BobLedgerToolsDayStripMixin {
         Observer = null;
       }
       if (typeof Observer !== "function") {
-        record.visible = true;
+        this.bankBadgeMarkFenceVisible
+          ? this.bankBadgeMarkFenceVisible(record)
+          : (record.visible = true);
         return;
       }
       try {
@@ -952,6 +959,9 @@ class BobLedgerToolsDayStripMixin {
           if (record.visible !== false) {
             record.visible = true;
             this.dayStripCheck(record);
+            try {
+              if (typeof this.bankBadgeMarkFenceVisible === "function") this.bankBadgeMarkFenceVisible(record);
+            } catch (error) {}
           }
         } catch (error) {
           // Observation is best-effort.

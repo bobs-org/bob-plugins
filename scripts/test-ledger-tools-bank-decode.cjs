@@ -6,6 +6,7 @@ const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
 
 const {
   BANK_SCHEMA_VERSION,
+  BANK_CACHE_SIZE,
   bankBuildArgs,
   bankCacheKey,
   bankDecodeList,
@@ -14,6 +15,9 @@ const {
   bankFormatCents,
   bankPresentList,
   bankPresentReport,
+  bankBadgeSpecForStrip,
+  bankBadgePeriodStart,
+  bankBadgeOlderBobRefusal,
 } = LedgerToolsPlugin.helpers;
 
 const fixtureDir = path.join(
@@ -40,9 +44,41 @@ test("bank argv is keyed by command and exact flags", () => {
   assert.deepEqual(bankBuildArgs({ command: "report", date: "2026-11-14" }), [
     "bank", "report", "-D", "2026-11-14", "-f", "json",
   ]);
+  assert.deepEqual(bankBuildArgs({ command: "report", week: "2026-W46" }), [
+    "bank", "report", "-w", "2026-W46", "-f", "json",
+  ]);
+  assert.deepEqual(bankBuildArgs({ command: "report", period: "2026-Q4", summary: true }), [
+    "bank", "report", "-p", "2026-Q4", "-s", "-f", "json",
+  ]);
+  assert.deepEqual(bankBuildArgs({ command: "report", period: "all", summary: true }), [
+    "bank", "report", "-p", "all", "-s", "-f", "json",
+  ]);
+  assert.equal(BANK_CACHE_SIZE, 24);
   assert.equal(
     bankCacheKey(bankBuildArgs({ command: "report", month: "2026-10" })),
     JSON.stringify(["bank", "report", "-m", "2026-10", "-f", "json"]),
+  );
+  assert.deepEqual(bankBadgeSpecForStrip("day", "2026-11-14"), { command: "report", date: "2026-11-14" });
+  assert.deepEqual(bankBadgeSpecForStrip("week", "2026-W46"), { command: "report", week: "2026-W46" });
+  assert.deepEqual(bankBadgeSpecForStrip("quarter", "2026-Q4"), { command: "report", period: "2026-Q4", summary: true });
+  assert.deepEqual(bankBadgeSpecForStrip("year", "2026"), { command: "report", period: "2026", summary: true });
+  assert.deepEqual(bankBadgeSpecForStrip("all", "all"), { command: "report", period: "all", summary: true });
+  assert.equal(bankBadgePeriodStart("day", "2026-11-14"), "2026-11-14");
+  assert.equal(bankBadgePeriodStart("week", "2026-W46"), "2026-11-09");
+  assert.equal(bankBadgePeriodStart("quarter", "2026-Q4"), "2026-09-28");
+  assert.equal(bankBadgePeriodStart("year", "2026"), "2025-12-29");
+  assert.equal(bankBadgePeriodStart("all", "all"), null);
+  assert.equal(
+    bankBadgeOlderBobRefusal({ exitCode: 2, code: "bad-json", message: "not JSON" }, ["bank", "report", "-p", "2026", "-s", "-f", "json"]),
+    true,
+  );
+  assert.equal(
+    bankBadgeOlderBobRefusal({ exitCode: 2, detail: "error: unexpected argument '-p' found" }, ["bank", "report", "-p", "all", "-s", "-f", "json"]),
+    true,
+  );
+  assert.equal(
+    bankBadgeOlderBobRefusal({ exitCode: 2, code: "bad-json", message: "not JSON" }, ["bank", "report", "-D", "2026-11-14", "-f", "json"]),
+    false,
   );
 });
 

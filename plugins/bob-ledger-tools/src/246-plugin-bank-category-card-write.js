@@ -170,7 +170,7 @@ function bankCategoryWritePlan(input = {}) {
 function bankCategoryWaitingRows(scan) {
   const rows = scan && Array.isArray(scan.rows) ? scan.rows : [];
   return rows
-    .filter((row) => row && row.acknowledged === false && Number.isSafeInteger(row.cents))
+    .filter((row) => bankWalkIsWaiting(row))
     .slice()
     .sort((left, right) => Number(left.line || 0) - Number(right.line || 0));
 }

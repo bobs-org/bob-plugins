@@ -141,6 +141,8 @@
   "246-plugin-bank-category-card-write.js",
   "247-plugin-bank-category-card-ui.js",
   "248-plugin-bank-category-card-actions.js",
+  "249-plugin-bank-walk-model.js",
+  "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
   "241c-plugin-notebook-catalog-dom.js",
   "241d-plugin-notebook-catalog.js",
@@ -249,5 +251,6 @@
   "356-exports-bank-category.js",
   "356-exports-mail-archive-receipts.js",
   "358-exports-projects.js",
-  "359-exports-projects-catalog.js"
+  "359-exports-projects-catalog.js",
+  "360-exports-bank-walk.js"
 ]

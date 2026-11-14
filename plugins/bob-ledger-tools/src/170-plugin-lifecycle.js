@@ -271,7 +271,7 @@ class BobLedgerToolsPlugin extends Plugin {
       // Themes namespace v1: cached history, sync hue/history/near-duplicate
       // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),
-      periodNotes: this.periodNotesApi(), bank: this.bankApi(),
+      periodNotes: this.periodNotesApi(), bank: this.bankApi(), bankWalk: this.bankWalkApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
       // Additive: top-level api stays v3. Every member is synchronous
@@ -673,7 +673,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions();
+    this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();

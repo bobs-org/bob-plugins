@@ -15,7 +15,7 @@ const CUSTOM_BLOCK_ID = "custom-row";
 const HELP_TEXT = [
   "Usage: node scripts/obsidian-bank-ui-e2e.cjs [OPTIONS]",
   "",
-  "Drive bob-bank cards, the daily chip, row marks, typing, ack, and guards",
+  "Drive bob-bank cards, the Bank Badge, row marks, typing, ack, and guards",
   "in an isolated scratch vault through CDP. Never opens the live vault.",
   "Run under xvfb-run -a on Linux.",
   "",
@@ -848,13 +848,14 @@ function assertEmptyQueue(card) {
   return { ok: true, card };
 }
 
-function assertChip(chip, options = {}) {
-  if (!chip) return { ok: false, reason: "missing chip" };
-  const text = String(chip.text || "");
-  if (!/out/i.test(text) || !/in/i.test(text)) return { ok: false, reason: `chip text ${JSON.stringify(text)}`, chip };
-  if (options.waiting === true && !/waiting/i.test(text)) return { ok: false, reason: "today chip missing waiting", chip };
-  if (options.waiting === false && /waiting/i.test(text)) return { ok: false, reason: "historical chip has waiting", chip };
-  return { ok: true, chip };
+function assertBadge(badge, options = {}) {
+  if (!badge) return { ok: false, reason: "missing bank badge" };
+  const text = String(badge.text || "");
+  if (!/BANK/i.test(text)) return { ok: false, reason: `badge text ${JSON.stringify(text)}`, badge };
+  if (/\$0\.00/.test(text)) return { ok: false, reason: "badge prints a zero amount", badge };
+  if (options.waiting === true && !/waiting/i.test(text)) return { ok: false, reason: "badge missing period waiting", badge };
+  if (options.waiting === false && /waiting/i.test(text)) return { ok: false, reason: "historical badge has waiting", badge };
+  return { ok: true, badge };
 }
 
 function assertAckArgv(entry) {
@@ -963,7 +964,7 @@ function BANK_UI_PROBE() {
         width: Math.round(card.getBoundingClientRect().width),
       };
     });
-    const chips = Array.from(document.querySelectorAll(".bob-bank-daily-chip")).filter(visible).map((el) => ({
+    const badges = Array.from(document.querySelectorAll(".bob-bank-badge")).filter(visible).map((el) => ({
       text: textOf(el),
       count: 1,
       stale: el.getAttribute("data-stale") === "true",
@@ -988,8 +989,8 @@ function BANK_UI_PROBE() {
     const hubClass = Boolean(document.body && document.body.classList && document.body.classList.contains("bob-bank-hub-note"));
     return {
       cards,
-      chips,
-      chipCount: document.querySelectorAll(".bob-bank-daily-chip").length,
+      badges,
+      badgeCount: document.querySelectorAll(".bob-bank-badge").length,
       marks,
       mathCount: math.length,
       path: active && active.path || null,
@@ -1010,10 +1011,10 @@ function BANK_UI_PROBE() {
         cycle: Boolean(window.app.commands.findCommand("task-status-cycler:cycle-task-status-forward")),
       },
       notices: Array.from(document.querySelectorAll(".notice")).map(textOf).slice(-8),
-      errors: Array.from(document.querySelectorAll(".bob-bank-card-error, .bob-bank-chip-error, [role=alert]")).map(textOf),
+      errors: Array.from(document.querySelectorAll(".bob-bank-card-error, .bob-bank-badge-unavailable, [role=alert]")).map(textOf),
     };
   } catch (error) {
-    return { error: String(error && error.message || error), cards: [], chips: [], marks: [], mathCount: 0 };
+    return { error: String(error && error.message || error), cards: [], badges: [], marks: [], mathCount: 0 };
   } })()`;
 }
 
@@ -1050,7 +1051,7 @@ module.exports = {
   assertHeat,
   assertQueue,
   assertEmptyQueue,
-  assertChip,
+  assertBadge,
   assertAckArgv,
   assertEnsureArgv,
   assertNoMath,

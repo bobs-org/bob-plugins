@@ -110,7 +110,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankDailyChip(); this.teardownBankMarks(); this.teardownBankData(); this.teardownBankActions();
+      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankData(); this.teardownBankActions();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }

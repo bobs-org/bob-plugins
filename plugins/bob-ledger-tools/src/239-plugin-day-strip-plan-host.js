@@ -734,8 +734,8 @@ class BobLedgerToolsDayStripPlanHostMixin {
       }
       let bankHost = null;
       try {
-        if (typeof this.bankPlanHostForRepaint === "function") {
-          bankHost = this.bankPlanHostForRepaint(el);
+        if (typeof this.bankBadgeHostForRepaint === "function") {
+          bankHost = this.bankBadgeHostForRepaint(el);
         }
       } catch (error) {
         bankHost = null;

@@ -77,6 +77,41 @@ test("report decoder preserves transfers, cash, inflows, and account caveats", (
   assert.equal(shop.flagged, true);
   assert.equal(shop.note, "with Kelly");
   assert.deepEqual(shop.links, ["[[shoprite]]"]);
+  assert.equal(decoded.report.coverage, null, "older bob reports remain supported");
+  assert.equal(decoded.report.navigation, null, "older bob reports remain supported");
+});
+
+test("report decoder validates and passes through optional badge coverage and navigation", () => {
+  const extended = JSON.parse(JSON.stringify(reportDocument));
+  extended.period.kind = "period-kind-from-a-newer-bob";
+  extended.coverage = {
+    tracked_since: "2026-11-01",
+    imported_through: "2026-11-12",
+    start: "2026-11-01",
+    through: "2026-11-12",
+    complete: false,
+  };
+  extended.navigation = {
+    waiting: null,
+    first: { path: "bank/2026-11.md", line: 12, date: "2026-11-12" },
+    months: ["bank/2026-11.md"],
+  };
+  const decoded = bankDecodeReport(JSON.stringify(extended), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.report.period.kind, extended.period.kind);
+  assert.deepEqual(decoded.report.coverage, extended.coverage);
+  assert.deepEqual(decoded.report.navigation, extended.navigation);
+  assert.deepEqual(bankPresentReport(decoded.report).navigation, extended.navigation);
+
+  const badCoverage = JSON.parse(JSON.stringify(extended));
+  badCoverage.coverage.tracked_since = "2026-02-30";
+  assert.equal(bankDecodeReport(JSON.stringify(badCoverage), "").code, "bad-shape");
+  const badNavigation = JSON.parse(JSON.stringify(extended));
+  badNavigation.navigation.first.line = 0;
+  assert.equal(bankDecodeReport(JSON.stringify(badNavigation), "").code, "bad-shape");
+  const badMonths = JSON.parse(JSON.stringify(extended));
+  badMonths.navigation.months = [""];
+  assert.equal(bankDecodeReport(JSON.stringify(badMonths), "").code, "bad-shape");
 });
 
 test("teaching-empty is success and never a zero-dollar report", () => {

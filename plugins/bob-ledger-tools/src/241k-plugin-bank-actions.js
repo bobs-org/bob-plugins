@@ -610,7 +610,8 @@ class BobLedgerToolsBankActionsMixin {
     return { ok: true, report };
   }
 
-  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0) {
+  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0, options = {}) {
+    const opts = bankJsonObject(options) ? options : {};
     const target = bankActionText(path);
     if (!target) {
       return false;
@@ -624,43 +625,57 @@ class BobLedgerToolsBankActionsMixin {
     }
     // Pending saves first: bob already wrote the file on disk, so flush
     // the in-memory buffer to avoid an external-change conflict.
-    try {
-      const leaves = this.app.workspace && typeof this.app.workspace.getLeavesOfType === "function"
-        ? this.app.workspace.getLeavesOfType("markdown")
-        : [];
-      for (const leaf of Array.isArray(leaves) ? leaves : []) {
-        const leafView = leaf && leaf.view;
-        if (leafView && leafView.file && leafView.file.path === target && typeof leafView.save === "function") {
-          await leafView.save();
+    if (opts.skipPendingSave !== true) {
+      try {
+        const leaves = this.app.workspace && typeof this.app.workspace.getLeavesOfType === "function"
+          ? this.app.workspace.getLeavesOfType("markdown")
+          : [];
+        for (const leaf of Array.isArray(leaves) ? leaves : []) {
+          const leafView = leaf && leaf.view;
+          if (leafView && leafView.file && leafView.file.path === target && typeof leafView.save === "function") {
+            await leafView.save();
+          }
         }
+      } catch (error) {
+        // Save is best-effort; the open below still reloads.
       }
-    } catch (error) {
-      // Save is best-effort; the open below still reloads.
     }
     let openedView = null;
-    try {
-      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
-      const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
-      const openInActiveLeaf = nav && nav.api && nav.api.openFileInActiveLeaf;
-      if (typeof openInActiveLeaf === "function") {
-        const result = await openInActiveLeaf.call(nav.api, file);
-        if (result && result.ok === true) {
-          openedView = result.view || null;
-        }
-      }
-    } catch (error) {
-      openedView = null;
-    }
-    if (!openedView) {
+    if (opts.newLeaf === true) {
       try {
         const workspace = this.app && this.app.workspace;
-        const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+        const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf("tab") : null;
         if (leaf && typeof leaf.openFile === "function") {
           await leaf.openFile(file);
           openedView = leaf.view || null;
         }
+      }
+      catch (error) { openedView = null; }
+    } else {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+        const openInActiveLeaf = nav && nav.api && nav.api.openFileInActiveLeaf;
+        if (typeof openInActiveLeaf === "function") {
+          const result = await openInActiveLeaf.call(nav.api, file);
+          if (result && result.ok === true) {
+            openedView = result.view || null;
+          }
+        }
       } catch (error) {
         openedView = null;
+      }
+      if (!openedView) {
+        try {
+          const workspace = this.app && this.app.workspace;
+          const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+          if (leaf && typeof leaf.openFile === "function") {
+            await leaf.openFile(file);
+            openedView = leaf.view || null;
+          }
+        } catch (error) {
+          openedView = null;
+        }
       }
     }
     const editor = (openedView && openedView.editor) || this.bankActiveEditor(openedView);

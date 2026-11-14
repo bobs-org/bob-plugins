@@ -272,22 +272,3 @@ function bankCardQueueModel(report, options = {}) {
   };
 }
 
-function bankCardDailyChipModel(report, date, today) {
-  if (report && report.teaching_empty === true) return { kind: "teaching-empty", date };
-  if (!report || report.command !== "report" || !Array.isArray(report.days)) {
-    return { kind: "invalid-report", date };
-  }
-  const day = report.days.find((entry) => entry && entry.date === date);
-  if (!day || !Number.isSafeInteger(day.out_cents) || !Number.isSafeInteger(day.in_cents)) {
-    return { kind: "day-unavailable", date };
-  }
-  return {
-    kind: "day",
-    date,
-    outCents: day.out_cents,
-    inCents: day.in_cents,
-    waitingAll: date === today && report.waiting && Number.isInteger(report.waiting.all)
-      ? report.waiting.all
-      : null,
-  };
-}

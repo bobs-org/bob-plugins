@@ -25,6 +25,56 @@ function bankCount(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+function bankIsoDateOrNull(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return { ok: false };
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return { ok: false };
+  return { ok: true, value };
+}
+
+function bankNormalizeCoverage(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || typeof value.complete !== "boolean") return { ok: false };
+  const trackedSince = bankIsoDateOrNull(value.tracked_since);
+  const importedThrough = bankIsoDateOrNull(value.imported_through);
+  const start = bankIsoDateOrNull(value.start);
+  const through = bankIsoDateOrNull(value.through);
+  if (!trackedSince.ok || !importedThrough.ok || !start.ok || !through.ok) return { ok: false };
+  return {
+    ok: true,
+    value: {
+      tracked_since: trackedSince.value,
+      imported_through: importedThrough.value,
+      start: start.value,
+      through: through.value,
+      complete: value.complete,
+    },
+  };
+}
+
+function bankNormalizeNavigationLocation(value) {
+  if (value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || bankString(value.path) === null || !Number.isInteger(value.line) || value.line < 1) {
+    return { ok: false };
+  }
+  const date = bankIsoDateOrNull(value.date);
+  if (!date.ok || date.value === null) return { ok: false };
+  return { ok: true, value: { path: value.path, line: value.line, date: date.value } };
+}
+
+function bankNormalizeNavigation(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || !Array.isArray(value.months)) return { ok: false };
+  const waiting = bankNormalizeNavigationLocation(value.waiting);
+  const first = bankNormalizeNavigationLocation(value.first);
+  if (!waiting.ok || !first.ok || value.months.some((month) => bankString(month) === null)) return { ok: false };
+  return {
+    ok: true,
+    value: { waiting: waiting.value, first: first.value, months: value.months.slice() },
+  };
+}
+
 function bankSafeCents(value, options = {}) {
   if (options.allowNull === true && value === null) {
     return { ok: true, value: null };
@@ -438,10 +488,16 @@ function bankDecodeReport(stdout, stderr) {
   if (!bankJsonObject(body.period) || !Array.isArray(body.days) || !bankJsonObject(body.waiting)) {
     return bankFail("bad-shape", "bob bank report returned a report without period, days, or waiting.", stderr);
   }
+  const periodKind = bankText(body.period.kind);
+  if (periodKind === null) {
+    return bankFail("bad-shape", "bob bank report returned a period without a kind.", stderr);
+  }
   const totals = bankNormalizeTotals(body.totals);
   const breakdown = bankNormalizeBreakdown(body.breakdown);
-  if (!totals || !breakdown) {
-    return bankFail("bad-shape", "bob bank report returned invalid totals or breakdown cents.", stderr);
+  const coverage = bankNormalizeCoverage(body.coverage);
+  const navigation = bankNormalizeNavigation(body.navigation);
+  if (!totals || !breakdown || !coverage.ok || !navigation.ok) {
+    return bankFail("bad-shape", "bob bank report returned invalid totals, breakdown, coverage, or navigation.", stderr);
   }
   const days = [];
   for (const day of body.days) {
@@ -482,7 +538,7 @@ function bankDecodeReport(stdout, stderr) {
       command: "report",
       teaching_empty: false,
       period: {
-        kind: bankString(body.period.kind),
+        kind: periodKind,
         key: bankString(body.period.key),
         start: bankString(body.period.start),
         end: bankString(body.period.end),
@@ -493,6 +549,8 @@ function bankDecodeReport(stdout, stderr) {
       totals,
       breakdown,
       days,
+      coverage: coverage.value,
+      navigation: navigation.value,
       waiting: {
         period: waitingPeriod,
         all: waitingAll,
@@ -615,6 +673,8 @@ function bankPresentReport(report) {
       inText: bankFormatCents(day.in_cents),
       rows: (day.rows || []).map(bankPresentRow),
     })),
+    coverage: report.coverage || null,
+    navigation: report.navigation || null,
     waiting: report.waiting,
     flagged: report.flagged,
   };

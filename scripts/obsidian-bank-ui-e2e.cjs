@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Real-Obsidian e2e for bob-bank cards, the daily chip, row marks, typing,
+// Real-Obsidian e2e for bob-bank cards, the Bank Badge, row marks, typing,
 // acknowledgment, cycler guards, and data honesty.
 // Isolated scratch vault + profile, owned Obsidian process, CDP probes.
 // Never opens the live vault.
@@ -116,6 +116,7 @@ function markdownViewState(mode) {
 function writeBobConfig(configDir, shimPath, extra = {}) {
   const stats = {
     bob_path: shimPath,
+    bank_badge: extra.bankBadge !== false,
     bank_chip: extra.bankChip !== false,
     bank_marks: extra.bankMarks !== false,
     day_strip: extra.dayStrip === true,
@@ -434,11 +435,11 @@ function runSelfTest() {
       accounts: [{ name: "WF Checking", hint: "No import yet" }],
     });
     if (!emptyQueue.ok) throw new Error(`empty queue helper failed: ${emptyQueue.reason}`);
-    const todayChip = bank.assertChip({ text: "BANK · out $1,418.21 · in +$2,100.00 · 4 waiting" }, { waiting: true });
-    if (!todayChip.ok) throw new Error(`today chip helper failed: ${todayChip.reason}`);
-    const histChip = bank.assertChip({ text: "BANK · out $8.00 · in $0.00" }, { waiting: false });
-    if (!histChip.ok) throw new Error(`historical chip helper failed: ${histChip.reason}`);
-    const badHist = bank.assertChip({ text: "BANK · out $8.00 · in $0.00 · 4 waiting" }, { waiting: false });
+    const todayBadge = bank.assertBadge({ text: "BANK · in +$2,100.00 · out $1,418.21 · 4 waiting" }, { waiting: true });
+    if (!todayBadge.ok) throw new Error(`today badge helper failed: ${todayBadge.reason}`);
+    const histBadge = bank.assertBadge({ text: "BANK · out $8.00" }, { waiting: false });
+    if (!histBadge.ok) throw new Error(`historical badge helper failed: ${histBadge.reason}`);
+    const badHist = bank.assertBadge({ text: "BANK · out $8.00 · 4 waiting" }, { waiting: false });
     if (badHist.ok) throw new Error("historical waiting count must fail");
     const ack = bank.assertAckArgv({ argv: ["bank", "ack", bank.IMPORTED_WAITING_ID, "-f", "json"] });
     if (!ack.ok) throw new Error(`ack argv helper failed: ${ack.reason}`);
@@ -766,51 +767,35 @@ async function runE2e(parsed) {
     const todayPath = bank.dailyPathFor(bank.FIXTURE_TODAY);
     const histPath = bank.dailyPathFor(bank.FIXTURE_HISTORICAL);
     await openNote(client, todayPath, "live");
-    const todayChip = await waitFor(client, probe(), (value) => Array.isArray(value.chips) && value.chips.length === 1, "today-chip", 16_000).catch((error) => ({ error: error.message, chips: [] }));
-    const todayAssert = bank.assertChip(todayChip.chips && todayChip.chips[0], { waiting: true });
-    record("chip-today", todayAssert.ok, todayAssert.ok ? todayChip.chips[0].text : todayAssert.reason);
-    record("chip-once", todayChip.chipCount === 1, `count=${todayChip.chipCount}`);
-    const shotChipToday = path.join(outDir, "chip-today.png");
-    await capturePage(client, shotChipToday);
-    report.screenshots.push(shotChipToday);
-    const leavesBefore = todayChip.leaves || [];
-    const argvBeforeChip = bank.readArgvLog(shimDir).length;
-    const chipClick = await client.evaluate(`(() => {
-      const chip = document.querySelector("button.bob-bank-daily-chip");
-      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-      const api = plugin && typeof plugin.bankApi === "function" ? plugin.bankApi() : null;
-      if (chip) chip.click();
-      return {
-        clicked: Boolean(chip),
-        hasEnsure: Boolean(api && typeof api.ensureOpenDay === "function"),
-        text: chip ? String(chip.textContent || "") : "",
-      };
+    const todayBadge = await waitFor(client, probe(), (value) => Array.isArray(value.badges) && value.badges.length === 1, "today-badge", 16_000).catch((error) => ({ error: error.message, badges: [] }));
+    const todayAssert = bank.assertBadge(todayBadge.badges && todayBadge.badges[0], { waiting: true });
+    record("badge-today", todayAssert.ok, todayAssert.ok ? todayBadge.badges[0].text : todayAssert.reason);
+    record("badge-once", todayBadge.badgeCount === 1, `count=${todayBadge.badgeCount}`);
+    const shotBadgeToday = path.join(outDir, "badge-today.png");
+    await capturePage(client, shotBadgeToday);
+    report.screenshots.push(shotBadgeToday);
+    const leavesBefore = todayBadge.leaves || [];
+    const argvBeforeBadge = bank.readArgvLog(shimDir).length;
+    const badgeClick = await client.evaluate(`(() => {
+      const badge = document.querySelector(".bob-bank-badge[role=link]");
+      if (badge) badge.click();
+      return { clicked: Boolean(badge), text: badge ? String(badge.textContent || "") : "" };
     })()`).catch((error) => ({ error: String(error) }));
-    let ensureWait = await waitArgv(shimDir, argvBeforeChip, (argv) => argv[1] === "ensure", 4000);
-    if (!ensureWait.hit) {
-      await client.evaluate(`(() => {
-        const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-        const api = plugin && typeof plugin.bankApi === "function" ? plugin.bankApi() : null;
-        if (api && typeof api.ensureOpenDay === "function") return api.ensureOpenDay(${JSON.stringify(bank.FIXTURE_TODAY)});
-        return null;
-      })()`, lib.RPC_TIMEOUT_MS).catch(() => null);
-      ensureWait = await waitArgv(shimDir, argvBeforeChip, (argv) => argv[1] === "ensure", 6000);
-    }
-    await waitFor(client, probe(), (value) => value.path === "bank/2026-11.md", "chip-jump", 8000).catch(() => null);
-    const afterChip = await client.evaluate(probe());
-    const ensureHit = ensureWait.hit;
-    const ensureAssert = bank.assertEnsureArgv(ensureHit || { argv: [] }, bank.FIXTURE_TODAY);
-    record("chip-ensure-argv", ensureAssert.ok, ensureAssert.ok ? ensureAssert.argv.join(" ") : `${ensureAssert.reason}; click=${jsonDetail(chipClick)}`);
-    record("chip-one-leaf", Array.isArray(afterChip.leaves) && afterChip.leaves.filter(Boolean).length <= Math.max(1, leavesBefore.filter(Boolean).length), JSON.stringify({ before: leavesBefore, after: afterChip.leaves }).slice(0, 220));
-    record("chip-jump", afterChip.path === "bank/2026-11.md" && Number(afterChip.cursorLine) >= 0, JSON.stringify({ path: afterChip.path, line: afterChip.cursorLine }).slice(0, 160));
+    await waitFor(client, probe(), (value) => value.path === "bank/2026-11.md", "badge-jump", 8000).catch(() => null);
+    const afterBadge = await client.evaluate(probe());
+    const badgeArgv = bank.readArgvLog(shimDir).slice(argvBeforeBadge);
+    const wroteEnsure = badgeArgv.some((entry) => entry.argv && entry.argv[1] === "ensure");
+    record("badge-read-only", Boolean(badgeClick.clicked) && !wroteEnsure, JSON.stringify({ click: badgeClick, argv: badgeArgv }).slice(0, 220));
+    record("badge-one-leaf", Array.isArray(afterBadge.leaves) && afterBadge.leaves.filter(Boolean).length <= Math.max(1, leavesBefore.filter(Boolean).length), JSON.stringify({ before: leavesBefore, after: afterBadge.leaves }).slice(0, 220));
+    record("badge-jump", afterBadge.path === "bank/2026-11.md" && Number(afterBadge.cursorLine) >= 0, JSON.stringify({ path: afterBadge.path, line: afterBadge.cursorLine }).slice(0, 160));
 
     await openNote(client, histPath, "live");
-    const histChipSnap = await waitFor(client, probe(), (value) => Array.isArray(value.chips) && value.chips.length >= 1, "historical-chip", 12_000).catch((error) => ({ error: error.message, chips: [] }));
-    const histAssert = bank.assertChip(histChipSnap.chips && histChipSnap.chips[0], { waiting: false });
-    record("chip-historical", histAssert.ok, histAssert.ok ? histChipSnap.chips[0].text : histAssert.reason);
-    const shotChipHist = path.join(outDir, "chip-historical.png");
-    await capturePage(client, shotChipHist);
-    report.screenshots.push(shotChipHist);
+    const histBadgeSnap = await waitFor(client, probe(), (value) => Array.isArray(value.badges) && value.badges.length >= 1, "historical-badge", 12_000).catch((error) => ({ error: error.message, badges: [] }));
+    const histAssert = bank.assertBadge(histBadgeSnap.badges && histBadgeSnap.badges[0], { waiting: false });
+    record("badge-historical", histAssert.ok, histAssert.ok ? histBadgeSnap.badges[0].text : histAssert.reason);
+    const shotBadgeHist = path.join(outDir, "badge-historical.png");
+    await capturePage(client, shotBadgeHist);
+    report.screenshots.push(shotBadgeHist);
 
     await client.evaluate(`(() => (async () => {
       const file = window.app.vault.getAbstractFileByPath("bank.md");
@@ -819,8 +804,8 @@ async function runE2e(parsed) {
     })())()`);
     await sleep(700);
     await openNote(client, todayPath, "live");
-    const noHub = await waitFor(client, probe(), (value) => (value.chips || []).length === 0, "chip-without-hub", 8_000).catch(() => ({ chips: [{ text: "still present" }] }));
-    record("chip-without-hub", !noHub.chips || noHub.chips.length === 0, JSON.stringify(noHub.chips).slice(0, 120));
+    const noHub = await waitFor(client, probe(), (value) => (value.badges || []).length === 0, "badge-without-hub", 8_000).catch(() => ({ badges: [{ text: "still present" }] }));
+    record("badge-without-hub", !noHub.badges || noHub.badges.length === 0, JSON.stringify(noHub.badges).slice(0, 120));
     await client.evaluate(`(() => (async () => {
       const file = window.app.vault.getAbstractFileByPath("bank-hub-away.md");
       if (file) await window.app.vault.rename(file, "bank.md");
@@ -828,24 +813,24 @@ async function runE2e(parsed) {
     })())()`);
     await sleep(500);
 
-    writeBobConfig(configDir, shimPath, { dayStrip: false, bankChip: false, bankMarks: true });
-    writeBobConfig(path.join(homeDir, ".config"), shimPath, { dayStrip: false, bankChip: false, bankMarks: true });
+    writeBobConfig(configDir, shimPath, { dayStrip: false, bankBadge: false, bankChip: true, bankMarks: true });
+    writeBobConfig(path.join(homeDir, ".config"), shimPath, { dayStrip: false, bankBadge: false, bankChip: true, bankMarks: true });
     await client.evaluate(`(() => {
       const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-      if (plugin && typeof plugin.bankDailyChipCheckConfig === "function") plugin.bankDailyChipCheckConfig();
-      if (plugin && typeof plugin.bankRefreshPlanHosts === "function") plugin.bankRefreshPlanHosts();
+      if (plugin && typeof plugin.bankBadgeCheckConfig === "function") plugin.bankBadgeCheckConfig();
+      if (plugin && typeof plugin.bankRefreshBadgeHosts === "function") plugin.bankRefreshBadgeHosts();
       return true;
     })()`);
     await sleep(400);
     await openNote(client, todayPath, "live");
-    const hiddenChip = await client.evaluate(probe());
-    record("chip-setting-off", !hiddenChip.chips || hiddenChip.chips.length === 0, `count=${hiddenChip.chipCount}`);
-    writeBobConfig(configDir, shimPath, { dayStrip: false, bankChip: true, bankMarks: true });
-    writeBobConfig(path.join(homeDir, ".config"), shimPath, { dayStrip: false, bankChip: true, bankMarks: true });
+    const hiddenBadge = await client.evaluate(probe());
+    record("badge-setting-off", !hiddenBadge.badges || hiddenBadge.badges.length === 0, `count=${hiddenBadge.badgeCount}`);
+    writeBobConfig(configDir, shimPath, { dayStrip: false, bankBadge: true, bankChip: true, bankMarks: true });
+    writeBobConfig(path.join(homeDir, ".config"), shimPath, { dayStrip: false, bankBadge: true, bankChip: true, bankMarks: true });
     await client.evaluate(`(() => {
       const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-      if (plugin && typeof plugin.bankDailyChipCheckConfig === "function") plugin.bankDailyChipCheckConfig();
-      if (plugin && typeof plugin.bankRefreshPlanHosts === "function") plugin.bankRefreshPlanHosts();
+      if (plugin && typeof plugin.bankBadgeCheckConfig === "function") plugin.bankBadgeCheckConfig();
+      if (plugin && typeof plugin.bankRefreshBadgeHosts === "function") plugin.bankRefreshBadgeHosts();
       return true;
     })()`);
 
@@ -1525,14 +1510,15 @@ async function runE2e(parsed) {
 
     const unload = await client.evaluate(`(() => (async () => {
       const plugin = window.app.plugins.plugins["bob-ledger-tools"];
-      const chipsBefore = document.querySelectorAll(".bob-bank-daily-chip").length;
+      const badgesBefore = document.querySelectorAll(".bob-bank-badge").length;
       if (plugin && typeof plugin.teardownBankCards === "function") plugin.teardownBankCards();
+      if (plugin && typeof plugin.teardownBankBadge === "function") plugin.teardownBankBadge();
       if (plugin && typeof plugin.teardownBankData === "function") plugin.teardownBankData();
       await window.app.workspace.activeLeaf.detach();
-      const chipsAfter = document.querySelectorAll(".bob-bank-daily-chip").length;
-      return { chipsBefore, chipsAfter };
+      const badgesAfter = document.querySelectorAll(".bob-bank-badge").length;
+      return { badgesBefore, badgesAfter };
     })())()`).catch((error) => ({ error: String(error) }));
-    record("unload-no-duplicate-chip", Boolean(unload && Number(unload.chipsAfter) <= 1), JSON.stringify(unload).slice(0, 160));
+    record("unload-no-duplicate-badge", Boolean(unload && Number(unload.badgesAfter) <= 1), JSON.stringify(unload).slice(0, 160));
 
     const argv = bank.readArgvLog(shimDir);
     report.bobMode = argv.some((entry) => entry && entry.argv) ? (realBob ? "shim-passthrough-or-fixture" : "shim-fixture") : "none";

@@ -33570,7 +33570,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions();
-    this.setupBankCards(); this.setupBankDailyChip(); this.setupBankMarks();
+    this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
@@ -33692,7 +33692,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankDailyChip(); this.teardownBankMarks(); this.teardownBankData(); this.teardownBankActions();
+      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankData(); this.teardownBankActions();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
@@ -52707,8 +52707,8 @@ class BobLedgerToolsDayStripPlanHostMixin {
       }
       let bankHost = null;
       try {
-        if (typeof this.bankPlanHostForRepaint === "function") {
-          bankHost = this.bankPlanHostForRepaint(el);
+        if (typeof this.bankBadgeHostForRepaint === "function") {
+          bankHost = this.bankBadgeHostForRepaint(el);
         }
       } catch (error) {
         bankHost = null;
@@ -64139,6 +64139,56 @@ function bankCount(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
+function bankIsoDateOrNull(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return { ok: false };
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return { ok: false };
+  return { ok: true, value };
+}
+
+function bankNormalizeCoverage(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || typeof value.complete !== "boolean") return { ok: false };
+  const trackedSince = bankIsoDateOrNull(value.tracked_since);
+  const importedThrough = bankIsoDateOrNull(value.imported_through);
+  const start = bankIsoDateOrNull(value.start);
+  const through = bankIsoDateOrNull(value.through);
+  if (!trackedSince.ok || !importedThrough.ok || !start.ok || !through.ok) return { ok: false };
+  return {
+    ok: true,
+    value: {
+      tracked_since: trackedSince.value,
+      imported_through: importedThrough.value,
+      start: start.value,
+      through: through.value,
+      complete: value.complete,
+    },
+  };
+}
+
+function bankNormalizeNavigationLocation(value) {
+  if (value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || bankString(value.path) === null || !Number.isInteger(value.line) || value.line < 1) {
+    return { ok: false };
+  }
+  const date = bankIsoDateOrNull(value.date);
+  if (!date.ok || date.value === null) return { ok: false };
+  return { ok: true, value: { path: value.path, line: value.line, date: date.value } };
+}
+
+function bankNormalizeNavigation(value) {
+  if (value === undefined || value === null) return { ok: true, value: null };
+  if (!bankJsonObject(value) || !Array.isArray(value.months)) return { ok: false };
+  const waiting = bankNormalizeNavigationLocation(value.waiting);
+  const first = bankNormalizeNavigationLocation(value.first);
+  if (!waiting.ok || !first.ok || value.months.some((month) => bankString(month) === null)) return { ok: false };
+  return {
+    ok: true,
+    value: { waiting: waiting.value, first: first.value, months: value.months.slice() },
+  };
+}
+
 function bankSafeCents(value, options = {}) {
   if (options.allowNull === true && value === null) {
     return { ok: true, value: null };
@@ -64552,10 +64602,16 @@ function bankDecodeReport(stdout, stderr) {
   if (!bankJsonObject(body.period) || !Array.isArray(body.days) || !bankJsonObject(body.waiting)) {
     return bankFail("bad-shape", "bob bank report returned a report without period, days, or waiting.", stderr);
   }
+  const periodKind = bankText(body.period.kind);
+  if (periodKind === null) {
+    return bankFail("bad-shape", "bob bank report returned a period without a kind.", stderr);
+  }
   const totals = bankNormalizeTotals(body.totals);
   const breakdown = bankNormalizeBreakdown(body.breakdown);
-  if (!totals || !breakdown) {
-    return bankFail("bad-shape", "bob bank report returned invalid totals or breakdown cents.", stderr);
+  const coverage = bankNormalizeCoverage(body.coverage);
+  const navigation = bankNormalizeNavigation(body.navigation);
+  if (!totals || !breakdown || !coverage.ok || !navigation.ok) {
+    return bankFail("bad-shape", "bob bank report returned invalid totals, breakdown, coverage, or navigation.", stderr);
   }
   const days = [];
   for (const day of body.days) {
@@ -64596,7 +64652,7 @@ function bankDecodeReport(stdout, stderr) {
       command: "report",
       teaching_empty: false,
       period: {
-        kind: bankString(body.period.kind),
+        kind: periodKind,
         key: bankString(body.period.key),
         start: bankString(body.period.start),
         end: bankString(body.period.end),
@@ -64607,6 +64663,8 @@ function bankDecodeReport(stdout, stderr) {
       totals,
       breakdown,
       days,
+      coverage: coverage.value,
+      navigation: navigation.value,
       waiting: {
         period: waitingPeriod,
         all: waitingAll,
@@ -64729,6 +64787,8 @@ function bankPresentReport(report) {
       inText: bankFormatCents(day.in_cents),
       rows: (day.rows || []).map(bankPresentRow),
     })),
+    coverage: report.coverage || null,
+    navigation: report.navigation || null,
     waiting: report.waiting,
     flagged: report.flagged,
   };
@@ -66501,7 +66561,8 @@ class BobLedgerToolsBankActionsMixin {
     return { ok: true, report };
   }
 
-  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0) {
+  async bankOpenMonthPathAtLine(path, oneBasedLine, column = 0, options = {}) {
+    const opts = bankJsonObject(options) ? options : {};
     const target = bankActionText(path);
     if (!target) {
       return false;
@@ -66515,43 +66576,57 @@ class BobLedgerToolsBankActionsMixin {
     }
     // Pending saves first: bob already wrote the file on disk, so flush
     // the in-memory buffer to avoid an external-change conflict.
-    try {
-      const leaves = this.app.workspace && typeof this.app.workspace.getLeavesOfType === "function"
-        ? this.app.workspace.getLeavesOfType("markdown")
-        : [];
-      for (const leaf of Array.isArray(leaves) ? leaves : []) {
-        const leafView = leaf && leaf.view;
-        if (leafView && leafView.file && leafView.file.path === target && typeof leafView.save === "function") {
-          await leafView.save();
+    if (opts.skipPendingSave !== true) {
+      try {
+        const leaves = this.app.workspace && typeof this.app.workspace.getLeavesOfType === "function"
+          ? this.app.workspace.getLeavesOfType("markdown")
+          : [];
+        for (const leaf of Array.isArray(leaves) ? leaves : []) {
+          const leafView = leaf && leaf.view;
+          if (leafView && leafView.file && leafView.file.path === target && typeof leafView.save === "function") {
+            await leafView.save();
+          }
         }
+      } catch (error) {
+        // Save is best-effort; the open below still reloads.
       }
-    } catch (error) {
-      // Save is best-effort; the open below still reloads.
     }
     let openedView = null;
-    try {
-      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
-      const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
-      const openInActiveLeaf = nav && nav.api && nav.api.openFileInActiveLeaf;
-      if (typeof openInActiveLeaf === "function") {
-        const result = await openInActiveLeaf.call(nav.api, file);
-        if (result && result.ok === true) {
-          openedView = result.view || null;
-        }
-      }
-    } catch (error) {
-      openedView = null;
-    }
-    if (!openedView) {
+    if (opts.newLeaf === true) {
       try {
         const workspace = this.app && this.app.workspace;
-        const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+        const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf("tab") : null;
         if (leaf && typeof leaf.openFile === "function") {
           await leaf.openFile(file);
           openedView = leaf.view || null;
         }
+      }
+      catch (error) { openedView = null; }
+    } else {
+      try {
+        const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+        const nav = plugins ? plugins["bob-navigation-hotkeys"] : null;
+        const openInActiveLeaf = nav && nav.api && nav.api.openFileInActiveLeaf;
+        if (typeof openInActiveLeaf === "function") {
+          const result = await openInActiveLeaf.call(nav.api, file);
+          if (result && result.ok === true) {
+            openedView = result.view || null;
+          }
+        }
       } catch (error) {
         openedView = null;
+      }
+      if (!openedView) {
+        try {
+          const workspace = this.app && this.app.workspace;
+          const leaf = workspace && typeof workspace.getLeaf === "function" ? workspace.getLeaf(false) : null;
+          if (leaf && typeof leaf.openFile === "function") {
+            await leaf.openFile(file);
+            openedView = leaf.view || null;
+          }
+        } catch (error) {
+          openedView = null;
+        }
       }
     }
     const editor = (openedView && openedView.editor) || this.bankActiveEditor(openedView);
@@ -67116,25 +67191,6 @@ function bankCardQueueModel(report, options = {}) {
   };
 }
 
-function bankCardDailyChipModel(report, date, today) {
-  if (report && report.teaching_empty === true) return { kind: "teaching-empty", date };
-  if (!report || report.command !== "report" || !Array.isArray(report.days)) {
-    return { kind: "invalid-report", date };
-  }
-  const day = report.days.find((entry) => entry && entry.date === date);
-  if (!day || !Number.isSafeInteger(day.out_cents) || !Number.isSafeInteger(day.in_cents)) {
-    return { kind: "day-unavailable", date };
-  }
-  return {
-    kind: "day",
-    date,
-    outCents: day.out_cents,
-    inCents: day.in_cents,
-    waitingAll: date === today && report.waiting && Number.isInteger(report.waiting.all)
-      ? report.waiting.all
-      : null,
-  };
-}
 // ---- src/241m-plugin-bank-cards.js ----
 // `bob-bank` month and queue cards. The renderer consumes only versioned
 // bank JSON and delegates every write to the shared bank action service.
@@ -67770,33 +67826,379 @@ class BobLedgerToolsBankCardsMixin {
     return this.bankApi().toggleIdLessRowAtCursor(editor, expected);
   }
 }
-// ---- src/241n-plugin-bank-daily-chip.js ----
-// A small report-driven chip inside canonical daily-note `bob-plan` blocks.
-// Its persistent `stats.bank_chip` preference is read and cached at setup or
-// on the config poll, never from a Markdown paint callback.
+// ---- src/241n-plugin-bank-badge-model.js ----
+// The Bank Badge is a read-only projection of one bob bank report. Keep its
+// visibility, copy, tone, tooltip, and target decisions in this pure model so
+// every host paints the same contract.
 
-class BobLedgerToolsBankDailyChipMixin {
-  setupBankDailyChip() {
-    this.bankDailyChipConfigLastEnabled = this.bankDailyChipConfigEnabled();
-    this.bankDailyChipTimer = null;
-    this.bankDailyChipViews = new Set();
+const BANK_BADGE_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function bankBadgeDate(value, includeYear = false, periodEnd = null) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  const [year, month, day] = value.split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  const endYear = typeof periodEnd === "string" && /^\d{4}-/.test(periodEnd)
+    ? Number(periodEnd.slice(0, 4))
+    : null;
+  const withYear = includeYear || (endYear !== null && year !== endYear);
+  return `${BANK_BADGE_MONTHS[month - 1]} ${day}${withYear ? `, ${year}` : ""}`;
+}
+
+function bankBadgeKind(reportKind) {
+  return ({ day: "day", week: "week", quarter: "quarter", year: "iso_year", all: "all_time" })[reportKind] || null;
+}
+
+function bankBadgeAmount(cents, kind) {
+  if (!Number.isSafeInteger(cents)) return "";
+  const magnitude = Math.abs(cents);
+  if (kind === "day" || kind === "week" || magnitude < 100) {
+    const dollars = Math.floor(magnitude / 100);
+    const remainder = magnitude % 100;
+    return `$${bankGroupThousands(dollars)}.${String(remainder).padStart(2, "0")}`;
+  }
+  const dollars = Math.floor((magnitude + 50) / 100);
+  return `$${bankGroupThousands(dollars)}`;
+}
+
+function bankBadgeCoverageText(report, kind, today) {
+  const coverage = report && report.coverage;
+  const period = report && report.period;
+  if (!coverage || !period) return "";
+  const periodStart = typeof period.start === "string" ? period.start : "";
+  const periodEnd = typeof period.end === "string" ? period.end : "";
+  const parts = [];
+  if (kind === "all") {
+    const since = bankBadgeDate(periodStart, true, periodEnd);
+    if (since) parts.push(`since ${since}`);
+  } else if (typeof coverage.start === "string" && periodStart && coverage.start > periodStart) {
+    const since = bankBadgeDate(coverage.start, false, periodEnd);
+    if (since) parts.push(`since ${since}`);
+  }
+  if (
+    periodEnd && typeof today === "string" && periodEnd < today &&
+    typeof coverage.through === "string" && coverage.through < periodEnd
+  ) {
+    const through = bankBadgeDate(coverage.through, false, periodEnd);
+    if (through) parts.push(`to ${through}`);
+  }
+  return parts.join(" · ");
+}
+
+function bankBadgeMoneyText(cents, explicitPlus = false) {
+  if (!Number.isSafeInteger(cents)) return "";
+  const text = bankFormatCents(Math.abs(cents));
+  if (!text) return "";
+  return explicitPlus ? `+${text.replace(/^\+/, "")}` : text.replace(/^\+/, "");
+}
+
+function bankBadgeLocation(value) {
+  return value && typeof value.path === "string" && value.path &&
+    Number.isInteger(value.line) && value.line > 0 &&
+    typeof value.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+    ? { path: value.path, line: value.line, date: value.date }
+    : null;
+}
+
+function bankBadgeTarget(report, context) {
+  const kind = context.kind;
+  const navigation = report.navigation && typeof report.navigation === "object"
+    ? report.navigation
+    : null;
+  const waiting = navigation && bankBadgeLocation(navigation.waiting);
+  if (waiting) return { ...waiting, type: "waiting" };
+
+  const first = navigation && bankBadgeLocation(navigation.first);
+  if (first && (kind === "day" || kind === "week" || (Array.isArray(navigation.months) && navigation.months.length === 1))) {
+    return { ...first, type: "day" };
+  }
+
+  // Older bob versions have no navigation object. Their day report still
+  // identifies the note and heading that the daily strip describes.
+  if (!navigation && kind === "day") {
+    const day = (Array.isArray(report.days) ? report.days : []).find((entry) => entry && entry.date === context.day);
+    if (day && typeof day.path === "string" && day.path && Number.isInteger(day.line) && day.line > 0) {
+      return { path: day.path, line: day.line, date: context.day, type: "day" };
+    }
+  }
+  return { path: "bank.md", line: 1, date: null, type: "hub" };
+}
+
+function bankBadgeTargetAction(target) {
+  if (target && target.type === "waiting") return "Click to open the oldest waiting row (Ctrl+Enter files it)";
+  if (target && target.type === "day") {
+    const date = bankBadgeDate(target.date, true);
+    return `Click to open ${date || target.date} in the bank month note`;
+  }
+  return "Click to open bank.md";
+}
+
+function bankBadgeTooltip(report, context, parts, target) {
+  const period = report.period || {};
+  const lines = [];
+  const label = period.label || period.key || (context.day || "Bank period");
+  lines.push(`${label}${period.so_far ? " · so far" : ""}`);
+
+  const inCents = report.totals.in_cents;
+  const outCents = report.totals.out_cents;
+  if (inCents > 0 || outCents > 0) {
+    const net = bankFormatCents(report.totals.net_cents);
+    lines.push(`In ${bankBadgeMoneyText(inCents, true)} · Out ${bankBadgeMoneyText(outCents)}${net ? ` · Net ${net}` : ""}`);
+  }
+
+  const topOut = (Array.isArray(report.breakdown) ? report.breakdown : [])
+    .filter((entry) => entry && Number.isSafeInteger(entry.out_cents) && entry.out_cents > 0)
+    .slice()
+    .sort((left, right) => right.out_cents - left.out_cents)
+    .slice(0, 3);
+  if (topOut.length) {
+    lines.push(`Top out: ${topOut.map((entry) => `${entry.emoji ? `${entry.emoji} ` : ""}${entry.label} ${bankBadgeMoneyText(entry.out_cents)}`).join(" · ")}`);
+  }
+
+  const totals = report.totals;
+  const notCounted = [];
+  const transfers = Math.max(Number(totals.transfer_out_cents) || 0, Number(totals.transfer_in_cents) || 0);
+  if (transfers > 0) notCounted.push(`transfers ↔ ${bankBadgeMoneyText(transfers)}`);
+  if (totals.unclassified_in_cents > 0) notCounted.push(`unclassified in ${bankBadgeMoneyText(totals.unclassified_in_cents, true)}`);
+  if (totals.cash_traced_cents > 0) notCounted.push(`cash traced ${bankBadgeMoneyText(totals.cash_traced_cents)}`);
+  if (notCounted.length) lines.push(`Not counted: ${notCounted.join(" · ")}`);
+
+  const waiting = Number.isInteger(report.waiting.period) ? report.waiting.period : 0;
+  if (waiting > 0) {
+    const oldest = (report.navigation && report.navigation.waiting && report.navigation.waiting.date) || report.waiting.oldest;
+    const oldestText = oldest ? ` · oldest ${bankBadgeDate(oldest, false, period.end) || oldest}` : "";
+    const all = context.kind === "day" && context.day === context.today && Number.isInteger(report.waiting.all)
+      ? ` · ${report.waiting.all} across all months`
+      : "";
+    lines.push(`${waiting} ${waiting === 1 ? "row" : "rows"} waiting${oldestText}${all}`);
+  }
+
+  if (report.coverage && (report.coverage.tracked_since || report.coverage.imported_through)) {
+    const tracked = report.coverage.tracked_since
+      ? bankBadgeDate(report.coverage.tracked_since, false, period.end)
+      : "";
+    const imported = report.coverage.imported_through
+      ? bankBadgeDate(report.coverage.imported_through, false, period.end)
+      : "";
+    const coverage = [];
+    if (tracked) coverage.push(`Tracked since ${tracked}`);
+    if (imported) coverage.push(`imported through ${imported}`);
+    if (coverage.length) lines.push(coverage.join(" · "));
+  }
+
+  lines.push(bankBadgeTargetAction(target));
+  if (context.stale) {
+    lines.push(context.refreshFailed
+      ? "Refresh failed; last good values shown."
+      : "Values are being refreshed; last good values shown.");
+  }
+  return lines.join("\n");
+}
+
+function bankBadgeAriaLabel(report, context, parts, target) {
+  const period = report.period || {};
+  const periodLabel = period.label || period.key || context.day || "this period";
+  const phrases = [`Bank, ${periodLabel}${period.so_far ? ", so far" : ""}`];
+  for (const part of parts) {
+    if (part.key === "in" || part.key === "out") phrases.push(`${part.words} ${part.exact}`);
+    else if (part.key === "waiting") phrases.push(`${part.amount} ${Number(part.amount) === 1 ? "row" : "rows"} waiting`);
+    else if (part.key === "coverage") {
+      for (const phrase of part.fragments || []) {
+        phrases.push(phrase.startsWith("since ") ? `tracked ${phrase}` : `available ${phrase}`);
+      }
+    }
+  }
+  phrases.push(bankBadgeTargetAction(target).replace(/^Click to /, "Opens ").replace(/ \(Ctrl\+Enter files it\)/, ""));
+  return phrases.join(": ");
+}
+
+function bankBadgeModel(report, context = {}) {
+  const ctx = context && typeof context === "object" ? context : {};
+  if (report && report.teaching_empty === true) return { state: "hidden", reason: "teaching-empty" };
+  if (
+    !report || report.command !== "report" || !report.period || !report.totals || !report.waiting ||
+    !Number.isSafeInteger(report.totals.in_cents) || report.totals.in_cents < 0 ||
+    !Number.isSafeInteger(report.totals.out_cents) || report.totals.out_cents < 0 ||
+    !Number.isInteger(report.waiting.period) || report.waiting.period < 0
+  ) {
+    return { state: "unavailable", reason: "invalid-report", hint: "The bank report could not be read." };
+  }
+  const expectedKind = bankBadgeKind(ctx.kind);
+  const periodKind = report.period.kind;
+  const matches = expectedKind !== null && periodKind === expectedKind &&
+    (ctx.kind !== "day" || report.period.start === ctx.day);
+  if (!matches) {
+    return { state: "unavailable", reason: "period-mismatch", hint: "The bank report does not match this stats strip." };
+  }
+  const today = typeof ctx.today === "string" ? ctx.today : "";
+  const future = (ctx.kind === "day" && typeof ctx.day === "string" && today && ctx.day > today) ||
+    (typeof report.period.start === "string" && today && report.period.start > today);
+  if (future) return { state: "hidden", reason: "future" };
+
+  const inCents = report.totals.in_cents;
+  const outCents = report.totals.out_cents;
+  const waiting = report.waiting.period;
+  if (inCents === 0 && outCents === 0 && waiting === 0) return { state: "hidden", reason: "empty" };
+
+  const parts = [];
+  if (inCents > 0) {
+    const amount = bankBadgeAmount(inCents, ctx.kind);
+    parts.push({ key: "in", words: "in", amount: `+${amount}`, exact: bankBadgeMoneyText(inCents, true) });
+  }
+  if (outCents > 0) {
+    const amount = bankBadgeAmount(outCents, ctx.kind);
+    parts.push({ key: "out", words: "out", amount, exact: bankBadgeMoneyText(outCents) });
+  }
+  if (waiting > 0) {
+    parts.push({
+      key: "waiting",
+      words: "waiting",
+      amount: String(waiting),
+      exact: String(waiting),
+      amountFirst: true,
+    });
+  }
+  const coverageText = bankBadgeCoverageText(report, ctx.kind, today);
+  if (coverageText) {
+    const fragments = coverageText.split(" · ");
+    for (const fragment of fragments) {
+      const space = fragment.indexOf(" ");
+      parts.push({
+        key: "coverage",
+        words: space < 0 ? fragment : fragment.slice(0, space),
+        amount: space < 0 ? "" : fragment.slice(space + 1),
+        exact: fragment,
+        fragments: [fragment],
+      });
+    }
+  }
+
+  const tone = inCents === 0 && outCents === 0 ? "waiting" : inCents > outCents ? "surplus" : "neutral";
+  const target = bankBadgeTarget(report, ctx);
+  const text = ["BANK", ...parts.map((part) => part.amountFirst
+    ? `${part.amount} ${part.words}`
+    : [part.words, part.amount].filter(Boolean).join(" "))].join(" · ");
+  return {
+    state: "badge",
+    label: "BANK",
+    kind: ctx.kind,
+    tone,
+    parts,
+    text,
+    ariaLabel: bankBadgeAriaLabel(report, ctx, parts, target),
+    tooltip: bankBadgeTooltip(report, ctx, parts, target),
+    target,
+    stale: ctx.stale === true,
+  };
+}
+// ---- src/241na-plugin-bank-badge.js ----
+// Shared read-only Bank Badge host lifecycle and painter wiring. Every stats
+// strip host registers here so one bank refresh updates all of them.
+
+function bankBadgeActivate(node, action) {
+  if (!node || typeof node.addEventListener !== "function" || typeof action !== "function") return;
+  const invoke = (event, forcedNewLeaf = false) => {
+    const newLeaf = forcedNewLeaf || Boolean(event && (event.ctrlKey || event.metaKey || event.button === 1));
+    action(newLeaf);
+  };
+  node.addEventListener("mousedown", (event) => {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  });
+  node.addEventListener("click", (event) => invoke(event));
+  node.addEventListener("auxclick", (event) => {
+    if (event && event.button === 1) {
+      if (typeof event.preventDefault === "function") event.preventDefault();
+      invoke(event, true);
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    if (!event || (event.key !== "Enter" && event.key !== " ")) return;
+    if (typeof event.preventDefault === "function") event.preventDefault();
+    invoke(event);
+  });
+}
+
+function bankBadgePaintPart(doc, modelPart) {
+  const part = statsEl(doc, "span", { class: `bob-bank-badge-part bob-bank-badge-part-${modelPart.key}` });
+  if (!part) return null;
+  const add = (className, value) => {
+    if (!value) return;
+    const node = statsEl(doc, "span", { class: className }, value);
+    if (node && typeof part.appendChild === "function") part.appendChild(node);
+  };
+  if (modelPart.amountFirst) {
+    add("bob-bank-badge-amount", modelPart.amount);
+    add("bob-bank-badge-words", modelPart.words);
+  } else {
+    add("bob-bank-badge-words", modelPart.words);
+    add("bob-bank-badge-amount", modelPart.amount);
+  }
+  return part;
+}
+
+function bankBadgePaint(host, model, handlers = {}) {
+  if (!host) return null;
+  bankCardClear(host);
+  if (!model || model.state === "hidden" || model.state === "loading") return null;
+  const doc = statsDocFor(host);
+  if (model.state === "unavailable") {
+    return bankCardAppend(host, "span", {
+      class: "bob-bank-badge-unavailable",
+      role: "status",
+      title: model.hint || "The bank report could not be read.",
+    }, "Bank unavailable");
+  }
+  if (model.state !== "badge") return null;
+
+  const badge = bankCardAppend(host, "span", {
+    class: "bob-bank-badge",
+    role: "link",
+    tabindex: "0",
+    "aria-label": model.ariaLabel,
+    title: model.tooltip,
+    "data-tone": model.tone,
+    "data-kind": model.kind,
+    "data-stale": model.stale ? "true" : "false",
+  });
+  if (!badge) return null;
+  const label = statsEl(doc, "span", { class: "bob-bank-badge-label" }, model.label || "BANK");
+  if (label) badge.appendChild(label);
+  for (const partModel of Array.isArray(model.parts) ? model.parts : []) {
+    const separator = statsEl(doc, "span", { class: "bob-bank-badge-separator", "aria-hidden": "true" }, "·");
+    if (separator) badge.appendChild(separator);
+    const part = bankBadgePaintPart(doc, partModel);
+    if (part) badge.appendChild(part);
+  }
+  bankBadgeActivate(badge, (newLeaf) => {
+    if (typeof handlers.activate === "function") handlers.activate(model.target, newLeaf);
+  });
+  return badge;
+}
+
+class BobLedgerToolsBankBadgeMixin {
+  setupBankBadge() {
+    this.bankBadgeConfigLastEnabled = this.bankBadgeConfigEnabled();
+    this.bankBadgeTimer = null;
+    this.bankBadgeHostsStore();
     try {
       const vault = this.app && this.app.vault;
       if (vault && typeof vault.on === "function") {
         for (const event of ["create", "delete", "rename", "modify"]) {
           this.registerEvent(vault.on(event, (file, oldPath) => {
-            if (bankRelevantPath(file) || bankIsHubPath(oldPath || "")) this.bankRefreshPlanHosts();
+            if (bankRelevantPath(file) || bankIsHubPath(oldPath || "")) this.bankRefreshBadgeHosts();
           }));
         }
       }
     } catch (error) {
-      // The bank data service owns refresh; this listener only updates hub visibility.
+      // The bank data service owns refresh; this listener only updates host visibility.
     }
     try {
       const metadataCache = this.app && this.app.metadataCache;
       if (metadataCache && typeof metadataCache.on === "function") {
         this.registerEvent(metadataCache.on("changed", (file) => {
-          if (bankIsHubPath(file || "")) this.bankRefreshPlanHosts();
+          if (bankIsHubPath(file || "")) this.bankRefreshBadgeHosts();
         }));
       }
     } catch (error) {}
@@ -67807,48 +68209,76 @@ class BobLedgerToolsBankDailyChipMixin {
       );
       const timers = hasTimerHost ? this.bankTimerApi() : null;
       if (timers && typeof timers.setInterval === "function") {
-        this.bankDailyChipTimer = timers.setInterval(() => this.bankDailyChipCheckConfig(), 60 * 1000);
-        if (typeof this.registerInterval === "function") this.registerInterval(this.bankDailyChipTimer);
+        this.bankBadgeTimer = timers.setInterval(() => this.bankBadgeCheckConfig(), 60 * 1000);
+        if (typeof this.registerInterval === "function") this.registerInterval(this.bankBadgeTimer);
       }
     } catch (error) {
-      this.bankDailyChipTimer = null;
+      this.bankBadgeTimer = null;
     }
-    this.bankDailyChipViewsStore();
   }
 
-  bankDailyChipConfigEnabled() {
+  bankBadgeConfigEnabled() {
     try {
-      return statsReadConfigValue("bank_chip") !== false;
+      const badge = statsReadConfigValue("bank_badge");
+      if (typeof badge === "boolean") return badge;
+      const legacy = statsReadConfigValue("bank_chip");
+      return typeof legacy === "boolean" ? legacy : true;
     } catch (error) {
       return true;
     }
   }
 
-  bankDailyChipEnabled() {
-    if (typeof this.bankDailyChipConfigLastEnabled !== "boolean") {
-      this.bankDailyChipConfigLastEnabled = this.bankDailyChipConfigEnabled();
+  bankBadgeEnabled() {
+    if (typeof this.bankBadgeConfigLastEnabled !== "boolean") {
+      this.bankBadgeConfigLastEnabled = this.bankBadgeConfigEnabled();
     }
-    return this.bankDailyChipConfigLastEnabled;
+    return this.bankBadgeConfigLastEnabled;
   }
 
-  bankDailyChipCheckConfig() {
+  bankBadgeCheckConfig() {
     try {
-      const enabled = this.bankDailyChipConfigEnabled();
-      if (enabled === this.bankDailyChipConfigLastEnabled) return false;
-      this.bankDailyChipConfigLastEnabled = enabled;
-      this.bankRefreshPlanHosts();
+      const enabled = this.bankBadgeConfigEnabled();
+      if (enabled === this.bankBadgeConfigLastEnabled) return false;
+      this.bankBadgeConfigLastEnabled = enabled;
+      this.bankRefreshBadgeHosts();
       return true;
     } catch (error) {
       return false;
     }
   }
 
-  bankDailyChipViewsStore() {
-    if (!(this.bankDailyChipViews instanceof Set)) this.bankDailyChipViews = new Set();
-    return this.bankDailyChipViews;
+  bankBadgeHostsStore() {
+    if (!(this.bankBadgeHosts instanceof Set)) this.bankBadgeHosts = new Set();
+    return this.bankBadgeHosts;
   }
 
-  bankDailyHubExists() {
+  bankBadgeRegisterHost(record) {
+    if (!record || typeof record.sync !== "function") return false;
+    this.bankBadgeHostsStore().add(record);
+    return true;
+  }
+
+  bankBadgeUnregisterHost(record) {
+    if (this.bankBadgeHosts instanceof Set) this.bankBadgeHosts.delete(record);
+  }
+
+  bankBadgeHostForRepaint(el) {
+    try {
+      if (!el) return null;
+      const view = this.dayStripPlanHostViewFor(el);
+      if (view && view.bankBadgeHost && view.bankBadgeHost.parentNode === el) return view.bankBadgeHost;
+      if (typeof el.querySelector === "function") return el.querySelector(".bob-bank-badge-host");
+      if (Array.isArray(el.children)) {
+        return el.children.find((child) => {
+          const classes = (child && typeof child.getAttribute === "function" ? child.getAttribute("class") : child && child.cls) || "";
+          return String(classes).split(/\s+/).includes("bob-bank-badge-host");
+        }) || null;
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  bankBadgeHubExists() {
     try {
       const vault = this.app && this.app.vault;
       return Boolean(vault && typeof vault.getAbstractFileByPath === "function" && vault.getAbstractFileByPath("bank.md"));
@@ -67857,58 +68287,41 @@ class BobLedgerToolsBankDailyChipMixin {
     }
   }
 
-  bankDailyChipLocalToday() {
+  bankBadgeLocalToday() {
     return bankLocalDate();
-  }
-
-  bankPlanHostForRepaint(el) {
-    try {
-      if (!el) return null;
-      const view = this.dayStripPlanHostViewFor(el);
-      if (view && view.bankDailyHost && view.bankDailyHost.parentNode === el) return view.bankDailyHost;
-      if (typeof el.querySelector === "function") return el.querySelector(".bob-bank-daily-plan-host");
-      if (Array.isArray(el.children)) {
-        return el.children.find((child) => {
-          const classes = (child && typeof child.getAttribute === "function" ? child.getAttribute("class") : child && child.cls) || "";
-          return String(classes).split(/\s+/).includes("bob-bank-daily-plan-host");
-        }) || null;
-      }
-    } catch (error) {}
-    return null;
   }
 
   bankSyncPlanHost(view) {
     if (!view || !view.el) return;
     const day = dayStripDayForPath(view.sourcePath || "");
-    const today = this.bankDailyChipLocalToday();
+    const today = this.bankBadgeLocalToday();
+    let excluded = false;
+    try {
+      excluded = dayStripPlanHostExcluded(view.el) || dayStripPlanHostExcluded(view.containerEl);
+    } catch (error) {}
     if (
       !day ||
       (today && day > today) ||
-      !this.bankDailyChipEnabled() ||
-      !this.bankDailyHubExists() ||
+      !this.bankBadgeEnabled() ||
+      !this.bankBadgeHubExists() ||
+      (typeof this.dayStripCanSpawn === "function" && !this.dayStripCanSpawn()) ||
+      excluded ||
       this.bankDataActive === false
     ) {
       this.bankReleasePlanHost(view);
       return;
     }
-    const existing = view.bankDailyRecord || null;
-    if (existing && existing.day === day && existing.host && existing.host.parentNode === view.el) {
-      existing.day = day;
-      this.bankDailyChipPaint(existing);
-      return;
-    }
+    const existing = view.bankBadgeRecord || null;
+    if (existing && existing.day === day && existing.host && existing.host.parentNode === view.el) return;
+
     this.bankReleasePlanHost(view);
     let host = null;
     try {
-      host = statsEl(statsDocFor(view.el), "div", { class: "bob-bank-daily-plan-host" });
+      host = statsEl(statsDocFor(view.el), "div", { class: "bob-bank-badge-host" });
     } catch (error) {
       host = null;
     }
     if (!host) return;
-    try {
-      const hue = typeof this.bankCardRootHue === "function" ? this.bankCardRootHue("bank.md") : "magenta";
-      if (hue) host.setAttribute("data-root-hue", hue);
-    } catch (error) {}
     const stripHost = view.dayStripHost || (view.dayStripRecord && view.dayStripRecord.el) || null;
     let attached = false;
     try {
@@ -67944,105 +68357,120 @@ class BobLedgerToolsBankDailyChipMixin {
       }
     }
     if (!attached) return;
-    const key = bankCacheKey(bankBuildArgs({ command: "report", date: day }));
-    const record = { host, day, path: view.sourcePath, key, view, unsubscribe: null, result: null, state: null, unloaded: false };
-    view.bankDailyHost = host;
-    view.bankDailyRecord = record;
-    this.bankDailyChipViewsStore().add(record);
-    record.unsubscribe = this.apiBankSubscribe({ command: "report", date: day }, (state) => {
+
+    const spec = { command: "report", date: day };
+    const key = bankCacheKey(bankBuildArgs(spec));
+    const record = {
+      host, day, path: view.sourcePath, key, view,
+      unsubscribe: null, result: null, state: null, unloaded: false,
+      sync: () => this.bankBadgePaintRecord(record),
+    };
+    view.bankBadgeHost = host;
+    view.bankBadgeRecord = record;
+    this.bankBadgeRegisterHost(record);
+    record.unsubscribe = this.apiBankSubscribe(spec, (state) => {
       if (record.unloaded || view.unloaded) return;
       record.state = state;
       record.result = state && state.results ? state.results[key] || null : null;
-      this.bankDailyChipPaint(record);
+      record.sync();
     });
   }
 
-  bankDailyChipPaint(record) {
+  bankBadgePaintRecord(record) {
     if (!record || record.unloaded || !record.host) return;
-    const host = record.host;
-    bankCardClear(host);
     const result = record.result;
     if (!result || !result.report) {
-      if (result && result.error) {
-        const error = bankErrorModel(result.error);
-        bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-error", role: "status", title: error.hint }, "Bank unavailable");
-      } else {
-        bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-loading", role: "status" }, "Bank · loading");
+      const model = result && result.error
+        ? { state: "unavailable", reason: "fetch-failed", hint: bankErrorModel(result.error).hint }
+        : null;
+      bankBadgePaint(record.host, model);
+      return;
+    }
+    const model = bankBadgeModel(result.report, {
+      kind: "day",
+      day: record.day,
+      today: record.state && record.state.today || bankLocalDate(),
+      stale: result.stale === true,
+      refreshFailed: Boolean(result.error),
+    });
+    bankBadgePaint(record.host, model, {
+      activate: (target, newLeaf) => {
+        if (!record.unloaded) void this.bankBadgeNavigate(target, newLeaf);
+      },
+    });
+  }
+
+  async bankBadgeNavigate(target, newLeaf = false) {
+    const path = target && typeof target.path === "string" ? target.path : "bank.md";
+    const vault = this.app && this.app.vault;
+    const file = vault && typeof vault.getAbstractFileByPath === "function"
+      ? vault.getAbstractFileByPath(path)
+      : null;
+    if (!file) {
+      new Notice(`Bank: could not find ${path}`);
+      return false;
+    }
+    const line = target && Number.isInteger(target.line) && target.line > 0 ? target.line : 1;
+    const opened = await this.bankOpenMonthPathAtLine(path, line, 0, { newLeaf, skipPendingSave: true });
+    if (!opened) new Notice(`Bank: could not open ${path}`);
+    return Boolean(opened);
+  }
+
+  bankRefreshBadgeHosts() {
+    try {
+      if (this.planBlockViews instanceof Set) {
+        for (const view of Array.from(this.planBlockViews)) this.bankSyncPlanHost(view);
       }
-      return;
-    }
-    if (result.report.teaching_empty === true) return;
-    const model = bankCardDailyChipModel(result.report, record.day, record.state && record.state.today || bankLocalDate());
-    if (model.kind !== "day") {
-      bankCardAppend(host, "span", { class: "bob-plan-chip bob-bank-daily-chip bob-bank-chip-error", role: "status" }, "Bank · unavailable");
-      return;
-    }
-    const out = bankCardDisplayCents(Math.abs(model.outCents));
-    const incoming = bankCardDisplayCents(Math.abs(model.inCents), true);
-    const text = `BANK · out ${out} · in ${incoming}${model.waitingAll === null ? "" : ` · ${model.waitingAll} waiting`}`;
-    const button = bankCardAppend(host, "button", {
-      type: "button",
-      class: "bob-plan-chip bob-bank-daily-chip",
-      "aria-label": `Open bank rows for ${record.day}; out ${out}; in ${incoming}${model.waitingAll === null ? "" : `; ${model.waitingAll} waiting across all months`}`,
-      title: result.stale ? "Bank values are being refreshed; last good values shown" : `Open ${record.day} in the bank month note`,
-    }, text);
-    if (button) {
-      if (result.stale) bankCardSetData(button, "stale", "true");
-      bankCardListen(button, "click", () => {
-        if (!record.unloaded) void this.bankApi().ensureOpenDay(record.day);
-      });
-    }
-    if (result.error) {
-      bankCardAppend(host, "span", { class: "bob-bank-chip-refresh-error", role: "status" }, "Refresh failed; values may be stale");
+      for (const record of Array.from(this.bankBadgeHostsStore())) {
+        try { record.sync(); } catch (error) {}
+      }
+    } catch (error) {
+      // One detached host never interrupts another badge.
     }
   }
 
+  // Kept as an internal compatibility name for existing plan-host callers.
   bankRefreshPlanHosts() {
-    try {
-      if (!(this.planBlockViews instanceof Set)) return;
-      for (const view of this.planBlockViews) this.bankSyncPlanHost(view);
-    } catch (error) {
-      // One note never interrupts another plan block.
-    }
+    this.bankRefreshBadgeHosts();
   }
 
   bankReleasePlanHost(view) {
     if (!view) return;
-    const record = view.bankDailyRecord || null;
+    const record = view.bankBadgeRecord || null;
     if (record) {
       record.unloaded = true;
+      this.bankBadgeUnregisterHost(record);
       try { if (typeof record.unsubscribe === "function") record.unsubscribe(); } catch (error) {}
-      if (this.bankDailyChipViews instanceof Set) this.bankDailyChipViews.delete(record);
     }
-    const host = view.bankDailyHost || (record && record.host) || null;
+    const host = view.bankBadgeHost || (record && record.host) || null;
     if (host && host.parentNode === view.el) dayStripPlanHostRemoveNode(host);
-    view.bankDailyRecord = null;
-    view.bankDailyHost = null;
+    view.bankBadgeRecord = null;
+    view.bankBadgeHost = null;
   }
 
-  teardownBankDailyChip() {
+  teardownBankBadge() {
     if (this.planBlockViews instanceof Set) {
       for (const view of this.planBlockViews) this.bankReleasePlanHost(view);
     }
-    if (this.bankDailyChipViews instanceof Set) {
-      for (const record of this.bankDailyChipViews) {
+    if (this.bankBadgeHosts instanceof Set) {
+      for (const record of this.bankBadgeHosts) {
         record.unloaded = true;
         try { if (typeof record.unsubscribe === "function") record.unsubscribe(); } catch (error) {}
       }
-      this.bankDailyChipViews.clear();
+      this.bankBadgeHosts.clear();
     }
-    if (this.bankDailyChipTimer !== null && this.bankDailyChipTimer !== undefined) {
+    if (this.bankBadgeTimer !== null && this.bankBadgeTimer !== undefined) {
       try {
         const hasTimerHost = Boolean(
           (this.bankTimers && typeof this.bankTimers === "object") ||
           (typeof window !== "undefined" && window),
         );
         const timers = hasTimerHost ? this.bankTimerApi() : null;
-        if (timers && typeof timers.clearInterval === "function") timers.clearInterval(this.bankDailyChipTimer);
+        if (timers && typeof timers.clearInterval === "function") timers.clearInterval(this.bankBadgeTimer);
       } catch (error) {}
     }
-    this.bankDailyChipTimer = null;
-    this.bankDailyChipConfigLastEnabled = null;
+    this.bankBadgeTimer = null;
+    this.bankBadgeConfigLastEnabled = null;
   }
 }
 // ---- src/241o-plugin-bank-marks-model.js ----
@@ -119363,7 +119791,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsBankCategoryMixin,
   BobLedgerToolsBankCardsMixin,
-  BobLedgerToolsBankDailyChipMixin,
+  BobLedgerToolsBankBadgeMixin,
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsNotebookCatalogMixin,
@@ -122480,7 +122908,7 @@ module.exports.helpers = {
   BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
-  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankCardDailyChipModel, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
+  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
 };
 // ---- src/357-exports-bank-category-ui.js ----
 // UI-level test helpers for the Category card. Kept apart from the pure

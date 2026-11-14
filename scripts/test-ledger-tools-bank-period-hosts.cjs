@@ -425,3 +425,37 @@ test("read-only navigation, isolated repaint, persistence, and release work", as
     }
   });
 });
+
+test("the panel's waiting link hands the row to bank walk family b like the badge", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const selected = [];
+      plugin.app.plugins = {
+        plugins: {
+          "bob-navigation-hotkeys": {
+            api: { version: 1, walkMode: { version: 4, select(type) { selected.push(type); return { ok: true }; } } },
+          },
+        },
+      };
+      plugin.bankBadgeEnabled = () => false;
+      const { el } = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+      const record = recordFor(plugin, el);
+      const report = activatePanelWithFixture(plugin, record, "week-2026-W46.json");
+      const link = record.periodHost.querySelector(".bob-bank-period-notcounted-waiting");
+      assert.ok(link, "with the badge off the Not-counted line carries the waiting link");
+      link.dispatch("click", { button: 0 });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(plugin.__opened.notePath, report.navigation.waiting.path);
+      assert.equal(plugin.__opened.line, report.navigation.waiting.line);
+      assert.deepEqual(selected, ["b"]);
+      const anchor = plugin.bankWalkAnchor();
+      assert.equal(anchor.path, report.navigation.waiting.path);
+      assert.equal(anchor.line, report.navigation.waiting.line);
+      assert.equal(anchor.date, report.navigation.waiting.date);
+      assert.equal(plugin.__writes(), 0);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

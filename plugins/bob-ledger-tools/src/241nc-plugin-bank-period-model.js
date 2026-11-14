@@ -20,63 +20,6 @@ function bankPeriodNextView(value) {
   return BANK_PERIOD_VIEWS[(BANK_PERIOD_VIEWS.indexOf(current) + 1) % BANK_PERIOD_VIEWS.length];
 }
 
-function bankPeriodLastIsoWeek(isoYear) {
-  return typeof periodNotesIsoWeekMonday === "function" && periodNotesIsoWeekMonday(isoYear, 53) ? 53 : 52;
-}
-
-function bankPeriodExpectedBounds(kind, id) {
-  if (kind === "day") return /^\d{4}-\d{2}-\d{2}$/.test(id) ? { start: id, end: id } : null;
-  if (typeof periodNotesIsoWeekMonday !== "function" || typeof bankIsoShiftDays !== "function") return null;
-  if (kind === "week") {
-    const match = /^(\d{4})-W(\d{2})$/.exec(id);
-    if (!match) return null;
-    const start = periodNotesIsoWeekMonday(Number(match[1]), Number(match[2]));
-    const end = start ? bankIsoShiftDays(start, 6) : null;
-    return start && end ? { start, end } : null;
-  }
-  if (kind === "quarter") {
-    const match = /^(\d{4})-Q([1-4])$/.exec(id);
-    if (!match) return null;
-    const year = Number(match[1]);
-    const quarter = Number(match[2]);
-    const startWeek = (quarter - 1) * 13 + 1;
-    const lastWeek = quarter === 4 ? bankPeriodLastIsoWeek(year) : quarter * 13;
-    const start = periodNotesIsoWeekMonday(year, startWeek);
-    const lastMonday = periodNotesIsoWeekMonday(year, lastWeek);
-    const end = lastMonday ? bankIsoShiftDays(lastMonday, 6) : null;
-    return start && end ? { start, end } : null;
-  }
-  if (kind === "year") {
-    const year = Number(id);
-    if (!Number.isInteger(year)) return null;
-    const start = periodNotesIsoWeekMonday(year, 1);
-    const lastMonday = periodNotesIsoWeekMonday(year, bankPeriodLastIsoWeek(year));
-    const end = lastMonday ? bankIsoShiftDays(lastMonday, 6) : null;
-    return start && end ? { start, end } : null;
-  }
-  return null;
-}
-
-function bankPeriodIdentityMatches(report, ctx) {
-  const kind = ctx && ctx.kind;
-  const expectedKind = typeof bankBadgeKind === "function" ? bankBadgeKind(kind) : null;
-  const period = report && report.period;
-  if (!period || expectedKind === null || period.kind !== expectedKind) return false;
-  const periodId = typeof ctx.periodId === "string" && ctx.periodId
-    ? ctx.periodId
-    : (kind === "day" && typeof ctx.day === "string" ? ctx.day : "");
-  if (kind === "all" || kind === "all_time") {
-    const keyOk = period.key === "all" || period.key === "all_time";
-    const start = bankIsoDateOrNull(period.start);
-    const end = bankIsoDateOrNull(period.end);
-    return keyOk && start.ok && start.value !== null && end.ok && end.value !== null;
-  }
-  if (!periodId || period.key !== periodId) return false;
-  const bounds = bankPeriodExpectedBounds(kind, periodId);
-  if (!bounds) return false;
-  return period.start === bounds.start && period.end === bounds.end;
-}
-
 function bankPeriodCompact(cents) {
   if (!Number.isSafeInteger(cents)) return "";
   const magnitude = Math.abs(cents);
@@ -414,6 +357,13 @@ function bankPeriodCategoryRows(categories, amountKind) {
   return rows;
 }
 
+// The same waiting target the badge builds, so opening it hands the row to
+// the bank walk exactly like the badge's waiting link.
+function bankPeriodWaitingTarget(report) {
+  const waiting = report.navigation && bankBadgeLocation(report.navigation.waiting);
+  return waiting ? { ...waiting, type: "waiting" } : null;
+}
+
 function bankPeriodNotCounted(report, ctx) {
   const totals = report.totals || {};
   const parts = [];
@@ -440,9 +390,7 @@ function bankPeriodNotCounted(report, ctx) {
       parts.push({
         key: "waiting",
         text: `● ${waiting} waiting${oldestText} →`,
-        target: report.navigation && report.navigation.waiting
-          ? { path: report.navigation.waiting.path, line: report.navigation.waiting.line }
-          : null,
+        target: bankPeriodWaitingTarget(report),
       });
     }
     const coverage = bankBadgeCoverageText(report, ctx.kind, ctx.today);
@@ -459,9 +407,7 @@ function bankPeriodWaitingLine(report, ctx) {
   const oldestText = oldest ? ` · oldest ${bankBadgeDate(oldest, false, report.period && report.period.end) || oldest}` : "";
   return {
     text: `● ${waiting} waiting${oldestText} →`,
-    target: report.navigation && report.navigation.waiting
-      ? { path: report.navigation.waiting.path, line: report.navigation.waiting.line }
-      : null,
+    target: bankPeriodWaitingTarget(report),
   };
 }
 
@@ -572,7 +518,8 @@ function bankPeriodChartsModel(report, context = {}) {
   ) {
     return bankPeriodUnavailable("invalid-report", "The bank charts could not be read.");
   }
-  if (!bankPeriodIdentityMatches(report, ctx)) {
+  // One period-identity rule for the badge and the panel (kind, key, start, end).
+  if (!bankBadgePeriodIdentityValid(report, ctx)) {
     return bankPeriodUnavailable("period-mismatch", "The bank report does not match this stats strip.");
   }
   const today = typeof ctx.today === "string" ? ctx.today : "";

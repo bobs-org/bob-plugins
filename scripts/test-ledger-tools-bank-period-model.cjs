@@ -6,7 +6,7 @@ const {
   bankDecodeReport,
   bankPeriodChartsModel,
   bankPeriodCompact,
-  bankPeriodIdentityMatches,
+  bankBadgePeriodIdentityValid,
   bankPeriodViewOf,
   bankBadgeAmount,
   periodNotesIsoWeekMonday,
@@ -206,7 +206,16 @@ test("hide rule with the badge on and off, and waiting-only copy", () => {
   assert.equal(bankPeriodChartsModel(waiting, ctx({ badgeEnabled: true })).state, "hidden");
   const shown = bankPeriodChartsModel(waiting, ctx({ badgeEnabled: false }));
   assert.equal(shown.state, "waiting");
-  assert.equal(shown.waitingLine.target.path, "bank/2026-11.md");
+  // Same target shape as the badge's waiting link, so the open hands off to the bank walk.
+  assert.deepEqual(shown.waitingLine.target, {
+    path: "bank/2026-11.md", line: 12, date: "2026-11-11", type: "waiting",
+  });
+  const noDate = report({
+    totals: totals(),
+    waiting: { period: 2, all: 2, oldest: "2026-11-12" },
+    navigation: { waiting: { path: "bank/2026-11.md", line: 12 }, first: null, months: [] },
+  });
+  assert.equal(bankPeriodChartsModel(noDate, ctx({ badgeEnabled: false })).waitingLine.target, null);
 });
 
 test("today's real shape: one counted day, six awaiting_import, $249.77 out", () => {
@@ -354,14 +363,14 @@ test("every bucket state has words, decorations, and table-twin rows", () => {
   assert.equal(model.tables.cashflow.rows.find((row) => row.period === "Wed 11").net, "−$248.77");
 });
 
-test("period identity rejects the wrong key or the right key with the wrong bounds", () => {
+test("period identity uses the badge rule: wrong key or right key with wrong bounds", () => {
   const ok = report();
-  assert.equal(bankPeriodIdentityMatches(ok, ctx()), true);
+  assert.equal(bankBadgePeriodIdentityValid(ok, ctx()), true);
   assert.equal(bankPeriodChartsModel(ok, ctx({ periodId: "2026-W45" })).reason, "period-mismatch");
   const wrongBounds = report({
     period: { ...ok.period, start: "2026-11-02", end: "2026-11-08" },
   });
-  assert.equal(bankPeriodIdentityMatches(wrongBounds, ctx()), false);
+  assert.equal(bankBadgePeriodIdentityValid(wrongBounds, ctx()), false);
   assert.equal(bankPeriodChartsModel(wrongBounds, ctx()).reason, "period-mismatch");
 });
 
@@ -457,7 +466,7 @@ test("14-week Q4, 53-week ISO year fallback, all-time leading ghost, year grain,
   const years = bankPeriodChartsModel({
     ...report(),
     period: {
-      kind: "all_time", key: "all",
+      kind: "all_time", key: "all_time",
       start: "2019-01-01", end: "2027-01-03",
       label: "All time", so_far: true, note: null,
     },
@@ -489,7 +498,7 @@ test("14-week Q4, 53-week ISO year fallback, all-time leading ghost, year grain,
   const ghost = bankPeriodChartsModel({
     ...report(),
     period: {
-      kind: "all_time", key: "all",
+      kind: "all_time", key: "all_time",
       start: "2018-12-31", end: "2027-01-03",
       label: "All time", so_far: true, note: null,
     },
@@ -527,7 +536,7 @@ test("14-week Q4, 53-week ISO year fallback, all-time leading ghost, year grain,
   const single = bankPeriodChartsModel({
     ...report(),
     period: {
-      kind: "all_time", key: "all",
+      kind: "all_time", key: "all_time",
       start: "2026-09-28", end: "2027-01-03",
       label: "All time", so_far: true, note: null,
     },
@@ -569,7 +578,10 @@ test("not-counted parts omit badge waiting when the badge is on, and include it 
   assert.deepEqual(badged.notCounted.map((part) => part.key), ["transfers", "unclassified_in", "cash"]);
   assert.match(badged.notCounted[0].text, /transfers ↔ \$500\.00/);
   const unbadged = bankPeriodChartsModel(withTransfers, ctx({ badgeEnabled: false }));
-  assert.ok(unbadged.notCounted.some((part) => part.key === "waiting"));
+  const waitingPart = unbadged.notCounted.find((part) => part.key === "waiting");
+  assert.deepEqual(waitingPart.target, {
+    path: "bank/2026-11.md", line: 12, date: "2026-11-11", type: "waiting",
+  });
   assert.ok(unbadged.notCounted.some((part) => part.key === "coverage"));
 });
 

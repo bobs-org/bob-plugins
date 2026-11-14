@@ -200,7 +200,7 @@ function buildFixtures() {
     "all-single": {
       report: {
         ...baseReport({
-          period: { kind: "all_time", key: "all", start: "2026-01-01", end: "2026-12-31", label: "All time", so_far: true, note: null },
+          period: { kind: "all_time", key: "all_time", start: "2026-01-01", end: "2026-12-31", label: "All time", so_far: true, note: null },
           charts: {
             version: 1, granularity: "quarter",
             buckets: [entry({ id: "2026-Q4", kind: "quarter", label: "Q4", start: quarterStart, end: quarterEnd, group: "2026", out_cents: 24977, state: "tracked" })],
@@ -214,7 +214,7 @@ function buildFixtures() {
     "all-collapse": {
       report: {
         ...baseReport({
-          period: { kind: "all_time", key: "all", start: "2019-01-01", end: "2026-12-31", label: "All time", so_far: true, note: null },
+          period: { kind: "all_time", key: "all_time", start: "2019-01-01", end: "2026-12-31", label: "All time", so_far: true, note: null },
           charts: {
             version: 1, granularity: "quarter",
             buckets: ["2025-Q1", "2025-Q2", "2025-Q3", "2025-Q4", "2026-Q1", "2026-Q2", "2026-Q3", "2026-Q4"].map((id) => entry({

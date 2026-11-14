@@ -367,7 +367,7 @@ test("waiting paints one quiet line that opens the waiting target", () => {
   assert.ok(link);
   assert.equal(link.getAttribute("role"), "link");
   link.dispatch("click", {});
-  assert.deepEqual(calls[0][0], { path: "bank/2026-11.md", line: 12 });
+  assert.deepEqual(calls[0][0], { path: "bank/2026-11.md", line: 12, date: "2026-11-11", type: "waiting" });
   assert.equal(calls[0][1], false);
 });
 

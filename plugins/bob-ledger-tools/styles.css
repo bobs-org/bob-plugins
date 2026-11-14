@@ -8830,7 +8830,12 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-bank-metric-label { color: var(--text-muted); font-size: 0.7em; font-variant: small-caps; letter-spacing: 0.08em; }
 .bob-bank-money { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bob-bank-card,
-.bob-bank-badge-host { --bob-bank-in-ink: color-mix(in srgb, var(--color-green) 60%, var(--text-normal)); }
+.bob-bank-badge-host,
+.bob-bank-period-host {
+  --bob-bank-in-ink: color-mix(in srgb, var(--color-green) 60%, var(--text-normal));
+  --bob-bank-in-fill: color-mix(in srgb, var(--color-green) 70%, var(--text-normal));
+  --bob-bank-out-fill: color-mix(in srgb, var(--text-normal) 50%, var(--background-primary));
+}
 .bob-bank-metric-in strong { color: var(--bob-bank-in-ink); }
 .bob-bank-counts { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
 .bob-bank-pill,
@@ -9332,3 +9337,204 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-records-fold:focus-visible, .bob-records-age:focus-visible {
   outline: 2px solid var(--interactive-accent); outline-offset: 2px;
 }
+
+/* Bank Period Charts paint (bob-cli-lj paint): begin. */
+.bob-bank-period-host { min-width: 0; margin-top: 0.4rem; container-type: inline-size; }
+.bob-bank-period-host:empty { display: none; }
+.bob-bank-period {
+  min-width: 0;
+  border-inline-start: 2px solid color-mix(in srgb, var(--text-normal) 45%, transparent);
+  padding-inline-start: 0.6em;
+  color: var(--text-muted);
+  font-size: 0.75em;
+  font-variant-numeric: tabular-nums;
+}
+.bob-bank-period[data-stale="true"] { border-inline-start-style: dashed; }
+.bob-bank-period-header { display: flex; min-width: 0; align-items: baseline; gap: 0.6em; }
+.bob-bank-period-disclosure {
+  flex: none;
+  color: var(--text-muted);
+  font-variant: small-caps;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+}
+.bob-bank-period-disclosure:hover { color: var(--text-normal); }
+.bob-bank-period-disclosure:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.bob-bank-period-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 0.1em 0.3em;
+  cursor: pointer;
+}
+.bob-bank-period-switch:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.bob-bank-period-switch-mark { display: inline-block; width: 10px; height: 8px; border-radius: 2px; background: var(--background-modifier-border); }
+.bob-bank-period-switch-mark[data-on="true"] { background: var(--text-muted); }
+.bob-bank-period-readout { margin-inline-start: auto; min-width: 0; overflow: hidden; text-align: end; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.bob-bank-period-body { display: grid; min-width: 0; gap: 0.6em 1.2em; margin-top: 0.3rem; }
+@container (min-width: 34em) {
+  .bob-bank-period-body:not(.bob-bank-period-body-year) { grid-template-columns: 3fr 2fr; align-items: start; }
+}
+.bob-bank-period-chart-heading { color: var(--text-muted); font-size: 0.92em; font-weight: 700; letter-spacing: 0.08em; }
+.bob-bank-period-cashflow { min-width: 0; }
+.bob-bank-period-plot {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 44px;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 2px;
+}
+.bob-bank-period[data-shown="cashflow"] .bob-bank-period-plot { height: 62px; }
+.bob-bank-period-zero {
+  position: absolute;
+  inset-inline: 0;
+  top: 14px;
+  height: 1px;
+  background: var(--background-modifier-border);
+}
+.bob-bank-period[data-shown="cashflow"] .bob-bank-period-zero { top: 20px; }
+.bob-bank-period-cashflow[data-encoding="mirrored"] .bob-bank-period-zero { top: 50%; }
+.bob-bank-period-plot-cell {
+  position: relative;
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 26px;
+  height: 100%;
+  margin-inline: auto;
+}
+.bob-bank-period-in-marker,
+.bob-bank-period-in-bar,
+.bob-bank-period-out-bar,
+.bob-bank-period-ghost-bar,
+.bob-bank-period-hatch,
+.bob-bank-period-partial-cap,
+.bob-bank-period-future-stub,
+.bob-bank-period-extreme {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.bob-bank-period-in-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bob-bank-in-fill);
+  box-shadow: 0 0 0 2px var(--background-primary);
+}
+.bob-bank-period-in-bar {
+  width: min(24px, calc(100% - 2px));
+  border-radius: 4px 4px 0 0;
+  background: var(--bob-bank-in-fill);
+}
+.bob-bank-period-out-bar {
+  width: min(24px, calc(100% - 2px));
+  border-radius: 0 0 4px 4px;
+  background: var(--bob-bank-out-fill);
+}
+.bob-bank-period-cashflow-many .bob-bank-period-extreme { display: none; }
+.bob-bank-period-ghost-bar {
+  width: 8px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-faint) 45%, transparent);
+}
+.bob-bank-period-hatch {
+  width: min(24px, calc(100% - 2px));
+  min-height: 8px;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 30%, transparent) 0 2px, transparent 2px 5px);
+}
+.bob-bank-period-partial-cap { width: min(24px, calc(100% - 2px)); border-top: 2px dotted var(--text-muted); }
+.bob-bank-period-future-stub { width: 2px; height: 2px; background: var(--text-faint); }
+.bob-bank-period-extreme { color: var(--text-muted); font-size: 0.85em; white-space: nowrap; }
+.bob-bank-period-extreme-in { color: var(--bob-bank-in-ink); }
+.bob-bank-period-axis { display: grid; min-width: 0; align-items: start; margin-top: 0.15em; }
+.bob-bank-period-column {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  cursor: pointer;
+}
+.bob-bank-period-column:hover { color: var(--text-normal); }
+.bob-bank-period-column:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.bob-bank-period-column-caption {
+  display: block;
+  overflow: hidden;
+  font-size: 0.92em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bob-bank-period-waiting-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: var(--text-warning);
+}
+.bob-bank-period-column-current { outline: 1px dashed var(--text-muted); outline-offset: 1px; }
+.bob-bank-period-groups { display: grid; min-width: 0; margin-top: 0.15em; }
+.bob-bank-period-group-caption { min-width: 0; overflow: hidden; color: var(--text-faint); font-size: 0.85em; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-period-year { min-width: 0; container-type: inline-size; }
+.bob-bank-period-year .bob-bank-period-cashflow-fallback { display: none; }
+.bob-bank-period-year .bob-bank-period-cashflow-detailed { display: block; min-width: 0; }
+@container (max-width: 400px) {
+  .bob-bank-period-year .bob-bank-period-cashflow-detailed { display: none; }
+  .bob-bank-period-year .bob-bank-period-cashflow-fallback { display: block; min-width: 0; }
+}
+.bob-bank-period-categories { min-width: 0; }
+.bob-bank-period-category-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto auto minmax(0, 1fr) minmax(2.5rem, 5rem) auto auto;
+  align-items: center;
+  gap: 0.5em;
+  margin: 0.25rem 0;
+}
+.bob-bank-period-amber-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--text-warning); }
+.bob-bank-period-category-emoji { flex: none; }
+.bob-bank-period-category-label { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; color: var(--text-normal); }
+.bob-bank-period-category-track { display: block; overflow: hidden; height: 0.42rem; border-radius: 999px; background: var(--background-modifier-border); }
+.bob-bank-period-category-fill { display: block; height: 100%; border-radius: inherit; background: var(--bob-bank-out-fill); }
+.bob-bank-period-category-row[data-kind="rest"] .bob-bank-period-category-fill { background: var(--text-faint); }
+.bob-bank-period-category-row[data-kind="rest"] .bob-bank-period-category-label { color: var(--text-muted); }
+.bob-bank-period-category-amount { color: var(--text-normal); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bob-bank-period-category-row[data-kind="rest"] .bob-bank-period-category-amount { color: var(--text-muted); }
+.bob-bank-period-category-percent { color: var(--text-muted); text-align: end; white-space: nowrap; }
+.bob-bank-period-notcounted { margin-top: 0.3rem; color: var(--text-muted); }
+.bob-bank-period-notcounted-waiting { color: var(--text-muted); cursor: pointer; }
+.bob-bank-period-notcounted-waiting:hover { color: var(--text-normal); }
+.bob-bank-period-notcounted-waiting:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.bob-bank-period-waiting { color: var(--text-muted); }
+.bob-bank-period-waiting-link { cursor: pointer; }
+.bob-bank-period-waiting-link:hover { color: var(--text-normal); }
+.bob-bank-period-waiting-link:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.bob-bank-period-unavailable { color: var(--text-faint); }
+.bob-bank-period-column-ghost { color: var(--text-faint); cursor: default; }
+.bob-bank-period-ghost-label { color: var(--text-muted); font-size: 0.85em; white-space: nowrap; }
+.bob-bank-period-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.bob-bank-period-enter { animation: bob-bank-period-enter 160ms ease-out; }
+@keyframes bob-bank-period-enter { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .bob-bank-period-enter { animation: none; }
+  .bob-bank-period-column { transition: none; }
+}
+@media (forced-colors: active) {
+  .bob-bank-period { border-inline-start-color: CanvasText; }
+  .bob-bank-period-zero { background: CanvasText; }
+  .bob-bank-period-in-bar,
+  .bob-bank-period-out-bar,
+  .bob-bank-period-in-marker,
+  .bob-bank-period-category-fill { background: CanvasText; forced-color-adjust: none; }
+  .bob-bank-period-hatch {
+    background: repeating-linear-gradient(135deg, CanvasText 0 1px, transparent 1px 4px);
+    forced-color-adjust: none;
+  }
+  .bob-bank-period-ghost-bar { border-top: 1px solid CanvasText; background: transparent; }
+  .bob-bank-period-column-current { outline-color: CanvasText; }
+}
+/* Bank Period Charts paint (bob-cli-lj paint): end. */

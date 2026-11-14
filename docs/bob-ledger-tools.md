@@ -82,6 +82,34 @@ changing checkbox or cursor. Hidden categories stay on rows but out of the
 card and `[cat:: ` suggestions. The waiting pill lands at the payee start.
 Older APIs keep the `[ ]`↔`[x]` flip.
 
+## Bank Period Charts
+
+The read-only Bank Period Charts panel is the third child of a period
+`bob-stats-strip` fence, after the strip host and the badge host, on week,
+quarter, ISO-year, and all-time notes. It never mounts for Day strips,
+`bob-day-stats`, `bob-period-parts`, embeds, hover popovers, mobile, or
+future periods. The panel runs its own `bank report -p <id> -s -c` fetch on
+a separate cache entry, so an older bob or a bad `charts` payload hides only
+the panel (with one `console.warn` per session) and never the badge. Bank
+file events and the existing focus and visibility revalidation refresh it;
+period-stats repaints never touch it, and its repaint clears only its host.
+
+The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
+Both → In / Out → Categories (shown only when both charts are available),
+and a readout naming the hovered or focused bucket. The per-device view and
+collapse persist under the `bob-ledger-tools-bank-period-view` localStorage
+key (`{"view": "both"|"cashflow"|"categories", "collapsed": false}`;
+invalid values fall back to defaults) and repaint only period hosts. The
+cashflow axis is one roving tab stop: Arrow Left/Right and Home/End move
+focus, hover and focus dim siblings and fill the readout, Escape clears it,
+and Enter, Space, or click activates — Ctrl/Cmd-click and middle-click open
+a new leaf. Each chart ships a visually hidden table twin, so no value hides
+behind hover. Activation is read-only: day buckets open the month note at
+the day heading and period buckets open the child note, with a Notice when
+the note does not exist; notes are never created and vault bytes never
+written. `stats.bank_period` (default on) gates every period host,
+independently of `stats.bank_badge`.
+
 ## Snippets and the plan block
 
 The **Expand Bob snippet** command (or Tab) expands editor snippets. Date

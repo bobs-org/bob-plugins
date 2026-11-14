@@ -73,6 +73,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `relationLabels` | 1 | Read the relation-label catalog and delegate hide, unhide, and previewed rename writes to bob. |
 | `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
 | `bank` | 2 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment and Category card actions. |
+| `bankWalk` | 1 | Serve the read-only bank-row walk snapshot, the shared step/day planners, cursor locate, live-buffer identity resolution, the session anchor, and the Category-card busy flag behind `]b` / `[b` and `]B` / `[B`. |
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -133,6 +134,17 @@ without advancing or changing its checkbox. Task Status Cycler
 feature-detects `api.bank.version >= 2` and `claimRowClose` on waiting rows
 only; a missing, v1, false, or throwing claim falls back to today's
 `[ ]`↔`[x]` flip. Ticked rows never delegate.
+
+`bankWalk` is namespace version 1. `snapshot()` returns a frozen
+`{ available, reason?, generation, scope, counts, entries, days, files }`
+document (WAITING while any row waits, else ALL) and never throws; `plan()`
+is the pure step/day planner with the cursor-plus-anchor origin ladder;
+`locate()` classifies the cursor; `resolve()` replays identity against the
+live editor buffer (block ID, then exact line, then unique text in the day)
+at the payee start; `anchor()` / `setAnchor()` carry the session landing;
+`busy()` is true while the Category card modal is open. Nav keys, the footer
+panel, and the Category card all read this one snapshot and planner, so arms
+and jumps can never disagree. The top-level ledger api version is unchanged.
 
 - Register `vault` `create` / `modify` listeners inside `workspace.onLayoutReady`,
   because Obsidian replays `create` for every vault file (PDFs included) during load.
@@ -505,6 +517,13 @@ than rejecting. `taskLinkLane.matches` is synchronous and
 `toggle` settles its result. `reviewWalk.capture` returns
 `null` when there is no current landing;
 `reviewWalk.continue` resolves its advance result.
+
+The persisted family rides additive nav `api.walkMode` (the top-level
+navigation api version stays 3): v4 `current()` may return `"b"` and
+`select("b")` records like a letter click, while `setAttention(type, value)`
+accepts `"s"` and `"b"` with attention stored per type and painted per
+letter. Ledger feature-detects `walkMode.version >= 4` before selecting `b`
+or pushing the amber bank waiting dot.
 
 ## Task Status Cycler
 

@@ -19,6 +19,11 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.bracketModePaintKey = undefined;
     this.bracketModeFlashTimer = null;
     this.bracketModeInstantFrame = null;
+    this.bracketModeAttention = Object.freeze({});
+    this.bankWalkChain = Promise.resolve();
+    this.bankWalkPendingCount = 0;
+    this.bankWalkNotice = null;
+    this.lastBankWalkScope = null;
     this.highlightsHintsEnabled = true;
     this.highlightsChipEl = null;
     this.highlightsChipParts = null;
@@ -174,25 +179,25 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "repeat-next-bracket-walk",
-      name: "Repeat last bracket walk forward (]s, ]w, or ]n)",
+      name: "Repeat last bracket walk forward (]s, ]w, ]n, or ]b)",
       callback: () => this.repeatBracketWalk(1),
     });
 
     this.addCommand({
       id: "repeat-prev-bracket-walk",
-      name: "Repeat last bracket walk backward ([s, [w, or [n)",
+      name: "Repeat last bracket walk backward ([s, [w, [n, or [b)",
       callback: () => this.repeatBracketWalk(-1),
     });
 
     this.addCommand({
       id: "repeat-next-uppercase-bracket-walk",
-      name: "Repeat last bracket walk forward, uppercase (]S or ]W)",
+      name: "Repeat last bracket walk forward, uppercase (]S, ]W, or ]B)",
       callback: () => this.repeatBracketWalk(1, { uppercase: true }),
     });
 
     this.addCommand({
       id: "repeat-prev-uppercase-bracket-walk",
-      name: "Repeat last bracket walk backward, uppercase ([S or [W)",
+      name: "Repeat last bracket walk backward, uppercase ([S, [W, or [B)",
       callback: () => this.repeatBracketWalk(-1, { uppercase: true }),
     });
 
@@ -339,6 +344,42 @@ class BobNavigationHotkeysPlugin extends Plugin {
       callback: () => {
         this.rememberBracketRepeatType("w");
         return this.jumpToLaneTask(-1, { laneJump: true });
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-next-bank-row",
+      name: "Jump to next bank row",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(1);
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-bank-row",
+      name: "Jump to previous bank row",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(-1);
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-next-bank-day",
+      name: "Jump to the first bank row of the next day",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(1, { dayJump: true });
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-bank-day",
+      name: "Jump to the first bank row of the previous day",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(-1, { dayJump: true });
       },
     });
 
@@ -664,6 +705,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    try {
+      if (this.bankWalkNotice && typeof this.bankWalkNotice.hide === "function") {
+        this.bankWalkNotice.hide();
+      }
+      this.bankWalkNotice = null;
+    } catch (_error) {
+      // A lingering walk notice never blocks plugin unload.
+    }
     try {
       if (typeof this.teardownBracketModeIndicator === "function") {
         this.teardownBracketModeIndicator();

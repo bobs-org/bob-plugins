@@ -152,8 +152,11 @@
   "544-plugin-lane-walk.js",
   "540-plugin-decay-picker-and-cancel.js",
   "548-decay-card-writers.js",
+  "549-plugin-bank-walk.js",
+  "549a-bank-walk-notice.js",
   "545-plugin-review-journal.js",
   "546-plugin-bracket-repeat.js",
+  "547a-bracket-mode-view.js",
   "547-bracket-mode-indicator.js",
   "550-plugin-cancel-and-counted-property.js",
   "551-plugin-album-schema-fallback.js",
@@ -226,5 +229,6 @@
   "715-delete-guard-exports.js",
   "716-reload-history-exports.js",
   "717-copy-card-exports.js",
-  "718-album-schema-fallback-exports.js"
+  "718-album-schema-fallback-exports.js",
+  "719-bank-walk-exports.js"
 ]

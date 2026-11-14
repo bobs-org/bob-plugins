@@ -1,14 +1,14 @@
 // `]]` / `[[` repeat the last bracket-walk family command used in this vault.
 // `]}` / `[{` repeat that family's uppercase jump (`]S` / `[S` review groups,
-// `]W` / `[W` lanes); links (`n`) have no uppercase walk.
+// `]W` / `[W` lanes, `]B` / `[B` bank days); links (`n`) have no uppercase walk.
 const BRACKET_REPEAT_STORAGE_KEY = "bob-navigation-hotkeys-bracket-repeat";
 const BRACKET_REPEAT_EMPTY_NOTICE =
-  "Nothing to repeat yet — press ]s, ]w, or ]n first";
+  "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
 const BRACKET_REPEAT_NO_UPPERCASE_NOTICE =
-  "No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W";
+  "No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B";
 
 function normalizeBracketRepeatType(value) {
-  return value === "s" || value === "w" || value === "n" ? value : null;
+  return value === "s" || value === "w" || value === "n" || value === "b" ? value : null;
 }
 
 const BRACKET_REPEAT_PLANS = Object.freeze({
@@ -23,6 +23,10 @@ const BRACKET_REPEAT_PLANS = Object.freeze({
   n: Object.freeze({
     forward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["next"]) }),
     backward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["prev"]) }),
+  }),
+  b: Object.freeze({
+    forward: Object.freeze({ method: "jumpToBankRow", args: Object.freeze([1]) }),
+    backward: Object.freeze({ method: "jumpToBankRow", args: Object.freeze([-1]) }),
   }),
 });
 
@@ -48,6 +52,16 @@ const BRACKET_REPEAT_UPPERCASE_PLANS = Object.freeze({
     }),
   }),
   n: null,
+  b: Object.freeze({
+    forward: Object.freeze({
+      method: "jumpToBankRow",
+      args: Object.freeze([1, Object.freeze({ dayJump: true })]),
+    }),
+    backward: Object.freeze({
+      method: "jumpToBankRow",
+      args: Object.freeze([-1, Object.freeze({ dayJump: true })]),
+    }),
+  }),
 });
 
 function planBracketRepeat(type, direction, options = {}) {

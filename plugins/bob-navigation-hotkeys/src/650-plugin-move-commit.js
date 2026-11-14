@@ -844,6 +844,10 @@ class BobNavigationHotkeysMoveCommitMixin {
       view.editor.getValue(),
       anchor,
     );
+    if (resolved && resolved.ok === false) {
+      return false;
+    }
+    const ch = Number.isInteger(resolved.ch) && resolved.ch >= 0 ? resolved.ch : 0;
     const suppress =
       options &&
       typeof options === "object" &&
@@ -854,7 +858,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       this.vimJumpSuppressNativeMirror = true;
     }
     try {
-      if (!setEditorCursor(view.editor, { line: resolved.line, ch: 0 })) {
+      if (!setEditorCursor(view.editor, { line: resolved.line, ch })) {
         return false;
       }
     } finally {
@@ -863,7 +867,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       }
     }
 
-    scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, 0);
+    scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, ch);
     return true;
   }
 

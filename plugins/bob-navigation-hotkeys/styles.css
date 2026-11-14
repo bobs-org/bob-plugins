@@ -3902,6 +3902,49 @@
 .bob-nh-notice.bob-nh-lane-walk.is-clear {
   --bob-nh-level-color: var(--color-green, #3f8f5f);
 }
+.bob-nh-notice.bob-nh-bank-walk.is-waiting {
+  --bob-nh-level-color: var(--text-warning, var(--color-orange, #d9822b));
+}
+.bob-nh-notice.bob-nh-bank-walk.is-all {
+  --bob-nh-level-color: var(--text-accent, var(--interactive-accent));
+}
+.bob-nh-notice.bob-nh-bank-walk.is-clear {
+  --bob-nh-level-color: var(--text-muted);
+}
+.bob-nh-bank-walk-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--bob-nh-level-color);
+  border-radius: 50%;
+  color: var(--bob-nh-level-color);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.bob-nh-bank-walk-rail {
+  height: 3px;
+  margin: 7px 0 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--background-modifier-border);
+}
+.bob-nh-bank-walk-progress {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--bob-nh-level-color);
+}
+.bob-nh-bank-walk-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+}
+button.bob-bracket-mode-seg.has-attention[data-attention-tier="waiting"] {
+  --bob-review-attention: var(--text-warning);
+}
 .bob-nh-lane-walk-box {
   display: inline-flex;
   align-items: center;

@@ -99,8 +99,8 @@ function command(commands, id) {
   return found;
 }
 
-test("pure helpers accept only s, w, and n and return frozen direction plans", () => {
-  for (const type of ["s", "w", "n"]) {
+test("pure helpers accept s, w, n, and b and return frozen direction plans", () => {
+  for (const type of ["s", "w", "n", "b"]) {
     assert.equal(normalizeBracketRepeatType(type), type);
   }
   for (const value of ["S", "W", "", "x", null, 1, undefined]) {
@@ -114,6 +114,8 @@ test("pure helpers accept only s, w, and n and return frozen direction plans", (
     ["w", -1, "jumpToLaneTask", [-1]],
     ["n", 1, "openLabeledBodyLink", ["next"]],
     ["n", -1, "openLabeledBodyLink", ["prev"]],
+    ["b", 1, "jumpToBankRow", [1]],
+    ["b", -1, "jumpToBankRow", [-1]],
   ];
   for (const [type, direction, method, args] of rows) {
     const plan = planBracketRepeat(type, direction);
@@ -139,14 +141,18 @@ test("registration adds repeat commands and keeps all bracket family commands", 
     "jump-to-prev-lane-task",
     "jump-to-next-lane",
     "jump-to-prev-lane",
+    "jump-to-next-bank-row",
+    "jump-to-prev-bank-row",
+    "jump-to-next-bank-day",
+    "jump-to-prev-bank-day",
   ]) {
     assert.ok(ids.has(id), `missing family command ${id}`);
   }
 
   const next = command(commands, "repeat-next-bracket-walk");
   const prev = command(commands, "repeat-prev-bracket-walk");
-  assert.equal(next.name, "Repeat last bracket walk forward (]s, ]w, or ]n)");
-  assert.equal(prev.name, "Repeat last bracket walk backward ([s, [w, or [n)");
+  assert.equal(next.name, "Repeat last bracket walk forward (]s, ]w, ]n, or ]b)");
+  assert.equal(prev.name, "Repeat last bracket walk backward ([s, [w, [n, or [b)");
   assert.equal(Object.hasOwn(next, "hotkeys"), false);
   assert.equal(Object.hasOwn(prev, "hotkeys"), false);
 });
@@ -167,6 +173,10 @@ test("each family callback records its family and preserves its original argumen
     ["jump-to-prev-lane-task", "w", "jumpToLaneTask", [-1]],
     ["jump-to-next-lane", "w", "jumpToLaneTask", [1, { laneJump: true }]],
     ["jump-to-prev-lane", "w", "jumpToLaneTask", [-1, { laneJump: true }]],
+    ["jump-to-next-bank-row", "b", "jumpToBankRow", [1]],
+    ["jump-to-prev-bank-row", "b", "jumpToBankRow", [-1]],
+    ["jump-to-next-bank-day", "b", "jumpToBankRow", [1, { dayJump: true }]],
+    ["jump-to-prev-bank-day", "b", "jumpToBankRow", [-1, { dayJump: true }]],
   ];
   for (const [id, type, method, args] of rows) {
     const calls = [];
@@ -182,6 +192,7 @@ test("each family callback records its family and preserves its original argumen
     [BRACKET_REPEAT_STORAGE_KEY, "n"],
     [BRACKET_REPEAT_STORAGE_KEY, "s"],
     [BRACKET_REPEAT_STORAGE_KEY, "w"],
+    [BRACKET_REPEAT_STORAGE_KEY, "b"],
   ]);
 });
 
@@ -190,6 +201,7 @@ test("repeat delegates every type in both directions with key-owned direction", 
     ["s", [[1, "jumpToDueTask", [1]], [-1, "jumpToDueTask", [-1]]]],
     ["w", [[1, "jumpToLaneTask", [1]], [-1, "jumpToLaneTask", [-1]]]],
     ["n", [[1, "openLabeledBodyLink", ["next"]], [-1, "openLabeledBodyLink", ["prev"]]]],
+    ["b", [[1, "jumpToBankRow", [1]], [-1, "jumpToBankRow", [-1]]]],
   ]) {
     for (const [direction, method, expectedArgs] of rows) {
       const { plugin } = makeBarePlugin();
@@ -392,6 +404,8 @@ test("uppercase planner returns group and lane jumps; n has no uppercase plan", 
     ["s", -1, "jumpToDueTask", [-1, { groupJump: true }]],
     ["w", 1, "jumpToLaneTask", [1, { laneJump: true }]],
     ["w", -1, "jumpToLaneTask", [-1, { laneJump: true }]],
+    ["b", 1, "jumpToBankRow", [1, { dayJump: true }]],
+    ["b", -1, "jumpToBankRow", [-1, { dayJump: true }]],
   ];
   for (const [type, direction, method, args] of rows) {
     const plan = planBracketRepeat(type, direction, { uppercase: true });
@@ -404,7 +418,7 @@ test("uppercase planner returns group and lane jumps; n has no uppercase plan", 
   assert.equal(planBracketRepeat("unknown", 1, { uppercase: true }), null);
   assert.equal(
     BRACKET_REPEAT_NO_UPPERCASE_NOTICE,
-    "No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W",
+    "No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B",
   );
 });
 
@@ -412,14 +426,14 @@ test("registration adds uppercase repeat commands with no hotkeys", () => {
   const { commands } = createLoadedPlugin();
   const next = command(commands, "repeat-next-uppercase-bracket-walk");
   const prev = command(commands, "repeat-prev-uppercase-bracket-walk");
-  assert.equal(next.name, "Repeat last bracket walk forward, uppercase (]S or ]W)");
-  assert.equal(prev.name, "Repeat last bracket walk backward, uppercase ([S or [W)");
+  assert.equal(next.name, "Repeat last bracket walk forward, uppercase (]S, ]W, or ]B)");
+  assert.equal(prev.name, "Repeat last bracket walk backward, uppercase ([S, [W, or [B)");
   assert.equal(Object.hasOwn(next, "hotkeys"), false);
   assert.equal(Object.hasOwn(prev, "hotkeys"), false);
   const legacyNext = command(commands, "repeat-next-bracket-walk");
   const legacyPrev = command(commands, "repeat-prev-bracket-walk");
-  assert.equal(legacyNext.name, "Repeat last bracket walk forward (]s, ]w, or ]n)");
-  assert.equal(legacyPrev.name, "Repeat last bracket walk backward ([s, [w, or [n)");
+  assert.equal(legacyNext.name, "Repeat last bracket walk forward (]s, ]w, ]n, or ]b)");
+  assert.equal(legacyPrev.name, "Repeat last bracket walk backward ([s, [w, [n, or [b)");
 });
 
 test("uppercase repeat delegates with fresh unfrozen options objects", () => {
@@ -631,7 +645,7 @@ test("walkMode api is versioned and the top-level api version is unchanged", () 
   const { plugin } = createDoorbellPlugin();
   assert.equal(plugin.api.version, 3);
   assert.ok(plugin.api.walkMode);
-  assert.equal(plugin.api.walkMode.version, 3);
+  assert.equal(plugin.api.walkMode.version, 4);
   assert.equal(
     WALK_MODE_DOORBELL_EVENT,
     "bob-navigation-hotkeys:walk-mode",
@@ -645,6 +659,7 @@ test("doorbell fires once at setup and once per actual change", () => {
   plugin.jumpToDueTask = () => true;
   plugin.jumpToLaneTask = () => true;
   plugin.openLabeledBodyLink = () => true;
+  plugin.jumpToBankRow = () => true;
   command(commands, "jump-to-next-due-task").callback();
   assert.deepEqual(events, [
     WALK_MODE_DOORBELL_EVENT,
@@ -665,6 +680,9 @@ test("doorbell fires once at setup and once per actual change", () => {
   command(commands, "open-next-link").callback();
   assert.equal(events.length, 4);
   assert.equal(plugin.api.walkMode.current(), "n");
+  command(commands, "jump-to-next-bank-row").callback();
+  assert.equal(events.length, 5);
+  assert.equal(plugin.api.walkMode.current(), "b");
 });
 
 test("select records like a letter click without walking; invalid types refuse", () => {
@@ -680,14 +698,22 @@ test("select records like a letter click without walking; invalid types refuse",
   plugin.openLabeledBodyLink = (...args) => {
     walks.push(["link", args]);
   };
+  plugin.jumpToBankRow = (...args) => {
+    walks.push(["bank", args]);
+  };
   assert.deepEqual(plugin.api.walkMode.select("w"), { ok: true });
   assert.equal(plugin.bracketRepeatType, "w");
   assert.equal(storage.get(BRACKET_REPEAT_STORAGE_KEY), "w");
   assert.equal(plugin.api.walkMode.current(), "w");
   assert.deepEqual(walks, []);
   assert.equal(events.length, 2);
+  assert.deepEqual(plugin.api.walkMode.select("b"), { ok: true });
+  assert.equal(plugin.bracketRepeatType, "b");
+  assert.equal(storage.get(BRACKET_REPEAT_STORAGE_KEY), "b");
+  assert.equal(plugin.api.walkMode.current(), "b");
+  assert.equal(events.length, 3);
   assert.deepEqual(plugin.api.walkMode.select("w"), { ok: true });
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 4);
   for (const bad of ["S", "x", "", null, undefined, 1, "sw"]) {
     assert.deepEqual(plugin.api.walkMode.select(bad), {
       ok: false,
@@ -696,7 +722,7 @@ test("select records like a letter click without walking; invalid types refuse",
   }
   assert.equal(plugin.bracketRepeatType, "w");
   assert.deepEqual(walks, []);
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 4);
 });
 
 test("current normalizes invalid stored values to null", () => {
@@ -728,7 +754,7 @@ test("a throwing workspace trigger never breaks recording or selection", () => {
 
 test("walkMode degrades with a null plugin", () => {
   const api = createWalkModeApi(null);
-  assert.equal(api.version, 3);
+  assert.equal(api.version, 4);
   assert.ok(Object.isFrozen(api));
   assert.equal(api.current(), null);
   assert.deepEqual(api.select("s"), { ok: false, reason: "unavailable" });
@@ -750,6 +776,7 @@ test("walkMode.setAttention validates type and value", () => {
     reason: "invalid-type",
   });
   assert.deepEqual(api.setAttention("n", null), { ok: false, reason: "invalid-type" });
+  assert.deepEqual(api.setAttention("b", { tier: "waiting", label: "x" }), { ok: true });
   for (const bad of ["x", "", null, undefined, 1, "ss"]) {
     assert.deepEqual(api.setAttention(bad, { tier: "next", label: "x" }), {
       ok: false,
@@ -768,19 +795,24 @@ test("walkMode.setAttention clears, normalizes, freezes, and never throws", () =
   plugin.refreshBracketModeIndicator = () => {
     refreshed += 1;
   };
+  assert.deepEqual(api.setAttention("b", { tier: "WAITING", label: "  Bank: 2 waiting  " }), { ok: true });
+  refreshed = 0;
   assert.deepEqual(api.setAttention("s", { tier: "NEXT", label: "  Review: 9 due  " }), { ok: true });
   assert.equal(refreshed, 1);
-  assert.deepEqual(plugin.bracketModeAttention, { tier: "next", label: "Review: 9 due" });
+  assert.deepEqual(plugin.bracketModeAttention, {
+    b: { tier: "waiting", label: "Bank: 2 waiting" },
+    s: { tier: "next", label: "Review: 9 due" },
+  });
   assert.ok(Object.isFrozen(plugin.bracketModeAttention));
   assert.deepEqual(api.setAttention("s", null), { ok: true });
-  assert.equal(plugin.bracketModeAttention, null);
+  assert.deepEqual(plugin.bracketModeAttention, { b: { tier: "waiting", label: "Bank: 2 waiting" } });
   assert.deepEqual(api.setAttention("s", undefined), { ok: true });
-  assert.equal(plugin.bracketModeAttention, null);
+  assert.deepEqual(plugin.bracketModeAttention, { b: { tier: "waiting", label: "Bank: 2 waiting" } });
   plugin.refreshBracketModeIndicator = () => {
     throw new Error("paint down");
   };
   assert.deepEqual(api.setAttention("s", { tier: "next", label: "x" }), { ok: true });
-  assert.deepEqual(plugin.bracketModeAttention, { tier: "next", label: "x" });
+  assert.deepEqual(plugin.bracketModeAttention, { b: { tier: "waiting", label: "Bank: 2 waiting" }, s: { tier: "next", label: "x" } });
 });
 
 test("walkMode.setAttention on a null plugin reports unavailable", () => {

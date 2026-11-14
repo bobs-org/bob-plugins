@@ -408,6 +408,25 @@ function resolveTaskMoveDestinationLine(content, anchor) {
   const anchorText = anchorInfo.text;
   const anchorBlockId = anchorInfo.blockId;
 
+  if (typeof anchorInfo.resolve === "function") {
+    let resolved = null;
+    try {
+      resolved = anchorInfo.resolve(text);
+    } catch (_error) {
+      resolved = null;
+    }
+    const line = resolved && resolved.ok === true ? resolved.line : null;
+    if (!Number.isInteger(line) || line < 0 || line >= lines.length) {
+      return Object.freeze({ ok: false, source: "resolver" });
+    }
+    return Object.freeze({
+      ok: true,
+      line,
+      ch: Number.isInteger(resolved.ch) && resolved.ch >= 0 ? resolved.ch : 0,
+      source: "resolver",
+    });
+  }
+
   if (
     Number.isInteger(anchorLine) &&
     anchorLine >= 0 &&

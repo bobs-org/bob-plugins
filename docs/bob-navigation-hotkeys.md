@@ -41,13 +41,17 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Insert blank line above | `insert-blank-line-above` | — |
 | Insert blank line below | `insert-blank-line-below` | — |
 | Jump to next Pending, Next, or Ready task off today's plan | `jump-to-next-lane-task` | — |
+| Jump to next bank row | `jump-to-next-bank-row` | — |
 | Jump to next open task or move a Pomodoro down | `jump-to-next-open-task` | — |
 | Jump to next section header | `jump-to-next-section-header` | — |
 | Jump to next task due for freshness review | `jump-to-next-due-task` | Ctrl+Alt+J |
 | Jump to previous Pending, Next, or Ready task off today's plan | `jump-to-prev-lane-task` | — |
+| Jump to previous bank row | `jump-to-prev-bank-row` | — |
 | Jump to previous open task or move a Pomodoro up | `jump-to-prev-open-task` | — |
 | Jump to previous section header | `jump-to-prev-section-header` | — |
 | Jump to previous task due for freshness review | `jump-to-prev-due-task` | Ctrl+Alt+K |
+| Jump to the first bank row of the next day | `jump-to-next-bank-day` | — |
+| Jump to the first bank row of the previous day | `jump-to-prev-bank-day` | — |
 | Jump to the first task of the next lane off today's plan | `jump-to-next-lane` | — |
 | Jump to the first task of the next review group | `jump-to-last-due-task` | — |
 | Jump to the first task of the previous lane off today's plan | `jump-to-prev-lane` | — |
@@ -67,10 +71,10 @@ Bob Navigation Hotkeys adds keyboard commands for navigating and editing Bob not
 | Refresh task freshness (confirm it still looks right) | `refresh-task-freshness` | Alt+F |
 | Refresh task freshness and jump to the next due task | `refresh-task-freshness-and-advance` | Ctrl+Alt+F |
 | Rename current file | `rename-current-file` | — |
-| Repeat last bracket walk backward ([s, [w, or [n) | `repeat-prev-bracket-walk` | — |
-| Repeat last bracket walk backward, uppercase ([S or [W) | `repeat-prev-uppercase-bracket-walk` | — |
-| Repeat last bracket walk forward (]s, ]w, or ]n) | `repeat-next-bracket-walk` | — |
-| Repeat last bracket walk forward, uppercase (]S or ]W) | `repeat-next-uppercase-bracket-walk` | — |
+| Repeat last bracket walk backward ([s, [w, [n, or [b) | `repeat-prev-bracket-walk` | — |
+| Repeat last bracket walk backward, uppercase ([S, [W, or [B) | `repeat-prev-uppercase-bracket-walk` | — |
+| Repeat last bracket walk forward (]s, ]w, ]n, or ]b) | `repeat-next-bracket-walk` | — |
+| Repeat last bracket walk forward, uppercase (]S, ]W, or ]B) | `repeat-next-uppercase-bracket-walk` | — |
 | Split Pomodoro by type | `split-pomodoro-by-type` | — |
 | Split bullets into tasks | `split-bullets-into-tasks` | Ctrl+Shift+T |
 | Task card (set properties) | `set-bullet-property` | — |

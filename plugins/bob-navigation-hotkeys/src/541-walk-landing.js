@@ -1,4 +1,4 @@
-// Shared walk landing: the cursor-moving core behind `]s` and `]w`.
+// Shared walk landing: the cursor-moving core behind `]s`, `]w`, and `]b`.
 // `landOnReviewQueueEntry` (review advance) is a thin wrapper that calls
 // this and then records the review landing; the lane walk calls this
 // directly so a `]w` landing never touches the `]s` walk.
@@ -8,6 +8,10 @@ class BobNavigationHotkeysWalkLandingMixin {
   async landOnWalkEntry(entry, options = {}) {
     const jumpOrigin =
       options && typeof options === "object" ? options.jumpOrigin : null;
+    const resolveLine =
+      options && typeof options.resolveLine === "function"
+        ? options.resolveLine
+        : null;
     const path = entry && typeof entry.path === "string" ? entry.path : "";
     if (!path) {
       return { ok: false, stale: true, settled: Promise.resolve(false) };
@@ -43,15 +47,26 @@ class BobNavigationHotkeysWalkLandingMixin {
         return { ok: false, stale: false, settled: Promise.resolve(false) };
       }
     }
-    const resolved = resolveReviewQueueLine(content, entry);
-    if (!resolved.ok) {
+    let resolved = null;
+    try {
+      resolved = resolveLine
+        ? resolveLine(content)
+        : resolveReviewQueueLine(content, entry);
+    } catch (_error) {
+      resolved = null;
+    }
+    const line = resolved && resolved.line;
+    const ch = resolveLine && Number.isInteger(resolved && resolved.ch) && resolved.ch >= 0
+      ? resolved.ch
+      : 0;
+    if (!resolved || resolved.ok !== true || !Number.isInteger(line) || line < 0) {
       return { ok: false, stale: true, settled: Promise.resolve(false) };
     }
     if (sameNote) {
-      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
+      if (!setEditorCursor(activeEditor, { line, ch })) {
         return { ok: false, stale: false, settled: Promise.resolve(false) };
       }
-      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
+      scheduleOpenTaskJumpCenter(this, activeEditor, line, ch);
       if (jumpOrigin) {
         try {
           const jumpContext =
@@ -59,7 +74,7 @@ class BobNavigationHotkeysWalkLandingMixin {
           if (jumpContext) {
             const settled = this.enqueueVimJumpContextTransition(
               jumpContext,
-              { path, line: resolved.line, ch: 0 },
+              { path, line, ch },
               { expectedPath: path },
             );
             if (settled && typeof settled.catch === "function") {
@@ -135,29 +150,39 @@ class BobNavigationHotkeysWalkLandingMixin {
             } catch (error) {
               // Jump history is best-effort after a successful landing.
             } finally {
-              wrappedSettle(true);
+              wrappedSettle(Boolean(result && result.ok));
             }
           },
         };
         this.jumpOrDeferTaskMoveDestination(
           path,
-          { line: resolved.line, text: entry.originalMarkdown },
+          resolveLine
+            ? { line, ch, resolve: resolveLine }
+            : { line, text: entry.originalMarkdown },
           TASK_MOVE_DESTINATION_JUMP_RETRIES,
           completion,
         );
       } else {
-        this.jumpOrDeferTaskMoveDestination(path, {
-          line: resolved.line,
-          text: entry.originalMarkdown,
-        });
-        wrappedSettle(true);
+        this.jumpOrDeferTaskMoveDestination(
+          path,
+          resolveLine
+            ? { line, ch, resolve: resolveLine }
+            : { line, text: entry.originalMarkdown },
+          TASK_MOVE_DESTINATION_JUMP_RETRIES,
+          (result) => wrappedSettle(Boolean(result && result.ok)),
+        );
+        if (timer === null) {
+          wrappedSettle(true);
+        }
       }
     } else {
       this.jumpOrDeferTaskMoveDestination(
         path,
-        { line: resolved.line, text: entry.originalMarkdown },
+        resolveLine
+          ? { line, ch, resolve: resolveLine }
+          : { line, text: entry.originalMarkdown },
         TASK_MOVE_DESTINATION_JUMP_RETRIES,
-        () => wrappedSettle(true),
+        (result) => wrappedSettle(Boolean(result && result.ok)),
       );
       if (timer === null) {
         wrappedSettle(true);

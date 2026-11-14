@@ -1,4 +1,4 @@
-// Bracket mode footer: always-visible `[[ s w n ]]` status-bar indicator.
+// Bracket mode footer: always-visible `[[ s w n b ]]` status-bar indicator.
 // Desktop only. Pure view model plus an idempotent painter that reuses one
 // DOM tree. Never throws; never changes walk behavior.
 const BRACKET_MODE_FAMILIES = Object.freeze([
@@ -29,6 +29,15 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     upperTooltip: "]} / [{ have no link variant (no ]N / [N)",
     segmentAria: "Links (]n / [n)",
   }),
+  Object.freeze({
+    type: "b",
+    letter: "b",
+    name: "bank walk",
+    keys: "]b / [b",
+    tooltip: "]] / [[ repeat the bank walk (]b / [b)",
+    upperTooltip: "]} / [{ jump to the next / previous bank day (]B / [B)",
+    segmentAria: "Bank walk (]b / [b)",
+  }),
 ]);
 
 const BRACKET_MODE_FLASH_MS = Object.freeze({
@@ -37,8 +46,8 @@ const BRACKET_MODE_FLASH_MS = Object.freeze({
   empty: 650,
 });
 
-const BRACKET_MODE_ACTIVE_HINT = "s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to switch";
-const BRACKET_MODE_NONE_HINT = "s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to choose";
+const BRACKET_MODE_ACTIVE_HINT = "s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to switch";
+const BRACKET_MODE_NONE_HINT = "s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to choose";
 
 function bracketModeFamilyFor(type) {
   for (const family of BRACKET_MODE_FAMILIES) {
@@ -47,91 +56,6 @@ function bracketModeFamilyFor(type) {
     }
   }
   return null;
-}
-
-function bracketModeViewKey(view) {
-  const attention = view && Array.isArray(view.segments)
-    ? view.segments.find((segment) => segment.type === "s" && segment.attention)
-    : null;
-  return `${view && view.mode || "none"}\0${attention ? attention.attentionLabel : ""}`;
-}
-
-function buildBracketModeView(type, attention = null) {
-  let normalized = null;
-  try {
-    if (typeof normalizeBracketRepeatType === "function") {
-      normalized = normalizeBracketRepeatType(type);
-    } else {
-      normalized = type === "s" || type === "w" || type === "n" ? type : null;
-    }
-  } catch (error) {
-    normalized = type === "s" || type === "w" || type === "n" ? type : null;
-  }
-  if (normalized === null) {
-    let emptyNotice = "";
-    try {
-      emptyNotice =
-        typeof BRACKET_REPEAT_EMPTY_NOTICE === "string"
-          ? BRACKET_REPEAT_EMPTY_NOTICE
-          : "Nothing to repeat yet \u2014 press ]s, ]w, or ]n first";
-    } catch (error) {
-      emptyNotice = "Nothing to repeat yet \u2014 press ]s, ]w, or ]n first";
-    }
-    const segments = BRACKET_MODE_FAMILIES.map((family) =>
-      Object.freeze({
-        type: family.type,
-        letter: family.letter,
-        name: family.name,
-        active: false,
-        ariaLabel:
-          family.type === "s" && attention
-            ? `${family.segmentAria}. ${String(attention.label || "Review commitments are due")}`
-            : family.segmentAria,
-        attention: family.type === "s" && normalized !== "s" && Boolean(attention),
-        attentionTier: family.type === "s" && normalized !== "s" && attention
-          ? String(attention.tier || "")
-          : "",
-        attentionLabel: family.type === "s" && normalized !== "s" && attention
-          ? String(attention.label || "Review commitments are due")
-          : "",
-      }),
-    );
-    return Object.freeze({
-      mode: "none",
-      index: -1,
-      ariaLabel: "Bracket repeat mode: not set",
-      tooltip: `${emptyNotice}\n\n${BRACKET_MODE_NONE_HINT}`,
-      segments: Object.freeze(segments),
-    });
-  }
-  const family = bracketModeFamilyFor(normalized);
-  const index = BRACKET_MODE_FAMILIES.indexOf(family);
-  const segments = BRACKET_MODE_FAMILIES.map((item) =>
-    Object.freeze({
-      type: item.type,
-      letter: item.letter,
-      name: item.name,
-      active: item.type === normalized,
-      ariaLabel:
-        item.type === "s" && normalized !== "s" && attention
-          ? `${item.segmentAria}. ${String(attention.label || "Review commitments are due")}`
-          : item.segmentAria,
-      attention: item.type === "s" && normalized !== "s" && Boolean(attention),
-      attentionTier: item.type === "s" && normalized !== "s" && attention
-        ? String(attention.tier || "")
-        : "",
-      attentionLabel: item.type === "s" && normalized !== "s" && attention
-        ? String(attention.label || "Review commitments are due")
-        : "",
-    }),
-  );
-  return Object.freeze({
-    mode: normalized,
-    index,
-    ariaLabel: `Bracket repeat mode: ${family.name}`,
-    tooltip: `${family.tooltip}\n${family.upperTooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
-    segments: Object.freeze(segments),
-  });
 }
 
 function bracketModeSetText(node, text) {
@@ -420,7 +344,7 @@ function ensureBracketModeDom(el) {
       el._bobBracketModeParts.track &&
       el._bobBracketModeParts.thumb &&
       Array.isArray(el._bobBracketModeParts.segments) &&
-      el._bobBracketModeParts.segments.length === 3 &&
+      el._bobBracketModeParts.segments.length === BRACKET_MODE_FAMILIES.length &&
       el._bobBracketModeParts.forward
     ) {
       return el._bobBracketModeParts;
@@ -482,7 +406,7 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     return parts || null;
   }
   const safe = view && typeof view === "object" ? view : null;
-  if (!safe || (safe.mode !== "s" && safe.mode !== "w" && safe.mode !== "n" && safe.mode !== "none")) {
+  if (!safe || (safe.mode !== "none" && !bracketModeFamilyFor(safe.mode))) {
     return parts;
   }
   const viewKey = bracketModeViewKey(safe);
@@ -841,7 +765,7 @@ class BobNavigationHotkeysBracketModeIndicatorMixin {
         if (typeof normalizeBracketRepeatType === "function") {
           normalized = normalizeBracketRepeatType(type);
         } else {
-          normalized = type === "s" || type === "w" || type === "n" ? type : null;
+          normalized = type === "s" || type === "w" || type === "n" || type === "b" ? type : null;
         }
       } catch (error) {
         normalized = null;

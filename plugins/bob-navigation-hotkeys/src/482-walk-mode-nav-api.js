@@ -1,14 +1,15 @@
-// Additive nav `api.walkMode` v3: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v4: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
-// exactly like a selector letter click: it refuses anything but s/w/n with
+// exactly like a selector letter click: it refuses anything but s/w/n/b with
 // `{ok: false, reason: "invalid-type"}`, otherwise records via
 // `rememberBracketRepeatType` (refreshing the indicator, never walking) and
 // never throws. `links({path, content})` v2 previews the first prev/next
 // body links with the exact matcher behind `[n`/`]n`; it is read-only and
 // reports resolved or creation-eligible paths without opening or creating.
-// v3 adds display-only review attention for the selector's `s` letter.
+// v3 adds display-only review attention for the selector's `s` letter. v4
+// keeps attention per family so the bank's waiting dot can coexist with it.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -30,7 +31,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 3,
+    version: 4,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -69,7 +70,7 @@ function createWalkModeApi(plugin) {
     },
     setAttention(type, value) {
       try {
-        if (type !== "s") {
+        if (type !== "s" && type !== "b") {
           return Object.freeze({ ok: false, reason: "invalid-type" });
         }
         let attention = null;
@@ -87,7 +88,18 @@ function createWalkModeApi(plugin) {
         if (!plugin) {
           return Object.freeze({ ok: false, reason: "unavailable" });
         }
-        plugin.bracketModeAttention = attention;
+        const current =
+          plugin.bracketModeAttention &&
+          typeof plugin.bracketModeAttention === "object"
+            ? plugin.bracketModeAttention
+            : {};
+        const next = { ...current };
+        if (attention === null) {
+          delete next[type];
+        } else {
+          next[type] = attention;
+        }
+        plugin.bracketModeAttention = Object.freeze(next);
         try {
           if (typeof plugin.refreshBracketModeIndicator === "function") {
             plugin.refreshBracketModeIndicator();

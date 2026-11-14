@@ -248,10 +248,10 @@ function commandById(commands, id) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("family table is frozen and ordered s, w, n", () => {
+test("family table is frozen and ordered s, w, n, b", () => {
   assert.deepEqual(
     BRACKET_MODE_FAMILIES.map((family) => family.type),
-    ["s", "w", "n"],
+    ["s", "w", "n", "b"],
   );
   assert.ok(Object.isFrozen(BRACKET_MODE_FAMILIES));
   for (const family of BRACKET_MODE_FAMILIES) {
@@ -261,11 +261,12 @@ test("family table is frozen and ordered s, w, n", () => {
   assert.ok(Object.isFrozen(BRACKET_MODE_FLASH_MS));
 });
 
-test("view model covers s, w, n, null, and garbage", () => {
+test("view model covers s, w, n, b, null, and garbage", () => {
   const expectations = [
     ["s", 0, "review walk", "]] / [[ repeat the review walk (]s / [s)", "]} / [{ jump to the next / previous review group (]S / [S)", "Review walk (]s / [s)"],
     ["w", 1, "lane walk", "]] / [[ repeat the lane walk (]w / [w)", "]} / [{ jump to the next / previous lane (]W / [W)", "Lane walk (]w / [w)"],
     ["n", 2, "links", "]] / [[ open the next / previous link (]n / [n)", "]} / [{ have no link variant (no ]N / [N)", "Links (]n / [n)"],
+    ["b", 3, "bank walk", "]] / [[ repeat the bank walk (]b / [b)", "]} / [{ jump to the next / previous bank day (]B / [B)", "Bank walk (]b / [b)"],
   ];
   for (const [type, index, name, firstLine, secondLine, segmentAria] of expectations) {
     const view = buildBracketModeView(type);
@@ -276,7 +277,7 @@ test("view model covers s, w, n, null, and garbage", () => {
     const lines = view.tooltip.split("\n");
     assert.equal(lines[1], secondLine, `${type} second line`);
     assert.ok(
-      view.tooltip.includes("s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to switch"),
+      view.tooltip.includes("s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to switch"),
       `${type} hint line`,
     );
     assert.ok(Object.isFrozen(view));
@@ -294,16 +295,17 @@ test("view model covers s, w, n, null, and garbage", () => {
     assert.equal(view.ariaLabel, "Bracket repeat mode: not set");
     assert.ok(view.tooltip.startsWith(BRACKET_REPEAT_EMPTY_NOTICE), `none first line for ${String(input)}`);
     assert.ok(
-      view.tooltip.includes("s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to choose"),
+      view.tooltip.includes("s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to choose"),
       "none second line",
     );
     assert.ok(view.segments.every((segment) => segment.active === false));
     assert.ok(Object.isFrozen(view));
   }
   assert.equal(normalizeBracketRepeatType("s"), "s");
+  assert.equal(normalizeBracketRepeatType("b"), "b");
 });
 
-test("desktop mount creates exactly one item with three letters and none on cold device", () => {
+test("desktop mount creates exactly one item with four letters and none on cold device", () => {
   const { plugin, statusBars } = createMountedPlugin();
   assert.equal(statusBars.length, 1);
   const el = plugin.bracketModeEl;
@@ -315,10 +317,10 @@ test("desktop mount creates exactly one item with three letters and none on cold
   assert.equal(el.getAttribute("aria-label"), "Bracket repeat mode: not set");
   const parts = plugin.bracketModeParts;
   assert.ok(parts);
-  assert.equal(parts.segments.length, 3);
+  assert.equal(parts.segments.length, 4);
   assert.deepEqual(
     parts.segments.map((node) => node.getAttribute("data-bracket-type")),
-    ["s", "w", "n"],
+    ["s", "w", "n", "b"],
   );
   assert.ok(parts.back);
   assert.ok(parts.forward);
@@ -386,6 +388,7 @@ test("family commands repaint to their family and reuse the same DOM nodes", () 
   plugin.jumpToDueTask = () => true;
   plugin.jumpToLaneTask = () => true;
   plugin.openLabeledBodyLink = () => true;
+  plugin.jumpToBankRow = () => true;
   commandById(commands, "jump-to-next-due-task").callback();
   assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-mode"), "s");
   assert.strictEqual(plugin.bracketModeParts, before);
@@ -400,6 +403,8 @@ test("family commands repaint to their family and reuse the same DOM nodes", () 
   assert.strictEqual(plugin.bracketModeParts, afterS);
   commandById(commands, "open-next-link").callback();
   assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-mode"), "n");
+  commandById(commands, "jump-to-next-bank-row").callback();
+  assert.equal(plugin.bracketModeEl.getAttribute("data-bracket-mode"), "b");
 });
 
 test("same-family commands skip DOM writes because the paint key is unchanged", () => {
@@ -633,15 +638,21 @@ test("uppercase repeat flashes forward and backward; no-uppercase flashes empty"
   await sleep(BRACKET_MODE_FLASH_MS.empty + 60);
 });
 
-test("attention lands only on the s segment while another family is selected", () => {
-  const attention = { tier: "next", label: "Review: 9 due" };
-  for (const mode of ["w", "n", null]) {
+test("per-family attention lands on s and b only while another family is selected", () => {
+  const attention = {
+    s: { tier: "next", label: "Review: 9 due" },
+    b: { tier: "waiting", label: "Bank: 4 waiting" },
+  };
+  for (const mode of ["w", "n", "b", null]) {
     const view = buildBracketModeView(mode, attention);
     const s = view.segments.find((segment) => segment.type === "s");
-    assert.equal(s.attention, true, `mode ${mode}`);
-    assert.equal(s.attentionTier, "next", `mode ${mode}`);
-    assert.equal(s.attentionLabel, "Review: 9 due", `mode ${mode}`);
-    assert.ok(s.ariaLabel.includes("Review: 9 due"), `mode ${mode}`);
+    assert.equal(s.attention, mode !== "s", `mode ${mode}`);
+    assert.equal(s.attentionTier, mode === "s" ? "" : "next", `mode ${mode}`);
+    assert.equal(s.attentionLabel, mode === "s" ? "" : "Review: 9 due", `mode ${mode}`);
+    const b = view.segments.find((segment) => segment.type === "b");
+    assert.equal(b.attention, mode !== "b", `bank mode ${mode}`);
+    assert.equal(b.attentionTier, mode === "b" ? "" : "waiting", `bank mode ${mode}`);
+    assert.equal(b.attentionLabel, mode === "b" ? "" : "Bank: 4 waiting", `bank mode ${mode}`);
     for (const other of ["w", "n"]) {
       const seg = view.segments.find((segment) => segment.type === other);
       assert.equal(seg.attention, false, `mode ${mode} seg ${other}`);
@@ -650,10 +661,8 @@ test("attention lands only on the s segment while another family is selected", (
       assert.ok(!seg.ariaLabel.includes("Review: 9 due"), `mode ${mode} seg ${other}`);
     }
   }
-  const onS = buildBracketModeView("s", attention);
-  for (const seg of onS.segments) {
-    assert.equal(seg.attention, false, `mode s seg ${seg.type}`);
-  }
+  assert.equal(buildBracketModeView("s", attention).segments.find((seg) => seg.type === "s").attention, false);
+  assert.equal(buildBracketModeView("b", attention).segments.find((seg) => seg.type === "b").attention, false);
   const none = buildBracketModeView("none", null);
   assert.ok(none.segments.every((segment) => segment.attention === false));
 });
@@ -661,14 +670,14 @@ test("attention lands only on the s segment while another family is selected", (
 test("paint sets and clears the s dot without touching instant or animation classes", () => {
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
-  const attention = { tier: "Pending", label: "  Review: 5 due  " };
+  const attention = { s: { tier: "Pending", label: "  Review: 5 due  " } };
   const view = buildBracketModeView("w", attention);
   paintBracketModeIndicator(el, parts, view, undefined);
   const sButton = findSegment(parts, "s");
   assert.ok(sButton.classes.includes("has-attention"));
   assert.equal(sButton.attrs["data-attention-tier"], "Pending");
   assert.equal(sButton.attrs.title, "  Review: 5 due  ");
-  const cleared = buildBracketModeView("w", null);
+  const cleared = buildBracketModeView("w", {});
   paintBracketModeIndicator(el, parts, cleared, "w");
   assert.ok(!sButton.classes.includes("has-attention"));
   assert.equal(sButton.attrs["data-attention-tier"], undefined);
@@ -676,11 +685,25 @@ test("paint sets and clears the s dot without touching instant or animation clas
   assert.equal(el.classes.includes("is-instant"), false);
 });
 
+test("bank waiting attention paints only the b dot and uses warning ink", () => {
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  const view = buildBracketModeView("w", { b: { tier: "waiting", label: "Bank: 2 waiting" } });
+  paintBracketModeIndicator(el, parts, view, undefined);
+  const bButton = findSegment(parts, "b");
+  const sButton = findSegment(parts, "s");
+  assert.ok(bButton.classes.includes("has-attention"));
+  assert.equal(bButton.attrs["data-attention-tier"], "waiting");
+  assert.ok(!sButton.classes.includes("has-attention"));
+  const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css"), "utf8");
+  assert.match(css, /data-attention-tier="waiting"[^}]*var\(--text-warning\)/);
+});
+
 test("attention-only change repaints while an unchanged view key skips DOM writes", () => {
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
-  const first = buildBracketModeView("w", { tier: "next", label: "one" });
-  const second = buildBracketModeView("w", { tier: "next", label: "two" });
+  const first = buildBracketModeView("w", { s: { tier: "next", label: "one" } });
+  const second = buildBracketModeView("w", { s: { tier: "next", label: "two" } });
   assert.notEqual(bracketModeViewKey(first), bracketModeViewKey(second));
   paintBracketModeIndicator(el, parts, first, undefined);
   let writes = 0;
@@ -696,7 +719,7 @@ test("attention-only change repaints while an unchanged view key skips DOM write
   writes = 0;
   paintBracketModeIndicator(el, parts, second, "w");
   assert.equal(writes, 0);
-  assert.equal(bracketModeViewKey(second), bracketModeViewKey(buildBracketModeView("w", { tier: "next", label: "two" })));
+  assert.equal(bracketModeViewKey(second), bracketModeViewKey(buildBracketModeView("w", { s: { tier: "next", label: "two" } })));
 });
 
 test("attention styles carry no motion and forced-colors uses Highlight", () => {

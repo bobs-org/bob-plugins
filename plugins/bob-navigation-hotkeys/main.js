@@ -42590,6 +42590,25 @@ function resolveTaskMoveDestinationLine(content, anchor) {
   const anchorText = anchorInfo.text;
   const anchorBlockId = anchorInfo.blockId;
 
+  if (typeof anchorInfo.resolve === "function") {
+    let resolved = null;
+    try {
+      resolved = anchorInfo.resolve(text);
+    } catch (_error) {
+      resolved = null;
+    }
+    const line = resolved && resolved.ok === true ? resolved.line : null;
+    if (!Number.isInteger(line) || line < 0 || line >= lines.length) {
+      return Object.freeze({ ok: false, source: "resolver" });
+    }
+    return Object.freeze({
+      ok: true,
+      line,
+      ch: Number.isInteger(resolved.ch) && resolved.ch >= 0 ? resolved.ch : 0,
+      source: "resolver",
+    });
+  }
+
   if (
     Number.isInteger(anchorLine) &&
     anchorLine >= 0 &&
@@ -76201,17 +76220,18 @@ function planReviewGroupJump(queue, options = {}) {
   });
 }
 // ---- src/482-walk-mode-nav-api.js ----
-// Additive nav `api.walkMode` v3: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v4: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
-// exactly like a selector letter click: it refuses anything but s/w/n with
+// exactly like a selector letter click: it refuses anything but s/w/n/b with
 // `{ok: false, reason: "invalid-type"}`, otherwise records via
 // `rememberBracketRepeatType` (refreshing the indicator, never walking) and
 // never throws. `links({path, content})` v2 previews the first prev/next
 // body links with the exact matcher behind `[n`/`]n`; it is read-only and
 // reports resolved or creation-eligible paths without opening or creating.
-// v3 adds display-only review attention for the selector's `s` letter.
+// v3 adds display-only review attention for the selector's `s` letter. v4
+// keeps attention per family so the bank's waiting dot can coexist with it.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -76233,7 +76253,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 3,
+    version: 4,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -76272,7 +76292,7 @@ function createWalkModeApi(plugin) {
     },
     setAttention(type, value) {
       try {
-        if (type !== "s") {
+        if (type !== "s" && type !== "b") {
           return Object.freeze({ ok: false, reason: "invalid-type" });
         }
         let attention = null;
@@ -76290,7 +76310,18 @@ function createWalkModeApi(plugin) {
         if (!plugin) {
           return Object.freeze({ ok: false, reason: "unavailable" });
         }
-        plugin.bracketModeAttention = attention;
+        const current =
+          plugin.bracketModeAttention &&
+          typeof plugin.bracketModeAttention === "object"
+            ? plugin.bracketModeAttention
+            : {};
+        const next = { ...current };
+        if (attention === null) {
+          delete next[type];
+        } else {
+          next[type] = attention;
+        }
+        plugin.bracketModeAttention = Object.freeze(next);
         try {
           if (typeof plugin.refreshBracketModeIndicator === "function") {
             plugin.refreshBracketModeIndicator();
@@ -76472,6 +76503,11 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.bracketModePaintKey = undefined;
     this.bracketModeFlashTimer = null;
     this.bracketModeInstantFrame = null;
+    this.bracketModeAttention = Object.freeze({});
+    this.bankWalkChain = Promise.resolve();
+    this.bankWalkPendingCount = 0;
+    this.bankWalkNotice = null;
+    this.lastBankWalkScope = null;
     this.highlightsHintsEnabled = true;
     this.highlightsChipEl = null;
     this.highlightsChipParts = null;
@@ -76627,25 +76663,25 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
     this.addCommand({
       id: "repeat-next-bracket-walk",
-      name: "Repeat last bracket walk forward (]s, ]w, or ]n)",
+      name: "Repeat last bracket walk forward (]s, ]w, ]n, or ]b)",
       callback: () => this.repeatBracketWalk(1),
     });
 
     this.addCommand({
       id: "repeat-prev-bracket-walk",
-      name: "Repeat last bracket walk backward ([s, [w, or [n)",
+      name: "Repeat last bracket walk backward ([s, [w, [n, or [b)",
       callback: () => this.repeatBracketWalk(-1),
     });
 
     this.addCommand({
       id: "repeat-next-uppercase-bracket-walk",
-      name: "Repeat last bracket walk forward, uppercase (]S or ]W)",
+      name: "Repeat last bracket walk forward, uppercase (]S, ]W, or ]B)",
       callback: () => this.repeatBracketWalk(1, { uppercase: true }),
     });
 
     this.addCommand({
       id: "repeat-prev-uppercase-bracket-walk",
-      name: "Repeat last bracket walk backward, uppercase ([S or [W)",
+      name: "Repeat last bracket walk backward, uppercase ([S, [W, or [B)",
       callback: () => this.repeatBracketWalk(-1, { uppercase: true }),
     });
 
@@ -76792,6 +76828,42 @@ class BobNavigationHotkeysPlugin extends Plugin {
       callback: () => {
         this.rememberBracketRepeatType("w");
         return this.jumpToLaneTask(-1, { laneJump: true });
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-next-bank-row",
+      name: "Jump to next bank row",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(1);
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-bank-row",
+      name: "Jump to previous bank row",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(-1);
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-next-bank-day",
+      name: "Jump to the first bank row of the next day",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(1, { dayJump: true });
+      },
+    });
+
+    this.addCommand({
+      id: "jump-to-prev-bank-day",
+      name: "Jump to the first bank row of the previous day",
+      callback: () => {
+        this.rememberBracketRepeatType("b");
+        return this.jumpToBankRow(-1, { dayJump: true });
       },
     });
 
@@ -77117,6 +77189,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
 
   onunload() {
     this.taskCardPluginUnloading = true;
+    try {
+      if (this.bankWalkNotice && typeof this.bankWalkNotice.hide === "function") {
+        this.bankWalkNotice.hide();
+      }
+      this.bankWalkNotice = null;
+    } catch (_error) {
+      // A lingering walk notice never blocks plugin unload.
+    }
     try {
       if (typeof this.teardownBracketModeIndicator === "function") {
         this.teardownBracketModeIndicator();
@@ -84685,7 +84765,7 @@ class BobNavigationHotkeysReviewReturnMixin {
   }
 }
 // ---- src/541-walk-landing.js ----
-// Shared walk landing: the cursor-moving core behind `]s` and `]w`.
+// Shared walk landing: the cursor-moving core behind `]s`, `]w`, and `]b`.
 // `landOnReviewQueueEntry` (review advance) is a thin wrapper that calls
 // this and then records the review landing; the lane walk calls this
 // directly so a `]w` landing never touches the `]s` walk.
@@ -84695,6 +84775,10 @@ class BobNavigationHotkeysWalkLandingMixin {
   async landOnWalkEntry(entry, options = {}) {
     const jumpOrigin =
       options && typeof options === "object" ? options.jumpOrigin : null;
+    const resolveLine =
+      options && typeof options.resolveLine === "function"
+        ? options.resolveLine
+        : null;
     const path = entry && typeof entry.path === "string" ? entry.path : "";
     if (!path) {
       return { ok: false, stale: true, settled: Promise.resolve(false) };
@@ -84730,15 +84814,26 @@ class BobNavigationHotkeysWalkLandingMixin {
         return { ok: false, stale: false, settled: Promise.resolve(false) };
       }
     }
-    const resolved = resolveReviewQueueLine(content, entry);
-    if (!resolved.ok) {
+    let resolved = null;
+    try {
+      resolved = resolveLine
+        ? resolveLine(content)
+        : resolveReviewQueueLine(content, entry);
+    } catch (_error) {
+      resolved = null;
+    }
+    const line = resolved && resolved.line;
+    const ch = resolveLine && Number.isInteger(resolved && resolved.ch) && resolved.ch >= 0
+      ? resolved.ch
+      : 0;
+    if (!resolved || resolved.ok !== true || !Number.isInteger(line) || line < 0) {
       return { ok: false, stale: true, settled: Promise.resolve(false) };
     }
     if (sameNote) {
-      if (!setEditorCursor(activeEditor, { line: resolved.line, ch: 0 })) {
+      if (!setEditorCursor(activeEditor, { line, ch })) {
         return { ok: false, stale: false, settled: Promise.resolve(false) };
       }
-      scheduleOpenTaskJumpCenter(this, activeEditor, resolved.line, 0);
+      scheduleOpenTaskJumpCenter(this, activeEditor, line, ch);
       if (jumpOrigin) {
         try {
           const jumpContext =
@@ -84746,7 +84841,7 @@ class BobNavigationHotkeysWalkLandingMixin {
           if (jumpContext) {
             const settled = this.enqueueVimJumpContextTransition(
               jumpContext,
-              { path, line: resolved.line, ch: 0 },
+              { path, line, ch },
               { expectedPath: path },
             );
             if (settled && typeof settled.catch === "function") {
@@ -84822,29 +84917,39 @@ class BobNavigationHotkeysWalkLandingMixin {
             } catch (error) {
               // Jump history is best-effort after a successful landing.
             } finally {
-              wrappedSettle(true);
+              wrappedSettle(Boolean(result && result.ok));
             }
           },
         };
         this.jumpOrDeferTaskMoveDestination(
           path,
-          { line: resolved.line, text: entry.originalMarkdown },
+          resolveLine
+            ? { line, ch, resolve: resolveLine }
+            : { line, text: entry.originalMarkdown },
           TASK_MOVE_DESTINATION_JUMP_RETRIES,
           completion,
         );
       } else {
-        this.jumpOrDeferTaskMoveDestination(path, {
-          line: resolved.line,
-          text: entry.originalMarkdown,
-        });
-        wrappedSettle(true);
+        this.jumpOrDeferTaskMoveDestination(
+          path,
+          resolveLine
+            ? { line, ch, resolve: resolveLine }
+            : { line, text: entry.originalMarkdown },
+          TASK_MOVE_DESTINATION_JUMP_RETRIES,
+          (result) => wrappedSettle(Boolean(result && result.ok)),
+        );
+        if (timer === null) {
+          wrappedSettle(true);
+        }
       }
     } else {
       this.jumpOrDeferTaskMoveDestination(
         path,
-        { line: resolved.line, text: entry.originalMarkdown },
+        resolveLine
+          ? { line, ch, resolve: resolveLine }
+          : { line, text: entry.originalMarkdown },
         TASK_MOVE_DESTINATION_JUMP_RETRIES,
-        () => wrappedSettle(true),
+        (result) => wrappedSettle(Boolean(result && result.ok)),
       );
       if (timer === null) {
         wrappedSettle(true);
@@ -87160,6 +87265,381 @@ class BobNavigationHotkeysDecayCardWriterMixin {
     }
   }
 }
+// ---- src/549-plugin-bank-walk.js ----
+// Bank-walk runtime: `]b` / `[b` step rows and `]B` / `[B` jump days.
+// The ledger owns membership and planning; navigation only lands and records
+// the session anchor. This path never writes the vault or starts bob.
+const BANK_WALK_REQUIRED_API_VERSION = 1;
+const BANK_WALK_API_REQUIRED_NOTICE = "Bob Ledger Tools bank walk api required";
+const BANK_WALK_INDEXING_NOTICE = "Bank walk unavailable — still indexing";
+const BANK_WALK_EMPTY_NOTICE = "No bank rows — bob bank import";
+const BANK_WALK_STALE_NOTICE = "Bank rows changed — try again";
+const BANK_WALK_JUMP_FAILURE_NOTICE = "Could not jump to bank row";
+
+function getBankWalkApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const owner = plugins && plugins["bob-ledger-tools"];
+    const api = owner && owner.api;
+    const bankWalk = api && api.bankWalk;
+    if (!bankWalk || typeof bankWalk !== "object") {
+      return null;
+    }
+    if (
+      !Number.isInteger(bankWalk.version) ||
+      bankWalk.version < BANK_WALK_REQUIRED_API_VERSION ||
+      typeof bankWalk.snapshot !== "function" ||
+      typeof bankWalk.plan !== "function" ||
+      typeof bankWalk.resolve !== "function" ||
+      typeof bankWalk.anchor !== "function" ||
+      typeof bankWalk.setAnchor !== "function"
+    ) {
+      return null;
+    }
+    return bankWalk;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function bankWalkSnapshot(api) {
+  try {
+    const snapshot = api && typeof api.snapshot === "function" ? api.snapshot() : null;
+    return snapshot && typeof snapshot === "object" ? snapshot : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function bankWalkScope(snapshot) {
+  return snapshot && snapshot.scope === "all" ? "all" : "waiting";
+}
+
+class BobNavigationHotkeysBankWalkMixin {
+  consumePendingBankWalkRepeat(options) {
+    if (options && options.repeat !== undefined && options.repeat !== null) {
+      return normalizeVimRepeat(options.repeat);
+    }
+    try {
+      const view = this.getActiveMarkdownView();
+      const editor = view && view.editor;
+      if (!editor || !this.isVimNormalModeEditor(editor, view)) {
+        return 1;
+      }
+      const cm = this.resolveVimCodeMirror(editor, view);
+      const pending = getPendingVimRepeat(cm);
+      if (!pending.explicit) {
+        return 1;
+      }
+      resetPendingVimInputState(cm, "counted-bank-walk");
+      return normalizeVimRepeat(pending.repeat);
+    } catch (_error) {
+      return 1;
+    }
+  }
+
+  bankWalkCursor() {
+    try {
+      const cursor = this.getReviewJumpCursor();
+      if (!cursor || typeof cursor.path !== "string" || !Number.isInteger(cursor.line)) {
+        return null;
+      }
+      return { path: cursor.path, line0: Math.max(0, cursor.line - 1) };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  bankWalkIsBusy(api) {
+    try {
+      return Boolean(this.reviewWalkBusy()) || Boolean(api && typeof api.busy === "function" && api.busy());
+    } catch (_error) {
+      return true;
+    }
+  }
+
+  bankWalkObserveScope(scope) {
+    const normalized = scope === "all" ? "all" : "waiting";
+    const previous = this.lastBankWalkScope;
+    this.lastBankWalkScope = normalized;
+    if (!previous || previous === normalized) {
+      return;
+    }
+    try {
+      new Notice(normalized === "all"
+        ? "Nothing waiting — ]b now walks every row"
+        : "Bank rows waiting — ]b now walks the queue");
+    } catch (_error) {
+      // Scope feedback never blocks navigation.
+    }
+  }
+
+  bankWalkUnavailable(snapshot) {
+    if (!snapshot || snapshot.available === false) {
+      try {
+        new Notice(BANK_WALK_INDEXING_NOTICE);
+      } catch (_error) {}
+      return true;
+    }
+    return false;
+  }
+
+  bankWalkPlan(api, snapshot, options) {
+    try {
+      return api.plan(snapshot, options);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async landBankWalkPlan(api, plan, jumpOrigin) {
+    const entry = plan && plan.entry;
+    if (!entry || typeof entry.path !== "string") {
+      return { ok: false, stale: true };
+    }
+    const resolveLine = (content) => {
+      try {
+        const result = api.resolve({ path: entry.path, content, entry });
+        if (!result || result.ok !== true || !Number.isInteger(result.line0)) {
+          return { ok: false };
+        }
+        return { ok: true, line: result.line0, ch: result.ch };
+      } catch (_error) {
+        return { ok: false };
+      }
+    };
+    let landed = null;
+    try {
+      landed = await this.landOnWalkEntry(entry, { jumpOrigin, resolveLine });
+    } catch (_error) {
+      return { ok: false, stale: false };
+    }
+    if (!landed || landed.ok !== true) {
+      return landed || { ok: false, stale: false };
+    }
+    if (landed.settled && typeof landed.settled.then === "function") {
+      let settled = false;
+      try {
+        settled = await landed.settled;
+      } catch (_error) {
+        settled = false;
+      }
+      if (!settled) {
+        return { ok: false, stale: true };
+      }
+    }
+    return { ok: true, stale: false };
+  }
+
+  async jumpToBankRow(direction, options = {}) {
+    try {
+      if (this.reviewWalkBusy()) {
+        return false;
+      }
+    } catch (_error) {
+      return false;
+    }
+    const api = getBankWalkApi(this.app);
+    if (!api) {
+      new Notice(BANK_WALK_API_REQUIRED_NOTICE);
+      return false;
+    }
+    if (this.bankWalkIsBusy(api)) {
+      return false;
+    }
+    const repeat = this.consumePendingBankWalkRepeat(options);
+    const jumpOrigin = this.getReviewWalkOriginCursor();
+    const cursor = this.bankWalkCursor();
+    let anchor = null;
+    try {
+      anchor = api.anchor();
+    } catch (_error) {
+      anchor = null;
+    }
+    const request = {
+      direction: direction < 0 ? -1 : 1,
+      dayJump: Boolean(options && options.dayJump === true),
+      repeat,
+      cursor,
+      anchor,
+    };
+    const snapshotAtPress = bankWalkSnapshot(api);
+    const capturedScope = bankWalkScope(snapshotAtPress);
+    const queued = (this.bankWalkPendingCount || 0) > 0;
+    this.bankWalkPendingCount = (this.bankWalkPendingCount || 0) + 1;
+
+    const run = async () => {
+      if (this.bankWalkIsBusy(api)) {
+        return false;
+      }
+      let snapshot = snapshotAtPress;
+      if (queued) {
+        const latest = bankWalkSnapshot(api);
+        if (this.bankWalkUnavailable(latest)) {
+          return false;
+        }
+        this.bankWalkObserveScope(bankWalkScope(latest));
+        if (bankWalkScope(latest) !== capturedScope) {
+          return false;
+        }
+        snapshot = latest;
+      } else {
+        if (this.bankWalkUnavailable(snapshot)) {
+          return false;
+        }
+        this.bankWalkObserveScope(bankWalkScope(snapshot));
+      }
+      if (this.bankWalkUnavailable(snapshot)) {
+        return false;
+      }
+
+      let plan = this.bankWalkPlan(api, snapshot, request);
+      if (!plan || plan.kind !== "jump") {
+        try {
+          showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
+        } catch (_error) {
+          new Notice(BANK_WALK_EMPTY_NOTICE);
+        }
+        return false;
+      }
+
+      let landed = await this.landBankWalkPlan(api, plan, jumpOrigin);
+      if (!landed.ok && landed.stale) {
+        snapshot = bankWalkSnapshot(api);
+        if (this.bankWalkUnavailable(snapshot)) {
+          return false;
+        }
+        this.bankWalkObserveScope(bankWalkScope(snapshot));
+        plan = this.bankWalkPlan(api, snapshot, request);
+        if (!plan || plan.kind !== "jump") {
+          showBankWalkEmptyNotice(this, BANK_WALK_EMPTY_NOTICE);
+          return false;
+        }
+        landed = await this.landBankWalkPlan(api, plan, jumpOrigin);
+      }
+      if (!landed.ok) {
+        new Notice(landed.stale ? BANK_WALK_STALE_NOTICE : BANK_WALK_JUMP_FAILURE_NOTICE);
+        return false;
+      }
+      try {
+        api.setAnchor(plan.entry);
+      } catch (_error) {
+        // The ledger anchor is session-only convenience.
+      }
+      try {
+        showBankWalkNotice(this, buildBankWalkNoticeModel(snapshot, plan));
+      } catch (_error) {
+        new Notice(BANK_WALK_JUMP_FAILURE_NOTICE);
+      }
+      return true;
+    };
+
+    const previous = this.bankWalkChain || Promise.resolve();
+    const chained = previous.then(run, run);
+    const result = chained.finally(() => {
+      this.bankWalkPendingCount = Math.max(0, (this.bankWalkPendingCount || 1) - 1);
+    });
+    this.bankWalkChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+}
+// ---- src/549a-bank-walk-notice.js ----
+// Bank-walk landing toast. The single notice is replaced on each landing.
+function buildBankWalkNoticeModel(snapshot, plan) {
+  const entry = plan && plan.entry ? plan.entry : {};
+  const scope = bankWalkScope(snapshot);
+  const rank = Number.isInteger(plan && plan.rank) ? plan.rank : 1;
+  const total = Number.isInteger(plan && plan.total) ? plan.total : 1;
+  const dayRank = Number.isInteger(plan && plan.dayRank) ? plan.dayRank : 1;
+  const dayTotal = Number.isInteger(plan && plan.dayTotal) ? plan.dayTotal : 1;
+  const waiting = snapshot && snapshot.counts && Number.isInteger(snapshot.counts.waiting)
+    ? snapshot.counts.waiting
+    : 0;
+  const title = String(entry.payee || "Bank row").trim() || "Bank row";
+  const date = String(entry.date || "");
+  const amount = String(entry.amountText || "");
+  const text = `${scope.toUpperCase()} ${rank}/${total} · ${date}${amount ? ` · ${amount}` : ""} ${title}${plan && plan.wrapped ? " · ↻ wrapped" : ""}`.trim();
+  return Object.freeze({
+    empty: false,
+    text,
+    scope,
+    rank,
+    total,
+    dayRank,
+    dayTotal,
+    waiting,
+    title,
+    date,
+    amount,
+    inflow: entry.inflow === true,
+    wrapped: Boolean(plan && plan.wrapped),
+  });
+}
+
+function renderBankWalkNoticeFragment(model, root) {
+  const scope = model.scope === "all" ? "all" : "waiting";
+  const card = root.createDiv({
+    cls: `bob-nh-notice bob-nh-bank-walk is-${scope}`,
+    attr: { "aria-label": model.text },
+  });
+  const header = card.createDiv({ cls: "bob-nh-notice-header" });
+  header.createSpan({ cls: "bob-nh-bank-walk-glyph", text: "$", attr: { "aria-hidden": "true" } });
+  header.createSpan({ cls: "bob-nh-notice-level", text: scope === "waiting" ? "WAITING" : "ALL" });
+  header.createSpan({ cls: "bob-nh-notice-count", text: `${model.rank}/${model.total}` });
+  header.createSpan({ cls: "bob-nh-notice-receipt", text: `${model.dayRank}/${model.dayTotal}` });
+  const rail = card.createDiv({ cls: "bob-nh-bank-walk-rail", attr: { "aria-hidden": "true" } });
+  const progress = rail.createDiv({ cls: "bob-nh-bank-walk-progress" });
+  progress.setAttribute("style", `width: ${Math.max(3, Math.min(100, (model.rank / Math.max(1, model.total)) * 100))}%`);
+  card.createDiv({ cls: "bob-nh-bank-walk-title", text: model.title });
+  const chips = card.createDiv({ cls: "bob-nh-notice-chips" });
+  if (model.date) chips.createSpan({ cls: "bob-nh-notice-chip", text: model.date });
+  if (model.amount) chips.createSpan({ cls: `bob-nh-notice-chip ${model.inflow ? "is-info" : ""}`, text: model.amount });
+  if (model.wrapped) chips.createSpan({ cls: "bob-nh-notice-chip is-info", text: "↻ wrapped" });
+  if (model.waiting > 0) chips.createSpan({ cls: "bob-nh-notice-chip", text: `${model.waiting} waiting` });
+  const hint = card.createDiv({ cls: "bob-nh-lane-walk-hint" });
+  hint.createSpan({ cls: "bob-nh-lane-walk-key", text: "]b / [b" });
+  hint.createSpan({ text: " rows · " });
+  hint.createSpan({ cls: "bob-nh-lane-walk-key", text: "]B / [B" });
+  hint.createSpan({ text: " days" });
+  return card;
+}
+
+function showBankWalkEmptyNotice(plugin, text) {
+  showBankWalkNotice(plugin, { empty: true, text: String(text || "No bank rows — bob bank import") });
+}
+
+function showBankWalkNotice(plugin, model) {
+  const fallback = model && typeof model.text === "string" ? model.text : String(model || "");
+  const showText = (text) => {
+    try { new Notice(String(text)); } catch (_error) {}
+  };
+  try {
+    if (plugin && plugin.bankWalkNotice && typeof plugin.bankWalkNotice.hide === "function") {
+      plugin.bankWalkNotice.hide();
+    }
+    if (plugin) plugin.bankWalkNotice = null;
+    if (typeof document === "undefined") {
+      showText(fallback);
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (!fragment || typeof fragment.createDiv !== "function") {
+      showText(fallback);
+      return;
+    }
+    if (model && model.empty === true) {
+      const card = fragment.createDiv({ cls: "bob-nh-notice bob-nh-bank-walk is-clear", attr: { "aria-label": fallback } });
+      card.createDiv({ cls: "bob-nh-notice-header" }).createSpan({ cls: "bob-nh-notice-level", text: "Bank walk" });
+      card.createDiv({ cls: "bob-nh-bank-walk-title", text: fallback });
+    } else {
+      renderBankWalkNoticeFragment(model || {}, fragment);
+    }
+    const notice = new Notice(fragment);
+    if (plugin) plugin.bankWalkNotice = notice;
+  } catch (_error) {
+    showText(fallback);
+  }
+}
 // ---- src/545-plugin-review-journal.js ----
 const REVIEW_JOURNAL_OUTCOMES = new Set([
   "keep",
@@ -87544,15 +88024,15 @@ class BobNavigationHotkeysReviewJournalMixin {
 // ---- src/546-plugin-bracket-repeat.js ----
 // `]]` / `[[` repeat the last bracket-walk family command used in this vault.
 // `]}` / `[{` repeat that family's uppercase jump (`]S` / `[S` review groups,
-// `]W` / `[W` lanes); links (`n`) have no uppercase walk.
+// `]W` / `[W` lanes, `]B` / `[B` bank days); links (`n`) have no uppercase walk.
 const BRACKET_REPEAT_STORAGE_KEY = "bob-navigation-hotkeys-bracket-repeat";
 const BRACKET_REPEAT_EMPTY_NOTICE =
-  "Nothing to repeat yet — press ]s, ]w, or ]n first";
+  "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
 const BRACKET_REPEAT_NO_UPPERCASE_NOTICE =
-  "No uppercase link walk — ]} / [{ repeat ]S / [S or ]W / [W";
+  "No uppercase link walk — ]} / [{ repeat ]S / [S, ]W / [W, or ]B / [B";
 
 function normalizeBracketRepeatType(value) {
-  return value === "s" || value === "w" || value === "n" ? value : null;
+  return value === "s" || value === "w" || value === "n" || value === "b" ? value : null;
 }
 
 const BRACKET_REPEAT_PLANS = Object.freeze({
@@ -87567,6 +88047,10 @@ const BRACKET_REPEAT_PLANS = Object.freeze({
   n: Object.freeze({
     forward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["next"]) }),
     backward: Object.freeze({ method: "openLabeledBodyLink", args: Object.freeze(["prev"]) }),
+  }),
+  b: Object.freeze({
+    forward: Object.freeze({ method: "jumpToBankRow", args: Object.freeze([1]) }),
+    backward: Object.freeze({ method: "jumpToBankRow", args: Object.freeze([-1]) }),
   }),
 });
 
@@ -87592,6 +88076,16 @@ const BRACKET_REPEAT_UPPERCASE_PLANS = Object.freeze({
     }),
   }),
   n: null,
+  b: Object.freeze({
+    forward: Object.freeze({
+      method: "jumpToBankRow",
+      args: Object.freeze([1, Object.freeze({ dayJump: true })]),
+    }),
+    backward: Object.freeze({
+      method: "jumpToBankRow",
+      args: Object.freeze([-1, Object.freeze({ dayJump: true })]),
+    }),
+  }),
 });
 
 function planBracketRepeat(type, direction, options = {}) {
@@ -87699,8 +88193,78 @@ class BobNavigationHotkeysBracketRepeatMixin {
     return result;
   }
 }
+// ---- src/547a-bracket-mode-view.js ----
+// Pure bracket-selector view helpers. Kept out of the painter fragment so
+// the growing family-specific attention model does not crowd the DOM code.
+function bracketModeAttentionMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "tier") || Object.prototype.hasOwnProperty.call(value, "label")) {
+    return { s: value };
+  }
+  return value;
+}
+
+function bracketModeViewKey(view) {
+  const segments = view && Array.isArray(view.segments) ? view.segments : [];
+  const attention = segments
+    .filter((segment) => segment && segment.attention === true)
+    .map((segment) => `${segment.type}:${segment.attentionTier || ""}:${segment.attentionLabel || ""}`)
+    .join("\u0001");
+  return `${view && view.mode || "none"}\0${attention}`;
+}
+
+function buildBracketModeView(type, attention = {}) {
+  let normalized = null;
+  try {
+    normalized = typeof normalizeBracketRepeatType === "function"
+      ? normalizeBracketRepeatType(type)
+      : BRACKET_MODE_FAMILIES.some((family) => family.type === type) ? type : null;
+  } catch (error) {
+    normalized = null;
+  }
+  const attentionByType = bracketModeAttentionMap(attention);
+  const family = BRACKET_MODE_FAMILIES.find((item) => item.type === normalized) || null;
+  const emptyNotice = typeof BRACKET_REPEAT_EMPTY_NOTICE === "string"
+    ? BRACKET_REPEAT_EMPTY_NOTICE
+    : "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
+  const segments = BRACKET_MODE_FAMILIES.map((item) => {
+    const raw = attentionByType[item.type];
+    const visible = Boolean(raw && typeof raw === "object" && item.type !== normalized);
+    const label = visible
+      ? String(raw.label || (item.type === "s" ? "Review commitments are due" : "Bank rows are waiting"))
+      : "";
+    return Object.freeze({
+      type: item.type,
+      letter: item.letter,
+      name: item.name,
+      active: item.type === normalized,
+      ariaLabel: visible ? `${item.segmentAria}. ${label}` : item.segmentAria,
+      attention: visible,
+      attentionTier: visible ? String(raw.tier || "") : "",
+      attentionLabel: label,
+    });
+  });
+  if (!family) {
+    return Object.freeze({
+      mode: "none",
+      index: -1,
+      ariaLabel: "Bracket repeat mode: not set",
+      tooltip: `${emptyNotice}\n\n${BRACKET_MODE_NONE_HINT}`,
+      segments: Object.freeze(segments),
+    });
+  }
+  return Object.freeze({
+    mode: normalized,
+    index: BRACKET_MODE_FAMILIES.indexOf(family),
+    ariaLabel: `Bracket repeat mode: ${family.name}`,
+    tooltip: `${family.tooltip}\n${family.upperTooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
+    segments: Object.freeze(segments),
+  });
+}
 // ---- src/547-bracket-mode-indicator.js ----
-// Bracket mode footer: always-visible `[[ s w n ]]` status-bar indicator.
+// Bracket mode footer: always-visible `[[ s w n b ]]` status-bar indicator.
 // Desktop only. Pure view model plus an idempotent painter that reuses one
 // DOM tree. Never throws; never changes walk behavior.
 const BRACKET_MODE_FAMILIES = Object.freeze([
@@ -87731,6 +88295,15 @@ const BRACKET_MODE_FAMILIES = Object.freeze([
     upperTooltip: "]} / [{ have no link variant (no ]N / [N)",
     segmentAria: "Links (]n / [n)",
   }),
+  Object.freeze({
+    type: "b",
+    letter: "b",
+    name: "bank walk",
+    keys: "]b / [b",
+    tooltip: "]] / [[ repeat the bank walk (]b / [b)",
+    upperTooltip: "]} / [{ jump to the next / previous bank day (]B / [B)",
+    segmentAria: "Bank walk (]b / [b)",
+  }),
 ]);
 
 const BRACKET_MODE_FLASH_MS = Object.freeze({
@@ -87739,8 +88312,8 @@ const BRACKET_MODE_FLASH_MS = Object.freeze({
   empty: 650,
 });
 
-const BRACKET_MODE_ACTIVE_HINT = "s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to switch";
-const BRACKET_MODE_NONE_HINT = "s review \u00b7 w lanes \u00b7 n links \u2014 click a letter to choose";
+const BRACKET_MODE_ACTIVE_HINT = "s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to switch";
+const BRACKET_MODE_NONE_HINT = "s review \u00b7 w lanes \u00b7 n links \u00b7 b bank \u2014 click a letter to choose";
 
 function bracketModeFamilyFor(type) {
   for (const family of BRACKET_MODE_FAMILIES) {
@@ -87749,91 +88322,6 @@ function bracketModeFamilyFor(type) {
     }
   }
   return null;
-}
-
-function bracketModeViewKey(view) {
-  const attention = view && Array.isArray(view.segments)
-    ? view.segments.find((segment) => segment.type === "s" && segment.attention)
-    : null;
-  return `${view && view.mode || "none"}\0${attention ? attention.attentionLabel : ""}`;
-}
-
-function buildBracketModeView(type, attention = null) {
-  let normalized = null;
-  try {
-    if (typeof normalizeBracketRepeatType === "function") {
-      normalized = normalizeBracketRepeatType(type);
-    } else {
-      normalized = type === "s" || type === "w" || type === "n" ? type : null;
-    }
-  } catch (error) {
-    normalized = type === "s" || type === "w" || type === "n" ? type : null;
-  }
-  if (normalized === null) {
-    let emptyNotice = "";
-    try {
-      emptyNotice =
-        typeof BRACKET_REPEAT_EMPTY_NOTICE === "string"
-          ? BRACKET_REPEAT_EMPTY_NOTICE
-          : "Nothing to repeat yet \u2014 press ]s, ]w, or ]n first";
-    } catch (error) {
-      emptyNotice = "Nothing to repeat yet \u2014 press ]s, ]w, or ]n first";
-    }
-    const segments = BRACKET_MODE_FAMILIES.map((family) =>
-      Object.freeze({
-        type: family.type,
-        letter: family.letter,
-        name: family.name,
-        active: false,
-        ariaLabel:
-          family.type === "s" && attention
-            ? `${family.segmentAria}. ${String(attention.label || "Review commitments are due")}`
-            : family.segmentAria,
-        attention: family.type === "s" && normalized !== "s" && Boolean(attention),
-        attentionTier: family.type === "s" && normalized !== "s" && attention
-          ? String(attention.tier || "")
-          : "",
-        attentionLabel: family.type === "s" && normalized !== "s" && attention
-          ? String(attention.label || "Review commitments are due")
-          : "",
-      }),
-    );
-    return Object.freeze({
-      mode: "none",
-      index: -1,
-      ariaLabel: "Bracket repeat mode: not set",
-      tooltip: `${emptyNotice}\n\n${BRACKET_MODE_NONE_HINT}`,
-      segments: Object.freeze(segments),
-    });
-  }
-  const family = bracketModeFamilyFor(normalized);
-  const index = BRACKET_MODE_FAMILIES.indexOf(family);
-  const segments = BRACKET_MODE_FAMILIES.map((item) =>
-    Object.freeze({
-      type: item.type,
-      letter: item.letter,
-      name: item.name,
-      active: item.type === normalized,
-      ariaLabel:
-        item.type === "s" && normalized !== "s" && attention
-          ? `${item.segmentAria}. ${String(attention.label || "Review commitments are due")}`
-          : item.segmentAria,
-      attention: item.type === "s" && normalized !== "s" && Boolean(attention),
-      attentionTier: item.type === "s" && normalized !== "s" && attention
-        ? String(attention.tier || "")
-        : "",
-      attentionLabel: item.type === "s" && normalized !== "s" && attention
-        ? String(attention.label || "Review commitments are due")
-        : "",
-    }),
-  );
-  return Object.freeze({
-    mode: normalized,
-    index,
-    ariaLabel: `Bracket repeat mode: ${family.name}`,
-    tooltip: `${family.tooltip}\n${family.upperTooltip}\n\n${BRACKET_MODE_ACTIVE_HINT}`,
-    segments: Object.freeze(segments),
-  });
 }
 
 function bracketModeSetText(node, text) {
@@ -88122,7 +88610,7 @@ function ensureBracketModeDom(el) {
       el._bobBracketModeParts.track &&
       el._bobBracketModeParts.thumb &&
       Array.isArray(el._bobBracketModeParts.segments) &&
-      el._bobBracketModeParts.segments.length === 3 &&
+      el._bobBracketModeParts.segments.length === BRACKET_MODE_FAMILIES.length &&
       el._bobBracketModeParts.forward
     ) {
       return el._bobBracketModeParts;
@@ -88184,7 +88672,7 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     return parts || null;
   }
   const safe = view && typeof view === "object" ? view : null;
-  if (!safe || (safe.mode !== "s" && safe.mode !== "w" && safe.mode !== "n" && safe.mode !== "none")) {
+  if (!safe || (safe.mode !== "none" && !bracketModeFamilyFor(safe.mode))) {
     return parts;
   }
   const viewKey = bracketModeViewKey(safe);
@@ -88543,7 +89031,7 @@ class BobNavigationHotkeysBracketModeIndicatorMixin {
         if (typeof normalizeBracketRepeatType === "function") {
           normalized = normalizeBracketRepeatType(type);
         } else {
-          normalized = type === "s" || type === "w" || type === "n" ? type : null;
+          normalized = type === "s" || type === "w" || type === "n" || type === "b" ? type : null;
         }
       } catch (error) {
         normalized = null;
@@ -103259,6 +103747,10 @@ class BobNavigationHotkeysMoveCommitMixin {
       view.editor.getValue(),
       anchor,
     );
+    if (resolved && resolved.ok === false) {
+      return false;
+    }
+    const ch = Number.isInteger(resolved.ch) && resolved.ch >= 0 ? resolved.ch : 0;
     const suppress =
       options &&
       typeof options === "object" &&
@@ -103269,7 +103761,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       this.vimJumpSuppressNativeMirror = true;
     }
     try {
-      if (!setEditorCursor(view.editor, { line: resolved.line, ch: 0 })) {
+      if (!setEditorCursor(view.editor, { line: resolved.line, ch })) {
         return false;
       }
     } finally {
@@ -103278,7 +103770,7 @@ class BobNavigationHotkeysMoveCommitMixin {
       }
     }
 
-    scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, 0);
+    scheduleOpenTaskJumpCenter(this, view.editor, resolved.line, ch);
     return true;
   }
 
@@ -116440,6 +116932,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysReviewDueRowMixin,
   BobNavigationHotkeysWalkLandingMixin,
   BobNavigationHotkeysLaneWalkMixin,
+  BobNavigationHotkeysBankWalkMixin,
   BobNavigationHotkeysBracketRepeatMixin,
   BobNavigationHotkeysBracketModeIndicatorMixin,
   BobNavigationHotkeysSuccessorPickerMixin,
@@ -117972,3 +118465,20 @@ Object.assign(module.exports.helpers, {
 Object.assign(module.exports.helpers, {
   albumSchemaFallbackGate,
 });
+// ---- src/719-bank-walk-exports.js ----
+try {
+  if (typeof module !== "undefined" && module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      getBankWalkApi,
+      bankWalkSnapshot,
+      bankWalkScope,
+      buildBankWalkNoticeModel,
+      renderBankWalkNoticeFragment,
+      showBankWalkNotice,
+      showBankWalkEmptyNotice,
+      bracketModeAttentionMap,
+    });
+  }
+} catch (_error) {
+  // Test exports are best-effort.
+}

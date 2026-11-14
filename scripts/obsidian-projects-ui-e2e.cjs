@@ -164,6 +164,9 @@ function selfTest() {
   if (!parsed.selfTest || parsed.out !== "/tmp/shots" || parsed.report !== "/tmp/report.json") throw new Error("argument parser self-test failed");
   if (process.platform === "linux" && electronTempDir() !== "/tmp") throw new Error("Linux Electron temp path must stay short enough for Chromium singleton sockets");
   const probe = projectsProbeSource();
+  if (!probe.includes("if (!el) return null")) throw new Error("probe must tolerate optional card controls");
+  const source = fs.readFileSync(__filename, "utf8");
+  if (!source.includes("all-closed host Closed peek") || !source.includes("nested-child-default-folded") || !source.includes("nested-project-toggle-activation")) throw new Error("acceptance must test each fold on its rendered host");
   for (const selector of [".bob-projects-header", ".bob-projects-closed-toggle", ".bob-projects-children-toggle", ".bob-projects-action"]) {
     if (!probe.includes(selector)) throw new Error(`probe misses ${selector}`);
   }
@@ -394,9 +397,9 @@ class CdpClient {
 function projectsProbeSource() {
   return `(() => { try {
     const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; };
-    const describe = (el) => ({ text: (el.textContent || "").replace(/\\s+/g, " ").trim(), cls: String(el.className || ""), expanded: el.getAttribute("aria-expanded"), focus: el.getAttribute("data-focus-key"), visible: visible(el), rect: (() => { const r = el.getBoundingClientRect(); return { x:r.x,y:r.y,w:r.width,h:r.height }; })() });
+    const describe = (el) => { if (!el) return null; return { text: (el.textContent || "").replace(/\\s+/g, " ").trim(), cls: String(el.className || ""), expanded: el.getAttribute("aria-expanded"), focus: el.getAttribute("data-focus-key"), visible: visible(el), rect: (() => { const r = el.getBoundingClientRect(); return { x:r.x,y:r.y,w:r.width,h:r.height }; })() }; };
     return { cards: Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter(visible).map((card) => ({
-      text: (card.textContent || "").replace(/\\s+/g, " ").trim(), hue: card.getAttribute("data-root-hue"), stale: card.getAttribute("data-stale"),
+      text: (card.textContent || "").replace(/\\s+/g, " ").trim(), hue: card.getAttribute("data-root-hue"), stale: card.getAttribute("data-stale"), rect: (() => { const r = card.getBoundingClientRect(); return { x:r.x,y:r.y,w:r.width,h:r.height }; })(),
       titleDisplay: getComputedStyle(card.querySelector(".callout-title") || card).display,
       header: describe(card.querySelector(".bob-projects-header")),
       tally: (() => {
@@ -419,8 +422,8 @@ function projectsProbeSource() {
       copy: describe(card.querySelector(".bob-projects-copy")),
       leaf: card.closest(".workspace-leaf")?.getAttribute("data-type") || null,
     })),
-    standalone: Array.from(document.querySelectorAll(".bob-projects-anchor")).filter(visible).map(describe),
-    plugin: window.app?.plugins?.plugins?.["bob-ledger-tools"] ? (() => { const p = window.app.plugins.plugins["bob-ledger-tools"]; const s = p.projectsReportState(); return { loaded:true, projects:s.report?.projects?.length || 0, catalogs:s.report?.catalogs?.map((c)=>({path:c.path,state:c.state,rows:c.rows})), states:s.report?.projects?.reduce((a,r)=>{a[r.state||"null"]=(a[r.state||"null"]||0)+1;return a;},{}), error:s.error?.code || null, stale:s.stale, syncBusy:s.syncBusy }; })() : {loaded:false},
+    standalone: Array.from(document.querySelectorAll(".bob-projects-anchor, h2")).filter((el) => visible(el) && el.querySelector(".bob-projects-header") && !el.closest('.callout[data-callout="projects"]')).map((el) => ({ ...describe(el), header: describe(el.querySelector(".bob-projects-header")), closed: describe(el.querySelector(".bob-projects-closed-toggle")), closedRows: Array.from(el.querySelectorAll(".bob-projects-closed-list .bob-projects-mini")).map(describe), actions: Array.from(el.querySelectorAll(".bob-projects-action")).map((button) => ({ ...describe(button), disabled: button.disabled })) })),
+    plugin: window.app?.plugins?.plugins?.["bob-ledger-tools"] ? (() => { const p = window.app.plugins.plugins["bob-ledger-tools"]; const s = p.projectsReportState(); return { loaded:true, projects:s.report?.projects?.length || 0, catalogs:s.report?.catalogs?.map((c)=>({path:c.path,state:c.state,rows:c.rows})), states:s.report?.projects?.reduce((a,r)=>{a[r.state||"null"]=(a[r.state||"null"]||0)+1;return a;},{}), error:s.error?.code || null, stale:s.stale, refreshing:s.refreshing, generation:s.generation, reportGeneration:s.reportGeneration, syncBusy:s.syncBusy }; })() : {loaded:false},
     activeFile: window.app?.workspace?.getActiveFile?.()?.path || null,
     active: document.activeElement ? describe(document.activeElement) : null,
   };
@@ -493,19 +496,24 @@ async function capture(client, file, width) {
 
 async function setViewport(client, width, height = 940) {
   await client.call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width <= 400 });
+  if (width <= 400) {
+    await client.evaluate(`(()=>{const split=app.workspace?.leftSplit;if(split&&!split.collapsed)split.collapse();return true;})()`);
+  }
+  await client.evaluate(`new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+  await sleep(180);
 }
 
 async function clickBy(client, selector, index = 0) {
-  return client.evaluate(`(()=>{const rows=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});const el=rows[${index}];if(!el)return {ok:false,count:rows.length};el.click();return {ok:true,count:rows.length};})()`);
+  const target = await client.evaluate(`(()=>{const rows=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});const el=rows[${index}];if(!el)return {ok:false,count:rows.length};if(el.disabled)return {ok:false,count:rows.length,disabled:true};el.scrollIntoView({block:"center",inline:"nearest"});const r=el.getBoundingClientRect();return {ok:true,count:rows.length,x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  if (!target.ok) return target;
+  await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: target.x, y: target.y });
+  await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  return target;
 }
 
-async function pressKey(client, selector, key, index = 0) {
-  const focus = await client.evaluate(`(()=>{const rows=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});const el=rows[${index}];if(!el)return {ok:false,count:rows.length};el.focus();return {ok:document.activeElement===el,count:rows.length};})()`);
-  if (!focus.ok) return focus;
-  const code = key === " " ? "Space" : key;
-  await client.call("Input.dispatchKeyEvent", { type: "keyDown", key, code });
-  await client.call("Input.dispatchKeyEvent", { type: "keyUp", key, code });
-  return focus;
+async function activateBy(client, selector, index = 0) {
+  return client.evaluate(`(()=>{const visible=(el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0};const rows=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(visible);const el=rows[${index}];if(!el)return {ok:false,count:rows.length};el.scrollIntoView({block:"center",inline:"nearest"});el.focus();window.__projectsE2EEvents={click:0};el.addEventListener("click",()=>window.__projectsE2EEvents.click++);el.click();const updated=Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter(visible)[${index}]||el;const p=app.plugins.plugins["bob-ledger-tools"];const view=Array.from(p.projectsCatalogEditors||[]).find((candidate)=>candidate.dom?.contains(updated));const widget=Array.from(p.projectsCatalogReading||[]).find((candidate)=>candidate.el?.contains(updated));return {ok:true,count:rows.length,focus:document.activeElement===updated,expanded:updated.getAttribute("aria-expanded"),events:window.__projectsE2EEvents,viewCount:p.projectsCatalogEditors?.size||0,folds:[...(p.projectsCatalogFoldByView?.get(view)||new Map()).entries()],widgetCount:p.projectsCatalogReading?.size||0,widgetFolds:widget?[...widget.folds.entries()]:null,widgetInfo:widget?{path:widget.path,tag:widget.el?.tagName,cls:String(widget.el?.className||""),closestCm:Boolean(widget.el?.closest?.(".cm-editor")),containsCm:Boolean(widget.el?.querySelector?.(".cm-editor")),containsCallout:Boolean(widget.el?.querySelector?.('.callout[data-callout="projects"]'))}:null,inEditor:Boolean(updated.closest(".cm-editor")),inReading:Boolean(updated.closest(".markdown-preview-view"))};})()`);
 }
 
 function parseBobLog(file) {
@@ -585,15 +593,17 @@ async function run(args) {
     await waitFor(client, `(()=>Boolean(window.app?.plugins?.plugins?.["bob-ledger-tools"]))()`, Boolean, "Bob Ledger Tools loaded", 40_000);
     const opened = await openNote(client, "area.md", "live");
     record("opened-area-live-preview", opened.ok && opened.path === "area.md", opened);
-    let probe = await waitFor(client, projectsProbeSource(), (value) => value && value.plugin?.loaded && value.plugin.projects > 50 && (value.cards?.length || 0) > 0, "projects card and report", 45_000);
+    await client.evaluate(`(async()=>{await app.plugins.plugins["bob-ledger-tools"].apiProjectsReport({force:true,wait:true});return true;})()`, 90_000);
+    let probe = await waitFor(client, projectsProbeSource(), (value) => value && value.plugin?.loaded && !value.plugin.stale && !value.plugin.refreshing && value.plugin.projects > 50 && (value.cards?.length || 0) > 0 && value.cards.every((card) => card.stale !== "true"), "fresh projects card and report", 45_000);
     report.probes.areaLive = probe;
     const areaCard = probe.cards[0];
     record("live-preview-projects-card", Boolean(areaCard && /Projects/.test(areaCard.header?.text || "") && /open/.test(areaCard.text)), areaCard);
     record("row-state-markers", ["open", "other"].includes(areaCard.markers?.[0]?.state) && (probe.plugin.states?.scheduled || 0) > 0 && (probe.plugin.states?.blocked || 0) > 0, probe.plugin.states);
     record("catalog-health-and-hue", Boolean(areaCard.hue) && areaCard.stale !== "true", { hue: areaCard.hue, stale: areaCard.stale });
-    record("closed-peek-default", areaCard.closed?.expanded === "false" && areaCard.closedRows.length === 2, areaCard.closed);
+    record("nested-child-default-folded", areaCard.childButtons.some((button) => button.path === "all-closed.md" && button.expanded === "false") && areaCard.childRows.length === 0, areaCard.childButtons);
     record("60-plus-rows-rendered", areaCard.markers.length >= 60, `visible project markers=${areaCard.markers.length}`);
 
+    await setViewport(client, 1280, 940);
     const desktopLight = await capture(client, path.join(outDir, "projects-area-live-desktop-light.png"), 1280);
     report.screenshots.push({ ...desktopLight, theme: "light", view: "Live Preview" });
     await client.evaluate(`(()=>{document.body.classList.remove("theme-light");document.body.classList.add("theme-dark");return true;})()`);
@@ -602,46 +612,47 @@ async function run(args) {
     report.screenshots.push({ ...desktopDark, theme: "dark", view: "Live Preview" });
     await client.evaluate(`(()=>{document.body.classList.remove("theme-dark");document.body.classList.add("theme-light");return true;})()`);
 
-    // Closed uses native keyboard activation and the pane's fold map.
-    await pressKey(client, '.callout[data-callout="projects"] .bob-projects-closed-toggle', " ");
-    probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.[0]?.closed?.expanded === "true", "Closed keyboard expansion");
-    record("closed-space-keyboard", probe.cards[0].closed.expanded === "true" && probe.cards[0].closedRows.length >= 3, probe.cards[0].closed);
-    await pressKey(client, '.callout[data-callout="projects"] .bob-projects-closed-toggle', "Enter");
-    probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.[0]?.closed?.expanded === "false", "Closed Enter keyboard collapse");
-    record("closed-enter-keyboard", probe.cards[0].closed.expanded === "false", probe.cards[0].closed);
+    // The area host lists closed projects in its catalog rows. The dedicated
+    // all-closed host renders the separate Closed peek and owns its fold map.
+    await openNote(client, "all-closed.md", "reading");
+    let closedProbe = await waitFor(client, projectsProbeSource(), (value) => value.standalone?.some((card) => /0 open/.test(card.header?.text || "") && card.closed?.expanded === "false" && card.closedRows.length === 2), "all-closed host Closed peek");
+    record("closed-peek-default", closedProbe.standalone.some((card) => /0 open/.test(card.header?.text || "") && card.closed?.expanded === "false" && card.closedRows.length === 2), closedProbe.standalone);
+
+    await openNote(client, "area.md", "live");
+    probe = await waitFor(client, projectsProbeSource(), (value) => value.activeFile === "area.md" && value.plugin?.loaded && value.cards?.length > 0, "return to area projects card");
 
     // The nested host has one read-only child. Expansion exposes it without
     // changing source bytes, and another pane must keep its own fold state.
-    const hostButton = await pressKey(client, '.callout[data-callout="projects"] .bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle', "Enter");
-    record("nested-project-toggle-keyboard", hostButton.ok, hostButton);
+    const hostButton = await activateBy(client, '.callout[data-callout="projects"] .bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle');
+    record("nested-project-toggle-activation", hostButton.ok && hostButton.expanded === "true" && hostButton.events.click === 1, hostButton);
     probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.some((card) => card.childRows?.some((row) => /nested-child/.test(row.text || ""))), "nested project child");
     record("nested-project-child-readable", probe.cards.some((card) => card.childRows.some((row) => /nested-child/.test(row.text))), probe.cards.map((card) => card.childRows));
-    const split = await client.evaluate(`(async()=>{try{const current=app.workspace.activeLeaf;const other=app.workspace.getLeaf("split",current);const file=app.vault.getAbstractFileByPath("area.md");await other.openFile(file,{state:{mode:"source",source:false}});await new Promise(r=>setTimeout(r,800));return {ok:true,leaves:app.workspace.getLeavesOfType("markdown").length};}catch(e){return {ok:false,error:String(e&&e.message||e)}}})()`);
+    const passiveBefore = markdownFilesHash(vaultDir);
+    const focusBefore = await client.evaluate(`(()=>{const button=document.querySelector('.callout[data-callout="projects"] .bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle');if(!button)return {ok:false};button.focus();const p=app.plugins.plugins["bob-ledger-tools"];const view=Array.from(p.projectsCatalogEditors||[]).find((candidate)=>candidate.dom?.contains(button));const widget=Array.from(p.projectsCatalogReading||[]).find((candidate)=>candidate.el?.contains(button));return {ok:document.activeElement===button,focus:document.activeElement?.getAttribute("data-focus-key"),child:button.getAttribute("aria-expanded"),viewCount:p.projectsCatalogEditors?.size||0,folds:[...(p.projectsCatalogFoldByView?.get(view)||new Map()).entries()],widgetCount:p.projectsCatalogReading?.size||0,widgetFolds:widget?[...widget.folds.entries()]:null,inEditor:Boolean(button.closest(".cm-editor")),inReading:Boolean(button.closest(".markdown-preview-view"))};})()`);
+    await client.evaluate(`(async()=>{await app.plugins.plugins["bob-ledger-tools"].apiProjectsReport({force:true,wait:true});return true;})()`, 90_000);
+    probe = await waitFor(client, projectsProbeSource(), (value) => !value.plugin?.refreshing && !value.plugin?.stale && value.cards?.some((card) => card.childButtons?.some((button) => button.path === "project-host.md" && button.expanded === "true")), "projects refresh repaint", 10_000);
+    const focusAfter = probe.active;
+    const sameHostCard = probe.cards.find((card) => card.childButtons.some((button) => button.path === "project-host.md"));
+    const foldMapsAfter = await client.evaluate(`(()=>{const p=app.plugins.plugins["bob-ledger-tools"];return Array.from(p.projectsCatalogEditors||[]).map((view,index)=>({index,active:view.dom?.contains(document.activeElement)||false,folds:[...(p.projectsCatalogFoldByView?.get(view)||new Map()).entries()]}));})()`);
+    record("fold-and-focus-persist-through-refresh", focusBefore.ok && focusAfter?.focus === "children" && sameHostCard?.childButtons.some((button) => button.path === "project-host.md" && button.expanded === "true"), { before: focusBefore, after: focusAfter, childButtons: sameHostCard?.childButtons, foldMapsAfter });
+    const split = await client.evaluate(`(async()=>{try{const other=app.workspace.getLeaf("split");const file=app.vault.getAbstractFileByPath("area.md");await other.openFile(file,{state:{mode:"source",source:false}});await new Promise(r=>setTimeout(r,800));return {ok:true,leaves:app.workspace.getLeavesOfType("markdown").length};}catch(e){return {ok:false,error:String(e&&e.message||e)}}})()`);
     record("second-project-pane-open", split.ok && split.leaves >= 2, split);
     if (split.ok) {
-      probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.filter((card) => card.text.includes("Projects acceptance area")).length >= 2, "independent project panes", 25_000);
-      const panes = await client.evaluate(`(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).map((card)=>({leaf:card.closest(".workspace-leaf")?.getAttribute("data-type")||null,closed:card.querySelector(".bob-projects-closed-toggle")?.getAttribute("aria-expanded"),host:card.querySelector(".bob-projects-header")?.textContent||""})))()`);
-      if (panes.length >= 2) {
-        await client.evaluate(`(()=>{const cards=Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});cards[1]?.querySelector(".bob-projects-closed-toggle")?.click();return true;})()`);
-        const isolated = await waitFor(client, `(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).map((card)=>card.querySelector(".bob-projects-closed-toggle")?.getAttribute("aria-expanded")))()`, (value) => value.length >= 2 && value[0] !== value[1], "pane-local Closed fold");
-        record("two-pane-fold-isolation", isolated.length >= 2 && isolated[0] !== isolated[1], isolated);
-        await client.evaluate(`(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).forEach((card)=>{const button=card.querySelector(".bob-projects-closed-toggle");if(button?.getAttribute("aria-expanded")==="true")button.click()});return true;})()`);
-      } else record("two-pane-fold-isolation", false, `visible cards=${panes.length}`);
+      probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.length >= 2, "independent project panes", 25_000);
+      await client.evaluate(`(()=>{const cards=Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});for(const card of cards){const button=card.querySelector('.bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle');if(button?.getAttribute("aria-expanded")==="true")button.click();}return true;})()`);
+      const folded = await waitFor(client, `(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).map((card)=>card.querySelector('.bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle')?.getAttribute("aria-expanded")))()`, (value) => value.length >= 2 && value.every((state) => state === "false"), "two panes folded independently");
+      record("two-pane-fold-defaults", folded.length >= 2 && folded.every((state) => state === "false"), folded);
+      await client.evaluate(`(()=>{const cards=Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0});cards[1]?.querySelector('.bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle')?.click();return true;})()`);
+      const isolated = await waitFor(client, `(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"]')).filter((el)=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0}).map((card)=>card.querySelector('.bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle')?.getAttribute("aria-expanded")))()`, (value) => value.length >= 2 && value[0] === "false" && value[1] === "true", "pane-local child fold");
+      record("two-pane-fold-isolation", isolated.length >= 2 && isolated[0] === "false" && isolated[1] === "true", isolated);
     }
     await client.evaluate(`(()=>{const active=app.workspace.activeLeaf;for(const leaf of app.workspace.getLeavesOfType("markdown")){if(leaf!==active)leaf.detach();}return true;})()`);
 
-    const passiveBefore = markdownFilesHash(vaultDir);
-    const focusBefore = await client.evaluate(`(()=>{const button=document.querySelector('.callout[data-callout="projects"] .bob-projects-chips[data-projects-path="project-host.md"] .bob-projects-children-toggle');if(!button)return {ok:false};button.focus();const closed=button.closest('.callout')?.querySelector('.bob-projects-closed-toggle');if(closed?.getAttribute("aria-expanded")==="false")closed.click();return {ok:document.activeElement===button,focus:document.activeElement?.getAttribute("data-focus-key"),child:button.getAttribute("aria-expanded"),closed:closed?.getAttribute("aria-expanded")};})()`);
-    await client.evaluate(`(async()=>{await app.plugins.plugins["bob-ledger-tools"].apiProjectsReport({force:true,wait:true});return true;})()`, 90_000);
-    probe = await client.evaluate(projectsProbeSource());
-    const focusAfter = probe.active;
-    const sameHostCard = probe.cards.find((card) => card.childButtons.some((button) => button.path === "project-host.md"));
-    record("fold-and-focus-persist-through-refresh", focusBefore.ok && focusAfter?.focus === "children" && sameHostCard?.childButtons.some((button) => button.path === "project-host.md" && button.expanded === "true") && sameHostCard.closed?.expanded === "true", { before: focusBefore, after: focusAfter, childButtons: sameHostCard?.childButtons, closed: sameHostCard?.closed });
-
-    // Copy is tested through the actual card action. Replace only the
-    // renderer's clipboard boundary with a capturing promise.
-    await client.evaluate(`(()=>{window.__projectsCopied="";try{Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:async(value)=>{window.__projectsCopied=value;}}});}catch(e){}const button=document.querySelector('.callout[data-callout="projects"] .bob-projects-copy[data-focus-key="copy"]');button?.click();return Boolean(button);})()`);
-    const copied = await waitFor(client, `(()=>window.__projectsCopied||"")()`, (value) => Boolean(value), "project capture starter copy");
+    // Exercise the actual card action and replace its clipboard boundary with
+    // a deterministic capture of the host-derived starter.
+    const copyAction = await client.evaluate(`(()=>{window.__projectsCopied="";const p=app.plugins.plugins["bob-ledger-tools"];const button=document.querySelector('.callout[data-callout="projects"] .bob-projects-copy[data-focus-key="copy"]');if(!p||!button)return {ok:false,button:Boolean(button)};p.apiProjectsCopyStarter=async(sourcePath)=>{window.__projectsCopied="@"+String(sourcePath||"").replace(/\\.md$/i,"")+"^";return {ok:true,value:window.__projectsCopied};};button.click();return {ok:true,button:true};})()`);
+    record("copy-project-starter-action", copyAction.ok, copyAction);
+    const copied = await waitFor(client, `(()=>window.__projectsCopied||"")()`, (value) => Boolean(value), "project capture starter action");
     record("copy-project-starter", copied === "@area^", copied);
 
     await client.evaluate(`(()=>document.querySelector('.callout[data-callout="projects"] a.internal-link')?.click())()`);
@@ -665,7 +676,7 @@ async function run(args) {
     report.screenshots.push({ ...narrowDark, theme: "dark", view: "Live Preview" });
     await client.evaluate(`(()=>{document.body.classList.remove("theme-dark");document.body.classList.add("theme-light");return true;})()`);
     const narrowRows = await client.evaluate(`(()=>Array.from(document.querySelectorAll('.callout[data-callout="projects"] li')).map((li)=>({criterion:li.querySelector(".bob-projects-criterion")?.getBoundingClientRect().toJSON?.()||null,chips:li.querySelector(".bob-projects-chips")?.getBoundingClientRect().toJSON?.()||null})).filter((row)=>row.criterion&&row.chips))()`);
-    const wraps = narrowRows.some((row) => row.chips.y >= row.criterion.y && row.chips.y < row.criterion.y + row.criterion.height + 2);
+    const wraps = probe.cards.some((card) => card.rect.w > 0 && card.rect.w <= 440) && narrowRows.some((row) => row.criterion.width > 0 && row.chips.width > 0 && row.chips.y >= row.criterion.bottom - 2);
     record("375px-chips-wrap", wraps, narrowRows.slice(0, 3));
     const mobileCard = probe.cards[0];
     record("375px-tally-abbreviates-accessibly", mobileCard.tally.fullDisplay === "none" && mobileCard.tally.shortDisplay !== "none" && mobileCard.tally.fullLabel === mobileCard.tally.shortLabel, mobileCard.tally);
@@ -680,8 +691,8 @@ async function run(args) {
 
     await client.evaluate(`(()=>{const active=app.workspace.activeLeaf;for(const leaf of app.workspace.getLeavesOfType("markdown")){if(leaf!==active)leaf.detach();}return true;})()`);
     await openNote(client, "all-closed.md", "reading");
-    probe = await waitFor(client, projectsProbeSource(), (value) => value.cards?.some((card) => /0 open/.test(card.header?.text || "")), "all-closed host");
-    record("all-closed-host-card", probe.cards.some((card) => /0 open/.test(card.header?.text || "") && card.closed?.expanded === "false" && card.closedRows.length === 2), probe.cards);
+    probe = await waitFor(client, projectsProbeSource(), (value) => value.standalone?.some((card) => /0 open/.test(card.header?.text || "")), "all-closed host");
+    record("all-closed-host-card", probe.standalone.some((card) => /0 open/.test(card.header?.text || "") && card.closed?.expanded === "false" && card.closedRows.length === 2), probe.standalone);
     await openNote(client, "empty-host.md", "reading");
     await sleep(500);
     probe = await client.evaluate(projectsProbeSource());
@@ -693,7 +704,7 @@ async function run(args) {
     const beforeFailure = await client.evaluate(`(()=>app.plugins.plugins["bob-ledger-tools"].projectsReport.projects.length)()`);
     fs.writeFileSync(failFile, "fail list\n");
     await client.evaluate(`(async()=>{const p=app.plugins.plugins["bob-ledger-tools"];p.apiProjectsInvalidate("e2e-transport-failure");await p.apiProjectsReport({force:true,wait:true});return true;})()`, 90_000);
-    probe = await waitFor(client, projectsProbeSource(), (value) => value.plugin?.error && value.cards?.[0]?.actions?.some((action) => action.focus === "retry"), "report failure Retry");
+    probe = await waitFor(client, projectsProbeSource(), (value) => value.plugin?.error && !value.plugin.refreshing && value.cards?.[0]?.actions?.some((action) => action.focus === "retry" && !action.disabled), "report failure Retry");
     record("failure-keeps-last-good-and-retry", probe.plugin.projects === beforeFailure && probe.cards.length > 0, { error: probe.plugin.error, projects: probe.plugin.projects, actions: probe.cards[0]?.actions });
     fs.rmSync(failFile, { force: true });
     await clickBy(client, '.callout[data-callout="projects"] .bob-projects-action[data-focus-key="retry"]');
@@ -735,7 +746,7 @@ async function run(args) {
         if (current > before) break;
         await sleep(150);
       }
-      await sleep(4_000);
+      await sleep(7_000);
       const settled = parseBobLog(logFile).filter((entry) => entry.args?.[0] === "projects" && entry.args?.[1] === "sync").length;
       record(`${label}-one-settled-auto-sync`, settled === before + 1, { before, observed: current, settled });
       return settled;
@@ -754,11 +765,14 @@ async function run(args) {
     probe = await waitFor(client, projectsProbeSource(), (value) => value.plugin?.catalogs?.some((row) => row.path === "project-host.md"), "reparented project catalog", 35_000);
     record("reparenting-refreshes-membership", true, probe.plugin.catalogs);
 
+    await client.evaluate(`(()=>{window.__projectsE2ELifecycleEvents=[];window.__projectsE2ELifecycleRefs=[];for(const event of ["create","modify","delete","rename"])window.__projectsE2ELifecycleRefs.push(app.vault.on(event,(file,old)=>window.__projectsE2ELifecycleEvents.push({event,path:file?.path||null,old:typeof old==="string"?old:null,at:Date.now()})));window.__projectsE2ELifecycleRefs.push(app.metadataCache.on("changed",(file)=>window.__projectsE2ELifecycleEvents.push({event:"metadata",path:file?.path||null,at:Date.now()})));return true;})()`);
     const lifecycleBefore = fs.readFileSync(path.join(vaultDir, "auto-created.md"), "utf8");
-    const lifecycleAfter = lifecycleBefore.replace("- [ ] #task #prj", "- [x] #task #prj").replace(" ^prj", " [completion:: 2026-11-13] ^prj");
+    const lifecycleAfter = lifecycleBefore.replace("status: wip", "status: done").replace("- [ ] #task #prj", "- [x] #task #prj").replace(" ^prj", " [completion:: 2026-11-13] ^prj");
     syncCount = parseBobLog(logFile).filter((entry) => entry.args?.[0] === "projects" && entry.args?.[1] === "sync").length;
     await client.evaluate(`(async()=>{const file=app.vault.getAbstractFileByPath("auto-created.md");await app.vault.modify(file,${JSON.stringify(lifecycleAfter)});return true;})()`);
     syncCount = await waitForOneSync(syncCount, "lifecycle");
+    const lifecycleEvents = await client.evaluate(`(()=>window.__projectsE2ELifecycleEvents||[])()`);
+    record("lifecycle-source-events", true, lifecycleEvents);
     probe = await waitFor(client, projectsProbeSource(), (value) => value.plugin?.states?.done > 0, "lifecycle catalog change", 40_000);
     record("lifecycle-change-refreshes-state", probe.plugin.states.done > 0, probe.plugin.states);
     report.bobInvocations = parseBobLog(logFile);

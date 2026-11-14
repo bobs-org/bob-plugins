@@ -782,6 +782,12 @@ test("unavailable, stale, missing, damaged, and refused reports keep distinct fe
   assert.match(f.root.textContent, /bob missing/);
   f.root.querySelector(".bob-projects-action").fire("click");
   assert.equal(f.plugin.retries, 1);
+  f.setState({ report: report(), errorModel: { hint: "last good report is stale" }, stale: true });
+  f.plugin.paintProjectsCatalogReading(f.root, "body.md", new Map(), false);
+  assert.match(f.root.textContent, /last good report is stale/);
+  assert.match(f.root.querySelector(".bob-projects-action").textContent, /Retry/);
+  f.root.querySelector(".bob-projects-action").fire("click");
+  assert.equal(f.plugin.retries, 2);
   f.setState({ report: report(), errorModel: null, stale: true });
   f.plugin.paintProjectsCatalogReading(f.root, "body.md", new Map(), false);
   assert.equal(chips(f.first).length, 1);
@@ -995,7 +1001,7 @@ test("copy starter writes @host^ and reports clipboard failures", async () => {
 test("Reading ignores CodeMirror chrome and setup refreshes both surfaces", () => {
   const f = fixture();
   const frame = el(f.doc, "div", { class: "cm-editor" }, [f.root]);
-  void frame;
+  const wrapper = el(f.doc, "div", {}, [frame]);
   const inner = f.root;
   let subscriber = null;
   f.plugin.apiProjectsSubscribe = (fn) => { subscriber = fn; return () => { subscriber = null; }; };
@@ -1011,6 +1017,9 @@ test("Reading ignores CodeMirror chrome and setup refreshes both surfaces", () =
   f.plugin.renderProjectsCatalogInReading(inner, { sourcePath: "body.md", addChild: (child) => found.push(child) });
   assert.equal(chips(inner).length, 0);
   assert.equal(f.plugin.projectsCatalogReading.size, 0);
+  f.plugin.renderProjectsCatalogInReading(wrapper, { sourcePath: "body.md", addChild: (child) => found.push(child) });
+  assert.equal(chips(wrapper).length, 0);
+  assert.equal(f.plugin.projectsCatalogReading.size, 0);
   const flush = () => { const work = Array.from(timers.values()); timers.clear(); for (const callback of work) callback(); };
   subscriber();
   subscriber();
@@ -1020,6 +1029,40 @@ test("Reading ignores CodeMirror chrome and setup refreshes both surfaces", () =
   assert.equal(subscriber, null);
   assert.equal(f.plugin.projectsCatalogReading.size, 0);
   assert.equal(f.writes.length, 0);
+});
+
+test("CodeMirror adopts folds from a postprocessor node moved into its editor", () => {
+  const f = fixture();
+  const widgetEl = el(f.doc, "div", {}, []);
+  const editorDom = el(f.doc, "div", { class: "cm-editor" }, [widgetEl]);
+  const folds = new Map([["child:body.md:project-host.md", true]]);
+  const widget = { el: widgetEl, path: "body.md", folds, allowAnchor: true };
+  const view = { dom: editorDom };
+  f.plugin.projectsCatalogReading = new Set([widget]);
+  f.plugin.projectsCatalogFoldByView = new WeakMap();
+  assert.equal(f.plugin.projectsCatalogFoldMap(view), folds);
+  assert.equal(f.plugin.projectsCatalogFoldByView.get(view), folds);
+  assert.equal(widget.editorOwner, view);
+});
+
+test("fold actions on a moved postprocessor repaint through their CodeMirror owner", () => {
+  const f = fixture();
+  const widgetEl = el(f.doc, "div", {}, []);
+  const editorDom = el(f.doc, "div", { class: "cm-editor" }, [widgetEl]);
+  const folds = new Map();
+  const widget = { el: widgetEl, path: "body.md", folds, allowAnchor: true };
+  const view = { dom: editorDom };
+  const painted = [];
+  f.plugin.projectsCatalogReading = new Set([widget]);
+  f.plugin.projectsCatalogEditors = new Set([view]);
+  f.plugin.projectsCatalogFoldByView = new WeakMap();
+  f.plugin.paintProjectsCatalogEditor = (owner) => painted.push(owner);
+  f.plugin.paintProjectsCatalogReading = () => assert.fail("moved editor content must not be repainted by Reading");
+  f.plugin.projectsCatalogHandlers("body.md", folds).toggleChild("project-host.md", true);
+  assert.equal(f.plugin.projectsCatalogFoldByView.get(view), folds);
+  assert.equal(folds.get("child:body.md:project-host.md"), true);
+  assert.equal(widget.editorOwner, view);
+  assert.deepEqual(painted, [view]);
 });
 
 test("CSS uses pane container wrapping, scoped projects hue, and keyboard outlines", () => {

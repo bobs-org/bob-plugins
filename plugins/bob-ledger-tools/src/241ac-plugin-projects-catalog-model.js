@@ -446,7 +446,7 @@ function projectsCardStatus(state, sourcePath) {
     messages.push(state.syncErrorModel.hint);
   }
   if ((!state || state.errorModel || (!state.report && !state.refreshing))) {
-    if (!state || !state.report) {
+    if (!state || !state.report || state.errorModel) {
       action = {
         kind: "retry",
         label: "Retry",

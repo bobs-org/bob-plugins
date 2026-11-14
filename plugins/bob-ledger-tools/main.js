@@ -61471,7 +61471,7 @@ function projectsCardStatus(state, sourcePath) {
     messages.push(state.syncErrorModel.hint);
   }
   if ((!state || state.errorModel || (!state.report && !state.refreshing))) {
-    if (!state || !state.report) {
+    if (!state || !state.report || state.errorModel) {
       action = {
         kind: "retry",
         label: "Retry",
@@ -62004,6 +62004,21 @@ class BobLedgerToolsProjectsCatalogMixin {
   projectsCatalogFoldMap(host) {
     if (!(this.projectsCatalogFoldByView instanceof WeakMap)) this.projectsCatalogFoldByView = new WeakMap();
     let folds = this.projectsCatalogFoldByView.get(host);
+    const surface = host?.dom || host;
+    const editor = surface?.matches?.(".cm-editor") ? surface : surface?.closest?.(".cm-editor");
+    const readingWidget = editor
+      ? Array.from(this.projectsCatalogReading || []).find((widget) => widget.el?.closest?.(".cm-editor") === editor)
+      : null;
+    if (readingWidget) {
+      if (!(folds instanceof Map) || (folds.size === 0 && readingWidget.folds instanceof Map && readingWidget.folds.size > 0)) {
+        folds = readingWidget.folds instanceof Map ? readingWidget.folds : new Map();
+        this.projectsCatalogFoldByView.set(host, folds);
+      }
+      // Obsidian can move a Markdown postprocessor node into CodeMirror after
+      // its callback runs. Once its editor is known, the view plugin owns all
+      // later paints for that surface.
+      readingWidget.editorOwner = host;
+    }
     if (!(folds instanceof Map)) {
       folds = new Map();
       this.projectsCatalogFoldByView.set(host, folds);
@@ -62015,13 +62030,25 @@ class BobLedgerToolsProjectsCatalogMixin {
     // Fold state is per-pane: handlers repaint only the surfaces that share
     // this exact folds map, so split views of one note stay independent.
     const repaintSurface = () => {
+      const paintedEditors = new Set();
       for (const widget of this.projectsCatalogReading || []) {
-        if (widget.folds === folds) {
+        if (widget.folds !== folds) continue;
+        const editorDom = widget.el?.matches?.(".cm-editor") ? widget.el : widget.el?.closest?.(".cm-editor");
+        const editorView = editorDom && Array.from(this.projectsCatalogEditors || []).find((view) => view.dom === editorDom);
+        if (editorView) {
+          const editorFolds = this.projectsCatalogFoldMap(editorView);
+          if (editorFolds !== folds) {
+            for (const [key, value] of folds) editorFolds.set(key, value);
+          }
+          widget.editorOwner = editorView;
+          this.paintProjectsCatalogEditor(editorView);
+          paintedEditors.add(editorView);
+        } else if (!editorDom && !widget.editorOwner) {
           this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
         }
       }
       for (const view of this.projectsCatalogEditors || []) {
-        if (this.projectsCatalogFoldByView instanceof WeakMap && this.projectsCatalogFoldByView.get(view) === folds) {
+        if (!paintedEditors.has(view) && this.projectsCatalogFoldByView instanceof WeakMap && this.projectsCatalogFoldByView.get(view) === folds) {
           this.paintProjectsCatalogEditor(view);
         }
       }
@@ -62116,7 +62143,8 @@ class BobLedgerToolsProjectsCatalogMixin {
     if (!this.projectsCatalogActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
     // CodeMirror owns its rendered callouts; its view plugin handles their
     // lifecycle so a postprocessor child cannot clean another pane's chrome.
-    if (el.closest?.(".cm-editor")) return;
+    const callouts = projectsFindCallouts(el);
+    if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
     const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
@@ -62238,7 +62266,9 @@ class BobLedgerToolsProjectsCatalogMixin {
       this.projectsCatalogRefreshTimer = null;
       if (!this.projectsCatalogActive) return;
       for (const widget of this.projectsCatalogReading) {
-        this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
       }
       const effect = ensureProjectsCatalogRefresh();
       for (const view of this.projectsCatalogEditors) {

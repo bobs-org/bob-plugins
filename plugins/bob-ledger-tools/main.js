@@ -33576,6 +33576,12 @@ class BobLedgerToolsPlugin extends Plugin {
   }
 
   onunload() {
+    this.teardownLedgerToolsSurfaces();
+  }
+}
+// ---- src/170-plugin-lifecycle-teardown.js ----
+// Keep the lifecycle entrypoint focused; preserve the existing teardown order.
+BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     this.teardownCalendarEventPainting();
     this.teardownRelationIndex();
     if (
@@ -33892,8 +33898,7 @@ class BobLedgerToolsPlugin extends Plugin {
     if (this.dailyLocations) {
       this.dailyLocations.clear();
     }
-  }
-}
+};
 // ---- src/171-relation-index-lifecycle.js ----
 // §19 kill switch: `relations.linked_from_mentions` (default true).
 // Missing, invalid, or unreadable values follow the enabled default; cache

@@ -276,71 +276,59 @@ The gesture never advances the `]s` review walk.
 
 ## Task properties, dependencies, and moves
 
-`Ctrl+Shift+P` edits scheduled, dependency, and priority task properties, with
-priority levels that roll scheduled dates, report the exact rolled ISO
-date/span and its distance from today, and offer date-picker re-roll
-suggestions. Choosing a `scheduled` date opens one combined Reason/Work summary
-review that records the optional reason as a nested entry under a Schedule Log
-child bullet — an empty reason on a task that already keeps a log records `🤷
-no reason given`, while a task with no log yet is left untouched. Choosing a
-priority level or the pinned roll suggestion writes immediately with its own
-deterministic reason. Giving a task a strictly future `scheduled` date removes
-its live links from today's open Pomodoro entries. `N<Ctrl+Shift+P>` edits the
-current task plus the next N real tasks; on a dedicated Task Link bullet the
-same keymap edits the linked task in its own note instead. Counted sessions
-never open the album Schema Card.
+`Ctrl+Shift+P` edits scheduled, dependency, and priority properties. Priority
+levels roll scheduled dates, report the exact ISO date/span and distance from
+today, and offer date-picker re-roll suggestions. Choosing `scheduled` opens a
+combined Reason/Work summary review; its optional reason becomes a nested
+Schedule Log entry. A blank reason on a task with a log records `🤷 no reason
+given`; without a log, it leaves the task untouched. Priority choices and
+pinned rolls write immediately with deterministic reasons. A strictly future
+`scheduled` date removes live links from today's open Pomodoros.
+`N<Ctrl+Shift+P>` edits the current and next N real tasks; on a dedicated Task
+Link bullet, it edits that linked task in its own note. Counted sessions never
+open the album Schema Card.
 
-Dependency writes go through one managed ⛓️ **DEPENDS ON:** first-child line
-per task, committed in one undoable edit: adding an open prerequisite marks
-the dependent Blocked, raises the target to its lane, and removes the
-dependent's live links from today's open Pomodoros together with any emptied
-entry. Cleanup deletes an open Pomodoro entry it empties, while entries with
-prose children and untouched placeholders remain. Removing the last open
-prerequisite recovers the dependent immediately when it has no future
-`scheduled` date. `Ctrl+D` on the Depends-On row deletes that line and the
-`[dependsOn::]` field in one writer transaction, leaving other child content
-untouched, with immediate recovery. Hand edits are mirrored once the cursor
-leaves the edited line; malformed lines are left alone. BLOCKED stage rows
-show `🔒 waits on N` for one or more open prerequisites, otherwise
-`🔒 scheduled YYYY-MM-DD` when a date blocks the task, otherwise `🔒 blocked`.
-The Depends on value stage searches every open task in the vault, reachable from a task
-line, the Depends-On line itself, a chip, a Task Link, or the `Edit task
-dependencies` palette command. Blockquoted tasks refuse dependency edits.
-Answering the landed review row advances the walk once to the next remaining
-item.
+Dependency writes use one managed ⛓️ **DEPENDS ON:** first-child line per
+task and one undoable edit. Adding an open prerequisite blocks the dependent,
+raises the target to its lane, and removes the dependent's live Pomodoro links.
+An emptied open entry is deleted; entries with prose children and untouched
+placeholders remain. Removing the last open prerequisite recovers the dependent
+unless a future `scheduled` date remains. `Ctrl+D` on the row deletes the line
+and `[dependsOn::]`, leaves other children untouched, and recovers immediately.
+Hand edits mirror after the cursor leaves; malformed lines stay unchanged.
+BLOCKED rows show `🔒 waits on N`, `🔒 scheduled YYYY-MM-DD`, or `🔒 blocked`.
+The Depends on value stage searches all open tasks from a task line, the
+Depends-On line, a chip, a Task Link, or the `Edit task dependencies` palette
+command. Blockquoted tasks refuse edits. Answering a landed review row advances
+once to the next remaining item.
 
-Bare `Ctrl+Shift+M` moves the current task and focuses the destination note on
-the moved task; `N<Ctrl+Shift+M>` moves it plus the next N movable tasks. A
-move never advances the review walk, even from a landed row: the next `]s` /
-`[s` resumes at the moved row's walk neighbour, with `Ctrl+O` returning to the
-post-removal source seam and `Ctrl+I` returning to the first moved task without
-undoing the move. The move and inbox-route destination lists admit only areas
-and open projects, so albums and records are never offered. The move and
-inbox-route destination lists, and Open child note, never offer `bob vault-sync` conflict copies under `_conflicts/`; Open
-child note also hides `_generated/` notes.
+Bare `Ctrl+Shift+M` moves the current task and focuses it in the destination;
+`N<Ctrl+Shift+M>` also moves the next N movable tasks. Moves never advance the
+review walk: the next `]s` / `[s` resumes at the moved row's walk neighbour.
+`Ctrl+O` returns to the post-removal source seam; `Ctrl+I` returns to the first
+moved task without undoing the move. Move and inbox-route destinations include
+only areas and open projects (never albums, records, or `bob vault-sync`
+conflict copies under `_conflicts/`). Open child note also hides `_generated/`
+notes.
 
-Project conversion and reversal keep Depends-On and inline dates on task lines.
-Promoting a task that is planned in today's Pomodoros never leaves a live Task
-Link on the new `^prj`: every dedicated live link to the source is consumed,
-and the new project's open tasks are offered through the Successor Offer
-picker — only picked tasks are linked, raised to Next, given a block ID, and
-stamped fresh. History, past dates, struck links, and prose rewrite
-one-to-one to `^prj`. Project schedules
-propagate to task-level `scheduled` properties and Blocked status, and
-`#prj_is_blocked` follows `^prj`'s post-gesture status. Dependency additions
-and removals update the generated 🧱 BLOCKS mirrors, governed by
-`dependencies.blocks_lines` in the shared bob config file (default on; set it
-to `false` to stop navigation gestures from writing BLOCKS lines).
+Project conversion keeps Depends-On and inline dates on task lines in both
+directions. Promoting a task planned today consumes every dedicated live link
+to it and offers the new project's open tasks through Successor Offer; only
+picked tasks are linked, raised to Next, given block IDs, and stamped fresh.
+History, past dates, struck links, and prose rewrite one-to-one to `^prj`.
+Project schedules propagate to task-level `scheduled` and Blocked status;
+`#prj_is_blocked` follows the post-gesture `^prj` status. Dependency changes
+update generated 🧱 BLOCKS mirrors, controlled by `dependencies.blocks_lines`
+in shared bob config (default on; `false` stops navigation gestures writing
+BLOCKS lines).
 
 **Create project note from task** converts an open task in an area or project
-note. Its `Ctrl+Shift+Alt+N` shortcut from the original README is a custom
-vault binding, not a registered default or a plugin keydown handler. The same
-command on a project's `^prj` task converts the note back into a parent-task
-block in the parent's `## Tasks` section, carrying its tasks, drawers,
-and project-task subtree, repointing `#^prj` links, then trashing the project
-note. The generated `[!projects]` callout, and a `## Projects` heading that
-holds only that callout, is never copied into the restored task, the
-destination note, or `## Tasks`. If backlink rewriting fails, the restored
+note. `Ctrl+Shift+Alt+N` is a custom vault binding from the original README,
+not a registered default or plugin keydown handler. Running it on a project's
+`^prj` restores a parent-task block in the parent's `## Tasks`, carrying tasks,
+drawers, and project-task children; it repoints `#^prj` links, then trashes the
+project note. The generated `[!projects]` callout and a `## Projects` heading
+containing only it are never copied. If backlink rewriting fails, the restored
 task remains and the project note is kept with a notice.
 
 When promoting a task, an unchecked, ALL-CAPS direct child bullet becomes a

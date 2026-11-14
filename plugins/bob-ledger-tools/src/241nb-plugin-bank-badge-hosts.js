@@ -144,6 +144,7 @@ class BobLedgerToolsBankBadgeHostsMixin {
     const model = bankBadgeModel(result.report, {
       kind: record.kind,
       day: record.kind === "day" ? record.id : undefined,
+      periodId: record.id,
       today: record.state && record.state.today || bankLocalDate(),
       stale: result.stale === true,
       refreshFailed: Boolean(result.error),

@@ -8886,7 +8886,11 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-bank-teaching code { color: var(--text-accent); }
 .bob-bank-badge-host { min-width: 0; margin-top: 0.4rem; }
 .bob-bank-badge-host:empty { display: none; }
-.bob-bank-badge { --bob-bank-badge-edge: color-mix(in srgb, var(--text-normal) 45%, transparent); --bob-bank-badge-wash: var(--text-normal); --bob-bank-badge-wash-strength: 6%; display: inline-flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0.35em; padding: 0.25em 0.6em; border: 0; border-inline-start: 2px solid var(--bob-bank-badge-edge); background: color-mix(in srgb, var(--bob-bank-badge-wash) var(--bob-bank-badge-wash-strength), transparent); color: var(--text-muted); font: inherit; font-size: 0.75em; font-variant-numeric: tabular-nums; text-align: start; text-decoration: none; cursor: pointer; }
+.bob-bank-badge { --bob-bank-badge-edge: color-mix(in srgb, var(--text-normal) 45%, transparent); --bob-bank-badge-wash: var(--text-normal); --bob-bank-badge-wash-strength: 6%; display: inline-flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0; padding: 0.25em 0.6em; border: 0; border-inline-start: 2px solid var(--bob-bank-badge-edge); background: color-mix(in srgb, var(--bob-bank-badge-wash) var(--bob-bank-badge-wash-strength), transparent); color: var(--text-muted); font: inherit; font-size: 0.75em; font-variant-numeric: tabular-nums; text-align: start; text-decoration: none; cursor: pointer; overflow: visible; text-overflow: clip; }
+.bob-bank-badge-part { white-space: nowrap; flex: 0 0 auto; overflow: visible; text-overflow: clip; }
+.bob-bank-badge-part .bob-bank-badge-amount { white-space: nowrap; overflow: visible; text-overflow: clip; }
+.bob-bank-badge-label { white-space: nowrap; flex: 0 0 auto; }
+.bob-bank-badge-separator { white-space: nowrap; flex: 0 0 auto; }
 .bob-bank-badge[data-tone="surplus"] { --bob-bank-badge-edge: color-mix(in srgb, var(--color-green) 70%, transparent); --bob-bank-badge-wash: var(--color-green); --bob-bank-badge-wash-strength: 12%; }
 .bob-bank-badge[data-tone="neutral"] { --bob-bank-badge-edge: color-mix(in srgb, var(--text-normal) 45%, transparent); --bob-bank-badge-wash: var(--text-normal); --bob-bank-badge-wash-strength: 6%; }
 .bob-bank-badge[data-tone="waiting"] { --bob-bank-badge-edge: color-mix(in srgb, var(--text-warning) 55%, transparent); --bob-bank-badge-wash: transparent; --bob-bank-badge-wash-strength: 0%; }

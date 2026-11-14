@@ -185,6 +185,104 @@ function bankBadgeAriaLabel(report, context, parts, target) {
   return phrases.join(": ");
 }
 
+function bankBadgeValidDate(value) {
+  try {
+    if (typeof dayStripDateParts === "function") return dayStripDateParts(value) !== null;
+  } catch (error) {
+    // Fall through to the pattern check.
+  }
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function bankBadgeShiftDay(value, amount) {
+  try {
+    if (typeof dayStripShiftDay === "function") return dayStripShiftDay(value, amount);
+  } catch (error) {
+    // Fall through to null.
+  }
+  return "";
+}
+
+function bankBadgeExpectedBounds(kind, requestedId) {
+  try {
+    const id = typeof requestedId === "string" ? requestedId.trim() : "";
+    if (!id) return null;
+    if (kind === "day") {
+      if (!bankBadgeValidDate(id)) return null;
+      return { key: id, start: id, end: id };
+    }
+    if (kind === "week") {
+      const match = /^(\d{4})-W(\d{2})$/.exec(id);
+      if (!match || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const start = periodNotesIsoWeekMonday(Number(match[1]), Number(match[2]));
+      if (!start) return null;
+      const end = bankBadgeShiftDay(start, 6);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "quarter") {
+      const match = /^(\d{4})-Q([1-4])$/.exec(id);
+      if (!match || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const year = Number(match[1]);
+      const quarter = Number(match[2]);
+      const start = periodNotesIsoWeekMonday(year, (quarter - 1) * 13 + 1);
+      if (!start) return null;
+      const nextStart = quarter < 4
+        ? periodNotesIsoWeekMonday(year, quarter * 13 + 1)
+        : periodNotesIsoWeekMonday(year + 1, 1);
+      if (!nextStart) return null;
+      const end = bankBadgeShiftDay(nextStart, -1);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "year") {
+      if (!/^\d{4}$/.test(id) || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const year = Number(id);
+      const start = periodNotesIsoWeekMonday(year, 1);
+      const nextStart = periodNotesIsoWeekMonday(year + 1, 1);
+      if (!start || !nextStart) return null;
+      const end = bankBadgeShiftDay(nextStart, -1);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "all") {
+      if (id !== "all" && id !== "all_time") return null;
+      return { key: "all_time", start: null, end: null };
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function bankBadgePeriodIdentityValid(report, ctx) {
+  const expectedKind = bankBadgeKind(ctx.kind);
+  const period = report && report.period;
+  if (!period || expectedKind === null || period.kind !== expectedKind) return false;
+  const requestedId = typeof ctx.periodId === "string" && ctx.periodId
+    ? ctx.periodId
+    : ctx.kind === "day" && typeof ctx.day === "string" && ctx.day
+      ? ctx.day
+      : null;
+  if (ctx.kind === "day") {
+    if (!requestedId || !bankBadgeValidDate(requestedId)) return false;
+    if (period.start !== requestedId || period.end !== requestedId) return false;
+    if (typeof period.key === "string" && period.key && period.key !== requestedId) return false;
+    return true;
+  }
+  if (ctx.kind === "all") {
+    if (!requestedId) return false;
+    if (period.key !== "all_time") return false;
+    if (!bankBadgeValidDate(period.start) || !bankBadgeValidDate(period.end)) return false;
+    return true;
+  }
+  if (!requestedId) return false;
+  const expected = bankBadgeExpectedBounds(ctx.kind, requestedId);
+  if (!expected) return false;
+  if (period.key !== expected.key) return false;
+  return period.start === expected.start && period.end === expected.end;
+}
+
 function bankBadgeModel(report, context = {}) {
   const ctx = context && typeof context === "object" ? context : {};
   if (report && report.teaching_empty === true) return { state: "hidden", reason: "teaching-empty" };
@@ -196,11 +294,7 @@ function bankBadgeModel(report, context = {}) {
   ) {
     return { state: "unavailable", reason: "invalid-report", hint: "The bank report could not be read." };
   }
-  const expectedKind = bankBadgeKind(ctx.kind);
-  const periodKind = report.period.kind;
-  const matches = expectedKind !== null && periodKind === expectedKind &&
-    (ctx.kind !== "day" || report.period.start === ctx.day);
-  if (!matches) {
+  if (!bankBadgePeriodIdentityValid(report, ctx)) {
     return { state: "unavailable", reason: "period-mismatch", hint: "The bank report does not match this stats strip." };
   }
   const today = typeof ctx.today === "string" ? ctx.today : "";

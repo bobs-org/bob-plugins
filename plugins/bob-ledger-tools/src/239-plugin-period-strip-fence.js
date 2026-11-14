@@ -538,6 +538,13 @@ class BobLedgerToolsPeriodStripMixin {
       if (!record || !record.el) return;
       if (!this.periodStripCanSpawn()) return;
       if (record.day) {
+        try {
+          if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+            this.bankSyncFenceBadge(record);
+          }
+        } catch (error) {
+          // Badge retry is best-effort and never triggers a strip fetch.
+        }
         if (typeof this.dayStripCheck === "function") {
           const dayRecord = { el: record.el, day: record.day, path: record.path, kind: "fence", observer: record.observer || null, visible: record.visible };
           this.dayStripCheck(dayRecord, opts);
@@ -552,6 +559,13 @@ class BobLedgerToolsPeriodStripMixin {
         return;
       }
       if (!this.periodStripRecordIsShown(record)) return;
+      try {
+        if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+          this.bankSyncFenceBadge(record);
+        }
+      } catch (error) {
+        // Badge retry is best-effort and never triggers a strip fetch.
+      }
       const peek = this.periodStripPeek(periodId);
       if (!peek || !peek.report) {
         this.periodStripFetch(record);

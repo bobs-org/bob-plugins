@@ -45,7 +45,7 @@ class FakeNode {
   }
 
   get textContent() {
-    return [this._text, ...this.children.map((child) => child.textContent)].filter(Boolean).join(" ");
+    return [this._text, ...this.children.map((child) => child.textContent)].filter(Boolean).join("");
   }
 
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
@@ -347,11 +347,78 @@ test("bank badge rejects mismatches, hides teaching-empty and future reports, an
   assert.equal(helpers.bankBadgeModel({ command: "report" }, badgeContext()).state, "unavailable");
   const mismatched = badgeReport({ period: { ...badgeReport().period, start: "2026-11-11" } });
   assert.equal(helpers.bankBadgeModel(mismatched, badgeContext()).reason, "period-mismatch");
-  const future = helpers.bankBadgeModel(badgeReport({ period: { ...badgeReport().period, kind: "week", start: "2026-11-13", end: "2026-11-19" } }), badgeContext({ kind: "week", day: undefined }));
+  const future = helpers.bankBadgeModel(
+    badgeReport({ period: { kind: "week", key: "2026-W47", start: "2026-11-16", end: "2026-11-22", label: "2026-W47", so_far: false } }),
+    badgeContext({ kind: "week", day: undefined, periodId: "2026-W47", today: "2026-11-14" }),
+  );
   assert.equal(future.reason, "future");
   const stale = helpers.bankBadgeModel(badgeReport({ totals: { ...badgeReport().totals, in_cents: 100 } }), badgeContext({ stale: true }));
   assert.equal(stale.stale, true);
   assert.match(stale.tooltip, /last good values shown/);
+});
+
+test("bank badge enforces period identity at the boundary", () => {
+  const money = { ...badgeReport().totals, in_cents: 100, net_cents: 100 };
+  const weekRight = badgeReport({
+    period: { kind: "week", key: "2026-W46", start: "2026-11-09", end: "2026-11-15", label: "2026-W46", so_far: true },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(weekRight, badgeContext({ kind: "week", day: undefined, periodId: "2026-W46" })).state, "badge");
+  const weekWrongKind = badgeReport({
+    period: { kind: "week", key: "2026-W45", start: "2026-11-02", end: "2026-11-08", label: "2026-W45", so_far: false },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(weekWrongKind, badgeContext({ kind: "week", day: undefined, periodId: "2026-W46" })).reason, "period-mismatch");
+  const weekRightKeyWrongBounds = badgeReport({
+    period: { kind: "week", key: "2026-W46", start: "2026-11-09", end: "2026-11-16", label: "2026-W46", so_far: true },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(weekRightKeyWrongBounds, badgeContext({ kind: "week", day: undefined, periodId: "2026-W46" })).reason, "period-mismatch");
+  const dayWrongDate = badgeReport({ totals: money });
+  assert.equal(helpers.bankBadgeModel(dayWrongDate, badgeContext({ kind: "week", day: undefined, periodId: "2026-W46" })).reason, "period-mismatch");
+  const validDay = badgeReport({ totals: money });
+  assert.equal(helpers.bankBadgeModel(validDay, badgeContext()).state, "badge");
+  const validWeek53 = badgeReport({
+    period: { kind: "week", key: "2026-W53", start: "2026-12-28", end: "2027-01-03", label: "2026-W53", so_far: false },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(validWeek53, badgeContext({ kind: "week", day: undefined, periodId: "2026-W53", today: "2026-12-30" })).state, "badge");
+  const invalidWeek53 = badgeReport({
+    period: { kind: "week", key: "2026-W53", start: "2026-12-28", end: "2027-01-03", label: "2026-W53", so_far: false },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(invalidWeek53, badgeContext({ kind: "week", day: undefined, periodId: "2025-W53" })).reason, "period-mismatch");
+  const validQ4 = badgeReport({
+    period: { kind: "quarter", key: "2026-Q4", start: "2026-09-28", end: "2027-01-03", label: "2026-Q4", so_far: true },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(validQ4, badgeContext({ kind: "quarter", day: undefined, periodId: "2026-Q4" })).state, "badge");
+  const validYear = badgeReport({
+    period: { kind: "iso_year", key: "2026", start: "2025-12-29", end: "2027-01-03", label: "2026", so_far: true },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(validYear, badgeContext({ kind: "year", day: undefined, periodId: "2026" })).state, "badge");
+  const validAll = badgeReport({
+    period: { kind: "all_time", key: "all_time", start: "2026-11-11", end: "2026-11-14", label: "All time", so_far: true },
+    totals: money,
+  });
+  assert.equal(helpers.bankBadgeModel(validAll, badgeContext({ kind: "all", day: undefined, periodId: "all" })).state, "badge");
+  const oldDay = badgeReport({
+    totals: money,
+    days: [{ date: "2026-11-12", path: "bank/2026-11.md", line: 4 }],
+    coverage: undefined,
+    navigation: undefined,
+  });
+  delete oldDay.coverage;
+  delete oldDay.navigation;
+  assert.equal(helpers.bankBadgeModel(oldDay, badgeContext()).state, "badge");
+  const oldWeek = badgeReport({
+    period: { kind: "week", key: "2026-W46", start: "2026-11-09", end: "2026-11-15", label: "2026-W46", so_far: true },
+    totals: money,
+  });
+  delete oldWeek.coverage;
+  delete oldWeek.navigation;
+  assert.equal(helpers.bankBadgeModel(oldWeek, badgeContext({ kind: "week", day: undefined, periodId: "2026-W46" })).state, "badge");
 });
 
 test("bank badge quarter amounts round half up but preserve nonzero cents below one dollar", () => {
@@ -362,8 +429,8 @@ test("bank badge quarter amounts round half up but preserve nonzero cents below 
     period: { kind: "quarter", key: "2026-Q4", start: "2026-09-28", end: "2027-01-03", label: "2026-Q4 · Sep 28, 2026 – Jan 3, 2027", so_far: true },
     totals: { ...badgeReport().totals, in_cents: 141850 },
   });
-  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", day: undefined })).parts[0].amount, "+$1,419");
-  assert.match(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", day: undefined })).tooltip, /In \+\$1,418\.50/);
+  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", day: undefined, periodId: "2026-Q4" })).parts[0].amount, "+$1,419");
+  assert.match(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", day: undefined, periodId: "2026-Q4" })).tooltip, /In \+\$1,418\.50/);
 });
 
 test("bank badge coverage copy handles partial starts, short imports, both bounds, and all time", () => {
@@ -398,30 +465,30 @@ test("bank badge chooses waiting, strip-first, one-month, hub, and old-bob targe
     totals: { ...badgeReport().totals, in_cents: 1, net_cents: 1 },
     navigation: { waiting: null, first, months: ["bank/2026-11.md", "bank/2026-12.md"] },
   });
-  assert.equal(helpers.bankBadgeModel(week, badgeContext({ kind: "week" })).target.path, first.path);
+  assert.equal(helpers.bankBadgeModel(week, badgeContext({ kind: "week", periodId: "2026-W46" })).target.path, first.path);
   const quarter = badgeReport({
     period: { kind: "quarter", key: "2026-Q4", start: "2026-09-28", end: "2027-01-03", label: "Q4", so_far: true },
     totals: { ...badgeReport().totals, in_cents: 1, net_cents: 1 },
     navigation: { waiting: null, first, months: ["bank/2026-11.md"] },
   });
-  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter" })).target.path, first.path);
+  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", periodId: "2026-Q4" })).target.path, first.path);
   quarter.navigation.months.push("bank/2026-12.md");
-  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter" })).target.path, "bank.md");
+  assert.equal(helpers.bankBadgeModel(quarter, badgeContext({ kind: "quarter", periodId: "2026-Q4" })).target.path, "bank.md");
   const year = badgeReport({
     period: { kind: "iso_year", key: "2026", start: "2025-12-29", end: "2027-01-03", label: "2026", so_far: true },
     totals: { ...badgeReport().totals, out_cents: 1, net_cents: -1 },
     navigation: { waiting: null, first, months: ["bank/2026-11.md"] },
   });
-  assert.equal(helpers.bankBadgeModel(year, badgeContext({ kind: "year" })).target.path, first.path);
+  assert.equal(helpers.bankBadgeModel(year, badgeContext({ kind: "year", periodId: "2026" })).target.path, first.path);
   const allTime = badgeReport({
     period: { kind: "all_time", key: "all_time", start: "2026-10-01", end: "2026-11-12", label: "All time", so_far: true },
     totals: { ...badgeReport().totals, out_cents: 1, net_cents: -1 },
     navigation: { waiting: null, first, months: ["bank/2026-11.md", "bank/2026-12.md"] },
   });
-  assert.equal(helpers.bankBadgeModel(allTime, badgeContext({ kind: "all" })).target.path, "bank.md");
+  assert.equal(helpers.bankBadgeModel(allTime, badgeContext({ kind: "all", periodId: "all" })).target.path, "bank.md");
   assert.deepEqual(helpers.bankBadgeModel(badgeReport({ totals: { ...badgeReport().totals, in_cents: 1, net_cents: 1 }, days: [{ date: "2026-11-12", path: "bank/2026-11.md", line: 4 }] }), badgeContext()).target, { path: "bank/2026-11.md", line: 4, date: "2026-11-12", type: "day" });
-  const oldWeek = badgeReport({ period: { kind: "week", start: "2026-11-09", end: "2026-11-15" }, totals: { ...badgeReport().totals, in_cents: 1, net_cents: 1 } });
-  assert.equal(helpers.bankBadgeModel(oldWeek, badgeContext({ kind: "week" })).target.path, "bank.md");
+  const oldWeek = badgeReport({ period: { kind: "week", key: "2026-W46", start: "2026-11-09", end: "2026-11-15", label: "2026-W46", so_far: true }, totals: { ...badgeReport().totals, in_cents: 1, net_cents: 1 } });
+  assert.equal(helpers.bankBadgeModel(oldWeek, badgeContext({ kind: "week", periodId: "2026-W46" })).target.path, "bank.md");
 });
 
 test("today-only all-month waiting is tooltip-only", () => {
@@ -456,6 +523,22 @@ test("bank badge painter uses one accessible span, joins present parts, and leav
   assert.equal(node.querySelectorAll(".bob-bank-badge-separator").length, model.parts.length);
   assert.equal(node.getAttribute("data-tone"), "surplus");
   assert.equal(node.getAttribute("data-kind"), "day");
+  assert.equal(textOf(node), model.text);
+  assert.match(textOf(node), /^BANK · in \+\$2,500\.00/);
+  for (const part of node.querySelectorAll(".bob-bank-badge-part")) {
+    assert.doesNotMatch(part.textContent, /  /);
+    assert.match(part.textContent, /^\S+ \S+/);
+  }
+  const separators = node.querySelectorAll(".bob-bank-badge-separator");
+  assert.ok(separators.length > 0);
+  for (const separator of separators) {
+    assert.equal(separator.textContent, " · ");
+    assert.equal(separator.getAttribute("aria-hidden"), "true");
+  }
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-bank-badge-part\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(css, /\.bob-bank-badge\s*\{[^}]*gap:\s*0[^0-9]/);
+  assert.doesNotMatch(textOf(node), / {2,}/);
   let prevented = false;
   node.fire("mousedown", { preventDefault: () => { prevented = true; } });
   assert.equal(prevented, true);

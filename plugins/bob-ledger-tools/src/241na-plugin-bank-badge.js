@@ -27,17 +27,20 @@ function bankBadgeActivate(node, action) {
 function bankBadgePaintPart(doc, modelPart) {
   const part = statsEl(doc, "span", { class: `bob-bank-badge-part bob-bank-badge-part-${modelPart.key}` });
   if (!part) return null;
-  const add = (className, value) => {
+  const words = modelPart.words || "";
+  const amount = modelPart.amount || "";
+  const needsSpace = Boolean(words && amount);
+  const add = (className, value, trailingSpace) => {
     if (!value) return;
-    const node = statsEl(doc, "span", { class: className }, value);
+    const node = statsEl(doc, "span", { class: className }, trailingSpace ? `${value} ` : value);
     if (node && typeof part.appendChild === "function") part.appendChild(node);
   };
   if (modelPart.amountFirst) {
-    add("bob-bank-badge-amount", modelPart.amount);
-    add("bob-bank-badge-words", modelPart.words);
+    add("bob-bank-badge-amount", amount, needsSpace);
+    add("bob-bank-badge-words", words, false);
   } else {
-    add("bob-bank-badge-words", modelPart.words);
-    add("bob-bank-badge-amount", modelPart.amount);
+    add("bob-bank-badge-words", words, needsSpace);
+    add("bob-bank-badge-amount", amount, false);
   }
   return part;
 }
@@ -70,7 +73,7 @@ function bankBadgePaint(host, model, handlers = {}) {
   const label = statsEl(doc, "span", { class: "bob-bank-badge-label" }, model.label || "BANK");
   if (label) badge.appendChild(label);
   for (const partModel of Array.isArray(model.parts) ? model.parts : []) {
-    const separator = statsEl(doc, "span", { class: "bob-bank-badge-separator", "aria-hidden": "true" }, "·");
+    const separator = statsEl(doc, "span", { class: "bob-bank-badge-separator", "aria-hidden": "true" }, " · ");
     if (separator) badge.appendChild(separator);
     const part = bankBadgePaintPart(doc, partModel);
     if (part) badge.appendChild(part);
@@ -293,6 +296,7 @@ class BobLedgerToolsBankBadgeMixin {
     const model = bankBadgeModel(result.report, {
       kind: "day",
       day: record.day,
+      periodId: record.day,
       today: record.state && record.state.today || bankLocalDate(),
       stale: result.stale === true,
       refreshFailed: Boolean(result.error),

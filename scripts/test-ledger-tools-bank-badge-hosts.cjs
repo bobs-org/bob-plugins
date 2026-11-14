@@ -125,6 +125,33 @@ function hostClasses(el) {
   return el.children.map((child) => child.getAttribute("class") || "");
 }
 
+function reportEndFor(kind, id, start) {
+  try {
+    if (kind === "day") return start;
+    if (kind === "week") return helpers.dayStripShiftDay(start, 6) || start;
+    if (kind === "quarter") {
+      const match = /^(\d{4})-Q([1-4])$/.exec(id);
+      if (!match) return start;
+      const year = Number(match[1]);
+      const quarter = Number(match[2]);
+      const nextStart = quarter < 4
+        ? helpers.periodNotesIsoWeekMonday(year, quarter * 13 + 1)
+        : helpers.periodNotesIsoWeekMonday(year + 1, 1);
+      return (nextStart && helpers.dayStripShiftDay(nextStart, -1)) || start;
+    }
+    if (kind === "year" || kind === "iso_year") {
+      const year = Number(id);
+      if (!Number.isInteger(year)) return start;
+      const nextStart = helpers.periodNotesIsoWeekMonday(year + 1, 1);
+      return (nextStart && helpers.dayStripShiftDay(nextStart, -1)) || start;
+    }
+    if (kind === "all" || kind === "all_time") return "2026-11-14";
+  } catch (error) {
+    // Fall through to the start date.
+  }
+  return start;
+}
+
 function reportFor(kind, id, extra = {}) {
   const starts = {
     day: id,
@@ -136,13 +163,15 @@ function reportFor(kind, id, extra = {}) {
     all_time: "2026-11-11",
   };
   const reportKind = kind === "year" ? "iso_year" : kind === "all" ? "all_time" : kind;
+  const start = extra.start || starts[kind] || starts[reportKind] || id;
+  const key = reportKind === "all_time" ? "all_time" : id;
   return {
     ...reportDecoded.report,
     period: {
       kind: reportKind,
-      key: id,
-      start: extra.start || starts[kind] || starts[reportKind] || id,
-      end: extra.end || id,
+      key,
+      start,
+      end: extra.end || reportEndFor(kind === "year" ? "year" : kind, id, start),
       label: extra.label || id,
       so_far: extra.so_far !== false,
       note: null,
@@ -390,6 +419,109 @@ test("unload unsubscribes and pref off clears every fence badge", async () => {
       plugin.bankBadgeCheckConfig();
       assert.equal(day.el.querySelector(".bob-bank-badge"), null);
       assert.equal(day.el.querySelector(".bob-bank-badge-host").textContent, "");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("hidden fences subscribe once they become visible without an observer", async () => {
+  await withMissingConfig(async () => {
+    const prior = globalThis.IntersectionObserver;
+    if ("IntersectionObserver" in globalThis) delete globalThis.IntersectionObserver;
+    try {
+      const plugin = makePlugin();
+      try {
+        let shown = false;
+        const { el, added } = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+        await drain();
+        const record = stripRecord(plugin, el);
+        const fenceEl = record.fenceEl || record.el;
+        // Simulate a hidden-at-mount fence that never subscribed.
+        plugin.bankReleaseFenceBadge(record, { keepHost: true });
+        plugin.__spawns.length = 0;
+        fenceEl.isShown = () => shown;
+        plugin.periodStripCheckAll();
+        await drain();
+        assert.ok(!plugin.__spawns.some((args) => args.includes("2026-W46")), "no W46 fetch while hidden");
+        // Become visible and re-run the shown/check cycle.
+        shown = true;
+        plugin.periodStripCheckAll();
+        await drain();
+        const w46 = plugin.__spawns.filter((args) => args.includes("2026-W46"));
+        assert.equal(w46.length, 1, "exactly one W46 bank report request");
+        const before = plugin.__spawns.length;
+        plugin.periodStripCheckAll();
+        await drain();
+        assert.equal(plugin.__spawns.length, before, "no repeated subscription on re-check");
+        assert.ok(el.querySelector(".bob-bank-badge") || el.querySelector(".bob-bank-badge-host").textContent !== "");
+        assert.equal(added.length, 1, "day delegation retains the owning fence record");
+      } finally {
+        plugin.onunload();
+      }
+    } finally {
+      if (prior !== undefined) globalThis.IntersectionObserver = prior;
+    }
+  });
+});
+
+test("day fences retry badge subscription when shown later without an observer", async () => {
+  await withMissingConfig(async () => {
+    const prior = globalThis.IntersectionObserver;
+    if ("IntersectionObserver" in globalThis) delete globalThis.IntersectionObserver;
+    try {
+      const plugin = makePlugin();
+      try {
+        let shown = false;
+        const { el } = mount(plugin, "bob-day-stats", "2026/20261114.md");
+        await drain();
+        const record = stripRecord(plugin, el);
+        const fenceEl = record.fenceEl || record.el;
+        plugin.bankReleaseFenceBadge(record, { keepHost: true });
+        plugin.__spawns.length = 0;
+        fenceEl.isShown = () => shown;
+        plugin.dayStripCheckAll();
+        await drain();
+        assert.ok(!plugin.__spawns.some((args) => args.includes("2026-11-14")), "no day fetch while hidden");
+        shown = true;
+        // Detached-to-connected: the fence element reports shown on the next check.
+        plugin.dayStripCheckAll();
+        await drain();
+        const day = plugin.__spawns.filter((args) => args.includes("2026-11-14"));
+        assert.equal(day.length, 1, "exactly one day bank report request");
+        assert.ok(el.querySelector(".bob-bank-badge"));
+      } finally {
+        plugin.onunload();
+      }
+    } finally {
+      if (prior !== undefined) globalThis.IntersectionObserver = prior;
+    }
+  });
+});
+
+test("losing periodId in the host adapter cannot silently undo validation", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const { el } = mount(plugin, "bob-stats-strip", "2026/2026-W46.md");
+      await drain();
+      const record = stripRecord(plugin, el);
+      const badgeRecord = record.bankBadgeRecord;
+      assert.ok(badgeRecord, "fence badge subscribed");
+      assert.equal(badgeRecord.kind, "week");
+      assert.equal(badgeRecord.id, "2026-W46");
+      // A W45 report for a W46 strip must be unavailable, not a badge.
+      const wrong = reportFor("week", "2026-W45");
+      const mismatched = helpers.bankBadgeModel(wrong, { kind: badgeRecord.kind, day: undefined, periodId: badgeRecord.id, today: "2026-11-14" });
+      assert.equal(mismatched.state, "unavailable");
+      assert.equal(mismatched.reason, "period-mismatch");
+      // Dropping periodId must not validate: the adapter always passes it.
+      const dropped = helpers.bankBadgeModel(wrong, { kind: badgeRecord.kind, day: undefined, today: "2026-11-14" });
+      assert.equal(dropped.state, "unavailable");
+      // The right report validates through the real host callback path.
+      const right = reportFor("week", "2026-W46");
+      const matched = helpers.bankBadgeModel(right, { kind: badgeRecord.kind, day: undefined, periodId: badgeRecord.id, today: "2026-11-14" });
+      assert.equal(matched.state === "badge" || matched.state === "hidden", true);
     } finally {
       plugin.onunload();
     }

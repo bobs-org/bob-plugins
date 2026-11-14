@@ -51379,6 +51379,13 @@ class BobLedgerToolsDayStripMixin {
       if (!this.dayStripRecordIsShown(record)) {
         return;
       }
+      try {
+        if (record && record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+          this.bankSyncFenceBadge(record);
+        }
+      } catch (error) {
+        // Badge retry is best-effort and never triggers a strip fetch.
+      }
       const { selection, options } = this.dayStripOptionsForRecord(
         record,
         localToday,
@@ -54780,6 +54787,13 @@ class BobLedgerToolsPeriodStripMixin {
       if (!record || !record.el) return;
       if (!this.periodStripCanSpawn()) return;
       if (record.day) {
+        try {
+          if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+            this.bankSyncFenceBadge(record);
+          }
+        } catch (error) {
+          // Badge retry is best-effort and never triggers a strip fetch.
+        }
         if (typeof this.dayStripCheck === "function") {
           const dayRecord = { el: record.el, day: record.day, path: record.path, kind: "fence", observer: record.observer || null, visible: record.visible };
           this.dayStripCheck(dayRecord, opts);
@@ -54794,6 +54808,13 @@ class BobLedgerToolsPeriodStripMixin {
         return;
       }
       if (!this.periodStripRecordIsShown(record)) return;
+      try {
+        if (record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+          this.bankSyncFenceBadge(record);
+        }
+      } catch (error) {
+        // Badge retry is best-effort and never triggers a strip fetch.
+      }
       const peek = this.periodStripPeek(periodId);
       if (!peek || !peek.report) {
         this.periodStripFetch(record);
@@ -68198,6 +68219,104 @@ function bankBadgeAriaLabel(report, context, parts, target) {
   return phrases.join(": ");
 }
 
+function bankBadgeValidDate(value) {
+  try {
+    if (typeof dayStripDateParts === "function") return dayStripDateParts(value) !== null;
+  } catch (error) {
+    // Fall through to the pattern check.
+  }
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function bankBadgeShiftDay(value, amount) {
+  try {
+    if (typeof dayStripShiftDay === "function") return dayStripShiftDay(value, amount);
+  } catch (error) {
+    // Fall through to null.
+  }
+  return "";
+}
+
+function bankBadgeExpectedBounds(kind, requestedId) {
+  try {
+    const id = typeof requestedId === "string" ? requestedId.trim() : "";
+    if (!id) return null;
+    if (kind === "day") {
+      if (!bankBadgeValidDate(id)) return null;
+      return { key: id, start: id, end: id };
+    }
+    if (kind === "week") {
+      const match = /^(\d{4})-W(\d{2})$/.exec(id);
+      if (!match || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const start = periodNotesIsoWeekMonday(Number(match[1]), Number(match[2]));
+      if (!start) return null;
+      const end = bankBadgeShiftDay(start, 6);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "quarter") {
+      const match = /^(\d{4})-Q([1-4])$/.exec(id);
+      if (!match || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const year = Number(match[1]);
+      const quarter = Number(match[2]);
+      const start = periodNotesIsoWeekMonday(year, (quarter - 1) * 13 + 1);
+      if (!start) return null;
+      const nextStart = quarter < 4
+        ? periodNotesIsoWeekMonday(year, quarter * 13 + 1)
+        : periodNotesIsoWeekMonday(year + 1, 1);
+      if (!nextStart) return null;
+      const end = bankBadgeShiftDay(nextStart, -1);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "year") {
+      if (!/^\d{4}$/.test(id) || typeof periodNotesIsoWeekMonday !== "function") return null;
+      const year = Number(id);
+      const start = periodNotesIsoWeekMonday(year, 1);
+      const nextStart = periodNotesIsoWeekMonday(year + 1, 1);
+      if (!start || !nextStart) return null;
+      const end = bankBadgeShiftDay(nextStart, -1);
+      if (!end) return null;
+      return { key: id, start, end };
+    }
+    if (kind === "all") {
+      if (id !== "all" && id !== "all_time") return null;
+      return { key: "all_time", start: null, end: null };
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function bankBadgePeriodIdentityValid(report, ctx) {
+  const expectedKind = bankBadgeKind(ctx.kind);
+  const period = report && report.period;
+  if (!period || expectedKind === null || period.kind !== expectedKind) return false;
+  const requestedId = typeof ctx.periodId === "string" && ctx.periodId
+    ? ctx.periodId
+    : ctx.kind === "day" && typeof ctx.day === "string" && ctx.day
+      ? ctx.day
+      : null;
+  if (ctx.kind === "day") {
+    if (!requestedId || !bankBadgeValidDate(requestedId)) return false;
+    if (period.start !== requestedId || period.end !== requestedId) return false;
+    if (typeof period.key === "string" && period.key && period.key !== requestedId) return false;
+    return true;
+  }
+  if (ctx.kind === "all") {
+    if (!requestedId) return false;
+    if (period.key !== "all_time") return false;
+    if (!bankBadgeValidDate(period.start) || !bankBadgeValidDate(period.end)) return false;
+    return true;
+  }
+  if (!requestedId) return false;
+  const expected = bankBadgeExpectedBounds(ctx.kind, requestedId);
+  if (!expected) return false;
+  if (period.key !== expected.key) return false;
+  return period.start === expected.start && period.end === expected.end;
+}
+
 function bankBadgeModel(report, context = {}) {
   const ctx = context && typeof context === "object" ? context : {};
   if (report && report.teaching_empty === true) return { state: "hidden", reason: "teaching-empty" };
@@ -68209,11 +68328,7 @@ function bankBadgeModel(report, context = {}) {
   ) {
     return { state: "unavailable", reason: "invalid-report", hint: "The bank report could not be read." };
   }
-  const expectedKind = bankBadgeKind(ctx.kind);
-  const periodKind = report.period.kind;
-  const matches = expectedKind !== null && periodKind === expectedKind &&
-    (ctx.kind !== "day" || report.period.start === ctx.day);
-  if (!matches) {
+  if (!bankBadgePeriodIdentityValid(report, ctx)) {
     return { state: "unavailable", reason: "period-mismatch", hint: "The bank report does not match this stats strip." };
   }
   const today = typeof ctx.today === "string" ? ctx.today : "";
@@ -68307,17 +68422,20 @@ function bankBadgeActivate(node, action) {
 function bankBadgePaintPart(doc, modelPart) {
   const part = statsEl(doc, "span", { class: `bob-bank-badge-part bob-bank-badge-part-${modelPart.key}` });
   if (!part) return null;
-  const add = (className, value) => {
+  const words = modelPart.words || "";
+  const amount = modelPart.amount || "";
+  const needsSpace = Boolean(words && amount);
+  const add = (className, value, trailingSpace) => {
     if (!value) return;
-    const node = statsEl(doc, "span", { class: className }, value);
+    const node = statsEl(doc, "span", { class: className }, trailingSpace ? `${value} ` : value);
     if (node && typeof part.appendChild === "function") part.appendChild(node);
   };
   if (modelPart.amountFirst) {
-    add("bob-bank-badge-amount", modelPart.amount);
-    add("bob-bank-badge-words", modelPart.words);
+    add("bob-bank-badge-amount", amount, needsSpace);
+    add("bob-bank-badge-words", words, false);
   } else {
-    add("bob-bank-badge-words", modelPart.words);
-    add("bob-bank-badge-amount", modelPart.amount);
+    add("bob-bank-badge-words", words, needsSpace);
+    add("bob-bank-badge-amount", amount, false);
   }
   return part;
 }
@@ -68350,7 +68468,7 @@ function bankBadgePaint(host, model, handlers = {}) {
   const label = statsEl(doc, "span", { class: "bob-bank-badge-label" }, model.label || "BANK");
   if (label) badge.appendChild(label);
   for (const partModel of Array.isArray(model.parts) ? model.parts : []) {
-    const separator = statsEl(doc, "span", { class: "bob-bank-badge-separator", "aria-hidden": "true" }, "·");
+    const separator = statsEl(doc, "span", { class: "bob-bank-badge-separator", "aria-hidden": "true" }, " · ");
     if (separator) badge.appendChild(separator);
     const part = bankBadgePaintPart(doc, partModel);
     if (part) badge.appendChild(part);
@@ -68573,6 +68691,7 @@ class BobLedgerToolsBankBadgeMixin {
     const model = bankBadgeModel(result.report, {
       kind: "day",
       day: record.day,
+      periodId: record.day,
       today: record.state && record.state.today || bankLocalDate(),
       stale: result.stale === true,
       refreshFailed: Boolean(result.error),
@@ -68817,6 +68936,7 @@ class BobLedgerToolsBankBadgeHostsMixin {
     const model = bankBadgeModel(result.report, {
       kind: record.kind,
       day: record.kind === "day" ? record.id : undefined,
+      periodId: record.id,
       today: record.state && record.state.today || bankLocalDate(),
       stale: result.stale === true,
       refreshFailed: Boolean(result.error),
@@ -124144,7 +124264,7 @@ module.exports.helpers = {
   BANK_SCHEMA_VERSION, BANK_CACHE_SIZE, BANK_REVALIDATE_DEBOUNCE_MS, BANK_ROLLOVER_INTERVAL_MS, bankBuildArgs, bankCacheKey, bankDecodeList, bankDecodeReport, bankBadgeSpecForStrip, bankBadgePeriodStart, bankBadgeOlderBobRefusal, bankPeriodSpecForStrip, bankPeriodOlderBobRefusal, bankNormalizeCharts, bankIsoShiftDays, bankPeriodCompact, bankPeriodViewOf, bankPeriodIdentityMatches, bankPeriodChartsModel,
   bankErrorModel, bankFormatCents, bankLocalDate, bankPresentList, bankPresentReport, bankRelevantPath, bankMonthFromPath, bankParseAmountLead, bankClassifyLine,
   bankParseDayHeading, bankScanSource, bankRecognizeRow, bankLocateDayHeading, bankDiscoverMonthPaths, bankSourceFenceLines,
-  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
+  bankEnsureArgsForDay, bankAckArgsForIds, bankNormalizeAckId, bankDedupeIds, bankDecodeEnsureResponse, bankDecodeAckResponse, bankDayWaitingSnapshot, bankAckResultSummary, bankCursorDayContext, bankGuardedCheckboxPlan, bankEnterDecision, bankCategoryCompletions, bankRowBlockId, bankAckIdFromLine, BANK_CARD_HUES, BANK_CARD_HEAT_LEVELS, bankCardParseFence, bankCardValidateMonthFrontmatter, bankCardMonthHeatModel, bankCardMonthModel, bankCardDedupeIds, bankCardRecentMonths, bankCardQueueModel, bankBadgeAmount, bankBadgeCoverageText, bankBadgeModel, bankBadgePaint, bankBadgeActivate, bankBadgeExpectedBounds, bankBadgePeriodIdentityValid, bankTokenizeLine, bankTokenizeSource, bankRowPresentation, bankHeadingPresentation, bankReportDayFor, bankNaiveMathSpans, bankMathConflictSpans, bankMathDollarRanges, bankLineHasCursor, bankProtectMathInElement, bankRestoreMarkHosts, bankIsMathNode, buildBankAmountElement, buildBankChipElement, buildBankIdElement, buildBankHeadingElement, buildBankDollarElement,
 };
 // ---- src/357-exports-bank-category-ui.js ----
 // UI-level test helpers for the Category card. Kept apart from the pure

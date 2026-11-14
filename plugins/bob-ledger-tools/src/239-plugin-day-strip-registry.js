@@ -630,6 +630,13 @@ class BobLedgerToolsDayStripMixin {
       if (!this.dayStripRecordIsShown(record)) {
         return;
       }
+      try {
+        if (record && record.badgeHost && typeof this.bankSyncFenceBadge === "function") {
+          this.bankSyncFenceBadge(record);
+        }
+      } catch (error) {
+        // Badge retry is best-effort and never triggers a strip fetch.
+      }
       const { selection, options } = this.dayStripOptionsForRecord(
         record,
         localToday,

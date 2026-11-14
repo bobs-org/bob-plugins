@@ -327,6 +327,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     bankCategoryUiAppend(root, "p", "bob-bank-category-summary", summary.line1 || "Bank filing complete");
     if (summary.detail) bankCategoryUiAppend(root, "p", "bob-bank-category-detail", summary.detail);
     if (summary.line2) bankCategoryUiAppend(root, "p", "bob-bank-category-summary-detail", summary.line2);
+    if (summary.walkLine) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-summary-detail bob-bank-category-walk-line",
+        summary.walkLine);
+    }
     const links = Array.isArray(summary.waitingLinks) ? summary.waitingLinks : [];
     if (links.length) {
       const section = bankCategoryUiAppend(root, "section", "bob-bank-category-other-months");

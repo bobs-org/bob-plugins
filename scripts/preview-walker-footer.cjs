@@ -2,9 +2,9 @@
 // Render the production walker footer (s/w/n plus the bank `b` panel), the
 // Keep chip, and the production bracket-mode selector in Chromium. The page
 // paints every panel state from the walker_footers and bank_walk_family_b
-// plan state tables plus an integrated bar that repaints s → w → n in one
+// plan state tables plus an integrated bar that repaints s → w → n → b in one
 // host to prove the selector rect never moves (invariant 7) and the panel
-// swaps synchronously. The four-letter integrated bar waits for handoff.
+// swaps synchronously with the four-letter selector and the b attention dot.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -232,10 +232,10 @@ function validateMatrix(entry) {
   if (heights.length && Math.max(...heights) - Math.min(...heights) > 2) {
     failures.push(`fixture host heights vary ${Math.min(...heights)}–${Math.max(...heights)}px`);
   }
-  // Invariant 7: the integrated selector rect is identical across s → w → n,
+  // Invariant 7: the integrated selector rect is identical across s → w → n → b,
   // immediately and after two frames, while footer widths change.
   const modes = entry.integrated;
-  const expectedPanel = { s: "s", w: "w", n: "n" };
+  const expectedPanel = { s: "s", w: "w", n: "n", b: "b" };
   for (const mode of modes) {
     if (mode.panel !== expectedPanel[mode.mode] || mode.settledPanel !== expectedPanel[mode.mode]) {
       failures.push(`integrated ${mode.mode} paints panel ${mode.panel}/${mode.settledPanel}`);
@@ -258,6 +258,14 @@ function validateMatrix(entry) {
   const widths = modes.map((mode) => mode.contentWidth);
   if (new Set(widths.map((value) => Math.round(value))).size < 2) {
     failures.push("integrated panel content width never changes across modes; the rect check proves nothing");
+  }
+  for (const mode of modes) {
+    if (mode.mode === "b" && mode.bAttention === true) {
+      failures.push("integrated b still shows the waiting attention dot");
+    }
+    if (mode.mode !== "b" && mode.bAttention !== true) {
+      failures.push(`integrated ${mode.mode} is missing the b waiting attention dot`);
+    }
   }
   return failures;
 }
@@ -326,9 +334,9 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: every walker panel state (s review + clear, w lane states + stress, n compass states + Unicode/dupe, b bank WAITING/ALL/empty/wrap), plus an integrated s/w/n bar (footer + Keep chip + production selector). The four-letter bar waits for handoff.",
+      "- Fixtures: every walker panel state (s review + clear, w lane states + stress, n compass states + Unicode/dupe, b bank WAITING/ALL/empty/wrap), plus an integrated s/w/n/b bar (footer + Keep chip + production four-letter selector and the b attention dot).",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
-      "- Checks: AA contrast for every panel ink; no host overflow; panel attribute per fixture id; links arms match the view; dashed create target; selector rect identical across s/w/n immediately and after frames while footer widths change; fixed host height.",
+      "- Checks: AA contrast for every panel ink; no host overflow; panel attribute per fixture id; links arms match the view; dashed create target; selector rect identical across s/w/n/b immediately and after frames while footer widths change; b attention dot off-b; fixed host height.",
       "",
       "| Width | Theme | Fixtures | Worst contrast | Overflow | Selector stable | Result | Screenshot |",
       "| ---: | --- | --- | ---: | ---: | --- | --- | --- |",

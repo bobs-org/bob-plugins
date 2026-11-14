@@ -375,3 +375,143 @@ test("session counts progress and the summary owns every number", () => {
   assert.equal(offline.line2, null);
   assert.match(offline.line1, /November filed/);
 });
+
+function editorFor(source) {
+  return {
+    source,
+    cursor: { line: 1, ch: 0 },
+    replacements: [],
+    getValue() { return this.source; },
+    getLine(line) { return this.source.split("\n")[line] || ""; },
+    getCursor() { return this.cursor; },
+    setCursor(cursor) { this.cursor = cursor; },
+    replaceRange(text, from, to) {
+      this.replacements.push({ text, from, to });
+      const lines = this.source.split("\n");
+      lines[from.line] = text;
+      this.source = lines.join("\n");
+    },
+  };
+}
+
+function otherMonthSnapshot() {
+  return h.bankWalkBuildSnapshotFromContents([
+    {
+      path: "bank/2026-11.md",
+      content: "# November 2026\n\n## Thu Nov 13\n\n- [x] $1.00 Filed cafe\n",
+    },
+    {
+      path: "bank/2026-10.md",
+      content: [
+        "# October 2026",
+        "",
+        "## Fri Oct 30",
+        "",
+        "- [ ] $4.25 Halloween candy",
+        "- [ ] $7.50 Duplicate heading treats",
+        "- [ ] $9.99 Empty heading placeholder",
+        "",
+      ].join("\n"),
+    },
+  ], 3);
+}
+
+test("other-month walk line names the oldest waiting month from the snapshot", () => {
+  const snap = otherMonthSnapshot();
+  assert.equal(snap.available, true);
+  assert.equal(h.bankWalkOtherMonthLine(snap, "bank/2026-11.md"), "]b → October 2026 (3 waiting)");
+  assert.equal(h.bankWalkOtherMonthLine(snap, "bank/2026-10.md"), null);
+  assert.equal(h.bankWalkOtherMonthLine({ available: false, reason: "indexing" }, "bank/2026-11.md"), null);
+  assert.equal(h.bankWalkOtherMonthLine(null, "bank/2026-11.md"), null);
+});
+
+test("close advances in note order and anchors the landed waiting row", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor([
+    "## Thu Nov 12",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "- [ ] $2.00 Market ^bank-bbb222",
+    "- [ ] $3.00 Later shop ^bank-ccc333",
+    "",
+  ].join("\n"));
+  const plugin = new LedgerToolsPlugin({ workspace: { getActiveFile: () => ({ path }) } });
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  const modal = {
+    mode: "close", editor, context, month: "2026-11",
+    session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    setNext(nextContext, progress, lock) { this.next = { context: nextContext, progress, lock }; this.waitingRefresh = true; },
+    setReport() {},
+    paint() {},
+    showSummary() {},
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.apiBankRefresh = async () => ({ report: { categories: categories(), days: [] }, error: null });
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  assert.equal(modal.next.context.row.line, 3);
+  assert.equal(modal.next.context.row.payee, "Market");
+  const anchor = plugin.bankWalkAnchor();
+  assert.equal(anchor.path, path);
+  assert.equal(anchor.line, 3);
+  assert.equal(h.bankCategoryNextWaiting({
+    source: editor.getValue(), path, filedLine: 3,
+  }).row.line, 4);
+});
+
+test("completing a month anchors the last filed row and surfaces the other-month ]b line", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor([
+    "## Thu Nov 12",
+    "- [ ] $1.00 Corner Cafe ^bank-aaa111",
+    "",
+  ].join("\n"));
+  const plugin = new LedgerToolsPlugin({ workspace: { getActiveFile: () => ({ path }) } });
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  let summary = null;
+  const modal = {
+    mode: "close", editor, context, month: "2026-11",
+    session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    setNext() { throw new Error("month-local wrap must not fire on the last waiting row"); },
+    setReport() {},
+    paint() {},
+    showSummary(value) { summary = value; },
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.bankWalkSnapshot = () => otherMonthSnapshot();
+  plugin.apiBankRefresh = async (spec) => {
+    if (spec && spec.command === "list") {
+      return { report: { days: [] }, error: null };
+    }
+    return { report: { period: { label: "November" }, accounts: [], days: [] }, error: null };
+  };
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  const anchor = plugin.bankWalkAnchor();
+  assert.equal(anchor.path, path);
+  assert.equal(anchor.line, 2);
+  assert.equal(summary.walkLine, "]b → October 2026 (3 waiting)");
+});
+
+test("completion omits the other-month ]b line when the snapshot has no other waiting months", async () => {
+  const path = "bank/2026-11.md";
+  const editor = editorFor("## Thu Nov 12\n- [ ] $1.00 Corner Cafe\n");
+  const plugin = new LedgerToolsPlugin({ workspace: { getActiveFile: () => ({ path }) } });
+  const context = plugin.bankCategoryContextAt(editor, { file: { path } }, 2);
+  let summary = null;
+  const modal = {
+    mode: "close", editor, context, month: "2026-11",
+    session: h.bankCategorySessionStart(path, Date.now()),
+    closed: false,
+    setNext() {},
+    setReport() {},
+    paint() {},
+    showSummary(value) { summary = value; },
+  };
+  plugin.bankCategoryModal = modal;
+  plugin.bankWalkSnapshot = () => h.bankWalkBuildSnapshotFromContents([{
+    path, content: "## Thu Nov 12\n- [x] $1.00 Corner Cafe [cat:: coffee]\n",
+  }], 1);
+  plugin.apiBankRefresh = async () => ({ report: { period: { label: "November" }, accounts: [], days: [] }, error: null });
+  assert.equal(await plugin.bankCategoryCommit(modal, "coffee", "pick"), true);
+  assert.equal(summary.walkLine, null);
+});

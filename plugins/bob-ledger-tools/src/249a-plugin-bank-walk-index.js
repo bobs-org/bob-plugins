@@ -475,6 +475,49 @@ class BobLedgerToolsBankWalkMixin {
     }
   }
 
+  bankWalkHandOffOpenedRow(row, options = {}) {
+    try {
+      if (!row || typeof row.path !== "string" || !Number.isInteger(row.line) || row.line < 1) {
+        return false;
+      }
+      let entry = null;
+      try {
+        const snapshot = typeof this.bankWalkSnapshot === "function"
+          ? this.bankWalkSnapshot()
+          : null;
+        if (snapshot && snapshot.available === true && Array.isArray(snapshot.entries)) {
+          entry = snapshot.entries.find((item) =>
+            item && item.path === row.path && item.line === row.line) || null;
+        }
+      } catch (error) {
+        entry = null;
+      }
+      this.bankWalkSetAnchor(entry || {
+        path: row.path,
+        line: row.line,
+        date: typeof row.date === "string" ? row.date : null,
+        text: typeof row.text === "string" ? row.text : "",
+        key: typeof row.key === "string" ? row.key : undefined,
+      });
+      if (options.selectFamily === true) {
+        const api = typeof this.dependencyNavApi === "function"
+          ? this.dependencyNavApi()
+          : null;
+        const walkMode = api && api.walkMode;
+        if (
+          walkMode &&
+          Number(walkMode.version) >= 4 &&
+          typeof walkMode.select === "function"
+        ) {
+          walkMode.select("b");
+        }
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   bankWalkApi() {
     const self = this;
     const guard = (fn, fallback) => (...args) => {

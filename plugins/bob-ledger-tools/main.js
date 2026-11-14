@@ -69495,8 +69495,14 @@ class BobLedgerToolsBankBadgeMixin {
     }
     const line = target && Number.isInteger(target.line) && target.line > 0 ? target.line : 1;
     const opened = await this.bankOpenMonthPathAtLine(path, line, 0, { newLeaf, skipPendingSave: true });
-    if (!opened) new Notice(`Bank: could not open ${path}`);
-    return Boolean(opened);
+    if (!opened) {
+      new Notice(`Bank: could not open ${path}`);
+      return false;
+    }
+    if (target && target.type === "waiting") {
+      this.bankWalkHandOffOpenedRow(target, { selectFamily: true });
+    }
+    return true;
   }
 
   bankRefreshBadgeHosts() {
@@ -73803,6 +73809,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     bankCategoryUiAppend(root, "p", "bob-bank-category-summary", summary.line1 || "Bank filing complete");
     if (summary.detail) bankCategoryUiAppend(root, "p", "bob-bank-category-detail", summary.detail);
     if (summary.line2) bankCategoryUiAppend(root, "p", "bob-bank-category-summary-detail", summary.line2);
+    if (summary.walkLine) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-summary-detail bob-bank-category-walk-line",
+        summary.walkLine);
+    }
     const links = Array.isArray(summary.waitingLinks) ? summary.waitingLinks : [];
     if (links.length) {
       const section = bankCategoryUiAppend(root, "section", "bob-bank-category-other-months");
@@ -74227,6 +74237,12 @@ class BobLedgerToolsBankCategoryMixin {
       try {
         modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount: null }));
       } catch (_) {}
+      this.bankWalkHandOffOpenedRow({
+        path: modal.context.path,
+        line: plan.line,
+        date: modal.context.row && modal.context.row.date,
+        text: modal.context.capture && modal.context.capture.lineText,
+      });
       await this.bankCategoryCompleteWalk(modal, session, refresh);
       return true;
     }
@@ -74256,6 +74272,12 @@ class BobLedgerToolsBankCategoryMixin {
       { path: modal.context.path, line: plan.line - 1, ch: filedCh },
       { path: modal.context.path, line: next.row.line - 1, ch: landingCh },
     );
+    this.bankWalkHandOffOpenedRow({
+      path: nextContext.path,
+      line: nextContext.row.line,
+      date: nextContext.row.date,
+      text: nextContext.capture && nextContext.capture.lineText,
+    });
     const progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(scan).length);
     let refreshResult = null;
     try {
@@ -74337,6 +74359,14 @@ class BobLedgerToolsBankCategoryMixin {
         waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
         bobReachable: Boolean(report && !monthResult?.error),
       });
+      try {
+        const snapshot = typeof this.bankWalkSnapshot === "function"
+          ? this.bankWalkSnapshot()
+          : null;
+        summary.walkLine = bankWalkOtherMonthLine(snapshot, modal.context && modal.context.path);
+      } catch (_) {
+        summary.walkLine = null;
+      }
       this.bankCategorySession = null;
       new Notice(summary.line1);
       modal.showSummary(summary);
@@ -74742,6 +74772,42 @@ function bankWalkBuildSnapshotFromContents(fileContents, generation) {
     days: frozenDays,
     files: frozenFiles,
   });
+}
+
+function bankWalkOtherMonthLine(snapshot, currentPath) {
+  try {
+    if (!snapshot || snapshot.available !== true) {
+      return null;
+    }
+    const current = bankNormalizePath(currentPath);
+    if (!current) {
+      return null;
+    }
+    const entries = Array.isArray(snapshot.entries) ? snapshot.entries : [];
+    const others = entries.filter((entry) => {
+      if (!entry || bankNormalizePath(entry.path) === current) {
+        return false;
+      }
+      return snapshot.scope === "waiting" || entry.waiting === true;
+    });
+    if (!others.length) {
+      return null;
+    }
+    const first = others[0];
+    const monthKey = first.month || bankWalkMonthKeyFromPath(first.path);
+    if (!monthKey) {
+      return null;
+    }
+    const count = others.filter((entry) =>
+      (entry.month || bankWalkMonthKeyFromPath(entry.path)) === monthKey).length;
+    const label = bankWalkMonthLabel(monthKey);
+    if (!label || count < 1) {
+      return null;
+    }
+    return `]b → ${label} (${count} waiting)`;
+  } catch (error) {
+    return null;
+  }
 }
 
 function bankWalkLocate(snapshot, cursor) {
@@ -75690,6 +75756,49 @@ class BobLedgerToolsBankWalkMixin {
     try {
       const modal = this.bankCategoryModal;
       return Boolean(modal && !modal.closed);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankWalkHandOffOpenedRow(row, options = {}) {
+    try {
+      if (!row || typeof row.path !== "string" || !Number.isInteger(row.line) || row.line < 1) {
+        return false;
+      }
+      let entry = null;
+      try {
+        const snapshot = typeof this.bankWalkSnapshot === "function"
+          ? this.bankWalkSnapshot()
+          : null;
+        if (snapshot && snapshot.available === true && Array.isArray(snapshot.entries)) {
+          entry = snapshot.entries.find((item) =>
+            item && item.path === row.path && item.line === row.line) || null;
+        }
+      } catch (error) {
+        entry = null;
+      }
+      this.bankWalkSetAnchor(entry || {
+        path: row.path,
+        line: row.line,
+        date: typeof row.date === "string" ? row.date : null,
+        text: typeof row.text === "string" ? row.text : "",
+        key: typeof row.key === "string" ? row.key : undefined,
+      });
+      if (options.selectFamily === true) {
+        const api = typeof this.dependencyNavApi === "function"
+          ? this.dependencyNavApi()
+          : null;
+        const walkMode = api && api.walkMode;
+        if (
+          walkMode &&
+          Number(walkMode.version) >= 4 &&
+          typeof walkMode.select === "function"
+        ) {
+          walkMode.select("b");
+        }
+      }
+      return true;
     } catch (error) {
       return false;
     }
@@ -127544,6 +127653,7 @@ try {
       bankWalkPayeeStart,
       bankWalkBuildEntries,
       bankWalkBuildSnapshotFromContents,
+      bankWalkOtherMonthLine,
       bankWalkLocate,
       bankWalkPlan,
       bankWalkResolve,

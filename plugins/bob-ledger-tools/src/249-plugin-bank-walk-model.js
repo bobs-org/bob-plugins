@@ -367,6 +367,42 @@ function bankWalkBuildSnapshotFromContents(fileContents, generation) {
   });
 }
 
+function bankWalkOtherMonthLine(snapshot, currentPath) {
+  try {
+    if (!snapshot || snapshot.available !== true) {
+      return null;
+    }
+    const current = bankNormalizePath(currentPath);
+    if (!current) {
+      return null;
+    }
+    const entries = Array.isArray(snapshot.entries) ? snapshot.entries : [];
+    const others = entries.filter((entry) => {
+      if (!entry || bankNormalizePath(entry.path) === current) {
+        return false;
+      }
+      return snapshot.scope === "waiting" || entry.waiting === true;
+    });
+    if (!others.length) {
+      return null;
+    }
+    const first = others[0];
+    const monthKey = first.month || bankWalkMonthKeyFromPath(first.path);
+    if (!monthKey) {
+      return null;
+    }
+    const count = others.filter((entry) =>
+      (entry.month || bankWalkMonthKeyFromPath(entry.path)) === monthKey).length;
+    const label = bankWalkMonthLabel(monthKey);
+    if (!label || count < 1) {
+      return null;
+    }
+    return `]b → ${label} (${count} waiting)`;
+  } catch (error) {
+    return null;
+  }
+}
+
 function bankWalkLocate(snapshot, cursor) {
   try {
     if (!snapshot || snapshot.available !== true) {

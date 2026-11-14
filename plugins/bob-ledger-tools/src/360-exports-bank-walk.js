@@ -20,6 +20,7 @@ try {
       bankWalkPayeeStart,
       bankWalkBuildEntries,
       bankWalkBuildSnapshotFromContents,
+      bankWalkOtherMonthLine,
       bankWalkLocate,
       bankWalkPlan,
       bankWalkResolve,

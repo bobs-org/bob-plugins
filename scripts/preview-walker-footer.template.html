@@ -546,12 +546,16 @@
     function paintIntegratedMode(integrated, mode, views, previousMode) {
       const started = performance.now();
       ledger.freshnessFooterPaint(integrated.footer, views[mode]);
+      const attention = mode === "b"
+        ? {}
+        : { b: { tier: "waiting", label: "Bank: 9 waiting · oldest Mon Nov 10 — click to show" } };
       const painted = nav.paintBracketModeIndicator(
-        integrated.selector, integrated.selectorParts, nav.buildBracketModeView(mode), previousMode,
+        integrated.selector, integrated.selectorParts, nav.buildBracketModeView(mode, attention), previousMode,
       );
       integrated.selectorParts = painted || integrated.selectorParts;
       const rect = integrated.selector.getBoundingClientRect();
       const main = integrated.footer.querySelector(".bob-freshness-main");
+      const bSeg = integrated.selector.querySelector('[data-bracket-type="b"]');
       return {
         mode,
         panel: integrated.footer.getAttribute("data-walker-panel"),
@@ -559,6 +563,7 @@
         contentWidth: main ? main.getBoundingClientRect().width : 0,
         barHeight: integrated.bar.getBoundingClientRect().height,
         selectorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        bAttention: Boolean(bSeg && bSeg.classList.contains("has-attention")),
         swapMs: performance.now() - started,
       };
     }
@@ -602,10 +607,11 @@
         s: reviewFixtures[1].make(),
         w: laneFixtures[0].make(),
         n: linksFixtures[0].make(),
+        b: bankFixtures[0].make(),
       };
       const modes = [];
       let previousMode;
-      for (const mode of ["s", "w", "n"]) {
+      for (const mode of ["s", "w", "n", "b"]) {
         const painted = paintIntegratedMode(integrated, mode, views, previousMode);
         previousMode = mode;
         await nextFrame();

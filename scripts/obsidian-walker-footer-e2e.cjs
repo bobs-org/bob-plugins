@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Walker-footer real-Obsidian e2e: selector geometry stays fixed across
-// s/w/n, the walker panel swaps within a frame, exactly one footer item
-// exists, and the review-attention dot appears off-s and clears on s.
+// s/w/n/b, the walker panel swaps within a frame, exactly one footer item
+// exists, the review-attention dot appears off-s and clears on s, and `]b`
+// lands at the oldest waiting payee.
 "use strict";
 
 const { spawn, spawnSync } = require("node:child_process");
@@ -155,6 +156,33 @@ function seedVault(vaultDir) {
   fs.writeFileSync(path.join(vaultDir, "links.md"), links);
   fs.writeFileSync(path.join(vaultDir, "2026-20261102.md"), "# Nov 2\n");
   fs.writeFileSync(path.join(vaultDir, "2026-20261104.md"), "# Nov 4\n");
+  fs.writeFileSync(path.join(vaultDir, "bank.md"), [
+    "---",
+    "type: \"[[area]]\"",
+    "---",
+    "",
+    "# Bank",
+    "",
+  ].join("\n"));
+  fs.mkdirSync(path.join(vaultDir, "bank"), { recursive: true });
+  fs.writeFileSync(path.join(vaultDir, "bank", "2026-11.md"), [
+    "---",
+    "parent: \"[[bank]]\"",
+    "type: \"[[bank_month]]\"",
+    "month: 2026-11",
+    "---",
+    "",
+    "# November 2026",
+    "",
+    "## Tue Nov 10",
+    "",
+    "- [ ] $10.00 Oldest waiting",
+    "",
+    "## Wed Nov 11",
+    "",
+    "- [ ] $20.00 Next day waiting",
+    "",
+  ].join("\n"));
   return { enabled, tasksPlugin };
 }
 
@@ -361,8 +389,23 @@ async function runE2e(args) {
       const navApi = nav && nav.api && nav.api.walkMode;
       return { navApi: Boolean(navApi), version: navApi && navApi.version, ledger: Boolean(ledger) };
     })()`,
-    (value) => value && value.navApi && value.version >= 3 && value.ledger,
-    "walker walkMode v3 api",
+    (value) => value && value.navApi && value.version >= 4 && value.ledger,
+    "walker walkMode v4 api",
+    30_000);
+
+    await waitFor(client, `(() => {
+      const ledger = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins[${JSON.stringify(LEDGER_ID)}];
+      const bankWalk = ledger && ledger.api && ledger.api.bankWalk;
+      let snapshot = null;
+      try { snapshot = bankWalk && typeof bankWalk.snapshot === "function" ? bankWalk.snapshot() : null; } catch (error) { snapshot = { error: String(error) }; }
+      return {
+        version: bankWalk && bankWalk.version,
+        available: Boolean(snapshot && snapshot.available),
+        waiting: snapshot && snapshot.counts && snapshot.counts.waiting,
+      };
+    })()`,
+    (value) => value && value.version >= 1 && value.available === true && value.waiting >= 2,
+    "ledger bankWalk snapshot with waiting rows",
     30_000);
 
     let tasksReady = { ready: false, skipped: !fixture.tasksPlugin };
@@ -458,29 +501,112 @@ async function runE2e(args) {
       const dotTier = dot() && dot().getAttribute("data-attention-tier");
       const dotTitle = dot() && (dot().getAttribute("title") || dot().title || "");
 
+      api.select("b");
+      const rectBImmediate = rectOf(selector());
+      await twoFrames();
+      const rectB = rectOf(selector());
+      const panelB = footer() && footer().getAttribute("data-walker-panel");
+      const textB = footer() && String(footer().innerText || "").slice(0, 400);
+      const bSwapMs = (() => {
+        const started = performance.now();
+        // The panel attribute is already swapped in; report the settle window.
+        return performance.now() - started;
+      })();
+
       api.select("s");
       await twoFrames();
       const dotCleared = !dot();
       const panelBackS = footer() && footer().getAttribute("data-walker-panel");
 
+      const reviewFile = window.app.vault.getAbstractFileByPath("review.md");
+      const leaf = window.app.workspace.getLeaf(false);
+      if (reviewFile && leaf && typeof leaf.openFile === "function") {
+        await leaf.openFile(reviewFile);
+      }
+      await twoFrames();
+
+      const rowCommand = "bob-navigation-hotkeys:jump-to-next-bank-row";
+      const dayCommand = "bob-navigation-hotkeys:jump-to-next-bank-day";
+      let rowDispatched = false;
+      try {
+        if (commands && commands.commands && commands.commands[rowCommand]) {
+          rowDispatched = Boolean(commands.executeCommandById(rowCommand));
+        }
+      } catch (error) { rowDispatched = String(error); }
+      await twoFrames();
+      const afterRow = (() => {
+        const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+        const editor = view && view.editor;
+        const file = view && view.file;
+        const cursor = editor && typeof editor.getCursor === "function" ? editor.getCursor() : null;
+        const lineText = editor && cursor && typeof editor.getLine === "function" ? editor.getLine(cursor.line) : "";
+        return {
+          path: file && file.path,
+          line: cursor && cursor.line,
+          ch: cursor && cursor.ch,
+          payeeAt: typeof lineText === "string" ? lineText.indexOf("Oldest waiting") : -1,
+          lineText,
+          panel: footer() && footer().getAttribute("data-walker-panel"),
+          text: footer() && String(footer().innerText || "").replace(/\s+/g, " "),
+        };
+      })();
+
+      let dayDispatched = false;
+      try {
+        if (commands && commands.commands && commands.commands[dayCommand]) {
+          dayDispatched = Boolean(commands.executeCommandById(dayCommand));
+        }
+      } catch (error) { dayDispatched = String(error); }
+      await twoFrames();
+      const afterDay = (() => {
+        const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+        const editor = view && view.editor;
+        const file = view && view.file;
+        const cursor = editor && typeof editor.getCursor === "function" ? editor.getCursor() : null;
+        const lineText = editor && cursor && typeof editor.getLine === "function" ? editor.getLine(cursor.line) : "";
+        return {
+          path: file && file.path,
+          line: cursor && cursor.line,
+          ch: cursor && cursor.ch,
+          payeeAt: typeof lineText === "string" ? lineText.indexOf("Next day waiting") : -1,
+          lineText,
+          panel: footer() && footer().getAttribute("data-walker-panel"),
+          text: footer() && String(footer().innerText || "").replace(/\s+/g, " "),
+        };
+      })();
+
       return {
-        rectS, rectWImmediate, rectW, rectNImmediate, rectN,
+        rectS, rectWImmediate, rectW, rectNImmediate, rectN, rectBImmediate, rectB,
         panelS, textS, dotOnS,
         panelW, textW, laneDispatched, panelAfterCommand, textAfterCommand,
-        panelN, textN, dotOffS, dotTier, dotTitle, dotCleared, panelBackS,
+        panelN, textN, panelB, textB, bSwapMs,
+        dotOffS, dotTier, dotTitle, dotCleared, panelBackS,
         footerItems: footerItems(),
+        rowDispatched, afterRow, dayDispatched, afterDay,
       };
     })()`);
 
     const sameRect = (a, b) => a && b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
     const geometryStable = sameRect(result.rectS, result.rectW) && sameRect(result.rectW, result.rectN)
-      && sameRect(result.rectS, result.rectWImmediate) && sameRect(result.rectS, result.rectNImmediate);
+      && sameRect(result.rectN, result.rectB)
+      && sameRect(result.rectS, result.rectWImmediate) && sameRect(result.rectS, result.rectNImmediate)
+      && sameRect(result.rectS, result.rectBImmediate);
     const panelsSwap = result.panelW === "w" && (result.panelAfterCommand === "w" || result.panelAfterCommand === "n")
-      && (result.panelN === "n" || result.panelN === "links");
+      && (result.panelN === "n" || result.panelN === "links")
+      && result.panelB === "b";
     const singleItem = result.footerItems === 1;
     const dotBehaves = result.dotOffS === true && result.dotCleared === true && result.dotOnS === false;
+    const bankLanding = Boolean(result.afterRow)
+      && result.afterRow.path === "bank/2026-11.md"
+      && result.afterRow.payeeAt >= 0
+      && result.afterRow.ch === result.afterRow.payeeAt
+      && /WAITING\s+1\s*\/\s*2/.test(String(result.afterRow.text || ""));
+    const bankDayJump = Boolean(result.afterDay)
+      && result.afterDay.path === "bank/2026-11.md"
+      && result.afterDay.payeeAt >= 0
+      && result.afterDay.ch === result.afterDay.payeeAt;
     const tasksOk = Boolean(tasksReady && tasksReady.ready);
-    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && tasksOk;
+    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && tasksOk && bankLanding && bankDayJump;
     if (passed) {
       return report("passed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, ...result });
     }
@@ -516,7 +642,7 @@ function selfTest() {
     if (!fixture.enabled.includes(NAV_ID) || !fixture.enabled.includes(LEDGER_ID)) {
       throw new Error("seed vault must enable both walker plugins");
     }
-    for (const name of ["review.md", "links.md"]) {
+    for (const name of ["review.md", "links.md", "bank.md", path.join("bank", "2026-11.md")]) {
       if (!fs.existsSync(path.join(vaultDir, name))) throw new Error("missing fixture " + name);
     }
   } finally {

@@ -454,6 +454,21 @@ test("tiles render keycaps, aria-keyshortcuts, and a live region after filing", 
     "Filed $6.45 as Coffee · next $12.90 waiting");
 });
 
+test("the completion state paints the other-month ]b walk line", () => {
+  const { modal, content } = paintModal("close", {
+    row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },
+  });
+  modal.showSummary({
+    line1: "🏦 November filed — 1 row in 5s",
+    line2: null,
+    detail: "1 accepted · 0 picked · 0 without a category",
+    waitingLinks: [],
+    walkLine: "]b → October 2026 (3 waiting)",
+  });
+  assert.equal(content.querySelector(".bob-bank-category-walk-line").textContent,
+    "]b → October 2026 (3 waiting)");
+});
+
 test("restricted mode shows only acknowledge keys and the loading reason", () => {
   const loading = paintModal("close", {
     categories: null,

@@ -265,6 +265,12 @@ class BobLedgerToolsBankCategoryMixin {
       try {
         modal.announce?.(bankCategoryAnnounceText({ amount, categoryLabel, nextAmount: null }));
       } catch (_) {}
+      this.bankWalkHandOffOpenedRow({
+        path: modal.context.path,
+        line: plan.line,
+        date: modal.context.row && modal.context.row.date,
+        text: modal.context.capture && modal.context.capture.lineText,
+      });
       await this.bankCategoryCompleteWalk(modal, session, refresh);
       return true;
     }
@@ -294,6 +300,12 @@ class BobLedgerToolsBankCategoryMixin {
       { path: modal.context.path, line: plan.line - 1, ch: filedCh },
       { path: modal.context.path, line: next.row.line - 1, ch: landingCh },
     );
+    this.bankWalkHandOffOpenedRow({
+      path: nextContext.path,
+      line: nextContext.row.line,
+      date: nextContext.row.date,
+      text: nextContext.capture && nextContext.capture.lineText,
+    });
     const progress = bankCategorySessionProgress(session, bankCategoryWaitingRows(scan).length);
     let refreshResult = null;
     try {
@@ -375,6 +387,14 @@ class BobLedgerToolsBankCategoryMixin {
         waitingByMonth: Array.from(waitingByMonth.values()).sort((left, right) => left.month.localeCompare(right.month)),
         bobReachable: Boolean(report && !monthResult?.error),
       });
+      try {
+        const snapshot = typeof this.bankWalkSnapshot === "function"
+          ? this.bankWalkSnapshot()
+          : null;
+        summary.walkLine = bankWalkOtherMonthLine(snapshot, modal.context && modal.context.path);
+      } catch (_) {
+        summary.walkLine = null;
+      }
       this.bankCategorySession = null;
       new Notice(summary.line1);
       modal.showSummary(summary);

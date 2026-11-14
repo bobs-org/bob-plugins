@@ -527,3 +527,90 @@ test("losing periodId in the host adapter cannot silently undo validation", asyn
     }
   });
 });
+
+function attachNav(plugin, walkMode) {
+  plugin.app.plugins = {
+    plugins: {
+      "bob-navigation-hotkeys": {
+        api: { version: 1, walkMode },
+      },
+    },
+  };
+}
+
+test("opening a waiting badge row selects family b and sets the walk anchor", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const selected = [];
+      attachNav(plugin, {
+        version: 4,
+        select(type) { selected.push(type); return { ok: true }; },
+      });
+      plugin.__files.set("bank/2026-11.md", { path: "bank/2026-11.md" });
+      plugin.bankOpenMonthPathAtLine = async () => true;
+      const opened = await plugin.bankBadgeNavigate({
+        type: "waiting", path: "bank/2026-11.md", line: 12, date: "2026-11-12",
+      });
+      assert.equal(opened, true);
+      assert.deepEqual(selected, ["b"]);
+      const anchor = plugin.bankWalkAnchor();
+      assert.equal(anchor.path, "bank/2026-11.md");
+      assert.equal(anchor.line, 12);
+      assert.equal(anchor.date, "2026-11-12");
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("heading and hub badge opens leave the family and walk anchor alone", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const selected = [];
+      attachNav(plugin, {
+        version: 4,
+        select(type) { selected.push(type); return { ok: true }; },
+      });
+      plugin.__files.set("bank/2026-11.md", { path: "bank/2026-11.md" });
+      plugin.bankOpenMonthPathAtLine = async () => true;
+      assert.equal(await plugin.bankBadgeNavigate({
+        type: "day", path: "bank/2026-11.md", line: 5, date: "2026-11-12",
+      }), true);
+      assert.deepEqual(selected, []);
+      assert.equal(plugin.bankWalkAnchor(), null);
+      assert.equal(await plugin.bankBadgeNavigate({
+        type: "hub", path: "bank.md", line: 1, date: null,
+      }), true);
+      assert.deepEqual(selected, []);
+      assert.equal(plugin.bankWalkAnchor(), null);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});
+
+test("old nav still anchors a waiting badge open and skips select", async () => {
+  await withMissingConfig(async () => {
+    const plugin = makePlugin();
+    try {
+      const selected = [];
+      attachNav(plugin, {
+        version: 3,
+        select(type) { selected.push(type); return { ok: true }; },
+      });
+      plugin.__files.set("bank/2026-10.md", { path: "bank/2026-10.md" });
+      plugin.bankOpenMonthPathAtLine = async () => true;
+      assert.equal(await plugin.bankBadgeNavigate({
+        type: "waiting", path: "bank/2026-10.md", line: 19, date: "2026-10-31",
+      }), true);
+      assert.deepEqual(selected, []);
+      const anchor = plugin.bankWalkAnchor();
+      assert.equal(anchor.path, "bank/2026-10.md");
+      assert.equal(anchor.line, 19);
+    } finally {
+      plugin.onunload();
+    }
+  });
+});

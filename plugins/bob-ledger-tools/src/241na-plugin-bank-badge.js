@@ -320,8 +320,14 @@ class BobLedgerToolsBankBadgeMixin {
     }
     const line = target && Number.isInteger(target.line) && target.line > 0 ? target.line : 1;
     const opened = await this.bankOpenMonthPathAtLine(path, line, 0, { newLeaf, skipPendingSave: true });
-    if (!opened) new Notice(`Bank: could not open ${path}`);
-    return Boolean(opened);
+    if (!opened) {
+      new Notice(`Bank: could not open ${path}`);
+      return false;
+    }
+    if (target && target.type === "waiting") {
+      this.bankWalkHandOffOpenedRow(target, { selectFamily: true });
+    }
+    return true;
   }
 
   bankRefreshBadgeHosts() {

@@ -150,6 +150,9 @@ function bankBuildArgs(options = {}) {
     if (opts.summary === true) {
       args.push("-s");
     }
+    if (opts.charts === true) {
+      args.push("-c");
+    }
   } else if (bankString(opts.month)) {
     args.push("-m", opts.month.trim());
   }
@@ -204,6 +207,32 @@ function bankBadgeOlderBobRefusal(error, args) {
     .filter((part) => typeof part === "string" && part)
     .join("\n");
   if (/(?:unexpected argument|unknown).{0,40}(?:-p|--period|-s|--summary)/i.test(text)) return true;
+  return error.exitCode === 2 && (error.code === "bad-json" || /not JSON/i.test(String(error.message || "")));
+}
+
+// Fetch spec for the period-note Bank Period Charts panel. Always -p -s -c,
+// never the badge's -D/-w older-bob path, so a missing -c cannot hide the badge.
+function bankPeriodSpecForStrip(kind, id) {
+  const key = typeof id === "string" ? id.trim() : "";
+  if (!key) return null;
+  if (kind === "week" || kind === "quarter" || kind === "year") {
+    return { command: "report", period: key, summary: true, charts: true };
+  }
+  if (kind === "all" || kind === "all_time") {
+    return { command: "report", period: "all", summary: true, charts: true };
+  }
+  return null;
+}
+
+function bankPeriodOlderBobRefusal(error, args) {
+  if (!error) return false;
+  const argv = Array.isArray(args) ? args : [];
+  const usesCharts = argv.includes("-c") || argv.includes("--charts");
+  if (!usesCharts) return false;
+  const text = [error.message, error.detail, error.stderr, error.stdout]
+    .filter((part) => typeof part === "string" && part)
+    .join("\n");
+  if (/(?:unexpected argument|unknown).{0,40}(?:-c|--charts)/i.test(text)) return true;
   return error.exitCode === 2 && (error.code === "bad-json" || /not JSON/i.test(String(error.message || "")));
 }
 
@@ -586,36 +615,41 @@ function bankDecodeReport(stdout, stderr) {
   if (waitingPeriod === null || waitingAll === null || flagged === null) {
     return bankFail("bad-shape", "bob bank report returned invalid waiting counts.", stderr);
   }
-  return {
-    ok: true,
-    report: {
-      ...shared,
-      command: "report",
-      teaching_empty: false,
-      period: {
-        kind: periodKind,
-        key: bankString(body.period.key),
-        start: bankString(body.period.start),
-        end: bankString(body.period.end),
-        label: bankText(body.period.label) || "",
-        so_far: body.period.so_far === true,
-        note: body.period.note === null || body.period.note === undefined ? null : bankText(body.period.note),
-      },
-      totals,
-      breakdown,
-      days,
-      coverage: coverage.value,
-      navigation: navigation.value,
-      waiting: {
-        period: waitingPeriod,
-        all: waitingAll,
-        oldest: body.waiting.oldest === null || body.waiting.oldest === undefined
-          ? null
-          : bankString(body.waiting.oldest),
-      },
-      flagged,
+  const report = {
+    ...shared,
+    command: "report",
+    teaching_empty: false,
+    period: {
+      kind: periodKind,
+      key: bankString(body.period.key),
+      start: bankString(body.period.start),
+      end: bankString(body.period.end),
+      label: bankText(body.period.label) || "",
+      so_far: body.period.so_far === true,
+      note: body.period.note === null || body.period.note === undefined ? null : bankText(body.period.note),
     },
+    totals,
+    breakdown,
+    days,
+    coverage: coverage.value,
+    navigation: navigation.value,
+    waiting: {
+      period: waitingPeriod,
+      all: waitingAll,
+      oldest: body.waiting.oldest === null || body.waiting.oldest === undefined
+        ? null
+        : bankString(body.waiting.oldest),
+    },
+    flagged,
   };
+  if (Object.prototype.hasOwnProperty.call(body, "charts")) {
+    const charts = bankNormalizeCharts(body.charts, report.period);
+    if (!charts.ok) {
+      return bankFail("bad-shape", "bob bank report returned invalid charts.", stderr);
+    }
+    report.charts = charts.value;
+  }
+  return { ok: true, report };
 }
 
 function bankErrorModel(result, options = {}) {

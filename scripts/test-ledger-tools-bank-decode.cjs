@@ -18,6 +18,9 @@ const {
   bankBadgeSpecForStrip,
   bankBadgePeriodStart,
   bankBadgeOlderBobRefusal,
+  bankPeriodSpecForStrip,
+  bankPeriodOlderBobRefusal,
+  periodNotesIsoWeekMonday,
 } = LedgerToolsPlugin.helpers;
 
 const fixtureDir = path.join(
@@ -79,6 +82,57 @@ test("bank argv is keyed by command and exact flags", () => {
   assert.equal(
     bankBadgeOlderBobRefusal({ exitCode: 2, code: "bad-json", message: "not JSON" }, ["bank", "report", "-D", "2026-11-14", "-f", "json"]),
     false,
+  );
+  assert.deepEqual(bankPeriodSpecForStrip("week", "2026-W46"), {
+    command: "report", period: "2026-W46", summary: true, charts: true,
+  });
+  assert.deepEqual(bankPeriodSpecForStrip("quarter", "2026-Q4"), {
+    command: "report", period: "2026-Q4", summary: true, charts: true,
+  });
+  assert.deepEqual(bankPeriodSpecForStrip("year", "2026"), {
+    command: "report", period: "2026", summary: true, charts: true,
+  });
+  assert.deepEqual(bankPeriodSpecForStrip("all", "all"), {
+    command: "report", period: "all", summary: true, charts: true,
+  });
+  assert.equal(bankPeriodSpecForStrip("day", "2026-11-14"), null);
+  assert.deepEqual(
+    bankBuildArgs({ command: "report", period: "2026-W46", summary: true, charts: true }),
+    ["bank", "report", "-p", "2026-W46", "-s", "-c", "-f", "json"],
+  );
+  assert.deepEqual(
+    bankBuildArgs({ command: "report", period: "2026-Q4", summary: true }),
+    ["bank", "report", "-p", "2026-Q4", "-s", "-f", "json"],
+    "charts: true is the only path that appends -c",
+  );
+  assert.equal(
+    bankPeriodOlderBobRefusal(
+      { exitCode: 2, detail: "error: unexpected argument '-c' found" },
+      ["bank", "report", "-p", "2026-W46", "-s", "-c", "-f", "json"],
+    ),
+    true,
+  );
+  assert.equal(
+    bankPeriodOlderBobRefusal(
+      { exitCode: 2, code: "bad-json", message: "not JSON" },
+      ["bank", "report", "-p", "2026-W46", "-s", "-c", "-f", "json"],
+    ),
+    true,
+  );
+  assert.equal(
+    bankPeriodOlderBobRefusal(
+      { exitCode: 2, detail: "error: unexpected argument '-c' found" },
+      ["bank", "report", "-w", "2026-W46", "-f", "json"],
+    ),
+    false,
+  );
+  assert.equal(
+    bankBadgeOlderBobRefusal(
+      { exitCode: 2, detail: "error: unexpected argument '-c' found" },
+      ["bank", "report", "-p", "2026-W46", "-s", "-c", "-f", "json"],
+    ),
+    false,
+    "the badge recognizer keeps matching -p/-s only",
   );
 });
 
@@ -231,3 +285,225 @@ test("bank error cards explain not-found, timeout, schema, and bob errors", () =
   assert.match(bankErrorModel({ code: "schema-mismatch" }).hint, /update bob-cli/i);
   assert.equal(bankErrorModel({ code: "bob-error", message: "No vault" }).hint, "No vault");
 });
+
+function chartEntry(overrides = {}) {
+  const inCents = overrides.in_cents || 0;
+  const outCents = overrides.out_cents || 0;
+  return {
+    id: "2026-11-09",
+    kind: "day",
+    label: "Mon 9",
+    start: "2026-11-09",
+    end: "2026-11-09",
+    group: null,
+    so_far: false,
+    state: "tracked",
+    in_cents: inCents,
+    out_cents: outCents,
+    net_cents: inCents - outCents,
+    waiting: 0,
+    rows: 0,
+    top_out: [],
+    target: { path: "bank/2026-11.md", line: 12 },
+    ...overrides,
+    net_cents: Object.prototype.hasOwnProperty.call(overrides, "net_cents")
+      ? overrides.net_cents
+      : (overrides.in_cents || 0) - (overrides.out_cents || 0),
+  };
+}
+
+function weekCharts(overrides = {}) {
+  const days = [
+    ["2026-11-09", "Mon 9"],
+    ["2026-11-10", "Tue 10"],
+    ["2026-11-11", "Wed 11"],
+    ["2026-11-12", "Thu 12"],
+    ["2026-11-13", "Fri 13"],
+    ["2026-11-14", "Sat 14"],
+    ["2026-11-15", "Sun 15"],
+  ];
+  const byId = overrides.byId || {};
+  const { byId: _byId, ...rest } = overrides;
+  return {
+    version: 1,
+    granularity: "day",
+    buckets: days.map(([id, label]) => chartEntry({
+      id,
+      label,
+      start: id,
+      end: id,
+      state: id === "2026-11-11" ? "tracked" : "awaiting_import",
+      out_cents: id === "2026-11-11" ? 24977 : 0,
+      waiting: id === "2026-11-11" ? 7 : 0,
+      rows: id === "2026-11-11" ? 7 : 0,
+      so_far: id === "2026-11-14",
+      top_out: id === "2026-11-11"
+        ? [{ key: "groceries", emoji: "🛒", label: "Groceries", out_cents: 14210 }]
+        : [],
+      ...(byId[id] || {}),
+    })),
+    groups: [],
+    categories: {
+      limit: 5,
+      series: [
+        { key: "groceries", emoji: "🛒", label: "Groceries", kind: "category", out_cents: 14210, share: 0.569, rows: 3 },
+        { key: "dining", emoji: "🍽", label: "Dining", kind: "category", out_cents: 6420, share: 0.257, rows: 2 },
+        { key: "unclassified", emoji: "●", label: "Unclassified", kind: "unclassified", out_cents: 2047, share: 0.082, rows: 1 },
+      ],
+      rest: { count: 2, out_cents: 2300, share: 0.092, rows: 2 },
+    },
+    ...rest,
+  };
+}
+
+function weekBody(charts) {
+  const body = JSON.parse(JSON.stringify(reportDocument));
+  body.period = {
+    kind: "week",
+    key: "2026-W46",
+    start: "2026-11-09",
+    end: "2026-11-15",
+    label: "2026-W46 · Nov 9–15, 2026",
+    so_far: true,
+    note: null,
+  };
+  if (charts !== undefined) body.charts = charts;
+  return body;
+}
+
+test("reports without charts decode exactly as today", () => {
+  const decoded = bankDecodeReport(JSON.stringify(reportDocument), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(decoded.report, "charts"), false);
+  const withNull = JSON.parse(JSON.stringify(reportDocument));
+  withNull.charts = null;
+  const decodedNull = bankDecodeReport(JSON.stringify(withNull), "");
+  assert.equal(decodedNull.ok, true);
+  assert.equal(decodedNull.report.charts, null);
+});
+
+test("charts decoder accepts a week payload and rejects malformed values with bad-shape", () => {
+  const decoded = bankDecodeReport(JSON.stringify(weekBody(weekCharts())), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.report.charts.version, 1);
+  assert.equal(decoded.report.charts.granularity, "day");
+  assert.equal(decoded.report.charts.buckets.length, 7);
+  assert.equal(decoded.report.charts.buckets[2].id, "2026-11-11");
+  assert.equal(decoded.report.charts.buckets[2].out_cents, 24977);
+  assert.equal(decoded.report.charts.buckets[2].net_cents, -24977);
+  assert.equal(decoded.report.charts.categories.rest.count, 2);
+
+  const absent = weekBody();
+  delete absent.charts;
+  assert.equal(Object.prototype.hasOwnProperty.call(bankDecodeReport(JSON.stringify(absent), "").report, "charts"), false);
+
+  const malformed = weekBody([]);
+  assert.equal(bankDecodeReport(JSON.stringify(malformed), "").code, "bad-shape");
+
+  const badNet = weekBody(weekCharts());
+  badNet.charts.buckets[2].net_cents = 0;
+  assert.equal(bankDecodeReport(JSON.stringify(badNet), "").code, "bad-shape");
+
+  const negative = weekBody(weekCharts());
+  negative.charts.buckets[2].out_cents = -1;
+  negative.charts.buckets[2].net_cents = 1;
+  assert.equal(bankDecodeReport(JSON.stringify(negative), "").code, "bad-shape");
+
+  const duplicate = weekBody(weekCharts());
+  duplicate.charts.buckets[1].id = duplicate.charts.buckets[0].id;
+  assert.equal(bankDecodeReport(JSON.stringify(duplicate), "").code, "bad-shape");
+
+  const gap = weekBody(weekCharts());
+  gap.charts.buckets[3].start = "2026-11-13";
+  gap.charts.buckets[3].end = "2026-11-13";
+  gap.charts.buckets[3].id = "2026-11-13";
+  assert.equal(bankDecodeReport(JSON.stringify(gap), "").code, "bad-shape");
+
+  const kindMismatch = weekBody(weekCharts());
+  kindMismatch.charts.buckets[0].kind = "week";
+  assert.equal(bankDecodeReport(JSON.stringify(kindMismatch), "").code, "bad-shape");
+
+  const badTarget = weekBody(weekCharts());
+  badTarget.charts.buckets[0].target = { path: "bank/2026-11.md", line: 0 };
+  assert.equal(bankDecodeReport(JSON.stringify(badTarget), "").code, "bad-shape");
+
+  const oversize = weekBody(weekCharts());
+  oversize.period.end = "2026-01-01";
+  oversize.charts.buckets = Array.from({ length: 65 }, (_, index) => {
+    const start = `2026-01-${String(index + 1).padStart(2, "0")}`;
+    return chartEntry({ id: start, label: start, start, end: start });
+  });
+  // 65 days from Jan 1 is not a real month; the length check fires first.
+  oversize.period.start = oversize.charts.buckets[0].start;
+  oversize.period.end = oversize.charts.buckets[64].end;
+  assert.equal(bankDecodeReport(JSON.stringify(oversize), "").code, "bad-shape");
+});
+
+test("charts decoder accepts ISO-year groups and null all-time charts", () => {
+  const weeks = [];
+  for (let week = 1; week <= 53; week += 1) {
+    const start = periodNotesIsoWeekMonday(2026, week);
+    const end = LedgerToolsPlugin.helpers.bankIsoShiftDays(start, 6);
+    const quarter = week <= 13 ? "Q1" : week <= 26 ? "Q2" : week <= 39 ? "Q3" : "Q4";
+    weeks.push(chartEntry({
+      id: `2026-W${String(week).padStart(2, "0")}`,
+      kind: "week",
+      label: `W${week}`,
+      start,
+      end,
+      group: quarter,
+      state: "tracked",
+    }));
+  }
+  const groups = [1, 2, 3, 4].map((quarter) => {
+    const startWeek = (quarter - 1) * 13 + 1;
+    const lastWeek = quarter === 4 ? 53 : quarter * 13;
+    return chartEntry({
+      id: `2026-Q${quarter}`,
+      kind: "quarter",
+      label: `Q${quarter}`,
+      start: periodNotesIsoWeekMonday(2026, startWeek),
+      end: LedgerToolsPlugin.helpers.bankIsoShiftDays(periodNotesIsoWeekMonday(2026, lastWeek), 6),
+      group: null,
+      state: "tracked",
+    });
+  });
+  const body = JSON.parse(JSON.stringify(reportDocument));
+  body.period = {
+    kind: "iso_year",
+    key: "2026",
+    start: weeks[0].start,
+    end: weeks[52].end,
+    label: "2026",
+    so_far: true,
+    note: null,
+  };
+  body.charts = {
+    version: 1,
+    granularity: "week",
+    buckets: weeks,
+    groups,
+    categories: { limit: 5, series: [], rest: null },
+  };
+  const decoded = bankDecodeReport(JSON.stringify(body), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.report.charts.buckets.length, 53);
+  assert.equal(decoded.report.charts.groups.length, 4);
+  assert.equal(decoded.report.charts.groups[0].group, null);
+
+  const allTime = JSON.parse(JSON.stringify(reportDocument));
+  allTime.period = {
+    kind: "all_time",
+    key: "all",
+    start: "2019-01-01",
+    end: "2026-11-14",
+    label: "All time",
+    so_far: true,
+    note: null,
+  };
+  allTime.charts = null;
+  const decodedAll = bankDecodeReport(JSON.stringify(allTime), "");
+  assert.equal(decodedAll.ok, true);
+  assert.equal(decodedAll.report.charts, null);
+});
+

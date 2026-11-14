@@ -131,6 +131,8 @@
   "241n-plugin-bank-badge-model.js",
   "241na-plugin-bank-badge.js",
   "241nb-plugin-bank-badge-hosts.js",
+  "241ha-plugin-bank-charts-decode.js",
+  "241nc-plugin-bank-period-model.js",
   "241o-plugin-bank-marks-model.js",
   "241p-plugin-bank-marks.js",
   "241q-plugin-bank-marks-reading.js",

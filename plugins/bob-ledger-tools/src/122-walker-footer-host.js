@@ -1,11 +1,9 @@
 // Walker-footer host (plan 202611/walker_footers.md, phase host): one
-// ledger status-bar item follows the persisted bracket walk. While `s`
-// is the family the existing review footer paints (gated, with a calm
-// clear state instead of hiding); `w`, `n`, and unset hide in this
-// phase — their panels land in the lanes and links phases. When nav is
-// absent or its `api.walkMode` namespace is older than v1, the router
-// stays on the legacy path: today's review footer exactly as now.
-// Never throws; every entry point falls back to hiding or legacy.
+// ledger status-bar item follows the persisted bracket walk. `s`, `w`,
+// `n`, and `b` each paint their panel; unset hides. When nav is absent
+// or its `api.walkMode` namespace is older than v1, the router stays on
+// the legacy path: today's review footer exactly as now. Never throws;
+// every entry point falls back to hiding or legacy.
 const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
@@ -64,7 +62,7 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
 // Resolve which panel the host should paint. `legacy: true` means nav
 // is missing or predates `api.walkMode` v1, so the caller paints the
 // ungated review footer. Otherwise `mode` is the persisted family
-// ("s", "w", "n", or null for unset); only "s" paints in this phase.
+// ("s", "w", "n", "b", or null for unset).
 function walkerFooterWalkMode(plugin) {
   try {
     const api =
@@ -90,7 +88,7 @@ function walkerFooterWalkMode(plugin) {
       // s": fall back to today's ungated footer rather than hiding.
       return { legacy: true, mode: null };
     }
-    if (mode !== "s" && mode !== "w" && mode !== "n") {
+    if (mode !== "s" && mode !== "w" && mode !== "n" && mode !== "b") {
       mode = null;
     }
     return { legacy: false, mode };

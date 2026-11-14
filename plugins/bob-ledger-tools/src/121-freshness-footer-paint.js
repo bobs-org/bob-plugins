@@ -405,6 +405,9 @@ function freshnessFooterFit(el, parts, view) {
       : detailText;
   let hint = Boolean(view && view.hintText);
   let meter = Boolean(view && view.meterText);
+  const bankPanel = Boolean(view && view.panel === "bank");
+  const showArms = Boolean(bankPanel && (view.linkPrev || view.linkNext));
+  let arms = showArms;
   const apply = () => {
     freshnessFooterSetText(parts.detail, detailText);
     freshnessFooterSetOmitted(groupContainer, shown === 0);
@@ -418,14 +421,28 @@ function freshnessFooterFit(el, parts, view) {
     freshnessFooterSetOmitted(parts.detail, !detail);
     freshnessFooterSetOmitted(parts.hint, !hint);
     freshnessFooterSetOmitted(parts.meter, !meter);
+    if (bankPanel) {
+      freshnessFooterSetOmitted(parts.linkPrev, !arms || !view.linkPrev);
+      freshnessFooterSetOmitted(parts.linkNext, !arms || !view.linkNext);
+      freshnessFooterSetOmitted(
+        parts.linkSeparator,
+        !arms || !view.linkPrev || !view.linkNext,
+      );
+    }
   };
-  const result = () => ({
-    groups: shown > 0,
-    groupsShown: shown,
-    detail,
-    hint,
-    meter,
-  });
+  const result = () => {
+    const out = {
+      groups: shown > 0,
+      groupsShown: shown,
+      detail,
+      hint,
+      meter,
+    };
+    if (bankPanel) {
+      out.arms = arms;
+    }
+    return out;
+  };
   apply();
   let width = 0;
   try {
@@ -453,6 +470,10 @@ function freshnessFooterFit(el, parts, view) {
   }
   if (overflows() && detail) {
     detail = false;
+    apply();
+  }
+  if (overflows() && arms) {
+    arms = false;
     apply();
   }
   const answerChip = Boolean(view && view.answer);
@@ -497,6 +518,7 @@ function freshnessFooterPaint(el, view) {
     "bob-freshness-budget",
     "bob-freshness-lanes",
     "bob-freshness-links",
+    "bob-freshness-bank",
     "bob-freshness-hidden",
   ];
   const wanted = visible
@@ -529,8 +551,17 @@ function freshnessFooterPaint(el, view) {
       ? "w"
       : view && view.panel === "links"
         ? "n"
-        : "s";
+        : view && view.panel === "bank"
+          ? "b"
+          : "s";
   freshnessFooterSetAttr(el, "data-walker-panel", walkerPanel);
+  if (visible && view && view.panel === "bank") {
+    freshnessFooterSetAttr(el, "data-bank-hue", view.hue || "magenta");
+    freshnessFooterSetAttr(el, "data-bank-scope", view.scope || "");
+  } else {
+    freshnessFooterRemoveAttr(el, "data-bank-hue");
+    freshnessFooterRemoveAttr(el, "data-bank-scope");
+  }
   if (parts.button) {
     try {
       parts.button.disabled = !visible;
@@ -548,6 +579,9 @@ function freshnessFooterPaint(el, view) {
     freshnessFooterPaintGroups(parts.groups, []);
     freshnessFooterSetText(parts.meter, "");
     freshnessFooterPaintLinks(parts, null);
+    freshnessFooterToggleClass(parts.detail, "bob-freshness-inflow", false);
+    freshnessFooterToggleClass(parts.meter, "bob-freshness-meter-warn", false);
+    freshnessFooterToggleClass(parts.meter, "bob-freshness-meter-ok", false);
     freshnessFooterRemoveAttr(parts.context, "data-review-tier");
     freshnessFooterRemoveAttr(parts.detail, "data-review-tier");
     freshnessFooterSetAttr(parts.button, "aria-label", "Walker footer hidden");
@@ -561,7 +595,25 @@ function freshnessFooterPaint(el, view) {
   freshnessFooterPaintHint(parts.hint, view);
   freshnessFooterPaintGroups(parts.groups, view.groups);
   freshnessFooterSetText(parts.meter, view.meterText);
-  freshnessFooterPaintLinks(parts, view.panel === "links" ? view : null);
+  freshnessFooterPaintLinks(
+    parts,
+    view.panel === "links" || view.panel === "bank" ? view : null,
+  );
+  freshnessFooterToggleClass(
+    parts.detail,
+    "bob-freshness-inflow",
+    Boolean(view.panel === "bank" && view.inflow),
+  );
+  freshnessFooterToggleClass(
+    parts.meter,
+    "bob-freshness-meter-warn",
+    Boolean(view.panel === "bank" && view.meterTone === "warn"),
+  );
+  freshnessFooterToggleClass(
+    parts.meter,
+    "bob-freshness-meter-ok",
+    Boolean(view.panel === "bank" && view.meterTone === "ok"),
+  );
   freshnessFooterSetOmitted(parts.context, !view.contextText);
   freshnessFooterSetOmitted(parts.detail, !view.detailText);
   freshnessFooterSetOmitted(parts.hint, !view.hintText);
@@ -611,7 +663,9 @@ function freshnessFooterPaintLinks(parts, view) {
   if (!parts) {
     return;
   }
-  const active = Boolean(view && view.panel === "links");
+  const active = Boolean(
+    view && (view.panel === "links" || view.panel === "bank"),
+  );
   const prev = active ? view.linkPrev : null;
   const next = active ? view.linkNext : null;
   const showSeparator = Boolean(prev && next);
@@ -622,11 +676,11 @@ function freshnessFooterPaintLinks(parts, view) {
     freshnessFooterSetOmitted(button, !arm);
     freshnessFooterSetText(button, arm ? arm.text : "");
     freshnessFooterSetAttr(button, "title", arm ? arm.tooltip : "");
-    freshnessFooterSetAttr(
-      button,
-      "aria-label",
-      arm ? `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}` : "",
-    );
+    const aria = arm
+      ? (arm.ariaLabel ||
+        `${arm.direction === "prev" ? "Open previous" : "Open next"}: ${arm.name}`)
+      : "";
+    freshnessFooterSetAttr(button, "aria-label", aria);
     freshnessFooterSetAttr(
       button,
       "data-walk-link-direction",

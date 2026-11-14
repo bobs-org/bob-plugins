@@ -98,6 +98,7 @@ const {
   dashboardLaneBadgeModel,
   dashboardLaneBudgetFromTasks,
   defaultPlanCaps,
+  freshnessFooterFit,
   freshnessFooterHiddenView,
   freshnessFooterPaint,
   laneWalkQueueFromTasks,
@@ -109,9 +110,19 @@ const {
   walkerFooterClearView,
   walkerFooterReviewView,
   walkerFooterPushReviewAttention,
+  walkerFooterPushBankAttention,
   walkerFooterWalkMode,
   readyBadgeModel,
   readyBudgetFromTasks,
+  bankWalkBuildEntries,
+  bankWalkLocate,
+  bankWalkPlan,
+  bankWalkerFooterView,
+  bankWalkerFooterMeterFromReport,
+  bankWalkerFooterArm,
+  bankWalkerFooterActivate,
+  bankWalkerFooterRequest,
+  bankWalkerFooterTakeMeter,
 } = helpers;
 
 const DAY = new Date(2026, 9, 28);
@@ -885,4 +896,596 @@ test("unload callback clears the dot and tolerates missing or old nav", () => {
   for (const fn of oldRegistered) {
     assert.doesNotThrow(fn);
   }
+});
+
+function bankRow(date, line, cents, payee, waiting = true) {
+  return {
+    path: "bank/2026-11.md",
+    line,
+    date,
+    cents,
+    waiting,
+    payee,
+    ackId: null,
+    text: `- [${waiting ? " " : "x"}] ${cents >= 0 ? "+" : ""}$${(Math.abs(cents) / 100).toFixed(2)} ${payee}`,
+  };
+}
+
+function bankSnap(rows, generation = 4) {
+  const built = bankWalkBuildEntries(rows);
+  const waiting = rows.filter((row) => row.waiting).length;
+  const files = {
+    "bank/2026-11.md": {
+      month: "2026-11",
+      headings: [...new Set(rows.map((row) => row.date))].map((date) => ({
+        date,
+        line: Math.min(...rows.filter((row) => row.date === date).map((row) => row.line)) - 1,
+      })),
+    },
+  };
+  return {
+    available: true,
+    version: 1,
+    generation,
+    scope: built.scope,
+    counts: {
+      rows: rows.length,
+      waiting,
+      days: built.days.length,
+      waitingDays: built.days.filter((day) => day.waiting > 0).length,
+      months: 1,
+      waitingMonths: waiting > 0 ? 1 : 0,
+    },
+    entries: built.entries,
+    days: built.days,
+    files,
+  };
+}
+
+const WAITING_ROWS = [
+  bankRow("2026-11-10", 4, -1100, "Mon one"),
+  bankRow("2026-11-10", 5, -1200, "Mon two"),
+  bankRow("2026-11-10", 6, -1300, "Mon three"),
+  bankRow("2026-11-12", 10, -2100, "Wed one"),
+  bankRow("2026-11-12", 11, -2200, "Wed two"),
+  bankRow("2026-11-13", 20, -4250, "ShopRite"),
+  bankRow("2026-11-13", 21, -1500, "Thu two"),
+  bankRow("2026-11-13", 22, -1600, "Thu three"),
+  bankRow("2026-11-13", 23, -1700, "Thu four"),
+  bankRow("2026-11-14", 30, -3100, "Fri one"),
+];
+
+const ALL_ROWS = [
+  bankRow("2026-11-03", 3, -500, "Old one", false),
+  bankRow("2026-11-04", 8, -1240, "Coffee", false),
+  bankRow("2026-11-04", 9, 120000, "Payroll inflow", false),
+  bankRow("2026-11-04", 10, -800, "Snack", false),
+  bankRow("2026-11-04", 11, -900, "Fare", false),
+  bankRow("2026-11-04", 12, -700, "Tip", false),
+  bankRow("2026-11-05", 16, -300, "Later", false),
+];
+
+function bankArms(snapshot, cursor) {
+  const prev = bankWalkPlan(snapshot, { direction: -1, dayJump: true, cursor, anchor: null });
+  const next = bankWalkPlan(snapshot, { direction: 1, dayJump: true, cursor, anchor: null });
+  return {
+    prev: bankWalkerFooterArm(prev, "prev", snapshot.scope),
+    next: bankWalkerFooterArm(next, "next", snapshot.scope),
+    prevPlan: prev,
+    nextPlan: next,
+  };
+}
+
+function bankMeterOk() {
+  return bankWalkerFooterMeterFromReport(
+    {
+      today: "2026-11-14",
+      accounts: [
+        { label: "Checking", kind: "checking", status: "balanced" },
+        { label: "Card", kind: "credit", status: "balanced" },
+      ],
+    },
+    { currentGeneration: 4, resultGeneration: 4 },
+  );
+}
+
+test("bank panel paints every WAITING and ALL state from one snapshot", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  assert.equal(waiting.scope, "waiting");
+  assert.equal(waiting.counts.waiting, 10);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const onRowCursor = { path: shop.path, line0: shop.line - 1 };
+  const onRowArms = bankArms(waiting, onRowCursor);
+  const onRow = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: shop.path, date: shop.date, line0: shop.line - 1, entry: shop, member: true },
+    arms: onRowArms,
+    meter: bankMeterOk(),
+    hue: "magenta",
+  });
+  assert.equal(onRow.visible, true);
+  assert.equal(onRow.panel, "bank");
+  assert.equal(onRow.glyph, "$");
+  assert.equal(onRow.dueText, `WAITING ${shop.rank}/${waiting.entries.length}`);
+  assert.equal(onRow.contextText, `${shop.label} ${shop.dayRank}/${shop.dayTotal}`);
+  assert.equal(onRow.detailText, "$42.50 ShopRite");
+  assert.equal(onRow.detailCompactText, "$42.50");
+  assert.equal(onRow.hintText, "Ctrl+Enter file");
+  assert.equal(onRow.inflow, false);
+  assert.equal(onRow.meterText, "✓ balanced");
+  assert.equal(onRow.meterTone, "ok");
+  assert.equal(onRow.linkPrev.text, "‹ Nov 12");
+  assert.equal(onRow.linkNext.text, "Nov 14 ›");
+  assert.equal(onRow.linkPrev.ariaLabel, `Previous bank day: ${onRowArms.prevPlan.entry.label}, 2 waiting`);
+  assert.match(onRow.tooltip, /WAITING — 10 rows wait across 4 days/);
+  assert.match(onRow.tooltip, /\$42\.50 ShopRite/);
+  assert.match(onRow.tooltip, /bank\/2026-11\.md:20/);
+  assert.doesNotMatch(onRow.dueText, /%/);
+
+  const inBank = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: shop.path, date: shop.date, line0: 18, entry: null, member: false },
+    arms: bankArms(waiting, { path: shop.path, line0: 18 }),
+    meter: bankMeterOk(),
+  });
+  assert.equal(inBank.dueText, "WAITING 10");
+  assert.equal(inBank.contextText, shop.label);
+  assert.equal(inBank.detailText, "");
+  assert.equal(inBank.hintText, "]] next waiting");
+  assert.equal(inBank.linkPrev.text, "‹ Nov 12");
+
+  const outside = bankWalkerFooterView(waiting, {
+    located: { inBank: false, path: "notes/gtd.md", date: null, line0: 0, entry: null, member: false },
+    arms: { prev: { text: "should-not-show" }, next: { text: "nope" } },
+    meter: bankMeterOk(),
+  });
+  assert.equal(outside.dueText, "WAITING 10");
+  assert.equal(outside.contextText, "]] oldest");
+  assert.equal(outside.detailText, "");
+  assert.equal(outside.linkPrev, null);
+  assert.equal(outside.linkNext, null);
+  assert.deepEqual(
+    outside.groups.map((group) => `${group.label} ${group.count}`),
+    waiting.days.map((day) => `${day.label} ${day.count}`),
+  );
+
+  const daily = bankWalkerFooterView(waiting, {
+    located: { inBank: false, path: "2026/20261113.md", date: null, line0: 2, entry: null, member: false },
+    dailyEntry: { date: "2026-11-13", label: "Fri Nov 13" },
+    meter: bankMeterOk(),
+  });
+  assert.equal(daily.contextText, "]] Fri Nov 13");
+
+  const all = bankSnap(ALL_ROWS);
+  assert.equal(all.scope, "all");
+  const coffee = all.entries.find((entry) => entry.payee === "Coffee");
+  const allRow = bankWalkerFooterView(all, {
+    located: { inBank: true, path: coffee.path, date: coffee.date, line0: coffee.line - 1, entry: coffee, member: true },
+    arms: bankArms(all, { path: coffee.path, line0: coffee.line - 1 }),
+    meter: bankMeterOk(),
+  });
+  assert.equal(allRow.dueText, `ALL ${coffee.rank}/${all.entries.length}`);
+  assert.match(allRow.contextText, /Nov 4 /);
+  assert.equal(allRow.detailText, "$12.40 Coffee");
+  assert.equal(allRow.hintText, "]} next day");
+  assert.equal(allRow.linkPrev.text, "‹ Nov 3");
+  assert.equal(allRow.linkNext.text, "Nov 5 ›");
+
+  const payroll = all.entries.find((entry) => entry.payee === "Payroll inflow");
+  const inflow = bankWalkerFooterView(all, {
+    located: { inBank: true, path: payroll.path, date: payroll.date, line0: payroll.line - 1, entry: payroll, member: true },
+    arms: bankArms(all, { path: payroll.path, line0: payroll.line - 1 }),
+  });
+  assert.equal(inflow.inflow, true);
+  assert.match(inflow.detailText, /\+\$1,200\.00 Payroll inflow/);
+
+  const allInBank = bankWalkerFooterView(all, {
+    located: { inBank: true, path: coffee.path, date: coffee.date, line0: 6, entry: null, member: false },
+    arms: bankArms(all, { path: coffee.path, line0: 6 }),
+    meter: bankMeterOk(),
+  });
+  assert.equal(allInBank.dueText, `ALL ${all.counts.rows}`);
+  assert.equal(allInBank.detailText, "");
+  assert.equal(allInBank.hintText, "]] next row");
+
+  const allOutside = bankWalkerFooterView(all, {
+    located: { inBank: false, path: "inbox.md", date: null, line0: 0, entry: null, member: false },
+    meter: bankMeterOk(),
+  });
+  assert.equal(allOutside.contextText, "]] latest day");
+  assert.equal(allOutside.groups.length, 0);
+  assert.equal(allOutside.linkPrev, null);
+
+  const empty = bankWalkerFooterView({
+    available: true,
+    version: 1,
+    generation: 1,
+    scope: "all",
+    counts: { rows: 0, waiting: 0, days: 0, waitingDays: 0, months: 0, waitingMonths: 0 },
+    entries: [],
+    days: [],
+    files: {},
+  }, { meter: bankMeterOk() });
+  assert.equal(empty.dueText, "No bank rows");
+  assert.equal(empty.hintText, "bob bank import");
+  assert.equal(empty.meterText, "");
+  assert.match(empty.tooltip, /bob bank import/);
+});
+
+test("bank money and day fractions appear only on the cursor row", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const offMember = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: shop.path, date: shop.date, line0: 18, entry: null, member: false },
+    arms: bankArms(waiting, { path: shop.path, line0: 18 }),
+  });
+  assert.equal(offMember.detailText, "");
+  assert.doesNotMatch(offMember.dueText, /\//);
+  assert.doesNotMatch(offMember.contextText, /\d+\/\d+/);
+  const outside = bankWalkerFooterView(waiting, {
+    located: { inBank: false, path: "daily.md", date: null, line0: 0, entry: null, member: false },
+  });
+  assert.equal(outside.detailText, "");
+  assert.doesNotMatch(outside.dueText, /\//);
+});
+
+test("bank day arms equal the shared planner including wrap", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const first = waiting.entries[0];
+  const last = waiting.entries[waiting.entries.length - 1];
+  const fromLast = bankArms(waiting, { path: last.path, line0: last.line - 1 });
+  assert.equal(fromLast.nextPlan.wrapped, true);
+  assert.equal(fromLast.next.text, `↻ ${fromLast.nextPlan.entry.short} ›`);
+  assert.match(fromLast.next.ariaLabel, /Next bank day:/);
+  const fromFirst = bankArms(waiting, { path: first.path, line0: first.line - 1 });
+  assert.equal(fromFirst.prevPlan.wrapped, true);
+  assert.equal(fromFirst.prev.text, `‹ ↻ ${fromFirst.prevPlan.entry.short}`);
+  const view = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: last.path, date: last.date, line0: last.line - 1, entry: last, member: true },
+    arms: { prev: fromLast.prev, next: fromLast.next },
+  });
+  assert.equal(view.linkNext.text, fromLast.next.text);
+});
+
+test("bank meter is honest about generation, ranking, and empty accounts", () => {
+  const today = "2026-11-14";
+  const balanced = bankWalkerFooterMeterFromReport({
+    today,
+    accounts: [
+      { label: "Checking", kind: "checking", status: "balanced" },
+      { label: "Cash", kind: "cash", status: "untracked" },
+      { label: "Ghost", kind: "checking", status: "untracked" },
+    ],
+  }, { currentGeneration: 3, resultGeneration: 3 });
+  assert.equal(balanced.text, "✓ balanced");
+  assert.equal(balanced.state, "ok");
+
+  const ranked = bankWalkerFooterMeterFromReport({
+    today,
+    accounts: [
+      { label: "Card", kind: "credit", status: "unverified" },
+      { label: "Savings", kind: "savings", status: "stale", balance_asof: "2026-11-02" },
+      { label: "Checking", kind: "checking", status: "gap" },
+      { label: "Brokerage", kind: "brokerage", status: "delta", delta_cents: 320 },
+      { label: "Wallet", kind: "cash", status: "delta", delta_cents: 99999 },
+    ],
+  }, { currentGeneration: 3, resultGeneration: 3 });
+  assert.equal(ranked.state, "delta");
+  assert.equal(ranked.text, "Δ $3.20");
+  assert.ok(ranked.lines.some((line) => line.includes("Checking gap")));
+  assert.ok(ranked.lines.some((line) => /stale 12d/.test(line)));
+  assert.equal(ranked.lines.some((line) => /Wallet/.test(line)), false);
+
+  const staleGen = bankWalkerFooterMeterFromReport(
+    { today, accounts: [{ label: "Checking", kind: "checking", status: "balanced" }] },
+    { currentGeneration: 5, resultGeneration: 4 },
+  );
+  assert.equal(staleGen.state, "stale-generation");
+  assert.equal(staleGen.text, "");
+
+  const none = bankWalkerFooterMeterFromReport(
+    { today, accounts: [{ label: "Cash", kind: "cash", status: "untracked" }] },
+    { currentGeneration: 1, resultGeneration: 1 },
+  );
+  assert.equal(none.state, "empty");
+  assert.equal(none.text, "");
+});
+
+test("bank shed order is groups, compact detail, detail, day arms, hint, then meter", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const view = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: shop.path, date: shop.date, line0: shop.line - 1, entry: shop, member: true },
+    arms: bankArms(waiting, { path: shop.path, line0: shop.line - 1 }),
+    meter: { text: "Δ $3.20", state: "delta", lines: ["Checking Δ $3.20"] },
+  });
+  view.groups = waiting.days.map((day) => ({ key: day.date, label: day.label, count: String(day.count) }));
+  view.groupsText = view.groups.map((group) => `${group.label} ${group.count}`).join(" · ");
+  const el = new TestElement("div");
+  el.clientWidth = 1000;
+  const omitted = (node) => Boolean(node && node.classList.contains("bob-freshness-omit"));
+  const widthOf = (node) => {
+    if (!node || omitted(node)) return 0;
+    if (node.classList.contains("bob-freshness-main")) return 50;
+    if (node.classList.contains("bob-freshness-context")) return 30;
+    if (node.classList.contains("bob-freshness-link-arm")) return 25;
+    if (node.classList.contains("bob-freshness-link-separator")) return 5;
+    if (node.classList.contains("bob-freshness-detail")) {
+      return String(node.text).length > 8 ? 40 : 18;
+    }
+    if (node.classList.contains("bob-freshness-hint")) return 20;
+    if (node.classList.contains("bob-freshness-meter")) return 20;
+    if (node.classList.contains("bob-freshness-groups")) {
+      return node.children.reduce((sum, child) => {
+        if (omitted(child)) return sum;
+        return sum + (child.classList.contains("bob-freshness-group") ? 12 : 5);
+      }, 0);
+    }
+    return 0;
+  };
+  Object.defineProperty(el, "scrollWidth", {
+    configurable: true,
+    get() {
+      return this.children.reduce((sum, child) => sum + widthOf(child), 0);
+    },
+  });
+  const parts = freshnessFooterPaint(el, view);
+  el.clientWidth = 1000;
+  assert.deepEqual(freshnessFooterFit(el, parts, view), {
+    groups: true, groupsShown: 4, detail: true, hint: true, meter: true, arms: true,
+  });
+  el.clientWidth = 200;
+  const afterGroups = freshnessFooterFit(el, parts, view);
+  assert.equal(afterGroups.groups, false);
+  assert.equal(afterGroups.detail, true);
+  assert.equal(afterGroups.arms, true);
+  assert.equal(parts.detail.text, "$42.50");
+  el.clientWidth = 180;
+  const afterDetail = freshnessFooterFit(el, parts, view);
+  assert.equal(afterDetail.detail, false);
+  assert.equal(afterDetail.arms, true);
+  el.clientWidth = 119;
+  const afterArms = freshnessFooterFit(el, parts, view);
+  assert.equal(afterArms.arms, false);
+  assert.equal(afterArms.hint, true);
+  el.clientWidth = 99;
+  const afterHint = freshnessFooterFit(el, parts, view);
+  assert.equal(afterHint.hint, false);
+  assert.equal(afterHint.meter, true);
+  el.clientWidth = 50;
+  const afterMeter = freshnessFooterFit(el, parts, view);
+  assert.equal(afterMeter.meter, false);
+});
+
+test("bank painter stamps family b, hue, scope, inflow, and arm labels", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const view = bankWalkerFooterView(waiting, {
+    located: { inBank: true, path: shop.path, date: shop.date, line0: shop.line - 1, entry: shop, member: true },
+    arms: bankArms(waiting, { path: shop.path, line0: shop.line - 1 }),
+    meter: { text: "Δ $3.20", state: "delta", lines: [] },
+    hue: "aqua",
+  });
+  const host = new TestElement("div");
+  const parts = freshnessFooterPaint(host, view);
+  assert.equal(host.attrs["data-walker-panel"], "b");
+  assert.equal(host.attrs["data-bank-hue"], "aqua");
+  assert.equal(host.attrs["data-bank-scope"], "waiting");
+  assert.equal(host.classList.contains("bob-freshness-bank"), true);
+  assert.equal(parts.icon.text, "$");
+  assert.equal(parts.linkPrev.attrs["aria-label"], view.linkPrev.ariaLabel);
+  assert.equal(parts.linkNext.disabled, false);
+  assert.equal(parts.detail.classList.contains("bob-freshness-inflow"), false);
+  assert.equal(parts.meter.classList.contains("bob-freshness-meter-warn"), true);
+  const payrollRows = ALL_ROWS.map((row) => ({ ...row }));
+  const all = bankSnap(payrollRows);
+  const payroll = all.entries.find((entry) => entry.payee === "Payroll inflow");
+  const inflowView = bankWalkerFooterView(all, {
+    located: { inBank: true, path: payroll.path, date: payroll.date, line0: payroll.line - 1, entry: payroll, member: true },
+    arms: bankArms(all, { path: payroll.path, line0: payroll.line - 1 }),
+    meter: bankMeterOk(),
+  });
+  freshnessFooterPaint(host, inflowView);
+  assert.equal(host.attrs["data-bank-scope"], "all");
+  assert.equal(host.classList.contains("bob-freshness-inflow") || parts.detail.classList.contains("bob-freshness-inflow"), true);
+});
+
+function makeBankFooterPlugin({ mode = "b", version = 4, snapshot = null, cursor = null } = {}) {
+  const calls = [];
+  const fetches = [];
+  const writes = [];
+  const spawns = [];
+  const walkMode = {
+    version,
+    current: () => mode,
+    setAttention: (type, value) => {
+      calls.push({ type, value });
+      return { ok: true };
+    },
+  };
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    commands: {
+      commands: {
+        "bob-navigation-hotkeys:repeat-next-bracket-walk": {},
+        "bob-navigation-hotkeys:jump-to-prev-bank-day": {},
+        "bob-navigation-hotkeys:jump-to-next-bank-day": {},
+      },
+      executeCommandById: (id) => calls.push(id),
+    },
+    workspace: { getActiveViewOfType: () => null },
+    vault: { modify: (...args) => writes.push(args) },
+  };
+  plugin.dependencyNavApi = () => ({ walkMode });
+  plugin.bankWalkApi = () => ({
+    version: 1,
+    snapshot: () => snapshot,
+    locate: (snap, cur) => bankWalkLocate(snap, cur),
+    plan: (snap, options) => bankWalkPlan(snap, options),
+    anchor: () => null,
+  });
+  plugin.freshnessFooterCursor = () => cursor;
+  plugin.freshnessStatusEl = new TestElement("div");
+  plugin.freshnessEnsureMemo = () => ({ counts: { walk: 0, byTier: {} }, tasksAvailable: true });
+  plugin.freshnessMemo = plugin.freshnessEnsureMemo();
+  plugin.bankVaultGeneration = snapshot && snapshot.generation ? snapshot.generation : 4;
+  plugin.apiBankFetch = (options) => {
+    fetches.push(options);
+    return Promise.resolve({
+      report: {
+        today: "2026-11-14",
+        accounts: [{ label: "Checking", kind: "checking", status: "balanced" }],
+      },
+      generation: plugin.bankVaultGeneration,
+    });
+  };
+  plugin.bobSpawnJson = () => {
+    spawns.push("bob");
+    return Promise.resolve(null);
+  };
+  plugin.bankSpawnFetch = (...args) => {
+    spawns.push(args);
+    return Promise.resolve(null);
+  };
+  return { plugin, walkMode, calls, fetches, writes, spawns };
+}
+
+test("bank footer hides while indexing, on other families, and when nav predates v4", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const hidden = bankWalkerFooterView(waiting, { navVersion: 3 });
+  assert.equal(hidden.visible, false);
+  const { plugin: oldNav } = makeBankFooterPlugin({ version: 3, snapshot: waiting });
+  bankWalkerFooterRequest(oldNav);
+  assert.equal(oldNav.freshnessFooterLastView.visible, false);
+
+  const { plugin: indexing } = makeBankFooterPlugin({
+    snapshot: { available: false, reason: "indexing" },
+  });
+  bankWalkerFooterRequest(indexing);
+  assert.equal(indexing.freshnessFooterLastView.visible, false);
+
+  const { plugin: other } = makeBankFooterPlugin({ mode: "w", snapshot: waiting });
+  other.updateFreshnessStatusBar();
+  assert.notEqual(other.freshnessFooterLastView.panel, "bank");
+
+  const { plugin: unset } = makeBankFooterPlugin({ mode: null, snapshot: waiting });
+  unset.dependencyNavApi = () => ({
+    walkMode: { version: 4, current: () => null, setAttention: () => ({ ok: true }) },
+  });
+  unset.updateFreshnessStatusBar();
+  assert.equal(unset.freshnessFooterLastView.visible, false);
+});
+
+test("bank attention is waiting-amber off-b and null on b, zero, or old nav", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const { plugin, calls } = makeBankFooterPlugin({ mode: "w", snapshot: waiting });
+  walkerFooterPushBankAttention(plugin, { legacy: false, mode: "w" }, waiting);
+  assert.equal(calls[0].type, "b");
+  assert.equal(calls[0].value.tier, "waiting");
+  assert.match(calls[0].value.label, /Bank: 10 waiting · oldest .* — click to show/);
+
+  const onB = makeBankFooterPlugin({ mode: "b", snapshot: waiting });
+  walkerFooterPushBankAttention(onB.plugin, { legacy: false, mode: "b" }, waiting);
+  assert.equal(onB.calls[0].value, null);
+
+  const none = bankSnap(ALL_ROWS);
+  const clear = makeBankFooterPlugin({ mode: "w", snapshot: none });
+  walkerFooterPushBankAttention(clear.plugin, { legacy: false, mode: "w" }, none);
+  assert.equal(clear.calls[0].value, null);
+
+  const old = makeBankFooterPlugin({ mode: "w", version: 3, snapshot: waiting });
+  walkerFooterPushBankAttention(old.plugin, { legacy: false, mode: "w" }, waiting);
+  assert.equal(old.calls.length, 0);
+
+  const { plugin: bar, calls: barCalls } = makeBankFooterPlugin({ mode: "w", snapshot: waiting });
+  bar.updateFreshnessStatusBar();
+  assert.ok(barCalls.some((call) => call.type === "b" && call.value && call.value.tier === "waiting"));
+});
+
+test("bank clicks route to bracket repeat and day-jump commands", () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const { plugin, calls } = makeBankFooterPlugin({ mode: "b", snapshot: waiting });
+  plugin.freshnessStatusClicked();
+  assert.deepEqual(calls.filter((call) => typeof call === "string"), [
+    "bob-navigation-hotkeys:repeat-next-bracket-walk",
+  ]);
+  assert.equal(bankWalkerFooterActivate(plugin, "next"), true);
+  assert.equal(bankWalkerFooterActivate(plugin, "prev"), true);
+  assert.deepEqual(calls.filter((call) => typeof call === "string"), [
+    "bob-navigation-hotkeys:repeat-next-bracket-walk",
+    "bob-navigation-hotkeys:jump-to-next-bank-day",
+    "bob-navigation-hotkeys:jump-to-prev-bank-day",
+  ]);
+  const { plugin: other } = makeBankFooterPlugin({ mode: "n", snapshot: waiting });
+  assert.equal(bankWalkerFooterActivate(other, "next"), false);
+});
+
+test("bank paint fetches list through the data service and never writes or spawns bob", async () => {
+  const waiting = bankSnap(WAITING_ROWS);
+  const shop = waiting.entries.find((entry) => entry.payee === "ShopRite");
+  const { plugin, fetches, writes, spawns } = makeBankFooterPlugin({
+    mode: "b",
+    snapshot: waiting,
+    cursor: { path: shop.path, line0: shop.line - 1 },
+  });
+  bankWalkerFooterRequest(plugin);
+  assert.equal(plugin.freshnessFooterLastView.panel, "bank");
+  assert.deepEqual(fetches, [{ command: "list" }]);
+  bankWalkerFooterRequest(plugin);
+  assert.deepEqual(fetches, [{ command: "list" }]);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(plugin.freshnessFooterLastView.meterText, "✓ balanced");
+  bankWalkerFooterRequest(plugin);
+  assert.deepEqual(fetches, [{ command: "list" }]);
+  plugin.bankVaultGeneration = 9;
+  const stale = bankWalkerFooterTakeMeter(plugin);
+  assert.equal(stale.state, "stale-generation");
+  assert.equal(stale.text, "");
+  assert.equal(writes.length, 0);
+  assert.equal(spawns.length, 0);
+});
+
+test("unload on walkMode v4 clears the bank attention without changing v3", () => {
+  const seen = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = {
+    workspace: { on: () => ({}), onLayoutReady: () => {} },
+    commands: { commands: {} },
+    plugins: { plugins: {} },
+  };
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 4,
+      current: () => "w",
+      setAttention: (type, value) => {
+        seen.push({ type, value });
+        return { ok: true };
+      },
+    },
+  });
+  plugin.addStatusBarItem = () => new TestElement("div");
+  const registered = [];
+  plugin.register = (fn) => registered.push(fn);
+  plugin.registerEvent = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.setupFreshnessStatusBar();
+  for (const fn of registered) {
+    assert.doesNotThrow(fn);
+  }
+  assert.deepEqual(seen.filter((call) => call.type === "b").at(-1), { type: "b", value: null });
+  assert.deepEqual(seen.filter((call) => call.type === "s").at(-1), { type: "s", value: null });
+});
+
+test("bank walker footer stylesheet defines the b crossfade and bank tones", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"),
+    "utf8",
+  );
+  assert.match(css, /@keyframes bob-walker-panel-in-b/);
+  assert.match(css, /data-walker-panel="b"/);
+  assert.match(css, /data-bank-scope="waiting"/);
+  assert.match(css, /bob-freshness-inflow/);
+  assert.match(css, /bob-freshness-meter-warn/);
+  assert.match(css, /font-variant-numeric:\s*tabular-nums/);
 });

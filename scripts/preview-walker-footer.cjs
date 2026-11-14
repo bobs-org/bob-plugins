@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Render the production walker footer (all three panels), the Keep chip, and
-// the production bracket-mode selector in Chromium. The page paints every
-// panel state from the walker_footers plan state tables plus an integrated
-// bar that repaints s → w → n in one host to prove the selector rect never
-// moves (invariant 7) and the panel swaps synchronously.
+// Render the production walker footer (s/w/n plus the bank `b` panel), the
+// Keep chip, and the production bracket-mode selector in Chromium. The page
+// paints every panel state from the walker_footers and bank_walk_family_b
+// plan state tables plus an integrated bar that repaints s → w → n in one
+// host to prove the selector rect never moves (invariant 7) and the panel
+// swaps synchronously. The four-letter integrated bar waits for handoff.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -172,7 +173,15 @@ function validateMatrix(entry) {
   if (new Set(colors).size !== tiers.length) failures.push("the nine group inks are not pairwise distinct");
   const byId = Object.fromEntries(entry.fixtures.map((item) => [item.id, item]));
   for (const fixture of entry.fixtures) {
-    const wantPanel = fixture.id.startsWith("s-") ? "s" : fixture.id.startsWith("w-") ? "w" : "n";
+    const wantPanel = fixture.id.startsWith("s-")
+      ? "s"
+      : fixture.id.startsWith("w-")
+        ? "w"
+        : fixture.id.startsWith("n-")
+          ? "n"
+          : fixture.id.startsWith("b-")
+            ? "b"
+            : "n";
     if (fixture.panel !== wantPanel) failures.push(`${fixture.id} paints panel ${fixture.panel}, not ${wantPanel}`);
     if (fixture.overflow > 1) failures.push(`${fixture.id} overflows its host by ${fixture.overflow}px`);
     failures.push(...contrastFailures(fixture).map((failure) => `${entry.theme} ${entry.width}px: ${failure}`));
@@ -202,6 +211,21 @@ function validateMatrix(entry) {
   }
   if (!byId["s-clear"] || byId["s-clear"].dueText !== "Review clear") {
     failures.push(`s-clear due is ${JSON.stringify(byId["s-clear"] && byId["s-clear"].dueText)}, not Review clear`);
+  }
+  if (!byId["b-waiting-row"] || !String(byId["b-waiting-row"].dueText).startsWith("WAITING ")) {
+    failures.push(`b-waiting-row due is ${JSON.stringify(byId["b-waiting-row"] && byId["b-waiting-row"].dueText)}, not WAITING`);
+  }
+  if (!byId["b-all-row"] || !String(byId["b-all-row"].dueText).startsWith("ALL ")) {
+    failures.push(`b-all-row due is ${JSON.stringify(byId["b-all-row"] && byId["b-all-row"].dueText)}, not ALL`);
+  }
+  if (!byId["b-empty"] || byId["b-empty"].dueText !== "No bank rows") {
+    failures.push(`b-empty due is ${JSON.stringify(byId["b-empty"] && byId["b-empty"].dueText)}, not No bank rows`);
+  }
+  if (!byId["b-wrap"] || !byId["b-wrap"].linkNext || !String(byId["b-wrap"].linkNext.text).includes("↻")) {
+    failures.push("b-wrap next arm does not show the wrapping ↻ mark");
+  }
+  for (const id of ["b-waiting-row", "b-waiting-inbank", "b-all-row", "b-wrap"]) {
+    if (linksMatch(id) === false) failures.push(`${id} painted arms differ from the view arms`);
   }
   // Fixed item height: every fixture host must agree within 2px.
   const heights = entry.fixtures.map((item) => item.hostHeight).filter(Number.isFinite);
@@ -302,7 +326,7 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: every walker panel state (s review + clear, w lane states + stress, n compass states + Unicode/dupe), plus an integrated bar (footer + Keep chip + production selector).",
+      "- Fixtures: every walker panel state (s review + clear, w lane states + stress, n compass states + Unicode/dupe, b bank WAITING/ALL/empty/wrap), plus an integrated s/w/n bar (footer + Keep chip + production selector). The four-letter bar waits for handoff.",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
       "- Checks: AA contrast for every panel ink; no host overflow; panel attribute per fixture id; links arms match the view; dashed create target; selector rect identical across s/w/n immediately and after frames while footer widths change; fixed host height.",
       "",

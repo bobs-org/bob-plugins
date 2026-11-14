@@ -91,7 +91,12 @@ class BobLedgerToolsFreshnessStatusMixin {
             } catch (error) {
               // Best-effort.
             }
-            linksWalkerFooterActivate(self, direction);
+            const route = walkerFooterWalkMode(self);
+            if (!route.legacy && route.mode === "b") {
+              bankWalkerFooterActivate(self, direction);
+            } else {
+              linksWalkerFooterActivate(self, direction);
+            }
           });
         } catch (error) {
           // A missing direction-button listener does not break the panel.
@@ -122,6 +127,9 @@ class BobLedgerToolsFreshnessStatusMixin {
                 return;
               }
               walkMode.setAttention("s", null);
+              if (Number(walkMode.version) >= 4) {
+                walkMode.setAttention("b", null);
+              }
             } catch (error) {
               // Unload clearing never throws.
             }
@@ -132,6 +140,7 @@ class BobLedgerToolsFreshnessStatusMixin {
       }
       this.observeFreshnessFooterWidth(el);
       this.subscribeWalkerFooterDoorbell();
+      this.subscribeBankWalkerFooter();
       this.refreshWalkerFooterOnLayoutReady();
     } catch (error) {
       this.freshnessStatusEl = null;
@@ -168,6 +177,33 @@ class BobLedgerToolsFreshnessStatusMixin {
       }
     } catch (error) {
       // No doorbell, no gating: the legacy fallback still paints.
+    }
+  }
+
+  subscribeBankWalkerFooter() {
+    try {
+      if (typeof this.onBankWalkChange !== "function") {
+        return;
+      }
+      const self = this;
+      const unsub = this.onBankWalkChange(() => {
+        try {
+          self.updateFreshnessStatusBar();
+        } catch (error) {
+          // Index change never breaks the footer.
+        }
+      });
+      if (typeof this.register === "function" && typeof unsub === "function") {
+        this.register(() => {
+          try {
+            unsub();
+          } catch (error) {
+            // Unload unsubscription is best-effort.
+          }
+        });
+      }
+    } catch (error) {
+      // The coalesced editor-change path still repaints.
     }
   }
 
@@ -350,6 +386,17 @@ class BobLedgerToolsFreshnessStatusMixin {
         }
       }
       walkerFooterPushReviewAttention(this, route, attentionMemo);
+      let bankSnapshot = null;
+      try {
+        const bankWalk =
+          typeof this.bankWalkApi === "function" ? this.bankWalkApi() : null;
+        if (bankWalk && typeof bankWalk.snapshot === "function") {
+          bankSnapshot = bankWalk.snapshot();
+        }
+      } catch (_error) {
+        bankSnapshot = null;
+      }
+      walkerFooterPushBankAttention(this, route, bankSnapshot);
       if (!route.legacy && route.mode === "n") {
         linksWalkerFooterRequest(this);
         return;
@@ -469,6 +516,10 @@ class BobLedgerToolsFreshnessStatusMixin {
           this.freshnessStatusEl,
           view,
         );
+        return;
+      }
+      if (!route.legacy && route.mode === "b") {
+        bankWalkerFooterRequest(this);
         return;
       }
       if (!route.legacy && route.mode !== "s") {
@@ -625,37 +676,19 @@ class BobLedgerToolsFreshnessStatusMixin {
     try {
       const commands = this.app && this.app.commands;
       const route = walkerFooterWalkMode(this);
-      if (!route.legacy && route.mode === "n") {
-        const linkCommandId =
-          "bob-navigation-hotkeys:repeat-next-bracket-walk";
-        const linkCommandExists = Boolean(
+      if (!route.legacy && (route.mode === "n" || route.mode === "w" || route.mode === "b")) {
+        const repeatId = "bob-navigation-hotkeys:repeat-next-bracket-walk";
+        const repeatExists = Boolean(
           commands &&
-            ((commands.commands && commands.commands[linkCommandId]) ||
+            ((commands.commands && commands.commands[repeatId]) ||
               (typeof commands.findCommand === "function" &&
-                commands.findCommand(linkCommandId))),
+                commands.findCommand(repeatId))),
         );
         if (
-          linkCommandExists &&
+          repeatExists &&
           typeof commands.executeCommandById === "function"
         ) {
-          commands.executeCommandById(linkCommandId);
-        }
-        return;
-      }
-      if (!route.legacy && route.mode === "w") {
-        const laneCommandId =
-          "bob-navigation-hotkeys:repeat-next-bracket-walk";
-        const laneCommandExists = Boolean(
-          commands &&
-            ((commands.commands && commands.commands[laneCommandId]) ||
-              (typeof commands.findCommand === "function" &&
-                commands.findCommand(laneCommandId))),
-        );
-        if (
-          laneCommandExists &&
-          typeof commands.executeCommandById === "function"
-        ) {
-          commands.executeCommandById(laneCommandId);
+          commands.executeCommandById(repeatId);
         }
         return;
       }

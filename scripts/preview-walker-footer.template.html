@@ -21,6 +21,7 @@
       --font-ui-smaller: 12px;
       --font-medium: 500; --font-bold: 700;
       --status-bar-background: #f6f6f6;
+      --text-warning: #9a4e00;
       background: #fff; color: var(--text-normal);
     }
     body.theme-dark {
@@ -36,6 +37,7 @@
       --font-ui-smaller: 12px;
       --font-medium: 500; --font-bold: 700;
       --status-bar-background: #262626;
+      --text-warning: #e9973f;
       background: #1c1c1c; color: var(--text-normal);
     }
     #preview-root { width: 100%; padding: 12px 0; }
@@ -253,7 +255,122 @@
       { id: "n-nonnote", title: "n · non-Markdown view", make: () => ledger.linksWalkerFooterView(null, { state: "open-note" }) },
       { id: "n-unavailable", title: "n · old nav without links()", make: () => ledger.linksWalkerFooterView(null, { state: "unavailable" }) },
     ];
-    const panelFixtures = [...reviewFixtures, ...laneFixtures, ...linksFixtures];
+    function previewBankRow(date, line, cents, payee, waiting = true) {
+      return {
+        path: "bank/2026-11.md", line, date, cents, waiting, payee, ackId: null,
+        text: `- [${waiting ? " " : "x"}] ${cents >= 0 ? "+" : ""}$${(Math.abs(cents) / 100).toFixed(2)} ${payee}`,
+      };
+    }
+    function previewBankSnap(rows, generation = 4) {
+      const built = ledger.bankWalkBuildEntries(rows);
+      const waiting = rows.filter((row) => row.waiting).length;
+      return {
+        available: true, version: 1, generation, scope: built.scope,
+        counts: {
+          rows: rows.length, waiting, days: built.days.length,
+          waitingDays: built.days.filter((day) => day.waiting > 0).length,
+          months: 1, waitingMonths: waiting > 0 ? 1 : 0,
+        },
+        entries: built.entries, days: built.days,
+        files: {
+          "bank/2026-11.md": {
+            month: "2026-11",
+            headings: [...new Set(rows.map((row) => row.date))].map((date) => ({
+              date, line: Math.min(...rows.filter((row) => row.date === date).map((row) => row.line)) - 1,
+            })),
+          },
+        },
+      };
+    }
+    function previewBankArms(snapshot, cursor) {
+      const prev = ledger.bankWalkPlan(snapshot, { direction: -1, dayJump: true, cursor, anchor: null });
+      const next = ledger.bankWalkPlan(snapshot, { direction: 1, dayJump: true, cursor, anchor: null });
+      return {
+        prev: ledger.bankWalkerFooterArm(prev, "prev", snapshot.scope),
+        next: ledger.bankWalkerFooterArm(next, "next", snapshot.scope),
+      };
+    }
+    const previewMeterOk = {
+      text: "✓ balanced", state: "ok",
+      lines: ["Checking ✓ balanced", "Card ✓ balanced"],
+    };
+    const previewMeterWarn = {
+      text: "Δ $3.20", state: "delta",
+      lines: ["Checking Δ $3.20", "Savings stale 12d"],
+    };
+    const waitingRows = [
+      previewBankRow("2026-11-10", 4, -1100, "Mon one"),
+      previewBankRow("2026-11-10", 5, -1200, "Mon two"),
+      previewBankRow("2026-11-10", 6, -1300, "Mon three"),
+      previewBankRow("2026-11-12", 10, -2100, "Wed one"),
+      previewBankRow("2026-11-12", 11, -2200, "Wed two"),
+      previewBankRow("2026-11-13", 20, -4250, "ShopRite"),
+      previewBankRow("2026-11-13", 21, -1500, "Thu two"),
+      previewBankRow("2026-11-13", 22, -1600, "Thu three"),
+      previewBankRow("2026-11-13", 23, -1700, "Thu four"),
+      previewBankRow("2026-11-14", 30, -3100, "Fri one"),
+    ];
+    const allRows = [
+      previewBankRow("2026-11-03", 3, -500, "Old one", false),
+      previewBankRow("2026-11-04", 8, -1240, "Coffee", false),
+      previewBankRow("2026-11-04", 9, 120000, "Payroll inflow", false),
+      previewBankRow("2026-11-04", 10, -800, "Snack", false),
+      previewBankRow("2026-11-04", 11, -900, "Fare", false),
+      previewBankRow("2026-11-04", 12, -700, "Tip", false),
+      previewBankRow("2026-11-05", 16, -300, "Later", false),
+    ];
+    const waitingSnap = previewBankSnap(waitingRows);
+    const allSnap = previewBankSnap(allRows);
+    const shop = waitingSnap.entries.find((entry) => entry.payee === "ShopRite");
+    const lastWaiting = waitingSnap.entries[waitingSnap.entries.length - 1];
+    const coffee = allSnap.entries.find((entry) => entry.payee === "Coffee");
+    const payroll = allSnap.entries.find((entry) => entry.payee === "Payroll inflow");
+    const bankFixtures = [
+      { id: "b-waiting-row", title: "b · WAITING · cursor on a waiting row", make: () => ledger.bankWalkerFooterView(waitingSnap, {
+        located: { inBank: true, path: shop.path, date: shop.date, line0: shop.line - 1, entry: shop, member: true },
+        arms: previewBankArms(waitingSnap, { path: shop.path, line0: shop.line - 1 }),
+        meter: previewMeterWarn, hue: "magenta",
+      }) },
+      { id: "b-waiting-inbank", title: "b · WAITING · elsewhere in a bank note", make: () => ledger.bankWalkerFooterView(waitingSnap, {
+        located: { inBank: true, path: shop.path, date: shop.date, line0: 18, entry: null, member: false },
+        arms: previewBankArms(waitingSnap, { path: shop.path, line0: 18 }),
+        meter: previewMeterWarn, hue: "magenta",
+      }) },
+      { id: "b-waiting-outside", title: "b · WAITING · cursor outside bank notes", make: () => ledger.bankWalkerFooterView(waitingSnap, {
+        located: { inBank: false, path: "notes/gtd.md", date: null, line0: 0, entry: null, member: false },
+        meter: previewMeterWarn, hue: "magenta",
+      }) },
+      { id: "b-all-row", title: "b · ALL · cursor on a row", make: () => ledger.bankWalkerFooterView(allSnap, {
+        located: { inBank: true, path: coffee.path, date: coffee.date, line0: coffee.line - 1, entry: coffee, member: true },
+        arms: previewBankArms(allSnap, { path: coffee.path, line0: coffee.line - 1 }),
+        meter: previewMeterOk, hue: "magenta",
+      }) },
+      { id: "b-all-inflow", title: "b · ALL · inflow row", make: () => ledger.bankWalkerFooterView(allSnap, {
+        located: { inBank: true, path: payroll.path, date: payroll.date, line0: payroll.line - 1, entry: payroll, member: true },
+        arms: previewBankArms(allSnap, { path: payroll.path, line0: payroll.line - 1 }),
+        meter: previewMeterOk, hue: "aqua",
+      }) },
+      { id: "b-all-inbank", title: "b · ALL · elsewhere in a bank note", make: () => ledger.bankWalkerFooterView(allSnap, {
+        located: { inBank: true, path: coffee.path, date: coffee.date, line0: 6, entry: null, member: false },
+        arms: previewBankArms(allSnap, { path: coffee.path, line0: 6 }),
+        meter: previewMeterOk, hue: "magenta",
+      }) },
+      { id: "b-all-outside", title: "b · ALL · cursor outside bank notes", make: () => ledger.bankWalkerFooterView(allSnap, {
+        located: { inBank: false, path: "inbox.md", date: null, line0: 0, entry: null, member: false },
+        meter: previewMeterOk, hue: "magenta",
+      }) },
+      { id: "b-wrap", title: "b · WAITING · wrapping next day arm", make: () => ledger.bankWalkerFooterView(waitingSnap, {
+        located: { inBank: true, path: lastWaiting.path, date: lastWaiting.date, line0: lastWaiting.line - 1, entry: lastWaiting, member: true },
+        arms: previewBankArms(waitingSnap, { path: lastWaiting.path, line0: lastWaiting.line - 1 }),
+        meter: previewMeterWarn, hue: "magenta",
+      }) },
+      { id: "b-empty", title: "b · no bank rows", make: () => ledger.bankWalkerFooterView({
+        available: true, version: 1, generation: 1, scope: "all",
+        counts: { rows: 0, waiting: 0, days: 0, waitingDays: 0, months: 0, waitingMonths: 0 },
+        entries: [], days: [], files: {},
+      }, { hue: "magenta" }) },
+    ];
+    const panelFixtures = [...reviewFixtures, ...laneFixtures, ...linksFixtures, ...bankFixtures];
 
     function visible(node) {
       return Boolean(node)
@@ -398,7 +515,7 @@
         } : null,
         linkStatus: linkStatus && visible(linkStatus) ? linkStatus.textContent : "",
       };
-      if (view && view.panel === "links") {
+      if (view && (view.panel === "links" || view.panel === "bank")) {
         const wantPrev = view.linkPrev ? view.linkPrev.text : null;
         const wantNext = view.linkNext ? view.linkNext.text : null;
         result.linksMatch = (result.linkPrev ? result.linkPrev.text : null) === wantPrev

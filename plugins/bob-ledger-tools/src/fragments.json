@@ -20,6 +20,7 @@
   "122-walker-footer-host.js",
   "123-lane-walker-footer.js",
   "124-links-walker-footer.js",
+  "125-bank-walker-footer.js",
   "130-freshness-marks.js",
   "135-freshness-rotten-log.js",
   "135-priority-marks.js",
@@ -252,5 +253,6 @@
   "356-exports-mail-archive-receipts.js",
   "358-exports-projects.js",
   "359-exports-projects-catalog.js",
-  "360-exports-bank-walk.js"
+  "360-exports-bank-walk.js",
+  "361-exports-bank-walker-footer.js"
 ]

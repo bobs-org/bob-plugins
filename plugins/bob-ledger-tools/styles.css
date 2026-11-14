@@ -662,7 +662,7 @@ a.bob-plan-ready:hover {
    a fixed item height so swapping panels never grows the status bar, and a
    calm ~120 ms content crossfade plays only when the active family changes.
    Count-only repaints keep `data-walker-panel`, so counts never animate: the
-   attribute flip (s/w/n) selects a different animation name, which restarts
+   attribute flip (s/w/n/b) selects a different animation name, which restarts
    the fade without any JS timing. */
 .bob-freshness {
   min-height: 1.6em;
@@ -679,6 +679,10 @@ a.bob-plan-ready:hover {
   from { opacity: 0.35; }
   to { opacity: 1; }
 }
+@keyframes bob-walker-panel-in-b {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
 @media (prefers-reduced-motion: no-preference) {
   .bob-freshness[data-walker-panel="s"] .bob-freshness-main {
     animation: bob-walker-panel-in-s 120ms ease-out;
@@ -689,11 +693,70 @@ a.bob-plan-ready:hover {
   .bob-freshness[data-walker-panel="n"] .bob-freshness-main {
     animation: bob-walker-panel-in-n 120ms ease-out;
   }
+  .bob-freshness[data-walker-panel="b"] .bob-freshness-main {
+    animation: bob-walker-panel-in-b 120ms ease-out;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .bob-freshness[data-walker-panel] .bob-freshness-main {
     animation: none;
   }
+}
+
+/* Bank walker-footer panel (plan 202611/bank_walk_family_b.md, phase footer):
+   `$` wears the bank hue, WAITING is warning ink, inflows are green, and the
+   meter uses warning ink unless every tracked account is balanced. */
+.bob-freshness-bank {
+  --bob-bank-footer-hue: var(--bob-area-magenta, var(--interactive-accent));
+  --bob-bank-in-ink: color-mix(in srgb, var(--color-green) 60%, var(--text-normal));
+}
+.bob-freshness-bank[data-bank-hue="aqua"] {
+  --bob-bank-footer-hue: var(--bob-area-aqua, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="blue"] {
+  --bob-bank-footer-hue: var(--bob-area-blue, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="green"] {
+  --bob-bank-footer-hue: var(--bob-area-green, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="magenta"] {
+  --bob-bank-footer-hue: var(--bob-area-magenta, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="orange"] {
+  --bob-bank-footer-hue: var(--bob-area-orange, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="red"] {
+  --bob-bank-footer-hue: var(--bob-area-red, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="violet"] {
+  --bob-bank-footer-hue: var(--bob-area-violet, var(--interactive-accent));
+}
+.bob-freshness-bank[data-bank-hue="yellow"] {
+  --bob-bank-footer-hue: var(--bob-area-yellow, var(--interactive-accent));
+}
+.bob-freshness-bank .bob-freshness-icon {
+  color: var(--bob-bank-footer-hue);
+}
+.bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-due,
+.bob-freshness-bank .bob-freshness-meter.bob-freshness-meter-warn {
+  color: var(--text-warning, #9a4e00);
+}
+.theme-dark .bob-freshness-bank[data-bank-scope="waiting"] .bob-freshness-due,
+.theme-dark .bob-freshness-bank .bob-freshness-meter.bob-freshness-meter-warn {
+  color: var(--text-warning, #e9973f);
+}
+.bob-freshness-bank .bob-freshness-detail.bob-freshness-inflow {
+  color: #0b7a38;
+}
+.theme-dark .bob-freshness-bank .bob-freshness-detail.bob-freshness-inflow {
+  color: var(--color-green, #44cf6e);
+}
+.bob-freshness-bank .bob-freshness-due,
+.bob-freshness-bank .bob-freshness-detail,
+.bob-freshness-bank .bob-freshness-meter,
+.bob-freshness-bank .bob-freshness-group-count,
+.bob-freshness-bank .bob-freshness-link-arm {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Task freshness mark (api v3): a small theme-native rendering of

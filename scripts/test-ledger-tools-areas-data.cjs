@@ -161,3 +161,78 @@ test("report refreshes are debounced, stale rows survive a failed refresh, and s
   unsubscribe();
   plugin.teardownAreasData();
 });
+
+test("missing bob waits for new demand instead of polling every debounce interval", async () => {
+  const { plugin, timers } = makeAreasPlugin();
+  let attempts = 0;
+  plugin.areasSpawnList = async () => { attempts += 1; return { ok: false, code: "bob-not-found" }; };
+  try {
+    plugin.apiAreasSubscribe(() => {});
+    await flush();
+    await timers.tick(3000);
+    assert.equal(attempts, 1);
+    assert.equal(timers.jobs.size, 0);
+    assert.equal(plugin.areasReportState().unavailable, true);
+    assert.equal(plugin.areasReportState().error.code, "bob-not-found");
+
+    plugin.areasSpawnList = async () => { attempts += 1; return { ok: true, report: areasIndexReport(listReport()) }; };
+    const retried = await plugin.apiAreasReport({ force: true, wait: true });
+    assert.equal(attempts, 2);
+    assert.equal(retried.error, null);
+    assert.equal(retried.unavailable, false);
+  } finally { plugin.teardownAreasData(); }
+});
+
+test("failed invalidation refresh keeps cached rows and concurrent waiters settle without another attempt", async () => {
+  const { plugin, file, timers } = makeAreasPlugin();
+  try {
+    plugin.apiAreasSubscribe(() => {});
+    await flush();
+    const lastGood = plugin.areasReport;
+    let attempts = 0;
+    let settle;
+    plugin.areasSpawnList = () => {
+      attempts += 1;
+      return new Promise((resolve) => { settle = resolve; });
+    };
+    plugin.areasHandleMetadataChanged(file, { frontmatter: { type: "[[area]]" } });
+    await timers.tick(AREAS_REVALIDATE_DEBOUNCE_MS);
+    const waiter = plugin.apiAreasReport({ wait: true });
+    settle({ ok: false, code: "timeout" });
+    await flush();
+    assert.equal(attempts, 1, "a waiter must not reinterpret a failure as a new invalidation");
+    const failed = await waiter;
+    assert.equal(failed.report, lastGood);
+    assert.equal(failed.stale, true);
+    assert.equal(failed.error.code, "timeout");
+    await timers.tick(3000);
+    assert.equal(attempts, 1);
+    assert.equal(timers.jobs.size, 0);
+  } finally { plugin.teardownAreasData(); }
+});
+
+test("a vault change during a failed fetch still gets one refresh for the newer generation", async () => {
+  const { plugin, file, timers } = makeAreasPlugin();
+  let attempts = 0;
+  let settle;
+  plugin.areasSpawnList = () => {
+    attempts += 1;
+    if (attempts === 1) return new Promise((resolve) => { settle = resolve; });
+    return Promise.resolve({ ok: true, report: areasIndexReport(listReport()) });
+  };
+  try {
+    plugin.apiAreasSubscribe(() => {});
+    await flush();
+    plugin.areasHandleMetadataChanged(file, { frontmatter: { type: "[[area]]" } });
+    // The debounce fires while the old generation is still fetching.
+    await timers.tick(AREAS_REVALIDATE_DEBOUNCE_MS);
+    settle({ ok: false, code: "timeout" });
+    await flush();
+    await timers.tick(AREAS_REVALIDATE_DEBOUNCE_MS);
+    assert.equal(attempts, 2);
+    assert.equal(plugin.areasReportState().stale, false);
+    assert.equal(plugin.areasReportState().error, null);
+    assert.equal(plugin.areasReportState().reportGeneration, plugin.areasReportState().generation);
+    assert.equal(timers.jobs.size, 0);
+  } finally { plugin.teardownAreasData(); }
+});

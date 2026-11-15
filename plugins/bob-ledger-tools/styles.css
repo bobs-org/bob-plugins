@@ -9378,6 +9378,8 @@ li.bob-bank-mark-acked { opacity: 0.72; }
   font-size: 0.9em;
   font-weight: 600;
 }
+.bob-areas-icon { display: inline-flex; align-self: center; flex: none; }
+.bob-areas-icon svg { width: 1em; height: 1em; }
 .bob-areas-count { color: var(--text-muted); font-weight: normal; }
 .bob-areas-unplaced { color: var(--text-warning); font-weight: normal; cursor: help; }
 .bob-areas-dot {

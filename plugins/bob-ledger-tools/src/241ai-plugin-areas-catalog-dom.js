@@ -5,6 +5,7 @@ const AREAS_STATUS_CLASS = "bob-areas-status";
 const AREAS_STANDALONE_CLASS = "bob-areas-standalone";
 const AREAS_ANCHOR_CLASS = "bob-areas-anchor";
 const AREAS_DOT_CLASS = "bob-areas-dot";
+const areasObsidianSetIcon = require("obsidian").setIcon;
 
 function areasSetAttr(node, name, value) {
   if (value === null || value === undefined || value === false) node.removeAttribute?.(name);
@@ -41,6 +42,12 @@ function areasPaintHeader(host, options) {
   const header = albumReplaceChrome(host, AREAS_HEADER_CLASS, key, (node, doc) => {
     node.setAttribute("role", "heading");
     node.setAttribute("aria-level", "3");
+    if (typeof areasObsidianSetIcon === "function") {
+      const icon = notebookCreateEl(doc, "span", "bob-areas-icon");
+      icon.setAttribute("aria-hidden", "true");
+      areasObsidianSetIcon(icon, "layers");
+      node.appendChild(icon);
+    }
     const title = notebookCreateEl(doc, "span", "bob-areas-title");
     notebookSetText(title, "Areas");
     node.appendChild(title);

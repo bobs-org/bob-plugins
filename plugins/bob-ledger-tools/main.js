@@ -63609,7 +63609,9 @@ class BobLedgerToolsAreasDataMixin {
       if (this.areasListFlight !== flight) return;
       this.areasListFlight = null;
       this.areasNotify();
-      if (this.areasDataActive !== false && (this.areasReportGeneration || 0) < (this.areasVaultGeneration || 0)) {
+      // Only changes newer than this attempt need another fetch. A failed
+      // attempt leaves the last good report stale until new demand or Retry.
+      if (this.areasDataActive !== false && generation < (this.areasVaultGeneration || 0)) {
         this.areasScheduleRevalidate("changed-during-fetch");
       }
     });
@@ -63623,7 +63625,9 @@ class BobLedgerToolsAreasDataMixin {
       const flight = this.areasListFlight;
       if (!opts.wait) return Promise.resolve(this.areasReportState());
       return flight.promise.then(() => {
-        if (this.areasReportStale && this.areasDataActive !== false) return this.apiAreasReport({ force: true, wait: true });
+        if (this.areasDataActive !== false && this.areasDataEpoch === flight.epoch && flight.generation < (this.areasVaultGeneration || 0)) {
+          return this.apiAreasReport({ force: true, wait: true });
+        }
         return this.areasReportState();
       });
     }
@@ -64065,6 +64069,7 @@ const AREAS_STATUS_CLASS = "bob-areas-status";
 const AREAS_STANDALONE_CLASS = "bob-areas-standalone";
 const AREAS_ANCHOR_CLASS = "bob-areas-anchor";
 const AREAS_DOT_CLASS = "bob-areas-dot";
+const areasObsidianSetIcon = require("obsidian").setIcon;
 
 function areasSetAttr(node, name, value) {
   if (value === null || value === undefined || value === false) node.removeAttribute?.(name);
@@ -64101,6 +64106,12 @@ function areasPaintHeader(host, options) {
   const header = albumReplaceChrome(host, AREAS_HEADER_CLASS, key, (node, doc) => {
     node.setAttribute("role", "heading");
     node.setAttribute("aria-level", "3");
+    if (typeof areasObsidianSetIcon === "function") {
+      const icon = notebookCreateEl(doc, "span", "bob-areas-icon");
+      icon.setAttribute("aria-hidden", "true");
+      areasObsidianSetIcon(icon, "layers");
+      node.appendChild(icon);
+    }
     const title = notebookCreateEl(doc, "span", "bob-areas-title");
     notebookSetText(title, "Areas");
     node.appendChild(title);

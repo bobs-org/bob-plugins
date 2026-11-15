@@ -1188,8 +1188,8 @@ test("the startup storm is linear", () => {
   const snapshot = plugin.api.noteReady.snapshot();
   assert.equal(
     walks.scans,
-    2,
-    "one note-ready eligibility scan plus one relation-index prefilter scan",
+    3,
+    "one scan each for note-ready eligibility, relation-index prefilter, and Areas relevance",
   );
   assert.equal(snapshot.available, true);
   for (const path of typed) {

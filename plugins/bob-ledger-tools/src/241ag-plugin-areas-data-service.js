@@ -97,7 +97,9 @@ class BobLedgerToolsAreasDataMixin {
       if (this.areasListFlight !== flight) return;
       this.areasListFlight = null;
       this.areasNotify();
-      if (this.areasDataActive !== false && (this.areasReportGeneration || 0) < (this.areasVaultGeneration || 0)) {
+      // Only changes newer than this attempt need another fetch. A failed
+      // attempt leaves the last good report stale until new demand or Retry.
+      if (this.areasDataActive !== false && generation < (this.areasVaultGeneration || 0)) {
         this.areasScheduleRevalidate("changed-during-fetch");
       }
     });
@@ -111,7 +113,9 @@ class BobLedgerToolsAreasDataMixin {
       const flight = this.areasListFlight;
       if (!opts.wait) return Promise.resolve(this.areasReportState());
       return flight.promise.then(() => {
-        if (this.areasReportStale && this.areasDataActive !== false) return this.apiAreasReport({ force: true, wait: true });
+        if (this.areasDataActive !== false && this.areasDataEpoch === flight.epoch && flight.generation < (this.areasVaultGeneration || 0)) {
+          return this.apiAreasReport({ force: true, wait: true });
+        }
         return this.areasReportState();
       });
     }

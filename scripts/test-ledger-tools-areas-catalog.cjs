@@ -12,6 +12,7 @@ Module._load = function loadAreasStubs(request, parent, isMain) {
     MarkdownRenderChild: class { constructor(el) { this.containerEl = el; } },
     MarkdownView: class {}, Modal: class {}, Notice: class {}, Platform: { isDesktopApp: true },
     Plugin: TestPlugin, PluginSettingTab: class {}, Setting: class {}, normalizePath: (value) => value, parseYaml: () => ({}),
+    setIcon: (node, name) => { node.setAttribute("data-test-icon", name); },
   };
   if (request === "@codemirror/state") return { Prec: { highest: (value) => value }, StateEffect: StubStateEffect, RangeSetBuilder: StubRangeSetBuilder };
   if (request === "@codemirror/view") return {
@@ -172,6 +173,8 @@ test("Reading card paints reported hue dots, sync and root warning without editi
   assert.equal(host.querySelectorAll(".bob-areas-dot")[0].getAttribute("data-hue"), "magenta");
   assert.equal(host.querySelectorAll(".bob-areas-dot")[1].getAttribute("data-hue"), "blue");
   assert.match(host.querySelector(".bob-areas-header").textContent, /2 areas/);
+  assert.equal(host.querySelector(".bob-areas-icon").getAttribute("data-test-icon"), "layers");
+  assert.equal(host.querySelector(".bob-areas-icon").getAttribute("aria-hidden"), "true");
   assert.match(host.querySelector(".bob-areas-unplaced").getAttribute("title"), /stray\.md/);
   assert.equal(host.querySelector(".bob-areas-action").textContent, "↻ sync");
   assert.equal(syncs, 0, "painting does not write catalogs");

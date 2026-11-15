@@ -130,7 +130,7 @@ function bankCacheKey(args) {
 
 function bankBuildArgs(options = {}) {
   const opts = bankJsonObject(options) ? options : {};
-  const command = opts.command === "report" ? "report" : "list";
+  const command = opts.command === "report" ? "report" : opts.command === "config" ? "config" : "list";
   const args = ["bank", command];
   if (command === "list" && opts.all === true) {
     args.push("-a");
@@ -267,12 +267,22 @@ function bankParseBody(stdout, stderr, commandLabel) {
     const message = bankString(inner.message)
       || (typeof body.error === "string" && body.error ? body.error : null)
       || `${commandLabel} reported an error.`;
-    return {
+    const failure = {
       ok: false,
       code: bankString(inner.code) || "bob-error",
       message,
       detail: statsFirstLine(stderr),
     };
+    // An invalid bank config still reports located findings on the failure
+    // envelope (bob-cli-lq): surface the count so the queue card can point at
+    // the Setup header instead of the raw first message.
+    if (Array.isArray(body.findings)) {
+      failure.findings = body.findings;
+      failure.configProblems = body.findings.filter(
+        (entry) => bankJsonObject(entry) && entry.severity === "error",
+      ).length;
+    }
+    return failure;
   }
   if (body.ok !== true) {
     return bankFail("bad-shape", `${commandLabel} returned a report without ok: true.`, stderr);

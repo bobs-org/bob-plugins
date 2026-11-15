@@ -451,6 +451,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   }
 
   paintTile(grid, tile, selected, disabled) {
+    // The Setup header renders tile-for-tile identical tiles through the
+    // shared helper; the card keeps its exact look and key attribute.
+    if (typeof bankSharedCategoryTile === "function" && grid && grid.ownerDocument) {
+      const button = bankSharedCategoryTile(grid.ownerDocument, tile, {
+        card: true,
+        selected: selected === true,
+        disabled: disabled === true,
+      });
+      if (button) {
+        if (typeof grid.appendChild === "function") {
+          grid.appendChild(button);
+        }
+        return;
+      }
+    }
     const attrs = {
       type: "button",
       "data-category-key": tile.key,

@@ -441,18 +441,13 @@ class BobLedgerToolsBankMarksMixin {
     }
   }
 
+  // Hub row hiding lives with the Setup header surface
+  // (`bob-bank-setup-surface`, owned by the bank setup hosts): the `bank`
+  // property on any other note is never hidden, and this mixin never touches
+  // document.body for it. Leaf containers keep the legacy hub marker for
+  // non-surface consumers.
   bankMarkSyncHubProperty() {
     try {
-      const docs = typeof this.markGateDocuments === "function" ? this.markGateDocuments() : [typeof document !== "undefined" ? document : null];
-      const active = bankIsHubPath(this.bankMarkActivePath());
-      for (const doc of Array.isArray(docs) ? docs : []) {
-        try {
-          const body = doc && doc.body;
-          if (!body || !body.classList) continue;
-          if (active) body.classList.add("bob-bank-hub-note");
-          else body.classList.remove("bob-bank-hub-note");
-        } catch (error) {}
-      }
       const workspace = this.app && this.app.workspace;
       const leaves = workspace && typeof workspace.getLeavesOfType === "function"
         ? workspace.getLeavesOfType("markdown") || []

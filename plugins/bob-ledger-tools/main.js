@@ -34433,7 +34433,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
-    this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks();
+    this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
@@ -34555,7 +34555,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankData(); this.teardownBankActions(); this.teardownBankWalk();
+      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankSetup(); this.teardownBankData(); this.teardownBankActions(); this.teardownBankWalk();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
@@ -42095,7 +42095,7 @@ function bobSpawnJson(args, decode, options = {}) {
         return { ok: true, report: result.report, exitCode };
       }
       const failure = result && typeof result === "object" ? result : {};
-      return {
+      const outcome = {
         ok: false,
         code: typeof failure.code === "string" ? failure.code : "failed",
         message:
@@ -42106,6 +42106,15 @@ function bobSpawnJson(args, decode, options = {}) {
         tried,
         exitCode,
       };
+      // Decoders may attach located diagnostics (bank config findings) to a
+      // failure: keep them so surfaces can point at the owning UI.
+      if (Array.isArray(failure.findings)) {
+        outcome.findings = failure.findings;
+      }
+      if (Number.isInteger(failure.configProblems)) {
+        outcome.configProblems = failure.configProblems;
+      }
+      return outcome;
     };
     const notFound = () => ({
       ok: false,
@@ -66777,7 +66786,7 @@ function bankCacheKey(args) {
 
 function bankBuildArgs(options = {}) {
   const opts = bankJsonObject(options) ? options : {};
-  const command = opts.command === "report" ? "report" : "list";
+  const command = opts.command === "report" ? "report" : opts.command === "config" ? "config" : "list";
   const args = ["bank", command];
   if (command === "list" && opts.all === true) {
     args.push("-a");
@@ -66914,12 +66923,22 @@ function bankParseBody(stdout, stderr, commandLabel) {
     const message = bankString(inner.message)
       || (typeof body.error === "string" && body.error ? body.error : null)
       || `${commandLabel} reported an error.`;
-    return {
+    const failure = {
       ok: false,
       code: bankString(inner.code) || "bob-error",
       message,
       detail: statsFirstLine(stderr),
     };
+    // An invalid bank config still reports located findings on the failure
+    // envelope (bob-cli-lq): surface the count so the queue card can point at
+    // the Setup header instead of the raw first message.
+    if (Array.isArray(body.findings)) {
+      failure.findings = body.findings;
+      failure.configProblems = body.findings.filter(
+        (entry) => bankJsonObject(entry) && entry.severity === "error",
+      ).length;
+    }
+    return failure;
   }
   if (body.ok !== true) {
     return bankFail("bad-shape", `${commandLabel} returned a report without ok: true.`, stderr);
@@ -67415,6 +67434,287 @@ function bankPresentReport(report) {
     flagged: report.flagged,
   };
 }
+// ---- src/241hb-plugin-bank-config-decode.js ----
+// Bank `config` report JSON boundary (bob-cli-lt setup-header). Decodes
+// `bob bank config -f json` without duplicating accounting: the effective
+// setup plus fully located findings. Tolerates absent fields; an older bob
+// without the subcommand decodes to `unsupported`, never a failure.
+
+// An older bob has no `bank config` subcommand: clap exits 2 with usage on
+// stderr and no JSON on stdout. Decode that as `unsupported` (the "needs a
+// newer bob" state), never as a config failure.
+function bankConfigUnsupported(stdout, stderr, exitCode) {
+  if (exitCode !== 2) {
+    return false;
+  }
+  const text = [String(stdout || ""), String(stderr || "")].join("\n");
+  return /unrecognized subcommand|unknown subcommand/i.test(text)
+    && /config/i.test(text);
+}
+
+function bankUnsupportedConfig(commandLabel, stderr) {
+  return {
+    ok: false,
+    code: "unsupported",
+    message: `${commandLabel} needs a newer bob — run bob update.`,
+    detail: statsFirstLine(stderr),
+  };
+}
+
+function bankConfigState(value) {
+  return value === "valid" || value === "invalid" || value === "missing" || value === "teaching_empty"
+    ? value
+    : null;
+}
+
+function bankConfigLine(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function bankNormalizeConfigCategory(value) {
+  if (!bankJsonObject(value) || bankText(value.key) === null || bankText(value.label) === null) {
+    return null;
+  }
+  const line = value.line === null || value.line === undefined ? null : bankConfigLine(value.line);
+  if (value.line !== null && value.line !== undefined && line === null) {
+    return null;
+  }
+  const sourceLine = value.source_line === null || value.source_line === undefined
+    ? null
+    : bankConfigLine(value.source_line);
+  return {
+    key: value.key,
+    emoji: bankText(value.emoji) || "",
+    label: value.label,
+    builtin: value.builtin === true,
+    declared: value.declared !== false,
+    hotkey: bankNormalizeHotkey(value.hotkey),
+    hotkey_source: value.hotkey_source === "explicit" || value.hotkey_source === "builtin_default"
+      || value.hotkey_source === "derived" || value.hotkey_source === "none"
+      ? value.hotkey_source
+      : "none",
+    group: bankNormalizeGroup(value.group),
+    hidden: value.hidden === true,
+    line,
+    source_line: sourceLine,
+    rows: bankCount(value.rows),
+    rule_refs: bankCount(value.rule_refs),
+  };
+}
+
+function bankNormalizeConfigAccount(value) {
+  if (!bankJsonObject(value) || bankText(value.alias) === null || bankText(value.label) === null) {
+    return null;
+  }
+  const balanceRaw = value.balance_cents === undefined ? null : value.balance_cents;
+  const deltaRaw = value.delta_cents === undefined ? null : value.delta_cents;
+  const balance = bankSafeCents(balanceRaw, { allowNull: true });
+  const delta = bankSafeCents(deltaRaw, { allowNull: true });
+  if (!balance.ok || !delta.ok) {
+    return null;
+  }
+  return {
+    alias: value.alias,
+    label: value.label,
+    kind: bankString(value.kind),
+    default: value.default === true,
+    start: bankString(value.start),
+    line: value.line === null || value.line === undefined ? null : bankConfigLine(value.line),
+    source_line: value.source_line === null || value.source_line === undefined
+      ? null
+      : bankConfigLine(value.source_line),
+    rows: value.rows === null || value.rows === undefined ? null : bankCount(value.rows),
+    journal_events: value.journal_events === null || value.journal_events === undefined
+      ? null
+      : bankCount(value.journal_events),
+    status: bankString(value.status),
+    hint: bankText(value.hint),
+    last_import: value.last_import === null || value.last_import === undefined
+      ? null
+      : bankString(value.last_import),
+    balance_cents: balance.value,
+    balance_asof: value.balance_asof === null || value.balance_asof === undefined
+      ? null
+      : bankString(value.balance_asof),
+    delta_cents: delta.value,
+  };
+}
+
+function bankNormalizeConfigRule(value) {
+  if (!bankJsonObject(value) || bankText(value.match) === null) {
+    return null;
+  }
+  const line = value.line === null || value.line === undefined ? null : bankConfigLine(value.line);
+  const sourceLine = value.source_line === null || value.source_line === undefined
+    ? null
+    : bankConfigLine(value.source_line);
+  return {
+    index: Number.isInteger(value.index) && value.index >= 0 ? value.index : null,
+    match: value.match,
+    payee: value.payee === null || value.payee === undefined ? null : bankText(value.payee),
+    cat: value.cat === null || value.cat === undefined ? null : bankText(value.cat),
+    link: value.link === null || value.link === undefined ? null : bankText(value.link),
+    line: line !== null ? line : sourceLine,
+    source_line: sourceLine !== null ? sourceLine : line,
+  };
+}
+
+function bankNormalizeConfigFinding(value) {
+  if (!bankJsonObject(value) || bankText(value.message) === null) {
+    return null;
+  }
+  const line = value.line === null || value.line === undefined ? null : bankConfigLine(value.line);
+  if (value.line !== null && value.line !== undefined && line === null) {
+    return null;
+  }
+  return {
+    code: bankString(value.code),
+    severity: value.severity === "warning" ? "warning" : "error",
+    path: bankString(value.path),
+    line,
+    key_path: value.key_path === null || value.key_path === undefined ? null : bankText(value.key_path),
+    message: value.message,
+    hint: value.hint === null || value.hint === undefined ? null : bankText(value.hint),
+  };
+}
+
+function bankNormalizeConfigStaleAfter(value) {
+  if (value === null || value === undefined) {
+    return { days: 10, explicit: false, line: null };
+  }
+  if (!bankJsonObject(value)) {
+    return null;
+  }
+  const days = bankCount(value.days);
+  if (days === null) {
+    return null;
+  }
+  return {
+    days,
+    explicit: value.explicit === true,
+    line: value.line === null || value.line === undefined ? null : bankConfigLine(value.line),
+  };
+}
+
+function bankNormalizeConfigFreeKeys(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry) => typeof entry === "string" && entry.length === 1);
+}
+
+// `bob bank config -f json`: the effective bank setup plus fully located
+// findings. Unlike list/report, `ok: false` is a state here (invalid, missing,
+// teaching_empty) with partial data — never a spawn failure.
+function bankDecodeConfig(stdout, stderr, exitCode = null) {
+  if (bankConfigUnsupported(stdout, stderr, exitCode)) {
+    return bankUnsupportedConfig("bob bank config", stderr);
+  }
+  let body = null;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return bankFail("bad-json", "bob bank config returned output that is not JSON.", stderr);
+  }
+  if (!bankJsonObject(body)) {
+    return bankFail("bad-shape", "bob bank config returned an unexpected JSON shape.", stderr);
+  }
+  if (body.schema_version !== BANK_SCHEMA_VERSION) {
+    return bankFail(
+      "schema-mismatch",
+      `bob bank config returned schema ${String(body.schema_version)}, this block reads schema ${BANK_SCHEMA_VERSION}.`,
+      stderr,
+    );
+  }
+  const state = bankConfigState(body.state);
+  // A bare failure without a state is a real error, not a config state.
+  if (body.ok === false && (state === null || state === "valid")) {
+    const inner = bankJsonObject(body.error) ? body.error : {};
+    const message = bankString(inner.message)
+      || (typeof body.error === "string" && body.error ? body.error : null)
+      || "bob bank config reported an error.";
+    return {
+      ok: false,
+      code: bankString(inner.code) || "bob-error",
+      message,
+      detail: statsFirstLine(stderr),
+    };
+  }
+  if (body.ok !== true && body.ok !== false) {
+    return bankFail("bad-shape", "bob bank config returned a report without ok: true.", stderr);
+  }
+  if (state === null) {
+    return bankFail("bad-shape", "bob bank config returned a report without a state.", stderr);
+  }
+  const categories = [];
+  for (const entry of Array.isArray(body.categories) ? body.categories : []) {
+    const normalized = bankNormalizeConfigCategory(entry);
+    if (!normalized) {
+      return bankFail("bad-shape", "bob bank config returned a malformed category.", stderr);
+    }
+    categories.push(normalized);
+  }
+  const accounts = [];
+  for (const entry of Array.isArray(body.accounts) ? body.accounts : []) {
+    const normalized = bankNormalizeConfigAccount(entry);
+    if (!normalized) {
+      return bankFail("bad-shape", "bob bank config returned a malformed account.", stderr);
+    }
+    accounts.push(normalized);
+  }
+  const rules = [];
+  for (const entry of Array.isArray(body.rules) ? body.rules : []) {
+    const normalized = bankNormalizeConfigRule(entry);
+    if (!normalized) {
+      return bankFail("bad-shape", "bob bank config returned a malformed rule.", stderr);
+    }
+    rules.push(normalized);
+  }
+  const findings = [];
+  for (const entry of Array.isArray(body.findings) ? body.findings : []) {
+    const normalized = bankNormalizeConfigFinding(entry);
+    if (!normalized) {
+      return bankFail("bad-shape", "bob bank config returned a malformed finding.", stderr);
+    }
+    findings.push(normalized);
+  }
+  const staleAfter = bankNormalizeConfigStaleAfter(body.stale_after);
+  if (!staleAfter) {
+    return bankFail("bad-shape", "bob bank config returned a malformed stale_after.", stderr);
+  }
+  return {
+    ok: true,
+    report: {
+      schema_version: BANK_SCHEMA_VERSION,
+      command: "config",
+      ok: body.ok,
+      state,
+      teaching_empty: body.teaching_empty === true || state === "teaching_empty",
+      partial: body.partial === true,
+      today: bankString(body.today),
+      path: bankString(body.path),
+      line: body.line === null || body.line === undefined ? null : bankConfigLine(body.line),
+      fingerprint: bankString(body.fingerprint) || bankString(body.config_fingerprint),
+      accounts,
+      categories,
+      free_hotkeys: bankNormalizeConfigFreeKeys(body.free_hotkeys),
+      rules,
+      stale_after: staleAfter,
+      findings,
+      issues: bankJsonObject(body.issues)
+        ? {
+          errors: bankCount(body.issues.errors) || 0,
+          warnings: bankCount(body.issues.warnings) || 0,
+        }
+        : {
+          errors: findings.filter((entry) => entry.severity === "error").length,
+          warnings: findings.filter((entry) => entry.severity === "warning").length,
+        },
+      starter: body.starter === null || body.starter === undefined ? null : bankText(body.starter),
+    },
+  };
+}
+
 // ---- src/241i-plugin-bank-source.js ----
 // Pure bank source recognizer. Syntax only: a canonical month path, a
 // valid day heading, and a top-level checkbox whose amount begins with
@@ -68059,11 +68359,23 @@ class BobLedgerToolsBankDataMixin {
   }
 
   bankSpawnFetch(args, options = {}) {
-    const command = Array.isArray(args) && args[1] === "report" ? "report" : "list";
-    const decoder = command === "report" ? bankDecodeReport : bankDecodeList;
+    const command = Array.isArray(args) && args[1] === "report"
+      ? "report"
+      : Array.isArray(args) && args[1] === "config"
+        ? "config"
+        : "list";
+    const decoder = command === "report"
+      ? bankDecodeReport
+      : command === "config"
+        ? bankDecodeConfig
+        : bankDecodeList;
     return bobSpawnJson(args, decoder, {
       ...options,
-      commandLabel: command === "report" ? "bob bank report" : "bob bank list",
+      commandLabel: command === "report"
+        ? "bob bank report"
+        : command === "config"
+          ? "bob bank config"
+          : "bob bank list",
       resolveBobPath: () =>
         typeof this.apiStatsBobPath === "function"
           ? this.apiStatsBobPath()
@@ -68084,6 +68396,10 @@ class BobLedgerToolsBankDataMixin {
       return opts.fetches.filter((entry) => bankJsonObject(entry));
     }
     const fetches = [];
+    if (opts.command === "config" || opts.config === true) {
+      fetches.push({ command: "config" });
+      return fetches;
+    }
     if (opts.list === true || opts.command === "list") {
       fetches.push({ command: "list", all: opts.all === true, month: opts.month });
     }
@@ -70117,9 +70433,51 @@ class BobLedgerToolsBankCardsMixin {
     return "magenta";
   }
 
+  // When the queue's report says the config is invalid, point at the Setup
+  // header instead of the raw first message. Counts error-severity findings
+  // from the failure envelope or a partial report.
+  bankCardConfigProblems(result) {
+    try {
+      const error = result && result.error;
+      if (error && Number.isInteger(error.configProblems) && error.configProblems > 0) {
+        return error.configProblems;
+      }
+      const fromError = error && Array.isArray(error.findings) ? error.findings : [];
+      const fromReport = result && result.report && Array.isArray(result.report.findings)
+        ? result.report.findings
+        : [];
+      const findings = fromError.length > 0 ? fromError : fromReport;
+      return findings.filter((entry) => entry && entry.severity === "error").length;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  bankCardPaintConfigPointer(root, problems, view, options) {
+    const line = bankCardAppend(root, "div", {
+      class: "bob-bank-card-error",
+      role: "alert",
+    }, `bank: has ${problems} problem${problems === 1 ? "" : "s"} — see Setup above`);
+    if (line && options && typeof this.apiBankRefresh === "function") {
+      const retry = bankCardAppend(line, "button", { type: "button", class: "bob-bank-retry" }, "Retry");
+      bankCardListen(retry, "click", () => {
+        void this.apiBankRefresh(options).then((next) => {
+          if (next && next.error && !view.unloaded) new Notice(next.error.message || "Bank refresh failed");
+        });
+      });
+    }
+  }
+
   bankCardPaintRefreshState(root, result, view, options) {
     if (result && result.stale) {
       bankCardAppend(root, "div", { class: "bob-bank-card-status", role: "status" }, "Updating · last good values shown");
+    }
+    if (options && options.command === "list") {
+      const problems = this.bankCardConfigProblems(result);
+      if (problems > 0) {
+        this.bankCardPaintConfigPointer(root, problems, view, options);
+        return;
+      }
     }
     if (result && result.error) {
       const model = bankErrorModel(result.error);
@@ -70139,6 +70497,11 @@ class BobLedgerToolsBankCardsMixin {
   }
 
   bankCardPaintUnavailable(root, result, kind) {
+    if (kind === "queue" && this.bankCardConfigProblems(result) > 0) {
+      bankCardAppend(root, "p", { class: "bob-bank-card-error", role: "alert" },
+        `bank: has ${this.bankCardConfigProblems(result)} problem${this.bankCardConfigProblems(result) === 1 ? "" : "s"} — see Setup above`);
+      return;
+    }
     if (result && result.error) {
       const model = bankErrorModel(result.error);
       bankCardAppend(root, "h2", {}, model.title);
@@ -74281,18 +74644,13 @@ class BobLedgerToolsBankMarksMixin {
     }
   }
 
+  // Hub row hiding lives with the Setup header surface
+  // (`bob-bank-setup-surface`, owned by the bank setup hosts): the `bank`
+  // property on any other note is never hidden, and this mixin never touches
+  // document.body for it. Leaf containers keep the legacy hub marker for
+  // non-surface consumers.
   bankMarkSyncHubProperty() {
     try {
-      const docs = typeof this.markGateDocuments === "function" ? this.markGateDocuments() : [typeof document !== "undefined" ? document : null];
-      const active = bankIsHubPath(this.bankMarkActivePath());
-      for (const doc of Array.isArray(docs) ? docs : []) {
-        try {
-          const body = doc && doc.body;
-          if (!body || !body.classList) continue;
-          if (active) body.classList.add("bob-bank-hub-note");
-          else body.classList.remove("bob-bank-hub-note");
-        } catch (error) {}
-      }
       const workspace = this.app && this.app.workspace;
       const leaves = workspace && typeof workspace.getLeavesOfType === "function"
         ? workspace.getLeavesOfType("markdown") || []
@@ -75792,6 +76150,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   }
 
   paintTile(grid, tile, selected, disabled) {
+    // The Setup header renders tile-for-tile identical tiles through the
+    // shared helper; the card keeps its exact look and key attribute.
+    if (typeof bankSharedCategoryTile === "function" && grid && grid.ownerDocument) {
+      const button = bankSharedCategoryTile(grid.ownerDocument, tile, {
+        card: true,
+        selected: selected === true,
+        disabled: disabled === true,
+      });
+      if (button) {
+        if (typeof grid.appendChild === "function") {
+          grid.appendChild(button);
+        }
+        return;
+      }
+    }
     const attrs = {
       type: "button",
       "data-category-key": tile.key,
@@ -76300,6 +76673,1925 @@ class BobLedgerToolsBankCategoryMixin {
     }
     return this.bankCardNavigateRow(first);
   }
+}
+// ---- src/248a-plugin-bank-setup-model.js ----
+// Pure Bank Setup header model (bob-cli-lt setup-header). No DOM, no spawns:
+// the collapsed-line grammar, section and tile models built from
+// `bankCategorySections` so order matches the Category card, tooltips, state
+// selection, and repaint signatures. The hosts fragment paints what these
+// return. Bob owns categories, hotkeys, groups, and usage.
+
+const BANK_SETUP_CLASS = "bob-bank-setup";
+const BANK_SETUP_SURFACE_CLASS = "bob-bank-setup-surface";
+const BANK_SETUP_HUB_PATH = "bank.md";
+const BANK_SETUP_MONEY_GROUP = "Money moves";
+
+function bankSetupText(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function bankSetupCount(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function bankSetupHubPath(value) {
+  const text = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string"
+      ? value.path
+      : "";
+  return text.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function bankSetupIsHubPath(fileOrPath) {
+  return /^bank\.md$/i.test(bankSetupHubPath(fileOrPath));
+}
+
+// Setup header state selection. `report` is a decoded `bob bank config`
+// report (or null); `error` is the fetch failure (or null). `desktop` gates
+// the mobile degrade line; without a report and without an error the header
+// is still loading.
+function bankSetupStateKind(report, error, options = {}) {
+  if (options.desktop === false) {
+    return "mobile";
+  }
+  if (error && (error.code === "unsupported" || error.code === "bob-not-found")) {
+    return "unsupported";
+  }
+  if (report && typeof report.state === "string") {
+    if (report.state === "valid") {
+      return "valid";
+    }
+    if (report.state === "invalid") {
+      return "invalid";
+    }
+    return "missing";
+  }
+  if (report && report.teaching_empty === true) {
+    return "missing";
+  }
+  if (error) {
+    return error.code === "unloaded" ? "loading" : "refresh-failed";
+  }
+  return "loading";
+}
+
+function bankSetupStatusTone(status) {
+  if (status === "balanced") {
+    return { icon: "✓", word: "balanced", tone: "ok" };
+  }
+  if (status === "stale") {
+    return { icon: "⚠", word: "stale", tone: "warn" };
+  }
+  if (status === "delta") {
+    return { icon: "✗", word: "delta", tone: "bad" };
+  }
+  return { icon: "·", word: status || "unknown", tone: "muted" };
+}
+
+function bankSetupSinceLabel(iso) {
+  const match = typeof iso === "string" ? iso.match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
+  if (!match) {
+    return null;
+  }
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `since ${weekdays[date.getUTCDay()]} ${months[date.getUTCMonth()]} ${date.getUTCDate()}`;
+}
+
+function bankSetupProvenanceLabel(source) {
+  if (source === "explicit") {
+    return "pinned";
+  }
+  if (source === "builtin_default") {
+    return "built-in default";
+  }
+  if (source === "derived") {
+    return "derived — may change when categories change; pin it in Bank setup";
+  }
+  return null;
+}
+
+// One header tile. `entry` is a decoded config category. Hidden entries stay
+// valid on rows and are never offered: they render in the HIDDEN row, not in
+// `bankCategorySections` (which only sees visible entries, like the card).
+function bankSetupTile(entry) {
+  if (!entry || typeof entry.key !== "string" || !entry.key) {
+    return null;
+  }
+  const hotkey = typeof entry.hotkey === "string" && entry.hotkey.length === 1
+    ? entry.hotkey.toLowerCase()
+    : null;
+  const rows = bankSetupCount(entry.rows);
+  const keycap = hotkey ? hotkey.toUpperCase() : null;
+  const provenance = bankSetupProvenanceLabel(entry.hotkey_source);
+  const tooltip = [
+    `${entry.emoji ? `${entry.emoji} ` : ""}${entry.label}`,
+    `stored as ${entry.key}`,
+    hotkey ? `key ${keycap}${provenance ? ` ${provenance}` : ""}` : "no key",
+    rows === null ? null : `${rows} row${rows === 1 ? "" : "s"}`,
+  ].filter((part) => part !== null).join(" · ");
+  return {
+    key: entry.key,
+    hotkey,
+    keycap,
+    keycapStyle: hotkey === null ? "none" : entry.hotkey_source === "derived" ? "dashed" : "solid",
+    emoji: typeof entry.emoji === "string" ? entry.emoji : "",
+    label: typeof entry.label === "string" && entry.label ? entry.label : entry.key,
+    rows,
+    rule_refs: bankSetupCount(entry.rule_refs),
+    group: typeof entry.group === "string" && entry.group.trim() ? entry.group : null,
+    builtin: entry.builtin === true,
+    hidden: entry.hidden === true,
+    line: Number.isInteger(entry.line) && entry.line > 0
+      ? entry.line
+      : Number.isInteger(entry.source_line) && entry.source_line > 0
+        ? entry.source_line
+        : null,
+    storedKey: entry.key,
+    provenance,
+    tooltip,
+    ariaLabel: rows === null
+      ? `${entry.label}, key ${keycap || "none"}`
+      : `${entry.label}, key ${keycap || "none"}, ${rows} row${rows === 1 ? "" : "s"}`,
+  };
+}
+
+function bankSetupAccountModel(entry) {
+  if (!entry || typeof entry.alias !== "string" || !entry.alias) {
+    return null;
+  }
+  const status = bankSetupStatusTone(typeof entry.status === "string" ? entry.status : "");
+  return {
+    alias: entry.alias,
+    label: typeof entry.label === "string" && entry.label ? entry.label : entry.alias,
+    kind: bankSetupText(entry.kind),
+    default: entry.default === true,
+    start: bankSetupText(entry.start),
+    sinceLabel: bankSetupSinceLabel(entry.start),
+    line: Number.isInteger(entry.line) && entry.line > 0
+      ? entry.line
+      : Number.isInteger(entry.source_line) && entry.source_line > 0
+        ? entry.source_line
+        : null,
+    rows: bankSetupCount(entry.rows),
+    status: status.word,
+    statusIcon: status.icon,
+    statusTone: status.tone,
+    hint: bankSetupText(entry.hint),
+    tooltip: [
+      typeof entry.label === "string" && entry.label ? entry.label : entry.alias,
+      entry.kind || null,
+      entry.default === true ? "default" : null,
+      bankSetupSinceLabel(entry.start),
+      `${status.icon} ${status.word}`,
+    ].filter((part) => part !== null).join(" · "),
+  };
+}
+
+function bankSetupRuleModel(entry, labelByKey) {
+  if (!entry || typeof entry.match !== "string" || !entry.match) {
+    return null;
+  }
+  const catLabel = entry.cat && labelByKey && labelByKey.get(entry.cat);
+  return {
+    index: Number.isInteger(entry.index) && entry.index >= 0 ? entry.index : null,
+    match: entry.match,
+    payee: bankSetupText(entry.payee),
+    cat: bankSetupText(entry.cat),
+    catLabel: catLabel || entry.cat || null,
+    link: bankSetupText(entry.link),
+    line: Number.isInteger(entry.line) && entry.line > 0
+      ? entry.line
+      : Number.isInteger(entry.source_line) && entry.source_line > 0
+        ? entry.source_line
+        : null,
+    readTimeDead: /[0-9]{4,}/.test(entry.match),
+  };
+}
+
+function bankSetupFindingModel(entry) {
+  if (!entry || typeof entry.message !== "string" || !entry.message) {
+    return null;
+  }
+  const line = Number.isInteger(entry.line) && entry.line > 0 ? entry.line : null;
+  const keyPath = bankSetupText(entry.key_path);
+  return {
+    code: bankSetupText(entry.code),
+    severity: entry.severity === "warning" ? "warning" : "error",
+    path: bankSetupText(entry.path),
+    line,
+    key_path: keyPath,
+    message: entry.message,
+    hint: bankSetupText(entry.hint),
+    label: [line !== null ? `line ${line}` : null, keyPath, entry.message]
+      .filter((part) => part !== null)
+      .join(" · "),
+  };
+}
+
+function bankSetupPlural(count, one, many) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+// Collapsed grammar: the account label (or "+ N more"), the visible category
+// count with a hidden tail, and the rule count. Money never appears here.
+function bankSetupCollapsedLine(model) {
+  if (!model) {
+    return "Setup";
+  }
+  const accounts = Array.isArray(model.accounts) ? model.accounts : [];
+  const accountText = accounts.length === 0
+    ? "no accounts"
+    : accounts.length === 1
+      ? `🏦 ${accounts[0].label}`
+      : `🏦 ${accounts[0].label} + ${accounts.length - 1} more`;
+  const visible = bankSetupCount(model.visibleCount) || 0;
+  const hidden = bankSetupCount(model.hiddenCount) || 0;
+  const categoryText = hidden > 0
+    ? `${bankSetupPlural(visible, "category", "categories")} · ${hidden} hidden`
+    : bankSetupPlural(visible, "category", "categories");
+  const rules = bankSetupCount(model.ruleCount) || 0;
+  const ruleText = rules === 0 ? "no rules" : bankSetupPlural(rules, "rule", "rules");
+  return `${accountText} · ${categoryText} · ${ruleText}`;
+}
+
+function bankSetupModel(report, options = {}) {
+  const error = options.error || null;
+  const desktop = options.desktop !== false;
+  const expanded = options.expanded === true;
+  const state = bankSetupStateKind(report, error, { desktop });
+  const categories = report && Array.isArray(report.categories) ? report.categories : [];
+  const labelByKey = new Map(
+    categories
+      .filter((entry) => entry && typeof entry.key === "string")
+      .map((entry) => [entry.key, entry.label || entry.key]),
+  );
+  const visibleEntries = categories.filter((entry) => entry && entry.hidden !== true);
+  const hiddenEntries = categories.filter((entry) => entry && entry.hidden === true);
+  const sections = typeof bankCategorySections === "function"
+    ? bankCategorySections(visibleEntries, {})
+    : [];
+  for (const section of sections) {
+    for (const tile of section.tiles || []) {
+      const full = categories.find((entry) => entry && entry.key === tile.key);
+      const enriched = bankSetupTile(full || { key: tile.key, label: tile.label, hotkey: tile.hotkey });
+      if (enriched) {
+        tile.keycapStyle = enriched.keycapStyle;
+        tile.rows = enriched.rows;
+        tile.tooltip = enriched.tooltip;
+        tile.ariaLabel = enriched.ariaLabel;
+        tile.line = enriched.line;
+        tile.provenance = enriched.provenance;
+      }
+    }
+  }
+  const hiddenTiles = hiddenEntries.map(bankSetupTile).filter(Boolean);
+  const accounts = (report && Array.isArray(report.accounts) ? report.accounts : [])
+    .map(bankSetupAccountModel)
+    .filter(Boolean);
+  const rules = (report && Array.isArray(report.rules) ? report.rules : [])
+    .map((entry) => bankSetupRuleModel(entry, labelByKey))
+    .filter(Boolean);
+  const findings = (report && Array.isArray(report.findings) ? report.findings : [])
+    .map(bankSetupFindingModel)
+    .filter(Boolean);
+  const errorFindings = findings.filter((entry) => entry.severity === "error");
+  const staleAfter = report && report.stale_after && typeof report.stale_after === "object"
+    ? report.stale_after
+    : { days: 10, explicit: false, line: null };
+  const model = {
+    state,
+    desktop,
+    expanded: state === "invalid" ? true : expanded,
+    stale: options.stale === true,
+    refreshing: options.refreshing === true,
+    errorCode: error && typeof error.code === "string" ? error.code : null,
+    errorMessage: error && typeof error.message === "string" ? error.message : null,
+    teachingEmpty: Boolean(report && report.teaching_empty),
+    partial: Boolean(report && report.partial),
+    path: (report && bankSetupText(report.path)) || BANK_SETUP_HUB_PATH,
+    line: report && Number.isInteger(report.line) && report.line > 0 ? report.line : null,
+    fingerprint: (report && bankSetupText(report.fingerprint)) || null,
+    lastGoodAt: typeof options.lastGoodAt === "number" ? options.lastGoodAt : null,
+    lastGoodLabel: bankSetupText(options.lastGoodLabel),
+    accounts,
+    sections,
+    hiddenTiles,
+    visibleCount: visibleEntries.length,
+    hiddenCount: hiddenEntries.length,
+    freeKeys: Array.isArray(report && report.free_hotkeys)
+      ? report.free_hotkeys.filter((key) => typeof key === "string" && key.length === 1)
+      : [],
+    ruleCount: rules.length,
+    rules,
+    findings,
+    errorCount: errorFindings.length,
+    staleAfterDays: bankSetupCount(staleAfter.days),
+    staleAfterExplicit: staleAfter.explicit === true,
+    staleAfterLine: Number.isInteger(staleAfter.line) && staleAfter.line > 0 ? staleAfter.line : null,
+    starter: report && typeof report.starter === "string" && report.starter ? report.starter : null,
+    today: (report && bankSetupText(report.today)) || null,
+  };
+  model.collapsedLine = bankSetupCollapsedLine(model);
+  model.signature = bankSetupModelSignature(model);
+  return model;
+}
+
+// Pure line-shift for lint marks across an edit: each delta is
+// { fromLine, delta } in 1-based lines. A mark on an edited line drops;
+// marks below shift; marks above keep their line.
+function bankSetupMapFindingLines(marks, deltas) {
+  const out = [];
+  for (const mark of Array.isArray(marks) ? marks : []) {
+    if (!mark || !Number.isInteger(mark.line) || mark.line < 1) {
+      continue;
+    }
+    let line = mark.line;
+    let dropped = false;
+    for (const delta of Array.isArray(deltas) ? deltas : []) {
+      if (!delta || !Number.isInteger(delta.fromLine) || !Number.isInteger(delta.delta)) {
+        continue;
+      }
+      if (line < delta.fromLine) {
+        continue;
+      }
+      if (delta.delta === 0) {
+        // A same-line edit drops only that line; marks below keep their line.
+        if (line === delta.fromLine) {
+          dropped = true;
+          break;
+        }
+        continue;
+      }
+      if (line === delta.fromLine) {
+        dropped = true;
+        break;
+      }
+      line += delta.delta;
+    }
+    if (!dropped && line > 0) {
+      out.push({ ...mark, line });
+    }
+  }
+  return out;
+}
+
+// Pure lint-mark model: one entry per located finding. Marks are keyed by
+// line so the editor can map them through edits.
+function bankSetupLintMarks(findings) {
+  const out = [];
+  for (const entry of Array.isArray(findings) ? findings : []) {
+    if (!entry || typeof entry.message !== "string" || !entry.message) {
+      continue;
+    }
+    if (!Number.isInteger(entry.line) || entry.line < 1) {
+      continue;
+    }
+    out.push({
+      line: entry.line,
+      severity: entry.severity === "warning" ? "warning" : "error",
+      message: entry.message,
+      keyPath: typeof entry.key_path === "string" ? entry.key_path : null,
+      tooltip: [entry.key_path || null, entry.message].filter(Boolean).join(" — "),
+    });
+  }
+  return out;
+}
+
+// Widget identity: the model signature plus the live surface options.
+function bankSetupSignature(model, extra = {}) {
+  try {
+    return [model && model.signature, extra.expanded === true, extra.desktop !== false].join("::");
+  } catch (error) {
+    return "setup";
+  }
+}
+
+// Repaint signature: collapsed grammar, section and tile identity, counts,
+// state, and freshness. Money and row text never participate.
+function bankSetupModelSignature(model) {
+  if (!model) {
+    return "none";
+  }
+  const tiles = [];
+  for (const section of model.sections || []) {
+    for (const tile of section.tiles || []) {
+      tiles.push([
+        tile.key,
+        tile.hotkey || "",
+        tile.keycapStyle || "",
+        tile.rows === null || tile.rows === undefined ? "" : String(tile.rows),
+      ].join(":"));
+    }
+  }
+  const hidden = (model.hiddenTiles || []).map((tile) => `${tile.key}:${tile.hotkey || ""}`).join(",");
+  const accounts = (model.accounts || [])
+    .map((account) => `${account.alias}:${account.status || ""}`)
+    .join(",");
+  const rules = (model.rules || []).map((rule) => `${rule.match}→${rule.cat || ""}`).join(",");
+  const findings = (model.findings || [])
+    .map((finding) => `${finding.severity}:${finding.line || 0}:${finding.message}`)
+    .join("|");
+  return JSON.stringify({
+    state: model.state,
+    expanded: model.expanded,
+    stale: model.stale,
+    refreshing: model.refreshing,
+    error: model.errorCode,
+    fingerprint: model.fingerprint,
+    collapsed: model.collapsedLine,
+    accounts,
+    tiles: tiles.join(","),
+    hidden,
+    free: (model.freeKeys || []).join(""),
+    rules,
+    findings,
+    staleDays: model.staleAfterDays,
+  });
+}
+// ---- src/248b-plugin-bank-setup-dom.js ----
+// Bank Setup header painter (bob-cli-lt setup-header). The header reuses the
+// Category card's tile component tile-for-tile: `bankSharedCategoryTile`
+// paints both, with the card's look and tests unchanged. Header tiles use
+// their own `data-bank-setup-category` attribute, never the card's
+// `button[data-category-key]` selector. Every report string is inserted as
+// text, never HTML.
+
+function bankSetupEl(doc, tag, className, text, attrs) {
+  if (typeof notebookCreateEl === "function") {
+    const node = notebookCreateEl(doc, tag, className);
+    if (!node) {
+      return null;
+    }
+    if (text !== null && text !== undefined) {
+      if (typeof notebookSetText === "function") {
+        notebookSetText(node, String(text));
+      } else {
+        node.textContent = String(text);
+      }
+    }
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === null || value === undefined || value === false) {
+        continue;
+      }
+      try {
+        if (key === "disabled") {
+          node.disabled = value === true;
+        } else if (typeof node.setAttribute === "function") {
+          node.setAttribute(key, String(value));
+        }
+      } catch (error) {}
+    }
+    return node;
+  }
+  if (!doc || typeof doc.createElement !== "function") {
+    return null;
+  }
+  const node = doc.createElement(tag);
+  if (!node) {
+    return null;
+  }
+  if (className) {
+    node.className = className;
+  }
+  if (text !== null && text !== undefined) {
+    node.textContent = String(text);
+  }
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === null || value === undefined || value === false) {
+      continue;
+    }
+    try {
+      if (key === "disabled") {
+        node.disabled = value === true;
+      } else if (typeof node.setAttribute === "function") {
+        node.setAttribute(key, String(value));
+      }
+    } catch (error) {}
+  }
+  return node;
+}
+
+function bankSetupAppend(parent, tag, className, text, attrs) {
+  const doc = parent && parent.ownerDocument;
+  const node = bankSetupEl(doc, tag, className, text, attrs);
+  if (node && parent && typeof parent.appendChild === "function") {
+    parent.appendChild(node);
+  }
+  return node;
+}
+
+function bankSetupListen(node, run) {
+  if (!node || typeof run !== "function") {
+    return;
+  }
+  try {
+    if (typeof notebookBindAction === "function") {
+      notebookBindAction(node, run);
+    } else if (typeof node.addEventListener === "function") {
+      node.addEventListener("click", (event) => {
+        try {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+        } catch (error) {}
+        run();
+      });
+    }
+  } catch (error) {}
+}
+
+// Shared bank tile component. The Category card keeps its exact look: pass
+// `{ card: true }` (keyed by `data-category-key`, pressed state, Enter
+// marker). The Setup header passes header options (keyed by
+// `data-bank-setup-category`, tooltip, accessible name, usage count).
+function bankSharedCategoryTile(doc, tile, options = {}) {
+  if (!tile || typeof tile.key !== "string" || !tile.key) {
+    return null;
+  }
+  const card = options.card === true;
+  const attrs = { type: "button" };
+  if (card) {
+    attrs["data-category-key"] = tile.key;
+    attrs["aria-pressed"] = options.selected === true ? "true" : "false";
+    if (tile.hotkey) {
+      attrs["aria-keyshortcuts"] = tile.hotkey;
+    }
+  } else {
+    attrs["data-bank-setup-category"] = tile.key;
+    attrs["aria-label"] = tile.ariaLabel || tile.text || tile.label || tile.key;
+    if (tile.tooltip) {
+      attrs.title = tile.tooltip;
+    }
+    if (Number.isInteger(tile.line) && tile.line > 0) {
+      attrs["data-bank-setup-line"] = String(tile.line);
+    }
+  }
+  const classes = ["bob-bank-category-tile"];
+  if (card && options.selected === true) {
+    classes.push("is-highlighted");
+  }
+  if (tile.dimmed) {
+    classes.push("is-dimmed");
+  }
+  if (!card && tile.hidden === true) {
+    classes.push("is-hidden");
+  }
+  const button = bankSetupEl(doc, "button", classes.join(" "), null, attrs);
+  if (!button) {
+    return null;
+  }
+  try {
+    button.disabled = card ? options.disabled === true : true;
+  } catch (error) {}
+  if (tile.keycap) {
+    const keycapClasses = ["bob-bank-category-keycap"];
+    if (!card && tile.keycapStyle === "dashed") {
+      keycapClasses.push("is-derived");
+    }
+    const keycap = bankSetupEl(doc, "kbd", keycapClasses.join(" "), tile.keycap, null);
+    if (keycap && typeof button.appendChild === "function") {
+      button.appendChild(keycap);
+    }
+  } else if (!card) {
+    const dot = bankSetupEl(doc, "span", "bob-bank-category-keydot", "·", { "aria-hidden": "true" });
+    if (dot && typeof button.appendChild === "function") {
+      button.appendChild(dot);
+    }
+  }
+  const label = `${tile.emoji ? `${tile.emoji} ` : ""}${tile.label || tile.key}`;
+  const labelEl = bankSetupEl(doc, "span", "bob-bank-category-tile-label", label, null);
+  if (labelEl && typeof button.appendChild === "function") {
+    button.appendChild(labelEl);
+  }
+  if (!card && Number.isInteger(tile.rows) && tile.rows > 0) {
+    const count = bankSetupEl(doc, "span", "bob-bank-setup-tile-count", String(tile.rows), null);
+    if (count && typeof button.appendChild === "function") {
+      button.appendChild(count);
+    }
+  }
+  if (card && options.selected === true) {
+    const enter = bankSetupEl(doc, "span", "bob-bank-category-enter", "↵", null);
+    if (enter && typeof button.appendChild === "function") {
+      button.appendChild(enter);
+    }
+  }
+  return button;
+}
+
+function bankSetupYamlButton(doc, handlers) {
+  const yaml = bankSetupEl(doc, "button", "bob-bank-setup-yaml", "↗ YAML", {
+    type: "button",
+    "data-bank-setup-focus": "yaml",
+    "aria-label": "Open bank setup in Source mode",
+  });
+  bankSetupListen(yaml, () => {
+    if (handlers && typeof handlers.onYaml === "function") {
+      handlers.onYaml();
+    }
+  });
+  return yaml;
+}
+
+function bankSetupJumpButton(doc, label, line, handlers, extraClass) {
+  const button = bankSetupEl(doc, "button", extraClass || "bob-bank-setup-jump", label, {
+    type: "button",
+    "data-bank-setup-line": line !== null && line !== undefined ? String(line) : "",
+  });
+  bankSetupListen(button, () => {
+    if (handlers && typeof handlers.onJump === "function") {
+      handlers.onJump(line);
+    }
+  });
+  return button;
+}
+
+function bankSetupSectionLabel(parent, text, note) {
+  const row = bankSetupAppend(parent, "div", "bob-bank-setup-section-head", null, null);
+  if (!row) {
+    return;
+  }
+  bankSetupAppend(row, "span", "bob-bank-setup-section-label", text, null);
+  if (note) {
+    bankSetupAppend(row, "span", "bob-bank-setup-section-note", note, null);
+  }
+}
+
+function bankSetupPaintAccounts(body, model, doc, handlers) {
+  const accounts = Array.isArray(model.accounts) ? model.accounts : [];
+  if (accounts.length === 0) {
+    return;
+  }
+  const staleNote = model.staleAfterDays !== null && model.staleAfterDays !== undefined
+    ? `balances go stale after ${model.staleAfterDays} day${model.staleAfterDays === 1 ? "" : "s"}`
+    : null;
+  bankSetupSectionLabel(body, "ACCOUNTS", staleNote);
+  const list = bankSetupAppend(body, "div", "bob-bank-setup-accounts", null, { role: "list" });
+  if (!list) {
+    return;
+  }
+  for (const account of accounts) {
+    const row = bankSetupAppend(list, "div", "bob-bank-setup-account", null, { role: "listitem" });
+    if (!row) {
+      continue;
+    }
+    const name = `🏦 ${account.label}`;
+    if (account.line !== null) {
+      const jump = bankSetupJumpButton(doc, name, account.line, handlers, "bob-bank-setup-account-name");
+      if (jump && typeof row.appendChild === "function") {
+        row.appendChild(jump);
+      }
+    } else {
+      bankSetupAppend(row, "span", "bob-bank-setup-account-name", name, null);
+    }
+    const meta = [
+      account.kind,
+      account.default ? "default" : null,
+      account.sinceLabel,
+    ].filter(Boolean).join(" · ");
+    if (meta) {
+      bankSetupAppend(row, "span", "bob-bank-setup-account-meta", meta, null);
+    }
+    const status = bankSetupAppend(row, "span", `bob-bank-setup-status is-${account.statusTone}`, null, null);
+    if (status) {
+      bankSetupAppend(status, "span", "bob-bank-setup-status-icon", account.statusIcon, { "aria-hidden": "true" });
+      bankSetupAppend(status, "span", "bob-bank-setup-status-word", account.status, null);
+      if (account.hint) {
+        try {
+          status.setAttribute("title", account.hint);
+        } catch (error) {}
+      }
+    }
+  }
+}
+
+function bankSetupPaintCategories(body, model, doc, handlers) {
+  bankSetupSectionLabel(body, "CATEGORIES", "what Ctrl+Enter offers, in order");
+  const sections = Array.isArray(model.sections) ? model.sections : [];
+  const hidden = Array.isArray(model.hiddenTiles) ? model.hiddenTiles : [];
+  if (sections.length === 0 && hidden.length === 0) {
+    bankSetupAppend(body, "p", "bob-bank-setup-empty", "No categories yet.", null);
+    return;
+  }
+  for (const section of sections) {
+    const wrap = bankSetupAppend(body, "div", "bob-bank-setup-group", null, null);
+    if (!wrap) {
+      continue;
+    }
+    if (section.group) {
+      bankSetupAppend(wrap, "span", "bob-bank-setup-group-label", section.group, null);
+    }
+    if (section.group === "Money moves") {
+      bankSetupAppend(wrap, "p", "bob-bank-setup-hidden-note", "built in · shown first for money in", null);
+    }
+    const tiles = bankSetupAppend(wrap, "div", "bob-bank-setup-tiles", null, { role: "group" });
+    if (!tiles) {
+      continue;
+    }
+    for (const tile of section.tiles || []) {
+      const button = bankSharedCategoryTile(doc, tile, {});
+      if (!button) {
+        continue;
+      }
+      bankSetupListen(button, () => {
+        if (handlers && typeof handlers.onJump === "function") {
+          handlers.onJump(tile.line);
+        }
+      });
+      if (typeof tiles.appendChild === "function") {
+        tiles.appendChild(button);
+      }
+    }
+  }
+  if (hidden.length > 0) {
+    const wrap = bankSetupAppend(body, "div", "bob-bank-setup-group is-hidden-group", null, null);
+    if (wrap) {
+      bankSetupAppend(wrap, "span", "bob-bank-setup-group-label", "HIDDEN", null);
+      const tiles = bankSetupAppend(wrap, "div", "bob-bank-setup-tiles", null, { role: "group" });
+      if (tiles) {
+        for (const tile of hidden) {
+          const button = bankSharedCategoryTile(doc, { ...tile, hidden: true }, {});
+          if (!button) {
+            continue;
+          }
+          bankSetupListen(button, () => {
+            if (handlers && typeof handlers.onJump === "function") {
+              handlers.onJump(tile.line);
+            }
+          });
+          if (typeof tiles.appendChild === "function") {
+            tiles.appendChild(button);
+          }
+        }
+        bankSetupAppend(wrap, "p", "bob-bank-setup-hidden-note", "still valid on rows, never offered", null);
+      }
+    }
+  }
+  const free = Array.isArray(model.freeKeys) ? model.freeKeys : [];
+  if (free.length > 0) {
+    const row = bankSetupAppend(body, "div", "bob-bank-setup-free", null, null);
+    if (row) {
+      bankSetupAppend(row, "span", "bob-bank-setup-group-label", "free keys", null);
+      bankSetupAppend(row, "span", "bob-bank-setup-free-keys", free.join(" ").toUpperCase(), null);
+    }
+  }
+}
+
+function bankSetupPaintRules(body, model, doc, handlers) {
+  bankSetupSectionLabel(body, "RULES", "checked top to bottom on import and hints");
+  const rules = Array.isArray(model.rules) ? model.rules : [];
+  if (rules.length === 0) {
+    bankSetupAppend(body, "p", "bob-bank-setup-rules-empty", "None yet. bob already learns each merchant's name and category from your last filing; add a rule only to override that.", null);
+    return;
+  }
+  const list = bankSetupAppend(body, "ol", "bob-bank-setup-rules", null, null);
+  if (!list) {
+    return;
+  }
+  for (const rule of rules) {
+    const item = bankSetupAppend(list, "li", "bob-bank-setup-rule", null, null);
+    if (!item) {
+      continue;
+    }
+    if (Number.isInteger(rule.index)) {
+      bankSetupAppend(item, "span", "bob-bank-setup-rule-index", String(rule.index + 1), null);
+    }
+    const text = [rule.match, "→", rule.catLabel || rule.cat || ""].filter(Boolean).join(" ");
+    if (rule.line !== null) {
+      const jump = bankSetupJumpButton(doc, text, rule.line, handlers, "bob-bank-setup-rule-text");
+      if (jump && typeof item.appendChild === "function") {
+        item.appendChild(jump);
+      }
+    } else {
+      bankSetupAppend(item, "span", "bob-bank-setup-rule-text", text, null);
+    }
+    if (rule.payee) {
+      bankSetupAppend(item, "span", "bob-bank-setup-rule-payee", `payee ${rule.payee}`, null);
+    }
+    if (rule.readTimeDead) {
+      bankSetupAppend(item, "span", "bob-bank-setup-rule-warning", "read-time dead: journal text is digit-masked", { role: "note" });
+    }
+  }
+}
+
+function bankSetupPaintFindings(body, model, doc, handlers) {
+  const findings = Array.isArray(model.findings) ? model.findings : [];
+  if (findings.length === 0) {
+    return;
+  }
+  const banner = bankSetupAppend(body, "div", "bob-bank-setup-banner is-invalid", null, { role: "alert" });
+  if (banner) {
+    const errors = findings.filter((entry) => entry.severity === "error").length;
+    const warnings = findings.length - errors;
+    const summary = errors > 0
+      ? `✗ ${errors} problem${errors === 1 ? "" : "s"} in bank: — the bank pauses until they're fixed`
+      : `⚠ ${warnings} warning${warnings === 1 ? "" : "s"} in bank:`;
+    bankSetupAppend(banner, "p", "bob-bank-setup-banner-text", summary, null);
+    const list = bankSetupAppend(banner, "ul", "bob-bank-setup-findings", null, null);
+    if (list) {
+      for (const finding of findings) {
+        const item = bankSetupAppend(list, "li", `bob-bank-setup-finding is-${finding.severity}`, null, null);
+        if (!item) {
+          continue;
+        }
+        if (finding.line !== null) {
+          const jump = bankSetupJumpButton(doc, finding.label, finding.line, handlers, "bob-bank-setup-finding-text");
+          if (jump && typeof item.appendChild === "function") {
+            item.appendChild(jump);
+          }
+        } else {
+          bankSetupAppend(item, "span", "bob-bank-setup-finding-text", finding.label, null);
+        }
+        if (finding.hint) {
+          bankSetupAppend(item, "span", "bob-bank-setup-finding-hint", finding.hint, null);
+        }
+      }
+    }
+  }
+  if (model.lastGoodLabel) {
+    bankSetupAppend(body, "p", "bob-bank-setup-lastgood", `last good · ${model.lastGoodLabel}`, null);
+  } else if (model.partial) {
+    bankSetupAppend(body, "p", "bob-bank-setup-lastgood", "partly read", null);
+  }
+}
+
+// `bankSetupBuildEl(model, handlers, doc)`: the whole Setup header. `model`
+// is a `bankSetupModel`; `handlers` carries onToggle, onYaml,
+// onJump(line), onCopyStarter, onRetry. All report strings enter as text.
+function bankSetupBuildEl(model, handlers, doc) {
+  if (!model) {
+    return null;
+  }
+  const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} is-${model.state}`, null, {
+    "data-bank-setup": "true",
+    "data-bank-setup-state": model.state,
+    "aria-label": "Bank setup",
+  });
+  if (!root) {
+    return null;
+  }
+  const head = bankSetupEl(doc, "div", "bob-bank-setup-head", null, null);
+  if (!head || typeof root.appendChild !== "function") {
+    return root;
+  }
+  root.appendChild(head);
+  const disclosure = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
+    type: "button",
+    "data-bank-setup-focus": "toggle",
+    "aria-expanded": model.expanded ? "true" : "false",
+    "aria-controls": "bob-bank-setup-body",
+  });
+  if (disclosure) {
+    bankSetupListen(disclosure, () => {
+      if (handlers && typeof handlers.onToggle === "function") {
+        handlers.onToggle();
+      }
+    });
+    head.appendChild(disclosure);
+  }
+  if (model.state === "mobile") {
+    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "drawn by bob on desktop", null);
+    const yaml = bankSetupYamlButton(doc, handlers);
+    if (yaml) {
+      head.appendChild(yaml);
+    }
+    return root;
+  }
+  if (model.state === "loading") {
+    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · loading…", { role: "status" });
+    return root;
+  }
+  if (model.state === "unsupported") {
+    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup needs a newer bob — run bob update", { role: "status" });
+    const yaml = bankSetupYamlButton(doc, handlers);
+    if (yaml) {
+      head.appendChild(yaml);
+    }
+    return root;
+  }
+  if (model.state === "missing") {
+    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", "Setup · no bank: mapping yet", null);
+    const yaml = bankSetupYamlButton(doc, handlers);
+    if (yaml) {
+      head.appendChild(yaml);
+    }
+    if (model.expanded && model.starter) {
+      const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
+      if (body) {
+        root.appendChild(body);
+        bankSetupAppend(body, "p", "bob-bank-setup-empty", "Copy the starter block into bank.md frontmatter, then edit it in Source mode.", null);
+        const copy = bankSetupEl(doc, "button", "bob-bank-setup-copy", "Copy starter", { type: "button" });
+        if (copy) {
+          bankSetupListen(copy, () => {
+            if (handlers && typeof handlers.onCopyStarter === "function") {
+              handlers.onCopyStarter();
+            }
+          });
+          body.appendChild(copy);
+        }
+      }
+    }
+    return root;
+  }
+  if (model.state === "refresh-failed") {
+    bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.errorMessage || "Setup · refresh failed", { role: "alert" });
+    const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
+    if (retry) {
+      bankSetupListen(retry, () => {
+        if (handlers && typeof handlers.onRetry === "function") {
+          handlers.onRetry();
+        }
+      });
+      head.appendChild(retry);
+    }
+    return root;
+  }
+  bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.collapsedLine, null);
+  const yaml = bankSetupYamlButton(doc, handlers);
+  if (yaml) {
+    head.appendChild(yaml);
+  }
+  if (!model.expanded) {
+    return root;
+  }
+  const body = bankSetupEl(doc, "div", "bob-bank-setup-body", null, null);
+  if (!body) {
+    return root;
+  }
+  root.appendChild(body);
+  if (model.stale) {
+    const note = bankSetupAppend(body, "div", "bob-bank-setup-status", "Updating · last good values shown", { role: "status" });
+    if (note && model.errorMessage) {
+      const retry = bankSetupEl(doc, "button", "bob-bank-retry", "Retry", { type: "button" });
+      if (retry) {
+        bankSetupListen(retry, () => {
+          if (handlers && typeof handlers.onRetry === "function") {
+            handlers.onRetry();
+          }
+        });
+        note.appendChild(retry);
+      }
+    }
+  }
+  bankSetupPaintFindings(body, model, doc, handlers);
+  bankSetupPaintAccounts(body, model, doc, handlers);
+  bankSetupPaintCategories(body, model, doc, handlers);
+  bankSetupPaintRules(body, model, doc, handlers);
+  return root;
+}
+// ---- src/248c-plugin-bank-setup-hosts.js ----
+// Report-driven Bank Setup headers in Reading view and Live Preview, plus
+// Source-mode config lint. The only editor decorations are widgets; no
+// Markdown or frontmatter is rewritten. One header per hub surface, mounted
+// after the first H1 exactly where the album header mounts.
+
+let bankSetupRefreshEffect = null;
+function ensureBankSetupRefresh() {
+  try {
+    if (!bankSetupRefreshEffect && StateEffect && typeof StateEffect.define === "function") {
+      bankSetupRefreshEffect = StateEffect.define({});
+    }
+    return bankSetupRefreshEffect;
+  } catch (error) {
+    return null;
+  }
+}
+
+function bankSetupClockLabel(timestamp) {
+  try {
+    if (!Number.isFinite(timestamp)) {
+      return null;
+    }
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const suffix = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    if (hours === 0) {
+      hours = 12;
+    }
+    return `${hours}:${minutes} ${suffix}`;
+  } catch (error) {
+    return null;
+  }
+}
+
+class BobLedgerToolsBankSetupMixin {
+  setupBankSetup() {
+    this.bankSetupActive = true;
+    this.bankSetupReading = new Set();
+    this.bankSetupReadingPending = new Map();
+    this.bankSetupReadingTimers = new Map();
+    this.bankSetupEditors = new Set();
+    this.bankSetupEditorScopes = new Map();
+    this.bankSetupExpanded = new Map();
+    this.bankSetupSurfaces = new Set();
+    this.bankSetupRefreshTimer = null;
+    this.bankSetupLastGoodAt = null;
+    this.bankSetupLastState = null;
+    this.bankSetupLintCache = new Map();
+    if (typeof this.registerMarkdownPostProcessor === "function") {
+      this.registerMarkdownPostProcessor((el, ctx) => this.renderBankSetupInReading(el, ctx), 47);
+    }
+    const extension = this.createBankSetupExtension();
+    if (extension && typeof this.registerEditorExtension === "function") {
+      this.registerEditorExtension(extension);
+    }
+    if (this.bankSetupDesktop()) {
+      try {
+        this.bankSetupUnsubscribe = this.apiBankSubscribe
+          ? this.apiBankSubscribe({ command: "config" }, (state) => {
+            this.bankSetupLastState = state;
+            this.bankSetupNoteReport(state);
+            this.scheduleBankSetupRefresh();
+          })
+          : null;
+      } catch (error) {
+        this.bankSetupUnsubscribe = null;
+      }
+    } else {
+      this.bankSetupUnsubscribe = null;
+    }
+  }
+
+  teardownBankSetup() {
+    this.bankSetupActive = false;
+    try {
+      if (typeof this.bankSetupUnsubscribe === "function") {
+        this.bankSetupUnsubscribe();
+      }
+    } catch (error) {}
+    this.bankSetupUnsubscribe = null;
+    this.bankClearTimeout?.(this.bankSetupRefreshTimer);
+    this.bankSetupRefreshTimer = null;
+    for (const timer of this.bankSetupReadingTimers?.values?.() || []) {
+      this.bankClearTimeout?.(timer);
+    }
+    this.bankSetupReadingTimers?.clear();
+    this.bankSetupReadingPending?.clear();
+    for (const widget of this.bankSetupReading || []) {
+      this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
+    }
+    for (const view of this.bankSetupEditors || []) {
+      this.bankSetupCleanEditor(view);
+    }
+    for (const scope of this.bankSetupSurfaces || []) {
+      try {
+        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+      } catch (error) {}
+    }
+    this.bankSetupSurfaces?.clear();
+    this.bankSetupReading?.clear();
+    this.bankSetupEditors?.clear();
+    this.bankSetupEditorScopes?.clear();
+    this.bankSetupExpanded?.clear();
+    this.bankSetupLintCache?.clear();
+    this.bankSetupLastState = null;
+  }
+
+  bankSetupDesktop() {
+    try {
+      if (typeof albumHeaderIsDesktopPlatform === "function") {
+        return albumHeaderIsDesktopPlatform();
+      }
+    } catch (error) {}
+    try {
+      return Boolean(typeof Platform !== "undefined" && Platform && Platform.isDesktopApp === true);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankSetupConfigKey() {
+    try {
+      return bankCacheKey(bankBuildArgs({ command: "config" }));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSetupEntry() {
+    try {
+      const state = this.bankSetupLastState;
+      const key = this.bankSetupConfigKey();
+      if (!state || !key || !state.results) {
+        return { report: null, stale: false, error: null, refreshing: false };
+      }
+      const entry = state.results[key];
+      if (!entry) {
+        return { report: null, stale: false, error: null, refreshing: false };
+      }
+      return {
+        report: entry.report || null,
+        stale: entry.stale === true,
+        error: entry.error || null,
+        refreshing: entry.refreshing === true,
+      };
+    } catch (error) {
+      return { report: null, stale: false, error: null, refreshing: false };
+    }
+  }
+
+  bankSetupNoteReport(state) {
+    try {
+      const key = this.bankSetupConfigKey();
+      const entry = key && state && state.results ? state.results[key] : null;
+      if (entry && entry.report) {
+        this.bankSetupLastGoodAt = Date.now();
+      }
+    } catch (error) {}
+  }
+
+  bankSetupModelFor(sourcePath) {
+    try {
+      const entry = this.bankSetupEntry();
+      const expandedMap = this.bankSetupExpanded instanceof Map
+        ? this.bankSetupExpanded
+        : new Map();
+      const key = bankSetupHubPath(sourcePath);
+      return bankSetupModel(entry.report, {
+        error: entry.error,
+        stale: entry.stale,
+        refreshing: entry.refreshing,
+        desktop: this.bankSetupDesktop(),
+        expanded: key && expandedMap.has(key) ? expandedMap.get(key) === true : false,
+        lastGoodAt: this.bankSetupLastGoodAt,
+        lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
+      });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSetupToggleExpanded(sourcePath) {
+    try {
+      const key = bankSetupHubPath(sourcePath);
+      if (!key) {
+        return;
+      }
+      if (!(this.bankSetupExpanded instanceof Map)) {
+        this.bankSetupExpanded = new Map();
+      }
+      const model = this.bankSetupModelFor(sourcePath);
+      this.bankSetupExpanded.set(key, model && model.expanded === true ? false : true);
+      this.refreshBankSetupReading();
+      this.refreshBankSetupEditors();
+    } catch (error) {}
+  }
+
+  bankSetupOptions(sourcePath, model) {
+    const self = this;
+    return {
+      sourcePath,
+      expanded: Boolean(model && model.expanded),
+      desktop: this.bankSetupDesktop(),
+      handlers: {
+        onToggle: () => self.bankSetupToggleExpanded(sourcePath),
+        onYaml: () => {
+          void self.bankSetupJumpYaml(sourcePath, model && model.line);
+        },
+        onJump: (line) => {
+          void self.bankSetupJumpYaml(
+            sourcePath,
+            Number.isInteger(line) && line > 0 ? line : model && model.line,
+          );
+        },
+        onCopyStarter: () => self.bankSetupCopyStarter(model && model.starter),
+        onRetry: () => {
+          try {
+            if (typeof self.apiBankRefresh === "function") {
+              void self.apiBankRefresh({ command: "config" });
+            }
+          } catch (error) {}
+        },
+      },
+    };
+  }
+
+  async bankSetupCopyStarter(starter) {
+    const value = typeof starter === "string" && starter ? starter : "";
+    if (!value) {
+      return { ok: false, reason: "no starter" };
+    }
+    try {
+      const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : null;
+      if (clipboard && typeof clipboard.writeText === "function") {
+        await clipboard.writeText(value);
+        try {
+          new Notice("Starter copied — paste it into bank.md frontmatter.");
+        } catch (error) {}
+        return { ok: true };
+      }
+    } catch (error) {}
+    try {
+      new Notice("Clipboard is unavailable.");
+    } catch (error) {}
+    return { ok: false, reason: "clipboard unavailable" };
+  }
+
+  bankSetupMarkdownLeaf(path) {
+    const target = bankSetupHubPath(path);
+    if (!target) {
+      return null;
+    }
+    try {
+      const leaves = this.app?.workspace?.getLeavesOfType?.("markdown") || [];
+      return leaves.find((leaf) => bankSetupHubPath(leaf?.view?.file?.path) === target)
+        || this.app?.workspace?.getMostRecentLeaf?.()
+        || this.app?.workspace?.activeLeaf
+        || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async bankSetupJumpYaml(sourcePath, line) {
+    const path = bankSetupIsHubPath(sourcePath) ? bankSetupHubPath(sourcePath) : BANK_SETUP_HUB_PATH;
+    if (!path) {
+      return { ok: false, reason: "missing path" };
+    }
+    const targetLine = Number.isInteger(line) && line > 0 ? line : 1;
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
+      const leaf = this.bankSetupMarkdownLeaf(path);
+      if (leaf && typeof leaf.openFile === "function") {
+        await leaf.openFile(file, { state: { mode: "source" } });
+      } else if (leaf && typeof leaf.setViewState === "function") {
+        const current = typeof leaf.getViewState === "function"
+          ? leaf.getViewState()
+          : { type: "markdown", state: {} };
+        await leaf.setViewState({
+          ...(current || {}),
+          type: "markdown",
+          state: { ...((current && current.state) || {}), mode: "source", file: path },
+        });
+      } else if (this.app?.workspace?.openLinkText) {
+        await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
+      }
+      const editor = leaf?.view?.editor;
+      const cursorLine = targetLine - 1;
+      if (editor && typeof editor.setCursor === "function") {
+        editor.setCursor({ line: cursorLine, ch: 0 });
+        if (typeof editor.scrollIntoView === "function") {
+          editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
+        }
+      }
+      return { ok: true, line: targetLine };
+    } catch (error) {
+      try {
+        new Notice("Could not open bank setup in Source mode.");
+      } catch (noticeError) {}
+      return { ok: false, reason: "source jump failed" };
+    }
+  }
+
+  bankSetupReadingRoot(el) {
+    try {
+      if (!el || el.closest?.(".cm-editor")) {
+        return null;
+      }
+      const attached = el.closest?.(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed");
+      if (!attached) {
+        return null;
+      }
+      const root = typeof notebookHeaderReadingSurface === "function"
+        ? notebookHeaderReadingSurface(el)
+        : attached;
+      if (root.matches?.(".markdown-preview-view")) {
+        const sizer = root.querySelector?.(".markdown-preview-sizer");
+        if (sizer?.closest?.(".markdown-preview-view") === root
+          && sizer.closest?.(".markdown-embed, .internal-embed") === root.closest?.(".markdown-embed, .internal-embed")) {
+          return sizer;
+        }
+      }
+      return root;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSetupReadingScope(root) {
+    try {
+      const embed = root?.closest?.(".markdown-embed, .internal-embed");
+      if (embed) {
+        return embed;
+      }
+      return root?.closest?.(".markdown-preview-view") || root;
+    } catch (error) {
+      return root;
+    }
+  }
+
+  bankSetupNodeBelongs(node, root) {
+    if (!node || !root) {
+      return false;
+    }
+    try {
+      if (node.getAttribute?.("data-cm-widget") === "true" || node.closest?.(".cm-widgetBuffer, .cm-content")) {
+        return false;
+      }
+      const nested = node.closest?.(".markdown-embed, .internal-embed");
+      const ownedEmbed = root.closest?.(".markdown-embed, .internal-embed");
+      if (nested && nested !== root && nested !== ownedEmbed) {
+        return false;
+      }
+      return typeof root.contains === "function" ? root.contains(node) : true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankSetupRemoveReading(root, scope = root, sourcePath = "") {
+    if (!root) {
+      return;
+    }
+    for (const node of Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])) {
+      if (!this.bankSetupNodeBelongs(node, root)) {
+        continue;
+      }
+      const ownedPath = bankSetupHubPath(node.getAttribute?.("data-bank-setup-source") || "");
+      if (sourcePath && ownedPath && ownedPath !== bankSetupHubPath(sourcePath)) {
+        continue;
+      }
+      try {
+        node.remove?.();
+      } catch (error) {
+        try {
+          node.parentNode?.removeChild?.(node);
+        } catch (childError) {}
+      }
+    }
+    const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
+      item.surface === root && item.scope && item.scope.classList
+      && item.surface.querySelector?.(`.${BANK_SETUP_CLASS}`));
+    if (!anotherOwner) {
+      try {
+        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+      } catch (error) {}
+      try {
+        this.bankSetupSurfaces?.delete(scope);
+      } catch (error) {}
+    }
+  }
+
+  bankSetupReadingAnchor(root) {
+    try {
+      const headings = Array.from(root?.querySelectorAll?.("h1") || []);
+      const inside = typeof notebookInsideCode === "function" ? notebookInsideCode : null;
+      return headings.find((node) => !(inside && inside(node))) || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSetupBuildReading(model, options, doc) {
+    try {
+      const header = bankSetupBuildEl(model, options.handlers, doc);
+      if (!header) {
+        return null;
+      }
+      header.setAttribute?.("data-bank-setup-source", options.sourcePath);
+      header.setAttribute?.("data-bank-setup-signature", model.signature);
+      try {
+        const hue = typeof this.bankCardRootHue === "function"
+          ? this.bankCardRootHue(options.sourcePath)
+          : null;
+        if (hue) {
+          header.setAttribute?.("data-root-hue", hue);
+        }
+      } catch (error) {}
+      return header;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  paintBankSetupReading(el, sourcePath) {
+    const root = this.bankSetupReadingRoot(el);
+    const scope = this.bankSetupReadingScope(root);
+    if (!root || !bankSetupIsHubPath(sourcePath)) {
+      return null;
+    }
+    const model = this.bankSetupModelFor(sourcePath);
+    const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(root) : null)
+      || (typeof document !== "undefined" ? document : null);
+    const old = Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])
+      .find((node) => this.bankSetupNodeBelongs(node, root));
+    const active = doc?.activeElement;
+    const focusKey = active && old?.contains?.(active)
+      ? active.getAttribute?.("data-bank-setup-focus") : "";
+    if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
+      && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
+      return old;
+    }
+    this.bankSetupRemoveReading(root, scope, sourcePath);
+    if (!model) {
+      return null;
+    }
+    try {
+      scope?.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
+      this.bankSetupSurfaces?.add?.(scope);
+    } catch (error) {}
+    const options = this.bankSetupOptions(sourcePath, model);
+    const header = this.bankSetupBuildReading(model, options, doc);
+    if (!header) {
+      try {
+        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+      } catch (error) {}
+      return null;
+    }
+    const anchor = this.bankSetupReadingAnchor(root);
+    if (anchor?.parentNode?.insertBefore) {
+      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+    } else if (root.insertBefore) {
+      root.insertBefore(header, root.firstChild || null);
+    } else {
+      root.prepend?.(header);
+    }
+    if (focusKey) {
+      try {
+        const next = header.querySelector?.(`[data-bank-setup-focus="${focusKey}"]`);
+        next?.focus?.({ preventScroll: true });
+      } catch (error) {}
+    }
+    return header;
+  }
+
+  renderBankSetupInReading(el, ctx) {
+    if (!this.bankSetupActive || !el || !ctx?.sourcePath || notebookInsideCode?.(el)) {
+      return;
+    }
+    if (el.closest?.(".cm-editor")) {
+      return;
+    }
+    if (!bankSetupIsHubPath(ctx.sourcePath)) {
+      return;
+    }
+    if (!(this.bankSetupReadingPending instanceof Map)) {
+      this.bankSetupReadingPending = new Map();
+    }
+    if (!(this.bankSetupReadingTimers instanceof Map)) {
+      this.bankSetupReadingTimers = new Map();
+    }
+    const path = ctx.sourcePath;
+    const batch = this.bankSetupReadingPending.get(path) || [];
+    batch.push({ el, ctx });
+    this.bankSetupReadingPending.set(path, batch);
+    try {
+      if (typeof this.bankClearTimeout === "function") {
+        this.bankClearTimeout(this.bankSetupReadingTimers.get(path));
+      }
+    } catch (error) {}
+    const schedule = typeof this.bankSetTimeout === "function"
+      ? this.bankSetTimeout.bind(this)
+      : (run) => setTimeout(run, 0);
+    this.bankSetupReadingTimers.set(path, schedule(() => {
+      this.bankSetupReadingTimers.delete(path);
+      const pending = this.bankSetupReadingPending.get(path) || [];
+      this.bankSetupReadingPending.delete(path);
+      if (!this.bankSetupActive) {
+        return;
+      }
+      const surfaces = new Set();
+      for (const item of pending) {
+        const root = this.bankSetupReadingRoot(item.el);
+        const key = root || item.el;
+        if (surfaces.has(key)) {
+          continue;
+        }
+        surfaces.add(key);
+        this.bankSetupBindReading(item.el, item.ctx, root);
+      }
+      this.refreshBankSetupReading();
+    }, 0));
+  }
+
+  bankSetupBindReading(el, ctx, root) {
+    let widget = Array.from(this.bankSetupReading || []).find((item) =>
+      item.el === el || (root && item.surface === root));
+    if (!widget) {
+      widget = { el, path: ctx.sourcePath, surface: root, scope: this.bankSetupReadingScope(root) };
+      this.bankSetupReading.add(widget);
+    } else if (widget.path !== ctx.sourcePath) {
+      this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
+    }
+    widget.el = el;
+    widget.path = ctx.sourcePath;
+    const binding = {};
+    widget.binding = binding;
+    const child = typeof MarkdownRenderChild === "function" ? new MarkdownRenderChild(el) : {};
+    child.onunload = () => {
+      if (widget.binding !== binding) {
+        return;
+      }
+      this.bankSetupReading?.delete(widget);
+      const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
+        item.surface === widget.surface && item.path === widget.path);
+      if (!anotherOwner) {
+        this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
+      }
+    };
+    try {
+      ctx.addChild?.(child);
+    } catch (error) {}
+  }
+
+  refreshBankSetupReading() {
+    for (const widget of this.bankSetupReading || []) {
+      try {
+        const root = this.bankSetupReadingRoot(widget.el);
+        if (widget.surface && widget.surface !== root) {
+          this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
+        }
+        widget.surface = root;
+        widget.scope = this.bankSetupReadingScope(root);
+      } catch (error) {}
+    }
+    const painted = new Set();
+    for (const widget of this.bankSetupReading || []) {
+      if (!widget.surface || painted.has(widget.surface)) {
+        continue;
+      }
+      painted.add(widget.surface);
+      try {
+        this.paintBankSetupReading(widget.el, widget.path);
+      } catch (error) {}
+    }
+    this.bankSetupSyncSurfaces();
+  }
+
+  bankSetupLivePath(view) {
+    try {
+      if (typeof this.notebookHeaderLivePath === "function") {
+        return this.notebookHeaderLivePath(view);
+      }
+      if (typeof this.notebookCatalogLivePath === "function") {
+        return this.notebookCatalogLivePath(view);
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  bankSetupSourcePath(view) {
+    try {
+      const leaves = this.app?.workspace?.getLeavesOfType?.("markdown") || [];
+      for (const leaf of leaves) {
+        try {
+          if (leaf?.view?.editor?.cm === view) {
+            const path = leaf?.view?.file?.path;
+            return typeof path === "string" && path ? path : null;
+          }
+        } catch (error) {}
+      }
+    } catch (error) {}
+    return null;
+  }
+
+  // Source-mode lint state. Fresh findings win on every new report
+  // (fingerprint change); between reports, marks map through edits and drop
+  // from edited lines. The report always reflects saved bytes.
+  bankSetupLintState(view) {
+    const path = this.bankSetupSourcePath(view);
+    if (!path || !bankSetupIsHubPath(path)) {
+      return null;
+    }
+    if (this.bankSetupLivePath(view)) {
+      return null;
+    }
+    if (!(this.bankSetupLintCache instanceof Map)) {
+      this.bankSetupLintCache = new Map();
+    }
+    const entry = this.bankSetupEntry();
+    const findings = entry.report && Array.isArray(entry.report.findings) ? entry.report.findings : [];
+    const fresh = bankSetupLintMarks(findings);
+    const fingerprint = entry.report && entry.report.fingerprint ? entry.report.fingerprint : "nofp";
+    let text = null;
+    try {
+      text = view?.state?.doc ? String(view.state.doc.toString()) : null;
+    } catch (error) {
+      text = null;
+    }
+    const previous = this.bankSetupLintCache.get(path);
+    if (!previous || previous.fingerprint !== fingerprint) {
+      this.bankSetupLintCache.set(path, { fingerprint, text, marks: fresh });
+      return { path, marks: fresh };
+    }
+    if (text === null || text === previous.text) {
+      return { path, marks: previous.marks };
+    }
+    const deltas = bankSetupLintDeltas(previous.text || "", text);
+    const mapped = bankSetupMapFindingLines(previous.marks, deltas);
+    this.bankSetupLintCache.set(path, { fingerprint, text, marks: mapped });
+    return { path, marks: mapped };
+  }
+
+  buildBankSetupDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType) {
+        return Decoration?.none || null;
+      }
+      if (!view?.state?.doc) {
+        this.bankSetupSetEditorScope(view, false);
+        return Decoration.none;
+      }
+      const livePath = this.bankSetupLivePath(view);
+      if (livePath && bankSetupIsHubPath(livePath)) {
+        return this.bankSetupLiveDecorations(view, livePath);
+      }
+      const lint = this.bankSetupLintState(view);
+      if (!lint) {
+        this.bankSetupSetEditorScope(view, false);
+        return Decoration.none;
+      }
+      return this.bankSetupLintDecorations(view, lint);
+    } catch (error) {
+      return Decoration?.none || null;
+    }
+  }
+
+  bankSetupLiveDecorations(view, livePath) {
+    const text = view.state.doc.toString();
+    const model = this.bankSetupModelFor(livePath);
+    this.bankSetupSetEditorScope(view, Boolean(model));
+    if (!model) {
+      return Decoration.none;
+    }
+    const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
+      || (typeof document !== "undefined" ? document : null);
+    const options = this.bankSetupOptions(livePath, model);
+    const header = this.bankSetupBuildReading(model, options, doc);
+    if (!header) {
+      return Decoration.none;
+    }
+    const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
+    const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    const widget = new class extends WidgetType {
+      constructor() {
+        super();
+        this.path = livePath;
+        this.signature = bankSetupSignature(model, {
+          expanded: options.expanded,
+          desktop: options.desktop,
+        });
+      }
+      eq(other) {
+        return Boolean(other && other.path === this.path && other.signature === this.signature);
+      }
+      toDOM() {
+        header.setAttribute?.("data-cm-widget", "true");
+        header.setAttribute?.("data-bank-setup-source", livePath);
+        return header;
+      }
+    }();
+    let at = 0;
+    const side = 1;
+    if (anchor >= 0) {
+      at = view.state.doc.line(anchor + 1).to;
+    } else if (frontmatterEnd >= 0) {
+      const nextLine = frontmatterEnd + 2;
+      at = nextLine <= (view.state.doc.lines || 0)
+        ? view.state.doc.line(nextLine).from
+        : (view.state.doc.length || 0);
+    }
+    const builder = new RangeSetBuilder();
+    builder.add(at, at, Decoration.widget({ widget, side }));
+    return builder.finish();
+  }
+
+  bankSetupLintDecorations(view, lint) {
+    const enabled = lint.marks.length > 0;
+    this.bankSetupSetEditorScope(view, true);
+    if (!enabled) {
+      return Decoration.none;
+    }
+    const doc = view.state.doc;
+    const builder = new RangeSetBuilder();
+    for (const mark of lint.marks) {
+      try {
+        const line = doc.line(mark.line);
+        if (!line) {
+          continue;
+        }
+        const tone = mark.severity === "warning" ? "warning" : "error";
+        builder.add(
+          line.from,
+          line.to,
+          Decoration.mark({
+            class: `bob-bank-setup-lint-${tone}`,
+            attributes: { title: mark.tooltip },
+          }),
+        );
+        const endWidget = new class extends WidgetType {
+          eq(other) {
+            return Boolean(other && other.markLine === mark.line && other.markText === mark.message);
+          }
+          toDOM() {
+            const span = typeof document !== "undefined" && document
+              ? document.createElement("span")
+              : null;
+            if (!span) {
+              return span;
+            }
+            span.className = `bob-bank-setup-lint-note is-${tone}`;
+            span.textContent = mark.message;
+            span.setAttribute("aria-label", mark.tooltip);
+            return span;
+          }
+        }();
+        endWidget.markLine = mark.line;
+        endWidget.markText = mark.message;
+        builder.add(line.to, line.to, Decoration.widget({ widget: endWidget, side: 1 }));
+      } catch (error) {}
+    }
+    return builder.finish();
+  }
+
+  bankSetupSetEditorScope(view, enabled) {
+    const root = view?.dom;
+    if (!root) {
+      return;
+    }
+    if (!(this.bankSetupEditorScopes instanceof Map)) {
+      this.bankSetupEditorScopes = new Map();
+    }
+    let scope = root;
+    try {
+      scope = root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
+    } catch (error) {}
+    try {
+      const previous = this.bankSetupEditorScopes?.get(view);
+      if (previous && previous !== scope) {
+        previous.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+        this.bankSetupSurfaces?.delete(previous);
+      }
+      const livePath = this.bankSetupLivePath(view);
+      const sourcePath = livePath || this.bankSetupSourcePath(view);
+      const hub = Boolean(sourcePath && bankSetupIsHubPath(sourcePath));
+      if (enabled && hub) {
+        scope.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
+        this.bankSetupSurfaces?.add?.(scope);
+      } else {
+        scope.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+        this.bankSetupSurfaces?.delete(scope);
+      }
+      if (enabled && hub) {
+        this.bankSetupEditorScopes?.set(view, scope);
+      } else {
+        this.bankSetupEditorScopes?.delete(view);
+      }
+      if (enabled && hub) {
+        this.bankSetupEditors?.add(view);
+      } else {
+        this.bankSetupEditors?.delete(view);
+      }
+    } catch (error) {}
+  }
+
+  bankSetupCleanEditor(view) {
+    try {
+      const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
+      scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+      this.bankSetupSurfaces?.delete(scope);
+      this.bankSetupEditorScopes?.delete(view);
+    } catch (error) {}
+    try {
+      this.bankSetupEditors?.delete(view);
+    } catch (error) {}
+  }
+
+  bankSetupSyncSurfaces() {
+    try {
+      for (const scope of Array.from(this.bankSetupSurfaces || [])) {
+        if (!scope) {
+          this.bankSetupSurfaces.delete(scope);
+          continue;
+        }
+        let owned = false;
+        try {
+          owned = Boolean(scope.querySelector?.(`.${BANK_SETUP_CLASS}`));
+        } catch (error) {
+          owned = false;
+        }
+        const tracked = Array.from(this.bankSetupEditorScopes?.values?.() || []).includes(scope)
+          || Array.from(this.bankSetupReading || []).some((item) => item.scope === scope);
+        if (!owned && !tracked) {
+          try {
+            scope.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+          } catch (error) {}
+          this.bankSetupSurfaces.delete(scope);
+        }
+      }
+    } catch (error) {}
+  }
+
+  createBankSetupExtension() {
+    try {
+      if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) {
+        return null;
+      }
+      if (!editorInfoField || !editorLivePreviewField) {
+        return null;
+      }
+      const plugin = this;
+      const SetupPlugin = class {
+        constructor(view) {
+          this.view = view;
+          this.path = plugin.bankSetupLivePath(view) || plugin.bankSetupSourcePath(view);
+          this.decorations = plugin.buildBankSetupDecorations(view);
+          plugin.bankSetupEditors?.add(view);
+        }
+        update(update) {
+          const path = plugin.bankSetupLivePath(update.view) || plugin.bankSetupSourcePath(update.view);
+          const rebuild = path !== this.path || update.docChanged || update.viewportChanged
+            || (update.transactions || []).some((tx) => (tx.effects || []).some((effect) =>
+              effect.is?.(ensureBankSetupRefresh())));
+          this.path = path;
+          if (rebuild) {
+            this.decorations = plugin.buildBankSetupDecorations(update.view);
+          }
+        }
+        destroy() {
+          plugin.bankSetupCleanEditor(this.view);
+        }
+      };
+      return Prec?.highest
+        ? Prec.highest(ViewPlugin.fromClass(SetupPlugin, {
+          decorations: (value) => value.decorations,
+        }))
+        : ViewPlugin.fromClass(SetupPlugin, { decorations: (value) => value.decorations });
+    } catch (error) {
+      return null;
+    }
+  }
+
+  refreshBankSetupEditors() {
+    try {
+      const effect = ensureBankSetupRefresh();
+      for (const leaf of this.app?.workspace?.getLeavesOfType?.("markdown") || []) {
+        const view = leaf?.view?.editor?.cm;
+        if (!view) {
+          continue;
+        }
+        if (effect && view.dispatch) {
+          view.dispatch({ effects: effect.of(null) });
+        } else {
+          this.buildBankSetupDecorations(view);
+        }
+      }
+    } catch (error) {}
+  }
+
+  scheduleBankSetupRefresh() {
+    if (!this.bankSetupActive) {
+      return;
+    }
+    if (this.bankSetupRefreshTimer != null) {
+      return;
+    }
+    const schedule = typeof this.bankSetTimeout === "function"
+      ? this.bankSetTimeout.bind(this)
+      : (run, delay) => setTimeout(run, delay);
+    this.bankSetupRefreshTimer = schedule(() => {
+      this.bankSetupRefreshTimer = null;
+      if (!this.bankSetupActive) {
+        return;
+      }
+      this.refreshBankSetupReading();
+      this.refreshBankSetupEditors();
+    }, 100);
+  }
+}
+
+// Line-shift deltas between two document texts, for lint-mark mapping.
+// Pure and testable: each delta marks the 1-based line where saved bytes
+// changed, with the net line-count shift below it.
+function bankSetupLintDeltas(beforeText, afterText) {
+  const before = String(beforeText === null || beforeText === undefined ? "" : beforeText).split("\n");
+  const after = String(afterText === null || afterText === undefined ? "" : afterText).split("\n");
+  if (before.join("\n") === after.join("\n")) {
+    return [];
+  }
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (suffix < before.length - prefix && suffix < after.length - prefix
+    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) {
+    suffix += 1;
+  }
+  return [{
+    fromLine: prefix + 1,
+    delta: (after.length - suffix) - (before.length - suffix),
+  }];
 }
 // ---- src/249-plugin-bank-walk-model.js ----
 // Pure bank-walk model (api.bankWalk v1): membership, snapshot building,
@@ -126133,6 +128425,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankPeriodHostsMixin,
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
+  BobLedgerToolsBankSetupMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
@@ -129758,5 +132051,35 @@ try {
     });
   }
 } catch (_error) {
+  // Test exports are best-effort.
+}
+// ---- src/363-exports-bank-setup.js ----
+// Test helpers for the Bank Setup header (bob-cli-lt setup-header):
+// config decode, setup model, shared tile painter, lint mapping, and the
+// queue config pointer. Kept separate so every hand-edited fragment stays
+// at or below 1000 lines.
+try {
+  if (
+    typeof module !== "undefined" &&
+    module.exports &&
+    typeof module.exports === "function"
+  ) {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      bankDecodeConfig,
+      bankConfigUnsupported,
+      bankSetupStateKind,
+      bankSetupCollapsedLine,
+      bankSetupModel,
+      bankSetupModelSignature,
+      bankSetupSignature,
+      bankSetupTile,
+      bankSetupLintMarks,
+      bankSetupLintDeltas,
+      bankSetupMapFindingLines,
+      bankSetupBuildEl,
+      bankSharedCategoryTile,
+    });
+  }
+} catch (error) {
   // Test exports are best-effort.
 }

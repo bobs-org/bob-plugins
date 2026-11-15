@@ -116,11 +116,23 @@ class BobLedgerToolsBankDataMixin {
   }
 
   bankSpawnFetch(args, options = {}) {
-    const command = Array.isArray(args) && args[1] === "report" ? "report" : "list";
-    const decoder = command === "report" ? bankDecodeReport : bankDecodeList;
+    const command = Array.isArray(args) && args[1] === "report"
+      ? "report"
+      : Array.isArray(args) && args[1] === "config"
+        ? "config"
+        : "list";
+    const decoder = command === "report"
+      ? bankDecodeReport
+      : command === "config"
+        ? bankDecodeConfig
+        : bankDecodeList;
     return bobSpawnJson(args, decoder, {
       ...options,
-      commandLabel: command === "report" ? "bob bank report" : "bob bank list",
+      commandLabel: command === "report"
+        ? "bob bank report"
+        : command === "config"
+          ? "bob bank config"
+          : "bob bank list",
       resolveBobPath: () =>
         typeof this.apiStatsBobPath === "function"
           ? this.apiStatsBobPath()
@@ -141,6 +153,10 @@ class BobLedgerToolsBankDataMixin {
       return opts.fetches.filter((entry) => bankJsonObject(entry));
     }
     const fetches = [];
+    if (opts.command === "config" || opts.config === true) {
+      fetches.push({ command: "config" });
+      return fetches;
+    }
     if (opts.list === true || opts.command === "list") {
       fetches.push({ command: "list", all: opts.all === true, month: opts.month });
     }

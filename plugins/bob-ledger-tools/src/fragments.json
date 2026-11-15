@@ -129,6 +129,7 @@
   "242d-plugin-album-entrypoints.js",
   "242e-plugin-album-yaml-excursion.js",
   "241h-plugin-bank-decode.js",
+  "241hb-plugin-bank-config-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
   "241k-plugin-bank-actions.js",
@@ -148,6 +149,9 @@
   "246-plugin-bank-category-card-write.js",
   "247-plugin-bank-category-card-ui.js",
   "248-plugin-bank-category-card-actions.js",
+  "248a-plugin-bank-setup-model.js",
+  "248b-plugin-bank-setup-dom.js",
+  "248c-plugin-bank-setup-hosts.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
@@ -261,5 +265,6 @@
   "359-exports-projects-catalog.js",
   "360-exports-bank-walk.js",
   "361-exports-bank-walker-footer.js",
-  "362-exports-areas.js"
+  "362-exports-areas.js",
+  "363-exports-bank-setup.js"
 ]

@@ -575,7 +575,7 @@ function bobSpawnJson(args, decode, options = {}) {
         return { ok: true, report: result.report, exitCode };
       }
       const failure = result && typeof result === "object" ? result : {};
-      return {
+      const outcome = {
         ok: false,
         code: typeof failure.code === "string" ? failure.code : "failed",
         message:
@@ -586,6 +586,15 @@ function bobSpawnJson(args, decode, options = {}) {
         tried,
         exitCode,
       };
+      // Decoders may attach located diagnostics (bank config findings) to a
+      // failure: keep them so surfaces can point at the owning UI.
+      if (Array.isArray(failure.findings)) {
+        outcome.findings = failure.findings;
+      }
+      if (Number.isInteger(failure.configProblems)) {
+        outcome.configProblems = failure.configProblems;
+      }
+      return outcome;
     };
     const notFound = () => ({
       ok: false,

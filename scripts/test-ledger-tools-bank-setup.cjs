@@ -1,0 +1,854 @@
+// Bank Setup header (bob-cli-lt setup-header): config decode, collapsed and
+// expanded models, shared tile parity with the Category card, DOM states,
+// mount idempotence, scoped hiding, jumps, Source-mode lint mapping, and the
+// queue card pointer. Painting never writes vault bytes: the fake DOM has no
+// vault, and every report string enters as text.
+const assert = require("node:assert/strict");
+const Module = require("node:module");
+const path = require("node:path");
+const test = require("node:test");
+
+class TestNotice {
+  constructor(message) { TestNotice.messages.push(String(message)); }
+}
+TestNotice.messages = [];
+
+class TestPlugin {
+  constructor(app) { this.app = app; }
+  addCommand(command) { (this.commands ||= []).push(command); }
+  registerEditorExtension(extension) { (this.extensions ||= []).push(extension); }
+  registerMarkdownPostProcessor(handler, order) { (this.postProcessors ||= []).push({ handler, order }); }
+  registerEvent(ref) { (this.events ||= []).push(ref); return ref; }
+  registerInterval(handle) { (this.intervals ||= []).push(handle); return handle; }
+  registerDomEvent() { return { unregister: () => {} }; }
+}
+
+const editorInfoField = { setupMark: "info" };
+const editorLivePreviewField = { setupMark: "live" };
+class WidgetType {}
+class RangeSetBuilder {
+  constructor() { this.adds = []; }
+  add(from, to, value) { this.adds.push({ from, to, value }); }
+  finish() { return { adds: this.adds.slice() }; }
+}
+const Decoration = {
+  none: { none: true },
+  mark: (spec) => ({ mark: true, ...spec }),
+  widget: (spec) => ({ widget: true, ...spec }),
+  line: (spec) => ({ line: true, ...spec }),
+};
+const StateEffect = {
+  define: () => {
+    const type = {};
+    type.of = (value) => ({ value, is: (other) => other === type });
+    return type;
+  },
+};
+const ViewPlugin = { fromClass: (cls, options) => ({ cls, options }) };
+const Prec = { highest: (value) => value };
+
+function loadPlugin(platform = { isDesktopApp: true }) {
+  const originalLoad = Module._load;
+  Module._load = function (request, ...args) {
+    if (request === "obsidian") {
+      return {
+        Notice: TestNotice,
+        Plugin: TestPlugin,
+        Platform: platform,
+        MarkdownView: class MarkdownView {},
+        MarkdownRenderChild: class MarkdownRenderChild {},
+        normalizePath: (value) => value,
+        parseYaml: (text) => JSON.parse(text),
+        editorInfoField,
+        editorLivePreviewField,
+      };
+    }
+    if (request === "@codemirror/state") return { Prec, StateEffect, RangeSetBuilder };
+    if (request === "@codemirror/view") return { ViewPlugin, Decoration, WidgetType, EditorView: {} };
+    if (request === "@codemirror/language") return {};
+    return originalLoad.call(this, request, ...args);
+  };
+  try {
+    const entryPath = require.resolve("../plugins/bob-ledger-tools/main.js");
+    delete require.cache[entryPath];
+    return require(entryPath);
+  } finally {
+    Module._load = originalLoad;
+  }
+}
+
+const LedgerToolsPlugin = loadPlugin();
+const H = LedgerToolsPlugin.helpers;
+
+// --- Minimal fake DOM: text-only insertion, attribute selectors, surfaces. ---
+
+class TextNode {
+  constructor(value, doc) {
+    this.nodeType = 3;
+    this.nodeValue = String(value);
+    this.ownerDocument = doc;
+    this.parentNode = null;
+  }
+  get textContent() { return this.nodeValue; }
+}
+
+function matchSelector(node, part) {
+  const tagMatch = part.match(/^([a-zA-Z][a-zA-Z0-9]*)/);
+  const tag = tagMatch ? tagMatch[1].toLowerCase() : null;
+  if (tag && tag !== "*" && String(node.tagName || "").toLowerCase() !== tag) {
+    return false;
+  }
+  const classes = part.match(/\.[A-Za-z0-9_-]+/g) || [];
+  for (const name of classes) {
+    if (!node.classList || !node.classList.contains(name.slice(1))) {
+      return false;
+    }
+  }
+  const attrMatch = part.match(/\[([A-Za-z0-9_-]+)(?:="([^"]*)")?\]/);
+  if (attrMatch) {
+    const actual = node.getAttribute ? node.getAttribute(attrMatch[1]) : null;
+    if (actual === null || actual === undefined) {
+      return false;
+    }
+    if (attrMatch[2] !== undefined && String(actual) !== attrMatch[2]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+class Element {
+  constructor(tag, doc) {
+    this.nodeType = 1;
+    this.tagName = String(tag).toUpperCase();
+    this.nodeName = this.tagName;
+    this.ownerDocument = doc;
+    this.childNodes = [];
+    this.parentNode = null;
+    this.className = "";
+    this.attrs = new Map();
+    this.disabled = false;
+    this.surface = false;
+    this.classList = {
+      contains: (name) => this.className.split(/\s+/).includes(name),
+      add: (...names) => {
+        for (const name of names) {
+          if (!this.classList.contains(name)) {
+            this.className = `${this.className} ${name}`.trim();
+          }
+        }
+      },
+      remove: (...names) => {
+        this.className = this.className.split(/\s+/).filter((part) => part && !names.includes(part)).join(" ");
+      },
+    };
+  }
+  setAttribute(name, value) {
+    this.attrs.set(name, String(value));
+    if (name === "class") {
+      this.className = String(value);
+    }
+  }
+  getAttribute(name) {
+    if (name === "class") {
+      return this.className;
+    }
+    return this.attrs.has(name) ? this.attrs.get(name) : null;
+  }
+  appendChild(node) {
+    if (node.parentNode && node.parentNode.removeChild) {
+      node.parentNode.removeChild(node);
+    }
+    node.parentNode = this;
+    this.childNodes.push(node);
+    return node;
+  }
+  insertBefore(node, ref) {
+    if (node.parentNode && node.parentNode.removeChild) {
+      node.parentNode.removeChild(node);
+    }
+    node.parentNode = this;
+    const index = this.childNodes.indexOf(ref);
+    if (index < 0) {
+      this.childNodes.push(node);
+    } else {
+      this.childNodes.splice(index, 0, node);
+    }
+    return node;
+  }
+  prepend(...nodes) {
+    for (const node of nodes.reverse()) {
+      this.insertBefore(node, this.childNodes[0] || null);
+    }
+  }
+  removeChild(node) {
+    const index = this.childNodes.indexOf(node);
+    if (index >= 0) {
+      this.childNodes.splice(index, 1);
+    }
+    node.parentNode = null;
+    return node;
+  }
+  remove() {
+    if (this.parentNode && this.parentNode.removeChild) {
+      this.parentNode.removeChild(this);
+    }
+  }
+  closest(selector) {
+    const parts = String(selector).split(",").map((part) => part.trim()).filter(Boolean);
+    let current = this;
+    while (current) {
+      if (current.nodeType === 1 && parts.some((part) => matchSelector(current, part))) {
+        return current;
+      }
+      current = current.parentNode;
+    }
+    return null;
+  }
+  matches(selector) {
+    return String(selector).split(",").map((part) => part.trim()).filter(Boolean)
+      .some((part) => matchSelector(this, part));
+  }
+  contains(node) {
+    if (node === this) {
+      return true;
+    }
+    return (node && typeof node.closest === "function" && node.closest("*") && walkUp(node, this)) || false;
+  }
+  querySelectorAll(selector) {
+    const parts = String(selector).split(",").map((part) => part.trim()).filter(Boolean);
+    const out = [];
+    const stack = [...this.childNodes];
+    while (stack.length) {
+      const node = stack.shift();
+      if (!node || node.nodeType !== 1) {
+        continue;
+      }
+      if (parts.some((part) => matchSelector(node, part))) {
+        out.push(node);
+      }
+      stack.push(...(node.childNodes || []));
+    }
+    return out;
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  addEventListener() {}
+  focus() { this.focused = true; }
+  get textContent() { return this.childNodes.map((node) => node.textContent || "").join(""); }
+  set textContent(value) {
+    this.childNodes = [];
+    const text = value == null ? "" : String(value);
+    if (text) {
+      this.appendChild(this.ownerDocument.createTextNode(text));
+    }
+  }
+}
+
+function walkUp(node, root) {
+  let current = node && node.parentNode;
+  while (current) {
+    if (current === root) {
+      return true;
+    }
+    current = current.parentNode;
+  }
+  return false;
+}
+
+class Document {
+  constructor() {
+    this.body = new Element("body", this);
+    this.body.ownerDocument = this;
+    this.activeElement = null;
+  }
+  createElement(tag) { return new Element(tag, this); }
+  createTextNode(value) { return new TextNode(value, this); }
+}
+
+// --- Config fixtures shaped like `bob bank config -f json`. ---
+
+function configCategory(overrides = {}) {
+  return {
+    key: "coffee",
+    emoji: "☕",
+    label: "Coffee",
+    builtin: false,
+    declared: true,
+    hotkey: "c",
+    hotkey_source: "explicit",
+    group: "Everyday",
+    hidden: false,
+    line: 13,
+    source_line: 13,
+    rows: 5,
+    rule_refs: 0,
+    ...overrides,
+  };
+}
+
+function configAccount(overrides = {}) {
+  return {
+    alias: "checking",
+    label: "WF Checking",
+    kind: "checking",
+    default: true,
+    start: "2026-11-11",
+    line: 8,
+    source_line: 8,
+    rows: 11,
+    journal_events: 0,
+    status: "balanced",
+    hint: "Ledger balance matches.",
+    last_import: "2026-11-15",
+    balance_cents: 100,
+    balance_asof: "2026-11-13",
+    delta_cents: 0,
+    ...overrides,
+  };
+}
+
+function configReport(overrides = {}) {
+  return {
+    schema_version: 1,
+    ok: true,
+    state: "valid",
+    teaching_empty: false,
+    partial: false,
+    today: "2026-11-15",
+    path: "bank.md",
+    line: 6,
+    fingerprint: "sha256:abc",
+    accounts: [configAccount()],
+    categories: [
+      configCategory(),
+      configCategory({ key: "groceries", emoji: "🛒", label: "Groceries", hotkey: "g", line: 14, source_line: 14, rows: 2 }),
+      configCategory({ key: "income", emoji: "💵", label: "Income", builtin: true, declared: false, hotkey: "i", hotkey_source: "builtin_default", group: "Money moves", line: null, source_line: null, rows: 1 }),
+      configCategory({ key: "kids", emoji: "🧸", label: "Kids", hotkey: null, hotkey_source: "none", hidden: true, line: 20, source_line: 20, rows: 3 }),
+    ],
+    free_hotkeys: ["b", "j"],
+    rules: [{ index: 0, match: "VENMO", payee: "Venmo", cat: "groceries", link: null, line: 30, source_line: 30 }],
+    stale_after: { days: 10, explicit: false, line: null },
+    findings: [],
+    issues: { errors: 0, warnings: 0 },
+    starter: null,
+    ...overrides,
+  };
+}
+
+test("config decode keeps every report field and tolerates absent ones", () => {
+  const decoded = H.bankDecodeConfig(JSON.stringify(configReport()), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.report.state, "valid");
+  assert.equal(decoded.report.categories.length, 4);
+  assert.equal(decoded.report.accounts[0].status, "balanced");
+  assert.equal(decoded.report.rules[0].line, 30);
+  assert.deepEqual(decoded.report.free_hotkeys, ["b", "j"]);
+  // Absent optional fields still decode.
+  const sparse = {
+    schema_version: 1,
+    ok: true,
+    state: "valid",
+    categories: [{ key: "coffee", label: "Coffee" }],
+    accounts: [{ alias: "checking", label: "WF Checking" }],
+  };
+  const sparseDecoded = H.bankDecodeConfig(JSON.stringify(sparse), "");
+  assert.equal(sparseDecoded.ok, true);
+  assert.equal(sparseDecoded.report.categories[0].hotkey, null);
+  assert.equal(sparseDecoded.report.categories[0].declared, true);
+  assert.equal(sparseDecoded.report.accounts[0].status, null);
+  assert.deepEqual(sparseDecoded.report.rules, []);
+  assert.deepEqual(sparseDecoded.report.findings, []);
+  assert.equal(sparseDecoded.report.stale_after.days, 10);
+});
+
+test("config decode reads invalid, missing, and teaching-empty states with located findings", () => {
+  const invalid = configReport({
+    ok: false,
+    state: "invalid",
+    partial: true,
+    findings: [
+      { code: "dup", severity: "error", path: "bank.md", line: 14, key_path: "bank.categories.cafe.hotkey", message: "hotkey taken", hint: null },
+      { code: "dead", severity: "warning", path: "bank.md", line: null, key_path: "bank.rules.0", message: "read-time dead", hint: "digits" },
+    ],
+    issues: { errors: 1, warnings: 1 },
+  });
+  const decoded = H.bankDecodeConfig(JSON.stringify(invalid), "");
+  assert.equal(decoded.ok, true);
+  assert.equal(decoded.report.state, "invalid");
+  assert.equal(decoded.report.partial, true);
+  assert.equal(decoded.report.findings.length, 2);
+  assert.equal(decoded.report.findings[0].line, 14);
+  assert.equal(decoded.report.findings[1].line, null);
+  const missing = H.bankDecodeConfig(JSON.stringify({
+    schema_version: 1,
+    ok: false,
+    state: "missing",
+    starter: "bank:\n  accounts: {}",
+  }), "");
+  assert.equal(missing.ok, true);
+  assert.equal(missing.report.state, "missing");
+  assert.equal(missing.report.starter, "bank:\n  accounts: {}");
+  const empty = H.bankDecodeConfig(JSON.stringify({ schema_version: 1, ok: false, state: "teaching_empty" }), "");
+  assert.equal(empty.ok, true);
+  assert.equal(empty.report.teaching_empty, true);
+});
+
+test("config decode maps an older bob to unsupported and rejects bad shapes", () => {
+  const unsupported = H.bankDecodeConfig(
+    "",
+    "error: unrecognized subcommand 'config'\n\nUsage: bob bank [COMMAND]",
+    2,
+  );
+  assert.equal(unsupported.ok, false);
+  assert.equal(unsupported.code, "unsupported");
+  assert.match(unsupported.message, /newer bob/);
+  const badJson = H.bankDecodeConfig("nope", "", 0);
+  assert.equal(badJson.ok, false);
+  assert.equal(badJson.code, "bad-json");
+  const badSchema = H.bankDecodeConfig(JSON.stringify({ schema_version: 2, ok: true, state: "valid" }), "", 0);
+  assert.equal(badSchema.ok, false);
+  assert.equal(badSchema.code, "schema-mismatch");
+  const malformed = H.bankDecodeConfig(
+    JSON.stringify({ schema_version: 1, ok: true, state: "valid", categories: [{ key: null }] }),
+    "",
+    0,
+  );
+  assert.equal(malformed.ok, false);
+});
+
+test("config fetch args use the bare config member", () => {
+  assert.deepEqual(H.bankBuildArgs({ command: "config" }), ["bank", "config", "-f", "json"]);
+  const plugin = makeSetupPlugin(null, {});
+  assert.deepEqual(plugin.bankFetchesFor({ command: "config" }), [{ command: "config" }]);
+  assert.deepEqual(plugin.bankFetchesFor({ config: true }), [{ command: "config" }]);
+  assert.equal(H.bankCacheKey(H.bankBuildArgs({ command: "config" })), JSON.stringify(["bank", "config", "-f", "json"]));
+});
+
+// --- Model: collapsed grammar, states, tiles, and signatures. ---
+
+function decodedReport(overrides = {}) {
+  const decoded = H.bankDecodeConfig(JSON.stringify(configReport(overrides)), "");
+  assert.equal(decoded.ok, true);
+  return decoded.report;
+}
+
+test("collapsed grammar covers one vs several accounts, hidden counts, and rule plurals", () => {
+  const one = H.bankSetupModel(decodedReport(), { desktop: true, expanded: false });
+  assert.equal(one.collapsedLine, "🏦 WF Checking · 3 categories · 1 hidden · 1 rule");
+  assert.equal(one.state, "valid");
+  const none = H.bankSetupModel(decodedReport({ accounts: [], categories: [], rules: [], free_hotkeys: [] }), { desktop: true });
+  assert.equal(none.collapsedLine, "no accounts · 0 categories · no rules");
+  const two = H.bankSetupModel(decodedReport({
+    accounts: [configAccount(), configAccount({ alias: "savings", label: "WF Savings", default: false })],
+  }), { desktop: true });
+  assert.equal(two.collapsedLine, "🏦 WF Checking + 1 more · 3 categories · 1 hidden · 1 rule");
+});
+
+test("invalid configs auto-expand and label every finding with its line", () => {
+  const report = decodedReport({
+    ok: false,
+    state: "invalid",
+    partial: true,
+    findings: [
+      { code: "dup", severity: "error", path: "bank.md", line: 14, key_path: "bank.categories.cafe.hotkey", message: "hotkey taken", hint: null },
+    ],
+  });
+  const collapsed = H.bankSetupModel(report, { desktop: true, expanded: false });
+  assert.equal(collapsed.state, "invalid");
+  assert.equal(collapsed.expanded, true);
+  assert.equal(collapsed.errorCount, 1);
+  assert.equal(collapsed.findings[0].label, "line 14 · bank.categories.cafe.hotkey · hotkey taken");
+});
+
+test("state selection covers mobile, unsupported, loading, refresh failures, and missing", () => {
+  const report = decodedReport();
+  assert.equal(H.bankSetupModel(report, { desktop: false }).state, "mobile");
+  assert.equal(H.bankSetupModel(report, { desktop: true, error: { code: "unsupported", message: "old" } }).state, "unsupported");
+  assert.equal(H.bankSetupModel(report, { desktop: true, error: { code: "bob-not-found", message: "missing" } }).state, "unsupported");
+  assert.equal(H.bankSetupModel(null, { desktop: true }).state, "loading");
+  assert.equal(H.bankSetupModel(null, { desktop: true, error: { code: "unloaded" } }).state, "loading");
+  assert.equal(H.bankSetupModel(null, { desktop: true, error: { code: "timeout", message: "slow" } }).state, "refresh-failed");
+  assert.equal(H.bankSetupModel(null, { desktop: true, error: { code: "failed", message: "down" }, stale: true }).state, "refresh-failed");
+  const missing = H.bankSetupModel(decodedReport({ ok: false, state: "missing", categories: [], accounts: [] }), { desktop: true });
+  assert.equal(missing.state, "missing");
+});
+
+test("tiles enrich keycap style, tooltips, accessible names, and jump lines", () => {
+  const model = H.bankSetupModel(decodedReport(), { desktop: true, expanded: true });
+  const everyday = model.sections.find((section) => section.group === "Everyday");
+  const coffee = everyday.tiles.find((tile) => tile.key === "coffee");
+  assert.equal(coffee.keycapStyle, "solid");
+  assert.equal(coffee.tooltip, "☕ Coffee · stored as coffee · key C pinned · 5 rows");
+  assert.equal(coffee.ariaLabel, "Coffee, key C, 5 rows");
+  assert.equal(coffee.line, 13);
+  const hidden = model.hiddenTiles.find((tile) => tile.key === "kids");
+  assert.equal(hidden.keycapStyle, "none");
+  assert.equal(hidden.tooltip, "🧸 Kids · stored as kids · no key · 3 rows");
+  const money = model.sections.find((section) => section.group === "Money moves");
+  const income = money.tiles.find((tile) => tile.key === "income");
+  assert.equal(income.keycapStyle, "solid");
+  assert.match(income.tooltip, /built-in default/);
+});
+
+test("widget identity folds the signature with surface options", () => {
+  const model = H.bankSetupModel(decodedReport(), { desktop: true, expanded: true });
+  const same = H.bankSetupSignature(model, { expanded: true, desktop: true });
+  assert.equal(same, H.bankSetupSignature(model, { expanded: true, desktop: true }));
+  assert.notEqual(same, H.bankSetupSignature(model, { expanded: false, desktop: true }));
+  assert.notEqual(same, H.bankSetupSignature(model, { expanded: true, desktop: false }));
+});
+
+test("tiles follow Category card order and the signature moves with row counts", () => {
+  const model = H.bankSetupModel(decodedReport(), { desktop: true, expanded: true });
+  const cardSections = H.bankCategorySections(
+    decodedReport().categories.filter((entry) => entry.hidden !== true),
+    {},
+  );
+  assert.deepEqual(
+    model.sections.map((section) => section.tiles.map((tile) => tile.key)),
+    cardSections.map((section) => section.tiles.map((tile) => tile.key)),
+  );
+  const changed = H.bankSetupModel(decodedReport({
+    categories: [
+      configCategory({ rows: 6 }),
+      configCategory({ key: "groceries", emoji: "🛒", label: "Groceries", hotkey: "g", line: 14, source_line: 14, rows: 2 }),
+      configCategory({ key: "income", emoji: "💵", label: "Income", builtin: true, declared: false, hotkey: "i", hotkey_source: "builtin_default", group: "Money moves", line: null, source_line: null, rows: 1 }),
+      configCategory({ key: "kids", emoji: "🧸", label: "Kids", hotkey: null, hotkey_source: "none", hidden: true, line: 20, source_line: 20, rows: 3 }),
+    ],
+  }), { desktop: true, expanded: true });
+  assert.notEqual(model.signature, changed.signature);
+});
+
+test("accounts carry status words and since labels; dead rules are flagged", () => {
+  const model = H.bankSetupModel(decodedReport(), { desktop: true, expanded: true });
+  assert.equal(model.accounts[0].status, "balanced");
+  assert.equal(model.accounts[0].statusIcon, "✓");
+  assert.equal(model.accounts[0].sinceLabel, "since Wed Nov 11");
+  const dead = H.bankSetupModel(decodedReport({
+    rules: [{ index: 0, match: "VENMO 1234", payee: "Venmo", cat: "groceries", link: null, line: 30, source_line: 30 }],
+  }), { desktop: true, expanded: true });
+  assert.equal(dead.rules[0].readTimeDead, true);
+  assert.equal(model.rules[0].readTimeDead, false);
+});
+
+// --- Shared tiles: card output unchanged, header keyed apart. ---
+
+test("shared tile keeps the card look and keys the header apart", () => {
+  const doc = new Document();
+  const tile = { key: "coffee", hotkey: "c", keycap: "C", emoji: "☕", label: "Coffee", dimmed: false };
+  const card = H.bankSharedCategoryTile(doc, tile, { card: true, selected: true, disabled: false });
+  assert.equal(card.getAttribute("data-category-key"), "coffee");
+  assert.equal(card.getAttribute("data-bank-setup-category"), null);
+  assert.equal(card.getAttribute("aria-keyshortcuts"), "c");
+  assert.equal(card.getAttribute("aria-pressed"), "true");
+  assert.equal(card.querySelector(".bob-bank-category-keycap").textContent, "C");
+  assert.match(card.textContent, /Coffee/);
+  assert.match(card.textContent, /↵/);
+  const header = H.bankSharedCategoryTile(doc, {
+    ...tile,
+    ariaLabel: "Coffee, key C, 5 rows",
+    tooltip: "☕ Coffee · stored as coffee · key C pinned · 5 rows",
+    rows: 5,
+    line: 13,
+    keycapStyle: "solid",
+  }, {});
+  assert.equal(header.getAttribute("data-bank-setup-category"), "coffee");
+  assert.equal(header.getAttribute("data-category-key"), null);
+  assert.equal(header.getAttribute("aria-label"), "Coffee, key C, 5 rows");
+  assert.equal(header.getAttribute("title"), "☕ Coffee · stored as coffee · key C pinned · 5 rows");
+  assert.equal(header.getAttribute("data-bank-setup-line"), "13");
+  assert.equal(header.querySelector(".bob-bank-setup-tile-count").textContent, "5");
+  assert.equal(header.querySelector(".bob-bank-category-enter"), null);
+  const keyless = H.bankSharedCategoryTile(doc, { key: "kids", hotkey: null, keycap: null, emoji: "🧸", label: "Kids" }, {});
+  assert.equal(keyless.querySelector(".bob-bank-category-keycap"), null);
+  assert.ok(keyless.querySelector(".bob-bank-category-keydot"));
+  const derived = H.bankSharedCategoryTile(doc, { ...tile, keycapStyle: "dashed" }, {});
+  assert.ok(derived.querySelector(".bob-bank-category-keycap.is-derived"));
+});
+
+// --- DOM: every state paints with text, jumps, and accessible names. ---
+
+function paintHandlers() {
+  const calls = { toggle: 0, yaml: 0, jumps: [], starter: 0, retry: 0 };
+  return {
+    calls,
+    handlers: {
+      onToggle: () => { calls.toggle += 1; },
+      onYaml: () => { calls.yaml += 1; },
+      onJump: (line) => { calls.jumps.push(line); },
+      onCopyStarter: () => { calls.starter += 1; },
+      onRetry: () => { calls.retry += 1; },
+    },
+  };
+}
+
+function paintModel(report, options = {}) {
+  const doc = new Document();
+  const { calls, handlers } = paintHandlers();
+  const model = H.bankSetupModel(report, { desktop: true, expanded: true, ...options });
+  const el = H.bankSetupBuildEl(model, handlers, doc);
+  assert.ok(el);
+  doc.body.appendChild(el);
+  return { doc, el, model, calls };
+}
+
+test("valid header paints collapsed and expanded states with jumps and accessible names", () => {
+  const collapsed = paintModel(decodedReport(), { expanded: false });
+  assert.match(collapsed.el.textContent, /WF Checking/);
+  assert.equal(collapsed.el.querySelector(".bob-bank-setup-body"), null);
+  assert.equal(collapsed.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(collapsed.calls.toggle, 0);
+  assert.equal(collapsed.calls.yaml, 0);
+  const expanded = paintModel(decodedReport(), { expanded: true });
+  assert.equal(expanded.el.querySelector(".bob-bank-setup-toggle").getAttribute("aria-expanded"), "true");
+  assert.ok(expanded.el.querySelector(".bob-bank-category-tile"));
+  assert.ok(expanded.el.querySelector(".bob-bank-setup-tiles"));
+  // Header tiles never match the card's click selector.
+  assert.equal(expanded.el.querySelectorAll("button[data-category-key]").length, 0);
+  assert.ok(expanded.el.querySelectorAll("button[data-bank-setup-category]").length > 0);
+  // No vault bytes move during paint: handlers stay silent.
+  assert.deepEqual(expanded.calls, { toggle: 0, yaml: 0, jumps: [], starter: 0, retry: 0 });
+  const tile = expanded.el.querySelector('button[data-bank-setup-category="coffee"]');
+  assert.equal(tile.getAttribute("data-bank-setup-line"), "13");
+  const account = expanded.el.querySelector(".bob-bank-setup-account-name");
+  assert.equal(account.getAttribute("data-bank-setup-line"), "8");
+  const rule = expanded.el.querySelector(".bob-bank-setup-rule-text");
+  assert.equal(rule.getAttribute("data-bank-setup-line"), "30");
+});
+
+test("invalid header auto-expands with a live-region banner and a last-good note", () => {
+  const report = decodedReport({
+    ok: false,
+    state: "invalid",
+    partial: true,
+    findings: [
+      { code: "dup", severity: "error", path: "bank.md", line: 14, key_path: "bank.categories.cafe.hotkey", message: "hotkey taken", hint: null },
+    ],
+  });
+  const { el } = paintModel(report, { lastGoodLabel: "2:14 PM" });
+  const banner = el.querySelector(".bob-bank-setup-banner");
+  assert.equal(banner.getAttribute("role"), "alert");
+  assert.match(banner.textContent, /1 problem in bank:/);
+  const finding = el.querySelector(".bob-bank-setup-finding-text");
+  assert.equal(finding.getAttribute("data-bank-setup-line"), "14");
+  assert.match(el.textContent, /last good · 2:14 PM/);
+});
+
+test("missing, unsupported, mobile, and failed states paint their lines", () => {
+  const missingReport = decodedReport({ ok: false, state: "missing", categories: [], accounts: [], rules: [], starter: "bank:\n  accounts: {}" });
+  const missing = paintModel(missingReport, {});
+  assert.match(missing.el.textContent, /no bank: mapping yet/);
+  assert.ok(missing.el.querySelector(".bob-bank-setup-copy"));
+  const stale = paintModel(null, {});
+  assert.match(stale.el.textContent, /loading/);
+  const failed = paintModel(null, { error: { code: "timeout", message: "slow" } });
+  assert.equal(failed.model.state, "refresh-failed");
+  assert.ok(failed.el.querySelector(".bob-bank-retry"));
+  const old = paintModel(decodedReport(), { error: { code: "unsupported", message: "old bob" } });
+  assert.match(old.el.textContent, /needs a newer bob/);
+  const mobile = paintModel(decodedReport(), { desktop: false });
+  assert.match(mobile.el.textContent, /drawn by bob on desktop/);
+  // The mobile line carries no subprocess-backed data or write affordances.
+  assert.equal(mobile.el.querySelectorAll("button[data-bank-setup-category]").length, 0);
+});
+
+// --- Lint mark mapping across edits. ---
+
+test("lint marks map through edits and drop from edited lines", () => {
+  const findings = [
+    { message: "hotkey taken", line: 14, key_path: "bank.categories.cafe.hotkey", severity: "error" },
+    { message: "unknown category", line: 30, key_path: "bank.rules.0.cat", severity: "error" },
+    { message: "unlocated", line: null, key_path: "bank", severity: "warning" },
+  ];
+  const marks = H.bankSetupLintMarks(findings);
+  assert.equal(marks.length, 2);
+  assert.equal(marks[0].tooltip, "bank.categories.cafe.hotkey — hotkey taken");
+  // Same-line edit drops only that line.
+  assert.deepEqual(
+    H.bankSetupMapFindingLines(marks, [{ fromLine: 14, delta: 0 }]).map((mark) => mark.line),
+    [30],
+  );
+  // Insert above shifts both.
+  assert.deepEqual(
+    H.bankSetupMapFindingLines(marks, [{ fromLine: 10, delta: 2 }]).map((mark) => mark.line),
+    [16, 32],
+  );
+  // Deletion above shifts down; an edit on the line drops it.
+  assert.deepEqual(
+    H.bankSetupMapFindingLines(marks, [{ fromLine: 5, delta: -1 }]).map((mark) => mark.line),
+    [13, 29],
+  );
+  assert.deepEqual(
+    H.bankSetupLintDeltas("a\nb\nc", "a\nB\nc"),
+    [{ fromLine: 2, delta: 0 }],
+  );
+  assert.deepEqual(
+    H.bankSetupLintDeltas("a\nc", "a\nb\nc"),
+    [{ fromLine: 2, delta: 1 }],
+  );
+  assert.deepEqual(H.bankSetupLintDeltas("same", "same"), []);
+});
+
+// --- Hosts: mount, scoped hide, jumps, lifecycle. ---
+
+function setupApp(overrides = {}) {
+  return {
+    vault: {
+      getAbstractFileByPath: (p) => ({ path: p }),
+      cachedRead: async () => "",
+      read: async () => "",
+    },
+    metadataCache: {
+      getFileCache: () => ({ frontmatter: {} }),
+      on: () => ({}),
+    },
+    workspace: {
+      on: () => ({}),
+      getLeavesOfType: () => overrides.leaves || [],
+      getMostRecentLeaf: () => null,
+      activeLeaf: null,
+      openLinkText: async () => {},
+    },
+  };
+}
+
+function makeSetupPlugin(platform, app, subscribe) {
+  const Bundle = platform ? loadPlugin(platform) : LedgerToolsPlugin;
+  const plugin = new Bundle(setupApp(app), {});
+  plugin.applyMarkGateClass = () => {};
+  plugin.registerMarkGatePopoutSync = () => {};
+  plugin.markGateDocuments = () => [new Document()];
+  plugin.apiBankSubscribe = subscribe || ((spec, subscriber) => {
+    plugin.subscribedSpec = spec;
+    return () => { plugin.unsubscribed = true; };
+  });
+  return plugin;
+}
+
+function hubSurface() {
+  const doc = new Document();
+  const preview = doc.createElement("div");
+  preview.classList.add("markdown-preview-view");
+  const h1 = doc.createElement("h1");
+  h1.appendChild(doc.createTextNode("🏦 Bank"));
+  preview.appendChild(h1);
+  const el = doc.createElement("div");
+  preview.appendChild(el);
+  doc.body.appendChild(preview);
+  return { doc, preview, h1, el };
+}
+
+function seedReport(plugin, report) {
+  const key = plugin.bankSetupConfigKey();
+  plugin.bankSetupLastState = {
+    results: { [key]: { report, stale: false, error: null, refreshing: false } },
+  };
+}
+
+test("setup registers surfaces on desktop and skips the fetch on mobile", () => {
+  const plugin = makeSetupPlugin(null, {});
+  plugin.setupBankSetup();
+  assert.equal(plugin.postProcessors.length, 1);
+  assert.equal(plugin.extensions.length, 1);
+  assert.deepEqual(plugin.subscribedSpec, { command: "config" });
+  plugin.teardownBankSetup();
+  assert.equal(plugin.unsubscribed, true);
+  const mobileBundle = loadPlugin({ isDesktopApp: false, isMobile: true });
+  const mobile = new mobileBundle(setupApp({}), {});
+  mobile.applyMarkGateClass = () => {};
+  mobile.registerMarkGatePopoutSync = () => {};
+  mobile.markGateDocuments = () => [new Document()];
+  let subscribed = false;
+  mobile.apiBankSubscribe = () => { subscribed = true; return () => {}; };
+  mobile.setupBankSetup();
+  assert.equal(subscribed, false);
+  assert.equal(mobile.bankSetupUnsubscribe, null);
+  mobile.teardownBankSetup();
+});
+
+test("hub mounts once per surface, survives repaint, and leaves other notes alone", () => {
+  const plugin = makeSetupPlugin(null, {});
+  plugin.setupBankSetup();
+  seedReport(plugin, decodedReport());
+  const { preview, el } = hubSurface();
+  const first = plugin.paintBankSetupReading(el, "bank.md");
+  assert.ok(first);
+  assert.ok(preview.querySelector(".bob-bank-setup"));
+  assert.ok(preview.classList.contains("bob-bank-setup-surface"));
+  const second = plugin.paintBankSetupReading(el, "bank.md");
+  assert.equal(second, first);
+  assert.equal(preview.querySelectorAll(".bob-bank-setup").length, 1);
+  const other = hubSurface();
+  const miss = plugin.paintBankSetupReading(other.el, "bank/2026-11.md");
+  assert.equal(miss, null);
+  assert.equal(other.preview.querySelector(".bob-bank-setup"), null);
+  assert.ok(!other.preview.classList.contains("bob-bank-setup-surface"));
+  plugin.bankSetupReading.add({ el, surface: preview, scope: preview, path: "bank.md" });
+  plugin.teardownBankSetup();
+  assert.equal(preview.querySelector(".bob-bank-setup"), null);
+  assert.ok(!preview.classList.contains("bob-bank-setup-surface"));
+});
+
+test("hiding never touches document.body and restores the native row on unload", () => {
+  const plugin = makeSetupPlugin(null, {});
+  const doc = new Document();
+  doc.body.classList.add("bogus-body-gate");
+  plugin.markGateDocuments = () => [doc];
+  const leafEl = doc.createElement("div");
+  const leaf = { view: { file: { path: "bank.md" }, containerEl: leafEl, contentEl: leafEl }, containerEl: leafEl };
+  plugin.app.workspace.getLeavesOfType = () => [leaf];
+  plugin.bankMarkSyncHubProperty();
+  assert.ok(!doc.body.classList.contains("bob-bank-hub-note"));
+  assert.ok(leafEl.classList.contains("bob-bank-hub-note"));
+  leaf.view.file.path = "bank/2026-11.md";
+  plugin.bankMarkSyncHubProperty();
+  assert.ok(!leafEl.classList.contains("bob-bank-hub-note"));
+});
+
+test("tile, account, and finding jumps open Source mode on the exact line", async () => {
+  const plugin = makeSetupPlugin(null, {});
+  const opened = {};
+  const cursor = {};
+  const scrolled = {};
+  const leaf = {
+    view: {
+      file: { path: "bank.md" },
+      editor: {
+        setCursor: (pos) => Object.assign(cursor, pos),
+        scrollIntoView: (range) => Object.assign(scrolled, range),
+      },
+    },
+    openFile: async (file, opts) => Object.assign(opened, { file, opts }),
+  };
+  plugin.app.workspace.getLeavesOfType = () => [leaf];
+  const result = await plugin.bankSetupJumpYaml("bank.md", 14);
+  assert.equal(result.ok, true);
+  assert.equal(result.line, 14);
+  assert.equal(opened.file.path, "bank.md");
+  assert.equal(opened.opts.state.mode, "source");
+  assert.deepEqual(cursor, { line: 13, ch: 0 });
+  assert.ok(scrolled.from);
+});
+
+// --- Queue card pointer. ---
+
+test("queue card points at Setup instead of the raw first message", () => {
+  const plugin = makeSetupPlugin(null, {});
+  const failure = { code: "bob-error", message: "bank.accounts: must be a mapping", configProblems: 2 };
+  assert.equal(plugin.bankCardConfigProblems({ error: failure }), 2);
+  assert.equal(plugin.bankCardConfigProblems({ error: { code: "failed", message: "down" } }), 0);
+  assert.equal(plugin.bankCardConfigProblems({ report: null, error: null }), 0);
+  const partial = {
+    report: { findings: [{ severity: "error" }, { severity: "warning" }] },
+    error: null,
+  };
+  assert.equal(plugin.bankCardConfigProblems(partial), 1);
+  const doc = new Document();
+  const root = doc.createElement("div");
+  const calls = [];
+  plugin.apiBankRefresh = async () => { calls.push("refresh"); return {}; };
+  plugin.bankCardPaintRefreshState(root, { stale: false, error: failure }, {}, { command: "list" });
+  assert.match(root.textContent, /bank: has 2 problems — see Setup above/);
+  assert.doesNotMatch(root.textContent, /must be a mapping/);
+  assert.ok(root.querySelector(".bob-bank-card-error"));
+});

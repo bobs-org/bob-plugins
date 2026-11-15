@@ -484,13 +484,17 @@ test("hub property hiding applies only to bank.md and restores on leave and unlo
   });
   plugin.markGateDocuments = () => [doc];
   plugin.setupBankMarks();
-  assert.equal(doc.body.classList.contains("bob-bank-hub-note"), true);
+  // The Setup header surface owns hub hiding now: document.body is never
+  // marked, while hub leaf containers keep the legacy hub marker.
+  assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
   assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), true);
   view.file.path = "bank/2026-11.md";
   plugin.bankMarkSyncHubProperty();
   assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
+  assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), false);
   view.file.path = "bank.md";
   plugin.bankMarkSyncHubProperty();
+  assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), true);
   plugin.teardownBankMarks();
   assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
 });

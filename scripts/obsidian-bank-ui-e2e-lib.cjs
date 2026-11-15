@@ -986,7 +986,8 @@ function BANK_UI_PROBE() {
     const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
     const cycler = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["task-status-cycler"];
     const bankProp = document.querySelector('.metadata-property[data-property-key="bank"]');
-    const hubClass = Boolean(document.body && document.body.classList && document.body.classList.contains("bob-bank-hub-note"));
+    const hubClass = Boolean(document.querySelector(".bob-bank-setup-surface"))
+      || Boolean(document.body && document.body.classList && document.body.classList.contains("bob-bank-hub-note"));
     return {
       cards,
       badges,

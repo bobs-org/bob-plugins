@@ -292,9 +292,51 @@ class BobLedgerToolsBankCardsMixin {
     return "magenta";
   }
 
+  // When the queue's report says the config is invalid, point at the Setup
+  // header instead of the raw first message. Counts error-severity findings
+  // from the failure envelope or a partial report.
+  bankCardConfigProblems(result) {
+    try {
+      const error = result && result.error;
+      if (error && Number.isInteger(error.configProblems) && error.configProblems > 0) {
+        return error.configProblems;
+      }
+      const fromError = error && Array.isArray(error.findings) ? error.findings : [];
+      const fromReport = result && result.report && Array.isArray(result.report.findings)
+        ? result.report.findings
+        : [];
+      const findings = fromError.length > 0 ? fromError : fromReport;
+      return findings.filter((entry) => entry && entry.severity === "error").length;
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  bankCardPaintConfigPointer(root, problems, view, options) {
+    const line = bankCardAppend(root, "div", {
+      class: "bob-bank-card-error",
+      role: "alert",
+    }, `bank: has ${problems} problem${problems === 1 ? "" : "s"} — see Setup above`);
+    if (line && options && typeof this.apiBankRefresh === "function") {
+      const retry = bankCardAppend(line, "button", { type: "button", class: "bob-bank-retry" }, "Retry");
+      bankCardListen(retry, "click", () => {
+        void this.apiBankRefresh(options).then((next) => {
+          if (next && next.error && !view.unloaded) new Notice(next.error.message || "Bank refresh failed");
+        });
+      });
+    }
+  }
+
   bankCardPaintRefreshState(root, result, view, options) {
     if (result && result.stale) {
       bankCardAppend(root, "div", { class: "bob-bank-card-status", role: "status" }, "Updating · last good values shown");
+    }
+    if (options && options.command === "list") {
+      const problems = this.bankCardConfigProblems(result);
+      if (problems > 0) {
+        this.bankCardPaintConfigPointer(root, problems, view, options);
+        return;
+      }
     }
     if (result && result.error) {
       const model = bankErrorModel(result.error);
@@ -314,6 +356,11 @@ class BobLedgerToolsBankCardsMixin {
   }
 
   bankCardPaintUnavailable(root, result, kind) {
+    if (kind === "queue" && this.bankCardConfigProblems(result) > 0) {
+      bankCardAppend(root, "p", { class: "bob-bank-card-error", role: "alert" },
+        `bank: has ${this.bankCardConfigProblems(result)} problem${this.bankCardConfigProblems(result) === 1 ? "" : "s"} — see Setup above`);
+      return;
+    }
     if (result && result.error) {
       const model = bankErrorModel(result.error);
       bankCardAppend(root, "h2", {}, model.title);

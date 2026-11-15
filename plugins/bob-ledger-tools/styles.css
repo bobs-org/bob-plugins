@@ -9091,7 +9091,96 @@ li.bob-bank-mark-waiting[data-root-hue="yellow"] { --bob-bank-accent: var(--bob-
 li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-math-dollar { display: inline; }
 .bob-bank-math-protected { display: inline; font-style: normal; }
-.bob-bank-hub-note .metadata-property[data-property-key="bank"] { display: none !important; }
+.bob-bank-hub-note .metadata-property[data-property-key="bank"],
+.bob-bank-setup-surface .metadata-property[data-property-key="bank"] { display: none !important; }
+
+/* Bank Setup header: report-backed and view-only. The bank property stays
+   editable in Source mode and remains scoped to a setup surface: a bank
+   property on any other note is never hidden. */
+.bob-bank-setup {
+  --bob-setup-accent: var(--bob-bank-accent, var(--interactive-accent));
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 0.9em;
+  padding: 0.65em 0.8em;
+  border: 1px solid color-mix(in srgb, var(--bob-setup-accent) 30%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-setup-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bob-setup-accent) 8%, var(--background-primary));
+  font-family: var(--font-interface);
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.bob-bank-setup[data-root-hue="aqua"] { --bob-setup-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="blue"] { --bob-setup-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="green"] { --bob-setup-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="magenta"] { --bob-setup-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="orange"] { --bob-setup-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="red"] { --bob-setup-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="violet"] { --bob-setup-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-bank-setup[data-root-hue="yellow"] { --bob-setup-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-bank-setup-head { display: flex; align-items: baseline; gap: 0.6em; }
+.bob-bank-setup-toggle { border: none; background: none; color: var(--text-normal); font: inherit; font-weight: 650; cursor: pointer; padding: 0; }
+.bob-bank-setup-collapsed { flex: 1 1 auto; min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-bank-setup-yaml { flex: none; border: none; background: none; color: var(--text-muted); font: inherit; cursor: pointer; padding: 0; }
+.bob-bank-setup-body { margin-top: 0.55em; }
+.bob-bank-setup-section-head { display: flex; align-items: baseline; gap: 0.6em; margin: 0.7em 0 0.35em; }
+.bob-bank-setup-section-label { color: var(--text-faint); font-size: 0.72em; font-variant: small-caps; letter-spacing: 0.07em; }
+.bob-bank-setup-section-note { color: var(--text-faint); font-size: 0.78em; }
+.bob-bank-setup-group-label { color: var(--text-muted); font-size: 0.72em; font-variant: small-caps; letter-spacing: 0.07em; }
+.bob-bank-setup-tiles { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.25rem 0 0.5rem; }
+.bob-bank-setup-group { min-width: 0; }
+.bob-bank-setup .bob-bank-category-tile { background: color-mix(in srgb, var(--bob-setup-accent) 6%, var(--background-primary)); }
+.bob-bank-category-keycap.is-derived { border-style: dashed; }
+.bob-bank-category-keydot { color: var(--text-faint); font-size: 0.8em; }
+.bob-bank-category-tile.is-hidden { opacity: 0.6; }
+.bob-bank-setup-tile-count { color: var(--text-muted); font-size: 0.78em; font-variant-numeric: tabular-nums; }
+.bob-bank-setup-hidden-note { color: var(--text-muted); font-size: 0.78em; }
+.bob-bank-setup-free { display: flex; align-items: baseline; gap: 0.6em; margin-top: 0.3em; }
+.bob-bank-setup-free-keys { color: var(--text-muted); font-family: var(--font-monospace, ui-monospace, monospace); font-size: 0.82em; letter-spacing: 0.18em; }
+.bob-bank-setup-account { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5em; margin: 0.2rem 0; }
+.bob-bank-setup-account-name { border: none; background: none; color: var(--text-normal); font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.bob-bank-setup-account-meta { color: var(--text-muted); font-size: 0.84em; }
+.bob-bank-setup-status { display: inline-flex; align-items: center; gap: 0.3em; font-size: 0.84em; }
+.bob-bank-setup-status.is-ok { color: var(--text-success, var(--text-muted)); }
+.bob-bank-setup-status.is-warn { color: var(--text-warning, var(--text-muted)); }
+.bob-bank-setup-status.is-bad { color: var(--text-error, var(--text-muted)); }
+.bob-bank-setup-status.is-muted { color: var(--text-muted); }
+.bob-bank-setup-rules { margin: 0.25rem 0 0.5rem; padding-inline-start: 1.4em; }
+.bob-bank-setup-rule { margin: 0.2rem 0; }
+.bob-bank-setup-rule-text { border: none; background: none; color: var(--text-normal); font: inherit; cursor: pointer; padding: 0; text-align: start; }
+.bob-bank-setup-rule-payee { color: var(--text-muted); font-size: 0.82em; margin-inline-start: 0.5em; }
+.bob-bank-setup-rule-warning { color: var(--text-warning, var(--text-muted)); font-size: 0.78em; margin-inline-start: 0.5em; }
+.bob-bank-setup-rules-empty,
+.bob-bank-setup-empty { color: var(--text-muted); font-size: 0.86em; }
+.bob-bank-setup-banner { margin: 0.5em 0; }
+.bob-bank-setup-banner-text { font-weight: 600; }
+.bob-bank-setup-banner.is-invalid .bob-bank-setup-banner-text { color: var(--text-error, var(--text-normal)); }
+.bob-bank-setup-findings { margin: 0.3rem 0; padding-inline-start: 1.4em; }
+.bob-bank-setup-finding { margin: 0.15rem 0; font-size: 0.86em; }
+.bob-bank-setup-finding.is-warning { color: var(--text-warning, var(--text-muted)); }
+.bob-bank-setup-finding-text { border: none; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: start; }
+.bob-bank-setup-finding-hint { color: var(--text-muted); font-size: 0.85em; margin-inline-start: 0.5em; }
+.bob-bank-setup-lastgood { color: var(--text-faint); font-size: 0.78em; }
+.bob-bank-setup-status[role="status"] { color: var(--text-muted); }
+.bob-bank-setup-jump { border: none; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: start; }
+@media (max-width: 480px) {
+  .bob-bank-setup-group-label { display: block; margin-bottom: 0.2rem; }
+  .bob-bank-setup-tiles { gap: 0.3rem; }
+  .bob-bank-setup-head { gap: 0.45em; }
+}
+/* Source-mode config lint: wavy underline plus a muted end-of-line message. */
+.bob-bank-setup-lint-error { text-decoration: underline wavy var(--text-error); text-underline-offset: 2px; }
+.bob-bank-setup-lint-warning { text-decoration: underline wavy var(--text-warning); text-underline-offset: 2px; }
+.bob-bank-setup-lint-note { color: var(--text-muted); font-size: 0.78em; margin-inline-start: 0.6em; }
+@media (forced-colors: active) {
+  .bob-bank-setup { border: 1px solid CanvasText; }
+  .bob-bank-category-keycap.is-derived { border-style: dashed; }
+  .bob-bank-setup-lint-error,
+  .bob-bank-setup-lint-warning { text-decoration: underline wavy; }
+}
 
 /* Album owner cards: all facts are view state, never catalog Markdown. */
 .callout[data-callout="albums"] {

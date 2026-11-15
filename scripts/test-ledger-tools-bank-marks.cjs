@@ -499,6 +499,198 @@ test("hub property hiding applies only to bank.md and restores on leave and unlo
   assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
 });
 
+test("Live Preview replaces a 🔁 wikilink with a subscription chip and parks a ghost widget", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const linkedLine = "- [ ] $9.99 Tunely [[subscriptions/tunely|🔁]] ^bank-abcdef12";
+  const ghostLine = "- [ ] $4.00 GhostSub ^bank-cdef3456";
+  const note = [
+    "---",
+    "month: 2026-11",
+    "---",
+    "",
+    "# 🏦 November 2026",
+    "",
+    "## Thu Nov 12",
+    "",
+    linkedLine,
+    ghostLine,
+    "",
+  ].join("\n");
+  const subReport = JSON.parse(JSON.stringify(report));
+  const day = subReport.days.find((entry) => entry.date === "2026-11-12");
+  day.rows.push(
+    {
+      path: "bank/2026-11.md",
+      line: 9,
+      date: "2026-11-12",
+      payee: "Tunely",
+      cents: -999,
+      id: "abcdef12",
+      subscription: {
+        stem: "tunely",
+        path: "subscriptions/tunely.md",
+        title: "Tunely",
+        status: "active",
+        status_label: "💚 Active",
+        cadence: "monthly",
+        pricing: "flat",
+        amount_cents: 999,
+        source: "link",
+        needle: "TUNELY",
+        drift_cents: null,
+        price_change: null,
+        state: "ok",
+      },
+      bank_recurring: true,
+      subscription_candidate: false,
+    },
+    {
+      path: "bank/2026-11.md",
+      line: 10,
+      date: "2026-11-12",
+      payee: "GhostSub",
+      cents: -400,
+      id: "cdef3456",
+      subscription: {
+        stem: "ghostsub",
+        path: "subscriptions/ghostsub.md",
+        title: "GhostSub",
+        status: "active",
+        status_label: "💚 Active",
+        cadence: "monthly",
+        pricing: "flat",
+        amount_cents: 400,
+        source: "match",
+        needle: "GHOST",
+        drift_cents: null,
+        price_change: null,
+        state: "ok",
+      },
+      bank_recurring: true,
+      subscription_candidate: false,
+    },
+  );
+  plugin.bankMarkReport = subReport;
+  plugin.bankMarkReports = new Map([["2026-11", subReport]]);
+  const decorated = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", note));
+  const widgets = (decorated.adds || []).map((add) => add.value && add.value.widget).filter(Boolean);
+  assert.ok(widgets.some((widget) => widget.model && widget.model.kind === "linked" && widget.model.label === "🔁"));
+  assert.ok(widgets.some((widget) => widget.model && widget.model.kind === "ghost" && widget.model.click === "insert-link"));
+  const linkedPos = makeDoc(note).line(9);
+  const revealed = plugin.buildBankMarkDecorations(makeView("bank/2026-11.md", note, {
+    selection: [{ from: linkedPos.from + 4, to: linkedPos.from + 4 }],
+  }));
+  const revealedSubs = (revealed.adds || []).filter((add) => (
+    add.from >= linkedPos.from && add.to <= linkedPos.to
+    && add.value && add.value.widget && add.value.widget.model && add.value.widget.model.kind
+  ));
+  assert.equal(revealedSubs.length, 0);
+});
+
+test("Reading view wraps a 🔁 internal-link and appends a ghost that restore removes", () => {
+  const plugin = makePlugin();
+  plugin.setupBankMarks();
+  const linkedLine = "- [ ] $9.99 Tunely [[subscriptions/tunely|🔁]] ^bank-abcdef12";
+  const ghostLine = "- [ ] $4.00 GhostSub ^bank-cdef3456";
+  const note = [
+    "---",
+    "month: 2026-11",
+    "---",
+    "",
+    "# 🏦 November 2026",
+    "",
+    "## Thu Nov 12",
+    "",
+    linkedLine,
+    ghostLine,
+    "",
+  ].join("\n");
+  const subReport = JSON.parse(JSON.stringify(report));
+  const day = subReport.days.find((entry) => entry.date === "2026-11-12");
+  day.rows.push(
+    {
+      path: "bank/2026-11.md",
+      line: 9,
+      date: "2026-11-12",
+      payee: "Tunely",
+      cents: -999,
+      id: "abcdef12",
+      subscription: {
+        stem: "tunely",
+        path: "subscriptions/tunely.md",
+        title: "Tunely",
+        status: "active",
+        status_label: "💚 Active",
+        cadence: "monthly",
+        pricing: "flat",
+        amount_cents: 999,
+        source: "link",
+        needle: null,
+        drift_cents: null,
+        price_change: null,
+        state: "ok",
+      },
+    },
+    {
+      path: "bank/2026-11.md",
+      line: 10,
+      date: "2026-11-12",
+      payee: "GhostSub",
+      cents: -400,
+      id: "cdef3456",
+      subscription: {
+        stem: "ghostsub",
+        path: "subscriptions/ghostsub.md",
+        title: "GhostSub",
+        status: "active",
+        status_label: "💚 Active",
+        cadence: "monthly",
+        pricing: "flat",
+        amount_cents: 400,
+        source: "match",
+        needle: null,
+        drift_cents: null,
+        price_change: null,
+        state: "ok",
+      },
+    },
+  );
+  plugin.bankMarkReport = subReport;
+  plugin.bankMarkReports = new Map([["2026-11", subReport]]);
+  plugin.bankMarkReadingSource = () => note;
+  const doc = new Document();
+  const root = doc.createElement("div");
+  const linked = doc.createElement("li");
+  linked.appendChild(doc.createTextNode("$9.99 Tunely "));
+  const anchor = doc.createElement("a");
+  anchor.setAttribute("class", "internal-link");
+  anchor.setAttribute("data-href", "subscriptions/tunely");
+  anchor.appendChild(doc.createTextNode("🔁"));
+  linked.appendChild(anchor);
+  const ghost = doc.createElement("li");
+  ghost.appendChild(doc.createTextNode("$4.00 GhostSub"));
+  root.appendChild(linked);
+  root.appendChild(ghost);
+  const ctx = {
+    sourcePath: "bank/2026-11.md",
+    getSectionInfo: (el) => {
+      if (el === linked) return { lineStart: 8 };
+      if (el === ghost) return { lineStart: 9 };
+      return null;
+    },
+  };
+  plugin.renderBankMarksIn(root, ctx);
+  plugin.renderBankMarksIn(root, ctx);
+  assert.equal(linked.querySelectorAll(".bob-bank-mark-sub").length, 1);
+  assert.equal(linked.querySelectorAll("a.internal-link").length, 1);
+  assert.equal(ghost.querySelectorAll(".bob-bank-mark-sub.is-appended").length, 1);
+  H.bankRestoreMarkHosts(root);
+  assert.equal(root.querySelectorAll(".bob-bank-mark-host").length, 0);
+  assert.equal(ghost.querySelectorAll(".bob-bank-mark-sub.is-appended").length, 0);
+  assert.equal(root.querySelectorAll("a.internal-link").length, 1);
+});
+
 test("cursor reveal helper and note bytes stay unchanged after tokenize", () => {
   const before = monthNote;
   H.bankTokenizeSource("bank/2026-11.md", monthNote);

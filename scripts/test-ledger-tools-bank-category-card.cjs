@@ -83,6 +83,10 @@ test("decode keeps hotkey, group, hidden, and suggestion; old bob degrades", () 
   assert.equal(h.bankNormalizeGroup("  "), null);
   assert.deepEqual(h.bankNormalizeSuggestion({ category: "x", source: "nope" }), null);
   assert.deepEqual(h.bankNormalizeSuggestion(null), null);
+  assert.deepEqual(h.bankNormalizeSuggestion({ category: "streaming", source: "subscription" }), {
+    category: "streaming",
+    source: "subscription",
+  });
 });
 
 test("card sections follow first-appearance order; hidden never renders; inflow reorders", () => {

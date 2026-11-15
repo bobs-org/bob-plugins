@@ -18,7 +18,7 @@ class BobLedgerToolsBankMarksReadingMixin {
       const catalogs = this.bankMarkCatalogs();
       const report = this.bankMarkReportForMonth(month.key);
       this.bankMarkDecorateReadingHeadings(el, ctx, tokens, report);
-      this.bankMarkDecorateReadingRows(el, ctx, tokens, catalogs);
+      this.bankMarkDecorateReadingRows(el, ctx, tokens, catalogs, report);
       return true;
     } catch (error) {
       return false;
@@ -133,7 +133,7 @@ class BobLedgerToolsBankMarksReadingMixin {
     return found;
   }
 
-  bankMarkDecorateReadingRows(root, ctx, tokens, catalogs) {
+  bankMarkDecorateReadingRows(root, ctx, tokens, catalogs, report) {
     const rows = this.bankMarkRowElements(root);
     for (const rowEl of rows) {
       try {
@@ -164,6 +164,16 @@ class BobLedgerToolsBankMarksReadingMixin {
         }
         if (token.bankIdSpan) {
           this.bankMarkWrapReadingSpan(rowEl, token.lineText, token.bankIdSpan, (doc) => buildBankIdElement(doc));
+        }
+        const subChip = this.bankMarkSubscriptionChip(token, catalogs, report);
+        if (subChip) {
+          if (subChip.kind === "linked") {
+            if (!bankMarkWrapSubscriptionAnchor(rowEl, subChip, this)) {
+              bankMarkAppendSubscriptionChip(rowEl, subChip, this);
+            }
+          } else {
+            bankMarkAppendSubscriptionChip(rowEl, subChip, this);
+          }
         }
       } catch (error) {}
     }

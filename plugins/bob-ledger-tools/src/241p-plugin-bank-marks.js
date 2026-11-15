@@ -20,6 +20,7 @@ let BankChipWidget = null;
 let BankIdWidget = null;
 let BankHeadingWidget = null;
 let BankDollarWidget = null;
+let BankSubscriptionChipWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BankAmountWidget = class extends WidgetType {
     constructor(model) {
@@ -82,6 +83,25 @@ if (WidgetType && typeof WidgetType === "function") {
     toDOM() {
       return buildBankDollarElement(typeof document !== "undefined" ? document : null)
         || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+    }
+    ignoreEvent() { return true; }
+  };
+  BankSubscriptionChipWidget = class extends WidgetType {
+    constructor(model, plugin) {
+      super();
+      this.model = model;
+      this.plugin = plugin;
+      this.key = bankSubscriptionChipKey(model);
+    }
+    eq(other) {
+      return Boolean(other) && other instanceof BankSubscriptionChipWidget && other.key === this.key;
+    }
+    toDOM() {
+      const el = buildBankSubscriptionChipElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+      ) || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+      return bankSubscriptionBindChip(el, this.model, this.plugin) || el;
     }
     ignoreEvent() { return true; }
   };
@@ -302,6 +322,25 @@ class BobLedgerToolsBankMarksMixin {
                 spec: Decoration.replace({ widget: new BankIdWidget() }),
               });
             }
+            const subChip = this.bankMarkSubscriptionChip(row, catalogs, report);
+            if (subChip && BankSubscriptionChipWidget) {
+              if (subChip.span && Number.isInteger(subChip.span.start) && Number.isInteger(subChip.span.end)) {
+                adds.push({
+                  from: line.from + subChip.span.start,
+                  to: line.from + subChip.span.end,
+                  spec: Decoration.replace({ widget: new BankSubscriptionChipWidget(subChip, this) }),
+                });
+              } else if (Number.isInteger(subChip.widgetOffset)) {
+                adds.push({
+                  from: line.from + subChip.widgetOffset,
+                  to: line.from + subChip.widgetOffset,
+                  spec: Decoration.widget({
+                    widget: new BankSubscriptionChipWidget(subChip, this),
+                    side: -1,
+                  }),
+                });
+              }
+            }
             if (Decoration.line) {
               const hue = typeof this.bankCardRootHue === "function" ? this.bankCardRootHue(path) : "magenta";
               const classes = row.acknowledged ? "bob-bank-mark-acked" : "bob-bank-mark-waiting";
@@ -500,6 +539,149 @@ class BobLedgerToolsBankMarksMixin {
       return this.bankMarksEnabled();
     } catch (error) {
       return Boolean(this.bankMarksEnabled());
+    }
+  }
+
+  bankMarkSubscriptionChip(token, catalogs, report) {
+    try {
+      const jsonRow = bankJsonRowForToken(token, report) || bankJsonRowForToken(token, catalogs);
+      return bankSubscriptionChipModel(token, jsonRow);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSubscriptionRecordUrl(model) {
+    if (model && model.url) return model.url;
+    try {
+      const path = model && model.recordPath ? `${String(model.recordPath).replace(/\.md$/i, "")}.md` : "";
+      if (!path) return null;
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      const cacheApi = this.app && this.app.metadataCache;
+      const cache = file && cacheApi && typeof cacheApi.getFileCache === "function"
+        ? cacheApi.getFileCache(file)
+        : null;
+      const url = cache && cache.frontmatter && cache.frontmatter.url;
+      return typeof url === "string" && url.trim() ? url.trim() : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSubscriptionOpenRecord(model, newLeaf) {
+    const note = model && model.recordPath ? String(model.recordPath).replace(/\.md$/i, "") : "";
+    if (!note) return false;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        void workspace.openLinkText(note, (model && model.rowPath) || "", newLeaf === true);
+        return true;
+      }
+    } catch (error) {}
+    return false;
+  }
+
+  bankSubscriptionOpenUrl(url) {
+    if (typeof url !== "string" || !url) return false;
+    try {
+      if (typeof openExternal === "function") {
+        openExternal(url);
+        return true;
+      }
+    } catch (error) {}
+    try {
+      if (typeof window !== "undefined" && typeof window.open === "function") {
+        window.open(url, "_blank");
+        return true;
+      }
+    } catch (error) {}
+    return false;
+  }
+
+  bankSubscriptionCandidateActivate(_model) {
+    // Linker phase wires ghost-candidate clicks to the Category card picker.
+    return false;
+  }
+
+  async bankSubscriptionInsertLink(model) {
+    if (!model || !model.recordPath || !model.rowPath) return false;
+    try {
+      const opened = await this.bankOpenMonthPathAtLine(model.rowPath, model.rowLine || 1);
+      if (!opened) {
+        new Notice("Bank: could not open the row to link");
+        return false;
+      }
+      const editor = this.bankActiveEditor();
+      if (!editor || typeof editor.getValue !== "function" || typeof editor.replaceRange !== "function") {
+        new Notice("Bank: the row is no longer open");
+        return false;
+      }
+      if (this.bankActiveFilePath() !== model.rowPath) {
+        new Notice("Bank: the row is no longer open");
+        return false;
+      }
+      const lineIndex = Number.isInteger(model.rowLine) ? model.rowLine - 1 : -1;
+      const currentLine = lineIndex >= 0 && typeof editor.getLine === "function"
+        ? editor.getLine(lineIndex)
+        : model.lineText;
+      const plan = bankSubscriptionLinkWritePlan({
+        currentPath: model.rowPath,
+        currentSource: editor.getValue(),
+        capture: {
+          path: model.rowPath,
+          line: model.rowLine,
+          lineText: typeof currentLine === "string" ? currentLine : model.lineText,
+          bankId: model.bankId,
+        },
+        recordPath: model.recordPath,
+      });
+      if (!plan.ok) {
+        new Notice(plan.message || "Bank: the row changed — nothing written");
+        return false;
+      }
+      if (plan.action === "exists") return true;
+      if (typeof this.bankCategoryApplyEdits === "function") {
+        if (!this.bankCategoryApplyEdits(editor, plan)) {
+          new Notice("Bank: the row changed — nothing written");
+          return false;
+        }
+      } else {
+        return false;
+      }
+      try {
+        const view = this.app && this.app.workspace && typeof this.app.workspace.getActiveViewOfType === "function"
+          ? this.app.workspace.getActiveViewOfType(MarkdownView)
+          : null;
+        if (view && typeof view.save === "function") void view.save();
+      } catch (error) {}
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankSubscriptionChipActivate(model, event) {
+    try {
+      if (!model) return false;
+      const modifier = bankSubscriptionModifierClick(event);
+      if (model.click === "candidate") {
+        return this.bankSubscriptionCandidateActivate(model) === true;
+      }
+      if (model.click === "insert-link") {
+        void this.bankSubscriptionInsertLink(model);
+        return true;
+      }
+      if (model.click === "open-url" && !modifier) {
+        const url = this.bankSubscriptionRecordUrl(model);
+        if (url && this.bankSubscriptionOpenUrl(url)) return true;
+        return this.bankSubscriptionOpenRecord(model, false);
+      }
+      return this.bankSubscriptionOpenRecord(model, modifier);
+    } catch (error) {
+      return false;
     }
   }
 

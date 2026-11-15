@@ -319,7 +319,7 @@ function bankNormalizeSuggestion(value) {
   }
   const category = bankText(value.category);
   const source = bankText(value.source);
-  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank")) {
+  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank" && source !== "subscription")) {
     return null;
   }
   return { category, source };
@@ -398,6 +398,9 @@ function bankNormalizeRow(value) {
     id: value.id === null || value.id === undefined ? null : bankString(value.id),
     origin: bankString(value.origin),
     suggestion: bankNormalizeSuggestion(value.suggestion),
+    subscription: bankNormalizeSubscription(value.subscription),
+    bank_recurring: value.bank_recurring === true,
+    subscription_candidate: value.subscription_candidate === true,
   };
 }
 

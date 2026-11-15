@@ -544,6 +544,14 @@ class BobLedgerToolsBankCardsMixin {
     bankCardAppend(label, "span", { class: "bob-bank-money" }, cents);
     bankCardAppend(label, "span", { class: "bob-bank-queue-payee" }, row.payee);
     if (row.category) bankCardAppend(label, "span", { class: "bob-bank-queue-category" }, row.category);
+    const subChip = bankSubscriptionChipForQueueRow(row);
+    if (subChip) {
+      const chipEl = buildBankSubscriptionChipElement(label.ownerDocument || statsDocFor(label), subChip);
+      if (chipEl) {
+        bankSubscriptionBindChip(chipEl, subChip, this);
+        if (typeof label.appendChild === "function") label.appendChild(chipEl);
+      }
+    }
     const jump = this.bankCardButton(line, `Open ${row.payee} on ${row.date}`, `Line ${row.line}`,
       () => this.bankCardNavigateRow(row), { class: "bob-bank-row-link" });
     bankCardListen(checkbox, "change", async () => {

@@ -612,6 +612,45 @@ test("queue card keeps account caveats visible, lists bounded report months, and
   });
 });
 
+test("queue card paints a subscription chip after the category", async () => {
+  await withMissingConfig(async () => {
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    const { el } = fakeDom();
+    plugin.bankCardRenderQueueRow(el, { unloaded: false }, {
+      path: "bank/2026-11.md",
+      line: 9,
+      date: "2026-11-12",
+      payee: "Tunely",
+      cents: -999,
+      category: "streaming",
+      id: "abcdef12",
+      links: ["[[subscriptions/tunely|🔁]]"],
+      subscription: {
+        stem: "tunely",
+        path: "subscriptions/tunely.md",
+        title: "Tunely",
+        status: "active",
+        status_label: "💚 Active",
+        cadence: "monthly",
+        pricing: "flat",
+        amount_cents: 999,
+        source: "link",
+        needle: "TUNELY",
+        drift_cents: null,
+        price_change: null,
+        state: "ok",
+      },
+    });
+    const chip = el.querySelector(".bob-bank-mark-sub");
+    assert.ok(chip);
+    assert.equal(chip.textContent.includes("🔁"), true);
+    assert.equal((chip.getAttribute("class") || "").includes("bob-bank-mark-chip"), true);
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
+});
+
 test("missing day headings and changed row snapshots cannot navigate to fallback line one", async () => {
   await withMissingConfig(async () => {
     const { plugin, opened } = makeHarness();

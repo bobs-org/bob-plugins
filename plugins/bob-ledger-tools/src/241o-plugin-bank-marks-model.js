@@ -620,6 +620,13 @@ function bankRestoreMarkHosts(root) {
       parent.removeChild(host);
     } catch (error) {}
   }
+  for (const extra of Array.from(root.querySelectorAll(".bob-bank-mark-sub.is-appended"))) {
+    try {
+      if (extra.parentNode) {
+        extra.parentNode.removeChild(extra);
+      }
+    } catch (error) {}
+  }
   for (const extra of Array.from(root.querySelectorAll(".bob-bank-mark-heading"))) {
     try {
       if (extra.parentNode) {

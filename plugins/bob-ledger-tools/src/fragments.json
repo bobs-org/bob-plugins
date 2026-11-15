@@ -129,6 +129,7 @@
   "242d-plugin-album-entrypoints.js",
   "242e-plugin-album-yaml-excursion.js",
   "241h-plugin-bank-decode.js",
+  "241hc-plugin-bank-subscription.js",
   "241hb-plugin-bank-config-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
@@ -266,5 +267,6 @@
   "360-exports-bank-walk.js",
   "361-exports-bank-walker-footer.js",
   "362-exports-areas.js",
-  "363-exports-bank-setup.js"
+  "363-exports-bank-setup.js",
+  "364-exports-bank-subscription.js"
 ]

@@ -66975,7 +66975,7 @@ function bankNormalizeSuggestion(value) {
   }
   const category = bankText(value.category);
   const source = bankText(value.source);
-  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank")) {
+  if (category === null || (source !== "rule" && source !== "learned" && source !== "bank" && source !== "subscription")) {
     return null;
   }
   return { category, source };
@@ -67054,6 +67054,9 @@ function bankNormalizeRow(value) {
     id: value.id === null || value.id === undefined ? null : bankString(value.id),
     origin: bankString(value.origin),
     suggestion: bankNormalizeSuggestion(value.suggestion),
+    subscription: bankNormalizeSubscription(value.subscription),
+    bank_recurring: value.bank_recurring === true,
+    subscription_candidate: value.subscription_candidate === true,
   };
 }
 
@@ -67433,6 +67436,517 @@ function bankPresentReport(report) {
     waiting: report.waiting,
     flagged: report.flagged,
   };
+}
+// ---- src/241hc-plugin-bank-subscription.js ----
+// Subscription chips (bob-cli-ls.7): decode additive row JSON, present
+// state-aware 🔁 pills, and plan one-transaction ghost-chip linking.
+// Older bob output without these fields stays byte-identical at decode.
+
+const BANK_SUBSCRIPTION_ALIAS = "🔁";
+const BANK_SUBSCRIPTION_CANDIDATE_GLYPH = "⟳";
+const BANK_SUBSCRIPTION_TITLE_CHARS = 14;
+const BANK_SUBSCRIPTION_CANDIDATE_TOOLTIP =
+  "Wells Fargo marks this as recurring — press / in the Category card";
+const BANK_SUBSCRIPTION_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function bankSubscriptionRecordPath(value) {
+  const raw = bankString(value) || (typeof value === "string" && value.trim() ? value.trim() : null);
+  if (!raw) return null;
+  return raw.replace(/\.md$/i, "");
+}
+
+function bankNormalizePriceChange(value) {
+  if (value === null || value === undefined) return null;
+  if (!bankJsonObject(value)) return null;
+  const fromCents = bankSafeCents(value.from_cents);
+  const toCents = bankSafeCents(value.to_cents);
+  const since = bankIsoDateOrNull(value.since);
+  if (!fromCents.ok || !toCents.ok || !since.ok || since.value === null) return null;
+  return { from_cents: fromCents.value, to_cents: toCents.value, since: since.value };
+}
+
+function bankNormalizeSubscription(value) {
+  if (value === null || value === undefined) return null;
+  if (!bankJsonObject(value)) return null;
+  const stem = bankString(value.stem);
+  const path = bankString(value.path);
+  const title = bankText(value.title);
+  if (!stem || !path || title === null || !title.trim()) return null;
+  const amount = bankSafeCents(value.amount_cents);
+  if (!amount.ok) return null;
+  const source = bankText(value.source);
+  const state = bankText(value.state);
+  const drift = value.drift_cents === null || value.drift_cents === undefined
+    ? { ok: true, value: null }
+    : bankSafeCents(value.drift_cents);
+  if (!drift.ok) return null;
+  const url = bankString(value.url);
+  return {
+    stem,
+    path,
+    title: title.trim(),
+    status: bankText(value.status) || "",
+    status_label: bankText(value.status_label) || "",
+    cadence: bankText(value.cadence) || "",
+    pricing: bankText(value.pricing) || "",
+    amount_cents: amount.value,
+    source: source === "link" || source === "match" ? source : null,
+    needle: value.needle === null || value.needle === undefined ? null : bankText(value.needle),
+    drift_cents: drift.value,
+    price_change: bankNormalizePriceChange(value.price_change),
+    state: state || "ok",
+    url: url,
+  };
+}
+
+function bankParseWikilinkSpan(span) {
+  if (!span || typeof span.text !== "string") return null;
+  const match = span.text.match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]$/);
+  if (!match) return null;
+  return {
+    span,
+    path: match[1].trim().replace(/\.md$/i, ""),
+    alias: match[2] ? match[2].trim() : "",
+  };
+}
+
+function bankSubscriptionLinkFromToken(token, sub) {
+  const links = token && Array.isArray(token.links) ? token.links : [];
+  const want = sub ? bankSubscriptionRecordPath(sub.path) : null;
+  let aliased = null;
+  for (const span of links) {
+    const parsed = bankParseWikilinkSpan(span);
+    if (!parsed || !parsed.path) continue;
+    if (want && parsed.path === want) return parsed;
+    if (parsed.alias === BANK_SUBSCRIPTION_ALIAS) aliased = parsed;
+  }
+  return aliased;
+}
+
+function bankSubscriptionFromWikilink(parsed) {
+  if (!parsed || !parsed.path) return null;
+  const stem = parsed.path.split("/").filter(Boolean).pop() || parsed.path;
+  return {
+    stem,
+    path: `${parsed.path}.md`,
+    title: stem,
+    status: "",
+    status_label: "",
+    cadence: "",
+    pricing: "",
+    amount_cents: null,
+    source: "link",
+    needle: null,
+    drift_cents: null,
+    price_change: null,
+    state: "ok",
+    url: null,
+  };
+}
+
+function bankPayeeNamesRecord(payee, title) {
+  const left = String(payee || "").toLowerCase();
+  const right = String(title || "").toLowerCase();
+  if (!left || !right) return false;
+  return left.includes(right) || right.includes(left);
+}
+
+function bankSubscriptionMoney(cents) {
+  const text = Number.isSafeInteger(cents) ? bankFormatCents(cents) : null;
+  return text ? text.replace(/^\+/, "") : null;
+}
+
+function bankSubscriptionSignedMoney(cents) {
+  if (!Number.isSafeInteger(cents) || cents === 0) return null;
+  const abs = bankSubscriptionMoney(cents < 0 ? -cents : cents);
+  if (!abs) return null;
+  return cents > 0 ? `+${abs}` : `−${abs}`;
+}
+
+function bankSubscriptionCadencePhrase(cadence) {
+  if (cadence === "monthly") return "a month";
+  if (cadence === "four_weekly") return "every 4 weeks";
+  if (cadence === "quarterly") return "a quarter";
+  if (cadence === "yearly") return "a year";
+  return cadence || "";
+}
+
+function bankSubscriptionShortDate(iso) {
+  const match = typeof iso === "string" ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso) : null;
+  if (!match) return null;
+  const month = BANK_SUBSCRIPTION_MONTHS[Number(match[2]) - 1];
+  if (!month) return null;
+  return `${month} ${Number(match[3])}`;
+}
+
+function bankSubscriptionTrimTitle(title) {
+  const raw = String(title || "").trim();
+  if (raw.length <= BANK_SUBSCRIPTION_TITLE_CHARS) return raw;
+  return `${raw.slice(0, BANK_SUBSCRIPTION_TITLE_CHARS).trimEnd()}`;
+}
+
+function bankSubscriptionGhostOffset(token) {
+  if (!token) return 0;
+  if (token.bankIdSpan && Number.isInteger(token.bankIdSpan.start)) return token.bankIdSpan.start;
+  if (token.customIdSpan && Number.isInteger(token.customIdSpan.start)) return token.customIdSpan.start;
+  return String(token.lineText || "").length;
+}
+
+function bankSubscriptionTooltip(sub, rowDate) {
+  if (!sub) return "";
+  const parts = [];
+  if (sub.title) parts.push(sub.title);
+  if (sub.status_label) parts.push(sub.status_label);
+  const money = bankSubscriptionMoney(sub.amount_cents);
+  const cadence = bankSubscriptionCadencePhrase(sub.cadence);
+  if (money && cadence) parts.push(`${money} ${cadence}`);
+  else if (money) parts.push(money);
+  const when = bankSubscriptionShortDate(rowDate);
+  if (when) parts.push(`latest charge ${when}`);
+  return parts.join(" · ");
+}
+
+function bankSubscriptionChipBase(token, sub, extras) {
+  const recordPath = sub ? bankSubscriptionRecordPath(sub.path) : null;
+  return {
+    kind: extras.kind,
+    state: extras.state,
+    label: extras.label,
+    title: sub && sub.title ? sub.title : "",
+    tooltip: extras.tooltip,
+    ariaLabel: extras.ariaLabel,
+    tone: extras.tone || "muted",
+    ghost: extras.ghost === true,
+    recordPath,
+    stem: sub && sub.stem ? sub.stem : "",
+    url: sub && sub.url ? sub.url : null,
+    source: sub && sub.source ? sub.source : null,
+    click: extras.click,
+    span: extras.span || null,
+    widgetOffset: extras.widgetOffset,
+    rowPath: token && token.path ? token.path : extras.rowPath || "",
+    rowLine: token && Number.isInteger(token.line) ? token.line : extras.rowLine || null,
+    rowDate: token && token.date ? token.date : extras.rowDate || "",
+    bankId: token && token.bankId ? token.bankId : extras.bankId || null,
+    lineText: token && typeof token.lineText === "string" ? token.lineText : extras.lineText || "",
+    payee: token && token.payee ? token.payee : extras.payee || "",
+    cents: token && Number.isSafeInteger(token.cents) ? token.cents : extras.cents,
+  };
+}
+
+function bankSubscriptionLinkedLabel(token, sub) {
+  const state = sub && sub.state ? sub.state : "ok";
+  if (state === "drift") {
+    const drift = bankSubscriptionSignedMoney(sub.drift_cents);
+    return drift ? `${BANK_SUBSCRIPTION_ALIAS} ${drift}` : BANK_SUBSCRIPTION_ALIAS;
+  }
+  if (state === "usage") return `${BANK_SUBSCRIPTION_ALIAS} usage`;
+  if (state === "to_cancel") return `${BANK_SUBSCRIPTION_ALIAS} ✂️ still charging`;
+  if (state === "after_cancel") return `${BANK_SUBSCRIPTION_ALIAS} 🚫 after cancel`;
+  if (state === "ok" && sub && sub.title && !bankPayeeNamesRecord(token && token.payee, sub.title)) {
+    const trimmed = bankSubscriptionTrimTitle(sub.title);
+    return trimmed ? `${BANK_SUBSCRIPTION_ALIAS} ${trimmed}` : BANK_SUBSCRIPTION_ALIAS;
+  }
+  return BANK_SUBSCRIPTION_ALIAS;
+}
+
+function bankSubscriptionLinkedTone(sub) {
+  const state = sub && sub.state ? sub.state : "ok";
+  if (state === "to_cancel") return "amber";
+  if (state === "after_cancel") return "warning";
+  if (state === "drift" && sub && sub.price_change) return "amber";
+  return "muted";
+}
+
+function bankSubscriptionLinkedClick(sub) {
+  const state = sub && sub.state ? sub.state : "ok";
+  if (state === "to_cancel") return "open-url";
+  return "open-record";
+}
+
+function bankSubscriptionLinkedChip(token, sub, span) {
+  const title = sub && sub.title ? sub.title : "subscription";
+  return bankSubscriptionChipBase(token, sub, {
+    kind: "linked",
+    state: sub && sub.state ? sub.state : "ok",
+    label: bankSubscriptionLinkedLabel(token, sub),
+    tooltip: bankSubscriptionTooltip(sub, token && token.date),
+    ariaLabel: `Open ${title} subscription`,
+    tone: bankSubscriptionLinkedTone(sub),
+    ghost: false,
+    click: bankSubscriptionLinkedClick(sub),
+    span: span || null,
+    widgetOffset: span ? null : bankSubscriptionGhostOffset(token),
+  });
+}
+
+function bankSubscriptionGhostChip(token, sub) {
+  const title = sub && sub.title ? sub.title : "subscription";
+  return bankSubscriptionChipBase(token, sub, {
+    kind: "ghost",
+    state: "ghost",
+    label: BANK_SUBSCRIPTION_ALIAS,
+    tooltip: bankSubscriptionTooltip(sub, token && token.date),
+    ariaLabel: `Link this row to ${title}`,
+    tone: "muted",
+    ghost: true,
+    click: "insert-link",
+    span: null,
+    widgetOffset: bankSubscriptionGhostOffset(token),
+  });
+}
+
+function bankSubscriptionCandidateChip(token, jsonRow) {
+  return bankSubscriptionChipBase(token, null, {
+    kind: "candidate",
+    state: "candidate",
+    label: `${BANK_SUBSCRIPTION_CANDIDATE_GLYPH} subscription?`,
+    tooltip: BANK_SUBSCRIPTION_CANDIDATE_TOOLTIP,
+    ariaLabel: "Possible new subscription",
+    tone: "muted",
+    ghost: true,
+    click: "candidate",
+    span: null,
+    widgetOffset: bankSubscriptionGhostOffset(token),
+    rowPath: jsonRow && jsonRow.path ? jsonRow.path : token && token.path,
+    rowLine: jsonRow && Number.isInteger(jsonRow.line) ? jsonRow.line : token && token.line,
+    rowDate: jsonRow && jsonRow.date ? jsonRow.date : token && token.date,
+    bankId: jsonRow && jsonRow.id ? jsonRow.id : token && token.bankId,
+    payee: jsonRow && jsonRow.payee ? jsonRow.payee : token && token.payee,
+    cents: jsonRow && Number.isSafeInteger(jsonRow.cents) ? jsonRow.cents : token && token.cents,
+  });
+}
+
+function bankSubscriptionChipModel(token, jsonRow) {
+  const sub = jsonRow && jsonRow.subscription ? jsonRow.subscription : null;
+  const candidate = Boolean(jsonRow && jsonRow.subscription_candidate === true && !sub);
+  const link = bankSubscriptionLinkFromToken(token, sub);
+  if (link && sub) return bankSubscriptionLinkedChip(token, sub, link.span);
+  if (link && !sub) {
+    const inferred = bankSubscriptionFromWikilink(link);
+    return inferred ? bankSubscriptionLinkedChip(token, inferred, link.span) : null;
+  }
+  if (sub && sub.source === "match") return bankSubscriptionGhostChip(token, sub);
+  if (sub) return bankSubscriptionLinkedChip(token, sub, null);
+  if (candidate) return bankSubscriptionCandidateChip(token, jsonRow);
+  return null;
+}
+
+function bankSubscriptionChipForQueueRow(row) {
+  if (!row) return null;
+  const token = {
+    kind: "row",
+    path: row.path,
+    line: row.line,
+    date: row.date,
+    payee: row.payee,
+    cents: row.cents,
+    bankId: typeof row.id === "string" ? String(row.id).replace(/^bank-/i, "").toLowerCase() : null,
+    lineText: "",
+    links: Array.isArray(row.links)
+      ? row.links.map((text, index) => ({ start: index, end: index, text: String(text) }))
+      : [],
+  };
+  return bankSubscriptionChipModel(token, row);
+}
+
+function bankJsonRowForToken(token, report) {
+  if (!token || !report) return null;
+  const rows = [];
+  for (const day of Array.isArray(report.days) ? report.days : []) {
+    for (const row of Array.isArray(day.rows) ? day.rows : []) {
+      rows.push({
+        ...row,
+        path: row.path || day.path,
+        date: row.date || day.date,
+      });
+    }
+  }
+  return bankCategoryMatchJsonRow({
+    path: token.path,
+    line: token.line,
+    cents: token.cents,
+    payee: token.payee,
+    id: token.bankId,
+    ackId: token.bankId,
+  }, rows);
+}
+
+function bankSubscriptionChipKey(model) {
+  if (!model) return "";
+  return [
+    model.kind,
+    model.state,
+    model.label,
+    model.tone,
+    model.recordPath || "",
+    model.rowPath || "",
+    String(model.rowLine || ""),
+    model.ghost ? "g" : "",
+  ].join("|");
+}
+
+function bankSubscriptionChipClass(model) {
+  const parts = ["bob-bank-mark-chip", "bob-bank-mark-sub"];
+  if (model && model.ghost) parts.push("is-ghost");
+  if (model && model.tone === "amber") parts.push("is-amber");
+  if (model && model.tone === "warning") parts.push("is-warning");
+  if (model && model.kind === "candidate") parts.push("is-candidate");
+  return parts.join(" ");
+}
+
+function buildBankSubscriptionChipElement(doc, model, options = {}) {
+  if (!model) return null;
+  const appended = options.appended === true;
+  const node = bankMarkEl(doc, "button", {
+    type: "button",
+    class: `${bankSubscriptionChipClass(model)}${appended ? " is-appended" : ""}`,
+    title: model.tooltip || "",
+    "aria-label": model.ariaLabel || model.label,
+  }, model.label);
+  return node;
+}
+
+function bankSubscriptionBindChip(node, model, plugin) {
+  if (!node || !model) return node;
+  const activate = (event) => {
+    try {
+      if (event && typeof event.preventDefault === "function") event.preventDefault();
+      if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+      if (plugin && typeof plugin.bankSubscriptionChipActivate === "function") {
+        void plugin.bankSubscriptionChipActivate(model, event);
+      }
+    } catch (error) {}
+  };
+  if (typeof node.addEventListener === "function") {
+    node.addEventListener("click", activate);
+  }
+  return node;
+}
+
+function bankSubscriptionAnchorPath(anchor) {
+  if (!anchor || typeof anchor.getAttribute !== "function") return "";
+  const raw = anchor.getAttribute("data-href") || anchor.getAttribute("href") || "";
+  return String(raw).replace(/\.md$/i, "").replace(/#.*$/, "").replace(/^\.\//, "").trim();
+}
+
+function bankMarkFindSubscriptionLink(rowEl, model) {
+  if (!rowEl || typeof rowEl.querySelectorAll !== "function") return null;
+  let anchors = [];
+  try {
+    anchors = Array.from(rowEl.querySelectorAll("a.internal-link"));
+  } catch (error) {
+    return null;
+  }
+  const want = model ? bankSubscriptionRecordPath(model.recordPath) : null;
+  const stem = model && model.stem ? String(model.stem) : "";
+  let aliased = null;
+  for (const anchor of anchors) {
+    if (!anchor) continue;
+    const path = bankSubscriptionAnchorPath(anchor);
+    const text = String(anchor.textContent || "").trim();
+    if (want && path && (path === want || (stem && path.endsWith(`/${stem}`)))) return anchor;
+    if (text === BANK_SUBSCRIPTION_ALIAS) aliased = aliased || anchor;
+  }
+  return aliased;
+}
+
+function bankMarkWrapSubscriptionAnchor(rowEl, model, plugin) {
+  try {
+    const anchor = bankMarkFindSubscriptionLink(rowEl, model);
+    if (!anchor || !anchor.parentNode) return false;
+    const parent = anchor.parentNode;
+    if (bankNodeHasClass(parent, "bob-bank-mark-host") || bankNodeHasClass(parent, "bob-bank-mark-native")) {
+      return true;
+    }
+    const doc = rowEl.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const host = bankMarkEl(doc, "span", { class: "bob-bank-mark-host" });
+    const native = bankMarkEl(doc, "span", { class: "bob-bank-mark-native" });
+    const chip = buildBankSubscriptionChipElement(doc, model);
+    if (!host || !native || !chip) return false;
+    bankSubscriptionBindChip(chip, model, plugin);
+    if (typeof parent.insertBefore !== "function" || typeof native.appendChild !== "function") return false;
+    parent.insertBefore(host, anchor);
+    native.appendChild(anchor);
+    host.appendChild(native);
+    host.appendChild(chip);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function bankMarkAppendSubscriptionChip(rowEl, model, plugin) {
+  try {
+    if (!rowEl || !model) return false;
+    if (typeof rowEl.querySelector === "function" && rowEl.querySelector(".bob-bank-mark-sub.is-appended")) {
+      return true;
+    }
+    const doc = rowEl.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const chip = buildBankSubscriptionChipElement(doc, model, { appended: true });
+    if (!chip || typeof rowEl.appendChild !== "function") return false;
+    bankSubscriptionBindChip(chip, model, plugin);
+    rowEl.appendChild(chip);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function bankSubscriptionWikilink(recordPath) {
+  const path = bankSubscriptionRecordPath(recordPath);
+  if (!path) return null;
+  return `[[${path}|${BANK_SUBSCRIPTION_ALIAS}]]`;
+}
+
+function bankSubscriptionAlreadyLinked(token, recordPath) {
+  const want = bankSubscriptionRecordPath(recordPath);
+  if (!want || !token) return false;
+  return Boolean(bankSubscriptionLinkFromToken(token, { path: want }));
+}
+
+function bankSubscriptionLinkWritePlan(input = {}) {
+  const recordPath = bankSubscriptionRecordPath(input.recordPath);
+  const wikilink = bankSubscriptionWikilink(recordPath);
+  if (!wikilink) {
+    return { ok: false, reason: "no-record", message: "Bank: no subscription to link" };
+  }
+  const capture = input.capture && typeof input.capture === "object"
+    ? input.capture
+    : {
+        path: input.currentPath,
+        line: input.line,
+        lineText: input.lineText,
+        bankId: input.bankId,
+      };
+  const resolved = bankCategoryResolveForCommit(capture, input.currentPath, input.currentSource);
+  if (!resolved.ok) return resolved;
+  const { line, raw, token } = resolved;
+  if (bankSubscriptionAlreadyLinked(token, recordPath)) {
+    return { ok: true, mode: "link", line, action: "exists", edits: [], tick: false };
+  }
+  let fromCh = raw.length;
+  if (token.bankIdSpan && Number.isInteger(token.bankIdSpan.start)) fromCh = token.bankIdSpan.start;
+  else if (token.customIdSpan && Number.isInteger(token.customIdSpan.start)) fromCh = token.customIdSpan.start;
+  let insert = wikilink;
+  if (fromCh > 0 && raw[fromCh - 1] !== " ") insert = ` ${insert}`;
+  if (fromCh < raw.length && raw[fromCh] !== " ") insert = `${insert} `;
+  return {
+    ok: true,
+    mode: "link",
+    line,
+    action: "insert",
+    edits: [{ line, fromCh, toCh: fromCh, insert }],
+    tick: false,
+  };
+}
+
+function bankSubscriptionModifierClick(event) {
+  if (!event) return false;
+  return event.metaKey === true || event.ctrlKey === true || event.shiftKey === true;
 }
 // ---- src/241hb-plugin-bank-config-decode.js ----
 // Bank `config` report JSON boundary (bob-cli-lt setup-header). Decodes
@@ -70685,6 +71199,14 @@ class BobLedgerToolsBankCardsMixin {
     bankCardAppend(label, "span", { class: "bob-bank-money" }, cents);
     bankCardAppend(label, "span", { class: "bob-bank-queue-payee" }, row.payee);
     if (row.category) bankCardAppend(label, "span", { class: "bob-bank-queue-category" }, row.category);
+    const subChip = bankSubscriptionChipForQueueRow(row);
+    if (subChip) {
+      const chipEl = buildBankSubscriptionChipElement(label.ownerDocument || statsDocFor(label), subChip);
+      if (chipEl) {
+        bankSubscriptionBindChip(chipEl, subChip, this);
+        if (typeof label.appendChild === "function") label.appendChild(chipEl);
+      }
+    }
     const jump = this.bankCardButton(line, `Open ${row.payee} on ${row.date}`, `Line ${row.line}`,
       () => this.bankCardNavigateRow(row), { class: "bob-bank-row-link" });
     bankCardListen(checkbox, "change", async () => {
@@ -74182,6 +74704,13 @@ function bankRestoreMarkHosts(root) {
       parent.removeChild(host);
     } catch (error) {}
   }
+  for (const extra of Array.from(root.querySelectorAll(".bob-bank-mark-sub.is-appended"))) {
+    try {
+      if (extra.parentNode) {
+        extra.parentNode.removeChild(extra);
+      }
+    } catch (error) {}
+  }
   for (const extra of Array.from(root.querySelectorAll(".bob-bank-mark-heading"))) {
     try {
       if (extra.parentNode) {
@@ -74223,6 +74752,7 @@ let BankChipWidget = null;
 let BankIdWidget = null;
 let BankHeadingWidget = null;
 let BankDollarWidget = null;
+let BankSubscriptionChipWidget = null;
 if (WidgetType && typeof WidgetType === "function") {
   BankAmountWidget = class extends WidgetType {
     constructor(model) {
@@ -74285,6 +74815,25 @@ if (WidgetType && typeof WidgetType === "function") {
     toDOM() {
       return buildBankDollarElement(typeof document !== "undefined" ? document : null)
         || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+    }
+    ignoreEvent() { return true; }
+  };
+  BankSubscriptionChipWidget = class extends WidgetType {
+    constructor(model, plugin) {
+      super();
+      this.model = model;
+      this.plugin = plugin;
+      this.key = bankSubscriptionChipKey(model);
+    }
+    eq(other) {
+      return Boolean(other) && other instanceof BankSubscriptionChipWidget && other.key === this.key;
+    }
+    toDOM() {
+      const el = buildBankSubscriptionChipElement(
+        typeof document !== "undefined" ? document : null,
+        this.model,
+      ) || (typeof document !== "undefined" && document ? document.createElement("span") : null);
+      return bankSubscriptionBindChip(el, this.model, this.plugin) || el;
     }
     ignoreEvent() { return true; }
   };
@@ -74505,6 +75054,25 @@ class BobLedgerToolsBankMarksMixin {
                 spec: Decoration.replace({ widget: new BankIdWidget() }),
               });
             }
+            const subChip = this.bankMarkSubscriptionChip(row, catalogs, report);
+            if (subChip && BankSubscriptionChipWidget) {
+              if (subChip.span && Number.isInteger(subChip.span.start) && Number.isInteger(subChip.span.end)) {
+                adds.push({
+                  from: line.from + subChip.span.start,
+                  to: line.from + subChip.span.end,
+                  spec: Decoration.replace({ widget: new BankSubscriptionChipWidget(subChip, this) }),
+                });
+              } else if (Number.isInteger(subChip.widgetOffset)) {
+                adds.push({
+                  from: line.from + subChip.widgetOffset,
+                  to: line.from + subChip.widgetOffset,
+                  spec: Decoration.widget({
+                    widget: new BankSubscriptionChipWidget(subChip, this),
+                    side: -1,
+                  }),
+                });
+              }
+            }
             if (Decoration.line) {
               const hue = typeof this.bankCardRootHue === "function" ? this.bankCardRootHue(path) : "magenta";
               const classes = row.acknowledged ? "bob-bank-mark-acked" : "bob-bank-mark-waiting";
@@ -74706,6 +75274,149 @@ class BobLedgerToolsBankMarksMixin {
     }
   }
 
+  bankMarkSubscriptionChip(token, catalogs, report) {
+    try {
+      const jsonRow = bankJsonRowForToken(token, report) || bankJsonRowForToken(token, catalogs);
+      return bankSubscriptionChipModel(token, jsonRow);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSubscriptionRecordUrl(model) {
+    if (model && model.url) return model.url;
+    try {
+      const path = model && model.recordPath ? `${String(model.recordPath).replace(/\.md$/i, "")}.md` : "";
+      if (!path) return null;
+      const vault = this.app && this.app.vault;
+      const file = vault && typeof vault.getAbstractFileByPath === "function"
+        ? vault.getAbstractFileByPath(path)
+        : null;
+      const cacheApi = this.app && this.app.metadataCache;
+      const cache = file && cacheApi && typeof cacheApi.getFileCache === "function"
+        ? cacheApi.getFileCache(file)
+        : null;
+      const url = cache && cache.frontmatter && cache.frontmatter.url;
+      return typeof url === "string" && url.trim() ? url.trim() : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  bankSubscriptionOpenRecord(model, newLeaf) {
+    const note = model && model.recordPath ? String(model.recordPath).replace(/\.md$/i, "") : "";
+    if (!note) return false;
+    try {
+      const workspace = this.app && this.app.workspace;
+      if (workspace && typeof workspace.openLinkText === "function") {
+        void workspace.openLinkText(note, (model && model.rowPath) || "", newLeaf === true);
+        return true;
+      }
+    } catch (error) {}
+    return false;
+  }
+
+  bankSubscriptionOpenUrl(url) {
+    if (typeof url !== "string" || !url) return false;
+    try {
+      if (typeof openExternal === "function") {
+        openExternal(url);
+        return true;
+      }
+    } catch (error) {}
+    try {
+      if (typeof window !== "undefined" && typeof window.open === "function") {
+        window.open(url, "_blank");
+        return true;
+      }
+    } catch (error) {}
+    return false;
+  }
+
+  bankSubscriptionCandidateActivate(_model) {
+    // Linker phase wires ghost-candidate clicks to the Category card picker.
+    return false;
+  }
+
+  async bankSubscriptionInsertLink(model) {
+    if (!model || !model.recordPath || !model.rowPath) return false;
+    try {
+      const opened = await this.bankOpenMonthPathAtLine(model.rowPath, model.rowLine || 1);
+      if (!opened) {
+        new Notice("Bank: could not open the row to link");
+        return false;
+      }
+      const editor = this.bankActiveEditor();
+      if (!editor || typeof editor.getValue !== "function" || typeof editor.replaceRange !== "function") {
+        new Notice("Bank: the row is no longer open");
+        return false;
+      }
+      if (this.bankActiveFilePath() !== model.rowPath) {
+        new Notice("Bank: the row is no longer open");
+        return false;
+      }
+      const lineIndex = Number.isInteger(model.rowLine) ? model.rowLine - 1 : -1;
+      const currentLine = lineIndex >= 0 && typeof editor.getLine === "function"
+        ? editor.getLine(lineIndex)
+        : model.lineText;
+      const plan = bankSubscriptionLinkWritePlan({
+        currentPath: model.rowPath,
+        currentSource: editor.getValue(),
+        capture: {
+          path: model.rowPath,
+          line: model.rowLine,
+          lineText: typeof currentLine === "string" ? currentLine : model.lineText,
+          bankId: model.bankId,
+        },
+        recordPath: model.recordPath,
+      });
+      if (!plan.ok) {
+        new Notice(plan.message || "Bank: the row changed — nothing written");
+        return false;
+      }
+      if (plan.action === "exists") return true;
+      if (typeof this.bankCategoryApplyEdits === "function") {
+        if (!this.bankCategoryApplyEdits(editor, plan)) {
+          new Notice("Bank: the row changed — nothing written");
+          return false;
+        }
+      } else {
+        return false;
+      }
+      try {
+        const view = this.app && this.app.workspace && typeof this.app.workspace.getActiveViewOfType === "function"
+          ? this.app.workspace.getActiveViewOfType(MarkdownView)
+          : null;
+        if (view && typeof view.save === "function") void view.save();
+      } catch (error) {}
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  bankSubscriptionChipActivate(model, event) {
+    try {
+      if (!model) return false;
+      const modifier = bankSubscriptionModifierClick(event);
+      if (model.click === "candidate") {
+        return this.bankSubscriptionCandidateActivate(model) === true;
+      }
+      if (model.click === "insert-link") {
+        void this.bankSubscriptionInsertLink(model);
+        return true;
+      }
+      if (model.click === "open-url" && !modifier) {
+        const url = this.bankSubscriptionRecordUrl(model);
+        if (url && this.bankSubscriptionOpenUrl(url)) return true;
+        return this.bankSubscriptionOpenRecord(model, false);
+      }
+      return this.bankSubscriptionOpenRecord(model, modifier);
+    } catch (error) {
+      return false;
+    }
+  }
+
   teardownBankMarks() {
     try {
       this.bankMarksSessionEnabled = false;
@@ -74766,7 +75477,7 @@ class BobLedgerToolsBankMarksReadingMixin {
       const catalogs = this.bankMarkCatalogs();
       const report = this.bankMarkReportForMonth(month.key);
       this.bankMarkDecorateReadingHeadings(el, ctx, tokens, report);
-      this.bankMarkDecorateReadingRows(el, ctx, tokens, catalogs);
+      this.bankMarkDecorateReadingRows(el, ctx, tokens, catalogs, report);
       return true;
     } catch (error) {
       return false;
@@ -74881,7 +75592,7 @@ class BobLedgerToolsBankMarksReadingMixin {
     return found;
   }
 
-  bankMarkDecorateReadingRows(root, ctx, tokens, catalogs) {
+  bankMarkDecorateReadingRows(root, ctx, tokens, catalogs, report) {
     const rows = this.bankMarkRowElements(root);
     for (const rowEl of rows) {
       try {
@@ -74912,6 +75623,16 @@ class BobLedgerToolsBankMarksReadingMixin {
         }
         if (token.bankIdSpan) {
           this.bankMarkWrapReadingSpan(rowEl, token.lineText, token.bankIdSpan, (doc) => buildBankIdElement(doc));
+        }
+        const subChip = this.bankMarkSubscriptionChip(token, catalogs, report);
+        if (subChip) {
+          if (subChip.kind === "linked") {
+            if (!bankMarkWrapSubscriptionAnchor(rowEl, subChip, this)) {
+              bankMarkAppendSubscriptionChip(rowEl, subChip, this);
+            }
+          } else {
+            bankMarkAppendSubscriptionChip(rowEl, subChip, this);
+          }
         }
       } catch (error) {}
     }
@@ -132078,6 +132799,39 @@ try {
       bankSetupMapFindingLines,
       bankSetupBuildEl,
       bankSharedCategoryTile,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/364-exports-bank-subscription.js ----
+// Test helpers for subscription chips (bob-cli-ls.7). Kept separate so
+// every hand-edited fragment stays at or below 1000 lines.
+try {
+  if (
+    typeof module !== "undefined" &&
+    module.exports &&
+    typeof module.exports === "function"
+  ) {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BANK_SUBSCRIPTION_ALIAS,
+      BANK_SUBSCRIPTION_CANDIDATE_TOOLTIP,
+      bankNormalizeSubscription,
+      bankParseWikilinkSpan,
+      bankSubscriptionLinkFromToken,
+      bankSubscriptionChipModel,
+      bankSubscriptionChipForQueueRow,
+      bankSubscriptionChipKey,
+      bankSubscriptionChipClass,
+      buildBankSubscriptionChipElement,
+      bankSubscriptionLinkWritePlan,
+      bankSubscriptionWikilink,
+      bankPayeeNamesRecord,
+      bankJsonRowForToken,
+      bankSubscriptionBindChip,
+      bankMarkFindSubscriptionLink,
+      bankMarkWrapSubscriptionAnchor,
+      bankMarkAppendSubscriptionChip,
     });
   }
 } catch (error) {

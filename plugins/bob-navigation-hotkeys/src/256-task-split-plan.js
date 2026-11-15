@@ -1,6 +1,6 @@
 // Task-split planner. JS twin of bob-cli `src/native/task_split/plan.rs`,
 // pinned byte-for-byte by `scripts/fixtures/task_split/vectors.json`
-// (SP1–SP30). Pure: no Obsidian imports, so the node vectors script and the
+// (SP1–SP31). Pure: no Obsidian imports, so the node vectors script and the
 // gesture share it. `planSplitBullets(files, request)` mirrors
 // `plan_task_split`; `listTaskSplitCandidates(files, request)` mirrors
 // `list_task_split_candidates`.
@@ -21,9 +21,11 @@
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
 // Drawer titles are the note-drawer grammar from
-// `capture_drawers::is_drawer_title`: an uppercase/digit lead, the drawer
-// rest alphabet, and at least one letter. `buildProjectSeedFromChildBullets`
-// gates its section titles on this same predicate.
+// `capture_drawers::is_drawer_title` (`punctuation = sentence`): an
+// uppercase/digit lead, the drawer rest alphabet, at least one letter,
+// plus `?`, `!`, `;` anywhere after the lead and `:` only as the final
+// character. `buildProjectSeedFromChildBullets` gates its section titles
+// on this same predicate.
 function isTaskSplitDrawerTitle(title) {
   const text = String(title || "");
   if (text.length === 0) {
@@ -36,7 +38,8 @@ function isTaskSplitDrawerTitle(title) {
   let hasLetter = first >= "A" && first <= "Z";
   for (let index = 1; index < text.length; index += 1) {
     const character = text.charAt(index);
-    if (!isTaskSplitDrawerTitleRest(character)) {
+    const isLast = index === text.length - 1;
+    if (!isTaskSplitDrawerTitleRest(character, isLast)) {
       return false;
     }
     if (character >= "A" && character <= "Z") {
@@ -53,8 +56,8 @@ function isTaskSplitDrawerTitleFirst(character) {
   );
 }
 
-function isTaskSplitDrawerTitleRest(character) {
-  return (
+function isTaskSplitDrawerTitleRest(character, isLast) {
+  if (
     isTaskSplitDrawerTitleFirst(character) ||
     character === " " ||
     character === "\t" ||
@@ -66,7 +69,16 @@ function isTaskSplitDrawerTitleRest(character) {
     character === "." ||
     character === "/" ||
     character === "-"
-  );
+  ) {
+    return true;
+  }
+  if (character === "?" || character === "!" || character === ";") {
+    return true;
+  }
+  if (character === ":") {
+    return isLast === true;
+  }
+  return false;
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---

@@ -113,11 +113,6 @@ const PROJECT_LIFECYCLE_TAG_GLOBAL_RE =
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PROJECT_TASKS_HEADER = "## Tasks";
 const PROJECT_TASKS_PLACEHOLDER = "(REPLACE WITH TASK DESCRIPTION)";
-// Whitelist for an ALL-CAPS project-note section title: uppercase letters,
-// digits, spaces/tabs, and a small set of punctuation. Deliberately narrow so
-// Markdown constructs (wikilinks, tags, block IDs, inline code, snake_case)
-// are never mistaken for a section title.
-const PROJECT_SECTION_TITLE_RE = /^[A-Z0-9][A-Z0-9 \t&'(),./-]*$/;
 // Any unfenced level-two (`##`) heading, capturing its title text.
 const PROJECT_SECTION_HEADER_RE = /^ {0,3}##(?:[ \t]+(.*))?$/;
 // A level-one or level-two heading, used to bound a project section's body.

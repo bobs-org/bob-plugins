@@ -690,6 +690,61 @@ test("a Bob-written drawer promotes to a title-case section and reverses to the 
   assert.ok(reversed.lines.includes("\t\t- Must stay backward compatible"));
 });
 
+test("a punctuated WHAT IS SASE? drawer promotes to title case and reverses to the same drawer key", () => {
+  const drawerLines = [
+    "  - WHAT IS SASE?",
+    "    - Why does capture need it?",
+  ];
+  const seeded = helpers.buildProjectSeedFromChildBullets(
+    drawerLines,
+    "2026-08-12",
+  );
+  assert.deepEqual(seeded.sections, [
+    {
+      title: "What Is Sase?",
+      noteLines: ["- Why does capture need it?"],
+    },
+  ]);
+
+  const promoted = helpers.buildProjectContentFromTask(
+    [
+      "---",
+      'parent: "[[Engineering]]"',
+      'template: "[[new_project]]"',
+      'type: "[[project]]"',
+      "status: wip",
+      "created: 2026-08-12T09:00:00-04:00",
+      "---",
+      "",
+      "- [ ] #task #prj (REPLACE WITH PROJECT COMPLETION CRITERIA) #hide ^prj",
+      "",
+      "## Tasks",
+      "",
+      "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::<date>]",
+    ].join("\n"),
+    { description: "Ship the API", priority: null },
+    { sections: seeded.sections },
+  );
+  assert.match(
+    promoted.content,
+    /## What Is Sase\?\n\n- Why does capture need it\?/,
+  );
+
+  const reversed = helpers.buildTaskBlockFromProjectNote(promoted.content, {
+    noteBasename: "Engineering_api",
+    parentBasename: "Engineering",
+    now: new Date("2026-08-12T12:00:00Z"),
+  });
+  assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
+  assert.ok(reversed.lines.includes("\t- WHAT IS SASE?"));
+  assert.ok(reversed.lines.includes("\t\t- Why does capture need it?"));
+
+  // Excluded forms never become sections.
+  assert.equal(helpers.parseProjectSectionBulletTitle("NOTE: X"), null);
+  assert.equal(helpers.parseProjectSectionBulletTitle("KEY:: VALUE"), null);
+  assert.equal(helpers.parseProjectSectionBulletTitle("OPTIONS::"), null);
+});
+
 test("buildProjectSeedFromChildBullets splits a mixed child block into tasks and sections, preserving relative note depth verbatim", () => {
   const childLines = [
     "  - Draft the API",

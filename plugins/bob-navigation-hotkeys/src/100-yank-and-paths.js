@@ -691,7 +691,7 @@ function formatProjectReversalSectionTitle(headerText) {
     .trim()
     .replace(/\s+/g, " ")
     .toUpperCase();
-  if (!PROJECT_SECTION_TITLE_RE.test(title) || !/[A-Z]/.test(title)) {
+  if (!isTaskSplitDrawerTitle(title)) {
     return null;
   }
 
@@ -883,7 +883,7 @@ function normalizeProjectSectionTitle(title) {
 // managed task-log child lines for the `^prj` task. Direct child list items
 // (those at the shallowest child indentation) become top-level tasks unless they
 // qualify as a managed schedule- or work-log marker or as a drawer: no
-// checkbox, an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and at least one
+// checkbox, an ALL-CAPS title (see isTaskSplitDrawerTitle), and at least one
 // nonblank list item nested deeper than it. A qualifying drawer's
 // descendants are copied in verbatim as that section's notes instead; a
 // non-qualifying bullet keeps today's task-conversion behavior. Two drawers

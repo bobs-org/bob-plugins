@@ -133,11 +133,6 @@ const PROJECT_LIFECYCLE_TAG_GLOBAL_RE =
 const PROJECT_BLOCK_ID_RE = /^[A-Za-z0-9-]+$/;
 const PROJECT_TASKS_HEADER = "## Tasks";
 const PROJECT_TASKS_PLACEHOLDER = "(REPLACE WITH TASK DESCRIPTION)";
-// Whitelist for an ALL-CAPS project-note section title: uppercase letters,
-// digits, spaces/tabs, and a small set of punctuation. Deliberately narrow so
-// Markdown constructs (wikilinks, tags, block IDs, inline code, snake_case)
-// are never mistaken for a section title.
-const PROJECT_SECTION_TITLE_RE = /^[A-Z0-9][A-Z0-9 \t&'(),./-]*$/;
 // Any unfenced level-two (`##`) heading, capturing its title text.
 const PROJECT_SECTION_HEADER_RE = /^ {0,3}##(?:[ \t]+(.*))?$/;
 // A level-one or level-two heading, used to bound a project section's body.
@@ -12612,7 +12607,7 @@ function formatProjectReversalSectionTitle(headerText) {
     .trim()
     .replace(/\s+/g, " ")
     .toUpperCase();
-  if (!PROJECT_SECTION_TITLE_RE.test(title) || !/[A-Z]/.test(title)) {
+  if (!isTaskSplitDrawerTitle(title)) {
     return null;
   }
 
@@ -12804,7 +12799,7 @@ function normalizeProjectSectionTitle(title) {
 // managed task-log child lines for the `^prj` task. Direct child list items
 // (those at the shallowest child indentation) become top-level tasks unless they
 // qualify as a managed schedule- or work-log marker or as a drawer: no
-// checkbox, an ALL-CAPS title (see PROJECT_SECTION_TITLE_RE), and at least one
+// checkbox, an ALL-CAPS title (see isTaskSplitDrawerTitle), and at least one
 // nonblank list item nested deeper than it. A qualifying drawer's
 // descendants are copied in verbatim as that section's notes instead; a
 // non-qualifying bullet keeps today's task-conversion behavior. Two drawers
@@ -43337,7 +43332,7 @@ function createInboxRouteApi(plugin) {
 // ---- src/256-task-split-plan.js ----
 // Task-split planner. JS twin of bob-cli `src/native/task_split/plan.rs`,
 // pinned byte-for-byte by `scripts/fixtures/task_split/vectors.json`
-// (SP1–SP30). Pure: no Obsidian imports, so the node vectors script and the
+// (SP1–SP31). Pure: no Obsidian imports, so the node vectors script and the
 // gesture share it. `planSplitBullets(files, request)` mirrors
 // `plan_task_split`; `listTaskSplitCandidates(files, request)` mirrors
 // `list_task_split_candidates`.
@@ -43358,9 +43353,11 @@ function createInboxRouteApi(plugin) {
 // Failure: { ok: false, code, message } with the §5.1 codes verbatim.
 
 // Drawer titles are the note-drawer grammar from
-// `capture_drawers::is_drawer_title`: an uppercase/digit lead, the drawer
-// rest alphabet, and at least one letter. `buildProjectSeedFromChildBullets`
-// gates its section titles on this same predicate.
+// `capture_drawers::is_drawer_title` (`punctuation = sentence`): an
+// uppercase/digit lead, the drawer rest alphabet, at least one letter,
+// plus `?`, `!`, `;` anywhere after the lead and `:` only as the final
+// character. `buildProjectSeedFromChildBullets` gates its section titles
+// on this same predicate.
 function isTaskSplitDrawerTitle(title) {
   const text = String(title || "");
   if (text.length === 0) {
@@ -43373,7 +43370,8 @@ function isTaskSplitDrawerTitle(title) {
   let hasLetter = first >= "A" && first <= "Z";
   for (let index = 1; index < text.length; index += 1) {
     const character = text.charAt(index);
-    if (!isTaskSplitDrawerTitleRest(character)) {
+    const isLast = index === text.length - 1;
+    if (!isTaskSplitDrawerTitleRest(character, isLast)) {
       return false;
     }
     if (character >= "A" && character <= "Z") {
@@ -43390,8 +43388,8 @@ function isTaskSplitDrawerTitleFirst(character) {
   );
 }
 
-function isTaskSplitDrawerTitleRest(character) {
-  return (
+function isTaskSplitDrawerTitleRest(character, isLast) {
+  if (
     isTaskSplitDrawerTitleFirst(character) ||
     character === " " ||
     character === "\t" ||
@@ -43403,7 +43401,16 @@ function isTaskSplitDrawerTitleRest(character) {
     character === "." ||
     character === "/" ||
     character === "-"
-  );
+  ) {
+    return true;
+  }
+  if (character === "?" || character === "!" || character === ";") {
+    return true;
+  }
+  if (character === ":") {
+    return isLast === true;
+  }
+  return false;
 }
 
 // --- Block-ID mint pipeline (mirrors `capture_block_ids`) ---

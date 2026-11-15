@@ -448,6 +448,27 @@ test("formatProjectReversalSectionTitle uppercases titles and rejects unsafe one
     "API DESIGN",
   );
   assert.equal(helpers.formatProjectReversalSectionTitle("Q&A: notes!"), null);
+  assert.equal(
+    helpers.formatProjectReversalSectionTitle("What Is Sase?"),
+    "WHAT IS SASE?",
+  );
+  assert.equal(helpers.formatProjectReversalSectionTitle("Options:"), "OPTIONS:");
+  assert.equal(helpers.formatProjectReversalSectionTitle("NOTE: X"), null);
+  assert.equal(helpers.formatProjectReversalSectionTitle("KEY:: VALUE"), null);
+  assert.equal(helpers.formatProjectReversalSectionTitle("OPTIONS::"), null);
+});
+
+test("a punctuated WHAT IS SASE? section reverses to the same drawer key", () => {
+  const content = workedExampleProjectNote({
+    extraSections: ["## What Is Sase?", "", "- Why does capture need it?"],
+  });
+  const reversed = helpers.buildTaskBlockFromProjectNote(content, {
+    noteBasename: "Health_gym_habit",
+    parentBasename: "Health",
+  });
+  assert.equal(reversed.valid, true, reversed.error || "project reversal failed");
+  assert.ok(reversed.lines.includes("\t- WHAT IS SASE?"));
+  assert.ok(reversed.lines.includes("\t\t- Why does capture need it?"));
 });
 
 test("splitProjectNoteForReversal treats TASKS as the task section and keeps section order", () => {

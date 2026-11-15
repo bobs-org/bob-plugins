@@ -26,20 +26,102 @@ function areasCardHostHue(state, sourcePath) {
   return areasCardHueSlot(areasCardHostEntry(state, sourcePath)?.hue);
 }
 
+function areasCardRollup(value) {
+  return {
+    direct: Number.isInteger(value?.direct) && value.direct >= 0 ? value.direct : 0,
+    subtree: Number.isInteger(value?.subtree) && value.subtree >= 0 ? value.subtree : 0,
+  };
+}
+
 function areasCardRowModel(entry, row = {}) {
   if (!entry || typeof entry.path !== "string") return null;
   const hue = areasCardHueSlot(entry.hue);
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  const children = Array.isArray(entry.children)
+    ? entry.children.map(areasReportPath).filter(Boolean)
+    : [];
   return {
     path: areasReportPath(entry.path),
     stem: entry.stem || "",
     link: row.link || entry.link || entry.stem || "",
     depth: Number.isInteger(row.depth) && row.depth >= 0 ? row.depth : 0,
-    summary: typeof entry.summary === "string" ? entry.summary : "",
+    summary,
     hue,
     muted: entry.hue_source === "muted" || !hue,
     title: entry.title || entry.stem || "",
     titled: entry.titled === true,
+    projects: areasCardRollup(entry.projects),
+    today: areasCardRollup(entry.today),
+    children,
+    childCount: children.length,
+    addSummary: !summary.trim(),
   };
+}
+
+function areasCardFoldKey(hostPath, rowPath) {
+  return `row:${areasReportPath(hostPath)}:${areasReportPath(rowPath)}`;
+}
+
+function areasCardFoldMap(folds) {
+  return folds instanceof Map ? folds : new Map();
+}
+
+function areasCardIsExpanded(folds, hostPath, rowPath) {
+  const map = areasCardFoldMap(folds);
+  const key = areasCardFoldKey(hostPath, rowPath);
+  if (!map.has(key)) return true;
+  return map.get(key) !== false;
+}
+
+function areasCardCountPhrase(count, one, many) {
+  const n = Number.isInteger(count) && count >= 0 ? count : 0;
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function areasCardCountLine(projects, today) {
+  return `${areasCardCountPhrase(projects, "project", "projects")} · ${areasCardCountPhrase(today, "task", "tasks")} today`;
+}
+
+function areasCardTooltip(model) {
+  if (!model) return "";
+  const lines = [];
+  if (model.titled && model.title) lines.push(model.title);
+  if (model.stem) lines.push(`@${model.stem}`);
+  const projects = model.projects || { direct: 0, subtree: 0 };
+  const today = model.today || { direct: 0, subtree: 0 };
+  lines.push(areasCardCountLine(projects.direct, today.direct));
+  if (projects.direct !== projects.subtree || today.direct !== today.subtree) {
+    lines.push(`${areasCardCountLine(projects.subtree, today.subtree)} in this branch`);
+  }
+  return lines.join("\n");
+}
+
+function areasCardChips(model, expanded) {
+  if (!model) return [];
+  const open = expanded !== false;
+  const projects = open ? model.projects.direct : model.projects.subtree;
+  const today = open ? model.today.direct : model.today.subtree;
+  const hint = areasCardTooltip(model);
+  const chips = [];
+  if (projects > 0) {
+    chips.push({
+      kind: "projects",
+      text: areasCardCountPhrase(projects, "project", "projects"),
+      compact: String(projects),
+      hint,
+    });
+  }
+  if (today > 0) {
+    chips.push({
+      kind: "today",
+      text: "today",
+      compact: String(today),
+      hint,
+      hue: model.hue,
+      muted: model.muted,
+    });
+  }
+  return chips;
 }
 
 function areasCardRows(state, sourcePath) {

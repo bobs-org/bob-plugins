@@ -1,5 +1,7 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 class TestPlugin { constructor(app) { this.app = app; } }
 class StubWidgetType {}
@@ -35,10 +37,15 @@ const {
   areasCardHealthModel,
   areasCardStatus,
   areasCardUnplacedModel,
+  areasCardFoldKey,
+  areasCardIsExpanded,
+  areasCardTooltip,
+  areasCardChips,
   areasPaintCallout,
   areasPaintStandalone,
   areasCleanCatalogDom,
 } = LedgerToolsPlugin.helpers;
+const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
 
 const issue = { path: "stray.md", code: "area_parent_missing", severity: "error", line: 2, message: "stray.md has no parent" };
 const entries = [
@@ -75,13 +82,14 @@ class FakeNode {
   set className(value) { this.setAttribute("class", value); }
   get classList() { return { contains: (value) => this.className.split(/\s+/).includes(value) }; }
   get firstChild() { return this.children[0] || null; }
+  get lastChild() { return this.children[this.children.length - 1] || null; }
   get nextSibling() { const list = this.parentNode?.children || []; return list[list.indexOf(this) + 1] || null; }
   get previousSibling() { const list = this.parentNode?.children || []; return list[list.indexOf(this) - 1] || null; }
   get textContent() { return this._text + this.children.map((node) => node.textContent).join(""); }
   set textContent(value) { this._text = String(value ?? ""); this.children.length = 0; }
-  setAttribute(name, value) { this.attrs.set(name, String(value)); }
+  setAttribute(name, value) { this.attrs.set(name, String(value)); if (name === "hidden") this.hidden = true; }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
-  removeAttribute(name) { this.attrs.delete(name); }
+  removeAttribute(name) { this.attrs.delete(name); if (name === "hidden") this.hidden = false; }
   appendChild(node) { if (!node) return node; node.remove?.(); node.parentNode = this; this.children.push(node); return node; }
   insertBefore(node, before) {
     if (!node) return node;
@@ -96,6 +104,15 @@ class FakeNode {
   contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
   addEventListener(name, callback) { const rows = this.listeners.get(name) || []; rows.push(callback); this.listeners.set(name, rows); }
   click() { for (const callback of this.listeners.get("click") || []) callback({ preventDefault() {}, stopPropagation() {} }); }
+  focus() { if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (matches(node, selector)) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
   matches(selector) { return matches(this, selector); }
   querySelectorAll(selector) {
     const selectors = String(selector).split(",").map((part) => part.trim());
@@ -108,13 +125,22 @@ class FakeNode {
 }
 
 function matches(node, selector) {
-  if (selector.startsWith(".")) return node.className.split(/\s+/).includes(selector.slice(1));
-  if (selector.startsWith("[data-callout=")) return node.getAttribute("data-callout") === selector.match(/"([^"]+)"/)?.[1];
-  if (selector.startsWith("[")) return false;
-  return node.tagName.toLowerCase() === selector.toLowerCase();
+  const raw = String(selector || "").trim();
+  if (raw.startsWith(".")) return node.className.split(/\s+/).includes(raw.slice(1));
+  const attr = raw.match(/^\[([^\s=\]]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]$/);
+  if (attr) {
+    const actual = node.getAttribute(attr[1]);
+    const expected = attr[2] ?? attr[3] ?? attr[4];
+    return expected === undefined ? actual !== null : actual === expected;
+  }
+  return node.tagName.toLowerCase() === raw.toLowerCase();
 }
 
-class FakeDocument { createElement(tag) { return new FakeNode(tag, this); } createTextNode(text) { const node = new FakeNode("span", this); node.textContent = text; return node; } }
+class FakeDocument {
+  constructor() { this.activeElement = null; }
+  createElement(tag) { return new FakeNode(tag, this); }
+  createTextNode(text) { const node = new FakeNode("span", this); node.textContent = text; return node; }
+}
 
 function callout(doc, links = ["cash", "bank"]) {
   const host = new FakeNode("div", doc, { class: "callout", "data-callout": "areas" });
@@ -138,6 +164,36 @@ function callout(doc, links = ["cash", "bank"]) {
 
 function areaMetadata() {
   return { getFirstLinkpathDest(target) { return entries.some((entry) => entry.stem === target) ? { path: `${target}.md` } : null; } };
+}
+
+function rowItem(doc, target) {
+  const li = new FakeNode("li", doc);
+  const strong = new FakeNode("strong", doc);
+  const link = new FakeNode("a", doc, { class: "internal-link", "data-href": target });
+  link.textContent = target;
+  strong.appendChild(link);
+  li.appendChild(strong);
+  return li;
+}
+
+function nestedCallout(doc) {
+  const host = new FakeNode("div", doc, { class: "callout", "data-callout": "areas" });
+  const title = new FakeNode("div", doc, { class: "callout-title" });
+  host.appendChild(title);
+  const content = new FakeNode("div", doc, { class: "callout-content" });
+  host.appendChild(content);
+  const list = new FakeNode("ul", doc);
+  content.appendChild(list);
+  const cash = rowItem(doc, "cash");
+  const nested = new FakeNode("ul", doc);
+  nested.appendChild(rowItem(doc, "bank"));
+  cash.appendChild(nested);
+  list.appendChild(cash);
+  return host;
+}
+
+function rowByStem(root, stem) {
+  return root.querySelectorAll("li").find((li) => li.querySelector("a")?.textContent === stem) || null;
 }
 
 test("Areas host, row, hue, health, status, and unplaced models follow Bob's report", () => {
@@ -231,5 +287,135 @@ test("Areas renderer registers in Reading and Live Preview at the family priorit
   const decoration = plugin.buildAreasCatalogDecorations(view);
   assert.equal(decoration.length, 1, "Live Preview gets one standalone widget when stored callout is missing");
   assert.equal(plugin.buildAreasCatalogDecorations({ ...view, path: "plain.md" }).none, true, "non-hosts get no phantom decoration");
+  plugin.teardownAreasCatalog();
+});
+
+test("fold helpers default expanded and key by pane host plus row", () => {
+  const folds = new Map();
+  assert.equal(areasCardIsExpanded(folds, "area.md", "cash.md"), true);
+  folds.set(areasCardFoldKey("area.md", "cash.md"), false);
+  assert.equal(areasCardIsExpanded(folds, "area.md", "cash.md"), false);
+  assert.equal(areasCardIsExpanded(folds, "area.md", "bank.md"), true);
+  assert.equal(areasCardIsExpanded(folds, "love.md", "cash.md"), true);
+});
+
+test("chips follow fold state and hide zeros; tooltips keep stems visible", () => {
+  const cash = areasCardRowModel(entries[0]);
+  assert.equal(cash.stem, "cash");
+  assert.equal(cash.addSummary, false);
+  assert.deepEqual(areasCardChips(cash, true).map((chip) => chip.kind), ["projects", "today"]);
+  assert.equal(areasCardChips(cash, true)[0].text, "2 projects");
+  assert.equal(areasCardChips(cash, false)[0].text, "3 projects");
+  const quiet = areasCardRowModel({
+    ...entries[1],
+    projects: { direct: 0, subtree: 4 },
+    today: { direct: 0, subtree: 2 },
+  });
+  assert.deepEqual(areasCardChips(quiet, true), []);
+  assert.deepEqual(areasCardChips(quiet, false).map((chip) => [chip.kind, chip.text, chip.compact]), [
+    ["projects", "4 projects", "4"],
+    ["today", "today", "2"],
+  ]);
+  const tooltip = areasCardTooltip(cash);
+  assert.match(tooltip, /^Cash\n@cash\n2 projects · 1 task today\n3 projects · 1 task today in this branch$/);
+  assert.equal(areasCardRowModel(entries[1]).addSummary, true);
+});
+
+test("nested rows fold per map, switch chips, and keep stored stem link text", () => {
+  const doc = new FakeDocument();
+  const host = nestedCallout(doc);
+  const folds = new Map();
+  const options = {
+    state: state(),
+    sourcePath: "area.md",
+    metadataCache: areaMetadata(),
+    vault: null,
+    folds,
+    handlers: {
+      toggleFold: (rowPath, expanded) => {
+        folds.set(areasCardFoldKey("area.md", rowPath), expanded);
+        areasPaintCallout(host, options);
+      },
+    },
+  };
+  assert.equal(areasPaintCallout(host, options), true);
+  const cash = rowByStem(host, "cash");
+  const bank = rowByStem(host, "bank");
+  assert.equal(cash.querySelector("a").textContent, "cash");
+  assert.equal(cash.getAttribute("data-folded"), null);
+  assert.equal(cash.querySelector(".bob-areas-toggle").textContent, "▾");
+  assert.equal(cash.querySelector(".bob-areas-toggle").getAttribute("aria-expanded"), "true");
+  assert.match(cash.querySelector(".bob-areas-chip-projects").querySelector(".bob-areas-chip-full").textContent, /2 projects/);
+  assert.match(cash.querySelector(".bob-areas-chip-today").querySelector(".bob-areas-chip-full").textContent, /today/);
+  assert.match(cash.querySelector(".bob-areas-dot").getAttribute("title"), /@cash/);
+  assert.match(cash.querySelector(".bob-areas-chip-projects").getAttribute("title"), /Cash/);
+  assert.equal(bank.querySelector(".bob-areas-toggle"), null);
+  assert.match(bank.querySelector(".bob-areas-chip-projects").querySelector(".bob-areas-chip-full").textContent, /1 project/);
+  assert.equal(bank.querySelector(".bob-areas-add-summary")?.textContent, "add summary");
+  assert.equal(cash.children.some((node) => (node.className || "").split(/\s+/).includes("bob-areas-add-summary")), false);
+
+  cash.querySelector(".bob-areas-toggle").click();
+  const folded = rowByStem(host, "cash");
+  assert.equal(folded.getAttribute("data-folded"), "true");
+  assert.equal(folded.querySelector(".bob-areas-toggle").textContent, "▸");
+  assert.equal(folded.querySelector(".bob-areas-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(areasNestedHidden(folded), true);
+  assert.match(folded.querySelector(".bob-areas-chip-projects").querySelector(".bob-areas-chip-full").textContent, /3 projects/);
+});
+
+function areasNestedHidden(li) {
+  const nested = li.children.find((node) => node.tagName === "UL");
+  return Boolean(nested && nested.getAttribute("hidden"));
+}
+
+test("add-summary is hover-only in CSS and opens the notebooks summary path", () => {
+  assert.match(css, /li:hover > \.bob-areas-add-summary/);
+  assert.match(css, /li:focus-within > \.bob-areas-add-summary/);
+  assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /@container bob-areas \(max-width: 440px\)/);
+  assert.match(css, /\.bob-areas-chip-compact \{ display: inline-flex; \}/);
+  const doc = new FakeDocument();
+  const host = nestedCallout(doc);
+  const opened = [];
+  const options = {
+    state: state(),
+    sourcePath: "area.md",
+    metadataCache: areaMetadata(),
+    vault: null,
+    folds: new Map(),
+    handlers: { openSummary: (model) => opened.push(model.path) },
+  };
+  areasPaintCallout(host, options);
+  const add = rowByStem(host, "bank").querySelector(".bob-areas-add-summary");
+  assert.equal(add.textContent, "add summary");
+  add.click();
+  assert.deepEqual(opened, ["bank.md"]);
+});
+
+test("two panes keep independent folds across a repaint", () => {
+  const current = state();
+  const plugin = new LedgerToolsPlugin({}, {});
+  plugin.areasCatalogActive = false;
+  plugin.areasCatalogState = () => current;
+  plugin.areasReportState = () => current;
+  plugin.apiAreasSubscribe = () => () => {};
+  plugin.areasSetTimeout = (callback) => { callback(); return 1; };
+  plugin.areasClearTimeout = () => {};
+  plugin.registerMarkdownPostProcessor = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.setupAreasCatalog();
+  const first = nestedCallout(new FakeDocument());
+  const second = nestedCallout(new FakeDocument());
+  const left = plugin.areasCatalogFoldMap(first);
+  const right = plugin.areasCatalogFoldMap(second);
+  plugin.areasCatalogReading.add({ el: first, path: "area.md", folds: left, allowAnchor: false });
+  plugin.areasCatalogReading.add({ el: second, path: "area.md", folds: right, allowAnchor: false });
+  plugin.areasPaintReading(first, "area.md", left, false);
+  plugin.areasPaintReading(second, "area.md", right, false);
+  plugin.areasCatalogHandlers("area.md", left).toggleFold("cash.md", false);
+  assert.equal(rowByStem(first, "cash").getAttribute("data-folded"), "true");
+  assert.equal(rowByStem(second, "cash").getAttribute("data-folded"), null);
+  plugin.areasPaintReading(first, "area.md", left, false);
+  assert.equal(rowByStem(first, "cash").getAttribute("data-folded"), "true");
   plugin.teardownAreasCatalog();
 });

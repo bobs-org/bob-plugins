@@ -12,6 +12,7 @@ class BobLedgerToolsAreasCatalogMixin {
     this.areasCatalogActive = true;
     this.areasCatalogReading = new Set();
     this.areasCatalogEditors = new Set();
+    this.areasCatalogFoldByView = new WeakMap();
     this.areasCatalogRefreshTimer = null;
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAreasCatalogInReading(el, ctx), 52);
     const extension = this.createAreasCatalogExtension();
@@ -39,15 +40,69 @@ class BobLedgerToolsAreasCatalogMixin {
     catch (_error) { return this.areasCatalogLastState || { report: null, unavailable: true, today: areasLocalDate() }; }
   }
 
-  areasCatalogHandlers(sourcePath) {
+  areasCatalogFoldMap(host) {
+    if (!(this.areasCatalogFoldByView instanceof WeakMap)) this.areasCatalogFoldByView = new WeakMap();
+    let folds = this.areasCatalogFoldByView.get(host);
+    const surface = host?.dom || host;
+    const editor = surface?.matches?.(".cm-editor") ? surface : surface?.closest?.(".cm-editor");
+    const readingWidget = editor
+      ? Array.from(this.areasCatalogReading || []).find((widget) => widget.el?.closest?.(".cm-editor") === editor)
+      : null;
+    if (readingWidget) {
+      if (!(folds instanceof Map) || (folds.size === 0 && readingWidget.folds instanceof Map && readingWidget.folds.size > 0)) {
+        folds = readingWidget.folds instanceof Map ? readingWidget.folds : new Map();
+        this.areasCatalogFoldByView.set(host, folds);
+      }
+      readingWidget.editorOwner = host;
+    }
+    if (!(folds instanceof Map)) {
+      folds = new Map();
+      this.areasCatalogFoldByView.set(host, folds);
+    }
+    return folds;
+  }
+
+  areasCatalogHandlers(sourcePath, folds) {
+    const repaintSurface = () => {
+      const paintedEditors = new Set();
+      for (const widget of this.areasCatalogReading || []) {
+        if (widget.folds !== folds) continue;
+        const editorDom = widget.el?.matches?.(".cm-editor") ? widget.el : widget.el?.closest?.(".cm-editor");
+        const editorView = editorDom && Array.from(this.areasCatalogEditors || []).find((view) => view.dom === editorDom);
+        if (editorView) {
+          const editorFolds = this.areasCatalogFoldMap(editorView);
+          if (editorFolds !== folds) {
+            for (const [key, value] of folds) editorFolds.set(key, value);
+          }
+          widget.editorOwner = editorView;
+          this.areasPaintEditor(editorView);
+          paintedEditors.add(editorView);
+        } else if (!editorDom && !widget.editorOwner) {
+          this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
+      }
+      for (const view of this.areasCatalogEditors || []) {
+        if (!paintedEditors.has(view) && this.areasCatalogFoldByView instanceof WeakMap && this.areasCatalogFoldByView.get(view) === folds) {
+          this.areasPaintEditor(view);
+        }
+      }
+    };
     return {
       retry: () => { void this.apiAreasReport({ force: true }); },
       sync: () => { void this.apiAreasSync(); },
+      toggleFold: (rowPath, expanded) => {
+        areasCardFoldMap(folds).set(areasCardFoldKey(sourcePath, rowPath), Boolean(expanded));
+        repaintSurface();
+      },
+      openSummary: (model) => {
+        void this.apiNotebookOpenSummary?.(model && model.path, sourcePath);
+      },
     };
   }
 
-  areasCatalogOptions(sourcePath, state = null) {
+  areasCatalogOptions(sourcePath, folds = null, state = null) {
     const current = state || this.areasCatalogState();
+    const map = areasCardFoldMap(folds);
     return {
       state: current,
       sourcePath,
@@ -56,7 +111,8 @@ class BobLedgerToolsAreasCatalogMixin {
       hue: areasCardHostHue(current, sourcePath),
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
-      handlers: this.areasCatalogHandlers(sourcePath),
+      handlers: this.areasCatalogHandlers(sourcePath, map),
+      folds: map,
     };
   }
 
@@ -80,8 +136,8 @@ class BobLedgerToolsAreasCatalogMixin {
     return anchor;
   }
 
-  areasPaintReading(el, sourcePath, allowAnchor = true) {
-    const options = this.areasCatalogOptions(sourcePath);
+  areasPaintReading(el, sourcePath, folds = null, allowAnchor = true) {
+    const options = this.areasCatalogOptions(sourcePath, folds);
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
     const catalog = options.catalog;
@@ -102,10 +158,11 @@ class BobLedgerToolsAreasCatalogMixin {
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
     const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
-    this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+    const folds = this.areasCatalogFoldMap(el);
+    this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
     if (!widget) {
-      widget = { el, path: ctx.sourcePath, allowAnchor };
+      widget = { el, path: ctx.sourcePath, folds, allowAnchor };
       this.areasCatalogReading.add(widget);
       if (ctx.addChild && typeof MarkdownRenderChild === "function") {
         const child = new MarkdownRenderChild(el);
@@ -118,9 +175,11 @@ class BobLedgerToolsAreasCatalogMixin {
     } else if (widget.path !== ctx.sourcePath) {
       areasCleanCatalogDom(el);
       widget.path = ctx.sourcePath;
-      this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+      widget.folds = folds;
+      this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     }
     widget.allowAnchor = allowAnchor;
+    widget.folds = folds;
   }
 
   areasCatalogLivePath(view) {
@@ -133,9 +192,13 @@ class BobLedgerToolsAreasCatalogMixin {
       areasCleanCatalogDom(view.dom);
       return;
     }
-    const options = this.areasCatalogOptions(path);
+    const options = this.areasCatalogOptions(path, this.areasCatalogFoldMap(view));
     for (const callout of areasFindCallouts(view.dom)) {
       if (!callout.closest?.(".markdown-embed")) areasPaintCallout(callout, options);
+    }
+    for (const host of view.dom?.querySelectorAll?.(".bob-areas-standalone, .bob-areas-anchor") || []) {
+      if (host.closest?.('[data-callout="areas"]') || host.closest?.(".markdown-embed")) continue;
+      areasPaintStandalone(host, options);
     }
   }
 
@@ -144,16 +207,17 @@ class BobLedgerToolsAreasCatalogMixin {
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
     const text = view.state.doc.toString();
     if (areasCardHasCallout(text)) return Decoration.none;
-    const options = this.areasCatalogOptions(path);
+    const folds = this.areasCatalogFoldMap(view);
+    const options = this.areasCatalogOptions(path, folds);
     if (!options.catalog) return Decoration.none;
     const plugin = this;
-    const key = JSON.stringify([path, options.catalog.state, options.rows, options.state.stale, options.state.error, options.state.syncBusy, options.state.syncError]);
+    const key = JSON.stringify([path, options.catalog.state, options.rows, options.state.stale, options.state.error, options.state.syncBusy, options.state.syncError, [...folds]]);
     const AreaStatusWidget = class extends WidgetType {
       constructor() { super(); this.key = key; }
       eq(other) { return other?.key === this.key; }
       toDOM() {
         const host = notebookCreateEl(typeof document !== "undefined" ? document : null, "div", AREAS_ANCHOR_CLASS);
-        if (host) areasPaintStandalone(host, plugin.areasCatalogOptions(path));
+        if (host) areasPaintStandalone(host, plugin.areasCatalogOptions(path, plugin.areasCatalogFoldMap(view)));
         return host;
       }
       ignoreEvent() { return true; }
@@ -207,7 +271,9 @@ class BobLedgerToolsAreasCatalogMixin {
       this.areasCatalogRefreshTimer = null;
       if (!this.areasCatalogActive) return;
       for (const widget of this.areasCatalogReading || []) {
-        if (!widget.el?.closest?.(".cm-editor")) this.areasPaintReading(widget.el, widget.path, widget.allowAnchor);
+        if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
       }
       const effect = ensureAreasCatalogRefresh();
       for (const view of this.areasCatalogEditors || []) {

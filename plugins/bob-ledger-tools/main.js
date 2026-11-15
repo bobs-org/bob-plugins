@@ -63903,20 +63903,102 @@ function areasCardHostHue(state, sourcePath) {
   return areasCardHueSlot(areasCardHostEntry(state, sourcePath)?.hue);
 }
 
+function areasCardRollup(value) {
+  return {
+    direct: Number.isInteger(value?.direct) && value.direct >= 0 ? value.direct : 0,
+    subtree: Number.isInteger(value?.subtree) && value.subtree >= 0 ? value.subtree : 0,
+  };
+}
+
 function areasCardRowModel(entry, row = {}) {
   if (!entry || typeof entry.path !== "string") return null;
   const hue = areasCardHueSlot(entry.hue);
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  const children = Array.isArray(entry.children)
+    ? entry.children.map(areasReportPath).filter(Boolean)
+    : [];
   return {
     path: areasReportPath(entry.path),
     stem: entry.stem || "",
     link: row.link || entry.link || entry.stem || "",
     depth: Number.isInteger(row.depth) && row.depth >= 0 ? row.depth : 0,
-    summary: typeof entry.summary === "string" ? entry.summary : "",
+    summary,
     hue,
     muted: entry.hue_source === "muted" || !hue,
     title: entry.title || entry.stem || "",
     titled: entry.titled === true,
+    projects: areasCardRollup(entry.projects),
+    today: areasCardRollup(entry.today),
+    children,
+    childCount: children.length,
+    addSummary: !summary.trim(),
   };
+}
+
+function areasCardFoldKey(hostPath, rowPath) {
+  return `row:${areasReportPath(hostPath)}:${areasReportPath(rowPath)}`;
+}
+
+function areasCardFoldMap(folds) {
+  return folds instanceof Map ? folds : new Map();
+}
+
+function areasCardIsExpanded(folds, hostPath, rowPath) {
+  const map = areasCardFoldMap(folds);
+  const key = areasCardFoldKey(hostPath, rowPath);
+  if (!map.has(key)) return true;
+  return map.get(key) !== false;
+}
+
+function areasCardCountPhrase(count, one, many) {
+  const n = Number.isInteger(count) && count >= 0 ? count : 0;
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function areasCardCountLine(projects, today) {
+  return `${areasCardCountPhrase(projects, "project", "projects")} · ${areasCardCountPhrase(today, "task", "tasks")} today`;
+}
+
+function areasCardTooltip(model) {
+  if (!model) return "";
+  const lines = [];
+  if (model.titled && model.title) lines.push(model.title);
+  if (model.stem) lines.push(`@${model.stem}`);
+  const projects = model.projects || { direct: 0, subtree: 0 };
+  const today = model.today || { direct: 0, subtree: 0 };
+  lines.push(areasCardCountLine(projects.direct, today.direct));
+  if (projects.direct !== projects.subtree || today.direct !== today.subtree) {
+    lines.push(`${areasCardCountLine(projects.subtree, today.subtree)} in this branch`);
+  }
+  return lines.join("\n");
+}
+
+function areasCardChips(model, expanded) {
+  if (!model) return [];
+  const open = expanded !== false;
+  const projects = open ? model.projects.direct : model.projects.subtree;
+  const today = open ? model.today.direct : model.today.subtree;
+  const hint = areasCardTooltip(model);
+  const chips = [];
+  if (projects > 0) {
+    chips.push({
+      kind: "projects",
+      text: areasCardCountPhrase(projects, "project", "projects"),
+      compact: String(projects),
+      hint,
+    });
+  }
+  if (today > 0) {
+    chips.push({
+      kind: "today",
+      text: "today",
+      compact: String(today),
+      hint,
+      hue: model.hue,
+      muted: model.muted,
+    });
+  }
+  return chips;
 }
 
 function areasCardRows(state, sourcePath) {
@@ -64069,6 +64151,10 @@ const AREAS_STATUS_CLASS = "bob-areas-status";
 const AREAS_STANDALONE_CLASS = "bob-areas-standalone";
 const AREAS_ANCHOR_CLASS = "bob-areas-anchor";
 const AREAS_DOT_CLASS = "bob-areas-dot";
+const AREAS_TOGGLE_CLASS = "bob-areas-toggle";
+const AREAS_CHIPS_CLASS = "bob-areas-chips";
+const AREAS_ADD_CLASS = "bob-areas-add-summary";
+const AREAS_ROW_CHROME = [AREAS_TOGGLE_CLASS, AREAS_DOT_CLASS, AREAS_CHIPS_CLASS, AREAS_ADD_CLASS];
 const areasObsidianSetIcon = require("obsidian").setIcon;
 
 function areasSetAttr(node, name, value) {
@@ -64161,26 +64247,193 @@ function areasPaintStatus(host, model, handlers, header = null) {
   return status;
 }
 
-function areasPaintDot(li, model) {
+function areasPlaceStart(li, node) {
+  if (!li || !node || node.parentNode !== li) return;
+  if (li.firstChild !== node) li.insertBefore(node, li.firstChild || null);
+}
+
+function areasNestedList(li) {
+  return Array.from(li?.children || []).find((node) => notebookDomTag(node) === "UL") || null;
+}
+
+function areasPlaceBeforeNested(li, node) {
+  if (!li || !node || node.parentNode !== li) return;
+  const nested = areasNestedList(li);
+  if (nested) {
+    if (node.nextSibling !== nested) li.insertBefore(node, nested);
+  } else if (li.lastChild !== node) {
+    li.appendChild(node);
+  }
+}
+
+function areasPaintDot(li, model, tooltip = "") {
   const existing = Array.from(li?.children || []).find((node) => notebookDomHasClass(node, AREAS_DOT_CLASS));
   if (!model) {
     existing?.remove?.();
     return null;
   }
-  if (existing) existing.remove?.();
   const link = notebookLiOwnLink(li);
-  if (!link) return null;
+  if (!link) {
+    existing?.remove?.();
+    return null;
+  }
   const doc = notebookDomDoc(li);
-  const dot = notebookCreateEl(doc, "span", AREAS_DOT_CLASS);
+  const dot = existing || notebookCreateEl(doc, "span", AREAS_DOT_CLASS);
   if (!dot) return null;
   dot.setAttribute("aria-hidden", "true");
   dot.setAttribute("data-area-path", model.path);
   areasSetAttr(dot, "data-hue", model.hue);
   areasSetAttr(dot, "data-muted", model.muted ? "true" : null);
+  areasSetAttr(dot, "title", tooltip || null);
   let first = link;
   while (first.parentNode && first.parentNode !== li) first = first.parentNode;
-  li.insertBefore(dot, first);
+  if (dot.parentNode !== li || dot.nextSibling !== first) li.insertBefore(dot, first);
   return dot;
+}
+
+function areasPaintToggle(li, model, expanded, options) {
+  const key = model && model.childCount > 0 ? JSON.stringify([model.path, expanded, model.childCount]) : "";
+  const node = albumReplaceChrome(li, AREAS_TOGGLE_CLASS, key, (host, doc) => {
+    const open = expanded !== false;
+    notebookSetText(host, open ? "▾" : "▸");
+    host.setAttribute("data-focus-key", "fold");
+    host.setAttribute("data-area-path", model.path);
+    host.setAttribute("aria-expanded", open ? "true" : "false");
+    const label = open
+      ? `Hide ${model.childCount} nested ${model.childCount === 1 ? "area" : "areas"}.`
+      : `Show ${model.childCount} nested ${model.childCount === 1 ? "area" : "areas"}.`;
+    host.setAttribute("title", label);
+    host.setAttribute("aria-label", label);
+    notebookBindAction(host, () => options.handlers?.toggleFold?.(model.path, !open));
+  });
+  if (node) areasPlaceStart(li, node);
+  return node;
+}
+
+function areasPaintChipDot(doc, hue, muted) {
+  const dot = notebookCreateEl(doc, "span", "bob-areas-chip-dot");
+  if (!dot) return null;
+  dot.setAttribute("aria-hidden", "true");
+  areasSetAttr(dot, "data-hue", hue);
+  areasSetAttr(dot, "data-muted", muted ? "true" : null);
+  return dot;
+}
+
+function areasPaintChips(li, model, expanded, tooltip) {
+  const chips = areasCardChips(model, expanded);
+  const key = chips.length ? JSON.stringify([model.path, expanded, chips]) : "";
+  const node = albumReplaceChrome(li, AREAS_CHIPS_CLASS, key, (host, doc) => {
+    host.setAttribute("data-area-path", model.path);
+    for (const chip of chips) {
+      const wrap = notebookCreateEl(doc, "span", `bob-areas-chip bob-areas-chip-${chip.kind}`);
+      if (!wrap) continue;
+      wrap.setAttribute("data-focus-key", chip.kind);
+      if (chip.hint) {
+        wrap.setAttribute("title", chip.hint);
+        wrap.setAttribute("aria-label", chip.kind === "today"
+          ? `${chip.compact} ${chip.compact === "1" ? "task" : "tasks"} today`
+          : chip.text);
+        wrap.setAttribute("tabindex", "0");
+      }
+      const full = notebookCreateEl(doc, "span", "bob-areas-chip-full");
+      if (full) {
+        if (chip.kind === "today") {
+          const dot = areasPaintChipDot(doc, chip.hue, chip.muted);
+          if (dot) full.appendChild(dot);
+          const label = notebookCreateEl(doc, "span", "bob-areas-chip-label");
+          if (label) {
+            notebookSetText(label, chip.text);
+            full.appendChild(label);
+          }
+        } else {
+          notebookSetText(full, chip.text);
+        }
+        wrap.appendChild(full);
+      }
+      const compact = notebookCreateEl(doc, "span", "bob-areas-chip-compact");
+      if (compact) {
+        compact.setAttribute("aria-hidden", "true");
+        const count = notebookCreateEl(doc, "span", "bob-areas-chip-count");
+        if (count) {
+          notebookSetText(count, chip.compact);
+          compact.appendChild(count);
+        }
+        if (chip.kind === "today") {
+          const dot = areasPaintChipDot(doc, chip.hue, chip.muted);
+          if (dot) compact.appendChild(dot);
+        } else {
+          const icon = notebookCreateEl(doc, "span", "bob-areas-chip-icon");
+          if (icon) {
+            icon.setAttribute("data-kind", "projects");
+            compact.appendChild(icon);
+          }
+        }
+        wrap.appendChild(compact);
+      }
+      host.appendChild(wrap);
+    }
+  });
+  if (node) areasPlaceBeforeNested(li, node);
+  void tooltip;
+  return node;
+}
+
+function areasPaintAddSummary(li, model, handlers) {
+  const key = model && model.addSummary ? model.path : "";
+  const node = albumReplaceChrome(li, AREAS_ADD_CLASS, key, (host) => {
+    notebookSetText(host, "add summary");
+    host.setAttribute("data-focus-key", "summary");
+    host.setAttribute("data-area-path", model.path);
+    host.setAttribute("aria-label", "Add a summary to this area");
+    host.setAttribute("title", "Open this area and edit its summary");
+    notebookBindAction(host, () => handlers?.openSummary?.(model));
+  });
+  if (node) areasPlaceBeforeNested(li, node);
+  return node;
+}
+
+function areasOrderRow(li) {
+  const kids = Array.from(li?.children || []);
+  const toggle = kids.find((node) => notebookDomHasClass(node, AREAS_TOGGLE_CLASS));
+  const dot = kids.find((node) => notebookDomHasClass(node, AREAS_DOT_CLASS));
+  const add = kids.find((node) => notebookDomHasClass(node, AREAS_ADD_CLASS));
+  const chips = kids.find((node) => notebookDomHasClass(node, AREAS_CHIPS_CLASS));
+  if (toggle) areasPlaceStart(li, toggle);
+  if (dot) {
+    if (toggle) areasPlaceAfter(li, dot, toggle);
+    else areasPlaceStart(li, dot);
+  }
+  if (add) areasPlaceBeforeNested(li, add);
+  if (chips) areasPlaceBeforeNested(li, chips);
+}
+
+function areasPaintRow(li, model, options) {
+  if (!model) {
+    areasCleanRow(li);
+    return false;
+  }
+  const expanded = areasCardIsExpanded(options.folds, options.sourcePath, model.path);
+  const tooltip = areasCardTooltip(model);
+  areasSetAttr(li, "data-folded", expanded ? null : "true");
+  areasSetAttr(li, "data-area-path", model.path);
+  areasPaintToggle(li, model, expanded, options);
+  areasPaintDot(li, model, tooltip);
+  areasPaintAddSummary(li, model, options.handlers);
+  areasPaintChips(li, model, expanded, tooltip);
+  const nested = areasNestedList(li);
+  if (nested) areasSetAttr(nested, "hidden", expanded ? null : "true");
+  areasOrderRow(li);
+  return true;
+}
+
+function areasCleanRow(li) {
+  for (const cls of AREAS_ROW_CHROME) {
+    const node = Array.from(li?.children || []).find((child) => notebookDomHasClass(child, cls));
+    node?.remove?.();
+  }
+  for (const name of ["data-folded", "data-area-path"]) li?.removeAttribute?.(name);
+  const nested = areasNestedList(li);
+  if (nested) nested.removeAttribute?.("hidden");
 }
 
 function areasPaintCallout(callout, options) {
@@ -64198,20 +64451,10 @@ function areasPaintCallout(callout, options) {
   for (const li of callout.querySelectorAll?.("li") || []) {
     const link = notebookLiOwnLink(li);
     const resolved = link ? areasCardLookupByTarget(report, notebookLinkHref(link), options.sourcePath, options.metadataCache, options.vault) : null;
-    areasPaintDot(li, resolved && resolved.entry ? areasCardRowModel(resolved.entry) : null);
+    areasPaintRow(li, resolved && resolved.entry ? areasCardRowModel(resolved.entry) : null, options);
   }
   areasPaintStatus(content, areasCardStatus(options.state, options.sourcePath), options.handlers, header);
   return true;
-}
-
-function areasPaintStandaloneDot(parent, doc, model) {
-  const dot = notebookCreateEl(doc, "span", AREAS_DOT_CLASS);
-  if (!dot) return;
-  dot.setAttribute("aria-hidden", "true");
-  dot.setAttribute("data-area-path", model.path);
-  areasSetAttr(dot, "data-hue", model.hue);
-  areasSetAttr(dot, "data-muted", model.muted ? "true" : null);
-  parent.appendChild(dot);
 }
 
 function areasPaintStandaloneRows(host, options) {
@@ -64230,7 +64473,6 @@ function areasPaintStandaloneRows(host, options) {
     let list = lists[safeDepth] || root;
     const li = notebookCreateEl(doc, "li", "bob-areas-row");
     if (!li) continue;
-    areasPaintStandaloneDot(li, doc, model);
     const link = notebookCreateEl(doc, "a", "internal-link");
     if (link) {
       link.setAttribute("data-href", model.link);
@@ -64253,6 +64495,7 @@ function areasPaintStandaloneRows(host, options) {
         lists[safeDepth + 1] = nested;
       }
     }
+    areasPaintRow(li, model, options);
     previousDepth = safeDepth;
   }
   host.appendChild(root);
@@ -64277,14 +64520,15 @@ function areasPaintStandalone(host, options) {
 function areasCleanCallout(callout) {
   notebookRemovePainted(callout, AREAS_HEADER_CLASS);
   notebookRemovePainted(callout, AREAS_STATUS_CLASS);
-  for (const li of callout?.querySelectorAll?.("li") || []) areasPaintDot(li, null);
+  for (const li of callout?.querySelectorAll?.("li") || []) areasCleanRow(li);
   for (const name of ["data-bob-areas-card", "data-root-hue", "data-stale"]) callout?.removeAttribute?.(name);
 }
 
 function areasCleanCatalogDom(root) {
   for (const callout of areasFindCallouts(root)) areasCleanCallout(callout);
   for (const cls of [AREAS_HEADER_CLASS, AREAS_STATUS_CLASS, AREAS_ANCHOR_CLASS, AREAS_STANDALONE_CLASS]) notebookRemovePainted(root, cls);
-  for (const dot of root?.querySelectorAll?.(`.${AREAS_DOT_CLASS}`) || []) dot.remove?.();
+  for (const li of root?.querySelectorAll?.("li") || []) areasCleanRow(li);
+  for (const cls of AREAS_ROW_CHROME) notebookRemovePainted(root, cls);
 }
 // ---- src/241aj-plugin-areas-catalog.js ----
 // Reading and Live Preview renderers for the display-only Areas card.
@@ -64301,6 +64545,7 @@ class BobLedgerToolsAreasCatalogMixin {
     this.areasCatalogActive = true;
     this.areasCatalogReading = new Set();
     this.areasCatalogEditors = new Set();
+    this.areasCatalogFoldByView = new WeakMap();
     this.areasCatalogRefreshTimer = null;
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAreasCatalogInReading(el, ctx), 52);
     const extension = this.createAreasCatalogExtension();
@@ -64328,15 +64573,69 @@ class BobLedgerToolsAreasCatalogMixin {
     catch (_error) { return this.areasCatalogLastState || { report: null, unavailable: true, today: areasLocalDate() }; }
   }
 
-  areasCatalogHandlers(sourcePath) {
+  areasCatalogFoldMap(host) {
+    if (!(this.areasCatalogFoldByView instanceof WeakMap)) this.areasCatalogFoldByView = new WeakMap();
+    let folds = this.areasCatalogFoldByView.get(host);
+    const surface = host?.dom || host;
+    const editor = surface?.matches?.(".cm-editor") ? surface : surface?.closest?.(".cm-editor");
+    const readingWidget = editor
+      ? Array.from(this.areasCatalogReading || []).find((widget) => widget.el?.closest?.(".cm-editor") === editor)
+      : null;
+    if (readingWidget) {
+      if (!(folds instanceof Map) || (folds.size === 0 && readingWidget.folds instanceof Map && readingWidget.folds.size > 0)) {
+        folds = readingWidget.folds instanceof Map ? readingWidget.folds : new Map();
+        this.areasCatalogFoldByView.set(host, folds);
+      }
+      readingWidget.editorOwner = host;
+    }
+    if (!(folds instanceof Map)) {
+      folds = new Map();
+      this.areasCatalogFoldByView.set(host, folds);
+    }
+    return folds;
+  }
+
+  areasCatalogHandlers(sourcePath, folds) {
+    const repaintSurface = () => {
+      const paintedEditors = new Set();
+      for (const widget of this.areasCatalogReading || []) {
+        if (widget.folds !== folds) continue;
+        const editorDom = widget.el?.matches?.(".cm-editor") ? widget.el : widget.el?.closest?.(".cm-editor");
+        const editorView = editorDom && Array.from(this.areasCatalogEditors || []).find((view) => view.dom === editorDom);
+        if (editorView) {
+          const editorFolds = this.areasCatalogFoldMap(editorView);
+          if (editorFolds !== folds) {
+            for (const [key, value] of folds) editorFolds.set(key, value);
+          }
+          widget.editorOwner = editorView;
+          this.areasPaintEditor(editorView);
+          paintedEditors.add(editorView);
+        } else if (!editorDom && !widget.editorOwner) {
+          this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
+      }
+      for (const view of this.areasCatalogEditors || []) {
+        if (!paintedEditors.has(view) && this.areasCatalogFoldByView instanceof WeakMap && this.areasCatalogFoldByView.get(view) === folds) {
+          this.areasPaintEditor(view);
+        }
+      }
+    };
     return {
       retry: () => { void this.apiAreasReport({ force: true }); },
       sync: () => { void this.apiAreasSync(); },
+      toggleFold: (rowPath, expanded) => {
+        areasCardFoldMap(folds).set(areasCardFoldKey(sourcePath, rowPath), Boolean(expanded));
+        repaintSurface();
+      },
+      openSummary: (model) => {
+        void this.apiNotebookOpenSummary?.(model && model.path, sourcePath);
+      },
     };
   }
 
-  areasCatalogOptions(sourcePath, state = null) {
+  areasCatalogOptions(sourcePath, folds = null, state = null) {
     const current = state || this.areasCatalogState();
+    const map = areasCardFoldMap(folds);
     return {
       state: current,
       sourcePath,
@@ -64345,7 +64644,8 @@ class BobLedgerToolsAreasCatalogMixin {
       hue: areasCardHostHue(current, sourcePath),
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
-      handlers: this.areasCatalogHandlers(sourcePath),
+      handlers: this.areasCatalogHandlers(sourcePath, map),
+      folds: map,
     };
   }
 
@@ -64369,8 +64669,8 @@ class BobLedgerToolsAreasCatalogMixin {
     return anchor;
   }
 
-  areasPaintReading(el, sourcePath, allowAnchor = true) {
-    const options = this.areasCatalogOptions(sourcePath);
+  areasPaintReading(el, sourcePath, folds = null, allowAnchor = true) {
+    const options = this.areasCatalogOptions(sourcePath, folds);
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
     const catalog = options.catalog;
@@ -64391,10 +64691,11 @@ class BobLedgerToolsAreasCatalogMixin {
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
     const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
-    this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+    const folds = this.areasCatalogFoldMap(el);
+    this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
     if (!widget) {
-      widget = { el, path: ctx.sourcePath, allowAnchor };
+      widget = { el, path: ctx.sourcePath, folds, allowAnchor };
       this.areasCatalogReading.add(widget);
       if (ctx.addChild && typeof MarkdownRenderChild === "function") {
         const child = new MarkdownRenderChild(el);
@@ -64407,9 +64708,11 @@ class BobLedgerToolsAreasCatalogMixin {
     } else if (widget.path !== ctx.sourcePath) {
       areasCleanCatalogDom(el);
       widget.path = ctx.sourcePath;
-      this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+      widget.folds = folds;
+      this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     }
     widget.allowAnchor = allowAnchor;
+    widget.folds = folds;
   }
 
   areasCatalogLivePath(view) {
@@ -64422,9 +64725,13 @@ class BobLedgerToolsAreasCatalogMixin {
       areasCleanCatalogDom(view.dom);
       return;
     }
-    const options = this.areasCatalogOptions(path);
+    const options = this.areasCatalogOptions(path, this.areasCatalogFoldMap(view));
     for (const callout of areasFindCallouts(view.dom)) {
       if (!callout.closest?.(".markdown-embed")) areasPaintCallout(callout, options);
+    }
+    for (const host of view.dom?.querySelectorAll?.(".bob-areas-standalone, .bob-areas-anchor") || []) {
+      if (host.closest?.('[data-callout="areas"]') || host.closest?.(".markdown-embed")) continue;
+      areasPaintStandalone(host, options);
     }
   }
 
@@ -64433,16 +64740,17 @@ class BobLedgerToolsAreasCatalogMixin {
     if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
     const text = view.state.doc.toString();
     if (areasCardHasCallout(text)) return Decoration.none;
-    const options = this.areasCatalogOptions(path);
+    const folds = this.areasCatalogFoldMap(view);
+    const options = this.areasCatalogOptions(path, folds);
     if (!options.catalog) return Decoration.none;
     const plugin = this;
-    const key = JSON.stringify([path, options.catalog.state, options.rows, options.state.stale, options.state.error, options.state.syncBusy, options.state.syncError]);
+    const key = JSON.stringify([path, options.catalog.state, options.rows, options.state.stale, options.state.error, options.state.syncBusy, options.state.syncError, [...folds]]);
     const AreaStatusWidget = class extends WidgetType {
       constructor() { super(); this.key = key; }
       eq(other) { return other?.key === this.key; }
       toDOM() {
         const host = notebookCreateEl(typeof document !== "undefined" ? document : null, "div", AREAS_ANCHOR_CLASS);
-        if (host) areasPaintStandalone(host, plugin.areasCatalogOptions(path));
+        if (host) areasPaintStandalone(host, plugin.areasCatalogOptions(path, plugin.areasCatalogFoldMap(view)));
         return host;
       }
       ignoreEvent() { return true; }
@@ -64496,7 +64804,9 @@ class BobLedgerToolsAreasCatalogMixin {
       this.areasCatalogRefreshTimer = null;
       if (!this.areasCatalogActive) return;
       for (const widget of this.areasCatalogReading || []) {
-        if (!widget.el?.closest?.(".cm-editor")) this.areasPaintReading(widget.el, widget.path, widget.allowAnchor);
+        if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
+        }
       }
       const effect = ensureAreasCatalogRefresh();
       for (const view of this.areasCatalogEditors || []) {
@@ -129391,6 +129701,11 @@ try {
       areasCardHostHue,
       areasCardRowModel,
       areasCardRows,
+      areasCardFoldKey,
+      areasCardFoldMap,
+      areasCardIsExpanded,
+      areasCardTooltip,
+      areasCardChips,
       areasCardLookupByTarget,
       areasCardIssueHint,
       areasCardHealthModel,

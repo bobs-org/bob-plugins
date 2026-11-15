@@ -61,6 +61,9 @@ function bankCategoryUiEventKey(event) {
   if (event.ctrlKey && event.key === "Enter") return "Ctrl+Enter";
   if (event.ctrlKey && (event.key === "n" || event.key === "N")) return "Ctrl+N";
   if (event.ctrlKey && (event.key === "p" || event.key === "P")) return "Ctrl+P";
+  if (event.key.length === 1 && (event.ctrlKey || event.metaKey || event.altKey)) {
+    return `Mod+${event.key}`;
+  }
   return event.key;
 }
 
@@ -107,6 +110,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.keyListener = (event) => this.onKeyDown(event);
     this.keyupListener = (event) => this.onKeyUp(event);
     this.keyupTarget = null;
+    this.keyScopeRef = null;
+    this.scopeKeyListener = null;
     this.model = null;
   }
 
@@ -120,7 +125,24 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       this.contentEl?.addClass?.("bob-bank-category-card");
       this.contentEl?.addClass?.("bob-key-card");
       this.contentEl?.addEventListener?.("click", this.clickListener);
-      this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
+      const hasScope = this.scope && typeof this.scope.register === "function";
+      if (hasScope) {
+        this.scopeKeyListener = (event) => {
+          try {
+            const routed = this.routeCardKey(event);
+            if (routed && typeof routed.catch === "function") routed.catch(() => {});
+          } catch (_) {}
+          bankCategoryUiConsume(event);
+          return false;
+        };
+        try {
+          this.keyScopeRef = this.scope.register(null, null, this.scopeKeyListener);
+        } catch (_) {
+          this.keyScopeRef = null;
+        }
+      } else {
+        this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
+      }
       this.contentEl?.addEventListener?.("keyup", this.keyupListener, true);
       const doc = this.contentEl?.ownerDocument || this.app?.document ||
         (typeof document !== "undefined" ? document : null);
@@ -134,6 +156,13 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onClose() {
     this.closed = true;
+    try {
+      if (this.keyScopeRef && this.scope && typeof this.scope.unregister === "function") {
+        this.scope.unregister(this.keyScopeRef);
+      }
+    } catch (_) {}
+    this.keyScopeRef = null;
+    this.scopeKeyListener = null;
     try { this.contentEl?.removeEventListener?.("click", this.clickListener); } catch (_) {}
     try { this.contentEl?.removeEventListener?.("keydown", this.keyListener, true); } catch (_) {}
     try { this.contentEl?.removeEventListener?.("keyup", this.keyupListener, true); } catch (_) {}
@@ -263,6 +292,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   async onKeyDown(event) {
     if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+    return this.routeCardKey(event);
+  }
+
+  async routeCardKey(event) {
+    if (!event || event.isComposing || event.keyCode === 229) return;
     const key = bankCategoryUiEventKey(event);
     if (!key) return;
     if (key === "Escape") {
@@ -277,6 +311,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (this.busy || this.waitingRefresh || this.summary) return;
     if (key === "Ctrl+Enter" && bankCategoryLockActive(this.lock, Date.now())) return;
     if ((key === "Enter" || key === "Ctrl+Enter") && bankCategoryChordShouldSwallow(this.chord, "Enter")) return;
+    if (event.repeat === true &&
+      (action.action === "file" || action.action === "no-category" || action.action === "accept")) {
+      return;
+    }
     this.didInteract = true;
     if (action.action === "cancel") {
       this.close();

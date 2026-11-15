@@ -73,13 +73,13 @@ Album owner cards, group navigation, and sync controls are described in
 `bob-bank` fences (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`): frontmatter matches the filename; only existing headings navigate; empty months teach. Queue rows run oldest-first; day buttons carry the drawn IDs. **Bank: open today** ensures today at the next row; **Bank: acknowledge this day** acks that day's snapshot; no default hotkeys. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clears empty stubs; `[cat:: ` inserts ordered keys. The read-only bank badge follows every Day and period strip — after the Day strip in a daily `bob-plan` block, after a `bob-day-stats` fence, and after each `bob-stats-strip` fence (never `bob-period-parts`) — for exactly that strip's period. It hides when the period has no counted money or waiting rows, uses quiet neutral, green-surplus, and amber-waiting tones, and opens the rows behind that period. Quarter, year, and all-time badges need a bob with `bank report -p`. `stats.bank_badge` (default on) gates the badge; `stats.bank_chip` remains its legacy alias. `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math; only `bank.md` hides its `bank` property.
 
 On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2
-`claimRowClose`, which opens the Category card. Bob's suggestion is
-highlighted; Enter or a second Ctrl+Enter accepts it, a hotkey picks another
-category, Space files without one, and Escape cancels. A filing ticks and
-categorizes in one undo, advances, and records a `recordJump` so Ctrl+O
-returns to the payee. **Bank: set category** corrects any row without
-changing checkbox or cursor. Hidden categories stay on rows but out of the
-card and `[cat:: ` suggestions. The waiting pill lands at the payee start.
+`claimRowClose` to open the Category card. Bob's suggestion is
+highlighted; Enter or a second Ctrl+Enter accepts it, a hotkey picks another,
+Space files without one, and Escape cancels. Keys work with editor focus;
+unbound keys (even with Ctrl/Cmd/Alt) never reach the note, and a held key
+never files twice. A filing ticks and categorizes in one undo, advances, and
+records a `recordJump` for Ctrl+O. **Bank: set category** corrects rows in
+place. Hidden categories stay on rows, out of card and suggestions.
 Older APIs keep the `[ ]`↔`[x]` flip.
 
 ## Bank Period Charts

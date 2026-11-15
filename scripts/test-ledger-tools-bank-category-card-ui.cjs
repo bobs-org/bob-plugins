@@ -580,3 +580,215 @@ test("a throwing save still refreshes after a successful close", async () => {
   assert.deepEqual(order, ["save", "refresh"]);
   assert.equal(modal.next.context.row.payee, "Market");
 });
+
+const CATEGORIES_WITH_DIGIT = [
+  ...CATEGORIES,
+  { key: "housing", label: "Housing", emoji: "🏠", hotkey: "1", group: "Everyday", hidden: false },
+];
+
+function scopeEvent(key, options = {}) {
+  return {
+    key,
+    ctrlKey: options.ctrlKey === true,
+    metaKey: options.metaKey === true,
+    altKey: options.altKey === true,
+    shiftKey: options.shiftKey === true,
+    repeat: options.repeat === true,
+    isComposing: false,
+    target: options.target || { nodeName: "TEXTAREA" },
+    prevented: false,
+    stopped: false,
+    preventDefault() { this.prevented = true; this.defaultPrevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+
+function fakeScope() {
+  const scope = {
+    calls: [],
+    unregistered: [],
+    fn: null,
+    register(mods, key, fn) {
+      this.calls.push({ mods, key, fn });
+      this.fn = fn;
+      return { id: this.calls.length };
+    },
+    unregister(ref) {
+      this.unregistered.push(ref);
+    },
+  };
+  return scope;
+}
+
+function openWithScope(mode, options = {}) {
+  const state = makeModal(mode, options);
+  const scope = fakeScope();
+  state.modal.scope = scope;
+  state.modal.onOpen();
+  return { ...state, scope };
+}
+
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("the scope catch-all is registered once and replaces the contentEl keydown listener", () => {
+  const { modal, scope } = openWithScope("close");
+  assert.equal(scope.calls.length, 1);
+  assert.equal(scope.calls[0].mods, null);
+  assert.equal(scope.calls[0].key, null);
+  assert.equal(typeof scope.calls[0].fn, "function");
+  const keydown = modal.contentEl.listeners.get("keydown") || [];
+  assert.equal(keydown.length, 0);
+  modal.onClose();
+});
+
+test("real-path scope keys file, accept, and move while swallowing every key", async () => {
+  const { modal, actions, scope } = openWithScope("close", { categories: CATEGORIES_WITH_DIGIT });
+  const outside = { nodeName: "TEXTAREA" };
+
+  let evt = scopeEvent("g", { target: outside });
+  assert.equal(scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(actions, [{ category: "groceries", kind: "pick", mode: "close" }]);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+
+  const digit = openWithScope("close", { categories: CATEGORIES_WITH_DIGIT });
+  evt = scopeEvent("1", { target: outside });
+  assert.equal(digit.scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(digit.actions, [{ category: "housing", kind: "pick", mode: "close" }]);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  digit.modal.onClose();
+
+  const space = openWithScope("close");
+  evt = scopeEvent(" ", { target: outside });
+  assert.equal(space.scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(space.actions, [{ category: null, kind: "no-category", mode: "close" }]);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  space.modal.onClose();
+
+  const accept = openWithScope("close");
+  evt = scopeEvent("Enter", { target: outside });
+  assert.equal(accept.scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(accept.actions, [{ category: "coffee", kind: "accept", mode: "close" }]);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  accept.modal.onClose();
+
+  const move = openWithScope("close");
+  evt = scopeEvent("ArrowDown", { target: outside });
+  assert.equal(move.scope.fn(evt), false);
+  assert.equal(move.modal.highlightKey, "groceries");
+  assert.equal(move.actions.length, 0);
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  move.modal.onClose();
+
+  modal.onClose();
+});
+
+test("unbound scope keys are swallowed with no filing and the card stays open", async () => {
+  const { modal, actions, scope } = openWithScope("close");
+  for (const key of ["z", "Tab", "Shift"]) {
+    const evt = scopeEvent(key, { target: { nodeName: "TEXTAREA" } });
+    assert.equal(scope.fn(evt), false);
+    await tick();
+    assert.equal(evt.prevented, true);
+    assert.equal(evt.stopped, true);
+  }
+  assert.equal(actions.length, 0);
+  assert.equal(modal.closed, false);
+  modal.onClose();
+});
+
+test("modifier letters never file while Shift+letter still files", async () => {
+  for (const mods of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+    const state = openWithScope("close");
+    const evt = scopeEvent("c", { ...mods, target: { nodeName: "TEXTAREA" } });
+    assert.equal(state.scope.fn(evt), false);
+    await tick();
+    assert.equal(state.actions.length, 0);
+    assert.equal(evt.prevented, true);
+    assert.equal(evt.stopped, true);
+    state.modal.onClose();
+  }
+  const shifted = openWithScope("close");
+  const evt = scopeEvent("G", { shiftKey: true, target: { nodeName: "TEXTAREA" } });
+  assert.equal(shifted.scope.fn(evt), false);
+  await tick();
+  assert.deepEqual(shifted.actions, [{ category: "groceries", kind: "pick", mode: "close" }]);
+  shifted.modal.onClose();
+});
+
+test("held-key repeats never file but repeats still move the highlight", async () => {
+  const filed = openWithScope("close");
+  for (const key of ["g", " ", "Enter"]) {
+    const evt = scopeEvent(key, { repeat: true, target: { nodeName: "TEXTAREA" } });
+    assert.equal(filed.scope.fn(evt), false);
+    await tick();
+    assert.equal(evt.prevented, true);
+    assert.equal(evt.stopped, true);
+  }
+  assert.equal(filed.actions.length, 0);
+  filed.modal.onClose();
+
+  const move = openWithScope("close");
+  const evt = scopeEvent("ArrowDown", { repeat: true, target: { nodeName: "TEXTAREA" } });
+  assert.equal(move.scope.fn(evt), false);
+  assert.equal(move.modal.highlightKey, "groceries");
+  assert.equal(move.actions.length, 0);
+  move.modal.onClose();
+});
+
+test("busy, waiting, and summary states swallow scope keys with no action", async () => {
+  const busy = openWithScope("close");
+  busy.modal.busy = true;
+  let evt = scopeEvent("g", { target: { nodeName: "TEXTAREA" } });
+  assert.equal(busy.scope.fn(evt), false);
+  await tick();
+  assert.equal(busy.actions.length, 0);
+  assert.equal(evt.prevented, true);
+  busy.modal.onClose();
+
+  const waiting = openWithScope("close");
+  waiting.modal.waitingRefresh = true;
+  evt = scopeEvent("g", { target: { nodeName: "TEXTAREA" } });
+  assert.equal(waiting.scope.fn(evt), false);
+  await tick();
+  assert.equal(waiting.actions.length, 0);
+  assert.equal(evt.prevented, true);
+  waiting.modal.onClose();
+
+  const summary = openWithScope("close");
+  summary.modal.summary = { line1: "done" };
+  evt = scopeEvent("g", { target: { nodeName: "TEXTAREA" } });
+  assert.equal(summary.scope.fn(evt), false);
+  await tick();
+  assert.equal(summary.actions.length, 0);
+  assert.equal(evt.prevented, true);
+  summary.modal.onClose();
+});
+
+test("onClose unregisters the scope catch-all", () => {
+  const { modal, scope } = openWithScope("close");
+  const ref = modal.keyScopeRef;
+  assert.ok(ref);
+  modal.onClose();
+  assert.deepEqual(scope.unregistered, [ref]);
+});
+
+test("without a scope the fallback contentEl keydown listener still files", async () => {
+  const { modal, actions } = makeModal("close");
+  modal.onOpen();
+  const keydown = modal.contentEl.listeners.get("keydown") || [];
+  assert.equal(keydown.length, 1);
+  await keydown[0](event("g"));
+  assert.deepEqual(actions, [{ category: "groceries", kind: "pick", mode: "close" }]);
+  modal.onClose();
+});

@@ -358,6 +358,33 @@ async function capturePage(client, output) {
   fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
 }
 
+function bankKeyDispatchEvents(options) {
+  const settings = options || {};
+  const key = String(settings.key || "");
+  const code = settings.code || (key === "Enter" ? "Enter" : key.length === 1 ? `Key${key.toUpperCase()}` : key);
+  const vk = settings.vk == null
+    ? (key === "Enter" ? 13 : key === "Escape" ? 27 : key === "Tab" ? 9 : key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0)
+    : settings.vk;
+  const events = [];
+  const text = key.length === 1 ? key : undefined;
+  events.push({
+    type: "keyDown",
+    key,
+    code,
+    windowsVirtualKeyCode: vk,
+    nativeVirtualKeyCode: vk,
+    ...(text !== undefined ? { text } : {}),
+  });
+  events.push({ type: "keyUp", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+  return events;
+}
+
+async function bankDispatchKey(client, options) {
+  const events = bankKeyDispatchEvents(options);
+  for (const event of events) await client.call("Input.dispatchKeyEvent", event, 5000);
+  return events;
+}
+
 async function clickSelector(client, selector) {
   const point = await client.evaluate(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
@@ -462,7 +489,7 @@ function runSelfTest() {
     const log = bank.readArgvLog(shimDir);
     if (!log.length || log[0].argv[1] !== "list") throw new Error("shim did not log argv");
     const source = fs.readFileSync(__filename, "utf8");
-    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-card.png"]) {
+    for (const token of ["toggle-bank-marks", "bank-open-today", "cycle-task-status-forward", "window-open", "xvfb-run", "never $0.00", ".math", "bob-bank-category-modal", "bob-bank-category-card", "walk-ctrl-enter-c", "walk-card.png", "walk-real-key-swallowed", "Input.dispatchKeyEvent", "walk-learn-coffee", "walk-learn-accept"]) {
       if (!source.includes(token) && token !== "never $0.00") {
         if (token === "never $0.00") continue;
         throw new Error(`e2e source missing ${token}`);
@@ -1406,57 +1433,148 @@ async function runE2e(parsed) {
     await capturePage(client, walkCardDark);
     report.screenshots.push(walkCardDark);
     await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
-    const learn = await client.evaluate(`(() => (async () => {
+    const focusState = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      if (editor && typeof editor.focus === "function") editor.focus();
+      const active = document.activeElement;
+      const modal = window.app.plugins.plugins["bob-ledger-tools"] && window.app.plugins.plugins["bob-ledger-tools"].bankCategoryModal;
+      const content = modal && modal.contentEl;
+      return {
+        focusedEditor: Boolean(editor),
+        activeTag: active ? active.tagName : null,
+        activeOutsideCard: Boolean(active && content && typeof content.contains === "function" ? !content.contains(active) : true),
+      };
+    })()`).catch((error) => ({ error: String(error) }));
+    await bankDispatchKey(client, { key: "c" });
+    const learned = await client.evaluate(`(() => (async () => {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        const current = ledger && ledger.bankCategoryModal;
+        if (current && current.suggestion && current.suggestion.category === "coffee") {
+          return { suggestion: current.suggestion.category, source: current.suggestion.source };
+        }
+        await sleep(100);
+      }
+      return { suggestion: null, source: null };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    await sleep(350);
+    await bankDispatchKey(client, { key: "Enter" });
+    await sleep(400);
+    const learn = await client.evaluate(`(() => {
       const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
       const editor = view && view.editor;
       const ledger = window.app.plugins.plugins["bob-ledger-tools"];
       const modal = ledger && ledger.bankCategoryModal;
       const lineOf = (payee) => editor.getValue().split("\\n").findIndex((line) => line.includes(payee));
-      const key = async (name, opts = {}) => {
-        const active = ledger && ledger.bankCategoryModal;
-        if (!active || typeof active.onKeyDown !== "function") return false;
-        const event = {
-          key: name, ctrlKey: opts.ctrl === true, isComposing: false,
-          preventDefault() {}, stopPropagation() {},
-        };
-        await active.onKeyDown(event);
-        if ((name === "Enter" || opts.ctrl === true) && typeof active.onKeyUp === "function") active.onKeyUp(event);
-        return true;
-      };
-      const keyedC = await key("c");
-      let suggestion = null;
-      let source = null;
-      const deadline = Date.now() + 2000;
-      while (Date.now() < deadline) {
-        const current = ledger && ledger.bankCategoryModal;
-        if (current && current.suggestion && current.suggestion.category === "coffee") {
-          suggestion = current.suggestion.category;
-          source = current.suggestion.source;
-          break;
-        }
-        await sleep(100);
-      }
-      await sleep(350);
-      const keyedEnter = await key("Enter");
-      await sleep(400);
       return {
-        keyedC,
-        keyedEnter,
-        suggestion,
-        source,
+        keyedC: true,
+        keyedEnter: true,
+        suggestion: ${JSON.stringify(null)} ,
+        source: null,
         first: editor.getLine(lineOf("$6.45 Corner Cafe")),
         second: editor.getLine(lineOf("$12.90 Corner Cafe")),
         payee: modal && modal.context && modal.context.cardRow && modal.context.cardRow.payee,
       };
-    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    })()`).catch((error) => ({ error: String(error) }));
+    if (learn && !learn.error) {
+      learn.suggestion = learned && learned.suggestion;
+      learn.source = learned && learned.source;
+      learn.focusState = focusState;
+    }
     record("walk-learn-coffee", Boolean(
       learn && /\[x\]/.test(String(learn.first || "")) && /\[cat:: coffee\]/.test(String(learn.first || "")) &&
-      learn.suggestion === "coffee" && learn.source === "learned",
-    ), jsonDetail(learn));
+      learn.suggestion === "coffee" && learn.source === "learned" &&
+      focusState && focusState.activeOutsideCard === true,
+    ), jsonDetail({ ...learn, focusState }));
     record("walk-learn-accept", Boolean(
       learn && /\[x\]/.test(String(learn.second || "")) && /\[cat:: coffee\]/.test(String(learn.second || "")),
     ), jsonDetail(learn));
+
+    await bankDispatchKey(client, { key: "Escape" });
+    await sleep(300);
+    const swallowed = await client.evaluate(`(() => (async () => {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const path = "bank/2026-12.md";
+      const body = [
+        "---",
+        'parent: "[[bank]]"',
+        'type: "[[bank_month]]"',
+        "month: 2026-12",
+        "---",
+        "",
+        "# Bank December 2026",
+        "",
+        "## Tue Dec 1",
+        "",
+        "- [ ] $6.45 Corner Cafe",
+        "- [ ] $12.90 Corner Cafe",
+        "- [ ] $4.00 Unrelated Shop",
+        "",
+      ].join("\\n");
+      const existing = window.app.vault.getAbstractFileByPath(path);
+      if (existing) await window.app.vault.modify(existing, body);
+      else await window.app.vault.create(path, body);
+      const abstract = window.app.vault.getAbstractFileByPath(path);
+      const leaf = window.app.workspace.getLeaf(false);
+      await leaf.openFile(abstract);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const editor = view && view.editor;
+      const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+      if (ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true) {
+        try { ledger.bankCategoryModal.close(); } catch (error) {}
+      }
+      const lineOf = (payee) => editor.getValue().split("\\n").findIndex((line) => line.includes(payee));
+      editor.setCursor({ line: lineOf("$6.45 Corner Cafe"), ch: 8 });
+      window.app.commands.executeCommandById("task-status-cycler:toggle-task-open-done");
+      await sleep(120);
+      if (!(ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true) &&
+          ledger && ledger.api && ledger.api.bank && typeof ledger.api.bank.claimRowClose === "function") {
+        ledger.api.bank.claimRowClose(editor, view);
+        await sleep(80);
+      }
+      const openDeadline = Date.now() + 1500;
+      let opened = Boolean(ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true);
+      while (!opened && Date.now() < openDeadline) {
+        await sleep(50);
+        opened = Boolean(ledger && ledger.bankCategoryModal && ledger.bankCategoryModal.closed !== true);
+      }
+      if (!opened) return { opened: false };
+      if (editor && typeof editor.focus === "function") editor.focus();
+      const active = document.activeElement;
+      const modal = ledger.bankCategoryModal;
+      const content = modal && modal.contentEl;
+      const activeOutsideCard = Boolean(active && content && typeof content.contains === "function" ? !content.contains(active) : true);
+      const before = editor.getValue();
+      return { opened: true, activeOutsideCard, before, line: editor.getLine(lineOf("$6.45 Corner Cafe")) };
+    })())()`, 30000).catch((error) => ({ error: String(error) }));
+    let swallowedAfter = null;
+    if (swallowed && swallowed.opened) {
+      await bankDispatchKey(client, { key: "z" });
+      await sleep(300);
+      swallowedAfter = await client.evaluate(`(() => {
+        const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+        const editor = view && view.editor;
+        const ledger = window.app.plugins.plugins["bob-ledger-tools"];
+        const modal = ledger && ledger.bankCategoryModal;
+        return {
+          after: editor.getValue(),
+          line: editor.getLine(editor.getValue().split("\\n").findIndex((line) => line.includes("$6.45 Corner Cafe"))),
+          stillOpen: Boolean(modal && modal.closed !== true),
+          filed: /\\[cat::/.test(editor.getValue().split("\\n").find((line) => line.includes("$6.45 Corner Cafe")) || ""),
+        };
+      })()`).catch((error) => ({ error: String(error) }));
+    }
+    await bankDispatchKey(client, { key: "Escape" });
+    await sleep(300);
+    record("walk-real-key-swallowed", Boolean(
+      swallowed && swallowed.opened && swallowed.activeOutsideCard === true &&
+      swallowedAfter && swallowedAfter.after === swallowed.before &&
+      swallowedAfter.filed !== true && swallowedAfter.stillOpen === true,
+    ), jsonDetail({ swallowed, swallowedAfter }));
 
     await openNote(client, "tasks/ordinary.md", "live");
     const ordinaryCycle = await client.evaluate(`(() => {

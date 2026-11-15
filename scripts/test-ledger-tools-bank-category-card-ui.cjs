@@ -93,6 +93,16 @@ test("the modal key contract dispatches every action in close and set modes", as
   }
 });
 
+test("plus opens the new-category stage and letters no longer file", async () => {
+  const state = makeModal("close");
+  state.modal.configFingerprint = "sha256:before";
+  await state.modal.onKeyDown(event("+"));
+  assert.ok(state.modal.newStage);
+  await state.modal.onKeyDown(event("g"));
+  assert.equal(state.actions.length, 0);
+  assert.equal(state.modal.newStage.label, "g");
+});
+
 test("the opening chord and landing lock swallow repeated Ctrl+Enter", async () => {
   const opened = makeModal("close", { openedWithCtrlEnter: true });
   await opened.modal.onKeyDown(event("Enter", { ctrlKey: true }));

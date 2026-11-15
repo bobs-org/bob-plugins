@@ -36,6 +36,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAreasDataMixin,
   BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
+  BobLedgerToolsBankConfigUpdateMixin,
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsBankWalkMixin,
   BobLedgerToolsBankCategoryMixin,

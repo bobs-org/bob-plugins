@@ -113,6 +113,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.keyScopeRef = null;
     this.scopeKeyListener = null;
     this.model = null;
+    this.newStage = null;
+    this.newSession = null;
+    this.newSessionDeps = null;
+    this.configFingerprint = "";
+    this.syncWarning = null;
   }
 
   onOpen() {
@@ -132,6 +137,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
             const routed = this.routeCardKey(event);
             if (routed && typeof routed.catch === "function") routed.catch(() => {});
           } catch (_) {}
+          if (this.newStage && typeof this.shouldPassNewCategoryKey === "function" &&
+              this.shouldPassNewCategoryKey(event)) {
+            return true;
+          }
           bankCategoryUiConsume(event);
           return false;
         };
@@ -156,6 +165,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onClose() {
     this.closed = true;
+    try { this.newSession?.close?.(); } catch (_) {}
+    this.newSession = null;
+    this.newStage = null;
     try {
       if (this.keyScopeRef && this.scope && typeof this.scope.unregister === "function") {
         this.scope.unregister(this.keyScopeRef);
@@ -173,6 +185,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onEscapeKey(event) {
     bankCategoryUiConsume(event);
+    if (this.newStage && typeof this.closeNewCategoryStage === "function") {
+      this.closeNewCategoryStage();
+      return false;
+    }
     if (!this.busy) this.close();
     return false;
   }
@@ -199,8 +215,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return this.model;
   }
 
+  setCategories(categories) {
+    if (!Array.isArray(categories) || this.closed) return false;
+    this.categories = categories;
+    this.reason = null;
+    try { this.paint(); } catch (_) {}
+    return true;
+  }
+
   setReport(report) {
-    if (!report || this.didInteract || this.closed) return false;
+    if (!report || this.closed) return false;
+    const fingerprint = typeof bankConfigFingerprintFromReport === "function"
+      ? bankConfigFingerprintFromReport(report)
+      : (typeof report.config_fingerprint === "string" ? report.config_fingerprint : "");
+    if (fingerprint) this.configFingerprint = fingerprint;
+    if (this.didInteract) return false;
     if (Array.isArray(report.categories)) this.categories = report.categories;
     const rows = Array.isArray(report.days)
       ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
@@ -234,6 +263,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.lock = lock || null;
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
+    if (this.newStage && typeof this.closeNewCategoryStage === "function") {
+      try { this.newSession?.close?.(); } catch (_) {}
+      this.newSession = null;
+      this.newStage = null;
+    }
     try { this.paint(); } catch (_) {}
   }
 
@@ -299,6 +333,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (!event || event.isComposing || event.keyCode === 229) return;
     const key = bankCategoryUiEventKey(event);
     if (!key) return;
+    if (this.newStage && typeof this.routeNewCategoryKey === "function") {
+      return this.routeNewCategoryKey(event);
+    }
     if (key === "Escape") {
       bankCategoryUiConsume(event);
       this.close();
@@ -316,7 +353,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     this.didInteract = true;
-    if (action.action === "cancel") {
+    if (action.action === "new-category") {
+      if (typeof this.openNewCategoryStage === "function") this.openNewCategoryStage();
+    } else if (action.action === "cancel") {
       this.close();
     } else if (action.action === "move") {
       const backwards = action.key === "ArrowLeft" || action.key === "ArrowUp" || action.key === "Ctrl+P";
@@ -338,6 +377,14 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onClick(event) {
     const target = event && event.target;
+    const created = target && typeof target.closest === "function"
+      ? target.closest("button[data-bank-new-category]")
+      : null;
+    if (created && !created.disabled) {
+      bankCategoryUiConsume(event);
+      if (typeof this.openNewCategoryStage === "function") this.openNewCategoryStage();
+      return;
+    }
     const tile = target && typeof target.closest === "function"
       ? target.closest("button[data-category-key]")
       : null;
@@ -530,13 +577,30 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
         this.paintTile(grid, tile, tile.key === this.highlightKey, disabled);
       }
     }
+    if (model.kind === "card" && typeof this.paintNewCategoryTile === "function") {
+      this.paintNewCategoryTile(root, disabled);
+    }
+    if (this.syncWarning && !this.newStage) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
+        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
+      const retry = bankCategoryUiAppend(root, "button", "bob-bank-category-retry", "Retry sync", {
+        type: "button",
+      });
+      if (retry) retry.addEventListener?.("click", () => { void this.retryBankConfigSync?.(); });
+    }
+    if (this.newStage && typeof this.paintNewCategoryStage === "function") {
+      this.paintNewCategoryStage(root);
+      return;
+    }
     bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
     if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
-    const keys = model.kind === "restricted"
-      ? (model.footer?.text || "␣ acknowledge · esc cancel")
-      : (this.mode === "close"
-        ? "↵ accept · letter choose · Space no category · Esc cancel"
-        : "↵ accept · letter choose · Space remove category · Esc cancel");
+    const keys = typeof bankCategoryCardKeysText === "function"
+      ? bankCategoryCardKeysText(this.mode, model.kind)
+      : (model.kind === "restricted"
+        ? (model.footer?.text || "␣ acknowledge · esc cancel")
+        : (this.mode === "close"
+          ? "↵ accept · letter choose · Space no category · + new category · Esc cancel"
+          : "↵ accept · letter choose · Space remove category · + new category · Esc cancel"));
     bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
   }
 }

@@ -65251,17 +65251,62 @@ class BobLedgerToolsAlbumUpdateMixin {
     );
   }
 }
-// ---- src/242b-plugin-album-update-session.js ----
-// Album schema update session: a DOM-independent, dependency-injected
-// edit session over one album. The visible card stays read-only until a
-// later phase wires it; this controller owns draft revisions, the typing
-// debounce, exact-envelope apply gating, editor-save ordering, Undo
-// availability, and sync-only recovery. Every response is keyed by
-// session epoch, draft revision, album identity, fingerprint, and vault
-// generation; superseded responses are ignored.
-function createAlbumUpdateSession(init = {}, deps = {}) {
-  const stem = String(init.stem || "");
-  const albumPath = albumReportPath(init.albumPath || `${stem}.md`);
+// ---- src/242aa-plugin-guarded-update-session.js ----
+// Writer-agnostic guarded update session (bob-cli-lt category-new).
+// Preview is keyed by revision, expect, and vault generation; Apply runs
+// only after a matching successful preview; open editors save first and a
+// generation move re-previews; inverse-op Undo is staged, not reconstructed.
+// Album and bank sessions are thin wrappers over this controller.
+const GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+
+function guardedUpdateJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function guardedUpdateCopy(overrides = {}) {
+  return {
+    previewEmpty: "There is nothing to preview.",
+    previewFailed: "The update preview failed.",
+    previewRefused: "The update preview was refused.",
+    applyFailed: "The update apply failed.",
+    applyRefused: "The update apply was refused.",
+    stalePreview: "The vault changed while this preview was running.",
+    stalePreviewHint: "Refresh and preview the retained draft against the current fingerprint.",
+    staleGeneration: "The vault changed under this preview.",
+    staleGenerationHint: "Preview again before applying; nothing was written.",
+    saveUnsupported: "Open editors could not confirm they are saved.",
+    saveUnsupportedHint: "Save every pane showing the file in Source mode, then preview again. Nothing was written.",
+    saveFailedHint: "Apply is refused until every pane showing the file saves. Nothing was written.",
+    supersededDuringSave: "The draft changed while panes were saving; preview the current draft before applying.",
+    saveInvalidated: "Saving changed the vault; preview again before applying.",
+    nothingToUndo: "There is no edit to undo.",
+    syncWarningHint: "The edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
+    retryHint: "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+    ...overrides,
+  };
+}
+
+function createGuardedUpdateSession(init = {}, deps = {}) {
+  const identity = String(init.identity || "");
+  const ownPath = typeof init.ownPath === "string" ? init.ownPath : identity;
+  const extras = guardedUpdateJsonObject(init.snapshotExtras) ? init.snapshotExtras : {};
+  const copy = guardedUpdateCopy(init.copy);
+  const debounceMs = Number.isFinite(init.debounceMs) && init.debounceMs >= 0
+    ? init.debounceMs
+    : GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS;
+  const buildEnvelope = typeof init.buildEnvelope === "function"
+    ? init.buildEnvelope
+    : (expect, ops) => JSON.stringify({ schema_version: 1, expect: String(expect), ops: Array.isArray(ops) ? ops : [] });
+  const isStaleCode = typeof init.isStaleCode === "function"
+    ? init.isStaleCode
+    : () => false;
+  const failureFromReport = typeof init.failureFromReport === "function"
+    ? init.failureFromReport
+    : (report) => {
+      if (guardedUpdateJsonObject(report) && guardedUpdateJsonObject(report.error)) return report.error;
+      if (guardedUpdateJsonObject(report) && guardedUpdateJsonObject(report.failure)) return report.failure;
+      return {};
+    };
   const timers = deps.timers || null;
   const session = {
     epoch: 1,
@@ -65320,7 +65365,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     return Boolean(preview) &&
       preview.epoch === session.epoch &&
       preview.revision === session.revision &&
-      preview.stem === stem &&
+      preview.identity === identity &&
       preview.expect === session.expect &&
       preview.generation === vaultGeneration();
   }
@@ -65337,8 +65382,8 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     const previewReport = session.preview && session.preview.report ? session.preview.report : null;
     return {
       status: session.status,
-      stem,
-      albumPath,
+      identity,
+      ownPath,
       revision: session.revision,
       expect: session.expect,
       draftOps: session.draftOps.slice(),
@@ -65351,6 +65396,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       refusal: session.refusal ? { ...session.refusal } : null,
       undoAvailable: Boolean(session.undo && Array.isArray(session.undo.inverseOps) && session.undo.inverseOps.length > 0),
       syncWarning: session.syncWarning ? { ...session.syncWarning } : null,
+      ...extras,
     };
   }
 
@@ -65376,29 +65422,46 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       if (!session.closed) {
         void requestPreview();
       }
-    }, ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS);
+    }, debounceMs);
+  }
+
+  function refusalFromFailure(kind, failure, fallbackMessage) {
+    const code = typeof failure.code === "string" ? failure.code : "refused";
+    return {
+      kind: isStaleCode(code) ? "stale" : kind,
+      code,
+      message: typeof failure.message === "string" ? failure.message : fallbackMessage,
+      hint: failure.hint == null ? "" : String(failure.hint),
+      opIndex: failure.op_index == null ? null : failure.op_index,
+      field: failure.field == null ? null : String(failure.field),
+      choice: failure.choice == null ? null : String(failure.choice),
+      path: failure.path == null ? null : String(failure.path),
+      line: failure.line == null ? null : failure.line,
+      keyPath: failure.key_path == null ? null : String(failure.key_path),
+      affected: failure.affected == null ? null : failure.affected,
+    };
   }
 
   async function requestPreview() {
     if (session.closed || session.draftOps.length === 0) {
-      return { ok: false, code: "empty-draft", message: "There is nothing to preview." };
+      return { ok: false, code: "empty-draft", message: copy.previewEmpty };
     }
     const revision = session.revision;
     const epoch = session.epoch;
     const expect = session.expect;
     const generation = vaultGeneration();
-    const envelopeText = albumUpdateEnvelopeText(expect, session.draftOps);
+    const envelopeText = buildEnvelope(expect, session.draftOps);
     session.status = "preview-pending";
     session.refusal = null;
     notify();
     let outcome;
     try {
-      outcome = await deps.spawnPreview(stem, envelopeText);
+      outcome = await deps.spawnPreview(identity, envelopeText);
     } catch (error) {
       outcome = {
         ok: false,
         code: "failed",
-        message: error && error.message ? String(error.message) : "The schema preview failed.",
+        message: error && error.message ? String(error.message) : copy.previewFailed,
       };
     }
     if (session.closed || session.epoch !== epoch || session.revision !== revision) {
@@ -65411,8 +65474,8 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       session.refusal = {
         kind: "stale",
         code: "stale_generation",
-        message: "The vault changed while this preview was running.",
-        hint: "Refresh the album and preview the retained draft against the current schema.",
+        message: copy.stalePreview,
+        hint: copy.stalePreviewHint,
       };
       notify();
       return { ok: false, ...session.refusal };
@@ -65423,7 +65486,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       session.refusal = {
         kind: outcome && outcome.code === "timeout" ? "timeout-unknown" : "transport",
         code: (outcome && outcome.code) || "failed",
-        message: (outcome && outcome.message) || "The schema preview failed.",
+        message: (outcome && outcome.message) || copy.previewFailed,
         hint: outcome && (outcome.detail || outcome.hint)
           ? String(outcome.detail || outcome.hint)
           : "Nothing was written. Refresh and preview again.",
@@ -65433,27 +65496,14 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     }
     const report = outcome.report;
     if (report.ok !== true) {
-      const failure = albumJsonObject(report.error) ? report.error : {};
-      const code = typeof failure.code === "string" ? failure.code : "refused";
+      const failure = failureFromReport(report);
       session.preview = null;
       session.status = "refused";
-      session.refusal = {
-        kind: albumIsStaleUpdateCode(code) ? "stale" : "refused",
-        code,
-        message: typeof failure.message === "string" ? failure.message : "The schema preview was refused.",
-        hint: failure.hint == null ? "" : String(failure.hint),
-        opIndex: failure.op_index == null ? null : failure.op_index,
-        field: failure.field == null ? null : String(failure.field),
-        choice: failure.choice == null ? null : String(failure.choice),
-        path: failure.path == null ? null : String(failure.path),
-        line: failure.line == null ? null : failure.line,
-        keyPath: failure.key_path == null ? null : String(failure.key_path),
-        affected: failure.affected == null ? null : failure.affected,
-      };
+      session.refusal = refusalFromFailure("refused", failure, copy.previewRefused);
       notify();
       return { ok: false, ...session.refusal };
     }
-    session.preview = { epoch, revision, stem, expect, generation, envelopeText, report };
+    session.preview = { epoch, revision, identity, expect, generation, envelopeText, report };
     session.status = "preview-ready";
     session.refusal = null;
     notify();
@@ -65484,8 +65534,6 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     return snapshot();
   }
 
-  // A vault generation observed outside the preview (for example the
-  // card's subscription firing) invalidates Apply eligibility at once.
   function noteGenerationChanged() {
     if (session.closed) {
       return snapshot();
@@ -65496,16 +65544,14 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       session.refusal = {
         kind: "stale",
         code: "stale_generation",
-        message: "The vault changed under this preview.",
-        hint: "Preview again before applying; nothing was written.",
+        message: copy.staleGeneration,
+        hint: copy.staleGenerationHint,
       };
       notify();
     }
     return snapshot();
   }
 
-  // Move a retained draft onto a freshly-read schema only after an explicit
-  // user action. Rebase never previews or applies by itself.
   function rebase(expect) {
     if (session.closed) return snapshot();
     session.expect = typeof expect === "string" ? expect : "";
@@ -65533,24 +65579,20 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     const run = (async () => {
       session.status = "applying";
       notify();
-      // Await supported saves of open Markdown editors, including every
-      // pane showing the album, before touching the writer. The original
-      // `expect` is retained through save and apply so a Source edit can
-      // never be silently rebased.
       if (typeof deps.saveEditors !== "function") {
         session.status = "refused";
         session.refusal = {
           kind: "save",
           code: "save-unsupported",
-          message: "The album editor could not confirm open panes are saved.",
-          hint: "Save every pane showing the album in Source mode, then preview again. Nothing was written.",
+          message: copy.saveUnsupported,
+          hint: copy.saveUnsupportedHint,
         };
         notify();
         return { ok: false, ...session.refusal };
       }
       let saved;
       try {
-        saved = await deps.saveEditors([albumPath]);
+        saved = await deps.saveEditors([ownPath]);
       } catch (error) {
         saved = { ok: false, message: error && error.message ? String(error.message) : "Saving failed." };
       }
@@ -65564,7 +65606,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
           kind: "save",
           code: (saved && saved.code) || "save-failed",
           message: (saved && saved.message) || "Saving the open editors failed.",
-          hint: "Apply is refused until every pane showing the album saves. Nothing was written.",
+          hint: copy.saveFailedHint,
         };
         notify();
         return { ok: false, ...session.refusal };
@@ -65572,34 +65614,26 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       if (session.revision !== preview.revision ||
           (session.preview !== preview && vaultGeneration() === preview.generation) ||
           session.expect !== preview.expect || session.epoch !== preview.epoch) {
-        // A draft changed or a same-generation preview was superseded while
-        // the supported save awaited. Keep that newer session state and never
-        // send the old bytes.
-        return { ok: false, code: "superseded-during-save", message: "The schema draft changed while panes were saving; preview the current draft before applying." };
+        return { ok: false, code: "superseded-during-save", message: copy.supersededDuringSave };
       }
       if (vaultGeneration() !== preview.generation || !previewMatchesCurrent(preview)) {
-        // Saving invalidated the preview: show a fresh preview and require
-        // confirmation again instead of applying the old envelope.
         session.preview = null;
         session.status = "preview-pending";
         notify();
         await requestPreview();
-        return { ok: false, code: "save-invalidated", message: "Saving changed the vault; preview again before applying." };
+        return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
       }
       let outcome;
       try {
-        outcome = await deps.spawnApply(stem, preview.envelopeText, { ownPath: albumPath });
+        outcome = await deps.spawnApply(identity, preview.envelopeText, { ownPath });
       } catch (error) {
         outcome = {
           ok: false,
           code: "failed",
-          message: error && error.message ? String(error.message) : "The schema apply failed.",
+          message: error && error.message ? String(error.message) : copy.applyFailed,
         };
       }
       if (session.closed || session.epoch !== epoch || session.revision !== preview.revision) {
-        // Never present a late apply as session state after close or a
-        // superseding draft; the committed transaction itself is not
-        // cancellable and is left to the refreshed report, not claimed here.
         return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
       }
       if (!outcome || outcome.ok !== true || !outcome.report) {
@@ -65609,7 +65643,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
         session.refusal = {
           kind: unknown ? "timeout-unknown" : "transport",
           code: (outcome && outcome.code) || "failed",
-          message: (outcome && outcome.message) || "The schema apply failed.",
+          message: (outcome && outcome.message) || copy.applyFailed,
           hint: unknown
             ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
             : "Nothing was written. Refresh and preview again.",
@@ -65619,31 +65653,14 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       }
       const report = outcome.report;
       if (report.ok !== true) {
-        const failure = albumJsonObject(report.error) ? report.error : {};
-        const code = typeof failure.code === "string" ? failure.code : "refused";
-        // Stale refreshes land through the service's generation-aware
-        // revalidation; the draft stays unconfirmed and is never retried
-        // automatically.
+        const failure = failureFromReport(report);
         session.preview = null;
         session.status = "refused";
-        session.refusal = {
-          kind: albumIsStaleUpdateCode(code) ? "stale" : "refused",
-          code,
-          message: typeof failure.message === "string" ? failure.message : "The schema apply was refused.",
-          hint: failure.hint == null ? "" : String(failure.hint),
-          opIndex: failure.op_index == null ? null : failure.op_index,
-          field: failure.field == null ? null : String(failure.field),
-          choice: failure.choice == null ? null : String(failure.choice),
-          path: failure.path == null ? null : String(failure.path),
-          line: failure.line == null ? null : failure.line,
-          keyPath: failure.key_path == null ? null : String(failure.key_path),
-          affected: failure.affected == null ? null : failure.affected,
-        };
+        session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
         notify();
         return { ok: false, ...session.refusal };
       }
       if (report.changed !== true) {
-        // A no-op applies nothing and must not overwrite Undo.
         session.revision += 1;
         session.draftOps = [];
         session.preview = null;
@@ -65652,9 +65669,6 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
         notify();
         return { ok: true, changed: false, report };
       }
-      // Success: the fresh baseline moves to the returned fingerprint and
-      // the opaque inverse (restoration metadata included) becomes Undo.
-      // Inverse YAML is never reconstructed and git history stays linear.
       session.expect = String(report.after_fingerprint || session.expect);
       session.undo = {
         inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
@@ -65671,7 +65685,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
       if (postSyncFailed) {
         session.syncWarning = {
           message: "Saved locally; sync failed.",
-          hint: "The schema edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
+          hint: copy.syncWarningHint,
         };
         session.status = "saved-with-sync-warning";
       } else {
@@ -65695,19 +65709,13 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     }
   }
 
-  // `u` stages the last successful gesture's inverse on the same
-  // preview-and-Enter path. External changes or newly used values can
-  // still refuse it through the backend checks.
   function stageUndo() {
     if (session.closed) {
       return { ok: false, code: "closed", message: "The edit session is closed." };
     }
     if (!session.undo || !Array.isArray(session.undo.inverseOps) || session.undo.inverseOps.length === 0) {
-      return { ok: false, code: "nothing-to-undo", message: "There is no schema edit to undo." };
+      return { ok: false, code: "nothing-to-undo", message: copy.nothingToUndo };
     }
-    // The inverse is guarded by the exact post-image of the write that
-    // created it. A later report refresh cannot silently bless an external
-    // edit as the Undo baseline.
     if (session.undo.afterFingerprint) session.expect = session.undo.afterFingerprint;
     setDraft(session.undo.inverseOps.map((op) => ({ ...op })));
     return { ok: true, revision: session.revision };
@@ -65740,7 +65748,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     }
     session.syncWarning = {
       message: "Saved locally; sync failed.",
-      hint: (outcome && (outcome.detail || outcome.message)) || "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+      hint: (outcome && (outcome.detail || outcome.message)) || copy.retryHint,
     };
     notify();
     return { ok: false, code: (outcome && outcome.code) || "sync-failed", message: session.syncWarning.hint };
@@ -65751,8 +65759,6 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     session.closed = true;
     clearPreviewTimer();
     session.previewFlight = null;
-    // A committed transaction already running is not cancellable: its
-    // late result is ignored by epoch, never painted as session state.
   }
 
   return {
@@ -65769,6 +65775,42 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     close,
     getState: snapshot,
   };
+}
+// ---- src/242b-plugin-album-update-session.js ----
+// Album schema update session: a thin wrapper over the writer-agnostic
+// guarded update session. Behavior and tests stay unchanged.
+function createAlbumUpdateSession(init = {}, deps = {}) {
+  const stem = String(init.stem || "");
+  const albumPath = albumReportPath(init.albumPath || `${stem}.md`);
+  return createGuardedUpdateSession({
+    identity: stem,
+    ownPath: albumPath,
+    expect: init.expect,
+    debounceMs: ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS,
+    buildEnvelope: albumUpdateEnvelopeText,
+    isStaleCode: albumIsStaleUpdateCode,
+    failureFromReport: (report) => (albumJsonObject(report) && albumJsonObject(report.error) ? report.error : {}),
+    snapshotExtras: { stem, albumPath },
+    copy: {
+      previewEmpty: "There is nothing to preview.",
+      previewFailed: "The schema preview failed.",
+      previewRefused: "The schema preview was refused.",
+      applyFailed: "The schema apply failed.",
+      applyRefused: "The schema apply was refused.",
+      stalePreview: "The vault changed while this preview was running.",
+      stalePreviewHint: "Refresh the album and preview the retained draft against the current schema.",
+      staleGeneration: "The vault changed under this preview.",
+      staleGenerationHint: "Preview again before applying; nothing was written.",
+      saveUnsupported: "The album editor could not confirm open panes are saved.",
+      saveUnsupportedHint: "Save every pane showing the album in Source mode, then preview again. Nothing was written.",
+      saveFailedHint: "Apply is refused until every pane showing the album saves. Nothing was written.",
+      supersededDuringSave: "The schema draft changed while panes were saving; preview the current draft before applying.",
+      saveInvalidated: "Saving changed the vault; preview again before applying.",
+      nothingToUndo: "There is no schema edit to undo.",
+      syncWarningHint: "The schema edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
+      retryHint: "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+    },
+  }, deps);
 }
 
 // Adapter from the shared album service to session dependencies. The
@@ -67088,6 +67130,7 @@ function bankSharedFields(body) {
   return {
     schema_version: BANK_SCHEMA_VERSION,
     today: bankString(body.today),
+    config_fingerprint: bankString(body.config_fingerprint) || bankString(body.fingerprint) || "",
     categories,
     accounts,
     issues: bankJsonObject(body.issues)
@@ -67106,6 +67149,7 @@ function bankTeachingReport(body) {
     ok: true,
     teaching_empty: true,
     today: bankString(body.today),
+    config_fingerprint: bankString(body.config_fingerprint) || bankString(body.fingerprint) || "",
     categories: [],
     accounts: [],
     issues: { errors: 0, warnings: 0 },
@@ -69259,6 +69303,14 @@ class BobLedgerToolsBankDataMixin {
     if (!current && !previous) {
       return;
     }
+    const own = this.bankConfigUpdateOwnPaths instanceof Set ? this.bankConfigUpdateOwnPaths : null;
+    if (own) {
+      const path = bankNormalizePath(file);
+      const prev = oldPath ? bankNormalizePath(oldPath) : "";
+      if ((path && own.has(path)) || (prev && own.has(prev))) {
+        return;
+      }
+    }
     this.apiBankInvalidate("vault");
   }
 
@@ -69292,6 +69344,12 @@ class BobLedgerToolsBankDataMixin {
     this.bankRevalidateTimer = null;
     this.bankRolloverTimer = null;
     this.bankLocalDay = bankLocalDate();
+    this.bankConfigUpdateOwnPaths = new Set();
+    this.bankConfigUpdateFlight = null;
+    this.bankConfigUpdateBusy = false;
+    if (typeof this.setupBankConfigUpdate === "function") {
+      this.setupBankConfigUpdate();
+    }
     try {
       const metadataCache = this.app && this.app.metadataCache;
       if (metadataCache && typeof metadataCache.on === "function") {
@@ -69376,6 +69434,14 @@ class BobLedgerToolsBankDataMixin {
     this.bankRolloverTimer = null;
     this.bankLocalDay = null;
     this.bankVaultGeneration = 0;
+    if (typeof this.teardownBankConfigUpdate === "function") {
+      this.teardownBankConfigUpdate();
+    }
+    this.bankConfigUpdateBusy = false;
+    this.bankConfigUpdateFlight = null;
+    if (this.bankConfigUpdateOwnPaths instanceof Set) {
+      this.bankConfigUpdateOwnPaths.clear();
+    }
     if (this.bankMounts instanceof Set) {
       for (const mount of this.bankMounts) {
         if (mount) {
@@ -75972,7 +76038,7 @@ function bankCategoryCardModel(input = {}) {
     highlightKey,
     footer: oldBob
       ? { ...footer, hint: "update bob for one-key filing" }
-      : footer,
+      : { ...footer, hint: footer.hint || "+ new category" },
     progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
   };
 }
@@ -75987,6 +76053,9 @@ function bankCategoryResolveCardKey(input = {}) {
   }
   if (key === " ") {
     return { action: "no-category" };
+  }
+  if (key === "+" || key === "=" || key === "＋") {
+    return { action: "new-category" };
   }
   if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
     return { action: "cancel" };
@@ -76533,6 +76602,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.keyScopeRef = null;
     this.scopeKeyListener = null;
     this.model = null;
+    this.newStage = null;
+    this.newSession = null;
+    this.newSessionDeps = null;
+    this.configFingerprint = "";
+    this.syncWarning = null;
   }
 
   onOpen() {
@@ -76552,6 +76626,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
             const routed = this.routeCardKey(event);
             if (routed && typeof routed.catch === "function") routed.catch(() => {});
           } catch (_) {}
+          if (this.newStage && typeof this.shouldPassNewCategoryKey === "function" &&
+              this.shouldPassNewCategoryKey(event)) {
+            return true;
+          }
           bankCategoryUiConsume(event);
           return false;
         };
@@ -76576,6 +76654,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onClose() {
     this.closed = true;
+    try { this.newSession?.close?.(); } catch (_) {}
+    this.newSession = null;
+    this.newStage = null;
     try {
       if (this.keyScopeRef && this.scope && typeof this.scope.unregister === "function") {
         this.scope.unregister(this.keyScopeRef);
@@ -76593,6 +76674,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onEscapeKey(event) {
     bankCategoryUiConsume(event);
+    if (this.newStage && typeof this.closeNewCategoryStage === "function") {
+      this.closeNewCategoryStage();
+      return false;
+    }
     if (!this.busy) this.close();
     return false;
   }
@@ -76619,8 +76704,21 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return this.model;
   }
 
+  setCategories(categories) {
+    if (!Array.isArray(categories) || this.closed) return false;
+    this.categories = categories;
+    this.reason = null;
+    try { this.paint(); } catch (_) {}
+    return true;
+  }
+
   setReport(report) {
-    if (!report || this.didInteract || this.closed) return false;
+    if (!report || this.closed) return false;
+    const fingerprint = typeof bankConfigFingerprintFromReport === "function"
+      ? bankConfigFingerprintFromReport(report)
+      : (typeof report.config_fingerprint === "string" ? report.config_fingerprint : "");
+    if (fingerprint) this.configFingerprint = fingerprint;
+    if (this.didInteract) return false;
     if (Array.isArray(report.categories)) this.categories = report.categories;
     const rows = Array.isArray(report.days)
       ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
@@ -76654,6 +76752,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.lock = lock || null;
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
+    if (this.newStage && typeof this.closeNewCategoryStage === "function") {
+      try { this.newSession?.close?.(); } catch (_) {}
+      this.newSession = null;
+      this.newStage = null;
+    }
     try { this.paint(); } catch (_) {}
   }
 
@@ -76719,6 +76822,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (!event || event.isComposing || event.keyCode === 229) return;
     const key = bankCategoryUiEventKey(event);
     if (!key) return;
+    if (this.newStage && typeof this.routeNewCategoryKey === "function") {
+      return this.routeNewCategoryKey(event);
+    }
     if (key === "Escape") {
       bankCategoryUiConsume(event);
       this.close();
@@ -76736,7 +76842,9 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       return;
     }
     this.didInteract = true;
-    if (action.action === "cancel") {
+    if (action.action === "new-category") {
+      if (typeof this.openNewCategoryStage === "function") this.openNewCategoryStage();
+    } else if (action.action === "cancel") {
       this.close();
     } else if (action.action === "move") {
       const backwards = action.key === "ArrowLeft" || action.key === "ArrowUp" || action.key === "Ctrl+P";
@@ -76758,6 +76866,14 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
 
   onClick(event) {
     const target = event && event.target;
+    const created = target && typeof target.closest === "function"
+      ? target.closest("button[data-bank-new-category]")
+      : null;
+    if (created && !created.disabled) {
+      bankCategoryUiConsume(event);
+      if (typeof this.openNewCategoryStage === "function") this.openNewCategoryStage();
+      return;
+    }
     const tile = target && typeof target.closest === "function"
       ? target.closest("button[data-category-key]")
       : null;
@@ -76950,13 +77066,30 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
         this.paintTile(grid, tile, tile.key === this.highlightKey, disabled);
       }
     }
+    if (model.kind === "card" && typeof this.paintNewCategoryTile === "function") {
+      this.paintNewCategoryTile(root, disabled);
+    }
+    if (this.syncWarning && !this.newStage) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
+        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
+      const retry = bankCategoryUiAppend(root, "button", "bob-bank-category-retry", "Retry sync", {
+        type: "button",
+      });
+      if (retry) retry.addEventListener?.("click", () => { void this.retryBankConfigSync?.(); });
+    }
+    if (this.newStage && typeof this.paintNewCategoryStage === "function") {
+      this.paintNewCategoryStage(root);
+      return;
+    }
     bankCategoryUiAppend(root, "p", "bob-bank-category-footer", model.footer?.text || "pick a category");
     if (model.footer?.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.footer.hint);
-    const keys = model.kind === "restricted"
-      ? (model.footer?.text || "␣ acknowledge · esc cancel")
-      : (this.mode === "close"
-        ? "↵ accept · letter choose · Space no category · Esc cancel"
-        : "↵ accept · letter choose · Space remove category · Esc cancel");
+    const keys = typeof bankCategoryCardKeysText === "function"
+      ? bankCategoryCardKeysText(this.mode, model.kind)
+      : (model.kind === "restricted"
+        ? (model.footer?.text || "␣ acknowledge · esc cancel")
+        : (this.mode === "close"
+          ? "↵ accept · letter choose · Space no category · + new category · Esc cancel"
+          : "↵ accept · letter choose · Space remove category · + new category · Esc cancel"));
     bankCategoryUiAppend(root, "p", "bob-bank-category-keys", keys);
   }
 }
@@ -79314,6 +79447,1034 @@ function bankSetupLintDeltas(beforeText, afterText) {
     delta: (after.length - suffix) - (before.length - suffix),
   }];
 }
+// ---- src/248d-plugin-bank-config-update.js ----
+// Bank config update wire helpers. `bob bank config update` is the only
+// writer of bank: YAML; these helpers build its argv and envelope and
+// decode its typed result. Report decoders stay additive: unknown future
+// keys are preserved by validating the wire shape, never reinterpreted.
+const BANK_CONFIG_UPDATE_SCHEMA_VERSION = 1;
+const BANK_CONFIG_UPDATE_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const BANK_CONFIG_UPDATE_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS = GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS;
+const BANK_CONFIG_UPDATE_HUB_PATH = "bank.md";
+const BANK_CONFIG_HOTKEY_ORDER = "abcdefghijklmnopqrstuvwxyz1234567890";
+const BANK_CONFIG_RESERVED_HOTKEY = "q";
+
+function bankConfigVaultSyncArgs() {
+  return ["vault-sync"];
+}
+
+function bankConfigUpdateArgs(options = {}) {
+  const opts = bankJsonObject(options) ? options : {};
+  const args = ["bank", "config", "update", "-f", "json", "-i", "-"];
+  if (opts.dryRun === true) {
+    args.push("-d");
+  }
+  return args;
+}
+
+function bankConfigUpdateEnvelope(expect, ops) {
+  return {
+    schema_version: BANK_CONFIG_UPDATE_SCHEMA_VERSION,
+    expect: String(expect),
+    ops: Array.isArray(ops) ? ops : [],
+  };
+}
+
+function bankConfigUpdateEnvelopeText(expect, ops) {
+  return JSON.stringify(bankConfigUpdateEnvelope(expect, ops));
+}
+
+function bankConfigUpdateCount(value) {
+  return value === null || value === undefined || (Number.isInteger(value) && value >= 0);
+}
+
+function bankConfigUpdateNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
+function bankConfigUpdatePerOpShape(entry) {
+  if (!bankJsonObject(entry)) {
+    return false;
+  }
+  if (!Number.isInteger(entry.index) || entry.index < 0) {
+    return false;
+  }
+  if (typeof entry.op !== "string" || !entry.op) {
+    return false;
+  }
+  if (typeof entry.summary !== "string") {
+    return false;
+  }
+  if (!bankConfigUpdateNullableString(entry.key) || !bankConfigUpdateNullableString(entry.hotkey)) {
+    return false;
+  }
+  if (!bankConfigUpdateCount(entry.rows) || !bankConfigUpdateCount(entry.rule_refs)) {
+    return false;
+  }
+  return true;
+}
+
+function bankConfigUpdateFailureShape(failure) {
+  if (failure === null || failure === undefined) {
+    return true;
+  }
+  if (!bankJsonObject(failure)) {
+    return false;
+  }
+  if (typeof failure.code !== "string" || !failure.code) {
+    return false;
+  }
+  if (typeof failure.message !== "string") {
+    return false;
+  }
+  return bankConfigUpdateNullableString(failure.hint) &&
+    bankConfigUpdateCount(failure.op_index) &&
+    bankConfigUpdateNullableString(failure.key_path) &&
+    bankConfigUpdateCount(failure.line) &&
+    bankConfigUpdateCount(failure.affected);
+}
+
+function bankConfigUpdateCommitShape(commit) {
+  if (commit === null || commit === undefined) {
+    return true;
+  }
+  return bankJsonObject(commit) &&
+    typeof commit.sha === "string" &&
+    typeof commit.subject === "string";
+}
+
+function bankConfigUpdateSyncShape(sync) {
+  if (sync === null || sync === undefined) {
+    return true;
+  }
+  return bankJsonObject(sync);
+}
+
+function bankConfigUpdateHotkeysShape(hotkeys) {
+  if (hotkeys === null || hotkeys === undefined) {
+    return true;
+  }
+  if (!bankJsonObject(hotkeys)) {
+    return false;
+  }
+  if (hotkeys.shifted !== undefined && !Array.isArray(hotkeys.shifted)) {
+    return false;
+  }
+  if (hotkeys.free !== undefined && !Array.isArray(hotkeys.free)) {
+    return false;
+  }
+  return true;
+}
+
+function bankConfigUpdateReportShape(body) {
+  if (!bankJsonObject(body)) {
+    return false;
+  }
+  if (body.schema_version !== BANK_CONFIG_UPDATE_SCHEMA_VERSION) {
+    return false;
+  }
+  if (body.command !== "update" || typeof body.ok !== "boolean") {
+    return false;
+  }
+  if (typeof body.dry_run !== "boolean" || typeof body.changed !== "boolean") {
+    return false;
+  }
+  if (typeof body.before_fingerprint !== "string" || typeof body.after_fingerprint !== "string") {
+    return false;
+  }
+  if (typeof body.consequence !== "string") {
+    return false;
+  }
+  if (!Array.isArray(body.per_op) || !body.per_op.every(bankConfigUpdatePerOpShape)) {
+    return false;
+  }
+  if (!bankConfigUpdateHotkeysShape(body.hotkeys)) {
+    return false;
+  }
+  if (body.categories !== undefined && body.categories !== null && !Array.isArray(body.categories)) {
+    return false;
+  }
+  if (!Array.isArray(body.inverse_ops)) {
+    return false;
+  }
+  if (!Array.isArray(body.changes)) {
+    return false;
+  }
+  if (!Array.isArray(body.warnings) || !body.warnings.every((warning) => typeof warning === "string")) {
+    return false;
+  }
+  return bankConfigUpdateCommitShape(body.commit) &&
+    bankConfigUpdateSyncShape(body.sync) &&
+    bankConfigUpdateFailureShape(body.failure);
+}
+
+function bankDecodeConfigUpdateReport(stdout, stderr = "", exitCode = null) {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    if (bankConfigUnsupported(stdout, stderr, exitCode)) {
+      return bankUnsupportedConfig("bob bank config update", stderr);
+    }
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob bank config update returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (!bankConfigUpdateReportShape(body)) {
+    if (bankJsonObject(body) && body.schema_version !== BANK_CONFIG_UPDATE_SCHEMA_VERSION) {
+      return {
+        ok: false,
+        code: "schema-mismatch",
+        message: "bob bank config update uses a different schema.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob bank config update returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  const categories = Array.isArray(body.categories)
+    ? body.categories.map((entry) => bankNormalizeConfigCategory(entry) || bankNormalizeCategory(entry)).filter(Boolean)
+    : [];
+  return {
+    ok: true,
+    report: {
+      ...body,
+      categories,
+    },
+    exitCode,
+  };
+}
+
+function bankDecodeConfigVaultSyncResult(stdout, stderr = "", exitCode = null) {
+  void stdout;
+  if (exitCode === null || exitCode === undefined || exitCode === 0) {
+    return { ok: true, report: { ok: true, output: String(stdout === undefined ? "" : stdout) } };
+  }
+  return {
+    ok: false,
+    code: "sync-failed",
+    message: "bob vault-sync reported a failure.",
+    detail: statsFirstLine(stderr),
+  };
+}
+
+function bankIsStaleConfigUpdateCode(code) {
+  return code === "stale_config";
+}
+
+function bankConfigUpdateErrorModel(result) {
+  const source = bankJsonObject(result) ? result : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Bank setup editing needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found") {
+    return { code, hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  }
+  if (code === "unsupported") {
+    return { code, hint: "Setup needs a newer bob — run bob update." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob bank config update timed out. Refresh and reconcile before retrying; never blind-retry." };
+  }
+  if (code === "stdin-failed") {
+    return { code, hint: "The update envelope never reached bob. Nothing was written; preview again." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "The config update failed. Refresh before retrying.",
+  };
+}
+
+function bankConfigFingerprintFromReport(report) {
+  if (!bankJsonObject(report)) {
+    return "";
+  }
+  return bankString(report.config_fingerprint) || bankString(report.fingerprint) || "";
+}
+
+function bankConfigFreeHotkeys(categories) {
+  const claimed = new Set();
+  claimed.add(BANK_CONFIG_RESERVED_HOTKEY);
+  for (const entry of Array.isArray(categories) ? categories : []) {
+    const hotkey = typeof entry?.hotkey === "string" && entry.hotkey.length === 1
+      ? entry.hotkey.toLowerCase()
+      : null;
+    if (hotkey) claimed.add(hotkey);
+  }
+  return [...BANK_CONFIG_HOTKEY_ORDER].filter((key) => !claimed.has(key));
+}
+
+function bankConfigHotkeyOwner(categories, hotkey) {
+  const wanted = typeof hotkey === "string" && hotkey.length === 1 ? hotkey.toLowerCase() : "";
+  if (!wanted) return null;
+  for (const entry of Array.isArray(categories) ? categories : []) {
+    const claimed = typeof entry?.hotkey === "string" && entry.hotkey.length === 1
+      ? entry.hotkey.toLowerCase()
+      : "";
+    if (claimed === wanted) return entry;
+  }
+  return null;
+}
+
+function bankConfigIsHotkeyChar(value) {
+  return typeof value === "string" && value.length === 1 && /[a-z0-9]/i.test(value);
+}
+
+function bankConfigGroups(categories) {
+  const groups = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(categories) ? categories : []) {
+    const group = typeof entry?.group === "string" && entry.group.trim() ? entry.group.trim() : null;
+    if (!group || seen.has(group)) continue;
+    seen.add(group);
+    groups.push(group);
+  }
+  return groups;
+}
+
+function bankConfigAddOp(draft) {
+  const label = typeof draft?.label === "string" ? draft.label.trim() : "";
+  if (!label) return null;
+  const op = { op: "category.add", label };
+  const group = typeof draft?.group === "string" ? draft.group.trim() : "";
+  if (group) op.group = group;
+  const hotkey = typeof draft?.hotkey === "string" ? draft.hotkey.trim().toLowerCase() : "";
+  if (hotkey) op.hotkey = hotkey;
+  if (draft?.hidden === true) op.hidden = true;
+  return op;
+}
+// ---- src/248e-plugin-bank-config-update-service.js ----
+// Bank config update service (mixin half). Preview is a dry-run with no
+// locks and no vault bytes; apply serializes across cards, suppresses only
+// the writer's own `bank.md` echo, and forces a fresh bank report so an
+// older in-flight list cannot become the post-write display. Sync-only
+// recovery runs `bob vault-sync` and never replays the mutation.
+class BobLedgerToolsBankConfigUpdateMixin {
+  bankConfigUpdateOwnPathsStore() {
+    if (!(this.bankConfigUpdateOwnPaths instanceof Set)) {
+      this.bankConfigUpdateOwnPaths = new Set();
+    }
+    return this.bankConfigUpdateOwnPaths;
+  }
+
+  setupBankConfigUpdate() {
+    this.bankConfigUpdateOwnPaths = new Set();
+    this.bankConfigUpdateFlight = null;
+    this.bankConfigUpdateBusy = false;
+  }
+
+  teardownBankConfigUpdate() {
+    this.bankConfigUpdateBusy = false;
+    this.bankConfigUpdateFlight = null;
+    if (this.bankConfigUpdateOwnPaths instanceof Set) {
+      this.bankConfigUpdateOwnPaths.clear();
+    }
+  }
+
+  bankSpawnConfigUpdate(envelopeText, options = {}) {
+    const opts = bankJsonObject(options) ? options : {};
+    const dryRun = opts.dryRun === true;
+    return bobSpawnJson(
+      bankConfigUpdateArgs({ dryRun }),
+      bankDecodeConfigUpdateReport,
+      {
+        ...opts,
+        stdin: typeof envelopeText === "string" ? envelopeText : "",
+        commandLabel: dryRun ? "bob bank config update -d" : "bob bank config update",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+        getVaultPath: () =>
+          typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+        timeout: BANK_CONFIG_UPDATE_TIMEOUT_MS,
+        maxBuffer: BANK_CONFIG_UPDATE_MAX_BUFFER,
+        firstLine: statsFirstLine,
+      },
+    );
+  }
+
+  apiBankConfigUpdatePreview(envelopeText, options = {}) {
+    if (this.bankDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Bank data has unloaded." });
+    }
+    return this.bankSpawnConfigUpdate(envelopeText, { ...options, dryRun: true });
+  }
+
+  async bankConfigRevalidateAfterApply() {
+    try {
+      this.apiBankInvalidate("config-update");
+    } catch (error) {
+      // Invalidation is best-effort; the forced fetch below still runs.
+    }
+    let refreshed = null;
+    try {
+      refreshed = await this.apiBankRefresh({
+        command: "config",
+        force: true,
+        requiredGeneration: this.bankVaultGeneration || 0,
+      });
+    } catch (error) {
+      refreshed = null;
+    }
+    try {
+      this.bankRevalidateMounts();
+    } catch (error) {
+      // Mount revalidation is best-effort after a write.
+    }
+    return refreshed;
+  }
+
+  apiBankConfigUpdateApply(envelopeText, options = {}) {
+    const opts = bankJsonObject(options) ? options : {};
+    if (this.bankDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Bank data has unloaded." });
+    }
+    if (this.bankConfigUpdateFlight) {
+      return Promise.resolve({
+        ok: false,
+        code: "apply-busy",
+        message: "Another bank config apply is already running.",
+        hint: "Wait for it to settle, then preview again.",
+      });
+    }
+    const epoch = this.bankDataEpoch || 0;
+    const ownPath = typeof opts.ownPath === "string" && opts.ownPath
+      ? bankNormalizePath(opts.ownPath)
+      : BANK_CONFIG_UPDATE_HUB_PATH;
+    const run = async () => {
+      if (this.bankDataActive === false || (this.bankDataEpoch || 0) !== epoch) {
+        return { ok: false, code: "unloaded", message: "Bank data has unloaded." };
+      }
+      if (this.bankConfigUpdateFlight && this.bankConfigUpdateFlight !== applyPromise) {
+        return {
+          ok: false,
+          code: "apply-busy",
+          message: "Another bank config apply is already running.",
+          hint: "Wait for it to settle, then preview again.",
+        };
+      }
+      this.bankConfigUpdateBusy = true;
+      if (ownPath) {
+        this.bankConfigUpdateOwnPathsStore().add(ownPath);
+      }
+      let outcome;
+      try {
+        outcome = await this.bankSpawnConfigUpdate(envelopeText, { ...opts, dryRun: false });
+      } catch (error) {
+        outcome = {
+          ok: false,
+          code: "failed",
+          message: error && error.message ? String(error.message) : "bob bank config update failed.",
+        };
+      }
+      const wrote = Boolean(
+        outcome && outcome.ok && outcome.report && outcome.report.ok === true &&
+        outcome.report.dry_run === false && outcome.report.changed === true,
+      );
+      const unknown = Boolean(outcome && !outcome.ok && (outcome.code === "timeout" || outcome.code === "failed"));
+      const maybeWrote = wrote || unknown;
+      if (this.bankDataActive === false || (this.bankDataEpoch || 0) !== epoch) {
+        if (this.bankConfigUpdateFlight === applyPromise) {
+          this.bankConfigUpdateFlight = null;
+        }
+        this.bankConfigUpdateBusy = false;
+        return { ...outcome, refreshed: null, wrote, unknown };
+      }
+      this.bankConfigUpdateBusy = false;
+      if (this.bankConfigUpdateFlight === applyPromise) {
+        this.bankConfigUpdateFlight = null;
+      }
+      let refreshed = null;
+      try {
+        refreshed = await this.bankConfigRevalidateAfterApply();
+      } catch (error) {
+        refreshed = null;
+      }
+      if (ownPath) {
+        this.bankConfigUpdateOwnPathsStore().delete(ownPath);
+      }
+      void maybeWrote;
+      return { ...outcome, refreshed, wrote, unknown };
+    };
+    const applyPromise = Promise.resolve().then(run);
+    this.bankConfigUpdateFlight = applyPromise;
+    return applyPromise;
+  }
+
+  apiBankConfigVaultSyncRetry(options = {}) {
+    if (this.bankDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Bank data has unloaded." });
+    }
+    return bobSpawnJson(
+      bankConfigVaultSyncArgs(),
+      bankDecodeConfigVaultSyncResult,
+      {
+        ...options,
+        commandLabel: "bob vault-sync",
+        resolveBobPath: () =>
+          typeof this.apiStatsBobPath === "function"
+            ? this.apiStatsBobPath()
+            : { path: "bob", source: "path" },
+        getVaultPath: () =>
+          typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+        timeout: BANK_CONFIG_UPDATE_TIMEOUT_MS,
+        maxBuffer: BANK_CONFIG_UPDATE_MAX_BUFFER,
+        firstLine: statsFirstLine,
+      },
+    );
+  }
+}
+
+function createBankConfigUpdateSession(init = {}, deps = {}) {
+  return createGuardedUpdateSession({
+    identity: "bank",
+    ownPath: BANK_CONFIG_UPDATE_HUB_PATH,
+    expect: init.expect,
+    debounceMs: BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
+    buildEnvelope: bankConfigUpdateEnvelopeText,
+    isStaleCode: bankIsStaleConfigUpdateCode,
+    failureFromReport: (report) =>
+      (bankJsonObject(report) && bankJsonObject(report.failure) ? report.failure : {}),
+    snapshotExtras: { hubPath: BANK_CONFIG_UPDATE_HUB_PATH },
+    copy: {
+      previewEmpty: "There is nothing to preview.",
+      previewFailed: "The category preview failed.",
+      previewRefused: "The category preview was refused.",
+      applyFailed: "The category apply failed.",
+      applyRefused: "The category apply was refused.",
+      stalePreview: "The vault changed while this preview was running.",
+      stalePreviewHint: "Refresh the bank config and preview the retained draft against the current fingerprint.",
+      staleGeneration: "The vault changed under this preview.",
+      staleGenerationHint: "Preview again before applying; nothing was written.",
+      saveUnsupported: "Open editors could not confirm bank.md is saved.",
+      saveUnsupportedHint: "Save every pane showing bank.md in Source mode, then preview again. Nothing was written.",
+      saveFailedHint: "Apply is refused until every pane showing bank.md saves. Nothing was written.",
+      supersededDuringSave: "The category draft changed while panes were saving; preview the current draft before applying.",
+      saveInvalidated: "Saving changed the vault; preview again before applying.",
+      nothingToUndo: "There is no category edit to undo.",
+      syncWarningHint: "The category is committed. Retry sync with `bob vault-sync` only.",
+      retryHint: "Retry `bob vault-sync` later. The committed category is kept.",
+    },
+  }, deps);
+}
+
+function bankConfigUpdateServiceDeps(plugin, options = {}) {
+  const saveEditors = options.saveEditors || ((paths) =>
+    typeof albumSchemaSaveOpenEditors === "function"
+      ? albumSchemaSaveOpenEditors(plugin, paths)
+      : Promise.resolve({
+        ok: false,
+        code: "save-unsupported",
+        message: "Open editors could not confirm bank.md is saved.",
+      }));
+  return {
+    spawnPreview: (_identity, envelopeText) => plugin.apiBankConfigUpdatePreview(envelopeText),
+    spawnApply: (_identity, envelopeText, applyOptions) =>
+      plugin.apiBankConfigUpdateApply(envelopeText, applyOptions),
+    spawnVaultSync: () => plugin.apiBankConfigVaultSyncRetry(),
+    saveEditors,
+    getGeneration: () => {
+      try {
+        if (plugin && Number.isInteger(plugin.bankVaultGeneration)) {
+          return plugin.bankVaultGeneration;
+        }
+      } catch (error) {
+        // Fall through to zero below.
+      }
+      return 0;
+    },
+    timers: options.timers,
+    onChange: options.onChange,
+  };
+}
+// ---- src/248f-plugin-bank-category-new-model.js ----
+// Pure New-category stage for the Category card. No DOM, no spawns: the
+// card paints these fields and the shared guarded session dry-runs
+// `category.add`. Bob owns the stored key, free hotkeys, and consequence.
+const BANK_CATEGORY_NEW_TILE_KEY = "__new_category__";
+const BANK_CATEGORY_NEW_NEEDS_BOB = "Setup needs a newer bob — run bob update.";
+
+function bankCategoryNewTile() {
+  return {
+    key: BANK_CATEGORY_NEW_TILE_KEY,
+    hotkey: "+",
+    keycap: "+",
+    emoji: "＋",
+    label: "New category",
+    text: "＋ New category",
+    dimmed: false,
+    isNew: true,
+  };
+}
+
+function bankCategoryNewSuggestedHotkey(categories) {
+  const free = typeof bankConfigFreeHotkeys === "function"
+    ? bankConfigFreeHotkeys(categories)
+    : [];
+  return free.length > 0 ? free[0] : "";
+}
+
+function bankCategoryNewDefaultGroup(categories, highlightKey) {
+  const entry = typeof bankCategoryByKey === "function"
+    ? bankCategoryByKey(categories, highlightKey)
+    : null;
+  return entry && typeof entry.group === "string" && entry.group.trim()
+    ? entry.group.trim()
+    : "";
+}
+
+function bankCategoryNewStageInit(categories, highlightKey) {
+  const groups = typeof bankConfigGroups === "function" ? bankConfigGroups(categories) : [];
+  const hotkey = bankCategoryNewSuggestedHotkey(categories);
+  return {
+    label: "",
+    group: bankCategoryNewDefaultGroup(categories, highlightKey),
+    hotkey,
+    suggestedHotkey: hotkey,
+    groups,
+    focus: "label",
+    consequence: "",
+    refusal: null,
+    syncWarning: null,
+    applying: false,
+    canApply: false,
+  };
+}
+
+function bankCategoryNewHotkeyStatus(categories, hotkey) {
+  const key = typeof hotkey === "string" ? hotkey.trim().toLowerCase() : "";
+  if (!key) {
+    return { kind: "empty", owner: null, canApply: true, text: "" };
+  }
+  if (key === BANK_CONFIG_RESERVED_HOTKEY) {
+    return { kind: "reserved", owner: null, canApply: false, text: "q cancels the card" };
+  }
+  if (typeof bankConfigIsHotkeyChar === "function" && !bankConfigIsHotkeyChar(key)) {
+    return { kind: "invalid", owner: null, canApply: false, text: "use a letter or digit" };
+  }
+  const owner = typeof bankConfigHotkeyOwner === "function"
+    ? bankConfigHotkeyOwner(categories, key)
+    : null;
+  if (owner) {
+    const name = typeof bankCategoryTileLabel === "function"
+      ? bankCategoryTileLabel(owner)
+      : (owner.label || owner.key);
+    return { kind: "taken", owner, canApply: false, text: `taken by ${name}` };
+  }
+  return { kind: "free", owner: null, canApply: true, text: "" };
+}
+
+function bankCategoryNewCycleGroup(stage, direction) {
+  const groups = Array.isArray(stage && stage.groups) ? stage.groups : [];
+  if (groups.length === 0) {
+    return typeof stage?.group === "string" ? stage.group : "";
+  }
+  const current = typeof stage?.group === "string" ? stage.group : "";
+  const at = groups.indexOf(current);
+  if (direction === "back") {
+    if (at < 0) return groups[groups.length - 1];
+    return groups[(at - 1 + groups.length) % groups.length];
+  }
+  if (at < 0) return groups[0];
+  return groups[(at + 1) % groups.length];
+}
+
+function bankCategoryNewDraftOp(stage) {
+  if (typeof bankConfigAddOp !== "function") return null;
+  return bankConfigAddOp({
+    label: stage && stage.label,
+    group: stage && stage.group,
+    hotkey: stage && stage.hotkey,
+  });
+}
+
+function bankCategoryNewCanApply(stage, sessionState, categories) {
+  if (!stage || stage.applying === true) return false;
+  const label = typeof stage.label === "string" ? stage.label.trim() : "";
+  if (!label) return false;
+  const hotkey = bankCategoryNewHotkeyStatus(categories, stage.hotkey);
+  if (hotkey.canApply !== true) return false;
+  return Boolean(sessionState && sessionState.canApply === true);
+}
+
+function bankCategoryNewAddedKey(report) {
+  if (!report || !Array.isArray(report.per_op) || !report.per_op[0]) return null;
+  const key = report.per_op[0].key;
+  return typeof key === "string" && key ? key : null;
+}
+
+function bankCategoryCardKeysText(mode, kind) {
+  if (kind === "restricted") {
+    return "␣ acknowledge · esc cancel";
+  }
+  const space = mode === "set" ? "Space remove category" : "Space no category";
+  return `↵ accept · letter choose · ${space} · + new category · Esc cancel`;
+}
+
+function bankCategoryNewStageKeysText() {
+  return "↵ add and file · ↑↓ cycle group · Esc close stage";
+}
+
+function bankCategoryIsNewCategoryKey(key) {
+  return key === "+" || key === "=" || key === "＋";
+}
+// ---- src/248g-plugin-bank-category-new-stage.js ----
+// Category-card New category stage. Prototype methods on the existing
+// modal: open/close, key pass-through, debounce dry-run, apply-then-file.
+// Letters type while staged; they never file. Esc closes the stage first.
+(function installBankCategoryNewStage() {
+  if (typeof BankCategoryCardModal !== "function") return;
+  const proto = BankCategoryCardModal.prototype;
+
+  proto.shouldPassNewCategoryKey = function shouldPassNewCategoryKey(event) {
+    if (!this.newStage || !event) return false;
+    const key = typeof event.key === "string" ? event.key : "";
+    if (!key || key === "Escape" || key === "Enter") return false;
+    const target = event.target;
+    const inInput = Boolean(target && typeof target.closest === "function"
+      && target.closest("input,select,textarea"));
+    if (inInput) return true;
+    if (event.ctrlKey || event.metaKey || event.altKey) return false;
+    return key.length === 1 || key === "Backspace" || key === "Delete" || key === "Tab";
+  };
+
+  proto.focusNewCategoryField = function focusNewCategoryField(field) {
+    const wanted = field || (this.newStage && this.newStage.focus) || "label";
+    if (this.newStage) this.newStage.focus = wanted;
+    try {
+      const root = this.contentEl;
+      const node = root && typeof root.querySelector === "function"
+        ? root.querySelector(`input[data-bank-new-field="${wanted}"]`)
+        : null;
+      if (node && typeof node.focus === "function") node.focus();
+    } catch (_) {}
+  };
+
+  proto.syncNewCategoryDraft = function syncNewCategoryDraft() {
+    if (!this.newStage || !this.newSession) return;
+    const op = bankCategoryNewDraftOp(this.newStage);
+    const hotkey = bankCategoryNewHotkeyStatus(this.categories, this.newStage.hotkey);
+    if (!op || hotkey.canApply !== true) {
+      this.newSession.setDraft([]);
+      this.newStage.canApply = false;
+      this.newStage.consequence = "";
+      return;
+    }
+    this.newSession.setDraft([op]);
+  };
+
+  proto.onNewCategorySessionChange = function onNewCategorySessionChange(state) {
+    if (!this.newStage || this.closed) return;
+    this.newStage.canApply = Boolean(state && state.canApply);
+    this.newStage.consequence = state && state.consequence ? String(state.consequence) : "";
+    this.newStage.refusal = state && state.refusal ? { ...state.refusal } : null;
+    if (state && state.syncWarning) this.syncWarning = { ...state.syncWarning };
+    if (state && state.refusal && state.refusal.code === "stale_config") {
+      void this.rebaseNewCategoryPreview();
+      return;
+    }
+    try { this.paint(); } catch (_) {}
+  };
+
+  proto.rebaseNewCategoryPreview = async function rebaseNewCategoryPreview() {
+    if (!this.newStage || !this.newSession || !this.pluginRef) return;
+    let result = null;
+    try {
+      result = await this.pluginRef.apiBankRefresh({ command: "config", force: true });
+    } catch (_) {
+      result = null;
+    }
+    if (!this.newStage || this.closed) return;
+    const fingerprint = bankConfigFingerprintFromReport(result && result.report);
+    if (!fingerprint) return;
+    this.configFingerprint = fingerprint;
+    this.newSession.rebase(fingerprint);
+    this.syncNewCategoryDraft();
+  };
+
+  proto.openNewCategoryStage = function openNewCategoryStage() {
+    if (this.closed || this.busy || this.summary || this.waitingRefresh) return false;
+    if (this.newStage) {
+      this.focusNewCategoryField("label");
+      return true;
+    }
+    const fingerprint = typeof this.configFingerprint === "string" ? this.configFingerprint : "";
+    if (!fingerprint) {
+      this.reason = BANK_CATEGORY_NEW_NEEDS_BOB;
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
+    this.didInteract = true;
+    this.newStage = bankCategoryNewStageInit(this.categories, this.highlightKey);
+    const plugin = this.pluginRef;
+    const deps = this.newSessionDeps || (plugin && typeof bankConfigUpdateServiceDeps === "function"
+      ? bankConfigUpdateServiceDeps(plugin, {
+        saveEditors: (paths) =>
+          typeof albumSchemaSaveOpenEditors === "function"
+            ? albumSchemaSaveOpenEditors(plugin, paths)
+            : Promise.resolve({ ok: true }),
+        timers: plugin.bankTimers,
+        onChange: (state) => this.onNewCategorySessionChange(state),
+      })
+      : null);
+    if (typeof createBankConfigUpdateSession === "function" && deps) {
+      this.newSession = createBankConfigUpdateSession({ expect: fingerprint }, deps);
+    } else {
+      this.newSession = null;
+    }
+    this.syncNewCategoryDraft();
+    try { this.paint(); } catch (_) {}
+    this.focusNewCategoryField("label");
+    return true;
+  };
+
+  proto.closeNewCategoryStage = function closeNewCategoryStage() {
+    if (!this.newStage) return false;
+    try { this.newSession?.close?.(); } catch (_) {}
+    this.newSession = null;
+    this.newStage = null;
+    try { this.paint(); } catch (_) {}
+    return true;
+  };
+
+  proto.appendNewCategoryChar = function appendNewCategoryChar(key) {
+    const stage = this.newStage;
+    if (!stage) return;
+    const field = stage.focus || "label";
+    if (key === "Backspace") {
+      stage[field] = String(stage[field] || "").slice(0, -1);
+    } else if (key === "Delete") {
+      stage[field] = "";
+    } else if (field === "hotkey") {
+      if (key.length === 1) stage.hotkey = key.toLowerCase();
+    } else {
+      stage[field] = String(stage[field] || "") + key;
+    }
+    this.didInteract = true;
+    this.syncNewCategoryDraft();
+    try { this.paint(); } catch (_) {}
+    this.focusNewCategoryField(field);
+  };
+
+  proto.routeNewCategoryKey = async function routeNewCategoryKey(event) {
+    if (!this.newStage || !event) return;
+    const key = bankCategoryUiEventKey(event);
+    if (!key) return;
+    const target = event.target;
+    const inInput = Boolean(target && typeof target.closest === "function"
+      && target.closest("input,select,textarea"));
+    if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
+      bankCategoryUiConsume(event);
+      this.closeNewCategoryStage();
+      return;
+    }
+    if (this.newStage.applying || this.busy) {
+      bankCategoryUiConsume(event);
+      return;
+    }
+    if (key === "Enter" || key === "Ctrl+Enter") {
+      bankCategoryUiConsume(event);
+      await this.applyNewCategoryAndFile();
+      return;
+    }
+    if (key === "Tab") {
+      bankCategoryUiConsume(event);
+      const order = ["label", "group", "hotkey"];
+      const at = order.indexOf(this.newStage.focus || "label");
+      const next = event.shiftKey
+        ? order[(at - 1 + order.length) % order.length]
+        : order[(at + 1) % order.length];
+      this.focusNewCategoryField(next);
+      try { this.paint(); } catch (_) {}
+      return;
+    }
+    const groupFocused = (this.newStage.focus === "group") ||
+      (inInput && target && target.getAttribute && target.getAttribute("data-bank-new-field") === "group");
+    if (groupFocused && (key === "ArrowUp" || key === "ArrowDown" || key === "Ctrl+P" || key === "Ctrl+N")) {
+      bankCategoryUiConsume(event);
+      this.newStage.group = bankCategoryNewCycleGroup(
+        this.newStage,
+        key === "ArrowUp" || key === "Ctrl+P" ? "back" : "forward",
+      );
+      this.syncNewCategoryDraft();
+      try { this.paint(); } catch (_) {}
+      this.focusNewCategoryField("group");
+      return;
+    }
+    if (inInput) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      bankCategoryUiConsume(event);
+      return;
+    }
+    if (key.length === 1 || key === "Backspace" || key === "Delete") {
+      bankCategoryUiConsume(event);
+      this.appendNewCategoryChar(key);
+    }
+  };
+
+  proto.applyNewCategoryAndFile = async function applyNewCategoryAndFile() {
+    if (!this.newStage || this.closed || this.busy || this.summary) return false;
+    const sessionState = this.newSession && typeof this.newSession.getState === "function"
+      ? this.newSession.getState()
+      : null;
+    if (!bankCategoryNewCanApply(this.newStage, sessionState, this.categories)) return false;
+    this.didInteract = true;
+    this.busy = true;
+    this.newStage.applying = true;
+    try { this.paint(); } catch (_) {}
+    let result;
+    try {
+      result = await this.newSession.apply();
+    } catch (error) {
+      result = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "apply failed" };
+    }
+    if (this.closed) return false;
+    if (!result || result.ok !== true) {
+      this.newStage.applying = false;
+      this.busy = false;
+      this.newStage.refusal = result
+        ? { code: result.code, message: result.message, hint: result.hint || "" }
+        : { code: "failed", message: "The category apply failed." };
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
+    const report = result.report || {};
+    const addedKey = bankCategoryNewAddedKey(report);
+    if (Array.isArray(report.categories)) this.setCategories(report.categories);
+    if (sessionState && sessionState.syncWarning) {
+      this.syncWarning = { ...sessionState.syncWarning };
+    } else if (this.newSession && this.newSession.getState) {
+      const after = this.newSession.getState();
+      if (after && after.syncWarning) this.syncWarning = { ...after.syncWarning };
+    }
+    this.closeNewCategoryStage();
+    if (!addedKey) {
+      this.busy = false;
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
+    this.busy = false;
+    return this.choose(addedKey, "pick");
+  };
+
+  proto.onNewCategoryFieldInput = function onNewCategoryFieldInput(field, value) {
+    if (!this.newStage) return;
+    this.newStage.focus = field;
+    if (field === "hotkey") {
+      const text = String(value || "");
+      this.newStage.hotkey = text ? text.slice(-1).toLowerCase() : "";
+    } else {
+      this.newStage[field] = String(value || "");
+    }
+    this.didInteract = true;
+    this.syncNewCategoryDraft();
+    try { this.paint(); } catch (_) {}
+    this.focusNewCategoryField(field);
+  };
+
+  proto.paintNewCategoryTile = function paintNewCategoryTile(root, disabled) {
+    const tile = bankCategoryNewTile();
+    const row = bankCategoryUiAppend(root, "div", "bob-bank-category-tiles bob-bank-category-new-row", null, {
+      role: "group",
+    });
+    if (!row) return;
+    const button = bankCategoryUiAppend(row, "button",
+      "bob-bank-category-tile bob-bank-category-new-tile",
+      null, { type: "button", "data-bank-new-category": "true" });
+    if (!button) return;
+    button.disabled = disabled === true;
+    bankCategoryUiAppend(button, "kbd", "bob-bank-category-keycap", tile.keycap);
+    bankCategoryUiAppend(button, "span", "bob-bank-category-tile-label", tile.text);
+  };
+
+  proto.paintNewCategoryStage = function paintNewCategoryStage(root) {
+    const stage = this.newStage;
+    if (!stage) return;
+    const form = bankCategoryUiAppend(root, "form", "bob-bank-category-stage", null, {
+      autocomplete: "off",
+    });
+    if (!form) return;
+    form.addEventListener?.("submit", (event) => {
+      bankCategoryUiConsume(event);
+      void this.applyNewCategoryAndFile();
+    });
+    const fields = [
+      { field: "label", caption: "Label", placeholder: "e.g. 🍔 Fast food" },
+      { field: "group", caption: "Group", placeholder: "e.g. Everyday" },
+      { field: "hotkey", caption: "Key", placeholder: stage.suggestedHotkey || "free key" },
+    ];
+    for (const entry of fields) {
+      const row = bankCategoryUiAppend(form, "label", "bob-bank-category-stage-row");
+      if (!row) continue;
+      bankCategoryUiAppend(row, "span", "bob-bank-category-stage-caption", entry.caption);
+      const input = bankCategoryUiAppend(row, "input", "bob-bank-category-stage-input", null, {
+        type: "text",
+        "data-bank-new-field": entry.field,
+        placeholder: entry.placeholder,
+        value: stage[entry.field] || "",
+        spellcheck: "false",
+        autocomplete: "off",
+      });
+      if (input) {
+        try { input.value = stage[entry.field] || ""; } catch (_) {}
+        input.addEventListener?.("input", (event) => {
+          this.onNewCategoryFieldInput(entry.field, event && event.target && event.target.value);
+        });
+        input.addEventListener?.("focus", () => {
+          if (this.newStage) this.newStage.focus = entry.field;
+        });
+      }
+    }
+    const hotkey = bankCategoryNewHotkeyStatus(this.categories, stage.hotkey);
+    if (hotkey.text) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
+    }
+    if (stage.consequence) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
+    }
+    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
+      bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
+        stage.refusal.hint || stage.refusal.message, { role: "status" });
+    }
+    if (this.syncWarning) {
+      const warn = bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
+        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
+      const retry = bankCategoryUiAppend(root, "button", "bob-bank-category-retry", "Retry sync", {
+        type: "button",
+      });
+      if (retry) {
+        retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
+      }
+      void warn;
+    }
+    bankCategoryUiAppend(root, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+  };
+
+  proto.retryBankConfigSync = async function retryBankConfigSync() {
+    const plugin = this.pluginRef;
+    if (!plugin || typeof plugin.apiBankConfigVaultSyncRetry !== "function") return false;
+    const result = await plugin.apiBankConfigVaultSyncRetry();
+    if (result && result.ok === true) this.syncWarning = null;
+    try { this.paint(); } catch (_) {}
+    return Boolean(result && result.ok === true);
+  };
+})();
 // ---- src/249-plugin-bank-walk-model.js ----
 // Pure bank-walk model (api.bankWalk v1): membership, snapshot building,
 // locate, step/day planners, identity resolution. No Obsidian, no spawns.
@@ -129137,6 +130298,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAreasDataMixin,
   BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
+  BobLedgerToolsBankConfigUpdateMixin,
   BobLedgerToolsBankActionsMixin,
   BobLedgerToolsBankWalkMixin,
   BobLedgerToolsBankCategoryMixin,
@@ -132333,6 +133495,7 @@ try {
       albumVaultSyncArgs,
       albumIsStaleUpdateCode,
       albumUpdateErrorModel,
+      createGuardedUpdateSession,
       createAlbumUpdateSession,
       albumUpdateServiceDeps,
       albumSchemaTargets,
@@ -132832,6 +133995,60 @@ try {
       bankMarkFindSubscriptionLink,
       bankMarkWrapSubscriptionAnchor,
       bankMarkAppendSubscriptionChip,
+    });
+  }
+} catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/365-exports-bank-config-update.js ----
+// Test helpers for the guarded bank config-update wire, session, and
+// Category-card New category stage (bob-cli-lt category-new).
+try {
+  if (
+    typeof module !== "undefined" &&
+    module.exports &&
+    typeof module.exports === "function"
+  ) {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS,
+      createGuardedUpdateSession,
+      BANK_CONFIG_UPDATE_SCHEMA_VERSION,
+      BANK_CONFIG_UPDATE_TIMEOUT_MS,
+      BANK_CONFIG_UPDATE_MAX_BUFFER,
+      BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
+      BANK_CONFIG_UPDATE_HUB_PATH,
+      BANK_CONFIG_HOTKEY_ORDER,
+      BANK_CONFIG_RESERVED_HOTKEY,
+      bankConfigVaultSyncArgs,
+      bankConfigUpdateArgs,
+      bankConfigUpdateEnvelope,
+      bankConfigUpdateEnvelopeText,
+      bankDecodeConfigUpdateReport,
+      bankDecodeConfigVaultSyncResult,
+      bankIsStaleConfigUpdateCode,
+      bankConfigUpdateErrorModel,
+      bankConfigFingerprintFromReport,
+      bankConfigFreeHotkeys,
+      bankConfigHotkeyOwner,
+      bankConfigIsHotkeyChar,
+      bankConfigGroups,
+      bankConfigAddOp,
+      createBankConfigUpdateSession,
+      bankConfigUpdateServiceDeps,
+      BANK_CATEGORY_NEW_TILE_KEY,
+      BANK_CATEGORY_NEW_NEEDS_BOB,
+      bankCategoryNewTile,
+      bankCategoryNewSuggestedHotkey,
+      bankCategoryNewDefaultGroup,
+      bankCategoryNewStageInit,
+      bankCategoryNewHotkeyStatus,
+      bankCategoryNewCycleGroup,
+      bankCategoryNewDraftOp,
+      bankCategoryNewCanApply,
+      bankCategoryNewAddedKey,
+      bankCategoryCardKeysText,
+      bankCategoryNewStageKeysText,
+      bankCategoryIsNewCategoryKey,
     });
   }
 } catch (error) {

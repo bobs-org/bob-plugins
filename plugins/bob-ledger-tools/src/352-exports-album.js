@@ -22,6 +22,7 @@ try {
       albumVaultSyncArgs,
       albumIsStaleUpdateCode,
       albumUpdateErrorModel,
+      createGuardedUpdateSession,
       createAlbumUpdateSession,
       albumUpdateServiceDeps,
       albumSchemaTargets,

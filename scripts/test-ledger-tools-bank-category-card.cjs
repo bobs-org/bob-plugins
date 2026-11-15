@@ -177,6 +177,9 @@ test("key table is case-insensitive; q/Esc cancel; chord and lock are pure state
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "ArrowDown" }).action, "move");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "Ctrl+N" }).action, "move");
   assert.equal(h.bankCategoryResolveCardKey({ table, key: "z" }).action, "ignore");
+  assert.equal(h.bankCategoryResolveCardKey({ table, key: "+" }).action, "new-category");
+  assert.equal(h.bankCategoryResolveCardKey({ table, key: "=" }).action, "new-category");
+  assert.equal(h.bankCategoryResolveCardKey({ table, key: "＋" }).action, "new-category");
   const chord = h.bankCategoryChordInit(true);
   assert.equal(h.bankCategoryChordShouldSwallow(chord, "Enter"), true);
   assert.equal(h.bankCategoryChordShouldSwallow(h.bankCategoryChordKeyup(chord), "Enter"), false);

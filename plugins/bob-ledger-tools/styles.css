@@ -9014,6 +9014,15 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-bank-category-tile:disabled { cursor: default; opacity: 0.55; }
 .bob-bank-category-footer { margin: 0.7rem 0 0.25rem; color: var(--bob-bank-accent); font-size: 0.84em; }
 .bob-bank-category-keys { margin: 0.2rem 0 0; color: var(--text-faint); font-size: 0.72em; }
+.bob-bank-category-new-row { margin-top: 0.55rem; grid-template-columns: minmax(0, 1fr); }
+.bob-bank-category-new-tile { border-style: dashed; }
+.bob-bank-category-stage { display: grid; gap: 0.4rem; margin-top: 0.7rem; }
+.bob-bank-category-stage-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.4rem; align-items: center; }
+.bob-bank-category-stage-caption { color: var(--text-muted); font-size: 0.78em; }
+.bob-bank-category-stage-input { width: 100%; font: inherit; }
+.bob-bank-category-consequence { margin: 0.15rem 0; color: var(--bob-bank-accent); font-size: 0.84em; }
+.bob-bank-category-stage-owner { margin: 0.1rem 0; color: var(--text-warning, var(--text-muted)); font-size: 0.8em; }
+.bob-bank-category-retry { margin-top: 0.2rem; }
 .bob-bank-category-summary { font-size: 1.05em; font-weight: 650; }
 .bob-bank-category-detail,
 .bob-bank-category-summary-detail { color: var(--text-muted); font-size: 0.83em; }

@@ -124,6 +124,7 @@
   "241aj-plugin-areas-catalog.js",
   "241z-plugin-album-update.js",
   "242a-plugin-album-update-service.js",
+  "242aa-plugin-guarded-update-session.js",
   "242b-plugin-album-update-session.js",
   "242c-plugin-album-schema-edit.js",
   "242d-plugin-album-entrypoints.js",
@@ -153,6 +154,10 @@
   "248a-plugin-bank-setup-model.js",
   "248b-plugin-bank-setup-dom.js",
   "248c-plugin-bank-setup-hosts.js",
+  "248d-plugin-bank-config-update.js",
+  "248e-plugin-bank-config-update-service.js",
+  "248f-plugin-bank-category-new-model.js",
+  "248g-plugin-bank-category-new-stage.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
@@ -268,5 +273,6 @@
   "361-exports-bank-walker-footer.js",
   "362-exports-areas.js",
   "363-exports-bank-setup.js",
-  "364-exports-bank-subscription.js"
+  "364-exports-bank-subscription.js",
+  "365-exports-bank-config-update.js"
 ]

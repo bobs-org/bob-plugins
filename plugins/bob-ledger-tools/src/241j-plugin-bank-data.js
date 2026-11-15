@@ -502,6 +502,14 @@ class BobLedgerToolsBankDataMixin {
     if (!current && !previous) {
       return;
     }
+    const own = this.bankConfigUpdateOwnPaths instanceof Set ? this.bankConfigUpdateOwnPaths : null;
+    if (own) {
+      const path = bankNormalizePath(file);
+      const prev = oldPath ? bankNormalizePath(oldPath) : "";
+      if ((path && own.has(path)) || (prev && own.has(prev))) {
+        return;
+      }
+    }
     this.apiBankInvalidate("vault");
   }
 
@@ -535,6 +543,12 @@ class BobLedgerToolsBankDataMixin {
     this.bankRevalidateTimer = null;
     this.bankRolloverTimer = null;
     this.bankLocalDay = bankLocalDate();
+    this.bankConfigUpdateOwnPaths = new Set();
+    this.bankConfigUpdateFlight = null;
+    this.bankConfigUpdateBusy = false;
+    if (typeof this.setupBankConfigUpdate === "function") {
+      this.setupBankConfigUpdate();
+    }
     try {
       const metadataCache = this.app && this.app.metadataCache;
       if (metadataCache && typeof metadataCache.on === "function") {
@@ -619,6 +633,14 @@ class BobLedgerToolsBankDataMixin {
     this.bankRolloverTimer = null;
     this.bankLocalDay = null;
     this.bankVaultGeneration = 0;
+    if (typeof this.teardownBankConfigUpdate === "function") {
+      this.teardownBankConfigUpdate();
+    }
+    this.bankConfigUpdateBusy = false;
+    this.bankConfigUpdateFlight = null;
+    if (this.bankConfigUpdateOwnPaths instanceof Set) {
+      this.bankConfigUpdateOwnPaths.clear();
+    }
     if (this.bankMounts instanceof Set) {
       for (const mount of this.bankMounts) {
         if (mount) {

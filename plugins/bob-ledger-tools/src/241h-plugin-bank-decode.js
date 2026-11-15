@@ -432,6 +432,7 @@ function bankSharedFields(body) {
   return {
     schema_version: BANK_SCHEMA_VERSION,
     today: bankString(body.today),
+    config_fingerprint: bankString(body.config_fingerprint) || bankString(body.fingerprint) || "",
     categories,
     accounts,
     issues: bankJsonObject(body.issues)
@@ -450,6 +451,7 @@ function bankTeachingReport(body) {
     ok: true,
     teaching_empty: true,
     today: bankString(body.today),
+    config_fingerprint: bankString(body.config_fingerprint) || bankString(body.fingerprint) || "",
     categories: [],
     accounts: [],
     issues: { errors: 0, warnings: 0 },

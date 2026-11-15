@@ -261,7 +261,7 @@ function bankCategoryCardModel(input = {}) {
     highlightKey,
     footer: oldBob
       ? { ...footer, hint: "update bob for one-key filing" }
-      : footer,
+      : { ...footer, hint: footer.hint || "+ new category" },
     progress: bankCategoryProgressModel(mode, input.progress, input.path || row.path),
   };
 }
@@ -276,6 +276,9 @@ function bankCategoryResolveCardKey(input = {}) {
   }
   if (key === " ") {
     return { action: "no-category" };
+  }
+  if (key === "+" || key === "=" || key === "＋") {
+    return { action: "new-category" };
   }
   if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
     return { action: "cancel" };

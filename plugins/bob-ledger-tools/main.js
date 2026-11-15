@@ -34432,9 +34432,9 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
-    this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
+    this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34561,7 +34561,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     }
     try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
-      this.teardownAlbumRecords(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
+      this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
       // Notebook catalog/data and album data teardown is best-effort.
     }
@@ -63301,6 +63301,1198 @@ class BobLedgerToolsProjectsCatalogMixin {
         this.paintProjectsCatalogEditor(view);
       }
     }, 100);
+  }
+}
+// ---- src/241af-plugin-areas-data.js ----
+// Shared Areas report and sync contract. Bob owns catalog bytes and reports
+// area identity, order, nesting, and hue; this fragment only validates and
+// indexes the versioned JSON.
+
+const AREAS_REPORT_SCHEMA_VERSION = 1;
+const AREAS_LIST_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const AREAS_LIST_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const AREAS_REVALIDATE_DEBOUNCE_MS = 300;
+const AREAS_ROLLOVER_INTERVAL_MS = 60 * 1000;
+const AREAS_HUES = new Set(["blue", "orange", "aqua", "yellow", "magenta", "green", "violet", "red"]);
+const AREAS_HUE_SOURCES = new Set(["color", "muted", "hash"]);
+const AREAS_CATALOG_STATES = new Set(["current", "stale", "missing", "damaged"]);
+
+function areasListArgs() {
+  return ["areas", "list", "-f", "json"];
+}
+
+function areasSyncArgs() {
+  return ["areas", "sync", "-f", "json"];
+}
+
+function areasJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function areasJsonString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function areasNullableString(value) {
+  return value === null || typeof value === "string";
+}
+
+function areasJsonCount(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function areasIssueShape(issue) {
+  return areasJsonObject(issue) && areasJsonString(issue.code) &&
+    (issue.severity === "error" || issue.severity === "warning") &&
+    (issue.line === null || issue.line === undefined || areasJsonCount(issue.line)) &&
+    typeof issue.message === "string";
+}
+
+function areasRollupShape(value) {
+  return areasJsonObject(value) && areasJsonCount(value.direct) && areasJsonCount(value.subtree);
+}
+
+function areasEntryShape(entry) {
+  return areasJsonObject(entry) &&
+    areasJsonString(entry.path) && areasJsonString(entry.stem) &&
+    areasJsonString(entry.link) && areasJsonString(entry.title) &&
+    typeof entry.titled === "boolean" && areasNullableString(entry.summary) &&
+    areasNullableString(entry.parent) && areasNullableString(entry.parent_raw) &&
+    (entry.depth === null || areasJsonCount(entry.depth)) &&
+    areasNullableString(entry.top) &&
+    (entry.hue === null || AREAS_HUES.has(entry.hue)) &&
+    (entry.hue_source === null || AREAS_HUE_SOURCES.has(entry.hue_source)) &&
+    Array.isArray(entry.children) && entry.children.every((path) => typeof path === "string") &&
+    areasRollupShape(entry.projects) && areasRollupShape(entry.today) &&
+    Array.isArray(entry.issues) && entry.issues.every(areasIssueShape);
+}
+
+function areasCatalogShape(catalog) {
+  return areasJsonObject(catalog) && areasJsonString(catalog.host) &&
+    areasJsonString(catalog.path) && ["root", "area", "project"].includes(catalog.kind) &&
+    AREAS_CATALOG_STATES.has(catalog.state) && Array.isArray(catalog.rows) &&
+    catalog.rows.every((row) => areasJsonObject(row) && areasJsonString(row.path) &&
+      areasJsonString(row.link) && areasJsonCount(row.depth)) &&
+    Array.isArray(catalog.issues) && catalog.issues.every(areasIssueShape);
+}
+
+function areasReportPath(value) {
+  const path = typeof value === "string"
+    ? value
+    : value && typeof value.path === "string" ? value.path : "";
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function areasIndexReport(report) {
+  const areasByPath = new Map();
+  const areasByStem = new Map();
+  const areasByLink = new Map();
+  const catalogsByHostPath = new Map();
+  for (const entry of report.areas) {
+    const path = areasReportPath(entry.path);
+    areasByPath.set(path, entry);
+    const stemRows = areasByStem.get(entry.stem) || [];
+    stemRows.push(entry);
+    areasByStem.set(entry.stem, stemRows);
+    const linkRows = areasByLink.get(entry.link) || [];
+    linkRows.push(entry);
+    areasByLink.set(entry.link, linkRows);
+  }
+  for (const catalog of report.catalogs) {
+    catalogsByHostPath.set(areasReportPath(catalog.path), catalog);
+  }
+  return { ...report, areasByPath, areasByStem, areasByLink, catalogsByHostPath };
+}
+
+function areasDecodeListReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (_error) {
+    return { ok: false, code: "bad-json", message: "bob areas list returned invalid JSON.", detail: statsFirstLine(stderr) };
+  }
+  if (!areasJsonObject(body)) {
+    return { ok: false, code: "bad-shape", message: "bob areas list returned no report object.", detail: statsFirstLine(stderr) };
+  }
+  if (body.schema_version !== AREAS_REPORT_SCHEMA_VERSION) {
+    return { ok: false, code: "schema-mismatch", message: "bob areas list uses a different schema.", detail: statsFirstLine(stderr) };
+  }
+  const root = body.root;
+  const counts = body.counts;
+  const catalogCounts = counts && counts.catalogs;
+  if (
+    typeof body.ok !== "boolean" || body.command !== "list" ||
+    !areasJsonObject(root) || !["found", "missing", "ambiguous"].includes(root.state) ||
+    !areasNullableString(root.path) || !areasNullableString(root.stem) ||
+    !Array.isArray(body.areas) || !body.areas.every(areasEntryShape) ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(areasCatalogShape) ||
+    !Array.isArray(body.findings) || !body.findings.every(areasIssueShape) ||
+    !areasJsonObject(counts) || !areasJsonCount(counts.areas) ||
+    !areasJsonCount(counts.top_level) || !areasJsonCount(counts.hosts) ||
+    !areasJsonCount(counts.errors) || !areasJsonCount(counts.warnings) ||
+    !areasJsonObject(catalogCounts) || !["current", "missing", "stale", "damaged"].every((key) => areasJsonCount(catalogCounts[key]))
+  ) {
+    return { ok: false, code: "bad-shape", message: "bob areas list returned an incomplete report.", detail: statsFirstLine(stderr) };
+  }
+  return { ok: true, report: areasIndexReport(body) };
+}
+
+function areasDecodeSyncReport(stdout, stderr = "") {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (_error) {
+    return { ok: false, code: "bad-json", message: "bob areas sync returned invalid JSON.", detail: statsFirstLine(stderr) };
+  }
+  if (!areasJsonObject(body)) {
+    return { ok: false, code: "bad-shape", message: "bob areas sync returned no report object.", detail: statsFirstLine(stderr) };
+  }
+  if (body.schema_version !== AREAS_REPORT_SCHEMA_VERSION) {
+    return { ok: false, code: "schema-mismatch", message: "bob areas sync uses a different schema.", detail: statsFirstLine(stderr) };
+  }
+  if (
+    typeof body.ok !== "boolean" || body.command !== "sync" || typeof body.dry_run !== "boolean" ||
+    !Array.isArray(body.changed) || !body.changed.every((path) => typeof path === "string") ||
+    !Array.isArray(body.changes) || !body.changes.every((change) => areasJsonObject(change) && typeof change.path === "string") ||
+    !Array.isArray(body.catalogs) || !body.catalogs.every(areasCatalogShape) ||
+    !Array.isArray(body.findings) || !body.findings.every(areasIssueShape) ||
+    !Array.isArray(body.warnings) ||
+    (body.commit !== undefined && body.commit !== null && !areasJsonObject(body.commit)) ||
+    (body.sync !== undefined && body.sync !== null && !areasJsonObject(body.sync)) ||
+    (body.error !== undefined && body.error !== null && !areasJsonObject(body.error))
+  ) {
+    return { ok: false, code: "bad-shape", message: "bob areas sync returned an incomplete report.", detail: statsFirstLine(stderr) };
+  }
+  return { ok: true, report: body };
+}
+
+function areasTypeNames(value) {
+  if (Array.isArray(value)) return value.flatMap(areasTypeNames);
+  if (typeof value !== "string") return [];
+  let text = value.trim();
+  if (!text) return [];
+  if ((text.startsWith("\"") && text.endsWith("\"")) || (text.startsWith("'") && text.endsWith("'"))) text = text.slice(1, -1).trim();
+  if (text.startsWith("[[") && text.endsWith("]]")) text = text.slice(2, -2).split("|")[0].split("#")[0].trim();
+  else if (text.startsWith("[") && text.endsWith("]")) return text.slice(1, -1).split(",").flatMap(areasTypeNames);
+  if (text.startsWith("- ")) return areasTypeNames(text.slice(2));
+  return [text.replace(/\.md$/i, "").trim().toLowerCase()].filter(Boolean);
+}
+
+function areasRelevantPath(fileOrPath, options = {}) {
+  const path = areasReportPath(fileOrPath);
+  if (!/\.md$/i.test(path) || (typeof isDoneArchivePath === "function" && isDoneArchivePath(path))) return false;
+  if (path.split("/").some((part) => part === ".obsidian" || part === ".bob" || part === "node_modules" || part.startsWith("."))) return false;
+  const normalized = path.toLowerCase();
+  const rootPath = areasReportPath(options.rootPath).toLowerCase();
+  const dailyPath = areasReportPath(options.dailyPath).toLowerCase();
+  if ((rootPath && normalized === rootPath) || (dailyPath && normalized === dailyPath)) return true;
+  if ((normalized.split("/").pop() || "").replace(/\.md$/i, "") === "area") return true;
+  const frontmatter = options.frontmatter || (fileOrPath && typeof fileOrPath === "object" ? fileOrPath.frontmatter : null) || {};
+  const types = areasTypeNames(frontmatter.type);
+  return types.includes("area") || types.includes("project");
+}
+
+function areasLocalDate(now = new Date()) {
+  try {
+    const date = now instanceof Date ? now : new Date(now);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function areasErrorModel(error) {
+  const source = areasJsonObject(error) ? error : { code: "failed" };
+  if (source.code === "bob-not-found") return { hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  if (source.code === "timeout") return { hint: "bob areas timed out. Retry, then check bob areas list in a terminal." };
+  if (["schema-mismatch", "bad-json", "bad-shape"].includes(source.code)) return { hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  return { hint: source.detail || source.hint || source.message || "Areas data is unavailable. Retry bob areas list." };
+}
+// ---- src/241ag-plugin-areas-data-service.js ----
+// One stale-while-revalidate Areas report shared by rendered notes. Vault
+// changes only refresh the read-only list; catalog writes happen only from
+// the explicit Sync action.
+class BobLedgerToolsAreasDataMixin {
+  areasTimerApi() {
+    if (this.areasTimers && typeof this.areasTimers === "object") return this.areasTimers;
+    return typeof window !== "undefined" && window ? window : globalThis;
+  }
+
+  areasSetTimeout(callback, delay) {
+    const timers = this.areasTimerApi();
+    const schedule = timers && typeof timers.setTimeout === "function" ? timers.setTimeout.bind(timers) : setTimeout;
+    return schedule(callback, delay);
+  }
+
+  areasClearTimeout(timer) {
+    if (timer === null || timer === undefined) return;
+    const timers = this.areasTimerApi();
+    const clear = timers && typeof timers.clearTimeout === "function" ? timers.clearTimeout.bind(timers) : clearTimeout;
+    clear(timer);
+  }
+
+  areasReportState() {
+    const report = this.areasReport || null;
+    return {
+      report,
+      stale: Boolean(report && (this.areasReportStale || this.areasReportGeneration < this.areasVaultGeneration)),
+      unavailable: !report,
+      refreshing: Boolean(this.areasListFlight),
+      error: this.areasReportError || null,
+      errorModel: this.areasReportError ? areasErrorModel(this.areasReportError) : null,
+      generation: this.areasVaultGeneration || 0,
+      reportGeneration: this.areasReportGeneration,
+      today: this.areasLocalDay || areasLocalDate(),
+      syncBusy: Boolean(this.areasSyncBusy),
+      syncError: this.areasSyncError || null,
+      syncErrorModel: this.areasSyncError ? areasErrorModel(this.areasSyncError) : null,
+    };
+  }
+
+  areasNotify() {
+    if (this.areasDataActive === false || !(this.areasSubscribers instanceof Set)) return;
+    const state = this.areasReportState();
+    for (const subscriber of this.areasSubscribers) {
+      try { subscriber(state); } catch (_error) { /* one pane cannot break another */ }
+    }
+  }
+
+  areasSpawnCommand(args, decoder) {
+    return bobSpawnJson(args, decoder, {
+      commandLabel: args && args[1] === "sync" ? "bob areas sync" : "bob areas list",
+      resolveBobPath: () => typeof this.apiStatsBobPath === "function" ? this.apiStatsBobPath() : { path: "bob", source: "path" },
+      getVaultPath: () => typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: AREAS_LIST_TIMEOUT_MS,
+      maxBuffer: AREAS_LIST_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  areasSpawnList() {
+    return this.areasSpawnCommand(areasListArgs(), areasDecodeListReport);
+  }
+
+  areasSpawnSync() {
+    return this.areasSpawnCommand(areasSyncArgs(), areasDecodeSyncReport);
+  }
+
+  areasStartListFetch(generation) {
+    const epoch = this.areasDataEpoch || 0;
+    const flight = { generation, epoch, promise: null };
+    this.areasListFlight = flight;
+    this.areasNotify();
+    const run = async () => {
+      try {
+        const result = await this.areasSpawnList();
+        if (this.areasDataActive === false || this.areasDataEpoch !== epoch) return this.areasReportState();
+        if (result && result.ok && result.report) {
+          this.areasReport = result.report;
+          this.areasReportGeneration = generation;
+          this.areasReportStale = generation < (this.areasVaultGeneration || 0);
+          this.areasReportError = null;
+          for (const entry of result.report.areas || []) this.areasKnownPaths.add(areasReportPath(entry.path));
+          if (result.report.root && result.report.root.path) this.areasKnownPaths.add(areasReportPath(result.report.root.path));
+        } else {
+          this.areasReportStale = Boolean(this.areasReport);
+          this.areasReportError = result || { code: "failed", message: "bob areas list failed." };
+        }
+      } catch (error) {
+        if (this.areasDataActive !== false && this.areasDataEpoch === epoch) {
+          this.areasReportStale = Boolean(this.areasReport);
+          this.areasReportError = { code: "failed", message: error && error.message ? String(error.message) : "bob areas list failed." };
+        }
+      }
+      return this.areasReportState();
+    };
+    flight.promise = Promise.resolve().then(run).finally(() => {
+      if (this.areasListFlight !== flight) return;
+      this.areasListFlight = null;
+      this.areasNotify();
+      if (this.areasDataActive !== false && (this.areasReportGeneration || 0) < (this.areasVaultGeneration || 0)) {
+        this.areasScheduleRevalidate("changed-during-fetch");
+      }
+    });
+    return flight;
+  }
+
+  apiAreasReport(options = {}) {
+    const opts = areasJsonObject(options) ? options : {};
+    if (this.areasDataActive === false) return Promise.resolve(this.areasReportState());
+    if (this.areasListFlight) {
+      const flight = this.areasListFlight;
+      if (!opts.wait) return Promise.resolve(this.areasReportState());
+      return flight.promise.then(() => {
+        if (this.areasReportStale && this.areasDataActive !== false) return this.apiAreasReport({ force: true, wait: true });
+        return this.areasReportState();
+      });
+    }
+    if (!opts.force && this.areasReport && !this.areasReportStale && this.areasReportGeneration >= this.areasVaultGeneration) {
+      return Promise.resolve(this.areasReportState());
+    }
+    if (opts.force && this.areasReport) {
+      this.areasReportStale = true;
+      this.areasNotify();
+    }
+    const generation = this.areasVaultGeneration || 0;
+    const flight = this.areasStartListFetch(generation);
+    if (this.areasReport && !opts.wait) return Promise.resolve(this.areasReportState());
+    return flight.promise;
+  }
+
+  apiAreasSubscribe(subscriber) {
+    if (typeof subscriber !== "function" || this.areasDataActive === false) return () => {};
+    if (!(this.areasSubscribers instanceof Set)) this.areasSubscribers = new Set();
+    this.areasSubscribers.add(subscriber);
+    try { subscriber(this.areasReportState()); } catch (_error) { /* render may not be mounted yet */ }
+    void this.apiAreasReport();
+    return () => this.areasSubscribers.delete(subscriber);
+  }
+
+  apiAreasInvalidate(reason = "manual") {
+    if (this.areasDataActive === false) return this.areasReportState();
+    this.areasVaultGeneration = (this.areasVaultGeneration || 0) + 1;
+    this.areasInvalidationReason = String(reason || "vault");
+    if (this.areasReport) this.areasReportStale = true;
+    this.areasNotify();
+    this.areasScheduleRevalidate(reason);
+    return this.areasReportState();
+  }
+
+  areasScheduleRevalidate(reason = "vault") {
+    void reason;
+    if (this.areasDataActive === false || !(this.areasSubscribers instanceof Set) || this.areasSubscribers.size === 0) return;
+    this.areasClearTimeout(this.areasRevalidateTimer);
+    this.areasRevalidateTimer = this.areasSetTimeout(() => {
+      this.areasRevalidateTimer = null;
+      if (this.areasDataActive !== false && this.areasSubscribers.size > 0) void this.apiAreasReport({ force: true });
+    }, AREAS_REVALIDATE_DEBOUNCE_MS);
+  }
+
+  areasFrontmatterFor(file, eventData) {
+    if (eventData && areasJsonObject(eventData.frontmatter)) return eventData.frontmatter;
+    try {
+      const cache = this.app?.metadataCache?.getFileCache?.(file);
+      return cache && areasJsonObject(cache.frontmatter) ? cache.frontmatter : {};
+    } catch (_error) { return {}; }
+  }
+
+  areasDailyPath() {
+    try { return typeof this.currentTodayDailyPath === "function" ? areasReportPath(this.currentTodayDailyPath(new Date())) : ""; }
+    catch (_error) { return ""; }
+  }
+
+  areasIsRelevant(fileOrPath, frontmatter = null) {
+    const path = areasReportPath(fileOrPath);
+    if (!path) return false;
+    if (this.areasKnownPaths instanceof Set && this.areasKnownPaths.has(path)) return true;
+    const rootPath = this.areasReport?.root?.path || "area.md";
+    return areasRelevantPath(fileOrPath, {
+      rootPath,
+      dailyPath: this.areasDailyPath(),
+      frontmatter: frontmatter || (fileOrPath && typeof fileOrPath === "object" ? this.areasFrontmatterFor(fileOrPath) : null),
+    });
+  }
+
+  areasRememberFile(file, eventData, reason) {
+    const path = areasReportPath(file);
+    if (!path) return false;
+    const wasRelevant = this.areasKnownPaths.has(path) || this.areasIsRelevant(path);
+    const frontmatter = this.areasFrontmatterFor(file, eventData);
+    const relevant = areasRelevantPath(file, {
+      rootPath: this.areasReport?.root?.path || "area.md",
+      dailyPath: this.areasDailyPath(),
+      frontmatter,
+    });
+    if (relevant) this.areasKnownPaths.add(path);
+    else this.areasKnownPaths.delete(path);
+    if (wasRelevant || relevant) this.apiAreasInvalidate(reason);
+    return wasRelevant || relevant;
+  }
+
+  areasHandleMetadataChanged(file, data) {
+    if (this.areasDataActive === false) return;
+    this.areasRememberFile(file, data, "metadata-change");
+  }
+
+  areasHandleVaultEvent(event, file, oldPath) {
+    if (this.areasDataActive === false) return;
+    const path = areasReportPath(file);
+    const oldKey = areasReportPath(oldPath);
+    if (event === "delete") {
+      const relevant = this.areasKnownPaths.has(path) || this.areasIsRelevant(path);
+      this.areasKnownPaths.delete(path);
+      if (relevant) this.apiAreasInvalidate("markdown-delete");
+      return;
+    }
+    const oldRelevant = Boolean(oldKey && (this.areasKnownPaths.has(oldKey) || this.areasIsRelevant(oldKey)));
+    if (event === "rename" && oldKey) this.areasKnownPaths.delete(oldKey);
+    const frontmatter = this.areasFrontmatterFor(file);
+    const currentRelevant = areasRelevantPath(file, {
+      rootPath: this.areasReport?.root?.path || "area.md",
+      dailyPath: this.areasDailyPath(),
+      frontmatter,
+    });
+    if (currentRelevant) this.areasKnownPaths.add(path);
+    else this.areasKnownPaths.delete(path);
+    if (oldRelevant || currentRelevant) this.apiAreasInvalidate(`markdown-${event}`);
+  }
+
+  areasSeedRelevantPaths(files = null) {
+    if (this.areasDataActive === false) return;
+    const paths = new Set();
+    try {
+      const sourceFiles = Array.isArray(files) ? files : this.app?.vault?.getMarkdownFiles?.() || [];
+      const rootPath = this.areasReport?.root?.path || "area.md";
+      const dailyPath = this.areasDailyPath();
+      for (const file of sourceFiles) {
+        if (areasRelevantPath(file, { rootPath, dailyPath, frontmatter: this.areasFrontmatterFor(file) })) paths.add(areasReportPath(file));
+      }
+    } catch (_error) { /* later events populate the set */ }
+    this.areasKnownPaths = paths;
+  }
+
+  areasRefreshRollover(now = new Date()) {
+    const day = areasLocalDate(now);
+    if (!day || day === this.areasLocalDay) return false;
+    this.areasLocalDay = day;
+    this.apiAreasInvalidate("day-rollover");
+    return true;
+  }
+
+  async apiAreasSync() {
+    if (this.areasDataActive === false) return { ok: false, error: { code: "unloaded", message: "Areas data has unloaded." } };
+    if (this.areasSyncFlight) return this.areasSyncFlight;
+    const epoch = this.areasDataEpoch || 0;
+    this.areasSyncBusy = true;
+    this.areasSyncError = null;
+    this.areasNotify();
+    let flight;
+    const run = async () => {
+      let result;
+      try { result = await this.areasSpawnSync(); }
+      catch (error) { result = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "bob areas sync failed." }; }
+      let operation;
+      if (!result || !result.ok || !result.report) operation = { ok: false, error: result || { code: "failed", message: "bob areas sync failed." }, report: null };
+      else if (result.report.ok !== true) {
+        const error = result.report.error || {};
+        operation = { ok: false, error: { code: error.code || "sync-refused", message: error.message || "bob areas sync could not complete.", detail: error.detail || error.hint || "" }, report: result.report };
+      } else operation = { ok: true, error: null, report: result.report };
+      if (this.areasDataActive === false || this.areasDataEpoch !== epoch) return { ...operation, refreshed: this.areasReportState() };
+      this.areasSyncError = operation.error;
+      this.areasVaultGeneration = (this.areasVaultGeneration || 0) + 1;
+      this.areasReportStale = Boolean(this.areasReport);
+      this.areasNotify();
+      let refreshed = this.areasReportState();
+      try { refreshed = await this.apiAreasReport({ force: true, wait: true }); } catch (_error) { /* keep the last good report */ }
+      if (this.areasDataActive !== false && this.areasDataEpoch === epoch) {
+        this.areasSyncBusy = false;
+        this.areasNotify();
+      }
+      return { ...operation, refreshed };
+    };
+    flight = Promise.resolve().then(run).catch((error) => {
+      const failure = { code: "failed", message: error && error.message ? String(error.message) : "bob areas sync failed." };
+      if (this.areasDataActive !== false && this.areasDataEpoch === epoch) {
+        this.areasSyncBusy = false;
+        this.areasSyncError = failure;
+        this.areasNotify();
+      }
+      return { ok: false, error: failure, report: null, refreshed: this.areasReportState() };
+    }).finally(() => {
+      if (this.areasSyncFlight === flight) this.areasSyncFlight = null;
+    });
+    this.areasSyncFlight = flight;
+    return flight;
+  }
+
+  setupAreasData() {
+    this.areasDataActive = true;
+    this.areasDataEpoch = (this.areasDataEpoch || 0) + 1;
+    this.areasVaultGeneration = 0;
+    this.areasReport = null;
+    this.areasReportGeneration = -1;
+    this.areasReportStale = true;
+    this.areasReportError = null;
+    this.areasSyncBusy = false;
+    this.areasSyncError = null;
+    this.areasSyncFlight = null;
+    this.areasListFlight = null;
+    this.areasSubscribers = new Set();
+    this.areasKnownPaths = new Set();
+    this.areasRevalidateTimer = null;
+    this.areasRolloverTimer = null;
+    this.areasLocalDay = areasLocalDate();
+    try {
+      const cache = this.app?.metadataCache;
+      if (cache?.on) this.registerEvent(cache.on("changed", (file, data) => this.areasHandleMetadataChanged(file, data)));
+    } catch (_error) { /* partial app hosts can omit metadata events */ }
+    try {
+      const vault = this.app?.vault;
+      if (vault?.on) for (const event of ["create", "modify", "delete", "rename"]) this.registerEvent(vault.on(event, (file, oldPath) => this.areasHandleVaultEvent(event, file, oldPath)));
+    } catch (_error) { /* partial app hosts can omit vault events */ }
+    try {
+      const workspace = this.app?.workspace;
+      if (workspace?.on) for (const event of ["file-open", "active-leaf-change"]) this.registerEvent(workspace.on(event, () => this.areasScheduleRevalidate(`workspace-${event}`)));
+      if (workspace?.onLayoutReady) workspace.onLayoutReady(() => this.areasSeedRelevantPaths());
+    } catch (_error) { /* layout readiness is optional */ }
+    try {
+      if (typeof this.registerDomEvent === "function" && typeof window !== "undefined" && window) {
+        this.registerDomEvent(window, "focus", () => this.areasScheduleRevalidate("window-focus"));
+        if (typeof document !== "undefined" && document) this.registerDomEvent(document, "visibilitychange", () => {
+          if (document.visibilityState === "visible") this.areasScheduleRevalidate("document-visible");
+        });
+      }
+    } catch (_error) { /* focus/visibility are best-effort */ }
+    try {
+      const timers = this.areasTimerApi();
+      if (timers?.setInterval && ((this.areasTimers && typeof this.areasTimers === "object") || (typeof window !== "undefined" && window))) {
+        this.areasRolloverTimer = timers.setInterval(() => this.areasRefreshRollover(new Date()), AREAS_ROLLOVER_INTERVAL_MS);
+        this.registerInterval?.(this.areasRolloverTimer);
+      }
+    } catch (_error) { this.areasRolloverTimer = null; }
+  }
+
+  teardownAreasData() {
+    this.areasDataActive = false;
+    this.areasDataEpoch = (this.areasDataEpoch || 0) + 1;
+    this.areasClearTimeout(this.areasRevalidateTimer);
+    this.areasRevalidateTimer = null;
+    if (this.areasRolloverTimer !== null && this.areasRolloverTimer !== undefined) {
+      try { this.areasTimerApi()?.clearInterval?.(this.areasRolloverTimer); } catch (_error) { /* best-effort */ }
+    }
+    this.areasRolloverTimer = null;
+    this.areasSubscribers?.clear?.();
+    this.areasKnownPaths?.clear?.();
+    this.areasReport = null;
+    this.areasReportError = null;
+    this.areasSyncBusy = false;
+    this.areasSyncError = null;
+  }
+}
+// ---- src/241ah-plugin-areas-catalog-model.js ----
+// Pure presentation models for the display-only Areas card. Bob's report is
+// authoritative for host membership, row order, nested depth, and hue.
+
+function areasCardHost(state, sourcePath) {
+  const report = state && state.report;
+  if (!report || !(report.catalogsByHostPath instanceof Map)) return null;
+  const path = areasReportPath(sourcePath);
+  if (!path) return null;
+  return report.catalogsByHostPath.get(path) || report.catalogsByHostPath.get(path.replace(/\.md$/i, "") + ".md") || null;
+}
+
+function areasCardHostEntry(state, sourcePath) {
+  const report = state && state.report;
+  if (!report || !(report.areasByPath instanceof Map)) return null;
+  const path = areasReportPath(sourcePath);
+  return report.areasByPath.get(path) || null;
+}
+
+function areasCardHueSlot(hue) {
+  return AREAS_HUES.has(hue) ? hue : null;
+}
+
+function areasCardHostHue(state, sourcePath) {
+  const catalog = areasCardHost(state, sourcePath);
+  if (!catalog || catalog.kind === "root") return null;
+  return areasCardHueSlot(areasCardHostEntry(state, sourcePath)?.hue);
+}
+
+function areasCardRowModel(entry, row = {}) {
+  if (!entry || typeof entry.path !== "string") return null;
+  const hue = areasCardHueSlot(entry.hue);
+  return {
+    path: areasReportPath(entry.path),
+    stem: entry.stem || "",
+    link: row.link || entry.link || entry.stem || "",
+    depth: Number.isInteger(row.depth) && row.depth >= 0 ? row.depth : 0,
+    summary: typeof entry.summary === "string" ? entry.summary : "",
+    hue,
+    muted: entry.hue_source === "muted" || !hue,
+    title: entry.title || entry.stem || "",
+    titled: entry.titled === true,
+  };
+}
+
+function areasCardRows(state, sourcePath) {
+  const report = state && state.report;
+  const catalog = areasCardHost(state, sourcePath);
+  if (!report || !catalog || !(report.areasByPath instanceof Map)) return [];
+  const rows = [];
+  for (const row of catalog.rows || []) {
+    const entry = report.areasByPath.get(areasReportPath(row.path));
+    const model = areasCardRowModel(entry, row);
+    if (model) rows.push(model);
+  }
+  return rows;
+}
+
+function areasCardLookupByTarget(report, target, sourcePath, metadataCache, vault) {
+  if (!report || !(report.areasByPath instanceof Map)) return null;
+  const name = typeof notebookWikilinkTarget === "function" ? notebookWikilinkTarget(target) : String(target || "").split("|")[0].trim();
+  if (!name) return null;
+  let file = null;
+  try { file = metadataCache?.getFirstLinkpathDest?.(name, sourcePath) || null; } catch (_error) { file = null; }
+  if (!file) {
+    try { file = vault?.getAbstractFileByPath?.(/\.md$/i.test(name) ? name : `${name}.md`) || null; }
+    catch (_error) { file = null; }
+  }
+  if (file && typeof file.path === "string") {
+    return { entry: report.areasByPath.get(areasReportPath(file.path)) || null, file };
+  }
+  const normalized = areasReportPath(name).replace(/\.md$/i, "");
+  const byPath = report.areasByPath.get(`${normalized}.md`) || report.areasByPath.get(normalized);
+  if (byPath) return { entry: byPath, file: null };
+  const linked = report.areasByLink instanceof Map ? report.areasByLink.get(name) : null;
+  if (Array.isArray(linked) && linked.length === 1) return { entry: linked[0], file: null };
+  const stem = name.split("/").pop().replace(/\.md$/i, "");
+  const matches = report.areasByStem instanceof Map ? report.areasByStem.get(stem) : null;
+  return Array.isArray(matches) && matches.length === 1 ? { entry: matches[0], file: null } : null;
+}
+
+function areasCardIssueHint(issues) {
+  return (Array.isArray(issues) ? issues : [])
+    .filter((issue) => issue && typeof issue === "object")
+    .map((issue) => {
+      const where = [issue.path, issue.line].filter((value) => value !== null && value !== undefined && value !== "").join(":");
+      const message = typeof issue.message === "string" && issue.message ? issue.message : issue.code || "issue";
+      return `${where ? `${where}: ` : ""}${message}`;
+    })
+    .join("\n");
+}
+
+function areasCardHealthModel(catalog) {
+  if (!catalog) return null;
+  const issues = Array.isArray(catalog.issues) ? catalog.issues : [];
+  if (catalog.state === "damaged") {
+    return { label: "damaged catalog", repairable: false, hint: areasCardIssueHint(issues) || "This Areas catalog is damaged. Repair the stored [!areas] block by hand." };
+  }
+  if (catalog.state === "missing" || catalog.state === "stale") {
+    return { label: "stale catalog", repairable: true, hint: areasCardIssueHint(issues) || `This Areas catalog is ${catalog.state}. Run bob areas sync to refresh it.` };
+  }
+  return issues.length ? { label: "check catalog", repairable: false, hint: areasCardIssueHint(issues) } : null;
+}
+
+function areasCardUnplacedModel(state, sourcePath) {
+  const catalog = areasCardHost(state, sourcePath);
+  const report = state && state.report;
+  if (!catalog || catalog.kind !== "root" || !report) return null;
+  const unplaced = (report.areas || []).filter((entry) => entry && entry.depth === null);
+  if (!unplaced.length) return null;
+  const paths = new Set(unplaced.map((entry) => areasReportPath(entry.path)));
+  const findings = (report.findings || []).filter((issue) => paths.has(areasReportPath(issue.path)));
+  const lines = findings.map((issue) => {
+    const where = [issue.path, issue.line].filter((value) => value !== null && value !== undefined && value !== "").join(":");
+    return `${where ? `${where}: ` : ""}${issue.message || issue.code || "area finding"}`;
+  });
+  return { count: unplaced.length, tooltip: lines.join("\n") || unplaced.map((entry) => entry.path).join("\n") };
+}
+
+function areasCardStatus(state, sourcePath) {
+  if (!state || !state.report) return null;
+  const catalog = areasCardHost(state, sourcePath);
+  if (!catalog) return null;
+  const health = areasCardHealthModel(catalog);
+  const messages = [];
+  let action = null;
+  if (state.error) {
+    messages.push(state.errorModel?.hint || "Could not refresh the Areas report.");
+    action = { kind: "retry", label: "Retry", hint: "Read the Areas report again.", disabled: Boolean(state.refreshing) };
+  } else if (state.stale) {
+    messages.push(state.refreshing ? "Refreshing Areas report…" : "Showing cached Areas while refreshing.");
+  }
+  if (health && catalog.state === "damaged") {
+    messages.push(health.hint);
+  } else if (health && health.repairable) {
+    if (state.syncErrorModel) messages.push(state.syncErrorModel.hint);
+    if (!state.error) action = { kind: "sync", label: state.syncBusy ? "Syncing…" : "↻ sync", hint: "Run bob areas sync to refresh this catalog.", disabled: Boolean(state.syncBusy) };
+  } else if (state.syncErrorModel) {
+    messages.push(state.syncErrorModel.hint);
+  }
+  if (state.syncBusy && !action) action = { kind: "sync", label: "Syncing…", hint: "Refreshing Areas catalogs.", disabled: true };
+  return { message: messages.join("\n"), health, action };
+}
+
+function areasCardAnchorLine(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  let start = 0;
+  if (/^\s*---\s*$/.test(lines[0] || "")) {
+    for (let i = 1; i < lines.length; i += 1) {
+      if (/^\s*---\s*$/.test(lines[i])) { start = i + 1; break; }
+    }
+  }
+  let fence = null;
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!fence) {
+      const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (match) { fence = { char: match[1][0], length: match[1].length }; continue; }
+      if (/^##\s+Areas\s*#*\s*$/i.test(line)) return i;
+    } else {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+    }
+  }
+  return Math.max(0, start);
+}
+
+function areasCardHasCallout(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  let start = 0;
+  if (/^\s*---\s*$/.test(lines[0] || "")) {
+    for (let i = 1; i < lines.length; i += 1) if (/^\s*---\s*$/.test(lines[i])) { start = i + 1; break; }
+  }
+  let fence = null;
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!fence) {
+      const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (match) { fence = { char: match[1][0], length: match[1].length }; continue; }
+      if (/^\s*>\s*\[!areas\](?:\s|$)/i.test(line)) return true;
+    } else {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+    }
+  }
+  return false;
+}
+// ---- src/241ai-plugin-areas-catalog-dom.js ----
+// Display-only Areas card chrome. Stored Markdown remains readable and is
+// never rewritten here; only the explicit bob areas sync action writes.
+const AREAS_HEADER_CLASS = "bob-areas-header";
+const AREAS_STATUS_CLASS = "bob-areas-status";
+const AREAS_STANDALONE_CLASS = "bob-areas-standalone";
+const AREAS_ANCHOR_CLASS = "bob-areas-anchor";
+const AREAS_DOT_CLASS = "bob-areas-dot";
+
+function areasSetAttr(node, name, value) {
+  if (value === null || value === undefined || value === false) node.removeAttribute?.(name);
+  else if (node.getAttribute?.(name) !== String(value)) node.setAttribute?.(name, String(value));
+}
+
+function areasFindCallouts(root) {
+  const selector = '.callout[data-callout="areas"], .cm-callout[data-callout="areas"], [data-callout="areas"]';
+  const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
+  if (notebookDomAttr(root, "data-callout") === "areas") nodes.unshift(root);
+  return Array.from(new Set(nodes)).filter((node) => !notebookInsideCode(node));
+}
+
+function areasContentHost(callout) {
+  return callout?.querySelector?.(".callout-content") || callout;
+}
+
+function areasPlaceFirst(host, node) {
+  if (!host || !node || node.parentNode !== host || host.firstChild === node) return;
+  host.insertBefore?.(node, host.firstChild || null);
+}
+
+function areasPlaceAfter(host, node, previous) {
+  if (!host || !node || !previous || node.parentNode !== host) return;
+  const next = previous.nextSibling || null;
+  if (next !== node) host.insertBefore?.(node, next);
+}
+
+function areasPaintHeader(host, options) {
+  const catalog = options.catalog || areasCardHost(options.state, options.sourcePath);
+  const rows = Array.isArray(catalog?.rows) ? catalog.rows.length : 0;
+  const warning = areasCardUnplacedModel(options.state, options.sourcePath);
+  const key = JSON.stringify([rows, warning]);
+  const header = albumReplaceChrome(host, AREAS_HEADER_CLASS, key, (node, doc) => {
+    node.setAttribute("role", "heading");
+    node.setAttribute("aria-level", "3");
+    const title = notebookCreateEl(doc, "span", "bob-areas-title");
+    notebookSetText(title, "Areas");
+    node.appendChild(title);
+    const count = notebookCreateEl(doc, "span", "bob-areas-count");
+    notebookSetText(count, `${rows} ${rows === 1 ? "area" : "areas"}`);
+    node.appendChild(count);
+    if (warning) {
+      const notice = notebookCreateEl(doc, "span", "bob-areas-unplaced");
+      notebookSetText(notice, `⚠ ${warning.count} areas unplaced`);
+      notice.setAttribute("title", warning.tooltip);
+      notice.setAttribute("tabindex", "0");
+      node.appendChild(notice);
+    }
+  });
+  areasPlaceFirst(host, header);
+  return header;
+}
+
+function areasPaintStatus(host, model, handlers, header = null) {
+  const status = albumReplaceChrome(host, AREAS_STATUS_CLASS, model && (model.message || model.action) ? JSON.stringify(model) : "", (node, doc) => {
+    node.setAttribute("role", "status");
+    if (model.message) {
+      const hint = notebookCreateEl(doc, "span", "bob-areas-status-hint");
+      notebookSetText(hint, model.message);
+      node.appendChild(hint);
+    }
+    if (model.health && model.health.label && model.health.label !== "damaged catalog") {
+      const health = notebookCreateEl(doc, "span", "bob-areas-health");
+      notebookSetText(health, "stale catalog");
+      node.appendChild(health);
+    }
+    if (model.action) {
+      const action = notebookCreateEl(doc, "button", "bob-areas-action");
+      notebookSetText(action, model.action.label);
+      action.setAttribute("type", "button");
+      action.setAttribute("title", model.action.hint);
+      action.setAttribute("aria-label", model.action.hint);
+      action.disabled = Boolean(model.action.disabled);
+      if (model.action.disabled) action.setAttribute("aria-busy", "true");
+      notebookBindAction(action, () => {
+        if (!action.disabled && typeof handlers?.[model.action.kind] === "function") handlers[model.action.kind]();
+      });
+      node.appendChild(action);
+    }
+  });
+  if (header) areasPlaceAfter(host, status, header);
+  return status;
+}
+
+function areasPaintDot(li, model) {
+  const existing = Array.from(li?.children || []).find((node) => notebookDomHasClass(node, AREAS_DOT_CLASS));
+  if (!model) {
+    existing?.remove?.();
+    return null;
+  }
+  if (existing) existing.remove?.();
+  const link = notebookLiOwnLink(li);
+  if (!link) return null;
+  const doc = notebookDomDoc(li);
+  const dot = notebookCreateEl(doc, "span", AREAS_DOT_CLASS);
+  if (!dot) return null;
+  dot.setAttribute("aria-hidden", "true");
+  dot.setAttribute("data-area-path", model.path);
+  areasSetAttr(dot, "data-hue", model.hue);
+  areasSetAttr(dot, "data-muted", model.muted ? "true" : null);
+  let first = link;
+  while (first.parentNode && first.parentNode !== li) first = first.parentNode;
+  li.insertBefore(dot, first);
+  return dot;
+}
+
+function areasPaintCallout(callout, options) {
+  const catalog = areasCardHost(options.state, options.sourcePath);
+  if (!catalog) {
+    areasCleanCallout(callout);
+    return false;
+  }
+  areasSetAttr(callout, "data-bob-areas-card", "true");
+  areasSetAttr(callout, "data-root-hue", areasCardHostHue(options.state, options.sourcePath));
+  areasSetAttr(callout, "data-stale", options.state.stale ? "true" : null);
+  const report = options.state.report;
+  const content = areasContentHost(callout);
+  const header = areasPaintHeader(content, options);
+  for (const li of callout.querySelectorAll?.("li") || []) {
+    const link = notebookLiOwnLink(li);
+    const resolved = link ? areasCardLookupByTarget(report, notebookLinkHref(link), options.sourcePath, options.metadataCache, options.vault) : null;
+    areasPaintDot(li, resolved && resolved.entry ? areasCardRowModel(resolved.entry) : null);
+  }
+  areasPaintStatus(content, areasCardStatus(options.state, options.sourcePath), options.handlers, header);
+  return true;
+}
+
+function areasPaintStandaloneDot(parent, doc, model) {
+  const dot = notebookCreateEl(doc, "span", AREAS_DOT_CLASS);
+  if (!dot) return;
+  dot.setAttribute("aria-hidden", "true");
+  dot.setAttribute("data-area-path", model.path);
+  areasSetAttr(dot, "data-hue", model.hue);
+  areasSetAttr(dot, "data-muted", model.muted ? "true" : null);
+  parent.appendChild(dot);
+}
+
+function areasPaintStandaloneRows(host, options) {
+  const rows = areasCardRows(options.state, options.sourcePath);
+  if (!rows.length) return;
+  const doc = notebookDomDoc(host);
+  const root = notebookCreateEl(doc, "ul", "bob-areas-list");
+  if (!root) return;
+  const lists = [root];
+  const parents = [];
+  let previousDepth = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    const model = rows[index];
+    const depth = Math.max(0, Math.min(Number.isInteger(model.depth) ? model.depth : 0, previousDepth + (parents.length ? 1 : 0)));
+    const safeDepth = Math.min(depth, lists.length - 1);
+    let list = lists[safeDepth] || root;
+    const li = notebookCreateEl(doc, "li", "bob-areas-row");
+    if (!li) continue;
+    areasPaintStandaloneDot(li, doc, model);
+    const link = notebookCreateEl(doc, "a", "internal-link");
+    if (link) {
+      link.setAttribute("data-href", model.link);
+      notebookSetText(link, model.stem || model.link);
+      li.appendChild(link);
+    }
+    if (model.summary) {
+      const summary = notebookCreateEl(doc, "span", "bob-areas-summary");
+      notebookSetText(summary, ` — ${model.summary}`);
+      li.appendChild(summary);
+    }
+    list.appendChild(li);
+    parents[safeDepth] = li;
+    lists.length = safeDepth + 1;
+    const next = rows[index + 1];
+    if (next && next.depth > safeDepth) {
+      const nested = notebookCreateEl(doc, "ul", "bob-areas-list");
+      if (nested) {
+        li.appendChild(nested);
+        lists[safeDepth + 1] = nested;
+      }
+    }
+    previousDepth = safeDepth;
+  }
+  host.appendChild(root);
+}
+
+function areasPaintStandalone(host, options) {
+  if (!host || !areasCardHost(options.state, options.sourcePath)) return false;
+  const catalog = areasCardHost(options.state, options.sourcePath);
+  host.setAttribute?.("class", `${notebookDomAttr(host, "class") || ""} ${AREAS_STANDALONE_CLASS}`.trim());
+  areasSetAttr(host, "data-bob-areas-card", "true");
+  areasSetAttr(host, "data-root-hue", areasCardHostHue(options.state, options.sourcePath));
+  areasSetAttr(host, "data-stale", options.state.stale ? "true" : null);
+  const header = areasPaintHeader(host, options);
+  let list = Array.from(host.children || []).find((node) => notebookDomHasClass(node, "bob-areas-list"));
+  if (list) list.remove?.();
+  areasPaintStandaloneRows(host, options);
+  areasPaintStatus(host, areasCardStatus(options.state, options.sourcePath), options.handlers, header);
+  void catalog;
+  return true;
+}
+
+function areasCleanCallout(callout) {
+  notebookRemovePainted(callout, AREAS_HEADER_CLASS);
+  notebookRemovePainted(callout, AREAS_STATUS_CLASS);
+  for (const li of callout?.querySelectorAll?.("li") || []) areasPaintDot(li, null);
+  for (const name of ["data-bob-areas-card", "data-root-hue", "data-stale"]) callout?.removeAttribute?.(name);
+}
+
+function areasCleanCatalogDom(root) {
+  for (const callout of areasFindCallouts(root)) areasCleanCallout(callout);
+  for (const cls of [AREAS_HEADER_CLASS, AREAS_STATUS_CLASS, AREAS_ANCHOR_CLASS, AREAS_STANDALONE_CLASS]) notebookRemovePainted(root, cls);
+  for (const dot of root?.querySelectorAll?.(`.${AREAS_DOT_CLASS}`) || []) dot.remove?.();
+}
+// ---- src/241aj-plugin-areas-catalog.js ----
+// Reading and Live Preview renderers for the display-only Areas card.
+let areasCatalogRefreshEffect = null;
+function ensureAreasCatalogRefresh() {
+  if (areasCatalogRefreshEffect) return areasCatalogRefreshEffect;
+  try { if (StateEffect?.define) areasCatalogRefreshEffect = StateEffect.define(); }
+  catch (_error) { areasCatalogRefreshEffect = null; }
+  return areasCatalogRefreshEffect;
+}
+
+class BobLedgerToolsAreasCatalogMixin {
+  setupAreasCatalog() {
+    this.areasCatalogActive = true;
+    this.areasCatalogReading = new Set();
+    this.areasCatalogEditors = new Set();
+    this.areasCatalogRefreshTimer = null;
+    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAreasCatalogInReading(el, ctx), 52);
+    const extension = this.createAreasCatalogExtension();
+    if (extension) this.registerEditorExtension?.(extension);
+    this.areasCatalogUnsubscribe = this.apiAreasSubscribe((state) => {
+      this.areasCatalogLastState = state;
+      this.scheduleAreasCatalogRefresh();
+    });
+  }
+
+  teardownAreasCatalog() {
+    this.areasCatalogActive = false;
+    this.areasCatalogUnsubscribe?.();
+    this.areasCatalogUnsubscribe = null;
+    this.areasClearTimeout(this.areasCatalogRefreshTimer);
+    this.areasCatalogRefreshTimer = null;
+    for (const widget of this.areasCatalogReading || []) areasCleanCatalogDom(widget.el);
+    for (const view of this.areasCatalogEditors || []) areasCleanCatalogDom(view.dom);
+    this.areasCatalogReading?.clear();
+    this.areasCatalogEditors?.clear();
+  }
+
+  areasCatalogState() {
+    try { return this.areasReportState(); }
+    catch (_error) { return this.areasCatalogLastState || { report: null, unavailable: true, today: areasLocalDate() }; }
+  }
+
+  areasCatalogHandlers(sourcePath) {
+    return {
+      retry: () => { void this.apiAreasReport({ force: true }); },
+      sync: () => { void this.apiAreasSync(); },
+    };
+  }
+
+  areasCatalogOptions(sourcePath, state = null) {
+    const current = state || this.areasCatalogState();
+    return {
+      state: current,
+      sourcePath,
+      catalog: areasCardHost(current, sourcePath),
+      rows: areasCardRows(current, sourcePath),
+      hue: areasCardHostHue(current, sourcePath),
+      metadataCache: this.app?.metadataCache,
+      vault: this.app?.vault,
+      handlers: this.areasCatalogHandlers(sourcePath),
+    };
+  }
+
+  areasCatalogCleanAnchor(el) {
+    const anchor = Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])[0];
+    anchor?.remove?.();
+  }
+
+  areasCatalogEnsureAnchor(el, heading = null) {
+    let anchor = Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])[0] || null;
+    if (!anchor) {
+      anchor = notebookCreateEl(notebookDomDoc(el), "div", AREAS_ANCHOR_CLASS);
+      if (!anchor) return null;
+    }
+    if (heading?.parentNode) {
+      const next = heading.nextSibling || null;
+      if (anchor.parentNode !== heading.parentNode || (next !== anchor && anchor.previousSibling !== heading)) heading.parentNode.insertBefore(anchor, next);
+    } else if (anchor.parentNode !== el) {
+      el.insertBefore?.(anchor, el.firstChild || null);
+    }
+    return anchor;
+  }
+
+  areasPaintReading(el, sourcePath, allowAnchor = true) {
+    const options = this.areasCatalogOptions(sourcePath);
+    const callouts = areasFindCallouts(el);
+    for (const callout of callouts) areasPaintCallout(callout, options);
+    const catalog = options.catalog;
+    if (!catalog || callouts.length || !allowAnchor) {
+      this.areasCatalogCleanAnchor(el);
+      return;
+    }
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
+    const anchor = this.areasCatalogEnsureAnchor(el, heading || null);
+    if (anchor) areasPaintStandalone(anchor, options);
+  }
+
+  renderAreasCatalogInReading(el, ctx) {
+    if (!this.areasCatalogActive || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    const callouts = areasFindCallouts(el);
+    if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
+    const section = ctx.getSectionInfo?.(el);
+    const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
+    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+    let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
+    if (!widget) {
+      widget = { el, path: ctx.sourcePath, allowAnchor };
+      this.areasCatalogReading.add(widget);
+      if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+        const child = new MarkdownRenderChild(el);
+        child.onunload = () => {
+          areasCleanCatalogDom(el);
+          this.areasCatalogReading?.delete(widget);
+        };
+        ctx.addChild(child);
+      }
+    } else if (widget.path !== ctx.sourcePath) {
+      areasCleanCatalogDom(el);
+      widget.path = ctx.sourcePath;
+      this.areasPaintReading(el, ctx.sourcePath, allowAnchor);
+    }
+    widget.allowAnchor = allowAnchor;
+  }
+
+  areasCatalogLivePath(view) {
+    return this.areasCatalogActive ? this.notebookCatalogLivePath(view) : null;
+  }
+
+  areasPaintEditor(view) {
+    const path = this.areasCatalogLivePath(view);
+    if (!path) {
+      areasCleanCatalogDom(view.dom);
+      return;
+    }
+    const options = this.areasCatalogOptions(path);
+    for (const callout of areasFindCallouts(view.dom)) {
+      if (!callout.closest?.(".markdown-embed")) areasPaintCallout(callout, options);
+    }
+  }
+
+  buildAreasCatalogDecorations(view) {
+    const path = this.areasCatalogLivePath(view);
+    if (!path || !Decoration || !WidgetType || !RangeSetBuilder) return Decoration?.none;
+    const text = view.state.doc.toString();
+    if (areasCardHasCallout(text)) return Decoration.none;
+    const options = this.areasCatalogOptions(path);
+    if (!options.catalog) return Decoration.none;
+    const plugin = this;
+    const key = JSON.stringify([path, options.catalog.state, options.rows, options.state.stale, options.state.error, options.state.syncBusy, options.state.syncError]);
+    const AreaStatusWidget = class extends WidgetType {
+      constructor() { super(); this.key = key; }
+      eq(other) { return other?.key === this.key; }
+      toDOM() {
+        const host = notebookCreateEl(typeof document !== "undefined" ? document : null, "div", AREAS_ANCHOR_CLASS);
+        if (host) areasPaintStandalone(host, plugin.areasCatalogOptions(path));
+        return host;
+      }
+      ignoreEvent() { return true; }
+    };
+    const index = areasCardAnchorLine(text);
+    const line = view.state.doc.line(Math.min(index + 1, view.state.doc.lines));
+    const builder = new RangeSetBuilder();
+    builder.add(line.to, line.to, Decoration.widget({ widget: new AreaStatusWidget(), side: 1 }));
+    return builder.finish();
+  }
+
+  createAreasCatalogExtension() {
+    if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
+    const plugin = this;
+    const refresh = ensureAreasCatalogRefresh();
+    return ViewPlugin.fromClass(class {
+      constructor(view) {
+        this.view = view;
+        this.path = plugin.areasCatalogLivePath(view);
+        this.decorations = plugin.buildAreasCatalogDecorations(view);
+        plugin.areasCatalogEditors.add(view);
+        this.schedulePaint();
+      }
+      schedulePaint() {
+        if (this.timer != null) return;
+        this.timer = plugin.areasSetTimeout(() => {
+          this.timer = null;
+          if (plugin.areasCatalogActive) plugin.areasPaintEditor(this.view);
+        }, 0);
+      }
+      update(update) {
+        const path = plugin.areasCatalogLivePath(update.view);
+        const changed = path !== this.path;
+        if (changed) areasCleanCatalogDom(update.view.dom);
+        this.path = path;
+        const notified = refresh && (update.transactions || []).some((tx) => (tx.effects || []).some((effect) => effect.is?.(refresh)));
+        if (changed || update.docChanged || notified) this.decorations = plugin.buildAreasCatalogDecorations(update.view);
+        this.schedulePaint();
+      }
+      destroy() {
+        plugin.areasClearTimeout(this.timer);
+        areasCleanCatalogDom(this.view.dom);
+        plugin.areasCatalogEditors.delete(this.view);
+      }
+    }, { decorations: (value) => value.decorations });
+  }
+
+  scheduleAreasCatalogRefresh() {
+    if (!this.areasCatalogActive || this.areasCatalogRefreshTimer !== null) return;
+    this.areasCatalogRefreshTimer = this.areasSetTimeout(() => {
+      this.areasCatalogRefreshTimer = null;
+      if (!this.areasCatalogActive) return;
+      for (const widget of this.areasCatalogReading || []) {
+        if (!widget.el?.closest?.(".cm-editor")) this.areasPaintReading(widget.el, widget.path, widget.allowAnchor);
+      }
+      const effect = ensureAreasCatalogRefresh();
+      for (const view of this.areasCatalogEditors || []) {
+        try { if (effect) view.dispatch({ effects: effect.of(null) }); } catch (_error) { /* stale view */ }
+        this.areasPaintEditor(view);
+      }
+    }, 0);
   }
 }
 // ---- src/241z-plugin-album-update.js ----
@@ -124570,6 +125762,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsNotebookDataMixin,
   BobLedgerToolsAlbumDataMixin,
   BobLedgerToolsProjectsDataMixin,
+  BobLedgerToolsAreasDataMixin,
   BobLedgerToolsAlbumUpdateMixin,
   BobLedgerToolsBankDataMixin,
   BobLedgerToolsBankActionsMixin,
@@ -124584,6 +125777,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
+  BobLedgerToolsAreasCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
@@ -128158,5 +129352,47 @@ try {
     });
   }
 } catch (error) {
+  // Test exports are best-effort.
+}
+// ---- src/362-exports-areas.js ----
+// Areas report and card helpers for focused regression coverage.
+try {
+  if (module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      AREAS_REPORT_SCHEMA_VERSION,
+      AREAS_LIST_TIMEOUT_MS,
+      AREAS_LIST_MAX_BUFFER,
+      AREAS_REVALIDATE_DEBOUNCE_MS,
+      AREAS_ROLLOVER_INTERVAL_MS,
+      areasListArgs,
+      areasSyncArgs,
+      areasDecodeListReport,
+      areasDecodeSyncReport,
+      areasIndexReport,
+      areasReportPath,
+      areasTypeNames,
+      areasRelevantPath,
+      areasLocalDate,
+      areasErrorModel,
+      areasCardHost,
+      areasCardHostEntry,
+      areasCardHueSlot,
+      areasCardHostHue,
+      areasCardRowModel,
+      areasCardRows,
+      areasCardLookupByTarget,
+      areasCardIssueHint,
+      areasCardHealthModel,
+      areasCardUnplacedModel,
+      areasCardStatus,
+      areasCardAnchorLine,
+      areasCardHasCallout,
+      areasFindCallouts,
+      areasPaintCallout,
+      areasPaintStandalone,
+      areasCleanCatalogDom,
+    });
+  }
+} catch (_error) {
   // Test exports are best-effort.
 }

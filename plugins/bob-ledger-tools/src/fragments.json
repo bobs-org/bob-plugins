@@ -117,6 +117,11 @@
   "241ac-plugin-projects-catalog-model.js",
   "241ad-plugin-projects-catalog-dom.js",
   "241ae-plugin-projects-catalog.js",
+  "241af-plugin-areas-data.js",
+  "241ag-plugin-areas-data-service.js",
+  "241ah-plugin-areas-catalog-model.js",
+  "241ai-plugin-areas-catalog-dom.js",
+  "241aj-plugin-areas-catalog.js",
   "241z-plugin-album-update.js",
   "242a-plugin-album-update-service.js",
   "242b-plugin-album-update-session.js",
@@ -255,5 +260,6 @@
   "358-exports-projects.js",
   "359-exports-projects-catalog.js",
   "360-exports-bank-walk.js",
-  "361-exports-bank-walker-footer.js"
+  "361-exports-bank-walker-footer.js",
+  "362-exports-areas.js"
 ]

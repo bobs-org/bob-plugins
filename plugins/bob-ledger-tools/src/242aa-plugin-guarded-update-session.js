@@ -69,6 +69,15 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     previewTimer: null,
     previewFlight: null,
   };
+  try {
+    const seed = init && init.undo;
+    if (seed && Array.isArray(seed.inverseOps) && seed.inverseOps.length > 0) {
+      session.undo = {
+        inverseOps: seed.inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+        afterFingerprint: typeof seed.afterFingerprint === "string" ? seed.afterFingerprint : "",
+      };
+    }
+  } catch (_) {}
 
   function setTimeout(callback, delay) {
     if (timers && typeof timers.setTimeout === "function") {

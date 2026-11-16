@@ -12,6 +12,46 @@ class BobLedgerToolsAlbumUpdateMixin {
     return this.albumUpdateOwnPaths;
   }
 
+  albumSchemaUndoStore() {
+    if (!(this.albumSchemaUndoByStem instanceof Map)) {
+      this.albumSchemaUndoByStem = new Map();
+    }
+    return this.albumSchemaUndoByStem;
+  }
+
+  albumSchemaRememberUndo(stem, inverseOps, afterFingerprint) {
+    try {
+      const key = String(stem || "");
+      if (!key || !Array.isArray(inverseOps) || !inverseOps.length) return null;
+      const record = {
+        inverseOps: inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+        afterFingerprint: typeof afterFingerprint === "string" ? afterFingerprint : "",
+      };
+      this.albumSchemaUndoStore().set(key, record);
+      return record;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  albumSchemaLastUndo(stem) {
+    try {
+      return this.albumSchemaUndoStore().get(String(stem || "")) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  albumSchemaRecordTiming(kind, ms) {
+    try {
+      if (!Array.isArray(this.albumSchemaTimings)) this.albumSchemaTimings = [];
+      const value = Number(ms);
+      if (!Number.isFinite(value) || value < 0) return;
+      this.albumSchemaTimings.push({ kind: String(kind || ""), ms: value, at: Date.now() });
+      while (this.albumSchemaTimings.length > 60) this.albumSchemaTimings.shift();
+    } catch (_) {}
+  }
+
   albumSpawnUpdate(stem, envelopeText, options = {}) {
     const opts = albumJsonObject(options) ? options : {};
     const dryRun = opts.dryRun === true;

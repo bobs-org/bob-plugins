@@ -786,16 +786,24 @@ test("Schema Card key events reorder fields and choices while plain navigation s
 
   modal.schemaSelect("field:one");
   key("field:one", { key: "j", altKey: true });
-  assert.deepEqual(modal.session.getState().draftOps, [{ op: "field.move", field: "one", position: 1 }]);
-  modal.session.setDraft([]);
+  assert.equal(modal.session.getState().draftOps.length, 1);
+  assert.deepEqual(
+    helpers.simulateAlbumOps(modal.schemaArrangement, modal.session.getState().draftOps).fields,
+    ["two", "one", "status"],
+  );
+  modal.schemaArrangeRevert();
   modal.schemaSelect("field:two");
   key("field:two", { key: "k", altKey: true });
-  assert.deepEqual(modal.session.getState().draftOps, [{ op: "field.move", field: "two", position: 0 }]);
-  modal.session.setDraft([]);
+  assert.equal(modal.session.getState().draftOps.length, 1);
+  assert.deepEqual(
+    helpers.simulateAlbumOps(modal.schemaArrangement, modal.session.getState().draftOps).fields,
+    ["two", "one", "status"],
+  );
+  modal.schemaArrangeRevert();
   modal.schemaSelect("choice:status:first");
   key("choice:status:first", { key: "j", altKey: true });
   assert.deepEqual(modal.session.getState().draftOps, [{ op: "choice.move", field: "status", value: "first", position: 1 }]);
-  modal.session.setDraft([]);
+  modal.schemaArrangeRevert();
   const before = modal.selectedKey;
   key("choice:status:first", { key: "j" });
   assert.notEqual(modal.selectedKey, before);
@@ -1253,13 +1261,13 @@ test("Schema Card maps album, field, choice, ordering, toggle, and removal gestu
   modal.session.setDraft([]);
   modal.schemaMoveSelected(1);
   assert.deepEqual(modal.session.getState().draftOps[0], { op: "field.move", field: "status", position: 1 });
-  modal.session.setDraft([]);
+  modal.schemaArrangeRevert();
   modal.selectedKey = "choice:status:liked";
   modal.schemaMoveSelected(1);
   assert.deepEqual(modal.session.getState().draftOps[0], {
     op: "choice.move", field: "status", value: "liked", position: 1,
   });
-  modal.session.setDraft([]);
+  modal.schemaArrangeRevert();
   modal.schemaRemoveSelected();
   assert.deepEqual(modal.session.getState().draftOps[0], {
     op: "choice.remove", field: "status", value: "liked",

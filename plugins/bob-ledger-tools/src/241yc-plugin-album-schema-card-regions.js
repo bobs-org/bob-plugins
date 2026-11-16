@@ -169,25 +169,155 @@ function albumSchemaCardPaintLint(card, model, options, doc) {
   host.appendChild(list);
 }
 
+function albumSchemaCardArrangeGapButton(doc, host, label, gapIndex, scope) {
+  if (!doc || !host) return null;
+  const button = notebookCreateEl(doc, "button", "bob-album-schema-gap-hint");
+  button.setAttribute("type", "button");
+  button.setAttribute("data-gap-index", String(gapIndex));
+  button.setAttribute("data-gap-scope", String(scope || ""));
+  button.setAttribute("aria-label", `Place here (gap ${label})`);
+  notebookSetText(button, label);
+  host.appendChild(button);
+  return button;
+}
+
+function albumSchemaCardDecorateArrangeNode(node, arrangeId, deltas, saving) {
+  if (!node || !arrangeId) return;
+  try { node.setAttribute("data-arrange-id", String(arrangeId)); } catch (_) {}
+  try {
+    const cls = String(node.getAttribute?.("class") || "");
+    if (deltas && Object.prototype.hasOwnProperty.call(deltas, arrangeId)) {
+      if (!cls.includes("is-arrange-moved")) node.setAttribute("class", `${cls} is-arrange-moved`.trim());
+    }
+    if (saving && deltas && Object.prototype.hasOwnProperty.call(deltas, arrangeId)) {
+      const next = String(node.getAttribute?.("class") || "");
+      if (!next.includes("is-arrange-saving")) node.setAttribute("class", `${next} is-arrange-saving`.trim());
+    }
+  } catch (_) {}
+  try {
+    if (deltas && Object.prototype.hasOwnProperty.call(deltas, arrangeId)) {
+      const badge = node.ownerDocument?.createElement
+        ? node.ownerDocument.createElement("span")
+        : null;
+      const text = typeof schemaArrangeDeltaBadge === "function"
+        ? schemaArrangeDeltaBadge(deltas[arrangeId])
+        : "";
+      if (badge && text) {
+        badge.setAttribute("class", "bob-album-schema-delta-badge");
+        if (typeof notebookSetText === "function") notebookSetText(badge, text);
+        else badge.textContent = text;
+        node.appendChild(badge);
+      } else if (text && typeof notebookCreateEl === "function" && node.ownerDocument) {
+        const fallback = notebookCreateEl(node.ownerDocument, "span", "bob-album-schema-delta-badge");
+        notebookSetText(fallback, text);
+        node.appendChild(fallback);
+      }
+    }
+  } catch (_) {}
+}
+
 function albumSchemaCardPaintBody(card, model, options, doc) {
   const host = albumSchemaCardRegion(card, "body");
   if (!host || !doc) return;
   albumSchemaRegionEmpty(host);
   const editable = options?.editable === true;
   const selectedKey = options?.selectedKey || "stats";
+  const arrange = options?.arrange || null;
+  const projected = arrange?.dirty && arrange?.projected ? arrange.projected : null;
+  const deltas = arrange?.deltas || {};
+  const saving = arrange?.saving === true;
+  const hintMode = arrange?.hintMode || null;
   if (model.emptySchema && !model.schemaInvalid) {
     const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
     notebookSetText(empty, albumHeaderSummaryText(model));
     host.appendChild(empty);
   }
   if (editable) {
-    for (const field of model.fields || []) {
-      const presented = albumHeaderPresentField(field, model);
-      albumSchemaCardPaintFieldRow(doc, host, presented, options);
-      if (presented.choices?.length || field.kind === "choices") {
+    const fieldsByKey = new Map((model.fields || []).map((field) => [String(field?.key || ""), field]));
+    const fieldOrder = projected && Array.isArray(projected.fields)
+      ? projected.fields.map(String).filter((key) => fieldsByKey.has(key))
+      : (model.fields || []).map((field) => String(field?.key || ""));
+    if (hintMode && hintMode.scope === "fields" && Array.isArray(hintMode.gaps)) {
+      const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
+      for (let gap = 0; gap <= fieldOrder.length; gap += 1) {
+        const hintIndex = (hintMode.gaps || []).indexOf(gap);
+        if (hintIndex >= 0) {
+          albumSchemaCardArrangeGapButton(doc, host, labels[hintIndex] || String(gap), gap, "fields");
+        }
+        if (gap >= fieldOrder.length) break;
+        const key = fieldOrder[gap];
+        const field = fieldsByKey.get(key);
+        if (!field) continue;
+        const presented = albumHeaderPresentField(field, model);
+        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        const row = host.children?.[host.children.length - 1] || null;
+        if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
+        const scope = `choices:${key}`;
+        const wantsChoices = presented.choices?.length || field.kind === "choices";
+        if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
         for (const choice of presented.choices || []) {
           albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+          const chip = cloud.children?.[cloud.children.length - 1] || null;
+          if (chip) {
+            const value = String(choice?.value ?? "");
+            albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
+          }
+        }
+        if (field.kind === "choices") {
+          const addKey = `add-choice:${field.key}`;
+          albumSchemaCardButton(doc, cloud, "+ choice", {
+            targetKey: addKey,
+            className: "bob-album-schema-add-choice is-dashed",
+            ariaLabel: `Add choice to ${presented.label}`,
+            current: selectedKey === addKey,
+          });
+        }
+        host.appendChild(cloud);
+      }
+    } else {
+      for (const key of fieldOrder) {
+        const field = fieldsByKey.get(key);
+        if (!field) continue;
+        const presented = albumHeaderPresentField(field, model);
+        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        const row = host.children?.[host.children.length - 1] || null;
+        if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
+        const scope = `choices:${key}`;
+        const wantsChoices = presented.choices?.length || field.kind === "choices";
+        if (!wantsChoices) continue;
+        const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        const choicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
+        let choiceOrder = (presented.choices || []).map((choice) => String(choice?.value ?? ""));
+        if (projected && Array.isArray(projected[scope])) {
+          const wanted = projected[scope].map(String).filter((value) => choicesByValue.has(value));
+          if (wanted.length === choiceOrder.length) choiceOrder = wanted;
+        }
+        if (hintMode && hintMode.scope === scope && Array.isArray(hintMode.gaps)) {
+          const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
+          for (let gap = 0; gap <= choiceOrder.length; gap += 1) {
+            const hintIndex = (hintMode.gaps || []).indexOf(gap);
+            if (hintIndex >= 0) {
+              albumSchemaCardArrangeGapButton(doc, cloud, labels[hintIndex] || String(gap), gap, scope);
+            }
+            if (gap >= choiceOrder.length) break;
+            const value = choiceOrder[gap];
+            const choice = choicesByValue.get(value);
+            if (!choice) continue;
+            const beforeCount = cloud.children?.length || 0;
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            const chip = cloud.children?.[cloud.children.length - 1] || null;
+            if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
+            void beforeCount;
+          }
+        } else {
+          for (const value of choiceOrder) {
+            const choice = choicesByValue.get(value);
+            if (!choice) continue;
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            const chip = cloud.children?.[cloud.children.length - 1] || null;
+            if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
+          }
         }
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
@@ -325,9 +455,13 @@ function albumSchemaCardPaintStageStatus(card, options) {
 
 function albumSchemaCardStatusTone(state, options) {
   if (options?.enterLatched) return "is-previewing";
-  if (state?.status === "applying") return "is-previewing";
+  if (options?.arrange?.saving || state?.status === "applying") {
+    return state?.refusal ? "is-refused" : "is-previewing";
+  }
   if (state?.status === "preview-pending" || state?.busy) return "is-previewing";
   if (state?.refusal) return "is-refused";
+  if (options?.arrange?.savedFlash) return "is-saved";
+  if (options?.arrange?.dirty && options.arrange.loud && state?.canApply) return "is-confirm";
   if (state?.status === "saved-with-sync-warning" || state?.syncWarning) return "is-confirm";
   if (state?.canApply) return "is-ready";
   if (state?.status === "saved") return "is-saved";
@@ -353,6 +487,13 @@ function albumSchemaCardPaintStatus(card, options, doc) {
   if (options?.enterLatched) {
     notebookSetText(host, "Saving as soon as bob confirms…");
     filled = true;
+  } else if (options?.arrange?.saving) {
+    const pending = options.arrange.pendingText || "Saving…";
+    notebookSetText(host, `Saving… · ${pending}`);
+    filled = true;
+  } else if (options?.arrange?.savedFlash && !report && !state.refusal) {
+    notebookSetText(host, "Saved · u undo");
+    filled = true;
   } else if (report) {
     const consequence = notebookCreateEl(doc, "p", "bob-album-schema-consequence-text");
     notebookSetText(consequence, state.consequence || report.consequence || "No schema changes.");
@@ -376,6 +517,21 @@ function albumSchemaCardPaintStatus(card, options, doc) {
       const derived = notebookCreateEl(doc, "p", "bob-album-schema-derived-keys");
       notebookSetText(derived, `bob will use key${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}`);
       host.appendChild(derived);
+    }
+    if (options?.arrange?.dirty && options.arrange.loud && state?.canApply) {
+      albumSchemaCardButton(doc, host, options.arrange.confirm ? "Confirm save ⏎" : "Confirm save", {
+        action: "apply",
+        className: "bob-album-schema-action is-primary",
+        ariaLabel: "Confirm save",
+        disabled: Boolean(state.busy),
+      });
+      filled = true;
+    }
+    if (options?.arrange?.dirty && options.arrange.pendingText && !options.arrange.saving) {
+      const pending = notebookCreateEl(doc, "p", "bob-album-schema-pending-bar");
+      notebookSetText(pending, options.arrange.pendingText);
+      host.appendChild(pending);
+      filled = true;
     }
   } else if (state.busy) {
     notebookSetText(host, state.status === "applying" ? "Saving the schema edit…" : "Previewing this edit…");
@@ -467,6 +623,7 @@ function albumSchemaCardHintItems(model, options) {
   const fresh = options?.fresh === true;
   const busy = Boolean(state.busy);
   const stage = options?.stage;
+  const arrange = options?.arrange || null;
   const gated = !fresh || busy || Boolean(stage);
   const target = albumSchemaTargetByKey(model, options?.selectedKey);
   const items = [];
@@ -476,6 +633,23 @@ function albumSchemaCardHintItems(model, options) {
       { keys: "y", label: "YAML", action: "yaml" },
       { keys: "esc", label: "close", action: "close" },
     ];
+  }
+  if (arrange?.saving) {
+    return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];
+  }
+  if (arrange?.dirty && !stage) {
+    items.push({ keys: "⏎", label: arrange.confirm ? "confirm save" : "save", action: "apply", enabled: !busy && fresh });
+    items.push({ keys: "esc", label: "revert", action: "revert-arrange", enabled: !busy });
+    items.push({ keys: "u", label: "step back", action: "undo", enabled: !busy });
+    if (["field", "choice"].includes(target?.kind)) {
+      items.push({ keys: "m", label: "move to…", action: "move-to", enabled: !busy && fresh });
+    }
+    return items.filter((item) => item.enabled !== false);
+  }
+  if (arrange?.hintMode && !stage) {
+    items.push({ keys: "a–z", label: "pick gap", enabled: true });
+    items.push({ keys: "esc", label: "leave hint mode", action: "revert-arrange", enabled: !busy });
+    return items.filter((item) => item.enabled !== false);
   }
   if (stage) {
     items.push({
@@ -531,18 +705,24 @@ function albumSchemaCardAllActions(model, options) {
   const stale = state.refusal?.kind === "stale";
   const timeout = state.refusal?.kind === "timeout-unknown";
   const hasFresh = Boolean(options?.hasFreshReplacement);
+  const arrange = options?.arrange || null;
+  const arrangeGated = Boolean(arrange?.dirty) || Boolean(arrange?.hintMode);
   const actions = [
-    { action: "edit", text: "Edit", enabled: !gated && editableRow },
-    { action: "add-field", text: "Add field", enabled: !gated },
-    { action: "add-choice", text: "Add choice", enabled: !gated && addChoiceOk },
-    { action: "toggle-required", text: "Toggle required", enabled: !gated && field },
-    { action: "toggle-suggest", text: "Toggle suggest", enabled: !gated && field },
+    { action: "edit", text: "Edit", enabled: !gated && !arrangeGated && editableRow },
+    { action: "add-field", text: "Add field", enabled: !gated && !arrangeGated },
+    { action: "add-choice", text: "Add choice", enabled: !gated && !arrangeGated && addChoiceOk },
+    { action: "toggle-required", text: "Toggle required", enabled: !gated && !arrangeGated && field },
+    { action: "toggle-suggest", text: "Toggle suggest", enabled: !gated && !arrangeGated && field },
     { action: "move-up", text: "Move up", enabled: !gated && (field || choice) },
     { action: "move-down", text: "Move down", enabled: !gated && (field || choice) },
-    { action: "remove", text: "Remove", enabled: !gated && (field || choice) },
+    { action: "move-first", text: "Move to first", enabled: !gated && (field || choice) },
+    { action: "move-last", text: "Move to last", enabled: !gated && (field || choice) },
+    { action: "move-to", text: "Move to…", enabled: !gated && (field || choice) },
+    { action: "revert-arrange", text: "Revert moves", enabled: !gated && Boolean(arrange?.dirty) },
+    { action: "remove", text: "Remove", enabled: !gated && !arrangeGated && (field || choice) },
     { action: "yaml", text: "YAML", enabled: true },
     { action: "undo", text: "Undo", enabled: !gated && Boolean(state.undoAvailable) },
-    { action: "apply", text: "Save", enabled: Boolean(state.canApply) && fresh && !busy },
+    { action: "apply", text: arrange?.confirm ? "Confirm save" : "Save", enabled: Boolean(state.canApply) && fresh && !busy },
     { action: "close", text: "Close", enabled: true },
   ];
   if (state.syncWarning) {

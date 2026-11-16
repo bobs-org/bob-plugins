@@ -3,6 +3,41 @@
 Object.assign(AlbumSchemaCardModal.prototype, {
   schemaPaintOptions() {
     const state = this.schemaState();
+    let arrange = null;
+    try {
+      const dirty = typeof this.schemaArrangeDirty === "function" ? this.schemaArrangeDirty() : false;
+      const loud = typeof this.schemaArrangeIsLoud === "function" ? this.schemaArrangeIsLoud() : { loud: false, reasons: [] };
+      let pendingText = "";
+      let projected = null;
+      let deltas = null;
+      try {
+        if (dirty && this.schemaArrangement) {
+          pendingText = schemaArrangePendingText(this.schemaArrangement, this.schemaModel);
+          projected = this.schemaArrangement.scopes();
+          deltas = {};
+          for (const scope of this.schemaArrangement.scopeIds()) {
+            for (const id of this.schemaArrangement.projected(scope)) {
+              const delta = this.schemaArrangement.delta(scope, id);
+              if (Number.isInteger(delta) && delta !== 0) deltas[`${scope}:${id}`] = delta;
+            }
+          }
+        }
+      } catch (_) {}
+      arrange = {
+        dirty: dirty === true,
+        loud: Boolean(loud?.loud),
+        loudReasons: Array.isArray(loud?.reasons) ? loud.reasons : [],
+        confirm: this.schemaArrangeConfirm === true,
+        saving: this.schemaSaving === true,
+        hintMode: this.schemaHintMode || null,
+        pendingText,
+        projected,
+        deltas: deltas || {},
+        savedFlash: Boolean(this.schemaSavedAt && Date.now() - this.schemaSavedAt < 3000),
+      };
+    } catch (_) {
+      arrange = null;
+    }
     return {
       selectedKey: this.selectedKey,
       selectedIndex: this.selectedIndex,
@@ -19,6 +54,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
       enterLatched: Boolean(this.schemaEnterLatch),
       moreOpen: this.schemaMoreOpen === true,
+      arrange,
       handlers: {
         jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
       },

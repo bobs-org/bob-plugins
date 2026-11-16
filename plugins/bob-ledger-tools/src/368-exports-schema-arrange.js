@@ -9,6 +9,13 @@ try {
       simulateBankOps,
       arrangeGapHintLabels,
       arrangeFlipPlan,
+      schemaArrangeScopesFromAlbumModel,
+      schemaArrangeIsLoudAlbumReport,
+      schemaArrangeDeltaBadge,
+      schemaArrangePendingText,
+      schemaArrangeCollectRects,
+      schemaArrangePlayFlip,
+      schemaArrangeGapBadges,
     });
   }
 } catch (_) {}

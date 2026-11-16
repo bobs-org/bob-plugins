@@ -115,15 +115,46 @@ other row edits. Undo carries the fingerprint from the successful apply, so
 an intervening schema edit leaves the inverse draft unconfirmed until an
 explicit rebase.
 
+Reorders arrange locally and save as one envelope. `Alt+J`/`K` (or
+`Alt+↑`/`↓`/`←`/`→`, matched by `event.code` so macOS Option never inserts
+`∆`/`˚`) nudge the selected field or choice one slot, `Alt+Shift+J/K` jump to
+the first or last slot, a count prefix such as `4Alt+K` repeats the nudge, and
+`m` (or `Alt+M`) opens Move to… gap badges (`a`–`z`, two characters past 26
+gaps) where typing a badge drops the item. Moved rows keep an accent ring and
+a delta badge (`↑4`, `↓2`), position changes animate with 140 ms FLIP
+(`prefers-reduced-motion` disables it), and a polite live region announces
+“label, position X of N”. While moves are pending the hint strip becomes a
+pending bar such as `↕ 1 move · 🔍 label 15 → 11 · ⏎ save · esc revert ·
+u step back`; other gestures are unavailable and flash that bar.
+
+`Enter` saves the whole arrangement through the unchanged guarded session:
+it compiles `field.move`/`choice.move` ops, simulates them to prove the
+projection, and previews once. Quiet arrangements save on the first `Enter`;
+loud ones (index grouping changed, any newly-invalid count, or warnings)
+paint amber with bob's consequence and need a second `Enter` (or **Confirm
+save**). A pending preview latches `Enter`; any further move clears the
+latch. Saves run in the background with a shimmer: the card stays navigable
+and follow-on moves compile after the apply settles without ever calling
+`setDraft` mid-apply. Success paints `Saved · u undo` (fading after ~3 s)
+and records one commit with one Undo; refusals keep the arrangement pending
+with a red rule. `u` steps back one local move while moves are pending and
+otherwise stages Undo of the last save; `esc` leaves hint mode, then reverts
+pending moves (nothing was written), then cancels a stage, then closes.
+Closing during a save is allowed: the plugin-level apply finishes, an
+Obsidian Notice reports “Album schema saved” (or the refusal), and a
+reopened card offers Undo when its fresh fingerprint equals the saved
+`afterFingerprint`.
+
 The card is keyboard-first with visible button equivalents for every
 gesture (on the hint strip, or under `⋯`): `↑`/`↓` (or `j`/`k`, `←`/`→`
-across choices) move, `Enter` edits the selected row or applies a ready
-preview (latching while that revision's preview is pending), `a` adds a
-field, `c` adds a choice, `!` and `s` stage required/suggest toggles,
-`Alt+J`/`K` stage moves, `Ctrl+D` stages removal, `y` jumps to Source, `u`
-previews Undo, and `Esc` closes the All actions list, then cancels an open
-stage, then clears a pending draft, then closes from plain browsing through
-one dispatch that survives Obsidian's capture-phase close.
+across choices) move selection, `Enter` edits the selected row or saves a
+pending arrangement (latching while that revision's preview is pending),
+`a` adds a field, `c` adds a choice, `!` and `s` stage required/suggest
+toggles, `Alt+J`/`K` (with `Shift` for ends, counts, and `m` gaps) arrange,
+`Ctrl+D` stages removal, `y` jumps to Source, `u` steps back or previews
+Undo, and `Esc` closes the All actions list, then cancels an open stage,
+then leaves hint mode, then reverts pending moves, then closes from plain
+browsing through one dispatch that survives Obsidian's capture-phase close.
 Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.

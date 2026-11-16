@@ -7,6 +7,7 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     identity: stem,
     ownPath: albumPath,
     expect: init.expect,
+    undo: init.undo,
     debounceMs: ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS,
     buildEnvelope: albumUpdateEnvelopeText,
     isStaleCode: albumIsStaleUpdateCode,

@@ -174,6 +174,7 @@
   "241d-plugin-notebook-catalog.js",
   "241o-plugin-album-catalog-model.js",
   "241p-plugin-album-catalog-dom.js",
+  "241ra-plugin-workspace-scroll-guard.js",
   "241q-plugin-album-catalog.js",
   "241r-plugin-album-records-model.js",
   "241s-plugin-album-records-dom.js",

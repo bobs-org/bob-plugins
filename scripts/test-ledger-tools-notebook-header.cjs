@@ -231,7 +231,8 @@ class FakeEl {
     }
     return null;
   }
-  focus() {
+  focus(options) {
+    this.lastFocusOptions = options;
     if (this.doc) this.doc.activeElement = this;
   }
   get textContent() {
@@ -593,6 +594,7 @@ test("header refresh restores keyboard focus", () => {
   link.focus();
   plugin.paintNotebookHeaderReading(root, "git.md");
   assert.equal(doc.activeElement.getAttribute("data-href"), link.getAttribute("data-href"));
+  assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
 });
 
 test("refreshNotebookHeaderAll restores header focus after editor refresh", () => {
@@ -611,6 +613,7 @@ test("refreshNotebookHeaderAll restores header focus after editor refresh", () =
   plugin.notebookHeaderReadingWidgets = new Set([{ el: root, path: "git.md", surface: root }]);
   const link = first.querySelector("a.internal-link");
   assert.ok(link);
+  plugin.app.workspace.activeLeaf = { containerEl: root };
   link.focus();
   const previous = global.document;
   global.document = doc;
@@ -618,6 +621,11 @@ test("refreshNotebookHeaderAll restores header focus after editor refresh", () =
     plugin.refreshNotebookHeaderEditors = () => { doc.activeElement = root; };
     plugin.refreshNotebookHeaderAll();
     assert.equal(doc.activeElement.getAttribute("data-href"), link.getAttribute("data-href"));
+    assert.deepEqual(doc.activeElement.lastFocusOptions, { preventScroll: true });
+    const emptyPane = new FakeEl("div", doc);
+    plugin.app.workspace.activeLeaf = { containerEl: emptyPane };
+    assert.equal(plugin.notebookHeaderRestoreFocus(link.getAttribute("data-href"), root), false,
+      "focus restore never falls through to another pane or document-wide match");
   } finally {
     global.document = previous;
   }

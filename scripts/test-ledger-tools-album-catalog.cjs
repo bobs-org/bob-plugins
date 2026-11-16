@@ -739,6 +739,40 @@ test('missing-catalog controls occur only in the selected source section', () =>
   assert.equal(title.querySelector('.bob-album-action'), null);
   assert.equal(paragraph.querySelector('.bob-album-action'), null);
   assert.equal(heading.querySelectorAll('.bob-album-action').length, 1);
+
+  const noSection = el(f.doc, 'div', {}, [el(f.doc, 'p', {}, ['Owner'])]);
+  f.plugin.renderAlbumCatalogInReading(noSection, { sourcePath: 'body.md', getSectionInfo: () => null, addChild() {} });
+  assert.equal(noSection.querySelector('.bob-album-status'), null, 'null section info cannot create standalone status chrome');
+
+  const calloutText = '# Body\n\n## Albums\n\n> [!albums]\n> - **[[eat]]**';
+  const duplicate = el(f.doc, 'div', {}, [el(f.doc, 'h2', {}, ['Albums'])]);
+  f.plugin.renderAlbumCatalogInReading(duplicate, { sourcePath: 'body.md',
+    getSectionInfo: () => ({ text: calloutText, lineStart: 2, lineEnd: 2 }), addChild() {} });
+  assert.equal(duplicate.querySelector('.bob-album-status'), null, 'a callout anywhere in the note suppresses a standalone card');
+
+  for (const cls of ['callout', 'markdown-embed', 'hover-popover', 'popover', 'plugin-tasks-list-item', 'tasks-list-text', 'block-language-tasks', 'dataview', 'block-language-dataview', 'block-language-dataviewjs']) {
+    const inner = el(f.doc, 'div', {}, [el(f.doc, 'p', {}, ['Owner'])]);
+    if (cls === 'tasks-list-text') {
+      f.plugin.paintAlbumCatalogReading(inner, 'body.md', true);
+      assert.ok(inner.querySelector('.bob-album-anchor'));
+      const wrapper = el(f.doc, 'div', { class: cls }, [inner]);
+      f.plugin.albumCatalogReading.add({ el: inner, path: 'body.md', allowAnchor: true });
+      let refresh;
+      f.plugin.albumSetTimeout = (callback) => { refresh = callback; return 3; };
+      f.plugin.albumClearTimeout = () => {};
+      f.plugin.albumCatalogRefreshTimer = null;
+      f.plugin.scheduleAlbumCatalogRefresh();
+      refresh();
+      assert.equal(inner.querySelector('.bob-album-anchor'), null, 'refresh removes standalone chrome from excluded widgets');
+      void wrapper;
+    } else {
+      const wrapper = el(f.doc, 'div', { class: cls }, [inner]);
+      f.plugin.renderAlbumCatalogInReading(inner, { sourcePath: 'body.md',
+        getSectionInfo: () => ({ text: '## Albums', lineStart: 0, lineEnd: 0 }), addChild() {} });
+      assert.equal(inner.querySelector('.bob-album-status'), null, `${cls} never gets standalone chrome`);
+      void wrapper;
+    }
+  }
 });
 
 test('keyboard and middle-click group controls activate once without changing the editor caret', async () => {

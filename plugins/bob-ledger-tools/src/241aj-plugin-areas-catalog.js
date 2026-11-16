@@ -97,6 +97,20 @@ class BobLedgerToolsAreasCatalogMixin {
       openSummary: (model) => {
         void this.apiNotebookOpenSummary?.(model && model.path, sourcePath);
       },
+      openPath: (link, event) => {
+        const workspace = this.app?.workspace;
+        if (!workspace?.openLinkText) return;
+        let mod = Boolean(event?.ctrlKey || event?.metaKey);
+        try { if (areasObsidianKeymap?.isModEvent) mod = areasObsidianKeymap.isModEvent(event); } catch (_error) {}
+        void workspace.openLinkText(link, sourcePath, mod);
+      },
+      hoverLink: (event, targetEl, linktext, hoverParent) => {
+        try {
+          this.app?.workspace?.trigger?.("hover-link", {
+            event, source: "bob-areas-catalog", hoverParent, targetEl, linktext, sourcePath,
+          });
+        } catch (_error) { /* Page preview is best-effort. */ }
+      },
     };
   }
 
@@ -117,8 +131,7 @@ class BobLedgerToolsAreasCatalogMixin {
   }
 
   areasCatalogCleanAnchor(el) {
-    const anchor = Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])[0];
-    anchor?.remove?.();
+    for (const anchor of Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])) anchor.remove?.();
   }
 
   areasCatalogEnsureAnchor(el, heading = null) {
@@ -141,12 +154,13 @@ class BobLedgerToolsAreasCatalogMixin {
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
     const catalog = options.catalog;
-    if (!catalog || callouts.length || !allowAnchor) {
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
+    if (!catalog || callouts.length || !allowAnchor || notebookCatalogAnchorExcluded(el)
+      || notebookCatalogAnchorExcluded(heading)) {
       this.areasCatalogCleanAnchor(el);
       return;
     }
-    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-      !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
     const anchor = this.areasCatalogEnsureAnchor(el, heading || null);
     if (anchor) areasPaintStandalone(anchor, options);
   }
@@ -157,7 +171,9 @@ class BobLedgerToolsAreasCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && !areasCardHasCallout(section.text));
     const folds = this.areasCatalogFoldMap(el);
     this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
@@ -272,6 +288,10 @@ class BobLedgerToolsAreasCatalogMixin {
       if (!this.areasCatalogActive) return;
       for (const widget of this.areasCatalogReading || []) {
         if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          if (notebookCatalogAnchorExcluded(widget.el)) {
+            this.areasCatalogCleanAnchor(widget.el);
+            continue;
+          }
           this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
         }
       }

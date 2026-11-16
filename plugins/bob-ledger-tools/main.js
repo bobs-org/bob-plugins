@@ -34432,6 +34432,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
+    this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
@@ -63146,7 +63147,12 @@ class BobLedgerToolsProjectsCatalogMixin {
     // current catalog, no empty card remains.
     const rows = projectsCardRowEntries(options.state, sourcePath);
     const catalog = options.catalog;
-    const needsAnchor = allowAnchor && !callouts.length
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Projects\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+    const title = notebookFindHostTitle(el);
+    const attachTarget = heading || title || el.querySelector?.(`.${PROJECTS_ANCHOR_CLASS}`) || el;
+    const needsAnchor = allowAnchor && !callouts.length && !notebookCatalogAnchorExcluded(el)
+      && !notebookCatalogAnchorExcluded(attachTarget)
       && ((catalog && catalog.state !== "current") || rows.length > 0);
     if (!needsAnchor) {
       // Clear stale standalone chrome only; callout chrome shares these
@@ -63158,9 +63164,6 @@ class BobLedgerToolsProjectsCatalogMixin {
       }
       return;
     }
-    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-      !notebookInsideCode(head) && /^Projects\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
-    const title = notebookFindHostTitle(el);
     const existing = el.querySelector?.(`.${PROJECTS_ANCHOR_CLASS}`);
     let host = heading || title || existing;
     if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
@@ -63181,7 +63184,9 @@ class BobLedgerToolsProjectsCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && projectsCardSourceRegions(section.text).length === 0);
     const folds = this.projectsCatalogFoldMap(el);
     this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
@@ -63301,6 +63306,10 @@ class BobLedgerToolsProjectsCatalogMixin {
       if (!this.projectsCatalogActive) return;
       for (const widget of this.projectsCatalogReading) {
         if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          if (notebookCatalogAnchorExcluded(widget.el)) {
+            this.projectsRemoveStandaloneChrome(widget.el);
+            continue;
+          }
           this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
         }
       }
@@ -63310,6 +63319,14 @@ class BobLedgerToolsProjectsCatalogMixin {
         this.paintProjectsCatalogEditor(view);
       }
     }, 100);
+  }
+
+  projectsRemoveStandaloneChrome(el) {
+    for (const cls of [PROJECTS_STATUS_CLASS, PROJECTS_ANCHOR_CLASS, PROJECTS_HEADER_CLASS, PROJECTS_CLOSED_CLASS]) {
+      for (const node of Array.from(el?.querySelectorAll?.(`.${cls}`) || [])) {
+        if (!node.closest?.('[data-callout="projects"]')) node.remove?.();
+      }
+    }
   }
 }
 // ---- src/241af-plugin-areas-data.js ----
@@ -64165,6 +64182,7 @@ const AREAS_CHIPS_CLASS = "bob-areas-chips";
 const AREAS_ADD_CLASS = "bob-areas-add-summary";
 const AREAS_ROW_CHROME = [AREAS_TOGGLE_CLASS, AREAS_DOT_CLASS, AREAS_CHIPS_CLASS, AREAS_ADD_CLASS];
 const areasObsidianSetIcon = require("obsidian").setIcon;
+const areasObsidianKeymap = require("obsidian").Keymap;
 
 function areasSetAttr(node, name, value) {
   if (value === null || value === undefined || value === false) node.removeAttribute?.(name);
@@ -64470,8 +64488,13 @@ function areasPaintStandaloneRows(host, options) {
   const rows = areasCardRows(options.state, options.sourcePath);
   if (!rows.length) return;
   const doc = notebookDomDoc(host);
-  const root = notebookCreateEl(doc, "ul", "bob-areas-list");
+  const key = JSON.stringify([options.sourcePath, rows, [...areasCardFoldMap(options.folds)]]);
+  let root = Array.from(host.children || []).find((node) => notebookDomHasClass(node, "bob-areas-list"));
+  if (root?.getAttribute?.("data-paint-key") === key) return root;
+  root?.remove?.();
+  root = notebookCreateEl(doc, "ul", "bob-areas-list");
   if (!root) return;
+  root.setAttribute("data-paint-key", key);
   const lists = [root];
   const parents = [];
   let previousDepth = 0;
@@ -64485,7 +64508,10 @@ function areasPaintStandaloneRows(host, options) {
     const link = notebookCreateEl(doc, "a", "internal-link");
     if (link) {
       link.setAttribute("data-href", model.link);
+      link.setAttribute("href", model.link);
       notebookSetText(link, model.stem || model.link);
+      notebookBindAction(link, (event) => options.handlers?.openPath?.(model.link, event));
+      link.addEventListener?.("mouseover", (event) => options.handlers?.hoverLink?.(event, link, model.link, li));
       li.appendChild(link);
     }
     if (model.summary) {
@@ -64518,8 +64544,6 @@ function areasPaintStandalone(host, options) {
   areasSetAttr(host, "data-root-hue", areasCardHostHue(options.state, options.sourcePath));
   areasSetAttr(host, "data-stale", options.state.stale ? "true" : null);
   const header = areasPaintHeader(host, options);
-  let list = Array.from(host.children || []).find((node) => notebookDomHasClass(node, "bob-areas-list"));
-  if (list) list.remove?.();
   areasPaintStandaloneRows(host, options);
   areasPaintStatus(host, areasCardStatus(options.state, options.sourcePath), options.handlers, header);
   void catalog;
@@ -64639,6 +64663,20 @@ class BobLedgerToolsAreasCatalogMixin {
       openSummary: (model) => {
         void this.apiNotebookOpenSummary?.(model && model.path, sourcePath);
       },
+      openPath: (link, event) => {
+        const workspace = this.app?.workspace;
+        if (!workspace?.openLinkText) return;
+        let mod = Boolean(event?.ctrlKey || event?.metaKey);
+        try { if (areasObsidianKeymap?.isModEvent) mod = areasObsidianKeymap.isModEvent(event); } catch (_error) {}
+        void workspace.openLinkText(link, sourcePath, mod);
+      },
+      hoverLink: (event, targetEl, linktext, hoverParent) => {
+        try {
+          this.app?.workspace?.trigger?.("hover-link", {
+            event, source: "bob-areas-catalog", hoverParent, targetEl, linktext, sourcePath,
+          });
+        } catch (_error) { /* Page preview is best-effort. */ }
+      },
     };
   }
 
@@ -64659,8 +64697,7 @@ class BobLedgerToolsAreasCatalogMixin {
   }
 
   areasCatalogCleanAnchor(el) {
-    const anchor = Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])[0];
-    anchor?.remove?.();
+    for (const anchor of Array.from(el?.querySelectorAll?.(`.${AREAS_ANCHOR_CLASS}`) || [])) anchor.remove?.();
   }
 
   areasCatalogEnsureAnchor(el, heading = null) {
@@ -64683,12 +64720,13 @@ class BobLedgerToolsAreasCatalogMixin {
     const callouts = areasFindCallouts(el);
     for (const callout of callouts) areasPaintCallout(callout, options);
     const catalog = options.catalog;
-    if (!catalog || callouts.length || !allowAnchor) {
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
+    if (!catalog || callouts.length || !allowAnchor || notebookCatalogAnchorExcluded(el)
+      || notebookCatalogAnchorExcluded(heading)) {
       this.areasCatalogCleanAnchor(el);
       return;
     }
-    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-      !notebookInsideCode(head) && /^Areas\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent || ""));
     const anchor = this.areasCatalogEnsureAnchor(el, heading || null);
     if (anchor) areasPaintStandalone(anchor, options);
   }
@@ -64699,7 +64737,9 @@ class BobLedgerToolsAreasCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? areasCardAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && !areasCardHasCallout(section.text));
     const folds = this.areasCatalogFoldMap(el);
     this.areasPaintReading(el, ctx.sourcePath, folds, allowAnchor);
     let widget = Array.from(this.areasCatalogReading || []).find((item) => item.el === el);
@@ -64814,6 +64854,10 @@ class BobLedgerToolsAreasCatalogMixin {
       if (!this.areasCatalogActive) return;
       for (const widget of this.areasCatalogReading || []) {
         if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          if (notebookCatalogAnchorExcluded(widget.el)) {
+            this.areasCatalogCleanAnchor(widget.el);
+            continue;
+          }
           this.areasPaintReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
         }
       }
@@ -87561,7 +87605,7 @@ class BobLedgerToolsNotebookCatalogMixin {
         for (const selector of selectors) {
           const node = root.querySelector(selector);
           if (node && typeof node.focus === "function") {
-            node.focus();
+            node.focus({ preventScroll: true });
             if (typeof node.select === "function") {
               try {
                 node.select();
@@ -87575,7 +87619,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       }
       const editor = view && view.metadataEditor;
       if (editor && typeof editor.focus === "function") {
-        editor.focus();
+        editor.focus({ preventScroll: true });
         return true;
       }
       const commands = this.app && this.app.commands;
@@ -87813,6 +87857,21 @@ function albumCatalogAnchorLine(text) {
 const ALBUM_CHIPS = "bob-album-chips";
 const ALBUM_STATUS = "bob-album-status";
 
+// Reading postprocessors can run on detached subsections of Tasks, Dataview,
+// embeds, and hover previews. Those surfaces never own a standalone catalog
+// anchor, even when the postprocessor later attaches its element elsewhere.
+const NOTEBOOK_CATALOG_ANCHOR_EXCLUSIONS = [
+  ".callout", ".cm-callout", ".markdown-embed", ".internal-embed",
+  ".hover-popover", ".popover", ".plugin-tasks-list-item", ".tasks-list-text",
+  ".block-language-tasks", ".dataview", ".block-language-dataview",
+  ".block-language-dataviewjs",
+].join(",");
+
+function notebookCatalogAnchorExcluded(node) {
+  try { return Boolean(node?.closest?.(NOTEBOOK_CATALOG_ANCHOR_EXCLUSIONS)); }
+  catch (_error) { return false; }
+}
+
 function albumFindCallouts(root) {
   const selector = '[data-callout="albums"]';
   const nodes = Array.from(root?.querySelectorAll?.(selector) || []);
@@ -87942,6 +88001,65 @@ function albumCleanCatalogDom(root) {
     }
   }
 }
+// ---- src/241ra-plugin-workspace-scroll-guard.js ----
+const BOB_WORKSPACE_SCROLL_GUARD_SELECTOR = [
+  ".horizontal-main-container", ".workspace", ".workspace-split", ".workspace-tabs",
+  ".workspace-tab-container", ".workspace-leaf", ".workspace-leaf-content",
+].join(",");
+
+class BobLedgerToolsWorkspaceScrollGuardMixin {
+  setupWorkspaceScrollGuard() {
+    this.workspaceScrollGuardDocs = new WeakSet();
+    this.workspaceScrollGuardLastWarning = new WeakMap();
+    this.workspaceScrollGuardBindDocument(typeof document !== "undefined" ? document : null);
+    const workspace = this.app?.workspace;
+    if (workspace?.on && this.registerEvent) {
+      this.registerEvent(workspace.on("window-open", (win) => {
+        this.workspaceScrollGuardBindDocument(win?.document || win?.doc || null);
+      }));
+    }
+  }
+
+  workspaceScrollGuardBindDocument(doc) {
+    if (!doc || this.workspaceScrollGuardDocs?.has(doc) || !this.registerDomEvent) return;
+    this.workspaceScrollGuardDocs.add(doc);
+    this.registerDomEvent(doc, "scroll", (event) => {
+      const target = event?.target;
+      if (!target?.matches?.(BOB_WORKSPACE_SCROLL_GUARD_SELECTOR)) return;
+      const top = Number(target.scrollTop) || 0;
+      const left = Number(target.scrollLeft) || 0;
+      if (top === 0 && left === 0) return;
+
+      const active = doc.activeElement;
+      const activeDetail = active ? {
+        tag: String(active.tagName || active.nodeName || "").toLowerCase(),
+        classes: String(active.className || "").slice(0, 120),
+        text: String(active.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
+      } : null;
+      const targetClass = String(target.className || "").trim() || "(no class)";
+      target.scrollTop = 0;
+      target.scrollLeft = 0;
+
+      const now = Date.now();
+      const previous = this.workspaceScrollGuardLastWarning.get(doc);
+      if (previous !== undefined && now - previous < 5000) return;
+      this.workspaceScrollGuardLastWarning.set(doc, now);
+      let hoverOpen = false;
+      try { hoverOpen = Boolean(doc.querySelector?.(".hover-popover, .popover")); } catch (_error) {}
+      let activePath = "";
+      try {
+        const leaf = this.app?.workspace?.activeLeaf;
+        activePath = leaf?.view?.file?.path || this.app?.workspace?.getActiveFile?.()?.path || "";
+      } catch (_error) {}
+      try {
+        console.warn("[bob-ledger-tools] reset unexpected workspace scroll", {
+          container: targetClass, scrollTop: top, scrollLeft: left, activePath,
+          activeElement: activeDetail, hoverPopoverOpen: hoverOpen,
+        });
+      } catch (_error) { /* Console reporting is best-effort. */ }
+    }, { capture: true });
+  }
+}
 // ---- src/241q-plugin-album-catalog.js ----
 // Owner cards in Reading view and Live Preview share one album subscription.
 let albumCatalogRefreshEffect = null;
@@ -87994,12 +88112,14 @@ class BobLedgerToolsAlbumCatalogMixin {
     const callouts = albumFindCallouts(el);
     for (const callout of callouts) albumPaintCallout(callout, options);
     const catalog = albumHostCatalog(options.state, sourcePath);
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+    const title = notebookFindHostTitle(el);
+    const attachTarget = heading || title || el.querySelector?.(".bob-album-anchor") || el;
     // Missing catalogs have no callout. Their real heading, H1, or an H1-less
     // body fragment is the actionable anchor; non-hosts never get an anchor.
-    if (allowAnchor && !callouts.length && catalog && catalog.state !== "current") {
-      const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-        !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
-      const title = notebookFindHostTitle(el);
+    if (allowAnchor && !callouts.length && catalog && catalog.state !== "current"
+      && !notebookCatalogAnchorExcluded(el) && !notebookCatalogAnchorExcluded(attachTarget)) {
       const existing = el.querySelector?.(".bob-album-anchor");
       let host = heading || title || existing;
       if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
@@ -88023,7 +88143,9 @@ class BobLedgerToolsAlbumCatalogMixin {
     if (el.closest?.(".cm-editor")) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? albumCatalogAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && albumSourceRegions(section.text).length === 0);
     this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
     const existing = Array.from(this.albumCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {
@@ -88133,7 +88255,16 @@ class BobLedgerToolsAlbumCatalogMixin {
     this.albumCatalogRefreshTimer = this.albumSetTimeout(() => {
       this.albumCatalogRefreshTimer = null;
       if (!this.albumCatalogActive) return;
-      for (const widget of this.albumCatalogReading) this.paintAlbumCatalogReading(widget.el, widget.path, widget.allowAnchor);
+      for (const widget of this.albumCatalogReading) {
+        if (notebookCatalogAnchorExcluded(widget.el)) {
+          for (const status of Array.from(widget.el?.querySelectorAll?.(`.${ALBUM_STATUS}`) || [])) {
+            if (!status.closest?.('[data-callout="albums"]')) status.remove?.();
+          }
+          notebookRemovePainted(widget.el, "bob-album-anchor");
+          continue;
+        }
+        this.paintAlbumCatalogReading(widget.el, widget.path, widget.allowAnchor);
+      }
       const effect = ensureAlbumCatalogRefresh();
       for (const view of this.albumCatalogEditors) {
         if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
@@ -91933,7 +92064,7 @@ class BobLedgerToolsNotebookHeaderMixin {
       try {
         const next = header.querySelector(`[data-href="${focusedHref}"]`);
         if (next && typeof next.focus === "function") {
-          next.focus();
+          next.focus({ preventScroll: true });
           this.notebookHeaderLastFocusHref = focusedHref;
         }
       } catch (error) {
@@ -92810,18 +92941,26 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     }
   }
 
-  notebookHeaderRestoreFocus(href) {
+  notebookHeaderFocusScope() {
+    try {
+      const leaf = this.app?.workspace?.activeLeaf;
+      return leaf?.containerEl || leaf?.view?.containerEl || leaf?.view?.contentEl || null;
+    } catch (_error) { return null; }
+  }
+
+  notebookHeaderRestoreFocus(href, surface = null) {
     const wanted = String(href || "").trim();
     if (!wanted) {
       return false;
     }
     try {
       const doc = typeof document !== "undefined" ? document : null;
-      if (!doc || typeof doc.querySelectorAll !== "function") {
+      const root = this.notebookHeaderFocusScope() || surface;
+      if (!doc || !root || typeof root.querySelectorAll !== "function") {
         return false;
       }
       const safe = wanted.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      const headers = Array.from(doc.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
+      const headers = Array.from(root.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
       for (const header of headers) {
         try {
           if (typeof header.getAttribute === "function" && header.getAttribute("data-cm-widget") === "true") {
@@ -92834,7 +92973,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           ? header.querySelector(`[data-href="${safe}"]`)
           : null;
         if (next && typeof next.focus === "function") {
-          next.focus();
+          next.focus({ preventScroll: true });
           return true;
         }
       }
@@ -92857,6 +92996,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     this.notebookHeaderRefreshTimer = schedule(() => {
       this.notebookHeaderRefreshTimer = null;
       const href = this.notebookHeaderCaptureFocus();
+      const focusScope = this.notebookHeaderFocusScope();
       try {
         this.refreshNotebookHeaderReading();
       } catch (error) {
@@ -92867,12 +93007,13 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       } catch (error) {
         // Best-effort.
       }
-      this.notebookHeaderRestoreFocus(href);
+      this.notebookHeaderRestoreFocus(href, focusScope);
     }, 150);
   }
 
   refreshNotebookHeaderAll() {
     const href = this.notebookHeaderCaptureFocus();
+    const focusScope = this.notebookHeaderFocusScope();
     try {
       this.refreshNotebookHeaderReading();
     } catch (error) {
@@ -92883,7 +93024,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     } catch (error) {
       // Best-effort.
     }
-    this.notebookHeaderRestoreFocus(href);
+    this.notebookHeaderRestoreFocus(href, focusScope);
   }
 }
 // ---- src/242-plugin-reading-board-models.js ----
@@ -133945,6 +134086,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
   BobLedgerToolsAreasCatalogMixin,
+  BobLedgerToolsWorkspaceScrollGuardMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,

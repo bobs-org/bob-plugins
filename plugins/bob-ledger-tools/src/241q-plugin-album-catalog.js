@@ -49,12 +49,14 @@ class BobLedgerToolsAlbumCatalogMixin {
     const callouts = albumFindCallouts(el);
     for (const callout of callouts) albumPaintCallout(callout, options);
     const catalog = albumHostCatalog(options.state, sourcePath);
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+    const title = notebookFindHostTitle(el);
+    const attachTarget = heading || title || el.querySelector?.(".bob-album-anchor") || el;
     // Missing catalogs have no callout. Their real heading, H1, or an H1-less
     // body fragment is the actionable anchor; non-hosts never get an anchor.
-    if (allowAnchor && !callouts.length && catalog && catalog.state !== "current") {
-      const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-        !notebookInsideCode(head) && /^Albums\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
-      const title = notebookFindHostTitle(el);
+    if (allowAnchor && !callouts.length && catalog && catalog.state !== "current"
+      && !notebookCatalogAnchorExcluded(el) && !notebookCatalogAnchorExcluded(attachTarget)) {
       const existing = el.querySelector?.(".bob-album-anchor");
       let host = heading || title || existing;
       if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
@@ -78,7 +80,9 @@ class BobLedgerToolsAlbumCatalogMixin {
     if (el.closest?.(".cm-editor")) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? albumCatalogAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && albumSourceRegions(section.text).length === 0);
     this.paintAlbumCatalogReading(el, ctx.sourcePath, allowAnchor);
     const existing = Array.from(this.albumCatalogReading || []).find((widget) => widget.el === el);
     if (existing) {
@@ -188,7 +192,16 @@ class BobLedgerToolsAlbumCatalogMixin {
     this.albumCatalogRefreshTimer = this.albumSetTimeout(() => {
       this.albumCatalogRefreshTimer = null;
       if (!this.albumCatalogActive) return;
-      for (const widget of this.albumCatalogReading) this.paintAlbumCatalogReading(widget.el, widget.path, widget.allowAnchor);
+      for (const widget of this.albumCatalogReading) {
+        if (notebookCatalogAnchorExcluded(widget.el)) {
+          for (const status of Array.from(widget.el?.querySelectorAll?.(`.${ALBUM_STATUS}`) || [])) {
+            if (!status.closest?.('[data-callout="albums"]')) status.remove?.();
+          }
+          notebookRemovePainted(widget.el, "bob-album-anchor");
+          continue;
+        }
+        this.paintAlbumCatalogReading(widget.el, widget.path, widget.allowAnchor);
+      }
       const effect = ensureAlbumCatalogRefresh();
       for (const view of this.albumCatalogEditors) {
         if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });

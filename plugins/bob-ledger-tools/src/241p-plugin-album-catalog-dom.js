@@ -3,6 +3,21 @@
 const ALBUM_CHIPS = "bob-album-chips";
 const ALBUM_STATUS = "bob-album-status";
 
+// Reading postprocessors can run on detached subsections of Tasks, Dataview,
+// embeds, and hover previews. Those surfaces never own a standalone catalog
+// anchor, even when the postprocessor later attaches its element elsewhere.
+const NOTEBOOK_CATALOG_ANCHOR_EXCLUSIONS = [
+  ".callout", ".cm-callout", ".markdown-embed", ".internal-embed",
+  ".hover-popover", ".popover", ".plugin-tasks-list-item", ".tasks-list-text",
+  ".block-language-tasks", ".dataview", ".block-language-dataview",
+  ".block-language-dataviewjs",
+].join(",");
+
+function notebookCatalogAnchorExcluded(node) {
+  try { return Boolean(node?.closest?.(NOTEBOOK_CATALOG_ANCHOR_EXCLUSIONS)); }
+  catch (_error) { return false; }
+}
+
 function albumFindCallouts(root) {
   const selector = '[data-callout="albums"]';
   const nodes = Array.from(root?.querySelectorAll?.(selector) || []);

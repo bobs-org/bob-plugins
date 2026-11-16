@@ -673,6 +673,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.scheduleDependencyChipsRefresh();
     this.setupStatsBlock();
     this.setupReadingBoardData();
+    this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();

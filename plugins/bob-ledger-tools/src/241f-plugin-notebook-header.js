@@ -472,7 +472,7 @@ class BobLedgerToolsNotebookHeaderMixin {
       try {
         const next = header.querySelector(`[data-href="${focusedHref}"]`);
         if (next && typeof next.focus === "function") {
-          next.focus();
+          next.focus({ preventScroll: true });
           this.notebookHeaderLastFocusHref = focusedHref;
         }
       } catch (error) {

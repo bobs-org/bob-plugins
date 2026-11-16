@@ -95,7 +95,15 @@ function projectNote(parent, options = {}) {
 }
 
 function areaNote() {
-  return ["---", 'type: "[[area]]"', 'parent: "[[index]]"', "color: blue", "---", "", "# Projects acceptance area", "", "## Projects", "", "Area host for the projects card acceptance fixture.", ""].join("\n");
+  return ["---", 'type: "[[area]]"', 'parent: "[[index]]"', "color: blue", "---", "", "# Projects acceptance area", "", "## Areas", "", "## Projects", "", "Area host for the projects card acceptance fixture.", "", "## Notebooks", "", "> [!notebooks]", "> - [[dev-notes]]", "", "## Tasks", "", "- [ ] #task #gtd Keep the area workspace visible ^area-task", ""].join("\n");
+}
+
+function devAreaNote() {
+  return ["---", 'type: "[[area]]"', 'parent: "[[area]]"', "color: teal", "---", "", "# Dev", "", "## Projects", "", "Development area host for Bob.", ""].join("\n");
+}
+
+function bobProjectNote() {
+  return ["---", 'type: "[[project]]"', 'parent: "[[dev]]"', "status: wip", "---", "", "# Bob", "", "- [ ] #task #prj Build Bob. ^prj", ""].join("\n");
 }
 
 function hostNote() {
@@ -105,6 +113,10 @@ function hostNote() {
 function fixtureNotes() {
   const notes = {
     "area.md": areaNote(),
+    "dev.md": devAreaNote(),
+    "bob.md": bobProjectNote(),
+    "dev-notes.md": ["---", 'type: "[[notebook]]"', 'parent: "[[area]]"', "---", "", "# Dev notes", ""].join("\n"),
+    "20261113.md": ["---", 'type: "[[daily]]"', "---", "", "# Friday, November 13, 2026", ""].join("\n"),
     "project-host.md": hostNote(),
     "ready-dependency.md": projectNote("area", { stem: "ready-dependency", title: "Dependency target", id: "ready-dependency", visible: true }),
     "scheduled.md": projectNote("area", { stem: "scheduled", state: "scheduled", scheduled: "2026-12-08" }),
@@ -158,6 +170,7 @@ function selfTest() {
   }
   if (projects.length < 60) throw new Error(`fixture has only ${projects.length} project notes`);
   if (!notes["project-host.md"].includes("## Projects") || !notes["nested-child.md"].includes('parent: "[[project-host]]"')) throw new Error("nested project-host fixture is incomplete");
+  if (!notes["area.md"].includes("> [!notebooks]") || !notes["area.md"].includes("## Tasks") || !notes["dev.md"].includes('parent: "[[area]]"') || !notes["bob.md"].includes('parent: "[[dev]]"')) throw new Error("Areas click/scroll fixture is incomplete");
   if (!notes["all-closed-a.md"] || !notes["all-closed-c.md"] || !notes["empty-host.md"]) throw new Error("closed/empty host fixture is incomplete");
   if (!notes["one/duplicate.md"] || !notes["two/duplicate.md"]) throw new Error("duplicate-stem fixtures are missing");
   const parsed = parseArgs(["-s", "-o", "/tmp/shots", "-r", "/tmp/report.json"]);
@@ -169,6 +182,10 @@ function selfTest() {
   if (!source.includes("all-closed host Closed peek") || !source.includes("nested-child-default-folded") || !source.includes("nested-project-toggle-activation")) throw new Error("acceptance must test each fold on its rendered host");
   for (const selector of [".bob-projects-header", ".bob-projects-closed-toggle", ".bob-projects-children-toggle", ".bob-projects-action"]) {
     if (!probe.includes(selector)) throw new Error(`probe misses ${selector}`);
+  }
+  const areasProbe = areasProbeSource();
+  for (const selector of ['.callout[data-callout="areas"]', ".bob-areas-anchor", ".horizontal-main-container", ".workspace"]) {
+    if (!areasProbe.includes(selector)) throw new Error(`Areas acceptance probe misses ${selector}`);
   }
   process.stdout.write("offline self-test complete (fixtures and CDP probes; no Obsidian or bob launched)\n");
 }
@@ -430,6 +447,19 @@ function projectsProbeSource() {
   } catch (e) { return { error: String(e && e.message || e) }; } })()`;
 }
 
+function areasProbeSource() {
+  return `(() => { try {
+    const visible = (el) => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0&&r.height>0&&s.display!=="none"&&s.visibility!=="hidden"; };
+    const areaCards=Array.from(document.querySelectorAll('.callout[data-callout="areas"]')).filter(visible);
+    const anchors=Array.from(document.querySelectorAll(".bob-areas-anchor"));
+    const forbidden=anchors.filter((el)=>el.closest('.callout:not([data-callout="areas"]), .plugin-tasks-list-item, .tasks-list-text, .block-language-tasks, .dataview, .block-language-dataview, .block-language-dataviewjs'));
+    const workspace=document.querySelector(".workspace");
+    const horizontal=document.querySelector(".horizontal-main-container");
+    const daily=Array.from(app.workspace.getLeavesOfType("markdown")||[]).find((leaf)=>leaf.view?.file?.path==="20261113.md");
+    return {activeFile:app.workspace.getActiveFile?.()?.path||null, areasCards:areaCards.map((el)=>({text:(el.textContent||"").replace(/\\s+/g," ").trim(),painted:el.getAttribute("data-bob-areas-card"),path:el.closest(".workspace-leaf")?.getAttribute("data-type")||null})), areaAnchors:anchors.length, forbiddenAnchors:forbidden.length, notebookCards:document.querySelectorAll('.callout[data-callout="notebooks"]').length, taskDescriptions:document.querySelectorAll(".plugin-tasks-list-item .bob-areas-anchor, .tasks-list-text .bob-areas-anchor, .block-language-tasks .bob-areas-anchor").length, pinnedDaily:daily?Boolean(daily.pinned||daily.getViewState?.()?.pinned):false, workspaceScroll:{top:workspace?.scrollTop||0,left:workspace?.scrollLeft||0}, horizontalScroll:{top:horizontal?.scrollTop||0,left:horizontal?.scrollLeft||0}, fileOpens:window.__areasE2EFileOpens||[]};
+  } catch(e) { return {error:String(e&&e.message||e)}; } })()`;
+}
+
 async function selectTarget(port, vaultPath, childAlive) {
   const deadline = Date.now() + 30_000;
   let last = "";
@@ -484,6 +514,24 @@ async function openNote(client, name, mode = "live") {
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); await new Promise(r=>setTimeout(r,350));
     return {ok:true,path:leaf.view?.file?.path,state:leaf.view?.getState?.()||null};
   })()`, 30_000);
+}
+
+async function pinDailyTabAndFocusArea(client) {
+  return client.evaluate(`(async()=>{
+    const workspace=app.workspace;
+    const daily=app.vault.getAbstractFileByPath("20261113.md");
+    if(!daily)return {ok:false,error:"daily note is missing"};
+    const dailyLeaf=workspace.getLeaf("tab");
+    await dailyLeaf.openFile(daily,{state:{mode:"source",source:false}});
+    if(typeof dailyLeaf.setPinned==="function") dailyLeaf.setPinned(true);
+    else if(typeof workspace.setPinned==="function") workspace.setPinned(dailyLeaf,true);
+    else return {ok:false,error:"WorkspaceLeaf.setPinned is unavailable"};
+    const areaLeaf=(workspace.getLeavesOfType("markdown")||[]).find((leaf)=>leaf.view?.file?.path==="area.md");
+    if(!areaLeaf)return {ok:false,error:"area.md leaf disappeared while pinning daily tab"};
+    workspace.setActiveLeaf(areaLeaf,{focus:true});
+    await new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    return {ok:true,pinned:Boolean(dailyLeaf.pinned),daily:dailyLeaf.view?.file?.path,active:workspace.getActiveFile?.()?.path};
+  })()`);
 }
 
 async function capture(client, file, width) {
@@ -562,6 +610,13 @@ async function run(args) {
   let client = null;
   let stopTimer;
   try {
+    const areaSync = runBob(bob, ["areas", "sync", "-f", "json"], vaultDir, profileDir);
+    report.bobRuns.push(areaSync);
+    record("areas-fixture-synced", areaSync.report?.command === "sync" && areaSync.report.schema_version === 1
+      && areaSync.report.catalogStates?.some((row) => row.path === "area.md" && row.state === "current"), areaSync);
+    if (areaSync.report?.command !== "sync" || !areaSync.report.catalogStates?.some((row) => row.path === "area.md")) {
+      throw new Error(`bob areas sync could not seed fixture: ${JSON.stringify(areaSync)}`);
+    }
     const seedSync = runBob(bob, ["projects", "sync", "-f", "json"], vaultDir, profileDir);
     report.bobRuns.push(seedSync);
     record("fixture-seeded-by-current-bob", seedSync.report?.command === "sync" && seedSync.report.schema_version === 1, seedSync);
@@ -602,6 +657,58 @@ async function run(args) {
     record("catalog-health-and-hue", Boolean(areaCard.hue) && areaCard.stale !== "true", { hue: areaCard.hue, stale: areaCard.stale });
     record("nested-child-default-folded", areaCard.childButtons.some((button) => button.path === "all-closed.md" && button.expanded === "false") && areaCard.childRows.length === 0, areaCard.childButtons);
     record("60-plus-rows-rendered", areaCard.markers.length >= 60, `visible project markers=${areaCard.markers.length}`);
+
+    await waitFor(client, `(()=>!String(document.body?.innerText||"").includes("Indexing vault…")&&!String(document.body?.innerText||"").includes("Indexing vault..."))()`, Boolean, "vault indexing to finish", 60_000);
+    await client.evaluate(`(async()=>{await app.plugins.plugins["bob-ledger-tools"].apiAreasReport({force:true,wait:true});return true;})()`, 90_000);
+    const pinned = await pinDailyTabAndFocusArea(client);
+    record("pinned-daily-note-tab", pinned.ok && pinned.pinned && pinned.daily === "20261113.md" && pinned.active === "area.md", pinned);
+    let areaProbe = await waitFor(client, areasProbeSource(), (value) => value && value.activeFile === "area.md" && value.areasCards?.length === 1, "one Live Preview Areas card");
+    report.probes.areasLive = areaProbe;
+    record("live-preview-one-areas-card-per-host", areaProbe.areasCards.length === 1 && areaProbe.areasCards[0].painted === "true" && areaProbe.areaAnchors === 0, areaProbe);
+    record("no-area-anchors-in-other-cards-or-tasks", areaProbe.forbiddenAnchors === 0 && areaProbe.taskDescriptions === 0, areaProbe);
+    await client.evaluate(`(()=>{window.__areasE2EFileOpens=[];window.__areasE2EFileOpenRef=app.workspace.on("file-open",(file)=>window.__areasE2EFileOpens.push(file?.path||null));return true;})()`);
+    const liveAreaClick = await clickBy(client, '.callout[data-callout="areas"] a.internal-link[data-href="dev"]');
+    areaProbe = await waitFor(client, areasProbeSource(), (value) => value.activeFile === "dev.md" && value.fileOpens?.includes("dev.md"), "Live Preview Areas row file-open");
+    record("live-preview-areas-row-opens-dev", liveAreaClick.ok && areaProbe.activeFile === "dev.md", { click: liveAreaClick, probe: areaProbe });
+    record("live-preview-area-click-keeps-workspace-origin", areaProbe.workspaceScroll.top === 0 && areaProbe.workspaceScroll.left === 0
+      && areaProbe.horizontalScroll.top === 0 && areaProbe.horizontalScroll.left === 0, areaProbe);
+    const liveProjectClick = await clickBy(client, '.callout[data-callout="projects"] a.internal-link[data-href="bob"]');
+    areaProbe = await waitFor(client, areasProbeSource(), (value) => value.activeFile === "bob.md" && value.fileOpens?.includes("bob.md"), "Live Preview Projects row file-open");
+    record("live-preview-project-row-opens-bob", liveProjectClick.ok && areaProbe.activeFile === "bob.md", { click: liveProjectClick, probe: areaProbe });
+    record("live-preview-project-click-keeps-workspace-origin", areaProbe.workspaceScroll.top === 0 && areaProbe.workspaceScroll.left === 0
+      && areaProbe.horizontalScroll.top === 0 && areaProbe.horizontalScroll.left === 0, areaProbe);
+
+    await openNote(client, "area.md", "reading");
+    areaProbe = await waitFor(client, areasProbeSource(), (value) => value.activeFile === "area.md" && value.areasCards?.length === 1, "one Reading Areas card");
+    report.probes.areasReading = areaProbe;
+    record("reading-view-one-areas-card-per-host", areaProbe.areasCards.length === 1 && areaProbe.areasCards[0].painted === "true" && areaProbe.areaAnchors === 0, areaProbe);
+    record("reading-no-area-anchors-in-other-cards-or-tasks", areaProbe.forbiddenAnchors === 0 && areaProbe.taskDescriptions === 0, areaProbe);
+    const readingAreaClick = await clickBy(client, '.callout[data-callout="areas"] a.internal-link[data-href="dev"]');
+    areaProbe = await waitFor(client, areasProbeSource(), (value) => value.activeFile === "dev.md" && value.fileOpens?.at(-1) === "dev.md", "Reading Areas row file-open");
+    record("reading-area-row-opens-dev", readingAreaClick.ok && areaProbe.activeFile === "dev.md", { click: readingAreaClick, probe: areaProbe });
+    record("reading-area-click-keeps-workspace-origin", areaProbe.workspaceScroll.top === 0 && areaProbe.workspaceScroll.left === 0
+      && areaProbe.horizontalScroll.top === 0 && areaProbe.horizontalScroll.left === 0, areaProbe);
+    const readingProjectClick = await clickBy(client, '.callout[data-callout="projects"] a.internal-link[data-href="bob"]');
+    areaProbe = await waitFor(client, areasProbeSource(), (value) => value.activeFile === "bob.md" && value.fileOpens?.at(-1) === "bob.md", "Reading Projects row file-open");
+    record("reading-project-row-opens-bob", readingProjectClick.ok && areaProbe.activeFile === "bob.md", { click: readingProjectClick, probe: areaProbe });
+    record("reading-project-click-keeps-workspace-origin", areaProbe.workspaceScroll.top === 0 && areaProbe.workspaceScroll.left === 0
+      && areaProbe.horizontalScroll.top === 0 && areaProbe.horizontalScroll.left === 0, areaProbe);
+    const guardProbe = await client.evaluate(`(async()=>{
+      const workspace=document.querySelector(".workspace");if(!workspace)return {ok:false,error:"workspace missing"};
+      const plugin=app.plugins.plugins["bob-ledger-tools"];plugin.workspaceScrollGuardLastWarning?.delete(document);
+      const warnings=[];const original=console.warn;console.warn=(...args)=>{if(String(args[0]||"").includes("unexpected workspace scroll"))warnings.push(args);return original.apply(console,args);};
+      const priorStyle=workspace.getAttribute("style");const spacer=document.createElement("div");spacer.style.height="2400px";spacer.style.flex="0 0 auto";spacer.style.width="1px";
+      workspace.style.height="120px";workspace.style.minHeight="0";workspace.style.overflow="hidden";workspace.appendChild(spacer);
+      workspace.scrollTop=31;workspace.scrollLeft=9;const attempted={top:workspace.scrollTop,left:workspace.scrollLeft};
+      workspace.dispatchEvent(new Event("scroll"));await new Promise((resolve)=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const after={top:workspace.scrollTop,left:workspace.scrollLeft};workspace.removeChild(spacer);if(priorStyle===null)workspace.removeAttribute("style");else workspace.setAttribute("style",priorStyle);console.warn=original;
+      return {ok:true,attempted,after,warnings:warnings.map((args)=>({message:String(args[0]),details:args[1]||null})),activePath:app.workspace.getActiveFile?.()?.path||null};
+    })()`);
+    record("workspace-scroll-guard-resets-and-reports", guardProbe.ok && guardProbe.attempted.top > 0
+      && guardProbe.after.top === 0 && guardProbe.after.left === 0 && guardProbe.warnings.length === 1
+      && guardProbe.warnings[0].details?.activePath === "bob.md", guardProbe);
+    await client.evaluate(`(()=>{const ref=window.__areasE2EFileOpenRef;if(ref)app.workspace.offref(ref);window.__areasE2EFileOpenRef=null;return true;})()`);
+    await openNote(client, "area.md", "live");
 
     await setViewport(client, 1280, 940);
     const desktopLight = await capture(client, path.join(outDir, "projects-area-live-desktop-light.png"), 1280);

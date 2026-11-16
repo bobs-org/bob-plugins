@@ -10,6 +10,7 @@ const AREAS_CHIPS_CLASS = "bob-areas-chips";
 const AREAS_ADD_CLASS = "bob-areas-add-summary";
 const AREAS_ROW_CHROME = [AREAS_TOGGLE_CLASS, AREAS_DOT_CLASS, AREAS_CHIPS_CLASS, AREAS_ADD_CLASS];
 const areasObsidianSetIcon = require("obsidian").setIcon;
+const areasObsidianKeymap = require("obsidian").Keymap;
 
 function areasSetAttr(node, name, value) {
   if (value === null || value === undefined || value === false) node.removeAttribute?.(name);
@@ -315,8 +316,13 @@ function areasPaintStandaloneRows(host, options) {
   const rows = areasCardRows(options.state, options.sourcePath);
   if (!rows.length) return;
   const doc = notebookDomDoc(host);
-  const root = notebookCreateEl(doc, "ul", "bob-areas-list");
+  const key = JSON.stringify([options.sourcePath, rows, [...areasCardFoldMap(options.folds)]]);
+  let root = Array.from(host.children || []).find((node) => notebookDomHasClass(node, "bob-areas-list"));
+  if (root?.getAttribute?.("data-paint-key") === key) return root;
+  root?.remove?.();
+  root = notebookCreateEl(doc, "ul", "bob-areas-list");
   if (!root) return;
+  root.setAttribute("data-paint-key", key);
   const lists = [root];
   const parents = [];
   let previousDepth = 0;
@@ -330,7 +336,10 @@ function areasPaintStandaloneRows(host, options) {
     const link = notebookCreateEl(doc, "a", "internal-link");
     if (link) {
       link.setAttribute("data-href", model.link);
+      link.setAttribute("href", model.link);
       notebookSetText(link, model.stem || model.link);
+      notebookBindAction(link, (event) => options.handlers?.openPath?.(model.link, event));
+      link.addEventListener?.("mouseover", (event) => options.handlers?.hoverLink?.(event, link, model.link, li));
       li.appendChild(link);
     }
     if (model.summary) {
@@ -363,8 +372,6 @@ function areasPaintStandalone(host, options) {
   areasSetAttr(host, "data-root-hue", areasCardHostHue(options.state, options.sourcePath));
   areasSetAttr(host, "data-stale", options.state.stale ? "true" : null);
   const header = areasPaintHeader(host, options);
-  let list = Array.from(host.children || []).find((node) => notebookDomHasClass(node, "bob-areas-list"));
-  if (list) list.remove?.();
   areasPaintStandaloneRows(host, options);
   areasPaintStatus(host, areasCardStatus(options.state, options.sourcePath), options.handlers, header);
   void catalog;

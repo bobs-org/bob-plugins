@@ -831,6 +831,13 @@ test("Closed group defaults folded with a two-row peek and keyboard toggles", ()
   assert.equal(peek[0].querySelector("a").getAttribute("data-href"), "eta.md");
   assert.equal(peek[1].querySelector("a").getAttribute("data-href"), "zeta.md");
   assert.match(peek[0].textContent, /✓/);
+  const standalone = el(f.doc, "div", {}, [el(f.doc, "h1", {}, ["Body"]) ]);
+  const folds = new Map();
+  f.plugin.paintProjectsCatalogReading(standalone, "body.md", folds, true);
+  const unchangedLink = standalone.querySelector(".bob-projects-mini a");
+  f.plugin.paintProjectsCatalogReading(standalone, "body.md", folds, true);
+  assert.equal(standalone.querySelector(".bob-projects-mini a"), unchangedLink,
+    "an unchanged Projects standalone list keeps its link nodes");
   button.fire("keydown", { key: " " });
   const opened = f.callout.querySelectorAll(".bob-projects-mini");
   assert.equal(opened.length, 3);
@@ -969,6 +976,42 @@ test("missing-catalog controls occur only in the selected source section", () =>
   assert.equal(title.querySelector(".bob-projects-action"), null);
   assert.equal(paragraph.querySelector(".bob-projects-action"), null);
   assert.equal(heading.querySelectorAll(".bob-projects-action").length, 1);
+
+  const noSection = el(f.doc, "div", {}, [el(f.doc, "h2", {}, ["Projects"])]);
+  f.plugin.renderProjectsCatalogInReading(noSection, { sourcePath: "body.md", getSectionInfo: () => null, addChild() {} });
+  assert.equal(noSection.querySelector(".bob-projects-header"), null, "null section info cannot create standalone chrome");
+
+  const calloutText = "# Body\n\n## Projects\n\n> [!projects]\n> - **[[alpha]]**";
+  const duplicate = el(f.doc, "div", {}, [el(f.doc, "h2", {}, ["Projects"])]);
+  f.plugin.renderProjectsCatalogInReading(duplicate, { sourcePath: "body.md",
+    getSectionInfo: () => ({ text: calloutText, lineStart: 2, lineEnd: 2 }), addChild() {} });
+  assert.equal(duplicate.querySelector(".bob-projects-header"), null, "a callout anywhere in the note suppresses a standalone card");
+
+  const paint = fixture({ state: { report: report(projects(), catalog({ state: "missing" })) } });
+  for (const cls of ["callout", "markdown-embed", "hover-popover", "popover", "plugin-tasks-list-item", "tasks-list-text", "block-language-tasks", "dataview", "block-language-dataview", "block-language-dataviewjs"]) {
+    const inner = el(paint.doc, "div", {}, [el(paint.doc, "h2", {}, ["Projects"])]);
+    if (cls === "tasks-list-text") {
+      // Seed the chrome before its postprocessor node is moved into Tasks.
+      paint.plugin.paintProjectsCatalogReading(inner, "body.md", new Map(), true);
+      assert.ok(inner.querySelector(".bob-projects-header"));
+      const wrapper = el(paint.doc, "div", { class: cls }, [inner]);
+      paint.plugin.projectsCatalogReading.add({ el: inner, path: "body.md", folds: new Map(), allowAnchor: true });
+      let refresh;
+      paint.plugin.projectsSetTimeout = (callback) => { refresh = callback; return 3; };
+      paint.plugin.projectsClearTimeout = () => {};
+      paint.plugin.projectsCatalogRefreshTimer = null;
+      paint.plugin.scheduleProjectsCatalogRefresh();
+      refresh();
+      assert.equal(inner.querySelector(".bob-projects-header"), null, "refresh removes standalone chrome from excluded widgets");
+      void wrapper;
+    } else {
+      const wrapper = el(paint.doc, "div", { class: cls }, [inner]);
+      paint.plugin.renderProjectsCatalogInReading(inner, { sourcePath: "body.md",
+        getSectionInfo: () => ({ text: "## Projects", lineStart: 0, lineEnd: 0 }), addChild() {} });
+      assert.equal(inner.querySelector(".bob-projects-header"), null, `${cls} never gets standalone chrome`);
+      void wrapper;
+    }
+  }
 });
 
 test("copy starter writes @host^ and reports clipboard failures", async () => {

@@ -52,6 +52,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
   BobLedgerToolsAreasCatalogMixin,
+  BobLedgerToolsWorkspaceScrollGuardMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,

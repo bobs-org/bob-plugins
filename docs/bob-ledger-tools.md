@@ -15,7 +15,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.118.0 |
+| Version | 1.119.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -594,12 +594,12 @@ alone stays silent. Live data needs desktop Obsidian.
 
 ## Projects catalog card
 
-An area or project host's `[!projects]` callout is a live, display-only view of
-Bob's project report. State markers and task, Today, empty, and blocked-reason
-chips come from `bob projects list -f json`; the card never derives membership
-or lifecycle state and never edits catalog text. **Closed** starts folded with
-a two-row peek and toggles with Space or Enter. A project's `▸ N` button
-reveals only direct children. Folds stay local to each pane.
+`[!projects]` shows Bob's project report in a live, display-only card. Each
+host gets one card; a standalone card appears only when the note has no stored
+callout. State markers and task, Today, empty, and blocked-reason chips come
+from `bob projects list -f json`; Bob owns membership, lifecycle, and catalog
+text. **Closed** starts folded with a two-row peek; Space or Enter toggles it.
+A project's `▸ N` button reveals direct children. Folds stay pane-local.
 
 Use **↻ sync** to refresh a missing or stale catalog, **Retry** after a report
 failure, and **＋ project** to copy the `@<host>^` capture starter. Sync writes
@@ -609,7 +609,8 @@ and the count shortens while keeping its full accessible label.
 
 ## Areas
 
-Per-pane folds, fold-aware chips, hover titles, add-summary, compact chips.
+One card per host; standalone only without a stored callout. Row links open
+the area. Unexpected workspace scroll resets to zero and logs a diagnostic.
 
 ## Gmail open hint
 

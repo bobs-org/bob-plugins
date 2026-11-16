@@ -397,18 +397,26 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     }
   }
 
-  notebookHeaderRestoreFocus(href) {
+  notebookHeaderFocusScope() {
+    try {
+      const leaf = this.app?.workspace?.activeLeaf;
+      return leaf?.containerEl || leaf?.view?.containerEl || leaf?.view?.contentEl || null;
+    } catch (_error) { return null; }
+  }
+
+  notebookHeaderRestoreFocus(href, surface = null) {
     const wanted = String(href || "").trim();
     if (!wanted) {
       return false;
     }
     try {
       const doc = typeof document !== "undefined" ? document : null;
-      if (!doc || typeof doc.querySelectorAll !== "function") {
+      const root = this.notebookHeaderFocusScope() || surface;
+      if (!doc || !root || typeof root.querySelectorAll !== "function") {
         return false;
       }
       const safe = wanted.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      const headers = Array.from(doc.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
+      const headers = Array.from(root.querySelectorAll(`.${NOTEBOOK_HEADER_CLASS}`) || []);
       for (const header of headers) {
         try {
           if (typeof header.getAttribute === "function" && header.getAttribute("data-cm-widget") === "true") {
@@ -421,7 +429,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
           ? header.querySelector(`[data-href="${safe}"]`)
           : null;
         if (next && typeof next.focus === "function") {
-          next.focus();
+          next.focus({ preventScroll: true });
           return true;
         }
       }
@@ -444,6 +452,7 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     this.notebookHeaderRefreshTimer = schedule(() => {
       this.notebookHeaderRefreshTimer = null;
       const href = this.notebookHeaderCaptureFocus();
+      const focusScope = this.notebookHeaderFocusScope();
       try {
         this.refreshNotebookHeaderReading();
       } catch (error) {
@@ -454,12 +463,13 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
       } catch (error) {
         // Best-effort.
       }
-      this.notebookHeaderRestoreFocus(href);
+      this.notebookHeaderRestoreFocus(href, focusScope);
     }, 150);
   }
 
   refreshNotebookHeaderAll() {
     const href = this.notebookHeaderCaptureFocus();
+    const focusScope = this.notebookHeaderFocusScope();
     try {
       this.refreshNotebookHeaderReading();
     } catch (error) {
@@ -470,6 +480,6 @@ class BobLedgerToolsNotebookHeaderLiveMixin {
     } catch (error) {
       // Best-effort.
     }
-    this.notebookHeaderRestoreFocus(href);
+    this.notebookHeaderRestoreFocus(href, focusScope);
   }
 }

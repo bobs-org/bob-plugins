@@ -57,8 +57,8 @@ const catalogs = [
   { host: "area", path: "area.md", kind: "root", state: "stale", rows: [{ path: "cash.md", link: "cash", depth: 0 }, { path: "bank.md", link: "bank", depth: 1 }], issues: [{ path: "area.md", code: "area_catalog_stale", severity: "warning", line: null, message: "catalog missing" }] },
   { host: "cash", path: "cash.md", kind: "area", state: "current", rows: [{ path: "bank.md", link: "bank", depth: 0 }], issues: [] },
 ];
-function reportWith(nextCatalogs = catalogs) {
-  return areasIndexReport({ schema_version: 1, ok: false, command: "list", root: { path: "area.md", stem: "area", state: "found" }, areas: entries, catalogs: nextCatalogs, findings: [issue], counts: { areas: 3, top_level: 1, hosts: 2, errors: 1, warnings: 1, catalogs: { current: 1, missing: 0, stale: 1, damaged: 0 } } });
+function reportWith(nextCatalogs = catalogs, nextEntries = entries) {
+  return areasIndexReport({ schema_version: 1, ok: false, command: "list", root: { path: "area.md", stem: "area", state: "found" }, areas: nextEntries, catalogs: nextCatalogs, findings: [issue], counts: { areas: nextEntries.length, top_level: 1, hosts: 2, errors: 1, warnings: 1, catalogs: { current: 1, missing: 0, stale: 1, damaged: 0 } } });
 }
 function state(report = reportWith(), overrides = {}) {
   return { report, stale: false, refreshing: false, error: null, errorModel: null, syncBusy: false, syncError: null, syncErrorModel: null, ...overrides };
@@ -125,6 +125,10 @@ class FakeNode {
 }
 
 function matches(node, selector) {
+  return String(selector || "").split(",").some((part) => matchesOne(node, part));
+}
+
+function matchesOne(node, selector) {
   const raw = String(selector || "").trim();
   if (raw.startsWith(".")) return node.className.split(/\s+/).includes(raw.slice(1));
   const attr = raw.match(/^\[([^\s=\]]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]+)))?\]$/);
@@ -261,6 +265,49 @@ test("standalone cards show report rows; non-host and unavailable notes get no p
   assert.equal(areasPaintStandalone(doc.createElement("div"), { ...options, state: { report: null }, sourcePath: "area.md" }), false);
 });
 
+test("standalone row nodes stay stable until rows, folds, or source path change", () => {
+  const doc = new FakeDocument();
+  const host = doc.createElement("div");
+  const folds = new Map();
+  const options = { state: state(), sourcePath: "area.md", folds, metadataCache: areaMetadata(), handlers: {} };
+  areasPaintStandalone(host, options);
+  const first = host.querySelectorAll("a")[0];
+  assert.ok(first.classList.contains("internal-link"));
+  assert.equal(first.getAttribute("href"), "cash");
+  areasPaintStandalone(host, options);
+  assert.equal(host.querySelectorAll("a")[0], first, "unchanged row links retain identity");
+  folds.set(areasCardFoldKey("area.md", "cash.md"), false);
+  areasPaintStandalone(host, options);
+  const folded = host.querySelectorAll("a")[0];
+  assert.notEqual(folded, first, "fold changes rebuild the list");
+  const changedEntries = entries.map((entry) => entry.path === "cash.md" ? { ...entry, summary: "Changed" } : entry);
+  areasPaintStandalone(host, { ...options, state: state(reportWith(catalogs, changedEntries)) });
+  assert.notEqual(host.querySelectorAll("a")[0], folded, "report changes rebuild the list");
+});
+
+test("standalone area links open their target and request hover previews", () => {
+  const opened = [];
+  const previews = [];
+  const plugin = new LedgerToolsPlugin({ workspace: {
+    openLinkText: (...args) => { opened.push(args); },
+    trigger: (name, detail) => previews.push([name, detail]),
+  } });
+  plugin.areasCatalogActive = true;
+  plugin.areasCatalogState = () => state();
+  plugin.areasCatalogFoldByView = new WeakMap();
+  const doc = new FakeDocument();
+  const host = doc.createElement("div");
+  areasPaintStandalone(host, plugin.areasCatalogOptions("area.md", new Map(), state()));
+  const link = host.querySelectorAll("a")[0];
+  assert.ok(link.classList.contains("internal-link"));
+  assert.equal(link.getAttribute("href"), "cash");
+  link.click();
+  assert.deepEqual(opened[0], ["cash", "area.md", false]);
+  link.listeners.get("mouseover")[0]({ type: "mouseover" });
+  assert.equal(previews[0][0], "hover-link");
+  assert.equal(previews[0][1].linktext, "cash");
+});
+
 test("Areas renderer registers in Reading and Live Preview at the family priority", () => {
   const doc = new FakeDocument();
   const current = state();
@@ -281,6 +328,53 @@ test("Areas renderer registers in Reading and Live Preview at the family priorit
   const markdown = callout(doc);
   plugin.postProcessor(markdown, { sourcePath: "area.md", getSectionInfo: () => null });
   assert.equal(markdown.getAttribute("data-bob-areas-card"), "true");
+  const noSection = doc.createElement("div");
+  const noSectionHeading = new FakeNode("h2", doc);
+  noSectionHeading.textContent = "Areas";
+  noSection.appendChild(noSectionHeading);
+  plugin.postProcessor(noSection, { sourcePath: "area.md", getSectionInfo: () => null });
+  assert.equal(noSection.querySelector(".bob-areas-anchor"), null, "null section info cannot create an anchor");
+  const noteCallout = doc.createElement("div");
+  const calloutHeading = new FakeNode("h2", doc);
+  calloutHeading.textContent = "Areas";
+  noteCallout.appendChild(calloutHeading);
+  plugin.postProcessor(noteCallout, { sourcePath: "area.md", getSectionInfo: () => ({
+    text: "## Areas\n\n> [!areas]", lineStart: 0, lineEnd: 2,
+  }) });
+  assert.equal(noteCallout.querySelector(".bob-areas-anchor"), null, "a stored note callout suppresses duplicate standalone cards");
+  const headingHost = doc.createElement("div");
+  const areasHeading = new FakeNode("h2", doc);
+  areasHeading.textContent = "Areas";
+  headingHost.appendChild(areasHeading);
+  plugin.postProcessor(headingHost, { sourcePath: "area.md", getSectionInfo: () => ({
+    text: "# Root\n## Areas", lineStart: 1, lineEnd: 1,
+  }) });
+  assert.ok(headingHost.querySelector(".bob-areas-anchor"), "a host without a callout gets one anchor in its heading section");
+  for (const cls of ["callout", "markdown-embed", "hover-popover", "plugin-tasks-list-item", "tasks-list-text", "block-language-tasks", "dataview", "block-language-dataview", "block-language-dataviewjs"]) {
+    const wrapper = new FakeNode("div", doc, { class: cls });
+    const child = doc.createElement("div");
+    const heading = new FakeNode("h2", doc);
+    heading.textContent = "Areas";
+    child.appendChild(heading);
+    wrapper.appendChild(child);
+    plugin.postProcessor(child, { sourcePath: "area.md", getSectionInfo: () => ({ text: "## Areas", lineStart: 0, lineEnd: 0 }) });
+    assert.equal(child.querySelector(".bob-areas-anchor"), null, `${cls} never gets a standalone anchor`);
+  }
+  const refreshHost = doc.createElement("div");
+  const refreshHeading = new FakeNode("h2", doc);
+  refreshHeading.textContent = "Areas";
+  refreshHost.appendChild(refreshHeading);
+  plugin.postProcessor(refreshHost, { sourcePath: "area.md", getSectionInfo: () => ({ text: "## Areas", lineStart: 0, lineEnd: 0 }) });
+  assert.ok(refreshHost.querySelector(".bob-areas-anchor"));
+  const refreshWrapper = new FakeNode("div", doc, { class: "tasks-list-text" });
+  refreshWrapper.appendChild(refreshHost);
+  let refresh = null;
+  plugin.areasSetTimeout = (callback) => { refresh = callback; return 5; };
+  plugin.areasClearTimeout = () => {};
+  plugin.areasCatalogRefreshTimer = null;
+  plugin.scheduleAreasCatalogRefresh();
+  refresh();
+  assert.equal(refreshHost.querySelector(".bob-areas-anchor"), null, "refresh removes an anchor from a now-excluded widget");
   const source = "## Areas\n\nA readable outline";
   const lines = source.split("\n");
   const view = { path: "area.md", dom: doc.createElement("div"), state: { doc: { lines: lines.length, toString: () => source, line: (number) => ({ to: lines.slice(0, number - 1).reduce((n, line) => n + line.length + 1, 0) + lines[number - 1].length }) } }, dispatch() {} };
@@ -288,6 +382,65 @@ test("Areas renderer registers in Reading and Live Preview at the family priorit
   assert.equal(decoration.length, 1, "Live Preview gets one standalone widget when stored callout is missing");
   assert.equal(plugin.buildAreasCatalogDecorations({ ...view, path: "plain.md" }).none, true, "non-hosts get no phantom decoration");
   plugin.teardownAreasCatalog();
+});
+
+test("workspace scroll guard resets forbidden containers and logs once per window", () => {
+  const mainDoc = new FakeDocument();
+  mainDoc.querySelector = () => null;
+  const popoutDoc = new FakeDocument();
+  popoutDoc.querySelector = () => null;
+  let windowOpen;
+  const previousDocument = global.document;
+  const previousWarn = console.warn;
+  const previousNow = Date.now;
+  const warnings = [];
+  const registrations = [];
+  global.document = mainDoc;
+  Date.now = () => 10000;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const plugin = new LedgerToolsPlugin({ workspace: {
+      activeLeaf: { view: { file: { path: "area.md" } } },
+      on: (_event, callback) => { windowOpen = callback; return {}; },
+    } });
+    plugin.registerEvent = () => {};
+    plugin.registerDomEvent = (target, type, handler, options) => registrations.push({ target, type, handler, options });
+    plugin.setupWorkspaceScrollGuard();
+    assert.equal(registrations[0].target, mainDoc);
+    assert.equal(registrations[0].type, "scroll");
+    assert.equal(registrations[0].options.capture, true);
+    windowOpen({ document: popoutDoc });
+    const mainScroll = registrations[0].handler;
+    const popoutScroll = registrations[1].handler;
+    const workspace = new FakeNode("div", mainDoc, { class: "workspace" });
+    workspace.scrollTop = 14;
+    workspace.scrollLeft = 3;
+    mainScroll({ target: workspace });
+    assert.equal(workspace.scrollTop, 0);
+    assert.equal(workspace.scrollLeft, 0);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0][0], /unexpected workspace scroll/);
+    assert.equal(warnings[0][1].activePath, "area.md");
+    workspace.scrollTop = 5;
+    mainScroll({ target: workspace });
+    assert.equal(workspace.scrollTop, 0);
+    assert.equal(warnings.length, 1, "repeat warnings are rate-limited per document");
+    for (const cls of ["view-content", "cm-scroller"]) {
+      const allowed = new FakeNode("div", mainDoc, { class: cls });
+      allowed.scrollTop = 7;
+      mainScroll({ target: allowed });
+      assert.equal(allowed.scrollTop, 7, `${cls} remains scrollable`);
+    }
+    const popoutWorkspace = new FakeNode("div", popoutDoc, { class: "workspace" });
+    popoutWorkspace.scrollLeft = 9;
+    popoutScroll({ target: popoutWorkspace });
+    assert.equal(popoutWorkspace.scrollLeft, 0);
+    assert.equal(warnings.length, 2, "each window can report its first reset");
+  } finally {
+    global.document = previousDocument;
+    console.warn = previousWarn;
+    Date.now = previousNow;
+  }
 });
 
 test("fold helpers default expanded and key by pane host plus row", () => {

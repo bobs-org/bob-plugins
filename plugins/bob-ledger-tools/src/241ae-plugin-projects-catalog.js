@@ -143,7 +143,12 @@ class BobLedgerToolsProjectsCatalogMixin {
     // current catalog, no empty card remains.
     const rows = projectsCardRowEntries(options.state, sourcePath);
     const catalog = options.catalog;
-    const needsAnchor = allowAnchor && !callouts.length
+    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
+      !notebookInsideCode(head) && /^Projects\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
+    const title = notebookFindHostTitle(el);
+    const attachTarget = heading || title || el.querySelector?.(`.${PROJECTS_ANCHOR_CLASS}`) || el;
+    const needsAnchor = allowAnchor && !callouts.length && !notebookCatalogAnchorExcluded(el)
+      && !notebookCatalogAnchorExcluded(attachTarget)
       && ((catalog && catalog.state !== "current") || rows.length > 0);
     if (!needsAnchor) {
       // Clear stale standalone chrome only; callout chrome shares these
@@ -155,9 +160,6 @@ class BobLedgerToolsProjectsCatalogMixin {
       }
       return;
     }
-    const heading = Array.from(el.querySelectorAll?.("h2") || []).find((head) =>
-      !notebookInsideCode(head) && /^Projects\s*$/i.test(head.childNodes?.[0]?.textContent || head.textContent));
-    const title = notebookFindHostTitle(el);
     const existing = el.querySelector?.(`.${PROJECTS_ANCHOR_CLASS}`);
     let host = heading || title || existing;
     if (!host && !el.closest?.(".markdown-embed, .cm-editor") && el.querySelector?.("p")) {
@@ -178,7 +180,9 @@ class BobLedgerToolsProjectsCatalogMixin {
     if (el.closest?.(".cm-editor") || el.querySelector?.(".cm-editor") || callouts.some((callout) => callout.closest?.(".cm-editor"))) return;
     const section = ctx.getSectionInfo?.(el);
     const anchorLine = section?.text ? projectsCardAnchorLine(section.text) : null;
-    const allowAnchor = anchorLine === null || (section.lineStart <= anchorLine && section.lineEnd >= anchorLine);
+    const allowAnchor = Boolean(section && anchorLine !== null
+      && section.lineStart <= anchorLine && section.lineEnd >= anchorLine
+      && projectsCardSourceRegions(section.text).length === 0);
     const folds = this.projectsCatalogFoldMap(el);
     this.paintProjectsCatalogReading(el, ctx.sourcePath, folds, allowAnchor);
     const existing = Array.from(this.projectsCatalogReading || []).find((widget) => widget.el === el);
@@ -298,6 +302,10 @@ class BobLedgerToolsProjectsCatalogMixin {
       if (!this.projectsCatalogActive) return;
       for (const widget of this.projectsCatalogReading) {
         if (!widget.editorOwner && !widget.el?.closest?.(".cm-editor")) {
+          if (notebookCatalogAnchorExcluded(widget.el)) {
+            this.projectsRemoveStandaloneChrome(widget.el);
+            continue;
+          }
           this.paintProjectsCatalogReading(widget.el, widget.path, widget.folds, widget.allowAnchor);
         }
       }
@@ -307,5 +315,13 @@ class BobLedgerToolsProjectsCatalogMixin {
         this.paintProjectsCatalogEditor(view);
       }
     }, 100);
+  }
+
+  projectsRemoveStandaloneChrome(el) {
+    for (const cls of [PROJECTS_STATUS_CLASS, PROJECTS_ANCHOR_CLASS, PROJECTS_HEADER_CLASS, PROJECTS_CLOSED_CLASS]) {
+      for (const node of Array.from(el?.querySelectorAll?.(`.${cls}`) || [])) {
+        if (!node.closest?.('[data-callout="projects"]')) node.remove?.();
+      }
+    }
   }
 }

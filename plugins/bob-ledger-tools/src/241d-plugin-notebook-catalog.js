@@ -725,7 +725,7 @@ class BobLedgerToolsNotebookCatalogMixin {
         for (const selector of selectors) {
           const node = root.querySelector(selector);
           if (node && typeof node.focus === "function") {
-            node.focus();
+            node.focus({ preventScroll: true });
             if (typeof node.select === "function") {
               try {
                 node.select();
@@ -739,7 +739,7 @@ class BobLedgerToolsNotebookCatalogMixin {
       }
       const editor = view && view.metadataEditor;
       if (editor && typeof editor.focus === "function") {
-        editor.focus();
+        editor.focus({ preventScroll: true });
         return true;
       }
       const commands = this.app && this.app.commands;

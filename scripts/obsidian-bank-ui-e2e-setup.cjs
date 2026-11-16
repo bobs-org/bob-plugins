@@ -730,12 +730,12 @@ function runSelfTest() {
     if (/\nbank:/.test(missingFm)) throw new Error("missing hub still has bank:");
     if (!bank.unrelatedBankNote().includes("bank: leftover-string")) throw new Error("unrelated note missing bank property");
     if (!bank.waitingMonthNote().includes("$6.45 Corner Cafe")) throw new Error("waiting month missing row");
-    const collapsed = bank.assertLiveCollapsed({
-      header: true, headerCount: 1, headerAria: "Bank setup", expanded: "false",
+    const expandedDefault = bank.assertLiveDefault({
+      header: true, headerCount: 1, headerAria: "Bank setup", expanded: "true",
       collapsed: "🏦 WF Checking · 9 categories · 1 hidden · no rules",
     });
-    if (!collapsed.ok) throw new Error(`collapsed helper failed: ${collapsed.reason}`);
-    if (bank.assertLiveCollapsed({ header: false }).ok) throw new Error("missing header must fail");
+    if (!expandedDefault.ok) throw new Error(`collapsed helper failed: ${expandedDefault.reason}`);
+    if (bank.assertLiveDefault({ header: false }).ok) throw new Error("missing header must fail");
     const missing = bank.assertMissingMapping({ header: true, collapsed: "Setup · no bank: mapping yet" });
     if (!missing.ok) throw new Error(`missing helper failed: ${missing.reason}`);
     const invalidProbe = bank.assertInvalidHeader({
@@ -961,16 +961,41 @@ async function runE2e(parsed) {
     const paintHashBefore = hashFile(hubPath);
     await openNote(client, "bank.md", "live");
     let live = await waitFor(client, probe(), (value) => value && value.header, "live setup header", 25000).catch((error) => ({ error: error.message }));
-    const liveCheck = bank.assertLiveCollapsed(live);
-    record("live-header-collapsed", liveCheck.ok, liveCheck.reason || jsonDetail(live));
+    const liveCheck = bank.assertLiveDefault(live);
+    record("live-header-expanded-default", liveCheck.ok, liveCheck.reason || jsonDetail(live));
     record("live-header-once", live && live.headerCount === 1, jsonDetail(live));
     const hideLive = bank.assertScopedHide(live, true);
     record("live-scoped-hide", hideLive.ok, hideLive.reason);
     record("paint-never-writes", hashFile(hubPath) === paintHashBefore, "bank.md hash after live paint");
     record("edit-command-registered", Boolean(live && live.commands && live.commands.editSetup), jsonDetail(live && live.commands));
 
+    const tileKeys = (live && live.tiles || []).map((tile) => tile.key);
+    record("live-tiles-present", tileKeys.includes("coffee") && tileKeys.includes("housing") && tileKeys.includes("kids") && tileKeys.includes("misc"), jsonDetail(live && live.tiles));
+    const coffee = (live && live.tiles || []).find((tile) => tile.key === "coffee");
+    record("live-tile-aria", Boolean(coffee && /Coffee/i.test(coffee.aria) && /key C/i.test(coffee.aria)), jsonDetail(coffee));
+    const kids = (live && live.tiles || []).find((tile) => tile.key === "kids");
+    record("live-hotkey-none-dot", Boolean(kids && kids.none), jsonDetail(kids));
+    const derived = (live && live.tiles || []).find((tile) => tile.key === "groceries" || tile.key === "dining");
+    record("live-derived-keycap", Boolean(derived && derived.derived), jsonDetail(derived));
+
     await setViewport(client, 375, 812);
     await setDark(client, false);
+    const expandedLight = path.join(outDir, "setup-expanded-375-light.png");
+    await capturePage(client, expandedLight, { scroll: ".bob-bank-setup" });
+    report.screenshots.push(expandedLight);
+    await setDark(client, true);
+    const expandedDark = path.join(outDir, "setup-expanded-375-dark.png");
+    await capturePage(client, expandedDark, { scroll: ".bob-bank-setup" });
+    report.screenshots.push(expandedDark);
+    await setDark(client, false);
+
+    await client.evaluate(`(() => {
+      const toggle = document.querySelector(".bob-bank-setup-toggle");
+      if (toggle) toggle.click();
+      return Boolean(toggle);
+    })()`);
+    live = await waitFor(client, probe(), (value) => value && value.expanded === "false", "collapsed header", 8000).catch((error) => ({ error: error.message }));
+    record("live-header-collapses", Boolean(live && live.expanded === "false"), jsonDetail(live));
     const collapsedLight = path.join(outDir, "setup-collapsed-375-light.png");
     await capturePage(client, collapsedLight, { scroll: ".bob-bank-setup" });
     report.screenshots.push(collapsedLight);
@@ -982,27 +1007,10 @@ async function runE2e(parsed) {
 
     await client.evaluate(`(() => {
       const toggle = document.querySelector(".bob-bank-setup-toggle");
-      if (toggle) toggle.click();
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true") toggle.click();
       return Boolean(toggle);
     })()`);
-    live = await waitFor(client, probe(), (value) => value && value.expanded === "true", "expanded header", 8000).catch((error) => ({ error: error.message }));
-    record("live-header-expands", Boolean(live && live.expanded === "true"), jsonDetail(live));
-    const tileKeys = (live && live.tiles || []).map((tile) => tile.key);
-    record("live-tiles-present", tileKeys.includes("coffee") && tileKeys.includes("housing") && tileKeys.includes("kids") && tileKeys.includes("misc"), jsonDetail(live && live.tiles));
-    const coffee = (live && live.tiles || []).find((tile) => tile.key === "coffee");
-    record("live-tile-aria", Boolean(coffee && /Coffee/i.test(coffee.aria) && /key C/i.test(coffee.aria)), jsonDetail(coffee));
-    const kids = (live && live.tiles || []).find((tile) => tile.key === "kids");
-    record("live-hotkey-none-dot", Boolean(kids && kids.none), jsonDetail(kids));
-    const derived = (live && live.tiles || []).find((tile) => tile.key === "groceries" || tile.key === "dining");
-    record("live-derived-keycap", Boolean(derived && derived.derived), jsonDetail(derived));
-    const expandedLight = path.join(outDir, "setup-expanded-375-light.png");
-    await capturePage(client, expandedLight, { scroll: ".bob-bank-setup" });
-    report.screenshots.push(expandedLight);
-    await setDark(client, true);
-    const expandedDark = path.join(outDir, "setup-expanded-375-dark.png");
-    await capturePage(client, expandedDark, { scroll: ".bob-bank-setup" });
-    report.screenshots.push(expandedDark);
-    await setDark(client, false);
+    live = await waitFor(client, probe(), (value) => value && value.expanded === "true", "restored expanded header", 8000).catch((error) => ({ error: error.message }));
     await setViewport(client, 1280, 900);
 
     await openNote(client, "bank.md", "preview");

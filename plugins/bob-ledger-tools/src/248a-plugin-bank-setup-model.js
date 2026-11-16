@@ -7,6 +7,7 @@
 const BANK_SETUP_CLASS = "bob-bank-setup";
 const BANK_SETUP_SURFACE_CLASS = "bob-bank-setup-surface";
 const BANK_SETUP_HUB_PATH = "bank.md";
+const BANK_SETUP_DEFAULT_EXPANDED = true;
 const BANK_SETUP_MONEY_GROUP = "Money moves";
 
 function bankSetupText(value) {

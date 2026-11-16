@@ -789,6 +789,31 @@ test("hub mounts once per surface, survives repaint, and leaves other notes alon
   assert.ok(!preview.classList.contains("bob-bank-setup-surface"));
 });
 
+test("setup header starts expanded and collapses per hub in view state", () => {
+  const plugin = makeSetupPlugin(null, {});
+  plugin.setupBankSetup();
+  seedReport(plugin, decodedReport());
+  const { el, preview } = hubSurface();
+  plugin.paintBankSetupReading(el, "bank.md");
+  const toggle = preview.querySelector(".bob-bank-setup-toggle");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(toggle.textContent, "▾ Setup");
+  const body = preview.querySelector(".bob-bank-setup-body");
+  assert.ok(body);
+  assert.ok(body.querySelector(".bob-bank-category-tile"));
+  plugin.bankSetupToggleExpanded("bank.md");
+  plugin.paintBankSetupReading(el, "bank.md");
+  const collapsed = preview.querySelector(".bob-bank-setup-toggle");
+  assert.equal(collapsed.getAttribute("aria-expanded"), "false");
+  assert.equal(preview.querySelector(".bob-bank-setup-body"), null);
+  plugin.bankSetupToggleExpanded("bank.md");
+  plugin.paintBankSetupReading(el, "bank.md");
+  const restored = preview.querySelector(".bob-bank-setup-toggle");
+  assert.equal(restored.getAttribute("aria-expanded"), "true");
+  assert.ok(preview.querySelector(".bob-bank-setup-body"));
+  plugin.teardownBankSetup();
+});
+
 test("hiding never touches document.body and is owned only by bob-bank-setup-surface", () => {
   const plugin = makeSetupPlugin(null, {});
   plugin.setupBankSetup();

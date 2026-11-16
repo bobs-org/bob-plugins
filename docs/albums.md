@@ -1,6 +1,6 @@
 ---
 title: "Album cards"
-description: "Live album counts, record-index folds, date chips, a collapsed schema header, and repair controls in owner and album notes."
+description: "Live album counts, record-index folds, date chips, an expanded schema header, and repair controls in owner and album notes."
 ---
 
 Bob Ledger Tools decorates the generated `[!albums]` catalog in area and project
@@ -65,11 +65,12 @@ findings count. Unknown `bob-bank` views stay quiet. None of these surfaces
 write the note.
 
 Album notes also show a breadcrumb from their resolved area/project ancestry
-and a collapsed-by-default schema summary in Reading view and Live Preview.
+and an expanded-by-default schema summary in Reading view and Live Preview.
 The summary names the schema, field count, dated notes, and index grouping.
-Expanding it shows one chip row per field in declaration order: human labels,
+Chip rows show by default, one per field in declaration order: human labels,
 kind and flag suffixes, required as a quiet `*`, choice chips with usage
-counts, grouping annotations, and muted `legacy` chips. Collapse state lives
+counts, grouping annotations, and muted `legacy` chips. The summary's `▾`
+toggle collapses them for the session. Collapse state lives
 in view state keyed by the album, never in frontmatter. An invalid schema
 paints the first diagnostic on the summary and expands to the lint list; an
 empty schema teaches how to add fields so `Name @stem/` can collect facts.
@@ -149,7 +150,7 @@ Its JSON report records Bob's path and version. Run the writer acceptance with
 `BOB_BIN=/path/to/bob node scripts/obsidian-album-schema-writer-e2e.cjs --self-test`.
 The wrappers report their real-Bob checks as skipped when `BOB_BIN` is absent.
 The walkthrough covers owner chips,
-group jump, folds, date chips, the collapsed header, property hiding, failure
+group jump, folds, date chips, the schema header, property hiding, failure
 and retry, cleanup, byte preservation, the debounced sync, and the Schema
 Card walk: header, palette, record-parent, title-row album fallback with
 Task Card priority, keyboard-only edit and Undo, previewed apply with a

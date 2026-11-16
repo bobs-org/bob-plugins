@@ -78736,6 +78736,7 @@ class BobLedgerToolsBankCategoryMixin {
 const BANK_SETUP_CLASS = "bob-bank-setup";
 const BANK_SETUP_SURFACE_CLASS = "bob-bank-setup-surface";
 const BANK_SETUP_HUB_PATH = "bank.md";
+const BANK_SETUP_DEFAULT_EXPANDED = true;
 const BANK_SETUP_MONEY_GROUP = "Money moves";
 
 function bankSetupText(value) {
@@ -79887,7 +79888,7 @@ class BobLedgerToolsBankSetupMixin {
         stale: entry.stale,
         refreshing: entry.refreshing,
         desktop: this.bankSetupDesktop(),
-        expanded: key && expandedMap.has(key) ? expandedMap.get(key) === true : false,
+        expanded: (key && expandedMap.has(key)) ? expandedMap.get(key) === true : BANK_SETUP_DEFAULT_EXPANDED,
         lastGoodAt: this.bankSetupLastGoodAt,
         lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
       });
@@ -89317,7 +89318,7 @@ function albumHeaderYamlLine(model, target = {}) {
 }
 
 function albumHeaderDefaultExpanded(model) {
-  return Boolean(model && model.schemaInvalid);
+  return true;
 }
 
 function albumHeaderIsDesktopPlatform(platform) {
@@ -89329,9 +89330,9 @@ function albumHeaderIsDesktopPlatform(platform) {
   }
 }
 // ---- src/241x-plugin-album-schema-dom.js ----
-// Collapsed schema summary, expandable chip view, and lint marks. All
-// report strings are text nodes. Collapse is a view-state flag; this
-// fragment never writes the vault.
+// Expanded-by-default schema summary, collapsible chip view, and lint
+// marks. All report strings are text nodes. Collapse is a view-state
+// flag; this fragment never writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {

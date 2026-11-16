@@ -1,6 +1,6 @@
-// Collapsed schema summary, expandable chip view, and lint marks. All
-// report strings are text nodes. Collapse is a view-state flag; this
-// fragment never writes the vault.
+// Expanded-by-default schema summary, collapsible chip view, and lint
+// marks. All report strings are text nodes. Collapse is a view-state
+// flag; this fragment never writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {

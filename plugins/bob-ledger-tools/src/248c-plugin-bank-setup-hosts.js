@@ -175,7 +175,7 @@ class BobLedgerToolsBankSetupMixin {
         stale: entry.stale,
         refreshing: entry.refreshing,
         desktop: this.bankSetupDesktop(),
-        expanded: key && expandedMap.has(key) ? expandedMap.get(key) === true : false,
+        expanded: (key && expandedMap.has(key)) ? expandedMap.get(key) === true : BANK_SETUP_DEFAULT_EXPANDED,
         lastGoodAt: this.bankSetupLastGoodAt,
         lastGoodLabel: bankSetupClockLabel(this.bankSetupLastGoodAt),
       });

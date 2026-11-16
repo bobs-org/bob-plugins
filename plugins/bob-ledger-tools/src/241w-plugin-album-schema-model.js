@@ -109,7 +109,7 @@ function albumHeaderYamlLine(model, target = {}) {
 }
 
 function albumHeaderDefaultExpanded(model) {
-  return Boolean(model && model.schemaInvalid);
+  return true;
 }
 
 function albumHeaderIsDesktopPlatform(platform) {

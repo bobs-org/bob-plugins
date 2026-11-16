@@ -487,7 +487,7 @@ test("H1-less albums paint at the start and embeds keep their own property scope
   assert.equal(parent.children.filter((child) => child.classList.contains("bob-album-header")).length, 0);
 });
 
-test("schema summary stays collapsed by default and expands per album in view state", () => {
+test("schema summary starts expanded and collapses per album in view state", () => {
   const { doc, plugin, flushReading } = fixture(album({
     label: "Restaurant",
     dated_notes: true,
@@ -503,18 +503,21 @@ test("schema summary stays collapsed by default and expands per album in view st
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.equal(summary.getAttribute("aria-expanded"), "true");
+  assert.match(summary.textContent, /^▾ /);
   assert.match(summary.textContent, /Restaurant · 2 fields · dated notes · grouped by Status, sub-grouped by Location/);
-  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
   assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
   summary.fire("click");
-  const opened = root.querySelector(".bob-album-schema-summary");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
-  assert.equal(opened.getAttribute("aria-expanded"), "true");
-  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
+  const closed = root.querySelector(".bob-album-schema-summary");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
+  assert.equal(closed.getAttribute("aria-expanded"), "false");
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
   const other = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(other, "eat.md");
-  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
+  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), true);
+  assert.equal(helpers.albumHeaderDefaultExpanded({ emptySchema: true }), true);
 });
 
 test("chip rows cover kinds, flags, grouping, legacy, and empty teaching copy", () => {
@@ -691,7 +694,7 @@ test("theme accent, schema button, and keyboard labels stay on the header", () =
   const header = root.querySelector(".bob-album-header");
   assert.equal(header.tagName, "SECTION");
   assert.equal(root.querySelector(".bob-album-header-schema").textContent, "⊞ Schema");
-  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
   const field = root.querySelector(".bob-album-schema-field");
   assert.equal(field.getAttribute("tabindex"), "0");
 });

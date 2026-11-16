@@ -1276,11 +1276,11 @@ function SETUP_UI_PROBE() {
   } })()`;
 }
 
-function assertLiveCollapsed(probe) {
+function assertLiveDefault(probe) {
   if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
   if (probe.headerCount !== 1) return { ok: false, reason: `header count ${probe.headerCount}` };
   if (probe.headerAria !== "Bank setup") return { ok: false, reason: `aria-label ${probe.headerAria}` };
-  if (probe.expanded !== "false") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
+  if (probe.expanded !== "true") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
   const line = String(probe.collapsed || "");
   if (!/🏦/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
     return { ok: false, reason: `collapsed grammar: ${line}` };
@@ -1369,7 +1369,7 @@ module.exports = {
   assertEnsureArgv,
   assertNoMath,
   assertHasMath,
-  assertLiveCollapsed,
+  assertLiveDefault,
   assertMissingMapping,
   assertInvalidHeader,
   assertScopedHide,

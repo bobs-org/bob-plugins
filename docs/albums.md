@@ -76,24 +76,38 @@ paints the first diagnostic on the summary and expands to the lint list; an
 empty schema teaches how to add fields so `Name @stem/` can collect facts.
 The two states never impersonate each other.
 
-**⊞ Schema** opens the editable Schema Card in the Task Card idiom: album
-label, record counts, the same chip rows, a lint banner, a staged-gesture
-consequence line, and a footer of edit keys, `y`, and `esc`. Every gesture
-dry-runs through `bob albums update` first and Enter applies only the exact
-envelope whose dry run succeeded; the dry run paints bob's consequence,
-affected and newly-invalid counts, and derived keys before Enter can apply,
-and pending, error, or superseded responses never enable it. `u` previews
-Undo of the last successful gesture and applies its inverse ops on a second
-Enter; a stale fingerprint repaints instead of retrying, keeping the retained
-draft unconfirmed and never silently rebasing it. Saved-local post-sync
-failures offer **Retry sync**, which runs only `bob vault-sync` and never
-replays the mutation. Defaults and numeric bounds edit through typed inputs
-with explicit Unset, and choice edits change label and emoji while stored
-values stay fixed. `y` from the card or a focused chip/lint row closes the
-card and jumps to that field or issue line in Source mode. Bob's `issues[]`
-paint as lint marks with their message and suggestions as text. The album's
-`record` property is hidden only in that album's rendered Properties surface,
-and stays editable in Source mode.
+**⊞ Schema** opens the editable Schema Card in the Task Card idiom: one title
+line (`🍽️ Restaurant`), a truncated breadcrumb, and the album details row as
+the header subtitle and selectable **Album details** target. Field rows use
+pills for `required`, kind, and grouping, choice chips carry a count pill
+(faded at zero), and `+ choice` / `+ field` are dashed add targets. A lint
+banner, a one-line status rule (hidden when empty), and a contextual hint
+strip sit below. The strip shows only keys valid for the current selection,
+wrapping to at most two lines, with `⋯` opening an **All actions** list so
+every gesture keeps a visible button equivalent. Previews run automatically
+as you type; there is no **Preview this edit** button. Stage buttons are
+**Save ⏎** (enabled when the current preview can apply, or while Enter is
+latched) and **Cancel esc**.
+
+Every gesture dry-runs through `bob albums update` first and Enter applies
+only the exact envelope whose dry run succeeded. If ⏎ arrives while that
+revision's preview is still running, the card latches: it paints **Saving as
+soon as bob confirms…** and applies when that preview succeeds. Any further
+edit clears the latch. The dry run paints bob's consequence, affected and
+newly-invalid counts, and derived keys in the status rule before Enter can
+apply, and pending, error, or superseded responses never enable it until the
+latch's matching preview succeeds. `u` previews Undo of the last successful
+gesture and applies its inverse ops on a second Enter; a stale fingerprint
+repaints instead of retrying, keeping the retained draft unconfirmed and
+never silently rebasing it. Saved-local post-sync failures offer **Retry
+sync**, which runs only `bob vault-sync` and never replays the mutation.
+Defaults and numeric bounds edit through typed inputs with explicit Unset,
+and choice edits change label and emoji while stored values stay fixed. `y`
+from the card or a focused chip/lint row closes the card and jumps to that
+field or issue line in Source mode. Bob's `issues[]` paint as lint marks with
+their message and suggestions as text. The album's `record` property is
+hidden only in that album's rendered Properties surface, and stays editable
+in Source mode.
 
 The card keeps typed stage drafts, choice rows, focus, and caret through its
 debounced previews; adding or removing a staged initial choice never loses
@@ -102,12 +116,14 @@ an intervening schema edit leaves the inverse draft unconfirmed until an
 explicit rebase.
 
 The card is keyboard-first with visible button equivalents for every
-gesture: `↑`/`↓` (or `j`/`k`, `←`/`→` across choices) move, `Enter` edits the
-selected row or applies a ready preview, `a` adds a field, `c` adds a choice,
-`!` and `s` stage required/suggest toggles, `Alt+J`/`K` stage moves,
-`Ctrl+D` stages removal, `y` jumps to Source, `u` previews Undo, and `Esc`
-cancels an open stage, then clears a pending draft, then closes from plain
-browsing through one dispatch that survives Obsidian's capture-phase close.
+gesture (on the hint strip, or under `⋯`): `↑`/`↓` (or `j`/`k`, `←`/`→`
+across choices) move, `Enter` edits the selected row or applies a ready
+preview (latching while that revision's preview is pending), `a` adds a
+field, `c` adds a choice, `!` and `s` stage required/suggest toggles,
+`Alt+J`/`K` stage moves, `Ctrl+D` stages removal, `y` jumps to Source, `u`
+previews Undo, and `Esc` closes the All actions list, then cancels an open
+stage, then clears a pending draft, then closes from plain browsing through
+one dispatch that survives Obsidian's capture-phase close.
 Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.

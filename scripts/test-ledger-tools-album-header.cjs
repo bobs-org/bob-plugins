@@ -602,6 +602,19 @@ test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer",
   }
   assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /y YAML/);
   assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /esc close/);
+  assert.ok(card.querySelector(".bob-album-schema-dialog-subtitle"), "details live in the header subtitle");
+  const region = (host, name) => (host.querySelectorAll("[data-schema-region]") || [])
+    .find((node) => node.getAttribute("data-schema-region") === name);
+  assert.equal((region(card, "body")?.querySelectorAll("[data-target-key]") || [])
+    .some((node) => node.getAttribute("data-target-key") === "stats"), false,
+    "the body does not repeat the details row");
+  assert.match(editableCard.querySelector(".bob-album-schema-pill")?.textContent || "", /required/);
+  assert.match(editableCard.querySelector(".bob-album-schema-count-pill")?.textContent || "", /11/);
+  assert.match(editableCard.querySelector(".bob-album-schema-add-choice")?.textContent || "", /\+ choice/);
+  assert.match(editableCard.querySelector(".bob-album-schema-add-field")?.textContent || "", /\+ field/);
+  assert.equal(editableCard.textContent.includes("Preview this edit"), false);
+  assert.ok(editableCard.querySelector('[data-schema-action="more"]'), "⋯ All actions stays in the hint strip");
+  assert.ok(editableCard.querySelector(".bob-album-schema-more"), "the All actions list stays in the DOM");
   assert.equal(card.textContent.includes("Add field"), false);
   assert.equal(helpers.albumHeaderYamlLine(model, { fieldKey: "visited" }), 18);
   assert.equal(helpers.albumHeaderYamlLine(model, { issue: model.issues[0] }), 4);
@@ -873,6 +886,8 @@ test("Schema Card Enter is gated by current preview across pending, refused, sta
   enter();
   await pause(0);
   assert.equal(applies, 0, "Enter cannot apply while the preview is pending");
+  assert.equal(modal.schemaEnterLatch?.revision, modal.session.getState().revision,
+    "Enter latches the pending preview revision");
   previews[0].resolve({ ok: true, report: { ok: false, error: { code: "used_choice", message: "refused" } } });
   await pause(0);
   enter();
@@ -1297,6 +1312,17 @@ test("Schema Card Escape follows one dispatch: stage cancel, draft clear, then c
   };
 
   modal.schemaSelect("field:amount");
+  modal.schemaMoreOpen = true;
+  modal.paintSchemaCard("session");
+  assert.equal(modal.contentEl.querySelector(".bob-album-schema-more")?.getAttribute("hidden"), null,
+    "All actions is visible before Escape");
+  obsidianEscape(modal.contentEl.querySelector('[data-target-key="field:amount"]'));
+  assert.equal(modal.schemaMoreOpen, false, "Escape closes All actions first");
+  assert.equal(closes, 0, "no close on All actions Escape");
+  assert.equal(modal.stage, null, "All actions Escape does not cancel a stage");
+  assert.equal(modal.contentEl.querySelector(".bob-album-schema-more")?.getAttribute("hidden"), "",
+    "All actions hides after Escape");
+
   modal.schemaStage("field", "field:amount");
   assert.ok(modal.stage, "stage is open");
   const input = modal.schemaInput("fieldLabel");

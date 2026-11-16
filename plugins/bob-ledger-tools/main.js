@@ -66908,9 +66908,12 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
   }
 
   const buttons = notebookCreateEl(doc, "div", "bob-album-schema-stage-actions");
-  const preview = albumSchemaStageAction(doc, buttons, "Preview this edit", "submit-stage", "is-primary");
-  const cancel = albumSchemaStageAction(doc, buttons, "Cancel stage", "cancel-stage");
-  if (locked) { preview.disabled = true; cancel.disabled = true; }
+  buttons.setAttribute("data-schema-region", "stage-status");
+  const save = albumSchemaStageAction(doc, buttons, "Save ⏎", "apply", "is-primary");
+  save.setAttribute("data-schema-action", "apply");
+  const cancel = albumSchemaStageAction(doc, buttons, "Cancel esc", "cancel-stage");
+  if (locked) { save.disabled = true; cancel.disabled = true; }
+  else save.disabled = options?.state?.canApply !== true && options?.enterLatched !== true;
   panel.appendChild(buttons);
   return panel;
 }
@@ -90890,12 +90893,9 @@ function albumSchemaCardModalBase() {
 }
 
 function albumSchemaCardTitle(model) {
-  const crumbs = (model?.crumbs || []).map((crumb) => crumb.title || crumb.stem).filter(Boolean);
-  const trail = crumbs.join(" › ");
   const label = model?.schemaLabel || model?.title || "Album";
   const emoji = String(model?.emoji || "").trim();
-  const head = emoji ? `${emoji} ${label}` : label;
-  return trail ? `${head} · ${trail}` : head;
+  return emoji ? `${emoji} ${label}` : label;
 }
 
 function albumSchemaCardButton(doc, host, text, options = {}) {
@@ -90914,240 +90914,6 @@ function albumSchemaCardButton(doc, host, text, options = {}) {
   notebookSetText(button, text);
   host.appendChild(button);
   return button;
-}
-
-function albumSchemaCardBuildEl(model, options, doc) {
-  const card = notebookCreateEl(doc, "div", "bob-album-schema-dialog bob-key-card");
-  if (!card) return null;
-  const state = options?.state || {};
-  const editable = options?.editable === true;
-  card.setAttribute("role", "dialog");
-  card.setAttribute("aria-modal", "true");
-  card.setAttribute("aria-label", "Album schema editor");
-
-  const header = notebookCreateEl(doc, "div", "bob-album-schema-dialog-header");
-  const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
-  notebookSetText(title, albumSchemaCardTitle(model));
-  header.appendChild(title);
-  const stats = notebookCreateEl(doc, "p", "bob-album-schema-dialog-stats");
-  notebookSetText(stats, albumHeaderStatsText(model));
-  header.appendChild(stats);
-  card.appendChild(header);
-
-  if ((model.issues || []).length) {
-    const banner = notebookCreateEl(doc, "div", "bob-album-schema-dialog-lint");
-    banner.setAttribute("role", "status");
-    const issues = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
-    issues.setAttribute("aria-label", "Album schema issues");
-    for (const issue of model.issues) {
-      const item = albumSchemaPaintIssue(doc, issue, options);
-      if (item) issues.appendChild(item);
-    }
-    banner.appendChild(issues);
-    card.appendChild(banner);
-  }
-
-  const body = notebookCreateEl(doc, "div", "bob-album-schema-dialog-body");
-  if (model.emptySchema && !model.schemaInvalid) {
-    const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
-    notebookSetText(empty, albumHeaderSummaryText(model));
-    body.appendChild(empty);
-  }
-
-  if (editable) {
-    const selectedKey = options.selectedKey || "stats";
-    albumSchemaCardButton(doc, body, albumHeaderStatsText(model), {
-      targetKey: "stats", className: "bob-album-schema-stats-target",
-      ariaLabel: "Album details", current: selectedKey === "stats",
-    });
-    for (const field of model.fields || []) {
-      const presented = albumHeaderPresentField(field, model);
-      const fieldText = [presented.label, presented.required ? "*" : "", presented.kindText]
-        .filter(Boolean).join(" · ");
-      const fieldRow = albumSchemaCardButton(doc, body, fieldText, {
-        targetKey: `field:${field.key}`, className: "bob-album-schema-field",
-        ariaLabel: `Field ${presented.label}${presented.required ? ", required" : ""}${presented.kindText ? `, ${presented.kindText}` : ""}`,
-        current: selectedKey === `field:${field.key}`,
-      });
-      fieldRow.setAttribute("data-field-key", field.key);
-      if (field.line != null) fieldRow.setAttribute("data-yaml-line", String(field.line));
-      const fieldDetails = [];
-      if (presented.filledText) fieldDetails.push(presented.filledText);
-      if (presented.groupsIndex) fieldDetails.push("groups the index");
-      if (presented.subgroupsIndex) fieldDetails.push("sub-groups the index");
-      if (fieldDetails.length) {
-        const detail = notebookCreateEl(doc, "span", "bob-album-schema-target-detail");
-        notebookSetText(detail, fieldDetails.join(" · "));
-        fieldRow.appendChild(detail);
-      }
-      for (const choice of presented.choices || []) {
-        const key = `choice:${field.key}:${choice.value}`;
-        const chip = albumSchemaCardButton(doc, body, choice.display || choice.label, {
-          targetKey: key, className: "bob-album-schema-choice bob-album-schema-choice-button",
-          ariaLabel: `Choice ${choice.label} on ${presented.label}${Number.isInteger(choice.count) ? `, used by ${choice.count} records` : ""}`,
-          current: selectedKey === key,
-        });
-        chip.setAttribute("data-field-key", field.key);
-        chip.setAttribute("data-choice-value", choice.value);
-      }
-      if (field.kind === "choices") {
-        const key = `add-choice:${field.key}`;
-        albumSchemaCardButton(doc, body, "+ Add choice", {
-          targetKey: key, className: "bob-album-schema-add-choice",
-          ariaLabel: `Add choice to ${presented.label}`, current: selectedKey === key,
-        });
-      }
-    }
-    for (const pattern of model.legacy || []) {
-      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
-      notebookSetText(chip, pattern);
-      body.appendChild(chip);
-    }
-    for (const issue of model.issues || []) {
-      albumSchemaCardButton(doc, body, albumHeaderIssueText(issue), {
-        targetKey: albumHeaderIssueKey(issue),
-        className: `bob-album-schema-issue is-${issue.severity}`,
-        ariaLabel: `Schema issue: ${albumHeaderIssueText(issue)}`,
-        current: selectedKey === albumHeaderIssueKey(issue),
-      });
-    }
-    albumSchemaCardButton(doc, body, "+ Add field", {
-      targetKey: "add-field", className: "bob-album-schema-add-field",
-      ariaLabel: "Add field", current: selectedKey === "add-field",
-    });
-  } else if (!model.emptySchema || model.schemaInvalid) {
-    const presented = (model.fields || []).map((field) => albumHeaderPresentField(field, model));
-    presented.forEach((field, index) => {
-      const row = albumSchemaPaintField(doc, field, options);
-      if (!row) return;
-      if (index === (options?.selectedIndex || 0)) {
-        const cls = `${row.getAttribute("class") || ""} is-selected`.trim();
-        row.setAttribute("class", cls);
-        row.setAttribute("aria-current", "true");
-      }
-      body.appendChild(row);
-    });
-    for (const pattern of model.legacy || []) {
-      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
-      notebookSetText(chip, pattern);
-      body.appendChild(chip);
-    }
-  }
-  card.appendChild(body);
-
-  if (editable && options.stage) {
-    const panel = albumSchemaStageBuildEl(options.stage, model, options, doc);
-    if (panel) card.appendChild(panel);
-  }
-
-  const status = notebookCreateEl(doc, "div", "bob-album-schema-consequence");
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  const report = state.preview || null;
-  if (report) {
-    const consequence = notebookCreateEl(doc, "p", "bob-album-schema-consequence-text");
-    notebookSetText(consequence, state.consequence || report.consequence || "No schema changes.");
-    status.appendChild(consequence);
-    for (const op of Array.isArray(report.per_op) ? report.per_op : []) {
-      const details = [];
-      if (Number.isInteger(op.filled)) details.push(`${op.filled} filled`);
-      if (Number.isInteger(op.count)) details.push(`${op.count} affected`);
-      if (Number.isInteger(op.newly_invalid) && op.newly_invalid > 0) details.push(`${op.newly_invalid} newly invalid`);
-      if (!details.length) continue;
-      const line = notebookCreateEl(doc, "p", "bob-album-schema-consequence-counts");
-      notebookSetText(line, `${op.summary}: ${details.join(" · ")}`);
-      status.appendChild(line);
-    }
-    const derivedKeys = Array.isArray(report.derived_keys) ? report.derived_keys.filter((key) => typeof key === "string" && key) : [];
-    const perOpKeys = (Array.isArray(report.per_op) ? report.per_op : [])
-      .map((op) => op?.derived_key).filter((key) => typeof key === "string" && key);
-    const keys = [...new Set(derivedKeys.concat(perOpKeys))];
-    if (keys.length) {
-      const derived = notebookCreateEl(doc, "p", "bob-album-schema-derived-keys");
-      notebookSetText(derived, `bob will use key${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}`);
-      status.appendChild(derived);
-    }
-  } else if (state.busy) {
-    notebookSetText(status, state.status === "applying" ? "Saving the schema edit…" : "Previewing this edit…");
-  } else if (state.refusal) {
-    const message = notebookCreateEl(doc, "p", "bob-album-schema-refusal");
-    notebookSetText(message, state.refusal.message || "The schema edit was refused.");
-    status.appendChild(message);
-    const identity = [
-      state.refusal.field ? `field ${state.refusal.field}` : "",
-      state.refusal.choice ? `choice ${state.refusal.choice}` : "",
-      state.refusal.keyPath ? `at ${state.refusal.keyPath}` : "",
-      state.refusal.path ? `${state.refusal.path}${Number.isInteger(state.refusal.line) ? `:${state.refusal.line}` : ""}` : "",
-    ].filter(Boolean);
-    if (identity.length) {
-      const detail = notebookCreateEl(doc, "p", "bob-album-schema-refusal-identity");
-      notebookSetText(detail, identity.join(" · "));
-      status.appendChild(detail);
-    }
-    if (state.refusal.hint) {
-      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
-      notebookSetText(hint, state.refusal.hint);
-      status.appendChild(hint);
-    }
-    if (Number.isInteger(state.refusal.affected)) {
-      const count = notebookCreateEl(doc, "p", "bob-album-schema-refusal-count");
-      notebookSetText(count, `${state.refusal.affected} records are affected.`);
-      status.appendChild(count);
-    }
-  } else if (options.editingUnavailable) {
-    notebookSetText(status, options.editingUnavailable);
-  }
-  if (state.syncWarning) {
-    const warning = notebookCreateEl(doc, "p", "bob-album-schema-sync-warning");
-    notebookSetText(warning, state.syncWarning.message || "Saved locally; sync failed.");
-    status.appendChild(warning);
-    if (state.syncWarning.hint) {
-      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
-      notebookSetText(hint, state.syncWarning.hint);
-      status.appendChild(hint);
-    }
-  }
-  card.appendChild(status);
-
-  if (editable) {
-    const actions = notebookCreateEl(doc, "div", "bob-album-schema-toolbar");
-    const target = albumSchemaTargetByKey(model, options.selectedKey);
-    const fresh = options.fresh === true;
-    const disabled = !fresh || Boolean(state.busy) || Boolean(options.stage);
-    const action = (text, name, blocked = disabled) => albumSchemaCardButton(doc, actions, text, {
-      action: name, className: "bob-album-schema-action", ariaLabel: text,
-      disabled: blocked,
-    });
-    action("Edit", "edit", disabled || !["stats", "field", "choice"].includes(target?.kind));
-    action("Add field", "add-field", disabled);
-    action("Add choice", "add-choice", disabled || !["field", "choice", "add-choice"].includes(target?.kind));
-    action("Toggle required", "toggle-required", disabled || target?.kind !== "field");
-    action("Toggle suggest", "toggle-suggest", disabled || target?.kind !== "field");
-    action("Move up", "move-up", disabled || !["field", "choice"].includes(target?.kind));
-    action("Move down", "move-down", disabled || !["field", "choice"].includes(target?.kind));
-    action("Remove", "remove", disabled || !["field", "choice"].includes(target?.kind));
-    action("YAML", "yaml", false);
-    action("Undo", "undo", disabled || !state.undoAvailable);
-    if (state.syncWarning) action("Retry sync", "retry-sync", Boolean(state.busy));
-    if (state.canApply && fresh) action("Apply", "apply", Boolean(state.busy) || !fresh);
-    if (state.refusal?.kind === "stale") {
-      action(options.hasFreshReplacement ? "Preview retained edit against updated schema" : "Refresh schema", "rebase-preview", Boolean(state.busy));
-    } else if (state.refusal?.kind === "timeout-unknown") {
-      action(options.hasFreshReplacement ? "Preview retained edit after refresh" : "Refresh to reconcile outcome", options.hasFreshReplacement ? "rebase-preview" : "refresh-schema", Boolean(state.busy));
-    } else if (state.status === "refused" && state.draftOps?.length && fresh) {
-      action("Preview again", "preview", Boolean(state.busy));
-    }
-    if (options.stage) action("Cancel stage", "cancel-stage", Boolean(state.busy));
-    action("Close", "close", false);
-    card.appendChild(actions);
-  }
-
-  const footer = notebookCreateEl(doc, "p", "bob-album-schema-dialog-footer bob-key-card-footer");
-  notebookSetText(footer, editable
-    ? "⏎ edit / apply   a add field   c add choice   ! required   s suggest   ⌥J/K move   ⌃D remove   y YAML   u undo   esc cancel / close"
-    : "↑/↓ navigate   y YAML   esc close");
-  card.appendChild(footer);
-  return card;
 }
 
 function albumSchemaSaveOpenEditors(plugin, paths) {
@@ -91185,6 +90951,660 @@ function albumSchemaSaveOpenEditors(plugin, paths) {
   })();
 }
 
+// ---- src/241yc-plugin-album-schema-card-regions.js ----
+// Stable Schema Card regions, visual language, and hint-strip catalog.
+// Painters refill one region at a time so session previews never rebuild
+// the shell, body, or open stage inputs.
+
+function albumSchemaRegionEmpty(node) {
+  if (!node) return;
+  try {
+    if (typeof node.empty === "function") {
+      node.empty();
+      return;
+    }
+  } catch (_) {}
+  try {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  } catch (_) {}
+}
+
+function albumSchemaCardRegion(card, name) {
+  if (!card || !name) return null;
+  const nodes = card.querySelectorAll?.("[data-schema-region]") || [];
+  for (const node of nodes) {
+    if (node.getAttribute?.("data-schema-region") === name) return node;
+  }
+  return null;
+}
+
+function albumSchemaCardTrail(model) {
+  const crumbs = (model?.crumbs || []).map((crumb) => crumb.title || crumb.stem).filter(Boolean);
+  if (crumbs.length <= 1) return "";
+  return crumbs.slice(0, -1).join(" › ");
+}
+
+function albumSchemaCardStageKey(stage) {
+  return stage ? `${stage.kind}:${stage.targetKey || ""}` : "";
+}
+
+function albumSchemaCardAppendPill(doc, host, text, className) {
+  if (!host || !text) return null;
+  const pill = notebookCreateEl(doc, "span", `bob-album-schema-pill ${className || ""}`.trim());
+  notebookSetText(pill, text);
+  host.appendChild(pill);
+  return pill;
+}
+
+function albumSchemaCardPaintChoiceChip(doc, host, field, choice, options) {
+  const selectedKey = options?.selectedKey || "";
+  const key = `choice:${field.key}:${choice.value}`;
+  const parts = albumSchemaChoiceParts(choice.label || choice.display || "");
+  const label = parts.label || String(choice.label || choice.value || "");
+  const count = Number.isInteger(choice.count) ? choice.count : null;
+  const ariaCount = count == null ? "" : `, used by ${count} records`;
+  const chip = albumSchemaCardButton(doc, host, "", {
+    targetKey: key,
+    className: "bob-album-schema-choice bob-album-schema-choice-button",
+    ariaLabel: `Choice ${label} on ${field.label || field.key}${ariaCount}`,
+    current: selectedKey === key,
+  });
+  chip.setAttribute("data-field-key", field.key);
+  chip.setAttribute("data-choice-value", choice.value);
+  if (parts.emoji) {
+    const glyph = notebookCreateEl(doc, "span", "bob-album-schema-choice-glyph");
+    notebookSetText(glyph, parts.emoji);
+    chip.appendChild(glyph);
+    if (label) chip.appendChild(doc.createTextNode(" "));
+  }
+  const name = notebookCreateEl(doc, "span", "bob-album-schema-choice-label");
+  notebookSetText(name, label);
+  chip.appendChild(name);
+  if (count != null) {
+    chip.appendChild(doc.createTextNode(" "));
+    const pill = notebookCreateEl(doc, "span", `bob-album-schema-count-pill${count === 0 ? " is-zero" : ""}`);
+    notebookSetText(pill, String(count));
+    chip.appendChild(pill);
+  }
+  return chip;
+}
+
+function albumSchemaCardPaintFieldPills(doc, host, field) {
+  const pills = notebookCreateEl(doc, "span", "bob-album-schema-pills");
+  if (field.required) albumSchemaCardAppendPill(doc, pills, "required", "is-required");
+  if (field.kindText) albumSchemaCardAppendPill(doc, pills, field.kindText, "is-kind");
+  if (field.groupsIndex) albumSchemaCardAppendPill(doc, pills, "groups index", "is-index");
+  if (field.subgroupsIndex) albumSchemaCardAppendPill(doc, pills, "sub-groups index", "is-index");
+  if (pills.children.length) host.appendChild(pills);
+  return pills;
+}
+
+function albumSchemaCardPaintFieldRow(doc, host, field, options) {
+  const selectedKey = options?.selectedKey || "";
+  const editable = options?.editable === true;
+  const key = `field:${field.key}`;
+  const aria = `Field ${field.label}${field.required ? ", required" : ""}${field.kindText ? `, ${field.kindText}` : ""}`;
+  let row;
+  if (editable) {
+    row = albumSchemaCardButton(doc, host, "", {
+      targetKey: key,
+      className: "bob-album-schema-field",
+      ariaLabel: aria,
+      current: selectedKey === key,
+    });
+  } else {
+    row = notebookCreateEl(doc, "div", `bob-album-schema-field${selectedKey === key ? " is-selected" : ""}`);
+    if (selectedKey === key) row.setAttribute("aria-current", "true");
+    host.appendChild(row);
+  }
+  row.setAttribute("data-field-key", field.key);
+  if (field.line != null) row.setAttribute("data-yaml-line", String(field.line));
+  const main = notebookCreateEl(doc, "span", "bob-album-schema-field-main");
+  const label = notebookCreateEl(doc, "span", "bob-album-schema-label");
+  notebookSetText(label, field.label);
+  main.appendChild(label);
+  albumSchemaCardPaintFieldPills(doc, main, field);
+  row.appendChild(main);
+  if (field.filledText) {
+    const filled = notebookCreateEl(doc, "span", "bob-album-schema-filled");
+    notebookSetText(filled, field.filledText);
+    row.appendChild(filled);
+  }
+  return row;
+}
+
+function albumSchemaCardPaintHeader(card, model, options, doc) {
+  const host = albumSchemaCardRegion(card, "header");
+  if (!host || !doc) return;
+  albumSchemaRegionEmpty(host);
+  const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
+  notebookSetText(title, albumSchemaCardTitle(model));
+  host.appendChild(title);
+  const trail = albumSchemaCardTrail(model);
+  if (trail) {
+    const crumb = notebookCreateEl(doc, "p", "bob-album-schema-dialog-crumb");
+    crumb.setAttribute("title", trail);
+    notebookSetText(crumb, trail);
+    host.appendChild(crumb);
+  }
+  const statsText = albumHeaderStatsText(model);
+  if (options?.editable === true) {
+    albumSchemaCardButton(doc, host, statsText, {
+      targetKey: "stats",
+      className: "bob-album-schema-stats-target bob-album-schema-dialog-subtitle",
+      ariaLabel: "Album details",
+      current: (options.selectedKey || "stats") === "stats",
+    });
+  } else if (statsText) {
+    const stats = notebookCreateEl(doc, "p", "bob-album-schema-dialog-subtitle bob-album-schema-dialog-stats");
+    notebookSetText(stats, statsText);
+    host.appendChild(stats);
+  }
+}
+
+function albumSchemaCardPaintLint(card, model, options, doc) {
+  const host = albumSchemaCardRegion(card, "lint");
+  if (!host || !doc) return;
+  albumSchemaRegionEmpty(host);
+  const issues = Array.isArray(model?.issues) ? model.issues : [];
+  if (!issues.length) {
+    host.setAttribute("hidden", "");
+    return;
+  }
+  host.removeAttribute("hidden");
+  host.setAttribute("class", "bob-album-schema-dialog-lint");
+  host.setAttribute("role", "status");
+  const list = notebookCreateEl(doc, "ul", "bob-album-schema-issues");
+  list.setAttribute("aria-label", "Album schema issues");
+  for (const issue of issues) {
+    const item = albumSchemaPaintIssue(doc, issue, options);
+    if (item) list.appendChild(item);
+  }
+  host.appendChild(list);
+}
+
+function albumSchemaCardPaintBody(card, model, options, doc) {
+  const host = albumSchemaCardRegion(card, "body");
+  if (!host || !doc) return;
+  albumSchemaRegionEmpty(host);
+  const editable = options?.editable === true;
+  const selectedKey = options?.selectedKey || "stats";
+  if (model.emptySchema && !model.schemaInvalid) {
+    const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
+    notebookSetText(empty, albumHeaderSummaryText(model));
+    host.appendChild(empty);
+  }
+  if (editable) {
+    for (const field of model.fields || []) {
+      const presented = albumHeaderPresentField(field, model);
+      albumSchemaCardPaintFieldRow(doc, host, presented, options);
+      if (presented.choices?.length || field.kind === "choices") {
+        const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        for (const choice of presented.choices || []) {
+          albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+        }
+        if (field.kind === "choices") {
+          const addKey = `add-choice:${field.key}`;
+          albumSchemaCardButton(doc, cloud, "+ choice", {
+            targetKey: addKey,
+            className: "bob-album-schema-add-choice is-dashed",
+            ariaLabel: `Add choice to ${presented.label}`,
+            current: selectedKey === addKey,
+          });
+        }
+        host.appendChild(cloud);
+      }
+    }
+    for (const pattern of model.legacy || []) {
+      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
+      notebookSetText(chip, pattern);
+      host.appendChild(chip);
+    }
+    for (const issue of model.issues || []) {
+      albumSchemaCardButton(doc, host, albumHeaderIssueText(issue), {
+        targetKey: albumHeaderIssueKey(issue),
+        className: `bob-album-schema-issue is-${issue.severity}`,
+        ariaLabel: `Schema issue: ${albumHeaderIssueText(issue)}`,
+        current: selectedKey === albumHeaderIssueKey(issue),
+      });
+    }
+    albumSchemaCardButton(doc, host, "+ field", {
+      targetKey: "add-field",
+      className: "bob-album-schema-add-field is-dashed",
+      ariaLabel: "Add field",
+      current: selectedKey === "add-field",
+    });
+    return;
+  }
+  if (!model.emptySchema || model.schemaInvalid) {
+    const presented = (model.fields || []).map((field) => albumHeaderPresentField(field, model));
+    presented.forEach((field, index) => {
+      const selected = index === (options?.selectedIndex || 0);
+      albumSchemaCardPaintFieldRow(doc, host, field, {
+        selectedKey: selected ? `field:${field.key}` : "",
+      });
+      if (field.choices?.length) {
+        const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        for (const choice of field.choices) {
+          const chip = notebookCreateEl(doc, "span", "bob-album-schema-choice");
+          const parts = albumSchemaChoiceParts(choice.label || choice.display || "");
+          if (parts.emoji) {
+            const glyph = notebookCreateEl(doc, "span", "bob-album-schema-choice-glyph");
+            notebookSetText(glyph, parts.emoji);
+            chip.appendChild(glyph);
+            if (parts.label) chip.appendChild(doc.createTextNode(" "));
+          }
+          const name = notebookCreateEl(doc, "span", "bob-album-schema-choice-label");
+          notebookSetText(name, parts.label || choice.label || "");
+          chip.appendChild(name);
+          if (Number.isInteger(choice.count)) {
+            chip.appendChild(doc.createTextNode(" "));
+            const pill = notebookCreateEl(doc, "span", `bob-album-schema-count-pill${choice.count === 0 ? " is-zero" : ""}`);
+            notebookSetText(pill, String(choice.count));
+            chip.appendChild(pill);
+          }
+          cloud.appendChild(chip);
+        }
+        host.appendChild(cloud);
+      }
+    });
+    for (const pattern of model.legacy || []) {
+      const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
+      notebookSetText(chip, pattern);
+      host.appendChild(chip);
+    }
+  }
+}
+
+function albumSchemaCardPaintSelection(card, selectedKey) {
+  if (!card) return;
+  const targets = card.querySelectorAll?.("[data-target-key]") || [];
+  for (const target of targets) {
+    const current = target.getAttribute?.("data-target-key") === selectedKey;
+    if (current) {
+      target.classList?.add?.("is-selected");
+      target.setAttribute("aria-current", "true");
+    } else {
+      target.classList?.remove?.("is-selected");
+      target.removeAttribute("aria-current");
+    }
+  }
+}
+
+function albumSchemaCardPaintStage(card, model, options, doc) {
+  const host = albumSchemaCardRegion(card, "stage");
+  if (!host || !doc) return;
+  const key = albumSchemaCardStageKey(options?.stage);
+  const current = host.getAttribute("data-stage-key") || "";
+  if (!options?.stageForce && key === current && (key === "" || host.firstChild)) {
+    albumSchemaCardPaintStageStatus(card, options);
+    return;
+  }
+  albumSchemaRegionEmpty(host);
+  if (key) host.setAttribute("data-stage-key", key);
+  else host.removeAttribute("data-stage-key");
+  if (!options?.stage) return;
+  const panel = albumSchemaStageBuildEl(options.stage, model, options, doc);
+  if (panel) host.appendChild(panel);
+  albumSchemaCardPaintStageStatus(card, options);
+}
+
+function albumSchemaCardPaintStageStatus(card, options) {
+  const host = albumSchemaCardRegion(card, "stage");
+  if (!host) return;
+  const state = options?.state || {};
+  const locked = options?.stageLocked === true;
+  const latched = options?.enterLatched === true;
+  const save = host.querySelector?.('[data-schema-action="apply"]')
+    || host.querySelector?.('[data-schema-action="submit-stage"]');
+  if (save) {
+    save.disabled = locked || (!(state.canApply === true) && !latched);
+    const label = latched ? "Saving as soon as bob confirms…" : "Save ⏎";
+    notebookSetText(save, label);
+    save.setAttribute("aria-label", label);
+  }
+  const cancel = host.querySelector?.('[data-schema-action="cancel-stage"]');
+  if (cancel) cancel.disabled = locked;
+  const inputs = host.querySelectorAll?.("[data-schema-input]") || [];
+  for (const input of inputs) input.disabled = locked;
+  const actions = host.querySelectorAll?.("[data-schema-action]") || [];
+  for (const action of actions) {
+    const name = action.getAttribute?.("data-schema-action") || "";
+    if (name === "apply" || name === "submit-stage" || name === "cancel-stage") continue;
+    if (name.startsWith("remove-initial-choice") || name === "add-initial-choice" || name.startsWith("unset-")) {
+      action.disabled = locked;
+    }
+  }
+}
+
+function albumSchemaCardStatusTone(state, options) {
+  if (options?.enterLatched) return "is-previewing";
+  if (state?.status === "applying") return "is-previewing";
+  if (state?.status === "preview-pending" || state?.busy) return "is-previewing";
+  if (state?.refusal) return "is-refused";
+  if (state?.status === "saved-with-sync-warning" || state?.syncWarning) return "is-confirm";
+  if (state?.canApply) return "is-ready";
+  if (state?.status === "saved") return "is-saved";
+  if (options?.editingUnavailable) return "is-idle";
+  return "";
+}
+
+function albumSchemaCardPaintStatus(card, options, doc) {
+  const host = albumSchemaCardRegion(card, "status");
+  if (!host || !doc) return;
+  const state = options?.state || {};
+  const report = state.preview || null;
+  albumSchemaRegionEmpty(host);
+  host.setAttribute("class", "bob-album-schema-consequence bob-album-schema-status");
+  host.setAttribute("role", "status");
+  host.setAttribute("aria-live", "polite");
+  const tone = albumSchemaCardStatusTone(state, options);
+  if (tone) {
+    const cls = `${host.getAttribute("class") || ""} ${tone}`.trim();
+    host.setAttribute("class", cls);
+  }
+  let filled = false;
+  if (options?.enterLatched) {
+    notebookSetText(host, "Saving as soon as bob confirms…");
+    filled = true;
+  } else if (report) {
+    const consequence = notebookCreateEl(doc, "p", "bob-album-schema-consequence-text");
+    notebookSetText(consequence, state.consequence || report.consequence || "No schema changes.");
+    host.appendChild(consequence);
+    filled = true;
+    for (const op of Array.isArray(report.per_op) ? report.per_op : []) {
+      const details = [];
+      if (Number.isInteger(op.filled)) details.push(`${op.filled} filled`);
+      if (Number.isInteger(op.count)) details.push(`${op.count} affected`);
+      if (Number.isInteger(op.newly_invalid) && op.newly_invalid > 0) details.push(`${op.newly_invalid} newly invalid`);
+      if (!details.length) continue;
+      const line = notebookCreateEl(doc, "p", "bob-album-schema-consequence-counts");
+      notebookSetText(line, `${op.summary}: ${details.join(" · ")}`);
+      host.appendChild(line);
+    }
+    const derivedKeys = Array.isArray(report.derived_keys) ? report.derived_keys.filter((key) => typeof key === "string" && key) : [];
+    const perOpKeys = (Array.isArray(report.per_op) ? report.per_op : [])
+      .map((op) => op?.derived_key).filter((key) => typeof key === "string" && key);
+    const keys = [...new Set(derivedKeys.concat(perOpKeys))];
+    if (keys.length) {
+      const derived = notebookCreateEl(doc, "p", "bob-album-schema-derived-keys");
+      notebookSetText(derived, `bob will use key${keys.length === 1 ? "" : "s"}: ${keys.join(", ")}`);
+      host.appendChild(derived);
+    }
+  } else if (state.busy) {
+    notebookSetText(host, state.status === "applying" ? "Saving the schema edit…" : "Previewing this edit…");
+    filled = true;
+  } else if (state.refusal) {
+    const message = notebookCreateEl(doc, "p", "bob-album-schema-refusal");
+    notebookSetText(message, state.refusal.message || "The schema edit was refused.");
+    host.appendChild(message);
+    filled = true;
+    const identity = [
+      state.refusal.field ? `field ${state.refusal.field}` : "",
+      state.refusal.choice ? `choice ${state.refusal.choice}` : "",
+      state.refusal.keyPath ? `at ${state.refusal.keyPath}` : "",
+      state.refusal.path ? `${state.refusal.path}${Number.isInteger(state.refusal.line) ? `:${state.refusal.line}` : ""}` : "",
+    ].filter(Boolean);
+    if (identity.length) {
+      const detail = notebookCreateEl(doc, "p", "bob-album-schema-refusal-identity");
+      notebookSetText(detail, identity.join(" · "));
+      host.appendChild(detail);
+    }
+    if (state.refusal.hint) {
+      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
+      notebookSetText(hint, state.refusal.hint);
+      host.appendChild(hint);
+    }
+    if (Number.isInteger(state.refusal.affected)) {
+      const count = notebookCreateEl(doc, "p", "bob-album-schema-refusal-count");
+      notebookSetText(count, `${state.refusal.affected} records are affected.`);
+      host.appendChild(count);
+    }
+  } else if (options?.editingUnavailable) {
+    notebookSetText(host, options.editingUnavailable);
+    filled = true;
+  }
+  if (state.syncWarning) {
+    const warning = notebookCreateEl(doc, "p", "bob-album-schema-sync-warning");
+    notebookSetText(warning, state.syncWarning.message || "Saved locally; sync failed.");
+    host.appendChild(warning);
+    filled = true;
+    if (state.syncWarning.hint) {
+      const hint = notebookCreateEl(doc, "p", "bob-album-schema-refusal-hint");
+      notebookSetText(hint, state.syncWarning.hint);
+      host.appendChild(hint);
+    }
+    albumSchemaCardButton(doc, host, "Retry sync", {
+      action: "retry-sync",
+      className: "bob-album-schema-action",
+      ariaLabel: "Retry sync",
+      disabled: Boolean(state.busy),
+    });
+  }
+  if (state.refusal?.kind === "stale") {
+    const label = options?.hasFreshReplacement
+      ? "Preview retained edit against updated schema"
+      : "Refresh schema";
+    albumSchemaCardButton(doc, host, label, {
+      action: "rebase-preview",
+      className: "bob-album-schema-action",
+      ariaLabel: label,
+      disabled: Boolean(state.busy),
+    });
+    filled = true;
+  } else if (state.refusal?.kind === "timeout-unknown") {
+    const hasFresh = Boolean(options?.hasFreshReplacement);
+    const label = hasFresh ? "Preview retained edit after refresh" : "Refresh to reconcile outcome";
+    albumSchemaCardButton(doc, host, label, {
+      action: hasFresh ? "rebase-preview" : "refresh-schema",
+      className: "bob-album-schema-action",
+      ariaLabel: label,
+      disabled: Boolean(state.busy),
+    });
+    filled = true;
+  } else if (state.status === "refused" && state.draftOps?.length && options?.fresh) {
+    albumSchemaCardButton(doc, host, "Preview again", {
+      action: "preview",
+      className: "bob-album-schema-action",
+      ariaLabel: "Preview again",
+      disabled: Boolean(state.busy),
+    });
+    filled = true;
+  }
+  if (filled) host.removeAttribute("hidden");
+  else host.setAttribute("hidden", "");
+}
+
+function albumSchemaCardHintItems(model, options) {
+  const editable = options?.editable === true;
+  const state = options?.state || {};
+  const fresh = options?.fresh === true;
+  const busy = Boolean(state.busy);
+  const stage = options?.stage;
+  const gated = !fresh || busy || Boolean(stage);
+  const target = albumSchemaTargetByKey(model, options?.selectedKey);
+  const items = [];
+  if (!editable) {
+    return [
+      { keys: "↑/↓", label: "navigate" },
+      { keys: "y", label: "YAML", action: "yaml" },
+      { keys: "esc", label: "close", action: "close" },
+    ];
+  }
+  if (stage) {
+    items.push({
+      keys: "⏎",
+      label: options?.enterLatched ? "saving" : "save",
+      action: "apply",
+      enabled: state.canApply === true || options?.enterLatched === true,
+    });
+    items.push({ keys: "esc", label: "cancel", action: "cancel-stage", enabled: !busy });
+    items.push({ keys: "y", label: "YAML", action: "yaml" });
+    return items;
+  }
+  if (state.canApply && fresh) {
+    items.push({ keys: "⏎", label: "apply", action: "apply", enabled: !busy && fresh });
+  } else if (["stats", "field", "choice"].includes(target?.kind)) {
+    items.push({ keys: "⏎", label: "edit", action: "edit", enabled: !gated });
+  } else if (target?.kind === "add-field") {
+    items.push({ keys: "⏎", label: "add field", action: "add-field", enabled: !gated });
+  } else if (target?.kind === "add-choice") {
+    items.push({ keys: "⏎", label: "add choice", action: "add-choice", enabled: !gated });
+  } else if (target?.kind === "issue") {
+    items.push({ keys: "⏎", label: "YAML", action: "yaml" });
+  }
+  items.push({ keys: "a", label: "add field", action: "add-field", enabled: !gated });
+  if (["field", "choice", "add-choice"].includes(target?.kind)) {
+    items.push({ keys: "c", label: "add choice", action: "add-choice", enabled: !gated });
+  }
+  if (target?.kind === "field") {
+    items.push({ keys: "!", label: "required", action: "toggle-required", enabled: !gated });
+    items.push({ keys: "s", label: "suggest", action: "toggle-suggest", enabled: !gated });
+  }
+  if (["field", "choice"].includes(target?.kind)) {
+    items.push({ keys: "⌥J/K", label: "move", action: "move-down", enabled: !gated });
+    items.push({ keys: "⌃D", label: "remove", action: "remove", enabled: !gated });
+  }
+  items.push({ keys: "y", label: "YAML", action: "yaml" });
+  if (state.undoAvailable) items.push({ keys: "u", label: "undo", action: "undo", enabled: !gated });
+  items.push({ keys: "esc", label: "close", action: "close" });
+  return items.filter((item) => item.enabled !== false);
+}
+
+function albumSchemaCardAllActions(model, options) {
+  const target = albumSchemaTargetByKey(model, options?.selectedKey);
+  const state = options?.state || {};
+  const fresh = options?.fresh === true;
+  const busy = Boolean(state.busy);
+  const stage = Boolean(options?.stage);
+  const gated = !fresh || busy || stage;
+  const field = target?.kind === "field";
+  const choice = target?.kind === "choice";
+  const editableRow = ["stats", "field", "choice"].includes(target?.kind);
+  const addChoiceOk = ["field", "choice", "add-choice"].includes(target?.kind);
+  const stale = state.refusal?.kind === "stale";
+  const timeout = state.refusal?.kind === "timeout-unknown";
+  const hasFresh = Boolean(options?.hasFreshReplacement);
+  const actions = [
+    { action: "edit", text: "Edit", enabled: !gated && editableRow },
+    { action: "add-field", text: "Add field", enabled: !gated },
+    { action: "add-choice", text: "Add choice", enabled: !gated && addChoiceOk },
+    { action: "toggle-required", text: "Toggle required", enabled: !gated && field },
+    { action: "toggle-suggest", text: "Toggle suggest", enabled: !gated && field },
+    { action: "move-up", text: "Move up", enabled: !gated && (field || choice) },
+    { action: "move-down", text: "Move down", enabled: !gated && (field || choice) },
+    { action: "remove", text: "Remove", enabled: !gated && (field || choice) },
+    { action: "yaml", text: "YAML", enabled: true },
+    { action: "undo", text: "Undo", enabled: !gated && Boolean(state.undoAvailable) },
+    { action: "apply", text: "Save", enabled: Boolean(state.canApply) && fresh && !busy },
+    { action: "close", text: "Close", enabled: true },
+  ];
+  if (state.syncWarning) {
+    actions.push({ action: "retry-sync", text: "Retry sync", enabled: !busy });
+  }
+  if (stale) {
+    actions.push({
+      action: "rebase-preview",
+      text: hasFresh ? "Preview retained edit against updated schema" : "Refresh schema",
+      enabled: !busy,
+    });
+  } else if (timeout) {
+    actions.push({
+      action: hasFresh ? "rebase-preview" : "refresh-schema",
+      text: hasFresh ? "Preview retained edit after refresh" : "Refresh to reconcile outcome",
+      enabled: !busy,
+    });
+  } else if (state.status === "refused" && state.draftOps?.length && fresh) {
+    actions.push({ action: "preview", text: "Preview again", enabled: !busy });
+  }
+  if (stage) actions.push({ action: "cancel-stage", text: "Cancel", enabled: !busy });
+  return actions;
+}
+
+function albumSchemaCardPaintHints(card, model, options, doc) {
+  const host = albumSchemaCardRegion(card, "hints");
+  if (!host || !doc) return;
+  albumSchemaRegionEmpty(host);
+  host.setAttribute("class", "bob-album-schema-hints bob-album-schema-dialog-footer bob-key-card-footer");
+  const strip = notebookCreateEl(doc, "div", "bob-album-schema-hint-strip");
+  for (const item of albumSchemaCardHintItems(model, options)) {
+    const row = notebookCreateEl(doc, "span", "bob-album-schema-hint");
+    const key = notebookCreateEl(doc, "kbd", "");
+    notebookSetText(key, item.keys);
+    row.appendChild(key);
+    if (typeof doc.createTextNode === "function") row.appendChild(doc.createTextNode(" "));
+    const label = notebookCreateEl(doc, "span", "bob-album-schema-hint-label");
+    notebookSetText(label, item.label);
+    row.appendChild(label);
+    strip.appendChild(row);
+  }
+  if (options?.editable === true) {
+    const more = albumSchemaCardButton(doc, strip, "⋯", {
+      action: "more",
+      className: "bob-album-schema-more-toggle is-quiet",
+      ariaLabel: "All actions",
+    });
+    more.setAttribute("aria-expanded", options.moreOpen === true ? "true" : "false");
+  }
+  host.appendChild(strip);
+  if (options?.editable === true) {
+    const list = notebookCreateEl(doc, "div", "bob-album-schema-more");
+    list.setAttribute("role", "group");
+    list.setAttribute("aria-label", "All actions");
+    if (options.moreOpen !== true) list.setAttribute("hidden", "");
+    const heading = notebookCreateEl(doc, "p", "bob-album-schema-more-title");
+    notebookSetText(heading, "All actions");
+    list.appendChild(heading);
+    for (const item of albumSchemaCardAllActions(model, options)) {
+      albumSchemaCardButton(doc, list, item.text, {
+        action: item.action,
+        className: "bob-album-schema-action",
+        ariaLabel: item.text,
+        disabled: item.enabled === false,
+      });
+    }
+    host.appendChild(list);
+  }
+}
+
+function albumSchemaCardPaintAll(card, model, options, doc) {
+  if (!card || !doc) return;
+  albumSchemaCardPaintHeader(card, model, options, doc);
+  albumSchemaCardPaintLint(card, model, options, doc);
+  albumSchemaCardPaintBody(card, model, options, doc);
+  albumSchemaCardPaintStage(card, model, { ...options, stageForce: true }, doc);
+  albumSchemaCardPaintStatus(card, options, doc);
+  albumSchemaCardPaintHints(card, model, options, doc);
+}
+
+function albumSchemaCardBuildEl(model, options, doc) {
+  const card = notebookCreateEl(doc, "div", "bob-album-schema-dialog bob-key-card");
+  if (!card) return null;
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.setAttribute("aria-label", "Album schema editor");
+  const regions = [
+    ["header", "bob-album-schema-dialog-header"],
+    ["lint", "bob-album-schema-dialog-lint"],
+    ["body", "bob-album-schema-dialog-body"],
+    ["stage", "bob-album-schema-stage-host"],
+    ["status", "bob-album-schema-consequence bob-album-schema-status"],
+    ["hints", "bob-album-schema-hints bob-album-schema-dialog-footer bob-key-card-footer"],
+  ];
+  for (const [name, className] of regions) {
+    const region = notebookCreateEl(doc, "div", className);
+    region.setAttribute("data-schema-region", name);
+    if (name === "status") {
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+      region.setAttribute("hidden", "");
+    }
+    if (name === "lint") region.setAttribute("hidden", "");
+    card.appendChild(region);
+  }
+  albumSchemaCardPaintAll(card, model, options || {}, doc);
+  return card;
+}
 // ---- src/241y-plugin-album-schema-card.js ----
 // Keyboard-first, editable album Schema Card. It stages one gesture at a
 // time, asks bob for a dry-run consequence, and applies only that preview.
@@ -91205,6 +91625,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.latestSchemaModel = null;
     this.schemaUnsubscribe = null;
     this.schemaStaleRefresh = null;
+    this.schemaEnterLatch = null;
+    this.schemaMoreOpen = false;
+    this.schemaStagePaintKey = "";
+    this.schemaComposing = false;
   }
 
   schemaFresh(state = null) {
@@ -91243,7 +91667,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (index < 0) return;
     this.selectedKey = key;
     this.selectedIndex = index;
-    this.paintSchemaCard();
+    this.paintSchemaCard("select");
   }
 
   schemaMove(delta) {
@@ -91254,17 +91678,18 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     index = (index + delta + targets.length) % targets.length;
     this.selectedIndex = index;
     this.selectedKey = targets[index].key;
-    this.paintSchemaCard();
+    this.paintSchemaCard("select");
   }
 
   schemaStage(kind, targetKey = this.selectedKey) {
     if (!this.session || !this.schemaFresh() || this.sessionState?.busy) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return false;
     }
     this.stage = { kind, targetKey };
     this.stageDraft = this.schemaCreateStageDraft(this.stage);
-    this.paintSchemaCard();
+    this.schemaMoreOpen = false;
+    this.paintSchemaCard("stage");
     return true;
   }
 
@@ -91325,55 +91750,6 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     return this.sessionState || {};
   }
 
-  paintSchemaCard() {
-    const host = this.contentEl;
-    if (!host) return;
-    const targets = this.schemaTargets();
-    if (targets.length && !targets.some((target) => target.key === this.selectedKey)) {
-      const index = Math.min(this.selectedIndex || 0, targets.length - 1);
-      this.selectedKey = targets[index].key;
-      this.selectedIndex = index;
-    }
-    try { host.empty?.(); } catch (_) { while (host.firstChild) host.removeChild(host.firstChild); }
-    const doc = notebookDomDoc(host) || host.ownerDocument || (typeof document !== "undefined" ? document : null);
-    const state = this.schemaState();
-    const card = albumSchemaCardBuildEl(this.schemaModel, {
-      selectedKey: this.selectedKey,
-      selectedIndex: this.selectedIndex,
-      desktop: true,
-      editable: Boolean(this.session),
-      fresh: this.schemaFresh(),
-      editingUnavailable: this.schemaUnavailable || (!this.schemaFresh()
-        ? this.schemaApplyNotice || "Editing waits for a fresh album report."
-        : ""),
-      state,
-      stage: this.stage,
-      stageDraft: this.stageDraft,
-      stageLocked: state.status === "applying" || !this.schemaFresh(),
-      hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
-      handlers: {
-        jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
-      },
-    }, doc);
-    if (card) host.appendChild(card);
-    if (this.stage) {
-      const wanted = this.stageDraft?.focusName;
-      const input = wanted
-        ? host.querySelector?.(`[data-schema-input="${wanted}"]`)
-        : host.querySelector?.(".bob-album-schema-stage [data-schema-input]");
-      try { input?.focus?.({ preventScroll: true }); } catch (_) {}
-      if (input && this.stageDraft && Number.isInteger(this.stageDraft.selectionStart) &&
-          typeof input.setSelectionRange === "function") {
-        try { input.setSelectionRange(this.stageDraft.selectionStart, this.stageDraft.selectionEnd, this.stageDraft.selectionDirection || "none"); } catch (_) {}
-      }
-    } else {
-      const selected = host.querySelector?.(`[data-target-key="${this.selectedKey}"]`)
-        || host.querySelector?.(".bob-album-schema-field.is-selected")
-        || host.querySelector?.(".bob-album-schema-issue");
-      try { selected?.focus?.({ preventScroll: true }); } catch (_) {}
-    }
-  }
-
   schemaStartSession() {
     const plugin = this.schemaPlugin;
     const model = this.schemaModel;
@@ -91395,7 +91771,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       saveEditors: (paths) => albumSchemaSaveOpenEditors(plugin, paths),
       onChange: (state) => {
         this.sessionState = state;
-        this.paintSchemaCard();
+        if (this.schemaMaybeFireEnterLatch(state)) return;
+        this.paintSchemaCard("session");
         if (["stale", "timeout-unknown"].includes(state.refusal?.kind)) void this.schemaRefreshAfterStale();
       },
     }));
@@ -91415,6 +91792,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   schemaAlbumState(state) {
     if (!state || !this.schemaModel) return;
     this.session?.noteGenerationChanged?.();
+    let rebuildBody = false;
     if (state.report) {
       const next = albumHeaderModel(state.report, this.schemaSourcePath, {
         sourcePath: this.schemaSourcePath,
@@ -91427,6 +91805,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
             ["browsing", "saved-with-sync-warning"].includes(session.status)) {
           this.schemaModel = next;
           this.latestSchemaModel = null;
+          rebuildBody = true;
           if (next.schemaFingerprint && next.schemaFingerprint !== session.expect) this.session?.rebase?.(next.schemaFingerprint);
           this.schemaRepairSelection();
         } else if (next.schemaFingerprint && (
@@ -91437,7 +91816,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         }
       }
     }
-    this.paintSchemaCard();
+    this.paintSchemaCard(rebuildBody ? "body" : "session");
   }
 
   schemaRepairSelection() {
@@ -91529,6 +91908,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     this.schemaStageRememberFocus(input);
     if (Object.is(previous, value)) return;
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
   }
 
@@ -91539,26 +91919,41 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const next = op ? [op] : [];
     const current = this.session.getState().draftOps || [];
     const changed = JSON.stringify(current) !== JSON.stringify(next);
-    if (changed) this.sessionState = this.session.setDraft(next);
+    if (changed) {
+      this.schemaClearEnterLatch();
+      this.sessionState = this.session.setDraft(next);
+    }
     if (immediate && next.length) void this.session.previewNow();
-    if (!changed && !immediate) this.paintSchemaCard();
+    if (!changed && !immediate) this.paintSchemaCard("session");
   }
 
   schemaStageAddInitialChoice() {
     if (!this.stageDraft || this.sessionState?.status === "applying") return;
+    this.schemaCaptureStageValuesFromDom();
     if (!Array.isArray(this.stageDraft.initialChoices)) this.stageDraft.initialChoices = [];
     this.stageDraft.initialChoices.push({ label: "", emoji: "" });
     const index = this.stageDraft.initialChoices.length - 1;
     this.stageDraft.focusName = `choiceLabel${index}`;
     this.stageDraft.selectionStart = null;
     this.stageDraft.selectionEnd = null;
-    this.paintSchemaCard();
+    const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
+    const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
+    const locked = this.schemaPaintOptions().stageLocked === true;
+    if (host && doc) {
+      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked });
+    } else {
+      this.paintSchemaCard("stage");
+    }
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
+    const input = this.schemaInput(`choiceLabel${index}`);
+    try { input?.focus?.({ preventScroll: true }); } catch (_) {}
   }
 
   schemaStageRemoveInitialChoice(index) {
     if (!this.stageDraft || this.sessionState?.status === "applying" || !Array.isArray(this.stageDraft.initialChoices)) return;
     if (!Number.isInteger(index) || index < 0 || index >= this.stageDraft.initialChoices.length) return;
+    this.schemaCaptureStageValuesFromDom();
     this.stageDraft.initialChoices.splice(index, 1);
     this.stageDraft.values = Object.fromEntries(Object.entries(this.stageDraft.values || {}).filter(([name]) => !/^choice(?:Label|Emoji)\d+$/.test(name)));
     this.stageDraft.initialChoices.forEach((choice, next) => {
@@ -91569,14 +91964,37 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.stageDraft.focusName = nextIndex >= 0 ? `choiceLabel${nextIndex}` : "newFieldLabel";
     this.stageDraft.selectionStart = null;
     this.stageDraft.selectionEnd = null;
-    this.paintSchemaCard();
+    const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
+    const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
+    const locked = this.schemaPaintOptions().stageLocked === true;
+    if (host && doc) {
+      albumSchemaRegionEmpty(host);
+      this.stageDraft.initialChoices.forEach((choice, next) => {
+        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked });
+      });
+    } else {
+      this.paintSchemaCard("stage");
+    }
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
+    const input = this.schemaInput(this.stageDraft.focusName);
+    try { input?.focus?.({ preventScroll: true }); } catch (_) {}
   }
 
   schemaStageEnter() {
     const state = this.session?.getState?.() || {};
-    if (state.canApply === true) {
+    if (state.canApply === true || (state.status === "preview-ready" && !state.canApply)) {
+      this.schemaClearEnterLatch();
       void this.schemaApply();
+      return;
+    }
+    if (state.status === "preview-pending" || state.busy) {
+      this.schemaArmEnterLatch();
+      return;
+    }
+    if ((state.draftOps || []).length && !state.refusal) {
+      this.schemaQueueStagePreview(true);
+      this.schemaArmEnterLatch();
     }
   }
 
@@ -91685,20 +92103,20 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaQueueOp(op, selectedKey = this.selectedKey) {
     if (!this.session || !this.schemaFresh() || this.sessionState?.status === "applying") {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "editing-unavailable", message: "Editing waits for a fresh album report." };
     }
     this.stage = null;
     this.stageDraft = null;
     if (!op) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("stage");
       return { ok: false, code: "empty-stage", message: "No schema values changed." };
     }
     const targetIndex = this.schemaTargets().findIndex((target) => target.key === selectedKey);
     if (targetIndex >= 0) this.selectedIndex = targetIndex;
     this.selectedKey = selectedKey;
     this.sessionState = this.session.setDraft([op]);
-    this.paintSchemaCard();
+    this.paintSchemaCard("session");
     return { ok: true, op };
   }
 
@@ -91715,6 +92133,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const state = this.schemaState();
     if (state.canApply || (state.status === "preview-ready" && !this.schemaFresh())) {
       void this.schemaApply();
+      return;
+    }
+    if (state.status === "preview-pending" || state.busy) {
+      this.schemaArmEnterLatch();
       return;
     }
     const target = this.schemaSelectedTarget();
@@ -91780,12 +92202,12 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         ? ""
         : "This preview is stale. Refresh the album report before applying.";
       void this.schemaRefreshAfterStale();
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "stale", message: current.refusal?.message || this.schemaApplyNotice };
     }
     this.schemaApplyNotice = "";
     if (!current.canApply || !fresh) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
     }
     const result = await this.session.apply();
@@ -91793,12 +92215,13 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (result?.ok && result.changed) {
       this.stage = null;
       this.stageDraft = null;
+      this.schemaMoreOpen = false;
       try { new Notice("Album schema saved. Press u to preview Undo."); } catch (_) {}
     }
     const state = this.schemaPlugin?.albumReportState?.();
     if (state) this.schemaAlbumState(state);
     if (this.sessionState.refusal?.kind === "stale") void this.schemaRefreshAfterStale();
-    this.paintSchemaCard();
+    this.paintSchemaCard("body");
     return result;
   }
 
@@ -91806,7 +92229,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (!this.session) return;
     await this.session.retrySync();
     this.sessionState = this.session.getState();
-    this.paintSchemaCard();
+    this.paintSchemaCard("session");
   }
 
   async schemaRebaseAndPreview() {
@@ -91818,7 +92241,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.latestSchemaModel = null;
     this.session.rebase(this.schemaModel.schemaFingerprint);
     this.schemaRepairSelection();
-    this.paintSchemaCard();
+    this.paintSchemaCard("body");
     await this.session.previewNow();
   }
 
@@ -91834,17 +92257,25 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     this.stage = null;
     this.stageDraft = null;
+    this.schemaClearEnterLatch();
+    let rebuildBody = false;
     if (!this.sessionState?.draftOps?.length && this.latestSchemaModel && this.schemaFresh()) {
       this.schemaModel = this.latestSchemaModel;
       this.latestSchemaModel = null;
       this.session?.rebase?.(this.schemaModel.schemaFingerprint);
       this.schemaRepairSelection();
+      rebuildBody = true;
     }
-    this.paintSchemaCard();
+    this.paintSchemaCard(rebuildBody ? "body" : "stage");
   }
 
   schemaHandleEscape() {
     if (this.sessionState?.status === "applying") return "ignore";
+    if (this.schemaMoreOpen) {
+      this.schemaMoreOpen = false;
+      this.paintSchemaCard("session");
+      return "stay";
+    }
     if (this.stage) {
       this.schemaCancelStage();
       return "stay";
@@ -91853,7 +92284,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if ((state.draftOps || []).length) {
       try { this.session.setDraft([]); } catch (_) {}
       try { this.sessionState = this.session.getState(); } catch (_) {}
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return "stay";
     }
     return "close";
@@ -91909,17 +92340,24 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (action === "move-up") { this.schemaMoveSelected(-1); return; }
     if (action === "move-down") { this.schemaMoveSelected(1); return; }
     if (action === "remove") { this.schemaRemoveSelected(); return; }
-    if (action === "apply") { await this.schemaApply(); return; }
+    if (action === "more") {
+      this.schemaMoreOpen = !this.schemaMoreOpen;
+      this.paintSchemaCard("session");
+      return;
+    }
+    if (action === "apply" || action === "submit-stage") {
+      this.schemaStageEnter();
+      return;
+    }
     if (action === "undo") {
       const result = this.session?.stageUndo?.();
-      if (result?.ok) { this.sessionState = this.session.getState(); this.paintSchemaCard(); }
+      if (result?.ok) { this.sessionState = this.session.getState(); this.paintSchemaCard("session"); }
       return;
     }
     if (action === "retry-sync") { await this.schemaRetrySync(); return; }
     if (action === "preview") { await this.session?.previewNow?.(); return; }
     if (action === "refresh-schema") { await this.schemaRefresh(); return; }
     if (action === "rebase-preview") { await this.schemaRebaseAndPreview(); return; }
-    if (action === "submit-stage") { this.schemaQueueStagePreview(true); return; }
     if (action === "add-initial-choice") {
       this.schemaStageAddInitialChoice();
       return;
@@ -92069,6 +92507,171 @@ class BobLedgerToolsAlbumSchemaCardMixin {
     return { ok: true, modal };
   }
 }
+// ---- src/241yd-plugin-album-schema-card-paint.js ----
+// Region paint and Enter-latch methods for AlbumSchemaCardModal. Kept in
+// their own fragment so the card class stays at or below 1000 lines.
+Object.assign(AlbumSchemaCardModal.prototype, {
+  schemaPaintOptions() {
+    const state = this.schemaState();
+    return {
+      selectedKey: this.selectedKey,
+      selectedIndex: this.selectedIndex,
+      desktop: true,
+      editable: Boolean(this.session),
+      fresh: this.schemaFresh(),
+      editingUnavailable: this.schemaUnavailable || (!this.schemaFresh()
+        ? this.schemaApplyNotice || "Editing waits for a fresh album report."
+        : ""),
+      state,
+      stage: this.stage,
+      stageDraft: this.stageDraft,
+      stageLocked: state.status === "applying" || !this.schemaFresh(),
+      hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
+      enterLatched: Boolean(this.schemaEnterLatch),
+      moreOpen: this.schemaMoreOpen === true,
+      handlers: {
+        jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
+      },
+    };
+  },
+
+  schemaCardEl() {
+    return this.contentEl?.querySelector?.(".bob-album-schema-dialog") || null;
+  },
+
+  schemaFocusAfterPaint(force = false) {
+    const host = this.contentEl;
+    if (!host || this.schemaComposing) return;
+    const active = host.ownerDocument?.activeElement;
+    const activeInCard = Boolean(active && (active === host || host.contains?.(active)));
+    if (this.stage) {
+      const wanted = this.stageDraft?.focusName;
+      const input = wanted
+        ? host.querySelector?.(`[data-schema-input="${wanted}"]`)
+        : host.querySelector?.("[data-schema-input]");
+      if (!force && activeInCard && active?.getAttribute?.("data-schema-input")) return;
+      try { input?.focus?.({ preventScroll: true }); } catch (_) {}
+      if (input && this.stageDraft && Number.isInteger(this.stageDraft.selectionStart) &&
+          typeof input.setSelectionRange === "function") {
+        try {
+          input.setSelectionRange(
+            this.stageDraft.selectionStart,
+            this.stageDraft.selectionEnd,
+            this.stageDraft.selectionDirection || "none",
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+    if (!force && activeInCard && active?.getAttribute?.("data-target-key") === this.selectedKey) return;
+    const selected = host.querySelector?.(`[data-target-key="${this.selectedKey}"]`)
+      || host.querySelector?.(".bob-album-schema-field")
+      || host.querySelector?.(".bob-album-schema-issue");
+    try { selected?.focus?.({ preventScroll: true }); } catch (_) {}
+  },
+
+  paintSchemaCard(reason = "full") {
+    const host = this.contentEl;
+    if (!host) return;
+    const targets = this.schemaTargets();
+    if (targets.length && !targets.some((target) => target.key === this.selectedKey)) {
+      const index = Math.min(this.selectedIndex || 0, targets.length - 1);
+      this.selectedKey = targets[index].key;
+      this.selectedIndex = index;
+    }
+    const doc = notebookDomDoc(host) || host.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const options = this.schemaPaintOptions();
+    let card = this.schemaCardEl();
+    const composing = this.schemaComposing === true;
+    if (!card || reason === "full" || !card.parentNode) {
+      try { host.empty?.(); } catch (_) { while (host.firstChild) host.removeChild(host.firstChild); }
+      card = albumSchemaCardBuildEl(this.schemaModel, options, doc);
+      if (card) host.appendChild(card);
+      this.schemaStagePaintKey = albumSchemaCardStageKey(this.stage);
+      this.schemaFocusAfterPaint(true);
+      return;
+    }
+    if (composing && (reason === "full" || reason === "stage" || reason === "body")) {
+      albumSchemaCardPaintStatus(card, options, doc);
+      albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      return;
+    }
+    if (reason === "select") {
+      albumSchemaCardPaintSelection(card, this.selectedKey);
+      albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      this.schemaFocusAfterPaint(false);
+      return;
+    }
+    if (reason === "session") {
+      albumSchemaCardPaintStatus(card, options, doc);
+      albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      const stageKey = albumSchemaCardStageKey(this.stage);
+      if (stageKey !== this.schemaStagePaintKey) {
+        albumSchemaCardPaintStage(card, this.schemaModel, options, doc);
+        this.schemaStagePaintKey = stageKey;
+      } else {
+        albumSchemaCardPaintStageStatus(card, options);
+      }
+      return;
+    }
+    if (reason === "stage") {
+      albumSchemaCardPaintStage(card, this.schemaModel, options, doc);
+      this.schemaStagePaintKey = albumSchemaCardStageKey(this.stage);
+      albumSchemaCardPaintStatus(card, options, doc);
+      albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      this.schemaFocusAfterPaint(true);
+      return;
+    }
+    albumSchemaCardPaintHeader(card, this.schemaModel, options, doc);
+    albumSchemaCardPaintLint(card, this.schemaModel, options, doc);
+    albumSchemaCardPaintBody(card, this.schemaModel, options, doc);
+    albumSchemaCardPaintStage(card, this.schemaModel, options, doc);
+    albumSchemaCardPaintStatus(card, options, doc);
+    albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+    this.schemaStagePaintKey = albumSchemaCardStageKey(this.stage);
+    this.schemaFocusAfterPaint(reason === "body");
+  },
+
+  schemaClearEnterLatch() {
+    if (!this.schemaEnterLatch) return;
+    this.schemaEnterLatch = null;
+  },
+
+  schemaArmEnterLatch() {
+    const state = this.session?.getState?.() || {};
+    this.schemaEnterLatch = { revision: state.revision, expect: state.expect };
+    this.paintSchemaCard("session");
+  },
+
+  schemaLatchShouldFire(state) {
+    const latch = this.schemaEnterLatch;
+    if (!latch || !state) return false;
+    if (state.revision !== latch.revision) return false;
+    return state.canApply === true;
+  },
+
+  schemaLatchShouldClear(state) {
+    const latch = this.schemaEnterLatch;
+    if (!latch || !state) return false;
+    if (state.revision !== latch.revision) return true;
+    if (state.status === "preview-pending" || state.status === "applying" || state.busy) return false;
+    return state.canApply !== true;
+  },
+
+  schemaMaybeFireEnterLatch(state) {
+    const current = state || this.session?.getState?.() || {};
+    if (this.schemaLatchShouldFire(current)) {
+      this.schemaClearEnterLatch();
+      void this.schemaApply();
+      return true;
+    }
+    if (this.schemaLatchShouldClear(current)) {
+      this.schemaClearEnterLatch();
+      this.paintSchemaCard("session");
+    }
+    return false;
+  },
+});
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
 // Bob remains the source of truth; this fragment never writes note bytes
@@ -138217,6 +138820,17 @@ try {
       albumHeaderIsDesktopPlatform,
       albumSchemaCardTitle,
       albumSchemaCardBuildEl,
+      albumSchemaCardTrail,
+      albumSchemaCardRegion,
+      albumSchemaCardStageKey,
+      albumSchemaCardHintItems,
+      albumSchemaCardAllActions,
+      albumSchemaCardPaintHeader,
+      albumSchemaCardPaintBody,
+      albumSchemaCardPaintStatus,
+      albumSchemaCardPaintHints,
+      albumSchemaCardPaintSelection,
+      albumSchemaCardPaintStage,
     });
   }
 } catch (error) {

@@ -110,6 +110,17 @@ try {
       albumHeaderIsDesktopPlatform,
       albumSchemaCardTitle,
       albumSchemaCardBuildEl,
+      albumSchemaCardTrail,
+      albumSchemaCardRegion,
+      albumSchemaCardStageKey,
+      albumSchemaCardHintItems,
+      albumSchemaCardAllActions,
+      albumSchemaCardPaintHeader,
+      albumSchemaCardPaintBody,
+      albumSchemaCardPaintStatus,
+      albumSchemaCardPaintHints,
+      albumSchemaCardPaintSelection,
+      albumSchemaCardPaintStage,
     });
   }
 } catch (error) {

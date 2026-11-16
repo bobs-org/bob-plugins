@@ -1470,6 +1470,38 @@ async function run(args) {
     record("schema-dialog-footer", (dialog.schemaFooter || []).some((item) => /⏎/.test(item.text || "") && /esc/i.test(item.text || "")), "footer names edit/Undo/YAML keys");
     record("schema-dialog-labeled", (dialog.schemaUnlabeled || []).length === 0, `unlabeled=${(dialog.schemaUnlabeled || []).length}`);
     record("schema-no-preview-yet", (dialog.schemaConsequence || []).length === 0, "opening and reading never previews");
+    const captureSchemaThemes = async (stem) => {
+      await setViewport(client, 375, 812);
+      await sleep(200);
+      const light = path.join(outDir, `album-schema-${stem}-375-light.png`);
+      await capturePage(client, light);
+      report.screenshots.push(light);
+      await client.evaluate(`(() => { document.body.classList.add("theme-dark"); return true; })()`);
+      await sleep(150);
+      const dark = path.join(outDir, `album-schema-${stem}-375-dark.png`);
+      await capturePage(client, dark);
+      report.screenshots.push(dark);
+      await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); return true; })()`);
+    };
+    await captureSchemaThemes("browsing");
+    const moreOpened = await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const toggle = modal?.contentEl?.querySelector?.('[data-schema-action="more"]');
+      if (!toggle) return { ok: false, error: "more toggle missing" };
+      toggle.click();
+      const list = modal?.contentEl?.querySelector?.(".bob-album-schema-more");
+      return { ok: Boolean(list) && list.getAttribute("hidden") == null, text: String(list?.textContent || "").slice(0, 160) };
+    })()`);
+    record("schema-more-list", Boolean(moreOpened && moreOpened.ok), JSON.stringify(moreOpened));
+    await captureSchemaThemes("more");
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      if (modal) {
+        modal.schemaMoreOpen = false;
+        modal.paintSchemaCard?.("session");
+      }
+      return true;
+    })()`);
 
     const keyState = await client.evaluate(`(() => {
       const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
@@ -1545,14 +1577,15 @@ async function run(args) {
         emoji.value = "🆕";
         emoji.dispatchEvent(new Event("input", { bubbles: true }));
       }
-      const submit = pick('[data-schema-action="submit-stage"]');
-      if (!submit) return { ok: false, error: "submit-stage action missing" };
-      submit.click();
       const state = modal.session?.getState?.() || {};
       return { ok: true, stage: modal.stage || null, draftOps: state.draftOps?.length || 0,
-        input: Boolean(pick('[data-schema-input="choiceLabel"]')) };
+        input: Boolean(pick('[data-schema-input="choiceLabel"]')),
+        previewButton: Boolean(pick('[data-schema-action="submit-stage"]')) };
     })())()`);
     record("schema-stage-choice", Boolean(stagedPreview && stagedPreview.ok), JSON.stringify(stagedPreview));
+    record("schema-no-preview-button", stagedPreview && stagedPreview.previewButton === false,
+      "Preview this edit is gone; previews run automatically");
+    await captureSchemaThemes("stage");
     if (!stagedPreview?.ok) throw new Error(`could not stage choice preview: ${stagedPreview?.error || "unknown failure"}`);
     const previewed = await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /cdp/.test(item.text || "")),
       "schema-consequence", 20_000).catch(async () => client.evaluate(probe));
@@ -1855,10 +1888,8 @@ async function run(args) {
       if (!label) return { ok: false, error: "choice stage input missing", stage: modal.stage || null };
       label.value = "Stale";
       label.dispatchEvent(new Event("input", { bubbles: true }));
-      const submit = pick('[data-schema-action="submit-stage"]');
-      if (!submit) return { ok: false, error: "stage preview action missing", stage: modal.stage || null };
-      submit.click();
-      return { ok: true, stage: modal.stage || null };
+      return { ok: true, stage: modal.stage || null,
+        previewButton: Boolean(pick('[data-schema-action="submit-stage"]')) };
     })())()`);
     record("schema-stale-draft-staged", Boolean(staleStageResult && staleStageResult.ok), JSON.stringify(staleStageResult));
     if (!staleStageResult?.ok) throw new Error(`could not stage stale draft: ${staleStageResult?.error || "unknown failure"}`);
@@ -2016,11 +2047,7 @@ async function run(args) {
       `writer applies=${staleAttempts}; commit unchanged=${staleHeadAfter === staleHeadBefore}; source save preserved=${staleBytesAfter === saveRaceSetup.editedText}`);
     record("schema-stale-draft-retained", Boolean(staleSession && staleSession.kind === "stale"
       && staleSession.drafts === 1 && staleSession.canApply === false), `draft stays unconfirmed: ${JSON.stringify(staleSession)}`);
-    const staleShot = path.join(outDir, "album-schema-stale-375-light.png");
-    await setViewport(client, 375, 812);
-    await sleep(300);
-    await capturePage(client, staleShot);
-    report.screenshots.push(staleShot);
+    await captureSchemaThemes("refusal");
 
     const yamlJumped = await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;

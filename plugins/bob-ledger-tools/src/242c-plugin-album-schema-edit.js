@@ -180,9 +180,12 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
   }
 
   const buttons = notebookCreateEl(doc, "div", "bob-album-schema-stage-actions");
-  const preview = albumSchemaStageAction(doc, buttons, "Preview this edit", "submit-stage", "is-primary");
-  const cancel = albumSchemaStageAction(doc, buttons, "Cancel stage", "cancel-stage");
-  if (locked) { preview.disabled = true; cancel.disabled = true; }
+  buttons.setAttribute("data-schema-region", "stage-status");
+  const save = albumSchemaStageAction(doc, buttons, "Save ⏎", "apply", "is-primary");
+  save.setAttribute("data-schema-action", "apply");
+  const cancel = albumSchemaStageAction(doc, buttons, "Cancel esc", "cancel-stage");
+  if (locked) { save.disabled = true; cancel.disabled = true; }
+  else save.disabled = options?.state?.canApply !== true && options?.enterLatched !== true;
   panel.appendChild(buttons);
   return panel;
 }

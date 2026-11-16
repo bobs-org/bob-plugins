@@ -17,6 +17,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.latestSchemaModel = null;
     this.schemaUnsubscribe = null;
     this.schemaStaleRefresh = null;
+    this.schemaEnterLatch = null;
+    this.schemaMoreOpen = false;
+    this.schemaStagePaintKey = "";
+    this.schemaComposing = false;
   }
 
   schemaFresh(state = null) {
@@ -55,7 +59,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (index < 0) return;
     this.selectedKey = key;
     this.selectedIndex = index;
-    this.paintSchemaCard();
+    this.paintSchemaCard("select");
   }
 
   schemaMove(delta) {
@@ -66,17 +70,18 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     index = (index + delta + targets.length) % targets.length;
     this.selectedIndex = index;
     this.selectedKey = targets[index].key;
-    this.paintSchemaCard();
+    this.paintSchemaCard("select");
   }
 
   schemaStage(kind, targetKey = this.selectedKey) {
     if (!this.session || !this.schemaFresh() || this.sessionState?.busy) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return false;
     }
     this.stage = { kind, targetKey };
     this.stageDraft = this.schemaCreateStageDraft(this.stage);
-    this.paintSchemaCard();
+    this.schemaMoreOpen = false;
+    this.paintSchemaCard("stage");
     return true;
   }
 
@@ -137,55 +142,6 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     return this.sessionState || {};
   }
 
-  paintSchemaCard() {
-    const host = this.contentEl;
-    if (!host) return;
-    const targets = this.schemaTargets();
-    if (targets.length && !targets.some((target) => target.key === this.selectedKey)) {
-      const index = Math.min(this.selectedIndex || 0, targets.length - 1);
-      this.selectedKey = targets[index].key;
-      this.selectedIndex = index;
-    }
-    try { host.empty?.(); } catch (_) { while (host.firstChild) host.removeChild(host.firstChild); }
-    const doc = notebookDomDoc(host) || host.ownerDocument || (typeof document !== "undefined" ? document : null);
-    const state = this.schemaState();
-    const card = albumSchemaCardBuildEl(this.schemaModel, {
-      selectedKey: this.selectedKey,
-      selectedIndex: this.selectedIndex,
-      desktop: true,
-      editable: Boolean(this.session),
-      fresh: this.schemaFresh(),
-      editingUnavailable: this.schemaUnavailable || (!this.schemaFresh()
-        ? this.schemaApplyNotice || "Editing waits for a fresh album report."
-        : ""),
-      state,
-      stage: this.stage,
-      stageDraft: this.stageDraft,
-      stageLocked: state.status === "applying" || !this.schemaFresh(),
-      hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
-      handlers: {
-        jumpYaml: (line) => this.schemaPlugin?.albumHeaderJumpYaml?.(this.schemaSourcePath, line),
-      },
-    }, doc);
-    if (card) host.appendChild(card);
-    if (this.stage) {
-      const wanted = this.stageDraft?.focusName;
-      const input = wanted
-        ? host.querySelector?.(`[data-schema-input="${wanted}"]`)
-        : host.querySelector?.(".bob-album-schema-stage [data-schema-input]");
-      try { input?.focus?.({ preventScroll: true }); } catch (_) {}
-      if (input && this.stageDraft && Number.isInteger(this.stageDraft.selectionStart) &&
-          typeof input.setSelectionRange === "function") {
-        try { input.setSelectionRange(this.stageDraft.selectionStart, this.stageDraft.selectionEnd, this.stageDraft.selectionDirection || "none"); } catch (_) {}
-      }
-    } else {
-      const selected = host.querySelector?.(`[data-target-key="${this.selectedKey}"]`)
-        || host.querySelector?.(".bob-album-schema-field.is-selected")
-        || host.querySelector?.(".bob-album-schema-issue");
-      try { selected?.focus?.({ preventScroll: true }); } catch (_) {}
-    }
-  }
-
   schemaStartSession() {
     const plugin = this.schemaPlugin;
     const model = this.schemaModel;
@@ -207,7 +163,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       saveEditors: (paths) => albumSchemaSaveOpenEditors(plugin, paths),
       onChange: (state) => {
         this.sessionState = state;
-        this.paintSchemaCard();
+        if (this.schemaMaybeFireEnterLatch(state)) return;
+        this.paintSchemaCard("session");
         if (["stale", "timeout-unknown"].includes(state.refusal?.kind)) void this.schemaRefreshAfterStale();
       },
     }));
@@ -227,6 +184,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   schemaAlbumState(state) {
     if (!state || !this.schemaModel) return;
     this.session?.noteGenerationChanged?.();
+    let rebuildBody = false;
     if (state.report) {
       const next = albumHeaderModel(state.report, this.schemaSourcePath, {
         sourcePath: this.schemaSourcePath,
@@ -239,6 +197,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
             ["browsing", "saved-with-sync-warning"].includes(session.status)) {
           this.schemaModel = next;
           this.latestSchemaModel = null;
+          rebuildBody = true;
           if (next.schemaFingerprint && next.schemaFingerprint !== session.expect) this.session?.rebase?.(next.schemaFingerprint);
           this.schemaRepairSelection();
         } else if (next.schemaFingerprint && (
@@ -249,7 +208,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         }
       }
     }
-    this.paintSchemaCard();
+    this.paintSchemaCard(rebuildBody ? "body" : "session");
   }
 
   schemaRepairSelection() {
@@ -341,6 +300,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     this.schemaStageRememberFocus(input);
     if (Object.is(previous, value)) return;
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
   }
 
@@ -351,26 +311,41 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const next = op ? [op] : [];
     const current = this.session.getState().draftOps || [];
     const changed = JSON.stringify(current) !== JSON.stringify(next);
-    if (changed) this.sessionState = this.session.setDraft(next);
+    if (changed) {
+      this.schemaClearEnterLatch();
+      this.sessionState = this.session.setDraft(next);
+    }
     if (immediate && next.length) void this.session.previewNow();
-    if (!changed && !immediate) this.paintSchemaCard();
+    if (!changed && !immediate) this.paintSchemaCard("session");
   }
 
   schemaStageAddInitialChoice() {
     if (!this.stageDraft || this.sessionState?.status === "applying") return;
+    this.schemaCaptureStageValuesFromDom();
     if (!Array.isArray(this.stageDraft.initialChoices)) this.stageDraft.initialChoices = [];
     this.stageDraft.initialChoices.push({ label: "", emoji: "" });
     const index = this.stageDraft.initialChoices.length - 1;
     this.stageDraft.focusName = `choiceLabel${index}`;
     this.stageDraft.selectionStart = null;
     this.stageDraft.selectionEnd = null;
-    this.paintSchemaCard();
+    const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
+    const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
+    const locked = this.schemaPaintOptions().stageLocked === true;
+    if (host && doc) {
+      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked });
+    } else {
+      this.paintSchemaCard("stage");
+    }
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
+    const input = this.schemaInput(`choiceLabel${index}`);
+    try { input?.focus?.({ preventScroll: true }); } catch (_) {}
   }
 
   schemaStageRemoveInitialChoice(index) {
     if (!this.stageDraft || this.sessionState?.status === "applying" || !Array.isArray(this.stageDraft.initialChoices)) return;
     if (!Number.isInteger(index) || index < 0 || index >= this.stageDraft.initialChoices.length) return;
+    this.schemaCaptureStageValuesFromDom();
     this.stageDraft.initialChoices.splice(index, 1);
     this.stageDraft.values = Object.fromEntries(Object.entries(this.stageDraft.values || {}).filter(([name]) => !/^choice(?:Label|Emoji)\d+$/.test(name)));
     this.stageDraft.initialChoices.forEach((choice, next) => {
@@ -381,14 +356,37 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.stageDraft.focusName = nextIndex >= 0 ? `choiceLabel${nextIndex}` : "newFieldLabel";
     this.stageDraft.selectionStart = null;
     this.stageDraft.selectionEnd = null;
-    this.paintSchemaCard();
+    const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
+    const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
+    const locked = this.schemaPaintOptions().stageLocked === true;
+    if (host && doc) {
+      albumSchemaRegionEmpty(host);
+      this.stageDraft.initialChoices.forEach((choice, next) => {
+        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked });
+      });
+    } else {
+      this.paintSchemaCard("stage");
+    }
+    this.schemaClearEnterLatch();
     this.schemaQueueStagePreview(false);
+    const input = this.schemaInput(this.stageDraft.focusName);
+    try { input?.focus?.({ preventScroll: true }); } catch (_) {}
   }
 
   schemaStageEnter() {
     const state = this.session?.getState?.() || {};
-    if (state.canApply === true) {
+    if (state.canApply === true || (state.status === "preview-ready" && !state.canApply)) {
+      this.schemaClearEnterLatch();
       void this.schemaApply();
+      return;
+    }
+    if (state.status === "preview-pending" || state.busy) {
+      this.schemaArmEnterLatch();
+      return;
+    }
+    if ((state.draftOps || []).length && !state.refusal) {
+      this.schemaQueueStagePreview(true);
+      this.schemaArmEnterLatch();
     }
   }
 
@@ -497,20 +495,20 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaQueueOp(op, selectedKey = this.selectedKey) {
     if (!this.session || !this.schemaFresh() || this.sessionState?.status === "applying") {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "editing-unavailable", message: "Editing waits for a fresh album report." };
     }
     this.stage = null;
     this.stageDraft = null;
     if (!op) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("stage");
       return { ok: false, code: "empty-stage", message: "No schema values changed." };
     }
     const targetIndex = this.schemaTargets().findIndex((target) => target.key === selectedKey);
     if (targetIndex >= 0) this.selectedIndex = targetIndex;
     this.selectedKey = selectedKey;
     this.sessionState = this.session.setDraft([op]);
-    this.paintSchemaCard();
+    this.paintSchemaCard("session");
     return { ok: true, op };
   }
 
@@ -527,6 +525,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const state = this.schemaState();
     if (state.canApply || (state.status === "preview-ready" && !this.schemaFresh())) {
       void this.schemaApply();
+      return;
+    }
+    if (state.status === "preview-pending" || state.busy) {
+      this.schemaArmEnterLatch();
       return;
     }
     const target = this.schemaSelectedTarget();
@@ -592,12 +594,12 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
         ? ""
         : "This preview is stale. Refresh the album report before applying.";
       void this.schemaRefreshAfterStale();
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "stale", message: current.refusal?.message || this.schemaApplyNotice };
     }
     this.schemaApplyNotice = "";
     if (!current.canApply || !fresh) {
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
     }
     const result = await this.session.apply();
@@ -605,12 +607,13 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (result?.ok && result.changed) {
       this.stage = null;
       this.stageDraft = null;
+      this.schemaMoreOpen = false;
       try { new Notice("Album schema saved. Press u to preview Undo."); } catch (_) {}
     }
     const state = this.schemaPlugin?.albumReportState?.();
     if (state) this.schemaAlbumState(state);
     if (this.sessionState.refusal?.kind === "stale") void this.schemaRefreshAfterStale();
-    this.paintSchemaCard();
+    this.paintSchemaCard("body");
     return result;
   }
 
@@ -618,7 +621,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (!this.session) return;
     await this.session.retrySync();
     this.sessionState = this.session.getState();
-    this.paintSchemaCard();
+    this.paintSchemaCard("session");
   }
 
   async schemaRebaseAndPreview() {
@@ -630,7 +633,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     this.latestSchemaModel = null;
     this.session.rebase(this.schemaModel.schemaFingerprint);
     this.schemaRepairSelection();
-    this.paintSchemaCard();
+    this.paintSchemaCard("body");
     await this.session.previewNow();
   }
 
@@ -646,17 +649,25 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     this.stage = null;
     this.stageDraft = null;
+    this.schemaClearEnterLatch();
+    let rebuildBody = false;
     if (!this.sessionState?.draftOps?.length && this.latestSchemaModel && this.schemaFresh()) {
       this.schemaModel = this.latestSchemaModel;
       this.latestSchemaModel = null;
       this.session?.rebase?.(this.schemaModel.schemaFingerprint);
       this.schemaRepairSelection();
+      rebuildBody = true;
     }
-    this.paintSchemaCard();
+    this.paintSchemaCard(rebuildBody ? "body" : "stage");
   }
 
   schemaHandleEscape() {
     if (this.sessionState?.status === "applying") return "ignore";
+    if (this.schemaMoreOpen) {
+      this.schemaMoreOpen = false;
+      this.paintSchemaCard("session");
+      return "stay";
+    }
     if (this.stage) {
       this.schemaCancelStage();
       return "stay";
@@ -665,7 +676,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if ((state.draftOps || []).length) {
       try { this.session.setDraft([]); } catch (_) {}
       try { this.sessionState = this.session.getState(); } catch (_) {}
-      this.paintSchemaCard();
+      this.paintSchemaCard("session");
       return "stay";
     }
     return "close";
@@ -721,17 +732,24 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     if (action === "move-up") { this.schemaMoveSelected(-1); return; }
     if (action === "move-down") { this.schemaMoveSelected(1); return; }
     if (action === "remove") { this.schemaRemoveSelected(); return; }
-    if (action === "apply") { await this.schemaApply(); return; }
+    if (action === "more") {
+      this.schemaMoreOpen = !this.schemaMoreOpen;
+      this.paintSchemaCard("session");
+      return;
+    }
+    if (action === "apply" || action === "submit-stage") {
+      this.schemaStageEnter();
+      return;
+    }
     if (action === "undo") {
       const result = this.session?.stageUndo?.();
-      if (result?.ok) { this.sessionState = this.session.getState(); this.paintSchemaCard(); }
+      if (result?.ok) { this.sessionState = this.session.getState(); this.paintSchemaCard("session"); }
       return;
     }
     if (action === "retry-sync") { await this.schemaRetrySync(); return; }
     if (action === "preview") { await this.session?.previewNow?.(); return; }
     if (action === "refresh-schema") { await this.schemaRefresh(); return; }
     if (action === "rebase-preview") { await this.schemaRebaseAndPreview(); return; }
-    if (action === "submit-stage") { this.schemaQueueStagePreview(true); return; }
     if (action === "add-initial-choice") {
       this.schemaStageAddInitialChoice();
       return;

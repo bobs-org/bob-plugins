@@ -5,6 +5,7 @@ const { NavigationHotkeysPlugin, helpers } = require("./navigation-hotkeys-harne
 const {
   inspectWindowPrefixLayoutApis,
   planWindowPrefixKey,
+  readWindowPrefixHotkeyEntries,
 } = helpers;
 
 function leaf(id, options = {}) {
@@ -168,6 +169,84 @@ test("live snapshot groups root leaves and reports selected tabs, pins, geometry
   assert.equal(snapshot.capabilities.move, true);
   assert.equal(plugin.windowPrefixLeafById.has("sidebar"), false);
   assert.equal(inspectWindowPrefixLayoutApis(workspace, b, workspace.rootSplit.children).capabilities.createSplit, true);
+});
+
+test("main-area snapshot survives sidebar focus and leaves the prefix object maps untouched", () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const c = leaf("C");
+  const outside = leaf("sidebar");
+  const outsideGroup = { children: [outside], parent: null };
+  outside.parent = outsideGroup;
+  const { workspace } = makeWorkspace([
+    { id: "left", left: 0, leaves: [a, b], selected: b },
+    { id: "right", left: 100, leaves: [c], selected: c },
+  ], { activeLeaf: outside, extraLeaves: [outside] });
+  const plugin = pluginFor(workspace);
+  const leafMapBefore = [...plugin.windowPrefixLeafById.entries()];
+  const splitMapBefore = [...plugin.windowPrefixSplitById.entries()];
+  const area = plugin.snapshotWindowPrefixMainArea();
+  assert.ok(area);
+  assert.equal(area.activeLeafId, null);
+  assert.equal(area.splits.length, 2);
+  assert.equal(plugin.snapshotWindowPrefixLayout(), null);
+  assert.deepEqual([...plugin.windowPrefixLeafById.entries()], leafMapBefore);
+  assert.deepEqual([...plugin.windowPrefixSplitById.entries()], splitMapBefore);
+  assert.equal(area.leafById.has("sidebar"), false);
+  assert.equal(area.splitById.size, 2);
+});
+
+test("main-area snapshot uses WorkspaceTabs children order when iteration order differs", () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const { workspace } = makeWorkspace([
+    { id: "only", left: 0, leaves: [a, b], selected: a },
+  ], { activeLeaf: a });
+  workspace.iterateRootLeaves = (callback) => {
+    callback(b);
+    callback(a);
+  };
+  const plugin = pluginFor(workspace);
+  const area = plugin.snapshotWindowPrefixMainArea();
+  assert.deepEqual(area.splits[0].leaves.map((item) => item.label), ["A", "B"]);
+});
+
+test("numeric WorkspaceTabs currentTab resolves the selected leaf before legacy fallbacks", () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const { workspace } = makeWorkspace([
+    { id: "only", left: 0, leaves: [a, b], selected: a },
+  ], { activeLeaf: b });
+  const group = workspace.rootSplit.children[0];
+  group.currentTab = 1;
+  group.selectedTab = a;
+  group.mostRecentLeaf = a;
+  const plugin = pluginFor(workspace);
+  const area = plugin.snapshotWindowPrefixMainArea();
+  const selectedId = area.splits[0].selectedLeafId;
+  assert.equal(area.leafById.get(selectedId), b);
+});
+
+test("hotkey reader preserves custom empty overrides, reads defaults, and fails closed when unavailable", () => {
+  const app = {
+    commands: { commands: { disabled: {}, defaulted: {} } },
+    hotkeyManager: {
+      customKeys: { disabled: [] },
+      defaultKeys: {
+        disabled: [{ modifiers: ["Ctrl"], key: "W" }],
+        defaulted: [{ modifiers: ["Mod"], key: "W" }],
+      },
+      getHotkeys: () => [],
+    },
+  };
+  assert.deepEqual(readWindowPrefixHotkeyEntries(app), {
+    known: true,
+    entries: [{ commandId: "defaulted", modifiers: ["Mod"], key: "W" }],
+  });
+  assert.deepEqual(readWindowPrefixHotkeyEntries({ commands: { commands: {} } }), {
+    known: false,
+    entries: [],
+  });
 });
 
 test("the layout API canary disables move plans when a required internal disappears", () => {

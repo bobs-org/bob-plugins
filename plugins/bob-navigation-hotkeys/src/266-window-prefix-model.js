@@ -132,13 +132,16 @@ function windowPrefixLeafLabel(layout, leafId) {
 }
 
 function windowPrefixReadingOrder(splits) {
-  return [...splits].sort((left, right) =>
-    left.rect.left - right.rect.left ||
-    left.rect.top - right.rect.top ||
-    left.rect.right - right.rect.right ||
-    left.rect.bottom - right.rect.bottom ||
-    left.id.localeCompare(right.id),
-  );
+  return splits
+    .map((split, treeOrder) => ({ split, treeOrder }))
+    .sort((left, right) =>
+      left.split.rect.left - right.split.rect.left ||
+      left.split.rect.top - right.split.rect.top ||
+      left.split.rect.right - right.split.rect.right ||
+      left.split.rect.bottom - right.split.rect.bottom ||
+      left.treeOrder - right.treeOrder,
+    )
+    .map(({ split }) => split);
 }
 
 function windowPrefixDirectionalNeighbor(layout, source, direction) {
@@ -361,7 +364,7 @@ function canonicalWindowPrefixKey(key) {
   return WINDOW_PREFIX_KEY_ALIASES[key] ?? key;
 }
 
-function planWindowPrefixKey(snapshot, key) {
+function planWindowPrefixKey(snapshot, key, options = {}) {
   const canonical = canonicalWindowPrefixKey(key);
   if (canonical === "Escape" || canonical === "q" || canonical === "Ctrl+[") {
     return {
@@ -372,6 +375,9 @@ function planWindowPrefixKey(snapshot, key) {
       preview: "cancel window prefix",
       consequence: null,
     };
+  }
+  if (/^[1-9]$/.test(canonical ?? "")) {
+    return planWindowPrefixTabJump(snapshot, Number(canonical), options);
   }
   const entry = WINDOW_PREFIX_KEY_LOOKUP.get(canonical);
   if (!entry) {
@@ -485,9 +491,20 @@ function buildWindowPrefixViewModel(snapshot) {
       activeSplitId: null,
       splits: [],
       groups: [],
+      tabs: {
+        range: "",
+        total: 0,
+        numbered: 0,
+        unnumbered: 0,
+        available: false,
+        preview: "no tabs",
+        aside: "",
+      },
       cancelKeys: WINDOW_PREFIX_CANCEL_KEYS,
     };
   }
+  const tabCatalog = buildWindowPrefixTabCatalog(snapshot);
+  const tabRanges = new Map(tabCatalog.splits.map((range) => [range.id, range]));
   const allLeft = Math.min(...layout.splits.map((split) => split.rect.left));
   const allRight = Math.max(...layout.splits.map((split) => split.rect.right));
   const totalWidth = Math.max(1, allRight - allLeft);
@@ -501,6 +518,16 @@ function buildWindowPrefixViewModel(snapshot) {
       active: split.id === layout.activeSplitId,
       rect: { ...split.rect },
       widthRatio: split.rect.width / totalWidth,
+      tabRange: (() => {
+        const range = tabRanges.get(split.id) ?? { first: null, last: null, unnumbered: 0 };
+        return {
+          first: range.first,
+          last: range.last,
+          unnumbered: range.unnumbered,
+          label: windowPrefixTabRangeLabel(range.first, range.last, range.unnumbered),
+          ariaLabel: windowPrefixTabRangeAriaLabel(range.first, range.last, range.unnumbered),
+        };
+      })(),
     };
   });
   const rows = WINDOW_PREFIX_KEY_TABLE.map((entry) => {
@@ -525,6 +552,24 @@ function buildWindowPrefixViewModel(snapshot) {
     ...group,
     rows: rows.filter((row) => row.group === group.id),
   }));
+  const range = tabCatalog.numbered === 1
+    ? "1"
+    : tabCatalog.numbered > 1
+      ? "1–" + String(tabCatalog.numbered)
+      : "";
+  const tabsAvailable = tabCatalog.total > 1 && layout.capabilities.focus;
+  const tabsPreview = tabCatalog.unnumbered > 0
+    ? String(range || "1–9") + " · " + String(tabCatalog.unnumbered) + " more unnumbered"
+    : tabCatalog.total === 1
+      ? "only tab"
+      : tabsAvailable
+        ? "jump to that tab"
+        : "no tabs";
+  const tabsAside = tabCatalog.unnumbered > 0
+    ? String(tabCatalog.unnumbered) + " more unnumbered"
+    : tabCatalog.total === 1
+      ? "only tab"
+      : "it stays in its split";
   return {
     ok: true,
     splitCount: layout.splits.length,
@@ -533,6 +578,15 @@ function buildWindowPrefixViewModel(snapshot) {
     splits: splitView,
     groups,
     rows,
+    tabs: {
+      range,
+      total: tabCatalog.total,
+      numbered: tabCatalog.numbered,
+      unnumbered: tabCatalog.unnumbered,
+      available: tabsAvailable,
+      preview: tabsPreview,
+      aside: tabsAside,
+    },
     cancelKeys: WINDOW_PREFIX_CANCEL_KEYS,
   };
 }

@@ -180,12 +180,21 @@ function windowPrefixLiveLeafLabel(leaf) {
 function windowPrefixSelectedLeaf(workspace, group, leaves) {
   const contains = (candidate) => candidate && leaves.includes(candidate);
   try {
-    if (contains(group?.selectedTab)) return group.selectedTab;
+    const index = group?.currentTab;
+    if (typeof index === "number" && Number.isInteger(index) && Array.isArray(group?.children)) {
+      const selected = group.children[index];
+      if (contains(selected)) return selected;
+    }
   } catch (_error) {
-    // Use the workspace recency API below.
+    // Older Obsidian builds may expose currentTab as the selected leaf instead.
   }
   try {
     if (contains(group?.currentTab)) return group.currentTab;
+  } catch (_error) {
+    // Use selectedTab or the workspace recency API below.
+  }
+  try {
+    if (contains(group?.selectedTab)) return group.selectedTab;
   } catch (_error) {
     // Use the workspace recency API below.
   }
@@ -196,6 +205,115 @@ function windowPrefixSelectedLeaf(workspace, group, leaves) {
     // Keep a deterministic fallback for an incomplete Obsidian API.
   }
   return leaves[0] ?? null;
+}
+
+function windowPrefixObjectHas(object, key) {
+  if (object instanceof Map) return object.has(key);
+  return Boolean(object && Object.prototype.hasOwnProperty.call(object, key));
+}
+
+function windowPrefixObjectGet(object, key) {
+  if (object instanceof Map) return object.get(key);
+  return object?.[key];
+}
+
+function windowPrefixCommandList(app, manager) {
+  try {
+    const commands = app?.commands?.commands;
+    if (commands && typeof commands === "object") {
+      let entries;
+      if (Array.isArray(commands)) {
+        entries = commands.map((command) => [command?.id, command])
+          .filter(([id]) => typeof id === "string" && id);
+      } else {
+        entries = Object.entries(commands);
+      }
+      const byId = new Map(entries);
+      for (const source of [manager?.customKeys, manager?.defaultKeys]) {
+        const keys = source instanceof Map ? [...source.keys()] : Object.keys(source || {});
+        for (const id of keys) if (!byId.has(String(id))) byId.set(String(id), null);
+      }
+      return { known: true, entries: [...byId.entries()] };
+    }
+    if (typeof app?.commands?.listCommands === "function") {
+      const listed = app.commands.listCommands();
+      if (Array.isArray(listed)) {
+        return { known: true, entries: listed.map((command) => [command?.id, command])
+          .filter(([id]) => typeof id === "string" && id) };
+      }
+    }
+    const ids = new Set();
+    for (const source of [manager?.customKeys, manager?.defaultKeys]) {
+      const keys = source instanceof Map ? [...source.keys()] : Object.keys(source || {});
+      for (const id of keys) ids.add(String(id));
+    }
+    return ids.size
+      ? { known: true, entries: [...ids].map((id) => [id, null]) }
+      : { known: false, entries: [] };
+  } catch (_error) {
+    return { known: false, entries: [] };
+  }
+}
+
+function windowPrefixNormalizeHotkeyList(value) {
+  const hotkeys = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];
+  return hotkeys.flatMap((hotkey) => {
+    if (!hotkey || typeof hotkey !== "object") return [];
+    const key = hotkey.key == null ? "" : String(hotkey.key);
+    const modifiers = Array.isArray(hotkey.modifiers)
+      ? hotkey.modifiers.map(String)
+      : [];
+    return key ? [{ modifiers, key }] : [];
+  });
+}
+
+function readWindowPrefixHotkeyEntries(app) {
+  try {
+    const manager = app?.hotkeyManager;
+    if (!manager) return { known: false, entries: [] };
+    const commands = windowPrefixCommandList(app, manager);
+    if (!commands.known) return { known: false, entries: [] };
+    const entries = [];
+    let known = true;
+    for (const [commandId, command] of commands.entries) {
+      try {
+        let hotkeys;
+        if (windowPrefixObjectHas(manager.customKeys, commandId)) {
+          hotkeys = windowPrefixObjectGet(manager.customKeys, commandId);
+        } else {
+          const current = typeof manager.getHotkeys === "function"
+            ? manager.getHotkeys(commandId)
+            : undefined;
+          let defaults;
+          if (windowPrefixObjectHas(manager.defaultKeys, commandId)) {
+            defaults = windowPrefixObjectGet(manager.defaultKeys, commandId);
+          } else if (typeof manager.getDefaultHotkeys === "function") {
+            defaults = manager.getDefaultHotkeys(commandId);
+          }
+          const currentHasKeys = Array.isArray(current)
+            ? current.length > 0
+            : Boolean(current && typeof current === "object" && current.key);
+          if (currentHasKeys) {
+            hotkeys = current;
+          } else if (defaults !== undefined && defaults !== null) {
+            hotkeys = defaults;
+          } else if (command?.hotkeys !== undefined && command?.hotkeys !== null) {
+            hotkeys = command.hotkeys;
+          } else {
+            hotkeys = current;
+          }
+        }
+        for (const hotkey of windowPrefixNormalizeHotkeyList(hotkeys)) {
+          entries.push({ commandId: String(commandId), ...hotkey });
+        }
+      } catch (_error) {
+        known = false;
+      }
+    }
+    return { known, entries };
+  } catch (_error) {
+    return { known: false, entries: [] };
+  }
 }
 
 function windowPrefixCaptureAncestorChain(group, rootSplit) {
@@ -473,39 +591,39 @@ class BobNavigationHotkeysWindowLayoutMixin {
     return result;
   }
 
-  snapshotWindowPrefixLayout() {
-    if (!(this.windowPrefixLeafIds instanceof WeakMap) ||
-        !(this.windowPrefixSplitIds instanceof WeakMap)) {
-      this.initializeWindowPrefixLayoutAdapter();
-    }
-    if (!(this.windowPrefixLeafById instanceof Map)) this.windowPrefixLeafById = new Map();
-    if (!(this.windowPrefixSplitById instanceof Map)) this.windowPrefixSplitById = new Map();
+  snapshotWindowPrefixMainArea() {
+    if (!(this.windowPrefixLeafIds instanceof WeakMap)) this.windowPrefixLeafIds = new WeakMap();
+    if (!(this.windowPrefixSplitIds instanceof WeakMap)) this.windowPrefixSplitIds = new WeakMap();
+    if (!Number.isFinite(this.windowPrefixIdSequence)) this.windowPrefixIdSequence = 0;
     const workspace = this.app?.workspace;
     const rootSplit = workspace?.rootSplit;
     if (!workspace || !rootSplit || typeof workspace.iterateRootLeaves !== "function") return null;
-    const activeLeaf = workspace.activeLeaf;
-    if (!windowPrefixIsInRoot(activeLeaf, rootSplit)) return null;
     const leaves = windowPrefixRootLeaves(workspace).filter((leaf) =>
       windowPrefixIsInRoot(leaf, rootSplit),
     );
-    if (!leaves.includes(activeLeaf)) return null;
     const groups = windowPrefixLayoutGroups(leaves);
     if (!groups.length) return null;
 
+    const leafById = new Map();
+    const splitById = new Map();
     const leafIds = new Map();
-    const splitIds = new Map();
     const splitSnapshots = [];
     for (const group of groups) {
-      const groupLeaves = leaves.filter((leaf) => windowPrefixLeafParent(leaf) === group);
+      const iteratedLeaves = leaves.filter((leaf) => windowPrefixLeafParent(leaf) === group);
+      const groupLeaves = Array.isArray(group.children)
+        ? [
+            ...group.children.filter((leaf) => iteratedLeaves.includes(leaf)),
+            ...iteratedLeaves.filter((leaf) => !group.children.includes(leaf)),
+          ]
+        : iteratedLeaves;
       const rect = windowPrefixReadRect(group);
       if (!groupLeaves.length || !rect) return null;
       const groupId = this.getWindowPrefixObjectId("split", group);
-      splitIds.set(group, groupId);
-      this.windowPrefixSplitById.set(groupId, group);
+      splitById.set(groupId, group);
       const snapshotLeaves = groupLeaves.map((leaf) => {
         const id = this.getWindowPrefixObjectId("leaf", leaf);
         leafIds.set(leaf, id);
-        this.windowPrefixLeafById.set(id, leaf);
+        leafById.set(id, leaf);
         let pinned = false;
         try { pinned = leaf.pinned === true; } catch (_error) { /* best effort */ }
         return { id, label: windowPrefixLiveLeafLabel(leaf), pinned };
@@ -524,17 +642,31 @@ class BobNavigationHotkeysWindowLayoutMixin {
         recency: groups.indexOf(group),
       });
     }
+    const activeLeaf = workspace.activeLeaf;
+    const activeLeafId = leaves.includes(activeLeaf) ? leafIds.get(activeLeaf) ?? null : null;
+    return { splits: splitSnapshots, activeLeafId, leafById, splitById };
+  }
+
+  snapshotWindowPrefixLayout() {
+    if (!(this.windowPrefixLeafIds instanceof WeakMap) ||
+        !(this.windowPrefixSplitIds instanceof WeakMap)) {
+      this.initializeWindowPrefixLayoutAdapter();
+    }
+    if (!(this.windowPrefixLeafById instanceof Map)) this.windowPrefixLeafById = new Map();
+    if (!(this.windowPrefixSplitById instanceof Map)) this.windowPrefixSplitById = new Map();
+    const workspace = this.app?.workspace;
+    const area = this.snapshotWindowPrefixMainArea();
+    if (!workspace || !area || !area.activeLeafId) return null;
+    const activeLeaf = area.leafById.get(area.activeLeafId);
+    if (!activeLeaf) return null;
+    const groups = [...area.splitById.values()];
     const api = inspectWindowPrefixLayoutApis(workspace, activeLeaf, groups);
     this.windowPrefixApiCanary = api;
-    this.windowPrefixLeafById = new Map(
-      [...leafIds.entries()].map(([leaf, id]) => [id, leaf]),
-    );
-    this.windowPrefixSplitById = new Map(
-      [...splitIds.entries()].map(([group, id]) => [id, group]),
-    );
+    this.windowPrefixLeafById = new Map(area.leafById);
+    this.windowPrefixSplitById = new Map(area.splitById);
     return {
-      activeLeafId: leafIds.get(activeLeaf),
-      splits: splitSnapshots,
+      activeLeafId: area.activeLeafId,
+      splits: area.splits,
       capabilities: api.capabilities,
     };
   }

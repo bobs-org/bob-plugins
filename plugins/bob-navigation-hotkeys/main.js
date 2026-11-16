@@ -121015,11 +121015,17 @@ const WINDOW_PREFIX_PALETTE_COMMANDS = [
   { id: "window-move-tab-left", name: "Move tab to left split", key: "H" },
   { id: "window-move-tab-right", name: "Move tab to right split", key: "L" },
 ];
-const WINDOW_PREFIX_TAB_JUMP_COMMANDS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
-  id: "window-jump-tab-" + n,
-  name: "Jump to tab " + n,
-  key: String(n),
-}));
+const WINDOW_PREFIX_TAB_JUMP_COMMANDS = [
+  { id: "window-jump-tab-1", name: "Jump to tab 1", key: "1" },
+  { id: "window-jump-tab-2", name: "Jump to tab 2", key: "2" },
+  { id: "window-jump-tab-3", name: "Jump to tab 3", key: "3" },
+  { id: "window-jump-tab-4", name: "Jump to tab 4", key: "4" },
+  { id: "window-jump-tab-5", name: "Jump to tab 5", key: "5" },
+  { id: "window-jump-tab-6", name: "Jump to tab 6", key: "6" },
+  { id: "window-jump-tab-7", name: "Jump to tab 7", key: "7" },
+  { id: "window-jump-tab-8", name: "Jump to tab 8", key: "8" },
+  { id: "window-jump-tab-9", name: "Jump to tab 9", key: "9" },
+];
 
 function windowPrefixPaletteNotice(message) {
   try {

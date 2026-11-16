@@ -13,8 +13,8 @@
 // Groups: --only spike runs the finding probes (1-5 below). --only actions
 // drives the shipped executor through runWindowPrefixPaletteKey against every
 // decision-contract vector. --only prefix runs the Ctrl+W prefix
-// state-machine cases. --only visual runs the hint screenshots and palette
-// probes. --only tabs drives in-place tab jumps through
+// state-machine cases. --only visual runs the hint and numbered-tab
+// screenshots plus palette probes. --only tabs drives in-place tab jumps through
 // runWindowPrefixPaletteKey("N") and Ctrl+W digits.
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
@@ -97,10 +97,9 @@ const HELP = [
   "  plus defaultPrevented close. Keymap scope restoration after every case.",
   "",
   "Visual group (--only visual):",
-  "  Palette command registration, then ring, card, move receipt, and",
-  "  focused-split underline screenshots in light and dark at one, two, and",
-  "  three splits, plus palette focus/move/window-keys probes with receipt",
-  "  and scope checks.",
+  "  Ring, card, move receipt, and split underline in light and dark at one,",
+  "  two, and three splits; numbered-tab idle/lit/flash in those layouts;",
+  "  13 tabs, stacked tabs, card ranges/row, and Linux-default hidden numerals.",
   "",
   "The --self-test run is an offline check only, never an Obsidian pass.",
 ].join("\n");
@@ -2143,6 +2142,7 @@ const VISUAL_PALETTE_IDS = Object.freeze([
   "bob-navigation-hotkeys:window-move-tab-left",
   "bob-navigation-hotkeys:window-move-tab-right",
   "bob-navigation-hotkeys:window-keys",
+  ...Array.from({ length: 9 }, (_unused, index) => `bob-navigation-hotkeys:window-jump-tab-${index + 1}`),
 ]);
 
 const VISUAL_UNDERLINE_PROBE = [
@@ -2173,6 +2173,187 @@ async function waitSignatureChange(client, before, label, timeout) {
   throw new Error("timed out waiting for " + label + ": still " + (after && after.signature));
 }
 
+async function runNumberedTabVisuals(client, record, findings, outDir, screenshots) {
+  const tabScreens = findings.visual.numberedTabs = {};
+  const numberedLayouts = VISUAL_LAYOUTS;
+
+  async function probeNumerals(label, options = {}) {
+    const probe = await client.evaluate(tabsMod.NUMERALS_PROBE, RPC_TIMEOUT_MS);
+    if (!probe || probe.ok !== true || probe.mismatch) {
+      throw new Error(label + " numeral parity failed: " + JSON.stringify(probe));
+    }
+    if (options.visible !== false && probe.bodyNumbers !== true) {
+      throw new Error(label + " numerals are hidden: " + JSON.stringify(probe));
+    }
+    if (options.lit === true && probe.bodyLit !== true) {
+      throw new Error(label + " numerals are not lit with the card: " + JSON.stringify(probe));
+    }
+    if (options.lit === false && probe.bodyLit === true) {
+      throw new Error(label + " numerals remained lit while idle: " + JSON.stringify(probe));
+    }
+    if (options.tabs != null && probe.catalog.length !== options.tabs) {
+      throw new Error(label + " tab count changed: " + JSON.stringify(probe.catalog));
+    }
+    if (options.flash && !probe.flashes.includes(options.flash)) {
+      throw new Error(label + " destination flash missing: " + JSON.stringify(probe.flashes));
+    }
+    return probe;
+  }
+
+  async function seedOverflowNotes() {
+    const names = tabsMod.TAB_EXTRA_NOTES.filter((name) => name !== "WP-LONG");
+    const seeded = await client.evaluate(
+      '((names) => (async () => { try { const v=window.app.vault; const out=[];'
+      + 'for(const name of names){const path=name+".md";if(v.getAbstractFileByPath(path)){out.push(path);continue;}'
+      + 'await v.create(path,"# "+name+"\\n\\nVisual tab fixture "+name+"\\n");out.push(path);}'
+      + 'return{ok:true,out};}catch(e){return{ok:false,error:String(e&&e.message||e)};} })())('
+      + JSON.stringify(names) + ')',
+      RPC_TIMEOUT_MS,
+    );
+    if (!seeded || !seeded.ok) throw new Error("could not seed overflow tabs: " + JSON.stringify(seeded));
+  }
+
+  async function captureIdle(theme, layout) {
+    const name = `visual/tabs-idle-${theme}-${layout.tag}`;
+    await runCase(record, name, async () => {
+      await prepareLayout(client, layout.signature);
+      await sleep(250);
+      const probe = await probeNumerals(name, { lit: false });
+      if (probe.stamped.length < 2) throw new Error(name + " has fewer than two stamped tabs");
+      screenshots.push(await screenshot(client, outDir, `visual-tabs-idle-${theme}-${layout.tag}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme][`idle-${layout.tag}`] = probe.stamped.length;
+      return `${probe.stamped.length} tabs numbered in ${layout.splits} split(s)`;
+    });
+  }
+
+  async function captureLit(theme, layout) {
+    const name = `visual/tabs-lit-${theme}-${layout.tag}`;
+    await runPrefixCase(record, client, name, async () => {
+      await prepareLayout(client, layout.signature);
+      await armPrefix(client);
+      await sleep(360);
+      const state = await prefixDebug(client);
+      if (!state.hostCarded || state.hostHidden) throw new Error(name + " card is not visible: " + JSON.stringify(state));
+      const probe = await probeNumerals(name, { lit: true });
+      screenshots.push(await screenshot(client, outDir, `visual-tabs-lit-${theme}-${layout.tag}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme][`lit-${layout.tag}`] = true;
+      return `card shown; ${probe.stamped.length} numerals lit`;
+    });
+  }
+
+  async function captureFlash(theme, layout) {
+    const name = `visual/tabs-flash-${theme}-${layout.tag}`;
+    await runPrefixCase(record, client, name, async () => {
+      await prepareLayout(client, layout.signature);
+      await armPrefix(client);
+      await key(client, { key: "1", code: "Digit1", text: "1" });
+      const deadline = Date.now() + 1200;
+      let probe = null;
+      while (Date.now() < deadline) {
+        probe = await client.evaluate(tabsMod.NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (probe && probe.ok && probe.flashes.includes("WP-A")) break;
+        await sleep(5);
+      }
+      if (!probe || !probe.flashes.includes("WP-A")) {
+        throw new Error(name + " missed the 220 ms destination flash: " + JSON.stringify(probe));
+      }
+      screenshots.push(await screenshot(client, outDir, `visual-tabs-flash-${theme}-${layout.tag}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme][`flash-${layout.tag}`] = probe.flashes;
+      return `WP-A flash captured in ${layout.splits} split(s)`;
+    });
+  }
+
+  async function captureRangeCard(theme, signature, label, fileLabel, expectedRanges, expectedAside) {
+    await runPrefixCase(record, client, `visual/${label}-${theme}`, async () => {
+      await prepareLayout(client, signature);
+      await armPrefix(client);
+      await sleep(360);
+      const state = await prefixDebug(client);
+      if (!state.hostCarded || state.hostHidden) throw new Error(label + " card is not visible: " + JSON.stringify(state));
+      const card = await client.evaluate(
+        '(()=>{const card=document.querySelector(".bob-wp-card");const row=card&&card.querySelector(".bob-wp-tabs-row");'
+        + 'return{ranges:Array.from(card?card.querySelectorAll(".bob-wp-pill-range"):[]).map((el)=>el.textContent||""),'
+        + 'row:row?String(row.textContent||""):""};})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!card || JSON.stringify(card.ranges) !== JSON.stringify(expectedRanges)) {
+        throw new Error(label + " pill ranges differ: " + JSON.stringify(card));
+      }
+      if (!card.row.includes("jump to that tab") || !card.row.includes(expectedAside)) {
+        throw new Error(label + " tabs row is incomplete: " + JSON.stringify(card));
+      }
+      screenshots.push(await screenshot(client, outDir, `${fileLabel}-${theme}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme][label] = card;
+      return JSON.stringify(card);
+    });
+  }
+
+  for (const dark of [false, true]) {
+    const theme = dark ? "dark" : "light";
+    await setTheme(client, dark);
+    for (const layout of numberedLayouts) {
+      await captureIdle(theme, layout);
+      await captureLit(theme, layout);
+      await captureFlash(theme, layout);
+    }
+
+    await runCase(record, `visual/tabs-stacked-${theme}`, async () => {
+      await prepareLayout(client, "[ WP-A  WP-B*  WP-C ]");
+      const stacked = await client.evaluate(
+        '(()=>{try{const g=window.app.workspace.activeLeaf.parent;'
+        + 'if(g&&typeof g.setStacked==="function"){g.setStacked(true);return{ok:true,method:"setStacked"};}'
+        + 'if(g&&g.containerEl&&g.containerEl.classList){g.containerEl.classList.add("mod-stacked");return{ok:true,method:"class"};}'
+        + 'return{ok:false,error:"no stacked API"};}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!stacked || !stacked.ok) throw new Error("stacked layout failed: " + JSON.stringify(stacked));
+      await sleep(250);
+      const probe = await probeNumerals("stacked " + theme, { lit: false, tabs: 3 });
+      screenshots.push(await screenshot(client, outDir, `visual-tabs-stacked-${theme}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme].stacked = { method: stacked.method, tabs: probe.stamped.length };
+      return `${stacked.method}; three numerals on stacked tabs`;
+    });
+
+    await captureRangeCard(
+      theme,
+      "[ WP-A  WP-B*  WP-C ] | [ WP-D'  WP-E  WP-F ]",
+      "tabs-card-ranges",
+      "visual-tabs-card-ranges",
+      ["1–3", "4–6"],
+      "it stays in its split",
+    );
+
+    await seedOverflowNotes();
+    const overflowSignature = "[ WP-A  WP-B  WP-C  WP-D  WP-E  WP-F  WP-G* ] | [ WP-H'  WP-I  WP-J  WP-K  WP-L  WP-M ]";
+    await runCase(record, `visual/tabs-overflow-${theme}`, async () => {
+      await prepareLayout(client, overflowSignature);
+      await sleep(300);
+      const probe = await probeNumerals("overflow " + theme, { lit: false, tabs: 13 });
+      if (probe.catalog.slice(0, 9).some((tab, index) => tab.expect !== String(index + 1))
+        || probe.catalog.slice(9).some((tab) => tab.expect !== null)) {
+        throw new Error("overflow catalog should number only 1–9: " + JSON.stringify(probe.catalog));
+      }
+      screenshots.push(await screenshot(client, outDir, `visual-tabs-overflow-${theme}`));
+      tabScreens[theme] = tabScreens[theme] || {};
+      tabScreens[theme].overflow = probe.catalog.map((tab) => tab.expect);
+      return "13 tabs; only first 9 numbered";
+    });
+    await captureRangeCard(
+      theme,
+      overflowSignature,
+      "tabs-card-overflow",
+      "visual-tabs-card-overflow",
+      ["1–7", "8–9"],
+      "4 more unnumbered",
+    );
+  }
+}
+
 async function runVisualMac(args, record, findings, outDir, screenshots) {
   const launch = await launchOwned(wplib.macHotkeys(), args.executable);
   let client = null;
@@ -2190,7 +2371,7 @@ async function runVisualMac(args, record, findings, outDir, screenshots) {
       if (!probe || !probe.ok) throw new Error("command probe failed: " + JSON.stringify(probe));
       const missing = VISUAL_PALETTE_IDS.filter((id, index) => !probe.found[index]);
       if (missing.length) throw new Error("palette commands missing: " + missing.join(", "));
-      return "6 window palette commands registered";
+      return `${VISUAL_PALETTE_IDS.length} window palette commands registered`;
     });
 
     for (const dark of [false, true]) {
@@ -2275,6 +2456,8 @@ async function runVisualMac(args, record, findings, outDir, screenshots) {
         });
       }
     }
+
+    await runNumberedTabVisuals(client, record, findings, outDir, screenshots);
 
     await runCase(record, "visual/palette-focus-right", async () => {
       await setTheme(client, false);
@@ -2722,7 +2905,10 @@ function selfTest() {
       "getMostRecentLeaf", "loadIfDeferred", "pushScope", "popScope", "Input.dispatchKeyEvent",
       "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active",
       "runPrefixMac", "runActionsMac", "actions/vector-", "runWindowPrefixPaletteKey",
-      "runTabsMac", "executeWindowPrefixFocusTab",
+      "runTabsMac", "executeWindowPrefixFocusTab", "runNumberedTabVisuals",
+      "visual-tabs-idle-", "visual-tabs-lit-", "visual-tabs-flash-",
+      "visual-tabs-card-ranges", "visual-tabs-card-overflow",
+      "visual-tabs-overflow-", "visual-tabs-stacked-",
       "prefix/focus-l", "getWindowPrefixDebugState",
       "runTabsLinux", "NUMERALS_PROBE", "bob-tab-numbers-lit",
       "bob-tab-number-flash", "data-bob-tab"]) {
@@ -2740,7 +2926,8 @@ function selfTest() {
       "tabs/prefix-already-here", "tabs/prefix-dom-parity", "tabs/prefix-renumber-open",
       "tabs/prefix-renumber-HL", "tabs/prefix-sidebar", "tabs/prefix-single-tab",
       "tabs/prefix-lit-card", "tabs/prefix-flash", "tabs/linux-numerals-hide",
-      "tabs/linux-ctrl-w-closes", "NUMERALS_PROBE", "data-bob-tab",
+      "tabs/linux-ctrl-w-closes", "visual.screenshots", "visual-tabs-linux-hidden-",
+      "NUMERALS_PROBE", "data-bob-tab",
       "bob-tab-numbers-lit", "bob-tab-number-flash", "runTabsLinuxGroup",
     ]) {
       if (!tabsSource.includes(token)) throw new Error("tabs e2e is missing " + token);
@@ -2805,7 +2992,7 @@ async function runTabsMac(args, record, findings, outDir, screenshots) {
   }, args, record, findings);
 }
 
-async function runTabsLinux(args, record, findings) {
+async function runTabsLinux(args, record, findings, visual = null) {
   await tabsMod.runTabsLinuxGroup({
     launchOwned,
     connectOwned,
@@ -2819,9 +3006,10 @@ async function runTabsLinux(args, record, findings) {
     prefixDebug,
     keymapFinger,
     sameKeymap,
+    screenshot,
     wplib,
     RPC_TIMEOUT_MS,
-  }, args, record, findings);
+  }, args, record, findings, visual);
 }
 
 async function runE2e(args) {
@@ -2848,6 +3036,7 @@ async function runE2e(args) {
     await runPrefixLinux(args, record, findings);
   } else if (group === "visual") {
     await runVisualMac(args, record, findings, outDir, screenshots);
+    await runTabsLinux(args, record, findings, { outDir, screenshots });
   } else if (group === "tabs") {
     await runTabsMac(args, record, findings, outDir, screenshots);
     await runTabsLinux(args, record, findings);

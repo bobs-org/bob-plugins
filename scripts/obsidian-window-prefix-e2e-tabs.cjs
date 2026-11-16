@@ -763,11 +763,11 @@ async function runTabsGroup(harness, args, record, findings) {
   }
 }
 
-async function runTabsLinuxGroup(harness, args, record, findings) {
+async function runTabsLinuxGroup(harness, args, record, findings, visual = null) {
   const {
     launchOwned, connectOwned, shutdownOwned, buildFromSignature,
     runCase, keys, ctrlW, sleep, leafCount, prefixDebug, keymapFinger, sameKeymap,
-    wplib, RPC_TIMEOUT_MS,
+    wplib, RPC_TIMEOUT_MS, screenshot,
   } = harness;
   const launch = await launchOwned(wplib.linuxDefaultHotkeys(), args.executable);
   let client = null;
@@ -790,6 +790,22 @@ async function runTabsLinuxGroup(harness, args, record, findings) {
         throw new Error("Linux idle headers carried data-bob-tab: " + JSON.stringify(probe.stamped));
       }
       findings.tabs.linuxHide = probe;
+      if (visual && visual.outDir && Array.isArray(visual.screenshots) && typeof screenshot === "function") {
+        for (const dark of [false, true]) {
+          const theme = dark ? "dark" : "light";
+          await client.evaluate(
+            '(()=>{document.body.classList.toggle("theme-dark",' + (dark ? "true" : "false")
+            + ');document.body.classList.toggle("theme-light",' + (dark ? "false" : "true") + ');return true;})()',
+          );
+          await sleep(300);
+          const themed = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+          if (!themed || themed.ok !== true || themed.bodyNumbers || themed.bodyLit
+            || themed.stamped.some((tab) => tab.number != null)) {
+            throw new Error(`Linux ${theme} theme unexpectedly showed numerals: ` + JSON.stringify(themed));
+          }
+          visual.screenshots.push(await screenshot(client, visual.outDir, `visual-tabs-linux-hidden-${theme}`));
+        }
+      }
       return "idle numerals hidden under Close tab";
     });
 

@@ -852,3 +852,255 @@ test("queue card points at Setup instead of the raw first message", () => {
   assert.doesNotMatch(root.textContent, /must be a mapping/);
   assert.ok(root.querySelector(".bob-bank-card-error"));
 });
+
+// --- Bank Setup card (setup-card). ---
+
+test("Setup card model preserves Category-card order and maps category gestures to guarded ops", () => {
+  const report = configReport({
+    categories: [
+      configCategory(),
+      configCategory({ key: "groceries", emoji: "🛒", label: "Groceries", hotkey: "g", line: 14, source_line: 14, rows: 2 }),
+      configCategory({ key: "income", emoji: "💵", label: "Income", builtin: true, declared: false, hotkey: "i", hotkey_source: "builtin_default", group: "Money moves", line: null, source_line: null, rows: 1 }),
+      configCategory({ key: "kids", emoji: "🧸", label: "Kids", hotkey: null, hotkey_source: "none", hidden: true, line: 20, source_line: 20, rows: 3 }),
+    ],
+  });
+  const model = H.bankSetupCardModel(report);
+  assert.equal(model.state, "valid");
+  assert.deepEqual(model.sections.map((section) => section.group), ["Everyday", "Money moves"]);
+  assert.deepEqual(model.sections[0].tiles.map((tile) => tile.key), ["coffee", "groceries"]);
+  assert.equal(model.hiddenTiles[0].key, "kids");
+  assert.equal(H.bankSetupCardSelectionByHotkey(report.categories, "g").key, "groceries");
+  assert.equal(H.bankSetupCardSelectionByHotkey(report.categories, "q"), null);
+
+  assert.deepEqual(H.bankSetupCardSetCategoryOp(report.categories[0], {
+    label: "Cafe", group: "Everyday", hotkey: "c", hotkeyTouched: false,
+  }), { op: "category.set", key: "coffee", set: { label: "Cafe" } });
+  assert.deepEqual(H.bankSetupCardSetCategoryOp(report.categories[0], {
+    label: "Coffee", group: "", hotkey: "", hotkeyTouched: false,
+  }), { op: "category.set", key: "coffee", unset: ["group"] });
+  const derived = configCategory({ key: "market", hotkey: "m", hotkey_source: "derived" });
+  assert.deepEqual(H.bankSetupCardSetCategoryOp(derived, {
+    label: "Market", group: "Everyday", hotkey: "m", hotkeyTouched: true,
+  }), { op: "category.set", key: "market", set: { label: "Market", hotkey: "m" } });
+  assert.deepEqual(H.bankSetupCardCategoryMoveOp(report.categories, "coffee", "forward"), {
+    op: "category.move", key: "coffee", after: "groceries",
+  });
+  const grouped = report.categories.concat(configCategory({ key: "family", label: "Family", group: "Family", hotkey: "f" }));
+  assert.deepEqual(H.bankSetupCardGroupMoveOp(grouped, "Everyday", "forward"), {
+    op: "group.move", group: "Everyday", after: "Family",
+  });
+  assert.deepEqual(H.bankSetupCardHiddenOp(report.categories[0]), {
+    op: "category.set", key: "coffee", set: { hidden: true },
+  });
+  assert.deepEqual(H.bankSetupCardRemoveOp(report.categories[0]), { op: "category.remove", key: "coffee" });
+  assert.equal(H.bankSetupCardRemoveOp(report.categories[2]), null);
+  assert.deepEqual(H.bankSetupCardRestoreOp(configCategory({ key: "income", builtin: true, declared: true })), {
+    op: "category.reset", key: "income",
+  });
+  assert.deepEqual(H.bankSetupCardGroupRenameOp("Everyday", "Daily"), {
+    op: "group.rename", group: "Everyday", to: "Daily",
+  });
+});
+
+function setupCardPlugin(report = configReport()) {
+  const plugin = makeSetupPlugin(null, { document: new Document() });
+  plugin.bankSetupCardActive = true;
+  plugin.bankVaultGeneration = 1;
+  plugin.apiBankRefresh = async () => ({ report, stale: false, error: null, generation: 1 });
+  plugin.applyOps = [];
+  plugin.previewAttempts = 0;
+  plugin.apiBankConfigUpdatePreview = async (envelopeText) => {
+    plugin.previewAttempts += 1;
+    const op = JSON.parse(envelopeText).ops[0];
+    if (plugin.previewAttempts === 1 && plugin.staleFirstPreview) {
+      return { ok: true, report: { ok: false, failure: { code: "stale_config", message: "bank config changed" } } };
+    }
+    return { ok: true, report: { ok: true, dry_run: true, changed: true, consequence: `Preview ${op.op}`, after_fingerprint: "sha256:abc", per_op: [], inverse_ops: [] } };
+  };
+  plugin.apiBankConfigUpdateApply = async (envelopeText) => {
+    const op = JSON.parse(envelopeText).ops[0];
+    plugin.applyOps.push(op);
+    return {
+      ok: true,
+      report: {
+        ok: true, dry_run: false, changed: true,
+        after_fingerprint: "sha256:next", inverse_ops: [{ op: "category.set", key: "coffee", set: { label: "Coffee" } }],
+        categories: report.categories, per_op: [{ op: op.op, key: op.key || "coffee" }], warnings: [], sync: null,
+      },
+    };
+  };
+  plugin.apiBankConfigVaultSyncRetry = async () => ({ ok: true });
+  plugin.app.workspace.getLeavesOfType = () => [];
+  return plugin;
+}
+
+test("Setup card selects by key, protects focused typing, and stages shared New category input", async () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  const before = modal.selection?.id;
+  const typed = { key: "g", target: { closest: () => ({}) }, preventDefault() { this.prevented = true; }, stopPropagation() {} };
+  modal.onKeyDown(typed);
+  assert.equal(modal.selection?.id, before, "letters in an input do not select a category");
+  assert.equal(typed.prevented, undefined);
+  const key = { key: "g", preventDefault() {}, stopPropagation() {} };
+  modal.onKeyDown(key);
+  assert.equal(modal.selection.key, "groceries");
+  const categoryButton = { getAttribute: (name) => name === "data-setup-card-category" ? "coffee" : null };
+  const enter = {
+    key: "Enter",
+    target: { closest: (selector) => selector === "[data-setup-card-category]" ? categoryButton : null },
+    preventDefault() {}, stopPropagation() {},
+  };
+  modal.onKeyDown(enter);
+  assert.equal(modal.selection.key, "coffee", "first Enter selects the focused category");
+  assert.equal(modal.stage, null);
+  modal.onKeyDown(enter);
+  assert.equal(modal.stage.kind, "edit", "second Enter edits the selected category");
+  modal.cancelStage();
+  modal.openNewCategoryStage();
+  assert.equal(modal.stage.kind, "new");
+  assert.equal(modal.stage.group, "Everyday");
+  modal.onFieldInput("label", "🍔 Fast food");
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "category.add", label: "🍔 Fast food", group: "Everyday", hotkey: "a" }]);
+  const cancel = { key: "q", target: { closest: () => ({}) }, preventDefault() { this.prevented = true; }, stopPropagation() {} };
+  await modal.onKeyDown(cancel);
+  assert.equal(cancel.prevented, true, "q cancels a stage even while an input has focus");
+  assert.equal(modal.stage, null);
+  modal.close();
+});
+
+test("Setup checks YAML action preserves its located line through one delegated click", () => {
+  const plugin = setupCardPlugin();
+  const calls = [];
+  plugin.bankSetupStartYamlExcursion = async (options) => { calls.push(options); return { ok: true }; };
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  const action = { getAttribute: (name) => name === "data-setup-action" ? "yaml" : name === "data-setup-line" ? "42" : null };
+  const event = {
+    target: { closest: (selector) => selector === "[data-setup-action]" ? action : null },
+    preventDefault() {}, stopPropagation() {},
+  };
+  modal.onClick(event);
+  assert.equal(modal.closed, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].line, 42);
+});
+
+test("Setup card requires a current preview before Apply and exposes the shared Undo stage", async () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  modal.beginGesture({ op: "category.set", key: "coffee", set: { hidden: true } }, "Hide Coffee");
+  assert.equal(await modal.applyStage(), false, "Enter is inert while the preview is pending");
+  assert.equal(plugin.applyOps.length, 0);
+  await modal.session.previewNow();
+  assert.equal(modal.session.getState().canApply, true);
+  assert.equal(await modal.applyStage(), true);
+  assert.deepEqual(plugin.applyOps[0], { op: "category.set", key: "coffee", set: { hidden: true } });
+  assert.equal(modal.savedMessage, "Saved · Ctrl+Z undo");
+  assert.equal(modal.stageUndo(), true);
+  assert.equal(modal.stage.kind, "undo");
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "category.set", key: "coffee", set: { label: "Coffee" } }]);
+  modal.close();
+});
+
+test("stale Setup preview refreshes data, keeps the draft, and waits for explicit re-preview", async () => {
+  const plugin = setupCardPlugin();
+  plugin.staleFirstPreview = true;
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  modal.beginGesture({ op: "category.set", key: "coffee", set: { hidden: true } }, "Hide Coffee");
+  const first = await modal.session.previewNow();
+  assert.equal(first.ok, false);
+  await modal.staleRefreshFlight;
+  assert.equal(modal.staleMessage.includes("draft is kept"), true);
+  assert.deepEqual(modal.session.getState().draftOps, [{ op: "category.set", key: "coffee", set: { hidden: true } }]);
+  assert.equal(modal.session.getState().canApply, false);
+  assert.equal(await modal.repreview(), true);
+  assert.equal(modal.session.getState().canApply, true);
+  modal.close();
+});
+
+test("invalid config opens Checks read-only and the palette command is registered", async () => {
+  const invalid = configReport({
+    ok: false,
+    state: "invalid",
+    findings: [{ severity: "error", line: 14, message: "duplicate hotkey", key_path: "bank.categories.coffee.hotkey" }],
+  });
+  const plugin = setupCardPlugin(invalid);
+  plugin.setupBankSetupCard();
+  assert.ok(plugin.commands.some((command) => command.id === "edit-bank-setup" && command.name === "Edit bank setup"));
+  const opened = await plugin.openBankSetupCard();
+  assert.equal(opened.modal.section, "checks");
+  assert.equal(opened.modal.readOnly, true);
+  opened.modal.close();
+  plugin.teardownBankSetupCard();
+});
+
+test("Setup card paints its loading shell before the first report arrives", () => {
+  const modal = new H.BankSetupCardModal({ document: new Document() }, { report: null });
+  modal.errorMessage = "Loading the current bank config…";
+  modal.open();
+  assert.equal(modal.model.state, "loading");
+  assert.match(modal.errorMessage, /Loading the current bank config/);
+  modal.close();
+});
+
+test("bank YAML Done stays on an invalid line and returns only after a valid fresh report", async () => {
+  const invalid = configReport({ ok: false, state: "invalid", findings: [{ severity: "error", line: 14, message: "duplicate hotkey" }] });
+  const plugin = setupCardPlugin(invalid);
+  plugin.albumYamlExcursionDisposed = false;
+  plugin.albumYamlExcursions = new Map();
+  plugin.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  const cursor = {};
+  const leaf = { view: { file: { path: "bank.md" }, editor: { setCursor: (value) => Object.assign(cursor, value) } } };
+  const record = { albumPath: "bank.md", kind: "bank", viewState: {}, selectedSection: "categories", reopenCard: false };
+  plugin.albumYamlExcursions.set(leaf, record);
+  const refused = await plugin.bankSetupYamlDoneAttempt(leaf, record);
+  assert.equal(refused.reason, "invalid-config");
+  assert.deepEqual(cursor, { line: 13, ch: 0 });
+  assert.equal(plugin.albumYamlExcursions.has(leaf), true);
+  plugin.apiBankRefresh = async () => ({ report: configReport(), stale: false, error: null, generation: 2 });
+  const accepted = await plugin.bankSetupYamlDoneAttempt(leaf, record);
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.reopened, false);
+  assert.equal(plugin.albumYamlExcursions.has(leaf), false);
+});
+
+test("valid bank YAML Done restores the prior view and reopens the card selection", async () => {
+  const plugin = setupCardPlugin();
+  plugin.albumYamlExcursionDisposed = false;
+  plugin.albumYamlExcursions = new Map();
+  plugin.albumYamlSaveExcursionEditors = async () => ({ ok: true });
+  const leaf = {
+    view: { file: { path: "bank.md" }, editor: {} },
+    setViewState: async (state) => {
+      leaf.view.file.path = state.state.file;
+      plugin.albumYamlExcursionHandleFileOpen({ path: state.state.file });
+    },
+  };
+  const selection = { type: "category", key: "groceries", group: "Everyday", id: "category:groceries" };
+  const record = {
+    albumPath: "bank.md", kind: "bank", viewState: { state: { file: "daily.md" } },
+    selectedSection: "rules", selection, reopenCard: true,
+  };
+  plugin.albumYamlExcursions.set(leaf, record);
+  let reopenedOptions = null;
+  plugin.openBankSetupCard = async (options) => { reopenedOptions = options; return { modal: {} }; };
+  const result = await plugin.bankSetupYamlDoneAttempt(leaf, record);
+  assert.deepEqual(result, { ok: true, reopened: true });
+  assert.deepEqual(reopenedOptions, { report: configReport(), section: "rules", selection });
+  assert.equal(plugin.albumYamlExcursions.has(leaf), false);
+  assert.equal(leaf.view.file.path, "daily.md");
+});
+
+test("Setup header shows Edit on desktop valid/invalid states and degrades without it on mobile", () => {
+  const doc = new Document();
+  const valid = H.bankSetupModel(configReport(), { desktop: true });
+  assert.ok(H.bankSetupBuildEl(valid, {}, doc).querySelector(".bob-bank-setup-edit"));
+  const invalid = H.bankSetupModel(configReport({ ok: false, state: "invalid" }), { desktop: true });
+  assert.ok(H.bankSetupBuildEl(invalid, {}, doc).querySelector(".bob-bank-setup-edit"));
+  const mobile = H.bankSetupModel(configReport(), { desktop: false });
+  assert.equal(H.bankSetupBuildEl(mobile, {}, doc).querySelector(".bob-bank-setup-edit"), null);
+});

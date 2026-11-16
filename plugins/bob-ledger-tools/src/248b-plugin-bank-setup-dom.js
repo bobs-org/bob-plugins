@@ -495,6 +495,19 @@ function bankSetupBuildEl(model, handlers, doc) {
     return root;
   }
   bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.collapsedLine, null);
+  if (model.desktop && (model.state === "valid" || model.state === "invalid")) {
+    const edit = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Edit", {
+      type: "button",
+      "data-bank-setup-focus": "edit",
+      "aria-label": "Edit bank setup",
+    });
+    if (edit) {
+      bankSetupListen(edit, () => {
+        if (handlers && typeof handlers.onEdit === "function") handlers.onEdit();
+      });
+      head.appendChild(edit);
+    }
+  }
   const yaml = bankSetupYamlButton(doc, handlers);
   if (yaml) {
     head.appendChild(yaml);

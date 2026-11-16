@@ -163,6 +163,10 @@
   "248f-plugin-bank-category-new-model.js",
   "248g-plugin-bank-category-new-stage.js",
   "248h-plugin-bank-subscription-linker.js",
+  "248i-plugin-bank-setup-card-model.js",
+  "248j-plugin-bank-setup-card-dom.js",
+  "248k-plugin-bank-setup-card.js",
+  "248l-plugin-bank-setup-card-entrypoints.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
@@ -281,5 +285,6 @@
   "364-exports-bank-subscription.js",
   "365-exports-bank-config-update.js",
   "366-exports-bank-subscription-linker.js",
-  "367-exports-bank-subscription-surfaces.js"
+  "367-exports-bank-subscription-surfaces.js",
+  "367-exports-bank-setup-card.js"
 ]

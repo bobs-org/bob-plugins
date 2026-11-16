@@ -60,6 +60,7 @@ const CM_SHEET_SURFACE_ROWS = [
   { plugin: "bob-navigation-hotkeys", id: "open-relation-labels-manager", title: "Relation labels manager", section: "tasks" },
   { plugin: "bob-ledger-tools", id: "open-reading-board", title: "Reading Board", section: "vault" },
   { plugin: "bob-ledger-tools", id: "edit-album-schema", title: "Edit album schema", section: "vault" },
+  { plugin: "bob-ledger-tools", id: "edit-bank-setup", title: "Edit bank setup", section: "vault" },
   { plugin: "bob-articles", id: "format-article", title: "Format this article", section: "vault" },
 ];
 

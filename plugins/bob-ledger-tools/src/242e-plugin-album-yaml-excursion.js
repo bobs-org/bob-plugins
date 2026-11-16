@@ -57,7 +57,7 @@ function albumYamlDoneButtonDoc(host) {
   return null;
 }
 
-function albumYamlBuildDoneEl(doc, albumPath) {
+function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   if (!doc || typeof doc.createElement !== "function") return null;
   let button = null;
   try {
@@ -69,7 +69,7 @@ function albumYamlBuildDoneEl(doc, albumPath) {
   button.setAttribute("type", "button");
   button.setAttribute("class", "bob-album-yaml-done");
   button.setAttribute("data-album-yaml-done", albumPath || "");
-  button.setAttribute("aria-label", "Done editing album schema");
+  button.setAttribute("aria-label", kind === "bank" ? "Done editing bank setup" : "Done editing album schema");
   try {
     button.textContent = "Done";
   } catch (_) {}
@@ -152,8 +152,13 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
     const record = {
       albumPath,
+      kind: details.kind === "bank" ? "bank" : "album",
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
+      selectedSection: typeof details.selectedSection === "string" ? details.selectedSection : "categories",
+      selection: details.selection && typeof details.selection === "object" ? { ...details.selection } : null,
+      reopenCard: details.reopenCard === true,
+      restoring: false,
       fingerprint: typeof details.fingerprint === "string" ? details.fingerprint : "",
       startedAt: Date.now(),
       doneEl: null,
@@ -182,7 +187,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     if (!doc && typeof document !== "undefined") {
       try { doc = document; } catch (_) {}
     }
-    const el = albumYamlBuildDoneEl(doc || albumYamlDoneButtonDoc(container), record.albumPath);
+    const el = albumYamlBuildDoneEl(doc || albumYamlDoneButtonDoc(container), record.albumPath, record.kind);
     if (!el) return null;
     try {
       el.addEventListener?.("click", (event) => {
@@ -229,7 +234,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         const leafPath = leaf?.view?.file?.path
           ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
           : openPath;
-        if (openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
+        if (!record.restoring && openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
           this.albumYamlExcursionClear(leaf);
         } else if (!openPath && !leafPath) {
           this.albumYamlExcursionClear(leaf);
@@ -283,6 +288,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   }
 
   async albumYamlDoneAttempt(leaf, record) {
+    if (record?.kind === "bank" && typeof this.bankSetupYamlDoneAttempt === "function") {
+      return this.bankSetupYamlDoneAttempt(leaf, record);
+    }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };
     try {

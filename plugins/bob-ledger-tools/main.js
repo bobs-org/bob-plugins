@@ -34433,7 +34433,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupStatsBlock();
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
-    this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup();
+    this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard();
     this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
@@ -34555,7 +34555,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       // Reading Board block teardown is best-effort.
     }
     try {
-      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankSetup(); this.teardownBankData(); this.teardownBankActions(); this.teardownBankWalk();
+      this.teardownReadingBoardData(); this.teardownBankCards(); this.teardownBankBadge(); this.teardownBankMarks(); this.teardownBankSetupCard(); this.teardownBankSetup(); this.teardownBankData(); this.teardownBankActions(); this.teardownBankWalk();
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
@@ -66373,7 +66373,7 @@ function albumYamlDoneButtonDoc(host) {
   return null;
 }
 
-function albumYamlBuildDoneEl(doc, albumPath) {
+function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   if (!doc || typeof doc.createElement !== "function") return null;
   let button = null;
   try {
@@ -66385,7 +66385,7 @@ function albumYamlBuildDoneEl(doc, albumPath) {
   button.setAttribute("type", "button");
   button.setAttribute("class", "bob-album-yaml-done");
   button.setAttribute("data-album-yaml-done", albumPath || "");
-  button.setAttribute("aria-label", "Done editing album schema");
+  button.setAttribute("aria-label", kind === "bank" ? "Done editing bank setup" : "Done editing album schema");
   try {
     button.textContent = "Done";
   } catch (_) {}
@@ -66468,8 +66468,13 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
     const record = {
       albumPath,
+      kind: details.kind === "bank" ? "bank" : "album",
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
+      selectedSection: typeof details.selectedSection === "string" ? details.selectedSection : "categories",
+      selection: details.selection && typeof details.selection === "object" ? { ...details.selection } : null,
+      reopenCard: details.reopenCard === true,
+      restoring: false,
       fingerprint: typeof details.fingerprint === "string" ? details.fingerprint : "",
       startedAt: Date.now(),
       doneEl: null,
@@ -66498,7 +66503,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     if (!doc && typeof document !== "undefined") {
       try { doc = document; } catch (_) {}
     }
-    const el = albumYamlBuildDoneEl(doc || albumYamlDoneButtonDoc(container), record.albumPath);
+    const el = albumYamlBuildDoneEl(doc || albumYamlDoneButtonDoc(container), record.albumPath, record.kind);
     if (!el) return null;
     try {
       el.addEventListener?.("click", (event) => {
@@ -66545,7 +66550,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         const leafPath = leaf?.view?.file?.path
           ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
           : openPath;
-        if (openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
+        if (!record.restoring && openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
           this.albumYamlExcursionClear(leaf);
         } else if (!openPath && !leafPath) {
           this.albumYamlExcursionClear(leaf);
@@ -66599,6 +66604,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   }
 
   async albumYamlDoneAttempt(leaf, record) {
+    if (record?.kind === "bank" && typeof this.bankSetupYamlDoneAttempt === "function") {
+      return this.bankSetupYamlDoneAttempt(leaf, record);
+    }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };
     try {
@@ -79532,6 +79540,19 @@ function bankSetupBuildEl(model, handlers, doc) {
     return root;
   }
   bankSetupAppend(head, "span", "bob-bank-setup-collapsed", model.collapsedLine, null);
+  if (model.desktop && (model.state === "valid" || model.state === "invalid")) {
+    const edit = bankSetupEl(doc, "button", "bob-bank-setup-edit", "⊞ Edit", {
+      type: "button",
+      "data-bank-setup-focus": "edit",
+      "aria-label": "Edit bank setup",
+    });
+    if (edit) {
+      bankSetupListen(edit, () => {
+        if (handlers && typeof handlers.onEdit === "function") handlers.onEdit();
+      });
+      head.appendChild(edit);
+    }
+  }
   const yaml = bankSetupYamlButton(doc, handlers);
   if (yaml) {
     head.appendChild(yaml);
@@ -79776,8 +79797,13 @@ class BobLedgerToolsBankSetupMixin {
       handlers: {
         onToggle: () => self.bankSetupToggleExpanded(sourcePath),
         onYaml: () => {
-          void self.bankSetupJumpYaml(sourcePath, model && model.line);
+          if (self.bankSetupDesktop()) {
+            void self.bankSetupStartYamlExcursion({ sourcePath, line: model && model.line, fromCard: false });
+          } else {
+            void self.bankSetupJumpYaml(sourcePath, model && model.line);
+          }
         },
+        onEdit: () => { void self.openBankSetupCard({ sourcePath }); },
         onJump: (line) => {
           void self.bankSetupJumpYaml(
             sourcePath,
@@ -82263,6 +82289,1211 @@ try {
     });
   }
 } catch (_) {}
+// ---- src/248i-plugin-bank-setup-card-model.js ----
+// Pure Setup-card models and gesture envelopes. Bob owns validation, derived
+// keys, ordering, consequences, and every write; these helpers only translate
+// an explicit card gesture into one guarded config op.
+const BANK_SETUP_CARD_SECTION_ORDER = ["categories", "accounts", "rules", "checks"];
+const BANK_SETUP_CARD_SECTION_LABELS = {
+  categories: "Categories",
+  accounts: "Accounts",
+  rules: "Rules",
+  checks: "Checks",
+};
+
+function bankSetupCardModel(report, selection = null) {
+  const setup = bankSetupModel(report, { desktop: true, expanded: true });
+  const categories = Array.isArray(report?.categories) ? report.categories : [];
+  const items = [];
+  const sections = (setup.sections || []).map((section) => {
+    const group = section.group || "";
+    const enriched = { ...section, items: [] };
+    if (group) {
+      const item = {
+        type: "group", group, id: `group:${group}`, label: group,
+        builtin: group === BANK_SETUP_MONEY_GROUP,
+        count: Array.isArray(section.tiles) ? section.tiles.length : 0,
+      };
+      enriched.items.push(item);
+      items.push(item);
+    }
+    enriched.tiles = (section.tiles || []).map((tile) => {
+      const entry = categories.find((candidate) => candidate && candidate.key === tile.key) || {};
+      const full = bankSetupTile(entry) || tile;
+      const item = { type: "category", key: tile.key, id: `category:${tile.key}`, entry, tile: { ...tile, ...full } };
+      enriched.items.push(item);
+      items.push(item);
+      return item.tile;
+    });
+    return enriched;
+  });
+  const hiddenTiles = (setup.hiddenTiles || []).map((tile) => {
+    const entry = categories.find((candidate) => candidate && candidate.key === tile.key) || {};
+    const item = { type: "category", key: tile.key, id: `category:${tile.key}`, entry, tile: { ...tile, hidden: true } };
+    return item.tile;
+  });
+  if (hiddenTiles.length) {
+    items.push({ type: "group", group: "", id: "group:hidden", label: "HIDDEN", hidden: true, count: hiddenTiles.length });
+    for (const tile of hiddenTiles) {
+      const entry = categories.find((candidate) => candidate && candidate.key === tile.key) || {};
+      items.push({ type: "category", key: tile.key, id: `category:${tile.key}`, entry, tile });
+    }
+  }
+  const chosen = selection && items.find((item) => item.id === selection.id)
+    ? items.find((item) => item.id === selection.id)
+    : items.find((item) => item.type === "category") || items[0] || null;
+  return {
+    ...setup,
+    categories,
+    sections,
+    hiddenTiles,
+    items,
+    selection: chosen ? { type: chosen.type, key: chosen.key || null, group: chosen.group || null, id: chosen.id } : null,
+    selectedItem: chosen,
+    canEdit: setup.state === "valid" && report?.state === "valid",
+  };
+}
+
+function bankSetupCardSelection(model, id) {
+  const item = (model && Array.isArray(model.items) ? model.items : []).find((candidate) => candidate.id === id);
+  return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+}
+
+function bankSetupCardSelectionByHotkey(categories, hotkey) {
+  const wanted = typeof hotkey === "string" && hotkey.length === 1 ? hotkey.toLowerCase() : "";
+  if (!wanted || wanted === BANK_CONFIG_RESERVED_HOTKEY) return null;
+  const entry = bankCategoryVisible(categories).find((item) => String(item.hotkey || "").toLowerCase() === wanted);
+  return entry ? { type: "category", key: entry.key, group: entry.group || null, id: `category:${entry.key}` } : null;
+}
+
+function bankSetupCardMoveSelection(model, selection, direction) {
+  const items = Array.isArray(model?.items) ? model.items : [];
+  if (!items.length) return null;
+  const current = selection && items.findIndex((item) => item.id === selection.id);
+  const at = Number.isInteger(current) && current >= 0 ? current : 0;
+  const next = Math.max(0, Math.min(items.length - 1, at + (direction === "back" ? -1 : 1)));
+  const item = items[next];
+  return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+}
+
+function bankSetupCardSetCategoryOp(entry, draft = {}) {
+  if (!entry || typeof entry.key !== "string" || !entry.key) return null;
+  const set = {};
+  const unset = [];
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  if (label && label !== (entry.label || entry.key)) set.label = label;
+  const group = typeof draft.group === "string" ? draft.group.trim() : "";
+  const oldGroup = typeof entry.group === "string" ? entry.group.trim() : "";
+  if (group !== oldGroup) {
+    if (group) set.group = group;
+    else if (oldGroup) unset.push("group");
+  }
+  if (draft.hotkeyTouched === true) {
+    const hotkey = typeof draft.hotkey === "string" ? draft.hotkey.trim().toLowerCase() : "";
+    const oldHotkey = typeof entry.hotkey === "string" ? entry.hotkey.toLowerCase() : "";
+    if (hotkey) {
+      if (hotkey !== oldHotkey || entry.hotkey_source !== "explicit") set.hotkey = hotkey;
+    } else if (oldHotkey) {
+      unset.push("hotkey");
+    }
+  }
+  if (!Object.keys(set).length && !unset.length) return null;
+  return { op: "category.set", key: entry.key, ...(Object.keys(set).length ? { set } : {}), ...(unset.length ? { unset } : {}) };
+}
+
+function bankSetupCardHotkeyStatus(categories, hotkey, ignoreKey = "") {
+  const key = typeof hotkey === "string" ? hotkey.trim().toLowerCase() : "";
+  if (!key) return { kind: "empty", owner: null, canApply: true, text: "" };
+  if (key === BANK_CONFIG_RESERVED_HOTKEY) return { kind: "reserved", owner: null, canApply: false, text: "q cancels the card" };
+  if (!bankConfigIsHotkeyChar(key)) return { kind: "invalid", owner: null, canApply: false, text: "use a letter or digit" };
+  const owner = bankConfigHotkeyOwner(categories, key);
+  if (owner && owner.key !== ignoreKey) {
+    const name = bankCategoryTileLabel(owner);
+    return { kind: "taken", owner, canApply: false, text: `taken by ${name}` };
+  }
+  return { kind: "free", owner: null, canApply: true, text: "" };
+}
+
+function bankSetupCardCategoryMoveOp(categories, key, direction) {
+  const entries = (Array.isArray(categories) ? categories : []).filter((entry) => entry && entry.declared !== false && (entry.group || "") === ((bankCategoryByKey(categories, key) || {}).group || ""));
+  const at = entries.findIndex((entry) => entry.key === key);
+  const neighbor = entries[at + (direction === "back" ? -1 : 1)];
+  if (at < 0 || !neighbor) return null;
+  return { op: "category.move", key, [direction === "back" ? "before" : "after"]: neighbor.key };
+}
+
+function bankSetupCardGroupMoveOp(categories, group, direction) {
+  if (!group || group === BANK_SETUP_MONEY_GROUP) return null;
+  const groups = bankConfigGroups(categories).filter((item) => item !== BANK_SETUP_MONEY_GROUP);
+  const at = groups.indexOf(group);
+  const neighbor = groups[at + (direction === "back" ? -1 : 1)];
+  if (at < 0 || !neighbor) return null;
+  return { op: "group.move", group, [direction === "back" ? "before" : "after"]: neighbor };
+}
+
+function bankSetupCardHiddenOp(entry) {
+  return entry && typeof entry.key === "string"
+    ? { op: "category.set", key: entry.key, set: { hidden: entry.hidden !== true } }
+    : null;
+}
+
+function bankSetupCardRemoveOp(entry) {
+  return entry && typeof entry.key === "string" && entry.builtin !== true && entry.declared !== false
+    ? { op: "category.remove", key: entry.key }
+    : null;
+}
+
+function bankSetupCardRestoreOp(entry) {
+  return entry && typeof entry.key === "string" && entry.builtin === true && entry.declared === true
+    ? { op: "category.reset", key: entry.key }
+    : null;
+}
+
+function bankSetupCardGroupRenameOp(group, to) {
+  const next = typeof to === "string" ? to.trim() : "";
+  if (!group || !next || next === group || group === BANK_SETUP_MONEY_GROUP) return null;
+  return { op: "group.rename", group, to: next };
+}
+
+function bankSetupCardStatus(report) {
+  if (!report) return { state: "unavailable", readOnly: true, label: "Loading the current bank config report." };
+  const state = String(report?.state || "missing");
+  if (state === "valid") return { state, readOnly: false, label: "✓ bank: is valid — bob uses it as shown" };
+  if (state === "invalid") return { state, readOnly: true, label: "✗ bank: has problems — fix the located lines in YAML" };
+  if (state === "missing" || report?.teaching_empty === true) return { state: "missing", readOnly: true, label: "bank: mapping is missing — add it in YAML" };
+  return { state: "unavailable", readOnly: true, label: "Setup needs a current bank config report." };
+}
+// ---- src/248j-plugin-bank-setup-card-dom.js ----
+// Safe DOM painter for the keyboard-first Bank setup modal. Report strings
+// are inserted as text and category tiles share the header's tile component.
+function bankSetupCardAppend(parent, tag, className, text, attrs = {}) {
+  const doc = parent && parent.ownerDocument;
+  const node = typeof bankSetupEl === "function"
+    ? bankSetupEl(doc, tag, className, text, attrs)
+    : null;
+  if (node && parent && typeof parent.appendChild === "function") parent.appendChild(node);
+  return node;
+}
+
+function bankSetupCardListen(node, handler) {
+  if (!node || typeof handler !== "function") return;
+  if (typeof bankSetupListen === "function") bankSetupListen(node, handler);
+  else node.addEventListener?.("click", handler);
+}
+
+function bankSetupCardInput(parent, modal, field, caption, value, options = {}) {
+  const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
+  if (!row) return null;
+  bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", caption);
+  const input = bankSetupCardAppend(row, "input", "bob-bank-setup-card-input", null, {
+    type: "text",
+    "data-setup-field": field,
+    "data-setup-card-focus": field,
+    "aria-label": caption,
+    placeholder: options.placeholder || "",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  if (!input) return null;
+  input.value = typeof value === "string" ? value : "";
+  input.addEventListener?.("input", (event) => {
+    modal.onFieldInput(field, event?.target?.value);
+  });
+  input.addEventListener?.("focus", () => {
+    if (modal.stage) modal.stage.focus = field;
+  });
+  return input;
+}
+
+function bankSetupCardPaintTabs(root, modal, model) {
+  const tabs = bankSetupCardAppend(root, "div", "bob-bank-setup-card-tabs", null, {
+    role: "tablist",
+    "aria-label": "Bank setup sections",
+  });
+  if (!tabs) return;
+  for (const section of BANK_SETUP_CARD_SECTION_ORDER) {
+    const invalidBadge = section === "checks" && model.errorCount > 0 ? ` · ${model.errorCount}` : "";
+    const button = bankSetupCardAppend(tabs, "button", "bob-bank-setup-card-tab",
+      `${BANK_SETUP_CARD_SECTION_LABELS[section]}${invalidBadge}`, {
+        type: "button",
+        role: "tab",
+        "data-setup-section": section,
+        "aria-selected": modal.section === section ? "true" : "false",
+        "aria-controls": "bob-bank-setup-card-panel",
+        "data-setup-card-focus": `tab-${section}`,
+      });
+    if (!button) continue;
+    button.classList?.toggle?.("is-active", modal.section === section);
+  }
+}
+
+function bankSetupCardPaintTile(parent, modal, item, doc) {
+  const selected = modal.selection?.id === item.id;
+  const tile = item.tile;
+  const button = bankSharedCategoryTile(doc, tile, {
+    card: true,
+    selected,
+    disabled: modal.busy,
+  });
+  if (!button) return null;
+  button.setAttribute?.("data-setup-card-category", item.key);
+  button.setAttribute?.("aria-label", tile.ariaLabel || `${tile.text || tile.label}; ${tile.rows || 0} rows`);
+  button.setAttribute?.("data-setup-card-focus", `category-${item.key}`);
+  if (tile.hidden) button.classList?.add?.("is-hidden");
+  const keycap = button.querySelector?.(".bob-bank-category-keycap");
+  if (keycap && tile.keycapStyle === "dashed") keycap.classList?.add?.("is-derived");
+  if (Number.isInteger(tile.rows) && tile.rows > 0) {
+    bankSetupCardAppend(button, "span", "bob-bank-setup-card-count", String(tile.rows), { "aria-label": `${tile.rows} rows` });
+  }
+  bankSetupCardListen(button, () => modal.selectItem(item.id));
+  parent.appendChild?.(button);
+  return button;
+}
+
+function bankSetupCardPaintCategories(panel, modal, model, doc) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Letters select a category. Enter edits it; all changes preview through bob.");
+  if (!model.categories.length) {
+    bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No categories are available.");
+  }
+  for (const section of model.sections) {
+    const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group");
+    if (!wrap) continue;
+    if (section.group) {
+      const groupItem = model.items.find((item) => item.type === "group" && item.group === section.group);
+      const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", section.group, {
+        type: "button",
+        "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
+        "data-setup-card-group": section.group,
+        "data-setup-card-focus": `group-${section.group}`,
+      });
+      bankSetupCardListen(label, () => groupItem && modal.selectItem(groupItem.id));
+      if (section.group === BANK_SETUP_MONEY_GROUP) bankSetupCardAppend(wrap, "span", "bob-bank-setup-card-group-note", "built in · shown first for money in");
+    }
+    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, { role: "group", "aria-label": section.group || "Ungrouped categories" });
+    for (const tile of section.tiles || []) {
+      const item = model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key);
+      if (item) bankSetupCardPaintTile(tiles, modal, item, doc);
+    }
+  }
+  if (model.hiddenTiles.length) {
+    const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group is-hidden-group");
+    const groupItem = model.items.find((item) => item.id === "group:hidden");
+    const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", "HIDDEN", {
+      type: "button", "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
+      "data-setup-card-group": "__hidden__", "data-setup-card-focus": "group-hidden",
+    });
+    bankSetupCardListen(label, () => groupItem && modal.selectItem(groupItem.id));
+    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, { role: "group", "aria-label": "Hidden categories" });
+    for (const tile of model.hiddenTiles) {
+      const item = model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key);
+      if (item) bankSetupCardPaintTile(tiles, modal, item, doc);
+    }
+  }
+  const newTile = bankCategoryNewTile();
+  const add = bankSetupCardAppend(panel, "button", "bob-bank-category-tile bob-bank-setup-card-new", null, {
+    type: "button", "data-setup-new-category": "true", "data-setup-card-focus": "new-category",
+    "aria-label": "New category",
+  });
+  if (add) {
+    bankSetupCardAppend(add, "span", "bob-bank-category-keydot", "＋", { "aria-hidden": "true" });
+    bankSetupCardAppend(add, "span", "bob-bank-category-tile-label", newTile.label);
+    add.disabled = modal.readOnly || modal.busy;
+  }
+}
+
+function bankSetupCardPaintAccounts(panel, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Accounts are shown from bob's current report.");
+  if (!model.accounts.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No accounts are configured.");
+  const list = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-readonly-list", null, { role: "list", "aria-label": "Accounts" });
+  for (const account of model.accounts) {
+    const row = bankSetupCardAppend(list, "div", "bob-bank-setup-card-readonly-row", null, { role: "listitem" });
+    bankSetupCardAppend(row, "strong", "", account.label);
+    bankSetupCardAppend(row, "span", "", [account.kind, account.default ? "default" : "", account.status].filter(Boolean).join(" · "));
+  }
+}
+
+function bankSetupCardPaintRules(panel, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom on imports and hints.");
+  if (!model.rules.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No rules are configured.");
+  const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-readonly-list", null, { "aria-label": "Rules" });
+  for (const rule of model.rules) {
+    const row = bankSetupCardAppend(list, "li", "bob-bank-setup-card-readonly-row");
+    bankSetupCardAppend(row, "strong", "", `${rule.match} → ${rule.catLabel || "no category"}`);
+    if (rule.payee || rule.link) bankSetupCardAppend(row, "span", "", [rule.payee, rule.link].filter(Boolean).join(" · "));
+    if (rule.readTimeDead) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
+  }
+}
+
+function bankSetupCardPaintChecks(panel, modal, model) {
+  const status = bankSetupCardStatus(modal.report);
+  bankSetupCardAppend(panel, "p", `bob-bank-setup-card-check-status is-${status.state}`, status.label, {
+    role: status.state === "invalid" ? "alert" : "status",
+  });
+  if (model.findings.length) {
+    const list = bankSetupCardAppend(panel, "ul", "bob-bank-setup-card-findings", null, { "aria-label": "Bank config findings" });
+    for (const finding of model.findings) {
+      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-finding is-${finding.severity}`);
+      if (finding.line) {
+        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", finding.label, {
+          type: "button", "data-setup-line": String(finding.line), "aria-label": `Open bank setup line ${finding.line}: ${finding.message}`,
+        });
+        bankSetupCardListen(jump, () => modal.openYaml(finding.line));
+      } else {
+        bankSetupCardAppend(row, "span", "", finding.label);
+      }
+      if (finding.hint) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", finding.hint);
+    }
+  }
+  bankSetupCardAppend(panel, "button", "bob-bank-setup-card-yaml", "↗ Open YAML", {
+    type: "button", "data-setup-action": "yaml",
+    "data-setup-line": String(model.findings[0]?.line || modal.report?.line || 1),
+  });
+}
+
+function bankSetupCardPaintSelection(parent, modal, model) {
+  const item = model.selectedItem;
+  if (!item) return bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", "No category selected.");
+  let text = "";
+  if (item.type === "group") {
+    text = item.hidden ? `HIDDEN · ${item.count} categories` : `${item.group.toUpperCase()} · ${item.count} categories`;
+  } else {
+    const entry = item.entry || {};
+    const tile = item.tile || {};
+    const key = tile.hotkey ? `key ${tile.hotkey.toUpperCase()} ${entry.hotkey_source === "derived" ? "derived" : entry.hotkey_source === "builtin_default" ? "built-in default" : "pinned"}` : "no key";
+    const rows = Number.isInteger(entry.rows) ? `${entry.rows} ${entry.rows === 1 ? "row" : "rows"}` : "usage unknown";
+    text = `${tile.text || entry.label || item.key} · stored as ${item.key} · ${key} · ${rows} · ${entry.rule_refs || 0} rules`;
+    if (entry.builtin) text += " · built in";
+    if (entry.hidden) text += " · hidden";
+  }
+  bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", text, { role: "status" });
+  if (item.type === "category" && bankSetupCardRestoreOp(item.entry)) {
+    const restore = bankSetupCardAppend(parent, "button", "bob-bank-setup-card-action", "Restore default", {
+      type: "button", "data-setup-action": "restore-default", "data-setup-card-focus": "restore-default",
+    });
+    restore.disabled = modal.readOnly || modal.busy || Boolean(modal.stage);
+  }
+}
+
+function bankSetupCardPaintStage(parent, modal, doc) {
+  const stage = modal.stage;
+  if (!stage) return;
+  const section = bankSetupCardAppend(parent, "section", "bob-bank-setup-card-stage", null, {
+    "aria-label": stage.title || "Staged bank setup edit",
+  });
+  if (stage.title) bankSetupCardAppend(section, "h3", "", stage.title);
+  if (stage.kind === "edit" || stage.kind === "new") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "label", "Label", stage.label, { placeholder: "e.g. ☕ Coffee" });
+    bankSetupCardInput(form, modal, "group", "Group", stage.group, { placeholder: "e.g. Everyday" });
+    bankSetupCardInput(form, modal, "hotkey", "Key", stage.hotkey, { placeholder: "free key" });
+    if (stage.kind === "edit") {
+      const entry = stage.entry || {};
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", entry.hotkey_source === "derived"
+        ? "This key is derived; changing it pins the key you type."
+        : "This key is pinned. Clear it to let bob derive a key.");
+    } else {
+      const status = bankCategoryNewHotkeyStatus(modal.categories, stage.hotkey);
+      if (status.text) bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text, { role: "status" });
+    }
+  } else if (stage.kind === "rename-group") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "group-name", "New group name", stage.to, { placeholder: stage.group });
+  } else {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-confirm", stage.confirmation || "Review bob's consequence, then press Enter to apply.");
+  }
+  const status = modal.sessionState || {};
+  if (status.busy || status.status === "preview-pending") {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-consequence is-pending", "Previewing with bob…", { role: "status", "aria-live": "polite" });
+  } else if (status.consequence) {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-consequence", status.consequence, { role: "status", "aria-live": "polite" });
+  }
+  if (status.refusal) {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", status.refusal.message || "bob refused this edit.", { role: "alert" });
+    if (status.refusal.hint) bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", status.refusal.hint);
+  }
+  if (modal.staleMessage) {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", modal.staleMessage, { role: "alert" });
+    bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Re-preview", { type: "button", "data-setup-action": "repreview" });
+    preview.disabled = modal.busy;
+  }
+  if (modal.syncWarning) {
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", "Saved locally; sync failed.", { role: "status" });
+    bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Retry sync", { type: "button", "data-setup-action": "retry-sync" });
+  }
+  const actions = bankSetupCardAppend(section, "div", "bob-bank-setup-card-actions");
+  const apply = bankSetupCardAppend(actions, "button", "bob-bank-setup-card-action is-primary", stage.kind === "undo" ? "Undo" : "Apply", {
+    type: "button", "data-setup-action": "apply", "data-setup-card-focus": "apply",
+  });
+  if (apply) {
+    apply.disabled = modal.busy || modal.readOnly || status.canApply !== true;
+  }
+  bankSetupCardAppend(actions, "button", "bob-bank-setup-card-action", "Cancel", {
+    type: "button", "data-setup-action": "cancel", "data-setup-card-focus": "cancel-stage",
+  });
+}
+
+function bankSetupCardPaint(modal) {
+  const content = modal && modal.contentEl;
+  if (!content) return null;
+  const doc = content.ownerDocument || modal.app?.document || (typeof document !== "undefined" ? document : null);
+  let focusId = "";
+  let selectionStart = null;
+  let selectionEnd = null;
+  try {
+    const active = doc?.activeElement;
+    focusId = active?.getAttribute?.("data-setup-card-focus") || "";
+    selectionStart = Number.isInteger(active?.selectionStart) ? active.selectionStart : null;
+    selectionEnd = Number.isInteger(active?.selectionEnd) ? active.selectionEnd : null;
+  } catch (_) {}
+  try { if (typeof content.empty === "function") content.empty(); else content.textContent = ""; } catch (_) {}
+  const model = bankSetupCardModel(modal.report, modal.selection);
+  modal.model = model;
+  modal.readOnly = model.state !== "valid";
+  modal.selection = model.selection;
+  const root = bankSetupCardAppend(content, "div", "bob-bank-setup-card", null, {
+    "data-bank-setup-card": "true",
+    "data-state": model.state,
+    role: "document",
+    "aria-label": "Bank setup editor",
+  });
+  if (!root) return model;
+  bankSetupCardAppend(root, "h2", "bob-bank-setup-card-title", "🏦 Bank setup");
+  bankSetupCardPaintTabs(root, modal, model);
+  const panel = bankSetupCardAppend(root, "div", "bob-bank-setup-card-panel", null, {
+    id: "bob-bank-setup-card-panel",
+    role: "tabpanel",
+    "aria-label": BANK_SETUP_CARD_SECTION_LABELS[modal.section] || "Categories",
+  });
+  if (modal.section === "categories") bankSetupCardPaintCategories(panel, modal, model, doc);
+  else if (modal.section === "accounts") bankSetupCardPaintAccounts(panel, model);
+  else if (modal.section === "rules") bankSetupCardPaintRules(panel, model);
+  else bankSetupCardPaintChecks(panel, modal, model);
+  bankSetupCardPaintSelection(root, modal, model);
+  if (modal.stage) bankSetupCardPaintStage(root, modal, doc);
+  else if (modal.savedMessage) bankSetupCardAppend(root, "p", "bob-bank-setup-card-saved", modal.savedMessage, { role: "status", "aria-live": "polite" });
+  if (modal.errorMessage) bankSetupCardAppend(root, "p", "bob-bank-setup-card-refusal", modal.errorMessage, { role: "alert" });
+  bankSetupCardAppend(root, "p", "bob-bank-setup-card-footer", modal.footerText(), null);
+  modal.liveRegion = bankSetupCardAppend(root, "div", "bob-bank-setup-card-live", modal.liveText || "", {
+    role: "status", "aria-live": "polite", "aria-atomic": "true",
+  });
+  if (focusId) {
+    try {
+      const next = root.querySelector?.(`[data-setup-card-focus="${focusId}"]`);
+      next?.focus?.();
+      if (selectionStart !== null && typeof next?.setSelectionRange === "function") next.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+    } catch (_) {}
+  }
+  return model;
+}
+// ---- src/248k-plugin-bank-setup-card.js ----
+// Keyboard-first Bank setup modal. The card stages one op, asks bob to
+// preview it, and applies only through the shared guarded config session.
+class BankSetupCardModal extends bankCategoryCardModalBase() {
+  constructor(app, options = {}) {
+    super(app);
+    this.pluginRef = options.plugin || null;
+    this.report = options.report || null;
+    this.error = options.error || null;
+    this.categories = Array.isArray(this.report?.categories) ? this.report.categories : [];
+    this.section = BANK_SETUP_CARD_SECTION_ORDER.includes(options.section)
+      ? options.section
+      : this.report?.state === "invalid" ? "checks" : "categories";
+    this.selection = options.selection || null;
+    this.model = null;
+    this.session = null;
+    this.sessionState = null;
+    this.stage = null;
+    this.closed = false;
+    this.busy = false;
+    this.readOnly = true;
+    this.didInteract = false;
+    this.staleMessage = "";
+    this.savedMessage = "";
+    this.errorMessage = "";
+    this.syncWarning = null;
+    this.liveText = "";
+    this.liveRegion = null;
+    this.staleRefreshFlight = null;
+    this.clickListener = (event) => this.onClick(event);
+    this.keyListener = (event) => { void this.onKeyDown(event); };
+  }
+
+  onOpen() {
+    try {
+      this.modalEl?.addClass?.("bob-bank-setup-card-modal");
+      this.modalEl?.setAttribute?.("role", "dialog");
+      this.modalEl?.setAttribute?.("aria-modal", "true");
+      this.modalEl?.setAttribute?.("aria-label", "Bank setup");
+      this.contentEl?.addClass?.("bob-bank-setup-card-dialog");
+      this.contentEl?.addEventListener?.("click", this.clickListener);
+      this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
+    } catch (_) {}
+    if (!this.setReport(this.report, { initial: true })) this.paint();
+  }
+
+  onClose() {
+    this.closed = true;
+    try { this.session?.close?.(); } catch (_) {}
+    this.session = null;
+    this.stage = null;
+    try { this.contentEl?.removeEventListener?.("click", this.clickListener); } catch (_) {}
+    try { this.contentEl?.removeEventListener?.("keydown", this.keyListener, true); } catch (_) {}
+    try { this.pluginRef?.bankSetupCardModalClosed?.(this); } catch (_) {}
+  }
+
+  setReport(report, options = {}) {
+    if (!report || this.closed) return false;
+    const hasDraft = Boolean(this.stage && this.sessionState?.draftOps?.length);
+    if (hasDraft && options.force !== true) return false;
+    this.report = report;
+    this.categories = Array.isArray(report.categories) ? report.categories : [];
+    const model = bankSetupCardModel(report, this.selection);
+    if (model.selection) this.selection = model.selection;
+    this.readOnly = model.state !== "valid";
+    const fingerprint = bankConfigFingerprintFromReport(report);
+    if (model.state === "valid" && fingerprint) {
+      if (!this.session) this.createSession(fingerprint);
+      else if (!hasDraft) this.session.rebase(fingerprint);
+    }
+    if (!hasDraft || options.initial === true) {
+      if (report.state === "invalid" || report.state === "missing") this.section = "checks";
+      else if (options.initial === true) this.section = "categories";
+    }
+    this.sessionState = this.session?.getState?.() || null;
+    this.paint();
+    return true;
+  }
+
+  createSession(fingerprint) {
+    if (!this.pluginRef || typeof createBankConfigUpdateSession !== "function") return null;
+    this.session = createBankConfigUpdateSession(
+      { expect: fingerprint },
+      bankConfigUpdateServiceDeps(this.pluginRef, { onChange: (state) => this.onSessionChange(state) }),
+    );
+    this.sessionState = this.session.getState();
+    return this.session;
+  }
+
+  onSessionChange(state) {
+    if (this.closed) return;
+    this.sessionState = state || null;
+    if (state?.syncWarning) this.syncWarning = { ...state.syncWarning };
+    if (state?.refusal?.kind === "stale" || state?.refusal?.code === "stale_config") {
+      void this.refreshStaleDraft();
+    }
+    this.paint();
+  }
+
+  async refreshStaleDraft() {
+    if (this.staleRefreshFlight || this.closed || !this.pluginRef) return this.staleRefreshFlight;
+    this.staleMessage = "The bank config changed. Your draft is kept; explicitly re-preview before applying.";
+    this.staleRefreshFlight = (async () => {
+      let result = null;
+      try { result = await this.pluginRef.apiBankRefresh({ command: "config", force: true, wait: true }); } catch (_) {}
+      if (this.closed) return null;
+      const report = result?.report || null;
+      const fingerprint = bankConfigFingerprintFromReport(report);
+      if (!report || !fingerprint || report.state !== "valid") {
+        this.errorMessage = "The refreshed bank config is unavailable or invalid. Open YAML and reconcile it before applying.";
+        this.paint();
+        return null;
+      }
+      this.report = report;
+      this.categories = Array.isArray(report.categories) ? report.categories : [];
+      this.readOnly = false;
+      this.session?.rebase?.(fingerprint);
+      this.sessionState = this.session?.getState?.() || null;
+      this.paint();
+      return report;
+    })();
+    try { return await this.staleRefreshFlight; }
+    finally { this.staleRefreshFlight = null; }
+  }
+
+  async repreview() {
+    if (!this.session || this.busy || this.readOnly) return false;
+    this.staleMessage = "";
+    this.errorMessage = "";
+    this.busy = true;
+    this.paint();
+    try {
+      const result = await this.session.previewNow();
+      if (!result || result.ok !== true) this.errorMessage = result?.message || "The draft preview failed.";
+      return Boolean(result && result.ok === true);
+    } finally {
+      this.busy = false;
+      this.sessionState = this.session?.getState?.() || null;
+      this.paint();
+    }
+  }
+
+  paint() {
+    try { return bankSetupCardPaint(this); } catch (_) { return null; }
+  }
+
+  footerText() {
+    const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
+    if (this.stage) return `Enter apply · Esc/q cancel stage · ${mod}+E YAML`;
+    return `Enter edit · + new · Alt+J/K move · ${mod}+H hide · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
+  }
+
+  setSection(section) {
+    if (!BANK_SETUP_CARD_SECTION_ORDER.includes(section)) return false;
+    this.section = section;
+    this.didInteract = true;
+    this.paint();
+    return true;
+  }
+
+  selectItem(id) {
+    if (this.busy || this.stage) return false;
+    this.selection = bankSetupCardSelection(this.model, id);
+    if (!this.selection) return false;
+    this.didInteract = true;
+    this.savedMessage = "";
+    this.paint();
+    return true;
+  }
+
+  selectedItem() {
+    return this.model?.selectedItem || null;
+  }
+
+  focusSelection() {
+    const item = this.selectedItem();
+    if (!item) return false;
+    const attr = item.type === "category" ? "data-setup-card-category" : "data-setup-card-group";
+    const wanted = item.type === "category" ? item.key : item.hidden ? "__hidden__" : item.group;
+    const nodes = Array.from(this.contentEl?.querySelectorAll?.(`[${attr}]`) || []);
+    const node = nodes.find((candidate) => candidate.getAttribute?.(attr) === wanted);
+    try { node?.focus?.(); } catch (_) {}
+    return Boolean(node);
+  }
+
+  selectionSummary() {
+    const item = this.selectedItem();
+    return item?.type === "category" ? item.entry : null;
+  }
+
+  startStage(stage, op) {
+    if (this.closed || this.busy || this.readOnly || !this.session || !stage) return false;
+    this.stage = stage;
+    this.didInteract = true;
+    this.savedMessage = "";
+    this.staleMessage = "";
+    this.errorMessage = "";
+    if (op) this.session.setDraft([op]);
+    else this.session.setDraft([]);
+    this.sessionState = this.session.getState();
+    this.paint();
+    const focus = stage.focus || (stage.kind === "rename-group" ? "group-name"
+      : stage.kind === "confirm" || stage.kind === "undo" ? "apply" : "label");
+    try { this.contentEl?.querySelector?.(`[data-setup-card-focus="${focus}"]`)?.focus?.(); } catch (_) {}
+    return true;
+  }
+
+  openEditStage(entry) {
+    if (!entry || this.readOnly || entry.builtin && entry.declared === false) return false;
+    return this.startStage({
+      kind: "edit", title: `Edit ${entry.label || entry.key}`, entry,
+      label: entry.label || entry.key,
+      group: entry.group || "",
+      hotkey: entry.hotkey || "",
+      hotkeyTouched: false,
+      focus: "label",
+    }, null);
+  }
+
+  openGroupRenameStage(group) {
+    if (!group || group === BANK_SETUP_MONEY_GROUP || this.readOnly) return false;
+    return this.startStage({ kind: "rename-group", title: `Rename ${group}`, group, to: group, focus: "group-name" }, null);
+  }
+
+  openNewCategoryStage() {
+    if (this.readOnly || this.busy || this.stage) return false;
+    const selected = this.selection?.type === "category" ? this.selection.key : "";
+    const stage = bankCategoryNewStageInit(this.categories, selected);
+    return this.startStage({ kind: "new", title: "New category", ...stage }, null);
+  }
+
+  beginGesture(op, title, confirmation = "Review bob's consequence, then press Enter to apply.") {
+    if (!op || this.readOnly || this.busy || this.stage) return false;
+    return this.startStage({ kind: "confirm", title, confirmation }, op);
+  }
+
+  beginSelectedGesture(kind, direction = "") {
+    const item = this.selectedItem();
+    if (!item || this.readOnly) return false;
+    if (kind === "edit") {
+      if (item.type === "group") return this.openGroupRenameStage(item.group);
+      return this.openEditStage(item.entry);
+    }
+    if (kind === "hide" && item.type === "category") {
+      const op = bankSetupCardHiddenOp(item.entry);
+      return this.beginGesture(op, item.entry.hidden ? "Unhide category" : "Hide category");
+    }
+    if (kind === "remove" && item.type === "category") {
+      const op = bankSetupCardRemoveOp(item.entry);
+      return this.beginGesture(op, `Remove ${item.entry.label || item.key}`, "Bob checks row and rule use before removing this category.");
+    }
+    if (kind === "restore" && item.type === "category") {
+      const op = bankSetupCardRestoreOp(item.entry);
+      return this.beginGesture(op, `Restore ${item.entry.label || item.key}`, "Restore this built-in category to bob's default.");
+    }
+    if (kind === "move") {
+      const op = item.type === "group"
+        ? bankSetupCardGroupMoveOp(this.categories, item.group, direction)
+        : bankSetupCardCategoryMoveOp(this.categories, item.key, direction);
+      return this.beginGesture(op, item.type === "group" ? `Move ${item.group} group` : `Move ${item.entry.label || item.key}`);
+    }
+    return false;
+  }
+
+  onFieldInput(field, value) {
+    if (!this.stage || this.busy) return;
+    const text = String(value ?? "");
+    if (field === "group-name") this.stage.to = text;
+    else if (field === "hotkey") {
+      this.stage.hotkey = this.stage.kind === "new" ? text.slice(-1).toLowerCase() : text.slice(-1).toLowerCase();
+      if (this.stage.kind === "edit") this.stage.hotkeyTouched = true;
+    } else this.stage[field] = text;
+    this.didInteract = true;
+    this.errorMessage = "";
+    const op = this.stageDraftOp();
+    if (op) this.session?.setDraft?.([op]);
+    else this.session?.setDraft?.([]);
+    this.sessionState = this.session?.getState?.() || null;
+    this.paint();
+    try { this.contentEl?.querySelector?.(`[data-setup-card-focus="${field}"]`)?.focus?.(); } catch (_) {}
+  }
+
+  stageDraftOp() {
+    if (!this.stage) return null;
+    if (this.stage.kind === "edit") {
+      const status = bankSetupCardHotkeyStatus(this.categories, this.stage.hotkey, this.stage.entry.key);
+      if (this.stage.hotkeyTouched && !status.canApply) return null;
+      return bankSetupCardSetCategoryOp(this.stage.entry, this.stage);
+    }
+    if (this.stage.kind === "new") {
+      const status = bankCategoryNewHotkeyStatus(this.categories, this.stage.hotkey);
+      if (!status.canApply) return null;
+      return bankCategoryNewDraftOp(this.stage);
+    }
+    if (this.stage.kind === "rename-group") return bankSetupCardGroupRenameOp(this.stage.group, this.stage.to);
+    if (this.stage.kind === "undo") return null;
+    return null;
+  }
+
+  cycleGroup(direction) {
+    if (!this.stage || !["new", "edit"].includes(this.stage.kind)) return false;
+    this.stage.group = bankCategoryNewCycleGroup(this.stage, direction);
+    this.onFieldInput("group", this.stage.group);
+    return true;
+  }
+
+  async applyStage() {
+    if (!this.stage || this.busy || this.readOnly || !this.session) return false;
+    if (this.stage.kind === "new") {
+      const status = bankCategoryNewHotkeyStatus(this.categories, this.stage.hotkey);
+      if (!status.canApply) {
+        this.errorMessage = status.text;
+        this.paint();
+        return false;
+      }
+    }
+    if (this.stage.kind === "edit" && this.stage.hotkeyTouched) {
+      const status = bankSetupCardHotkeyStatus(this.categories, this.stage.hotkey, this.stage.entry.key);
+      if (!status.canApply) {
+        this.errorMessage = status.text;
+        this.paint();
+        return false;
+      }
+    }
+    if (!this.session.getState().canApply) return false;
+    this.busy = true;
+    this.errorMessage = "";
+    this.paint();
+    let result;
+    try { result = await this.session.apply(); }
+    catch (error) { result = { ok: false, message: String(error?.message || error) }; }
+    if (this.closed) return false;
+    this.busy = false;
+    this.sessionState = this.session.getState();
+    if (!result || result.ok !== true) {
+      this.errorMessage = result?.message || "The bank config edit was refused.";
+      if (result?.code === "undo_blocked") this.errorMessage = result.message || "Undo is blocked by a later bank config change.";
+      this.paint();
+      return false;
+    }
+    const priorStage = this.stage;
+    const report = result.report || null;
+    if (report && Array.isArray(report.categories)) this.categories = report.categories;
+    if (report) {
+      this.report = { ...this.report, ...report, state: this.report?.state || "valid" };
+      const after = typeof report.after_fingerprint === "string" ? report.after_fingerprint : "";
+      if (after) {
+        this.report.config_fingerprint = after;
+        this.report.fingerprint = after;
+      }
+    }
+    const opResult = Array.isArray(report?.per_op) ? report.per_op[0] : null;
+    const changedKey = opResult && typeof opResult.key === "string" ? opResult.key : "";
+    if (changedKey && this.categories.some((entry) => entry.key === changedKey)) {
+      this.selection = { type: "category", key: changedKey, group: "", id: `category:${changedKey}` };
+    }
+    this.sessionState = this.session.getState();
+    this.syncWarning = this.sessionState?.syncWarning || null;
+    this.stage = null;
+    this.staleMessage = "";
+    this.errorMessage = "";
+    this.savedMessage = result.changed === false ? "No change." : "Saved · Ctrl+Z undo";
+    if (priorStage?.kind === "new" && !changedKey) this.savedMessage = "Saved · refresh the bank report to confirm the new category.";
+    this.paint();
+    this.focusSelection();
+    return true;
+  }
+
+  stageUndo() {
+    if (this.stage || this.readOnly || !this.session) return false;
+    const result = this.session.stageUndo();
+    if (!result || result.ok !== true) {
+      this.errorMessage = result?.message || "There is no bank config edit to undo.";
+      this.paint();
+      return false;
+    }
+    this.stage = { kind: "undo", title: "Undo last bank setup edit", confirmation: "Preview the inverse operation. Enter applies the undo as one normal edit." };
+    this.savedMessage = "";
+    this.staleMessage = "";
+    this.sessionState = this.session.getState();
+    this.paint();
+    try { this.contentEl?.querySelector?.('[data-setup-card-focus="apply"]')?.focus?.(); } catch (_) {}
+    return true;
+  }
+
+  cancelStage() {
+    if (!this.stage || this.busy) return false;
+    this.session?.setDraft?.([]);
+    this.sessionState = this.session?.getState?.() || null;
+    this.stage = null;
+    this.staleMessage = "";
+    this.errorMessage = "";
+    this.paint();
+    this.focusSelection();
+    return true;
+  }
+
+  async retrySync() {
+    if (!this.session || this.busy) return false;
+    this.busy = true;
+    this.paint();
+    try {
+      const result = await this.session.retrySync();
+      this.sessionState = this.session.getState();
+      this.syncWarning = this.sessionState.syncWarning || null;
+      this.errorMessage = result?.ok ? "" : result?.message || "Sync retry failed.";
+      return Boolean(result && result.ok);
+    } finally {
+      this.busy = false;
+      this.paint();
+    }
+  }
+
+  async openYaml(line) {
+    if (this.busy || !this.pluginRef || typeof this.pluginRef.bankSetupStartYamlExcursion !== "function") return false;
+    let targetLine = line;
+    if (!Number.isInteger(targetLine) || targetLine < 1) {
+      const item = this.selectedItem();
+      if (item?.type === "category" && Number.isInteger(item.tile?.line)) targetLine = item.tile.line;
+      else if (item?.type === "group") {
+        const first = this.model?.items?.find((candidate) => candidate.type === "category" && candidate.entry?.group === item.group);
+        if (Number.isInteger(first?.tile?.line)) targetLine = first.tile.line;
+      }
+      if (!Number.isInteger(targetLine) || targetLine < 1) targetLine = this.report?.line || 1;
+    }
+    const options = {
+      sourcePath: BANK_SETUP_HUB_PATH,
+      line: targetLine,
+      fromCard: true,
+      section: this.section,
+      selection: this.selection,
+    };
+    this.close();
+    return this.pluginRef.bankSetupStartYamlExcursion(options);
+  }
+
+  async onKeyDown(event) {
+    if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+    const key = String(event.key || "");
+    const lower = key.toLowerCase();
+    const mod = Boolean(event.ctrlKey || event.metaKey);
+    const target = event.target;
+    const inInput = Boolean(target?.closest?.("input,select,textarea"));
+    const consume = () => bankCategoryUiConsume(event);
+    if (key === "Escape" || (!mod && !event.altKey && lower === "q")) {
+      consume();
+      if (this.busy) return;
+      if (!this.cancelStage()) this.close();
+      return;
+    }
+    if (mod && lower === "e") {
+      consume();
+      void this.openYaml(this.report?.line || 1);
+      return;
+    }
+    if (inInput) {
+      if (key === "Enter") {
+        consume();
+        void this.applyStage();
+        return;
+      }
+      if (mod && lower === "z") return; // Native text undo owns input focus.
+      if (this.stage && this.stage.focus === "group" && (key === "ArrowUp" || key === "ArrowDown")) {
+        consume();
+        this.cycleGroup(key === "ArrowUp" ? "back" : "forward");
+      }
+      return;
+    }
+    if (mod && lower === "z") {
+      consume();
+      if (this.stage?.kind === "undo") void this.applyStage();
+      else if (!this.stage) this.stageUndo();
+      return;
+    }
+    if (key === "Tab" && !this.stage) {
+      consume();
+      const at = BANK_SETUP_CARD_SECTION_ORDER.indexOf(this.section);
+      const next = (at + (event.shiftKey ? -1 : 1) + BANK_SETUP_CARD_SECTION_ORDER.length) % BANK_SETUP_CARD_SECTION_ORDER.length;
+      this.setSection(BANK_SETUP_CARD_SECTION_ORDER[next]);
+      return;
+    }
+    if (this.stage) {
+      if (key === "Enter") { consume(); void this.applyStage(); return; }
+      if (key === "r" && this.staleMessage) { consume(); void this.repreview(); return; }
+      return;
+    }
+    if (key === "Enter") {
+      const category = target?.closest?.("[data-setup-card-category]");
+      if (category) {
+        consume();
+        const id = `category:${category.getAttribute("data-setup-card-category")}`;
+        if (this.selection?.id === id) this.beginSelectedGesture("edit");
+        else this.selectItem(id);
+        return;
+      }
+      const group = target?.closest?.("[data-setup-card-group]");
+      if (group) {
+        consume();
+        const name = group.getAttribute("data-setup-card-group");
+        const id = name === "__hidden__" ? "group:hidden" : `group:${name}`;
+        if (this.selection?.id === id && name !== "__hidden__") this.beginSelectedGesture("edit");
+        else this.selectItem(id);
+        return;
+      }
+      if (target?.closest?.("[data-setup-section],[data-setup-new-category],[data-setup-action],[data-setup-line]")) return;
+      consume();
+      this.beginSelectedGesture("edit");
+      return;
+    }
+    if (mod && lower === "h") { consume(); this.beginSelectedGesture("hide"); return; }
+    if (mod && lower === "d") { consume(); this.beginSelectedGesture("remove"); return; }
+    if (mod && lower === "n") { consume(); this.moveSelection("forward"); return; }
+    if (mod && lower === "p") { consume(); this.moveSelection("back"); return; }
+    if (event.altKey && lower === "j") { consume(); this.beginSelectedGesture("move", "forward"); return; }
+    if (event.altKey && lower === "k") { consume(); this.beginSelectedGesture("move", "back"); return; }
+    if (key === "+" || key === "=" || key === "＋") { consume(); this.openNewCategoryStage(); return; }
+    if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
+    if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
+    if (key.length === 1 && /[a-z0-9]/i.test(key) && this.section === "categories") {
+      const selection = bankSetupCardSelectionByHotkey(this.categories, key);
+      if (selection) { consume(); this.selection = selection; this.didInteract = true; this.paint(); }
+    }
+  }
+
+  moveSelection(direction) {
+    if (this.section !== "categories" || this.busy || this.stage) return false;
+    const next = bankSetupCardMoveSelection(this.model, this.selection, direction);
+    if (!next) return false;
+    this.selection = next;
+    this.didInteract = true;
+    this.paint();
+    return true;
+  }
+
+  onClick(event) {
+    const target = event?.target;
+    const section = target?.closest?.("[data-setup-section]");
+    if (section) { bankCategoryUiConsume(event); this.setSection(section.getAttribute("data-setup-section")); return; }
+    const fresh = target?.closest?.("[data-setup-new-category]");
+    if (fresh) { bankCategoryUiConsume(event); this.openNewCategoryStage(); return; }
+    const action = target?.closest?.("[data-setup-action]");
+    if (action) {
+      bankCategoryUiConsume(event);
+      const kind = action.getAttribute("data-setup-action");
+      if (kind === "apply") void this.applyStage();
+      else if (kind === "cancel") this.cancelStage();
+      else if (kind === "yaml") void this.openYaml(Number(action.getAttribute("data-setup-line")) || this.report?.line || 1);
+      else if (kind === "repreview") void this.repreview();
+      else if (kind === "retry-sync") void this.retrySync();
+      else if (kind === "restore-default") this.beginSelectedGesture("restore");
+      return;
+    }
+  }
+}
+// ---- src/248l-plugin-bank-setup-card-entrypoints.js ----
+// Bank Setup card entry points, lifecycle, and its branch of the shared
+// album/bank YAML excursion. The palette command stays an object literal so
+// the generated command inventory can describe it.
+class BobLedgerToolsBankSetupCardMixin {
+  setupBankSetupCard() {
+    this.bankSetupCardModal = null;
+    this.bankSetupCardActive = true;
+    try {
+      this.addCommand({
+        id: "edit-bank-setup",
+        name: "Edit bank setup",
+        callback: () => { void this.openBankSetupCard(); },
+      });
+    } catch (_) {}
+  }
+
+  teardownBankSetupCard() {
+    this.bankSetupCardActive = false;
+    try { this.bankSetupCardModal?.close?.(); } catch (_) {}
+    this.bankSetupCardModal = null;
+  }
+
+  bankSetupCardModalClosed(modal) {
+    if (this.bankSetupCardModal === modal) this.bankSetupCardModal = null;
+  }
+
+  async openBankSetupCard(options = {}) {
+    if (typeof this.bankSetupDesktop === "function" && !this.bankSetupDesktop()) {
+      try { new Notice("Bank setup editing needs desktop Obsidian."); } catch (_) {}
+      return { ok: false, reason: "mobile" };
+    }
+    if (this.bankSetupCardActive === false) return { ok: false, reason: "unloaded" };
+    try { this.bankSetupCardModal?.close?.(); } catch (_) {}
+    const cached = options.report || this.bankSetupEntry?.().report || null;
+    const modal = new BankSetupCardModal(this.app, {
+      plugin: this,
+      report: cached,
+      section: options.section,
+      selection: options.selection,
+    });
+    this.bankSetupCardModal = modal;
+    if (!cached) modal.errorMessage = "Loading the current bank config…";
+    modal.open();
+    let result = null;
+    try { result = await this.apiBankRefresh({ command: "config", force: true, wait: true }); } catch (error) {
+      result = { report: null, error: { message: String(error?.message || error), code: "failed" } };
+    }
+    if (this.bankSetupCardModal !== modal || modal.closed) return { ok: false, reason: "closed" };
+    if (result?.report) {
+      modal.errorMessage = "";
+      modal.setReport(result.report, { force: true, initial: !cached });
+    } else {
+      const code = result?.error?.code || "unavailable";
+      const hint = bankConfigUpdateErrorModel({ ...result?.error, code }).hint;
+      modal.errorMessage = hint || "The bank config report is unavailable.";
+      modal.paint();
+    }
+    return { ok: Boolean(result?.report), modal, report: result?.report || null };
+  }
+
+  async bankSetupStartYamlExcursion(options = {}) {
+    const path = bankSetupHubPath(options.sourcePath || BANK_SETUP_HUB_PATH);
+    if (!path || !this.bankSetupDesktop()) {
+      if (!this.bankSetupDesktop()) return this.bankSetupJumpYaml(path || BANK_SETUP_HUB_PATH, options.line);
+      return { ok: false, reason: "missing-path" };
+    }
+    const leaf = this.bankSetupMarkdownLeaf(path);
+    if (!leaf) return this.bankSetupJumpYaml(path, options.line);
+    let viewState = null;
+    try { viewState = typeof leaf.getViewState === "function" ? leaf.getViewState() : null; } catch (_) {}
+    const currentReport = options.report || this.bankSetupEntry?.().report || null;
+    const selection = options.selection || null;
+    const record = this.albumYamlExcursionBegin(leaf, {
+      kind: "bank",
+      albumPath: path,
+      viewState,
+      selectedKey: selection?.id || "",
+      selectedSection: options.section || "categories",
+      selection,
+      fingerprint: bankConfigFingerprintFromReport(currentReport),
+      reopenCard: options.fromCard === true,
+    });
+    if (!record) return this.bankSetupJumpYaml(path, options.line);
+    return this.bankSetupJumpYaml(path, options.line);
+  }
+
+  async bankSetupYamlDoneAttempt(leaf, record) {
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    let save = { ok: true };
+    try { save = await this.albumYamlSaveExcursionEditors([record.albumPath]); }
+    catch (error) { save = { ok: false, code: "save-failed", message: String(error?.message || error) }; }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    if (!save || save.ok !== true) {
+      try { new Notice(save?.message || "Saving bank.md failed — fix it before Done."); } catch (_) {}
+      return { ok: false, reason: save?.code || "save-failed" };
+    }
+    let result = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try { result = await this.apiBankRefresh({ command: "config", force: true, wait: true }); }
+      catch (_) { result = null; }
+      if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+      const report = result?.report || null;
+      const fresh = report && result.stale !== true && !result.error &&
+        (!Number.isInteger(result.generation) || !Number.isInteger(report.generation) || report.generation >= result.generation);
+      if (fresh) break;
+    }
+    const report = result?.report || null;
+    if (!report || result.stale === true || result.error) {
+      try { new Notice(result?.error?.message || "Bank config is unavailable — fix sync before Done."); } catch (_) {}
+      return { ok: false, reason: "unavailable" };
+    }
+    if (report.state !== "valid") {
+      const findings = Array.isArray(report.findings) ? report.findings : [];
+      const firstError = findings.find((finding) => finding && finding.severity !== "warning") || findings[0] || null;
+      const line = Number.isInteger(firstError?.line) && firstError.line > 0
+        ? firstError.line
+        : Number.isInteger(report.line) && report.line > 0 ? report.line : 1;
+      try {
+        const editor = leaf?.view?.editor;
+        const cursor = { line: line - 1, ch: 0 };
+        editor?.setCursor?.(cursor);
+        editor?.scrollIntoView?.({ from: cursor, to: cursor }, true);
+      } catch (_) {}
+      const message = firstError?.message || (report.state === "missing" ? "bank: mapping is missing." : "The bank config is invalid.");
+      try { new Notice(`${message} Fix the highlighted line before Done.`); } catch (_) {}
+      return { ok: false, reason: report.state === "missing" ? "missing-mapping" : "invalid-config", focus: { line } };
+    }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    let restoreError = null;
+    try {
+      record.restoring = true;
+      if (record.viewState && typeof leaf.setViewState === "function") await leaf.setViewState(record.viewState);
+      else if (record.viewState?.state && typeof leaf.openFile === "function") {
+        const file = this.app?.vault?.getAbstractFileByPath?.(record.albumPath) || { path: record.albumPath };
+        await leaf.openFile(file, { state: { ...record.viewState.state, file: record.albumPath } });
+      }
+    } catch (error) { restoreError = error; }
+    record.restoring = false;
+    if (this.albumYamlExcursionForLeaf(leaf) !== record && !restoreError) return { ok: false, reason: "stale-excursion" };
+    if (restoreError) return { ok: false, reason: "restore-failed", message: String(restoreError.message || restoreError) };
+    this.albumYamlExcursionClear(leaf);
+    if (record.reopenCard) {
+      const opened = await this.openBankSetupCard({
+        report,
+        section: record.selectedSection,
+        selection: record.selection || null,
+      });
+      return { ok: true, reopened: Boolean(opened?.modal) };
+    }
+    return { ok: true, reopened: false };
+  }
+}
 // ---- src/249-plugin-bank-walk-model.js ----
 // Pure bank-walk model (api.bankWalk v1): membership, snapshot building,
 // locate, step/day planners, identity resolution. No Obsidian, no spawns.
@@ -132123,6 +133354,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksMixin,
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsBankSetupMixin,
+  BobLedgerToolsBankSetupCardMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,
@@ -135921,6 +137153,29 @@ try {
       bankCardParseFence,
       bankBuildArgs,
       bankIsSubscriptionPath,
+    });
+  }
+} catch (_) {}
+// ---- src/367-exports-bank-setup-card.js ----
+// Focused test helpers for the Bank Setup card's pure gesture models and
+// modal controller. The implementation remains split into small fragments.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BankSetupCardModal,
+      bankSetupCardModel,
+      bankSetupCardSelection,
+      bankSetupCardSelectionByHotkey,
+      bankSetupCardMoveSelection,
+      bankSetupCardSetCategoryOp,
+      bankSetupCardHotkeyStatus,
+      bankSetupCardCategoryMoveOp,
+      bankSetupCardGroupMoveOp,
+      bankSetupCardHiddenOp,
+      bankSetupCardRemoveOp,
+      bankSetupCardRestoreOp,
+      bankSetupCardGroupRenameOp,
+      bankSetupCardStatus,
     });
   }
 } catch (_) {}

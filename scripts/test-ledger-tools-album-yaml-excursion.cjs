@@ -243,6 +243,9 @@ test("Done button is a small accessible affordance outside the note text", () =>
   assert.equal(el.getAttribute("aria-label"), "Done editing album schema");
   assert.equal(el.getAttribute("data-album-yaml-done"), "eat.md");
   assert.equal(el.getAttribute("type"), "button");
+  const bank = helpers.albumYamlBuildDoneEl(doc, "bank.md", "bank");
+  assert.equal(bank.getAttribute("aria-label"), "Done editing bank setup");
+  assert.equal(bank.getAttribute("data-album-yaml-done"), "bank.md");
 });
 
 test("two panes keep separate excursions: decisions are per-leaf records", () => {

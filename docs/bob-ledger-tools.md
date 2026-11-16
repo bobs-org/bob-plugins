@@ -33,6 +33,7 @@ Album owner cards, group navigation, and sync controls are described in
 | Cycle Day stats bars | `cycle-day-stats-bars` | — |
 | Cycle period stats charts | `cycle-period-stats-charts` | — |
 | Edit album schema | `edit-album-schema` | — |
+| Edit bank setup | `edit-bank-setup` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
 | Jump to current Pomodoro line | `jump-to-current-pomodoro` | Ctrl+9 |
@@ -74,7 +75,7 @@ Album owner cards, group navigation, and sync controls are described in
 
 🔁 chips on bank rows (Live Preview, Reading, queue): `🔁`/`🔁 Cloudbox` (`ok`), `🔁 +$1.00` (`drift`; amber with `price_change`), `🔁 usage`, amber `🔁 ✂️ still charging` (click Manage `url`; modifier-click the record), warning `🔁 🚫 after cancel`. Ghost 🔁 on a match inserts `[[subscriptions/<stem>|🔁]]` in one transaction. Ghost `⟳ subscription?` opens the Category card picker for that row. Tooltip `Tunely · 💚 Active · $9.99 a month · latest charge Nov 21`; focus ring; plugin-off still shows 🔁.
 
-The Setup header replaces the hub's raw `bank` property — hidden only behind the header surface — with the effective setup from `bob bank config`: Category-card tiles in card order with usage counts, account status, rules, and located diagnostics, collapsed by default under `# 🏦 Bank`. Tiles, accounts, rules, and findings jump to their Source-mode lines; ↗ YAML opens the mapping. Invalid configs auto-expand; an invalid queue report reads `bank: has N problems — see Setup above`. Painting never writes vault bytes.
+Setup header shows `bob bank config` categories, accounts, rules, and findings under `# 🏦 Bank`; it collapses by default, expands on errors, and jumps to Source-mode lines. Tiles keep Category-card order and counts. **⊞ Edit** or palette/Command Mode opens the card. Enter edits; `+` adds; Alt+J/K moves; Ctrl+H hides; Ctrl+D removes after bob previews; Ctrl+Z previews Undo. Accounts and rules are read-only. Open YAML uses the shared excursion; Done returns after a valid report. Painting never writes vault bytes. Mobile remains read-only.
 
 On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `claimRowClose` for the Category card. Enter or a second Ctrl+Enter accepts the suggestion, a hotkey picks another, Space files without one, `+` adds a category then files, and Escape cancels the stage then the card. `/` opens the inline subscription picker; search matches titles and statement needles, arrows or Ctrl+N/P move, Enter links, and Escape returns to category tiles. Picking a record adds its 🔁 link and fills `[cat::]` from the record only when the row has no category, in one undo step. **+ New subscription…** pre-fills the sheet from the row and any candidate proposal, creates a 🤔 record through `bob records new subscription`, then links it. Keys work with editor focus; unbound keys never reach the note; a held key never files twice. A filing ticks and categorizes in one undo, advances, and records a `recordJump` for Ctrl+O. **Bank: set category** corrects rows in place. Hidden categories stay on rows, out of card and suggestions. Older APIs keep the `[ ]`↔`[x]` flip.
 

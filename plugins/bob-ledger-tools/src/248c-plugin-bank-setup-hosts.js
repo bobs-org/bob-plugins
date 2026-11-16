@@ -209,8 +209,13 @@ class BobLedgerToolsBankSetupMixin {
       handlers: {
         onToggle: () => self.bankSetupToggleExpanded(sourcePath),
         onYaml: () => {
-          void self.bankSetupJumpYaml(sourcePath, model && model.line);
+          if (self.bankSetupDesktop()) {
+            void self.bankSetupStartYamlExcursion({ sourcePath, line: model && model.line, fromCard: false });
+          } else {
+            void self.bankSetupJumpYaml(sourcePath, model && model.line);
+          }
         },
+        onEdit: () => { void self.openBankSetupCard({ sourcePath }); },
         onJump: (line) => {
           void self.bankSetupJumpYaml(
             sourcePath,

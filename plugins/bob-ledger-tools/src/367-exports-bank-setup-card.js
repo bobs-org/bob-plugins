@@ -1,0 +1,22 @@
+// Focused test helpers for the Bank Setup card's pure gesture models and
+// modal controller. The implementation remains split into small fragments.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BankSetupCardModal,
+      bankSetupCardModel,
+      bankSetupCardSelection,
+      bankSetupCardSelectionByHotkey,
+      bankSetupCardMoveSelection,
+      bankSetupCardSetCategoryOp,
+      bankSetupCardHotkeyStatus,
+      bankSetupCardCategoryMoveOp,
+      bankSetupCardGroupMoveOp,
+      bankSetupCardHiddenOp,
+      bankSetupCardRemoveOp,
+      bankSetupCardRestoreOp,
+      bankSetupCardGroupRenameOp,
+      bankSetupCardStatus,
+    });
+  }
+} catch (_) {}

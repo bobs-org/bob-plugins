@@ -39,10 +39,11 @@ function bankNormalizeSubscription(value) {
   if (!amount.ok) return null;
   const source = bankText(value.source);
   const state = bankText(value.state);
+  const latest = value.latest === undefined ? { ok: true, value: null } : bankIsoDateOrNull(value.latest);
   const drift = value.drift_cents === null || value.drift_cents === undefined
     ? { ok: true, value: null }
     : bankSafeCents(value.drift_cents);
-  if (!drift.ok) return null;
+  if (!latest.ok || !drift.ok) return null;
   const url = bankString(value.url);
   return {
     stem,
@@ -55,6 +56,7 @@ function bankNormalizeSubscription(value) {
     amount_cents: amount.value,
     source: source === "link" || source === "match" ? source : null,
     needle: value.needle === null || value.needle === undefined ? null : bankText(value.needle),
+    latest: latest.value,
     drift_cents: drift.value,
     price_change: bankNormalizePriceChange(value.price_change),
     state: state || "ok",
@@ -164,8 +166,13 @@ function bankSubscriptionTooltip(sub, rowDate) {
   const cadence = bankSubscriptionCadencePhrase(sub.cadence);
   if (money && cadence) parts.push(`${money} ${cadence}`);
   else if (money) parts.push(money);
-  const when = bankSubscriptionShortDate(rowDate);
-  if (when) parts.push(`latest charge ${when}`);
+  const latest = bankSubscriptionShortDate(sub.latest);
+  if (latest) {
+    parts.push(`latest charge ${latest}`);
+  } else {
+    const charged = bankSubscriptionShortDate(rowDate);
+    if (charged) parts.push(`charged ${charged}`);
+  }
   return parts.join(" · ");
 }
 

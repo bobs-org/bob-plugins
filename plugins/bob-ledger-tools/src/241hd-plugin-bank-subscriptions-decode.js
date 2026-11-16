@@ -44,7 +44,7 @@ function bankDecodeRecordCreation(stdout, stderr, exitCode = null) {
   const validPath = path && /^subscriptions\/[^/\\]+\.md$/i.test(path) && !path.includes("..")
     ? path
     : null;
-  if (exitCode === 0 && body.status === "written" && validPath) {
+  if ((exitCode === 0 || exitCode === null) && body.status === "written" && validPath) {
     return { ok: true, report: { ...body, path: validPath } };
   }
   const inner = bankJsonObject(body.error) ? body.error : {};

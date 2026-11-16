@@ -33,6 +33,9 @@ function bankSubscriptionPickerItems(values, query, row) {
   const needle = String(query || "").trim().toLocaleLowerCase();
   const payee = String(row && row.payee || "").toLocaleLowerCase();
   const cents = row && Number.isSafeInteger(row.cents) ? Math.abs(row.cents) : null;
+  const resolvedStem = row && row.subscription && typeof row.subscription.stem === "string"
+    ? row.subscription.stem
+    : "";
   const entries = (Array.isArray(values) ? values : [])
     .map(bankSubscriptionPickerRecord)
     .filter(Boolean)
@@ -43,9 +46,17 @@ function bankSubscriptionPickerItems(values, query, row) {
       const amountDistance = cents !== null && entry.amount_cents !== null
         ? Math.abs(cents - entry.amount_cents)
         : Number.MAX_SAFE_INTEGER;
-      return { entry, index, matched, amountDistance, cancelled: entry.status === "cancelled" };
+      return {
+        entry,
+        index,
+        resolved: Boolean(resolvedStem && entry.stem === resolvedStem),
+        matched,
+        amountDistance,
+        cancelled: entry.status === "cancelled",
+      };
     });
-  entries.sort((left, right) => Number(right.matched) - Number(left.matched) ||
+  entries.sort((left, right) => Number(right.resolved) - Number(left.resolved) ||
+    Number(right.matched) - Number(left.matched) ||
     left.amountDistance - right.amountDistance || Number(left.cancelled) - Number(right.cancelled) ||
     left.entry.title.localeCompare(right.entry.title) || left.index - right.index);
   return entries.map((item) => ({ ...item.entry, matched: item.matched, amount_distance: item.amountDistance }));
@@ -127,10 +138,13 @@ function bankCategorySubscriptionWritePlan(input = {}) {
   if (!recordPath || !recordPath.startsWith("subscriptions/") || recordPath.includes("..")) {
     return { ok: false, reason: "no-record", message: "Bank: no subscription to link" };
   }
-  const base = bankCategoryWritePlan({ ...input, allowLinkOnly: true });
-  if (!base.ok) return base;
   const resolved = bankCategoryResolveForCommit(input.capture, input.currentPath, input.currentSource);
   if (!resolved.ok) return resolved;
+  const base = bankCategoryWritePlan({
+    ...input,
+    allowLinkOnly: Boolean(resolved.token.category),
+  });
+  if (!base.ok) return base;
   const updated = bankCategoryApplyLineEdits(resolved.raw, base);
   if (typeof updated !== "string") {
     return { ok: false, reason: "bad-edit", message: BANK_CATEGORY_WRITE_REFUSAL };
@@ -186,7 +200,8 @@ function bankCategorySubscriptionWritePlan(input = {}) {
 
 function bankSubscriptionContextLine(subscription) {
   if (!bankJsonObject(subscription)) return "";
-  const parts = ["🔁", bankText(subscription.title)];
+  const title = bankText(subscription.title);
+  const parts = [`🔁${title ? ` ${title}` : ""}`];
   const status = bankText(subscription.status_label) || bankText(subscription.status);
   if (status) parts.push(status);
   const amount = Number.isSafeInteger(subscription.amount_cents)
@@ -194,8 +209,11 @@ function bankSubscriptionContextLine(subscription) {
   const cadence = bankSubscriptionCadencePhrase(subscription.cadence);
   if (amount) parts.push(`${amount} ${cadence}`.trim());
   if (subscription.state === "drift" && Number.isSafeInteger(subscription.drift_cents)) {
-    const drift = bankSubscriptionSignedMoney(subscription.drift_cents);
-    if (drift) parts.push(`${drift} vs record`);
+    const cents = subscription.drift_cents;
+    const drift = typeof bankSubscriptionMoney === "function"
+      ? bankSubscriptionMoney(Math.abs(cents))
+      : null;
+    if (drift) parts.push(`${cents < 0 ? "↓" : "↑"} ${drift} vs record`);
   }
   return parts.filter(Boolean).join(" · ");
 }

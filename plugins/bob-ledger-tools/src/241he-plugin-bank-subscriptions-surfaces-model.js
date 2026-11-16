@@ -87,8 +87,17 @@ function bankSubscriptionYearlyFromMonthly(monthlyCents) {
   if (!Number.isSafeInteger(monthlyCents)) return "";
   const yearly = monthlyCents * 12;
   if (!Number.isSafeInteger(yearly)) return "";
-  const money = typeof bankSubscriptionMoney === "function" ? bankSubscriptionMoney(yearly) : null;
+  const rounded = Math.floor((yearly + 50) / 100) * 100;
+  const money = typeof bankSubscriptionMoney === "function"
+    ? bankSubscriptionMoney(rounded)?.replace(/\.00$/, "")
+    : null;
   return money ? `≈ ${money} a year` : "";
+}
+
+function bankSubscriptionMonthlyFromYearly(monthlyCents) {
+  if (!Number.isSafeInteger(monthlyCents)) return "";
+  const money = typeof bankSubscriptionMoney === "function" ? bankSubscriptionMoney(monthlyCents) : null;
+  return money ? `≈ ${money} a month` : "";
 }
 
 function bankSubscriptionTimelineAmber(bucket, priceChange, chargedFallback) {
@@ -167,8 +176,11 @@ function bankSubscriptionHeaderModel(report, path) {
   const facts = [];
   const amount = bankSubscriptionAmountPhrase(entry.amount_cents, entry.cadence);
   if (amount) facts.push(amount);
-  const yearly = bankSubscriptionYearlyFromMonthly(entry.monthly_cents);
-  if (yearly) facts.push(yearly);
+  const annualCadence = BANK_SUBSCRIPTION_CADENCE_KEYS[entry.cadence] === "yearly";
+  const annualEstimate = annualCadence
+    ? bankSubscriptionMonthlyFromYearly(entry.monthly_cents)
+    : bankSubscriptionYearlyFromMonthly(entry.monthly_cents);
+  if (annualEstimate) facts.push(annualEstimate);
   const lastIso = entry.charges && entry.charges.latest && entry.charges.latest.date;
   const last = typeof bankSubscriptionShortDate === "function"
     ? bankSubscriptionShortDate(lastIso) : null;

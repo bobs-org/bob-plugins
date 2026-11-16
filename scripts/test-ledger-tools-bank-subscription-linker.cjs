@@ -44,6 +44,39 @@ test("subscription picker filters titles and needles and ranks row matches first
   assert.deepEqual(h.bankSubscriptionPickerItems(entries, "other", cardRow()).map((entry) => entry.title), ["Close Amount"]);
 });
 
+test("picker ranks the resolver's record before rule-renamed payee matches", () => {
+  const entries = [
+    { stem: "resolver-answer", path: "subscriptions/resolver-answer.md", title: "Resolved", status: "active", amount_cents: 1999, match: ["RAW MERCHANT"] },
+    { stem: "payee-hit", path: "subscriptions/payee-hit.md", title: "Payee Hit", status: "active", amount_cents: 999, match: ["RULE RENAMED"] },
+  ];
+  const row = cardRow({
+    payee: "RULE RENAMED",
+    cents: -999,
+    subscription: { stem: "resolver-answer" },
+  });
+  const items = h.bankSubscriptionPickerItems(entries, "", row);
+  assert.deepEqual(items.map((entry) => entry.stem), ["resolver-answer", "payee-hit"]);
+});
+
+test("context strip compacts title, status, amount, and signed price drift", () => {
+  assert.equal(h.bankSubscriptionContextLine({
+    title: "Tunely",
+    status_label: "💚 Active",
+    amount_cents: 999,
+    cadence: "monthly",
+    state: "drift",
+    drift_cents: 100,
+  }), "🔁 Tunely · 💚 Active · $9.99 a month · ↑ $1.00 vs record");
+  assert.equal(h.bankSubscriptionContextLine({
+    title: "Cloudbox",
+    status_label: "🤔 To decide",
+    amount_cents: 1999,
+    cadence: "four_weekly",
+    state: "drift",
+    drift_cents: -100,
+  }), "🔁 Cloudbox · 🤔 To decide · $19.99 every 4 weeks · ↓ $1.00 vs record");
+});
+
 test("record selection inserts one link, fills a missing category, and closes in one edit", () => {
   const path = "bank/2026-11.md";
   const line = "- [ ] $9.99 TUNELY MONTHLY ^bank-aaa111";
@@ -80,6 +113,42 @@ test("set mode can link without a category and replaces one prior subscription l
   assert.match(updated, /\[\[subscriptions\/new\|🔁\]\]/);
   assert.doesNotMatch(updated, /subscriptions\/old/);
   assert.equal((updated.match(/subscriptions\//g) || []).length, 1);
+});
+
+test("set-mode subscription pick fills a missing category in its atomic edit", () => {
+  const path = "bank/2026-11.md";
+  const line = "- [x] $9.99 TUNELY MONTHLY ^bank-aaa111";
+  const plan = h.bankCategorySubscriptionWritePlan({
+    mode: "set",
+    capture: h.bankCategoryCapture({ path, line: 2, lineText: line }),
+    currentPath: path,
+    currentSource: `## Thu Nov 12\n${line}\n`,
+    categoryKey: "media",
+    recordPath: "subscriptions/tunely.md",
+  });
+  assert.equal(plan.ok, true);
+  assert.equal(plan.edits.length, 1);
+  const updated = h.bankCategoryApplyLineEdits(line, plan);
+  assert.match(updated, /\[cat:: media\]/);
+  assert.match(updated, /\[\[subscriptions\/tunely\|🔁\]\]/);
+});
+
+test("set-mode subscription pick keeps an existing category and adds the link", () => {
+  const path = "bank/2026-11.md";
+  const line = "- [x] $9.99 TUNELY [cat:: software] ^bank-aaa111";
+  const plan = h.bankCategorySubscriptionWritePlan({
+    mode: "set",
+    capture: h.bankCategoryCapture({ path, line: 2, lineText: line }),
+    currentPath: path,
+    currentSource: `## Thu Nov 12\n${line}\n`,
+    categoryKey: "software",
+    recordPath: "subscriptions/tunely.md",
+  });
+  assert.equal(plan.ok, true);
+  const updated = h.bankCategoryApplyLineEdits(line, plan);
+  assert.equal((updated.match(/\[cat::/g) || []).length, 1);
+  assert.match(updated, /\[cat:: software\]/);
+  assert.match(updated, /\[\[subscriptions\/tunely\|🔁\]\]/);
 });
 
 test("new subscription fields default from the candidate proposal and stay argv-safe", () => {
@@ -130,6 +199,7 @@ test("subscription JSON decoders accept reports and reject malformed record path
 
   const created = h.bankDecodeRecordCreation(JSON.stringify({ status: "written", path: "subscriptions/new.md" }), "", 0);
   assert.equal(created.ok, true);
+  assert.equal(h.bankDecodeRecordCreation(JSON.stringify({ status: "written", path: "subscriptions/new.md" }), "", null).ok, true);
   assert.equal(h.bankDecodeRecordCreation(JSON.stringify({ status: "written", path: "../other.md" }), "", 0).ok, false);
 });
 

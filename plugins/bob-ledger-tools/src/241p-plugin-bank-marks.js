@@ -567,11 +567,6 @@ class BobLedgerToolsBankMarksMixin {
     return false;
   }
 
-  bankSubscriptionCandidateActivate(_model) {
-    // Linker phase wires ghost-candidate clicks to the Category card picker.
-    return false;
-  }
-
   async bankSubscriptionInsertLink(model) {
     if (!model || !model.recordPath || !model.rowPath) return false;
     try {

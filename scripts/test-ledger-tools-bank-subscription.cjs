@@ -84,6 +84,13 @@ test("row decoder accepts subscription JSON and the subscription suggestion sour
   assert.equal(row.subscription.source, "match");
   assert.equal(row.bank_recurring, true);
   assert.equal(row.suggestion.source, "subscription");
+  const withLatest = JSON.parse(JSON.stringify(body));
+  withLatest.days[1].rows.find((entry) => entry.payee === "ShopRite").subscription.latest = "2026-11-21";
+  const latestDecoded = h.bankDecodeReport(JSON.stringify(withLatest), "");
+  assert.equal(
+    latestDecoded.report.days[1].rows.find((entry) => entry.payee === "ShopRite").subscription.latest,
+    "2026-11-21",
+  );
   const malformed = JSON.parse(JSON.stringify(body));
   malformed.days[1].rows.find((entry) => entry.payee === "ShopRite").subscription = { title: "nope" };
   const dropped = h.bankDecodeReport(JSON.stringify(malformed), "");
@@ -101,7 +108,7 @@ test("linked chip labels follow state, payee containment, and tooltip copy", () 
   assert.match(ok.tooltip, /Tunely/);
   assert.match(ok.tooltip, /💚 Active/);
   assert.match(ok.tooltip, /\$9\.99 a month/);
-  assert.match(ok.tooltip, /latest charge Nov 12/);
+  assert.match(ok.tooltip, /charged Nov 12/);
   assert.equal(ok.ariaLabel, "Open Tunely subscription");
   assert.equal(ok.click, "open-record");
 
@@ -142,6 +149,16 @@ test("linked chip labels follow state, payee containment, and tooltip copy", () 
   assert.equal(after.label, "🔁 🚫 after cancel");
   assert.equal(after.tone, "warning");
   assert.equal(after.click, "open-record");
+});
+
+test("subscription tooltip uses the record latest date when available", () => {
+  const linked = tokenFrom("- [ ] $9.99 Tunely [[subscriptions/tunely|🔁]] ^bank-abcdef12");
+  const model = h.bankSubscriptionChipModel(
+    linked,
+    jsonRow({ subscription: sub({ latest: "2026-11-21" }) }),
+  );
+  assert.match(model.tooltip, /latest charge Nov 21/);
+  assert.doesNotMatch(model.tooltip, /charged Nov 12/);
 });
 
 test("matched-unlinked rows are dashed ghosts; candidates stay tooltip-only", () => {

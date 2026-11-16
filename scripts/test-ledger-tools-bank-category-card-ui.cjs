@@ -478,7 +478,7 @@ test("the subscription context strip sits above tiles and the picker exposes an 
   modal.paint();
   const context = content.querySelector(".bob-bank-subscription-context");
   const root = content.querySelector(".bob-bank-category-card");
-  assert.match(context.textContent, /🔁 · Tunely · 💚 Active · \$9\.99 a month/);
+  assert.match(context.textContent, /🔁 Tunely · 💚 Active · \$9\.99 a month/);
   assert.ok(root.children.indexOf(context) < root.children.findIndex((child) =>
     child.classTokens().includes("bob-bank-category-section")));
 

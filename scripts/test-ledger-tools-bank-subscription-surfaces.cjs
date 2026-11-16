@@ -223,13 +223,26 @@ test("record header reads money, last/next, timeline, and finding sentence", () 
   });
   const model = h.bankSubscriptionHeaderModel(body, "subscriptions/tunely.md");
   assert.equal(model.kind, "header");
-  assert.equal(model.factsText, "$9.99 a month · ≈ $119.88 a year · last Nov 21 · next ≈ Dec 21");
+  assert.equal(model.factsText, "$9.99 a month · ≈ $120 a year · last Nov 21 · next ≈ Dec 21");
   assert.equal(model.timeline.length, 12);
   assert.equal(model.timeline[0].kind, "charged");
   assert.equal(model.timeline[2].kind, "missed");
   assert.equal(model.timeline[4].kind, "faint");
   assert.equal(model.timeline[11].kind, "faint");
   assert.equal(model.finding, "Tunely's latest charge does not match the record amount.");
+});
+
+test("yearly record header shows its monthly equivalent", () => {
+  const yearly = tunely({
+    cadence: "yearly",
+    amount_cents: 14999,
+    monthly_cents: 1250,
+  });
+  const model = h.bankSubscriptionHeaderModel(
+    report({ subscriptions: [yearly] }),
+    "subscriptions/tunely.md",
+  );
+  assert.match(model.factsText, /^\$149\.99 a year · ≈ \$12\.50 a month/);
 });
 
 test("timeline paints amber on the price-changed bucket, else the latest charged", () => {

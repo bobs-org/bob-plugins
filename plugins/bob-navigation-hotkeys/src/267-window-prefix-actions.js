@@ -251,6 +251,17 @@ function windowPrefixRestoreScroll(state) {
   }
 }
 
+function windowPrefixSplitIsPlaced(sourceGroup, targetGroup, direction) {
+  const sourceRect = windowPrefixReadRect(sourceGroup);
+  const targetRect = windowPrefixReadRect(targetGroup);
+  const sourceCenter = sourceRect && sourceRect.left + sourceRect.width / 2;
+  const targetCenter = targetRect && targetRect.left + targetRect.width / 2;
+  const placedCorrectly = direction === "left"
+    ? targetCenter < sourceCenter
+    : targetCenter > sourceCenter;
+  return Number.isFinite(sourceCenter) && Number.isFinite(targetCenter) && placedCorrectly;
+}
+
 async function windowPrefixPutSplitBeside(workspace, sourceGroup, targetGroup, direction) {
   const parent = sourceGroup?.parent || sourceGroup?.parentSplit || null;
   const targetParent = targetGroup?.parent || targetGroup?.parentSplit || null;
@@ -264,21 +275,15 @@ async function windowPrefixPutSplitBeside(workspace, sourceGroup, targetGroup, d
   children.splice(targetIndex, 1);
   const reorderedSourceIndex = children.indexOf(sourceGroup);
   children.splice(reorderedSourceIndex + (direction === "right" ? 1 : 0), 0, targetGroup);
-  if (typeof parent.recomputeChildrenDimensions === "function") {
-    parent.recomputeChildrenDimensions();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (typeof parent.recomputeChildrenDimensions === "function") {
+      parent.recomputeChildrenDimensions();
+    }
+    workspace.onLayoutChange();
+    await windowPrefixNextFrame();
+    if (windowPrefixSplitIsPlaced(sourceGroup, targetGroup, direction)) return;
   }
-  workspace.onLayoutChange();
-  await windowPrefixNextFrame();
-  const sourceRect = windowPrefixReadRect(sourceGroup);
-  const targetRect = windowPrefixReadRect(targetGroup);
-  const sourceCenter = sourceRect && sourceRect.left + sourceRect.width / 2;
-  const targetCenter = targetRect && targetRect.left + targetRect.width / 2;
-  const placedCorrectly = direction === "left"
-    ? targetCenter < sourceCenter
-    : targetCenter > sourceCenter;
-  if (!Number.isFinite(sourceCenter) || !Number.isFinite(targetCenter) || !placedCorrectly) {
-    throw new Error(`Obsidian did not place the new split ${direction}`);
-  }
+  throw new Error(`Obsidian did not place the new split ${direction}`);
 }
 
 async function windowPrefixUpdateLayout(workspace, groups, activeLeaf, scrollState = null) {
@@ -290,6 +295,10 @@ async function windowPrefixUpdateLayout(workspace, groups, activeLeaf, scrollSta
   }
   workspace.onLayoutChange();
   workspace.setActiveLeaf(activeLeaf, { focus: true });
+  if (workspace.activeLeaf !== activeLeaf) {
+    await windowPrefixNextFrame();
+    workspace.setActiveLeaf(activeLeaf, { focus: true });
+  }
   if (workspace.activeLeaf !== activeLeaf) {
     throw new Error("Obsidian did not focus the requested tab");
   }
@@ -641,8 +650,14 @@ class BobNavigationHotkeysWindowLayoutMixin {
           "vertical",
           plan.direction === "left",
         );
-        targetGroup = windowPrefixLeafParent(placeholder);
-        if (!placeholder || !targetGroup || targetGroup === sourceGroup ||
+        if (placeholder && typeof placeholder.then === "function") placeholder = await placeholder;
+        // Live Obsidian must never detach the moved tab if the split API
+        // returned the source leaf instead of an empty placeholder.
+        if (placeholder === sourceLeaf) placeholder = null;
+        targetGroup = placeholder
+          ? windowPrefixLeafParent(placeholder)
+          : windowPrefixLeafParent(sourceLeaf);
+        if (!targetGroup || targetGroup === sourceGroup ||
             !windowPrefixGroupCanMove(targetGroup)) {
           throw new Error("Obsidian did not create a usable split");
         }
@@ -653,13 +668,23 @@ class BobNavigationHotkeysWindowLayoutMixin {
       const insertionIndex = plan.action === "create-split"
         ? 0
         : plan.destinationIndex;
-      sourceGroup.removeChild(sourceLeaf);
-      windowPrefixInsertLeaf(targetGroup, insertionIndex, sourceLeaf);
+      if (sourceGroup.children.includes(sourceLeaf)) sourceGroup.removeChild(sourceLeaf);
+      if (targetGroup.children.includes(sourceLeaf)) {
+        if (targetGroup.children.indexOf(sourceLeaf) !== insertionIndex) {
+          targetGroup.removeChild(sourceLeaf);
+          windowPrefixInsertLeaf(targetGroup, insertionIndex, sourceLeaf);
+        }
+      } else {
+        windowPrefixInsertLeaf(targetGroup, insertionIndex, sourceLeaf);
+      }
       targetGroup.selectTab(sourceLeaf);
       if (plan.action === "create-split") {
         await windowPrefixPutSplitBeside(workspace, sourceGroup, targetGroup, plan.direction);
       }
-      if (placeholder && targetGroup.children.includes(placeholder)) placeholder.detach();
+      if (placeholder && placeholder !== sourceLeaf &&
+          targetGroup.children.includes(placeholder)) {
+        placeholder.detach();
+      }
 
       if (sourceGroup.children?.length) {
         let mostRecent = null;
@@ -672,7 +697,9 @@ class BobNavigationHotkeysWindowLayoutMixin {
             : sourceGroup.children.includes(plannedRemaining)
               ? plannedRemaining
               : sourceGroup.children[0];
-        sourceGroup.selectTab(sourceSelection);
+        try { sourceGroup.selectTab(sourceSelection); } catch (_error) {
+          // Remainder selection is best-effort; the moved tab is the active leaf.
+        }
       }
       await windowPrefixUpdateLayout(workspace, [sourceGroup, targetGroup], sourceLeaf, scrollState);
 
@@ -683,17 +710,31 @@ class BobNavigationHotkeysWindowLayoutMixin {
       const movedExactlyOnce = afterLeaves.filter((leaf) => leaf === sourceLeaf).length === 1;
       const sameLeafSet = beforeLeaves.length === afterLeaves.length &&
         beforeLeaves.every((leaf) => afterLeaves.includes(leaf));
-      const sourceShapeValid = plan.sourceCollapsed
-        ? sourceCollapsed
-        : !sourceCollapsed && sourceGroup.children.length > 0 &&
-          sourceSelection && sourceSelection !== sourceLeaf &&
-          sourceGroup.children.includes(sourceSelection) && sourceGroup.selectedTab === sourceSelection;
-      const valid = movedExactlyOnce && sameLeafSet &&
-        windowPrefixLeafParent(sourceLeaf) === targetGroup &&
-        targetChildren.indexOf(sourceLeaf) === expectedInsertion &&
-        targetGroup.selectedTab === sourceLeaf && workspace.activeLeaf === sourceLeaf &&
+      const parentIsTarget = windowPrefixLeafParent(sourceLeaf) === targetGroup;
+      const insertionAt = targetChildren.indexOf(sourceLeaf);
+      const targetSelected = windowPrefixSelectedLeaf(workspace, targetGroup, [...targetChildren]);
+      const activeIsMoved = workspace.activeLeaf === sourceLeaf;
+      const sourceStillHoldsTabs = !sourceCollapsed && sourceGroup.children.length > 0 &&
+        !sourceGroup.children.includes(sourceLeaf);
+      const sourceShapeValid = plan.sourceCollapsed ? sourceCollapsed : sourceStillHoldsTabs;
+      const valid = movedExactlyOnce && sameLeafSet && parentIsTarget &&
+        insertionAt === expectedInsertion && activeIsMoved &&
         sourceLeaf.pinned === beforePinned && sourceShapeValid;
-      if (!valid) throw new Error("tab move did not satisfy the layout invariants");
+      if (!valid) {
+        throw new Error("tab move did not satisfy the layout invariants: " + JSON.stringify({
+          movedExactlyOnce,
+          sameLeafSet,
+          parentIsTarget,
+          insertionAt,
+          expectedInsertion,
+          activeIsMoved,
+          pinnedPreserved: sourceLeaf.pinned === beforePinned,
+          sourceShapeValid,
+          sourceCollapsed,
+          targetSelectedIsMoved: targetSelected === sourceLeaf,
+          selectedTabIsMoved: targetGroup.selectedTab === sourceLeaf,
+        }));
+      }
       return {
         ok: true,
         action: plan.action,

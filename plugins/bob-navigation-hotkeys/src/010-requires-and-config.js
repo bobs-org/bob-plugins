@@ -1,5 +1,8 @@
 const obsidian = require("obsidian");
 const { MarkdownView, Modal, Notice, Plugin, parseYaml } = obsidian;
+const Scope = obsidian.Scope;
+const Platform = obsidian.Platform;
+const setIcon = typeof obsidian.setIcon === "function" ? obsidian.setIcon : undefined;
 const { EditorView, Decoration } = require("@codemirror/view");
 let codeMirrorState = {};
 try {

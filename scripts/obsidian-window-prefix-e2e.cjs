@@ -10,9 +10,10 @@
 //     -e /snap/bin/obsidian -r <dir>/report.json -o <dir>/shots
 // then copy the report and screenshots back and review them).
 //
-// Groups: --only spike runs the finding probes (1-5 below). --only actions,
-// --only prefix, and --only visual are reserved for their phases and report
-// skipped until those phases land their runners.
+// Groups: --only spike runs the finding probes (1-5 below). --only prefix
+// runs the Ctrl+W prefix state-machine cases. --only actions and --only
+// visual stay reserved for their phases and report skipped until those
+// runners land.
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -62,6 +63,13 @@ const HELP = [
   "  5. Later-phase facts: bundled Vim idle <C-w> entry; native focus-split",
   "     command IDs; .workspace-tabs.mod-active; getMostRecentLeaf(group);",
   "     deferred background-leaf behavior on focus/move.",
+  "",
+  "Prefix group (--only prefix):",
+  "  Ctrl+W l/h/L/H on [ WP-A  WP-B* ] | [ WP-C ], Ctrl+W Ctrl+W toggle,",
+  "  Ctrl+W Ctrl+L (no palette), Esc byte-identical, unmapped j, insert-mode",
+  "  word delete, Copy card pass-through, reading view + empty tab arm,",
+  "  pending d pass-through, Linux default Close tab with prefix idle, and",
+  "  keymap scope restoration. Screenshots: ring and card at 300 ms.",
   "",
   "The --self-test run is an offline check only, never an Obsidian pass.",
 ].join("\n");
@@ -1637,6 +1645,452 @@ async function shutdownOwned(launch, client) {
   } catch (_) {}
 }
 
+const PREFIX_DEBUG = [
+  '(()=>{try{',
+  'const p=window.app.plugins.plugins["bob-navigation-hotkeys"];',
+  'if(!p)return{ok:false,error:"plugin missing"};',
+  'const d=typeof p.getWindowPrefixDebugState==="function"?p.getWindowPrefixDebugState():{state:p.windowPrefixState||null,armed:false,hasScope:false,scopeCount:null};',
+  'const host=document.querySelector("[data-bob-wp=\'host\']");',
+  'const ring=document.querySelector("[data-bob-wp=\'ring\']");',
+  'const card=document.querySelector("[data-bob-wp=\'card\']");',
+  'const msg=document.querySelector("[data-bob-wp=\'message\']");',
+  'return{ok:true,state:d.state||null,armed:!!d.armed,hasScope:!!d.hasScope,',
+  'scopeCount:d.scopeCount==null?null:d.scopeCount,lastVerdict:d.lastVerdict||null,lastDispatch:d.lastDispatch||null,',
+  'hostHidden:!host||host.classList.contains("is-hidden"),',
+  'hostArmed:!!(host&&host.classList.contains("is-armed")),',
+  'hostCarded:!!(host&&host.classList.contains("is-carded")),',
+  'hasHost:!!host,hasRing:!!ring,hasCard:!!card,',
+  'message:msg?String(msg.textContent||""):""};',
+  '}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+].join("");
+
+const KEYMAP_FINGERPRINT = [
+  '(()=>{try{const km=window.app.keymap;const scopes=km&&km.scopes;',
+  'if(Array.isArray(scopes)){',
+  'const ids=scopes.map((s)=>{if(!s)return"null";',
+  'try{if(!s.__wpFp)s.__wpFp="s"+Math.random().toString(16).slice(2);return s.__wpFp;}catch(_){return typeof s;}});',
+  'return{ok:true,kind:"scopes",ids,count:scopes.length};}',
+  'return{ok:true,kind:"keys",keys:Object.keys(km||{}).sort()};',
+  '}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+].join("");
+
+const PREFIX_SCREENSHOT_LAYOUT = "[ WP-A  WP-B* ] | [ WP-C ]";
+
+async function prefixDebug(client) {
+  return client.evaluate(PREFIX_DEBUG, RPC_TIMEOUT_MS);
+}
+
+async function keymapFinger(client) {
+  return client.evaluate(KEYMAP_FINGERPRINT, RPC_TIMEOUT_MS);
+}
+
+function sameKeymap(left, right) {
+  if (!left || !right || !left.ok || !right.ok) return false;
+  if (left.kind === "scopes" && right.kind === "scopes") {
+    return JSON.stringify(left.ids) === JSON.stringify(right.ids);
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function titlesOf(live) {
+  return live.groups.map((group) => group.tabs.map((tab) => tab.title));
+}
+
+async function waitPrefix(client, predicate, label, timeout) {
+  return waitFor(client, PREFIX_DEBUG, (state) => state && state.ok && predicate(state), label, timeout || 4000);
+}
+
+async function ctrlW(client, pause) {
+  await key(client, { key: "w", code: "KeyW", modifiers: 2, text: "", pause: pause == null ? 24 : pause });
+}
+
+async function armPrefix(client) {
+  await ctrlW(client, 40);
+  return waitPrefix(client, (state) => state.armed === true, "prefix armed");
+}
+
+async function waitPrefixIdle(client, timeout) {
+  return waitPrefix(client, (state) => state.state === "idle" && state.armed === false, "prefix idle", timeout || 6000);
+}
+
+const OVERLAY_OPEN = '(()=>!!document.querySelector(".prompt,.modal,.bob-copy-card,.bob-copy-card-modal,.bob-task-card"))()';
+
+async function cancelPrefix(client) {
+  const overlay = await client.evaluate(OVERLAY_OPEN, RPC_TIMEOUT_MS).catch(() => false);
+  const state = await prefixDebug(client).catch(() => null);
+  if ((state && state.armed) || overlay) {
+    await keys(client, ["Escape"]);
+    await sleep(80);
+  }
+  if (state && state.armed) {
+    await waitPrefixIdle(client, 3000).catch(() => null);
+  }
+  const still = await client.evaluate(OVERLAY_OPEN, RPC_TIMEOUT_MS).catch(() => false);
+  if (still) {
+    await keys(client, ["Escape"]);
+    await sleep(80);
+  }
+}
+
+async function letterKey(client, letter) {
+  const upper = letter.toUpperCase();
+  const isUpper = letter === upper && letter !== letter.toLowerCase();
+  await key(client, {
+    key: letter,
+    code: "Key" + upper,
+    modifiers: isUpper ? 8 : 0,
+    text: "",
+  });
+}
+
+async function prepareLayout(client, signature) {
+  await buildFromSignature(client, signature);
+  await keys(client, ["Escape"]);
+  await client.evaluate(
+    '(()=>{const v=window.app.workspace.activeLeaf&&window.app.workspace.activeLeaf.view;if(v&&v.editor&&v.editor.focus)v.editor.focus();return true;})()',
+    RPC_TIMEOUT_MS,
+  );
+  const vim = await waitForVim(client, 8000);
+  if (vim && vim.vimPresent) {
+    await keys(client, ["Escape"]);
+    await sleep(80);
+  }
+  return readLive(client);
+}
+
+async function runPrefixCase(record, client, name, action) {
+  const before = await keymapFinger(client);
+  await runCase(record, name, async () => {
+    try {
+      const detail = await action();
+      return detail;
+    } finally {
+      try { await cancelPrefix(client); } catch (_error) { /* next case rebuilds */ }
+    }
+  });
+  const after = await keymapFinger(client);
+  if (!sameKeymap(before, after)) {
+    record(name + "/scope-stack", "fail", "keymap scope stack changed: " + JSON.stringify({ before, after }));
+  }
+}
+
+async function runPrefixMac(args, record, findings, outDir, screenshots) {
+  const launch = await launchOwned(wplib.macHotkeys(), args.executable);
+  let client = null;
+  try {
+    client = await connectOwned(launch);
+    findings.appVersion = await client.evaluate("window.app.version||null").catch(() => null);
+    findings.prefix = {};
+
+    await runCase(record, "prefix/mixin-loaded", async () => {
+      const ready = await client.evaluate(
+        '(()=>{const p=window.app.plugins.plugins["bob-navigation-hotkeys"];return{has:!!p,state:p&&p.windowPrefixState,debug:typeof (p&&p.getWindowPrefixDebugState),arm:typeof (p&&p.armWindowPrefix)};})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!ready || ready.debug !== "function" || ready.arm !== "function") {
+        throw new Error("window prefix mixin not loaded: " + JSON.stringify(ready));
+      }
+      return JSON.stringify(ready);
+    });
+
+    await runPrefixCase(record, client, "prefix/focus-l", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await key(client, "l");
+      await waitPrefixIdle(client);
+      const after = await readLive(client);
+      if (after.live.activePath !== "WP-C.md") throw new Error("l did not focus WP-C: " + after.signature);
+      if (JSON.stringify(titlesOf(after.live)) !== JSON.stringify([["WP-A", "WP-B"], ["WP-C"]])) {
+        throw new Error("l changed titles: " + after.signature);
+      }
+      findings.prefix.focusL = after.signature;
+      return after.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/focus-h-edge", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await key(client, "h");
+      await sleep(150);
+      const state = await prefixDebug(client);
+      if (!state.armed) throw new Error("h at left edge disarmed: " + JSON.stringify(state));
+      const after = await readLive(client);
+      if (after.live.activePath !== "WP-B.md") throw new Error("h moved focus: " + after.signature);
+      return after.signature + " still armed";
+    });
+
+    await runPrefixCase(record, client, "prefix/move-L", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await letterKey(client, "L");
+      await waitPrefixIdle(client, 8000);
+      await sleep(250);
+      const after = await readLive(client);
+      if (JSON.stringify(titlesOf(after.live)) !== JSON.stringify([["WP-A"], ["WP-C", "WP-B"]])) {
+        const debug = await prefixDebug(client);
+        throw new Error("L join failed: " + after.signature + " dispatch=" + JSON.stringify(debug.lastDispatch));
+      }
+      if (after.live.activePath !== "WP-B.md") throw new Error("moved tab not active: " + after.signature);
+      findings.prefix.moveL = after.signature;
+      return after.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/move-H", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await letterKey(client, "H");
+      await waitPrefixIdle(client, 8000);
+      await sleep(250);
+      const after = await readLive(client);
+      if (JSON.stringify(titlesOf(after.live)) !== JSON.stringify([["WP-B"], ["WP-A"], ["WP-C"]])) {
+        const debug = await prefixDebug(client);
+        throw new Error("H create-left failed: " + after.signature + " dispatch=" + JSON.stringify(debug.lastDispatch));
+      }
+      if (after.live.activePath !== "WP-B.md") throw new Error("moved tab not active: " + after.signature);
+      findings.prefix.moveH = after.signature;
+      return after.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/ctrl-w-toggle", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await ctrlW(client);
+      await waitPrefixIdle(client);
+      let after = await readLive(client);
+      if (after.live.activePath !== "WP-C.md") throw new Error("first w did not toggle to WP-C: " + after.signature);
+      await armPrefix(client);
+      await ctrlW(client);
+      await waitPrefixIdle(client);
+      after = await readLive(client);
+      if (after.live.activePath !== "WP-B.md") throw new Error("second w did not wrap to WP-B: " + after.signature);
+      findings.prefix.toggle = after.signature;
+      return after.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/ctrl-w-ctrl-l", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await key(client, { key: "l", code: "KeyL", modifiers: 2, text: "" });
+      await waitPrefixIdle(client);
+      const palette = await client.evaluate(MODAL_OPEN, RPC_TIMEOUT_MS);
+      if (palette) throw new Error("Ctrl+L opened the palette under the prefix");
+      const after = await readLive(client);
+      if (after.live.activePath !== "WP-C.md") throw new Error("Ctrl+L suffix did not focus right: " + after.signature);
+      return after.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/esc-identical", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      const before = await readLive(client);
+      const textBefore = (await dumpEditor(client)).text;
+      await armPrefix(client);
+      await keys(client, ["Escape"]);
+      await waitPrefixIdle(client);
+      const after = await readLive(client);
+      const textAfter = (await dumpEditor(client)).text;
+      if (after.signature !== before.signature) {
+        throw new Error("Esc changed layout: " + before.signature + " -> " + after.signature);
+      }
+      if (textAfter !== textBefore) throw new Error("Esc changed note text");
+      return before.signature;
+    });
+
+    await runPrefixCase(record, client, "prefix/unmapped-j", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      const before = await readLive(client);
+      const dumpBefore = await dumpEditor(client);
+      await armPrefix(client);
+      await key(client, "j");
+      await sleep(150);
+      const state = await prefixDebug(client);
+      if (!state.armed) throw new Error("unmapped j disarmed: " + JSON.stringify(state));
+      const after = await readLive(client);
+      const dump = await dumpEditor(client);
+      if (after.signature !== before.signature) throw new Error("j changed layout: " + after.signature);
+      if (dump.text !== dumpBefore.text) throw new Error("j leaked into the note");
+      if (dump.cursor.line !== dumpBefore.cursor.line || dump.cursor.ch !== dumpBefore.cursor.ch) {
+        throw new Error("j moved the cursor");
+      }
+      return state.message || "consumed j, still armed";
+    });
+
+    await runPrefixCase(record, client, "prefix/insert-passthrough", async () => {
+      const opened = await openNote(client, "WP-C.md", "source");
+      if (!opened || !opened.ok || opened.viewType !== "markdown") {
+        throw new Error("WP-C did not open as a markdown editor: " + JSON.stringify(opened));
+      }
+      const settled = await waitForVim(client, 8000);
+      if (!settled || !settled.vimPresent) {
+        throw new Error("editor never attached Vim state after open: " + JSON.stringify(settled));
+      }
+      await keys(client, ["Escape"]);
+      await placeCursor(client, 2, 0);
+      await keys(client, ["i"]);
+      await sleep(150);
+      const inserting = await dumpEditor(client);
+      if (!inserting.vimPresent || inserting.vimMode !== "insert") {
+        throw new Error("'i' did not enter insert mode: " + JSON.stringify({ vim: inserting.vimMode }));
+      }
+      await client.call("Input.insertText", { text: "hello world" });
+      await ctrlW(client, 80);
+      await sleep(200);
+      const dump = await dumpEditor(client);
+      const state = await prefixDebug(client);
+      await keys(client, ["Escape"]);
+      const line = dump.text.split("\n")[2];
+      if (state.armed || state.state !== "idle") {
+        throw new Error("insert-mode Ctrl+W armed the prefix: " + JSON.stringify(state));
+      }
+      if (dump.vimMode !== "insert") {
+        throw new Error("editor left insert mode around Ctrl+W: " + JSON.stringify({ vim: dump.vimMode, line }));
+      }
+      if (line !== "hello spike join target charlie") {
+        throw new Error("insert-mode Ctrl+W did not delete exactly one word: " + JSON.stringify(line));
+      }
+      return "insert-mode Ctrl+W deletes a word; prefix idle";
+    });
+
+    await runPrefixCase(record, client, "prefix/copy-card-passthrough", async () => {
+      await prepareLayout(client, "[ WP-A*  WP-B ]");
+      await client.evaluate(
+        '(()=>{try{return window.app.commands.executeCommandById("bob-navigation-hotkeys:copy-active-file-path");}catch(e){return{error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      await sleep(300);
+      let overlay = await client.evaluate(
+        '(()=>!!document.querySelector(".bob-copy-card,.bob-copy-card-modal,.modal"))()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!overlay) {
+        await client.evaluate(
+          '(()=>{const el=document.createElement("div");el.className="bob-copy-card modal";el.setAttribute("data-bob-wp-test","1");document.body.appendChild(el);return true;})()',
+        );
+        overlay = "injected";
+      }
+      await ctrlW(client, 80);
+      const state = await prefixDebug(client);
+      if (state.armed || state.state !== "idle") {
+        throw new Error("Ctrl+W armed over copy card: " + JSON.stringify(state));
+      }
+      await keys(client, ["Escape"]);
+      await sleep(150);
+      await waitFor(client, '(!document.querySelector(".modal,.bob-copy-card,.bob-copy-card-modal,.prompt"))', Boolean, "copy card closed", 4000);
+      return overlay === true ? "copy-card blocked arming" : "injected overlay blocked arming";
+    });
+
+    await runPrefixCase(record, client, "prefix/reading-view-arms", async () => {
+      await waitFor(client, '(!document.querySelector(".modal,.bob-copy-card,.bob-copy-card-modal,.prompt"))', Boolean, "no overlay before reading view", 4000);
+      const opened = await openNote(client, "WP-A.md", "preview");
+      if (!opened || !opened.ok) throw new Error("preview open failed: " + JSON.stringify(opened));
+      await sleep(400);
+      await client.evaluate(
+        '(()=>{const v=window.app.workspace.activeLeaf&&window.app.workspace.activeLeaf.view;if(v&&typeof v.setState==="function"){try{v.setState({mode:"preview",source:false});}catch(_){}}const preview=document.querySelector(".markdown-preview-view,.markdown-reading-view");if(preview){if(preview.tabIndex<0)preview.tabIndex=0;if(preview.focus)preview.focus();preview.click();}const el=(v&&v.contentEl)||(v&&v.containerEl);if(el&&el.focus)el.focus();return{viewType:v&&v.getViewType(),mode:typeof (v&&v.getMode)==="function"?v.getMode():null,active:(document.activeElement&&document.activeElement.className)||null};})()',
+        RPC_TIMEOUT_MS,
+      );
+      await sleep(200);
+      await ctrlW(client, 80);
+      const state = await waitPrefix(client, (item) => item.armed === true, "reading-view prefix armed");
+      return JSON.stringify(state);
+    });
+
+    await runPrefixCase(record, client, "prefix/empty-tab-arms", async () => {
+      await prepareLayout(client, "[ WP-A* ]");
+      const made = await client.evaluate(
+        '(()=>(async()=>{const w=window.app.workspace;const leaf=w.getLeaf("tab");w.setActiveLeaf(leaf,{focus:true});await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));const v=leaf.view;const el=(v&&v.containerEl)||(leaf&&leaf.containerEl);if(el&&el.focus)el.focus();return{ok:true,viewType:v&&typeof v.getViewType==="function"?v.getViewType():null,hasFile:!!(v&&v.file)};})())()',
+        RPC_TIMEOUT_MS,
+      );
+      await sleep(250);
+      await ctrlW(client, 80);
+      const state = await waitPrefix(client, (item) => item.armed === true, "empty-tab prefix armed");
+      return JSON.stringify({ made, state });
+    });
+
+    await runPrefixCase(record, client, "prefix/pending-d-passthrough", async () => {
+      await prepareLayout(client, "[ WP-A* ]");
+      await keys(client, ["Escape"]);
+      await key(client, "d");
+      await sleep(80);
+      await ctrlW(client, 80);
+      const state = await prefixDebug(client);
+      if (state.armed || state.state !== "idle") {
+        throw new Error("Ctrl+W armed over pending d: " + JSON.stringify(state));
+      }
+      return "idle over pending operator";
+    });
+
+    await runPrefixCase(record, client, "prefix/hint-ring", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await sleep(80);
+      const state = await prefixDebug(client);
+      if (!state.hostArmed || state.hostHidden) throw new Error("ring host not visible: " + JSON.stringify(state));
+      if (state.hostCarded) throw new Error("card appeared before 300ms: " + JSON.stringify(state));
+      screenshots.push(await screenshot(client, outDir, "prefix-ring"));
+      return "ring visible, card hidden";
+    });
+
+    await runPrefixCase(record, client, "prefix/hint-card-300ms", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await armPrefix(client);
+      await sleep(360);
+      const state = await prefixDebug(client);
+      if (!state.hostCarded || state.hostHidden) throw new Error("card not visible at 300ms: " + JSON.stringify(state));
+      screenshots.push(await screenshot(client, outDir, "prefix-card"));
+      return "card visible at 300ms";
+    });
+  } finally {
+    await shutdownOwned(launch, client);
+  }
+}
+
+async function runPrefixLinux(args, record, findings) {
+  const launch = await launchOwned(wplib.linuxDefaultHotkeys(), args.executable);
+  let client = null;
+  try {
+    client = await connectOwned(launch);
+    findings.linuxAppVersion = await client.evaluate("window.app.version||null").catch(() => null);
+    await runCase(record, "prefix/linux-close-stays-idle", async () => {
+      await buildFromSignature(client, "[ WP-A*  WP-B ]");
+      await keys(client, ["Escape"]);
+      const before = await keymapFinger(client);
+      const leavesBefore = await leafCount(client);
+      const debugBefore = await prefixDebug(client);
+      if (debugBefore.state && debugBefore.state !== "idle") {
+        throw new Error("prefix not idle before Linux Ctrl+W: " + JSON.stringify(debugBefore));
+      }
+      const ctx = { dead: false };
+      try {
+        await ctrlW(client, 200);
+        await sleep(400);
+      } catch (_error) {
+        ctx.dead = true;
+      }
+      if (ctx.dead) {
+        findings.prefix = findings.prefix || {};
+        findings.prefix.linux = { outcome: "window-closed-or-socket-dead", leavesBefore };
+        return `socket died after Ctrl+W from ${leavesBefore} leaves (window closed)`;
+      }
+      const leavesAfter = await leafCount(client);
+      const debugAfter = await prefixDebug(client);
+      if (debugAfter.armed || (debugAfter.state && debugAfter.state !== "idle")) {
+        throw new Error("prefix armed under Linux Close tab: " + JSON.stringify(debugAfter));
+      }
+      if (leavesAfter !== leavesBefore - 1) {
+        throw new Error(`expected tab close ${leavesBefore}->${leavesBefore - 1}, got ${leavesAfter}`);
+      }
+      const after = await keymapFinger(client);
+      if (!sameKeymap(before, after)) {
+        throw new Error("scope stack changed on Linux close: " + JSON.stringify({ before, after }));
+      }
+      findings.prefix = findings.prefix || {};
+      findings.prefix.linux = { leavesBefore, leavesAfter, idle: true };
+      return `closed ${leavesBefore}->${leavesAfter}, prefix idle`;
+    });
+  } finally {
+    await shutdownOwned(launch, client);
+  }
+}
+
 async function runSpikeMac(args, record, findings, outDir, screenshots) {
   const launch = await launchOwned(wplib.macHotkeys(), args.executable);
   let client = null;
@@ -1685,6 +2139,8 @@ async function runSpikeLinux(args, record, findings) {
 function selfTest() {
   const parsed = parseArgs(["--self-test", "--only", "spike", "--report", "/tmp/wp-spike.json"]);
   if (!parsed.selfTest || parsed.only !== "spike") throw new Error("argument parsing failed");
+  const parsedPrefix = parseArgs(["--only", "prefix"]);
+  if (parsedPrefix.only !== "prefix") throw new Error("prefix --only parsing failed");
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "bob-wp-spike-self-"));
   try {
     const vault = path.join(temp, "vault");
@@ -1706,7 +2162,8 @@ function selfTest() {
     for (const token of ["removeChild", "insertChild", "selectTab", "createLeafBySplit", "duplicateLeaf",
       "recomputeChildrenDimensions", "onLayoutChange", "setActiveLeaf", "requestSaveLayout",
       "getMostRecentLeaf", "loadIfDeferred", "pushScope", "popScope", "Input.dispatchKeyEvent",
-      "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active"]) {
+      "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active",
+      "runPrefixMac", "prefix/focus-l", "getWindowPrefixDebugState"]) {
       if (!source.includes(token)) throw new Error("e2e is missing " + token);
     }
     const libSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-lib.cjs"), "utf8");
@@ -1754,11 +2211,14 @@ async function runE2e(args) {
   fs.mkdirSync(outDir, { recursive: true });
   const findings = { move: {}, collapse: {}, create: {}, keyboard: {}, facts: {} };
   const screenshots = [];
-  if (group !== "spike") {
-    record(group + "/reserved", "skipped", "runner lands in the " + group + " phase; spike ships only the harness helpers");
-  } else {
+  if (group === "spike") {
     await runSpikeMac(args, record, findings, outDir, screenshots);
     await runSpikeLinux(args, record, findings);
+  } else if (group === "prefix") {
+    await runPrefixMac(args, record, findings, outDir, screenshots);
+    await runPrefixLinux(args, record, findings);
+  } else {
+    record(group + "/reserved", "skipped", "runner lands in the " + group + " phase; spike and prefix ship their harness runners");
   }
   const executable = findExecutable(args.executable);
   let sourceSha = "";
@@ -1825,6 +2285,8 @@ const PROBE_SNIPPETS = {
   RECORDER_INSTALL,
   DUMP_EDITOR,
   VIM_PROBE,
+  PREFIX_DEBUG,
+  KEYMAP_FINGERPRINT,
 };
 
 module.exports = {

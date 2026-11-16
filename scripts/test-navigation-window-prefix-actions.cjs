@@ -345,6 +345,35 @@ test("duplicate supports an empty leaf with no file", async () => {
   assert.equal(result.targetLeaf.view.file, null);
 });
 
+test("join succeeds when selectedTab tracks only the workspace active leaf", async () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const c = leaf("C");
+  const { workspace } = makeWorkspace([
+    { id: "source", left: 0, leaves: [a, b], selected: b },
+    { id: "target", left: 100, leaves: [c], selected: c },
+  ], { activeLeaf: b });
+  for (const group of workspace.rootSplit.children) {
+    Object.defineProperty(group, "selectedTab", {
+      configurable: true,
+      get() {
+        return workspace.activeLeaf && this.children.includes(workspace.activeLeaf)
+          ? workspace.activeLeaf
+          : undefined;
+      },
+      set() { /* live WorkspaceTabs selection follows the active leaf */ },
+    });
+  }
+  const plugin = pluginFor(workspace);
+  const { plan } = getPlan(plugin, "L");
+  const result = await plugin.executeWindowPrefixPlan(plan);
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(workspace.rootSplit.children.map((group) => group.children.map((item) => item.id)), [
+    ["A"], ["C", "B"],
+  ]);
+  assert.equal(workspace.activeLeaf, b);
+});
+
 test("a failed move restores the source layout and reports the failure", async () => {
   const a = leaf("A");
   const b = leaf("B");

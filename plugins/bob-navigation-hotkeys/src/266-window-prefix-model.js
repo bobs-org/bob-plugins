@@ -3,6 +3,7 @@
 // { activeLeafId, splits: [{ id, rect, leaves: [{ id, label?, pinned? }],
 //   selectedLeafId, mostRecentLeafId?, recency? }] }.
 const WINDOW_PREFIX_EDGE_EPSILON = 0.5;
+const WINDOW_PREFIX_HINT_DELAY_MS = 300;
 const WINDOW_PREFIX_KEY_ALIASES = Object.freeze({
   ArrowLeft: "h",
   ArrowRight: "l",

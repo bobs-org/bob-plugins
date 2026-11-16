@@ -682,6 +682,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.wrapPomodoroSplitSaveCommand();
     this.registerCountedLaneToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
+    this.registerWindowPrefixInputListeners();
 
     this.register(() => {
       if (this.pendingDependencyMirror) {
@@ -805,5 +806,10 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.laneWalkAnchor = null;
     this.laneWalkChain = Promise.resolve();
     this.laneWalkNotice = null;
+    try {
+      if (typeof this.teardownWindowPrefix === "function") this.teardownWindowPrefix();
+    } catch (_error) {
+      // Best-effort during unload; a leaked scope would be worse than a throw.
+    }
   }
 }

@@ -18,9 +18,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Named --only groups the harness accepts. Only `spike` runs real probes in
-// this phase; `actions`, `prefix`, and `visual` are reserved for their phases
-// and report every case as skipped until those phases land their runners.
+// Named --only groups the harness accepts. `spike` and `prefix` run real
+// probes; `actions` and `visual` stay reserved for their phases and report
+// skipped until those runners land.
 const GROUPS = Object.freeze(["spike", "actions", "prefix", "visual"]);
 
 // Six fixture notes: enough distinct tabs for every decision-contract vector

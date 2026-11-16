@@ -97,7 +97,21 @@ function normalizeWindowPrefixSnapshot(snapshot) {
       !sourceSplit.leaves.some((leaf) => leaf.id === resolvedActiveLeafId)) {
     return null;
   }
-  return { splits, activeLeafId: resolvedActiveLeafId, activeSplitId: sourceSplit.id };
+  const capabilities = snapshot.capabilities && typeof snapshot.capabilities === "object"
+    ? {
+        focus: snapshot.capabilities.focus !== false,
+        move: snapshot.capabilities.move !== false,
+        createSplit: snapshot.capabilities.createSplit !== false,
+        createSplitLeft: snapshot.capabilities.createSplitLeft !== false,
+        duplicate: snapshot.capabilities.duplicate !== false,
+      }
+    : { focus: true, move: true, createSplit: true, createSplitLeft: true, duplicate: true };
+  return {
+    splits,
+    activeLeafId: resolvedActiveLeafId,
+    activeSplitId: sourceSplit.id,
+    capabilities,
+  };
 }
 
 function windowPrefixActiveSplit(layout) {
@@ -171,6 +185,7 @@ function windowPrefixPlanNoop(key, source, layout, reason, preview) {
     action: "noop",
     key,
     sourceSplitId: source?.id ?? null,
+    sourceLeafId: layout?.activeLeafId ?? null,
     activeLeafId: layout?.activeLeafId ?? null,
     reason,
     preview,
@@ -183,6 +198,11 @@ function planWindowPrefixFocus(snapshot, direction) {
   const layout = normalizeWindowPrefixSnapshot(snapshot);
   if (!layout) return windowPrefixPlanError(key, "invalid-layout");
   const source = windowPrefixActiveSplit(layout);
+  if (!layout.capabilities.focus) {
+    return windowPrefixPlanNoop(
+      key, source, layout, "layout-api-changed", "Obsidian layout API changed",
+    );
+  }
   let target = null;
   if (direction === "next") {
     const order = windowPrefixReadingOrder(layout.splits);
@@ -204,6 +224,7 @@ function planWindowPrefixFocus(snapshot, direction) {
     key,
     direction,
     sourceSplitId: source.id,
+    sourceLeafId: layout.activeLeafId,
     targetSplitId: target.id,
     targetLeafId,
     preview: `focus ${windowPrefixLeafLabel(layout, targetLeafId)}`,
@@ -216,6 +237,11 @@ function planWindowPrefixMove(snapshot, direction) {
   const layout = normalizeWindowPrefixSnapshot(snapshot);
   if (!layout) return windowPrefixPlanError(key, "invalid-layout");
   const source = windowPrefixActiveSplit(layout);
+  if (!layout.capabilities.move) {
+    return windowPrefixPlanNoop(
+      key, source, layout, "layout-api-changed", "Obsidian layout API changed",
+    );
+  }
   const movedLeaf = windowPrefixLeaf(source, layout.activeLeafId);
   const sourceAfter = source.leaves.filter((leaf) => leaf.id !== movedLeaf.id);
   const neighbor = windowPrefixDirectionalNeighbor(layout, source, direction);
@@ -235,6 +261,16 @@ function planWindowPrefixMove(snapshot, direction) {
       ? source.mostRecentLeafId
       : sourceAfter[0].id;
   if (!neighbor) {
+    if (!layout.capabilities.createSplit) {
+      return windowPrefixPlanNoop(
+        key, source, layout, "layout-api-changed", "Obsidian layout API changed",
+      );
+    }
+    if (direction === "left" && !layout.capabilities.createSplitLeft) {
+      return windowPrefixPlanNoop(
+        key, source, layout, "layout-api-changed", "Obsidian layout API changed",
+      );
+    }
     return {
       ok: true,
       available: true,
@@ -242,6 +278,7 @@ function planWindowPrefixMove(snapshot, direction) {
       key,
       direction,
       sourceSplitId: source.id,
+      sourceLeafId: layout.activeLeafId,
       targetSplitId: null,
       movedLeafId: movedLeaf.id,
       destinationIndex: 0,
@@ -268,6 +305,7 @@ function planWindowPrefixMove(snapshot, direction) {
     key,
     direction,
     sourceSplitId: source.id,
+    sourceLeafId: layout.activeLeafId,
     targetSplitId: neighbor.id,
     movedLeafId: movedLeaf.id,
     destinationIndex,
@@ -283,6 +321,11 @@ function planWindowPrefixSplit(snapshot) {
   const layout = normalizeWindowPrefixSnapshot(snapshot);
   if (!layout) return windowPrefixPlanError("v", "invalid-layout");
   const source = windowPrefixActiveSplit(layout);
+  if (!layout.capabilities.duplicate) {
+    return windowPrefixPlanNoop(
+      "v", source, layout, "layout-api-changed", "Obsidian layout API changed",
+    );
+  }
   return {
     ok: true,
     available: true,

@@ -131,6 +131,32 @@ test("split planner duplicates the active leaf to the right", () => {
   assert.equal(plan.direction, "right");
 });
 
+test("live API canary marks focus, move, create, and duplicate as unavailable", () => {
+  const snapshot = layout("b", [
+    split("left", 0, [leaf("a")]),
+    split("right", 100, [leaf("b")]),
+  ]);
+  snapshot.capabilities = { focus: false, move: false, createSplit: false, duplicate: false };
+  for (const key of ["h", "l", "w", "H", "L", "v"]) {
+    const plan = planWindowPrefixKey(snapshot, key);
+    assert.equal(plan.available, false, `${key} is disabled`);
+    assert.equal(plan.reason, "layout-api-changed", `${key} explains the canary failure`);
+    assert.match(plan.preview, /Obsidian layout API changed/);
+  }
+});
+
+test("left edge split is unavailable when sibling ordering cannot be verified", () => {
+  const snapshot = layout("b", [
+    split("main", 0, [leaf("a"), leaf("b")]),
+  ]);
+  snapshot.capabilities = { createSplitLeft: false };
+  const left = planWindowPrefixKey(snapshot, "H");
+  const right = planWindowPrefixKey(snapshot, "L");
+  assert.equal(left.available, false);
+  assert.equal(left.reason, "layout-api-changed");
+  assert.equal(right.action, "create-split");
+});
+
 test("key normalization handles aliases, shifted letters, control fallback, and safe exits", () => {
   assert.deepEqual(normalizeWindowPrefixKeydown({ key: "ArrowLeft" }), {
     kind: "mapped", key: "h", inputKey: "ArrowLeft", consume: true,

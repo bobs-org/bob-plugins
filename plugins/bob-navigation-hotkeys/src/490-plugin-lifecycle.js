@@ -65,6 +65,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.activeNotebookCreateModal = null;
     this.parentChangePickerOpening = false;
     this.pendingTaskMoveJumpDeferred = null;
+    this.initializeWindowPrefixLayoutAdapter();
 
     this.addCommand({
       id: "open-parent-note",

@@ -264,9 +264,69 @@ class ImageZoomModal extends Modal {
     this.abortController = null;
     this.viewportEl = null;
     this.imgEl = null;
+    this.mediaEl = null;
     this.readoutEl = null;
     this.drag = null;
     this.suppressClick = false;
+  }
+
+  decorateImageZoomChrome() {}
+
+  createImageZoomMediaEl() {
+    this.imgEl = this.viewportEl.createEl("img", {
+      cls: "bob-image-zoom-img",
+      attr: { draggable: "false", alt: this.imageTitle },
+    });
+    this.mediaEl = this.imgEl;
+  }
+
+  bindImageZoomMediaEvents(signalOpts) {
+    listenImageZoom(this.imgEl, "load", () => this.handleImageZoomLoad(), signalOpts);
+    listenImageZoom(this.imgEl, "error", () => this.handleImageZoomError(), signalOpts);
+  }
+
+  startImageZoomMediaLoad() {
+    if (this.imgEl) {
+      this.imgEl.setAttribute("src", this.imageSrc);
+    }
+  }
+
+  imageZoomReadoutText() {
+    if (!this.natural) {
+      return "Loading…";
+    }
+    const dpr = getImageZoomDevicePixelRatio(this.getImageZoomWindow());
+    return `${Math.round(this.state.scale * dpr * 100)}%`;
+  }
+
+  addImageZoomPrimaryFooterChips(addChip) {
+    addChip("Esc", "close");
+    addChip("+ / −", "zoom");
+    addChip("0", "fit");
+    addChip("1", "1:1");
+    addChip("hjkl", "pan");
+  }
+
+  collectImageZoomTrailingFooterChips(_addChip) {}
+
+  handleImageZoomMediaClick(_event) {}
+
+  releaseImageZoomMedia() {
+    try {
+      if (this.imgEl && typeof this.imgEl.removeAttribute === "function") {
+        this.imgEl.removeAttribute("src");
+      }
+    } catch (_error) {
+      // Cancelling a pending load is best effort.
+    }
+  }
+
+  mapImageZoomKey(event) {
+    return imageZoomKeyAction(event);
+  }
+
+  handleImageZoomMappedKey(_mapped, _event) {
+    return false;
   }
 
   getImageZoomWindow() {
@@ -298,6 +358,7 @@ class ImageZoomModal extends Modal {
     addImageZoomClass(this.containerEl, "bob-image-zoom-container");
     addImageZoomClass(this.modalEl, "bob-image-zoom-modal");
     addImageZoomClass(contentEl, "bob-image-zoom");
+    this.decorateImageZoomChrome();
 
     const header = contentEl.createDiv({ cls: "bob-image-zoom-header" });
     header.createDiv({ cls: "bob-image-zoom-title", text: this.imageTitle });
@@ -312,10 +373,7 @@ class ImageZoomModal extends Modal {
       cls: "bob-image-zoom-viewport",
       attr: { tabindex: "-1" },
     });
-    this.imgEl = this.viewportEl.createEl("img", {
-      cls: "bob-image-zoom-img",
-      attr: { draggable: "false", alt: this.imageTitle },
-    });
+    this.createImageZoomMediaEl();
     this.imageZoomFooterEl = contentEl.createDiv({ cls: "bob-image-zoom-footer" });
     this.renderImageZoomOrigin();
     this.renderImageZoomFooter();
@@ -334,8 +392,7 @@ class ImageZoomModal extends Modal {
         ? new AbortController()
         : { signal: { aborted: false }, abort() { this.signal.aborted = true; } };
     const signalOpts = this.imageZoomListenerOptions();
-    listenImageZoom(this.imgEl, "load", () => this.handleImageZoomLoad(), signalOpts);
-    listenImageZoom(this.imgEl, "error", () => this.handleImageZoomError(), signalOpts);
+    this.bindImageZoomMediaEvents(signalOpts);
     listenImageZoom(
       this.viewportEl,
       "wheel",
@@ -385,9 +442,7 @@ class ImageZoomModal extends Modal {
       signalOpts,
     );
 
-    if (this.imgEl) {
-      this.imgEl.setAttribute("src", this.imageSrc);
-    }
+    this.startImageZoomMediaLoad();
 
     // Ignore the opening Z until the next tick, then steal focus back from Vim.
     this.defer(() => {
@@ -409,7 +464,7 @@ class ImageZoomModal extends Modal {
     if (this.imageZoomClosed || !this.armed) {
       return;
     }
-    const mapped = imageZoomKeyAction(event);
+    const mapped = this.mapImageZoomKey(event);
     if (mapped.action === "close") {
       if (event && event.repeat) {
         return;
@@ -422,6 +477,9 @@ class ImageZoomModal extends Modal {
     }
     if (mapped.action === "restoreSource") {
       return this.restoreImageZoomSource();
+    }
+    if (this.handleImageZoomMappedKey(mapped, event)) {
+      return;
     }
     if (!this.natural || mapped.action === "ignore") {
       return;
@@ -578,7 +636,8 @@ class ImageZoomModal extends Modal {
       this.suppressClick = false;
       return;
     }
-    if (imageZoomEventHitsEl(event, this.imgEl)) {
+    if (imageZoomEventHitsEl(event, this.imgEl) || imageZoomEventHitsEl(event, this.mediaEl)) {
+      this.handleImageZoomMediaClick(event);
       return;
     }
     this.close();
@@ -707,12 +766,7 @@ class ImageZoomModal extends Modal {
 
   renderImageZoom() {
     if (this.readoutEl && typeof this.readoutEl.setText === "function") {
-      if (!this.natural) {
-        this.readoutEl.setText("Loading…");
-      } else {
-        const dpr = getImageZoomDevicePixelRatio(this.getImageZoomWindow());
-        this.readoutEl.setText(`${Math.round(this.state.scale * dpr * 100)}%`);
-      }
+      this.readoutEl.setText(this.imageZoomReadoutText());
     }
     if (!this.imgEl || !this.natural) {
       return;
@@ -755,13 +809,7 @@ class ImageZoomModal extends Modal {
     }
     this.scopeHandler = null;
     this.clearImageZoomToast();
-    try {
-      if (this.imgEl && typeof this.imgEl.removeAttribute === "function") {
-        this.imgEl.removeAttribute("src");
-      }
-    } catch (_error) {
-      // Cancelling a pending load is best effort.
-    }
+    this.releaseImageZoomMedia();
     contentElCleanup(this.contentEl);
     if (alreadyClosed) {
       return;

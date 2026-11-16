@@ -105,19 +105,23 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
     item.createSpan({ cls: "bob-image-zoom-chip-label", text: label });
   };
   const addDivider = () => footer.createSpan({ cls: "bob-image-zoom-divider", text: "·" });
-  addChip("Esc", "close");
-  addChip("+ / −", "zoom");
-  addChip("0", "fit");
-  addChip("1", "1:1");
-  addChip("hjkl", "pan");
-  if (!this.imageZoomOriginResolved) return;
+  this.addImageZoomPrimaryFooterChips(addChip);
+  const trailing = [];
+  this.collectImageZoomTrailingFooterChips((key, label) => trailing.push([key, label]));
+  if (!this.imageZoomOriginResolved) {
+    if (trailing.length) {
+      addDivider();
+      for (const [key, label] of trailing) addChip(key, label);
+    }
+    return;
+  }
   const context = this.imageZoomContext || {};
   const isVault = context.kind === "vault";
   const isUrl = context.kind === "url";
   const canCopy = Boolean((isVault && context.absolutePath) || (isUrl && context.url));
   const recorded = Boolean(this.imageZoomOrigin && (this.imageZoomOrigin.display || this.imageZoomOrigin.source));
   const canRestore = Boolean(context.restore && this.imageZoomOrigin && this.imageZoomOrigin.state === "present");
-  if (canCopy || canRestore) addDivider();
+  if (canCopy || canRestore || trailing.length) addDivider();
   if (canCopy) {
     const label = this.imageZoomOrigin && this.imageZoomOrigin.state === "external"
       ? "copy Gmail link"
@@ -125,6 +129,7 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
     addChip("y", label);
   }
   if (canRestore) addChip("r", "restore path");
+  for (const [key, label] of trailing) addChip(key, label);
 };
 
 ImageZoomModal.prototype.showImageZoomToast = function showImageZoomToast(message, options = {}) {

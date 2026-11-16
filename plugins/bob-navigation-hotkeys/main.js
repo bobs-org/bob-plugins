@@ -31679,9 +31679,69 @@ class ImageZoomModal extends Modal {
     this.abortController = null;
     this.viewportEl = null;
     this.imgEl = null;
+    this.mediaEl = null;
     this.readoutEl = null;
     this.drag = null;
     this.suppressClick = false;
+  }
+
+  decorateImageZoomChrome() {}
+
+  createImageZoomMediaEl() {
+    this.imgEl = this.viewportEl.createEl("img", {
+      cls: "bob-image-zoom-img",
+      attr: { draggable: "false", alt: this.imageTitle },
+    });
+    this.mediaEl = this.imgEl;
+  }
+
+  bindImageZoomMediaEvents(signalOpts) {
+    listenImageZoom(this.imgEl, "load", () => this.handleImageZoomLoad(), signalOpts);
+    listenImageZoom(this.imgEl, "error", () => this.handleImageZoomError(), signalOpts);
+  }
+
+  startImageZoomMediaLoad() {
+    if (this.imgEl) {
+      this.imgEl.setAttribute("src", this.imageSrc);
+    }
+  }
+
+  imageZoomReadoutText() {
+    if (!this.natural) {
+      return "Loading…";
+    }
+    const dpr = getImageZoomDevicePixelRatio(this.getImageZoomWindow());
+    return `${Math.round(this.state.scale * dpr * 100)}%`;
+  }
+
+  addImageZoomPrimaryFooterChips(addChip) {
+    addChip("Esc", "close");
+    addChip("+ / −", "zoom");
+    addChip("0", "fit");
+    addChip("1", "1:1");
+    addChip("hjkl", "pan");
+  }
+
+  collectImageZoomTrailingFooterChips(_addChip) {}
+
+  handleImageZoomMediaClick(_event) {}
+
+  releaseImageZoomMedia() {
+    try {
+      if (this.imgEl && typeof this.imgEl.removeAttribute === "function") {
+        this.imgEl.removeAttribute("src");
+      }
+    } catch (_error) {
+      // Cancelling a pending load is best effort.
+    }
+  }
+
+  mapImageZoomKey(event) {
+    return imageZoomKeyAction(event);
+  }
+
+  handleImageZoomMappedKey(_mapped, _event) {
+    return false;
   }
 
   getImageZoomWindow() {
@@ -31713,6 +31773,7 @@ class ImageZoomModal extends Modal {
     addImageZoomClass(this.containerEl, "bob-image-zoom-container");
     addImageZoomClass(this.modalEl, "bob-image-zoom-modal");
     addImageZoomClass(contentEl, "bob-image-zoom");
+    this.decorateImageZoomChrome();
 
     const header = contentEl.createDiv({ cls: "bob-image-zoom-header" });
     header.createDiv({ cls: "bob-image-zoom-title", text: this.imageTitle });
@@ -31727,10 +31788,7 @@ class ImageZoomModal extends Modal {
       cls: "bob-image-zoom-viewport",
       attr: { tabindex: "-1" },
     });
-    this.imgEl = this.viewportEl.createEl("img", {
-      cls: "bob-image-zoom-img",
-      attr: { draggable: "false", alt: this.imageTitle },
-    });
+    this.createImageZoomMediaEl();
     this.imageZoomFooterEl = contentEl.createDiv({ cls: "bob-image-zoom-footer" });
     this.renderImageZoomOrigin();
     this.renderImageZoomFooter();
@@ -31749,8 +31807,7 @@ class ImageZoomModal extends Modal {
         ? new AbortController()
         : { signal: { aborted: false }, abort() { this.signal.aborted = true; } };
     const signalOpts = this.imageZoomListenerOptions();
-    listenImageZoom(this.imgEl, "load", () => this.handleImageZoomLoad(), signalOpts);
-    listenImageZoom(this.imgEl, "error", () => this.handleImageZoomError(), signalOpts);
+    this.bindImageZoomMediaEvents(signalOpts);
     listenImageZoom(
       this.viewportEl,
       "wheel",
@@ -31800,9 +31857,7 @@ class ImageZoomModal extends Modal {
       signalOpts,
     );
 
-    if (this.imgEl) {
-      this.imgEl.setAttribute("src", this.imageSrc);
-    }
+    this.startImageZoomMediaLoad();
 
     // Ignore the opening Z until the next tick, then steal focus back from Vim.
     this.defer(() => {
@@ -31824,7 +31879,7 @@ class ImageZoomModal extends Modal {
     if (this.imageZoomClosed || !this.armed) {
       return;
     }
-    const mapped = imageZoomKeyAction(event);
+    const mapped = this.mapImageZoomKey(event);
     if (mapped.action === "close") {
       if (event && event.repeat) {
         return;
@@ -31837,6 +31892,9 @@ class ImageZoomModal extends Modal {
     }
     if (mapped.action === "restoreSource") {
       return this.restoreImageZoomSource();
+    }
+    if (this.handleImageZoomMappedKey(mapped, event)) {
+      return;
     }
     if (!this.natural || mapped.action === "ignore") {
       return;
@@ -31993,7 +32051,8 @@ class ImageZoomModal extends Modal {
       this.suppressClick = false;
       return;
     }
-    if (imageZoomEventHitsEl(event, this.imgEl)) {
+    if (imageZoomEventHitsEl(event, this.imgEl) || imageZoomEventHitsEl(event, this.mediaEl)) {
+      this.handleImageZoomMediaClick(event);
       return;
     }
     this.close();
@@ -32122,12 +32181,7 @@ class ImageZoomModal extends Modal {
 
   renderImageZoom() {
     if (this.readoutEl && typeof this.readoutEl.setText === "function") {
-      if (!this.natural) {
-        this.readoutEl.setText("Loading…");
-      } else {
-        const dpr = getImageZoomDevicePixelRatio(this.getImageZoomWindow());
-        this.readoutEl.setText(`${Math.round(this.state.scale * dpr * 100)}%`);
-      }
+      this.readoutEl.setText(this.imageZoomReadoutText());
     }
     if (!this.imgEl || !this.natural) {
       return;
@@ -32170,13 +32224,7 @@ class ImageZoomModal extends Modal {
     }
     this.scopeHandler = null;
     this.clearImageZoomToast();
-    try {
-      if (this.imgEl && typeof this.imgEl.removeAttribute === "function") {
-        this.imgEl.removeAttribute("src");
-      }
-    } catch (_error) {
-      // Cancelling a pending load is best effort.
-    }
+    this.releaseImageZoomMedia();
     contentElCleanup(this.contentEl);
     if (alreadyClosed) {
       return;
@@ -32300,19 +32348,23 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
     item.createSpan({ cls: "bob-image-zoom-chip-label", text: label });
   };
   const addDivider = () => footer.createSpan({ cls: "bob-image-zoom-divider", text: "·" });
-  addChip("Esc", "close");
-  addChip("+ / −", "zoom");
-  addChip("0", "fit");
-  addChip("1", "1:1");
-  addChip("hjkl", "pan");
-  if (!this.imageZoomOriginResolved) return;
+  this.addImageZoomPrimaryFooterChips(addChip);
+  const trailing = [];
+  this.collectImageZoomTrailingFooterChips((key, label) => trailing.push([key, label]));
+  if (!this.imageZoomOriginResolved) {
+    if (trailing.length) {
+      addDivider();
+      for (const [key, label] of trailing) addChip(key, label);
+    }
+    return;
+  }
   const context = this.imageZoomContext || {};
   const isVault = context.kind === "vault";
   const isUrl = context.kind === "url";
   const canCopy = Boolean((isVault && context.absolutePath) || (isUrl && context.url));
   const recorded = Boolean(this.imageZoomOrigin && (this.imageZoomOrigin.display || this.imageZoomOrigin.source));
   const canRestore = Boolean(context.restore && this.imageZoomOrigin && this.imageZoomOrigin.state === "present");
-  if (canCopy || canRestore) addDivider();
+  if (canCopy || canRestore || trailing.length) addDivider();
   if (canCopy) {
     const label = this.imageZoomOrigin && this.imageZoomOrigin.state === "external"
       ? "copy Gmail link"
@@ -32320,6 +32372,7 @@ ImageZoomModal.prototype.renderImageZoomFooter = function renderImageZoomFooter(
     addChip("y", label);
   }
   if (canRestore) addChip("r", "restore path");
+  for (const [key, label] of trailing) addChip(key, label);
 };
 
 ImageZoomModal.prototype.showImageZoomToast = function showImageZoomToast(message, options = {}) {
@@ -32500,6 +32553,741 @@ ImageZoomModal.prototype.restoreImageZoomSource = async function restoreImageZoo
   }
   return true;
 };
+// ---- src/207b-video-zoom-model.js ----
+const VIDEO_ZOOM_EXTENSIONS = Object.freeze(
+  new Set(["mp4", "mov", "webm", "mkv"]),
+);
+const VIDEO_ZOOM_PLAY_GLYPH = "\u25B6\uFE0E";
+const VIDEO_ZOOM_PAUSE_GLYPH = "\u23F8\uFE0E";
+const VIDEO_ZOOM_SPACE_HINT = "· Space to play";
+
+function videoZoomKeyAction(event) {
+  if (!event) {
+    return Object.freeze({ action: "ignore" });
+  }
+  if (event.isComposing === true || event.keyCode === 229) {
+    return Object.freeze({ action: "ignore" });
+  }
+  const key = String(event.key || "");
+  const ctrl = event.ctrlKey === true;
+  const meta = event.metaKey === true;
+  const alt = event.altKey === true;
+  const shift = event.shiftKey === true;
+  if ((key === " " || key === "Spacebar") && !ctrl && !meta && !alt && !shift) {
+    return Object.freeze({ action: "togglePlay" });
+  }
+  if (key === "ArrowLeft" && !ctrl && !meta && !alt) {
+    return Object.freeze({ action: "seek", delta: shift ? -10 : -1 });
+  }
+  if (key === "ArrowRight" && !ctrl && !meta && !alt) {
+    return Object.freeze({ action: "seek", delta: shift ? 10 : 1 });
+  }
+  if (key.toLowerCase() === "o" && !ctrl && !meta && !alt && !shift && !event.repeat) {
+    return Object.freeze({ action: "openExternal" });
+  }
+  return imageZoomKeyAction(event);
+}
+
+function formatVideoZoomTime(seconds, duration) {
+  const time = Number(seconds);
+  const length = Number(duration);
+  const safe = Number.isFinite(time) && time > 0 ? time : 0;
+  const useHours = Number.isFinite(length) && length >= 3600;
+  if (useHours) {
+    const total = Math.max(0, Math.round(safe));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  const tenthsTotal = Math.max(0, Math.round(safe * 10));
+  const whole = Math.floor(tenthsTotal / 10);
+  const tenths = tenthsTotal % 10;
+  const minutes = Math.floor(whole / 60);
+  const secs = whole % 60;
+  return `${minutes}:${String(secs).padStart(2, "0")}.${tenths}`;
+}
+
+function clampVideoZoomSeek(current, delta, duration) {
+  const now = Number(current);
+  const step = Number(delta);
+  const length = Number(duration);
+  const start = Number.isFinite(now) ? now : 0;
+  const bump = Number.isFinite(step) ? step : 0;
+  const max = Number.isFinite(length) && length > 0 ? length : 0;
+  return clampNumber(start + bump, 0, max);
+}
+
+function videoZoomStartPolicy(options = {}) {
+  const reducedMotion = Boolean(options && options.reducedMotion);
+  const audioBytes = options ? options.audioBytes : undefined;
+  const silent = typeof audioBytes === "number" && Number.isFinite(audioBytes) && audioBytes === 0;
+  if (reducedMotion || !silent) {
+    return Object.freeze({
+      autoplay: false,
+      loop: false,
+      hint: VIDEO_ZOOM_SPACE_HINT,
+    });
+  }
+  return Object.freeze({ autoplay: true, loop: true, hint: "" });
+}
+
+function videoZoomReadout(state) {
+  const current = state && typeof state === "object" ? state : {};
+  const playing = current.playing === true;
+  const glyph = playing ? VIDEO_ZOOM_PLAY_GLYPH : VIDEO_ZOOM_PAUSE_GLYPH;
+  const duration = current.duration;
+  const currentText = formatVideoZoomTime(current.currentTime, duration);
+  const durationText = formatVideoZoomTime(duration, duration);
+  const extras = [];
+  if (current.zoomPercent) {
+    extras.push(String(current.zoomPercent));
+  }
+  if (current.muted === true) {
+    extras.push("muted");
+  }
+  if (current.hint) {
+    extras.push(String(current.hint).replace(/^\s*·\s*/, ""));
+  }
+  const extra = extras.length ? ` · ${extras.join(" · ")}` : "";
+  return `${glyph} ${currentText} / ${durationText}${extra}`;
+}
+
+function videoZoomFailureCopy(code, title) {
+  const name = String(title || "this file");
+  const numeric = Number(code);
+  let reason = "Playback failed.";
+  if (numeric === 4) {
+    reason = "Obsidian's player can't decode this file — the codec may be unsupported, or the file may be damaged.";
+  } else if (numeric === 3) {
+    reason = "Decoding stopped partway — the file may be damaged.";
+  } else if (numeric === 2) {
+    reason = "Obsidian couldn't read the file.";
+  }
+  return Object.freeze({
+    title: `Can't play ${name} here`,
+    reason,
+  });
+}
+// ---- src/207c-video-zoom-modal.js ----
+class VideoZoomModal extends ImageZoomModal {
+  constructor(app, options = {}) {
+    super(app, options);
+    this.videoZoomReady = false;
+    this.videoZoomFailed = false;
+    this.videoZoomHasAudio = false;
+    this.videoZoomAudioOnly = false;
+    this.videoZoomZoomDisabled = false;
+    this.videoZoomHint = "";
+    this.videoZoomHasPlayed = false;
+    this.videoZoomPlayToken = 0;
+    this.videoZoomRafId = null;
+    this.videoZoomFrameCallbackId = null;
+    this.videoZoomPlaceholderEl = null;
+    this.videoZoomFailureEl = null;
+  }
+
+  decorateImageZoomChrome() {
+    addImageZoomClass(this.containerEl, "bob-video-zoom-container");
+    addImageZoomClass(this.modalEl, "bob-video-zoom-modal");
+    addImageZoomClass(this.contentEl, "bob-video-zoom");
+  }
+
+  createImageZoomMediaEl() {
+    this.imgEl = this.viewportEl.createEl("video", {
+      cls: "bob-image-zoom-img bob-video-zoom-video",
+      attr: {
+        preload: "auto",
+        playsinline: "",
+        disablepictureinpicture: "",
+        disableremoteplayback: "",
+      },
+    });
+    this.mediaEl = this.imgEl;
+    try {
+      this.imgEl.playsInline = true;
+      this.imgEl.disablePictureInPicture = true;
+      this.imgEl.controls = false;
+    } catch (_error) {
+      // Boolean properties are optional in the Node harness.
+    }
+    this.videoZoomPlaceholderEl = this.viewportEl.createDiv({
+      cls: "bob-video-zoom-placeholder",
+    });
+    this.videoZoomPlaceholderEl.setText("♪ Audio only");
+    this.videoZoomPlaceholderEl.classList.toggle("is-visible", false);
+  }
+
+  bindImageZoomMediaEvents(signalOpts) {
+    listenImageZoom(
+      this.imgEl,
+      "loadedmetadata",
+      () => this.handleVideoZoomMetadata(),
+      signalOpts,
+    );
+    listenImageZoom(
+      this.imgEl,
+      "loadeddata",
+      () => this.handleVideoZoomLoadedData(),
+      signalOpts,
+    );
+    listenImageZoom(this.imgEl, "error", () => this.handleImageZoomError(), signalOpts);
+    listenImageZoom(this.imgEl, "play", () => this.handleVideoZoomPlayEvent(), signalOpts);
+    listenImageZoom(this.imgEl, "pause", () => this.handleVideoZoomPauseEvent(), signalOpts);
+    listenImageZoom(
+      this.imgEl,
+      "timeupdate",
+      () => this.updateVideoZoomReadout(),
+      signalOpts,
+    );
+  }
+
+  startImageZoomMediaLoad() {
+    if (!this.imgEl) {
+      return;
+    }
+    this.imgEl.setAttribute("src", this.imageSrc);
+    try {
+      this.imgEl.src = this.imageSrc;
+    } catch (_error) {
+      // Property assignment is optional in the Node harness.
+    }
+  }
+
+  mapImageZoomKey(event) {
+    return videoZoomKeyAction(event);
+  }
+
+  handleImageZoomMappedKey(mapped, event) {
+    if (mapped.action === "togglePlay") {
+      this.preventVideoZoomDefault(event);
+      this.toggleVideoZoomPlayback();
+      return true;
+    }
+    if (mapped.action === "seek") {
+      this.preventVideoZoomDefault(event);
+      this.seekVideoZoom(mapped.delta);
+      return true;
+    }
+    if (mapped.action === "openExternal") {
+      this.openVideoZoomExternal();
+      return true;
+    }
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      if (
+        mapped.action === "zoomIn" ||
+        mapped.action === "zoomOut" ||
+        mapped.action === "fit" ||
+        mapped.action === "actual" ||
+        mapped.action === "pan"
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  preventVideoZoomDefault(event) {
+    try {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+    } catch (_error) {
+      // Some harness events are not cancelable.
+    }
+  }
+
+  addImageZoomPrimaryFooterChips(addChip) {
+    if (this.videoZoomFailed) {
+      addChip("o", "open in default app");
+      addChip("y", "copy path");
+      addChip("Esc", "close");
+      return;
+    }
+    addChip("Esc", "close");
+    addChip("Space", "play");
+    addChip("← →", "seek");
+    addChip("+ −", "zoom");
+    addChip("0", "fit");
+    addChip("1", "1:1");
+  }
+
+  collectImageZoomTrailingFooterChips(addChip) {
+    if (this.videoZoomFailed) {
+      return;
+    }
+    addChip("o", "open");
+  }
+
+  renderImageZoomFooter() {
+    if (this.videoZoomFailed) {
+      const footer = this.imageZoomFooterEl;
+      if (!footer) {
+        return;
+      }
+      footer.empty();
+      const addChip = (key, label) => {
+        const item = footer.createSpan({ cls: "bob-image-zoom-chip" });
+        item.createEl("kbd", { text: key });
+        item.createSpan({ cls: "bob-image-zoom-chip-label", text: label });
+      };
+      this.addImageZoomPrimaryFooterChips(addChip);
+      return;
+    }
+    super.renderImageZoomFooter();
+  }
+
+  imageZoomReadoutText() {
+    if (this.videoZoomFailed) {
+      return "";
+    }
+    if (!this.videoZoomReady) {
+      return "Loading…";
+    }
+    return videoZoomReadout(this.videoZoomReadoutState());
+  }
+
+  videoZoomReadoutState() {
+    const video = this.imgEl;
+    const dpr = getImageZoomDevicePixelRatio(this.getImageZoomWindow());
+    const zoomPercent = this.fitMode
+      ? ""
+      : `${Math.round((this.state.scale || 1) * dpr * 100)}%`;
+    return {
+      playing: Boolean(video && video.paused === false),
+      currentTime: video ? Number(video.currentTime) : 0,
+      duration: video ? Number(video.duration) : 0,
+      zoomPercent,
+      muted: Boolean(this.videoZoomHasAudio && video && video.muted === true),
+      hint: this.videoZoomHasPlayed ? "" : this.videoZoomHint,
+    };
+  }
+
+  updateVideoZoomReadout() {
+    if (this.imageZoomClosed) {
+      return;
+    }
+    if (this.readoutEl && typeof this.readoutEl.setText === "function") {
+      this.readoutEl.setText(this.imageZoomReadoutText());
+    }
+  }
+
+  prefersVideoZoomReducedMotion() {
+    const win = this.getImageZoomWindow();
+    try {
+      const media = win && typeof win.matchMedia === "function"
+        ? win.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
+      return Boolean(media && media.matches);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  handleVideoZoomMetadata() {
+    if (this.imageZoomClosed || !this.imgEl) {
+      return;
+    }
+    const width = Number(this.imgEl.videoWidth);
+    const height = Number(this.imgEl.videoHeight);
+    this.viewportSize = measureImageZoomViewport(
+      this.viewportEl,
+      this.getImageZoomWindow(),
+    );
+    if (!(width > 0) || !(height > 0)) {
+      this.videoZoomAudioOnly = true;
+      this.videoZoomZoomDisabled = true;
+      this.natural = Object.freeze({ width: 1, height: 1 });
+      if (this.videoZoomPlaceholderEl && this.videoZoomPlaceholderEl.classList) {
+        this.videoZoomPlaceholderEl.classList.toggle("is-visible", true);
+      }
+      this.fitMode = true;
+      this.refitImageZoom();
+      return;
+    }
+    this.videoZoomAudioOnly = false;
+    this.videoZoomZoomDisabled = false;
+    this.natural = Object.freeze({ width, height });
+    this.fitMode = true;
+    this.refitImageZoom();
+  }
+
+  handleVideoZoomLoadedData() {
+    if (this.imageZoomClosed || !this.imgEl) {
+      return;
+    }
+    this.videoZoomReady = true;
+    const audioBytes = this.imgEl.webkitAudioDecodedByteCount;
+    this.videoZoomHasAudio = !(
+      typeof audioBytes === "number" && Number.isFinite(audioBytes) && audioBytes === 0
+    );
+    const policy = videoZoomStartPolicy({
+      audioBytes,
+      reducedMotion: this.prefersVideoZoomReducedMotion(),
+    });
+    try {
+      this.imgEl.loop = policy.loop === true;
+    } catch (_error) {
+      // loop is optional in the harness.
+    }
+    this.videoZoomHint = policy.hint || "";
+    this.videoZoomHasPlayed = false;
+    this.updateVideoZoomReadout();
+    this.renderImageZoomFooter();
+    if (policy.autoplay) {
+      this.playVideoZoom();
+    }
+  }
+
+  handleImageZoomError() {
+    if (this.imageZoomClosed) {
+      return;
+    }
+    const code = this.imgEl && this.imgEl.error ? this.imgEl.error.code : undefined;
+    this.showVideoZoomFailure(code);
+  }
+
+  handleImageZoomMediaClick(_event) {
+    this.toggleVideoZoomPlayback();
+  }
+
+  handleImageZoomWheel(event) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.handleImageZoomWheel(event);
+  }
+
+  handleImageZoomDblClick(event) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.handleImageZoomDblClick(event);
+  }
+
+  handleImageZoomPointerDown(event) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.handleImageZoomPointerDown(event);
+  }
+
+  isImageZoomPannable() {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return false;
+    }
+    return super.isImageZoomPannable();
+  }
+
+  zoomImageZoom(factor, point) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.zoomImageZoom(factor, point);
+  }
+
+  actualImageZoom(point) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.actualImageZoom(point);
+  }
+
+  panImageZoom(dir, large) {
+    if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
+      return;
+    }
+    super.panImageZoom(dir, large);
+  }
+
+  renderImageZoom() {
+    if (this.videoZoomAudioOnly && this.imgEl && this.imgEl.style) {
+      this.imgEl.style.visibility = "hidden";
+    }
+    super.renderImageZoom();
+    this.updateVideoZoomReadout();
+  }
+
+  toggleVideoZoomPlayback() {
+    if (this.imageZoomClosed || this.videoZoomFailed || !this.imgEl) {
+      return;
+    }
+    if (this.imgEl.paused === false) {
+      this.pauseVideoZoom();
+      return;
+    }
+    this.playVideoZoom();
+  }
+
+  pauseVideoZoom() {
+    this.videoZoomPlayToken += 1;
+    try {
+      if (this.imgEl && typeof this.imgEl.pause === "function") {
+        this.imgEl.pause();
+      }
+    } catch (_error) {
+      // Pause is best effort.
+    }
+    this.cancelVideoZoomRaf();
+    this.updateVideoZoomReadout();
+  }
+
+  playVideoZoom() {
+    if (this.imageZoomClosed || this.videoZoomFailed || !this.imgEl) {
+      return;
+    }
+    this.videoZoomPlayToken += 1;
+    const token = this.videoZoomPlayToken;
+    let result;
+    try {
+      result = typeof this.imgEl.play === "function" ? this.imgEl.play() : null;
+    } catch (error) {
+      this.handleVideoZoomPlayError(error);
+      return;
+    }
+    if (result && typeof result.then === "function") {
+      Promise.resolve(result).then(
+        () => {
+          if (this.imageZoomClosed || token !== this.videoZoomPlayToken) {
+            return;
+          }
+          if (this.imgEl && this.imgEl.paused) {
+            return;
+          }
+          this.videoZoomHasPlayed = true;
+          this.videoZoomHint = "";
+          this.startVideoZoomRaf();
+          this.updateVideoZoomReadout();
+        },
+        (error) => {
+          if (this.imageZoomClosed || token !== this.videoZoomPlayToken) {
+            return;
+          }
+          this.handleVideoZoomPlayError(error);
+        },
+      );
+    }
+  }
+
+  handleVideoZoomPlayError(error) {
+    const name = error && error.name;
+    if (name === "NotSupportedError") {
+      this.showVideoZoomFailure(4);
+      return;
+    }
+    try {
+      if (this.imgEl && typeof this.imgEl.pause === "function") {
+        this.imgEl.pause();
+      }
+    } catch (_error) {
+      // Stay in the paused visual state.
+    }
+    this.cancelVideoZoomRaf();
+    this.updateVideoZoomReadout();
+  }
+
+  handleVideoZoomPlayEvent() {
+    if (this.imageZoomClosed || this.videoZoomFailed) {
+      return;
+    }
+    this.videoZoomHasPlayed = true;
+    this.videoZoomHint = "";
+    this.startVideoZoomRaf();
+    this.updateVideoZoomReadout();
+  }
+
+  handleVideoZoomPauseEvent() {
+    if (this.imageZoomClosed) {
+      return;
+    }
+    this.cancelVideoZoomRaf();
+    this.updateVideoZoomReadout();
+  }
+
+  startVideoZoomRaf() {
+    this.cancelVideoZoomRaf();
+    const win = this.getImageZoomWindow();
+    const raf = win && win.requestAnimationFrame;
+    if (typeof raf !== "function") {
+      this.updateVideoZoomReadout();
+      return;
+    }
+    const tick = () => {
+      if (this.imageZoomClosed || !this.imgEl || this.imgEl.paused !== false) {
+        this.videoZoomRafId = null;
+        return;
+      }
+      this.updateVideoZoomReadout();
+      this.videoZoomRafId = raf.call(win, tick);
+    };
+    this.videoZoomRafId = raf.call(win, tick);
+  }
+
+  cancelVideoZoomRaf() {
+    if (this.videoZoomRafId == null) {
+      return;
+    }
+    const win = this.getImageZoomWindow();
+    try {
+      if (win && typeof win.cancelAnimationFrame === "function") {
+        win.cancelAnimationFrame(this.videoZoomRafId);
+      }
+    } catch (_error) {
+      // Best effort.
+    }
+    this.videoZoomRafId = null;
+  }
+
+  cancelVideoZoomFrameCallbacks() {
+    const win = this.getImageZoomWindow();
+    const video = this.imgEl;
+    try {
+      if (
+        this.videoZoomFrameCallbackId != null &&
+        video &&
+        typeof video.cancelVideoFrameCallback === "function"
+      ) {
+        video.cancelVideoFrameCallback(this.videoZoomFrameCallbackId);
+      } else if (
+        this.videoZoomFrameCallbackId != null &&
+        win &&
+        typeof win.cancelVideoFrameCallback === "function"
+      ) {
+        win.cancelVideoFrameCallback(this.videoZoomFrameCallbackId);
+      }
+    } catch (_error) {
+      // Best effort.
+    }
+    this.videoZoomFrameCallbackId = null;
+  }
+
+  seekVideoZoom(delta) {
+    if (this.imageZoomClosed || this.videoZoomFailed || !this.imgEl) {
+      return;
+    }
+    const next = clampVideoZoomSeek(
+      this.imgEl.currentTime,
+      delta,
+      this.imgEl.duration,
+    );
+    try {
+      this.imgEl.currentTime = next;
+    } catch (_error) {
+      // Seeking is best effort in the harness.
+    }
+    this.updateVideoZoomReadout();
+  }
+
+  openVideoZoomExternal() {
+    if (this.imageZoomClosed) {
+      return;
+    }
+    this.pauseVideoZoom();
+    const context = this.imageZoomContext || {};
+    const vaultPath = String(context.vaultPath || "");
+    const opener = this.app && this.app.openWithDefaultApp;
+    if (!vaultPath || typeof opener !== "function") {
+      this.showImageZoomToast("! Can't open outside Obsidian here", { error: true });
+      return;
+    }
+    try {
+      opener.call(this.app, vaultPath);
+      if (this.imageZoomClosed) {
+        return;
+      }
+      this.showImageZoomToast("✓ Opened in default app");
+    } catch (_error) {
+      if (this.imageZoomClosed) {
+        return;
+      }
+      this.showImageZoomToast("! Can't open outside Obsidian here", { error: true });
+    }
+  }
+
+  showVideoZoomFailure(code) {
+    if (this.imageZoomClosed) {
+      return;
+    }
+    this.videoZoomFailed = true;
+    this.videoZoomPlayToken += 1;
+    this.cancelVideoZoomRaf();
+    try {
+      if (this.imgEl && typeof this.imgEl.pause === "function") {
+        this.imgEl.pause();
+      }
+    } catch (_error) {
+      // Best effort.
+    }
+    const copy = videoZoomFailureCopy(code, this.imageTitle);
+    this.renderVideoZoomFailureCard(copy);
+    this.updateVideoZoomReadout();
+    this.renderImageZoomFooter();
+  }
+
+  renderVideoZoomFailureCard(copy) {
+    if (!this.viewportEl) {
+      return;
+    }
+    if (this.videoZoomFailureEl && typeof this.videoZoomFailureEl.empty === "function") {
+      this.videoZoomFailureEl.empty();
+    } else {
+      this.videoZoomFailureEl = this.viewportEl.createDiv({
+        cls: "bob-video-zoom-failure",
+      });
+    }
+    this.videoZoomFailureEl.createDiv({
+      cls: "bob-video-zoom-failure-title",
+      text: copy.title,
+    });
+    this.videoZoomFailureEl.createDiv({
+      cls: "bob-video-zoom-failure-reason",
+      text: copy.reason,
+    });
+    this.videoZoomFailureEl.classList.toggle("is-visible", true);
+    if (this.imgEl && this.imgEl.style) {
+      this.imgEl.style.visibility = "hidden";
+    }
+    if (this.videoZoomPlaceholderEl && this.videoZoomPlaceholderEl.classList) {
+      this.videoZoomPlaceholderEl.classList.toggle("is-visible", false);
+    }
+  }
+
+  releaseImageZoomMedia() {
+    this.videoZoomPlayToken += 1;
+    this.cancelVideoZoomRaf();
+    this.cancelVideoZoomFrameCallbacks();
+    const video = this.imgEl;
+    if (!video) {
+      return;
+    }
+    try {
+      if (typeof video.pause === "function") {
+        video.pause();
+      }
+    } catch (_error) {
+      // Best effort.
+    }
+    try {
+      if (typeof video.removeAttribute === "function") {
+        video.removeAttribute("src");
+      }
+    } catch (_error) {
+      // Best effort.
+    }
+    try {
+      video.src = "";
+    } catch (_error) {
+      // Best effort.
+    }
+    try {
+      if (typeof video.load === "function") {
+        video.load();
+      }
+    } catch (_error) {
+      // Releasing the decoder is best effort.
+    }
+  }
+}
 // ---- src/208-parent-note-picker-model.js ----
 const PARENT_PICKER_HINTS = Object.freeze([
   Object.freeze({ keys: Object.freeze(["↑", "↓"]), label: "Navigate" }),
@@ -123633,3 +124421,14 @@ try {
 } catch (_error) {
   // Test exports are best-effort.
 }
+// ---- src/723-video-zoom-exports.js ----
+Object.assign(module.exports.helpers, {
+  VideoZoomModal,
+  VIDEO_ZOOM_EXTENSIONS,
+  videoZoomKeyAction,
+  formatVideoZoomTime,
+  clampVideoZoomSeek,
+  videoZoomStartPolicy,
+  videoZoomReadout,
+  videoZoomFailureCopy,
+});

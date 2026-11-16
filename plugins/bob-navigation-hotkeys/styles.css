@@ -3765,6 +3765,76 @@
   }
 }
 
+.bob-video-zoom-video {
+  background: #000;
+  object-fit: contain;
+}
+
+.bob-video-zoom-placeholder {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--font-ui-medium);
+  letter-spacing: 0.02em;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  user-select: none;
+}
+
+.bob-video-zoom-placeholder.is-visible {
+  opacity: 1;
+}
+
+.bob-video-zoom-failure {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  display: none;
+  max-width: 420px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(0, 0, 0, 0.72);
+  text-align: center;
+  transform: translate(-50%, -50%);
+  user-select: none;
+}
+
+.bob-video-zoom-failure.is-visible {
+  display: block;
+}
+
+.bob-video-zoom-failure-title {
+  font-weight: var(--font-semibold);
+  line-height: 1.4;
+}
+
+.bob-video-zoom-failure-reason {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bob-video-zoom-placeholder,
+  .bob-video-zoom-failure {
+    transition: opacity 120ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-video-zoom-placeholder,
+  .bob-video-zoom-failure {
+    transition: none;
+  }
+}
+
 /* Keep reasons share the command prompt layout in both modal hosts. */
 .bob-rotten-icon {
   background: color-mix(in srgb, var(--color-red) 14%, transparent);

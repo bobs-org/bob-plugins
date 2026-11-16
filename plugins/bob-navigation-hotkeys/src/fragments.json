@@ -57,6 +57,8 @@
   "206d-successor-picker-verdict-render.js",
   "207-image-zoom-modal.js",
   "207a-image-zoom-origin.js",
+  "207b-video-zoom-model.js",
+  "207c-video-zoom-modal.js",
   "208-parent-note-picker-model.js",
   "209-parent-note-picker-modal.js",
   "210-rename-and-line-context.js",
@@ -242,5 +244,6 @@
   "719-bank-walk-exports.js",
   "720-window-prefix-exports.js",
   "721-window-prefix-actions-exports.js",
-  "722-window-tab-exports.js"
+  "722-window-tab-exports.js",
+  "723-video-zoom-exports.js"
 ]

@@ -122,6 +122,7 @@
   "241ah-plugin-areas-catalog-model.js",
   "241ai-plugin-areas-catalog-dom.js",
   "241aj-plugin-areas-catalog.js",
+  "241xa-plugin-schema-arrange-model.js",
   "241z-plugin-album-update.js",
   "242a-plugin-album-update-service.js",
   "242aa-plugin-guarded-update-session.js",
@@ -287,5 +288,6 @@
   "365-exports-bank-config-update.js",
   "366-exports-bank-subscription-linker.js",
   "367-exports-bank-subscription-surfaces.js",
-  "367-exports-bank-setup-card.js"
+  "367-exports-bank-setup-card.js",
+  "368-exports-schema-arrange.js"
 ]

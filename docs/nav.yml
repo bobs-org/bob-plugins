@@ -14,6 +14,8 @@
   path: bob-mail.md
 - title: Bob Navigation Hotkeys
   path: bob-navigation-hotkeys.md
+- title: Window keys (Ctrl+W)
+  path: window-keys.md
 - title: Bob Project Tasks
   path: bob-project-tasks.md
 - title: Bob Vim Surround

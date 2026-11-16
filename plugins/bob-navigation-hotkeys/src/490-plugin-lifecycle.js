@@ -683,6 +683,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerCountedLaneToggleInputListeners();
     this.registerClearSearchHighlightInputListeners();
     this.registerWindowPrefixInputListeners();
+    this.registerWindowPrefixCommands();
 
     this.register(() => {
       if (this.pendingDependencyMirror) {

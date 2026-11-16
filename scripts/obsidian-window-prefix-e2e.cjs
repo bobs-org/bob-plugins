@@ -71,6 +71,12 @@ const HELP = [
   "  pending d pass-through, Linux default Close tab with prefix idle, and",
   "  keymap scope restoration. Screenshots: ring and card at 300 ms.",
   "",
+  "Visual group (--only visual):",
+  "  Palette command registration, then ring, card, move receipt, and",
+  "  focused-split underline screenshots in light and dark at one, two, and",
+  "  three splits, plus palette focus/move/window-keys probes with receipt",
+  "  and scope checks.",
+  "",
   "The --self-test run is an offline check only, never an Obsidian pass.",
 ].join("\n");
 
@@ -2091,6 +2097,207 @@ async function runPrefixLinux(args, record, findings) {
   }
 }
 
+const VISUAL_LAYOUTS = Object.freeze([
+  { tag: "1split", signature: "[ WP-A  WP-B* ]", splits: 1 },
+  { tag: "2splits", signature: PREFIX_SCREENSHOT_LAYOUT, splits: 2 },
+  { tag: "3splits", signature: "[ WP-A  WP-B* ] | [ WP-C ] | [ WP-D ]", splits: 3 },
+]);
+
+const VISUAL_PALETTE_IDS = Object.freeze([
+  "bob-navigation-hotkeys:window-focus-left",
+  "bob-navigation-hotkeys:window-focus-right",
+  "bob-navigation-hotkeys:window-focus-next",
+  "bob-navigation-hotkeys:window-move-tab-left",
+  "bob-navigation-hotkeys:window-move-tab-right",
+  "bob-navigation-hotkeys:window-keys",
+]);
+
+const VISUAL_UNDERLINE_PROBE = [
+  '(()=>{try{const root=document.querySelector(".workspace-split.mod-root");',
+  'const tabs=root?Array.from(root.querySelectorAll(".workspace-tabs")):[];',
+  'return{ok:true,',
+  'multi:document.body.classList.contains("bob-wp-multi-split"),',
+  'tabs:tabs.length,',
+  'active:tabs.filter((t)=>t.classList.contains("mod-active")).length,',
+  'fallback:document.querySelectorAll(".workspace-tabs.bob-wp-active-split").length};',
+  '}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+].join("");
+
+const VISUAL_RECEIPT_PROBE = [
+  '(()=>{try{const el=document.querySelector(".bob-wp-receipt");',
+  'return{ok:true,receipt:el?String(el.textContent||""):"",visible:!!el&&!el.closest(".is-hidden")};',
+  '}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+].join("");
+
+async function waitSignatureChange(client, before, label, timeout) {
+  const deadline = Date.now() + (timeout || 6000);
+  let after = null;
+  while (Date.now() < deadline) {
+    after = await readLive(client);
+    if (after.signature !== before) return after;
+    await sleep(150);
+  }
+  throw new Error("timed out waiting for " + label + ": still " + (after && after.signature));
+}
+
+async function runVisualMac(args, record, findings, outDir, screenshots) {
+  const launch = await launchOwned(wplib.macHotkeys(), args.executable);
+  let client = null;
+  try {
+    client = await connectOwned(launch);
+    findings.visual = {};
+    findings.visual.appVersion = await client.evaluate("window.app.version||null").catch(() => null);
+
+    await runCase(record, "visual/commands-registered", async () => {
+      const probe = await client.evaluate(
+        '(()=>{try{return {ok:true,found:' + JSON.stringify(VISUAL_PALETTE_IDS) +
+        '.map((id)=>{try{const c=window.app.commands;return!!((c&&c.commands&&c.commands[id])||(c&&c.findCommand&&c.findCommand(id)));}catch(_){return false;}})};}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!probe || !probe.ok) throw new Error("command probe failed: " + JSON.stringify(probe));
+      const missing = VISUAL_PALETTE_IDS.filter((id, index) => !probe.found[index]);
+      if (missing.length) throw new Error("palette commands missing: " + missing.join(", "));
+      return "6 window palette commands registered";
+    });
+
+    for (const dark of [false, true]) {
+      const theme = dark ? "dark" : "light";
+      await runCase(record, "visual/theme-" + theme, async () => {
+        await setTheme(client, dark);
+        return theme + " theme applied";
+      });
+      for (const layout of VISUAL_LAYOUTS) {
+        await runCase(record, "visual/ring-" + theme + "-" + layout.tag, async () => {
+          await prepareLayout(client, layout.signature);
+          await armPrefix(client);
+          await sleep(80);
+          const state = await prefixDebug(client);
+          if (!state.hostArmed || state.hostHidden) {
+            throw new Error("ring host not visible: " + JSON.stringify(state));
+          }
+          if (state.hostCarded) throw new Error("card appeared before 300ms: " + JSON.stringify(state));
+          screenshots.push(await screenshot(client, outDir, "visual-ring-" + theme + "-" + layout.tag));
+          await keys(client, ["Escape"]);
+          await waitPrefixIdle(client);
+          return "ring visible, card hidden";
+        });
+
+        await runCase(record, "visual/card-" + theme + "-" + layout.tag, async () => {
+          await prepareLayout(client, layout.signature);
+          await armPrefix(client);
+          await sleep(360);
+          const state = await prefixDebug(client);
+          if (!state.hostCarded || state.hostHidden) {
+            throw new Error("card not visible at 300ms: " + JSON.stringify(state));
+          }
+          screenshots.push(await screenshot(client, outDir, "visual-card-" + theme + "-" + layout.tag));
+          await keys(client, ["Escape"]);
+          await waitPrefixIdle(client);
+          return "card visible at 300ms";
+        });
+
+        if (layout.splits >= 2) {
+          await runCase(record, "visual/receipt-" + theme + "-" + layout.tag, async () => {
+            await prepareLayout(client, layout.signature);
+            const armed = await prefixDebug(client).catch(() => null);
+            if (armed && armed.armed) {
+              await keys(client, ["Escape"]);
+              await waitPrefixIdle(client);
+            }
+            await armPrefix(client);
+            await letterKey(client, "L");
+            const after = await waitSignatureChange(client, layout.signature, "palette-free move L", 8000);
+            await sleep(250);
+            const receipt = await client.evaluate(VISUAL_RECEIPT_PROBE, RPC_TIMEOUT_MS);
+            if (JSON.stringify(titlesOf(after.live)) !== JSON.stringify(layout.splits === 2
+              ? [["WP-A"], ["WP-C", "WP-B"]]
+              : [["WP-A"], ["WP-C", "WP-B"], ["WP-D"]])) {
+              throw new Error("L join failed: " + after.signature);
+            }
+            if (after.live.activePath !== "WP-B.md") throw new Error("moved tab not active: " + after.signature);
+            if (!receipt || !receipt.ok || !receipt.receipt) {
+              throw new Error("move receipt not visible: " + JSON.stringify(receipt));
+            }
+            findings.visual["receipt-" + theme + "-" + layout.tag] = receipt.receipt;
+            screenshots.push(await screenshot(client, outDir, "visual-receipt-" + theme + "-" + layout.tag));
+            await keys(client, ["Escape"]);
+            await sleep(200);
+            return after.signature + " · " + receipt.receipt;
+          });
+        }
+
+        await runCase(record, "visual/underline-" + theme + "-" + layout.tag, async () => {
+          await prepareLayout(client, layout.signature);
+          await sleep(150);
+          const underline = await client.evaluate(VISUAL_UNDERLINE_PROBE, RPC_TIMEOUT_MS);
+          if (!underline || !underline.ok) throw new Error("underline probe failed: " + JSON.stringify(underline));
+          if (underline.multi !== (layout.splits >= 2)) {
+            throw new Error("underline gate wrong: " + JSON.stringify(underline));
+          }
+          if (underline.tabs !== layout.splits) {
+            throw new Error("split count wrong: " + JSON.stringify(underline));
+          }
+          screenshots.push(await screenshot(client, outDir, "visual-underline-" + theme + "-" + layout.tag));
+          return JSON.stringify(underline);
+        });
+      }
+    }
+
+    await runCase(record, "visual/palette-focus-right", async () => {
+      await setTheme(client, false);
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      const before = await readLive(client);
+      await client.evaluate(
+        '(()=>window.app.commands.executeCommandById("bob-navigation-hotkeys:window-focus-right"))()',
+        RPC_TIMEOUT_MS,
+      );
+      const after = await waitSignatureChange(client, before.signature, "palette focus-right", 6000);
+      if (after.live.activePath !== "WP-C.md") throw new Error("palette focus-right failed: " + after.signature);
+      return after.signature;
+    });
+
+    await runCase(record, "visual/palette-move-tab-right", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      const before = await readLive(client);
+      await client.evaluate(
+        '(()=>window.app.commands.executeCommandById("bob-navigation-hotkeys:window-move-tab-right"))()',
+        RPC_TIMEOUT_MS,
+      );
+      const after = await waitSignatureChange(client, before.signature, "palette move-tab-right", 8000);
+      if (JSON.stringify(titlesOf(after.live)) !== JSON.stringify([["WP-A"], ["WP-C", "WP-B"]])) {
+        throw new Error("palette move-tab-right join failed: " + after.signature);
+      }
+      if (after.live.activePath !== "WP-B.md") throw new Error("moved tab not active: " + after.signature);
+      await sleep(250);
+      const receipt = await client.evaluate(VISUAL_RECEIPT_PROBE, RPC_TIMEOUT_MS);
+      if (!receipt || !receipt.ok || !receipt.receipt) {
+        throw new Error("palette move receipt not visible: " + JSON.stringify(receipt));
+      }
+      screenshots.push(await screenshot(client, outDir, "visual-palette-move-receipt"));
+      return after.signature + " · " + receipt.receipt;
+    });
+
+    await runPrefixCase(record, client, "visual/palette-window-keys", async () => {
+      await prepareLayout(client, PREFIX_SCREENSHOT_LAYOUT);
+      await client.evaluate(
+        '(()=>window.app.commands.executeCommandById("bob-navigation-hotkeys:window-keys"))()',
+        RPC_TIMEOUT_MS,
+      );
+      const state = await waitPrefix(client, (item) => item.hostCarded === true, "palette window-keys card", 4000);
+      if (state.hostHidden) throw new Error("palette card hidden: " + JSON.stringify(state));
+      await sleep(250);
+      screenshots.push(await screenshot(client, outDir, "visual-palette-keys-card"));
+      const dbg = await prefixDebug(client);
+      if (!dbg.hasScope) {
+        throw new Error("palette window-keys holds no scope: " + JSON.stringify(dbg));
+      }
+      return "card shown at once";
+    });
+  } finally {
+    await shutdownOwned(launch, client);
+  }
+}
+
 async function runSpikeMac(args, record, findings, outDir, screenshots) {
   const launch = await launchOwned(wplib.macHotkeys(), args.executable);
   let client = null;
@@ -2217,6 +2424,8 @@ async function runE2e(args) {
   } else if (group === "prefix") {
     await runPrefixMac(args, record, findings, outDir, screenshots);
     await runPrefixLinux(args, record, findings);
+  } else if (group === "visual") {
+    await runVisualMac(args, record, findings, outDir, screenshots);
   } else {
     record(group + "/reserved", "skipped", "runner lands in the " + group + " phase; spike and prefix ship their harness runners");
   }

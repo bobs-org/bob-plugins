@@ -214,6 +214,7 @@
   "684-notebook-create-model.js",
   "685-plugin-notebook-create.js",
   "687-plugin-window-prefix.js",
+  "688-plugin-window-prefix-commands.js",
   "690-install-plugin-mixins.js",
   "700-exports.js",
   "701-exports-parent-change.js",

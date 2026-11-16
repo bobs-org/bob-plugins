@@ -17,6 +17,7 @@ try {
       windowPrefixTargetIsEditable,
       windowPrefixMoveReceiptText,
       windowPrefixNormalizeVimMode,
+      WINDOW_PREFIX_PALETTE_COMMANDS,
     });
   }
 } catch (_error) {

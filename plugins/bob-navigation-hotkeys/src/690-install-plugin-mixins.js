@@ -89,4 +89,5 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysNotebookCreateMixin,
   BobNavigationHotkeysWindowLayoutMixin,
   BobNavigationHotkeysWindowPrefixMixin,
+  BobNavigationHotkeysWindowPrefixCommandsMixin,
 ]);

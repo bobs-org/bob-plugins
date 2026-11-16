@@ -1122,3 +1122,155 @@ test("falling back when createLeafInParent throws still opens a new tab", async 
   assert.equal(harness.openCalls[0].path, "first.md");
   assert.deepEqual(notices, []);
 });
+
+function prepareBobOpenNotesJumpHistory(harness) {
+  harness.plugin.vimJumpHistory = helpers.createVimJumpHistory();
+  harness.plugin.vimJumpOperationToken = 1;
+  harness.plugin.vimJumpHistoryChain = Promise.resolve();
+  harness.plugin.vimJumpSuppressNativeMirror = false;
+  harness.plugin.vimJumpPendingDestinationDeferred = null;
+}
+
+test("a line-less Markdown open records one Vim jump from the captured origin", async () => {
+  const harness = createBobOpenNotesHarness({
+    files: [{ path: "target.md", content: "hello" }],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/target.md" }]),
+    ),
+    true,
+  );
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 2);
+  assert.deepEqual(harness.plugin.vimJumpHistory.entries[0], {
+    path: "source.md",
+    line: 2,
+    ch: 4,
+  });
+  assert.deepEqual(harness.plugin.vimJumpHistory.entries[1], {
+    path: "target.md",
+    line: 0,
+    ch: 0,
+  });
+  assert.deepEqual(notices, []);
+});
+
+test("an already-active note at the same caret records no Vim jump", async () => {
+  const target = makeFile("target.md");
+  const harness = createBobOpenNotesHarness({
+    activeFile: target,
+    files: [{ file: target, path: "target.md", content: "hello" }],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  harness.plugin.captureGoToTaskJumpContext = () => ({
+    token: 1,
+    origin: { path: "target.md", line: 0, ch: 0 },
+  });
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/target.md" }]),
+    ),
+    true,
+  );
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 0);
+  assert.deepEqual(notices, []);
+});
+
+test("a line-less open without a captured origin records no Vim jump", async () => {
+  const harness = createBobOpenNotesHarness({
+    files: [{ path: "target.md", content: "hello" }],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  harness.plugin.captureGoToTaskJumpContext = () => null;
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/target.md" }]),
+    ),
+    true,
+  );
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 0);
+  assert.deepEqual(notices, []);
+});
+
+test(".base and PDF line-less opens record no Vim jump", async () => {
+  const board = makeFile("board.base", "base", "board");
+  const pdf = makeFile("book.pdf", "pdf");
+  const harness = createBobOpenNotesHarness({
+    files: [
+      { file: board, path: "board.base", extension: "base", content: "" },
+      { file: pdf, path: "book.pdf", extension: "pdf", content: "" },
+    ],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([
+        { path: "/Users/me/bob/board.base" },
+        { path: "/Users/me/bob/book.pdf" },
+      ]),
+    ),
+    true,
+  );
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 0);
+  assert.equal(harness.focusCalls.length, 0);
+  assert.deepEqual(notices, []);
+});
+
+test("a with-line open still passes its jump context through focusTaskAnchor once", async () => {
+  const harness = createBobOpenNotesHarness({
+    files: [{ path: "target.md", content: "- [ ] #task Land here" }],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/target.md", line: 1 }]),
+    ),
+    true,
+  );
+  assert.equal(harness.focusCalls.length, 1);
+  assert.deepEqual(harness.focusCalls[0].config.vimJumpContext, {
+    token: 1,
+    origin: { path: "source.md", line: 2, ch: 4 },
+  });
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 0);
+  assert.deepEqual(notices, []);
+});
+
+test("a reused background tab records its preserved caret as the destination", async () => {
+  const harness = createBobOpenNotesHarness({
+    files: [{ path: "target.md", content: "hello" }],
+  });
+  prepareBobOpenNotesJumpHistory(harness);
+  const targetFile = harness.files.get("target.md");
+  const background = harness.workspace.getLeaf("tab");
+  background.view.file = targetFile;
+  background.view.editor = harness.editors.get("target.md");
+  background.view.editor.getCursor = () => ({ line: 5, ch: 7 });
+  notices.length = 0;
+  assert.equal(
+    await harness.plugin.handleBobOpenNotesUri(
+      params([{ path: "/Users/me/bob/target.md" }]),
+    ),
+    true,
+  );
+  await harness.plugin.vimJumpHistoryChain;
+  assert.equal(harness.openCalls.length, 0);
+  assert.equal(helpers.getVimJumpHistoryLength(harness.plugin.vimJumpHistory), 2);
+  assert.deepEqual(harness.plugin.vimJumpHistory.entries[1], {
+    path: "target.md",
+    line: 5,
+    ch: 7,
+  });
+  assert.deepEqual(notices, []);
+});

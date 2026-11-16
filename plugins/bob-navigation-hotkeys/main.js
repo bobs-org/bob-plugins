@@ -113856,7 +113856,18 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     }
 
     if (typeof this.activateWorkspaceLeaf === "function") {
-      return Boolean(await this.activateWorkspaceLeaf(opened.leaf));
+      const activated = Boolean(await this.activateWorkspaceLeaf(opened.leaf));
+      if (!activated) {
+        return false;
+      }
+      if (this.isMarkdownFile(file) && jumpContext && jumpContext.origin) {
+        try {
+          await this.finishVimLinkJump(jumpContext, file.path);
+        } catch (error) {
+          // History is best-effort after a successful open.
+        }
+      }
+      return true;
     }
     return false;
   }

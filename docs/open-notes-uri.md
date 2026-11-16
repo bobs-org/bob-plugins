@@ -15,7 +15,9 @@ If the first entry is not open and the active leaf is empty, it opens there.
 Otherwise, the handler appends a new tab at the far right of the active tab
 group. The first successfully opened entry is primary; other notes open in
 the background, and the primary tab ends active. A supplied line receives a
-caret at column 0 and a brief accent highlight. The handler waits up to two
+caret at column 0 and a brief accent highlight. A line-less open of a
+Markdown note records a Vim jump, so `<C-o>` returns to the previous caret.
+The handler waits up to two
 seconds for Bob's writes to appear in Obsidian.
 
 ## URI v1

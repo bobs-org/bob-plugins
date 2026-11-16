@@ -573,6 +573,31 @@ class BobNavigationHotkeysWindowPrefixMixin {
       return false;
     }
     if (this.windowPrefixState === "running") {
+      const isReArmCtrlW = Boolean(event && event.ctrlKey) &&
+        resolved && resolved.kind === "mapped" && resolved.key === "w";
+      if (isReArmCtrlW) {
+        this.enqueueWindowPrefix(() => {
+          const liveContext = this.collectWindowPrefixArmingContext(event);
+          if (liveContext && windowPrefixAlreadyHandled(this.windowPrefixHandledEvents, event)) {
+            liveContext.defaultPrevented = false;
+          }
+          const liveVerdict = typeof getWindowPrefixArmingVerdict === "function"
+            ? getWindowPrefixArmingVerdict(liveContext)
+            : null;
+          this.windowPrefixLastVerdict = {
+            allowed: Boolean(liveVerdict && liveVerdict.allowed),
+            reason: liveVerdict && liveVerdict.reason,
+            vimMode: liveContext && liveContext.vimMode,
+            isMarkdownEditor: liveContext && liveContext.isMarkdownEditor,
+            isEditable: liveContext && liveContext.isEditable,
+            defaultPrevented: liveContext && liveContext.defaultPrevented,
+          };
+          if (liveVerdict && liveVerdict.allowed === true) {
+            this.armWindowPrefix();
+          }
+        });
+        return false;
+      }
       this.enqueueWindowPrefix(() => {
         if (!this.windowPrefixIsArmed() && this.windowPrefixState === "idle") {
           return this.tryArmWindowPrefix(event);

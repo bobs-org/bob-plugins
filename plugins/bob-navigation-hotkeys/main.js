@@ -47171,6 +47171,43 @@ function windowPrefixCaptureAncestorChain(group, rootSplit) {
   return child === rootSplit ? chain : null;
 }
 
+function windowPrefixImmediateSplitParent(sourceGroup, sourceChain) {
+  if (Array.isArray(sourceChain) && sourceChain.length) {
+    return sourceChain[sourceChain.length - 1]?.parent ?? null;
+  }
+  return sourceGroup?.parent || sourceGroup?.parentSplit || null;
+}
+
+function windowPrefixIsSourceCollapsedLive(sourceGroup, sourceChain) {
+  if (!sourceGroup) return false;
+  if (Array.isArray(sourceGroup.children) && sourceGroup.children.length > 0) return false;
+  const parent = windowPrefixImmediateSplitParent(sourceGroup, sourceChain);
+  if (parent && Array.isArray(parent.children) && parent.children.includes(sourceGroup)) {
+    return false;
+  }
+  const liveParent = sourceGroup.parent ?? sourceGroup.parentSplit ?? null;
+  if (liveParent == null) return true;
+  if (parent && liveParent !== parent) return true;
+  if (!parent) return true;
+  return false;
+}
+
+function windowPrefixCollapseEmptySource(workspace, sourceGroup, sourceChain) {
+  const parent = windowPrefixImmediateSplitParent(sourceGroup, sourceChain);
+  if (!parent || !Array.isArray(parent.children) || !parent.children.includes(sourceGroup)) {
+    return windowPrefixIsSourceCollapsedLive(sourceGroup, sourceChain);
+  }
+  if (Array.isArray(sourceGroup.children) && sourceGroup.children.length > 0) {
+    return false;
+  }
+  parent.removeChild(sourceGroup);
+  if (typeof parent.recomputeChildrenDimensions === "function") {
+    parent.recomputeChildrenDimensions();
+  }
+  workspace.onLayoutChange();
+  return windowPrefixIsSourceCollapsedLive(sourceGroup, sourceChain);
+}
+
 function windowPrefixRecomputeGroup(group) {
   if (group?.children?.length && typeof group.recomputeChildrenDimensions === "function") {
     group.recomputeChildrenDimensions();
@@ -47661,7 +47698,13 @@ class BobNavigationHotkeysWindowLayoutMixin {
 
       const afterLeaves = windowPrefixRootLeaves(workspace);
       const targetChildren = targetGroup.children;
-      const sourceCollapsed = !windowPrefixLayoutGroups(afterLeaves).includes(sourceGroup);
+      let sourceCollapsed = windowPrefixIsSourceCollapsedLive(sourceGroup, sourceChain);
+      if (plan.sourceCollapsed && !sourceCollapsed) {
+        sourceCollapsed = windowPrefixCollapseEmptySource(workspace, sourceGroup, sourceChain);
+      }
+      if (plan.sourceCollapsed && !sourceCollapsed) {
+        throw new Error("emptied split stayed attached after explicit collapse");
+      }
       const expectedInsertion = plan.action === "create-split" ? 0 : plan.destinationIndex;
       const movedExactlyOnce = afterLeaves.filter((leaf) => leaf === sourceLeaf).length === 1;
       const sameLeafSet = beforeLeaves.length === afterLeaves.length &&
@@ -119790,6 +119833,31 @@ class BobNavigationHotkeysWindowPrefixMixin {
       return false;
     }
     if (this.windowPrefixState === "running") {
+      const isReArmCtrlW = Boolean(event && event.ctrlKey) &&
+        resolved && resolved.kind === "mapped" && resolved.key === "w";
+      if (isReArmCtrlW) {
+        this.enqueueWindowPrefix(() => {
+          const liveContext = this.collectWindowPrefixArmingContext(event);
+          if (liveContext && windowPrefixAlreadyHandled(this.windowPrefixHandledEvents, event)) {
+            liveContext.defaultPrevented = false;
+          }
+          const liveVerdict = typeof getWindowPrefixArmingVerdict === "function"
+            ? getWindowPrefixArmingVerdict(liveContext)
+            : null;
+          this.windowPrefixLastVerdict = {
+            allowed: Boolean(liveVerdict && liveVerdict.allowed),
+            reason: liveVerdict && liveVerdict.reason,
+            vimMode: liveContext && liveContext.vimMode,
+            isMarkdownEditor: liveContext && liveContext.isMarkdownEditor,
+            isEditable: liveContext && liveContext.isEditable,
+            defaultPrevented: liveContext && liveContext.defaultPrevented,
+          };
+          if (liveVerdict && liveVerdict.allowed === true) {
+            this.armWindowPrefix();
+          }
+        });
+        return false;
+      }
       this.enqueueWindowPrefix(() => {
         if (!this.windowPrefixIsArmed() && this.windowPrefixState === "idle") {
           return this.tryArmWindowPrefix(event);
@@ -121881,6 +121949,8 @@ try {
       inspectWindowPrefixLayoutApis,
       windowPrefixIsInRoot,
       windowPrefixLayoutGroups,
+      windowPrefixIsSourceCollapsedLive,
+      windowPrefixCollapseEmptySource,
     });
   }
 } catch (_error) {

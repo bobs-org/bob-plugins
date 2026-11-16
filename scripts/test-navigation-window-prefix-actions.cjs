@@ -399,3 +399,88 @@ test("a failed move restores the source layout and reports the failure", async (
   assert.deepEqual(target.children, [c]);
   assert.equal(workspace.activeLeaf, b);
 });
+
+function makeWorkspaceNoAutoCollapse(groups, options = {}) {
+  const built = makeWorkspace(groups, options);
+  for (const group of built.workspace.rootSplit.children) {
+    const originalRemove = group.removeChild;
+    group.removeChild = function (child) {
+      const index = this.children.indexOf(child);
+      if (index < 0) return;
+      this.children.splice(index, 1);
+      child.parent = null;
+      if (this.selectedTab === child) this.selectedTab = this.children[0] ?? null;
+    };
+    group.__wpOriginalRemove = originalRemove;
+  }
+  const originalMakeGroupCreate = built.workspace.createLeafBySplit;
+  return built;
+}
+
+test("an emptied split without auto-collapse is collapsed explicitly (last-tab join)", async () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const { workspace } = makeWorkspaceNoAutoCollapse([
+    { id: "source", left: 0, leaves: [a], selected: a },
+    { id: "target", left: 100, leaves: [b], selected: b },
+  ], { activeLeaf: a });
+  const plugin = pluginFor(workspace);
+  const { plan } = getPlan(plugin, "L");
+  assert.equal(plan.sourceCollapsed, true);
+  const result = await plugin.executeWindowPrefixPlan(plan);
+  assert.equal(result.ok, true);
+  assert.equal(result.sourceCollapsed, true);
+  assert.equal(workspace.rootSplit.children.length, 1);
+  assert.ok(!workspace.rootSplit.children.includes(workspace.rootSplit.children.find((g) => g.children.length === 0)));
+  for (const group of workspace.rootSplit.children) {
+    assert.ok(group.children.length > 0);
+  }
+  assert.deepEqual(workspace.rootSplit.children[0].children, [b, a]);
+  assert.equal(workspace.activeLeaf, a);
+});
+
+test("an emptied middle split without auto-collapse is collapsed explicitly (middle-out)", async () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const c = leaf("C");
+  const { workspace } = makeWorkspaceNoAutoCollapse([
+    { id: "left", left: 0, leaves: [a], selected: a },
+    { id: "middle", left: 100, leaves: [b], selected: b },
+    { id: "right", left: 200, leaves: [c], selected: c },
+  ], { activeLeaf: b });
+  const plugin = pluginFor(workspace);
+  const { plan } = getPlan(plugin, "H");
+  assert.equal(plan.sourceCollapsed, true);
+  const result = await plugin.executeWindowPrefixPlan(plan);
+  assert.equal(result.ok, true);
+  assert.equal(result.sourceCollapsed, true);
+  assert.equal(workspace.rootSplit.children.length, 2);
+  for (const group of workspace.rootSplit.children) {
+    assert.ok(group.children.length > 0);
+  }
+  assert.deepEqual(workspace.rootSplit.children.map((group) => group.children.map((item) => item.id)), [
+    ["A", "B"], ["C"],
+  ]);
+});
+
+test("explicit collapse failure rolls back to the original split and index", async () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const { workspace } = makeWorkspaceNoAutoCollapse([
+    { id: "source", left: 0, leaves: [a], selected: a },
+    { id: "target", left: 100, leaves: [b], selected: b },
+  ], { activeLeaf: a });
+  const [source, target] = workspace.rootSplit.children;
+  const originalParentRemove = workspace.rootSplit.removeChild;
+  workspace.rootSplit.removeChild = function () { throw new Error("synthetic parent collapse failure"); };
+  const plugin = pluginFor(workspace);
+  const { plan } = getPlan(plugin, "L");
+  const result = await plugin.executeWindowPrefixPlan(plan);
+  assert.equal(result.ok, false);
+  assert.equal(result.restored, true);
+  workspace.rootSplit.removeChild = originalParentRemove;
+  assert.deepEqual(workspace.rootSplit.children, [source, target]);
+  assert.deepEqual(source.children, [a]);
+  assert.deepEqual(target.children, [b]);
+  assert.equal(workspace.activeLeaf, a);
+});

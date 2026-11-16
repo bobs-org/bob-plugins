@@ -397,6 +397,56 @@ test("actions are serialized through the prefix queue", async () => {
   assert.ok(order.includes("l"));
 });
 
+test("a Ctrl+W pressed while an action runs re-arms and the next suffix dispatches fresh", async () => {
+  const { plugin, keymap } = pluginFor();
+  let current = 0;
+  let max = 0;
+  const order = [];
+  const gates = [];
+  let snapshots = 0;
+  const baseSnapshot = snapshotTwoSplits();
+  plugin.snapshotWindowPrefixLayout = () => {
+    snapshots += 1;
+    return JSON.parse(JSON.stringify(baseSnapshot));
+  };
+  plugin.executeWindowPrefixPlan = async (plan) => {
+    current += 1;
+    max = Math.max(max, current);
+    order.push(plan.key);
+    await new Promise((resolve) => { gates.push(resolve); });
+    current -= 1;
+    return { ok: true, action: "focus", plan };
+  };
+  arm(plugin);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "l", code: "KeyL", ctrlKey: false }));
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(plugin.windowPrefixState, "running");
+  assert.equal(current, 1);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "w", code: "KeyW", ctrlKey: true }));
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "l", code: "KeyL", ctrlKey: false }));
+  assert.equal(current, 1);
+  assert.equal(gates.length, 1);
+  gates[0]();
+  await plugin.windowPrefixQueue;
+  await Promise.resolve();
+  await Promise.resolve();
+  while (gates.length < 2) {
+    await Promise.resolve();
+  }
+  assert.equal(max, 1);
+  gates[1]();
+  await plugin.windowPrefixQueue;
+  await plugin.windowPrefixQueue;
+  await Promise.resolve();
+  assert.deepEqual(order, ["l", "l"]);
+  assert.equal(max, 1);
+  assert.ok(snapshots >= 2);
+  assert.equal(plugin.windowPrefixState, "idle");
+  assert.equal(keymap.scopes.length, 0);
+});
+
 test("no card is painted for a fluent sequence, and the card appears at 300 ms", () => {
   const { plugin, host } = pluginFor();
   arm(plugin);

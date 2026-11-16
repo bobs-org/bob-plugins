@@ -4,6 +4,8 @@ try {
       inspectWindowPrefixLayoutApis,
       windowPrefixIsInRoot,
       windowPrefixLayoutGroups,
+      windowPrefixIsSourceCollapsedLive,
+      windowPrefixCollapseEmptySource,
     });
   }
 } catch (_error) {

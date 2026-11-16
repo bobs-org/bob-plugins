@@ -237,3 +237,105 @@ test("view rows use the same planners exposed for dispatch", () => {
   assert.equal(view.splits.find((split) => split.active).label, "b");
   assert.equal(view.splits.reduce((sum, split) => sum + split.widthRatio, 0), 1);
 });
+
+test("six columns walk left, right, and next across all of them", () => {
+  const splits = [0, 100, 200, 300, 400, 500].map((x, i) =>
+    split(`s${i}`, x, [leaf(`n${i}`)], { selected: `n${i}`, recency: i }));
+  const active = "n2";
+  const snapshot = layout(active, splits);
+  assert.equal(normalizeWindowPrefixSnapshot(snapshot).activeSplitId, "s2");
+  assert.equal(planWindowPrefixFocus(snapshot, "left").targetSplitId, "s1");
+  assert.equal(planWindowPrefixFocus(snapshot, "right").targetSplitId, "s3");
+  assert.equal(planWindowPrefixFocus(snapshot, "next").targetSplitId, "s3");
+  assert.equal(planWindowPrefixFocus(layout("n5", splits), "right").reason, "at-right-edge");
+  assert.equal(planWindowPrefixFocus(layout("n0", splits), "left").reason, "at-left-edge");
+  const view = buildWindowPrefixViewModel(snapshot);
+  assert.equal(view.ok, true);
+  assert.equal(view.splitCount, 6);
+  assert.equal(view.activeSplitId, "s2");
+  for (const row of view.rows) {
+    assert.deepEqual(row.plan, planWindowPrefixKey(snapshot, row.key), `six-column ${row.key} parity`);
+  }
+});
+
+test("stacked splits in one column prefer vertical overlap then recency", () => {
+  const active = {
+    id: "active",
+    rect: { left: 200, top: 0, right: 300, bottom: 100 },
+    leaves: [leaf("c")],
+    selectedLeafId: "c",
+    recency: 0,
+  };
+  const makeStack = (id, top, bottom, recency) => ({
+    id,
+    rect: { left: 0, top, right: 200, bottom },
+    leaves: [leaf(id)],
+    selectedLeafId: id,
+    recency,
+  });
+  const near = makeStack("near", 10, 90, 1);
+  const far = makeStack("far", 0, 30, 5);
+  const snapshot = layout("c", [far, near, active]);
+  assert.equal(planWindowPrefixFocus(snapshot, "left").targetSplitId, "near");
+  const tieFar = makeStack("tie-far", 0, 100, 9);
+  const tieNear = makeStack("tie-near", 0, 40, 1);
+  const tieSnapshot = layout("c", [tieFar, tieNear, active]);
+  assert.equal(planWindowPrefixFocus(tieSnapshot, "left").targetSplitId, "tie-far");
+  const recencyA = makeStack("rec-a", 0, 100, 2);
+  const recencyB = makeStack("rec-b", 0, 100, 7);
+  const recencySnapshot = layout("c", [recencyA, recencyB, active]);
+  assert.equal(planWindowPrefixFocus(recencySnapshot, "left").targetSplitId, "rec-b");
+});
+
+test("uneven widths keep width ratios and pick the nearest edge", () => {
+  const snapshot = layout("b", [
+    { id: "narrow", rect: { left: 0, top: 0, right: 60, bottom: 100 }, leaves: [leaf("a")], selectedLeafId: "a", recency: 0 },
+    { id: "mid", rect: { left: 60, top: 0, right: 260, bottom: 100 }, leaves: [leaf("b")], selectedLeafId: "b", recency: 1 },
+    { id: "wide", rect: { left: 260, top: 0, right: 560, bottom: 100 }, leaves: [leaf("c")], selectedLeafId: "c", recency: 2 },
+  ]);
+  const view = buildWindowPrefixViewModel(snapshot);
+  assert.equal(view.ok, true);
+  const byId = Object.fromEntries(view.splits.map((s) => [s.id, s]));
+  assert.ok(Math.abs(byId.narrow.widthRatio - 60 / 560) < 1e-9);
+  assert.ok(Math.abs(byId.mid.widthRatio - 200 / 560) < 1e-9);
+  assert.ok(Math.abs(byId.wide.widthRatio - 300 / 560) < 1e-9);
+  assert.ok(Math.abs(view.splits.reduce((sum, s) => sum + s.widthRatio, 0) - 1) < 1e-9);
+  assert.equal(planWindowPrefixFocus(snapshot, "right").targetSplitId, "wide");
+  assert.equal(planWindowPrefixFocus(layout("c", snapshot.splits), "left").targetSplitId, "mid");
+});
+
+test("every fixture view row matches its planner, including the decision contract", () => {
+  const fixtures = [
+    layout("b", [split("one", 0, [leaf("a"), leaf("b")])]),
+    layout("b", [split("left", 0, [leaf("a")]), split("middle", 100, [leaf("b")]), split("right", 200, [leaf("c")])]),
+    layout("b", [
+      split("source", 0, [leaf("a"), leaf("b")], { selected: "b", mostRecent: "a" }),
+      split("dest", 100, [leaf("p", { pinned: true }), leaf("q"), leaf("r")], { selected: "q" }),
+    ]),
+    layout("a", [split("only", 0, [leaf("a")])]),
+    layout("a", [split("left", 0, [leaf("a")]), split("right", 100, [leaf("b")])]),
+    layout("b", [
+      split("left", 0, [leaf("a")]),
+      split("middle", 100, [leaf("b")]),
+      split("right", 200, [leaf("c")]),
+    ]),
+    layout("note", [split("main", 0, [leaf("note")])]),
+    layout("n2", [0, 100, 200, 300, 400, 500].map((x, i) =>
+      split(`s${i}`, x, [leaf(`n${i}`)], { selected: `n${i}`, recency: i }))),
+    layout("P!*".replace("!*", ""), [
+      split("source", 0, [leaf("P", { pinned: true }), leaf("B")], { selected: "P" }),
+      split("dest", 100, [leaf("Q", { pinned: true }), leaf("C")], { selected: "C" }),
+    ]),
+    layout("A", [
+      split("source", 0, [leaf("A"), leaf("B")], { selected: "A" }),
+      split("dest", 100, [leaf("Q", { pinned: true }), leaf("R", { pinned: true }), leaf("C")], { selected: "Q" }),
+    ]),
+  ];
+  for (const [index, snapshot] of fixtures.entries()) {
+    const view = buildWindowPrefixViewModel(snapshot);
+    assert.equal(view.ok, true, `fixture ${index} view ok`);
+    for (const row of view.rows) {
+      assert.deepEqual(row.plan, planWindowPrefixKey(snapshot, row.key), `fixture ${index} ${row.key} parity`);
+    }
+  }
+});

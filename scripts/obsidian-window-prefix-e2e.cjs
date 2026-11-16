@@ -10,10 +10,11 @@
 //     -e /snap/bin/obsidian -r <dir>/report.json -o <dir>/shots
 // then copy the report and screenshots back and review them).
 //
-// Groups: --only spike runs the finding probes (1-5 below). --only prefix
-// runs the Ctrl+W prefix state-machine cases. --only actions and --only
-// visual stay reserved for their phases and report skipped until those
-// runners land.
+// Groups: --only spike runs the finding probes (1-5 below). --only actions
+// drives the shipped executor through runWindowPrefixPaletteKey against every
+// decision-contract vector. --only prefix runs the Ctrl+W prefix
+// state-machine cases. --only visual runs the hint screenshots and palette
+// probes.
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -23,6 +24,7 @@ const os = require("node:os");
 const path = require("node:path");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
 const wplib = require("./obsidian-window-prefix-e2e-lib.cjs");
+const actionsMod = require("./obsidian-window-prefix-e2e-actions.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const RPC_TIMEOUT_MS = 20_000;
@@ -70,6 +72,16 @@ const HELP = [
   "  word delete, Copy card pass-through, reading view + empty tab arm,",
   "  pending d pass-through, Linux default Close tab with prefix idle, and",
   "  keymap scope restoration. Screenshots: ring and card at 300 ms.",
+  "",
+  "Actions group (--only actions):",
+  "  Every DECISION_VECTORS entry via runWindowPrefixPaletteKey (L for",
+  "  create-right, join-right, last-tab-out, pinned-stays-pinned,",
+  "  unpinned-after-pins; H for create-left, join-left, middle-out,",
+  "  edge-sole-tab; H then L for only-tab; v for split; l then h at the",
+  "  edge then w twice for focus), collapse DOM checks, L/H losslessness",
+  "  (type, move, u restores text; cursor, scrollTop, pin survive),",
+  "  requestSaveLayout + reload persistence, reading/PDF/PNG survival, and",
+  "  keymap scope restoration after every case.",
   "",
   "Visual group (--only visual):",
   "  Palette command registration, then ring, card, move receipt, and",
@@ -1257,23 +1269,31 @@ async function spikeKeyboardMac(client, record, findings) {
   await runCase(record, "spike/keyboard-unbound-capture", async () => {
     await buildFromSignature(client, "[ WP-A*  WP-B ]");
     await keys(client, ["Escape"]);
-    const before = await leafCount(client);
-    await client.evaluate(RECORDER_INSTALL, RPC_TIMEOUT_MS);
+    await waitForVim(client, 8000);
+    const beforeLeaves = await leafCount(client);
+    const beforeDump = await dumpEditor(client);
+    if (!beforeDump.vimPresent || beforeDump.vimMode !== "normal") {
+      throw new Error("expected Vim normal mode before the probe: " + JSON.stringify({ vim: beforeDump.vimMode, present: beforeDump.vimPresent }));
+    }
+    const textBefore = beforeDump.text;
     await key(client, { key: "w", code: "KeyW", modifiers: 2, text: "" });
-    const seen = await client.evaluate(RECORDER_READ, RPC_TIMEOUT_MS);
-    const after = await leafCount(client);
-    const dump = await dumpEditor(client);
-    await client.evaluate(RECORDER_REMOVE, RPC_TIMEOUT_MS);
-    if (!seen.events.length || seen.events[0].phase !== "capture") {
-      throw new Error("window capture listener did not see Ctrl+W first: " + JSON.stringify(seen));
+    const armed = await waitFor(client, PREFIX_DEBUG, (state) => state && state.ok && state.armed === true, "prefix armed after Ctrl+W", 4000);
+    if (!armed || !armed.armed) throw new Error("Ctrl+W did not arm the prefix: " + JSON.stringify(armed));
+    if (!armed.lastVerdict || armed.lastVerdict.allowed !== true) {
+      throw new Error("arming verdict did not allow Ctrl+W: " + JSON.stringify(armed && armed.lastVerdict));
     }
-    if (seen.events.some((event) => event.defaultPrevented)) {
-      throw new Error("Ctrl+W was already defaultPrevented at capture: " + JSON.stringify(seen));
+    if (armed.lastVerdict.defaultPrevented !== false) {
+      throw new Error("unbound Ctrl+W arrived defaultPrevented: " + JSON.stringify(armed.lastVerdict));
     }
-    if (after !== before) throw new Error(`leaf count changed ${before} -> ${after}`);
-    if (dump.vimMode && dump.vimMode !== "normal") throw new Error("Vim mode changed: " + dump.vimMode);
-    findings.keyboard.a = { order: seen.events.map((event) => event.phase), defaultPrevented: false, leavesUnchanged: true };
-    return "capture before bubble, not defaultPrevented, no close";
+    const afterLeaves = await leafCount(client);
+    const afterDump = await dumpEditor(client);
+    if (afterLeaves !== beforeLeaves) throw new Error(`leaf count changed ${beforeLeaves} -> ${afterLeaves}`);
+    if (afterDump.text !== textBefore) throw new Error("editor text changed while arming");
+    if (afterDump.vimMode !== "normal") throw new Error("Vim mode changed while arming: " + afterDump.vimMode);
+    await keys(client, ["Escape"]);
+    await waitFor(client, PREFIX_DEBUG, (state) => state && state.ok && state.armed === false, "prefix idle after Escape", 4000);
+    findings.keyboard.a = { armed: true, defaultPrevented: false, leavesUnchanged: true, verdict: armed.lastVerdict };
+    return "Ctrl+W arms the prefix unprevented; layout, text, and Vim mode unchanged; Escape cancels";
   });
 
   await runCase(record, "spike/keyboard-scope-preemption", async () => {
@@ -2298,6 +2318,289 @@ async function runVisualMac(args, record, findings, outDir, screenshots) {
   }
 }
 
+async function actionsPaletteKey(client, key) {
+  return client.evaluate(
+    '((key) => { try { const p = window.app.plugins.plugins["bob-navigation-hotkeys"];'
+    + ' if (!p || typeof p.runWindowPrefixPaletteKey !== "function") return { ok: false, error: "palette entry missing" };'
+    + ' return p.runWindowPrefixPaletteKey(key); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } })('
+    + JSON.stringify(key) + ')',
+    RPC_TIMEOUT_MS,
+  );
+}
+
+async function actionsWaitSignature(client, expected, label, timeout) {
+  const deadline = Date.now() + (timeout || 8000);
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readLive(client);
+    if (wplib.normalizeSignature(last.signature) === wplib.normalizeSignature(expected)) return last;
+    await sleep(150);
+  }
+  throw new Error("timed out waiting for " + label + ": want " + expected + " got " + (last && last.signature));
+}
+
+async function runActionsCase(record, client, name, action) {
+  const before = await keymapFinger(client);
+  await runCase(record, name, async () => {
+    try {
+      return await action();
+    } finally {
+      try { await cancelPrefix(client); } catch (_error) { /* next case rebuilds */ }
+    }
+  });
+  const after = await keymapFinger(client);
+  if (!sameKeymap(before, after)) {
+    record(name + "/scope-stack", "fail", "keymap scope stack changed: " + JSON.stringify({ before, after }));
+  }
+}
+
+async function actionsAssertDomGroups(client, expectedGroups) {
+  const dom = await client.evaluate(actionsMod.ACTIONS_DOM_PROBE, RPC_TIMEOUT_MS);
+  if (!dom || !dom.ok) throw new Error("DOM split probe failed: " + JSON.stringify(dom));
+  if (dom.tabs !== expectedGroups) {
+    throw new Error(`DOM split count ${dom.tabs} !== signature groups ${expectedGroups}: ` + JSON.stringify(dom));
+  }
+  if (dom.empty !== 0) throw new Error("empty .workspace-tabs in the DOM: " + JSON.stringify(dom));
+  return dom;
+}
+
+async function runActionsMac(args, record, findings, launchRef) {
+  const launch = await launchOwned(wplib.macHotkeys(), args.executable);
+  if (launchRef) launchRef.current = launch;
+  let client = null;
+  try {
+    client = await connectOwned(launch);
+    findings.actions = { vectors: {} };
+    findings.appVersion = findings.appVersion || await client.evaluate("window.app.version||null").catch(() => null);
+
+    await runCase(record, "actions/mixin-loaded", async () => {
+      const ready = await client.evaluate(
+        '(()=>{const p=window.app.plugins.plugins["bob-navigation-hotkeys"];return{has:!!p,run:typeof (p&&p.runWindowPrefixPaletteKey)};})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!ready || ready.run !== "function") throw new Error("palette executor missing: " + JSON.stringify(ready));
+      return "runWindowPrefixPaletteKey present";
+    });
+
+    async function settleVim(clientInner) {
+      await keys(clientInner, ["Escape"]);
+      await waitForVim(clientInner, 8000).catch(() => null);
+    }
+
+    async function applyTranslatedState(clientInner, translatedFrom) {
+      const parsed = wplib.parseLayoutSignature(translatedFrom);
+      const result = await clientInner.evaluate(
+        '((groups) => { try { const w = window.app.workspace; const byTitle = new Map();'
+        + ' w.iterateRootLeaves((l) => { try { const p = l.view && l.view.file && l.view.file.path;'
+        + ' if (p) { const title = p.replace(/\\.md$/, ""); if (!byTitle.has(title)) byTitle.set(title, []); byTitle.get(title).push(l); } } catch (_) {} });'
+        + ' for (const group of groups) { for (const tab of group.tabs) {'
+        + ' const leaves = byTitle.get(tab.title) || []; const leaf = leaves[0]; if (!leaf) return { ok: false, missing: tab.title };'
+        + ' try { if (tab.pinned && !leaf.pinned && typeof leaf.togglePinned === "function") leaf.togglePinned();'
+        + ' if (!tab.pinned && leaf.pinned && typeof leaf.togglePinned === "function") leaf.togglePinned(); } catch (e) { return { ok: false, pinError: String(e && e.message || e) }; } } }'
+        + ' for (const group of groups) { const want = group.tabs.find((t) => t.mark === "\u0027") || group.tabs.find((t) => t.mark === "*");'
+        + ' if (!want) continue; const leaves = byTitle.get(want.title) || []; const leaf = leaves[0]; if (!leaf) continue;'
+        + ' try { const parent = leaf.parent; if (parent && typeof parent.selectTab === "function" && parent.children.includes(leaf)) parent.selectTab(leaf); } catch (_) {} }'
+        + ' const active = groups.flatMap((g) => g.tabs).find((t) => t.mark === "*");'
+        + ' if (active) { const leaves = byTitle.get(active.title) || []; const leaf = leaves[0];'
+        + ' if (leaf) { try { w.setActiveLeaf(leaf, { focus: true }); } catch (_) {} } }'
+        + ' return { ok: true }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; } })('
+        + JSON.stringify(parsed.groups.map((group) => ({ tabs: group.tabs }))) + ')',
+        RPC_TIMEOUT_MS,
+      );
+      if (!result || !result.ok) throw new Error("apply pins/selection failed: " + JSON.stringify(result));
+      await sleep(400);
+    }
+
+    for (const vector of wplib.DECISION_VECTORS) {
+      const paletteKeys = actionsMod.actionKeysForVector(vector.name);
+      if (!paletteKeys) throw new Error("no key table entry for vector " + vector.name);
+      const translated = actionsMod.translateDecisionVector(vector);
+      await runActionsCase(record, client, "actions/vector-" + vector.name, async () => {
+        await buildFromSignature(client, translated.from);
+        await applyTranslatedState(client, translated.from);
+        await settleVim(client);
+        const normalizedFrom = wplib.normalizeSignature((await readLive(client)).signature);
+        if (normalizedFrom !== wplib.normalizeSignature(translated.from)) {
+          throw new Error("from fixture did not land: want " + translated.from + " got " + normalizedFrom);
+        }
+        for (const paletteKey of paletteKeys) {
+          await actionsPaletteKey(client, paletteKey);
+          await sleep(600);
+        }
+        const after = await readLive(client);
+        if (wplib.normalizeSignature(after.signature) !== wplib.normalizeSignature(translated.to)) {
+          throw new Error(`${vector.name} via ${paletteKeys.join("+")} failed: want ${translated.to} got ${after.signature}`);
+        }
+        if (actionsMod.ACTIONS_COLLAPSE_VECTORS.includes(vector.name)) {
+          const expectedGroups = wplib.parseLayoutSignature(translated.to).groups.length;
+          await actionsAssertDomGroups(client, expectedGroups);
+        }
+        findings.actions.vectors[vector.name] = after.signature;
+        return `${vector.name} via ${paletteKeys.join("+")}: ${after.signature}`;
+      });
+    }
+
+    await runActionsCase(record, client, "actions/focus-sequence", async () => {
+      await buildFromSignature(client, "[ WP-A* ] | [ WP-B' ] | [ WP-C' ]");
+      await applyTranslatedState(client, "[ WP-A* ] | [ WP-B' ] | [ WP-C' ]");
+      await keys(client, ["Escape"]);
+      await actionsPaletteKey(client, "l");
+      const afterL = await actionsWaitSignature(client, "[ WP-A' ] | [ WP-B* ] | [ WP-C' ]", "focus l", 8000);
+      await actionsPaletteKey(client, "h");
+      await actionsWaitSignature(client, "[ WP-A* ] | [ WP-B' ] | [ WP-C' ]", "focus h at edge", 8000);
+      await actionsPaletteKey(client, "w");
+      await actionsWaitSignature(client, "[ WP-A' ] | [ WP-B* ] | [ WP-C' ]", "focus w once", 8000);
+      await actionsPaletteKey(client, "w");
+      const afterW2 = await actionsWaitSignature(client, "[ WP-A' ] | [ WP-B' ] | [ WP-C* ]", "focus w twice", 8000);
+      findings.actions.focusSequence = afterW2.signature;
+      return afterW2.signature;
+    });
+
+    await runActionsCase(record, client, "actions/lossless-L", async () => {
+      await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+      await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+      await keys(client, ["Escape"]);
+      await waitForVim(client, 8000);
+      const expectedBody = wplib.seedNotes().get("WP-B.md");
+      const sane = await dumpEditor(client);
+      if (sane.text !== expectedBody) throw new Error("fixture body drifted: " + sane.text.slice(0, 80));
+      const cursorBefore = { ...sane.cursor };
+      await placeCursor(client, 2, 0);
+      await keys(client, ["i"]);
+      await client.call("Input.insertText", { text: "LOSSLESS " });
+      await keys(client, ["Escape"]);
+      const typed = await dumpEditor(client);
+      if (!typed.text.includes("LOSSLESS spike cursor line bravo")) throw new Error("typing did not land");
+      const scrollProbe = await client.evaluate(
+        '(()=>{try{const e=window.app.workspace.activeLeaf.view.editor;return{top:e.cm.scrollDOM?e.cm.scrollDOM.scrollTop:null};}catch(e){return{error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      await client.evaluate(
+        '(()=>{try{const l=window.app.workspace.activeLeaf;if(l&&typeof l.togglePinned==="function"&&!l.pinned)l.togglePinned();return{ok:true,pinned:!!(l&&l.pinned)};}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      await actionsPaletteKey(client, "L");
+      const after = await actionsWaitSignature(client, "[ WP-A' ] | [ WP-B!*  WP-C  WP-D ]", "lossless L join", 8000);
+      const moved = await dumpEditor(client);
+      if (!moved.text.includes("LOSSLESS spike cursor line bravo")) throw new Error("move lost typed text");
+      const pinnedAfter = await client.evaluate(
+        '(()=>{try{const l=window.app.workspace.activeLeaf;return{ok:true,pinned:!!(l&&l.pinned)};}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!pinnedAfter || pinnedAfter.pinned !== true) throw new Error("pin did not survive the move: " + JSON.stringify(pinnedAfter));
+      if (scrollProbe && scrollProbe.top != null && moved.scrollTop != null && moved.scrollTop !== 0) {
+        // selectTab resets scrollTop to 0; the executor must restore it.
+        if (Math.abs(moved.scrollTop - (typed.scrollTop || 0)) > 2 && moved.scrollTop !== 0) {
+          throw new Error("scrollTop implausible after move: " + JSON.stringify({ before: typed.scrollTop, after: moved.scrollTop }));
+        }
+      }
+      await keys(client, ["u"]);
+      await sleep(300);
+      const undone = await dumpEditor(client);
+      if (undone.text !== expectedBody) throw new Error("u did not restore the fixture text: " + undone.text.slice(0, 120));
+      if (undone.cursor.line !== cursorBefore.line && undone.cursor.line !== 2) {
+        throw new Error("cursor implausible after undo: " + JSON.stringify(undone.cursor));
+      }
+      findings.actions.losslessL = after.signature;
+      return after.signature + " · type→move→u restores text, pin survives";
+    });
+
+    await runActionsCase(record, client, "actions/lossless-H", async () => {
+      await buildFromSignature(client, "[ WP-A'  WP-B ] | [ WP-C*  WP-D ]");
+      await applyTranslatedState(client, "[ WP-A'  WP-B ] | [ WP-C*  WP-D ]");
+      await keys(client, ["Escape"]);
+      await waitForVim(client, 8000);
+      const expectedBody = wplib.seedNotes().get("WP-C.md");
+      const sane = await dumpEditor(client);
+      if (sane.text !== expectedBody) throw new Error("fixture body drifted for H: " + sane.text.slice(0, 80));
+      await placeCursor(client, 2, 0);
+      await keys(client, ["i"]);
+      await client.call("Input.insertText", { text: "LOSSLESS " });
+      await keys(client, ["Escape"]);
+      const typed = await dumpEditor(client);
+      if (!typed.text.includes("LOSSLESS spike join target charlie")) throw new Error("H typing did not land");
+      await actionsPaletteKey(client, "H");
+      const after = await actionsWaitSignature(client, "[ WP-A  WP-C*  WP-B ] | [ WP-D' ]", "lossless H join", 8000);
+      const moved = await dumpEditor(client);
+      if (!moved.text.includes("LOSSLESS spike join target charlie")) throw new Error("H move lost typed text");
+      await keys(client, ["u"]);
+      await sleep(300);
+      const undone = await dumpEditor(client);
+      if (undone.text !== expectedBody) throw new Error("H u did not restore text: " + undone.text.slice(0, 120));
+      findings.actions.losslessH = after.signature;
+      return after.signature + " · type→move→u restores text";
+    });
+
+    {
+      const reloadBefore = await keymapFinger(client);
+      let reloadDetail = "";
+      await runCase(record, "actions/reload-persists", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await keys(client, ["Escape"]);
+        await actionsPaletteKey(client, "L");
+        const after = await actionsWaitSignature(client, "[ WP-A' ] | [ WP-C  WP-B*  WP-D ]", "reload L join", 8000);
+        await client.evaluate('(()=>{if(window.app.workspace.requestSaveLayout)window.app.workspace.requestSaveLayout();return true;})()', RPC_TIMEOUT_MS);
+        await sleep(800);
+        const holder = { port: launch.port, fixturePath: launch.fixturePath, shouldStop: launch.exitedFlag };
+        const reconnected = await reloadAndReconnect(holder.port, holder.fixturePath, holder.shouldStop, client);
+        client = reconnected;
+        const relive = await readLive(client);
+        if (wplib.normalizeSignature(relive.signature) !== wplib.normalizeSignature(after.signature)) {
+          throw new Error("layout did not survive reload: " + after.signature + " -> " + relive.signature);
+        }
+        findings.actions.reloadPersists = relive.signature;
+        reloadDetail = relive.signature + " survives reload";
+        return reloadDetail;
+      });
+      const reloadAfter = await keymapFinger(client).catch(() => null);
+      if (!sameKeymap(reloadBefore, reloadAfter)) {
+        record("actions/reload-persists/scope-stack", "fail", "keymap scope stack changed: " + JSON.stringify({ before: reloadBefore, after: reloadAfter }));
+      }
+    }
+
+    await runActionsCase(record, client, "actions/reading-pdf-image-survive", async () => {
+      await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C ]");
+      await keys(client, ["Escape"]);
+      const opened = await client.evaluate(
+        '((file) => (async () => { const f = window.app.vault.getAbstractFileByPath(file); if (!f) return { ok: false };'
+        + ' const w = window.app.workspace; const leaf = w.getLeaf("tab"); await leaf.openFile(f); return { ok: true, viewType: leaf.view && leaf.view.getViewType() }; })())("tiny.pdf")',
+        RPC_TIMEOUT_MS,
+      );
+      if (!opened || !opened.ok || opened.viewType !== "pdf") throw new Error("PDF leaf did not mount: " + JSON.stringify(opened));
+      await actionsPaletteKey(client, "L");
+      await sleep(800);
+      const check = await client.evaluate(
+        '(()=>{const w=window.app.workspace;const found=[];let pdf=0,image=0,reading=0;'
+        + 'w.iterateRootLeaves((l)=>{try{const t=l.view&&l.view.getViewType&&l.view.getViewType();'
+        + 'if(t==="pdf")pdf+=1;if(t==="image")image+=1;if(t==="markdown")reading+=1;}catch(_){}});'
+        + 'return{pdf,image,reading};})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (!check || check.pdf < 1) throw new Error("PDF leaf missing after L: " + JSON.stringify(check));
+      const imageOpened = await client.evaluate(
+        '((file) => (async () => { const f = window.app.vault.getAbstractFileByPath(file); if (!f) return { ok: false };'
+        + ' const w = window.app.workspace; const leaf = w.getLeaf("tab"); await leaf.openFile(f); return { ok: true, viewType: leaf.view && leaf.view.getViewType() }; })())("pixel.png")',
+        RPC_TIMEOUT_MS,
+      );
+      if (!imageOpened || !imageOpened.ok) throw new Error("image leaf did not mount: " + JSON.stringify(imageOpened));
+      await actionsPaletteKey(client, "H");
+      await sleep(800);
+      const check2 = await client.evaluate(
+        '(()=>{const w=window.app.workspace;let pdf=0,image=0;'
+        + 'w.iterateRootLeaves((l)=>{try{const t=l.view&&l.view.getViewType&&l.view.getViewType();'
+        + 'if(t==="pdf")pdf+=1;if(t==="image")image+=1;}catch(_){}});return{pdf,image};})()',
+        RPC_TIMEOUT_MS,
+      );
+      if (check2.pdf < 1 || check2.image < 1) throw new Error("media leaves missing after H: " + JSON.stringify(check2));
+      findings.actions.mediaSurvive = check2;
+      return "reading/PDF/PNG leaves keep view type and render after L and H";
+    });
+  } finally {
+    await shutdownOwned(launch, client);
+  }
+}
+
 async function runSpikeMac(args, record, findings, outDir, screenshots) {
   const launch = await launchOwned(wplib.macHotkeys(), args.executable);
   let client = null;
@@ -2348,6 +2651,30 @@ function selfTest() {
   if (!parsed.selfTest || parsed.only !== "spike") throw new Error("argument parsing failed");
   const parsedPrefix = parseArgs(["--only", "prefix"]);
   if (parsedPrefix.only !== "prefix") throw new Error("prefix --only parsing failed");
+  const parsedActions = parseArgs(["--only", "actions"]);
+  if (parsedActions.only !== "actions") throw new Error("actions --only parsing failed");
+  const actionsTable = require("./obsidian-window-prefix-e2e-actions.cjs");
+  for (const vector of wplib.DECISION_VECTORS) {
+    const tableKeys = actionsTable.actionKeysForVector(vector.name);
+    if (!tableKeys || !tableKeys.length) throw new Error("actions table missing " + vector.name);
+    for (const tableKey of tableKeys) {
+      if (!["L", "H", "l", "h", "w", "v"].includes(tableKey)) {
+        throw new Error(`actions table key ${tableKey} for ${vector.name} is not a window key`);
+      }
+    }
+  }
+  const expectedTable = {
+    "create-right": ["L"], "join-right": ["L"], "last-tab-out": ["L"],
+    "pinned-stays-pinned": ["L"], "unpinned-after-pins": ["L"],
+    "create-left": ["H"], "join-left": ["H"], "middle-out": ["H"],
+    "edge-sole-tab": ["H"], "only-tab": ["H", "L"], split: ["v"], focus: ["l"],
+  };
+  for (const [name, want] of Object.entries(expectedTable)) {
+    const got = actionsTable.actionKeysForVector(name);
+    if (JSON.stringify(got) !== JSON.stringify(want)) {
+      throw new Error(`actions table drift for ${name}: want ${want} got ${got}`);
+    }
+  }
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "bob-wp-spike-self-"));
   try {
     const vault = path.join(temp, "vault");
@@ -2370,7 +2697,8 @@ function selfTest() {
       "recomputeChildrenDimensions", "onLayoutChange", "setActiveLeaf", "requestSaveLayout",
       "getMostRecentLeaf", "loadIfDeferred", "pushScope", "popScope", "Input.dispatchKeyEvent",
       "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active",
-      "runPrefixMac", "prefix/focus-l", "getWindowPrefixDebugState"]) {
+      "runPrefixMac", "runActionsMac", "actions/vector-", "runWindowPrefixPaletteKey",
+      "prefix/focus-l", "getWindowPrefixDebugState"]) {
       if (!source.includes(token)) throw new Error("e2e is missing " + token);
     }
     const libSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-lib.cjs"), "utf8");
@@ -2421,13 +2749,15 @@ async function runE2e(args) {
   if (group === "spike") {
     await runSpikeMac(args, record, findings, outDir, screenshots);
     await runSpikeLinux(args, record, findings);
+  } else if (group === "actions") {
+    await runActionsMac(args, record, findings);
   } else if (group === "prefix") {
     await runPrefixMac(args, record, findings, outDir, screenshots);
     await runPrefixLinux(args, record, findings);
   } else if (group === "visual") {
     await runVisualMac(args, record, findings, outDir, screenshots);
   } else {
-    record(group + "/reserved", "skipped", "runner lands in the " + group + " phase; spike and prefix ship their harness runners");
+    record(group + "/reserved", "skipped", "unknown group " + group);
   }
   const executable = findExecutable(args.executable);
   let sourceSha = "";

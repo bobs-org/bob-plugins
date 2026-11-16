@@ -69,7 +69,9 @@ const HEADER_VISIBLE_PROBE = [
   'const parent = el.closest(".workspace-tab-header-container-inner") || el.closest(".workspace-tab-header-container") || el.parentElement;',
   'const prect = parent && parent.getBoundingClientRect ? parent.getBoundingClientRect() : null;',
   'const fullyVisible = !prect ? null : rect.left >= prect.left - 0.5 && rect.right <= prect.right + 0.5 && rect.width > 2;',
-  'return { ok: true, header: true, fullyVisible, rect: { left: rect.left, right: rect.right, width: rect.width }, parent: prect && { left: prect.left, right: prect.right, width: prect.width } };',
+  'let strip = null;',
+  'try { const cs = parent && window.getComputedStyle(parent); strip = parent && { cls: String(parent.className || ""), overflowX: cs && cs.overflowX, scrollLeft: parent.scrollLeft, scrollWidth: parent.scrollWidth, clientWidth: parent.clientWidth, groupWidth: leaf.parent && leaf.parent.containerEl ? leaf.parent.containerEl.getBoundingClientRect().width : null }; } catch (_) {}',
+  'return { ok: true, header: true, fullyVisible, rect: { left: rect.left, right: rect.right, width: rect.width }, parent: prect && { left: prect.left, right: prect.right, width: prect.width }, strip };',
   '} catch (e) { return { ok: false, error: String(e && e.message || e) }; } })',
 ].join("");
 
@@ -708,7 +710,10 @@ async function runTabsGroup(harness, args, record, findings) {
 
     await runActionsCase(record, client, "tabs/thirteen-clip", async () => {
       await seedExtraNotes();
-      const thirteen = "[ WP-A  WP-B  WP-C  WP-D  WP-E  WP-F  WP-G  WP-H  WP-I*  WP-J  WP-K  WP-L  WP-M ]";
+      // Start on tab 1 so "9" is a real jump, not an already-here no-op. The
+      // strip metrics record why the executor does no header scrolling: the
+      // tab strip is `overflow-x: clip`, and natural widths keep tab 9 visible.
+      const thirteen = "[ WP-A*  WP-B  WP-C  WP-D  WP-E  WP-F  WP-G  WP-H  WP-I  WP-J  WP-K  WP-L  WP-M ]";
       await buildFromSignature(client, thirteen);
       await applyTranslatedState(client, thirteen);
       await client.evaluate(
@@ -716,6 +721,7 @@ async function runTabsGroup(harness, args, record, findings) {
         RPC_TIMEOUT_MS,
       );
       await sleep(200);
+      const before = await client.evaluate(HEADER_VISIBLE_PROBE + '("WP-I")', RPC_TIMEOUT_MS);
       await actionsPaletteKey(client, "9");
       await sleep(600);
       const after = await readLive(client);
@@ -723,8 +729,24 @@ async function runTabsGroup(harness, args, record, findings) {
         throw new Error("jump to tab 9 failed: " + after.signature);
       }
       const vis = await client.evaluate(HEADER_VISIBLE_PROBE + '("WP-I")', RPC_TIMEOUT_MS);
-      findings.tabs.clip = vis;
-      return "tab 9 focused; header fullyVisible=" + String(vis && vis.fullyVisible);
+      // The same jump with Obsidian's own split width (no inline clip).
+      await client.evaluate(
+        '(()=>{try{const g=window.app.workspace.activeLeaf.parent;const el=g&&g.containerEl;if(el){el.style.width="";if(el.parentElement)el.parentElement.style.width="";}return true;}catch(e){return String(e&&e.message||e);}})()',
+        RPC_TIMEOUT_MS,
+      );
+      await sleep(200);
+      await actionsPaletteKey(client, "1");
+      await sleep(300);
+      await actionsPaletteKey(client, "9");
+      await sleep(600);
+      const natural = await client.evaluate(HEADER_VISIBLE_PROBE + '("WP-I")', RPC_TIMEOUT_MS);
+      findings.tabs.clip = { ...(vis || {}), before, natural };
+      if (!natural || natural.ok !== true || natural.fullyVisible !== true) {
+        throw new Error("tab 9 header clipped at natural split width: " + JSON.stringify(natural));
+      }
+      return "tab 9 focused from tab 1; header fullyVisible before=" +
+        String(before && before.fullyVisible) + " after=" + String(vis && vis.fullyVisible) +
+        " natural=" + String(natural && natural.fullyVisible);
     });
 
     {

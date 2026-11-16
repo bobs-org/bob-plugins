@@ -311,9 +311,27 @@ test("missing headers never throw and report numbers hidden", () => {
   assert.equal(result.shown, false);
   assert.equal(result.numbersHidden, true);
   // The card seam reports the same state through the view model flag.
+  assert.equal(plugin.windowTabNumbersHeadersHidden(), true);
   const view = buildWindowPrefixViewModel({ activeLeafId: "b", splits: area.splits });
   assert.equal(view.tabs.total, 2);
+  assert.equal(view.tabs.numbersHidden, undefined);
+  assert.equal(plugin.decorateWindowPrefixTabsModel(view), view);
+  assert.equal(view.tabs.numbersHidden, true);
   plugin.stopWindowTabNumbers();
+});
+
+test("the card seam leaves numbersHidden unset while headers paint", () => {
+  const doc = makeDoc();
+  const { area } = twoSplitArea(doc);
+  const plugin = pluginFor(doc, area);
+  assert.equal(plugin.windowTabNumbersHeadersHidden(), false);
+  const view = buildWindowPrefixViewModel({ activeLeafId: area.activeLeafId, splits: area.splits });
+  plugin.decorateWindowPrefixTabsModel(view);
+  assert.equal(view.tabs.numbersHidden, undefined);
+  // One tab never reports hidden numbers: there is nothing to number.
+  const single = makeArea(doc, [{ id: "solo", leaves: [{ id: "x", label: "X", headerEl: null }] }], "x");
+  single.leafById.set("x", { id: "x", tabHeaderEl: null });
+  assert.equal(pluginFor(doc, single).windowTabNumbersHeadersHidden(), false);
 });
 
 test("catalog verdict parity for the stamper inputs", () => {

@@ -41,6 +41,14 @@ class BobNavigationHotkeysWindowTabJumpMixin {
     };
   }
 
+  decorateWindowPrefixTabsModel(model) {
+    if (!model || !model.tabs || typeof this.windowTabNumbersHeadersHidden !== "function") return model;
+    try {
+      if (this.windowTabNumbersHeadersHidden() === true) model.tabs.numbersHidden = true;
+    } catch (_error) { /* never throw */ }
+    return model;
+  }
+
   lightWindowTabNumbers() {
     if (typeof this.setWindowTabNumbersLit === "function") {
       try { this.setWindowTabNumbersLit(true); } catch (_error) { /* never throw */ }

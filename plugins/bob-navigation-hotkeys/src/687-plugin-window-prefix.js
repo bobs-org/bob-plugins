@@ -828,6 +828,7 @@ class BobNavigationHotkeysWindowPrefixMixin {
     const model = snapshot && typeof buildWindowPrefixViewModel === "function"
       ? buildWindowPrefixViewModel(snapshot)
       : null;
+    if (typeof this.decorateWindowPrefixTabsModel === "function") this.decorateWindowPrefixTabsModel(model);
     if (host && typeof host.showCard === "function") host.showCard(model);
     if (typeof this.lightWindowTabNumbers === "function") this.lightWindowTabNumbers();
     if (this.windowPrefixState === "armed") this.windowPrefixState = "carded";

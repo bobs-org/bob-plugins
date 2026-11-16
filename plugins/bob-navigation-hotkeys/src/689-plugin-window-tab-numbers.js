@@ -526,6 +526,37 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
     }
   }
 
+  windowTabNumbersHeadersAvailable(area, catalog) {
+    try {
+      const leafById = area && area.leafById;
+      if (!leafById || typeof leafById.get !== "function") return true;
+      for (const tab of (catalog && catalog.tabs) || []) {
+        if (tab.number == null) continue;
+        const resolved = windowTabNumbersHeaderForLeaf(leafById.get(tab.leafId));
+        if (resolved && resolved.inner) return true;
+      }
+      return false;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // The card's "numbers hidden" aside: two or more tabs, but no numbered tab
+  // has a header to paint, so the tab bar shows no numerals at all.
+  windowTabNumbersHeadersHidden() {
+    try {
+      const area = typeof this.snapshotWindowPrefixMainArea === "function"
+        ? this.snapshotWindowPrefixMainArea()
+        : null;
+      if (!area || typeof buildWindowPrefixTabCatalog !== "function") return false;
+      const catalog = buildWindowPrefixTabCatalog({ splits: area.splits, activeLeafId: area.activeLeafId });
+      if (!catalog || catalog.ok !== true || catalog.total < 2) return false;
+      return !this.windowTabNumbersHeadersAvailable(area, catalog);
+    } catch (_error) {
+      return false;
+    }
+  }
+
   refreshWindowTabNumbersNow(options = {}) {
     try {
       const doc = windowTabNumbersDocument(this);
@@ -571,24 +602,7 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
         hotkeysKnown = false;
         ctrlWOwner = null;
       }
-      let headersAvailable = false;
-      try {
-        const leafById = area.leafById;
-        if (leafById && typeof leafById.get === "function") {
-          for (const tab of catalog.tabs) {
-            if (tab.number == null) continue;
-            const resolved = windowTabNumbersHeaderForLeaf(leafById.get(tab.leafId));
-            if (resolved && resolved.inner) {
-              headersAvailable = true;
-              break;
-            }
-          }
-        } else {
-          headersAvailable = true;
-        }
-      } catch (_error) {
-        headersAvailable = false;
-      }
+      const headersAvailable = this.windowTabNumbersHeadersAvailable(area, catalog);
       let verdict = { show: false, lit: false, reason: "unavailable" };
       try {
         if (typeof windowTabNumeralsVerdict === "function") {

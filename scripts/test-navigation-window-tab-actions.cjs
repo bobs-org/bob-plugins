@@ -499,7 +499,7 @@ test("concurrent focus-tab calls serialize load then focus", async () => {
   assert.equal(workspace.activeLeaf, d);
 });
 
-test("a clipped header is scrolled into view after a successful jump", async () => {
+test("a successful jump never scrolls the tab header or its ancestors", async () => {
   const a = leaf("A");
   const b = leaf("B");
   const c = leaf("C");
@@ -515,7 +515,8 @@ test("a clipped header is scrolled into view after a successful jump", async () 
   const { plan } = getPlan(plugin, "3");
   const result = await plugin.executeWindowPrefixPlan(plan);
   assert.equal(result.ok, true);
-  assert.deepEqual(calls, [{ block: "nearest", inline: "nearest" }]);
+  assert.equal(built.workspace.activeLeaf, c);
+  assert.deepEqual(calls, []);
 });
 
 test("a PDF tab is focused without forcing an editor", async () => {

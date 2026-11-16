@@ -108,14 +108,10 @@ class BobNavigationHotkeysWindowTabActionsMixin {
       if (!valid) {
         throw new Error("tab jump did not satisfy the layout invariants");
       }
-      try {
-        const header = target.tabHeaderEl;
-        if (header && typeof header.scrollIntoView === "function") {
-          header.scrollIntoView({ block: "nearest", inline: "nearest" });
-        }
-      } catch (_error) {
-        // Clipped-header scrolling is best-effort and must never undo a good jump.
-      }
+      // No header scrolling: Obsidian 1.15.1's tab strip
+      // (.workspace-tab-header-container-inner) is `overflow-x: clip`, so
+      // scrollIntoView cannot reveal a clipped header and could only scroll a
+      // workspace ancestor. The tabs e2e shows tab 9 visible at natural widths.
       return {
         ok: true,
         action: "focus-tab",

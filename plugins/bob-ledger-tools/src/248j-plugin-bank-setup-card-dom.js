@@ -135,27 +135,117 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   }
 }
 
-function bankSetupCardPaintAccounts(panel, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Accounts are shown from bob's current report.");
-  if (!model.accounts.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No accounts are configured.");
-  const list = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-readonly-list", null, { role: "list", "aria-label": "Accounts" });
-  for (const account of model.accounts) {
-    const row = bankSetupCardAppend(list, "div", "bob-bank-setup-card-readonly-row", null, { role: "listitem" });
-    bankSetupCardAppend(row, "strong", "", account.label);
-    bankSetupCardAppend(row, "span", "", [account.kind, account.default ? "default" : "", account.status].filter(Boolean).join(" · "));
+function bankSetupCardAccountRowText(account) {
+  if (!account) return "";
+  const parts = [account.label || account.alias || "account"];
+  parts.push(`[acct:: ${account.alias || "?"}]`);
+  if (account.kind) parts.push(account.kind);
+  if (account.default === true) parts.push("default");
+  if (account.sinceLabel) parts.push(account.sinceLabel);
+  else if (account.start) parts.push(`since ${account.start}`);
+  const statusWord = account.status || "unknown";
+  const statusIcon = account.statusIcon || (statusWord === "balanced" ? "✓" : statusWord === "stale" ? "⚠" : statusWord === "delta" ? "✗" : "·");
+  parts.push(`${statusIcon} ${statusWord}`);
+  if (Number.isInteger(account.rows)) parts.push(`${account.rows} ${account.rows === 1 ? "row" : "rows"}`);
+  return parts.join(" · ");
+}
+
+function bankSetupCardPaintAccounts(panel, modal, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Accounts hold money; categories file rows. Enter relabels; Ctrl+D removes an unused account. Alias, kind, start, order, and default stay in YAML — bob refuses them with counts.");
+  const items = Array.isArray(model.accountItems) ? model.accountItems : [];
+  if (!items.length) {
+    bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No accounts are configured.");
+  } else {
+    const list = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-accounts", null, { role: "list", "aria-label": "Accounts" });
+    for (const item of items) {
+      const account = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "button", `bob-bank-setup-card-account${selected ? " is-selected" : ""}`, null, {
+        type: "button", role: "listitem",
+        "data-setup-card-account": account.alias || "",
+        "data-setup-card-focus": `account-${account.alias || ""}`,
+        "aria-pressed": selected ? "true" : "false",
+        "aria-label": bankSetupCardAccountRowText(account),
+      });
+      if (row) {
+        bankSetupCardAppend(row, "strong", "", account.label || account.alias || "account");
+        bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", `[acct:: ${account.alias || "?"}]`);
+        const meta = [account.kind || null, account.default === true ? "default" : null, account.sinceLabel || (account.start ? `since ${account.start}` : null)].filter(Boolean).join(" · ");
+        if (meta) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", meta);
+        const statusWord = account.status || "unknown";
+        const statusIcon = account.statusIcon || (statusWord === "balanced" ? "✓" : statusWord === "stale" ? "⚠" : statusWord === "delta" ? "✗" : "·");
+        bankSetupCardAppend(row, "span", `bob-bank-setup-card-status is-${account.statusTone || "muted"}`, `${statusIcon} ${statusWord}`);
+        if (Number.isInteger(account.rows)) bankSetupCardAppend(row, "span", "bob-bank-setup-card-count", String(account.rows), { "aria-label": `${account.rows} rows` });
+        bankSetupCardListen(row, () => modal.selectItem(item.id));
+      }
+    }
+  }
+  const add = bankSetupCardAppend(panel, "button", "bob-bank-setup-card-action", "＋ Add account", {
+    type: "button", "data-setup-new-account": "true", "data-setup-card-focus": "new-account",
+  });
+  if (add) add.disabled = modal.readOnly || modal.busy;
+  const stale = model.staleAfter || { days: 10, explicit: false, line: null };
+  const staleText = stale.explicit === true
+    ? `Balances go stale after ${stale.days} ${stale.days === 1 ? "day" : "days"}`
+    : `Balances go stale after ${stale.days} ${stale.days === 1 ? "day" : "days"} (default)`;
+  const staleRow = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-stale", null, { role: "group", "aria-label": "Stale after setting" });
+  if (staleRow) {
+    bankSetupCardAppend(staleRow, "span", "", staleText);
+    const change = bankSetupCardAppend(staleRow, "button", "bob-bank-setup-card-action", "Change", {
+      type: "button", "data-setup-action": "stale-after", "data-setup-card-focus": "stale-after",
+    });
+    if (change) change.disabled = modal.readOnly || modal.busy;
+    if (stale.explicit === true) {
+      const unset = bankSetupCardAppend(staleRow, "button", "bob-bank-setup-card-action", "Unset to default", {
+        type: "button", "data-setup-action": "stale-after-unset", "data-setup-card-focus": "stale-after-unset",
+      });
+      if (unset) unset.disabled = modal.readOnly || modal.busy;
+    }
   }
 }
 
-function bankSetupCardPaintRules(panel, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom on imports and hints.");
-  if (!model.rules.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No rules are configured.");
-  const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-readonly-list", null, { "aria-label": "Rules" });
-  for (const rule of model.rules) {
-    const row = bankSetupCardAppend(list, "li", "bob-bank-setup-card-readonly-row");
-    bankSetupCardAppend(row, "strong", "", `${rule.match} → ${rule.catLabel || "no category"}`);
-    if (rule.payee || rule.link) bankSetupCardAppend(row, "span", "", [rule.payee, rule.link].filter(Boolean).join(" · "));
-    if (rule.readTimeDead) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
+function bankSetupCardRuleRowText(rule, position) {
+  if (!rule) return "";
+  const number = Number.isInteger(position) && position >= 0 ? `${position + 1} ` : "";
+  const parts = [`${number}${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`];
+  if (rule.payee) parts.push(`payee ${rule.payee}`);
+  if (rule.link) parts.push(rule.link);
+  if (rule.readTimeDead) parts.push("read-time-dead pattern");
+  return parts.join(" · ");
+}
+
+function bankSetupCardPaintRules(panel, modal, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom and only affect future imports and hints; filed rows never change.");
+  const items = Array.isArray(model.ruleItems) ? model.ruleItems : [];
+  if (!items.length) {
+    bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "None yet. bob already learns each merchant's name and category from your last filing; add a rule only to override that.");
+  } else {
+    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, { "aria-label": "Rules" });
+    for (let position = 0; position < items.length; position += 1) {
+      const item = items[position];
+      const rule = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-rule${selected ? " is-selected" : ""}`);
+      if (!row) continue;
+      const button = bankSetupCardAppend(row, "button", "bob-bank-setup-card-rule-button", null, {
+        type: "button",
+        "data-setup-card-rule": String(rule.index),
+        "data-setup-card-focus": `rule-${rule.index}`,
+        "aria-pressed": selected ? "true" : "false",
+        "aria-label": bankSetupCardRuleRowText(rule, position),
+      });
+      if (button) {
+        bankSetupCardAppend(button, "strong", "", `${position + 1} ${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`);
+        if (rule.payee || rule.link) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", [rule.payee ? `payee ${rule.payee}` : null, rule.link || null].filter(Boolean).join(" · "));
+        if (rule.readTimeDead) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
+        bankSetupCardListen(button, () => modal.selectItem(item.id));
+      }
+    }
   }
+  const add = bankSetupCardAppend(panel, "button", "bob-bank-setup-card-action", "＋ New rule", {
+    type: "button", "data-setup-new-rule": "true", "data-setup-card-focus": "new-rule",
+  });
+  if (add) add.disabled = modal.readOnly || modal.busy;
 }
 
 function bankSetupCardPaintChecks(panel, modal, model) {
@@ -163,17 +253,34 @@ function bankSetupCardPaintChecks(panel, modal, model) {
   bankSetupCardAppend(panel, "p", `bob-bank-setup-card-check-status is-${status.state}`, status.label, {
     role: status.state === "invalid" ? "alert" : "status",
   });
-  if (model.findings.length) {
+  const items = Array.isArray(model.findingItems) ? model.findingItems : [];
+  if (items.length) {
     const list = bankSetupCardAppend(panel, "ul", "bob-bank-setup-card-findings", null, { "aria-label": "Bank config findings" });
-    for (const finding of model.findings) {
-      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-finding is-${finding.severity}`);
+    for (const item of items) {
+      const finding = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-finding is-${finding.severity || "error"}${selected ? " is-selected" : ""}`);
+      if (!row) continue;
+      const label = finding.label || finding.message || "finding";
       if (finding.line) {
-        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", finding.label, {
-          type: "button", "data-setup-line": String(finding.line), "aria-label": `Open bank setup line ${finding.line}: ${finding.message}`,
+        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", label, {
+          type: "button",
+          "data-setup-card-finding": String(item.index),
+          "data-setup-line": String(finding.line),
+          "data-setup-card-focus": `finding-${item.index}`,
+          "aria-pressed": selected ? "true" : "false",
+          "aria-label": `Open bank setup line ${finding.line}: ${finding.message}`,
         });
-        bankSetupCardListen(jump, () => modal.openYaml(finding.line));
+        bankSetupCardListen(jump, () => { modal.selectItem(item.id); modal.openYaml(finding.line); });
       } else {
-        bankSetupCardAppend(row, "span", "", finding.label);
+        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", label, {
+          type: "button",
+          "data-setup-card-finding": String(item.index),
+          "data-setup-card-focus": `finding-${item.index}`,
+          "aria-pressed": selected ? "true" : "false",
+          "aria-label": label,
+        });
+        bankSetupCardListen(jump, () => modal.selectItem(item.id));
       }
       if (finding.hint) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", finding.hint);
     }
@@ -186,10 +293,25 @@ function bankSetupCardPaintChecks(panel, modal, model) {
 
 function bankSetupCardPaintSelection(parent, modal, model) {
   const item = model.selectedItem;
-  if (!item) return bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", "No category selected.");
+  if (!item) {
+    const empty = modal.section === "accounts" ? "No account selected."
+      : modal.section === "rules" ? "No rule selected."
+      : modal.section === "checks" ? "No finding selected."
+      : "No category selected.";
+    return bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", empty);
+  }
   let text = "";
   if (item.type === "group") {
     text = item.hidden ? `HIDDEN · ${item.count} categories` : `${item.group.toUpperCase()} · ${item.count} categories`;
+  } else if (item.type === "account") {
+    text = bankSetupCardAccountRowText(item.entry);
+  } else if (item.type === "rule") {
+    const position = (model.ruleItems || []).findIndex((candidate) => candidate.id === item.id);
+    text = bankSetupCardRuleRowText(item.entry, position);
+  } else if (item.type === "finding") {
+    const finding = item.entry || {};
+    text = finding.label || finding.message || "finding";
+    if (finding.hint) text += ` — ${finding.hint}`;
   } else {
     const entry = item.entry || {};
     const tile = item.tile || {};
@@ -204,7 +326,7 @@ function bankSetupCardPaintSelection(parent, modal, model) {
     const restore = bankSetupCardAppend(parent, "button", "bob-bank-setup-card-action", "Restore default", {
       type: "button", "data-setup-action": "restore-default", "data-setup-card-focus": "restore-default",
     });
-    restore.disabled = modal.readOnly || modal.busy || Boolean(modal.stage);
+    if (restore) restore.disabled = modal.readOnly || modal.busy || Boolean(modal.stage);
   }
 }
 
@@ -234,6 +356,37 @@ function bankSetupCardPaintStage(parent, modal, doc) {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
     form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
     bankSetupCardInput(form, modal, "group-name", "New group name", stage.to, { placeholder: stage.group });
+  } else if (stage.kind === "new-account" || stage.kind === "edit-account") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "label", "Label", stage.label, { placeholder: "e.g. WF Savings" });
+    if (stage.kind === "new-account") {
+      bankSetupCardInput(form, modal, "kind", "Kind", stage.kindValue, { placeholder: "checking, savings, cash, credit" });
+      bankSetupCardInput(form, modal, "start", "Start", stage.start, { placeholder: "YYYY-MM-DD (cash needs none)" });
+      bankSetupCardInput(form, modal, "alias", "Alias", stage.alias, { placeholder: "derived from the label" });
+      const status = typeof bankSetupCardAccountAddStatus === "function"
+        ? bankSetupCardAccountAddStatus(modal.report?.accounts, stage)
+        : { text: "" };
+      const aliasText = status.alias ? `stored as ${status.alias}` : "stored as …";
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", `${aliasText} · appears on rows as [acct:: ${status.alias || "…"}]`, { role: "status" });
+      if (status.text) bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text, { role: "status" });
+    } else {
+      const entry = stage.entry || {};
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", `[acct:: ${entry.alias}] · ${entry.kind || ""}${entry.default === true ? " · default" : ""} · alias, kind, start, order, and default stay in YAML`);
+    }
+  } else if (stage.kind === "new-rule" || stage.kind === "edit-rule") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "match", "Match", stage.match, { placeholder: "e.g. VENMO" });
+    bankSetupCardInput(form, modal, "cat", "Category", stage.cat, { placeholder: "category key from the Categories tab" });
+    bankSetupCardInput(form, modal, "payee", "Payee", stage.payee, { placeholder: "optional" });
+    bankSetupCardInput(form, modal, "link", "Link", stage.link, { placeholder: "optional" });
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", "Checked top to bottom; future imports and hints only.");
+  } else if (stage.kind === "stale-after") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "stale-after", "Days", stage.days, { placeholder: "10" });
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", "Unset returns to the default 10 days.");
   } else {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-confirm", stage.confirmation || "Review bob's consequence, then press Enter to apply.");
   }
@@ -249,8 +402,8 @@ function bankSetupCardPaintStage(parent, modal, doc) {
   }
   if (modal.staleMessage) {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", modal.staleMessage, { role: "alert" });
-    bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Re-preview", { type: "button", "data-setup-action": "repreview" });
-    preview.disabled = modal.busy;
+    const repreview = bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Re-preview", { type: "button", "data-setup-action": "repreview" });
+    if (repreview) repreview.disabled = modal.busy;
   }
   if (modal.syncWarning) {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", "Saved locally; sync failed.", { role: "status" });
@@ -301,8 +454,8 @@ function bankSetupCardPaint(modal) {
     "aria-label": BANK_SETUP_CARD_SECTION_LABELS[modal.section] || "Categories",
   });
   if (modal.section === "categories") bankSetupCardPaintCategories(panel, modal, model, doc);
-  else if (modal.section === "accounts") bankSetupCardPaintAccounts(panel, model);
-  else if (modal.section === "rules") bankSetupCardPaintRules(panel, model);
+  else if (modal.section === "accounts") bankSetupCardPaintAccounts(panel, modal, model);
+  else if (modal.section === "rules") bankSetupCardPaintRules(panel, modal, model);
   else bankSetupCardPaintChecks(panel, modal, model);
   bankSetupCardPaintSelection(root, modal, model);
   if (modal.stage) bankSetupCardPaintStage(root, modal, doc);

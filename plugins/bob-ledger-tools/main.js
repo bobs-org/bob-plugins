@@ -82304,6 +82304,9 @@ const BANK_SETUP_CARD_SECTION_LABELS = {
 function bankSetupCardModel(report, selection = null) {
   const setup = bankSetupModel(report, { desktop: true, expanded: true });
   const categories = Array.isArray(report?.categories) ? report.categories : [];
+  const rawAccounts = Array.isArray(report?.accounts) ? report.accounts : [];
+  const rawRules = Array.isArray(report?.rules) ? report.rules : [];
+  const rawFindings = Array.isArray(setup.findings) ? setup.findings : [];
   const items = [];
   const sections = (setup.sections || []).map((section) => {
     const group = section.group || "";
@@ -82339,24 +82342,74 @@ function bankSetupCardModel(report, selection = null) {
       items.push({ type: "category", key: tile.key, id: `category:${tile.key}`, entry, tile });
     }
   }
-  const chosen = selection && items.find((item) => item.id === selection.id)
-    ? items.find((item) => item.id === selection.id)
+  const accountItems = rawAccounts
+    .filter((entry) => entry && typeof entry.alias === "string" && entry.alias)
+    .map((entry) => ({ type: "account", alias: entry.alias, key: null, group: null, id: `account:${entry.alias}`, entry }));
+  const ruleItems = rawRules
+    .filter((entry) => entry && typeof entry.match === "string")
+    .map((entry, position) => {
+      const index = Number.isInteger(entry.index) && entry.index >= 0 ? entry.index : position;
+      return { type: "rule", index, key: null, group: null, id: `rule:${index}`, entry: { ...entry, index } };
+    });
+  const findingItems = rawFindings.map((entry, position) => ({
+    type: "finding", index: position, key: null, group: null, id: `finding:${position}`, entry,
+  }));
+  const allItems = items.concat(accountItems, ruleItems, findingItems);
+  const chosen = selection && allItems.find((item) => item.id === selection.id)
+    ? allItems.find((item) => item.id === selection.id)
     : items.find((item) => item.type === "category") || items[0] || null;
+  const staleAfter = setup && setup.staleAfterDays !== undefined
+    ? { days: setup.staleAfterDays, explicit: setup.staleAfterExplicit === true, line: setup.staleAfterLine || null }
+    : { days: 10, explicit: false, line: null };
   return {
     ...setup,
     categories,
+    accounts: rawAccounts,
+    rules: rawRules,
     sections,
     hiddenTiles,
     items,
-    selection: chosen ? { type: chosen.type, key: chosen.key || null, group: chosen.group || null, id: chosen.id } : null,
+    accountItems,
+    ruleItems,
+    findingItems,
+    allItems,
+    staleAfter,
+    selection: chosen
+      ? {
+        type: chosen.type,
+        key: chosen.key || null,
+        group: chosen.group || null,
+        alias: chosen.alias || null,
+        index: Number.isInteger(chosen.index) ? chosen.index : null,
+        id: chosen.id,
+      }
+      : null,
     selectedItem: chosen,
     canEdit: setup.state === "valid" && report?.state === "valid",
   };
 }
 
+function bankSetupCardAllItems(model) {
+  if (!model) return [];
+  if (Array.isArray(model.allItems)) return model.allItems;
+  const out = Array.isArray(model.items) ? model.items.slice() : [];
+  for (const item of Array.isArray(model.accountItems) ? model.accountItems : []) out.push(item);
+  for (const item of Array.isArray(model.ruleItems) ? model.ruleItems : []) out.push(item);
+  for (const item of Array.isArray(model.findingItems) ? model.findingItems : []) out.push(item);
+  return out;
+}
+
 function bankSetupCardSelection(model, id) {
-  const item = (model && Array.isArray(model.items) ? model.items : []).find((candidate) => candidate.id === id);
-  return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+  const item = bankSetupCardAllItems(model).find((candidate) => candidate.id === id);
+  if (!item) return null;
+  return {
+    type: item.type,
+    key: item.key || null,
+    group: item.group || null,
+    alias: item.alias || null,
+    index: Number.isInteger(item.index) ? item.index : null,
+    id: item.id,
+  };
 }
 
 function bankSetupCardSelectionByHotkey(categories, hotkey) {
@@ -82453,6 +82506,194 @@ function bankSetupCardGroupRenameOp(group, to) {
   const next = typeof to === "string" ? to.trim() : "";
   if (!group || !next || next === group || group === BANK_SETUP_MONEY_GROUP) return null;
   return { op: "group.rename", group, to: next };
+}
+
+function bankSetupCardDeriveAccountAlias(label) {
+  let alias = "";
+  for (const character of String(label || "")) {
+    if (/[A-Za-z0-9]/.test(character)) alias += character.toLowerCase();
+    else if (alias && !alias.endsWith("_")) alias += "_";
+  }
+  alias = alias.replace(/^_+|_+$/g, "");
+  return /^[a-z][a-z0-9_]*$/.test(alias) ? alias : "";
+}
+
+function bankSetupCardAccountKinds() {
+  return ["checking", "savings", "cash", "credit"];
+}
+
+function bankSetupCardAccountAddOp(draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const kind = typeof draft.kind === "string" ? draft.kind.trim().toLowerCase() : "";
+  if (!label || !bankSetupCardAccountKinds().includes(kind)) return null;
+  const op = { op: "account.add", label, kind };
+  const start = typeof draft.start === "string" ? draft.start.trim() : "";
+  if (start) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+    op.start = start;
+  } else if (kind !== "cash") {
+    return null;
+  }
+  const alias = typeof draft.alias === "string" ? draft.alias.trim().toLowerCase() : "";
+  if (alias) {
+    if (!/^[a-z][a-z0-9_]*$/.test(alias)) return null;
+    op.alias = alias;
+  }
+  return op;
+}
+
+function bankSetupCardAccountAddStatus(accounts, draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const kind = typeof draft.kind === "string" ? draft.kind.trim().toLowerCase() : "";
+  if (!label) return { kind: "empty", canApply: false, text: "name the account" };
+  if (!bankSetupCardAccountKinds().includes(kind)) return { kind: "empty", canApply: false, text: "pick a kind" };
+  const start = typeof draft.start === "string" ? draft.start.trim() : "";
+  if (start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    return { kind: "invalid", canApply: false, text: "use YYYY-MM-DD for the start date" };
+  }
+  if (!start && kind !== "cash") return { kind: "empty", canApply: false, text: "cash needs no start date" };
+  const alias = typeof draft.alias === "string" && draft.alias.trim()
+    ? draft.alias.trim().toLowerCase()
+    : bankSetupCardDeriveAccountAlias(label);
+  if (!/^[a-z][a-z0-9_]*$/.test(alias)) {
+    return { kind: "invalid", canApply: false, text: "alias must match [a-z][a-z0-9_]*", alias: "" };
+  }
+  const owner = (Array.isArray(accounts) ? accounts : []).find((entry) => entry && entry.alias === alias);
+  if (owner) return { kind: "taken", owner, canApply: false, text: `alias ${alias} already exists`, alias };
+  return { kind: "free", owner: null, canApply: true, text: "", alias };
+}
+
+function bankSetupCardAccountSetOp(entry, draft = {}) {
+  if (!entry || typeof entry.alias !== "string" || !entry.alias) return null;
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  if (!label || label === (entry.label || entry.alias)) return null;
+  return { op: "account.set", alias: entry.alias, set: { label } };
+}
+
+function bankSetupCardAccountRemoveOp(entry) {
+  return entry && typeof entry.alias === "string" && entry.alias
+    ? { op: "account.remove", alias: entry.alias }
+    : null;
+}
+
+function bankSetupCardRuleAddOp(draft = {}, categories = []) {
+  const match = typeof draft.match === "string" ? draft.match.trim() : "";
+  if (!match) return null;
+  const op = { op: "rule.add", match };
+  const payee = typeof draft.payee === "string" ? draft.payee.trim() : "";
+  if (payee) op.payee = payee;
+  const cat = typeof draft.cat === "string" ? draft.cat.trim() : "";
+  if (cat) {
+    const known = (Array.isArray(categories) ? categories : []).some((entry) => entry && entry.key === cat);
+    if (!known) return null;
+    op.cat = cat;
+  }
+  const link = typeof draft.link === "string" ? draft.link.trim() : "";
+  if (link) op.link = link;
+  if (draft.position !== undefined && draft.position !== null && draft.position !== "") {
+    const position = Number(draft.position);
+    if (!Number.isInteger(position) || position < 0) return null;
+    op.position = position;
+  }
+  return op;
+}
+
+function bankSetupCardRuleSetOp(entry, draft = {}, categories = []) {
+  if (!entry || !Number.isInteger(entry.index) || entry.index < 0 || typeof entry.match !== "string") return null;
+  const set = {};
+  const unset = [];
+  const match = typeof draft.match === "string" ? draft.match.trim() : "";
+  if (match && match !== entry.match) set.match = match;
+  const payee = draft.payee === null || draft.payee === undefined ? null : String(draft.payee).trim();
+  const oldPayee = entry.payee === null || entry.payee === undefined ? "" : String(entry.payee);
+  if (payee !== null && payee !== oldPayee) {
+    if (payee) set.payee = payee;
+    else if (oldPayee) unset.push("payee");
+  }
+  const cat = draft.cat === null || draft.cat === undefined ? null : String(draft.cat).trim();
+  const oldCat = entry.cat === null || entry.cat === undefined ? "" : String(entry.cat);
+  if (cat !== null && cat !== oldCat) {
+    if (cat) {
+      const known = (Array.isArray(categories) ? categories : []).some((candidate) => candidate && candidate.key === cat);
+      if (!known) return null;
+      set.cat = cat;
+    } else if (oldCat) {
+      unset.push("cat");
+    }
+  }
+  const link = draft.link === null || draft.link === undefined ? null : String(draft.link).trim();
+  const oldLink = entry.link === null || entry.link === undefined ? "" : String(entry.link);
+  if (link !== null && link !== oldLink) {
+    if (link) set.link = link;
+    else if (oldLink) unset.push("link");
+  }
+  if (!Object.keys(set).length && !unset.length) return null;
+  return {
+    op: "rule.set", index: entry.index, match_was: entry.match,
+    ...(Object.keys(set).length ? { set } : {}),
+    ...(unset.length ? { unset } : {}),
+  };
+}
+
+function bankSetupCardRuleMoveOp(rules, index, direction) {
+  const list = Array.isArray(rules) ? rules : [];
+  const at = list.findIndex((entry) => entry && entry.index === index);
+  if (at < 0) return null;
+  const next = at + (direction === "back" ? -1 : 1);
+  if (next < 0 || next >= list.length) return null;
+  const entry = list[at];
+  return { op: "rule.move", index, match_was: entry.match, position: next };
+}
+
+function bankSetupCardRuleRemoveOp(entry) {
+  return entry && Number.isInteger(entry.index) && entry.index >= 0 && typeof entry.match === "string"
+    ? { op: "rule.remove", index: entry.index, match_was: entry.match }
+    : null;
+}
+
+function bankSetupCardStaleAfterOp(days) {
+  const value = typeof days === "string" && days.trim() !== "" ? Number(days) : days;
+  if (!Number.isInteger(value) || value < 0) return null;
+  return { op: "bank.set", set: { stale_after: value } };
+}
+
+function bankSetupCardStaleAfterUnsetOp() {
+  return { op: "bank.set", unset: ["stale_after"] };
+}
+
+function bankSetupCardMoveInList(list, id, direction) {
+  const items = Array.isArray(list) ? list : [];
+  const at = items.findIndex((item) => item && item.id === id);
+  if (at < 0) return null;
+  const next = Math.max(0, Math.min(items.length - 1, at + (direction === "back" ? -1 : 1)));
+  const item = items[next];
+  if (!item) return null;
+  return {
+    type: item.type,
+    key: item.key || null,
+    group: item.group || null,
+    alias: item.alias || null,
+    index: Number.isInteger(item.index) ? item.index : null,
+    id: item.id,
+  };
+}
+
+function bankSetupCardMoveAccountSelection(model, selection, direction) {
+  const list = Array.isArray(model?.accountItems) ? model.accountItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
+}
+
+function bankSetupCardMoveRuleSelection(model, selection, direction) {
+  const list = Array.isArray(model?.ruleItems) ? model.ruleItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
+}
+
+function bankSetupCardMoveFindingSelection(model, selection, direction) {
+  const list = Array.isArray(model?.findingItems) ? model.findingItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
 }
 
 function bankSetupCardStatus(report) {
@@ -82601,27 +82842,117 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   }
 }
 
-function bankSetupCardPaintAccounts(panel, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Accounts are shown from bob's current report.");
-  if (!model.accounts.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No accounts are configured.");
-  const list = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-readonly-list", null, { role: "list", "aria-label": "Accounts" });
-  for (const account of model.accounts) {
-    const row = bankSetupCardAppend(list, "div", "bob-bank-setup-card-readonly-row", null, { role: "listitem" });
-    bankSetupCardAppend(row, "strong", "", account.label);
-    bankSetupCardAppend(row, "span", "", [account.kind, account.default ? "default" : "", account.status].filter(Boolean).join(" · "));
+function bankSetupCardAccountRowText(account) {
+  if (!account) return "";
+  const parts = [account.label || account.alias || "account"];
+  parts.push(`[acct:: ${account.alias || "?"}]`);
+  if (account.kind) parts.push(account.kind);
+  if (account.default === true) parts.push("default");
+  if (account.sinceLabel) parts.push(account.sinceLabel);
+  else if (account.start) parts.push(`since ${account.start}`);
+  const statusWord = account.status || "unknown";
+  const statusIcon = account.statusIcon || (statusWord === "balanced" ? "✓" : statusWord === "stale" ? "⚠" : statusWord === "delta" ? "✗" : "·");
+  parts.push(`${statusIcon} ${statusWord}`);
+  if (Number.isInteger(account.rows)) parts.push(`${account.rows} ${account.rows === 1 ? "row" : "rows"}`);
+  return parts.join(" · ");
+}
+
+function bankSetupCardPaintAccounts(panel, modal, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Accounts hold money; categories file rows. Enter relabels; Ctrl+D removes an unused account. Alias, kind, start, order, and default stay in YAML — bob refuses them with counts.");
+  const items = Array.isArray(model.accountItems) ? model.accountItems : [];
+  if (!items.length) {
+    bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No accounts are configured.");
+  } else {
+    const list = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-accounts", null, { role: "list", "aria-label": "Accounts" });
+    for (const item of items) {
+      const account = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "button", `bob-bank-setup-card-account${selected ? " is-selected" : ""}`, null, {
+        type: "button", role: "listitem",
+        "data-setup-card-account": account.alias || "",
+        "data-setup-card-focus": `account-${account.alias || ""}`,
+        "aria-pressed": selected ? "true" : "false",
+        "aria-label": bankSetupCardAccountRowText(account),
+      });
+      if (row) {
+        bankSetupCardAppend(row, "strong", "", account.label || account.alias || "account");
+        bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", `[acct:: ${account.alias || "?"}]`);
+        const meta = [account.kind || null, account.default === true ? "default" : null, account.sinceLabel || (account.start ? `since ${account.start}` : null)].filter(Boolean).join(" · ");
+        if (meta) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", meta);
+        const statusWord = account.status || "unknown";
+        const statusIcon = account.statusIcon || (statusWord === "balanced" ? "✓" : statusWord === "stale" ? "⚠" : statusWord === "delta" ? "✗" : "·");
+        bankSetupCardAppend(row, "span", `bob-bank-setup-card-status is-${account.statusTone || "muted"}`, `${statusIcon} ${statusWord}`);
+        if (Number.isInteger(account.rows)) bankSetupCardAppend(row, "span", "bob-bank-setup-card-count", String(account.rows), { "aria-label": `${account.rows} rows` });
+        bankSetupCardListen(row, () => modal.selectItem(item.id));
+      }
+    }
+  }
+  const add = bankSetupCardAppend(panel, "button", "bob-bank-setup-card-action", "＋ Add account", {
+    type: "button", "data-setup-new-account": "true", "data-setup-card-focus": "new-account",
+  });
+  if (add) add.disabled = modal.readOnly || modal.busy;
+  const stale = model.staleAfter || { days: 10, explicit: false, line: null };
+  const staleText = stale.explicit === true
+    ? `Balances go stale after ${stale.days} ${stale.days === 1 ? "day" : "days"}`
+    : `Balances go stale after ${stale.days} ${stale.days === 1 ? "day" : "days"} (default)`;
+  const staleRow = bankSetupCardAppend(panel, "div", "bob-bank-setup-card-stale", null, { role: "group", "aria-label": "Stale after setting" });
+  if (staleRow) {
+    bankSetupCardAppend(staleRow, "span", "", staleText);
+    const change = bankSetupCardAppend(staleRow, "button", "bob-bank-setup-card-action", "Change", {
+      type: "button", "data-setup-action": "stale-after", "data-setup-card-focus": "stale-after",
+    });
+    if (change) change.disabled = modal.readOnly || modal.busy;
+    if (stale.explicit === true) {
+      const unset = bankSetupCardAppend(staleRow, "button", "bob-bank-setup-card-action", "Unset to default", {
+        type: "button", "data-setup-action": "stale-after-unset", "data-setup-card-focus": "stale-after-unset",
+      });
+      if (unset) unset.disabled = modal.readOnly || modal.busy;
+    }
   }
 }
 
-function bankSetupCardPaintRules(panel, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom on imports and hints.");
-  if (!model.rules.length) return bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No rules are configured.");
-  const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-readonly-list", null, { "aria-label": "Rules" });
-  for (const rule of model.rules) {
-    const row = bankSetupCardAppend(list, "li", "bob-bank-setup-card-readonly-row");
-    bankSetupCardAppend(row, "strong", "", `${rule.match} → ${rule.catLabel || "no category"}`);
-    if (rule.payee || rule.link) bankSetupCardAppend(row, "span", "", [rule.payee, rule.link].filter(Boolean).join(" · "));
-    if (rule.readTimeDead) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
+function bankSetupCardRuleRowText(rule, position) {
+  if (!rule) return "";
+  const number = Number.isInteger(position) && position >= 0 ? `${position + 1} ` : "";
+  const parts = [`${number}${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`];
+  if (rule.payee) parts.push(`payee ${rule.payee}`);
+  if (rule.link) parts.push(rule.link);
+  if (rule.readTimeDead) parts.push("read-time-dead pattern");
+  return parts.join(" · ");
+}
+
+function bankSetupCardPaintRules(panel, modal, model) {
+  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom and only affect future imports and hints; filed rows never change.");
+  const items = Array.isArray(model.ruleItems) ? model.ruleItems : [];
+  if (!items.length) {
+    bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "None yet. bob already learns each merchant's name and category from your last filing; add a rule only to override that.");
+  } else {
+    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, { "aria-label": "Rules" });
+    for (let position = 0; position < items.length; position += 1) {
+      const item = items[position];
+      const rule = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-rule${selected ? " is-selected" : ""}`);
+      if (!row) continue;
+      const button = bankSetupCardAppend(row, "button", "bob-bank-setup-card-rule-button", null, {
+        type: "button",
+        "data-setup-card-rule": String(rule.index),
+        "data-setup-card-focus": `rule-${rule.index}`,
+        "aria-pressed": selected ? "true" : "false",
+        "aria-label": bankSetupCardRuleRowText(rule, position),
+      });
+      if (button) {
+        bankSetupCardAppend(button, "strong", "", `${position + 1} ${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`);
+        if (rule.payee || rule.link) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", [rule.payee ? `payee ${rule.payee}` : null, rule.link || null].filter(Boolean).join(" · "));
+        if (rule.readTimeDead) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
+        bankSetupCardListen(button, () => modal.selectItem(item.id));
+      }
+    }
   }
+  const add = bankSetupCardAppend(panel, "button", "bob-bank-setup-card-action", "＋ New rule", {
+    type: "button", "data-setup-new-rule": "true", "data-setup-card-focus": "new-rule",
+  });
+  if (add) add.disabled = modal.readOnly || modal.busy;
 }
 
 function bankSetupCardPaintChecks(panel, modal, model) {
@@ -82629,17 +82960,34 @@ function bankSetupCardPaintChecks(panel, modal, model) {
   bankSetupCardAppend(panel, "p", `bob-bank-setup-card-check-status is-${status.state}`, status.label, {
     role: status.state === "invalid" ? "alert" : "status",
   });
-  if (model.findings.length) {
+  const items = Array.isArray(model.findingItems) ? model.findingItems : [];
+  if (items.length) {
     const list = bankSetupCardAppend(panel, "ul", "bob-bank-setup-card-findings", null, { "aria-label": "Bank config findings" });
-    for (const finding of model.findings) {
-      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-finding is-${finding.severity}`);
+    for (const item of items) {
+      const finding = item.entry || {};
+      const selected = modal.selection?.id === item.id;
+      const row = bankSetupCardAppend(list, "li", `bob-bank-setup-card-finding is-${finding.severity || "error"}${selected ? " is-selected" : ""}`);
+      if (!row) continue;
+      const label = finding.label || finding.message || "finding";
       if (finding.line) {
-        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", finding.label, {
-          type: "button", "data-setup-line": String(finding.line), "aria-label": `Open bank setup line ${finding.line}: ${finding.message}`,
+        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", label, {
+          type: "button",
+          "data-setup-card-finding": String(item.index),
+          "data-setup-line": String(finding.line),
+          "data-setup-card-focus": `finding-${item.index}`,
+          "aria-pressed": selected ? "true" : "false",
+          "aria-label": `Open bank setup line ${finding.line}: ${finding.message}`,
         });
-        bankSetupCardListen(jump, () => modal.openYaml(finding.line));
+        bankSetupCardListen(jump, () => { modal.selectItem(item.id); modal.openYaml(finding.line); });
       } else {
-        bankSetupCardAppend(row, "span", "", finding.label);
+        const jump = bankSetupCardAppend(row, "button", "bob-bank-setup-card-finding-jump", label, {
+          type: "button",
+          "data-setup-card-finding": String(item.index),
+          "data-setup-card-focus": `finding-${item.index}`,
+          "aria-pressed": selected ? "true" : "false",
+          "aria-label": label,
+        });
+        bankSetupCardListen(jump, () => modal.selectItem(item.id));
       }
       if (finding.hint) bankSetupCardAppend(row, "span", "bob-bank-setup-card-muted", finding.hint);
     }
@@ -82652,10 +83000,25 @@ function bankSetupCardPaintChecks(panel, modal, model) {
 
 function bankSetupCardPaintSelection(parent, modal, model) {
   const item = model.selectedItem;
-  if (!item) return bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", "No category selected.");
+  if (!item) {
+    const empty = modal.section === "accounts" ? "No account selected."
+      : modal.section === "rules" ? "No rule selected."
+      : modal.section === "checks" ? "No finding selected."
+      : "No category selected.";
+    return bankSetupCardAppend(parent, "p", "bob-bank-setup-card-selection", empty);
+  }
   let text = "";
   if (item.type === "group") {
     text = item.hidden ? `HIDDEN · ${item.count} categories` : `${item.group.toUpperCase()} · ${item.count} categories`;
+  } else if (item.type === "account") {
+    text = bankSetupCardAccountRowText(item.entry);
+  } else if (item.type === "rule") {
+    const position = (model.ruleItems || []).findIndex((candidate) => candidate.id === item.id);
+    text = bankSetupCardRuleRowText(item.entry, position);
+  } else if (item.type === "finding") {
+    const finding = item.entry || {};
+    text = finding.label || finding.message || "finding";
+    if (finding.hint) text += ` — ${finding.hint}`;
   } else {
     const entry = item.entry || {};
     const tile = item.tile || {};
@@ -82670,7 +83033,7 @@ function bankSetupCardPaintSelection(parent, modal, model) {
     const restore = bankSetupCardAppend(parent, "button", "bob-bank-setup-card-action", "Restore default", {
       type: "button", "data-setup-action": "restore-default", "data-setup-card-focus": "restore-default",
     });
-    restore.disabled = modal.readOnly || modal.busy || Boolean(modal.stage);
+    if (restore) restore.disabled = modal.readOnly || modal.busy || Boolean(modal.stage);
   }
 }
 
@@ -82700,6 +83063,37 @@ function bankSetupCardPaintStage(parent, modal, doc) {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
     form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
     bankSetupCardInput(form, modal, "group-name", "New group name", stage.to, { placeholder: stage.group });
+  } else if (stage.kind === "new-account" || stage.kind === "edit-account") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "label", "Label", stage.label, { placeholder: "e.g. WF Savings" });
+    if (stage.kind === "new-account") {
+      bankSetupCardInput(form, modal, "kind", "Kind", stage.kindValue, { placeholder: "checking, savings, cash, credit" });
+      bankSetupCardInput(form, modal, "start", "Start", stage.start, { placeholder: "YYYY-MM-DD (cash needs none)" });
+      bankSetupCardInput(form, modal, "alias", "Alias", stage.alias, { placeholder: "derived from the label" });
+      const status = typeof bankSetupCardAccountAddStatus === "function"
+        ? bankSetupCardAccountAddStatus(modal.report?.accounts, stage)
+        : { text: "" };
+      const aliasText = status.alias ? `stored as ${status.alias}` : "stored as …";
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", `${aliasText} · appears on rows as [acct:: ${status.alias || "…"}]`, { role: "status" });
+      if (status.text) bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text, { role: "status" });
+    } else {
+      const entry = stage.entry || {};
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", `[acct:: ${entry.alias}] · ${entry.kind || ""}${entry.default === true ? " · default" : ""} · alias, kind, start, order, and default stay in YAML`);
+    }
+  } else if (stage.kind === "new-rule" || stage.kind === "edit-rule") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "match", "Match", stage.match, { placeholder: "e.g. VENMO" });
+    bankSetupCardInput(form, modal, "cat", "Category", stage.cat, { placeholder: "category key from the Categories tab" });
+    bankSetupCardInput(form, modal, "payee", "Payee", stage.payee, { placeholder: "optional" });
+    bankSetupCardInput(form, modal, "link", "Link", stage.link, { placeholder: "optional" });
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", "Checked top to bottom; future imports and hints only.");
+  } else if (stage.kind === "stale-after") {
+    const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
+    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
+    bankSetupCardInput(form, modal, "stale-after", "Days", stage.days, { placeholder: "10" });
+    bankSetupCardAppend(section, "p", "bob-bank-setup-card-muted", "Unset returns to the default 10 days.");
   } else {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-confirm", stage.confirmation || "Review bob's consequence, then press Enter to apply.");
   }
@@ -82715,8 +83109,8 @@ function bankSetupCardPaintStage(parent, modal, doc) {
   }
   if (modal.staleMessage) {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", modal.staleMessage, { role: "alert" });
-    bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Re-preview", { type: "button", "data-setup-action": "repreview" });
-    preview.disabled = modal.busy;
+    const repreview = bankSetupCardAppend(section, "button", "bob-bank-setup-card-action", "Re-preview", { type: "button", "data-setup-action": "repreview" });
+    if (repreview) repreview.disabled = modal.busy;
   }
   if (modal.syncWarning) {
     bankSetupCardAppend(section, "p", "bob-bank-setup-card-refusal", "Saved locally; sync failed.", { role: "status" });
@@ -82767,8 +83161,8 @@ function bankSetupCardPaint(modal) {
     "aria-label": BANK_SETUP_CARD_SECTION_LABELS[modal.section] || "Categories",
   });
   if (modal.section === "categories") bankSetupCardPaintCategories(panel, modal, model, doc);
-  else if (modal.section === "accounts") bankSetupCardPaintAccounts(panel, model);
-  else if (modal.section === "rules") bankSetupCardPaintRules(panel, model);
+  else if (modal.section === "accounts") bankSetupCardPaintAccounts(panel, modal, model);
+  else if (modal.section === "rules") bankSetupCardPaintRules(panel, modal, model);
   else bankSetupCardPaintChecks(panel, modal, model);
   bankSetupCardPaintSelection(root, modal, model);
   if (modal.stage) bankSetupCardPaintStage(root, modal, doc);
@@ -82936,6 +83330,9 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
   footerText() {
     const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
     if (this.stage) return `Enter apply · Esc/q cancel stage · ${mod}+E YAML`;
+    if (this.section === "accounts") return `Enter relabel · + add · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
+    if (this.section === "rules") return `Enter edit · + new · Alt+J/K move · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
+    if (this.section === "checks") return `Enter open line · ${mod}+E YAML · Esc/q close`;
     return `Enter edit · + new · Alt+J/K move · ${mod}+H hide · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
   }
 
@@ -82964,8 +83361,12 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
   focusSelection() {
     const item = this.selectedItem();
     if (!item) return false;
-    const attr = item.type === "category" ? "data-setup-card-category" : "data-setup-card-group";
-    const wanted = item.type === "category" ? item.key : item.hidden ? "__hidden__" : item.group;
+    let attr = "data-setup-card-group";
+    let wanted = item.hidden ? "__hidden__" : item.group;
+    if (item.type === "category") { attr = "data-setup-card-category"; wanted = item.key; }
+    else if (item.type === "account") { attr = "data-setup-card-account"; wanted = item.alias; }
+    else if (item.type === "rule") { attr = "data-setup-card-rule"; wanted = String(item.entry?.index ?? item.index ?? ""); }
+    else if (item.type === "finding") { attr = "data-setup-card-finding"; wanted = String(item.index ?? ""); }
     const nodes = Array.from(this.contentEl?.querySelectorAll?.(`[${attr}]`) || []);
     const node = nodes.find((candidate) => candidate.getAttribute?.(attr) === wanted);
     try { node?.focus?.(); } catch (_) {}
@@ -83018,6 +83419,55 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     return this.startStage({ kind: "new", title: "New category", ...stage }, null);
   }
 
+  openNewAccountStage() {
+    if (this.readOnly || this.busy || this.stage) return false;
+    return this.startStage({
+      kind: "new-account", title: "New account",
+      label: "", kindValue: "", start: "", alias: "",
+      focus: "label",
+    }, null);
+  }
+
+  openEditAccountStage(entry) {
+    if (!entry || typeof entry.alias !== "string" || !entry.alias || this.readOnly) return false;
+    return this.startStage({
+      kind: "edit-account", title: `Rename ${entry.label || entry.alias}`, entry,
+      label: entry.label || entry.alias,
+      focus: "label",
+    }, null);
+  }
+
+  openNewRuleStage() {
+    if (this.readOnly || this.busy || this.stage) return false;
+    return this.startStage({
+      kind: "new-rule", title: "New rule",
+      match: "", cat: "", payee: "", link: "",
+      focus: "match",
+    }, null);
+  }
+
+  openEditRuleStage(entry) {
+    if (!entry || !Number.isInteger(entry.index) || this.readOnly) return false;
+    return this.startStage({
+      kind: "edit-rule", title: `Edit rule ${entry.index + 1}`, entry,
+      match: entry.match || "",
+      cat: entry.cat || "",
+      payee: entry.payee || "",
+      link: entry.link || "",
+      focus: "match",
+    }, null);
+  }
+
+  openStaleAfterStage() {
+    if (this.readOnly || this.busy || this.stage) return false;
+    const days = this.model?.staleAfter?.days;
+    return this.startStage({
+      kind: "stale-after", title: "Balances go stale after",
+      days: Number.isInteger(days) ? String(days) : "10",
+      focus: "stale-after",
+    }, null);
+  }
+
   beginGesture(op, title, confirmation = "Review bob's consequence, then press Enter to apply.") {
     if (!op || this.readOnly || this.busy || this.stage) return false;
     return this.startStage({ kind: "confirm", title, confirmation }, op);
@@ -83028,21 +83478,46 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (!item || this.readOnly) return false;
     if (kind === "edit") {
       if (item.type === "group") return this.openGroupRenameStage(item.group);
+      if (item.type === "account") return this.openEditAccountStage(item.entry);
+      if (item.type === "rule") return this.openEditRuleStage(item.entry);
+      if (item.type === "finding") {
+        const line = Number.isInteger(item.entry?.line) && item.entry.line > 0 ? item.entry.line : null;
+        if (line) { void this.openYaml(line); return true; }
+        return false;
+      }
       return this.openEditStage(item.entry);
     }
     if (kind === "hide" && item.type === "category") {
       const op = bankSetupCardHiddenOp(item.entry);
       return this.beginGesture(op, item.entry.hidden ? "Unhide category" : "Hide category");
     }
-    if (kind === "remove" && item.type === "category") {
-      const op = bankSetupCardRemoveOp(item.entry);
-      return this.beginGesture(op, `Remove ${item.entry.label || item.key}`, "Bob checks row and rule use before removing this category.");
+    if (kind === "remove") {
+      if (item.type === "account") {
+        const op = typeof bankSetupCardAccountRemoveOp === "function" ? bankSetupCardAccountRemoveOp(item.entry) : null;
+        return this.beginGesture(op, `Remove ${item.entry?.label || item.alias || "account"}`, "Bob checks rows and journal events before removing this account.");
+      }
+      if (item.type === "rule") {
+        const op = typeof bankSetupCardRuleRemoveOp === "function" ? bankSetupCardRuleRemoveOp(item.entry) : null;
+        const position = (this.model?.ruleItems || []).findIndex((candidate) => candidate.id === item.id);
+        return this.beginGesture(op, `Remove rule ${position >= 0 ? position + 1 : item.entry?.index + 1}`, "Filed rows keep their categories; only future imports and hints change.");
+      }
+      if (item.type === "category") {
+        const op = bankSetupCardRemoveOp(item.entry);
+        return this.beginGesture(op, `Remove ${item.entry.label || item.key}`, "Bob checks row and rule use before removing this category.");
+      }
+      return false;
     }
     if (kind === "restore" && item.type === "category") {
       const op = bankSetupCardRestoreOp(item.entry);
       return this.beginGesture(op, `Restore ${item.entry.label || item.key}`, "Restore this built-in category to bob's default.");
     }
     if (kind === "move") {
+      if (item.type === "rule") {
+        const op = typeof bankSetupCardRuleMoveOp === "function"
+          ? bankSetupCardRuleMoveOp(this.report?.rules || this.model?.rules || [], item.entry?.index, direction)
+          : null;
+        return this.beginGesture(op, `Move rule ${item.entry?.index + 1}`);
+      }
       const op = item.type === "group"
         ? bankSetupCardGroupMoveOp(this.categories, item.group, direction)
         : bankSetupCardCategoryMoveOp(this.categories, item.key, direction);
@@ -83055,8 +83530,10 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (!this.stage || this.busy) return;
     const text = String(value ?? "");
     if (field === "group-name") this.stage.to = text;
+    else if (field === "kind") this.stage.kindValue = text;
+    else if (field === "stale-after") this.stage.days = text;
     else if (field === "hotkey") {
-      this.stage.hotkey = this.stage.kind === "new" ? text.slice(-1).toLowerCase() : text.slice(-1).toLowerCase();
+      this.stage.hotkey = text.slice(-1).toLowerCase();
       if (this.stage.kind === "edit") this.stage.hotkeyTouched = true;
     } else this.stage[field] = text;
     this.didInteract = true;
@@ -83082,6 +83559,34 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
       return bankCategoryNewDraftOp(this.stage);
     }
     if (this.stage.kind === "rename-group") return bankSetupCardGroupRenameOp(this.stage.group, this.stage.to);
+    if (this.stage.kind === "edit-account") {
+      return typeof bankSetupCardAccountSetOp === "function"
+        ? bankSetupCardAccountSetOp(this.stage.entry, this.stage)
+        : null;
+    }
+    if (this.stage.kind === "new-account") {
+      if (typeof bankSetupCardAccountAddOp !== "function") return null;
+      return bankSetupCardAccountAddOp({
+        label: this.stage.label,
+        kind: this.stage.kindValue,
+        start: this.stage.start,
+        alias: this.stage.alias,
+      });
+    }
+    if (this.stage.kind === "new-rule") {
+      if (typeof bankSetupCardRuleAddOp !== "function") return null;
+      const status = bankSetupCardRuleAddOp(this.stage, this.categories);
+      if (!status) return null;
+      return status;
+    }
+    if (this.stage.kind === "edit-rule") {
+      if (typeof bankSetupCardRuleSetOp !== "function") return null;
+      return bankSetupCardRuleSetOp(this.stage.entry, this.stage, this.categories);
+    }
+    if (this.stage.kind === "stale-after") {
+      if (typeof bankSetupCardStaleAfterOp !== "function") return null;
+      return bankSetupCardStaleAfterOp(this.stage.days);
+    }
     if (this.stage.kind === "undo") return null;
     return null;
   }
@@ -83111,6 +83616,32 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
         return false;
       }
     }
+    if (this.stage.kind === "new-account") {
+      const op = typeof bankSetupCardAccountAddOp === "function"
+        ? bankSetupCardAccountAddOp({ label: this.stage.label, kind: this.stage.kindValue, start: this.stage.start, alias: this.stage.alias })
+        : null;
+      if (!op) {
+        this.errorMessage = "Name the account, pick a kind, and give a start date (cash needs none).";
+        this.paint();
+        return false;
+      }
+    }
+    if (this.stage.kind === "new-rule" || this.stage.kind === "edit-rule") {
+      if (!this.stageDraftOp()) {
+        this.errorMessage = this.stage.kind === "new-rule"
+          ? "Give the rule a match and a known category."
+          : "Change the match, category, payee, or link first.";
+        this.paint();
+        return false;
+      }
+    }
+    if (this.stage.kind === "stale-after") {
+      if (typeof bankSetupCardStaleAfterOp === "function" && !bankSetupCardStaleAfterOp(this.stage.days)) {
+        this.errorMessage = "Use a non-negative number of days.";
+        this.paint();
+        return false;
+      }
+    }
     if (!this.session.getState().canApply) return false;
     this.busy = true;
     this.errorMessage = "";
@@ -83128,20 +83659,29 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
       return false;
     }
     const priorStage = this.stage;
+    const refreshed = result.refreshed && result.refreshed.report ? result.refreshed.report : null;
     const report = result.report || null;
-    if (report && Array.isArray(report.categories)) this.categories = report.categories;
-    if (report) {
-      this.report = { ...this.report, ...report, state: this.report?.state || "valid" };
-      const after = typeof report.after_fingerprint === "string" ? report.after_fingerprint : "";
-      if (after) {
-        this.report.config_fingerprint = after;
-        this.report.fingerprint = after;
+    if (refreshed && refreshed.state === "valid") {
+      this.report = refreshed;
+      if (Array.isArray(refreshed.categories)) this.categories = refreshed.categories;
+    } else {
+      if (report && Array.isArray(report.categories)) this.categories = report.categories;
+      if (report) {
+        this.report = { ...this.report, ...report, state: this.report?.state || "valid" };
+        const after = typeof report.after_fingerprint === "string" ? report.after_fingerprint : "";
+        if (after) {
+          this.report.config_fingerprint = after;
+          this.report.fingerprint = after;
+        }
       }
     }
     const opResult = Array.isArray(report?.per_op) ? report.per_op[0] : null;
     const changedKey = opResult && typeof opResult.key === "string" ? opResult.key : "";
     if (changedKey && this.categories.some((entry) => entry.key === changedKey)) {
       this.selection = { type: "category", key: changedKey, group: "", id: `category:${changedKey}` };
+    } else if (changedKey) {
+      const accountHit = (this.report?.accounts || []).find((entry) => entry && entry.alias === changedKey);
+      if (accountHit) this.selection = { type: "account", key: null, group: null, alias: changedKey, index: null, id: `account:${changedKey}` };
     }
     this.sessionState = this.session.getState();
     this.syncWarning = this.sessionState?.syncWarning || null;
@@ -83206,11 +83746,22 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (!Number.isInteger(targetLine) || targetLine < 1) {
       const item = this.selectedItem();
       if (item?.type === "category" && Number.isInteger(item.tile?.line)) targetLine = item.tile.line;
+      else if (item?.type === "account" && Number.isInteger(item.entry?.line)) targetLine = item.entry.line;
+      else if (item?.type === "rule" && Number.isInteger(item.entry?.line)) targetLine = item.entry.line;
+      else if (item?.type === "finding" && Number.isInteger(item.entry?.line)) targetLine = item.entry.line;
       else if (item?.type === "group") {
         const first = this.model?.items?.find((candidate) => candidate.type === "category" && candidate.entry?.group === item.group);
         if (Number.isInteger(first?.tile?.line)) targetLine = first.tile.line;
       }
-      if (!Number.isInteger(targetLine) || targetLine < 1) targetLine = this.report?.line || 1;
+      if (this.section === "accounts" && Number.isInteger(this.model?.staleAfter?.line)) {
+        const staleLine = this.model.staleAfter.line;
+        if ((!Number.isInteger(targetLine) || targetLine < 1) && staleLine) targetLine = staleLine;
+      }
+      if (!Number.isInteger(targetLine) || targetLine < 1) {
+        const firstFinding = (this.model?.findingItems || [])[0]?.entry;
+        if (this.section === "checks" && Number.isInteger(firstFinding?.line)) targetLine = firstFinding.line;
+        else targetLine = this.report?.line || 1;
+      }
     }
     const options = {
       sourcePath: BANK_SETUP_HUB_PATH,
@@ -83282,6 +83833,32 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
         else this.selectItem(id);
         return;
       }
+      const account = target?.closest?.("[data-setup-card-account]");
+      if (account) {
+        consume();
+        const id = `account:${account.getAttribute("data-setup-card-account")}`;
+        if (this.selection?.id === id) this.beginSelectedGesture("edit");
+        else this.selectItem(id);
+        return;
+      }
+      const rule = target?.closest?.("[data-setup-card-rule]");
+      if (rule) {
+        consume();
+        const id = `rule:${rule.getAttribute("data-setup-card-rule")}`;
+        if (this.selection?.id === id) this.beginSelectedGesture("edit");
+        else this.selectItem(id);
+        return;
+      }
+      const finding = target?.closest?.("[data-setup-card-finding]");
+      if (finding) {
+        consume();
+        const id = `finding:${finding.getAttribute("data-setup-card-finding")}`;
+        this.selectItem(id);
+        const found = (this.model?.findingItems || []).find((candidate) => candidate.id === id) || this.selectedItem();
+        const line = found && Number.isInteger(found.entry?.line) && found.entry.line > 0 ? found.entry.line : null;
+        if (line) void this.openYaml(line);
+        return;
+      }
       const group = target?.closest?.("[data-setup-card-group]");
       if (group) {
         consume();
@@ -83291,18 +83868,27 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
         else this.selectItem(id);
         return;
       }
-      if (target?.closest?.("[data-setup-section],[data-setup-new-category],[data-setup-action],[data-setup-line]")) return;
+      if (target?.closest?.("[data-setup-section],[data-setup-new-category],[data-setup-new-account],[data-setup-new-rule],[data-setup-action],[data-setup-line]")) return;
       consume();
       this.beginSelectedGesture("edit");
       return;
     }
-    if (mod && lower === "h") { consume(); this.beginSelectedGesture("hide"); return; }
+    if (mod && lower === "h") {
+      if (this.section !== "categories") return;
+      consume(); this.beginSelectedGesture("hide"); return;
+    }
     if (mod && lower === "d") { consume(); this.beginSelectedGesture("remove"); return; }
     if (mod && lower === "n") { consume(); this.moveSelection("forward"); return; }
     if (mod && lower === "p") { consume(); this.moveSelection("back"); return; }
     if (event.altKey && lower === "j") { consume(); this.beginSelectedGesture("move", "forward"); return; }
     if (event.altKey && lower === "k") { consume(); this.beginSelectedGesture("move", "back"); return; }
-    if (key === "+" || key === "=" || key === "＋") { consume(); this.openNewCategoryStage(); return; }
+    if (key === "+" || key === "=" || key === "＋") {
+      consume();
+      if (this.section === "accounts") this.openNewAccountStage();
+      else if (this.section === "rules") this.openNewRuleStage();
+      else this.openNewCategoryStage();
+      return;
+    }
     if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
     if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
     if (key.length === 1 && /[a-z0-9]/i.test(key) && this.section === "categories") {
@@ -83312,8 +83898,19 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
   }
 
   moveSelection(direction) {
-    if (this.section !== "categories" || this.busy || this.stage) return false;
-    const next = bankSetupCardMoveSelection(this.model, this.selection, direction);
+    if (this.busy || this.stage) return false;
+    let next = null;
+    if (this.section === "accounts" && typeof bankSetupCardMoveAccountSelection === "function") {
+      next = bankSetupCardMoveAccountSelection(this.model, this.selection, direction);
+    } else if (this.section === "rules" && typeof bankSetupCardMoveRuleSelection === "function") {
+      next = bankSetupCardMoveRuleSelection(this.model, this.selection, direction);
+    } else if (this.section === "checks" && typeof bankSetupCardMoveFindingSelection === "function") {
+      next = bankSetupCardMoveFindingSelection(this.model, this.selection, direction);
+    } else if (this.section === "categories") {
+      next = bankSetupCardMoveSelection(this.model, this.selection, direction);
+    } else {
+      return false;
+    }
     if (!next) return false;
     this.selection = next;
     this.didInteract = true;
@@ -83327,6 +83924,10 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (section) { bankCategoryUiConsume(event); this.setSection(section.getAttribute("data-setup-section")); return; }
     const fresh = target?.closest?.("[data-setup-new-category]");
     if (fresh) { bankCategoryUiConsume(event); this.openNewCategoryStage(); return; }
+    const freshAccount = target?.closest?.("[data-setup-new-account]");
+    if (freshAccount) { bankCategoryUiConsume(event); this.openNewAccountStage(); return; }
+    const freshRule = target?.closest?.("[data-setup-new-rule]");
+    if (freshRule) { bankCategoryUiConsume(event); this.openNewRuleStage(); return; }
     const action = target?.closest?.("[data-setup-action]");
     if (action) {
       bankCategoryUiConsume(event);
@@ -83337,6 +83938,12 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
       else if (kind === "repreview") void this.repreview();
       else if (kind === "retry-sync") void this.retrySync();
       else if (kind === "restore-default") this.beginSelectedGesture("restore");
+      else if (kind === "stale-after") this.openStaleAfterStage();
+      else if (kind === "stale-after-unset") {
+        if (typeof bankSetupCardStaleAfterUnsetOp === "function") {
+          this.beginGesture(bankSetupCardStaleAfterUnsetOp(), "Unset stale after", "Return to the default 10 days.");
+        }
+      }
       return;
     }
   }
@@ -137176,6 +137783,27 @@ try {
       bankSetupCardRestoreOp,
       bankSetupCardGroupRenameOp,
       bankSetupCardStatus,
+      bankSetupCardAllItems,
+      bankSetupCardDeriveAccountAlias,
+      bankSetupCardAccountKinds,
+      bankSetupCardAccountAddOp,
+      bankSetupCardAccountAddStatus,
+      bankSetupCardAccountSetOp,
+      bankSetupCardAccountRemoveOp,
+      bankSetupCardRuleAddOp,
+      bankSetupCardRuleSetOp,
+      bankSetupCardRuleMoveOp,
+      bankSetupCardRuleRemoveOp,
+      bankSetupCardStaleAfterOp,
+      bankSetupCardStaleAfterUnsetOp,
+      bankSetupCardMoveAccountSelection,
+      bankSetupCardMoveRuleSelection,
+      bankSetupCardMoveFindingSelection,
+      bankSetupCardAccountRowText,
+      bankSetupCardRuleRowText,
+      bankSetupCardPaintAccounts,
+      bankSetupCardPaintRules,
+      bankSetupCardPaintChecks,
     });
   }
 } catch (_) {}

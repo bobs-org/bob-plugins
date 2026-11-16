@@ -1104,3 +1104,198 @@ test("Setup header shows Edit on desktop valid/invalid states and degrades witho
   const mobile = H.bankSetupModel(configReport(), { desktop: false });
   assert.equal(H.bankSetupBuildEl(mobile, {}, doc).querySelector(".bob-bank-setup-edit"), null);
 });
+
+// --- Bank Setup card (setup-card-more): Accounts, Rules, Checks. ---
+
+test("Setup card models accounts, rules, and findings alongside categories", () => {
+  const report = configReport({
+    accounts: [
+      configAccount(),
+      configAccount({ alias: "savings", label: "WF Savings", kind: "savings", default: false, start: "2026-12-01", rows: 0 }),
+    ],
+    rules: [
+      { index: 0, match: "VENMO", payee: "Venmo", cat: "groceries", link: null, line: 30, source_line: 30 },
+      { index: 1, match: "ACME1234", payee: null, cat: "coffee", link: null, line: 31, source_line: 31 },
+    ],
+    findings: [{ severity: "error", line: 14, message: "duplicate hotkey", key_path: "bank.categories.coffee.hotkey" }],
+  });
+  const model = H.bankSetupCardModel(report);
+  assert.equal(model.accountItems.length, 2);
+  assert.equal(model.ruleItems.length, 2);
+  assert.equal(model.findingItems.length, 1);
+  // Existing category items are unchanged.
+  assert.ok(model.items.some((item) => item.id === "category:coffee"));
+  assert.deepEqual(H.bankSetupCardSelection(model, "account:savings"), {
+    type: "account", key: null, group: null, alias: "savings", index: null, id: "account:savings",
+  });
+  assert.deepEqual(H.bankSetupCardSelection(model, "rule:1"), {
+    type: "rule", key: null, group: null, alias: null, index: 1, id: "rule:1",
+  });
+  assert.deepEqual(H.bankSetupCardSelection(model, "finding:0"), {
+    type: "finding", key: null, group: null, alias: null, index: 0, id: "finding:0",
+  });
+  const moved = H.bankSetupCardMoveRuleSelection(model, { id: "rule:0" }, "forward");
+  assert.equal(moved.id, "rule:1");
+  const movedAccount = H.bankSetupCardMoveAccountSelection(model, { id: "account:checking" }, "forward");
+  assert.equal(movedAccount.id, "account:savings");
+  const stale = H.bankSetupCardMoveFindingSelection(model, { id: "finding:0" }, "forward");
+  assert.equal(stale.id, "finding:0", "a single finding stays put");
+});
+
+test("Setup card maps account, rule, and stale-after gestures to guarded ops", () => {
+  const accounts = [configAccount(), configAccount({ alias: "savings", label: "WF Savings", kind: "savings", rows: 0 })];
+  assert.deepEqual(H.bankSetupCardAccountAddOp({ label: "WF Savings", kind: "savings", start: "2026-12-01" }), {
+    op: "account.add", label: "WF Savings", kind: "savings", start: "2026-12-01",
+  });
+  assert.equal(H.bankSetupCardAccountAddOp({ label: "Nope", kind: "checking" }), null, "start is required except for cash");
+  assert.deepEqual(H.bankSetupCardAccountAddOp({ label: "Cash", kind: "cash" }), {
+    op: "account.add", label: "Cash", kind: "cash",
+  });
+  assert.equal(H.bankSetupCardAccountAddStatus(accounts, { label: "Savings", kind: "savings", start: "2026-12-01" }).kind, "taken");
+  assert.equal(H.bankSetupCardDeriveAccountAlias("WF Savings"), "wf_savings");
+  assert.deepEqual(H.bankSetupCardAccountSetOp(configAccount(), { label: "WF Checking!" }), {
+    op: "account.set", alias: "checking", set: { label: "WF Checking!" },
+  });
+  assert.equal(H.bankSetupCardAccountSetOp(configAccount(), { label: "WF Checking" }), null);
+  assert.deepEqual(H.bankSetupCardAccountRemoveOp(configAccount()), { op: "account.remove", alias: "checking" });
+
+  const categories = configReport().categories;
+  assert.deepEqual(H.bankSetupCardRuleAddOp({ match: "VENMO", cat: "coffee" }, categories), {
+    op: "rule.add", match: "VENMO", cat: "coffee",
+  });
+  assert.equal(H.bankSetupCardRuleAddOp({ match: "", cat: "coffee" }, categories), null);
+  assert.equal(H.bankSetupCardRuleAddOp({ match: "X", cat: "nope" }, categories), null, "unknown categories stay inert");
+  const rules = [
+    { index: 0, match: "VENMO", payee: "Venmo", cat: "groceries", link: null, line: 30 },
+    { index: 1, match: "ACME", payee: null, cat: "coffee", link: null, line: 31 },
+  ];
+  assert.deepEqual(H.bankSetupCardRuleMoveOp(rules, 0, "forward"), { op: "rule.move", index: 0, match_was: "VENMO", position: 1 });
+  assert.equal(H.bankSetupCardRuleMoveOp(rules, 1, "forward"), null, "the last rule cannot move forward");
+  assert.deepEqual(H.bankSetupCardRuleRemoveOp(rules[0]), { op: "rule.remove", index: 0, match_was: "VENMO" });
+  assert.deepEqual(H.bankSetupCardRuleSetOp(rules[0], { match: "VENMO", payee: "", cat: "groceries", link: null }, categories), {
+    op: "rule.set", index: 0, match_was: "VENMO", unset: ["payee"],
+  });
+  assert.equal(H.bankSetupCardRuleSetOp(rules[0], { match: "VENMO", payee: "Venmo", cat: "groceries", link: null }, categories), null);
+  assert.deepEqual(H.bankSetupCardStaleAfterOp("10"), { op: "bank.set", set: { stale_after: 10 } });
+  assert.deepEqual(H.bankSetupCardStaleAfterUnsetOp(), { op: "bank.set", unset: ["stale_after"] });
+});
+
+test("Setup card paints interactive account, rule, and finding rows", () => {
+  const doc = new Document();
+  const report = configReport();
+  const model = H.bankSetupCardModel(report);
+  const fakeModal = (section) => ({
+    section,
+    selection: null,
+    report,
+    readOnly: false,
+    busy: false,
+    selectItem() { return false; },
+    openYaml() { return false; },
+  });
+  const accountsPanel = doc.createElement("div");
+  H.bankSetupCardPaintAccounts(accountsPanel, fakeModal("accounts"), model);
+  assert.ok(accountsPanel.querySelector("[data-setup-card-account]"), "accounts paint as selectable rows");
+  assert.ok(accountsPanel.querySelector("[data-setup-new-account]"), "accounts offer + Add account");
+  assert.match(accountsPanel.textContent, /\[acct:: checking\]/);
+  assert.match(accountsPanel.textContent, /Balances go stale after/);
+  const rulesPanel = doc.createElement("div");
+  H.bankSetupCardPaintRules(rulesPanel, fakeModal("rules"), model);
+  assert.ok(rulesPanel.querySelector("[data-setup-card-rule]"), "rules paint as numbered rows");
+  assert.ok(rulesPanel.querySelector("[data-setup-new-rule]"), "rules offer + New rule");
+  assert.match(rulesPanel.textContent, /future imports and hints/);
+  const checksPanel = doc.createElement("div");
+  H.bankSetupCardPaintChecks(checksPanel, fakeModal("checks"), model);
+  assert.match(checksPanel.textContent, /valid — bob uses it as shown/);
+  const invalid = configReport({
+    ok: false,
+    state: "invalid",
+    findings: [{ severity: "error", line: 14, message: "duplicate hotkey", key_path: "bank.categories.coffee.hotkey" }],
+  });
+  const invalidModel = H.bankSetupCardModel(invalid);
+  const invalidPanel = doc.createElement("div");
+  H.bankSetupCardPaintChecks(invalidPanel, { ...fakeModal("checks"), report: invalid }, invalidModel);
+  assert.ok(invalidPanel.querySelector("[data-setup-card-finding]"), "findings are selectable");
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report });
+  modal.open();
+  modal.setSection("accounts");
+  assert.match(modal.footerText(), /relabel/);
+  modal.setSection("rules");
+  assert.match(modal.footerText(), /Alt\+J\/K move/);
+  modal.setSection("checks");
+  assert.match(modal.footerText(), /open line/);
+  modal.close();
+});
+
+test("Setup card stages account and rule gestures through bob previews", async () => {
+  const plugin = setupCardPlugin();
+  const twoRules = configReport({
+    rules: [
+      { index: 0, match: "VENMO", payee: "Venmo", cat: "coffee", link: null, line: 30, source_line: 30 },
+      { index: 1, match: "ACME", payee: null, cat: "groceries", link: null, line: 31, source_line: 31 },
+    ],
+  });
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: twoRules });
+  modal.open();
+  modal.setSection("accounts");
+  modal.openNewAccountStage();
+  assert.equal(modal.stage.kind, "new-account");
+  modal.onFieldInput("label", "WF Savings");
+  modal.onFieldInput("kind", "savings");
+  modal.onFieldInput("start", "2026-12-01");
+  assert.deepEqual(modal.stageDraftOp(), {
+    op: "account.add", label: "WF Savings", kind: "savings", start: "2026-12-01",
+  });
+  modal.cancelStage();
+  modal.selection = { type: "account", key: null, group: null, alias: "checking", index: null, id: "account:checking" };
+  modal.paint();
+  assert.equal(modal.beginSelectedGesture("edit")?.kind || modal.stage?.kind, "edit-account");
+  modal.cancelStage();
+
+  modal.setSection("rules");
+  modal.openNewRuleStage();
+  assert.equal(modal.stage.kind, "new-rule");
+  modal.onFieldInput("match", "VENMO");
+  modal.onFieldInput("cat", "coffee");
+  assert.deepEqual(modal.stageDraftOp(), { op: "rule.add", match: "VENMO", cat: "coffee" });
+  modal.cancelStage();
+  const plus = { key: "+", target: { closest: () => null }, preventDefault() {}, stopPropagation() {} };
+  modal.onKeyDown(plus);
+  assert.equal(modal.stage.kind, "new-rule", "+ in the Rules section opens a rule stage");
+  modal.cancelStage();
+  const firstRule = modal.model.ruleItems[0];
+  modal.selection = { type: "rule", key: null, group: null, alias: null, index: firstRule.entry.index, id: firstRule.id };
+  modal.paint();
+  assert.equal(modal.beginSelectedGesture("move", "forward")?.kind || modal.stage?.kind, "confirm");
+  modal.cancelStage();
+  modal.openStaleAfterStage();
+  assert.equal(modal.stage.kind, "stale-after");
+  modal.onFieldInput("stale-after", "14");
+  assert.deepEqual(modal.stageDraftOp(), { op: "bank.set", set: { stale_after: 14 } });
+  modal.cancelStage();
+  modal.close();
+});
+
+test("Setup card checks Enter jumps to the finding line", async () => {
+  const plugin = setupCardPlugin();
+  const calls = [];
+  plugin.bankSetupStartYamlExcursion = async (options) => { calls.push(options); return { ok: true }; };
+  const invalid = configReport({
+    ok: false,
+    state: "invalid",
+    findings: [{ severity: "error", line: 14, message: "duplicate hotkey", key_path: "bank.categories.coffee.hotkey" }],
+  });
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: invalid });
+  modal.open();
+  assert.equal(modal.section, "checks");
+  const finding = { getAttribute: (name) => name === "data-setup-card-finding" ? "0" : null };
+  modal.onKeyDown({
+    key: "Enter",
+    target: { closest: (selector) => selector === "[data-setup-card-finding]" ? finding : null },
+    preventDefault() {}, stopPropagation() {},
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].line, 14);
+  modal.close();
+});

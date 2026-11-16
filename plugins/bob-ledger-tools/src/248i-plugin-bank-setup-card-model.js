@@ -12,6 +12,9 @@ const BANK_SETUP_CARD_SECTION_LABELS = {
 function bankSetupCardModel(report, selection = null) {
   const setup = bankSetupModel(report, { desktop: true, expanded: true });
   const categories = Array.isArray(report?.categories) ? report.categories : [];
+  const rawAccounts = Array.isArray(report?.accounts) ? report.accounts : [];
+  const rawRules = Array.isArray(report?.rules) ? report.rules : [];
+  const rawFindings = Array.isArray(setup.findings) ? setup.findings : [];
   const items = [];
   const sections = (setup.sections || []).map((section) => {
     const group = section.group || "";
@@ -47,24 +50,74 @@ function bankSetupCardModel(report, selection = null) {
       items.push({ type: "category", key: tile.key, id: `category:${tile.key}`, entry, tile });
     }
   }
-  const chosen = selection && items.find((item) => item.id === selection.id)
-    ? items.find((item) => item.id === selection.id)
+  const accountItems = rawAccounts
+    .filter((entry) => entry && typeof entry.alias === "string" && entry.alias)
+    .map((entry) => ({ type: "account", alias: entry.alias, key: null, group: null, id: `account:${entry.alias}`, entry }));
+  const ruleItems = rawRules
+    .filter((entry) => entry && typeof entry.match === "string")
+    .map((entry, position) => {
+      const index = Number.isInteger(entry.index) && entry.index >= 0 ? entry.index : position;
+      return { type: "rule", index, key: null, group: null, id: `rule:${index}`, entry: { ...entry, index } };
+    });
+  const findingItems = rawFindings.map((entry, position) => ({
+    type: "finding", index: position, key: null, group: null, id: `finding:${position}`, entry,
+  }));
+  const allItems = items.concat(accountItems, ruleItems, findingItems);
+  const chosen = selection && allItems.find((item) => item.id === selection.id)
+    ? allItems.find((item) => item.id === selection.id)
     : items.find((item) => item.type === "category") || items[0] || null;
+  const staleAfter = setup && setup.staleAfterDays !== undefined
+    ? { days: setup.staleAfterDays, explicit: setup.staleAfterExplicit === true, line: setup.staleAfterLine || null }
+    : { days: 10, explicit: false, line: null };
   return {
     ...setup,
     categories,
+    accounts: rawAccounts,
+    rules: rawRules,
     sections,
     hiddenTiles,
     items,
-    selection: chosen ? { type: chosen.type, key: chosen.key || null, group: chosen.group || null, id: chosen.id } : null,
+    accountItems,
+    ruleItems,
+    findingItems,
+    allItems,
+    staleAfter,
+    selection: chosen
+      ? {
+        type: chosen.type,
+        key: chosen.key || null,
+        group: chosen.group || null,
+        alias: chosen.alias || null,
+        index: Number.isInteger(chosen.index) ? chosen.index : null,
+        id: chosen.id,
+      }
+      : null,
     selectedItem: chosen,
     canEdit: setup.state === "valid" && report?.state === "valid",
   };
 }
 
+function bankSetupCardAllItems(model) {
+  if (!model) return [];
+  if (Array.isArray(model.allItems)) return model.allItems;
+  const out = Array.isArray(model.items) ? model.items.slice() : [];
+  for (const item of Array.isArray(model.accountItems) ? model.accountItems : []) out.push(item);
+  for (const item of Array.isArray(model.ruleItems) ? model.ruleItems : []) out.push(item);
+  for (const item of Array.isArray(model.findingItems) ? model.findingItems : []) out.push(item);
+  return out;
+}
+
 function bankSetupCardSelection(model, id) {
-  const item = (model && Array.isArray(model.items) ? model.items : []).find((candidate) => candidate.id === id);
-  return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+  const item = bankSetupCardAllItems(model).find((candidate) => candidate.id === id);
+  if (!item) return null;
+  return {
+    type: item.type,
+    key: item.key || null,
+    group: item.group || null,
+    alias: item.alias || null,
+    index: Number.isInteger(item.index) ? item.index : null,
+    id: item.id,
+  };
 }
 
 function bankSetupCardSelectionByHotkey(categories, hotkey) {
@@ -161,6 +214,194 @@ function bankSetupCardGroupRenameOp(group, to) {
   const next = typeof to === "string" ? to.trim() : "";
   if (!group || !next || next === group || group === BANK_SETUP_MONEY_GROUP) return null;
   return { op: "group.rename", group, to: next };
+}
+
+function bankSetupCardDeriveAccountAlias(label) {
+  let alias = "";
+  for (const character of String(label || "")) {
+    if (/[A-Za-z0-9]/.test(character)) alias += character.toLowerCase();
+    else if (alias && !alias.endsWith("_")) alias += "_";
+  }
+  alias = alias.replace(/^_+|_+$/g, "");
+  return /^[a-z][a-z0-9_]*$/.test(alias) ? alias : "";
+}
+
+function bankSetupCardAccountKinds() {
+  return ["checking", "savings", "cash", "credit"];
+}
+
+function bankSetupCardAccountAddOp(draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const kind = typeof draft.kind === "string" ? draft.kind.trim().toLowerCase() : "";
+  if (!label || !bankSetupCardAccountKinds().includes(kind)) return null;
+  const op = { op: "account.add", label, kind };
+  const start = typeof draft.start === "string" ? draft.start.trim() : "";
+  if (start) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+    op.start = start;
+  } else if (kind !== "cash") {
+    return null;
+  }
+  const alias = typeof draft.alias === "string" ? draft.alias.trim().toLowerCase() : "";
+  if (alias) {
+    if (!/^[a-z][a-z0-9_]*$/.test(alias)) return null;
+    op.alias = alias;
+  }
+  return op;
+}
+
+function bankSetupCardAccountAddStatus(accounts, draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const kind = typeof draft.kind === "string" ? draft.kind.trim().toLowerCase() : "";
+  if (!label) return { kind: "empty", canApply: false, text: "name the account" };
+  if (!bankSetupCardAccountKinds().includes(kind)) return { kind: "empty", canApply: false, text: "pick a kind" };
+  const start = typeof draft.start === "string" ? draft.start.trim() : "";
+  if (start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    return { kind: "invalid", canApply: false, text: "use YYYY-MM-DD for the start date" };
+  }
+  if (!start && kind !== "cash") return { kind: "empty", canApply: false, text: "cash needs no start date" };
+  const alias = typeof draft.alias === "string" && draft.alias.trim()
+    ? draft.alias.trim().toLowerCase()
+    : bankSetupCardDeriveAccountAlias(label);
+  if (!/^[a-z][a-z0-9_]*$/.test(alias)) {
+    return { kind: "invalid", canApply: false, text: "alias must match [a-z][a-z0-9_]*", alias: "" };
+  }
+  const owner = (Array.isArray(accounts) ? accounts : []).find((entry) => entry && entry.alias === alias);
+  if (owner) return { kind: "taken", owner, canApply: false, text: `alias ${alias} already exists`, alias };
+  return { kind: "free", owner: null, canApply: true, text: "", alias };
+}
+
+function bankSetupCardAccountSetOp(entry, draft = {}) {
+  if (!entry || typeof entry.alias !== "string" || !entry.alias) return null;
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  if (!label || label === (entry.label || entry.alias)) return null;
+  return { op: "account.set", alias: entry.alias, set: { label } };
+}
+
+function bankSetupCardAccountRemoveOp(entry) {
+  return entry && typeof entry.alias === "string" && entry.alias
+    ? { op: "account.remove", alias: entry.alias }
+    : null;
+}
+
+function bankSetupCardRuleAddOp(draft = {}, categories = []) {
+  const match = typeof draft.match === "string" ? draft.match.trim() : "";
+  if (!match) return null;
+  const op = { op: "rule.add", match };
+  const payee = typeof draft.payee === "string" ? draft.payee.trim() : "";
+  if (payee) op.payee = payee;
+  const cat = typeof draft.cat === "string" ? draft.cat.trim() : "";
+  if (cat) {
+    const known = (Array.isArray(categories) ? categories : []).some((entry) => entry && entry.key === cat);
+    if (!known) return null;
+    op.cat = cat;
+  }
+  const link = typeof draft.link === "string" ? draft.link.trim() : "";
+  if (link) op.link = link;
+  if (draft.position !== undefined && draft.position !== null && draft.position !== "") {
+    const position = Number(draft.position);
+    if (!Number.isInteger(position) || position < 0) return null;
+    op.position = position;
+  }
+  return op;
+}
+
+function bankSetupCardRuleSetOp(entry, draft = {}, categories = []) {
+  if (!entry || !Number.isInteger(entry.index) || entry.index < 0 || typeof entry.match !== "string") return null;
+  const set = {};
+  const unset = [];
+  const match = typeof draft.match === "string" ? draft.match.trim() : "";
+  if (match && match !== entry.match) set.match = match;
+  const payee = draft.payee === null || draft.payee === undefined ? null : String(draft.payee).trim();
+  const oldPayee = entry.payee === null || entry.payee === undefined ? "" : String(entry.payee);
+  if (payee !== null && payee !== oldPayee) {
+    if (payee) set.payee = payee;
+    else if (oldPayee) unset.push("payee");
+  }
+  const cat = draft.cat === null || draft.cat === undefined ? null : String(draft.cat).trim();
+  const oldCat = entry.cat === null || entry.cat === undefined ? "" : String(entry.cat);
+  if (cat !== null && cat !== oldCat) {
+    if (cat) {
+      const known = (Array.isArray(categories) ? categories : []).some((candidate) => candidate && candidate.key === cat);
+      if (!known) return null;
+      set.cat = cat;
+    } else if (oldCat) {
+      unset.push("cat");
+    }
+  }
+  const link = draft.link === null || draft.link === undefined ? null : String(draft.link).trim();
+  const oldLink = entry.link === null || entry.link === undefined ? "" : String(entry.link);
+  if (link !== null && link !== oldLink) {
+    if (link) set.link = link;
+    else if (oldLink) unset.push("link");
+  }
+  if (!Object.keys(set).length && !unset.length) return null;
+  return {
+    op: "rule.set", index: entry.index, match_was: entry.match,
+    ...(Object.keys(set).length ? { set } : {}),
+    ...(unset.length ? { unset } : {}),
+  };
+}
+
+function bankSetupCardRuleMoveOp(rules, index, direction) {
+  const list = Array.isArray(rules) ? rules : [];
+  const at = list.findIndex((entry) => entry && entry.index === index);
+  if (at < 0) return null;
+  const next = at + (direction === "back" ? -1 : 1);
+  if (next < 0 || next >= list.length) return null;
+  const entry = list[at];
+  return { op: "rule.move", index, match_was: entry.match, position: next };
+}
+
+function bankSetupCardRuleRemoveOp(entry) {
+  return entry && Number.isInteger(entry.index) && entry.index >= 0 && typeof entry.match === "string"
+    ? { op: "rule.remove", index: entry.index, match_was: entry.match }
+    : null;
+}
+
+function bankSetupCardStaleAfterOp(days) {
+  const value = typeof days === "string" && days.trim() !== "" ? Number(days) : days;
+  if (!Number.isInteger(value) || value < 0) return null;
+  return { op: "bank.set", set: { stale_after: value } };
+}
+
+function bankSetupCardStaleAfterUnsetOp() {
+  return { op: "bank.set", unset: ["stale_after"] };
+}
+
+function bankSetupCardMoveInList(list, id, direction) {
+  const items = Array.isArray(list) ? list : [];
+  const at = items.findIndex((item) => item && item.id === id);
+  if (at < 0) return null;
+  const next = Math.max(0, Math.min(items.length - 1, at + (direction === "back" ? -1 : 1)));
+  const item = items[next];
+  if (!item) return null;
+  return {
+    type: item.type,
+    key: item.key || null,
+    group: item.group || null,
+    alias: item.alias || null,
+    index: Number.isInteger(item.index) ? item.index : null,
+    id: item.id,
+  };
+}
+
+function bankSetupCardMoveAccountSelection(model, selection, direction) {
+  const list = Array.isArray(model?.accountItems) ? model.accountItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
+}
+
+function bankSetupCardMoveRuleSelection(model, selection, direction) {
+  const list = Array.isArray(model?.ruleItems) ? model.ruleItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
+}
+
+function bankSetupCardMoveFindingSelection(model, selection, direction) {
+  const list = Array.isArray(model?.findingItems) ? model.findingItems : [];
+  const id = selection && selection.id ? selection.id : (list[0] && list[0].id);
+  return bankSetupCardMoveInList(list, id, direction);
 }
 
 function bankSetupCardStatus(report) {

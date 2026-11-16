@@ -9288,6 +9288,17 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-setup-card-tab:disabled { opacity: 0.5; cursor: not-allowed; }
 .bob-bank-setup-card-readonly-list { display: grid; gap: 0.35em; margin: 0.35em 0; padding-inline-start: 1.4em; }
 .bob-bank-setup-card-readonly-row { display: flex; flex-wrap: wrap; gap: 0.3em 0.6em; align-items: baseline; }
+.bob-bank-setup-card-accounts { display: grid; gap: 0.35em; margin: 0.35em 0; }
+.bob-bank-setup-card-account { display: flex; flex-wrap: wrap; gap: 0.3em 0.6em; align-items: baseline; border: 1px solid var(--background-modifier-border); border-radius: 0.45em; background: var(--background-primary); color: var(--text-normal); font: inherit; text-align: start; cursor: pointer; padding: 0.35em 0.55em; }
+.bob-bank-setup-card-account.is-selected { border-color: var(--bob-setup-accent); }
+.bob-bank-setup-card-rules { display: grid; gap: 0.35em; margin: 0.35em 0; padding-inline-start: 1.4em; }
+.bob-bank-setup-card-rule.is-selected .bob-bank-setup-card-rule-button { border-color: var(--bob-setup-accent); }
+.bob-bank-setup-card-rule-button { display: flex; flex-wrap: wrap; gap: 0.3em 0.6em; align-items: baseline; border: 1px solid transparent; border-radius: 0.45em; background: none; color: var(--text-normal); font: inherit; text-align: start; cursor: pointer; padding: 0.15em 0.3em; }
+.bob-bank-setup-card-stale { display: flex; flex-wrap: wrap; gap: 0.3em 0.6em; align-items: center; margin-top: 0.5em; }
+.bob-bank-setup-card-finding.is-selected .bob-bank-setup-card-finding-jump { text-decoration: underline; text-underline-offset: 0.2em; }
+.bob-bank-setup-card-status.is-ok { color: var(--text-success, var(--text-muted)); }
+.bob-bank-setup-card-status.is-warn { color: var(--text-warning, var(--text-muted)); }
+.bob-bank-setup-card-status.is-bad { color: var(--text-error, var(--text-normal)); }
 .bob-bank-setup-card-check-status { font-weight: 600; }
 .bob-bank-setup-card-check-status.is-invalid { color: var(--text-error, var(--text-normal)); }
 .bob-bank-setup-card-findings { padding-inline-start: 1.4em; }

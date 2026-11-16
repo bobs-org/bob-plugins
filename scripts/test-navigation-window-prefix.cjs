@@ -148,6 +148,25 @@ function pluginFor(options = {}) {
   };
   plugin.snapshotWindowPrefixLayout = options.snapshot || (() => snapshotTwoSplits());
   plugin.executeWindowPrefixPlan = options.execute || (async (plan) => ({ ok: true, action: plan.action, plan }));
+  plugin.windowTabNumbersLitCalls = [];
+  plugin.windowTabFlashes = [];
+  plugin.windowTabRefreshNow = [];
+  plugin.windowTabRefreshScheduled = 0;
+  plugin.setWindowTabNumbersLit = (on) => {
+    plugin.windowTabNumbersLitCalls.push(on === true);
+    plugin.windowTabNumbersLit = on === true;
+  };
+  plugin.flashWindowTabNumber = (id) => {
+    plugin.windowTabFlashes.push(id);
+    return true;
+  };
+  plugin.refreshWindowTabNumbersNow = (opts) => {
+    plugin.windowTabRefreshNow.push(opts || {});
+    return { ok: true, shown: true };
+  };
+  plugin.scheduleWindowTabNumbersRefresh = () => {
+    plugin.windowTabRefreshScheduled += 1;
+  };
   plugin.collectWindowPrefixArmingContext = options.context || ((event) => ({
     key: event.key,
     code: event.code,
@@ -250,6 +269,7 @@ test("a defaultPrevented Ctrl+W (Linux Close tab) does not arm", () => {
   });
   plugin.handleWindowPrefixCaptureKeydown(event);
   assert.equal(plugin.windowPrefixState, "idle");
+  assert.ok(plugin.windowTabRefreshScheduled >= 1);
   assert.equal(getWindowPrefixArmingVerdict({
     key: "w", code: "KeyW", ctrlKey: true, defaultPrevented: true,
     isMainWindow: true, activeLeafInRootSplit: true, isEditable: false,
@@ -543,5 +563,209 @@ test("successful focus pulses then disarms without a receipt", async () => {
   assert.equal(plugin.windowPrefixState, "idle");
   assert.equal(keymap.scopes.length, 0);
   assert.ok(host.calls.some((call) => call[0] === "pulse"));
+  assert.equal(host.calls.some((call) => call[0] === "receipt"), false);
+});
+
+function snapshotFourTabs() {
+  return {
+    activeLeafId: "b",
+    splits: [
+      {
+        id: "left",
+        rect: { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 },
+        leaves: [{ id: "a", label: "WP-A" }, { id: "b", label: "WP-B" }],
+        selectedLeafId: "b",
+      },
+      {
+        id: "right",
+        rect: { left: 100, top: 0, right: 200, bottom: 100, width: 100, height: 100 },
+        leaves: [{ id: "c", label: "WP-C" }, { id: "d", label: "WP-D" }],
+        selectedLeafId: "c",
+      },
+    ],
+  };
+}
+
+test("a digit after arming runs focus-tab", async () => {
+  const { plugin, keymap } = pluginFor();
+  plugin.snapshotWindowPrefixLayout = () => snapshotFourTabs();
+  const executed = [];
+  plugin.executeWindowPrefixPlan = async (plan, armed) => {
+    executed.push({ key: plan.key, action: plan.action, catalog: Boolean(armed && armed.armedCatalog) });
+    return { ok: true, action: "focus-tab", leafId: plan.targetLeafId, plan };
+  };
+  arm(plugin);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "4", code: "Digit4", ctrlKey: false }));
+  await plugin.windowPrefixQueue;
+  assert.equal(executed.length, 1);
+  assert.equal(executed[0].action, "focus-tab");
+  assert.equal(executed[0].key, "4");
+  assert.equal(executed[0].catalog, true);
+  assert.equal(plugin.windowPrefixState, "idle");
+  assert.equal(keymap.scopes.length, 0);
+  assert.deepEqual(plugin.windowTabFlashes, ["d"]);
+});
+
+test("held-Ctrl and numpad digits map after arming", async () => {
+  const { plugin } = pluginFor();
+  plugin.snapshotWindowPrefixLayout = () => snapshotFourTabs();
+  const executed = [];
+  plugin.executeWindowPrefixPlan = async (plan) => {
+    executed.push(plan.key);
+    return { ok: true, action: "focus-tab", leafId: plan.targetLeafId, plan };
+  };
+  arm(plugin);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({
+    key: "\u0003", code: "Digit3", ctrlKey: true, text: "",
+  }));
+  await plugin.windowPrefixQueue;
+  arm(plugin);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "2", code: "Numpad2", ctrlKey: false }));
+  await plugin.windowPrefixQueue;
+  assert.deepEqual(executed, ["3", "2"]);
+});
+
+test("0 and # stay unmapped and consumed", () => {
+  const { plugin, host, keymap } = pluginFor();
+  arm(plugin);
+  host.calls.length = 0;
+  const zero = keyEvent({ key: "0", code: "Digit0", ctrlKey: false });
+  plugin.handleWindowPrefixCaptureKeydown(zero);
+  assert.equal(plugin.windowPrefixIsArmed(), true);
+  assert.equal(keymap.scopes.length, 1);
+  assert.equal(zero.prevented, true);
+  assert.ok(host.calls.some((call) => call[0] === "message" && String(call[1]).includes("0 isn't a window key")));
+
+  host.calls.length = 0;
+  const hash = keyEvent({ key: "#", code: "Digit3", shiftKey: true, ctrlKey: false });
+  plugin.handleWindowPrefixCaptureKeydown(hash);
+  assert.equal(plugin.windowPrefixIsArmed(), true);
+  assert.equal(hash.prevented, true);
+  assert.ok(host.calls.some((call) => call[0] === "message" && String(call[1]).includes("isn't a window key")));
+});
+
+test("Cmd+3 passes through and cancels the prefix", () => {
+  const { plugin, keymap } = pluginFor();
+  arm(plugin);
+  const event = keyEvent({ key: "3", code: "Digit3", ctrlKey: false, metaKey: true });
+  const result = plugin.handleWindowPrefixCaptureKeydown(event);
+  assert.equal(plugin.windowPrefixState, "idle");
+  assert.equal(keymap.scopes.length, 0);
+  assert.equal(event.prevented, undefined);
+  assert.equal(result, true);
+});
+
+test("a blocked digit stays armed with the card and tabs-row nudge", () => {
+  const { plugin, host, keymap } = pluginFor();
+  arm(plugin);
+  host.calls.length = 0;
+  const seven = keyEvent({ key: "7", code: "Digit7", ctrlKey: false });
+  plugin.handleWindowPrefixCaptureKeydown(seven);
+  assert.equal(plugin.windowPrefixIsArmed(), true);
+  assert.equal(keymap.scopes.length, 1);
+  assert.equal(seven.prevented, true);
+  assert.ok(host.calls.some((call) => call[0] === "showCard"));
+  assert.ok(host.calls.some((call) => call[0] === "nudge" && call[1] === "7"));
+  assert.ok(host.calls.some((call) => call[0] === "message" && /No tab 7/.test(String(call[1]))));
+});
+
+test("a stale catalog refuses and disarms", () => {
+  const { plugin, host, keymap } = pluginFor();
+  plugin.snapshotWindowPrefixLayout = () => snapshotFourTabs();
+  arm(plugin);
+  assert.ok(plugin.windowPrefixArmedTabCatalog && plugin.windowPrefixArmedTabCatalog.ok);
+  plugin.snapshotWindowPrefixLayout = () => ({
+    activeLeafId: "b",
+    splits: [
+      {
+        id: "left",
+        rect: { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 },
+        leaves: [{ id: "a", label: "WP-A" }, { id: "b", label: "WP-B" }, { id: "x", label: "WP-X" }],
+        selectedLeafId: "b",
+      },
+      {
+        id: "right",
+        rect: { left: 100, top: 0, right: 200, bottom: 100, width: 100, height: 100 },
+        leaves: [{ id: "c", label: "WP-C" }, { id: "d", label: "WP-D" }],
+        selectedLeafId: "c",
+      },
+    ],
+  });
+  host.calls.length = 0;
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "3", code: "Digit3", ctrlKey: false }));
+  assert.equal(plugin.windowPrefixState, "idle");
+  assert.equal(keymap.scopes.length, 0);
+  assert.ok(host.calls.some((call) => call[0] === "message" && /Tabs changed/.test(String(call[1]))));
+});
+
+test("a superseded load presents nothing", async () => {
+  const { plugin, host } = pluginFor();
+  plugin.snapshotWindowPrefixLayout = () => snapshotFourTabs();
+  plugin.executeWindowPrefixPlan = async () => ({ ok: false, reason: "superseded" });
+  arm(plugin);
+  host.calls.length = 0;
+  plugin.windowTabFlashes.length = 0;
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "4", code: "Digit4", ctrlKey: false }));
+  await plugin.windowPrefixQueue;
+  assert.equal(host.calls.some((call) => call[0] === "showCard"), false);
+  assert.equal(host.calls.some((call) => call[0] === "pulse"), false);
+  assert.equal(plugin.windowTabFlashes.length, 0);
+  assert.equal(host.calls.some((call) => call[0] === "message"), false);
+});
+
+test("numerals light with the card and unlight on every exit path", () => {
+  const { plugin } = pluginFor();
+  arm(plugin);
+  assert.equal(plugin.windowTabNumbersLit, undefined);
+  plugin.advanceWindowPrefixClock(300);
+  assert.equal(plugin.windowTabNumbersLit, true);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "Escape", code: "Escape", ctrlKey: false }));
+  assert.equal(plugin.windowTabNumbersLit, false);
+
+  arm(plugin);
+  plugin.advanceWindowPrefixClock(300);
+  assert.equal(plugin.windowTabNumbersLit, true);
+  plugin.handleWindowPrefixMouseDown({ target: { closest: () => null } });
+  assert.equal(plugin.windowTabNumbersLit, false);
+
+  arm(plugin);
+  plugin.advanceWindowPrefixClock(300);
+  plugin.handleWindowPrefixCancelEvent("blur");
+  assert.equal(plugin.windowTabNumbersLit, false);
+
+  arm(plugin);
+  plugin.advanceWindowPrefixClock(300);
+  plugin.handleWindowPrefixWorkspaceEvent("layout-change");
+  assert.equal(plugin.windowTabNumbersLit, false);
+});
+
+test("a fluent digit never paints the card", async () => {
+  const { plugin, host } = pluginFor();
+  plugin.snapshotWindowPrefixLayout = () => snapshotFourTabs();
+  plugin.executeWindowPrefixPlan = async (plan) => ({
+    ok: true, action: "focus-tab", leafId: plan.targetLeafId, plan,
+  });
+  arm(plugin);
+  host.calls.length = 0;
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "4", code: "Digit4", ctrlKey: false }));
+  await plugin.windowPrefixQueue;
+  assert.equal(host.calls.some((call) => call[0] === "showCard"), false);
+  assert.ok(host.calls.some((call) => call[0] === "pulse"));
+  plugin.advanceWindowPrefixClock(300);
+  assert.equal(plugin.windowPrefixState, "idle");
+});
+
+test("the focused tab's digit flashes and restores the scope stack", async () => {
+  const { plugin, keymap, host } = pluginFor();
+  plugin.executeWindowPrefixPlan = async (plan) => ({
+    ok: true, action: "focus-tab", alreadyHere: true, leafId: plan.targetLeafId, plan,
+  });
+  arm(plugin);
+  assert.equal(keymap.scopes.length, 1);
+  plugin.handleWindowPrefixCaptureKeydown(keyEvent({ key: "2", code: "Digit2", ctrlKey: false }));
+  await plugin.windowPrefixQueue;
+  assert.equal(plugin.windowPrefixState, "idle");
+  assert.equal(keymap.scopes.length, 0);
+  assert.deepEqual(plugin.windowTabFlashes, ["b"]);
   assert.equal(host.calls.some((call) => call[0] === "receipt"), false);
 });

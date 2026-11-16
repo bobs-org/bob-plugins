@@ -1,6 +1,5 @@
-// Dormant tab-numeral stamper for the Ctrl+W numbered-tab epic (paint phase).
-// Nothing starts this mixin yet: `prefix` wires `startWindowTabNumbers` from
-// `onload`, and the card lights numerals through `setWindowTabNumbersLit`.
+// Tab-numeral stamper for the Ctrl+W numbered-tab epic. `prefix` starts it
+// from `onload` and lights numerals through `setWindowTabNumbersLit`.
 // The stamper never throws, never mutates the prefix live maps, and never
 // cancels an in-flight flash during a refresh.
 const WINDOW_TAB_NUMBERS_ATTRIBUTE = "data-bob-tab";
@@ -455,6 +454,24 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
       }
       if (!inner) return false;
       try {
+        if (!windowTabNumbersGetAttr(inner, WINDOW_TAB_NUMBERS_ATTRIBUTE)) {
+          const area = typeof this.snapshotWindowPrefixMainArea === "function"
+            ? this.snapshotWindowPrefixMainArea()
+            : null;
+          const catalog = area && typeof buildWindowPrefixTabCatalog === "function"
+            ? buildWindowPrefixTabCatalog({ splits: area.splits, activeLeafId: area.activeLeafId })
+            : null;
+          const tab = catalog && Array.isArray(catalog.tabs)
+            ? catalog.tabs.find((item) => String(item.leafId) === id)
+            : null;
+          if (tab && tab.number != null) {
+            windowTabNumbersSetAttr(inner, WINDOW_TAB_NUMBERS_ATTRIBUTE, String(tab.number));
+          }
+        }
+      } catch (_error) {
+        // Flash content is best-effort.
+      }
+      try {
         const previousId = this.windowTabNumbersFlashLeafId;
         if (previousId && previousId !== id) {
           const previous = stamped.get(String(previousId));
@@ -469,6 +486,7 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
         try {
           windowTabNumbersRemoveClass(inner, WINDOW_TAB_NUMBERS_FLASH_CLASS);
           if (this.windowTabNumbersFlashLeafId === id) this.windowTabNumbersFlashLeafId = null;
+          this.refreshWindowTabNumbersNow();
         } catch (_error) {
           // Flash cleanup never throws.
         }
@@ -588,6 +606,19 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
         verdict = { show: false, lit: false, reason: "unavailable" };
       }
       if (!verdict || verdict.show !== true) {
+        if (this.windowTabNumbersFlashLeafId) {
+          if (body) {
+            windowTabNumbersAddClass(body, WINDOW_TAB_NUMBERS_BODY_CLASS);
+            windowTabNumbersRemoveClass(body, WINDOW_TAB_NUMBERS_LIT_CLASS);
+          }
+          return {
+            ok: true,
+            shown: true,
+            lit: false,
+            reason: "flash-hold",
+            total: catalog.total,
+          };
+        }
         this.windowTabNumbersClearStamps();
         if (body) {
           windowTabNumbersRemoveClass(body, WINDOW_TAB_NUMBERS_BODY_CLASS);

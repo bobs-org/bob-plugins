@@ -237,6 +237,8 @@ class BobNavigationHotkeysWindowPrefixMixin {
     this.windowPrefixHintHost = this.windowPrefixHintHost || null;
     this.windowPrefixSourceLeaf = null;
     this.windowPrefixArmedSnapshot = null;
+    this.windowPrefixArmedTabCatalog = null;
+    this.windowPrefixArmGeneration = 0;
     this.windowPrefixSelfCaused = false;
     this.windowPrefixTimerIds = Object.create(null);
 
@@ -422,7 +424,12 @@ class BobNavigationHotkeysWindowPrefixMixin {
       isEditable: context && context.isEditable,
       defaultPrevented: context && context.defaultPrevented,
     };
-    if (!verdict || verdict.allowed !== true) return false;
+    if (!verdict || verdict.allowed !== true) {
+      if (typeof this.scheduleWindowTabNumbersFromPreventedCtrlW === "function") {
+        this.scheduleWindowTabNumbersFromPreventedCtrlW(verdict);
+      }
+      return false;
+    }
     windowPrefixMarkHandled(this.windowPrefixHandledEvents, event);
     windowPrefixConsumeEvent(event);
     this.armWindowPrefix();
@@ -510,6 +517,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
       ? this.snapshotWindowPrefixLayout()
       : null;
     this.windowPrefixState = "armed";
+    if (typeof this.captureWindowPrefixArmedTabState === "function") {
+      this.captureWindowPrefixArmedTabState();
+    }
     this.pushWindowPrefixScope();
     this.showWindowPrefixArmedHint();
     this.showWindowPrefixCardSoon();
@@ -520,6 +530,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
     this.windowPrefixState = "idle";
     this.windowPrefixSourceLeaf = null;
     this.windowPrefixArmedSnapshot = null;
+    if (typeof this.releaseWindowPrefixArmedTabState === "function") {
+      this.releaseWindowPrefixArmedTabState();
+    }
     this.clearWindowPrefixTimer("card");
     this.clearWindowPrefixTimer("linger");
     this.popWindowPrefixScope();
@@ -627,7 +640,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
     const snapshot = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : this.windowPrefixArmedSnapshot;
-    const plan = planWindowPrefixKey(snapshot, key);
+    const armedCatalog = this.windowPrefixArmedTabCatalog;
+    const generation = this.windowPrefixArmGeneration;
+    const plan = planWindowPrefixKey(snapshot, key, armedCatalog ? { armedCatalog } : {});
     this.windowPrefixLastDispatch = {
       ...(this.windowPrefixLastDispatch || {}),
       key,
@@ -637,6 +652,10 @@ class BobNavigationHotkeysWindowPrefixMixin {
     };
     if (!plan || plan.ok !== true || plan.available !== true ||
         plan.action === "noop" || plan.action === "unmapped" || plan.action === "unavailable") {
+      if (typeof this.handleWindowPrefixUnavailablePlan === "function" &&
+          this.handleWindowPrefixUnavailablePlan(plan, key)) {
+        return false;
+      }
       this.presentWindowPrefixBlocked(plan, key);
       return false;
     }
@@ -644,15 +663,20 @@ class BobNavigationHotkeysWindowPrefixMixin {
       this.disarmWindowPrefix();
       return false;
     }
+    const executeOptions = typeof this.windowPrefixMappedExecuteOptions === "function"
+      ? this.windowPrefixMappedExecuteOptions(generation)
+      : {
+        activeLeafId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeLeafId,
+        sourceSplitId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeSplitId,
+        armedCatalog,
+        isCurrent: () => this.windowPrefixArmGeneration === generation,
+      };
     this.windowPrefixState = "running";
     this.enqueueWindowPrefix(async () => {
       this.windowPrefixSelfCaused = true;
       let result;
       try {
-        result = await this.executeWindowPrefixPlan(plan, {
-          activeLeafId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeLeafId,
-          sourceSplitId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeSplitId,
-        });
+        result = await this.executeWindowPrefixPlan(plan, executeOptions);
       } catch (error) {
         this.disarmWindowPrefix();
         throw error;
@@ -669,6 +693,10 @@ class BobNavigationHotkeysWindowPrefixMixin {
         skipped: Boolean(result && result.skipped),
       };
       if (!result || result.ok !== true) {
+        if (typeof this.handleWindowPrefixMappedFailure === "function" &&
+            this.handleWindowPrefixMappedFailure(result, key)) {
+          return;
+        }
         if (result && result.reason === "layout-changed") {
           this.presentWindowPrefixBlocked({
             action: "noop",
@@ -725,6 +753,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
   }
 
   async presentWindowPrefixSuccess(plan, result) {
+    if (typeof this.presentWindowPrefixJumpFeedback === "function") {
+      this.presentWindowPrefixJumpFeedback(plan, result);
+    }
     const after = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : null;
@@ -754,6 +785,7 @@ class BobNavigationHotkeysWindowPrefixMixin {
       (typeof document !== "undefined" ? document : null);
     if (!doc || typeof createWindowHintHost !== "function") return null;
     this.windowPrefixHintHost = createWindowHintHost(doc, {
+      tabNumbers: true,
       setIcon: typeof setIcon === "function" ? setIcon : undefined,
       platform: windowPrefixIsMacPlatform() ? "mac" : "other",
       setTimeout: (callback, delay) => this.scheduleWindowPrefixTimeout(callback, delay),
@@ -797,12 +829,14 @@ class BobNavigationHotkeysWindowPrefixMixin {
       ? buildWindowPrefixViewModel(snapshot)
       : null;
     if (host && typeof host.showCard === "function") host.showCard(model);
+    if (typeof this.lightWindowTabNumbers === "function") this.lightWindowTabNumbers();
     if (this.windowPrefixState === "armed") this.windowPrefixState = "carded";
   }
 
   hideWindowPrefixHint() {
     const host = this.windowPrefixHintHost;
     if (host && typeof host.hide === "function") host.hide();
+    if (typeof this.unlightWindowTabNumbers === "function") this.unlightWindowTabNumbers();
   }
 
   handleWindowPrefixCancelEvent(_reason) {

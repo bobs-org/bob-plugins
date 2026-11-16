@@ -45,6 +45,9 @@ class BobNavigationHotkeysWindowTabActionsMixin {
     const isCurrent = typeof armed.isCurrent === "function" ? armed.isCurrent : () => true;
 
     if (plan.alreadyHere) {
+      if (!isCurrent()) {
+        return { ok: false, reason: "superseded" };
+      }
       return {
         ok: true,
         action: "focus-tab",

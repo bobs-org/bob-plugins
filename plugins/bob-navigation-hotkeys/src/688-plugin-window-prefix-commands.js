@@ -11,6 +11,11 @@ const WINDOW_PREFIX_PALETTE_COMMANDS = [
   { id: "window-move-tab-left", name: "Move tab to left split", key: "H" },
   { id: "window-move-tab-right", name: "Move tab to right split", key: "L" },
 ];
+const WINDOW_PREFIX_TAB_JUMP_COMMANDS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+  id: "window-jump-tab-" + n,
+  name: "Jump to tab " + n,
+  key: String(n),
+}));
 
 function windowPrefixPaletteNotice(message) {
   try {
@@ -23,6 +28,13 @@ function windowPrefixPaletteNotice(message) {
 class BobNavigationHotkeysWindowPrefixCommandsMixin {
   registerWindowPrefixCommands() {
     WINDOW_PREFIX_PALETTE_COMMANDS.forEach((command) => {
+      this.addCommand({
+        id: command.id,
+        name: command.name,
+        callback: () => this.runWindowPrefixPaletteKey(command.key),
+      });
+    });
+    WINDOW_PREFIX_TAB_JUMP_COMMANDS.forEach((command) => {
       this.addCommand({
         id: command.id,
         name: command.name,
@@ -59,10 +71,12 @@ class BobNavigationHotkeysWindowPrefixCommandsMixin {
     }
     let result = null;
     try {
-      result = await this.executeWindowPrefixPlan(plan, {
-        activeLeafId: layout.activeLeafId,
-        sourceSplitId: layout.activeSplitId,
-      });
+      result = await this.executeWindowPrefixPlan(plan, typeof this.windowPrefixPaletteExecuteOptions === "function"
+        ? this.windowPrefixPaletteExecuteOptions(layout)
+        : {
+          activeLeafId: layout.activeLeafId,
+          sourceSplitId: layout.activeSplitId,
+        });
     } catch (_error) {
       windowPrefixPaletteNotice("Window action failed · check the layout");
       return false;
@@ -84,6 +98,9 @@ class BobNavigationHotkeysWindowPrefixCommandsMixin {
   }
 
   async presentWindowPrefixPaletteSuccess(plan, result) {
+    if (typeof this.presentWindowPrefixJumpFeedback === "function") {
+      this.presentWindowPrefixJumpFeedback(plan, result);
+    }
     const after = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : null;

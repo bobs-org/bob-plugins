@@ -423,6 +423,12 @@ function normalizeWindowPrefixKeydown(event) {
   if (normalizedKey.toLowerCase() === "q") {
     return { kind: "cancel", key: "q", consume: true };
   }
+  const digit = typeof windowPrefixDigitFromKeydown === "function"
+    ? windowPrefixDigitFromKeydown(event)
+    : null;
+  if (digit) {
+    return { kind: "mapped", key: digit, inputKey: normalizedKey || digit, consume: true };
+  }
   const canonical = canonicalWindowPrefixKey(normalizedKey);
   if (WINDOW_PREFIX_KEY_LOOKUP.has(canonical)) {
     return { kind: "mapped", key: canonical, inputKey: normalizedKey, consume: true };

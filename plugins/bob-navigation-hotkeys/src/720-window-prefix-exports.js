@@ -22,6 +22,7 @@ try {
       windowPrefixMoveReceiptText,
       windowPrefixNormalizeVimMode,
       WINDOW_PREFIX_PALETTE_COMMANDS,
+      WINDOW_PREFIX_TAB_JUMP_COMMANDS,
     });
   }
 } catch (_error) {

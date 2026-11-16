@@ -684,6 +684,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerClearSearchHighlightInputListeners();
     this.registerWindowPrefixInputListeners();
     this.registerWindowPrefixCommands();
+    if (typeof this.startWindowTabNumbers === "function") {
+      this.startWindowTabNumbers();
+      this.register(() => {
+        try {
+          if (typeof this.stopWindowTabNumbers === "function") this.stopWindowTabNumbers();
+        } catch (_error) { /* unload */ }
+      });
+    }
 
     this.register(() => {
       if (this.pendingDependencyMirror) {

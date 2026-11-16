@@ -171,6 +171,22 @@ test("key normalization handles aliases, shifted letters, control fallback, and 
   assert.deepEqual(normalizeWindowPrefixKeydown({ key: "x" }), {
     kind: "unmapped", key: "x", consume: true,
   });
+  assert.deepEqual(normalizeWindowPrefixKeydown({ key: "3" }), {
+    kind: "mapped", key: "3", inputKey: "3", consume: true,
+  });
+  assert.deepEqual(normalizeWindowPrefixKeydown({ key: "\u0003", code: "Digit3", ctrlKey: true }), {
+    kind: "mapped", key: "3", inputKey: "\u0003", consume: true,
+  });
+  assert.deepEqual(normalizeWindowPrefixKeydown({ key: "2", code: "Numpad2" }), {
+    kind: "mapped", key: "2", inputKey: "2", consume: true,
+  });
+  assert.deepEqual(normalizeWindowPrefixKeydown({ key: "0" }), {
+    kind: "unmapped", key: "0", consume: true,
+  });
+  assert.deepEqual(normalizeWindowPrefixKeydown({ key: "#", code: "Digit3", shiftKey: true }), {
+    kind: "unmapped", key: "#", consume: true,
+  });
+  assert.equal(normalizeWindowPrefixKeydown({ key: "3", metaKey: true }).kind, "pass-through");
   assert.equal(normalizeWindowPrefixKeydown({ key: "q" }).kind, "cancel");
   assert.equal(normalizeWindowPrefixKeydown({ key: "[", ctrlKey: true }).key, "Ctrl+[");
   assert.equal(normalizeWindowPrefixKeydown({ key: "l", altKey: true }).cancel, true);

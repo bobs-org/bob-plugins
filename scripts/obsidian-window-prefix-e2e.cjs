@@ -15,7 +15,7 @@
 // decision-contract vector. --only prefix runs the Ctrl+W prefix
 // state-machine cases. --only visual runs the hint screenshots and palette
 // probes. --only tabs drives in-place tab jumps through
-// runWindowPrefixPaletteKey("N").
+// runWindowPrefixPaletteKey("N") and Ctrl+W digits.
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -89,8 +89,12 @@ const HELP = [
   "  Every tab decision-contract vector via runWindowPrefixPaletteKey (3/4/1/2/7),",
   "  source-split selection after a cross-split jump, type→jump away→back→u,",
   "  scroll of an unselected long note, PDF focus without an editor, stacked",
-  "  tabs, 13 tabs in a narrow split (header clipping), and a deferred",
-  "  background tab after reload. Keymap scope restoration after every case.",
+  "  tabs, 13 tabs in a narrow split (header clipping), a deferred background",
+  "  tab after reload, and Ctrl+W digits: 4 across splits, Ctrl+3 global vs",
+  "  group-local, Numpad 2, blocked 7+Esc identical, 0 and Shift+3, already-",
+  "  here, data-bob-tab parity, H/L and new-tab renumber, sidebar/single-tab,",
+  "  lit/flash classes, idle/lit/flash screenshots, and Linux Close-tab hide",
+  "  plus defaultPrevented close. Keymap scope restoration after every case.",
   "",
   "Visual group (--only visual):",
   "  Palette command registration, then ring, card, move receipt, and",
@@ -2719,7 +2723,9 @@ function selfTest() {
       "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active",
       "runPrefixMac", "runActionsMac", "actions/vector-", "runWindowPrefixPaletteKey",
       "runTabsMac", "executeWindowPrefixFocusTab",
-      "prefix/focus-l", "getWindowPrefixDebugState"]) {
+      "prefix/focus-l", "getWindowPrefixDebugState",
+      "runTabsLinux", "NUMERALS_PROBE", "bob-tab-numbers-lit",
+      "bob-tab-number-flash", "data-bob-tab"]) {
       if (!source.includes(token)) throw new Error("e2e is missing " + token);
     }
     const libSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-lib.cjs"), "utf8");
@@ -2727,7 +2733,16 @@ function selfTest() {
       if (!libSource.includes(token)) throw new Error("lib is missing " + token);
     }
     const tabsSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-tabs.cjs"), "utf8");
-    for (const token of ["tabs/vector-", "TAB_DECISION_VECTORS", "deferred-reload", "runWindowPrefixPaletteKey"]) {
+    for (const token of [
+      "tabs/vector-", "TAB_DECISION_VECTORS", "deferred-reload", "runWindowPrefixPaletteKey",
+      "tabs/prefix-digit-4", "tabs/prefix-ctrl-3-global", "tabs/prefix-numpad-2",
+      "tabs/prefix-blocked-7", "tabs/prefix-zero", "tabs/prefix-shift-3",
+      "tabs/prefix-already-here", "tabs/prefix-dom-parity", "tabs/prefix-renumber-open",
+      "tabs/prefix-renumber-HL", "tabs/prefix-sidebar", "tabs/prefix-single-tab",
+      "tabs/prefix-lit-card", "tabs/prefix-flash", "tabs/linux-numerals-hide",
+      "tabs/linux-ctrl-w-closes", "NUMERALS_PROBE", "data-bob-tab",
+      "bob-tab-numbers-lit", "bob-tab-number-flash", "runTabsLinuxGroup",
+    ]) {
       if (!tabsSource.includes(token)) throw new Error("tabs e2e is missing " + token);
     }
     // Every snippet shipped to Obsidian must be syntactically valid: two
@@ -2757,7 +2772,7 @@ function selfTest() {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 
-async function runTabsMac(args, record, findings) {
+async function runTabsMac(args, record, findings, outDir, screenshots) {
   await tabsMod.runTabsGroup({
     launchOwned,
     connectOwned,
@@ -2768,6 +2783,7 @@ async function runTabsMac(args, record, findings) {
     runCase,
     readLive,
     keys,
+    key,
     sleep,
     dumpEditor,
     placeCursor,
@@ -2777,6 +2793,34 @@ async function runTabsMac(args, record, findings) {
     wplib,
     RPC_TIMEOUT_MS,
     waitForVim,
+    armPrefix,
+    waitPrefixIdle,
+    waitPrefix,
+    prefixDebug,
+    letterKey,
+    screenshot,
+    outDir,
+    screenshots,
+    ctrlW,
+  }, args, record, findings);
+}
+
+async function runTabsLinux(args, record, findings) {
+  await tabsMod.runTabsLinuxGroup({
+    launchOwned,
+    connectOwned,
+    shutdownOwned,
+    buildFromSignature,
+    runCase,
+    keys,
+    ctrlW,
+    sleep,
+    leafCount,
+    prefixDebug,
+    keymapFinger,
+    sameKeymap,
+    wplib,
+    RPC_TIMEOUT_MS,
   }, args, record, findings);
 }
 
@@ -2805,7 +2849,8 @@ async function runE2e(args) {
   } else if (group === "visual") {
     await runVisualMac(args, record, findings, outDir, screenshots);
   } else if (group === "tabs") {
-    await runTabsMac(args, record, findings);
+    await runTabsMac(args, record, findings, outDir, screenshots);
+    await runTabsLinux(args, record, findings);
   } else {
     record(group + "/reserved", "skipped", "unknown group " + group);
   }
@@ -2877,6 +2922,7 @@ const PROBE_SNIPPETS = {
   VIM_PROBE,
   PREFIX_DEBUG,
   KEYMAP_FINGERPRINT,
+  NUMERALS_PROBE: tabsMod.NUMERALS_PROBE,
 };
 
 module.exports = {

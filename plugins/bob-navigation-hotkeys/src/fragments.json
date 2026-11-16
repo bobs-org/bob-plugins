@@ -216,6 +216,7 @@
   "684-notebook-create-model.js",
   "685-plugin-notebook-create.js",
   "687-plugin-window-prefix.js",
+  "687a-plugin-window-tab-jump.js",
   "688-plugin-window-prefix-commands.js",
   "689-plugin-window-tab-numbers.js",
   "690-install-plugin-mixins.js",

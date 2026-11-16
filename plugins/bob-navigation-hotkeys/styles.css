@@ -4948,6 +4948,7 @@ body.bob-tab-numbers-lit .workspace-tabs.mod-active .workspace-tab-header.is-act
 }
 
 .workspace-tab-header-inner.bob-tab-number-flash::before {
+  content: attr(data-bob-tab);
   color: var(--text-on-accent) !important;
   background: var(--interactive-accent) !important;
   box-shadow: inset 0 0 0 1px var(--interactive-accent) !important;

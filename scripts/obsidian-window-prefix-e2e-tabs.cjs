@@ -1,8 +1,10 @@
 "use strict";
 // Real-Obsidian window-prefix tabs group: in-place jumps through
-// `runWindowPrefixPaletteKey("N")` against every tab decision-contract vector.
-// The main harness requires this module for vectors, extra fixtures, and the
-// runner, and passes CDP helpers so this file does not require the harness.
+// `runWindowPrefixPaletteKey("N")` against every tab decision-contract vector,
+// plus Ctrl+W digit cases (armed catalog, held-Ctrl, numpad, blocked, DOM
+// parity, lit/flash, Linux hide+close). The main harness requires this module
+// for vectors, extra fixtures, and the runner, and passes CDP helpers so this
+// file does not require the harness.
 
 const actionsMod = require("./obsidian-window-prefix-e2e-actions.cjs");
 
@@ -104,6 +106,45 @@ const SOURCE_SELECTION_PROBE = [
   '} catch (e) { return { ok: false, error: String(e && e.message || e) }; } })()',
 ].join("");
 
+const NUMERALS_PROBE = [
+  '(()=>{try{',
+  'const body=document.body;',
+  'const bodyNumbers=!!(body&&body.classList&&body.classList.contains("bob-tab-numbers"));',
+  'const bodyLit=!!(body&&body.classList&&body.classList.contains("bob-tab-numbers-lit"));',
+  'const w=window.app.workspace,seen=new Map(),order=[];',
+  'w.iterateRootLeaves((leaf)=>{const p=leaf.parent;if(!p)return;',
+  'if(!seen.has(p)){seen.set(p,[]);order.push(p);}seen.get(p).push(leaf);});',
+  'const indexed=order.map((parent)=>{let left=0;',
+  'try{left=parent.containerEl.getBoundingClientRect().left;}catch(_){}',
+  'const tabs=seen.get(parent).map((leaf)=>{',
+  'let title="?";try{title=leaf.getDisplayText();}catch(_){}',
+  'const header=leaf.tabHeaderEl;',
+  'const inner=header&&header.querySelector?header.querySelector(".workspace-tab-header-inner"):header;',
+  'const number=inner&&inner.getAttribute?inner.getAttribute("data-bob-tab"):null;',
+  'const flash=!!(inner&&inner.classList&&inner.classList.contains("bob-tab-number-flash"));',
+  'return{title:title||"?",number,flash,leafId:leaf&&leaf.id||null};',
+  '});',
+  'return{left,tabs};});',
+  'indexed.sort((a,b)=>a.left-b.left);',
+  'const stamped=indexed.flatMap((g)=>g.tabs);',
+  'const catalog=[];',
+  'let n=1;for(const tab of stamped){catalog.push({title:tab.title,expect:n<=9?String(n):null});n+=1;}',
+  'let mismatch=null;',
+  'for(let i=0;i<stamped.length;i+=1){',
+  'const got=stamped[i].number==null?null:String(stamped[i].number);',
+  'const want=catalog[i].expect;',
+  'if(got!==want){mismatch={index:i,title:stamped[i].title,got,want};break;}}',
+  'return{ok:true,bodyNumbers,bodyLit,stamped,catalog,mismatch,',
+  'flashes:stamped.filter((t)=>t.flash).map((t)=>t.title)};',
+  '}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+].join("");
+
+function assertNumeralParity(probe, label) {
+  if (!probe || probe.ok !== true) throw new Error(label + " numerals probe failed: " + JSON.stringify(probe));
+  if (probe.mismatch) throw new Error(label + " data-bob-tab parity: " + JSON.stringify(probe.mismatch));
+  return probe;
+}
+
 function translateTabVector(vector) {
   const translated = actionsMod.translateDecisionVector({ from: vector.from, to: vector.to });
   return { ...vector, from: translated.from, to: translated.to, mapping: translated.mapping };
@@ -113,8 +154,10 @@ async function runTabsGroup(harness, args, record, findings) {
   const {
     launchOwned, connectOwned, shutdownOwned, buildFromSignature,
     actionsPaletteKey, runActionsCase, runCase,
-    readLive, keys, sleep, dumpEditor, placeCursor, reloadAndReconnect,
+    readLive, keys, key, sleep, dumpEditor, placeCursor, reloadAndReconnect,
     keymapFinger, sameKeymap, wplib, RPC_TIMEOUT_MS, waitForVim,
+    armPrefix, waitPrefixIdle, prefixDebug, letterKey, screenshot,
+    outDir, screenshots, waitPrefix, ctrlW,
   } = harness;
 
   async function settleVim(clientInner) {
@@ -344,6 +387,325 @@ async function runTabsGroup(harness, args, record, findings) {
       return after.signature + " via " + stacked.method;
     });
 
+    async function waitFlash(clientInner, title, label) {
+      const deadline = Date.now() + 1500;
+      let last = null;
+      while (Date.now() < deadline) {
+        last = await clientInner.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (last && last.ok && Array.isArray(last.flashes) && last.flashes.includes(title)) return last;
+        await sleep(30);
+      }
+      throw new Error((label || "flash") + " never appeared on " + title + ": " + JSON.stringify(last));
+    }
+
+    async function runPrefixDigitCases() {
+      findings.tabs.prefix = findings.tabs.prefix || {};
+
+      await runActionsCase(record, client, "tabs/prefix-digit-4", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await settleVim(client);
+        await armPrefix(client);
+        await key(client, { key: "4", code: "Digit4" });
+        await waitPrefixIdle(client);
+        const after = await readLive(client);
+        if (wplib.normalizeSignature(after.signature) !== "[ WP-A  WP-B' ] | [ WP-C  WP-D* ]") {
+          throw new Error("Ctrl+W 4 failed: " + after.signature);
+        }
+        findings.tabs.prefix.digit4 = after.signature;
+        return after.signature;
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-ctrl-3-global", async () => {
+        const layout = "[ WP-A  WP-B ] | [ WP-C  WP-D  WP-E* ]";
+        await buildFromSignature(client, layout);
+        await applyTranslatedState(client, layout);
+        await settleVim(client);
+        const before = await readLive(client);
+        if (!String(before.signature).includes("WP-E*")) {
+          throw new Error("ctrl-3 fixture did not land: " + before.signature);
+        }
+        await armPrefix(client);
+        await key(client, { key: "3", code: "Digit3", modifiers: 2, text: "" });
+        await waitPrefixIdle(client);
+        const after = await readLive(client);
+        if (!String(after.signature).includes("WP-C*")) {
+          throw new Error("Ctrl+W Ctrl+3 did not land on global tab 3 (WP-C): " + after.signature);
+        }
+        if (String(after.signature).includes("WP-E*")) {
+          throw new Error("Ctrl+W Ctrl+3 ran group-local native Ctrl+3: " + after.signature);
+        }
+        findings.tabs.prefix.ctrl3 = after.signature;
+        return after.signature;
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-numpad-2", async () => {
+        await buildFromSignature(client, "[ WP-A*  WP-B ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A*  WP-B ] | [ WP-C' ]");
+        await settleVim(client);
+        await armPrefix(client);
+        await key(client, { key: "2", code: "Numpad2" });
+        await waitPrefixIdle(client);
+        const after = await readLive(client);
+        if (!String(after.signature).includes("WP-B*")) {
+          throw new Error("Ctrl+W Numpad 2 failed: " + after.signature);
+        }
+        findings.tabs.prefix.numpad2 = after.signature;
+        return after.signature;
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-blocked-7", async () => {
+        const layout = "[ WP-A  WP-B*  WP-C ] | [ WP-D  WP-E  WP-F ]";
+        await buildFromSignature(client, layout);
+        await applyTranslatedState(client, layout);
+        await settleVim(client);
+        const before = await readLive(client);
+        const textBefore = (await dumpEditor(client)).text;
+        await armPrefix(client);
+        await key(client, { key: "7", code: "Digit7" });
+        await sleep(200);
+        const state = await prefixDebug(client);
+        if (!state.armed) throw new Error("blocked 7 disarmed: " + JSON.stringify(state));
+        if (!/No tab 7/i.test(String(state.message || ""))) {
+          throw new Error("blocked 7 missing message: " + JSON.stringify(state));
+        }
+        await keys(client, ["Escape"]);
+        await waitPrefixIdle(client);
+        const after = await readLive(client);
+        const textAfter = (await dumpEditor(client)).text;
+        if (wplib.normalizeSignature(after.signature) !== wplib.normalizeSignature(before.signature)) {
+          throw new Error("blocked 7+Esc changed layout: " + before.signature + " -> " + after.signature);
+        }
+        if (textAfter !== textBefore) throw new Error("blocked 7+Esc changed note text");
+        findings.tabs.prefix.blocked7 = after.signature;
+        return "stayed armed then Esc identical";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-zero", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await settleVim(client);
+        const before = await readLive(client);
+        await armPrefix(client);
+        await key(client, { key: "0", code: "Digit0" });
+        await sleep(150);
+        const state = await prefixDebug(client);
+        if (!state.armed) throw new Error("0 disarmed: " + JSON.stringify(state));
+        const after = await readLive(client);
+        if (after.signature !== before.signature) throw new Error("0 changed layout: " + after.signature);
+        return state.message || "0 consumed";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-shift-3", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await settleVim(client);
+        const before = await readLive(client);
+        await armPrefix(client);
+        await key(client, { key: "#", code: "Digit3", modifiers: 8, text: "#" });
+        await sleep(150);
+        const state = await prefixDebug(client);
+        if (!state.armed) throw new Error("Shift+3 disarmed: " + JSON.stringify(state));
+        const after = await readLive(client);
+        if (after.signature !== before.signature) throw new Error("Shift+3 changed layout: " + after.signature);
+        if (String(after.signature).includes("WP-C*")) {
+          throw new Error("Shift+3 jumped to tab 3: " + after.signature);
+        }
+        return state.message || "Shift+3 consumed";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-already-here", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await settleVim(client);
+        const before = await readLive(client);
+        await armPrefix(client);
+        await key(client, { key: "2", code: "Digit2" });
+        await waitPrefixIdle(client);
+        const after = await readLive(client);
+        if (wplib.normalizeSignature(after.signature) !== wplib.normalizeSignature(before.signature)) {
+          throw new Error("already-here digit changed layout: " + after.signature);
+        }
+        findings.tabs.prefix.alreadyHere = after.signature;
+        return after.signature;
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-dom-parity", async () => {
+        await seedExtraNotes();
+        const thirteen = "[ WP-A  WP-B  WP-C  WP-D  WP-E  WP-F  WP-G  WP-H  WP-I*  WP-J  WP-K  WP-L  WP-M ]";
+        await buildFromSignature(client, thirteen);
+        await applyTranslatedState(client, thirteen);
+        await sleep(250);
+        const probe = assertNumeralParity(
+          await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS),
+          "thirteen",
+        );
+        const numbered = probe.stamped.filter((tab) => tab.number != null);
+        const unnumbered = probe.stamped.filter((tab) => tab.number == null);
+        if (numbered.length !== 9) throw new Error("expected 9 numbered headers: " + JSON.stringify(probe.stamped));
+        if (unnumbered.length < 4) throw new Error("tabs 10+ should carry no data-bob-tab: " + JSON.stringify(probe.stamped));
+        findings.tabs.prefix.domParity = { numbered: numbered.length, unnumbered: unnumbered.length };
+        return "9 numbered, " + unnumbered.length + " unnumbered";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-renumber-open", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C  WP-D ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C  WP-D ]");
+        await sleep(200);
+        const before = assertNumeralParity(
+          await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS),
+          "renumber-open before",
+        );
+        const cBefore = before.stamped.find((tab) => tab.title === "WP-C");
+        if (!cBefore || cBefore.number !== "3") {
+          throw new Error("WP-C should be 3 before open: " + JSON.stringify(before.stamped));
+        }
+        const opened = await client.evaluate(
+          '(()=>(async()=>{const f=window.app.vault.getAbstractFileByPath("WP-E.md");if(!f)return{ok:false,error:"missing WP-E"};'
+          + 'const w=window.app.workspace;const leaf=w.getLeaf("tab");await leaf.openFile(f);'
+          + 'w.setActiveLeaf(leaf,{focus:true});'
+          + 'await new Promise((r)=>requestAnimationFrame(()=>requestAnimationFrame(r)));'
+          + 'return{ok:true,path:leaf.view&&leaf.view.file&&leaf.view.file.path};})())()',
+          RPC_TIMEOUT_MS,
+        );
+        if (!opened || !opened.ok) throw new Error("open tab in left split failed: " + JSON.stringify(opened));
+        await sleep(250);
+        const after = assertNumeralParity(
+          await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS),
+          "renumber-open after",
+        );
+        const cAfter = after.stamped.find((tab) => tab.title === "WP-C");
+        if (!cAfter || cAfter.number !== "4") {
+          throw new Error("opening a left-split tab did not renumber WP-C to 4: " + JSON.stringify(after.stamped));
+        }
+        findings.tabs.prefix.renumberOpen = after.stamped.map((tab) => tab.title + "=" + tab.number);
+        return "WP-C 3 → 4";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-renumber-HL", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await settleVim(client);
+        const before = assertNumeralParity(
+          await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS),
+          "renumber-HL before",
+        );
+        const cBefore = before.stamped.find((tab) => tab.title === "WP-C");
+        if (!cBefore || cBefore.number !== "3") {
+          throw new Error("WP-C should be 3 before L: " + JSON.stringify(before.stamped));
+        }
+        await armPrefix(client);
+        await letterKey(client, "L");
+        await waitPrefixIdle(client, 8000);
+        await sleep(250);
+        const after = assertNumeralParity(
+          await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS),
+          "renumber-HL after",
+        );
+        const cAfter = after.stamped.find((tab) => tab.title === "WP-C");
+        const bAfter = after.stamped.find((tab) => tab.title === "WP-B");
+        if (!cAfter || cAfter.number !== "2") {
+          throw new Error("L did not renumber WP-C to 2: " + JSON.stringify(after.stamped));
+        }
+        if (!bAfter || bAfter.number !== "3") {
+          throw new Error("L did not number moved WP-B as 3: " + JSON.stringify(after.stamped));
+        }
+        findings.tabs.prefix.renumberHL = after.stamped.map((tab) => tab.title + "=" + tab.number);
+        return after.stamped.map((tab) => tab.title + "=" + tab.number).join(" ");
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-sidebar", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await sleep(200);
+        const before = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (!before || before.bodyNumbers !== true) {
+          throw new Error("numerals missing before sidebar focus: " + JSON.stringify(before));
+        }
+        const focused = await client.evaluate(
+          '(()=>{try{const w=window.app.workspace;const leaves=w.getLeavesOfType?w.getLeavesOfType("file-explorer"):[];'
+          + 'const leaf=leaves&&leaves[0];if(!leaf)return{ok:false,error:"no file-explorer"};'
+          + 'w.setActiveLeaf(leaf,{focus:true});'
+          + 'return{ok:true,viewType:leaf.view&&leaf.view.getViewType&&leaf.view.getViewType()};}catch(e){return{ok:false,error:String(e&&e.message||e)};}})()',
+          RPC_TIMEOUT_MS,
+        );
+        if (!focused || !focused.ok) throw new Error("sidebar focus failed: " + JSON.stringify(focused));
+        await sleep(200);
+        const after = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (!after || after.bodyNumbers !== true) {
+          throw new Error("sidebar focus hid numerals: " + JSON.stringify(after));
+        }
+        findings.tabs.prefix.sidebar = after;
+        return "sidebar focus keeps numerals";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-single-tab", async () => {
+        await buildFromSignature(client, "[ WP-A* ]");
+        await applyTranslatedState(client, "[ WP-A* ]");
+        await sleep(250);
+        const probe = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (!probe || probe.ok !== true) throw new Error("single-tab probe failed: " + JSON.stringify(probe));
+        if (probe.bodyNumbers === true) throw new Error("single tab showed numerals: " + JSON.stringify(probe));
+        if (probe.stamped.some((tab) => tab.number != null)) {
+          throw new Error("single tab carried data-bob-tab: " + JSON.stringify(probe.stamped));
+        }
+        findings.tabs.prefix.singleTab = probe;
+        return "single tab shows none";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-lit-card", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C' ]");
+        await settleVim(client);
+        if (outDir && typeof screenshot === "function") {
+          screenshots.push(await screenshot(client, outDir, "tabs-idle"));
+        }
+        await armPrefix(client);
+        await sleep(80);
+        const early = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        const earlyDebug = await prefixDebug(client);
+        if (earlyDebug.hostCarded) throw new Error("card appeared before 300ms: " + JSON.stringify(earlyDebug));
+        if (early && early.bodyLit === true) throw new Error("lit arrived before the card: " + JSON.stringify(early));
+        await sleep(300);
+        const late = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        const lateDebug = await prefixDebug(client);
+        if (!lateDebug.hostCarded) throw new Error("card missing at 300ms: " + JSON.stringify(lateDebug));
+        if (!late || late.bodyLit !== true) throw new Error("lit missing with the card: " + JSON.stringify(late));
+        if (outDir && typeof screenshot === "function") {
+          screenshots.push(await screenshot(client, outDir, "tabs-lit"));
+        }
+        await keys(client, ["Escape"]);
+        await waitPrefixIdle(client);
+        const after = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (after && after.bodyLit === true) throw new Error("lit survived Esc: " + JSON.stringify(after));
+        findings.tabs.prefix.lit = { early: early && early.bodyLit, late: late.bodyLit, afterEsc: after && after.bodyLit };
+        return "lit with card, gone after Esc";
+      });
+
+      await runActionsCase(record, client, "tabs/prefix-flash", async () => {
+        await buildFromSignature(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await applyTranslatedState(client, "[ WP-A  WP-B* ] | [ WP-C'  WP-D ]");
+        await settleVim(client);
+        await armPrefix(client);
+        await key(client, { key: "4", code: "Digit4" });
+        const flashing = await waitFlash(client, "WP-D", "tabs/prefix-flash");
+        if (outDir && typeof screenshot === "function") {
+          screenshots.push(await screenshot(client, outDir, "tabs-flash"));
+        }
+        await sleep(400);
+        const gone = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+        if (gone && Array.isArray(gone.flashes) && gone.flashes.length) {
+          throw new Error("flash class lingered past 220ms: " + JSON.stringify(gone.flashes));
+        }
+        findings.tabs.prefix.flash = { during: flashing.flashes, after: gone && gone.flashes };
+        return "flash on WP-D ~220ms";
+      });
+    }
+
+    if (typeof armPrefix === "function" && typeof key === "function") {
+      await runPrefixDigitCases();
+    }
+
     await runActionsCase(record, client, "tabs/thirteen-clip", async () => {
       await seedExtraNotes();
       const thirteen = "[ WP-A  WP-B  WP-C  WP-D  WP-E  WP-F  WP-G  WP-H  WP-I*  WP-J  WP-K  WP-L  WP-M ]";
@@ -401,12 +763,84 @@ async function runTabsGroup(harness, args, record, findings) {
   }
 }
 
+async function runTabsLinuxGroup(harness, args, record, findings) {
+  const {
+    launchOwned, connectOwned, shutdownOwned, buildFromSignature,
+    runCase, keys, ctrlW, sleep, leafCount, prefixDebug, keymapFinger, sameKeymap,
+    wplib, RPC_TIMEOUT_MS,
+  } = harness;
+  const launch = await launchOwned(wplib.linuxDefaultHotkeys(), args.executable);
+  let client = null;
+  try {
+    client = await connectOwned(launch);
+    findings.linuxAppVersion = findings.linuxAppVersion
+      || await client.evaluate("window.app.version||null").catch(() => null);
+    findings.tabs = findings.tabs || {};
+
+    await runCase(record, "tabs/linux-numerals-hide", async () => {
+      await buildFromSignature(client, "[ WP-A*  WP-B ] | [ WP-C ]");
+      await keys(client, ["Escape"]);
+      await sleep(300);
+      const probe = await client.evaluate(NUMERALS_PROBE, RPC_TIMEOUT_MS);
+      if (!probe || probe.ok !== true) throw new Error("linux numerals probe failed: " + JSON.stringify(probe));
+      if (probe.bodyNumbers === true || probe.bodyLit === true) {
+        throw new Error("Linux Close-tab owner still showed numerals: " + JSON.stringify(probe));
+      }
+      if (probe.stamped.some((tab) => tab.number != null)) {
+        throw new Error("Linux idle headers carried data-bob-tab: " + JSON.stringify(probe.stamped));
+      }
+      findings.tabs.linuxHide = probe;
+      return "idle numerals hidden under Close tab";
+    });
+
+    await runCase(record, "tabs/linux-ctrl-w-closes", async () => {
+      await buildFromSignature(client, "[ WP-A*  WP-B ]");
+      await keys(client, ["Escape"]);
+      const before = await keymapFinger(client);
+      const leavesBefore = await leafCount(client);
+      const debugBefore = await prefixDebug(client);
+      if (debugBefore.state && debugBefore.state !== "idle") {
+        throw new Error("prefix not idle before Linux Ctrl+W: " + JSON.stringify(debugBefore));
+      }
+      const ctx = { dead: false };
+      try {
+        await ctrlW(client, 200);
+        await sleep(400);
+      } catch (_error) {
+        ctx.dead = true;
+      }
+      if (ctx.dead) {
+        findings.tabs.linuxClose = { outcome: "window-closed-or-socket-dead", leavesBefore };
+        return `socket died after Ctrl+W from ${leavesBefore} leaves (window closed)`;
+      }
+      const leavesAfter = await leafCount(client);
+      const debugAfter = await prefixDebug(client);
+      if (debugAfter.armed || (debugAfter.state && debugAfter.state !== "idle")) {
+        throw new Error("prefix armed under Linux Close tab: " + JSON.stringify(debugAfter));
+      }
+      if (leavesAfter !== leavesBefore - 1) {
+        throw new Error(`expected tab close ${leavesBefore}->${leavesBefore - 1}, got ${leavesAfter}`);
+      }
+      const after = await keymapFinger(client);
+      if (!sameKeymap(before, after)) {
+        throw new Error("scope stack changed on Linux close: " + JSON.stringify({ before, after }));
+      }
+      findings.tabs.linuxClose = { leavesBefore, leavesAfter, idle: true };
+      return `closed ${leavesBefore}->${leavesAfter}, prefix idle`;
+    });
+  } finally {
+    await shutdownOwned(launch, client);
+  }
+}
+
 module.exports = {
   TAB_DECISION_VECTORS,
   TAB_EXTRA_NOTES,
   HEADER_VISIBLE_PROBE,
   SCROLL_STATE_PROBE,
   SOURCE_SELECTION_PROBE,
+  NUMERALS_PROBE,
   translateTabVector,
   runTabsGroup,
+  runTabsLinuxGroup,
 };

@@ -46840,6 +46840,12 @@ function normalizeWindowPrefixKeydown(event) {
   if (normalizedKey.toLowerCase() === "q") {
     return { kind: "cancel", key: "q", consume: true };
   }
+  const digit = typeof windowPrefixDigitFromKeydown === "function"
+    ? windowPrefixDigitFromKeydown(event)
+    : null;
+  if (digit) {
+    return { kind: "mapped", key: digit, inputKey: normalizedKey || digit, consume: true };
+  }
   const canonical = canonicalWindowPrefixKey(normalizedKey);
   if (WINDOW_PREFIX_KEY_LOOKUP.has(canonical)) {
     return { kind: "mapped", key: canonical, inputKey: normalizedKey, consume: true };
@@ -48263,6 +48269,9 @@ class BobNavigationHotkeysWindowTabActionsMixin {
     const isCurrent = typeof armed.isCurrent === "function" ? armed.isCurrent : () => true;
 
     if (plan.alreadyHere) {
+      if (!isCurrent()) {
+        return { ok: false, reason: "superseded" };
+      }
       return {
         ok: true,
         action: "focus-tab",
@@ -80050,6 +80059,14 @@ class BobNavigationHotkeysPlugin extends Plugin {
     this.registerClearSearchHighlightInputListeners();
     this.registerWindowPrefixInputListeners();
     this.registerWindowPrefixCommands();
+    if (typeof this.startWindowTabNumbers === "function") {
+      this.startWindowTabNumbers();
+      this.register(() => {
+        try {
+          if (typeof this.stopWindowTabNumbers === "function") this.stopWindowTabNumbers();
+        } catch (_error) { /* unload */ }
+      });
+    }
 
     this.register(() => {
       if (this.pendingDependencyMirror) {
@@ -120239,6 +120256,8 @@ class BobNavigationHotkeysWindowPrefixMixin {
     this.windowPrefixHintHost = this.windowPrefixHintHost || null;
     this.windowPrefixSourceLeaf = null;
     this.windowPrefixArmedSnapshot = null;
+    this.windowPrefixArmedTabCatalog = null;
+    this.windowPrefixArmGeneration = 0;
     this.windowPrefixSelfCaused = false;
     this.windowPrefixTimerIds = Object.create(null);
 
@@ -120424,7 +120443,12 @@ class BobNavigationHotkeysWindowPrefixMixin {
       isEditable: context && context.isEditable,
       defaultPrevented: context && context.defaultPrevented,
     };
-    if (!verdict || verdict.allowed !== true) return false;
+    if (!verdict || verdict.allowed !== true) {
+      if (typeof this.scheduleWindowTabNumbersFromPreventedCtrlW === "function") {
+        this.scheduleWindowTabNumbersFromPreventedCtrlW(verdict);
+      }
+      return false;
+    }
     windowPrefixMarkHandled(this.windowPrefixHandledEvents, event);
     windowPrefixConsumeEvent(event);
     this.armWindowPrefix();
@@ -120512,6 +120536,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
       ? this.snapshotWindowPrefixLayout()
       : null;
     this.windowPrefixState = "armed";
+    if (typeof this.captureWindowPrefixArmedTabState === "function") {
+      this.captureWindowPrefixArmedTabState();
+    }
     this.pushWindowPrefixScope();
     this.showWindowPrefixArmedHint();
     this.showWindowPrefixCardSoon();
@@ -120522,6 +120549,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
     this.windowPrefixState = "idle";
     this.windowPrefixSourceLeaf = null;
     this.windowPrefixArmedSnapshot = null;
+    if (typeof this.releaseWindowPrefixArmedTabState === "function") {
+      this.releaseWindowPrefixArmedTabState();
+    }
     this.clearWindowPrefixTimer("card");
     this.clearWindowPrefixTimer("linger");
     this.popWindowPrefixScope();
@@ -120629,7 +120659,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
     const snapshot = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : this.windowPrefixArmedSnapshot;
-    const plan = planWindowPrefixKey(snapshot, key);
+    const armedCatalog = this.windowPrefixArmedTabCatalog;
+    const generation = this.windowPrefixArmGeneration;
+    const plan = planWindowPrefixKey(snapshot, key, armedCatalog ? { armedCatalog } : {});
     this.windowPrefixLastDispatch = {
       ...(this.windowPrefixLastDispatch || {}),
       key,
@@ -120639,6 +120671,10 @@ class BobNavigationHotkeysWindowPrefixMixin {
     };
     if (!plan || plan.ok !== true || plan.available !== true ||
         plan.action === "noop" || plan.action === "unmapped" || plan.action === "unavailable") {
+      if (typeof this.handleWindowPrefixUnavailablePlan === "function" &&
+          this.handleWindowPrefixUnavailablePlan(plan, key)) {
+        return false;
+      }
       this.presentWindowPrefixBlocked(plan, key);
       return false;
     }
@@ -120646,15 +120682,20 @@ class BobNavigationHotkeysWindowPrefixMixin {
       this.disarmWindowPrefix();
       return false;
     }
+    const executeOptions = typeof this.windowPrefixMappedExecuteOptions === "function"
+      ? this.windowPrefixMappedExecuteOptions(generation)
+      : {
+        activeLeafId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeLeafId,
+        sourceSplitId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeSplitId,
+        armedCatalog,
+        isCurrent: () => this.windowPrefixArmGeneration === generation,
+      };
     this.windowPrefixState = "running";
     this.enqueueWindowPrefix(async () => {
       this.windowPrefixSelfCaused = true;
       let result;
       try {
-        result = await this.executeWindowPrefixPlan(plan, {
-          activeLeafId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeLeafId,
-          sourceSplitId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeSplitId,
-        });
+        result = await this.executeWindowPrefixPlan(plan, executeOptions);
       } catch (error) {
         this.disarmWindowPrefix();
         throw error;
@@ -120671,6 +120712,10 @@ class BobNavigationHotkeysWindowPrefixMixin {
         skipped: Boolean(result && result.skipped),
       };
       if (!result || result.ok !== true) {
+        if (typeof this.handleWindowPrefixMappedFailure === "function" &&
+            this.handleWindowPrefixMappedFailure(result, key)) {
+          return;
+        }
         if (result && result.reason === "layout-changed") {
           this.presentWindowPrefixBlocked({
             action: "noop",
@@ -120727,6 +120772,9 @@ class BobNavigationHotkeysWindowPrefixMixin {
   }
 
   async presentWindowPrefixSuccess(plan, result) {
+    if (typeof this.presentWindowPrefixJumpFeedback === "function") {
+      this.presentWindowPrefixJumpFeedback(plan, result);
+    }
     const after = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : null;
@@ -120756,6 +120804,7 @@ class BobNavigationHotkeysWindowPrefixMixin {
       (typeof document !== "undefined" ? document : null);
     if (!doc || typeof createWindowHintHost !== "function") return null;
     this.windowPrefixHintHost = createWindowHintHost(doc, {
+      tabNumbers: true,
       setIcon: typeof setIcon === "function" ? setIcon : undefined,
       platform: windowPrefixIsMacPlatform() ? "mac" : "other",
       setTimeout: (callback, delay) => this.scheduleWindowPrefixTimeout(callback, delay),
@@ -120799,12 +120848,14 @@ class BobNavigationHotkeysWindowPrefixMixin {
       ? buildWindowPrefixViewModel(snapshot)
       : null;
     if (host && typeof host.showCard === "function") host.showCard(model);
+    if (typeof this.lightWindowTabNumbers === "function") this.lightWindowTabNumbers();
     if (this.windowPrefixState === "armed") this.windowPrefixState = "carded";
   }
 
   hideWindowPrefixHint() {
     const host = this.windowPrefixHintHost;
     if (host && typeof host.hide === "function") host.hide();
+    if (typeof this.unlightWindowTabNumbers === "function") this.unlightWindowTabNumbers();
   }
 
   handleWindowPrefixCancelEvent(_reason) {
@@ -120847,6 +120898,109 @@ class BobNavigationHotkeysWindowPrefixMixin {
     }
   }
 }
+// ---- src/687a-plugin-window-tab-jump.js ----
+// Digit glue for the Ctrl+W prefix: freeze the armed tab catalog, light and
+// flash numerals, and settle focus-tab outcomes. 687 calls these helpers so
+// it stays under 1000 lines.
+class BobNavigationHotkeysWindowTabJumpMixin {
+  captureWindowPrefixArmedTabState() {
+    this.windowPrefixArmGeneration = (this.windowPrefixArmGeneration || 0) + 1;
+    const snapshot = this.windowPrefixArmedSnapshot;
+    this.windowPrefixArmedTabCatalog = typeof buildWindowPrefixTabCatalog === "function"
+      ? buildWindowPrefixTabCatalog(snapshot)
+      : null;
+    if (typeof this.refreshWindowTabNumbersNow === "function") {
+      try { this.refreshWindowTabNumbersNow({ snapshot }); } catch (_error) { /* never throw */ }
+    }
+  }
+
+  releaseWindowPrefixArmedTabState() {
+    this.windowPrefixArmGeneration = (this.windowPrefixArmGeneration || 0) + 1;
+    this.windowPrefixArmedTabCatalog = null;
+    this.unlightWindowTabNumbers();
+  }
+
+  windowPrefixMappedExecuteOptions(generation) {
+    const gen = generation == null ? this.windowPrefixArmGeneration : generation;
+    return {
+      activeLeafId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeLeafId,
+      sourceSplitId: this.windowPrefixArmedSnapshot && this.windowPrefixArmedSnapshot.activeSplitId,
+      armedCatalog: this.windowPrefixArmedTabCatalog,
+      isCurrent: () => this.windowPrefixArmGeneration === gen,
+    };
+  }
+
+  windowPrefixPaletteExecuteOptions(layout) {
+    const workspace = this.app && this.app.workspace;
+    const startLeaf = workspace && workspace.activeLeaf;
+    return {
+      activeLeafId: layout && layout.activeLeafId,
+      sourceSplitId: layout && layout.activeSplitId,
+      isCurrent: () => {
+        try { return workspace && workspace.activeLeaf === startLeaf; } catch (_error) { return false; }
+      },
+    };
+  }
+
+  lightWindowTabNumbers() {
+    if (typeof this.setWindowTabNumbersLit === "function") {
+      try { this.setWindowTabNumbersLit(true); } catch (_error) { /* never throw */ }
+    }
+  }
+
+  unlightWindowTabNumbers() {
+    if (typeof this.setWindowTabNumbersLit === "function") {
+      try { this.setWindowTabNumbersLit(false); } catch (_error) { /* never throw */ }
+    }
+  }
+
+  presentWindowPrefixJumpFeedback(plan, result) {
+    if (!plan || plan.action !== "focus-tab") return;
+    const leafId = (result && result.leafId) || plan.targetLeafId;
+    if (leafId != null && typeof this.flashWindowTabNumber === "function") {
+      try { this.flashWindowTabNumber(leafId); } catch (_error) { /* never throw */ }
+    }
+    this.unlightWindowTabNumbers();
+  }
+
+  presentWindowPrefixTabsChanged(plan, key) {
+    this.presentWindowPrefixBlocked(plan || {
+      action: "noop",
+      available: false,
+      reason: "tabs-changed",
+      preview: "Tabs changed — try again",
+      key,
+    }, key);
+    this.disarmWindowPrefix({ keepHint: true });
+    this.scheduleWindowPrefixTimeout(() => this.hideWindowPrefixHint(), 900, "linger");
+  }
+
+  handleWindowPrefixUnavailablePlan(plan, key) {
+    if (plan && (plan.disarm === true || plan.reason === "tabs-changed")) {
+      this.presentWindowPrefixTabsChanged(plan, key);
+      return true;
+    }
+    return false;
+  }
+
+  handleWindowPrefixMappedFailure(result, key) {
+    if (result && result.reason === "superseded") return true;
+    const plan = result && result.plan;
+    if (result && (result.reason === "tabs-changed" ||
+        (plan && (plan.disarm === true || plan.reason === "tabs-changed")))) {
+      this.presentWindowPrefixTabsChanged(plan, key);
+      return true;
+    }
+    return false;
+  }
+
+  scheduleWindowTabNumbersFromPreventedCtrlW(verdict) {
+    if (!verdict || verdict.reason !== "default-prevented") return;
+    if (typeof this.scheduleWindowTabNumbersRefresh === "function") {
+      try { this.scheduleWindowTabNumbersRefresh(); } catch (_error) { /* never throw */ }
+    }
+  }
+}
 // ---- src/688-plugin-window-prefix-commands.js ----
 // Window-prefix palette commands and the persistent focused-split underline.
 // Palette verbs route through the same planner/executor/painter as the Ctrl+W
@@ -120861,6 +121015,11 @@ const WINDOW_PREFIX_PALETTE_COMMANDS = [
   { id: "window-move-tab-left", name: "Move tab to left split", key: "H" },
   { id: "window-move-tab-right", name: "Move tab to right split", key: "L" },
 ];
+const WINDOW_PREFIX_TAB_JUMP_COMMANDS = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+  id: "window-jump-tab-" + n,
+  name: "Jump to tab " + n,
+  key: String(n),
+}));
 
 function windowPrefixPaletteNotice(message) {
   try {
@@ -120873,6 +121032,13 @@ function windowPrefixPaletteNotice(message) {
 class BobNavigationHotkeysWindowPrefixCommandsMixin {
   registerWindowPrefixCommands() {
     WINDOW_PREFIX_PALETTE_COMMANDS.forEach((command) => {
+      this.addCommand({
+        id: command.id,
+        name: command.name,
+        callback: () => this.runWindowPrefixPaletteKey(command.key),
+      });
+    });
+    WINDOW_PREFIX_TAB_JUMP_COMMANDS.forEach((command) => {
       this.addCommand({
         id: command.id,
         name: command.name,
@@ -120909,10 +121075,12 @@ class BobNavigationHotkeysWindowPrefixCommandsMixin {
     }
     let result = null;
     try {
-      result = await this.executeWindowPrefixPlan(plan, {
-        activeLeafId: layout.activeLeafId,
-        sourceSplitId: layout.activeSplitId,
-      });
+      result = await this.executeWindowPrefixPlan(plan, typeof this.windowPrefixPaletteExecuteOptions === "function"
+        ? this.windowPrefixPaletteExecuteOptions(layout)
+        : {
+          activeLeafId: layout.activeLeafId,
+          sourceSplitId: layout.activeSplitId,
+        });
     } catch (_error) {
       windowPrefixPaletteNotice("Window action failed · check the layout");
       return false;
@@ -120934,6 +121102,9 @@ class BobNavigationHotkeysWindowPrefixCommandsMixin {
   }
 
   async presentWindowPrefixPaletteSuccess(plan, result) {
+    if (typeof this.presentWindowPrefixJumpFeedback === "function") {
+      this.presentWindowPrefixJumpFeedback(plan, result);
+    }
     const after = typeof this.snapshotWindowPrefixLayout === "function"
       ? this.snapshotWindowPrefixLayout()
       : null;
@@ -121071,9 +121242,8 @@ class BobNavigationHotkeysWindowPrefixCommandsMixin {
   }
 }
 // ---- src/689-plugin-window-tab-numbers.js ----
-// Dormant tab-numeral stamper for the Ctrl+W numbered-tab epic (paint phase).
-// Nothing starts this mixin yet: `prefix` wires `startWindowTabNumbers` from
-// `onload`, and the card lights numerals through `setWindowTabNumbersLit`.
+// Tab-numeral stamper for the Ctrl+W numbered-tab epic. `prefix` starts it
+// from `onload` and lights numerals through `setWindowTabNumbersLit`.
 // The stamper never throws, never mutates the prefix live maps, and never
 // cancels an in-flight flash during a refresh.
 const WINDOW_TAB_NUMBERS_ATTRIBUTE = "data-bob-tab";
@@ -121528,6 +121698,24 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
       }
       if (!inner) return false;
       try {
+        if (!windowTabNumbersGetAttr(inner, WINDOW_TAB_NUMBERS_ATTRIBUTE)) {
+          const area = typeof this.snapshotWindowPrefixMainArea === "function"
+            ? this.snapshotWindowPrefixMainArea()
+            : null;
+          const catalog = area && typeof buildWindowPrefixTabCatalog === "function"
+            ? buildWindowPrefixTabCatalog({ splits: area.splits, activeLeafId: area.activeLeafId })
+            : null;
+          const tab = catalog && Array.isArray(catalog.tabs)
+            ? catalog.tabs.find((item) => String(item.leafId) === id)
+            : null;
+          if (tab && tab.number != null) {
+            windowTabNumbersSetAttr(inner, WINDOW_TAB_NUMBERS_ATTRIBUTE, String(tab.number));
+          }
+        }
+      } catch (_error) {
+        // Flash content is best-effort.
+      }
+      try {
         const previousId = this.windowTabNumbersFlashLeafId;
         if (previousId && previousId !== id) {
           const previous = stamped.get(String(previousId));
@@ -121542,6 +121730,7 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
         try {
           windowTabNumbersRemoveClass(inner, WINDOW_TAB_NUMBERS_FLASH_CLASS);
           if (this.windowTabNumbersFlashLeafId === id) this.windowTabNumbersFlashLeafId = null;
+          this.refreshWindowTabNumbersNow();
         } catch (_error) {
           // Flash cleanup never throws.
         }
@@ -121661,6 +121850,19 @@ class BobNavigationHotkeysWindowTabNumbersMixin {
         verdict = { show: false, lit: false, reason: "unavailable" };
       }
       if (!verdict || verdict.show !== true) {
+        if (this.windowTabNumbersFlashLeafId) {
+          if (body) {
+            windowTabNumbersAddClass(body, WINDOW_TAB_NUMBERS_BODY_CLASS);
+            windowTabNumbersRemoveClass(body, WINDOW_TAB_NUMBERS_LIT_CLASS);
+          }
+          return {
+            ok: true,
+            shown: true,
+            lit: false,
+            reason: "flash-hold",
+            total: catalog.total,
+          };
+        }
         this.windowTabNumbersClearStamps();
         if (body) {
           windowTabNumbersRemoveClass(body, WINDOW_TAB_NUMBERS_BODY_CLASS);
@@ -121840,6 +122042,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysWindowLayoutMixin,
   BobNavigationHotkeysWindowTabActionsMixin,
   BobNavigationHotkeysWindowPrefixMixin,
+  BobNavigationHotkeysWindowTabJumpMixin,
   BobNavigationHotkeysWindowPrefixCommandsMixin,
   BobNavigationHotkeysWindowTabNumbersMixin,
 ]);
@@ -123362,6 +123565,7 @@ try {
       windowPrefixMoveReceiptText,
       windowPrefixNormalizeVimMode,
       WINDOW_PREFIX_PALETTE_COMMANDS,
+      WINDOW_PREFIX_TAB_JUMP_COMMANDS,
     });
   }
 } catch (_error) {

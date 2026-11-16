@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { NavigationHotkeysPlugin, helpers, notices } = require("./navigation-hotkeys-harness.cjs");
 
-const { WINDOW_PREFIX_PALETTE_COMMANDS } = helpers;
+const { WINDOW_PREFIX_PALETTE_COMMANDS, WINDOW_PREFIX_TAB_JUMP_COMMANDS } = helpers;
 
 function fakeHost() {
   const calls = [];
@@ -141,6 +141,17 @@ function pluginFor(options = {}) {
   plugin.snapshotWindowPrefixLayout = options.snapshot || (() => twoSplitSnapshot());
   plugin.executeWindowPrefixPlan = options.execute ||
     (async (plan) => ({ ok: true, action: plan.action, plan }));
+  plugin.windowTabNumbersLitCalls = [];
+  plugin.windowTabFlashes = [];
+  plugin.setWindowTabNumbersLit = (on) => {
+    plugin.windowTabNumbersLitCalls.push(on === true);
+    plugin.windowTabNumbersLit = on === true;
+  };
+  plugin.flashWindowTabNumber = (id) => {
+    plugin.windowTabFlashes.push(id);
+    return true;
+  };
+  plugin.refreshWindowTabNumbersNow = () => ({ ok: true, shown: true });
   installClock(plugin);
   plugin.registerWindowPrefixInputListeners();
   notices.length = 0;
@@ -165,7 +176,7 @@ test("palette command table covers every verb with no default hotkeys", () => {
   assert.deepEqual(keys, ["h", "l", "w", "H", "L"]);
 });
 
-test("registerWindowPrefixCommands registers six palette commands and gates the underline", () => {
+test("registerWindowPrefixCommands registers window and jump-tab palette commands and gates the underline", () => {
   const { plugin, body, commands } = pluginFor();
   plugin.registerWindowPrefixCommands();
   const ids = commands.map((command) => command.id);
@@ -175,6 +186,15 @@ test("registerWindowPrefixCommands registers six palette commands and gates the 
     "window-focus-next",
     "window-move-tab-left",
     "window-move-tab-right",
+    "window-jump-tab-1",
+    "window-jump-tab-2",
+    "window-jump-tab-3",
+    "window-jump-tab-4",
+    "window-jump-tab-5",
+    "window-jump-tab-6",
+    "window-jump-tab-7",
+    "window-jump-tab-8",
+    "window-jump-tab-9",
     "window-keys",
   ]);
   for (const command of commands) {
@@ -267,6 +287,54 @@ test("the underline gates on split count and clears on unload", () => {
   assert.equal(body.classList.contains("bob-wp-multi-split"), true);
   plugin.clearWindowPrefixUnderline();
   assert.equal(body.classList.contains("bob-wp-multi-split"), false);
+});
+
+test("nine jump-to-tab commands register with no hotkeys", () => {
+  assert.ok(Array.isArray(WINDOW_PREFIX_TAB_JUMP_COMMANDS));
+  assert.equal(WINDOW_PREFIX_TAB_JUMP_COMMANDS.length, 9);
+  WINDOW_PREFIX_TAB_JUMP_COMMANDS.forEach((command, index) => {
+    const n = index + 1;
+    assert.equal(command.id, "window-jump-tab-" + n);
+    assert.equal(command.name, "Jump to tab " + n);
+    assert.equal(command.key, String(n));
+    assert.equal(command.hotkeys, undefined);
+  });
+});
+
+test("a blocked jump-tab command shows its copy-table reason as a Notice", async () => {
+  let executed = 0;
+  const { plugin } = pluginFor({
+    execute: async (plan) => { executed += 1; return { ok: true, action: plan.action, plan }; },
+  });
+  plugin.registerWindowPrefixCommands();
+  const ok = await plugin.runWindowPrefixPaletteKey("7");
+  assert.equal(ok, false);
+  assert.equal(executed, 0);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /No tab 7/);
+});
+
+test("a successful jump-tab command flashes and pulses", async () => {
+  const { plugin, host } = pluginFor();
+  plugin.registerWindowPrefixCommands();
+  const ok = await plugin.runWindowPrefixPaletteKey("1");
+  assert.equal(ok, true);
+  assert.ok(host.calls.some((call) => call[0] === "pulse"));
+  assert.deepEqual(plugin.windowTabFlashes, ["a"]);
+  assert.equal(notices.length, 0);
+});
+
+test("Show window keys lights the numerals along with its card", () => {
+  const { plugin, host } = pluginFor();
+  plugin.registerWindowPrefixInputListeners();
+  plugin.registerWindowPrefixCommands();
+  const shown = plugin.openWindowPrefixFromPalette();
+  assert.equal(shown, true);
+  assert.ok(plugin.windowPrefixIsArmed());
+  assert.ok(host.calls.some((call) => call[0] === "showCard"));
+  assert.equal(plugin.windowTabNumbersLit, true);
+  plugin.disarmWindowPrefix();
+  assert.equal(plugin.windowTabNumbersLit, false);
 });
 
 test("layout-change refreshes the underline gate", () => {

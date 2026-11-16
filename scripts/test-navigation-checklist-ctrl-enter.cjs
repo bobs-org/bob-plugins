@@ -1,5 +1,6 @@
 // Ctrl+Enter claims only the current PRE/POST review-walk landing and advances
-// through live checklist rows (docs/freshness.md §6).
+// through live checklist rows; the last PRE row lands on the next review
+// group (docs/freshness.md §6).
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 const test = require("node:test");
@@ -156,10 +157,12 @@ function freshnessApi(queueState, options = {}) {
       ok: true,
       tier: item.tier,
       label: item.tier.toUpperCase(),
-      detail: item.tier === "pre" ? "checklist" : "closeout",
+      detail: item.tier === "pre" ? "checklist" : item.tier === "post" ? "closeout" : "",
       actionHint: item.tier === "pre"
         ? "Ctrl+Enter done · ]s skip"
-        : "Ctrl+Enter done · closes the review",
+        : item.tier === "post"
+          ? "Ctrl+Enter done · closes the review"
+          : "",
     }),
   };
 }
@@ -264,6 +267,8 @@ function refreshQueueFromEditor(fixture) {
 }
 
 test("review checklist group helpers format exact completion and close notices", () => {
+  assert.equal(helpers.REVIEW_PRE_EXIT_SETTLE_MS, 1500);
+  assert.equal(helpers.REVIEW_ADVANCE_SETTLE_MS, 350);
   const rows = queueFor(["One", "Two"], ["Morning review"]);
   assert.deepEqual(
     helpers.reviewChecklistGroupScan(rows, rows[1], new Set([rows[0].key])),
@@ -375,7 +380,16 @@ test("the last staged PRE row ticks the group-end completion line", async () => 
   const fixture = makePlugin({ queue: rows });
   await land(fixture.plugin, "first");
   assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
-  assert.equal(notices.at(-1), "✓ Done · Read email · BROWSER ✓ · PRE done\n]s → POST");
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Morning review/);
+  assert.equal(
+    notices.at(-1),
+    [
+      "✓ Done · Read email · BROWSER ✓ · PRE done",
+      "Commitments done — 0 ROTTEN left",
+      "Review 1/1 · POST 1/1 · closeout · 0 commitments due · 0 ROTTEN left",
+      "Ctrl+Enter done · closes the review",
+    ].join("\n"),
+  );
 });
 
 test("]s toast includes staged ledger details and action hint", () => {
@@ -503,11 +517,9 @@ test("seven Ctrl+Enter presses walk PRE with stale queues and either recurrence 
         assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), new RegExp(`#pre ${CHORES[index + 1]}`));
       }
     }
-    assert.equal(
-      notices.at(-1),
-      "✓ Done · Do morning stretches! · PRE done\n]s → POST",
-    );
-    assert.equal(await claim(fixture.plugin, fixture.editor), null);
+    assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Morning review/);
+    assert.match(notices.at(-1), /^✓ Done · Do morning stretches! · PRE done\n/);
+    assert.match(notices.at(-1), /POST 1\/1 · closeout/);
     }
   }
 });
@@ -523,7 +535,7 @@ test("a landed [?] checklist chore is claimed and completed", async () => {
 test("]s skips two PRE chores; Ctrl+Enter finishes PRE with the skipped count", async () => {
   const chores = ["One", "Two", "Three"];
   const queue = queueFor(chores, ["Morning review"], [{
-    tier: "new", path: "Other.md", line: 1, rank: 5, tierRank: 1, tierTotal: 1,
+    tier: "new", path: "gtd_daily.md", line: 4, rank: 4, tierRank: 1, tierTotal: 1,
     text: "New task", markdown: "- [ ] #task New task",
   }]);
   const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
@@ -532,9 +544,10 @@ test("]s skips two PRE chores; Ctrl+Enter finishes PRE with the skipped count", 
   await fixture.plugin.jumpToDueTask(1);
   clearNotices();
   assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /New task/);
   assert.equal(
     notices.at(-1),
-    "✓ Done · Three · end of PRE · 2 skipped\n]s → NEW · 3 commitments due",
+    "✓ Done · Three · end of PRE · 2 skipped\nReview 3/4 · NEW 1/1",
   );
 });
 
@@ -620,7 +633,7 @@ test("live group filtering reads each cross-note path once", async () => {
   assert.equal(reads, 1);
 });
 
-test("Ctrl+Enter stays in PRE while Ctrl+Alt+F still crosses into NEW", async () => {
+test("Ctrl+Enter and Ctrl+Alt+F both cross from the last PRE row into NEW", async () => {
   const queue = queueFor(["Two"], [], [{
     tier: "new", path: "gtd_daily.md", line: 3, rank: 3, tierRank: 1, tierTotal: 1,
     text: "New task", markdown: "- [ ] #task New task",
@@ -630,8 +643,12 @@ test("Ctrl+Enter stays in PRE while Ctrl+Alt+F still crosses into NEW", async ()
   await land(ctrl.plugin, "first");
   clearNotices();
   assert.deepEqual(await claim(ctrl.plugin, ctrl.editor), { ok: true });
-  assert.match(ctrl.editor.getLine(ctrl.editor.getCursor().line), /#pre Two/);
-  assert.equal(notices.at(-1), "✓ Done · Two · PRE done\n]s → NEW · 1 commitments due");
+  assert.match(ctrl.editor.getLine(ctrl.editor.getCursor().line), /New task/);
+  assert.equal(ctrl.plugin.reviewLanding.tier, "new");
+  assert.equal(
+    notices.at(-1),
+    "✓ Done · Two · PRE done\nReview 1/1 · NEW 1/1",
+  );
 
   const advance = makePlugin({ queue, content });
   await land(advance.plugin, "first");
@@ -772,4 +789,95 @@ test("a keep-moving picker holds the checklist landing and its ⏭ notice joins 
   assert.equal(notices.length, 1, "the picker and the walk use one toast");
   assert.match(notices[0], /⏭ Next in JOB: Ship the badge renderer · keeps ‹sase_badges› moving/);
   assert.doesNotMatch(notices[0], /🔓|unblocked/i);
+});
+
+test("a 1.5 s guard swallows walk keys after a PRE-exit crossing", async () => {
+  const queue = queueFor(["Two"], ["Morning review"], [{
+    tier: "new", path: "gtd_daily.md", line: 2, rank: 2, tierRank: 1, tierTotal: 1,
+    text: "New task", markdown: "- [ ] #task New task",
+  }]);
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
+  await land(fixture.plugin, "first");
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /New task/);
+  const openNew = fixture.editor.getLine(fixture.editor.getCursor().line);
+  clearNotices();
+  fixture.plugin.advanceReviewClock(400);
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: false, reason: "busy" });
+  assert.equal(await fixture.plugin.jumpToDueTask(1), false);
+  assert.equal(fixture.editor.getLine(fixture.editor.getCursor().line), openNew);
+  assert.deepEqual(notices, []);
+  fixture.plugin.advanceReviewClock(1000);
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: false, reason: "busy" });
+  assert.equal(await fixture.plugin.jumpToDueTask(1), false);
+  assert.equal(fixture.editor.getLine(fixture.editor.getCursor().line), openNew);
+  fixture.plugin.advanceReviewClock(100);
+  assert.equal(await claim(fixture.plugin, fixture.editor), null);
+  assert.equal(await fixture.plugin.jumpToDueTask(1), true);
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Morning review/);
+});
+
+test("a wrap back to a skipped PRE chore still stays", async () => {
+  const queue = queueFor(["One", "Two", "Three"], []);
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
+  await land(fixture.plugin, "first");
+  await fixture.plugin.jumpToDueTask(1);
+  await fixture.plugin.jumpToDueTask(1);
+  clearNotices();
+  const cursor = fixture.editor.getCursor();
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.deepEqual(fixture.editor.getCursor(), cursor);
+  assert.equal(
+    notices.at(-1),
+    "✓ Done · Three · end of PRE · 2 skipped\n]s → PRE · 2 commitments due",
+  );
+});
+
+test("a stale next NEW row keeps today's group-end toast and the 350 ms settle", async () => {
+  const queue = queueFor(["Two"], [], [{
+    tier: "new", path: "gtd_daily.md", line: 2, rank: 2, tierRank: 1, tierTotal: 1,
+    text: "New task", markdown: "- [ ] #task New task",
+  }]);
+  const content = `${queue[0].originalMarkdown}\n- [ ] #task New task (rewritten)`;
+  const fixture = makePlugin({ queue, content });
+  await land(fixture.plugin, "first");
+  const cursor = fixture.editor.getCursor();
+  clearNotices();
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.deepEqual(fixture.editor.getCursor(), cursor);
+  assert.equal(
+    notices.at(-1),
+    "✓ Done · Two · PRE done\n]s → NEW · 1 commitments due",
+  );
+  fixture.plugin.advanceReviewClock(400);
+  assert.equal(fixture.plugin.reviewWalkBusy(), false);
+});
+
+test("PRE then ROTTEN only names the commitments-done boundary", async () => {
+  const queue = queueFor(["Last"], [], [{
+    tier: "rotten", path: "gtd_daily.md", line: 2, rank: 2, tierRank: 1, tierTotal: 1,
+    text: "Rotten leftover", markdown: "- [ ] #task Rotten leftover",
+  }]);
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
+  await land(fixture.plugin, "first");
+  clearNotices();
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.match(fixture.editor.getLine(fixture.editor.getCursor().line), /Rotten leftover/);
+  assert.equal(
+    notices.at(-1),
+    [
+      "✓ Done · Last · PRE done",
+      "Commitments done — 1 ROTTEN left",
+      "Review 1/1 · ROTTEN 1/1",
+    ].join("\n"),
+  );
+});
+
+test("nothing else due keeps the PRE-done toast alone", async () => {
+  const queue = queueFor(["Last"], []);
+  const fixture = makePlugin({ queue, content: queue.map((row) => row.originalMarkdown).join("\n") });
+  await land(fixture.plugin, "first");
+  clearNotices();
+  assert.deepEqual(await claim(fixture.plugin, fixture.editor), { ok: true });
+  assert.equal(notices.at(-1), "✓ Done · Last · PRE done");
 });

@@ -135,6 +135,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
       } catch (_error) {
         this.reviewGestureSeq = 1;
       }
+      const originTier = landing.tier;
       const successorOwner = this.beginReviewSuccessorGestureOwner({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
@@ -153,7 +154,19 @@ class BobNavigationHotkeysChecklistWalkMixin {
         }),
       )
         .then((ok) => {
-          this.settleReviewWalkLock(ok === true);
+          const destTier =
+            this.reviewLanding && typeof this.reviewLanding.tier === "string"
+              ? this.reviewLanding.tier
+              : "";
+          const crossedPre =
+            ok === true &&
+            originTier === "pre" &&
+            destTier &&
+            destTier !== "pre";
+          this.settleReviewWalkLock(
+            ok === true,
+            crossedPre ? REVIEW_PRE_EXIT_SETTLE_MS : undefined,
+          );
           return ok === true
             ? { ok: true }
             : { ok: false, reason: "not-completed" };
@@ -440,6 +453,64 @@ class BobNavigationHotkeysChecklistWalkMixin {
         anchor,
         todayText,
       });
+      const destTier =
+        next && next.kind === "jump"
+          ? reviewEntryMachineTier(next.entry)
+          : "";
+      const shouldCross =
+        next &&
+        next.kind === "jump" &&
+        next.wrapped !== true &&
+        destTier &&
+        destTier !== "pre";
+      if (shouldCross) {
+        let landed;
+        try {
+          landed = await this.landOnReviewQueueEntry(next.entry, {
+            jumpOrigin,
+          });
+        } catch (error) {
+          landed = { ok: false, stale: true };
+        }
+        if (landed && landed.ok) {
+          this.reviewAnchor = buildReviewAnchor(
+            queueBefore,
+            [reviewQueueEntryKey(next.entry)],
+            next.rank,
+            todayText,
+          );
+          const doneLine = formatReviewChecklistGroupEndNotice({
+            taskText,
+            tier,
+            skipped: liveGroup.before.length,
+            stage: stageDone,
+          });
+          const boundary = buildReviewBoundaryNotice({
+            originTier: "pre",
+            destTier,
+            commitmentsLeft: remaining.commitments,
+            rottenLeft: remaining.rotten,
+            postLeft: remaining.post,
+          });
+          const landingNotice = await this.composeReviewWalkLandingNotice(
+            next.entry,
+            next.rank,
+            next.total,
+            {
+              wrapped: next.wrapped,
+              todayText,
+              api,
+              remaining,
+            },
+          );
+          new Notice(
+            withSuccessorToast(
+              [doneLine, boundary, landingNotice].filter(Boolean).join("\n"),
+            ),
+          );
+          return true;
+        }
+      }
       const nextLabel =
         next && next.kind === "jump" ? reviewEntryTierLabel(next.entry) : "";
       new Notice(

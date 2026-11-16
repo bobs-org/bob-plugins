@@ -83978,6 +83978,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
       } catch (_error) {
         this.reviewGestureSeq = 1;
       }
+      const originTier = landing.tier;
       const successorOwner = this.beginReviewSuccessorGestureOwner({
         seq: this.reviewGestureSeq,
         epoch: Math.floor(numericOrDefault(this.reviewLandingEpoch, 0)),
@@ -83996,7 +83997,19 @@ class BobNavigationHotkeysChecklistWalkMixin {
         }),
       )
         .then((ok) => {
-          this.settleReviewWalkLock(ok === true);
+          const destTier =
+            this.reviewLanding && typeof this.reviewLanding.tier === "string"
+              ? this.reviewLanding.tier
+              : "";
+          const crossedPre =
+            ok === true &&
+            originTier === "pre" &&
+            destTier &&
+            destTier !== "pre";
+          this.settleReviewWalkLock(
+            ok === true,
+            crossedPre ? REVIEW_PRE_EXIT_SETTLE_MS : undefined,
+          );
           return ok === true
             ? { ok: true }
             : { ok: false, reason: "not-completed" };
@@ -84283,6 +84296,64 @@ class BobNavigationHotkeysChecklistWalkMixin {
         anchor,
         todayText,
       });
+      const destTier =
+        next && next.kind === "jump"
+          ? reviewEntryMachineTier(next.entry)
+          : "";
+      const shouldCross =
+        next &&
+        next.kind === "jump" &&
+        next.wrapped !== true &&
+        destTier &&
+        destTier !== "pre";
+      if (shouldCross) {
+        let landed;
+        try {
+          landed = await this.landOnReviewQueueEntry(next.entry, {
+            jumpOrigin,
+          });
+        } catch (error) {
+          landed = { ok: false, stale: true };
+        }
+        if (landed && landed.ok) {
+          this.reviewAnchor = buildReviewAnchor(
+            queueBefore,
+            [reviewQueueEntryKey(next.entry)],
+            next.rank,
+            todayText,
+          );
+          const doneLine = formatReviewChecklistGroupEndNotice({
+            taskText,
+            tier,
+            skipped: liveGroup.before.length,
+            stage: stageDone,
+          });
+          const boundary = buildReviewBoundaryNotice({
+            originTier: "pre",
+            destTier,
+            commitmentsLeft: remaining.commitments,
+            rottenLeft: remaining.rotten,
+            postLeft: remaining.post,
+          });
+          const landingNotice = await this.composeReviewWalkLandingNotice(
+            next.entry,
+            next.rank,
+            next.total,
+            {
+              wrapped: next.wrapped,
+              todayText,
+              api,
+              remaining,
+            },
+          );
+          new Notice(
+            withSuccessorToast(
+              [doneLine, boundary, landingNotice].filter(Boolean).join("\n"),
+            ),
+          );
+          return true;
+        }
+      }
       const nextLabel =
         next && next.kind === "jump" ? reviewEntryTierLabel(next.entry) : "";
       new Notice(
@@ -84381,6 +84452,7 @@ class BobNavigationHotkeysChecklistWalkMixin {
 
 const REVIEW_GESTURE_LOCK_MS = 3000;
 const REVIEW_ADVANCE_SETTLE_MS = 350;
+const REVIEW_PRE_EXIT_SETTLE_MS = 1500;
 const REVIEW_WALK_BUSY = Object.freeze({ busy: true });
 
 // nav api v3 `reviewWalk` (`docs/task-dependencies.md` §9). Synchronous
@@ -84484,11 +84556,21 @@ class BobNavigationHotkeysReviewAdvanceMixin {
   }
 
   // End the gesture lock: start the settle window when the gesture wrote,
-  // otherwise free the lock immediately.
-  settleReviewWalkLock(wrote) {
+  // otherwise free the lock immediately. `settleMs` overrides the usual
+  // 350 ms window (the PRE-exit crossing uses 1500 ms).
+  settleReviewWalkLock(wrote, settleMs) {
     try {
       if (wrote === true) {
-        this.takeReviewWalkLock(REVIEW_ADVANCE_SETTLE_MS);
+        const duration =
+          settleMs === undefined || settleMs === null
+            ? REVIEW_ADVANCE_SETTLE_MS
+            : Math.max(
+                0,
+                Math.floor(
+                  numericOrDefault(settleMs, REVIEW_ADVANCE_SETTLE_MS),
+                ),
+              );
+        this.takeReviewWalkLock(duration);
       } else {
         this.reviewWalkLock = null;
       }
@@ -84922,6 +85004,34 @@ class BobNavigationHotkeysReviewAdvanceMixin {
     return [preamble].concat(parts).filter(Boolean).join("\n");
   }
 
+  // Shared landing-notice tail for an answer that already landed: jump
+  // notice (with the action hint), POST remaining counts, then the
+  // quick-roll line. Byte-identical between the advance tail and the
+  // PRE-exit crossing.
+  async composeReviewWalkLandingNotice(entry, rank, total, options = {}) {
+    const api = options.api;
+    let landingNotice = buildReviewJumpNotice(entry, rank, total, {
+      wrapped: options.wrapped === true,
+      todayText: options.todayText,
+      trackers: reviewFreshnessSupportsTrackers(api),
+      reviewEntryView:
+        api && typeof api.reviewEntryView === "function"
+          ? (noticeEntry, noticeOptions) =>
+              api.reviewEntryView(noticeEntry, noticeOptions)
+          : null,
+    });
+    if (reviewEntryMachineTier(entry) === "post") {
+      landingNotice = appendReviewPostLandingTail(
+        landingNotice,
+        options.remaining,
+      );
+    }
+    return appendQuickRollLine(
+      landingNotice,
+      await this.reviewQuickRollLine(entry),
+    );
+  }
+
   // The advance gates for one plan: the Ctrl+Enter checklist-boundary stop
   // and the POST no-wrap close. Returns the stop notice, or null to land.
   checkReviewAdvanceStop(plan, settings, remaining) {
@@ -85050,21 +85160,6 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         todayText,
         anchor && Array.isArray(anchor.excludeRefs) ? anchor.excludeRefs : [],
       );
-      let landingNotice = buildReviewJumpNotice(
-        plan.entry,
-        plan.rank,
-        plan.total,
-        {
-          wrapped: plan.wrapped,
-          todayText,
-          trackers: reviewFreshnessSupportsTrackers(api),
-          reviewEntryView:
-            api && typeof api.reviewEntryView === "function"
-              ? (noticeEntry, noticeOptions) =>
-                  api.reviewEntryView(noticeEntry, noticeOptions)
-              : null,
-        },
-      );
       const destTier = reviewEntryMachineTier(plan.entry);
       const originTier =
         typeof settings.originTier === "string" && settings.originTier
@@ -85079,12 +85174,16 @@ class BobNavigationHotkeysReviewAdvanceMixin {
         rottenLeft: remaining.rotten,
         postLeft: remaining.post,
       });
-      if (destTier === "post") {
-        landingNotice = appendReviewPostLandingTail(landingNotice, remaining);
-      }
-      landingNotice = appendQuickRollLine(
-        landingNotice,
-        await this.reviewQuickRollLine(plan.entry),
+      const landingNotice = await this.composeReviewWalkLandingNotice(
+        plan.entry,
+        plan.rank,
+        plan.total,
+        {
+          wrapped: plan.wrapped,
+          todayText,
+          api,
+          remaining,
+        },
       );
       new Notice(
         this.composeReviewAdvanceNotice(preamble, boundary, landingNotice),
@@ -119663,8 +119762,7 @@ module.exports.helpers = {
   formatReviewChecklistGroupEndNotice,
   formatReviewClosedNotice,
   formatReviewAdvanceStopLine,
-  REVIEW_GESTURE_LOCK_MS,
-  REVIEW_ADVANCE_SETTLE_MS,
+  REVIEW_GESTURE_LOCK_MS, REVIEW_ADVANCE_SETTLE_MS, REVIEW_PRE_EXIT_SETTLE_MS,
   REVIEW_WALK_BUSY,
   reviewOutcomeResolves,
   reviewCardJournalOutcome,

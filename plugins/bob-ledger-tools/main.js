@@ -75776,8 +75776,9 @@ function bankRestoreMarkHosts(root) {
 }
 // ---- src/241p-plugin-bank-marks.js ----
 // Live Preview bank-row marks, math-dollar protection, the session
-// toggle, the persistent stats.bank_marks setting, and hub-property
-// hiding. Decorative marks never change note bytes or Source mode.
+// toggle, and the persistent stats.bank_marks setting. Decorative marks
+// never change note bytes or Source mode. Hub `bank` row hiding lives
+// with the Setup header surface (`bob-bank-setup-surface`).
 
 let bankMarksRefreshEffect = null;
 
@@ -75906,7 +75907,6 @@ class BobLedgerToolsBankMarksMixin {
         this.registerMarkdownPostProcessor((el, ctx) => this.renderBankMarksIn(el, ctx), 40);
       }
       this.bankMarkWireEvents();
-      this.bankMarkSyncHubProperty();
     } catch (error) {}
   }
 
@@ -76170,14 +76170,11 @@ class BobLedgerToolsBankMarksMixin {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
         this.registerEvent(workspace.on("active-leaf-change", () => {
-          this.bankMarkSyncHubProperty();
           this.bankMarkWatchActiveMonth();
         }));
         this.registerEvent(workspace.on("file-open", () => {
-          this.bankMarkSyncHubProperty();
           this.bankMarkWatchActiveMonth();
         }));
-        this.registerEvent(workspace.on("layout-change", () => this.bankMarkSyncHubProperty()));
       }
       // Same timer-host guard as the bank data and daily-chip intervals: without
       // a window or injected timers (Node tests), never fall back to a real
@@ -76257,36 +76254,6 @@ class BobLedgerToolsBankMarksMixin {
     }
   }
 
-  // Hub row hiding lives with the Setup header surface
-  // (`bob-bank-setup-surface`, owned by the bank setup hosts): the `bank`
-  // property on any other note is never hidden, and this mixin never touches
-  // document.body for it. Leaf containers keep the legacy hub marker for
-  // non-surface consumers.
-  bankMarkSyncHubProperty() {
-    try {
-      const workspace = this.app && this.app.workspace;
-      const leaves = workspace && typeof workspace.getLeavesOfType === "function"
-        ? workspace.getLeavesOfType("markdown") || []
-        : [];
-      for (const leaf of leaves) {
-        try {
-          const file = leaf && leaf.view && leaf.view.file;
-          const hub = bankIsHubPath(file && file.path);
-          const containers = [
-            leaf && leaf.view && leaf.view.containerEl,
-            leaf && leaf.view && leaf.view.contentEl,
-            leaf && leaf.containerEl,
-          ];
-          for (const el of containers) {
-            if (!el || !el.classList) continue;
-            if (hub) el.classList.add("bob-bank-hub-note");
-            else el.classList.remove("bob-bank-hub-note");
-          }
-        } catch (error) {}
-      }
-    } catch (error) {}
-  }
-
   refreshBankMarks() {
     try {
       const workspace = this.app && this.app.workspace;
@@ -76303,7 +76270,6 @@ class BobLedgerToolsBankMarksMixin {
           if (container) this.renderBankMarksIn(container, { sourcePath: file && file.path ? file.path : "" });
         } catch (error) {}
       }
-      this.bankMarkSyncHubProperty();
     } catch (error) {}
   }
 
@@ -76476,27 +76442,8 @@ class BobLedgerToolsBankMarksMixin {
         try {
           const root = doc && (doc.body || doc.documentElement);
           bankRestoreMarkHosts(root);
-          if (root && root.classList) root.classList.remove("bob-bank-hub-note");
         } catch (error) {}
       }
-      try {
-        const workspace = this.app && this.app.workspace;
-        const leaves = workspace && typeof workspace.getLeavesOfType === "function"
-          ? workspace.getLeavesOfType("markdown") || []
-          : [];
-        for (const leaf of leaves) {
-          const containers = [
-            leaf && leaf.view && leaf.view.containerEl,
-            leaf && leaf.view && leaf.view.contentEl,
-            leaf && leaf.containerEl,
-          ];
-          for (const el of containers) {
-            if (el && el.classList && typeof el.classList.remove === "function") {
-              el.classList.remove("bob-bank-hub-note");
-            }
-          }
-        }
-      } catch (error) {}
       this.applyMarkGateClass("bob-bank-marks", false);
     } catch (error) {}
   }
@@ -79869,7 +79816,7 @@ class BobLedgerToolsBankSetupMixin {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.bankSetupMarkdownLeaf(path);
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function"
           ? leaf.getViewState()
@@ -79877,7 +79824,7 @@ class BobLedgerToolsBankSetupMixin {
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);

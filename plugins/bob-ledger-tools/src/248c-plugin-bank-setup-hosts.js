@@ -281,7 +281,7 @@ class BobLedgerToolsBankSetupMixin {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.bankSetupMarkdownLeaf(path);
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function"
           ? leaf.getViewState()
@@ -289,7 +289,7 @@ class BobLedgerToolsBankSetupMixin {
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);

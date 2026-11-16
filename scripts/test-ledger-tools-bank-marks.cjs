@@ -462,7 +462,7 @@ test("Reading view is idempotent, preserves links, and does not rewrite note byt
   assert.equal(mathNote.includes("- [x] $13.71 Smashburger"), true);
 });
 
-test("hub property hiding applies only to bank.md and restores on leave and unload", () => {
+test("hub property hiding is owned by the setup surface, never by bank marks", () => {
   const doc = new Document();
   doc.body.classList = {
     names: new Set(),
@@ -484,17 +484,14 @@ test("hub property hiding applies only to bank.md and restores on leave and unlo
   });
   plugin.markGateDocuments = () => [doc];
   plugin.setupBankMarks();
-  // The Setup header surface owns hub hiding now: document.body is never
-  // marked, while hub leaf containers keep the legacy hub marker.
-  assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
-  assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), true);
-  view.file.path = "bank/2026-11.md";
-  plugin.bankMarkSyncHubProperty();
+  assert.equal(typeof plugin.bankMarkSyncHubProperty, "undefined");
   assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
   assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), false);
-  view.file.path = "bank.md";
-  plugin.bankMarkSyncHubProperty();
-  assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), true);
+  assert.equal(view.containerEl.classList.names.has("bob-bank-setup-surface"), false);
+  view.file.path = "bank/2026-11.md";
+  plugin.refreshBankMarks();
+  assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
+  assert.equal(view.containerEl.classList.names.has("bob-bank-hub-note"), false);
   plugin.teardownBankMarks();
   assert.equal(doc.body.classList.contains("bob-bank-hub-note"), false);
 });

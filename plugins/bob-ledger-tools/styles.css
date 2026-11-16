@@ -9159,7 +9159,6 @@ li.bob-bank-mark-waiting[data-root-hue="yellow"] { --bob-bank-accent: var(--bob-
 li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-math-dollar { display: inline; }
 .bob-bank-math-protected { display: inline; font-style: normal; }
-.bob-bank-hub-note .metadata-property[data-property-key="bank"],
 .bob-bank-setup-surface .metadata-property[data-property-key="bank"] { display: none !important; }
 
 /* Bank Setup header: report-backed and view-only. The bank property stays
@@ -9179,7 +9178,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
   font-family: var(--font-interface);
   font-size: 0.9em;
   line-height: 1.4;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .bob-bank-setup[data-root-hue="aqua"] { --bob-setup-accent: var(--bob-area-aqua, var(--interactive-accent)); }
 .bob-bank-setup[data-root-hue="blue"] { --bob-setup-accent: var(--bob-area-blue, var(--interactive-accent)); }
@@ -9229,7 +9228,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-setup-findings { margin: 0.3rem 0; padding-inline-start: 1.4em; }
 .bob-bank-setup-finding { margin: 0.15rem 0; font-size: 0.86em; }
 .bob-bank-setup-finding.is-warning { color: var(--text-warning, var(--text-muted)); }
-.bob-bank-setup-finding-text { border: none; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: start; }
+.bob-bank-setup-finding-text { border: none; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0; text-align: start; overflow-wrap: anywhere; }
 .bob-bank-setup-finding-hint { color: var(--text-muted); font-size: 0.85em; margin-inline-start: 0.5em; }
 .bob-bank-setup-lastgood { color: var(--text-faint); font-size: 0.78em; }
 .bob-bank-setup-status[role="status"] { color: var(--text-muted); }
@@ -9237,7 +9236,13 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 @media (max-width: 480px) {
   .bob-bank-setup-group-label { display: block; margin-bottom: 0.2rem; }
   .bob-bank-setup-tiles { gap: 0.3rem; }
-  .bob-bank-setup-head { gap: 0.45em; }
+  .bob-bank-setup-head { flex-wrap: wrap; align-items: center; gap: 0.45em; }
+  .bob-bank-setup-collapsed { flex: 1 1 100%; white-space: normal; overflow: visible; text-overflow: unset; }
+  .bob-bank-setup-section-head { flex-direction: column; align-items: flex-start; gap: 0.15em; }
+  .bob-bank-setup-section-label { white-space: nowrap; overflow-wrap: normal; }
+  .bob-bank-setup-yaml,
+  .bob-bank-setup-edit { white-space: nowrap; }
+  .bob-bank-setup .bob-bank-category-tile { max-width: 100%; }
 }
 /* Source-mode config lint: wavy underline plus a muted end-of-line message. */
 .bob-bank-setup-lint-error { text-decoration: underline wavy var(--text-error); text-underline-offset: 2px; }

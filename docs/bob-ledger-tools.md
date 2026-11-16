@@ -71,11 +71,11 @@ Album owner cards, group navigation, and sync controls are described in
 
 ## Bank cards and the bank badge
 
-`bob-bank` fences (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`, `view: subscriptions` on `subscriptions.md`): frontmatter matches the filename; only existing headings navigate; empty months teach; a missing subscriptions album points at `bob albums create`. Unknown views stay quiet. Queue rows run oldest-first; day buttons carry drawn IDs. The subscriptions card is read-only from `bob bank subscriptions -f json` and labels the monthly/yearly totals as an estimate of commitments, not bank spend. Record notes under `subscriptions/` show a header strip with the charge timeline and any finding sentence; the records index paints bank category labels, `$9.99 a month`, and a quiet next-expected chip. **Bank: open today** jumps to the next row; **Bank: acknowledge this day** acks the day; no default hotkeys. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clearing stubs; `[cat:: ` inserts ordered keys. The read-only bank badge follows Day and period strips — the daily `bob-plan` Day strip, `bob-day-stats` and each `bob-stats-strip` fence (never `bob-period-parts`) — for that strip's period, hiding with no counted money or waiting rows, in neutral, green-surplus, and amber-waiting tones, opening the rows behind that period. Quarter, year, and all-time badges need a bob with `bank report -p`. `stats.bank_badge` (default on) gates the badge; `stats.bank_chip` is the legacy alias. `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math.
+`bob-bank` fences (`view: queue` on `bank.md`, `view: month` on `bank/YYYY-MM.md`, `view: subscriptions` on `subscriptions.md`): frontmatter matches the filename; only existing headings navigate; empty months teach; a missing subscriptions album points at `bob albums create`. Unknown views stay quiet. Queue rows run oldest-first; day buttons carry drawn IDs. The subscriptions card is read-only from `bob bank subscriptions -f json`; monthly/yearly totals estimate commitments, not bank spend. Record notes under `subscriptions/` show a header strip with the charge timeline and any finding sentence; the records index paints bank category labels, `$9.99 a month`, and a quiet next-expected chip. **Bank: open today** jumps to the next row; **Bank: acknowledge this day** acks the day; no default hotkeys. ID-less rows tick once verified; bulk ack reports leftovers, never `ack -D`. Month-note Enter continues rows, clearing stubs; `[cat:: ` inserts ordered keys. The read-only bank badge follows Day and period strips — the daily `bob-plan` Day strip, `bob-day-stats` and each `bob-stats-strip` fence (never `bob-period-parts`) — for that strip's period, hiding with no counted money or waiting rows, in neutral, green-surplus, and amber-waiting tones, opening the rows behind that period. Quarter, year, and all-time badges need a bob with `bank report -p`. `stats.bank_badge` (default on) gates the badge; `stats.bank_chip` is the legacy alias. `toggle-bank-marks` and `stats.bank_marks` (default on) gate decorations; `$` never renders as math.
 
 🔁 chips on bank rows (Live Preview, Reading, queue): `🔁`/`🔁 Cloudbox` (`ok`), `🔁 +$1.00` (`drift`; amber with `price_change`), `🔁 usage`, amber `🔁 ✂️ still charging` (click Manage `url`; modifier-click the record), warning `🔁 🚫 after cancel`. Ghost 🔁 on a match inserts `[[subscriptions/<stem>|🔁]]` in one transaction. Ghost `⟳ subscription?` opens the Category card picker for that row. Tooltip `Tunely · 💚 Active · $9.99 a month · latest charge Nov 21`; focus ring; plugin-off still shows 🔁.
 
-Setup header shows `bob bank config` categories, accounts, rules, and findings under `# 🏦 Bank`; it collapses by default, expands on errors, and jumps to Source-mode lines. Tiles keep Category-card order and counts. **⊞ Edit** or palette/Command Mode opens the card. Categories: Enter edits; `+` adds; Alt+J/K moves; Ctrl+H hides; Ctrl+D removes. Accounts: Enter relabels; `+` adds; Ctrl+D removes unused; stale-after edits the setting. Rules: Enter edits; `+` adds; Alt+J/K reorders; Ctrl+D removes. Checks lists findings with lines. Ctrl+Z undoes after bob previews. Open YAML uses the shared excursion; Done returns after a valid report. Painting never writes vault bytes. Mobile remains read-only.
+The Setup header under `# 🏦 Bank` draws `bob bank config` categories, accounts, rules, and findings. It starts collapsed, auto-expands on errors, and jumps to Source-mode lines. Tiles match the Category card's order and counts. **⊞ Edit**, **Edit bank setup**, or Command Mode opens the Bank setup card. Categories: Enter edits; `+` adds; Alt+J/K moves; Ctrl+H hides; Ctrl+D removes. Accounts: Enter relabels; `+` adds; Ctrl+D removes unused; stale-after edits the setting. Rules: Enter edits; `+` adds; Alt+J/K reorders; Ctrl+D removes. Checks lists located findings. Ctrl+Z undoes after bob previews the inverse. ↗ YAML / Ctrl+E uses the shared excursion; Done returns only after a valid report. Painting never writes vault bytes. Mobile stays read-only.
 
 On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `claimRowClose` for the Category card. Enter or a second Ctrl+Enter accepts the suggestion, a hotkey picks another, Space files without one, `+` adds a category then files, and Escape cancels the stage then the card. `/` opens the inline subscription picker; search matches titles and statement needles, arrows or Ctrl+N/P move, Enter links, and Escape returns to category tiles. Picking a record adds its 🔁 link and fills `[cat::]` from the record only when the row has no category, in one undo step. **+ New subscription…** pre-fills the sheet from the row and any candidate proposal, creates a 🤔 record through `bob records new subscription`, then links it. Keys work with editor focus; unbound keys never reach the note; a held key never files twice. A filing ticks and categorizes in one undo, advances, and records a `recordJump` for Ctrl+O. **Bank: set category** corrects rows in place. Hidden categories stay on rows, out of card and suggestions. Older APIs keep the `[ ]`↔`[x]` flip.
 
@@ -85,27 +85,26 @@ The read-only Bank Period Charts panel is the third child of a period
 `bob-stats-strip` fence, after the strip host and the badge host, on week,
 quarter, ISO-year, and all-time notes. It never mounts for Day strips,
 `bob-day-stats`, `bob-period-parts`, embeds, hover popovers, mobile, or
-future periods. The panel runs its own `bank report -p <id> -s -c` fetch on
-a separate cache entry, so an older bob or a bad `charts` payload hides only
-the panel (with one `console.warn` per session) and never the badge. Bank
-file events and the existing focus and visibility revalidation refresh it;
-period-stats repaints never touch it, and its repaint clears only its host.
+future periods. Its own `bank report -p <id> -s -c` fetch uses a separate
+cache entry, so an older bob or a bad `charts` payload hides only the
+panel (one `console.warn` per session) and never the badge. Bank file
+events plus focus/visibility revalidation refresh it; period-stats
+repaints never touch it, and its repaint clears only its host.
 
-The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
-Both → In / Out → Categories (shown only when both charts are available),
-and a readout naming the hovered or focused bucket. The per-device view and
-collapse persist under the `bob-ledger-tools-bank-period-view` localStorage
-key (`{"view": "both"|"cashflow"|"categories", "collapsed": false}`;
-invalid values fall back to defaults) and repaint only period hosts. The
-cashflow axis is one roving tab stop: Arrow Left/Right and Home/End move
-focus, hover and focus dim siblings and fill the readout, Escape clears it,
-and Enter, Space, or click activates — Ctrl/Cmd-click and middle-click open
-a new leaf. Each chart ships a visually hidden table twin, so no value hides
-behind hover. Activation is read-only: day buckets open the month note at
-the day heading and period buckets open the child note, with a Notice when
-the note does not exist; notes are never created and vault bytes never
-written. `stats.bank_period` (default on) gates every period host,
-independently of `stats.bank_badge`.
+The header holds a collapse disclosure (`BANK CHARTS`), a view glyph
+cycling Both → In / Out → Categories (only when both charts exist), and a
+readout naming the hovered or focused bucket. Per-device view and
+collapse persist in `bob-ledger-tools-bank-period-view`
+(`{"view": "both"|"cashflow"|"categories", "collapsed": false}`; invalid
+values fall back) and repaint only period hosts. The cashflow axis is one
+roving tab stop: Arrow Left/Right and Home/End move; hover and focus dim
+siblings and fill the readout; Escape clears it; Enter, Space, or click
+activates — Ctrl/Cmd-click and middle-click open a new leaf. Each chart
+has a visually hidden table twin. Activation is read-only: day buckets
+open the month note at the day heading and period buckets open the child
+note, with a Notice when the note does not exist; notes are never created
+and vault bytes never written. `stats.bank_period` (default on) gates
+every period host, independently of `stats.bank_badge`.
 
 ## Snippets and the plan block
 
@@ -171,81 +170,80 @@ the key by the same counted-links rule `bob capture` uses:
   events are queue, not participation); a MEET with no run, and every other
   session, uses its lineup. Only the key changes.
 
-When the lineup holds an off-clock link but the session stays worked, a Notice
-mirrors bob's `pomodoro_clock_mixed` warning: `◌ LUNCH stays on the clock: it
-also links Fix the parser`, or `◌ LUNCH stays on the clock: [[bob#^gone]] does
-not resolve`. Swapping sessions, `~K` drops, and link starts are capture-only
-gestures.
+When the lineup holds an off-clock link but the session stays worked, a
+Notice mirrors bob's `pomodoro_clock_mixed` warning. Swapping sessions,
+`~K` drops, and link starts are capture-only.
 
-Starting, extending, or shifting a non-MEET session raises a Notice when its new
-span newly overlaps the occupied span of an open Event Task that is not in its
-own lineup (`pomodoro_runs_past_event`): `⚠ BOB 1150-1215 runs 15m into Standup
-(1200-1230) · se2 ends at 1200`. With a buffer the overlap names the wing when
-it sits wholly inside one (`Lunch's −30m buffer (1200-1300)`) and otherwise
-carries the event's buffer label; the fit draft ends at the buffered start. A
-session starting mid-meeting stays quiet. It covers `se<X>` + Tab, `N\p`,
-`N\o`, and `N\O`; `N\P` and closes never warn, and the write is never blocked.
-`N\p` and `N\P` keep the row's key and update its recorded minutes (`[t::]`
-stays `[t::]`, `[off::]` stays `[off::]`, bare spans stamp `[off::]`, and a
-row holding both keys resolves to `[t::]`); `N\o` and `N\O` move the span and
-keep every key byte-for-byte. `Ctrl+Enter` re-stamps the closed row from the
-links it keeps (see Task Status Cycler). Timed close classifies Event Task
-links by the meeting span, so a MEET closed when lunch ends still completes
-lunch even though its `+15` buffer runs on.
+Starting, extending, or shifting a non-MEET session raises
+`pomodoro_runs_past_event` when the new span newly overlaps an open
+Event Task outside its lineup. A buffered overlap names the wing when
+it sits wholly inside one; the fit draft ends at the buffered start. A
+session starting mid-meeting stays quiet. It covers `se<X>` + Tab,
+`N\p`, `N\o`, and `N\O`; `N\P` and closes never warn, and the write is
+never blocked. `N\p` and `N\P` keep the row's key and update recorded
+minutes (`[t::]` stays `[t::]`, `[off::]` stays `[off::]`, bare spans
+stamp `[off::]`, both keys resolve to `[t::]`); `N\o` and `N\O` move
+the span and keep every key byte-for-byte. `Ctrl+Enter` re-stamps the
+closed row from the links it keeps (see Task Status Cycler). Timed
+close classifies Event Task links by the meeting span, so a MEET closed
+when lunch ends still completes lunch even though its `+15` buffer
+runs on.
 
-The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for the
-on-clock Task Link budget (off-clock links are uncapped; its tooltip lists each type with its link count, plus ` · N off-clock uncapped` when off-clock links were left out),
-`PENDING n/10`, `NEXT n/15`, and `READY n/100` chips that open the matching
-dashboard sections, the `★ GOALS · DECKS · BOB` type line with the highlight
-starred, a hue-ringed roots line of today's root parents (`○ bob 5  ○ sase 2`)
-directly after the type line, and one muted line per lint. Each real root is a
-quiet link that opens its note; the faint count is how many open Today tasks
-sit under that root, and `unfiled` is a dashed non-interactive bucket. The
-roots line is a view, never a budget: it is omitted when Tasks is unavailable
-or Today is empty. READY is the shared live current backlog
-(Today excluded) and never changes the PLAN status; READY over its cap adds a
-`ready_cap_exceeded` lint line. PENDING and NEXT show the live dashboard section
-counts (Today excluded; `–` when Tasks or the current-day Today cache is
-unready) and turn red only for a strict section excess, while whole-lane
-pressure stays in the tooltip. `next_cap_exceeded` / `pending_cap_exceeded`
-lint lines appear only when the matching badge is red and quote its section
-count. Older daily notes follow
-today's live lanes while keeping their own TODAY link budget.
+The plugin also renders a live `bob-plan` block: a `TODAY 7/10` chip for
+the on-clock Task Link budget (off-clock links are uncapped; its tooltip
+lists each type with its link count, plus ` · N off-clock uncapped` when
+off-clock links were left out), `PENDING n/10`, `NEXT n/15`, and
+`READY n/100` chips that open the matching dashboard sections, the
+`★ GOALS · DECKS · BOB` type line with the highlight starred, a
+hue-ringed roots line of today's root parents (`○ bob 5  ○ sase 2`)
+directly after the type line, and one muted line per lint. Each real
+root is a quiet link that opens its note; the faint count is how many
+open Today tasks sit under that root, and `unfiled` is a dashed
+non-interactive bucket. The roots line is a view, never a budget: it is
+omitted when Tasks is unavailable or Today is empty. READY is the shared
+live current backlog (Today excluded) and never changes the PLAN status;
+READY over its cap adds a `ready_cap_exceeded` lint line. PENDING and
+NEXT show the live dashboard section counts (Today excluded; `–` when
+Tasks or the current-day Today cache is unready) and turn red only for a
+strict section excess, while whole-lane pressure stays in the tooltip.
+`next_cap_exceeded` / `pending_cap_exceeded` lint lines appear only when
+the matching badge is red and quote its section count. Older daily notes
+follow today's live lanes while keeping their own TODAY link budget.
 
-Today is read from the ledger at render time — the open tasks with a dedicated
-Task Link under today's open Pomodoros — and kept in a synchronous cache that
-rebuilds on layout ready, on daily-note change, create, delete, and rename, and
-at local-midnight rollover. When the cached Today key set changes, open Tasks
-queries reload their results through the Tasks plugin's
-`reload-open-search-results` event. Caps come from the `plan:` block in the shared bob
-config file (`max_next`, `max_pending`, `max_ready`, `max_ready_per_note`; a
-legacy `max_now` loads without error), with built-in defaults when the file,
-the block, or a value is missing or invalid. The block re-renders live when the
-daily note or the Tasks cache changes and shows `–` placeholders, never an
-error, when there is no daily note, no Pomodoros section, or no Tasks plugin.
+Today is read from the ledger at render time — the open tasks with a
+dedicated Task Link under today's open Pomodoros — and kept in a
+synchronous cache that rebuilds on layout ready, on daily-note change,
+create, delete, and rename, and at local-midnight rollover. When the
+cached Today key set changes, open Tasks queries reload through the
+Tasks plugin's `reload-open-search-results` event. Caps come from the
+`plan:` block in the shared bob config (`max_next`, `max_pending`,
+`max_ready`, `max_ready_per_note`; a legacy `max_now` loads without
+error), with built-in defaults when the file, the block, or a value is
+missing or invalid. The block re-renders live when the daily note or the
+Tasks cache changes and shows `–` placeholders, never an error, when
+there is no daily note, no Pomodoros section, or no Tasks plugin.
 
-One walker footer follows the bracket walk (`s`/`w`/`n`/`b`), routed through
-nav `api.walkMode` v1 and the walk-mode doorbell. The `s` panel is the review
-footer, gated on `s`: nonempty walk groups (PRE → NEW → PROJECTS →
-PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN)
-minus the active tier, tier-colored with a commitment/ROTTEN hairline,
-shedding groups, detail, hint, meter. The button jumps like `]s`; TICK rows
-show a tinted `Alt+P` chip (red when cancel). Empty shows
-`⟳ Review clear · ✓ N today`, keeping the Alt+P preview on prioritized rows;
-hints read `]] next` (`]s next` in the legacy no-nav footer). The `w` lane
-footer shows `api.laneWalk` v2 counts (`Lanes N`, validated-row position,
-`Lanes clear` / `REVIEW n` / `No Pending…` states, `n/cap` only over cap);
-`Lanes` acts like `]]`, counts never filter. The `n` links compass previews
-via `walkMode.links()` v2 with `[n` / `]n` arms. The `b` bank panel shows the
-`api.bankWalk` v1 snapshot with the scope word first (`WAITING` amber while
-any row waits, `ALL` calm otherwise), day arms from the shared day planner
-(`[B` / `]B`), money only for the row under the cursor, and an account meter
-that never claims health it was not told: `✓ balanced` only from a current-
-generation cached `bob bank list` result where every account is balanced,
-otherwise the worst account's status in bob's own words. Hidden when unset, indexing,
-loading, or mobile. Off-`s` review commitments arrive via `setAttention` (v3)
-as a quiet dot on the selector's `s`; bank waiting rows arrive via per-family
-attention (v4) as an amber dot on the selector's `b`.
+One walker footer follows the bracket walk (`s`/`w`/`n`/`b`) through
+nav `api.walkMode` v1 and the walk-mode doorbell. The `s` review panel
+shows nonempty groups (PRE → NEW → PROJECTS → PENDING → NEXT →
+RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN) minus the
+active tier, tier-colored with a commitment/ROTTEN hairline. The button
+jumps like `]s`; TICK rows show a tinted `Alt+P` chip (red when cancel).
+Empty shows `⟳ Review clear · ✓ N today`, keeping Alt+P on prioritized
+rows; hints read `]] next` (`]s next` in the legacy no-nav footer). The
+`w` lane footer shows `api.laneWalk` v2 counts (`Lanes N`, position,
+`Lanes clear` / `REVIEW n` / `No Pending…`, `n/cap` only over cap);
+`Lanes` acts like `]]`. The `n` links compass uses `walkMode.links()`
+v2 with `[n` / `]n` arms. The `b` bank panel shows `api.bankWalk` v1
+with the scope word first (`WAITING` amber while any row waits, `ALL`
+calm otherwise), shared day-planner arms (`[B` / `]B`), money only for
+the cursor row, and an account meter that never claims health it was
+not told: `✓ balanced` only from a current-generation cached
+`bob bank list` where every account is balanced, otherwise the worst
+account's status in bob's own words. Hidden when unset, indexing,
+loading, or mobile. Off-`s` review commitments arrive via
+`setAttention` (v3) as a quiet `s` dot; bank waiting rows arrive via
+per-family attention (v4) as an amber `b` dot.
 
 ## Marks and rendered blocks
 
@@ -263,28 +261,25 @@ restores the unmarked rendering:
 - The blocked-reason mark paints each canonical Blocked `[?]` `#task`
   checkbox with the proven reason (`&`, project chevron, reply plane,
   P1–P4 digit, recurrence loop, hand-date `?`, or dashed stale `?`) in
-  Live Preview,
-  Reading view, embeds, hover previews, and Dataview `TASK` rows. Nested
-  children keep their own checkbox. Source mapping uses the section text
-  and `data-line`; when that is unavailable a conservative own-text
-  fallback reconstructs only the list checkbox prefix and stays unmarked
-  rather than guessing from transformed date/priority pills. Retained
-  canonical text is reused only while the row's origin, status, and
-  `data-line` still match and the current fallback is unavailable
-  because a later processor transformed the fields; a recycled fallback
-  row with new raw text is reclassified. Query rows require a proven
-  origin path and never treat the query-note stem as the project. Tasks
-  query rows, and `code`/`pre` hosts, stay excluded even when they are
-  the processor root. Dataview TASK rows that prove an origin recover
-  canonical text from the Tasks cache when inline-field pills have
-  replaced the raw fields. Tooltip attributes restore only while they still
-  match the last applied values, then the ownership record is released.
-  Live Preview also attaches those attributes through a CodeMirror
+  Live Preview, Reading view, embeds, hover previews, and Dataview
+  `TASK` rows. Nested children keep their own checkbox. Source mapping
+  uses the section text and `data-line`; when that is unavailable a
+  conservative own-text fallback reconstructs only the list checkbox
+  prefix and stays unmarked rather than guessing from transformed
+  pills. Retained canonical text is reused only while origin, status,
+  and `data-line` still match and a later processor hid the fields; a
+  recycled fallback row with new raw text is reclassified. Query rows
+  require a proven origin path and never treat the query-note stem as
+  the project. Tasks query rows and `code`/`pre` hosts stay excluded.
+  Dataview TASK rows that prove an origin recover canonical text from
+  the Tasks cache when pills replaced the raw fields. Tooltip attributes
+  restore only while they still match, then the ownership record is
+  released. Live Preview attaches them through a CodeMirror
   `requestMeasure` write-pass after rebuild. While the marks are on, a
-  digit checkbox (`p1`–`p4`) folds that row's priority bars to zero
-  width, and `prj` / `awaiting` checkboxes fold their exact
-  `#prj_is_blocked` / `#awaiting_reply` pill; the cursor and a click
-  still reveal the raw field, and either session toggle restores it.
+  digit checkbox (`p1`–`p4`) folds that row's priority bars, and `prj` /
+  `awaiting` checkboxes fold their exact `#prj_is_blocked` /
+  `#awaiting_reply` pill; the cursor and a click still reveal the raw
+  field, and either session toggle restores it.
 - The priority mark renders each canonical `[priority:: …]` field as one
   signal-bar glyph (4/3/2/1 filled bars for P1–P4, a solid `!` square for
   off-ladder `highest`) in Live Preview and rendered views. The glyph follows
@@ -357,29 +352,37 @@ restores the unmarked rendering:
   buffer wings, display-only. Contract:
   [Event link times](https://bobs-org.github.io/event-link-times/).
 
-The plugin renders live TODAY/PENDING/NEXT/READY badges, CROWDED, the `bob-ready-notes` ranked-bar block, and `## Tasks` heading chips. Pomodoro home chips name linked tasks' root parents with area hues and tooltips, and show recorded minutes for off-clock sessions. Type pills use shared catalog hues. The display-only 🍅 Today mark identifies open tasks linked under today's Pomodoros and jumps to the Task Link. Marks have session toggles; unknown type names stay neutral while typed. Behavior and hues: [Task types](https://bobs-org.github.io/task-types/).
+The plugin renders live TODAY/PENDING/NEXT/READY badges, CROWDED, the
+`bob-ready-notes` ranked-bar block, and `## Tasks` heading chips.
+Pomodoro home chips name linked tasks' root parents with area hues and
+tooltips, and show recorded minutes for off-clock sessions. Type pills
+use shared catalog hues. The display-only 🍅 Today mark identifies open
+tasks linked under today's Pomodoros and jumps to the Task Link. Marks
+have session toggles; unknown type names stay neutral while typed.
+Behavior and hues: [Task types](https://bobs-org.github.io/task-types/).
 
-The **Day strip** is a read-only daily Stats receipt rendered above the
-`bob-plan` badges of canonical daily notes, in Live Preview and Reading view.
-It shows that note's own day as a row of stacked stats (a small uppercase
-label over a large value over a quiet typical-day line on each numeric
-fact), followed by two lanes on the same working
-minutes: the root-parent legend with `so far · HH:MM` over the
-root-parent bar, then a type legend over the full-width type bar that
-separates the strip from the badges — and paints from bob's Stats
-report; it never writes the vault. A quiet
-switch at the right of the top lane cycles both bars → root parents only
-→ types only, for every daily note at once; the choice is remembered on
-this device. Review
+The **Day strip** is a read-only daily Stats receipt above the
+`bob-plan` badges of canonical daily notes, in Live Preview and Reading
+view. It shows that note's own day as stacked stats (uppercase label,
+large value, typical-day line on each numeric fact), then two lanes on
+the same working minutes: the root-parent legend with `so far · HH:MM`
+over the root-parent bar, then a type legend over the full-width type
+bar that separates the strip from the badges. It paints from bob's Stats
+report and never writes the vault. A quiet switch at the right of the
+top lane cycles both bars → root parents only → types only for every
+daily note at once; the choice is remembered on this device. Review
 closed shows a green check, a red ✕, or the yellow In Progress half-ring
-while today's review is still open. The roots bar groups working time
-by root parent (falling back to areas with an honest "Time by area" label when
-bob predates `root_parent`). Grey roots stay gray, after coloured roots. The type bar groups the same minutes by task type and wears each type's hue;
-clicking it opens Stats on the Types view. Each legend fits as many names as its line holds.
-When the day's Worked point carries positive off-clock time, a quiet `◌ +<display> off-clock` hint renders under WORKED and opens Stats on that day with the Off-clock lens.
-Daily notes without a `bob-plan` block show no strip. To place one explicitly,
-add a `bob-day-stats` code fence in any note, optionally with `day: YYYY-MM-DD`.
-A fence inside a daily note renders its own strip.
+while today's review is still open. The roots bar groups working time by
+root parent (falling back to areas with an honest "Time by area" label
+when bob predates `root_parent`). Grey roots stay gray, after coloured
+roots. The type bar groups the same minutes by task type and wears each
+type's hue; clicking it opens Stats on the Types view. Each legend fits
+as many names as its line holds. When the day's Worked point carries
+positive off-clock time, a quiet `◌ +<display> off-clock` hint renders
+under WORKED and opens Stats on that day with the Off-clock lens. Daily
+notes without a `bob-plan` block show no strip. To place one explicitly,
+add a `bob-day-stats` code fence in any note, optionally with
+`day: YYYY-MM-DD`. A fence inside a daily note renders its own strip.
 
 The **period stats strip** (`bob-stats-strip`) paints Roots above Types for every period note. ●/■ and `Cycle period stats charts` cycle Both → Roots → Types per device, not Day strips. Arrows move, Enter opens the note, Alt+Enter opens Stats (days pin the day). Cache-driven read-only; Retry on failure. See bob-cli `docs/stats.md`.
 
@@ -391,17 +394,27 @@ through CSS; Reading-view chip tooltips keep the reason text until the view
 re-renders. Chips render in Live Preview and Reading view on owned
 Depends-On rows only, with a session toggle; `waiting on N` counts open
 prerequisites only. Open BLOCKS rows add ＋ to open the reverse Blocks stage
-and hover × to remove a dependent. The Stats `bob-stats` block renders a report-driven Worked · Off-clock · Total clock control above the window bars (one checked native radio per `report.clock.options`, arrows wrap and select, `Space` activates, `c` cycles from the dash surface, remembered per device; clockless or no-adoption reports hide the control and stay on Worked without erasing the saved preference), then two window time bars above the tiles
-that split the selected window's minutes by root parent and by
-task type, then the responsive Root parents panel with Root parents
-and Types views, area groups with sub-project disclosure, bucket fix-it
-copy, and session drill-down, plus task counts; the Types view wears
-each type's hue on its bars, with exempt and grey-area types and `other` in gray. Off-clock time renders as dashed outlines in the item's hue across tiles, focus charts, window lanes, and time breakdowns; under Total, a solid worked span ends in a dashed off-clock tail and off-clock sessions get a dashed edge. Total sums session minutes, so overlapping sessions count twice; it is neither occupied nor free time. Values: [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type line of
-the plan block renders the same pills. The read-only `bob-reading-board` block
-renders a Reading / Next / Ready / Snoozed kanban of the reading queue drawn
-entirely from `bob ref list` JSON — wake dates and waiting-on reasons come from
-`bob`, never from vault text — with the Highlights PDF hand-off and the Open
-Reading Board command.
+and hover × to remove a dependent. The Stats `bob-stats` block renders a
+report-driven Worked · Off-clock · Total clock control above the window
+bars (one checked native radio per `report.clock.options`, arrows wrap
+and select, `Space` activates, `c` cycles from the dash, remembered per
+device; clockless or no-adoption reports hide the control and stay on
+Worked without erasing the saved preference), then two window time bars
+above the tiles that split the selected window's minutes by root parent
+and by task type, then the responsive Root parents panel with Root
+parents and Types views, area groups with sub-project disclosure, bucket
+fix-it copy, session drill-down, and task counts; the Types view wears
+each type's hue, with exempt, grey-area, and `other` in gray. Off-clock
+time renders as dashed outlines in the item's hue across tiles, focus
+charts, window lanes, and time breakdowns; under Total, a solid worked
+span ends in a dashed off-clock tail. Total sums session minutes, so
+overlapping sessions count twice; it is neither occupied nor free time.
+Values: [Bob Stats page](https://bobs-org.github.io/stats/). The `★` type
+line of the plan block renders the same pills. The read-only
+`bob-reading-board` block renders a Reading / Next / Ready / Snoozed
+kanban of the reading queue from `bob ref list` JSON — wake dates and
+waiting-on reasons come from `bob`, never from vault text — with the
+Highlights PDF hand-off and the Open Reading Board command.
 
 `🪢 **LINKS:**` and `🪢 **LINKED FROM:**` rows are relation metadata. Their
 wikilinks are excluded from the live plan Task Link count. Both rows render as
@@ -416,83 +429,78 @@ The shared `toggle-dependency-chips` command covers both rows. See
 
 The plugin tracks freshness from `[fresh:: YYYY-MM-DD]` / `[refresh:: N]` /
 `[keeps:: N]` stamps: PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING →
-TICKLER → ROTTEN → POST, reference freshness, daily lane review, checklist
-tiers, project reminders, freshness-gated READY, NEW/ROTTEN review models and
-chips, plus the queue, counts, lints, and status bar. `freshness.decay` carries
-per-rung allowances (`pending_keeps` for WIP, `next_keeps` for Next,
-`ready_keeps` for Ready and every P-level, each 0–999 or `false`, resolved
-against the `keeps` fallback), and `decide` is true on due PENDING and NEXT
-rows at their rung limit as well as due Ready rows, so those rows join the
-`counts().decide` "need a decision" total. Folded keep pips always render in the
-freshness mark; the leaf plus `Alt+F to decide` appears only when the
-navigation decay-card capability is present and decay is on. Due lane rows show
-the leaf only with navigation's rung-aware card (capability 3+); with an older
-or missing card they keep counting pips with counting-only wording. READY counts gate
-on the read-time bucket so NEW and ROTTEN review stay out of READY.
+TICKLER → ROTTEN → POST, plus reference freshness, daily lane review,
+checklist tiers, project reminders, freshness-gated READY, NEW/ROTTEN
+review models and chips, and the queue, counts, lints, and status bar.
+`freshness.decay` carries per-rung allowances (`pending_keeps` for WIP,
+`next_keeps` for Next, `ready_keeps` for Ready and every P-level, each
+0–999 or `false`, resolved against the `keeps` fallback). `decide` is
+true on due PENDING and NEXT rows at their rung limit and on due Ready
+rows, so those rows join the `counts().decide` total. Folded keep pips
+always render in the freshness mark; the leaf plus `Alt+F to decide`
+appears only when navigation's decay-card capability is present and decay
+is on. Due lane rows show the leaf only with the rung-aware card
+(capability 3+); an older or missing card keeps counting-only wording.
+READY counts gate on the read-time bucket so NEW and ROTTEN stay out.
 
-PRE/POST sort by stage. Namespace v14 exposes `checklistStages`, stage fields,
-and normalized lists through `config()`.
-Staged POST says `Ctrl+Enter done · ]s skip`; unstaged says `Ctrl+Enter done · closes the review`.
+PRE/POST sort by stage. Namespace v14 exposes `checklistStages`, stage
+fields, and normalized lists through `config()`. Staged POST says
+`Ctrl+Enter done · ]s skip`; unstaged says
+`Ctrl+Enter done · closes the review`.
 
-Other plugins never place `fresh` stamps themselves: navigation, the cycler,
-and Block ID Prompt call the shared stamper instead. `keepLine` is the sole
-increment helper (a counted keep stamps and increments once, saturating at 999,
-with a valid prior `fresh` before today required; uncounted keeps preserve),
-and every generic stamper clears `keeps`.
-
-The `noteReady` surface backs the read-only per-note Ready cap: each
-area/project note's Ready lane against `plan.max_ready_per_note` (default 5)
-with per-note `ready_cap` overrides and crowded/full/room states.
+Other plugins never place `fresh` stamps themselves: navigation, the
+cycler, and Block ID Prompt call the shared stamper. `keepLine` is the
+sole increment helper (a counted keep stamps and increments once,
+saturating at 999, with a valid prior `fresh` before today; uncounted
+keeps preserve), and every generic stamper clears `keeps`. The
+`noteReady` surface backs the read-only per-note Ready cap: each
+area/project note's Ready lane against `plan.max_ready_per_note`
+(default 5) with per-note `ready_cap` overrides and crowded/full/room
+states.
 
 ## Keep inbox indicator
 
 The desktop status bar shows a `bob-keep-inbox` item beside the review
-footer: a gold bulb pill counting the Google Keep notes a default
-`bob gkeep pull` would take, a chevron connector, and an inbox-tray count
-of open top-level tasks in the inbox tree: `inbox.md` and every area note
-below it at any depth via `parent`, such as `mac_inbox.md` and
-`gkeep_inbox.md`. Project and untyped notes filed under it do not count.
-Each segment appears only while its count is above zero, and the item
-disappears when both are zero. The bulb is gold when fresh and dashed when
-last-known. The Keep pill also hides when its count is unknown or Keep is
-unverified. After sign-in expires, a dashed `lightbulb-off` pill still
-shows. The whole item hides when Keep is not configured or before the
-first status read.
+footer: a gold bulb counting the Google Keep notes a default
+`bob gkeep pull` would take, a chevron, and an inbox-tray count of open
+top-level tasks in the inbox tree (`inbox.md` and every area note below
+it via `parent`, such as `mac_inbox.md` and `gkeep_inbox.md`). Project
+and untyped notes filed under it do not count. Each segment appears only
+while its count is above zero; the item disappears when both are zero.
+The bulb is gold when fresh and dashed when last-known. The Keep pill
+hides when its count is unknown or Keep is unverified; after sign-in
+expires a dashed `lightbulb-off` pill still shows. The item hides when
+Keep is not configured or before the first status read.
 
-The Keep count comes from `bob gkeep status`; the inbox-tree count is
-recomputed from the Tasks plugin cache on every
-`obsidian-tasks-plugin:cache-update`. The inbox tray stays hidden until
-Tasks is ready. The plugin never reads the vault file for the Keep count,
-never reads a credential, and never decides backoff. It runs
-`bob gkeep status -r` after layout settles, on focus/visibility/online
-events, and when bob's `next_check_at` arrives, but only while Obsidian
-is visible, focused, and has seen keyboard, pointer, or wheel input in the
+The Keep count comes from `bob gkeep status`; the inbox-tree count
+recomputes from the Tasks cache on every
+`obsidian-tasks-plugin:cache-update` and stays hidden until Tasks is
+ready. The plugin never reads the vault file, a credential, or backoff.
+It runs `bob gkeep status -r` after layout settles, on
+focus/visibility/online, and at `next_check_at`, only while Obsidian is
+visible, focused, and has seen keyboard, pointer, or wheel input in the
 last ten minutes. Unattended due checks wait for the next input; without
-attention, focus only re-reads Bob's cached status, at most every ten
-seconds, or every ten minutes while Keep is not configured. Bob still
-applies its own freshness, budget, and backoff gates.
+attention, focus re-reads the cached status at most every ten seconds,
+or every ten minutes while Keep is not configured. Bob still applies
+freshness, budget, and backoff.
 
-Click the bulb when its count is fresh to open Command Mode at a dry-run
-`gkeep pull` preview; click a stale bulb to check now. After sign-in
-expires, the bulb opens the `gkeep doctor` report. **Check Google Keep
-now** still works from the palette while the item is hidden, and says
-when there is nothing to pull. Right-click either visible count for
-Check Google Keep now, Preview Keep pull, Open `gkeep_inbox.md`, Keep
-setup check, or Hide until restart. The palette also offers **Check
-Google Keep now** and **Toggle Keep inbox indicator**. Preview and setup
-actions need Command Mode; without its preview API the bulb explains the
-matching `bob` command to run. User-triggered checks pulse the bulb,
-while background checks stay still. Bob caps unattended-safe checks with
-its own 30-minute default interval and a 48-check daily budget (about 16
-checks in eight attended hours); setting `gkeep.check_interval: off`
-disables automatic Keep checks without affecting manual checks.
+Click a fresh bulb to open Command Mode at a dry-run `gkeep pull`; click
+a stale bulb to check now; after sign-in expires it opens `gkeep doctor`.
+**Check Google Keep now** works from the palette while the item is
+hidden. Right-click either visible count for Check Google Keep now,
+Preview Keep pull, Open `gkeep_inbox.md`, Keep setup check, or Hide until
+restart. Preview and setup need Command Mode; without its preview API
+the bulb names the matching `bob` command. User-triggered checks pulse
+the bulb; background checks stay still. Bob caps unattended-safe checks
+at a 30-minute default interval and a 48-check daily budget;
+`gkeep.check_interval: off` disables automatic Keep checks only.
 
-Hovering the inbox lists each note's open count. Clicking the inbox opens
-the note with the most open tasks (then the earliest path) at its first
+Hovering the inbox lists each note's open count. Clicking it opens the
+note with the most open tasks (then the earliest path) at its first
 open top-level task; a missing note shows a Notice and never creates the
-file. The context menu's **Open `gkeep_inbox.md`** still opens the Keep
-pull target. Turning off the session toggle stops automatic and manual
-`-r` requests until the next Obsidian restart.
+file. **Open `gkeep_inbox.md`** opens the Keep pull target.
+**Toggle Keep inbox indicator** stops automatic and manual `-r` requests
+until the next Obsidian restart.
 
 ## Session toggles
 
@@ -500,8 +508,8 @@ Every `Toggle …` command in the generated table above is a session-only toggle
 (default on) that restores the unmarked rendering while the session lasts. The
 jump and open commands (`Jump to current Pomodoro line` on `Ctrl+9`, `Go to
 today's Task Link`, `Open today's daily note`, `Open Stats`, `Open Reading
-Board`) are the only commands in this plugin with lasting effects; `Ctrl+9` is
-its only registered default hotkey.
+Board`) are the only commands with lasting effects; `Ctrl+9` is this plugin's
+only registered default hotkey.
 
 `Toggle Day stats` hides or restores the automatic Day strip above the
 `bob-plan` badges for the current session. It does not remove an explicit
@@ -516,23 +524,24 @@ event painting and marks closed rows and past daily notes too.
 
 `Toggle Task Link event times` hides or restores the Event time pill beside
 ledger Task Links that point at one of the note's Event Tasks, in Live
-Preview and Reading view. The pill reuses the calendar Event painting look,
-so calendar event painting must also be on; no vault text is written.
+Preview and Reading view. The pill reuses calendar Event painting, so that
+toggle must also be on; no vault text is written.
 
 `Toggle blocked-reason marks` controls the display-only marks on canonical
 Blocked `#task` rows. Live Preview reads the editor's current text, keeps
-checkboxes native, and attaches the reason tooltip when a checkbox is hovered.
-Reading view, embeds, hover previews, and Dataview `TASK` rows reuse the same
-classifier in place: each row's own checkbox gets the reason tooltip, nested
-children stay independent, and turning the toggle off restores prior
-`aria-label` / `data-tooltip-position` values. Tasks cache updates,
-priority-ladder changes, local midnight, and returning to the app refresh the
-visible marks. The command refreshes editors and rendered hosts in both
-directions; turning it off restores the ordinary `?` box.
+checkboxes native, and attaches the reason tooltip on hover. Reading view,
+embeds, hover previews, and Dataview `TASK` rows reuse the same
+classifier: each row's own checkbox gets the tooltip, nested children stay
+independent, and turning the toggle off restores prior `aria-label` /
+`data-tooltip-position` values. Tasks cache updates, the priority ladder,
+local midnight, and returning to the app refresh visible marks. The
+command refreshes editors and rendered hosts both ways; off restores the
+ordinary `?` box.
 
 `Cycle Day stats bars` cycles the Day strip bars switch (both bars → root
 parents only → types only) for every Day strip on this device, with a Notice
-naming the new view. Period strips keep their own chart view. It works with no Day strip on screen.
+naming the new view. Period strips keep their own chart view. It works with
+no Day strip on screen.
 
 ## Calendar Events
 
@@ -544,35 +553,35 @@ target for existing Bob documentation.
 
 The hook stays inert until the vault adopts period notes (an `all_time.md`
 next to `org.md`); without it, nothing spawns and **Open this week's note**
-shows a Notice naming `bob periods migrate`. Once adopted, Ledger Tools runs
-`bob periods ensure -q -f json` (15 s timeout) on today's daily-note creation,
-once per local day after layout loads, and on the first 5-second tick after
-local midnight, so the week → quarter → year → all_time tree exists before
-anything reads it. Bob remains the only writer.
-
-An older bob without `periods` logs one `console.warn` per session. A
-`lock_busy` run retries once after 60 seconds. Any other failure shows at most
-one Notice per local day: `Period notes could not be created — <message>`.
+shows a Notice naming `bob periods migrate`. Once adopted, Ledger Tools
+runs `bob periods ensure -q -f json` (15 s timeout) on today's daily-note
+creation, once per local day after layout loads, and on the first
+5-second tick after local midnight, so the week → quarter → year →
+all_time tree exists before anything reads it. Bob remains the only
+writer. An older bob without `periods` logs one `console.warn` per
+session. A `lock_busy` run retries once after 60 seconds. Any other
+failure shows at most one Notice per local day:
+`Period notes could not be created — <message>`.
 
 **Open this week's note** opens `GGGG/GGGG-Www.md` for the current week,
-running ensure first when the note is missing. Without adoption it shows the
-`bob periods migrate` Notice instead of opening anything.
+running ensure first when the note is missing. Without adoption it shows
+the `bob periods migrate` Notice instead of opening anything.
 
 A clicked dangling period link (a Templater frontmatter stub) is filled by
 `bob periods ensure -d <first day>`; `api.periodNotes` v1 lets
 bob-navigation-hotkeys do the same.
 
 Agent instruction callouts (`> [!agent]- ...`) render as one quiet folded
-line: no tinted background, a small muted title, and the expanded body in the
+line: no tinted background, a small muted title, and the expanded body in
 normal text colour.
 
 ## Command-mode run refresh
 
 When Bob Command Mode is enabled, this plugin listens for its
 `bob-command-mode:run-finished` workspace event and refreshes the caches a
-finished run invalidates: the type catalog, relation labels and the relation
-index, stats data, the Reading Board, and the plan, freshness, and Today
-views. Tags this plugin does not own are ignored.
+finished run invalidates: the type catalog, relation labels and index, stats
+data, the Reading Board, and the plan, freshness, and Today views. Tags this
+plugin does not own are ignored.
 
 ## Task type identity
 
@@ -580,11 +589,12 @@ Explicit `[type:: NAME]` (and legacy `[theme:: NAME]`) fields render as a
 colored `#TYPE` in the `#task` slot. The field is folded; there is no
 trailing pill on the task line. Inherited types stay a plain hash whose
 tooltip names the type, until **Toggle inherited task types** is turned
-on. A live Task Link that disagrees with its task's effective type (explicit
-or inherited) gets a dashed `#TYPE` prefix in today's ledger. Day strip and Stats copy say **Time by
-type** / **Types**; JSON still uses the `theme` dimension.
-Exempt types such as PLAN, and grey-area types, have no hue, so their `#TYPE` uses the muted ink
-(`--bob-type-ink-muted`) instead of a palette color.
+on. A live Task Link that disagrees with its task's effective type
+(explicit or inherited) gets a dashed `#TYPE` prefix in today's ledger.
+Day strip and Stats copy say **Time by type** / **Types**; JSON still
+uses the `theme` dimension. Exempt types such as PLAN, and grey-area
+types, have no hue, so their `#TYPE` uses muted ink
+(`--bob-type-ink-muted`).
 
 ## Notebooks
 
@@ -593,7 +603,7 @@ the notebook and focuses Properties `summary`. **↻ sync** rewrites missing,
 stale, or damaged catalogs. Chrome (sync, Retry, status, anchor) paints only
 in report-listed hosts (or pre-report notes with a real callout); non-hosts
 get none, never at position 0. **Retry** needs a failed refresh or no report;
-lag alone stays silent. Live data needs desktop Obsidian.
+lag stays silent. Live data needs desktop Obsidian.
 
 ## Projects catalog card
 
@@ -606,10 +616,9 @@ reveals only its direct children. Folds stay local to each pane.
 
 Use **↻ sync** to refresh a missing or stale catalog, **Retry** after a report
 failure, and **＋ project** to copy the `@<host>^` capture starter. Sync writes
-through Bob; the starter only goes to the clipboard and does not submit
-capture. A failed refresh keeps the last good rows visible. At narrow widths,
-chips wrap below the criterion and the count shortens while keeping its full
-accessible label.
+through Bob; the starter only goes to the clipboard. A failed refresh keeps
+the last good rows visible. At narrow widths, chips wrap below the criterion
+and the count shortens while keeping its full accessible label.
 
 ## Areas
 
@@ -618,23 +627,23 @@ Per-pane folds, fold-aware chips, hover titles, add-summary, compact chips.
 ## Gmail open hint
 
 `⌘↵ Gmail` (`M-↵` elsewhere) marks the line's Gmail target: a `[[mail/…]]`
-link, Gmail Task child, or one link-only Task Link hop. Live Preview requires
-the mail-link-marks toggle and bob-mail's live open API. Embeds, struck links,
-and unresolved hops stay quiet.
+link, Gmail Task child, or one link-only Task Link hop. Live Preview needs
+the mail-link-marks toggle and bob-mail's live open API. Embeds, struck
+links, and unresolved hops stay quiet.
 
 ## Gmail archive receipts
 
 Closed Gmail tasks may show `⤓ archived <day>` chips when linked mail notes
 have active Bob receipts. The cached offline snapshot keeps row rendering
 local; **Toggle mail link marks** hides these chips with reply badges. Daily
-Gmail sync can report Bob's `recent_archive` count. The exact identity,
-placement, cache, and notice contracts live in [bob-cli's mail link marks
+Gmail sync can report Bob's `recent_archive` count. Identity, placement,
+cache, and notice contracts live in [bob-cli's mail link marks
 guide](../../mail-link-marks.md).
 
 ## Settings
 
 The **Notebook chips** setting (default on) hides live chips while keeping
-styling, links, and sync. The plugin also reads the shared bob config file.
+styling, links, and sync. The plugin also reads the shared bob config.
 
 ## Related
 

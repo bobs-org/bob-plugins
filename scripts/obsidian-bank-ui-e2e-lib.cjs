@@ -986,8 +986,7 @@ function BANK_UI_PROBE() {
     const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
     const cycler = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["task-status-cycler"];
     const bankProp = document.querySelector('.metadata-property[data-property-key="bank"]');
-    const hubClass = Boolean(document.querySelector(".bob-bank-setup-surface"))
-      || Boolean(document.body && document.body.classList && document.body.classList.contains("bob-bank-hub-note"));
+    const hubClass = Boolean(document.querySelector(".bob-bank-setup-surface"));
     return {
       cards,
       badges,
@@ -1019,8 +1018,311 @@ function BANK_UI_PROBE() {
   } })()`;
 }
 
+const SETUP_HELP_TEXT = [
+  "Usage: node scripts/obsidian-bank-ui-e2e-setup.cjs [OPTIONS]",
+  "",
+  "Drive the Bank Setup header, Category-card New category, and Bank setup",
+  "card in an isolated git scratch vault through CDP. Never opens the live vault.",
+  "Run under xvfb-run -a on Linux.",
+  "",
+  "Options:",
+  "  -e, --executable PATH   Obsidian executable (default: /snap/bin/obsidian)",
+  "  -h, --help              Print this help and exit",
+  "  -o, --out DIRECTORY     Screenshot output directory",
+  "  -r, --report PATH       Write the structured JSON report to PATH",
+  "  -s, --self-test         Run offline self-tests (no Obsidian needed)",
+].join("\n");
+
+function setupScratchRoot(repoRoot) {
+  return path.join(path.resolve(repoRoot), ".tmp-bank-setup-e2e");
+}
+
+function makeSetupScratch(repoRoot, prefix) {
+  const root = setupScratchRoot(repoRoot);
+  fs.mkdirSync(root, { recursive: true });
+  const safe = String(prefix || "run").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "") || "run";
+  return fs.mkdtempSync(path.join(root, `${safe}-`));
+}
+
+function liveHubNote() {
+  return [
+    "---",
+    'parent: "[[cash]]"',
+    'type: "[[area]]"',
+    "color: magenta",
+    "summary: Bank hub",
+    "bank:",
+    "  accounts:",
+    "    checking:",
+    "      label: WF Checking",
+    "      kind: checking",
+    "      start: 2026-10-01",
+    "  categories:",
+    "    groceries: 🛒 Groceries",
+    "    dining: 🍽️ Dining",
+    "    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }",
+    "    convenience: { label: 🏪 Convenience, hotkey: v, group: Everyday }",
+    "    housing: { label: 🏠 Housing, hotkey: \"1\", group: Bills }",
+    "    utilities: { label: 💡 Utilities, hotkey: \"2\", group: Bills }",
+    "    income: { label: 💵 Income, hotkey: i, group: Money moves }",
+    "    refund: { label: ↩️ Refund, hotkey: r, group: Money moves }",
+    "    kids: { label: 🧸 Kids, hidden: true }",
+    "    misc: { label: 📦 Misc }",
+    "---",
+    "",
+    "# 🏦 Bank",
+    "",
+    "```bob-bank",
+    "view: queue",
+    "```",
+    "",
+  ].join("\n");
+}
+
+function invalidHubNote() {
+  return [
+    "---",
+    'parent: "[[cash]]"',
+    'type: "[[area]]"',
+    "color: magenta",
+    "summary: Bank hub",
+    "bank:",
+    "  accounts:",
+    "    checking:",
+    "      label: WF Checking",
+    "      kind: checking",
+    "      start: 2026-10-01",
+    "  categories:",
+    "    coffee: { label: ☕ Coffee, hotkey: c, group: Everyday }",
+    "    cafe: { label: 🍵 Cafe, hotkey: c, group: Everyday }",
+    "  rules:",
+    "    - match: VENMO",
+    "      cat: unknown_cat",
+    "---",
+    "",
+    "# 🏦 Bank",
+    "",
+    "```bob-bank",
+    "view: queue",
+    "```",
+    "",
+  ].join("\n");
+}
+
+function missingHubNote() {
+  return [
+    "---",
+    'parent: "[[cash]]"',
+    'type: "[[area]]"',
+    "color: magenta",
+    "summary: Bank hub",
+    "---",
+    "",
+    "# 🏦 Bank",
+    "",
+    "```bob-bank",
+    "view: queue",
+    "```",
+    "",
+  ].join("\n");
+}
+
+function unrelatedBankNote() {
+  return [
+    "---",
+    "bank: leftover-string",
+    "---",
+    "",
+    "# Other note",
+    "",
+    "An unrelated `bank` property must stay visible.",
+    "",
+  ].join("\n");
+}
+
+function waitingMonthNote() {
+  return [
+    "---",
+    'parent: "[[bank]]"',
+    'type: "[[bank_month]]"',
+    "month: 2026-11",
+    "---",
+    "",
+    "# 🏦 November 2026",
+    "",
+    "```bob-bank",
+    "view: month",
+    "```",
+    "",
+    "## Wed Nov 12",
+    "",
+    "- [x] $12.00 ShopRite [cat:: groceries]",
+    "- [ ] $6.45 Corner Cafe",
+    "",
+  ].join("\n");
+}
+
+function cashAreaNote() {
+  return [
+    "---",
+    'type: "[[area]]"',
+    "---",
+    "",
+    "# Cash",
+    "",
+  ].join("\n");
+}
+
+function setupFixtureNotes() {
+  return {
+    "bank.md": liveHubNote(),
+    "bank/2026-11.md": waitingMonthNote(),
+    "cash.md": cashAreaNote(),
+    "other.md": unrelatedBankNote(),
+  };
+}
+
+function setupRequiredNoteNames() {
+  return ["bank.md", "bank/2026-11.md", "cash.md", "other.md"];
+}
+
+function SETUP_UI_PROBE() {
+  return `(() => { try {
+    const textOf = (el) => String(el && el.textContent || "").replace(/\\s+/g, " ").trim();
+    const view = window.app && window.app.workspace && window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+    const viewRoot = view && (view.contentEl || view.containerEl) || document;
+    const header = viewRoot.querySelector(".bob-bank-setup") || document.querySelector(".bob-bank-setup");
+    const surface = viewRoot.querySelector(".bob-bank-setup-surface") || document.querySelector(".bob-bank-setup-surface");
+    const hubNote = document.querySelector(".bob-bank-hub-note");
+    const toggle = header && header.querySelector(".bob-bank-setup-toggle");
+    const collapsed = header && header.querySelector(".bob-bank-setup-collapsed");
+    const banner = header && header.querySelector(".bob-bank-setup-banner");
+    const tiles = Array.from((header || viewRoot).querySelectorAll("[data-bank-setup-category]")).map((el) => ({
+      key: el.getAttribute("data-bank-setup-category") || "",
+      label: textOf(el),
+      aria: el.getAttribute("aria-label") || "",
+      derived: Boolean(el.querySelector("kbd.bob-bank-category-keycap.is-derived")),
+      none: Boolean(el.querySelector(".bob-bank-category-keydot")),
+    }));
+    const bankProps = Array.from(document.querySelectorAll('.metadata-property[data-property-key="bank"]')).map((el) => {
+      const style = window.getComputedStyle(el);
+      return {
+        display: style.display,
+        visible: style.display !== "none" && style.visibility !== "hidden" && el.getBoundingClientRect().height > 0,
+        inSurface: Boolean(el.closest(".bob-bank-setup-surface")),
+      };
+    });
+    const queue = document.querySelector(".bob-bank-card-queue");
+    const card = document.querySelector(".bob-bank-setup-card-modal, .modal.bob-bank-setup-card-modal");
+    const categoryCard = document.querySelector(".bob-bank-category-modal, .bob-bank-category-card");
+    const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins["bob-ledger-tools"];
+    const state = view && view.getState && view.getState() || {};
+    const active = window.app && window.app.workspace && window.app.workspace.getActiveFile && window.app.workspace.getActiveFile();
+    const h1 = viewRoot.querySelector(".markdown-preview-view h1, .markdown-source-view h1, .inline-title, .view-header-title")
+      || document.querySelector(".markdown-preview-view h1, .markdown-source-view h1, .inline-title, .view-header-title");
+    const headerAfterH1 = Boolean(header && header.previousElementSibling && /bank/i.test(textOf(header.previousElementSibling)));
+    const modal = plugin && plugin.bankSetupCardModal;
+    const sessionState = modal && modal.session && typeof modal.session.getState === "function" ? modal.session.getState() : null;
+    return {
+      path: active && active.path || null,
+      mode: state.mode || null,
+      source: state.source,
+      header: Boolean(header),
+      headerCount: Array.from(viewRoot.querySelectorAll(".bob-bank-setup")).filter((el) => {
+        const box = el.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      }).length,
+      headerState: header && header.getAttribute("data-bank-setup-state") || "",
+      headerAria: header && header.getAttribute("aria-label") || "",
+      surface: Boolean(surface),
+      hubNote: Boolean(hubNote),
+      expanded: toggle ? toggle.getAttribute("aria-expanded") : null,
+      collapsed: textOf(collapsed),
+      banner: textOf(banner),
+      bannerRole: banner && banner.getAttribute("role") || "",
+      bannerLive: banner && (banner.getAttribute("aria-live") || banner.getAttribute("role") || ""),
+      tiles,
+      bankProps,
+      queueText: textOf(queue),
+      copyStarter: Boolean(document.querySelector(".bob-bank-setup-copy")),
+      yaml: Boolean(document.querySelector(".bob-bank-setup-yaml")),
+      edit: Boolean(document.querySelector(".bob-bank-setup-edit")),
+      findings: Array.from(document.querySelectorAll(".bob-bank-setup-finding-text[data-bank-setup-line], .bob-bank-setup-finding")).map((el) => ({
+        text: textOf(el),
+        line: el.getAttribute("data-bank-setup-line") || "",
+      })),
+      lint: document.querySelectorAll(".bob-bank-setup-lint-error, .bob-bank-setup-lint-warning, [class*=bob-bank-setup-lint-]").length,
+      card: Boolean(card),
+      cardAria: card && (card.getAttribute("aria-label") || textOf(card.querySelector("[aria-label]"))) || "",
+      cardSection: (modal && modal.section) || (card && textOf(card.querySelector(".bob-bank-setup-card-tab.is-active, .bob-bank-setup-card-tab[aria-selected=true], [data-setup-section].is-active"))),
+      cardReadOnly: Boolean(modal && modal.readOnly),
+      cardSelection: modal && modal.selection && modal.selection.id || "",
+      cardCanApply: Boolean(sessionState && sessionState.canApply),
+      cardStage: modal && modal.stage && modal.stage.kind || "",
+      cardStale: modal && modal.staleMessage || "",
+      consequence: textOf(document.querySelector(".bob-bank-setup-card-consequence")),
+      refusal: textOf(document.querySelector(".bob-bank-setup-card-refusal")),
+      newCategory: Boolean(document.querySelector('input[data-bank-new-field="label"]')),
+      categoryCard: Boolean(categoryCard),
+      headerAfterH1,
+      h1: textOf(h1),
+      ledger: Boolean(plugin),
+      commands: {
+        editSetup: Boolean(window.app && window.app.commands && window.app.commands.findCommand("bob-ledger-tools:edit-bank-setup")),
+      },
+    };
+  } catch (error) {
+    return { error: String(error && error.message || error) };
+  } })()`;
+}
+
+function assertLiveCollapsed(probe) {
+  if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
+  if (probe.headerCount !== 1) return { ok: false, reason: `header count ${probe.headerCount}` };
+  if (probe.headerAria !== "Bank setup") return { ok: false, reason: `aria-label ${probe.headerAria}` };
+  if (probe.expanded !== "false") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
+  const line = String(probe.collapsed || "");
+  if (!/🏦/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
+    return { ok: false, reason: `collapsed grammar: ${line}` };
+  }
+  return { ok: true, reason: line };
+}
+
+function assertMissingMapping(probe) {
+  if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
+  if (!/no bank: mapping yet/.test(String(probe.collapsed || ""))) {
+    return { ok: false, reason: `missing line: ${probe.collapsed}` };
+  }
+  return { ok: true, reason: probe.collapsed };
+}
+
+function assertInvalidHeader(probe) {
+  if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
+  if (probe.expanded !== "true") return { ok: false, reason: `invalid header not expanded (${probe.expanded})` };
+  if (probe.bannerRole !== "alert" && !/alert/.test(String(probe.bannerLive || ""))) {
+    return { ok: false, reason: `banner role ${probe.bannerRole}` };
+  }
+  if (!probe.findings || probe.findings.length < 2) {
+    return { ok: false, reason: `findings ${JSON.stringify(probe.findings || [])}` };
+  }
+  return { ok: true, reason: `${probe.findings.length} findings` };
+}
+
+function assertScopedHide(probe, expectedHidden) {
+  const props = Array.isArray(probe && probe.bankProps) ? probe.bankProps : [];
+  const surfaceHidden = props.some((row) => row.inSurface && row.display === "none");
+  const unsourcedVisible = props.some((row) => !row.inSurface && row.visible);
+  if (expectedHidden && !probe.surface) return { ok: false, reason: "setup surface missing" };
+  if (probe.hubNote) return { ok: false, reason: "legacy bob-bank-hub-note is present" };
+  if (expectedHidden && !surfaceHidden && props.length > 0) {
+    return { ok: false, reason: `surface hide failed: ${JSON.stringify(props)}` };
+  }
+  return { ok: true, reason: JSON.stringify({ surfaceHidden, unsourcedVisible, props }) };
+}
+
 module.exports = {
   HELP_TEXT,
+  SETUP_HELP_TEXT,
   FIXTURE_TODAY,
   FIXTURE_HISTORICAL,
   IMPORTED_WAITING_ID,
@@ -1028,6 +1330,8 @@ module.exports = {
   CUSTOM_BLOCK_ID,
   scratchRoot,
   makeScratch,
+  setupScratchRoot,
+  makeSetupScratch,
   parseArgs,
   dailyPathFor,
   hubNote,
@@ -1038,6 +1342,14 @@ module.exports = {
   dailyNote,
   ordinaryNote,
   fixtureNotes,
+  liveHubNote,
+  invalidHubNote,
+  missingHubNote,
+  unrelatedBankNote,
+  waitingMonthNote,
+  cashAreaNote,
+  setupFixtureNotes,
+  setupRequiredNoteNames,
   listWaitingJson,
   emptyListJson,
   reportMonthJson,
@@ -1057,5 +1369,10 @@ module.exports = {
   assertEnsureArgv,
   assertNoMath,
   assertHasMath,
+  assertLiveCollapsed,
+  assertMissingMapping,
+  assertInvalidHeader,
+  assertScopedHide,
   BANK_UI_PROBE,
+  SETUP_UI_PROBE,
 };

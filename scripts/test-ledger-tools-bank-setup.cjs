@@ -789,20 +789,24 @@ test("hub mounts once per surface, survives repaint, and leaves other notes alon
   assert.ok(!preview.classList.contains("bob-bank-setup-surface"));
 });
 
-test("hiding never touches document.body and restores the native row on unload", () => {
+test("hiding never touches document.body and is owned only by bob-bank-setup-surface", () => {
   const plugin = makeSetupPlugin(null, {});
-  const doc = new Document();
+  plugin.setupBankSetup();
+  seedReport(plugin, decodedReport());
+  const { doc, preview, el } = hubSurface();
   doc.body.classList.add("bogus-body-gate");
-  plugin.markGateDocuments = () => [doc];
-  const leafEl = doc.createElement("div");
-  const leaf = { view: { file: { path: "bank.md" }, containerEl: leafEl, contentEl: leafEl }, containerEl: leafEl };
-  plugin.app.workspace.getLeavesOfType = () => [leaf];
-  plugin.bankMarkSyncHubProperty();
+  plugin.paintBankSetupReading(el, "bank.md");
+  assert.ok(preview.classList.contains("bob-bank-setup-surface"));
+  assert.ok(!preview.classList.contains("bob-bank-hub-note"));
   assert.ok(!doc.body.classList.contains("bob-bank-hub-note"));
-  assert.ok(leafEl.classList.contains("bob-bank-hub-note"));
-  leaf.view.file.path = "bank/2026-11.md";
-  plugin.bankMarkSyncHubProperty();
-  assert.ok(!leafEl.classList.contains("bob-bank-hub-note"));
+  assert.equal(typeof plugin.bankMarkSyncHubProperty, "undefined");
+  const other = hubSurface();
+  plugin.paintBankSetupReading(other.el, "bank/2026-11.md");
+  assert.ok(!other.preview.classList.contains("bob-bank-setup-surface"));
+  assert.ok(!other.preview.classList.contains("bob-bank-hub-note"));
+  plugin.teardownBankSetup();
+  assert.ok(!preview.classList.contains("bob-bank-setup-surface"));
+  assert.ok(!doc.body.classList.contains("bob-bank-hub-note"));
 });
 
 test("tile, account, and finding jumps open Source mode on the exact line", async () => {
@@ -826,6 +830,7 @@ test("tile, account, and finding jumps open Source mode on the exact line", asyn
   assert.equal(result.line, 14);
   assert.equal(opened.file.path, "bank.md");
   assert.equal(opened.opts.state.mode, "source");
+  assert.equal(opened.opts.state.source, true);
   assert.deepEqual(cursor, { line: 13, ch: 0 });
   assert.ok(scrolled.from);
 });

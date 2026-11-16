@@ -79,6 +79,7 @@
   "257-task-split-apply.js",
   "260-project-schedules.js",
   "265-project-schedule-inline.js",
+  "266-window-prefix-model.js",
   "270-counted-batches.js",
   "280-notices-and-dates.js",
   "285-unblocked-notice.js",
@@ -230,5 +231,6 @@
   "716-reload-history-exports.js",
   "717-copy-card-exports.js",
   "718-album-schema-fallback-exports.js",
-  "719-bank-walk-exports.js"
+  "719-bank-walk-exports.js",
+  "720-window-prefix-exports.js"
 ]

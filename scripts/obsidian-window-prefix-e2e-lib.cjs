@@ -21,7 +21,7 @@ const path = require("node:path");
 // Named --only groups the harness accepts. `spike`, `actions`, `prefix`,
 // and `visual` all run real probes; `visual` reports skipped only when its
 // screenshots cannot run headlessly.
-const GROUPS = Object.freeze(["spike", "actions", "prefix", "visual"]);
+const GROUPS = Object.freeze(["spike", "actions", "prefix", "visual", "tabs"]);
 
 // Six fixture notes: enough distinct tabs for every decision-contract vector
 // (one, two, three, and six columns plus pinned prefixes on both sides).

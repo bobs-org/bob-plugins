@@ -75,6 +75,7 @@ function makeWorkspace(groups, options = {}) {
         this.children.splice(index, 1);
         child.parent = null;
         if (this.selectedTab === child) this.selectedTab = this.children[0] ?? null;
+        this.currentTab = this.children.indexOf(this.selectedTab);
         if (this.children.length === 0 && this.parent?.children?.includes(this)) {
           this.parent.removeChild(this);
         }
@@ -82,12 +83,14 @@ function makeWorkspace(groups, options = {}) {
       selectTab(child) {
         if (!this.children.includes(child)) throw new Error("selected tab is not a child");
         this.selectedTab = child;
+        this.currentTab = this.children.indexOf(child);
         child.view?.editor?.cm?.scrollDOM && (child.view.editor.cm.scrollDOM.scrollTop = 0);
       },
       recomputeChildrenDimensions() {},
     };
     for (const child of leaves) group.insertChild(group.children.length, child);
     group.selectedTab = selected;
+    group.currentTab = group.children.indexOf(selected);
     group.mostRecentLeaf = selected;
     rootSplit.insertChild(rootSplit.children.length, group);
     return group;
@@ -476,6 +479,42 @@ test("a failed move restores the source layout and reports the failure", async (
   assert.deepEqual(workspace.rootSplit.children, [source, target]);
   assert.deepEqual(source.children, [a, b]);
   assert.deepEqual(target.children, [c]);
+  assert.equal(workspace.activeLeaf, b);
+});
+
+test("a failed join rollback reselects the destination's previous tab via currentTab", async () => {
+  const a = leaf("A");
+  const b = leaf("B");
+  const c = leaf("C");
+  const d = leaf("D");
+  const { workspace } = makeWorkspace([
+    { id: "source", left: 0, leaves: [a, b], selected: b },
+    { id: "target", left: 100, leaves: [c, d], selected: d },
+  ], { activeLeaf: b });
+  const [source, target] = workspace.rootSplit.children;
+  Object.defineProperty(target, "selectedTab", {
+    configurable: true,
+    get() { return undefined; },
+    set() { /* 1.15.1 WorkspaceTabs.selectedTab is undefined */ },
+  });
+  target.currentTab = 1;
+  const selectTarget = target.selectTab;
+  let reselected = null;
+  target.selectTab = function (candidate) {
+    if (candidate === b) throw new Error("synthetic selection failure");
+    reselected = candidate;
+    this.currentTab = this.children.indexOf(candidate);
+    return selectTarget.call(this, candidate);
+  };
+  const plugin = pluginFor(workspace);
+  const { plan } = getPlan(plugin, "L");
+  const result = await plugin.executeWindowPrefixPlan(plan);
+  assert.equal(result.ok, false);
+  assert.equal(result.restored, true);
+  assert.deepEqual(source.children, [a, b]);
+  assert.deepEqual(target.children, [c, d]);
+  assert.equal(reselected, d);
+  assert.equal(target.currentTab, 1);
   assert.equal(workspace.activeLeaf, b);
 });
 

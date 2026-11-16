@@ -699,7 +699,9 @@ class BobNavigationHotkeysWindowLayoutMixin {
     if (normalized.activeLeafId !== String(expectedLeafId) || normalized.activeSplitId !== expectedSplitId) {
       return { ok: false, reason: "layout-changed" };
     }
-    const freshPlan = planWindowPrefixKey(snapshot, plan.key);
+    const freshPlan = planWindowPrefixKey(snapshot, plan.key, {
+      armedCatalog: armed.armedCatalog,
+    });
     if (!freshPlan || freshPlan.ok !== true || !freshPlan.available) {
       return { ok: false, reason: freshPlan?.reason ?? "layout-changed", plan: freshPlan };
     }
@@ -707,6 +709,9 @@ class BobNavigationHotkeysWindowLayoutMixin {
     if (!sourceLeaf || sourceLeaf !== workspace.activeLeaf) return { ok: false, reason: "layout-changed" };
 
     try {
+      if (freshPlan.action === "focus-tab") {
+        return await this.executeWindowPrefixFocusTab(freshPlan, sourceLeaf, armed);
+      }
       if (freshPlan.action === "focus") {
         const target = this.windowPrefixLeafById.get(freshPlan.targetLeafId);
         const focused = target && await this.focusWindowPrefixLeaf(target);
@@ -801,12 +806,22 @@ class BobNavigationHotkeysWindowLayoutMixin {
     const beforeLeaves = windowPrefixRootLeaves(workspace);
     const beforeGroups = windowPrefixLayoutGroups(beforeLeaves);
     const scrollState = windowPrefixCaptureScroll(sourceLeaf);
-    const sourceSelectedLeaf = sourceGroup.selectedTab ?? sourceLeaf;
+    const sourceSelectedLeaf = windowPrefixSelectedLeaf(
+      workspace,
+      sourceGroup,
+      Array.isArray(sourceGroup.children) ? [...sourceGroup.children] : [],
+    ) ?? sourceLeaf;
     const beforePinned = sourceLeaf.pinned === true;
     let targetGroup = plan.targetSplitId
       ? this.windowPrefixSplitById.get(plan.targetSplitId)
       : null;
-    const targetSelectedLeaf = targetGroup?.selectedTab ?? null;
+    const targetSelectedLeaf = targetGroup
+      ? windowPrefixSelectedLeaf(
+        workspace,
+        targetGroup,
+        Array.isArray(targetGroup.children) ? [...targetGroup.children] : [],
+      )
+      : null;
     let placeholder = null;
     let sourceSelection = null;
     try {
@@ -859,10 +874,15 @@ class BobNavigationHotkeysWindowLayoutMixin {
         let mostRecent = null;
         try { mostRecent = workspace.getMostRecentLeaf(sourceGroup); } catch (_error) { /* use current selection */ }
         const plannedRemaining = this.windowPrefixLeafById.get(plan.sourceSelectedLeafId);
+        const resolvedSelected = windowPrefixSelectedLeaf(
+          workspace,
+          sourceGroup,
+          [...sourceGroup.children],
+        );
         sourceSelection = sourceGroup.children.includes(mostRecent)
           ? mostRecent
-          : sourceGroup.children.includes(sourceGroup.selectedTab)
-            ? sourceGroup.selectedTab
+          : sourceGroup.children.includes(resolvedSelected)
+            ? resolvedSelected
             : sourceGroup.children.includes(plannedRemaining)
               ? plannedRemaining
               : sourceGroup.children[0];
@@ -907,7 +927,7 @@ class BobNavigationHotkeysWindowLayoutMixin {
           sourceShapeValid,
           sourceCollapsed,
           targetSelectedIsMoved: targetSelected === sourceLeaf,
-          selectedTabIsMoved: targetGroup.selectedTab === sourceLeaf,
+          selectedTabIsMoved: targetSelected === sourceLeaf,
         }));
       }
       return {

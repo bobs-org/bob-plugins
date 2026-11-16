@@ -82,6 +82,7 @@
   "266-window-prefix-model.js",
   "266a-window-tab-model.js",
   "267-window-prefix-actions.js",
+  "267a-window-tab-actions.js",
   "270-counted-batches.js",
   "280-notices-and-dates.js",
   "285-unblocked-notice.js",
@@ -238,5 +239,6 @@
   "718-album-schema-fallback-exports.js",
   "719-bank-walk-exports.js",
   "720-window-prefix-exports.js",
-  "721-window-prefix-actions-exports.js"
+  "721-window-prefix-actions-exports.js",
+  "722-window-tab-exports.js"
 ]

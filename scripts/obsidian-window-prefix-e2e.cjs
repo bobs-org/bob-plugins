@@ -14,7 +14,8 @@
 // drives the shipped executor through runWindowPrefixPaletteKey against every
 // decision-contract vector. --only prefix runs the Ctrl+W prefix
 // state-machine cases. --only visual runs the hint screenshots and palette
-// probes.
+// probes. --only tabs drives in-place tab jumps through
+// runWindowPrefixPaletteKey("N").
 "use strict";
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -25,6 +26,7 @@ const path = require("node:path");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
 const wplib = require("./obsidian-window-prefix-e2e-lib.cjs");
 const actionsMod = require("./obsidian-window-prefix-e2e-actions.cjs");
+const tabsMod = require("./obsidian-window-prefix-e2e-tabs.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const RPC_TIMEOUT_MS = 20_000;
@@ -39,7 +41,7 @@ const HELP = [
   "      --obsidian-bin PATH Alias for --executable",
   "  -h, --help              Print help",
   "  -o, --out DIRECTORY     Screenshot output directory",
-  "      --only NAME         Run only a named group: spike, actions, prefix, visual",
+  "      --only NAME         Run only a named group: spike, actions, prefix, visual, tabs",
   "  -r, --report PATH       Write the structured JSON report",
   "  -s, --self-test         Run offline self-tests (no Obsidian needed)",
   "",
@@ -82,6 +84,13 @@ const HELP = [
   "  (type, move, u restores text; cursor, scrollTop, pin survive),",
   "  requestSaveLayout + reload persistence, reading/PDF/PNG survival, and",
   "  keymap scope restoration after every case.",
+  "",
+  "Tabs group (--only tabs):",
+  "  Every tab decision-contract vector via runWindowPrefixPaletteKey (3/4/1/2/7),",
+  "  source-split selection after a cross-split jump, type→jump away→back→u,",
+  "  scroll of an unselected long note, PDF focus without an editor, stacked",
+  "  tabs, 13 tabs in a narrow split (header clipping), and a deferred",
+  "  background tab after reload. Keymap scope restoration after every case.",
   "",
   "Visual group (--only visual):",
   "  Palette command registration, then ring, card, move receipt, and",
@@ -2653,6 +2662,17 @@ function selfTest() {
   if (parsedPrefix.only !== "prefix") throw new Error("prefix --only parsing failed");
   const parsedActions = parseArgs(["--only", "actions"]);
   if (parsedActions.only !== "actions") throw new Error("actions --only parsing failed");
+  const parsedTabs = parseArgs(["--only", "tabs"]);
+  if (parsedTabs.only !== "tabs") throw new Error("tabs --only parsing failed");
+  const tabsTable = require("./obsidian-window-prefix-e2e-tabs.cjs");
+  if (!tabsTable.TAB_DECISION_VECTORS || tabsTable.TAB_DECISION_VECTORS.length < 6) {
+    throw new Error("tabs table missing decision vectors");
+  }
+  for (const vector of tabsTable.TAB_DECISION_VECTORS) {
+    if (!/^[1-9]$/.test(vector.key)) throw new Error("tabs vector " + vector.name + " has a non-digit key");
+    const translated = tabsTable.translateTabVector(vector);
+    if (!translated.from.includes("WP-")) throw new Error("tabs vector " + vector.name + " did not translate");
+  }
   const actionsTable = require("./obsidian-window-prefix-e2e-actions.cjs");
   for (const vector of wplib.DECISION_VECTORS) {
     const tableKeys = actionsTable.actionKeysForVector(vector.name);
@@ -2698,12 +2718,17 @@ function selfTest() {
       "getMostRecentLeaf", "loadIfDeferred", "pushScope", "popScope", "Input.dispatchKeyEvent",
       "Input.insertText", "--only", "requestSaveLayout", "workspace-tabs.mod-active",
       "runPrefixMac", "runActionsMac", "actions/vector-", "runWindowPrefixPaletteKey",
+      "runTabsMac", "executeWindowPrefixFocusTab",
       "prefix/focus-l", "getWindowPrefixDebugState"]) {
       if (!source.includes(token)) throw new Error("e2e is missing " + token);
     }
     const libSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-lib.cjs"), "utf8");
     for (const token of ["parseLayoutSignature", "formatLayoutSignature", "DECISION_VECTORS", "macHotkeys", "linuxDefaultHotkeys"]) {
       if (!libSource.includes(token)) throw new Error("lib is missing " + token);
+    }
+    const tabsSource = fs.readFileSync(path.join(__dirname, "obsidian-window-prefix-e2e-tabs.cjs"), "utf8");
+    for (const token of ["tabs/vector-", "TAB_DECISION_VECTORS", "deferred-reload", "runWindowPrefixPaletteKey"]) {
+      if (!tabsSource.includes(token)) throw new Error("tabs e2e is missing " + token);
     }
     // Every snippet shipped to Obsidian must be syntactically valid: two
     // uninvoked-IIFE typos once made probes silently no-op, and a .join-again
@@ -2732,6 +2757,29 @@ function selfTest() {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 
+async function runTabsMac(args, record, findings) {
+  await tabsMod.runTabsGroup({
+    launchOwned,
+    connectOwned,
+    shutdownOwned,
+    buildFromSignature,
+    actionsPaletteKey,
+    runActionsCase,
+    runCase,
+    readLive,
+    keys,
+    sleep,
+    dumpEditor,
+    placeCursor,
+    reloadAndReconnect,
+    keymapFinger,
+    sameKeymap,
+    wplib,
+    RPC_TIMEOUT_MS,
+    waitForVim,
+  }, args, record, findings);
+}
+
 async function runE2e(args) {
   if (args.only && !wplib.GROUPS.includes(args.only)) fail("--only must be one of " + wplib.GROUPS.join(", "), 2);
   const group = args.only || "spike";
@@ -2756,6 +2804,8 @@ async function runE2e(args) {
     await runPrefixLinux(args, record, findings);
   } else if (group === "visual") {
     await runVisualMac(args, record, findings, outDir, screenshots);
+  } else if (group === "tabs") {
+    await runTabsMac(args, record, findings);
   } else {
     record(group + "/reserved", "skipped", "unknown group " + group);
   }
@@ -2773,6 +2823,7 @@ async function runE2e(args) {
     sourceContentSha256: Object.fromEntries([
       "scripts/obsidian-window-prefix-e2e.cjs",
       "scripts/obsidian-window-prefix-e2e-lib.cjs",
+      "scripts/obsidian-window-prefix-e2e-tabs.cjs",
       "scripts/test-obsidian-window-prefix-e2e.cjs",
       "plugins/bob-navigation-hotkeys/manifest.json",
     ].map((relative) => [relative, crypto.createHash("sha256").update(fs.readFileSync(path.join(ROOT, relative))).digest("hex")])),

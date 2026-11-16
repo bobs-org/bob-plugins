@@ -118,6 +118,13 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.newSessionDeps = null;
     this.configFingerprint = "";
     this.syncWarning = null;
+    this.subscriptionPicker = null;
+    this.subscriptionCreateStage = null;
+    this.subscriptionReport = null;
+    this.subscriptionProposal = null;
+    this.subscriptionContext = null;
+    this.subscriptionCandidate = false;
+    this.subscriptionPickerMessage = "";
   }
 
   onOpen() {
@@ -139,6 +146,11 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
           } catch (_) {}
           if (this.newStage && typeof this.shouldPassNewCategoryKey === "function" &&
               this.shouldPassNewCategoryKey(event)) {
+            return true;
+          }
+          if ((this.subscriptionPicker || this.subscriptionCreateStage) &&
+              typeof this.shouldPassSubscriptionStageKey === "function" &&
+              this.shouldPassSubscriptionStageKey(event)) {
             return true;
           }
           bankCategoryUiConsume(event);
@@ -168,6 +180,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     try { this.newSession?.close?.(); } catch (_) {}
     this.newSession = null;
     this.newStage = null;
+    this.subscriptionPicker = null;
+    this.subscriptionCreateStage = null;
     try {
       if (this.keyScopeRef && this.scope && typeof this.scope.unregister === "function") {
         this.scope.unregister(this.keyScopeRef);
@@ -187,6 +201,14 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     bankCategoryUiConsume(event);
     if (this.newStage && typeof this.closeNewCategoryStage === "function") {
       this.closeNewCategoryStage();
+      return false;
+    }
+    if (this.subscriptionCreateStage && typeof this.closeSubscriptionCreateStage === "function") {
+      this.closeSubscriptionCreateStage();
+      return false;
+    }
+    if (this.subscriptionPicker && typeof this.closeSubscriptionPicker === "function") {
+      this.closeSubscriptionPicker();
       return false;
     }
     if (!this.busy) this.close();
@@ -229,13 +251,19 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
       ? bankConfigFingerprintFromReport(report)
       : (typeof report.config_fingerprint === "string" ? report.config_fingerprint : "");
     if (fingerprint) this.configFingerprint = fingerprint;
-    if (this.didInteract) return false;
-    if (Array.isArray(report.categories)) this.categories = report.categories;
     const rows = Array.isArray(report.days)
       ? report.days.flatMap((day) => Array.isArray(day.rows) ? day.rows : [])
       : [];
     const cardRow = this.cardRow();
     const match = cardRow ? bankCategoryMatchJsonRow(cardRow, rows) : null;
+    this.subscriptionRow = match || null;
+    this.subscriptionContext = match && match.subscription ? match.subscription : null;
+    this.subscriptionCandidate = Boolean(match && match.subscription_candidate === true && !match.subscription);
+    if (this.didInteract) {
+      this.paint();
+      return false;
+    }
+    if (Array.isArray(report.categories)) this.categories = report.categories;
     this.suggestion = match && match.suggestion ? match.suggestion : null;
     this.reason = null;
     const model = bankCategoryCardModel({
@@ -260,6 +288,13 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     this.waitingRefresh = true;
     this.busy = false;
     this.summary = null;
+    this.subscriptionPicker = null;
+    this.subscriptionCreateStage = null;
+    this.subscriptionReport = null;
+    this.subscriptionProposal = null;
+    this.subscriptionContext = null;
+    this.subscriptionCandidate = false;
+    this.subscriptionPickerMessage = "";
     this.lock = lock || null;
     this.highlightKey = null;
     this.chord = bankCategoryChordInit(false);
@@ -284,6 +319,8 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   showSummary(summary) {
     this.waitingRefresh = false;
     this.busy = false;
+    this.subscriptionPicker = null;
+    this.subscriptionCreateStage = null;
     this.summary = summary || null;
     this.paint();
   }
@@ -303,13 +340,13 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     return true;
   }
 
-  async choose(categoryKey, kind) {
+  async choose(categoryKey, kind, writeOptions = {}) {
     if (this.busy || this.closed || this.summary) return false;
     this.didInteract = true;
     this.busy = true;
     this.paint();
     try {
-      if (this.onChoose) await this.onChoose(categoryKey, kind, this);
+      if (this.onChoose) await this.onChoose(categoryKey, kind, this, writeOptions);
       return true;
     } catch (error) {
       this.waitingRefresh = false;
@@ -335,6 +372,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (!key) return;
     if (this.newStage && typeof this.routeNewCategoryKey === "function") {
       return this.routeNewCategoryKey(event);
+    }
+    if ((this.subscriptionPicker || this.subscriptionCreateStage) &&
+        typeof this.routeSubscriptionStageKey === "function") {
+      return this.routeSubscriptionStageKey(event);
+    }
+    if (key === "/") {
+      bankCategoryUiConsume(event);
+      if (!this.busy && !this.waitingRefresh && !this.summary) void this.openSubscriptionPicker?.();
+      return;
     }
     if (key === "Escape") {
       bankCategoryUiConsume(event);
@@ -376,6 +422,7 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
   }
 
   onClick(event) {
+    if (typeof this.onSubscriptionStageClick === "function" && this.onSubscriptionStageClick(event)) return;
     const target = event && event.target;
     const created = target && typeof target.closest === "function"
       ? target.closest("button[data-bank-new-category]")
@@ -563,6 +610,15 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     if (title) title.id = "bob-bank-category-title";
     this.paintHeader(root, model);
     this.paintProgress(root, model);
+    if (typeof this.paintSubscriptionContext === "function") this.paintSubscriptionContext(root);
+    if (this.subscriptionCreateStage && typeof this.paintSubscriptionCreateStage === "function") {
+      this.paintSubscriptionCreateStage(root);
+      return;
+    }
+    if (this.subscriptionPicker && typeof this.paintSubscriptionPicker === "function") {
+      this.paintSubscriptionPicker(root);
+      return;
+    }
     if (model.hint) bankCategoryUiAppend(root, "p", "bob-bank-category-hint", model.hint, { role: "status" });
     if (this.waitingRefresh) {
       bankCategoryUiAppend(root, "p", "bob-bank-category-hint", "Refreshing suggestions…", { role: "status" });

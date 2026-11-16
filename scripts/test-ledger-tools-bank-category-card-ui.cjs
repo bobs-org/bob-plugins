@@ -464,6 +464,43 @@ test("tiles render keycaps, aria-keyshortcuts, and a live region after filing", 
     "Filed $6.45 as Coffee · next $12.90 waiting");
 });
 
+test("the subscription context strip sits above tiles and the picker exposes an accessible list", () => {
+  const { modal, content } = paintModal("set", {
+    row: { payee: "Tunely", cents: -999, date: "2026-11-12" },
+  });
+  modal.subscriptionContext = {
+    title: "Tunely",
+    status_label: "💚 Active",
+    amount_cents: 999,
+    cadence: "monthly",
+    state: "ok",
+  };
+  modal.paint();
+  const context = content.querySelector(".bob-bank-subscription-context");
+  const root = content.querySelector(".bob-bank-category-card");
+  assert.match(context.textContent, /🔁 · Tunely · 💚 Active · \$9\.99 a month/);
+  assert.ok(root.children.indexOf(context) < root.children.findIndex((child) =>
+    child.classTokens().includes("bob-bank-category-section")));
+
+  modal.subscriptionPicker = {
+    query: "tun",
+    items: [{ path: "subscriptions/tunely", title: "Tunely", status_label: "💚 Active", amount_cents: 999, cadence: "monthly", matched: true }],
+    selected: 0,
+    loading: false,
+    error: "",
+    album: { path: "subscriptions.md" },
+  };
+  modal.paint();
+  const query = content.querySelector("input[data-bank-subscription-query]");
+  const option = content.querySelector("button[data-subscription-path]");
+  assert.equal(query.value, "tun");
+  assert.equal(query.getAttribute("aria-label"), "Search subscriptions");
+  assert.equal(option.getAttribute("role"), "option");
+  assert.equal(option.getAttribute("aria-selected"), "true");
+  assert.equal(option.getAttribute("data-subscription-path"), "subscriptions/tunely");
+  assert.ok(content.querySelector("button[data-bank-subscription-new]"));
+});
+
 test("the completion state paints the other-month ]b walk line", () => {
   const { modal, content } = paintModal("close", {
     row: { payee: "Corner Cafe", cents: -645, date: "2026-11-12" },

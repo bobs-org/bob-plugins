@@ -132,6 +132,7 @@
   "241h-plugin-bank-decode.js",
   "241hc-plugin-bank-subscription.js",
   "241hb-plugin-bank-config-decode.js",
+  "241hd-plugin-bank-subscriptions-decode.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
   "241k-plugin-bank-actions.js",
@@ -158,6 +159,7 @@
   "248e-plugin-bank-config-update-service.js",
   "248f-plugin-bank-category-new-model.js",
   "248g-plugin-bank-category-new-stage.js",
+  "248h-plugin-bank-subscription-linker.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
@@ -274,5 +276,6 @@
   "362-exports-areas.js",
   "363-exports-bank-setup.js",
   "364-exports-bank-subscription.js",
-  "365-exports-bank-config-update.js"
+  "365-exports-bank-config-update.js",
+  "366-exports-bank-subscription-linker.js"
 ]

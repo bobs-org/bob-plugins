@@ -109,8 +109,8 @@ class BobLedgerToolsBankCategoryMixin {
       categories,
       progress,
       openedWithCtrlEnter,
-      onChoose: (categoryKey, kind, activeModal) =>
-        this.bankCategoryCommit(activeModal, categoryKey, kind),
+      onChoose: (categoryKey, kind, activeModal, writeOptions) =>
+        this.bankCategoryCommit(activeModal, categoryKey, kind, writeOptions),
       onMonth: (path) => this.bankCategoryOpenWaitingMonth(path),
     });
     modal.editor = activeEditor;
@@ -207,7 +207,26 @@ class BobLedgerToolsBankCategoryMixin {
     return true;
   }
 
-  async bankCategoryCommit(modal, categoryKey, kind) {
+  apiBankCreateSubscription(fields = {}) {
+    const built = bankSubscriptionCreateArgs(fields);
+    if (!built.ok) return Promise.resolve(built);
+    return bobSpawnJson(built.args, bankDecodeRecordCreation, {
+      commandLabel: "bob records new subscription",
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function"
+          ? this.statsVaultBasePath()
+          : null,
+      timeout: BOB_SPAWN_TIMEOUT_MS,
+      maxBuffer: BOB_SPAWN_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  async bankCategoryCommit(modal, categoryKey, kind, writeOptions = {}) {
     if (!modal || modal.closed || modal !== this.bankCategoryModal) return false;
     const editor = modal.editor;
     if (!editor || typeof editor.getValue !== "function") {
@@ -216,13 +235,20 @@ class BobLedgerToolsBankCategoryMixin {
     }
     const currentPath = this.bankActiveFilePath();
     const currentSource = editor.getValue();
-    const plan = bankCategoryWritePlan({
+    const planInput = {
       mode: modal.mode,
       capture: modal.context && modal.context.capture,
       currentPath,
       currentSource,
       categoryKey,
-    });
+    };
+    const plan = writeOptions && typeof writeOptions.subscriptionPath === "string"
+      ? bankCategorySubscriptionWritePlan({
+        ...planInput,
+        recordPath: writeOptions.subscriptionPath,
+        allowLinkOnly: true,
+      })
+      : bankCategoryWritePlan(planInput);
     if (!plan.ok) {
       new Notice(plan.message || BANK_CATEGORY_WRITE_REFUSAL);
       return false;
@@ -235,7 +261,11 @@ class BobLedgerToolsBankCategoryMixin {
     if (modal.mode === "set") {
       await saved;
       modal.close();
-      new Notice(plan.action === "noop" ? "Bank: row has no category" : "Bank: category updated");
+      if (writeOptions && writeOptions.subscriptionPath) {
+        new Notice(`Bank: linked to ${writeOptions.title || "subscription"}`);
+      } else {
+        new Notice(plan.action === "noop" ? "Bank: row has no category" : "Bank: category updated");
+      }
       return true;
     }
 

@@ -130,7 +130,9 @@ function bankCacheKey(args) {
 
 function bankBuildArgs(options = {}) {
   const opts = bankJsonObject(options) ? options : {};
-  const command = opts.command === "report" ? "report" : opts.command === "config" ? "config" : "list";
+  const command = opts.command === "report" ? "report"
+    : opts.command === "config" ? "config"
+      : opts.command === "subscriptions" ? "subscriptions" : "list";
   const args = ["bank", command];
   if (command === "list" && opts.all === true) {
     args.push("-a");
@@ -153,7 +155,7 @@ function bankBuildArgs(options = {}) {
     if (opts.charts === true) {
       args.push("-c");
     }
-  } else if (bankString(opts.month)) {
+  } else if (command === "list" && bankString(opts.month)) {
     args.push("-m", opts.month.trim());
   }
   args.push("-f", "json");

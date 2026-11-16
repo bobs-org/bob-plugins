@@ -149,6 +149,9 @@ function bankCategoryWritePlan(input = {}) {
     if (mode === "close" && edits.length > 0) {
       return { ok: true, mode, line, action: "tick", edits, tick: true };
     }
+    if (input.allowLinkOnly === true && mode === "set") {
+      return { ok: true, mode, line, action: "noop", edits, tick: false };
+    }
     if (mode === "set") {
       return { ok: true, mode, line, action: "noop", edits, tick: false };
     }
@@ -156,8 +159,14 @@ function bankCategoryWritePlan(input = {}) {
   }
   const replacement = `[cat:: ${categoryKey}]`;
   if (existing && existing.span && Number.isInteger(existing.span.start)) {
+    if (existing.key === categoryKey) {
+      return { ok: true, mode, line, action: mode === "close" && edits.length ? "tick" : "noop", edits, tick: mode === "close" };
+    }
     edits.push({ line, fromCh: existing.span.start, toCh: existing.span.end, insert: replacement });
     return { ok: true, mode, line, action: "replace", edits, tick: mode === "close" };
+  }
+  if (input.allowLinkOnly === true && mode === "set") {
+    return { ok: true, mode, line, action: "noop", edits, tick: false };
   }
   const payeeSpan = token.payeeSpan;
   if (!payeeSpan || !Number.isInteger(payeeSpan.end)) {

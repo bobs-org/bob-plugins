@@ -120,19 +120,25 @@ class BobLedgerToolsBankDataMixin {
       ? "report"
       : Array.isArray(args) && args[1] === "config"
         ? "config"
-        : "list";
+        : Array.isArray(args) && args[1] === "subscriptions"
+          ? "subscriptions"
+          : "list";
     const decoder = command === "report"
       ? bankDecodeReport
       : command === "config"
         ? bankDecodeConfig
-        : bankDecodeList;
+        : command === "subscriptions"
+          ? bankDecodeSubscriptions
+          : bankDecodeList;
     return bobSpawnJson(args, decoder, {
       ...options,
       commandLabel: command === "report"
         ? "bob bank report"
         : command === "config"
           ? "bob bank config"
-          : "bob bank list",
+          : command === "subscriptions"
+            ? "bob bank subscriptions"
+            : "bob bank list",
       resolveBobPath: () =>
         typeof this.apiStatsBobPath === "function"
           ? this.apiStatsBobPath()
@@ -153,6 +159,10 @@ class BobLedgerToolsBankDataMixin {
       return opts.fetches.filter((entry) => bankJsonObject(entry));
     }
     const fetches = [];
+    if (opts.command === "subscriptions" || opts.subscriptions === true) {
+      fetches.push({ command: "subscriptions", all: opts.all === true });
+      return fetches;
+    }
     if (opts.command === "config" || opts.config === true) {
       fetches.push({ command: "config" });
       return fetches;

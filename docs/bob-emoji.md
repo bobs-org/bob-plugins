@@ -13,7 +13,7 @@ line or immediately after whitespace in an Obsidian Markdown editor.
 | --- | --- |
 | Name | Bob Emoji |
 | ID | `bob-emoji` |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Complete GitHub-style emoji shortcodes from a colon typed after a space. |
@@ -47,14 +47,32 @@ not edit the document; the menu works while typing in insert mode.
 
 ## Results and selection
 
-Matches are ranked by alias prefix, alias substring, tag match, then
-description word match. Exact aliases lead their tier, and recently selected
-emoji receive a stable boost within a tier. The list shows up to 30 results.
+Queries are normalized (lowercase, surrounding colons stripped; `_`, `-`, and
+whitespace split tokens) and every token must match. Ranking is tiered, best
+first: exact alias or keyword, alias prefix, alias word-start or keyword
+prefix, alias substring, description word prefix, description substring, then
+conservative fuzzy (edit distance 1 for tokens of 4+ chars, only when fewer
+than 8 results). Recents and caller-supplied `boost` glyphs reorder only
+within a tier. A query that is exactly one emoji grapheme returns that entry
+first (VS16-insensitive). The catalog carries gemoji `category` plus CLDR
+English keywords and TTS names (Unicode License, see
+`plugins/bob-emoji/vendor/README.md`), deduped against aliases and tags. The
+list shows up to 30 results.
 
 Rows show the Unicode emoji, its primary shortcode, and up to two alternate
-aliases or tags. The matched shortcode text is highlighted. Use the arrow keys
-to navigate; Enter, Tab, or a click inserts the Unicode emoji in place of the
-colon and query. The insertion adds no trailing space.
+aliases or keywords. The matched shortcode text is highlighted. Use the arrow
+keys to navigate; Enter, Tab, or a click inserts the Unicode emoji in place of
+the colon and query. The insertion adds no trailing space. Pasted glyphs
+(including ZWJ sequences, flags, keycaps, and tone modifiers) are preserved
+byte-for-byte; digit keycaps (`0️⃣`–`9️⃣`) are accepted with the note that bob
+stores a leading digit keycap as label text.
+
+## Label suggestions
+
+`suggestForLabel(label)` tokenizes the label, drops a small stop-word list,
+lightly stems (`-s`, `-es`, `-ing`, `-ed`), and ranks by matched tokens, then
+tier. For example, "Seed" suggests 🌱, "Ready" suggests ✅, and
+"Automation (service)" suggests ⚙️ or 🛠️.
 
 ## Recents
 

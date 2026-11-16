@@ -56,7 +56,7 @@ class BobEmojiSuggest extends EmojiEditorSuggestBase {
         if (hints.length >= 2) break;
       }
       if (hints.length < 2) {
-        for (const tag of value.tags || []) {
+        for (const tag of value.tags || value.keywords || []) {
           if (!hints.includes(tag)) hints.push(tag);
           if (hints.length >= 2) break;
         }

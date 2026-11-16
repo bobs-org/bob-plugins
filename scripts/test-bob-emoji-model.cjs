@@ -31,7 +31,7 @@ test("query normalization, alias ranking, tags, descriptions, and recents", () =
   ]);
   assert.deepEqual(
     helpers.emojiSearch(fixture, "happy", [], 10, []).map((row) => [row.emoji, row.matchTier]),
-    [["P", 0], ["S", 1], ["T", 2], ["D", 3]],
+    [["P", 0], ["T", 0], ["S", 3], ["D", 4]],
   );
 
   const recentFixture = helpers.emojiBuildIndex([

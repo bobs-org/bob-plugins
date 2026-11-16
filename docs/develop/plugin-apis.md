@@ -602,6 +602,42 @@ and newest record. Each finish also triggers the workspace event
 `bob-command-mode:run-finished` with `{ runId, argv, entryId, outcome,
 effect, invalidates }`.
 
+## Bob Emoji
+
+`bob-emoji.api` is version 1. It serves the same tiered search the editor
+`:shortcode:` menu uses, plus label suggestions and catalog browsing for the
+shared Emoji Slot. Feature-detect the plugin and `api.version >= 1` before
+calling it; the api exists even when `EditorSuggest` is unavailable, because
+the index builds anyway. Every method is total: it returns empty arrays or
+`null` and never throws.
+
+```js
+const emoji = app.plugins.plugins["bob-emoji"]?.api;
+if (emoji?.version >= 1) {
+  const rows = emoji.search("white check mark", { limit: 10 });
+}
+```
+
+Rows are `{ emoji, name, alias, aliases, category, keywords, matchTier }`
+where `name` is the gemoji description, `alias` is the primary alias,
+`category` is the gemoji category, and `keywords` are CLDR English keywords
+plus TTS names deduped against aliases and tags. `matchTier` is the search
+tier (0–6) or `null` for browse, info, and recents rows.
+
+- `search(query, { limit, boost })` ranks with multi-token AND, tiered
+  matching, VS16-insensitive single-glyph lookup, and conservative fuzzy.
+  `boost` is an array of glyphs (or `{ emoji }` rows) that reorder only
+  within a tier.
+- `suggestForLabel(label, { limit, exclude })` ranks catalog entries by
+  matched label tokens, then tier. `exclude` is an array of glyphs to skip.
+- `categories()` returns the 9 gemoji category names in catalog order.
+- `browse(categoryId, { limit, offset })` lists one category in catalog
+  order. `categoryId` matches case- and punctuation-insensitively.
+- `info(glyph)` returns one row for a glyph (VS16-insensitive) or `null`.
+- `recents({ limit })` returns the persisted recent rows, newest first.
+- `remember(glyphOrRow)` maps a glyph to its primary alias, shares the
+  editor's persisted recents, and returns `true` when remembered.
+
 ## Related
 
 - [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)

@@ -4910,3 +4910,132 @@ body.bob-wp-multi-split .workspace-tabs.mod-active .workspace-tab-header-contain
 body.bob-wp-multi-split .workspace-tabs.bob-wp-active-split .workspace-tab-header-container {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--interactive-accent) 75%, transparent);
 }
+
+/* Window tab numerals */
+body.bob-tab-numbers .workspace-tab-header-inner::before {
+  content: attr(data-bob-tab);
+  flex: 0 0 auto;
+  width: 16px;
+  margin-right: 5px;
+  font-family: var(--font-monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
+  align-self: center;
+  color: inherit;
+}
+
+body.bob-tab-numbers .workspace-tab-header-inner:not([data-bob-tab])::before {
+  content: none;
+}
+
+body.bob-tab-numbers-lit .workspace-tab-header-inner[data-bob-tab]::before {
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+  border-radius: 4px;
+  padding: 1px 0;
+  transition: color 90ms ease-out, background 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+body.bob-tab-numbers-lit .workspace-tabs.mod-active .workspace-tab-header.is-active .workspace-tab-header-inner[data-bob-tab]::before {
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border-hover);
+}
+
+.workspace-tab-header-inner.bob-tab-number-flash::before {
+  color: var(--text-on-accent) !important;
+  background: var(--interactive-accent) !important;
+  box-shadow: inset 0 0 0 1px var(--interactive-accent) !important;
+}
+
+.workspace-tabs.mod-stacked .workspace-tab-header-inner::before {
+  writing-mode: horizontal-tb;
+  align-self: center;
+}
+
+.bob-wp-pill-count.is-range {
+  font-family: var(--font-monospace);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  padding: 0 2px;
+}
+
+.bob-wp-pill-extra {
+  color: var(--text-faint);
+  font-weight: 600;
+}
+
+.bob-wp-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.bob-wp-tabs-row.is-dimmed {
+  opacity: 0.6;
+}
+
+.bob-wp-card .bob-wp-tabs-key {
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+}
+
+.bob-wp-tabs-glyph {
+  flex: 0 0 auto;
+}
+
+.bob-wp-tabs-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-wp-tabs-aside {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-wp-tabs-row.is-nudge {
+  animation: bob-wp-nudge 160ms ease-out;
+}
+
+.bob-wp-tabs-row.is-nudge .bob-wp-tabs-label,
+.bob-wp-tabs-row.is-nudge .bob-wp-tabs-aside {
+  color: var(--text-normal);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.bob-tab-numbers .workspace-tab-header-inner::before,
+  body.bob-tab-numbers-lit .workspace-tab-header-inner[data-bob-tab]::before,
+  .workspace-tab-header-inner.bob-tab-number-flash::before {
+    transition: none !important;
+    animation: none !important;
+  }
+}

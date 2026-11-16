@@ -118,80 +118,161 @@ function dimMoves(model) {
 }
 
 function buildCases(helpers) {
-  const screenshot = helpers.buildWindowPrefixViewModel(layout("blog", [
-    split("left", 0, [
+  // Paint-phase preview: every fixture tab bar uses Obsidian's real header
+  // structure and the numbers below come from the production catalog
+  // (`buildWindowPrefixTabCatalog`), the same source the dormant stamper
+  // reads. The browser applies them with the stamper's attribute and body
+  // class rules, so the PNGs show what the stamper paints.
+  function numberedCase(options) {
+    const snap = layout(options.activeLeafId, options.rawSplits);
+    const catalog = helpers.buildWindowPrefixTabCatalog(snap);
+    const byId = new Map();
+    for (const tab of catalog.tabs || []) byId.set(tab.leafId, tab.number);
+    const model = helpers.buildWindowPrefixViewModel(snap);
+    model.platform = "mac";
+    const activeSplitId = model.activeSplitId;
+    const workspace = {
+      width: options.width || 840,
+      splits: options.rawSplits.map((raw) => {
+        const view = model.splits.find((entry) => entry.id === raw.id) || {};
+        return {
+          id: raw.id,
+          title: view.label || raw.id,
+          active: raw.id === activeSplitId,
+          flex: Math.max(0.4, view.widthRatio || 1),
+          stacked: Boolean(options.stackedIds && options.stackedIds.includes(raw.id)),
+          tabs: raw.leaves.map((entry) => ({
+            name: entry.label || entry.id,
+            number: byId.has(entry.id) ? byId.get(entry.id) : null,
+            pinned: entry.pinned === true,
+            active: entry.id === (raw.selectedLeafId || raw.leaves[raw.leaves.length - 1]?.id),
+          })),
+        };
+      }),
+    };
+    return {
+      id: options.id,
+      title: options.title,
+      model,
+      workspace,
+      actions: options.ring === false ? (options.card ? ["card"] : []) : (options.card ? ["armed", "card"] : ["armed"]),
+      tabState: options.tabState || "idle",
+      flashNumber: options.flashNumber ?? null,
+      showNumerals: options.showNumerals !== false,
+      cardTabNumbers: options.cardTabNumbers !== false,
+      nudge: options.nudge || null,
+      receipt: options.receipt || null,
+      reducedMotion: Boolean(options.reducedMotion),
+    };
+  }
+
+  function rawSplit(id, x, leaves, options = {}) {
+    return split(id, x, leaves, options);
+  }
+
+  const twoSplitRaw = [
+    rawSplit("left", 0, [
       leaf("day", { label: "20261115" }),
       leaf("dash", { label: "dash" }),
       leaf("blog", { label: "sase_blog" }),
     ], { selected: "blog", width: 280 }),
-    split("right", 280, [leaf("contents", { label: "sase_blog_contents" })], { width: 180 }),
-  ]));
-  const threeTabs = helpers.buildWindowPrefixViewModel(layout("blog", [
-    split("only", 0, [
-      leaf("day", { label: "20261115" }),
-      leaf("dash", { label: "dash" }),
-      leaf("blog", { label: "sase_blog" }),
-    ], { selected: "blog", width: 360 }),
-  ]));
-  const onlyTab = helpers.buildWindowPrefixViewModel(layout("a", [
-    split("only", 0, [leaf("a", { label: "sase_blog" })], { width: 360 }),
-  ]));
-  const three = helpers.buildWindowPrefixViewModel(layout("b", [
-    split("left", 0, [leaf("a", { label: "20261115" })], { width: 140 }),
-    split("middle", 140, [leaf("b", { label: "sase_blog" })], { width: 180 }),
-    split("right", 320, [leaf("c", { label: "sase_blog_contents" })], { width: 140 }),
-  ]));
-  const sixSplits = [];
-  for (let index = 0; index < 6; index += 1) {
-    sixSplits.push(split(`s${index}`, index * 80, [leaf(`t${index}`, { label: `Note ${index + 1}` })], { width: 80 }));
-  }
-  const six = helpers.buildWindowPrefixViewModel(layout("t2", sixSplits));
-  const closes = helpers.buildWindowPrefixViewModel(layout("a", [
-    split("left", 0, [leaf("a", { label: "sase_blog" })], { width: 180 }),
-    split("right", 180, [
-      leaf("c", { label: "dash" }),
-      leaf("b", { label: "sase_blog_contents" }),
-    ], { selected: "b", width: 220 }),
-  ]));
-
-  function workspaceFrom(model, width, tabNames) {
-    return {
-      width: width || 840,
-      splits: model.splits.map((item) => ({
-        id: item.id,
-        title: item.label,
-        tabs: (tabNames && tabNames[item.id]) || (item.tabCount > 1
-          ? Array.from({ length: item.tabCount }, (_, index) => (index === item.tabCount - 1 ? item.label : `Pinned ${index + 1}`))
-          : [item.label]),
-        active: item.active,
-        flex: Math.max(0.4, item.widthRatio),
-      })),
-    };
-  }
-
-  screenshot.platform = "mac";
-  threeTabs.platform = "mac";
-  onlyTab.platform = "mac";
-  three.platform = "mac";
-  six.platform = "mac";
-  closes.platform = "mac";
-  const apiChanged = dimMoves(screenshot);
-  apiChanged.platform = "mac";
-  const shotTabs = { left: ["20261115", "dash", "sase_blog"], right: ["sase_blog_contents"] };
+    rawSplit("right", 280, [leaf("contents", { label: "sase_blog_contents" })], { width: 180 }),
+  ];
+  const thirteenLeft = Array.from({ length: 6 }, (_, index) => leaf(`t${index + 1}`, { label: `Tab ${index + 1}`, pinned: index === 0 }));
+  const thirteenRight = Array.from({ length: 7 }, (_, index) => leaf(`t${index + 7}`, { label: `Note ${index + 7} with a long crowded title` }));
+  const thirteenRaw = [
+    rawSplit("left", 0, thirteenLeft, { selected: "t1", width: 300 }),
+    rawSplit("right", 300, thirteenRight, { selected: "t7", width: 320 }),
+  ];
+  const sixTabRaw = [
+    rawSplit("left", 0, [
+      leaf("a1", { label: "20261115" }),
+      leaf("a2", { label: "dash" }),
+      leaf("a3", { label: "sase_blog" }),
+    ], { selected: "a3", width: 260 }),
+    rawSplit("right", 260, [
+      leaf("b1", { label: "map" }),
+      leaf("b2", { label: "outline" }),
+      leaf("b3", { label: "sase_blog_contents" }),
+    ], { selected: "b1", width: 260 }),
+  ];
 
   return [
-    { id: "tier1", title: "Tier 1 ring · two splits", model: screenshot, workspace: workspaceFrom(screenshot, 840, shotTabs), actions: ["armed"] },
-    { id: "screenshot", title: "Screenshot layout card", model: screenshot, workspace: workspaceFrom(screenshot, 840, shotTabs), actions: ["armed", "card"] },
-    { id: "ghosts", title: "One split · three tabs · ghost slots", model: threeTabs, workspace: workspaceFrom(threeTabs, 640, { only: ["20261115", "dash", "sase_blog"] }), actions: ["armed", "card"] },
-    { id: "only-v", title: "One split · one tab · only v", model: onlyTab, workspace: workspaceFrom(onlyTab, 560), actions: ["armed", "card"] },
-    { id: "three", title: "Three splits · middle focused", model: three, workspace: workspaceFrom(three), actions: ["armed", "card"] },
-    { id: "overflow", title: "Six splits · overflow counters", model: six, workspace: workspaceFrom(six, 900), actions: ["armed", "card"] },
-    { id: "nudge", title: "Blocked h nudge at the left edge", model: screenshot, workspace: workspaceFrom(screenshot, 840, shotTabs), actions: ["armed", "card"], nudge: { key: "h", message: "Already the leftmost split" } },
-    { id: "closes", title: "L from a sole tab · closes split", model: closes, workspace: workspaceFrom(closes, 840, { left: ["sase_blog"], right: ["dash", "sase_blog_contents"] }), actions: ["armed", "card"] },
-    { id: "api-changed", title: "Layout API changed dimming", model: apiChanged, workspace: workspaceFrom(apiChanged, 840, shotTabs), actions: ["armed", "card"] },
-    { id: "receipt", title: "Move receipt pill", model: closes, workspace: workspaceFrom(closes, 840, { left: ["sase_blog"], right: ["dash", "sase_blog_contents"] }), actions: ["armed", "card"], receipt: "Moved “sase_blog” → sase_blog_contents · left split closed" },
-    { id: "narrow", title: "420px main area", model: screenshot, workspace: workspaceFrom(screenshot, 420, shotTabs), actions: ["armed", "card"] },
-    { id: "reduced", title: "Reduced motion", model: screenshot, workspace: workspaceFrom(screenshot, 840, shotTabs), actions: ["armed", "card"], reducedMotion: true },
+    numberedCase({
+      id: "idle", title: "1 · Idle numerals · two splits",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 840,
+      tabState: "idle", card: false,
+    }),
+    numberedCase({
+      id: "lit", title: "2 · Lit caps with the here cap · card",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 840,
+      tabState: "lit", card: true, cardTabNumbers: true,
+    }),
+    numberedCase({
+      id: "flash", title: "3 · Flash on the destination numeral",
+      activeLeafId: "contents", rawSplits: twoSplitRaw, width: 840,
+      tabState: "flash", flashNumber: 4, card: false,
+    }),
+    numberedCase({
+      id: "crowded", title: "4 · Thirteen tabs · 10+ blank",
+      activeLeafId: "t1", rawSplits: thirteenRaw, width: 900,
+      tabState: "idle", card: false,
+    }),
+    numberedCase({
+      id: "stacked", title: "5 · Stacked-tab spines stay upright",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 840,
+      tabState: "idle", card: false, stackedIds: ["left", "right"], ring: false,
+    }),
+    numberedCase({
+      id: "one-split", title: "6 · One split · two tabs",
+      activeLeafId: "blog", rawSplits: [
+        rawSplit("only", 0, [
+          leaf("day", { label: "20261115" }),
+          leaf("blog", { label: "sase_blog" }),
+        ], { selected: "blog", width: 420 }),
+      ], width: 640,
+      tabState: "idle", card: false,
+    }),
+    numberedCase({
+      id: "single", title: "7 · A single tab shows no numerals",
+      activeLeafId: "solo", rawSplits: [
+        rawSplit("only", 0, [leaf("solo", { label: "sase_blog" })], { width: 420 }),
+      ], width: 560,
+      tabState: "hidden", card: false, showNumerals: false,
+    }),
+    numberedCase({
+      id: "card", title: "8 · Card with pill ranges and the tabs row",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 840,
+      tabState: "lit", card: true, cardTabNumbers: true,
+    }),
+    numberedCase({
+      id: "card-many", title: "9 · Card over thirteen tabs · +k pill",
+      activeLeafId: "t1", rawSplits: thirteenRaw, width: 900,
+      tabState: "lit", card: true, cardTabNumbers: true,
+    }),
+    numberedCase({
+      id: "card-one", title: "10 · Card over one tab · dimmed tabs row",
+      activeLeafId: "solo", rawSplits: [
+        rawSplit("only", 0, [leaf("solo", { label: "sase_blog" })], { width: 420 }),
+      ], width: 560,
+      tabState: "hidden", card: true, cardTabNumbers: true, showNumerals: false,
+    }),
+    numberedCase({
+      id: "blocked", title: "11 · Blocked digit nudges the tabs row",
+      activeLeafId: "a3", rawSplits: sixTabRaw, width: 840,
+      tabState: "lit", card: true, cardTabNumbers: true,
+      nudge: { key: "tabs", message: "No tab 7 · 6 tabs" },
+    }),
+    numberedCase({
+      id: "narrow", title: "12 · 420px narrow card",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 420,
+      tabState: "lit", card: true, cardTabNumbers: true,
+    }),
+    numberedCase({
+      id: "reduced", title: "13 · Reduced motion keeps the flash",
+      activeLeafId: "blog", rawSplits: twoSplitRaw, width: 840,
+      tabState: "lit", card: true, cardTabNumbers: true, reducedMotion: true,
+    }),
   ];
 }
 
@@ -249,6 +330,29 @@ html, body { margin:0; padding:0; background:var(--background-secondary); color:
 }
 .workspace-tab-header.is-active { color:var(--text-normal); font-weight:600; }
 .workspace-tabs.mod-active .workspace-tab-header.is-active { color:var(--text-normal); }
+.workspace-tab-header-inner {
+  display:flex; align-items:center; min-width:0; flex:1 1 auto;
+}
+.workspace-tab-header-inner-icon {
+  flex:0 0 auto; width:16px; height:16px; margin-right:2px;
+  display:inline-flex; align-items:center; justify-content:center;
+  color:var(--text-faint); font-size:10px;
+}
+.workspace-tab-header-inner-title {
+  flex:1 1 auto; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+.workspace-tab-header-pin,
+.workspace-tab-header-close {
+  flex:0 0 auto; width:14px; text-align:center;
+  color:var(--text-faint); font-size:10px; line-height:1;
+}
+.workspace-tabs.mod-stacked .workspace-tab-header-container {
+  flex-direction:column; height:auto; min-height:120px;
+}
+.workspace-tabs.mod-stacked .workspace-tab-header {
+  max-width:none; padding:6px 8px;
+}
 .workspace-leaf {
   flex:1 1 auto; min-height:0; padding:14px 16px; color:var(--text-muted); font-size:13px; line-height:1.55;
 }
@@ -299,6 +403,7 @@ const ICONS = {
   "arrow-right": "M5 12h14M12 5l7 7-7 7",
   "arrow-left-right": "M8 7 4 12l4 5M16 7l4 5-4 5M4 12h16",
   "columns-2": "M12 3v18M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+  "hash": "M4 9h16M4 15h16M10 3L8 21M16 3L14 21",
 };
 function setIcon(el, name) {
   el.replaceChildren();
@@ -321,23 +426,53 @@ function rectOf(el) {
   const rect = el.getBoundingClientRect();
   return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
 }
-function renderWorkspace(spec) {
+function renderWorkspace(spec, tabState, flashNumber, showNumerals) {
   const root = document.getElementById("workspace");
   root.replaceChildren();
   root.style.width = (spec.width || 840) + "px";
   document.body.classList.toggle("bob-wp-multi-split", (spec.splits || []).length > 1);
+  document.body.classList.toggle("bob-tab-numbers", showNumerals !== false);
+  document.body.classList.toggle("bob-tab-numbers-lit", tabState === "lit");
   for (const split of spec.splits || []) {
     const tabs = document.createElement("div");
-    tabs.className = "workspace-tabs" + (split.active ? " mod-active" : "");
+    tabs.className = "workspace-tabs" + (split.active ? " mod-active" : "") + (split.stacked ? " mod-stacked" : "");
     tabs.dataset.split = split.id;
     tabs.style.flex = String(split.flex || 1) + " 1 0";
     const header = document.createElement("div");
     header.className = "workspace-tab-header-container";
-    for (const name of split.tabs || [split.title]) {
-      const tab = document.createElement("div");
-      tab.className = "workspace-tab-header" + (name === split.title ? " is-active" : "");
-      tab.textContent = name;
-      header.appendChild(tab);
+    for (const tab of split.tabs || []) {
+      const info = (tab && typeof tab === "object") ? tab : { name: String(tab) };
+      const tabEl = document.createElement("div");
+      tabEl.className = "workspace-tab-header" + (info.active ? " is-active" : "");
+      const inner = document.createElement("div");
+      inner.className = "workspace-tab-header-inner";
+      if (showNumerals !== false && info.number != null) {
+        inner.setAttribute("data-bob-tab", String(info.number));
+        tabEl.setAttribute("aria-description", "Control W then N");
+      }
+      if (flashNumber != null && info.number === flashNumber) {
+        inner.classList.add("bob-tab-number-flash");
+      }
+      const icon = document.createElement("div");
+      icon.className = "workspace-tab-header-inner-icon";
+      icon.textContent = info.pinned ? "📌" : "○";
+      const title = document.createElement("div");
+      title.className = "workspace-tab-header-inner-title";
+      title.textContent = info.name || split.title;
+      inner.appendChild(icon);
+      inner.appendChild(title);
+      tabEl.appendChild(inner);
+      if (info.pinned) {
+        const pin = document.createElement("div");
+        pin.className = "workspace-tab-header-pin";
+        pin.textContent = "•";
+        tabEl.appendChild(pin);
+      }
+      const close = document.createElement("div");
+      close.className = "workspace-tab-header-close";
+      close.textContent = "×";
+      tabEl.appendChild(close);
+      header.appendChild(tabEl);
     }
     const leaf = document.createElement("div");
     leaf.className = "workspace-leaf";
@@ -356,10 +491,11 @@ window.windowPrefixPreview = {
     if (!item) throw new Error("unknown preview case " + id);
     document.getElementById("case-title").textContent = item.title;
     if (this.host) this.host.destroy();
-    renderWorkspace(item.workspace);
+    document.body.classList.remove("bob-tab-numbers", "bob-tab-numbers-lit");
+    renderWorkspace(item.workspace, item.tabState, item.flashNumber, item.showNumerals);
     const workspace = document.getElementById("workspace");
     const active = workspace.querySelector(".workspace-tabs.mod-active") || workspace.querySelector(".workspace-tabs");
-    const host = createWindowHintHost(document, { setIcon, platform: "mac", reducedMotion: Boolean(item.reducedMotion) });
+    const host = createWindowHintHost(document, { setIcon, platform: "mac", reducedMotion: Boolean(item.reducedMotion), tabNumbers: item.cardTabNumbers !== false });
     this.host = host;
     const area = rectOf(workspace);
     const ring = rectOf(active);
@@ -382,6 +518,8 @@ window.windowPrefixPreview = {
     const counts = Array.from(document.querySelectorAll(".bob-wp-pill-count"));
     const titles = Array.from(document.querySelectorAll(".bob-wp-pill-title"));
     const overflow = titles.some((el) => el.scrollWidth > el.clientWidth + 1);
+    const numerals = Array.from(document.querySelectorAll(".workspace-tab-header-inner[data-bob-tab]"));
+    const blankPastNine = Array.from(document.querySelectorAll(".workspace-tab-header-inner:not([data-bob-tab])")).length;
     return {
       ringCoversTabs: Boolean(ringRect && headerRect && ringRect.top < headerRect.bottom - 1),
       cardWidth: cardRect ? cardRect.width : 0,
@@ -389,6 +527,8 @@ window.windowPrefixPreview = {
       titleEllipsisKeepsCount: counts.every((el) => el.offsetWidth > 0),
       dimmedRows: document.querySelectorAll(".bob-wp-row.is-unavailable").length,
       overflowTitles: overflow,
+      numerals: numerals.length,
+      blankPastNine,
     };
   },
 };
@@ -464,6 +604,22 @@ async function capture(client, output) {
   fs.writeFileSync(output, Buffer.from(response.data, "base64"));
 }
 
+function relativeLuminance(hex) {
+  const clean = String(hex).replace("#", "");
+  const full = clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean;
+  const rgb = [0, 2, 4].map((at) => parseInt(full.slice(at, at + 2), 16) / 255);
+  const linear = rgb.map((value) => (value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)));
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(a, b) {
+  const l1 = relativeLuminance(a);
+  const l2 = relativeLuminance(b);
+  const hi = Math.max(l1, l2);
+  const lo = Math.min(l1, l2);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.out, { recursive: true });
@@ -499,6 +655,10 @@ async function main() {
     }
     const screenshots = [];
     const failures = [];
+    for (const [theme, accent, surface] of [["light", "#624bb8", "#f0f1f4"], ["dark", "#b6a0ff", "#292c32"]]) {
+      const ratio = contrastRatio(accent, surface);
+      if (ratio < 4.5) failures.push(`${theme}/lit-cap: contrast ${ratio.toFixed(2)}:1 below 4.5:1 (${accent} on ${surface})`);
+    }
     for (const theme of ["light", "dark"]) {
       await client.evaluate(`document.body.dataset.theme = ${safeJson(theme)}`);
       for (const item of cases) {

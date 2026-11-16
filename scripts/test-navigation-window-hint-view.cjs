@@ -307,3 +307,129 @@ test("reduced motion marks the host and still paints the card", () => {
   assert.ok(root.classes.includes("is-carded"));
   host.destroy();
 });
+
+test("tabNumbers pills show numeral ranges with aria and +k", () => {
+  const doc = makeDoc({ platform: "mac" });
+  const host = createWindowHintHost(doc, { platform: "mac", tabNumbers: true });
+  host.showCard(screenshotModel());
+  const pills = byAttr(doc.body, "data-bob-wp", "pill");
+  assert.equal(pills.length, 2);
+  const ranges = byAttr(doc.body, "data-bob-wp", "pill-range");
+  assert.equal(ranges.length, 2);
+  assert.match(flattenText(ranges[0]), /1–3/);
+  assert.equal(ranges[0].attributes["aria-label"], "tabs 1 to 3");
+  assert.match(flattenText(ranges[1]), /4/);
+  assert.equal(ranges[1].attributes["aria-label"], "tab 4");
+  // Crowded split renders a faint +k extra.
+  const crowdedDoc = makeDoc();
+  const crowdedHost = createWindowHintHost(crowdedDoc, { tabNumbers: true });
+  const leaves = Array.from({ length: 13 }, (_, index) => leaf(`t${index + 1}`, { label: `Tab ${index + 1}` }));
+  const crowded = buildWindowPrefixViewModel({
+    activeLeafId: "t1",
+    splits: [
+      split("left", 0, leaves.slice(0, 6).map((entry) => entry.id).map((id, index) => leaf(id, { label: `Tab ${index + 1}` })), { selected: "t1", width: 280 }),
+      split("right", 280, leaves.slice(6).map((entry, index) => leaf(entry.id, { label: `Tab ${index + 7}` })), { selected: "t7", width: 180 }),
+    ],
+  });
+  crowdedHost.showCard(crowded);
+  const extras = byAttr(crowdedDoc.body, "data-bob-wp", "pill-range").map((node) => flattenText(node));
+  assert.ok(extras.some((text) => /\+4/.test(text)));
+  crowdedHost.destroy();
+  host.destroy();
+});
+
+test("tabNumbers tabs row renders ranges, asides, and nudges", () => {
+  const doc = makeDoc({ platform: "mac" });
+  const host = createWindowHintHost(doc, { platform: "mac", tabNumbers: true });
+  const model = screenshotModel();
+  host.showCard(model);
+  const row = byAttr(doc.body, "data-bob-wp", "tabs-row")[0];
+  assert.ok(row);
+  assert.match(flattenText(byAttr(row, "data-bob-wp", "tabs-key")[0]), /1–4/);
+  assert.match(flattenText(byAttr(row, "data-bob-wp", "tabs-label")[0]), /jump to that tab/);
+  assert.match(flattenText(byAttr(row, "data-bob-wp", "tabs-aside")[0]), /it stays in its split/);
+  assert.match(flattenText(byAttr(row, "data-bob-wp", "tabs-glyph")[0]), /#/);
+  assert.match(flattenText(byAttr(doc.body, "data-bob-wp", "card")[0]), /jump to that tab/);
+  const card = byAttr(doc.body, "data-bob-wp", "card")[0];
+  assert.match(String(card.attributes["aria-label"] || ""), /1 to 4 jump to that tab/);
+  host.nudge("3", "No tab 7 · 4 tabs");
+  assert.ok(row.classes.includes("is-nudge"));
+  assert.match(flattenText(byAttr(doc.body, "data-bob-wp", "message")[0]), /No tab 7/);
+  host.destroy();
+
+  const manyDoc = makeDoc();
+  const manyHost = createWindowHintHost(manyDoc, { tabNumbers: true });
+  const leaves = Array.from({ length: 13 }, (_, index) => leaf(`m${index + 1}`, { label: `M ${index + 1}` }));
+  const many = buildWindowPrefixViewModel({
+    activeLeafId: "m1",
+    splits: [{
+      id: "all", rect: { left: 0, top: 0, right: 400, bottom: 100, width: 400, height: 100 },
+      leaves, selectedLeafId: "m1",
+    }],
+  });
+  manyHost.showCard(many);
+  const manyRow = byAttr(manyDoc.body, "data-bob-wp", "tabs-row")[0];
+  assert.match(flattenText(manyRow), /1–9/);
+  assert.match(flattenText(manyRow), /4 more unnumbered/);
+  manyHost.nudge("tabs", "No tab 7 · 13 tabs");
+  assert.ok(manyRow.classes.includes("is-nudge"));
+  manyHost.destroy();
+
+  const oneDoc = makeDoc();
+  const oneHost = createWindowHintHost(oneDoc, { tabNumbers: true });
+  const one = buildWindowPrefixViewModel({
+    activeLeafId: "solo",
+    splits: [{
+      id: "solo", rect: { left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 },
+      leaves: [leaf("solo", { label: "Solo" })], selectedLeafId: "solo",
+    }],
+  });
+  oneHost.showCard(one);
+  const oneRow = byAttr(oneDoc.body, "data-bob-wp", "tabs-row")[0];
+  assert.ok(oneRow.classes.includes("is-dimmed"));
+  assert.match(flattenText(oneRow), /only tab/);
+  oneHost.destroy();
+});
+
+test("tabNumbers headers-hidden adds a faint numbers hidden aside", () => {
+  const doc = makeDoc();
+  const host = createWindowHintHost(doc, { tabNumbers: true });
+  const model = screenshotModel();
+  model.tabs = { ...model.tabs, numbersHidden: true };
+  host.showCard(model);
+  const row = byAttr(doc.body, "data-bob-wp", "tabs-row")[0];
+  assert.match(flattenText(row), /numbers hidden/);
+  host.destroy();
+});
+
+test("tabNumbers off output is byte-identical to today", () => {
+  function snapshot(doc) {
+    const host = createWindowHintHost(doc);
+    host.showCard(screenshotModel());
+    const card = byAttr(doc.body, "data-bob-wp", "card")[0];
+    const text = flattenText(card);
+    const aria = String(card.attributes["aria-label"] || "");
+    const pills = byAttr(doc.body, "data-bob-wp", "pill").map((node) => flattenText(node));
+    host.destroy();
+    return { text, aria, pills };
+  }
+  function snapshotOpt(doc, options) {
+    const host = createWindowHintHost(doc, options);
+    host.showCard(screenshotModel());
+    const card = byAttr(doc.body, "data-bob-wp", "card")[0];
+    const text = flattenText(card);
+    const aria = String(card.attributes["aria-label"] || "");
+    const pills = byAttr(doc.body, "data-bob-wp", "pill").map((node) => flattenText(node));
+    const tabsRows = byAttr(doc.body, "data-bob-wp", "tabs-row").length;
+    host.destroy();
+    return { text, aria, pills, tabsRows };
+  }
+  const before = snapshot(makeDoc());
+  const afterUndefined = snapshotOpt(makeDoc(), {});
+  const afterFalse = snapshotOpt(makeDoc(), { tabNumbers: false });
+  assert.deepEqual(afterUndefined, { ...before, tabsRows: 0 });
+  assert.deepEqual(afterFalse, { ...before, tabsRows: 0 });
+  const withTabs = snapshotOpt(makeDoc(), { tabNumbers: true });
+  assert.ok(withTabs.tabsRows === 1);
+  assert.notEqual(withTabs.text, before.text);
+});

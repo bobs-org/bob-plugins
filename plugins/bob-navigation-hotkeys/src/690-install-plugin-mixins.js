@@ -91,4 +91,5 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysWindowTabActionsMixin,
   BobNavigationHotkeysWindowPrefixMixin,
   BobNavigationHotkeysWindowPrefixCommandsMixin,
+  BobNavigationHotkeysWindowTabNumbersMixin,
 ]);

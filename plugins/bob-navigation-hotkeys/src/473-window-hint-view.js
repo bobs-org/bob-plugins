@@ -27,6 +27,8 @@ const WINDOW_HINT_ICONS = Object.freeze({
 });
 const WINDOW_HINT_FOCUS_KEYS = Object.freeze(["h", "l", "w"]);
 const WINDOW_HINT_TAB_KEYS = Object.freeze(["H", "L", "v"]);
+const WINDOW_HINT_TABS_ICON = "hash";
+const WINDOW_HINT_TABS_FALLBACK = "#";
 
 function windowHintText(value) {
   if (value == null) return "";
@@ -319,14 +321,44 @@ function windowHintVisibleColumns(columns, activeIndex) {
   return { start, end, left: start, right: columns.length - end };
 }
 
-function windowHintCardSummary(model) {
+function windowHintCardSummary(model, tabNumbers) {
   const rows = Array.isArray(model?.rows) ? model.rows : [];
   const available = rows
     .filter((row) => row && row.available)
     .map((row) => `${row.key} ${windowHintReasonText(row)}`.trim());
   const count = windowHintNum(model?.splitCount, 0);
   const splits = count === 1 ? "1 split" : `${count} splits`;
-  return ["Window", splits, ...available, "escape cancels"].filter(Boolean).join(". ");
+  const parts = ["Window", splits, ...available];
+  if (tabNumbers === true && model && model.tabs && Number.isFinite(model.tabs.numbered) && model.tabs.numbered >= 1) {
+    const range = windowHintText(model.tabs.range);
+    const spoken = range ? range.replace("–", " to ") : "";
+    if (model.tabs.total === 1) parts.push("1 only tab");
+    else if (spoken) parts.push(`${spoken} jump to that tab`);
+  }
+  parts.push("escape cancels");
+  return parts.filter(Boolean).join(". ");
+}
+
+function windowHintTabsRowModel(model) {
+  const tabs = model && typeof model.tabs === "object" ? model.tabs : null;
+  if (!tabs) return null;
+  const total = windowHintNum(tabs.total, 0);
+  const numbered = windowHintNum(tabs.numbered, 0);
+  const unnumbered = windowHintNum(tabs.unnumbered, 0);
+  const range = windowHintText(tabs.range);
+  if (total === 1) {
+    return { key: "1", label: "only tab", aside: "", dimmed: true, numbersHidden: tabs.numbersHidden === true };
+  }
+  if (numbered < 1) {
+    return { key: "", label: windowHintText(tabs.preview) || "no tabs", aside: windowHintText(tabs.aside), dimmed: true, numbersHidden: tabs.numbersHidden === true };
+  }
+  return {
+    key: range || `1–${numbered}`,
+    label: "jump to that tab",
+    aside: unnumbered > 0 ? `${unnumbered} more unnumbered` : windowHintText(tabs.aside) === "only tab" ? "" : "it stays in its split",
+    dimmed: false,
+    numbersHidden: tabs.numbersHidden === true,
+  };
 }
 
 function windowHintSchedule(store, key, callback, delay) {
@@ -360,6 +392,7 @@ function createWindowHintHost(doc, options = {}) {
     : typeof view?.clearTimeout === "function"
       ? view.clearTimeout.bind(view)
       : typeof clearTimeout === "function" ? clearTimeout : null;
+  const tabNumbers = options.tabNumbers === true;
   const state = {
     destroyed: false,
     parts: null,
@@ -369,6 +402,7 @@ function createWindowHintHost(doc, options = {}) {
     timers: Object.create(null),
     setTimeout: setTimeoutFn,
     clearTimeout: clearTimeoutFn,
+    tabNumbers,
   };
 
   function reduced() {
@@ -449,7 +483,7 @@ function createWindowHintHost(doc, options = {}) {
     });
     state.parts = {
       host, ring, badge, card, header, headerKey, title, splitCount, esc,
-      minimap, grid, footer, cancel, live, receipt, rows: Object.create(null),
+      minimap, grid, tabsRow: null, footer, cancel, live, receipt, rows: Object.create(null),
     };
     return state.parts;
   }
@@ -536,11 +570,40 @@ function createWindowHintHost(doc, options = {}) {
           cls: "bob-wp-pill-title",
           text: windowHintText(split.label || "empty tab"),
         });
-        const count = windowHintNum(split.tabCount, 1);
-        windowHintMakeEl(pill, "span", {
-          cls: "bob-wp-pill-count",
-          text: String(count),
-        });
+        if (state.tabNumbers && split.tabRange) {
+          const range = split.tabRange;
+          const countEl = windowHintMakeEl(pill, "span", {
+            cls: "bob-wp-pill-count is-range",
+            attr: {
+              "data-bob-wp": "pill-range",
+              "aria-label": windowHintText(range.ariaLabel || range.label || ""),
+            },
+          });
+          const main = range.first != null && range.last != null
+            ? (range.first === range.last ? String(range.first) : `${range.first}–${range.last}`)
+            : "";
+          if (main) {
+            windowHintMakeEl(countEl, "span", {
+              cls: "bob-wp-pill-range",
+              text: main,
+            });
+          }
+          if (windowHintNum(range.unnumbered, 0) > 0) {
+            windowHintMakeEl(countEl, "span", {
+              cls: "bob-wp-pill-extra",
+              text: `${main ? " " : ""}+${windowHintNum(range.unnumbered, 0)}`,
+            });
+          }
+          if (!main && windowHintNum(range.unnumbered, 0) <= 0) {
+            windowHintSetText(countEl, windowHintText(range.label || String(windowHintNum(split.tabCount, 1))));
+          }
+        } else {
+          const count = windowHintNum(split.tabCount, 1);
+          windowHintMakeEl(pill, "span", {
+            cls: "bob-wp-pill-count",
+            text: String(count),
+          });
+        }
         const targetId = windowHintText(split.id);
         if (focusLeft?.available && windowHintText(focusLeft.plan?.targetSplitId) === targetId) {
           windowHintMakeEl(pill, "span", {
@@ -630,6 +693,71 @@ function createWindowHintHost(doc, options = {}) {
     }
   }
 
+  function paintTabsRow(model) {
+    const parts = state.parts;
+    if (!parts) return;
+    if (parts.tabsRow) {
+      windowHintDetach(parts.tabsRow);
+      parts.tabsRow = null;
+    }
+    if (state.tabNumbers !== true) return;
+    const row = windowHintTabsRowModel(model);
+    if (!row) return;
+    const card = parts.card;
+    const footer = parts.footer;
+    const rowEl = windowHintMakeEl(card, "div", {
+      cls: `bob-wp-tabs-row${row.dimmed ? " is-dimmed" : ""}`,
+      attr: { "data-bob-wp": "tabs-row" },
+    });
+    if (footer && typeof card.appendChild === "function" && rowEl) {
+      try {
+        if (rowEl.parentNode === card && footer.parentNode === card) {
+          card.removeChild(rowEl);
+          card.insertBefore(rowEl, footer);
+        } else if (rowEl.parent && Array.isArray(rowEl.parent.children)) {
+          rowEl.parent.children = rowEl.parent.children.filter((child) => child !== rowEl);
+          const siblings = card.children || [];
+          const at = siblings.indexOf(footer);
+          if (at >= 0) siblings.splice(at, 0, rowEl);
+          else siblings.push(rowEl);
+          rowEl.parent = card;
+        } else if (typeof card.insertBefore === "function") {
+          card.insertBefore(rowEl, footer);
+        }
+      } catch (_error) {
+        // Order repair is best-effort; the row still renders.
+      }
+    }
+    if (row.key) {
+      windowHintMakeEl(rowEl, "span", {
+        cls: "bob-key-card-key bob-wp-tabs-key",
+        text: row.key,
+        attr: { "data-bob-wp": "tabs-key" },
+      });
+    }
+    const glyph = windowHintMakeEl(rowEl, "span", {
+      cls: "bob-wp-glyph bob-wp-tabs-glyph",
+      attr: { "data-bob-wp": "tabs-glyph" },
+    });
+    windowHintPaintIcon(glyph, WINDOW_HINT_TABS_ICON, WINDOW_HINT_TABS_FALLBACK, setIcon);
+    windowHintMakeEl(rowEl, "span", {
+      cls: "bob-wp-tabs-label",
+      text: row.label,
+      attr: { "data-bob-wp": "tabs-label" },
+    });
+    const asideParts = [];
+    if (row.aside) asideParts.push(row.aside);
+    if (row.numbersHidden) asideParts.push("numbers hidden");
+    if (asideParts.length) {
+      windowHintMakeEl(rowEl, "span", {
+        cls: "bob-wp-tabs-aside",
+        text: asideParts.join(" · "),
+        attr: { "data-bob-wp": "tabs-aside" },
+      });
+    }
+    parts.tabsRow = rowEl;
+  }
+
   function paintCard(model) {
     const parts = ensure();
     if (!parts || !model) return;
@@ -638,8 +766,9 @@ function createWindowHintHost(doc, options = {}) {
     paintBadge(model);
     paintMinimap(model);
     paintGrid(model);
+    paintTabsRow(model);
     if (typeof parts.card.setAttribute === "function") {
-      parts.card.setAttribute("aria-label", windowHintCardSummary(model));
+      parts.card.setAttribute("aria-label", windowHintCardSummary(model, state.tabNumbers));
     }
   }
 
@@ -690,7 +819,15 @@ function createWindowHintHost(doc, options = {}) {
     if (!parts) return;
     const text = windowHintText(message);
     windowHintSetText(parts.live, text);
-    const row = parts.rows[key] || parts.rows[windowHintText(key)];
+    const normalized = windowHintText(key);
+    if (state.tabNumbers === true && (normalized === "tabs" || /^[1-9]$/.test(normalized))) {
+      if (parts.tabsRow) {
+        windowHintAddClass(parts.tabsRow, "is-nudge");
+        windowHintSchedule(state, "nudge", () => windowHintRemoveClass(parts.tabsRow, "is-nudge"), WINDOW_HINT_NUDGE_MS);
+      }
+      return;
+    }
+    const row = parts.rows[key] || parts.rows[normalized];
     if (row) {
       windowHintAddClass(row, "is-nudge");
       windowHintSchedule(state, "nudge", () => windowHintRemoveClass(row, "is-nudge"), WINDOW_HINT_NUDGE_MS);

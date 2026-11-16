@@ -522,8 +522,9 @@ The persisted family rides additive nav `api.walkMode` (the top-level
 navigation api version stays 3): v4 `current()` may return `"b"` and
 `select("b")` records like a letter click, while `setAttention(type, value)`
 accepts `"s"` and `"b"` with attention stored per type and painted per
-letter. Ledger feature-detects `walkMode.version >= 4` before selecting `b`
-or pushing the amber bank waiting dot.
+letter; v5 accepts `"w"` and ledger feature-detects `walkMode.version >= 5`
+before pushing it. Ledger feature-detects `walkMode.version >= 4` before
+selecting `b` or pushing the amber bank waiting dot.
 
 ## Task Status Cycler
 

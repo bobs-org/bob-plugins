@@ -15,7 +15,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.119.0 |
+| Version | 1.120.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -217,21 +217,19 @@ Pomodoros section, or Tasks plugin.
 
 One walker footer follows the bracket walk (`s`/`w`/`n`/`b`), routed through
 nav `api.walkMode` v1 and the walk-mode doorbell. The `s` panel is the review
-footer, gated on `s`: nonempty walk groups (PRE → NEW → PROJECTS → PENDING →
+footer, gated on `s`: nonempty groups (PRE → NEW → PROJECTS → PENDING →
 NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN) minus the
-active tier, tier-colored with commitment/ROTTEN hairline, shedding groups,
+active tier, tier-colored, shedding groups,
 detail, hint, meter. The button jumps like `]s`; TICK rows show a tinted
 `Alt+P` chip (red when cancel). Empty shows `⟳ Review clear · ✓ N today`,
-keeping the Alt+P preview on prioritized rows; hints read `]] next` (`]s next`
-in the legacy no-nav footer). The `w` lane footer shows `api.laneWalk` v2
-counts (`Lanes N`, validated-row position, `Lanes clear` / `REVIEW n` / `No
-Pending…` states, `n/cap` only over cap); `Lanes` acts like `]]`, counts never
-filter. The `n` links compass previews via `walkMode.links()` v2 with `[n` /
-`]n` arms. The `b` bank panel shows the `api.bankWalk` v1 snapshot with scope
-word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
-arms from the day planner (`[B` / `]B`), money only for the row under the
-cursor, and an account meter that never claims untold health: `✓ balanced`
-only from a current-generation cached `bob bank list` result where every
+keeping the Alt+P preview on rows; hints read `]] next` (`]s next` legacy). The `w` lane footer shows `api.laneWalk` v2
+counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
+Pending…` states, red `n/cap` over tokens (over lanes stay visible);
+`Lanes` acts like `]]`, counts never filter. A red `w` dot is pushed
+through nav `api.walkMode` v5 when any PENDING/NEXT/READY badge is red. The `n` links compass previews via `walkMode.links()` v2 with `[n` /
+`]n` arms. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
+arms from the planner (`[B` / `]B`), money only for the cursor row, and an account meter that never claims untold health: `✓ balanced`
+only from a cached `bob bank list` result where every
 account is balanced, otherwise the worst account's status in bob's own words.
 Hidden when unset, indexing, loading, or mobile. Off-`s` review commitments
 arrive via `setAttention` (v3) as a dot on the selector's `s`; bank waiting

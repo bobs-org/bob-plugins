@@ -221,6 +221,7 @@ function freshnessFooterPaintGroups(container, groups) {
         continue;
       }
       freshnessFooterSetAttr(token, "data-review-tier", group && group.key);
+      freshnessFooterToggleClass(token, "is-over", Boolean(group && group.over === true));
       const label = freshnessFooterCreateChild(
         token,
         "span",

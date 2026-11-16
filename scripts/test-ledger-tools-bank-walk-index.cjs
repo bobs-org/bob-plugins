@@ -268,3 +268,45 @@ test("overlay snapshot signature uses per-path seq, not full overlay text", () =
   assert.notEqual(state.plugin.bankWalkOverlaySignature, first);
   assert.equal(state.plugin.bankWalkOverlaySignature.includes(`${oct}\n`), false);
 });
+
+test("listeners registered before setupBankWalk survive it in onload order", async () => {
+  const oct = readMonth("2026-10.md");
+  const { LedgerToolsPlugin } = require("./ledger-tools-harness.cjs");
+  const vaultHandlers = {};
+  const layout = [];
+  const vault = {
+    cachedRead(file) {
+      const filePath = file && typeof file.path === "string" ? file.path : String(file || "");
+      return Promise.resolve(oct);
+    },
+    on(event, handler) {
+      vaultHandlers[event] = handler;
+      return {};
+    },
+    getMarkdownFiles() {
+      return [{ path: "bank/2026-10.md" }];
+    },
+    getFolderByPath: () => ({ path: "bank", children: [{ path: "bank/2026-10.md" }] }),
+    getAbstractFileByPath: (filePath) => (filePath === "bank" ? { path: "bank" } : { path: filePath }),
+  };
+  const plugin = new LedgerToolsPlugin(
+    { vault, workspace: { onLayoutReady: (callback) => layout.push(callback), getLeavesOfType: () => [] } },
+    {},
+  );
+  plugin.bankTimerApi = () => ({ setTimeout: (fn) => { fn(); return {}; }, clearTimeout: () => {} });
+  let fires = 0;
+  const unsub = plugin.onBankWalkChange(() => { fires += 1; });
+  assert.equal(typeof unsub, "function");
+  plugin.setupBankWalk();
+  assert.ok(plugin.bankWalkListeners instanceof Set);
+  assert.equal(plugin.bankWalkListeners.size, 1);
+  for (const callback of layout) callback();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.ok(fires >= 1, "initial scan should fire the pre-setup listener");
+  const before = fires;
+  vaultHandlers.modify({ path: "bank/2026-10.md" });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.ok(fires > before, "vault modify should fire the pre-setup listener");
+});

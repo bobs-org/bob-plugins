@@ -9,6 +9,9 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       laneWalkerFooterView,
       laneWalkerFooterGroups,
+      laneWalkerFooterCapFor,
+      laneWalkerFooterOverLanes,
+      walkerFooterPushLaneAttention,
       laneWalkerFooterReadLatestWorkLog,
       laneWalkerFooterWorkLogLabel,
       laneWalkerFooterAgeLabel,

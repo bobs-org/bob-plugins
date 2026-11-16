@@ -210,6 +210,22 @@
       { id: "w-overcap", title: "w · every lane over cap", make: () => ledger.laneWalkerFooterView(laneSnapshot([
         laneEntry("pending", "notes/a.md", 0, 1, 30, 1, 12),
       ], { pending: 12, next: 15, ready: 25, total: 30 }), { caps: laneCaps }) },
+      { id: "w-one-over", title: "w · one lane over cap", make: () => ledger.laneWalkerFooterView(laneSnapshot([
+        laneEntry("pending", "notes/a.md", 0, 1, 15, 1, 9),
+        laneEntry("next", "notes/a.md", 4, 2, 15, 1, 5),
+      ], { pending: 9, next: 5, ready: 4, total: 15 }), { caps: laneCaps }) },
+      { id: "w-two-over-current", title: "w · two over incl current lane", make: () => {
+        const landed = laneEntry("pending", "notes/a.md", 0, 1, 16, 1, 10, { originalMarkdown: "- [ ] #task pending task" });
+        const entries = [
+          landed,
+          laneEntry("next", "notes/a.md", 4, 2, 16, 1, 14),
+          laneEntry("ready", "notes/b.md", 1, 3, 16, 1, 2),
+        ];
+        return ledger.laneWalkerFooterView(
+          laneSnapshot(entries, { pending: 10, next: 14, ready: 4, total: 16 }),
+          { caps: laneCaps, cursor: { path: "notes/a.md", line0: 0, sourceLine: "- [ ] #task pending task" } },
+        );
+      } },
       { id: "w-huge", title: "w · huge counts · minimum-width stress", make: () => ledger.laneWalkerFooterView(laneSnapshot([
         laneEntry("pending", "notes/a.md", 0, 1, 1400, 1, 248),
       ], { pending: 248, next: 1024, ready: 128, total: 1400, todayPending: 64, todayNext: 64, todayReady: 64 }), { caps: laneCaps }) },

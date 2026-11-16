@@ -640,6 +640,23 @@ a.bob-plan-ready:hover {
 .bob-freshness-group-count::before {
   content: "\00a0";
 }
+.bob-freshness .bob-freshness-group.is-over .bob-freshness-group-count {
+  --bob-review-hue: var(--color-red, #c65367);
+  --bob-review-ink: color-mix(
+    in srgb,
+    var(--bob-review-hue) 60%,
+    var(--text-normal)
+  );
+  color: var(--bob-review-ink, var(--text-normal));
+}
+/* Older Electron installers keep the color-mix ink above. */
+@supports (color: oklch(from red l c h)) {
+  .bob-freshness .bob-freshness-group.is-over .bob-freshness-group-count {
+    --bob-review-ink: oklch(
+      from var(--bob-review-hue) var(--bob-review-ink-l) min(c, 0.16) h
+    );
+  }
+}
 .bob-freshness-group + .bob-freshness-group {
   margin-inline-start: 0.7em;
 }

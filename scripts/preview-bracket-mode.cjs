@@ -189,10 +189,14 @@ function loadProductionHelpers() {
   return helpers;
 }
 
-function renderIndicator(helpers, mode, flash = null) {
+function renderIndicator(helpers, mode, attention = {}, flash = null) {
+  if (typeof attention === "string" || attention === null) {
+    flash = attention;
+    attention = {};
+  }
   const root = new FakeEl("div");
   root.classes.push("status-bar-item", "bob-bracket-mode");
-  const view = helpers.buildBracketModeView(mode);
+  const view = helpers.buildBracketModeView(mode, attention);
   const parts = helpers.ensureBracketModeDom(root);
   helpers.paintBracketModeIndicator(root, parts, view, undefined);
   // Clear the async is-instant for a stable screenshot (first paint fades in).
@@ -211,6 +215,14 @@ function buildCases(helpers) {
     const { html } = renderIndicator(helpers, mode);
     cases.push({ id, title: mode === null ? "unset (no thumb)" : `mode ${mode}`, html });
   }
+  const allDots = {
+    s: { tier: "pre", label: "Review: 9 due · 5 commitments — PRE first; click to show" },
+    w: { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" },
+    b: { tier: "waiting", label: "Bank: 3 waiting · oldest Nov 14 — click to show" },
+  };
+  cases.push({ id: "all-dots-n", title: "all three dots on mode n", html: renderIndicator(helpers, "n", allDots).html });
+  cases.push({ id: "w-dot-s", title: "w dot alone on mode s", html: renderIndicator(helpers, "s", { w: allDots.w }).html });
+  cases.push({ id: "sb-on-w", title: "mode w with s and b dots", html: renderIndicator(helpers, "w", { s: allDots.s, b: allDots.b }).html });
   for (const flash of ["forward", "backward"]) {
     const { html } = renderIndicator(helpers, "s", flash);
     cases.push({ id: `flash-${flash}`, title: `flash ${flash} (reduced motion)`, html });

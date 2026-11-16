@@ -10051,6 +10051,7 @@ function freshnessFooterPaintGroups(container, groups) {
         continue;
       }
       freshnessFooterSetAttr(token, "data-review-tier", group && group.key);
+      freshnessFooterToggleClass(token, "is-over", Boolean(group && group.over === true));
       const label = freshnessFooterCreateChild(
         token,
         "span",
@@ -11024,18 +11025,113 @@ function laneWalkerFooterSafeCount(counts, key, fallback) {
   return Number.isInteger(fallback) && fallback >= 0 ? fallback : 0;
 }
 
+// Resolve a lane cap exactly as its badge does. PENDING/NEXT use the
+// effective plan caps; READY uses the badge fallback. Never throws.
+function laneWalkerFooterCapFor(laneKey, caps) {
+  try {
+    const effective = effectivePlanCaps(caps);
+    if (laneKey === "pending") {
+      return effective.maxPending;
+    }
+    if (laneKey === "next") {
+      return effective.maxNext;
+    }
+    if (laneKey === "ready") {
+      return planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Pure over-lane list in dash order (WIP, NEXT, READY). An entry appears
+// exactly when its badge would be red (`workBadgeTone(count, cap) === "red"`).
+// Never throws; bad input yields an empty frozen list.
+function laneWalkerFooterOverLanes(counts, caps) {
+  try {
+    const over = [];
+    for (const lane of LANE_WALKER_FOOTER_LANES) {
+      const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
+      const cap = laneWalkerFooterCapFor(lane.key, caps);
+      if (!Number.isInteger(cap) || cap < 1) {
+        continue;
+      }
+      let tone = null;
+      try {
+        tone = workBadgeTone(count, cap);
+      } catch (error) {
+        tone = null;
+      }
+      if (tone === "red") {
+        over.push(Object.freeze({ key: lane.key, label: lane.label, count, cap }));
+      }
+    }
+    return Object.freeze(over);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Push the lane-over-limit dot through nav `api.walkMode` v5, mirroring the
+// bank push. Never throws; old nav makes no call.
+function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
+  try {
+    const api = plugin && typeof plugin.dependencyNavApi === "function"
+      ? plugin.dependencyNavApi()
+      : null;
+    const walkMode = api && api.walkMode;
+    if (
+      !walkMode ||
+      Number(walkMode.version) < 5 ||
+      typeof walkMode.setAttention !== "function"
+    ) {
+      return;
+    }
+    if (!route || route.legacy || route.mode === "w") {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    if (!queue || queue.available !== true) {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    const counts = queue.counts && typeof queue.counts === "object" ? queue.counts : {};
+    const over = laneWalkerFooterOverLanes(counts, caps);
+    if (over.length === 0) {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")} — click to show`;
+    walkMode.setAttention("w", { tier: "over", label });
+  } catch (_error) {
+    // A stale or throwing nav listener never blocks footer painting.
+  }
+}
+
 function laneWalkerFooterGroups(counts, caps, currentLane) {
   const groups = [];
   for (const lane of LANE_WALKER_FOOTER_LANES) {
-    if (lane.key === currentLane) {
+    const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
+    const cap = laneWalkerFooterCapFor(lane.key, caps);
+    if (!Number.isInteger(cap) || cap < 1) {
+      if (lane.key === currentLane) {
+        continue;
+      }
+      groups.push({ key: lane.key, label: lane.label, count: String(count), over: false });
       continue;
     }
-    const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
-    const cap = Number.isInteger(caps && caps[lane.cap]) && caps[lane.cap] > 0
-      ? caps[lane.cap]
-      : null;
-    const display = cap !== null && count > cap ? `${count}/${cap}` : String(count);
-    groups.push({ key: lane.key, label: lane.label, count: display });
+    let over = false;
+    try {
+      over = workBadgeTone(count, cap) === "red";
+    } catch (error) {
+      over = false;
+    }
+    if (lane.key === currentLane && !over) {
+      continue;
+    }
+    const display = over ? `${count}/${cap}` : String(count);
+    groups.push({ key: lane.key, label: lane.label, count: display, over });
   }
   return groups;
 }
@@ -11144,7 +11240,7 @@ function laneWalkerFooterView(queue, options = {}) {
     }
     const laneRows = LANE_WALKER_FOOTER_LANES.map((lane) => {
       const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
-      const cap = caps[lane.cap];
+      const cap = laneWalkerFooterCapFor(lane.key, caps);
       const suffix = count > cap ? ` of ${cap} (over)` : ` of ${cap}`;
       return `${lane.label} ${count}${suffix}`;
     });
@@ -37310,6 +37406,13 @@ class BobLedgerToolsPlanAndReadyMixin {
         this.refreshDashboardLaneBadges(now);
         this.schedulePlanBlockRerender();
         try {
+          if (typeof this.scheduleFreshnessStatusBar === "function") {
+            this.scheduleFreshnessStatusBar();
+          }
+        } catch (error) {
+          // Footer repaint is best-effort; badges already refreshed.
+        }
+        try {
           this.noteReadyEnsureSnapshot(now);
         } catch (error) {
           // The snapshot rebuilds on next access; only the eager
@@ -57226,6 +57329,9 @@ class BobLedgerToolsFreshnessStatusMixin {
               if (Number(walkMode.version) >= 4) {
                 walkMode.setAttention("b", null);
               }
+              if (Number(walkMode.version) >= 5) {
+                walkMode.setAttention("w", null);
+              }
             } catch (error) {
               // Unload clearing never throws.
             }
@@ -57481,6 +57587,32 @@ class BobLedgerToolsFreshnessStatusMixin {
           attentionMemo = null;
         }
       }
+      // One immutable lane snapshot per paint feeds both the `w` dot and
+      // the `w` panel, so they can never disagree.
+      let laneQueue = null;
+      try {
+        const laneApi =
+          typeof this.laneWalkApi === "function" ? this.laneWalkApi() : null;
+        if (
+          laneApi &&
+          Number(laneApi.version) >= 2 &&
+          typeof laneApi.queue === "function"
+        ) {
+          // One immutable snapshot supplies both counts and positions.
+          laneQueue = laneApi.queue();
+        }
+      } catch (error) {
+        laneQueue = null;
+      }
+      let laneCaps = this.laneWalkerFooterCaps;
+      if (!laneCaps || !contextOnly) {
+        try {
+          laneCaps = loadPlanCaps().caps;
+        } catch (error) {
+          laneCaps = defaultPlanCaps();
+        }
+        this.laneWalkerFooterCaps = laneCaps;
+      }
       walkerFooterPushReviewAttention(this, route, attentionMemo);
       let bankSnapshot = null;
       try {
@@ -57493,27 +57625,14 @@ class BobLedgerToolsFreshnessStatusMixin {
         bankSnapshot = null;
       }
       walkerFooterPushBankAttention(this, route, bankSnapshot);
+      walkerFooterPushLaneAttention(this, route, laneQueue, laneCaps);
       if (!route.legacy && route.mode === "n") {
         linksWalkerFooterRequest(this);
         return;
       }
       linksWalkerFooterInvalidate(this);
       if (!route.legacy && route.mode === "w") {
-        let queue = null;
-        try {
-          const laneApi =
-            typeof this.laneWalkApi === "function" ? this.laneWalkApi() : null;
-          if (
-            laneApi &&
-            Number(laneApi.version) >= 2 &&
-            typeof laneApi.queue === "function"
-          ) {
-            // One immutable snapshot supplies both counts and positions.
-            queue = laneApi.queue();
-          }
-        } catch (error) {
-          queue = null;
-        }
+        const queue = laneQueue;
         let cursor = this.freshnessFooterCursor(false);
         const entries =
           queue && queue.available === true && Array.isArray(queue.entries)
@@ -57575,15 +57694,7 @@ class BobLedgerToolsFreshnessStatusMixin {
             }
           }
         }
-        let caps = this.laneWalkerFooterCaps;
-        if (!caps || !contextOnly) {
-          try {
-            caps = loadPlanCaps().caps;
-          } catch (error) {
-            caps = defaultPlanCaps();
-          }
-          this.laneWalkerFooterCaps = caps;
-        }
+        const caps = laneCaps;
         const view = laneWalkerFooterView(queue, {
           caps,
           cursor,
@@ -85002,7 +85113,12 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
-    this.bankWalkListeners = new Set();
+    // onload subscribes the footer listener (via setupFreshnessStatusBar)
+    // before setupBankWalk runs; preserve those listeners instead of dropping
+    // them, or the footer never repaints when the index becomes ready.
+    if (!(this.bankWalkListeners instanceof Set)) {
+      this.bankWalkListeners = new Set();
+    }
     this.bankWalkAnchorValue = null;
     this.bankWalkAnchorDay = null;
     this.bankWalkRevalidateTimer = null;
@@ -137408,6 +137524,9 @@ try {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       laneWalkerFooterView,
       laneWalkerFooterGroups,
+      laneWalkerFooterCapFor,
+      laneWalkerFooterOverLanes,
+      walkerFooterPushLaneAttention,
       laneWalkerFooterReadLatestWorkLog,
       laneWalkerFooterWorkLogLabel,
       laneWalkerFooterAgeLabel,

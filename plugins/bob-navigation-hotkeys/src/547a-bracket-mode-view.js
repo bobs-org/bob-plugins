@@ -33,11 +33,16 @@ function buildBracketModeView(type, attention = {}) {
   const emptyNotice = typeof BRACKET_REPEAT_EMPTY_NOTICE === "string"
     ? BRACKET_REPEAT_EMPTY_NOTICE
     : "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
+  const BRACKET_MODE_ATTENTION_DEFAULT_LABELS = Object.freeze({
+    s: "Review commitments are due",
+    w: "Lanes are over limit",
+    b: "Bank rows are waiting",
+  });
   const segments = BRACKET_MODE_FAMILIES.map((item) => {
     const raw = attentionByType[item.type];
     const visible = Boolean(raw && typeof raw === "object" && item.type !== normalized);
     const label = visible
-      ? String(raw.label || (item.type === "s" ? "Review commitments are due" : "Bank rows are waiting"))
+      ? String(raw.label || BRACKET_MODE_ATTENTION_DEFAULT_LABELS[item.type] || "")
       : "";
     return Object.freeze({
       type: item.type,

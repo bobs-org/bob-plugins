@@ -79101,7 +79101,7 @@ function planReviewGroupJump(queue, options = {}) {
   });
 }
 // ---- src/482-walk-mode-nav-api.js ----
-// Additive nav `api.walkMode` v4: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v5: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -79113,6 +79113,7 @@ function planReviewGroupJump(queue, options = {}) {
 // reports resolved or creation-eligible paths without opening or creating.
 // v3 adds display-only review attention for the selector's `s` letter. v4
 // keeps attention per family so the bank's waiting dot can coexist with it.
+// v5 adds `w` attention for lanes over limit.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -79134,7 +79135,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 4,
+    version: 5,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -79173,7 +79174,7 @@ function createWalkModeApi(plugin) {
     },
     setAttention(type, value) {
       try {
-        if (type !== "s" && type !== "b") {
+        if (type !== "s" && type !== "w" && type !== "b") {
           return Object.freeze({ ok: false, reason: "invalid-type" });
         }
         let attention = null;
@@ -91313,11 +91314,16 @@ function buildBracketModeView(type, attention = {}) {
   const emptyNotice = typeof BRACKET_REPEAT_EMPTY_NOTICE === "string"
     ? BRACKET_REPEAT_EMPTY_NOTICE
     : "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
+  const BRACKET_MODE_ATTENTION_DEFAULT_LABELS = Object.freeze({
+    s: "Review commitments are due",
+    w: "Lanes are over limit",
+    b: "Bank rows are waiting",
+  });
   const segments = BRACKET_MODE_FAMILIES.map((item) => {
     const raw = attentionByType[item.type];
     const visible = Boolean(raw && typeof raw === "object" && item.type !== normalized);
     const label = visible
-      ? String(raw.label || (item.type === "s" ? "Review commitments are due" : "Bank rows are waiting"))
+      ? String(raw.label || BRACKET_MODE_ATTENTION_DEFAULT_LABELS[item.type] || "")
       : "";
     return Object.freeze({
       type: item.type,

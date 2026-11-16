@@ -130,6 +130,9 @@ class BobLedgerToolsFreshnessStatusMixin {
               if (Number(walkMode.version) >= 4) {
                 walkMode.setAttention("b", null);
               }
+              if (Number(walkMode.version) >= 5) {
+                walkMode.setAttention("w", null);
+              }
             } catch (error) {
               // Unload clearing never throws.
             }
@@ -385,6 +388,32 @@ class BobLedgerToolsFreshnessStatusMixin {
           attentionMemo = null;
         }
       }
+      // One immutable lane snapshot per paint feeds both the `w` dot and
+      // the `w` panel, so they can never disagree.
+      let laneQueue = null;
+      try {
+        const laneApi =
+          typeof this.laneWalkApi === "function" ? this.laneWalkApi() : null;
+        if (
+          laneApi &&
+          Number(laneApi.version) >= 2 &&
+          typeof laneApi.queue === "function"
+        ) {
+          // One immutable snapshot supplies both counts and positions.
+          laneQueue = laneApi.queue();
+        }
+      } catch (error) {
+        laneQueue = null;
+      }
+      let laneCaps = this.laneWalkerFooterCaps;
+      if (!laneCaps || !contextOnly) {
+        try {
+          laneCaps = loadPlanCaps().caps;
+        } catch (error) {
+          laneCaps = defaultPlanCaps();
+        }
+        this.laneWalkerFooterCaps = laneCaps;
+      }
       walkerFooterPushReviewAttention(this, route, attentionMemo);
       let bankSnapshot = null;
       try {
@@ -397,27 +426,14 @@ class BobLedgerToolsFreshnessStatusMixin {
         bankSnapshot = null;
       }
       walkerFooterPushBankAttention(this, route, bankSnapshot);
+      walkerFooterPushLaneAttention(this, route, laneQueue, laneCaps);
       if (!route.legacy && route.mode === "n") {
         linksWalkerFooterRequest(this);
         return;
       }
       linksWalkerFooterInvalidate(this);
       if (!route.legacy && route.mode === "w") {
-        let queue = null;
-        try {
-          const laneApi =
-            typeof this.laneWalkApi === "function" ? this.laneWalkApi() : null;
-          if (
-            laneApi &&
-            Number(laneApi.version) >= 2 &&
-            typeof laneApi.queue === "function"
-          ) {
-            // One immutable snapshot supplies both counts and positions.
-            queue = laneApi.queue();
-          }
-        } catch (error) {
-          queue = null;
-        }
+        const queue = laneQueue;
         let cursor = this.freshnessFooterCursor(false);
         const entries =
           queue && queue.available === true && Array.isArray(queue.entries)
@@ -479,15 +495,7 @@ class BobLedgerToolsFreshnessStatusMixin {
             }
           }
         }
-        let caps = this.laneWalkerFooterCaps;
-        if (!caps || !contextOnly) {
-          try {
-            caps = loadPlanCaps().caps;
-          } catch (error) {
-            caps = defaultPlanCaps();
-          }
-          this.laneWalkerFooterCaps = caps;
-        }
+        const caps = laneCaps;
         const view = laneWalkerFooterView(queue, {
           caps,
           cursor,

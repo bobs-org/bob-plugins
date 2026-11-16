@@ -734,3 +734,109 @@ test("attention styles carry no motion and forced-colors uses Highlight", () => 
   assert.ok(forced.includes("button.bob-bracket-mode-seg.has-attention::after"));
   assert.ok(forced.includes("Highlight"));
 });
+
+test("walkMode v5 accepts w, still refuses n, and reports the version", () => {
+  const { createWalkModeApi } = helpers;
+  assert.equal(typeof createWalkModeApi, "function");
+  const plugin = { bracketModeAttention: null, refreshBracketModeIndicator: () => {} };
+  const api = createWalkModeApi(plugin);
+  assert.equal(api.version, 5);
+  assert.deepEqual(api.setAttention("w", { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" }), { ok: true });
+  assert.deepEqual(plugin.bracketModeAttention.w, { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" });
+  assert.deepEqual(api.setAttention("w", null), { ok: true });
+  assert.equal(plugin.bracketModeAttention.w, undefined);
+  assert.deepEqual(api.setAttention("n", { tier: "over", label: "x" }), { ok: false, reason: "invalid-type" });
+  assert.deepEqual(api.setAttention("s", { tier: "next", label: "Review: 1 due" }), { ok: true });
+  assert.deepEqual(api.setAttention("b", { tier: "waiting", label: "Bank: 1 waiting" }), { ok: true });
+});
+
+test("the w dot paints only while mode is not w with over tier, title, and aria", () => {
+  const attention = { w: { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" } };
+  for (const mode of ["s", "n", "b", null]) {
+    const view = buildBracketModeView(mode, attention);
+    const w = view.segments.find((segment) => segment.type === "w");
+    assert.equal(w.attention, mode !== "w", `mode ${mode}`);
+    assert.equal(w.attentionTier, mode === "w" ? "" : "over", `mode ${mode}`);
+    assert.equal(w.attentionLabel, mode === "w" ? "" : "Lanes over limit: WIP 12/10 — click to show", `mode ${mode}`);
+  }
+  assert.equal(buildBracketModeView("w", attention).segments.find((seg) => seg.type === "w").attention, false);
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  const view = buildBracketModeView("s", attention);
+  paintBracketModeIndicator(el, parts, view, undefined);
+  const wButton = findSegment(parts, "w");
+  assert.ok(wButton.classes.includes("has-attention"));
+  assert.equal(wButton.attrs["data-attention-tier"], "over");
+  assert.equal(wButton.attrs.title, "Lanes over limit: WIP 12/10 — click to show");
+});
+
+test("s, w, and b dots coexist on mode n and on unset mode", () => {
+  const attention = {
+    s: { tier: "next", label: "Review: 9 due" },
+    w: { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" },
+    b: { tier: "waiting", label: "Bank: 4 waiting" },
+  };
+  for (const mode of ["n", null]) {
+    const view = buildBracketModeView(mode, attention);
+    for (const type of ["s", "w", "b"]) {
+      const seg = view.segments.find((segment) => segment.type === type);
+      assert.equal(seg.attention, true, `mode ${mode} seg ${type}`);
+    }
+    const n = view.segments.find((segment) => segment.type === "n");
+    assert.equal(n.attention, false, `mode ${mode} seg n`);
+  }
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  paintBracketModeIndicator(el, parts, buildBracketModeView("n", attention), undefined);
+  for (const type of ["s", "w", "b"]) {
+    assert.ok(findSegment(parts, type).classes.includes("has-attention"), `paints ${type}`);
+  }
+  assert.ok(!findSegment(parts, "n").classes.includes("has-attention"));
+});
+
+test("per-family default labels cover w without overriding explicit labels", () => {
+  const view = buildBracketModeView("n", { w: { tier: "over", label: "" } });
+  const w = view.segments.find((segment) => segment.type === "w");
+  assert.equal(w.attentionLabel, "Lanes are over limit");
+  const explicit = buildBracketModeView("n", { w: { tier: "over", label: "Lanes over limit: WIP 2/1 — click to show" } });
+  assert.equal(explicit.segments.find((segment) => segment.type === "w").attentionLabel, "Lanes over limit: WIP 2/1 — click to show");
+  const sDefault = buildBracketModeView("n", { s: { tier: "next", label: "" } });
+  assert.equal(sDefault.segments.find((segment) => segment.type === "s").attentionLabel, "Review commitments are due");
+  const bDefault = buildBracketModeView("n", { b: { tier: "waiting", label: "" } });
+  assert.equal(bDefault.segments.find((segment) => segment.type === "b").attentionLabel, "Bank rows are waiting");
+});
+
+test("the over tier rule exists, carries no motion, and is covered by forced colors", () => {
+  const cssPath = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css");
+  const css = fs.readFileSync(cssPath, "utf8");
+  assert.match(css, /data-attention-tier="over"[^}]*var\(--color-red, #c65367\)/);
+  const overRule = css.match(/button\.bob-bracket-mode-seg\.has-attention\[data-attention-tier="over"\][^{]*\{[^}]*\}/);
+  assert.ok(overRule, "missing over tier rule");
+  assert.doesNotMatch(overRule[0], /animation\s*:/);
+  assert.doesNotMatch(overRule[0], /transition\s*:/);
+  const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+  assert.ok(forced.includes("button.bob-bracket-mode-seg.has-attention::after"));
+});
+
+test("s dot hues match the review footer tier hues", () => {
+  const navCss = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css"), "utf8");
+  const ledgerCss = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-ledger-tools", "styles.css"), "utf8");
+  const expected = {
+    pre: "var(--color-cyan, #00bfbc)",
+    new: "var(--color-red, #e93147)",
+    projects: "var(--color-purple, #7852ee)",
+    pending: "var(--task-status-in-progress, var(--color-yellow, #e0ac00))",
+    next: "var(--task-status-next, var(--color-green, #08b94e))",
+    recurring: "var(--color-pink, #d53984)",
+    tickler: "var(--color-blue, #086ddd)",
+  };
+  for (const [tier, hue] of Object.entries(expected)) {
+    const navRule = navCss.match(new RegExp(`data-attention-tier="${tier}"[^}]*\\{[^}]*\\}`));
+    assert.ok(navRule, `missing nav s tier rule for ${tier}`);
+    assert.ok(navRule[0].includes(hue), `nav ${tier} should use ${hue}`);
+    const ledgerRule = ledgerCss.match(new RegExp(`\\[data-review-tier="${tier}"\\]\\s*\\{[^}]*\\}`));
+    assert.ok(ledgerRule, `missing ledger review hue for ${tier}`);
+    assert.ok(ledgerRule[0].includes(hue), `ledger ${tier} should use ${hue}`);
+  }
+  assert.match(navCss, /data-attention-tier="waiting"[^}]*var\(--text-warning\)/);
+});

@@ -884,6 +884,13 @@ class BobLedgerToolsPlanAndReadyMixin {
         this.refreshDashboardLaneBadges(now);
         this.schedulePlanBlockRerender();
         try {
+          if (typeof this.scheduleFreshnessStatusBar === "function") {
+            this.scheduleFreshnessStatusBar();
+          }
+        } catch (error) {
+          // Footer repaint is best-effort; badges already refreshed.
+        }
+        try {
           this.noteReadyEnsureSnapshot(now);
         } catch (error) {
           // The snapshot rebuilds on next access; only the eager

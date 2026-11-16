@@ -17,7 +17,12 @@ class BobLedgerToolsBankWalkMixin {
     this.bankWalkOverlaySignature = null;
     this.bankWalkMemoKey = null;
     this.bankWalkMemoSnapshot = null;
-    this.bankWalkListeners = new Set();
+    // onload subscribes the footer listener (via setupFreshnessStatusBar)
+    // before setupBankWalk runs; preserve those listeners instead of dropping
+    // them, or the footer never repaints when the index becomes ready.
+    if (!(this.bankWalkListeners instanceof Set)) {
+      this.bankWalkListeners = new Set();
+    }
     this.bankWalkAnchorValue = null;
     this.bankWalkAnchorDay = null;
     this.bankWalkRevalidateTimer = null;

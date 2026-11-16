@@ -102,8 +102,12 @@ const {
   freshnessFooterHiddenView,
   freshnessFooterPaint,
   laneWalkQueueFromTasks,
+  laneWalkerFooterCapFor,
+  laneWalkerFooterGroups,
+  laneWalkerFooterOverLanes,
   laneWalkerFooterReadLatestWorkLog,
   laneWalkerFooterView,
+  walkerFooterPushLaneAttention,
   linksWalkerFooterActivate,
   linksWalkerFooterRequest,
   linksWalkerFooterView,
@@ -220,9 +224,9 @@ test("off-row panel shows lane membership, over-cap counts, and the Today meter"
   assert.equal(view.contextText, "]] next");
   assert.equal(view.meterText, "TODAY 2");
   assert.deepEqual(view.groups, [
-    { key: "pending", label: "WIP", count: "2/1" },
-    { key: "next", label: "NEXT", count: "0" },
-    { key: "ready", label: "READY", count: "1" },
+    { key: "pending", label: "WIP", count: "2/1", over: true },
+    { key: "next", label: "NEXT", count: "0", over: false },
+    { key: "ready", label: "READY", count: "1", over: false },
   ]);
   assert.match(view.tooltip, /WIP 2 of 1 \(over\)/);
   assert.match(view.tooltip, /NEXT 0 of 4/);
@@ -1606,4 +1610,208 @@ test("bank walker footer stylesheet defines the b crossfade and bank tones", () 
   assert.match(css, /--bob-bank-in-ink/);
   assert.match(css, /bob-freshness-meter-warn/);
   assert.match(css, /font-variant-numeric:\s*tabular-nums/);
+});
+
+test("laneWalkerFooterOverLanes respects at-cap, cap+1, and the READY fallback", () => {
+  assert.deepEqual(laneWalkerFooterOverLanes({ pending: 10, next: 0, ready: 0 }, { maxPending: 10, maxNext: 15, maxReady: 100 }), []);
+  assert.deepEqual(
+    laneWalkerFooterOverLanes({ pending: 11, next: 0, ready: 0 }, { maxPending: 10, maxNext: 15, maxReady: 100 }),
+    [{ key: "pending", label: "WIP", count: 11, cap: 10 }],
+  );
+  assert.deepEqual(laneWalkerFooterCapFor("pending", { maxPending: 10, maxNext: 15, maxReady: 100 }), 10);
+  assert.deepEqual(laneWalkerFooterCapFor("next", { maxPending: 10, maxNext: 15, maxReady: 100 }), 15);
+  assert.deepEqual(laneWalkerFooterCapFor("ready", { maxPending: 10, maxNext: 15 }), 100);
+  assert.deepEqual(laneWalkerFooterOverLanes({ pending: 0, next: 0, ready: 100 }, { maxPending: 10, maxNext: 15 }), []);
+  assert.deepEqual(
+    laneWalkerFooterOverLanes({ pending: 0, next: 0, ready: 101 }, { maxPending: 10, maxNext: 15 }),
+    [{ key: "ready", label: "READY", count: 101, cap: 100 }],
+  );
+  assert.deepEqual(laneWalkerFooterOverLanes(null, null), []);
+  assert.deepEqual(laneWalkerFooterOverLanes({ pending: 5 }, null), []);
+  assert.ok(Object.isFrozen(laneWalkerFooterOverLanes({ pending: 11 }, { maxPending: 10, maxNext: 15, maxReady: 100 })));
+});
+
+test("lane attention lights off-w and clears on w, no overage, unavailable, or legacy", () => {
+  function lanePushPlugin({ mode = "s", version = 5, queue = null, caps = null } = {}) {
+    const calls = [];
+    const plugin = {
+      dependencyNavApi: () => ({
+        walkMode: {
+          version,
+          setAttention: (type, value) => {
+            calls.push({ type, value });
+            return { ok: true };
+          },
+        },
+      }),
+    };
+    return { plugin, calls };
+  }
+  const overQueue = { available: true, counts: { pending: 12, next: 0, ready: 0 } };
+  const caps = { maxPending: 10, maxNext: 15, maxReady: 100 };
+  const { plugin, calls } = lanePushPlugin({ mode: "s" });
+  walkerFooterPushLaneAttention(plugin, { legacy: false, mode: "s" }, overQueue, caps);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, "w");
+  assert.equal(calls[0].value.tier, "over");
+  assert.match(calls[0].value.label, /Lanes over limit: WIP 12\/10 — click to show/);
+  const onW = lanePushPlugin({ mode: "w" });
+  walkerFooterPushLaneAttention(onW.plugin, { legacy: false, mode: "w" }, overQueue, caps);
+  assert.deepEqual(onW.calls[0].value, null);
+  const none = lanePushPlugin({ mode: "s" });
+  walkerFooterPushLaneAttention(none.plugin, { legacy: false, mode: "s" }, { available: true, counts: { pending: 1, next: 1, ready: 1 } }, caps);
+  assert.deepEqual(none.calls[0].value, null);
+  const unavailable = lanePushPlugin({ mode: "s" });
+  walkerFooterPushLaneAttention(unavailable.plugin, { legacy: false, mode: "s" }, { available: false, reason: "tasks" }, caps);
+  assert.deepEqual(unavailable.calls[0].value, null);
+  const legacy = lanePushPlugin({ mode: "s" });
+  walkerFooterPushLaneAttention(legacy.plugin, { legacy: true, mode: null }, overQueue, caps);
+  assert.deepEqual(legacy.calls[0].value, null);
+  const old = lanePushPlugin({ mode: "s", version: 4 });
+  walkerFooterPushLaneAttention(old.plugin, { legacy: false, mode: "s" }, overQueue, caps);
+  assert.equal(old.calls.length, 0);
+  const throwing = lanePushPlugin({ mode: "s" });
+  throwing.plugin.dependencyNavApi = () => ({
+    walkMode: { version: 5, setAttention: () => { throw new Error("nav down"); } },
+  });
+  assert.doesNotThrow(() => walkerFooterPushLaneAttention(throwing.plugin, { legacy: false, mode: "s" }, overQueue, caps));
+  const missing = lanePushPlugin({ mode: "s" });
+  missing.plugin.dependencyNavApi = () => ({});
+  assert.doesNotThrow(() => walkerFooterPushLaneAttention(missing.plugin, { legacy: false, mode: "s" }, overQueue, caps));
+});
+
+test("lane tooltip lists only over lanes in dash order", () => {
+  function lanePushCapture(counts, caps) {
+    const calls = [];
+    const plugin = {
+      dependencyNavApi: () => ({ walkMode: { version: 5, setAttention: (type, value) => { calls.push({ type, value }); return { ok: true }; } } }),
+    };
+    walkerFooterPushLaneAttention(plugin, { legacy: false, mode: "n" }, { available: true, counts }, caps);
+    return calls[0].value.label;
+  }
+  const caps = { maxPending: 10, maxNext: 15, maxReady: 100 };
+  assert.match(
+    lanePushCapture({ pending: 12, next: 20, ready: 104 }, caps),
+    /Lanes over limit: WIP 12\/10 · NEXT 20\/15 · READY 104\/100 — click to show/,
+  );
+  assert.match(lanePushCapture({ pending: 0, next: 16, ready: 0 }, caps), /Lanes over limit: NEXT 16\/15 — click to show/);
+  assert.doesNotMatch(lanePushCapture({ pending: 0, next: 16, ready: 0 }, caps), /WIP/);
+});
+
+test("the w panel and the w dot read the same queue object within one paint", () => {
+  const queue = snapshot(
+    [entry("pending", "notes/a.md", 0, { rank: 1, total: 1, laneRank: 1, laneTotal: 1 })],
+    { pending: 12, total: 1 },
+  );
+  const seen = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { commands: { commands: {}, executeCommandById: () => {} }, workspace: { getActiveViewOfType: () => null } };
+  plugin.dependencyNavApi = () => ({
+    walkMode: {
+      version: 5,
+      current: () => "w",
+      setAttention: (type, value) => { seen.push({ type, value }); return { ok: true }; },
+    },
+  });
+  let queueCalls = 0;
+  plugin.laneWalkApi = () => ({ version: 2, queue: () => { queueCalls += 1; return queue; } });
+  plugin.freshnessFooterCursor = () => null;
+  plugin.freshnessStatusEl = new TestElement("div");
+  plugin.freshnessEnsureMemo = () => commitmentMemo({ byTier: {}, walk: 0, tasksAvailable: true });
+  plugin.freshnessMemo = plugin.freshnessEnsureMemo();
+  plugin.updateFreshnessStatusBar();
+  assert.equal(queueCalls, 1);
+  assert.ok(seen.some((call) => call.type === "w" && call.value === null));
+  assert.equal(plugin.freshnessFooterLastView.panel, "lanes");
+});
+
+test("over groups carry is-over and an over current lane stays in the strip", () => {
+  const queue = snapshot(
+    [
+      entry("pending", "notes/a.md", 0, { rank: 1, total: 2, laneRank: 1, laneTotal: 1 }),
+      entry("next", "notes/a.md", 4, { rank: 2, total: 2, laneRank: 1, laneTotal: 1 }),
+    ],
+    { pending: 12, next: 1, ready: 0, total: 2 },
+  );
+  const caps = { maxPending: 10, maxNext: 15, maxReady: 100 };
+  const groups = laneWalkerFooterGroups({ pending: 12, next: 1, ready: 0 }, caps, "pending");
+  assert.ok(groups.some((group) => group.key === "pending" && group.over === true && group.count === "12/10"));
+  assert.ok(groups.some((group) => group.key === "next" && group.over === false));
+  const view = laneWalkerFooterView(queue, { caps, cursor: { path: "notes/a.md", line0: 0, sourceLine: "- [ ] #task pending" } });
+  assert.ok(view.groups.some((group) => group.key === "pending" && group.over === true));
+  const host = new TestElement("div");
+  const parts = freshnessFooterPaint(host, view);
+  const groupNodes = (parts.groups && parts.groups._bobFreshnessGroupNodes) || host._bobFreshnessGroupNodes || [];
+  const overNode = groupNodes.find((node) => node.attrs && node.attrs["data-review-tier"] === "pending");
+  assert.ok(overNode, "missing pending group node");
+  assert.ok(overNode.classes.has("is-over"));
+  const notOver = laneWalkerFooterGroups({ pending: 1, next: 1, ready: 0 }, caps, "pending");
+  assert.ok(!notOver.some((group) => group.key === "pending"));
+});
+
+test("the w dot means a badge is red on the same snapshot", () => {
+  const tasks = [
+    pendingTask({ path: "notes/p.md", tags: ["#task"], description: "pending" }),
+    pendingTask({ path: "notes/p2.md", tags: ["#task"], description: "pending two" }),
+    pendingTask({ path: "notes/pt.md", tags: ["#task", "#today"], description: "pending today" }),
+    nextTask({ path: "notes/n.md", tags: ["#task"], description: "next" }),
+    task({ path: "notes/r.md", tags: ["#task"], description: "ready" }),
+    task({ path: "notes/rt.md", tags: ["#task", "#today"], description: "ready today" }),
+    task({ path: "notes/review.md", tags: ["#task", "#review"], description: "ready review" }),
+  ];
+  const caps = { ...defaultPlanCaps(), maxPending: 1, maxNext: 1, maxReady: 1 };
+  const isToday = (item) => item.tags.includes("#today");
+  const isReview = (item) => item.tags.includes("#review");
+  const queue = laneWalkQueueFromTasks(tasks, DAY, isToday, { isReviewBucket: isReview });
+  const over = new Set(laneWalkerFooterOverLanes(queue.counts, caps).map((item) => item.key));
+  const pendingBadge = dashboardLaneBadgeModel(dashboardLaneBudgetFromTasks(tasks, DAY, caps, "pending", isToday), "pending");
+  const nextBadge = dashboardLaneBadgeModel(dashboardLaneBudgetFromTasks(tasks, DAY, caps, "next", isToday), "next");
+  const readyBadge = readyBadgeModel(readyBudgetFromTasks(tasks, DAY, caps, isToday, isReview));
+  const red = new Set();
+  if (pendingBadge.tone === "red") red.add("pending");
+  if (nextBadge.tone === "red") red.add("next");
+  if (readyBadge.tone === "red") red.add("ready");
+  assert.deepEqual(over, red);
+  const atCap = laneWalkQueueFromTasks(tasks, DAY, isToday, { isReviewBucket: isReview });
+  const atCaps = { ...defaultPlanCaps(), maxPending: atCap.counts.pending, maxNext: Math.max(1, atCap.counts.next), maxReady: Math.max(1, atCap.counts.ready) };
+  assert.deepEqual(laneWalkerFooterOverLanes(atCap.counts, atCaps).map((item) => item.key), []);
+});
+
+test("unload on walkMode v5 clears w without disturbing s and b", () => {
+  const seen = [];
+  const plugin = Object.create(LedgerToolsPlugin.prototype);
+  plugin.app = { workspace: { on: () => ({}), onLayoutReady: () => {} }, commands: { commands: {} }, plugins: { plugins: {} } };
+  plugin.dependencyNavApi = () => ({
+    walkMode: { version: 5, current: () => "w", setAttention: (type, value) => { seen.push({ type, value }); return { ok: true }; } },
+  });
+  plugin.addStatusBarItem = () => new TestElement("div");
+  const registered = [];
+  plugin.register = (fn) => registered.push(fn);
+  plugin.registerEvent = () => {};
+  plugin.registerEditorExtension = () => {};
+  plugin.setupFreshnessStatusBar();
+  for (const fn of registered) assert.doesNotThrow(fn);
+  assert.deepEqual(seen.filter((call) => call.type === "w").at(-1), { type: "w", value: null });
+  assert.deepEqual(seen.filter((call) => call.type === "s").at(-1), { type: "s", value: null });
+  assert.deepEqual(seen.filter((call) => call.type === "b").at(-1), { type: "b", value: null });
+});
+
+test("checkReadyCapsAndDay schedules a footer repaint on a caps change", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-ledger-tools/src/180-plugin-plan-and-ready.js"),
+    "utf8",
+  );
+  assert.match(source, /scheduleFreshnessStatusBar/);
+});
+
+test("w panel over-limit counts wear the badge-red ink recipe", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-freshness \.bob-freshness-group\.is-over \.bob-freshness-group-count/);
+  assert.match(css, /--bob-review-hue: var\(--color-red, #c65367\)/);
+  assert.match(css, /color-mix\(/);
+  assert.match(css, /oklch\(\s*from var\(--bob-review-hue\)/);
 });

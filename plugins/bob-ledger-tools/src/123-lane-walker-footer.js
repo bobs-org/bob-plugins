@@ -204,18 +204,113 @@ function laneWalkerFooterSafeCount(counts, key, fallback) {
   return Number.isInteger(fallback) && fallback >= 0 ? fallback : 0;
 }
 
+// Resolve a lane cap exactly as its badge does. PENDING/NEXT use the
+// effective plan caps; READY uses the badge fallback. Never throws.
+function laneWalkerFooterCapFor(laneKey, caps) {
+  try {
+    const effective = effectivePlanCaps(caps);
+    if (laneKey === "pending") {
+      return effective.maxPending;
+    }
+    if (laneKey === "next") {
+      return effective.maxNext;
+    }
+    if (laneKey === "ready") {
+      return planReadyCapOrDefault(effective.maxReady, READY_FALLBACK_CAP);
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Pure over-lane list in dash order (WIP, NEXT, READY). An entry appears
+// exactly when its badge would be red (`workBadgeTone(count, cap) === "red"`).
+// Never throws; bad input yields an empty frozen list.
+function laneWalkerFooterOverLanes(counts, caps) {
+  try {
+    const over = [];
+    for (const lane of LANE_WALKER_FOOTER_LANES) {
+      const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
+      const cap = laneWalkerFooterCapFor(lane.key, caps);
+      if (!Number.isInteger(cap) || cap < 1) {
+        continue;
+      }
+      let tone = null;
+      try {
+        tone = workBadgeTone(count, cap);
+      } catch (error) {
+        tone = null;
+      }
+      if (tone === "red") {
+        over.push(Object.freeze({ key: lane.key, label: lane.label, count, cap }));
+      }
+    }
+    return Object.freeze(over);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Push the lane-over-limit dot through nav `api.walkMode` v5, mirroring the
+// bank push. Never throws; old nav makes no call.
+function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
+  try {
+    const api = plugin && typeof plugin.dependencyNavApi === "function"
+      ? plugin.dependencyNavApi()
+      : null;
+    const walkMode = api && api.walkMode;
+    if (
+      !walkMode ||
+      Number(walkMode.version) < 5 ||
+      typeof walkMode.setAttention !== "function"
+    ) {
+      return;
+    }
+    if (!route || route.legacy || route.mode === "w") {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    if (!queue || queue.available !== true) {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    const counts = queue.counts && typeof queue.counts === "object" ? queue.counts : {};
+    const over = laneWalkerFooterOverLanes(counts, caps);
+    if (over.length === 0) {
+      walkMode.setAttention("w", null);
+      return;
+    }
+    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")} — click to show`;
+    walkMode.setAttention("w", { tier: "over", label });
+  } catch (_error) {
+    // A stale or throwing nav listener never blocks footer painting.
+  }
+}
+
 function laneWalkerFooterGroups(counts, caps, currentLane) {
   const groups = [];
   for (const lane of LANE_WALKER_FOOTER_LANES) {
-    if (lane.key === currentLane) {
+    const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
+    const cap = laneWalkerFooterCapFor(lane.key, caps);
+    if (!Number.isInteger(cap) || cap < 1) {
+      if (lane.key === currentLane) {
+        continue;
+      }
+      groups.push({ key: lane.key, label: lane.label, count: String(count), over: false });
       continue;
     }
-    const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
-    const cap = Number.isInteger(caps && caps[lane.cap]) && caps[lane.cap] > 0
-      ? caps[lane.cap]
-      : null;
-    const display = cap !== null && count > cap ? `${count}/${cap}` : String(count);
-    groups.push({ key: lane.key, label: lane.label, count: display });
+    let over = false;
+    try {
+      over = workBadgeTone(count, cap) === "red";
+    } catch (error) {
+      over = false;
+    }
+    if (lane.key === currentLane && !over) {
+      continue;
+    }
+    const display = over ? `${count}/${cap}` : String(count);
+    groups.push({ key: lane.key, label: lane.label, count: display, over });
   }
   return groups;
 }
@@ -324,7 +419,7 @@ function laneWalkerFooterView(queue, options = {}) {
     }
     const laneRows = LANE_WALKER_FOOTER_LANES.map((lane) => {
       const count = laneWalkerFooterSafeCount(counts, lane.key, 0);
-      const cap = caps[lane.cap];
+      const cap = laneWalkerFooterCapFor(lane.key, caps);
       const suffix = count > cap ? ` of ${cap} (over)` : ` of ${cap}`;
       return `${lane.label} ${count}${suffix}`;
     });

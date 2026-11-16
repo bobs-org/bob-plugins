@@ -65862,7 +65862,7 @@ function albumSchemaTargets(model) {
   targets.push({ key: "add-field", kind: "add-field" });
   for (const issue of Array.isArray(model?.issues) ? model.issues : []) {
     targets.push({
-      key: `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+      key: albumHeaderIssueKey(issue),
       kind: "issue",
       issue,
     });
@@ -85213,6 +85213,7 @@ function albumHeaderIssueModel(issue) {
     severity: String(issue?.severity || "info"),
     code: String(issue?.code || ""),
     message: String(issue?.message || ""),
+    path: albumHeaderPath(issue?.path),
     line: albumHeaderOptionalCount(issue?.line),
     keyPath: issue?.key_path == null ? "" : String(issue.key_path),
     suggestions: (Array.isArray(issue?.suggestions) ? issue.suggestions : [])
@@ -85369,6 +85370,19 @@ function albumHeaderStatsText(model) {
   return parts.join(" · ");
 }
 
+function albumHeaderIssueText(issue) {
+  const message = String(issue?.message || issue?.code || "");
+  const path = albumHeaderPath(issue?.path);
+  return path ? `${path} — ${message}` : message;
+}
+
+function albumHeaderIssueKey(issue) {
+  return `issue:${encodeURIComponent(JSON.stringify([
+    issue?.code || "lint", albumHeaderPath(issue?.path),
+    issue?.line || "", issue?.keyPath || issue?.key_path || "",
+  ]))}`;
+}
+
 function albumHeaderKindText(field) {
   if (!field) return "";
   const bits = [];
@@ -85511,9 +85525,9 @@ function albumSchemaPaintIssue(doc, issue, options) {
   const item = notebookCreateEl(doc, "li", `bob-album-schema-issue is-${issue.severity}`);
   if (!item) return null;
   item.setAttribute("tabindex", "0");
-  item.setAttribute("data-album-header-focus", `issue:${issue.code || issue.line || "lint"}`);
+  item.setAttribute("data-album-header-focus", albumHeaderIssueKey(issue));
   if (Number.isInteger(issue.line)) item.setAttribute("data-yaml-line", String(issue.line));
-  notebookSetText(item, issue.message || issue.code);
+  notebookSetText(item, albumHeaderIssueText(issue));
   if (issue.suggestions && issue.suggestions.length) {
     const tips = notebookCreateEl(doc, "span", "bob-album-schema-suggestions");
     notebookSetText(tips, issue.suggestions.join(" "));
@@ -86279,7 +86293,8 @@ function albumSchemaCardTitle(model) {
 }
 
 function albumSchemaCardButton(doc, host, text, options = {}) {
-  const button = notebookCreateEl(doc, "button", options.className || "bob-album-schema-target");
+  const baseClass = options.action ? "bob-album-schema-action" : "bob-album-schema-target";
+  const button = notebookCreateEl(doc, "button", `${baseClass} ${options.className || ""}`.trim());
   button.setAttribute("type", "button");
   if (options.targetKey) button.setAttribute("data-target-key", options.targetKey);
   if (options.action) button.setAttribute("data-schema-action", options.action);
@@ -86383,11 +86398,11 @@ function albumSchemaCardBuildEl(model, options, doc) {
       body.appendChild(chip);
     }
     for (const issue of model.issues || []) {
-      albumSchemaCardButton(doc, body, issue.message || issue.code, {
-        targetKey: `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+      albumSchemaCardButton(doc, body, albumHeaderIssueText(issue), {
+        targetKey: albumHeaderIssueKey(issue),
         className: `bob-album-schema-issue is-${issue.severity}`,
-        ariaLabel: `Schema issue: ${issue.message || issue.code}`,
-        current: selectedKey === `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+        ariaLabel: `Schema issue: ${albumHeaderIssueText(issue)}`,
+        current: selectedKey === albumHeaderIssueKey(issue),
       });
     }
     albumSchemaCardButton(doc, body, "+ Add field", {

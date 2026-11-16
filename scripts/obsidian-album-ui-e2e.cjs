@@ -17,6 +17,7 @@ const path = require("node:path");
 const repoRoot = path.resolve(__dirname, "..");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
 const album = require("./obsidian-album-ui-e2e-lib.cjs");
+const properties = require("./obsidian-album-properties-e2e.cjs");
 
 const OVERALL_TIMEOUT_MS = 420_000;
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -163,6 +164,10 @@ function readExpectedPlugins() {
 
 function buildAuthoredFixture(vaultDir) {
   const notes = album.fixtureNotes();
+  notes["schema-proof.md"] = properties.ROUNDTRIP_NOTE;
+  for (const name of ["First child", "Second child"]) {
+    notes[`outside/${name}.md`] = `---\nparent: "[[eat]]"\n---\n\n# ${name}\n`;
+  }
   for (const [name, body] of Object.entries(notes)) writeNote(path.join(vaultDir, name), body);
   const enabled = [];
   for (const plugin of readExpectedPlugins()) {
@@ -643,6 +648,28 @@ async function capturePage(client, output) {
             await candidate.call("Page.enable", {});
             await setViewport(candidate, 375, 812);
             await sleep(180);
+            const geometry = await candidate.evaluate(`(() => {
+              const card = document.querySelector(".bob-album-schema-dialog");
+              return { viewportWidth: innerWidth, cardWidth: card?.getBoundingClientRect().width,
+                fontSize: parseFloat(getComputedStyle(card).fontSize),
+                scrollWidth: card?.scrollWidth, clientWidth: card?.clientWidth,
+                url: location.href, title: document.title,
+                overflow: Array.from(card.querySelectorAll("*")).filter((el) => el.getBoundingClientRect().right > card.getBoundingClientRect().right + 1 || el.scrollWidth > el.clientWidth + 1)
+                  .slice(0, 12).map((el) => ({ tag: el.tagName, cls: el.className, width: el.getBoundingClientRect().width,
+                    text: el.textContent.slice(0, 100), whiteSpace: getComputedStyle(el).whiteSpace })) };
+            })()`);
+            if (geometry.viewportWidth !== 375 || geometry.cardWidth > 375
+                || geometry.fontSize < 12 || geometry.scrollWidth > geometry.clientWidth + 1) {
+              const failed = await candidate.call("Page.captureScreenshot", { format: "png", fromSurface: true });
+              fs.writeFileSync(output, Buffer.from(failed.data, "base64"));
+              throw new Error("Schema screenshot is not a readable 375px layout: " + JSON.stringify(geometry));
+            }
+            Object.assign(context, geometry);
+            await candidate.evaluate(`(() => {
+              const selector = ${JSON.stringify(/consequence|stale/.test(output) ? ".bob-album-schema-consequence" : ".bob-album-schema-stage")};
+              document.querySelector(selector)?.scrollIntoView({ block: "center" });
+            })()`);
+            await sleep(120);
             const screenshot = await candidate.call("Page.captureScreenshot", { format: "png", fromSurface: true });
             fs.writeFileSync(output, Buffer.from(screenshot.data, "base64"));
             client.lastScreenshotContext = context;
@@ -650,13 +677,15 @@ async function capturePage(client, output) {
             client.screenshotContexts.push({ output, selected: context, candidates: candidatesSeen });
             return;
           }
-        } catch (_) {
+        } catch (error) {
+          if (String(error?.message).startsWith("Schema screenshot")) throw error;
           // The primary view remains the fallback when no modal-owned target is available.
         } finally {
           if (candidate) candidate.close();
         }
       }
-    } catch (_) {
+    } catch (error) {
+      if (String(error?.message).startsWith("Schema screenshot")) throw error;
       // Keep the screenshot path usable if the target list is temporarily unavailable.
     }
   }
@@ -667,7 +696,7 @@ async function capturePage(client, output) {
 }
 
 async function setViewport(client, width, height) {
-  await client.call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: width <= 400 });
+  await client.call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 }
 
 function hashNotes(vaultDir) {
@@ -1125,6 +1154,11 @@ async function run(args) {
       record(`${label}-age`, (snapshot.ages || []).length > 0, `ages=${(snapshot.ages || []).length}`);
       const stainedZero = (snapshot.counts || []).some((item) => /\\b0\\b/.test(item.text || "") && /missing|stale|invalid|damaged/i.test(JSON.stringify(snapshot.health || [])));
       record(`${label}-no-zero-when-unavailable`, !stainedZero, "unavailable data must not read as zero");
+      await client.evaluate(`(() => {
+        const view = window.app.workspace.activeLeaf.view;
+        const surface = view.containerEl.querySelector(${JSON.stringify(mode)} === "live" ? ".markdown-source-view" : ".markdown-preview-view");
+        surface?.querySelector("[data-callout=albums]")?.scrollIntoView({ block: "start" });
+      })()`);
       const shot = path.join(outDir, `album-owner-${label}.png`);
       await capturePage(client, shot);
       report.screenshots.push(shot);
@@ -1135,6 +1169,9 @@ async function run(args) {
     await sleep(400);
     await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
     await sleep(200);
+    await client.evaluate(`(() => {
+      document.querySelector(".markdown-preview-view [data-callout=albums]")?.scrollIntoView({ block: "start" });
+    })()`);
     const lightShot = path.join(outDir, "album-owner-light.png");
     await capturePage(client, lightShot);
     report.screenshots.push(lightShot);
@@ -1157,7 +1194,7 @@ async function run(args) {
           if (window.app && window.app.workspace && window.app.workspace.leftSplit) window.app.workspace.leftSplit.collapse();
           if (window.app && window.app.workspace && window.app.workspace.rightSplit) window.app.workspace.rightSplit.collapse();
         } catch {}
-        const el = document.querySelector('[data-callout="albums"]');
+        const el = document.querySelector('.markdown-preview-view [data-callout=albums], .markdown-preview-view [data-callout="albums"]');
         if (el) el.scrollIntoView({ block: "start" });
         return Boolean(el);
       })()`)
@@ -1197,9 +1234,35 @@ async function run(args) {
     const liveHeader = album.assertHeaderIntegrity(recordsLive);
     record("live-single-header-no-warning", liveHeader.ok, liveHeader.reason || "one header outside records; no ancestry warning");
     record("records-live-card", (recordsLive.recordCards || []).length > 0, `cards=${(recordsLive.recordCards || []).length}`);
+    const headerLayout = await client.evaluate(`(() => {
+      const header = window.app.workspace.activeLeaf.view.containerEl.querySelector(".markdown-source-view .bob-album-header");
+      const summary = header?.querySelector(".bob-album-schema-summary");
+      const style = header && getComputedStyle(header);
+      return { fontSize: parseFloat(style?.fontSize), fontWeight: Number(style?.fontWeight),
+        width: header?.clientWidth, scrollWidth: header?.scrollWidth,
+        summaryWidth: summary?.clientWidth, summaryScrollWidth: summary?.scrollWidth };
+    })()`);
+    report.probes.liveHeaderLayout = headerLayout;
+    record("live-header-body-sized-and-contained", headerLayout.fontSize >= 12 && headerLayout.fontSize <= 16
+      && headerLayout.fontWeight < 600 && headerLayout.scrollWidth <= headerLayout.width + 1
+      && headerLayout.summaryScrollWidth <= headerLayout.summaryWidth + 1, JSON.stringify(headerLayout));
     const liveShot = path.join(outDir, "album-records-live.png");
     await capturePage(client, liveShot);
     report.screenshots.push(liveShot);
+    await setViewport(client, 375, 812);
+    await sleep(300);
+    const narrowHeader = await client.evaluate(`(() => {
+      const header = window.app.workspace.activeLeaf.view.containerEl.querySelector(".markdown-source-view .bob-album-header");
+      header?.scrollIntoView({ block: "start" });
+      return { viewport: innerWidth, width: header?.clientWidth, scrollWidth: header?.scrollWidth };
+    })()`);
+    record("header-375-wrap", narrowHeader.viewport === 375 && narrowHeader.width > 0
+      && narrowHeader.scrollWidth <= narrowHeader.width + 1, JSON.stringify(narrowHeader));
+    await sleep(150);
+    const narrowHeaderShot = path.join(outDir, "album-header-375-light.png");
+    await capturePage(client, narrowHeaderShot);
+    report.screenshots.push(narrowHeaderShot);
+    await setViewport(client, 1280, 800);
 
     // Date chips: distinct visited/watched tooltips; refresh on frontmatter edit.
     const chips = (recordsLive.dateChips || []).concat(records.dateChips || []);
@@ -1239,6 +1302,26 @@ async function run(args) {
     })())()`).catch((error) => ({ ok: false, error: String(error && error.message || error) }));
     record("header-copy", Boolean(copyResult && copyResult.ok && !copyResult.disabled && (copyResult.clipboard === "Name @eat/" || (copyResult.clipboard == null && String(copyResult.title || "").includes("@eat/")))), JSON.stringify(copyResult).slice(0, 200));
 
+    const childWarnings = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const surface = view.containerEl.querySelector(".markdown-preview-view");
+      const summary = surface?.querySelector(".bob-album-schema-summary");
+      if (summary?.getAttribute("aria-expanded") !== "true") summary?.click();
+      return Array.from(surface?.querySelectorAll(".bob-album-schema-issue") || [])
+        .filter((el) => el.getBoundingClientRect().height > 0)
+        .map((el) => el.textContent);
+    })()`);
+    report.probes.childWarnings = childWarnings;
+    record("child-warnings-name-their-files", ["First child", "Second child"].every(
+      (name) => childWarnings.some((text) => text.includes(`outside/${name}.md`) && text.includes("lives outside eat/"))
+    ), JSON.stringify(childWarnings));
+    await client.evaluate(`(() => {
+      document.querySelector(".markdown-preview-view .bob-album-header")?.scrollIntoView({ block: "start" });
+    })()`);
+    const warningsShot = path.join(outDir, "album-named-child-warnings.png");
+    await capturePage(client, warningsShot);
+    report.screenshots.push(warningsShot);
+
     // The empty records callout previously rendered a header per detached chunk.
     for (const mode of ["preview", "live"]) {
       await openNote(client, "empty.md", mode);
@@ -1274,14 +1357,14 @@ async function run(args) {
     // Property hiding: record row hidden only on album notes.
     await openNote(client, "eat.md", "preview");
     await sleep(500);
-    const albumProps = await client.evaluate(probe);
+    const albumProps = await client.evaluate(properties.propertyProbe());
     await openNote(client, "unrelated.md", "preview");
     await sleep(500);
-    const unrelatedProps = await client.evaluate(probe);
+    const unrelatedProps = await client.evaluate(properties.propertyProbe());
     report.probes.albumProps = albumProps;
     report.probes.unrelatedProps = unrelatedProps;
-    record("record-prop-hidden-on-album", true, "scoped hiding is enforced by the album surface class; source mode stays editable");
-    record("record-prop-visible-off-album", true, "unrelated note keeps its record property row");
+    record("record-prop-hidden-on-album", properties.propertyVisibility(albumProps, "eat.md", false), JSON.stringify(albumProps));
+    record("record-prop-visible-off-album", properties.propertyVisibility(unrelatedProps, "unrelated.md", true), JSON.stringify(unrelatedProps));
 
     // Report failure and retry through the shim control flag.
     fs.writeFileSync(path.join(shimDir, "control.json"), JSON.stringify({ mode: "malformed" }));
@@ -1580,21 +1663,35 @@ async function run(args) {
     const postEditFp = await schemaFp();
     record("schema-fingerprint-advanced", Boolean(postEditFp && preEditFp && postEditFp !== preEditFp), "apply advances the fingerprint");
 
-    await client.evaluate(`(() => {
+    const undoReady = await waitFor(client, `(() => {
+      const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
+      const modal = plugin?.albumSchemaCardModal;
+      const undo = modal?.contentEl?.querySelector('[data-schema-action="undo"]');
+      return { present: Boolean(undo), disabled: undo?.disabled, fresh: modal?.schemaFresh?.(),
+        stage: modal?.stage?.kind || null, status: modal?.session?.getState?.()?.status,
+        reportRefreshing: plugin?.albumReportState?.()?.refreshing };
+    })()`, (value) => value?.present && value?.disabled === false, "schema-undo-enabled", 30_000);
+    report.probes.schemaUndoReady = undoReady;
+    const undoClicked = await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
-      const root = modal?.contentEl || document;
-      const undo = root.querySelector('[data-schema-action="undo"]');
-      if (undo) undo.click();
+      const undo = modal?.contentEl?.querySelector('[data-schema-action="undo"]');
+      if (!undo || undo.disabled) return false;
+      undo.click();
       return true;
     })()`);
-    await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /remov/.test(item.text || "")),
-      "schema-undo-preview", 20_000).catch(() => null);
+    if (!undoClicked) throw new Error("Undo control is missing or disabled after Apply");
+    const undoPreview = await waitFor(client, `(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const state = modal?.session?.getState?.() || {};
+      const apply = modal?.contentEl?.querySelector('[data-schema-action="apply"]');
+      return { status: state.status, canApply: state.canApply, previewOk: state.preview?.ok,
+        applyDisabled: apply?.disabled, refusal: state.refusal, draftOps: state.draftOps };
+    })()`, (value) => value?.canApply && value?.previewOk && value?.applyDisabled === false,
+      "schema-undo-preview-ready", 20_000);
+    report.probes.schemaUndoPreview = undoPreview;
     await client.evaluate(`(() => {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
-      const root = modal?.contentEl || document;
-      const apply = root.querySelector('[data-schema-action="apply"]');
-      if (apply) apply.click();
-      return true;
+      modal.contentEl.querySelector('[data-schema-action="apply"]').click();
     })()`);
     const restoredFp = await waitFor(client, `(() => (async () => {
       const plugin = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
@@ -2070,6 +2167,25 @@ async function run(args) {
       return true;
     })()`);
     await closeSchemaCard();
+
+    // Exercise Obsidian's actual Properties input, after all read-only byte
+    // checks. The native serializer must preserve the emitted record block.
+    await setViewport(client, 1280, 800);
+    await openNote(client, "schema-proof.md", "preview");
+    await sleep(600);
+    const roundTrip = await properties.propertiesRoundTrip(client, vaultDir);
+    report.probes.propertiesRoundTrip = roundTrip;
+    record("properties-summary-preserves-record-bytes", roundTrip.ok, JSON.stringify(roundTrip));
+
+    // Disabling the plugin must restore the existing native property row.
+    await client.evaluate(`(async () => {
+      await window.app.plugins.disablePlugin("bob-ledger-tools");
+      return true;
+    })()`);
+    await sleep(300);
+    const restoredProperty = await client.evaluate(properties.propertyProbe());
+    report.probes.restoredProperty = restoredProperty;
+    record("plugin-disable-restores-record-property", properties.propertyVisibility(restoredProperty, "schema-proof.md", true), JSON.stringify(restoredProperty));
 
     report.probes.bobInvocations = shimInvocationSummary(shimDir);
     const failures = report.checks.filter((item) => !item.ok);

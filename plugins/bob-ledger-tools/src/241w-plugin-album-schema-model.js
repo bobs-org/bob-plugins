@@ -35,6 +35,19 @@ function albumHeaderStatsText(model) {
   return parts.join(" · ");
 }
 
+function albumHeaderIssueText(issue) {
+  const message = String(issue?.message || issue?.code || "");
+  const path = albumHeaderPath(issue?.path);
+  return path ? `${path} — ${message}` : message;
+}
+
+function albumHeaderIssueKey(issue) {
+  return `issue:${encodeURIComponent(JSON.stringify([
+    issue?.code || "lint", albumHeaderPath(issue?.path),
+    issue?.line || "", issue?.keyPath || issue?.key_path || "",
+  ]))}`;
+}
+
 function albumHeaderKindText(field) {
   if (!field) return "";
   const bits = [];

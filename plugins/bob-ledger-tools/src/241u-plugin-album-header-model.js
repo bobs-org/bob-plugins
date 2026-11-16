@@ -183,6 +183,7 @@ function albumHeaderIssueModel(issue) {
     severity: String(issue?.severity || "info"),
     code: String(issue?.code || ""),
     message: String(issue?.message || ""),
+    path: albumHeaderPath(issue?.path),
     line: albumHeaderOptionalCount(issue?.line),
     keyPath: issue?.key_path == null ? "" : String(issue.key_path),
     suggestions: (Array.isArray(issue?.suggestions) ? issue.suggestions : [])

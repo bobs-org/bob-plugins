@@ -67,9 +67,9 @@ function albumSchemaPaintIssue(doc, issue, options) {
   const item = notebookCreateEl(doc, "li", `bob-album-schema-issue is-${issue.severity}`);
   if (!item) return null;
   item.setAttribute("tabindex", "0");
-  item.setAttribute("data-album-header-focus", `issue:${issue.code || issue.line || "lint"}`);
+  item.setAttribute("data-album-header-focus", albumHeaderIssueKey(issue));
   if (Number.isInteger(issue.line)) item.setAttribute("data-yaml-line", String(issue.line));
-  notebookSetText(item, issue.message || issue.code);
+  notebookSetText(item, albumHeaderIssueText(issue));
   if (issue.suggestions && issue.suggestions.length) {
     const tips = notebookCreateEl(doc, "span", "bob-album-schema-suggestions");
     notebookSetText(tips, issue.suggestions.join(" "));

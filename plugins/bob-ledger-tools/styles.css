@@ -8511,8 +8511,10 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   border-radius: 8px;
   background: color-mix(in srgb, var(--bob-album-accent) 8%, var(--background-primary));
   font-family: var(--font-interface);
-  font-size: 0.9em;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-normal);
   line-height: 1.4;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .bob-album-header[data-root-hue="aqua"] { --bob-album-accent: var(--bob-area-aqua, var(--interactive-accent)); }
@@ -8571,6 +8573,8 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-album-schema-summary {
   display: block;
   width: 100%;
+  height: auto;
+  white-space: normal;
   margin-top: 0.55em;
   padding: 0.15em 0;
   border: 0;
@@ -8580,6 +8584,7 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   text-align: start;
   cursor: pointer;
   overflow-wrap: anywhere;
+  box-shadow: none;
 }
 .bob-album-schema-summary.is-error {
   color: var(--text-error, var(--text-warning));
@@ -8650,6 +8655,10 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   padding-inline-start: 1.4em;
   color: var(--text-warning);
 }
+.bob-album-schema-issues > .bob-album-schema-issue {
+  display: list-item;
+  width: auto;
+}
 .bob-album-schema-issue.is-info {
   color: var(--text-muted);
 }
@@ -8658,10 +8667,14 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   margin-top: 0.15em;
   color: var(--text-muted);
 }
+.bob-album-schema-modal {
+  width: min(42em, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+}
 .bob-album-schema-modal .modal-content,
 .bob-album-schema-dialog {
-  min-width: min(36em, 100%);
-  max-width: 42em;
+  min-width: 0;
+  max-width: 100%;
   font-family: var(--font-interface);
   font-variant-numeric: tabular-nums;
 }
@@ -8688,6 +8701,8 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-album-schema-target,
 .bob-album-schema-action {
   min-width: 0;
+  height: auto;
+  white-space: normal;
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 0.25em 0.45em;

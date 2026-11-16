@@ -66,7 +66,8 @@ function albumSchemaCardTitle(model) {
 }
 
 function albumSchemaCardButton(doc, host, text, options = {}) {
-  const button = notebookCreateEl(doc, "button", options.className || "bob-album-schema-target");
+  const baseClass = options.action ? "bob-album-schema-action" : "bob-album-schema-target";
+  const button = notebookCreateEl(doc, "button", `${baseClass} ${options.className || ""}`.trim());
   button.setAttribute("type", "button");
   if (options.targetKey) button.setAttribute("data-target-key", options.targetKey);
   if (options.action) button.setAttribute("data-schema-action", options.action);
@@ -170,11 +171,11 @@ function albumSchemaCardBuildEl(model, options, doc) {
       body.appendChild(chip);
     }
     for (const issue of model.issues || []) {
-      albumSchemaCardButton(doc, body, issue.message || issue.code, {
-        targetKey: `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+      albumSchemaCardButton(doc, body, albumHeaderIssueText(issue), {
+        targetKey: albumHeaderIssueKey(issue),
         className: `bob-album-schema-issue is-${issue.severity}`,
-        ariaLabel: `Schema issue: ${issue.message || issue.code}`,
-        current: selectedKey === `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+        ariaLabel: `Schema issue: ${albumHeaderIssueText(issue)}`,
+        current: selectedKey === albumHeaderIssueKey(issue),
       });
     }
     albumSchemaCardButton(doc, body, "+ Add field", {

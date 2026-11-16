@@ -21,7 +21,7 @@ function albumSchemaTargets(model) {
   targets.push({ key: "add-field", kind: "add-field" });
   for (const issue of Array.isArray(model?.issues) ? model.issues : []) {
     targets.push({
-      key: `issue:${issue.code || "lint"}:${issue.line || ""}:${issue.keyPath || issue.key_path || ""}`,
+      key: albumHeaderIssueKey(issue),
       kind: "issue",
       issue,
     });

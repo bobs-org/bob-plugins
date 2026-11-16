@@ -590,6 +590,13 @@ test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer",
   assert.match(card.textContent, /set on 2 of 104/);
   assert.match(card.textContent, /index is stale/);
   assert.match(card.textContent, /bob albums sync/);
+  const editableCard = helpers.albumSchemaCardBuildEl(model, { editable: true, selectedKey: "stats", handlers: {} }, doc);
+  const styledTargets = editableCard.querySelectorAll("[data-target-key]");
+  assert.ok(styledTargets.length >= 5);
+  for (const target of styledTargets) {
+    assert.ok(target.getAttribute("class").split(/\s+/).includes("bob-album-schema-target"),
+      `${target.getAttribute("data-target-key")} keeps the shared wrapping and focus styles`);
+  }
   assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /y YAML/);
   assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /esc close/);
   assert.equal(card.textContent.includes("Add field"), false);
@@ -603,6 +610,49 @@ test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer",
   plugin.paintAlbumHeaderReading(mobile, "eat.md");
   assert.equal(mobile.querySelector(".bob-album-header-schema"), null);
   assert.match(mobile.querySelector(".bob-album-schema-mobile-hint").textContent, /Edit this schema in YAML/);
+});
+
+test("same-message child warnings name each file and keep distinct focus and card targets", () => {
+  const paths = ['outside/First "child".md', 'outside/Second <child>.md'];
+  const entry = album({ issues: paths.map((path) => ({
+    severity: "info", code: "album_child_reparent", path, line: 3, key_path: "parent",
+    message: "this child lives outside eat/", suggestions: ["eat/"],
+  })) });
+  const { app, doc, plugin } = fixture(entry);
+  const model = helpers.albumHeaderModel(report(entry), "eat.md", {
+    metadataCache: app.metadataCache, vault: app.vault,
+  });
+  assert.deepEqual(model.issues.map((issue) => issue.path), paths);
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.albumHeaderSetExpanded("eat.md", true);
+  plugin.paintAlbumHeaderReading(root, "eat.md");
+  const warnings = root.querySelectorAll(".bob-album-schema-issue");
+  assert.equal(warnings.length, 2);
+  warnings.forEach((warning, index) => {
+    assert.equal(warning.firstChild.textContent, `${paths[index]} — this child lives outside eat/`);
+    assert.equal(warning.querySelector(".bob-album-schema-suggestions").textContent, "eat/");
+    assert.equal(warning.querySelector("child"), null, "paths remain plain text");
+  });
+  assert.notEqual(warnings[0].getAttribute("data-album-header-focus"), warnings[1].getAttribute("data-album-header-focus"));
+  warnings[1].focus();
+  plugin.paintAlbumHeaderReading(root, "eat.md");
+  assert.equal(doc.activeElement.textContent, warnings[1].textContent);
+  assert.notEqual(doc.activeElement, warnings[1], "focus follows the repainted second warning");
+
+  const targets = helpers.albumSchemaTargets(model).filter((target) => target.kind === "issue");
+  assert.equal(new Set(targets.map((target) => target.key)).size, 2);
+  assert.equal(helpers.albumSchemaTargetByKey(model, targets[1].key).issue.path, paths[1]);
+  const card = helpers.albumSchemaCardBuildEl(model, {
+    editable: true, selectedKey: targets[1].key, handlers: {},
+  }, doc);
+  const buttons = card.querySelectorAll("button").filter((button) => button.classList.contains("bob-album-schema-issue"));
+  assert.deepEqual(buttons.map((button) => button.getAttribute("data-target-key")), targets.map((target) => target.key));
+  buttons.forEach((button, index) => {
+    assert.equal(button.textContent, `${paths[index]} — this child lives outside eat/`);
+    assert.equal(button.getAttribute("aria-label"), `Schema issue: ${button.textContent}`);
+  });
+  assert.equal(buttons[0].getAttribute("aria-current"), null);
+  assert.equal(buttons[1].getAttribute("aria-current"), "true");
 });
 
 test("y jumps to the field or lint line in Source mode without writing the vault", async () => {

@@ -43,6 +43,20 @@ test("keyboard staging targets the row selected after navigation", () => {
 });
 
 const album = require("./obsidian-album-ui-e2e-lib.cjs");
+const properties = require("./obsidian-album-properties-e2e.cjs");
+
+test("Properties acceptance requires the actual row and byte-identical record block", () => {
+  const before = properties.recordBlock(properties.ROUNDTRIP_NOTE);
+  assert.match(before, /  legacy:\n    - lid\n    - source_\*/);
+  assert.equal(properties.recordBlock(properties.ROUNDTRIP_NOTE.replace("Before the Properties edit.", "Changed.")), before);
+  assert.notEqual(properties.recordBlock(properties.ROUNDTRIP_NOTE.replace("    - lid", "  - lid")), before);
+  assert.throws(() => properties.recordBlock("record: []\n"));
+  const hidden = { path: "eat.md", rows: [{ visible: false }] };
+  assert.equal(properties.propertyVisibility(hidden, "eat.md", false), true);
+  assert.equal(properties.propertyVisibility(hidden, "eat.md", true), false);
+  assert.equal(properties.propertyVisibility(hidden, "other.md", false), false);
+  assert.equal(properties.propertyVisibility({ path: "eat.md", rows: [] }, "eat.md", false), false);
+});
 
 test("header acceptance rejects duplicate chrome, false warnings, and callout headers", () => {
   const healthy = { activeHeaders: [{}], ancestryWarnings: [], headersInRecords: [] };

@@ -53,6 +53,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAreasCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
+  BobLedgerToolsSubscriptionSurfacesMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsAlbumEntryMixin,
   BobLedgerToolsAlbumYamlExcursionMixin,

@@ -62,16 +62,21 @@ class BobLedgerToolsAlbumRecordsMixin {
 
   albumRecordsOptions(sourcePath, folds, handlers) {
     const state = this.albumReportState();
+    const album = albumRecordsSourceAlbum(state, sourcePath);
+    if (bankSubscriptionIsAlbumSource(sourcePath, album)) {
+      this.ensureSubscriptionSurfacesSubscribe?.();
+    }
     return {
       sourcePath,
       state,
-      album: albumRecordsSourceAlbum(state, sourcePath),
+      album,
       hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
       today: state.today,
       folds,
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
       handlers,
+      subscriptionReport: this.subscriptionSurfacesReport || null,
     };
   }
 

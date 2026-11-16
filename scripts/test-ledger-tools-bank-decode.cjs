@@ -41,6 +41,12 @@ test("bank argv is keyed by command and exact flags", () => {
   assert.deepEqual(bankBuildArgs({ command: "list", all: true, month: "2026-11" }), [
     "bank", "list", "-a", "-m", "2026-11", "-f", "json",
   ]);
+  assert.deepEqual(bankBuildArgs({ command: "subscriptions" }), [
+    "bank", "subscriptions", "-f", "json",
+  ]);
+  assert.deepEqual(bankBuildArgs({ command: "subscriptions", all: true }), [
+    "bank", "subscriptions", "-a", "-f", "json",
+  ]);
   assert.deepEqual(bankBuildArgs({ command: "report", month: "2026-11" }), [
     "bank", "report", "-m", "2026-11", "-f", "json",
   ]);

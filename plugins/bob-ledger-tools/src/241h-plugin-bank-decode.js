@@ -134,7 +134,7 @@ function bankBuildArgs(options = {}) {
     : opts.command === "config" ? "config"
       : opts.command === "subscriptions" ? "subscriptions" : "list";
   const args = ["bank", command];
-  if (command === "list" && opts.all === true) {
+  if ((command === "list" || command === "subscriptions") && opts.all === true) {
     args.push("-a");
   }
   if (command === "report") {

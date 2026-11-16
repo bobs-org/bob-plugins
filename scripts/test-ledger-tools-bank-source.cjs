@@ -28,6 +28,9 @@ test("only the hub and canonical month paths are bank-relevant", () => {
   assert.equal(bankRelevantPath("bank.md"), true);
   assert.equal(bankMonthFromPath("bank/2026-11.md").key, "2026-11");
   assert.equal(bankRelevantPath("bank/2026-11.md"), true);
+  assert.equal(bankRelevantPath("subscriptions.md"), true);
+  assert.equal(bankRelevantPath("subscriptions/tunely.md"), true);
+  assert.equal(bankRelevantPath("subscriptions/nested/tunely.md"), false);
   assert.equal(bankRelevantPath("bank/notes.md"), false);
   assert.equal(bankRelevantPath("cash.md"), false);
   assert.equal(bankRelevantPath("area/bank.md"), false);

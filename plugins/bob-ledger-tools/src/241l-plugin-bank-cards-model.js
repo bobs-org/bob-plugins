@@ -13,7 +13,7 @@ function bankCardParseFence(source) {
     if (!raw || raw.startsWith("#")) continue;
     const match = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/.exec(raw);
     if (!match) {
-      errors.push(`Line ${index + 1}: use "view: month" or "view: queue".`);
+      errors.push(`Line ${index + 1}: use "view: month", "view: queue", or "view: subscriptions".`);
       continue;
     }
     const key = match[1].toLowerCase();
@@ -28,8 +28,11 @@ function bankCardParseFence(source) {
     values.set(key, match[2].replace(/^(?:"([^"]*)"|'([^']*)')$/, (_, a, b) => a || b));
   }
   const view = values.get("view");
-  if (!view) errors.push("Add " + '"view: month"' + " or " + '"view: queue"' + ".");
-  else if (view !== "month" && view !== "queue") errors.push(`Unknown view "${view}". Use month or queue.`);
+  if (!view) {
+    errors.push("Add " + '"view: month"' + ", " + '"view: queue"' + ", or " + '"view: subscriptions"' + ".");
+  } else if (view !== "month" && view !== "queue" && view !== "subscriptions") {
+    return errors.length ? { ok: false, errors } : { ok: true, view, quiet: true };
+  }
   return errors.length ? { ok: false, errors } : { ok: true, view };
 }
 

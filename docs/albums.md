@@ -51,6 +51,19 @@ frontmatter. Both dates, when valid, appear with their own **Visited** and
 Chips refresh when that metadata changes and at local midnight. Folding,
 peeking, and date chips never rewrite the note.
 
+On the subscriptions album, the generated `[!records]` index still stores
+raw category keys and plain amount/cadence numbers. The plugin paints
+category subgroup headings with the bank emoji and label (`💻 Tech & AI`),
+formats amount plus cadence as `$9.99 a month`, and adds a quiet
+`next ≈ Dec 21` chip from `bob bank subscriptions -f json`. Each
+`subscriptions/*.md` record shows a header strip with the same money line,
+a 12-dot charge timeline, and any finding as a sentence. A `bob-bank` fence
+with `view: subscriptions` on `subscriptions.md` draws the album summary
+card: monthly and yearly estimates labeled as an estimate of commitments,
+not bank spend, status counts, the top five by monthly equivalent, and the
+findings count. Unknown `bob-bank` views stay quiet. None of these surfaces
+write the note.
+
 Album notes also show a breadcrumb from their resolved area/project ancestry
 and a collapsed-by-default schema summary in Reading view and Live Preview.
 The summary names the schema, field count, dated notes, and index grouping.

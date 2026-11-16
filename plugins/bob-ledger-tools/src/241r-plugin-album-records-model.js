@@ -41,7 +41,9 @@ function albumRecordsGroupIdentity(album, label, index) {
 function albumRecordsChromeNode(node) {
   return notebookDomHasClass(node, "bob-records-fold")
     || notebookDomHasClass(node, "bob-records-ages")
-    || notebookDomHasClass(node, "bob-records-age");
+    || notebookDomHasClass(node, "bob-records-age")
+    || notebookDomHasClass(node, "bob-records-pretty")
+    || notebookDomHasClass(node, "bob-records-next");
 }
 
 function albumRecordsHeadingText(li) {

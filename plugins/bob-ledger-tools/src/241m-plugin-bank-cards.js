@@ -84,6 +84,10 @@ class BobLedgerToolsBankCardsMixin {
       }
       return;
     }
+    if (fence.quiet === true) {
+      bankCardClear(el);
+      return;
+    }
     const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
     let month = null;
     if (fence.view === "month") {
@@ -104,7 +108,9 @@ class BobLedgerToolsBankCardsMixin {
       month,
       dataKey: bankCacheKey(fence.view === "month"
         ? bankBuildArgs({ command: "report", month })
-        : bankBuildArgs({ command: "list" })),
+        : fence.view === "subscriptions"
+          ? bankBuildArgs({ command: "subscriptions", all: true })
+          : bankBuildArgs({ command: "list" })),
       dataState: null,
       monthState: null,
       monthPaths: [],
@@ -129,7 +135,9 @@ class BobLedgerToolsBankCardsMixin {
     }
     const spec = fence.view === "month"
       ? { command: "report", month }
-      : { command: "list" };
+      : fence.view === "subscriptions"
+        ? { command: "subscriptions", all: true }
+        : { command: "list" };
     view.unsubscribe = this.apiBankSubscribe(spec, (state) => {
       if (view.unloaded) return;
       view.dataState = state;
@@ -230,7 +238,11 @@ class BobLedgerToolsBankCardsMixin {
     const root = bankCardAppend(view.el, "section", {
       class: `bob-bank-card bob-bank-card-${view.kind}`,
       role: "region",
-      "aria-label": view.kind === "month" ? "Bank month summary" : "Bank rows waiting for acknowledgment",
+      "aria-label": view.kind === "month"
+        ? "Bank month summary"
+        : view.kind === "subscriptions"
+          ? "Subscription commitments"
+          : "Bank rows waiting for acknowledgment",
     });
     if (!root) return;
     const hue = this.bankCardRootHue(view.sourcePath);
@@ -238,9 +250,16 @@ class BobLedgerToolsBankCardsMixin {
     const keyResult = this.bankCardCurrentResult(view);
     this.bankCardPaintRefreshState(root, keyResult, view, view.kind === "month"
       ? { command: "report", month: view.month }
-      : { command: "list" });
+      : view.kind === "subscriptions"
+        ? { command: "subscriptions", all: true }
+        : { command: "list" });
     if (!keyResult || !keyResult.report) {
       this.bankCardPaintUnavailable(root, keyResult, view.kind);
+      return;
+    }
+    if (view.kind === "subscriptions") {
+      const model = bankSubscriptionAlbumCardModel(keyResult.report);
+      bankSubscriptionPaintCard(root, model);
       return;
     }
     if (keyResult.report.teaching_empty === true) {
@@ -368,7 +387,11 @@ class BobLedgerToolsBankCardsMixin {
       return;
     }
     bankCardAppend(root, "p", { class: "bob-bank-loading", role: "status" },
-      kind === "month" ? "Loading this month's bank report…" : "Loading rows to acknowledge…");
+      kind === "month"
+        ? "Loading this month's bank report…"
+        : kind === "subscriptions"
+          ? "Loading subscription commitments…"
+          : "Loading rows to acknowledge…");
   }
 
   bankCardPaintTeaching(root) {

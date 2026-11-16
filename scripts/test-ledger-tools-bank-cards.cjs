@@ -229,12 +229,27 @@ function makeHarness(options = {}) {
 test("bank card fence and filename frontmatter validation are explicit", () => {
   assert.deepEqual(helpers.bankCardParseFence("view: month"), { ok: true, view: "month" });
   assert.deepEqual(helpers.bankCardParseFence("view: queue"), { ok: true, view: "queue" });
-  assert.equal(helpers.bankCardParseFence("view: inbox").ok, false);
+  assert.deepEqual(helpers.bankCardParseFence("view: subscriptions"), { ok: true, view: "subscriptions" });
+  assert.deepEqual(helpers.bankCardParseFence("view: inbox"), { ok: true, view: "inbox", quiet: true });
   assert.equal(helpers.bankCardParseFence("view: month\nlayout: wide").ok, false);
   assert.equal(helpers.bankCardParseFence("").errors.length, 1);
   assert.deepEqual(helpers.bankCardValidateMonthFrontmatter("bank/2026-11.md", "2026-11"), { ok: true, month: "2026-11" });
   assert.equal(helpers.bankCardValidateMonthFrontmatter("bank/2026-11.md", "2026-10").code, "month-mismatch");
   assert.equal(helpers.bankCardValidateMonthFrontmatter("notes/2026-11.md", "2026-11").code, "month-path");
+});
+
+test("unknown bob-bank views render nothing", async () => {
+  await withMissingConfig(async () => {
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    const { el } = fakeDom();
+    plugin.renderBankCard(el, { sourcePath: "subscriptions.md", addChild: () => {} }, "view: inbox");
+    await drain();
+    assert.equal(el.children.length, 0);
+    assert.equal(textOf(el), "");
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
 });
 
 test("month card model keeps Bob totals, ordered category shares, account caveats, and waiting row", () => {

@@ -1,0 +1,35 @@
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BANK_SUBSCRIPTION_ALBUM_PATH,
+      BANK_SUBSCRIPTION_RECORD_PATH,
+      BANK_SUBSCRIPTION_STATUS_ORDER,
+      bankSubscriptionNotePath,
+      bankSubscriptionIsAlbumPath,
+      bankSubscriptionIsRecordPath,
+      bankSubscriptionIsAlbumSource,
+      bankSubscriptionEntryByPath,
+      bankSubscriptionAmountPhrase,
+      bankSubscriptionYearlyFromMonthly,
+      bankSubscriptionTimelineDots,
+      bankSubscriptionFindingFallback,
+      bankSubscriptionFindingSentence,
+      bankSubscriptionHeaderModel,
+      bankSubscriptionAlbumCardModel,
+      bankSubscriptionCategoryMap,
+      bankSubscriptionPrettyHeading,
+      bankSubscriptionPrettyFacets,
+      bankSubscriptionIndexRowModel,
+      bankSubscriptionHeaderSignature,
+      bankSubscriptionPaintHeader,
+      bankSubscriptionPaintCard,
+      bankSubscriptionPaintTeaching,
+      albumPaintSubscriptionRecords,
+      albumCleanSubscriptionRecords,
+      albumCleanSubscriptionHeader,
+      bankCardParseFence,
+      bankBuildArgs,
+      bankIsSubscriptionPath,
+    });
+  }
+} catch (_) {}

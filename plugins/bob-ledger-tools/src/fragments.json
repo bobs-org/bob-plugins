@@ -133,6 +133,9 @@
   "241hc-plugin-bank-subscription.js",
   "241hb-plugin-bank-config-decode.js",
   "241hd-plugin-bank-subscriptions-decode.js",
+  "241he-plugin-bank-subscriptions-surfaces-model.js",
+  "241hf-plugin-bank-subscriptions-surfaces-dom.js",
+  "241hg-plugin-bank-subscription-header.js",
   "241i-plugin-bank-source.js",
   "241j-plugin-bank-data.js",
   "241k-plugin-bank-actions.js",
@@ -277,5 +280,6 @@
   "363-exports-bank-setup.js",
   "364-exports-bank-subscription.js",
   "365-exports-bank-config-update.js",
-  "366-exports-bank-subscription-linker.js"
+  "366-exports-bank-subscription-linker.js",
+  "367-exports-bank-subscription-surfaces.js"
 ]

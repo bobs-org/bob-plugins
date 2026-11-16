@@ -9776,8 +9776,114 @@ li.bob-bank-mark-acked { opacity: 0.72; }
   color: var(--text-muted);
 }
 .bob-records-age { white-space: nowrap; }
-.bob-records-fold:focus-visible, .bob-records-age:focus-visible {
+.bob-records-fold:focus-visible, .bob-records-age:focus-visible,
+.bob-records-pretty:focus-visible, .bob-records-next:focus-visible {
   outline: 2px solid var(--interactive-accent); outline-offset: 2px;
+}
+.bob-records-pretty {
+  color: var(--text-normal);
+  font: 0.9em var(--font-interface);
+  font-variant-numeric: tabular-nums;
+}
+.bob-records-next {
+  margin-inline-start: auto;
+  color: var(--text-faint);
+  font: 0.78em var(--font-interface);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
+
+.bob-subscription-header {
+  --bob-subscription-accent: var(--interactive-accent);
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.85rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--bob-subscription-accent) 28%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-subscription-accent);
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--bob-subscription-accent) 10%, var(--background-primary));
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+.bob-subscription-header[data-root-hue="aqua"] { --bob-subscription-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="blue"] { --bob-subscription-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="green"] { --bob-subscription-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="magenta"] { --bob-subscription-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="orange"] { --bob-subscription-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="red"] { --bob-subscription-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="violet"] { --bob-subscription-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-subscription-header[data-root-hue="yellow"] { --bob-subscription-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-subscription-header-facts { font-size: 0.92em; }
+.bob-subscription-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28em;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bob-subscription-dot {
+  width: 0.58em;
+  height: 0.58em;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-muted) 28%, transparent);
+  box-sizing: border-box;
+}
+.bob-subscription-dot-charged { background: var(--text-normal); }
+.bob-subscription-dot-missed {
+  background: transparent;
+  border: 1.5px solid var(--text-normal);
+}
+.bob-subscription-dot-faint { background: color-mix(in srgb, var(--text-muted) 32%, transparent); }
+.bob-subscription-dot[data-amber="true"] {
+  background: var(--color-orange);
+  border-color: var(--color-orange);
+}
+.bob-subscription-finding {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84em;
+}
+.bob-bank-card-subscriptions .bob-subscription-card-summary { display: grid; gap: 0.2rem; margin-bottom: 0.55rem; }
+.bob-subscription-card-totals { font-size: 1.02em; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bob-subscription-card-note { margin: 0; color: var(--text-muted); font-size: 0.8em; font-style: italic; }
+.bob-subscription-card-statuses { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.6rem; }
+.bob-subscription-status {
+  padding: 0.15em 0.45em;
+  border-radius: var(--radius-s, 4px);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: 0.78em;
+}
+.bob-subscription-card-bars { display: grid; gap: 0.32rem; margin: 0.2rem 0 0.65rem; }
+.bob-subscription-bar {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 0.4fr) minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+  font-size: 0.82em;
+}
+.bob-subscription-bar-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-subscription-bar-track {
+  display: block;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bob-bank-accent, var(--interactive-accent)) 18%, var(--background-modifier-border));
+  overflow: hidden;
+}
+.bob-subscription-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--bob-bank-accent, var(--interactive-accent));
+}
+.bob-subscription-bar-amount { font-variant-numeric: tabular-nums; color: var(--text-muted); white-space: nowrap; }
+.bob-subscription-card-findings { margin: 0.2rem 0 0; color: var(--text-muted); font-size: 0.82em; }
+@media (max-width: 600px) {
+  .bob-subscription-bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .bob-subscription-bar-track { grid-column: 1 / -1; }
 }
 
 /* Bank Period Charts paint (bob-cli-lj paint): begin. */

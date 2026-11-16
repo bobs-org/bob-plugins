@@ -34434,7 +34434,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupReadingBoardData();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34559,7 +34559,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -66832,7 +66832,7 @@ function bankBuildArgs(options = {}) {
     : opts.command === "config" ? "config"
       : opts.command === "subscriptions" ? "subscriptions" : "list";
   const args = ["bank", command];
-  if (command === "list" && opts.all === true) {
+  if ((command === "list" || command === "subscriptions") && opts.all === true) {
     args.push("-a");
   }
   if (command === "report") {
@@ -68332,6 +68332,875 @@ function bankDecodeRecordCreation(stdout, stderr, exitCode = null) {
     stderr,
   );
 }
+// ---- src/241he-plugin-bank-subscriptions-surfaces-model.js ----
+// Read-only subscription surfaces: record header facts, charge timeline,
+// album summary card, and records-index pretty labels. All values come
+// from `bob bank subscriptions -f json`; this fragment never writes notes.
+
+const BANK_SUBSCRIPTION_ALBUM_PATH = /^subscriptions\.md$/i;
+const BANK_SUBSCRIPTION_RECORD_PATH = /^subscriptions\/[^/]+\.md$/i;
+const BANK_SUBSCRIPTION_STATUS_ORDER = ["to_cancel", "to_decide", "active", "cancelled"];
+const BANK_SUBSCRIPTION_STATUS_LABELS = {
+  to_cancel: "✂️ To cancel",
+  to_decide: "🤔 To decide",
+  active: "💚 Active",
+  cancelled: "🚫 Cancelled",
+};
+const BANK_SUBSCRIPTION_CADENCE_KEYS = {
+  monthly: "monthly",
+  Monthly: "monthly",
+  "a month": "monthly",
+  four_weekly: "four_weekly",
+  "every 4 weeks": "four_weekly",
+  "Every 4 weeks": "four_weekly",
+  quarterly: "quarterly",
+  Quarterly: "quarterly",
+  "a quarter": "quarterly",
+  yearly: "yearly",
+  Yearly: "yearly",
+  "a year": "yearly",
+};
+const BANK_SUBSCRIPTION_FINDING_FALLBACKS = {
+  bank_subscription_price: "The latest charge does not match the record amount.",
+  bank_subscription_to_cancel_charged: "This record is marked to cancel and still charged.",
+  bank_subscription_cancelled_charge: "A charge arrived after this record was cancelled.",
+  bank_subscription_match_invalid: "A Shows-up-as needle is invalid.",
+  bank_subscription_category_unknown: "The category is not a bank category.",
+  bank_subscription_amount_invalid: "The amount is not a valid number.",
+  bank_subscription_overlap: "Two records claim the same charge.",
+};
+
+function bankSubscriptionNotePath(value) {
+  const path = typeof bankNormalizePath === "function"
+    ? bankNormalizePath(value)
+    : String((value && value.path) || value || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  return path.replace(/\\/g, "/");
+}
+
+function bankSubscriptionIsAlbumPath(fileOrPath) {
+  return BANK_SUBSCRIPTION_ALBUM_PATH.test(bankSubscriptionNotePath(fileOrPath));
+}
+
+function bankSubscriptionIsRecordPath(fileOrPath) {
+  return BANK_SUBSCRIPTION_RECORD_PATH.test(bankSubscriptionNotePath(fileOrPath));
+}
+
+function bankSubscriptionIsAlbumSource(sourcePath, album) {
+  if (bankSubscriptionIsAlbumPath(sourcePath) || bankSubscriptionIsAlbumPath(album && album.path)) {
+    return true;
+  }
+  const noun = album && (album.noun || (album.record && album.record.noun));
+  return String(noun || "").toLowerCase() === "subscription";
+}
+
+function bankSubscriptionEntries(report) {
+  return report && Array.isArray(report.subscriptions) ? report.subscriptions : [];
+}
+
+function bankSubscriptionEntryByPath(report, path) {
+  const want = bankSubscriptionNotePath(path);
+  if (!want) return null;
+  const wantStem = want.replace(/\.md$/i, "");
+  for (const entry of bankSubscriptionEntries(report)) {
+    const have = bankSubscriptionNotePath(entry && entry.path);
+    if (!have) continue;
+    if (have === want || have.replace(/\.md$/i, "") === wantStem) return entry;
+  }
+  return null;
+}
+
+function bankSubscriptionAmountPhrase(cents, cadence) {
+  const money = typeof bankSubscriptionMoney === "function" ? bankSubscriptionMoney(cents) : null;
+  const phrase = typeof bankSubscriptionCadencePhrase === "function"
+    ? bankSubscriptionCadencePhrase(BANK_SUBSCRIPTION_CADENCE_KEYS[cadence] || cadence)
+    : "";
+  if (money && phrase) return `${money} ${phrase}`;
+  return money || phrase || "";
+}
+
+function bankSubscriptionYearlyFromMonthly(monthlyCents) {
+  if (!Number.isSafeInteger(monthlyCents)) return "";
+  const yearly = monthlyCents * 12;
+  if (!Number.isSafeInteger(yearly)) return "";
+  const money = typeof bankSubscriptionMoney === "function" ? bankSubscriptionMoney(yearly) : null;
+  return money ? `≈ ${money} a year` : "";
+}
+
+function bankSubscriptionTimelineAmber(bucket, priceChange, chargedFallback) {
+  if (!bucket) return false;
+  const since = priceChange && typeof priceChange.since === "string" ? priceChange.since : "";
+  if (since && bucket.start && bucket.due && since >= bucket.start && since <= bucket.due) {
+    return true;
+  }
+  return chargedFallback === true && bucket.state === "charged";
+}
+
+function bankSubscriptionTimelineDots(entry) {
+  const buckets = entry && Array.isArray(entry.timeline) ? entry.timeline : [];
+  const change = entry && entry.price_change ? entry.price_change : null;
+  const since = change && typeof change.since === "string" ? change.since : "";
+  const matched = Boolean(since && buckets.some((bucket) => (
+    bucket && bucket.start && bucket.due && since >= bucket.start && since <= bucket.due
+  )));
+  let latestCharged = -1;
+  if (!matched && change) {
+    for (let index = buckets.length - 1; index >= 0; index -= 1) {
+      if (buckets[index] && buckets[index].state === "charged") {
+        latestCharged = index;
+        break;
+      }
+    }
+  }
+  return buckets.map((bucket, index) => {
+    const state = bucket && typeof bucket.state === "string" ? bucket.state : "";
+    const kind = state === "charged" ? "charged"
+      : state === "missed" ? "missed"
+        : "faint";
+    const start = bucket && bucket.start ? bucket.start : "";
+    const due = bucket && bucket.due ? bucket.due : "";
+    const startLabel = typeof bankSubscriptionShortDate === "function"
+      ? bankSubscriptionShortDate(start) : start;
+    const dueLabel = typeof bankSubscriptionShortDate === "function"
+      ? bankSubscriptionShortDate(due) : due;
+    const range = startLabel && dueLabel ? `${startLabel}–${dueLabel}` : (startLabel || dueLabel || "");
+    const amber = bankSubscriptionTimelineAmber(bucket, change, index === latestCharged);
+    return {
+      state,
+      kind,
+      amber,
+      start,
+      due,
+      title: [state || "bucket", range].filter(Boolean).join(" "),
+    };
+  });
+}
+
+function bankSubscriptionFindingFallback(code) {
+  const key = String(code || "");
+  if (BANK_SUBSCRIPTION_FINDING_FALLBACKS[key]) return BANK_SUBSCRIPTION_FINDING_FALLBACKS[key];
+  return key ? "bob bank check reported a finding for this record." : "";
+}
+
+function bankSubscriptionFindingSentence(report, path) {
+  const want = bankSubscriptionNotePath(path);
+  const findings = report && Array.isArray(report.findings) ? report.findings : [];
+  const hit = findings.find((finding) => (
+    finding && bankSubscriptionNotePath(finding.path) === want && finding.message
+  ));
+  if (hit && hit.message) return String(hit.message);
+  const entry = bankSubscriptionEntryByPath(report, path);
+  const codes = entry && Array.isArray(entry.findings) ? entry.findings : [];
+  return bankSubscriptionFindingFallback(codes[0]);
+}
+
+function bankSubscriptionHeaderModel(report, path) {
+  if (!report) return { kind: "loading" };
+  if (report.teaching_empty === true) return { kind: "teaching-empty" };
+  if (report.command && report.command !== "subscriptions") return { kind: "invalid" };
+  const entry = bankSubscriptionEntryByPath(report, path);
+  if (!entry) return { kind: "missing" };
+  const facts = [];
+  const amount = bankSubscriptionAmountPhrase(entry.amount_cents, entry.cadence);
+  if (amount) facts.push(amount);
+  const yearly = bankSubscriptionYearlyFromMonthly(entry.monthly_cents);
+  if (yearly) facts.push(yearly);
+  const lastIso = entry.charges && entry.charges.latest && entry.charges.latest.date;
+  const last = typeof bankSubscriptionShortDate === "function"
+    ? bankSubscriptionShortDate(lastIso) : null;
+  if (last) facts.push(`last ${last}`);
+  const next = typeof bankSubscriptionShortDate === "function"
+    ? bankSubscriptionShortDate(entry.next_expected) : null;
+  if (next) facts.push(`next ≈ ${next}`);
+  return {
+    kind: "header",
+    path: entry.path,
+    title: entry.title || "",
+    facts,
+    factsText: facts.join(" · "),
+    timeline: bankSubscriptionTimelineDots(entry),
+    finding: bankSubscriptionFindingSentence(report, path),
+  };
+}
+
+function bankSubscriptionStatusLabel(key, report) {
+  for (const entry of bankSubscriptionEntries(report)) {
+    if (entry && entry.status === key && entry.status_label) return entry.status_label;
+  }
+  return BANK_SUBSCRIPTION_STATUS_LABELS[key] || key;
+}
+
+function bankSubscriptionAlbumCardModel(report) {
+  if (!report) return { kind: "loading" };
+  if (report.teaching_empty === true) {
+    return {
+      kind: "teaching-empty",
+      command: "subscriptions",
+      teach: "Create a subscriptions album with bob albums create, then capture records as Name @subscriptions/.",
+      commandHint: "bob albums create",
+    };
+  }
+  if (report.command && report.command !== "subscriptions") {
+    return { kind: "invalid", message: "bob bank subscriptions did not return this album." };
+  }
+  const totals = report.totals && typeof report.totals === "object" ? report.totals : {};
+  const byStatus = totals.by_status && typeof totals.by_status === "object" ? totals.by_status : {};
+  const statuses = BANK_SUBSCRIPTION_STATUS_ORDER.map((key) => {
+    const item = byStatus[key] && typeof byStatus[key] === "object" ? byStatus[key] : {};
+    return {
+      key,
+      count: Number.isInteger(item.count) ? item.count : 0,
+      monthly_cents: Number.isSafeInteger(item.monthly_cents) ? item.monthly_cents : 0,
+      label: bankSubscriptionStatusLabel(key, report),
+    };
+  }).filter((item) => item.count > 0);
+  const ranked = bankSubscriptionEntries(report)
+    .filter((entry) => (
+      entry
+      && entry.status !== "cancelled"
+      && Number.isSafeInteger(entry.monthly_cents)
+      && entry.monthly_cents > 0
+    ))
+    .slice()
+    .sort((left, right) => (
+      right.monthly_cents - left.monthly_cents
+      || String(left.title || "").localeCompare(String(right.title || ""))
+    ))
+    .slice(0, 5);
+  const max = ranked[0] ? ranked[0].monthly_cents : 0;
+  const bars = ranked.map((entry) => ({
+    title: entry.title || entry.stem || "",
+    path: entry.path || "",
+    monthly_cents: entry.monthly_cents,
+    amount: typeof bankSubscriptionMoney === "function"
+      ? bankSubscriptionMoney(entry.monthly_cents) : "",
+    share: max > 0 ? entry.monthly_cents / max : 0,
+  }));
+  const findingsCount = Array.isArray(report.findings) ? report.findings.length : 0;
+  return {
+    kind: "card",
+    monthly: typeof bankSubscriptionMoney === "function"
+      ? bankSubscriptionMoney(totals.monthly_cents) : "",
+    yearly: typeof bankSubscriptionMoney === "function"
+      ? bankSubscriptionMoney(totals.yearly_cents) : "",
+    monthly_cents: Number.isSafeInteger(totals.monthly_cents) ? totals.monthly_cents : 0,
+    yearly_cents: Number.isSafeInteger(totals.yearly_cents) ? totals.yearly_cents : 0,
+    estimateNote: "an estimate of commitments, not bank spend",
+    statuses,
+    bars,
+    findingsCount,
+    hiddenCancelled: Number.isInteger(report.hidden_cancelled) ? report.hidden_cancelled : 0,
+  };
+}
+
+function bankSubscriptionCategoryMap(report) {
+  const map = new Map();
+  for (const entry of bankSubscriptionEntries(report)) {
+    const category = entry && entry.category;
+    if (!category || typeof category !== "object" || !category.key) continue;
+    const key = String(category.key).toLowerCase();
+    if (map.has(key)) continue;
+    map.set(key, {
+      key: category.key,
+      emoji: category.emoji || "",
+      label: category.label || category.key,
+    });
+  }
+  return map;
+}
+
+function bankSubscriptionPrettyHeading(label, report) {
+  const raw = typeof albumRecordsNormalizeLabel === "function"
+    ? albumRecordsNormalizeLabel(label) : String(label || "").trim();
+  if (!raw) return null;
+  const hit = bankSubscriptionCategoryMap(report).get(raw.toLowerCase());
+  if (!hit) return null;
+  const pretty = [hit.emoji, hit.label].filter(Boolean).join(" ").trim();
+  if (!pretty) return null;
+  return { original: raw, pretty, emoji: hit.emoji, label: hit.label };
+}
+
+function bankSubscriptionParseAmountCents(text) {
+  const raw = String(text || "").trim();
+  const match = /^(?:\$)?(\d+)(?:\.(\d{1,2}))?$/.exec(raw);
+  if (!match) return null;
+  const dollars = Number(match[1]);
+  const fraction = match[2] ? match[2].padEnd(2, "0") : "00";
+  const cents = dollars * 100 + Number(fraction);
+  return Number.isSafeInteger(cents) ? cents : null;
+}
+
+function bankSubscriptionPrettyFacets(facetText) {
+  const raw = typeof albumRecordsNormalizeLabel === "function"
+    ? albumRecordsNormalizeLabel(facetText) : String(facetText || "").trim();
+  const trimmed = raw.replace(/^—\s*/, "");
+  if (!trimmed) return null;
+  const parts = trimmed.split(/\s+·\s+/);
+  let amountIndex = -1;
+  let cadenceIndex = -1;
+  let cadenceKey = "";
+  let cents = null;
+  for (let index = 0; index < parts.length; index += 1) {
+    if (amountIndex < 0) {
+      const parsed = bankSubscriptionParseAmountCents(parts[index]);
+      if (parsed != null) {
+        amountIndex = index;
+        cents = parsed;
+      }
+    }
+    const key = BANK_SUBSCRIPTION_CADENCE_KEYS[parts[index]];
+    if (key) {
+      cadenceIndex = index;
+      cadenceKey = key;
+    }
+  }
+  if (amountIndex < 0 || cadenceIndex < 0 || cents == null) return null;
+  const pretty = bankSubscriptionAmountPhrase(cents, cadenceKey);
+  if (!pretty) return null;
+  const rest = parts.filter((_, index) => index !== amountIndex && index !== cadenceIndex);
+  return { pretty, rest, cents, cadence: cadenceKey };
+}
+
+function bankSubscriptionIndexRowModel(entry, facetText) {
+  const facets = bankSubscriptionPrettyFacets(facetText);
+  const next = entry && typeof bankSubscriptionShortDate === "function"
+    ? bankSubscriptionShortDate(entry.next_expected) : null;
+  return {
+    amountText: facets ? facets.pretty : "",
+    rest: facets && Array.isArray(facets.rest) ? facets.rest : [],
+    nextText: next ? `next ≈ ${next}` : "",
+    nextDate: entry && entry.next_expected ? entry.next_expected : "",
+  };
+}
+
+function bankSubscriptionHeaderSignature(model) {
+  if (!model || model.kind !== "header") return model && model.kind ? model.kind : "";
+  try {
+    return JSON.stringify({
+      facts: model.factsText,
+      finding: model.finding || "",
+      timeline: (model.timeline || []).map((dot) => [dot.state, dot.amber]),
+    });
+  } catch (_) {
+    return model.factsText || "";
+  }
+}
+// ---- src/241hf-plugin-bank-subscriptions-surfaces-dom.js ----
+// Presentation-only subscription chrome. Painting never mutates note
+// bytes; cleanup restores wrapped native index text.
+
+const SUBSCRIPTION_HEADER_CLASS = "bob-subscription-header";
+const SUBSCRIPTION_TIMELINE_CLASS = "bob-subscription-timeline";
+const SUBSCRIPTION_FINDING_CLASS = "bob-subscription-finding";
+const RECORDS_PRETTY_CLASS = "bob-records-pretty";
+const RECORDS_NEXT_CLASS = "bob-records-next";
+const RECORDS_NATIVE_CLASS = "bob-records-native";
+
+function bankSubscriptionCreateEl(doc, tag, className, text) {
+  const node = typeof notebookCreateEl === "function"
+    ? notebookCreateEl(doc, tag, className)
+    : (doc && typeof doc.createElement === "function" ? doc.createElement(tag) : null);
+  if (!node) return null;
+  if (className && typeof node.setAttribute === "function" && !node.getAttribute("class")) {
+    node.setAttribute("class", className);
+  }
+  if (text !== undefined && typeof notebookSetText === "function") notebookSetText(node, text);
+  else if (text !== undefined) node.textContent = String(text);
+  return node;
+}
+
+function bankSubscriptionAppend(parent, tag, className, text) {
+  const doc = typeof notebookDomDoc === "function" ? notebookDomDoc(parent) : (parent && parent.ownerDocument);
+  const node = bankSubscriptionCreateEl(doc, tag, className, text);
+  if (node && parent && typeof parent.appendChild === "function") parent.appendChild(node);
+  return node;
+}
+
+function bankSubscriptionPaintTimeline(parent, dots) {
+  const list = bankSubscriptionAppend(parent, "ol", SUBSCRIPTION_TIMELINE_CLASS);
+  if (!list) return null;
+  list.setAttribute("aria-label", "Charge timeline");
+  for (const dot of Array.isArray(dots) ? dots : []) {
+    const item = bankSubscriptionAppend(list, "li", `bob-subscription-dot bob-subscription-dot-${dot.kind}`);
+    if (!item) continue;
+    item.setAttribute("title", dot.title || dot.state || "");
+    item.setAttribute("aria-label", dot.title || dot.state || "timeline bucket");
+    if (dot.amber) item.setAttribute("data-amber", "true");
+  }
+  return list;
+}
+
+function bankSubscriptionPaintHeader(parent, model, options = {}) {
+  if (!parent || !model || model.kind !== "header") return null;
+  const header = bankSubscriptionAppend(parent, "section", SUBSCRIPTION_HEADER_CLASS);
+  if (!header) return null;
+  header.setAttribute("role", "region");
+  header.setAttribute("aria-label", model.title ? `${model.title} subscription ledger` : "Subscription ledger");
+  if (options.hue) header.setAttribute("data-root-hue", options.hue);
+  if (options.sourcePath) header.setAttribute("data-subscription-source", options.sourcePath);
+  if (model.factsText) {
+    bankSubscriptionAppend(header, "div", "bob-subscription-header-facts", model.factsText);
+  }
+  if (model.timeline && model.timeline.length) bankSubscriptionPaintTimeline(header, model.timeline);
+  if (model.finding) {
+    const finding = bankSubscriptionAppend(header, "p", SUBSCRIPTION_FINDING_CLASS, model.finding);
+    if (finding) finding.setAttribute("role", "status");
+  }
+  return header;
+}
+
+function bankSubscriptionPaintTeaching(parent) {
+  const empty = typeof bankCardAppend === "function"
+    ? bankCardAppend(parent, "div", { class: "bob-bank-teaching" })
+    : bankSubscriptionAppend(parent, "div", "bob-bank-teaching");
+  if (!empty) return null;
+  if (typeof bankCardAppend === "function") {
+    bankCardAppend(empty, "h2", {}, "Start with a subscriptions album");
+    bankCardAppend(empty, "p", {}, "Create a subscriptions album with bob albums create, then capture records as Name @subscriptions/.");
+    bankCardAppend(empty, "code", {}, "bob albums create");
+  } else {
+    bankSubscriptionAppend(empty, "h2", "", "Start with a subscriptions album");
+    bankSubscriptionAppend(empty, "p", "", "Create a subscriptions album with bob albums create, then capture records as Name @subscriptions/.");
+    bankSubscriptionAppend(empty, "code", "", "bob albums create");
+  }
+  return empty;
+}
+
+function bankSubscriptionPaintCard(parent, model) {
+  if (!parent || !model) return null;
+  if (model.kind === "teaching-empty") return bankSubscriptionPaintTeaching(parent);
+  if (model.kind === "invalid") {
+    if (typeof bankCardAppend === "function") {
+      bankCardAppend(parent, "p", { class: "bob-bank-card-error", role: "alert" }, model.message);
+    } else {
+      bankSubscriptionAppend(parent, "p", "bob-bank-card-error", model.message);
+    }
+    return parent;
+  }
+  if (model.kind !== "card") return null;
+  const header = typeof bankCardAppend === "function"
+    ? bankCardAppend(parent, "header", { class: "bob-bank-card-header" })
+    : bankSubscriptionAppend(parent, "header", "bob-bank-card-header");
+  if (header) {
+    if (typeof bankCardAppend === "function") bankCardAppend(header, "h2", {}, "Subscriptions");
+    else bankSubscriptionAppend(header, "h2", "", "Subscriptions");
+  }
+  const summary = bankSubscriptionAppend(parent, "div", "bob-subscription-card-summary");
+  if (summary) {
+    const monthly = model.monthly ? `≈ ${model.monthly} a month` : "≈ — a month";
+    const yearly = model.yearly ? `≈ ${model.yearly} a year` : "≈ — a year";
+    bankSubscriptionAppend(summary, "div", "bob-subscription-card-totals", `${monthly} · ${yearly}`);
+    const note = bankSubscriptionAppend(summary, "p", "bob-subscription-card-note", model.estimateNote);
+    if (note) note.setAttribute("aria-label", "an estimate of commitments, not bank spend");
+  }
+  if (model.statuses && model.statuses.length) {
+    const counts = bankSubscriptionAppend(parent, "div", "bob-subscription-card-statuses");
+    for (const status of model.statuses) {
+      const chip = bankSubscriptionAppend(counts, "span", `bob-subscription-status bob-subscription-status-${status.key}`);
+      if (chip) {
+        chip.textContent = `${status.label} · ${status.count}`;
+      }
+    }
+  }
+  if (model.bars && model.bars.length) {
+    const chart = bankSubscriptionAppend(parent, "div", "bob-subscription-card-bars");
+    if (chart) chart.setAttribute("aria-label", "Top subscriptions by monthly equivalent");
+    for (const bar of model.bars) {
+      const row = bankSubscriptionAppend(chart, "div", "bob-subscription-bar");
+      if (!row) continue;
+      bankSubscriptionAppend(row, "span", "bob-subscription-bar-label", bar.title);
+      const track = bankSubscriptionAppend(row, "span", "bob-subscription-bar-track");
+      const fill = bankSubscriptionAppend(track, "span", "bob-subscription-bar-fill");
+      if (fill && fill.style) fill.style.width = `${Math.max(0, Math.min(1, bar.share || 0)) * 100}%`;
+      bankSubscriptionAppend(row, "span", "bob-subscription-bar-amount", bar.amount || "");
+    }
+  }
+  const findings = model.findingsCount === 1
+    ? "1 finding — bob bank check"
+    : model.findingsCount > 1
+      ? `${model.findingsCount} findings — bob bank check`
+      : "no findings";
+  bankSubscriptionAppend(parent, "p", "bob-subscription-card-findings", findings);
+  return parent;
+}
+
+function albumRecordsIsChromeNode(node) {
+  if (typeof albumRecordsChromeNode === "function" && albumRecordsChromeNode(node)) return true;
+  return notebookDomHasClass(node, RECORDS_PRETTY_CLASS)
+    || notebookDomHasClass(node, RECORDS_NEXT_CLASS)
+    || notebookDomHasClass(node, SUBSCRIPTION_HEADER_CLASS);
+}
+
+function albumRecordsWrapNativeNodes(li, nodes) {
+  if (!li || !nodes || !nodes.length) return null;
+  const existing = Array.from(li.childNodes || []).find((node) => notebookDomHasClass(node, RECORDS_NATIVE_CLASS));
+  if (existing) return existing;
+  const doc = typeof notebookDomDoc === "function" ? notebookDomDoc(li) : li.ownerDocument;
+  const wrap = bankSubscriptionCreateEl(doc, "span", RECORDS_NATIVE_CLASS);
+  if (!wrap) return null;
+  const first = nodes[0];
+  if (first && first.parentNode && typeof first.parentNode.insertBefore === "function") {
+    first.parentNode.insertBefore(wrap, first);
+  } else if (typeof li.insertBefore === "function") {
+    li.insertBefore(wrap, li.firstChild || null);
+  } else {
+    li.appendChild(wrap);
+  }
+  for (const node of nodes) {
+    if (node && node.parentNode === wrap) continue;
+    wrap.appendChild(node);
+  }
+  return wrap;
+}
+
+function albumRecordsUnwrapNative(li) {
+  const wrap = Array.from(li.childNodes || li.children || []).find((node) => (
+    notebookDomHasClass(node, RECORDS_NATIVE_CLASS)
+  ));
+  if (!wrap || !wrap.parentNode) return;
+  const parent = wrap.parentNode;
+  const children = Array.from(wrap.childNodes || []);
+  for (const child of children) parent.insertBefore(child, wrap);
+  if (typeof wrap.remove === "function") wrap.remove();
+  else parent.removeChild(wrap);
+}
+
+function albumPaintSubscriptionHeading(li, heading, report) {
+  const pretty = bankSubscriptionPrettyHeading(heading && heading.label, report);
+  if (!pretty) {
+    albumRecordsUnwrapNative(li);
+    notebookRemovePainted(li, RECORDS_PRETTY_CLASS);
+    if (typeof albumSetAttr === "function") albumSetAttr(li, "data-bob-records-pretty", null);
+    return;
+  }
+  const own = (typeof notebookLiOwnNodes === "function" ? notebookLiOwnNodes(li) : Array.from(li.childNodes || []))
+    .filter((node) => !albumRecordsIsChromeNode(node) && notebookDomTag(node) !== "UL" && notebookDomTag(node) !== "OL");
+  albumRecordsWrapNativeNodes(li, own);
+  if (typeof albumSetAttr === "function") albumSetAttr(li, "data-bob-records-pretty", "true");
+  const key = JSON.stringify({ pretty: pretty.pretty, count: heading.count });
+  albumRecordsPlaceChrome(li, RECORDS_PRETTY_CLASS, key, (host) => {
+    notebookSetText(host, `${pretty.pretty} · ${heading.count}`);
+    host.setAttribute("aria-label", `${pretty.pretty}, ${heading.count} records`);
+  }, true);
+}
+
+function albumRecordsFacetText(li) {
+  const wrap = Array.from(li.childNodes || []).find((node) => notebookDomHasClass(node, RECORDS_NATIVE_CLASS));
+  let text = "";
+  const walk = (node) => {
+    if (!node || albumRecordsIsChromeNode(node)) return;
+    if (notebookDomTag(node) === "A") return;
+    if (node.nodeType === 3) {
+      text += typeof node.nodeValue === "string" ? node.nodeValue : String(node.textContent || "");
+      return;
+    }
+    const tag = notebookDomTag(node);
+    if (tag === "UL" || tag === "OL") return;
+    for (const child of node.childNodes || []) walk(child);
+  };
+  if (wrap) {
+    for (const child of wrap.childNodes || []) walk(child);
+  } else {
+    for (const child of (typeof notebookLiOwnNodes === "function" ? notebookLiOwnNodes(li) : [])) {
+      if (notebookDomTag(child) === "A") continue;
+      walk(child);
+    }
+  }
+  return typeof albumRecordsNormalizeLabel === "function"
+    ? albumRecordsNormalizeLabel(text) : text.trim();
+}
+
+function albumPaintSubscriptionRow(li, link, report, options) {
+  const path = typeof notebookLinkHref === "function" ? notebookLinkHref(link) : (link && link.getAttribute && link.getAttribute("href"));
+  const file = typeof albumRecordFile === "function"
+    ? albumRecordFile(path, options && options.sourcePath, options && options.metadataCache, options && options.vault)
+    : null;
+  const recordPath = (file && file.path) || (typeof path === "string" && path.endsWith(".md") ? path : (path ? `${path}.md` : ""));
+  const entry = bankSubscriptionEntryByPath(report, recordPath);
+  const own = (typeof notebookLiOwnNodes === "function" ? notebookLiOwnNodes(li) : Array.from(li.childNodes || []))
+    .filter((node) => !albumRecordsIsChromeNode(node) && notebookDomTag(node) !== "A" && notebookDomTag(node) !== "UL" && notebookDomTag(node) !== "OL");
+  if (own.length) albumRecordsWrapNativeNodes(li, own);
+  const facets = albumRecordsFacetText(li);
+  const model = bankSubscriptionIndexRowModel(entry, facets);
+  if (model.amountText) {
+    if (typeof albumSetAttr === "function") albumSetAttr(li, "data-bob-records-pretty", "true");
+    albumRecordsPlaceChrome(li, RECORDS_PRETTY_CLASS, model.amountText, (host) => {
+      notebookSetText(host, model.amountText);
+    });
+  } else {
+    notebookRemovePainted(li, RECORDS_PRETTY_CLASS);
+  }
+  if (model.nextText) {
+    albumRecordsPlaceChrome(li, RECORDS_NEXT_CLASS, model.nextText, (host) => {
+      notebookSetText(host, model.nextText);
+      host.setAttribute("title", model.nextDate ? `Next expected ${model.nextDate}` : model.nextText);
+    });
+  } else {
+    notebookRemovePainted(li, RECORDS_NEXT_CLASS);
+  }
+}
+
+function albumPaintSubscriptionRecords(callout, options) {
+  const report = options && options.subscriptionReport;
+  if (!callout || !report || report.teaching_empty === true) return;
+  for (const li of callout.querySelectorAll?.("li") || []) {
+    const heading = typeof albumRecordsParseGroupHeading === "function"
+      ? albumRecordsParseGroupHeading(li) : null;
+    if (heading) {
+      albumPaintSubscriptionHeading(li, heading, report);
+      continue;
+    }
+    const link = typeof notebookLiOwnLink === "function" ? notebookLiOwnLink(li) : null;
+    if (link) albumPaintSubscriptionRow(li, link, report, options);
+  }
+}
+
+function albumCleanSubscriptionRecords(root) {
+  notebookRemovePainted(root, RECORDS_PRETTY_CLASS);
+  notebookRemovePainted(root, RECORDS_NEXT_CLASS);
+  for (const li of root.querySelectorAll?.("li[data-bob-records-pretty], li") || []) {
+    albumRecordsUnwrapNative(li);
+    if (typeof albumSetAttr === "function") albumSetAttr(li, "data-bob-records-pretty", null);
+    else li.removeAttribute?.("data-bob-records-pretty");
+  }
+}
+
+function albumCleanSubscriptionHeader(root) {
+  notebookRemovePainted(root, SUBSCRIPTION_HEADER_CLASS);
+  for (const node of root.querySelectorAll?.(`section.${SUBSCRIPTION_HEADER_CLASS}, .${SUBSCRIPTION_HEADER_CLASS}`) || []) {
+    if (typeof node.remove === "function") node.remove();
+    else node.parentNode && node.parentNode.removeChild(node);
+  }
+}
+// ---- src/241hg-plugin-bank-subscription-header.js ----
+// Record-note subscription header in Reading view and Live Preview.
+// One shared `bob bank subscriptions -a` fetch feeds the strip, the
+// album card, and records-index pretty labels. Nothing writes notes.
+
+let subscriptionHeaderRefreshEffect = null;
+function ensureSubscriptionHeaderRefresh() {
+  if (!subscriptionHeaderRefreshEffect && StateEffect?.define) {
+    subscriptionHeaderRefreshEffect = StateEffect.define();
+  }
+  return subscriptionHeaderRefreshEffect;
+}
+
+class BobLedgerToolsSubscriptionSurfacesMixin {
+  setupSubscriptionSurfaces() {
+    this.subscriptionSurfacesActive = true;
+    this.subscriptionSurfacesReading = new Set();
+    this.subscriptionSurfacesEditors = new Set();
+    this.subscriptionSurfacesReport = null;
+    this.subscriptionSurfacesRefreshTimer = null;
+    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderSubscriptionHeaderInReading(el, ctx), 51);
+    const extension = this.createSubscriptionHeaderExtension();
+    if (extension) this.registerEditorExtension?.(extension);
+    this.ensureSubscriptionSurfacesSubscribe();
+  }
+
+  teardownSubscriptionSurfaces() {
+    this.subscriptionSurfacesActive = false;
+    this.subscriptionSurfacesUnsubscribe?.();
+    this.subscriptionSurfacesUnsubscribe = null;
+    this.albumClearTimeout?.(this.subscriptionSurfacesRefreshTimer);
+    this.subscriptionSurfacesRefreshTimer = null;
+    for (const widget of this.subscriptionSurfacesReading || []) {
+      albumCleanSubscriptionHeader(widget.surface || widget.el);
+    }
+    for (const view of this.subscriptionSurfacesEditors || []) {
+      albumCleanSubscriptionHeader(view.dom);
+    }
+    this.subscriptionSurfacesReading?.clear();
+    this.subscriptionSurfacesEditors?.clear();
+    this.subscriptionSurfacesReport = null;
+  }
+
+  ensureSubscriptionSurfacesSubscribe() {
+    if (!this.subscriptionSurfacesActive) return;
+    if (typeof this.subscriptionSurfacesUnsubscribe === "function") return;
+    if (typeof this.apiBankSubscribe !== "function") return;
+    this.subscriptionSurfacesUnsubscribe = this.apiBankSubscribe(
+      { command: "subscriptions", all: true },
+      (state) => {
+        if (!this.subscriptionSurfacesActive) return;
+        const key = typeof bankCacheKey === "function"
+          ? bankCacheKey(bankBuildArgs({ command: "subscriptions", all: true }))
+          : null;
+        const result = state && state.results && key ? state.results[key] : null;
+        this.subscriptionSurfacesReport = result && result.report ? result.report : null;
+        this.scheduleSubscriptionSurfacesRefresh();
+      },
+    );
+  }
+
+  subscriptionSurfacesHue(path) {
+    try {
+      return typeof notebookHostHueName === "function"
+        ? notebookHostHueName(path, this.app?.metadataCache, this.app?.vault)
+        : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  paintSubscriptionHeaderReading(el, sourcePath) {
+    const root = this.albumHeaderReadingRoot?.(el) || el;
+    if (!root || !sourcePath) return null;
+    albumCleanSubscriptionHeader(root);
+    if (!bankSubscriptionIsRecordPath(sourcePath)) return null;
+    this.ensureSubscriptionSurfacesSubscribe();
+    const model = bankSubscriptionHeaderModel(this.subscriptionSurfacesReport, sourcePath);
+    if (!model || model.kind !== "header") return null;
+    const header = bankSubscriptionPaintHeader(root, model, {
+      hue: this.subscriptionSurfacesHue(sourcePath),
+      sourcePath,
+    });
+    if (!header) return null;
+    const anchor = this.albumHeaderReadingAnchor?.(root) || this.notebookHeaderReadingAnchor?.(root);
+    if (anchor?.parentNode?.insertBefore) {
+      header.remove?.();
+      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+    } else if (root.insertBefore && header.parentNode === root && root.firstChild !== header) {
+      root.insertBefore(header, root.firstChild || null);
+    }
+    return header;
+  }
+
+  renderSubscriptionHeaderInReading(el, ctx) {
+    if (!this.subscriptionSurfacesActive || !el || !ctx?.sourcePath || notebookInsideCode(el)) return;
+    if (el.closest?.(".cm-editor")) return;
+    if (!bankSubscriptionIsRecordPath(ctx.sourcePath)) return;
+    const root = this.albumHeaderReadingRoot?.(el) || el;
+    let widget = Array.from(this.subscriptionSurfacesReading || []).find((item) => (
+      item.el === el || (root && item.surface === root)
+    ));
+    if (!widget) {
+      widget = { el, path: ctx.sourcePath, surface: root };
+      this.subscriptionSurfacesReading.add(widget);
+    } else {
+      if (widget.path !== ctx.sourcePath) albumCleanSubscriptionHeader(widget.surface || widget.el);
+      widget.el = el;
+      widget.path = ctx.sourcePath;
+      widget.surface = root;
+    }
+    this.paintSubscriptionHeaderReading(el, ctx.sourcePath);
+    if (ctx.addChild && typeof MarkdownRenderChild === "function") {
+      const child = new MarkdownRenderChild(el);
+      child.onunload = () => {
+        albumCleanSubscriptionHeader(widget.surface || el);
+        this.subscriptionSurfacesReading?.delete(widget);
+      };
+      try { ctx.addChild(child); } catch (_) {}
+    }
+  }
+
+  subscriptionHeaderLivePath(view) {
+    try {
+      return this.notebookCatalogLivePath?.(view) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  buildSubscriptionHeaderDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
+      const path = this.subscriptionHeaderLivePath(view);
+      if (!path || !bankSubscriptionIsRecordPath(path) || !view?.state?.doc) {
+        return Decoration.none;
+      }
+      this.ensureSubscriptionSurfacesSubscribe();
+      const model = bankSubscriptionHeaderModel(this.subscriptionSurfacesReport, path);
+      if (!model || model.kind !== "header") return Decoration.none;
+      const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
+      const holder = typeof notebookCreateEl === "function"
+        ? notebookCreateEl(doc, "div")
+        : (doc && typeof doc.createElement === "function" ? doc.createElement("div") : null);
+      const header = bankSubscriptionPaintHeader(holder || view.dom, model, {
+        hue: this.subscriptionSurfacesHue(path),
+        sourcePath: path,
+      });
+      if (!header) return Decoration.none;
+      if (header.parentNode && header.parentNode !== holder) header.parentNode.removeChild(header);
+      const text = view.state.doc.toString();
+      const signature = bankSubscriptionHeaderSignature(model);
+      const widget = new class extends WidgetType {
+        constructor() {
+          super();
+          this.path = path;
+          this.signature = signature;
+        }
+        eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
+        toDOM() {
+          header.setAttribute?.("data-cm-widget", "true");
+          return header;
+        }
+      }();
+      const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
+      const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+      let at = 0;
+      let side = 1;
+      if (anchor >= 0) {
+        at = view.state.doc.line(anchor + 1).to;
+      } else if (frontmatterEnd >= 0) {
+        const nextLine = frontmatterEnd + 2;
+        at = nextLine <= (view.state.doc.lines || 0)
+          ? view.state.doc.line(nextLine).from
+          : (view.state.doc.length || 0);
+      }
+      const builder = new RangeSetBuilder();
+      builder.add(at, at, Decoration.widget({ widget, side }));
+      this.subscriptionSurfacesEditors.add(view);
+      return builder.finish();
+    } catch (_) {
+      return Decoration?.none || null;
+    }
+  }
+
+  createSubscriptionHeaderExtension() {
+    try {
+      if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
+      const plugin = this;
+      const refresh = ensureSubscriptionHeaderRefresh();
+      return ViewPlugin.fromClass(class {
+        constructor(view) {
+          this.view = view;
+          this.decorations = plugin.buildSubscriptionHeaderDecorations(view);
+        }
+        update(update) {
+          const notified = (update.transactions || []).some((tx) => (
+            (tx.effects || []).some((effect) => effect.is?.(refresh))
+          ));
+          if (notified || update.docChanged || update.viewportChanged) {
+            this.decorations = plugin.buildSubscriptionHeaderDecorations(update.view);
+          }
+        }
+        destroy() {
+          plugin.subscriptionSurfacesEditors.delete(this.view);
+        }
+      }, { decorations: (value) => value.decorations });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  scheduleSubscriptionSurfacesRefresh() {
+    if (!this.subscriptionSurfacesActive || this.subscriptionSurfacesRefreshTimer != null) return;
+    this.subscriptionSurfacesRefreshTimer = this.albumSetTimeout(() => {
+      this.subscriptionSurfacesRefreshTimer = null;
+      if (!this.subscriptionSurfacesActive) return;
+      for (const widget of this.subscriptionSurfacesReading || []) {
+        this.paintSubscriptionHeaderReading(widget.el, widget.path);
+      }
+      const effect = ensureSubscriptionHeaderRefresh();
+      for (const view of this.subscriptionSurfacesEditors || []) {
+        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
+      }
+      if (typeof this.scheduleAlbumRecordsRefresh === "function") {
+        this.scheduleAlbumRecordsRefresh();
+      }
+    }, 100);
+  }
+}
 // ---- src/241i-plugin-bank-source.js ----
 // Pure bank source recognizer. Syntax only: a canonical month path, a
 // valid day heading, and a top-level checkbox whose amount begins with
@@ -68344,6 +69213,8 @@ const BANK_MONTHS_ABBR = [
 ];
 const BANK_HUB_PATH = /^bank\.md$/i;
 const BANK_MONTH_PATH = /^bank\/(\d{4})-(\d{2})\.md$/i;
+const BANK_SUBSCRIPTION_ALBUM_FILE = /^subscriptions\.md$/i;
+const BANK_SUBSCRIPTION_RECORD_FILE = /^subscriptions\/[^/]+\.md$/i;
 
 function bankNormalizePath(value) {
   const path = typeof value === "string"
@@ -68371,9 +69242,14 @@ function bankIsHubPath(fileOrPath) {
   return BANK_HUB_PATH.test(bankNormalizePath(fileOrPath));
 }
 
+function bankIsSubscriptionPath(fileOrPath) {
+  const path = bankNormalizePath(fileOrPath);
+  return BANK_SUBSCRIPTION_ALBUM_FILE.test(path) || BANK_SUBSCRIPTION_RECORD_FILE.test(path);
+}
+
 function bankRelevantPath(fileOrPath) {
   const path = bankNormalizePath(fileOrPath);
-  return bankIsHubPath(path) || bankMonthFromPath(path) !== null;
+  return bankIsHubPath(path) || bankMonthFromPath(path) !== null || bankIsSubscriptionPath(path);
 }
 
 function bankDiscoverMonthPaths(files) {
@@ -70528,7 +71404,7 @@ function bankCardParseFence(source) {
     if (!raw || raw.startsWith("#")) continue;
     const match = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/.exec(raw);
     if (!match) {
-      errors.push(`Line ${index + 1}: use "view: month" or "view: queue".`);
+      errors.push(`Line ${index + 1}: use "view: month", "view: queue", or "view: subscriptions".`);
       continue;
     }
     const key = match[1].toLowerCase();
@@ -70543,8 +71419,11 @@ function bankCardParseFence(source) {
     values.set(key, match[2].replace(/^(?:"([^"]*)"|'([^']*)')$/, (_, a, b) => a || b));
   }
   const view = values.get("view");
-  if (!view) errors.push("Add " + '"view: month"' + " or " + '"view: queue"' + ".");
-  else if (view !== "month" && view !== "queue") errors.push(`Unknown view "${view}". Use month or queue.`);
+  if (!view) {
+    errors.push("Add " + '"view: month"' + ", " + '"view: queue"' + ", or " + '"view: subscriptions"' + ".");
+  } else if (view !== "month" && view !== "queue" && view !== "subscriptions") {
+    return errors.length ? { ok: false, errors } : { ok: true, view, quiet: true };
+  }
   return errors.length ? { ok: false, errors } : { ok: true, view };
 }
 
@@ -70874,6 +71753,10 @@ class BobLedgerToolsBankCardsMixin {
       }
       return;
     }
+    if (fence.quiet === true) {
+      bankCardClear(el);
+      return;
+    }
     const sourcePath = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : "";
     let month = null;
     if (fence.view === "month") {
@@ -70894,7 +71777,9 @@ class BobLedgerToolsBankCardsMixin {
       month,
       dataKey: bankCacheKey(fence.view === "month"
         ? bankBuildArgs({ command: "report", month })
-        : bankBuildArgs({ command: "list" })),
+        : fence.view === "subscriptions"
+          ? bankBuildArgs({ command: "subscriptions", all: true })
+          : bankBuildArgs({ command: "list" })),
       dataState: null,
       monthState: null,
       monthPaths: [],
@@ -70919,7 +71804,9 @@ class BobLedgerToolsBankCardsMixin {
     }
     const spec = fence.view === "month"
       ? { command: "report", month }
-      : { command: "list" };
+      : fence.view === "subscriptions"
+        ? { command: "subscriptions", all: true }
+        : { command: "list" };
     view.unsubscribe = this.apiBankSubscribe(spec, (state) => {
       if (view.unloaded) return;
       view.dataState = state;
@@ -71020,7 +71907,11 @@ class BobLedgerToolsBankCardsMixin {
     const root = bankCardAppend(view.el, "section", {
       class: `bob-bank-card bob-bank-card-${view.kind}`,
       role: "region",
-      "aria-label": view.kind === "month" ? "Bank month summary" : "Bank rows waiting for acknowledgment",
+      "aria-label": view.kind === "month"
+        ? "Bank month summary"
+        : view.kind === "subscriptions"
+          ? "Subscription commitments"
+          : "Bank rows waiting for acknowledgment",
     });
     if (!root) return;
     const hue = this.bankCardRootHue(view.sourcePath);
@@ -71028,9 +71919,16 @@ class BobLedgerToolsBankCardsMixin {
     const keyResult = this.bankCardCurrentResult(view);
     this.bankCardPaintRefreshState(root, keyResult, view, view.kind === "month"
       ? { command: "report", month: view.month }
-      : { command: "list" });
+      : view.kind === "subscriptions"
+        ? { command: "subscriptions", all: true }
+        : { command: "list" });
     if (!keyResult || !keyResult.report) {
       this.bankCardPaintUnavailable(root, keyResult, view.kind);
+      return;
+    }
+    if (view.kind === "subscriptions") {
+      const model = bankSubscriptionAlbumCardModel(keyResult.report);
+      bankSubscriptionPaintCard(root, model);
       return;
     }
     if (keyResult.report.teaching_empty === true) {
@@ -71158,7 +72056,11 @@ class BobLedgerToolsBankCardsMixin {
       return;
     }
     bankCardAppend(root, "p", { class: "bob-bank-loading", role: "status" },
-      kind === "month" ? "Loading this month's bank report…" : "Loading rows to acknowledge…");
+      kind === "month"
+        ? "Loading this month's bank report…"
+        : kind === "subscriptions"
+          ? "Loading subscription commitments…"
+          : "Loading rows to acknowledge…");
   }
 
   bankCardPaintTeaching(root) {
@@ -85500,7 +86402,9 @@ function albumRecordsGroupIdentity(album, label, index) {
 function albumRecordsChromeNode(node) {
   return notebookDomHasClass(node, "bob-records-fold")
     || notebookDomHasClass(node, "bob-records-ages")
-    || notebookDomHasClass(node, "bob-records-age");
+    || notebookDomHasClass(node, "bob-records-age")
+    || notebookDomHasClass(node, "bob-records-pretty")
+    || notebookDomHasClass(node, "bob-records-next");
 }
 
 function albumRecordsHeadingText(li) {
@@ -85682,9 +86586,13 @@ function albumPaintRecordsCallout(callout, options) {
     const frontmatter = file ? albumRecordCachedFrontmatter(file, options.metadataCache) : {};
     albumPaintRecordAges(row.li, albumRecordsAgeChips(frontmatter, options.today));
   }
+  if (options && options.subscriptionReport && bankSubscriptionIsAlbumSource(options.sourcePath, options.album)) {
+    albumPaintSubscriptionRecords(callout, options);
+  }
 }
 
 function albumCleanRecordsDom(root) {
+  albumCleanSubscriptionRecords(root);
   notebookRemovePainted(root, ALBUM_RECORDS_FOLD);
   notebookRemovePainted(root, ALBUM_RECORDS_AGES);
   for (const callout of albumFindRecordCallouts(root)) {
@@ -85762,16 +86670,21 @@ class BobLedgerToolsAlbumRecordsMixin {
 
   albumRecordsOptions(sourcePath, folds, handlers) {
     const state = this.albumReportState();
+    const album = albumRecordsSourceAlbum(state, sourcePath);
+    if (bankSubscriptionIsAlbumSource(sourcePath, album)) {
+      this.ensureSubscriptionSurfacesSubscribe?.();
+    }
     return {
       sourcePath,
       state,
-      album: albumRecordsSourceAlbum(state, sourcePath),
+      album,
       hue: notebookHostHueName(sourcePath, this.app?.metadataCache, this.app?.vault),
       today: state.today,
       folds,
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
       handlers,
+      subscriptionReport: this.subscriptionSurfacesReport || null,
     };
   }
 
@@ -131216,6 +132129,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAreasCatalogMixin,
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
+  BobLedgerToolsSubscriptionSurfacesMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsAlbumEntryMixin,
   BobLedgerToolsAlbumYamlExcursionMixin,
@@ -134971,6 +135885,42 @@ try {
       bankCategorySubscriptionWritePlan,
       bankSubscriptionContextLine,
       bankSubscriptionPickerStatus,
+    });
+  }
+} catch (_) {}
+// ---- src/367-exports-bank-subscription-surfaces.js ----
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      BANK_SUBSCRIPTION_ALBUM_PATH,
+      BANK_SUBSCRIPTION_RECORD_PATH,
+      BANK_SUBSCRIPTION_STATUS_ORDER,
+      bankSubscriptionNotePath,
+      bankSubscriptionIsAlbumPath,
+      bankSubscriptionIsRecordPath,
+      bankSubscriptionIsAlbumSource,
+      bankSubscriptionEntryByPath,
+      bankSubscriptionAmountPhrase,
+      bankSubscriptionYearlyFromMonthly,
+      bankSubscriptionTimelineDots,
+      bankSubscriptionFindingFallback,
+      bankSubscriptionFindingSentence,
+      bankSubscriptionHeaderModel,
+      bankSubscriptionAlbumCardModel,
+      bankSubscriptionCategoryMap,
+      bankSubscriptionPrettyHeading,
+      bankSubscriptionPrettyFacets,
+      bankSubscriptionIndexRowModel,
+      bankSubscriptionHeaderSignature,
+      bankSubscriptionPaintHeader,
+      bankSubscriptionPaintCard,
+      bankSubscriptionPaintTeaching,
+      albumPaintSubscriptionRecords,
+      albumCleanSubscriptionRecords,
+      albumCleanSubscriptionHeader,
+      bankCardParseFence,
+      bankBuildArgs,
+      bankIsSubscriptionPath,
     });
   }
 } catch (_) {}

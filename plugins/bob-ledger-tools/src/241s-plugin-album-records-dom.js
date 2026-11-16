@@ -105,9 +105,13 @@ function albumPaintRecordsCallout(callout, options) {
     const frontmatter = file ? albumRecordCachedFrontmatter(file, options.metadataCache) : {};
     albumPaintRecordAges(row.li, albumRecordsAgeChips(frontmatter, options.today));
   }
+  if (options && options.subscriptionReport && bankSubscriptionIsAlbumSource(options.sourcePath, options.album)) {
+    albumPaintSubscriptionRecords(callout, options);
+  }
 }
 
 function albumCleanRecordsDom(root) {
+  albumCleanSubscriptionRecords(root);
   notebookRemovePainted(root, ALBUM_RECORDS_FOLD);
   notebookRemovePainted(root, ALBUM_RECORDS_AGES);
   for (const callout of albumFindRecordCallouts(root)) {

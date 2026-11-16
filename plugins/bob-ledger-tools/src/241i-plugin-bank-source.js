@@ -9,6 +9,8 @@ const BANK_MONTHS_ABBR = [
 ];
 const BANK_HUB_PATH = /^bank\.md$/i;
 const BANK_MONTH_PATH = /^bank\/(\d{4})-(\d{2})\.md$/i;
+const BANK_SUBSCRIPTION_ALBUM_FILE = /^subscriptions\.md$/i;
+const BANK_SUBSCRIPTION_RECORD_FILE = /^subscriptions\/[^/]+\.md$/i;
 
 function bankNormalizePath(value) {
   const path = typeof value === "string"
@@ -36,9 +38,14 @@ function bankIsHubPath(fileOrPath) {
   return BANK_HUB_PATH.test(bankNormalizePath(fileOrPath));
 }
 
+function bankIsSubscriptionPath(fileOrPath) {
+  const path = bankNormalizePath(fileOrPath);
+  return BANK_SUBSCRIPTION_ALBUM_FILE.test(path) || BANK_SUBSCRIPTION_RECORD_FILE.test(path);
+}
+
 function bankRelevantPath(fileOrPath) {
   const path = bankNormalizePath(fileOrPath);
-  return bankIsHubPath(path) || bankMonthFromPath(path) !== null;
+  return bankIsHubPath(path) || bankMonthFromPath(path) !== null || bankIsSubscriptionPath(path);
 }
 
 function bankDiscoverMonthPaths(files) {

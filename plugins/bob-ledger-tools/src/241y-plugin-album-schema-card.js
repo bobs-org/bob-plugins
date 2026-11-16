@@ -802,8 +802,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaEditSelected();
       return;
     }
-    if (event.altKey && (event.key === "j" || event.key === "J")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
-    if (event.altKey && (event.key === "k" || event.key === "K")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
+    if (event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
+    if (event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
     if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }

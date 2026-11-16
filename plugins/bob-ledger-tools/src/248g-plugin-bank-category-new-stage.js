@@ -142,7 +142,7 @@
     const target = event.target;
     const inInput = Boolean(target && typeof target.closest === "function"
       && target.closest("input,select,textarea"));
-    if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
+    if (key === "Escape" || key === "Ctrl+[" || (!inInput && (key === "q" || key === "Q"))) {
       bankCategoryUiConsume(event);
       this.closeNewCategoryStage();
       return;

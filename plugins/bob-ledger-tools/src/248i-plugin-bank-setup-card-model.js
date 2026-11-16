@@ -142,7 +142,9 @@ function bankSetupCardSetCategoryOp(entry, draft = {}) {
   const set = {};
   const unset = [];
   const label = typeof draft.label === "string" ? draft.label.trim() : "";
-  if (label && label !== (entry.label || entry.key)) set.label = label;
+  if (label && label !== (entry.label || entry.key)) {
+    set.label = entry.emoji ? `${entry.emoji} ${label}` : label;
+  }
   const group = typeof draft.group === "string" ? draft.group.trim() : "";
   const oldGroup = typeof entry.group === "string" ? entry.group.trim() : "";
   if (group !== oldGroup) {

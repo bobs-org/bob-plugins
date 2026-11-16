@@ -66030,9 +66030,17 @@ function albumSchemaTargetByKey(model, key) {
 }
 
 function albumSchemaChoiceParts(value) {
-  const text = String(value || "");
-  const match = /^(\p{Extended_Pictographic}(?:\uFE0F|\uFE0E|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic}\uFE0F?)*|(?:\p{Regional_Indicator}{2})|[0-9#*]\uFE0F?\u20E3)\s+(.+)$/u.exec(text);
-  return match ? { emoji: match[1], label: match[2] } : { emoji: "", label: text };
+  const text = String(value || "").trim();
+  const first = Array.from(text)[0];
+  if (!first || /^[A-Za-z0-9]$/.test(first)) return { emoji: "", label: text };
+  let end = first.length;
+  for (const character of Array.from(text).slice(1)) {
+    if (/\s/.test(character) || /^[A-Za-z0-9]$/.test(character)) break;
+    end += character.length;
+  }
+  const emoji = text.slice(0, end).trim();
+  const label = text.slice(end).trim();
+  return emoji ? { emoji, label } : { emoji: "", label: text };
 }
 
 function albumSchemaControl(doc, host, labelText, type, name, value, options = {}) {
@@ -81487,7 +81495,7 @@ function bankCategoryIsNewCategoryKey(key) {
     const target = event.target;
     const inInput = Boolean(target && typeof target.closest === "function"
       && target.closest("input,select,textarea"));
-    if (key === "Escape" || key === "q" || key === "Q" || key === "Ctrl+[") {
+    if (key === "Escape" || key === "Ctrl+[" || (!inInput && (key === "q" || key === "Q"))) {
       bankCategoryUiConsume(event);
       this.closeNewCategoryStage();
       return;
@@ -82568,7 +82576,9 @@ function bankSetupCardSetCategoryOp(entry, draft = {}) {
   const set = {};
   const unset = [];
   const label = typeof draft.label === "string" ? draft.label.trim() : "";
-  if (label && label !== (entry.label || entry.key)) set.label = label;
+  if (label && label !== (entry.label || entry.key)) {
+    set.label = entry.emoji ? `${entry.emoji} ${label}` : label;
+  }
   const group = typeof draft.group === "string" ? draft.group.trim() : "";
   const oldGroup = typeof entry.group === "string" ? entry.group.trim() : "";
   if (group !== oldGroup) {
@@ -83916,7 +83926,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
     const consume = () => bankCategoryUiConsume(event);
-    if (key === "Escape" || (!mod && !event.altKey && lower === "q")) {
+    if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
       consume();
       if (this.busy) return;
       if (!this.cancelStage()) this.close();
@@ -84014,8 +84024,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (mod && lower === "d") { consume(); this.beginSelectedGesture("remove"); return; }
     if (mod && lower === "n") { consume(); this.moveSelection("forward"); return; }
     if (mod && lower === "p") { consume(); this.moveSelection("back"); return; }
-    if (event.altKey && lower === "j") { consume(); this.beginSelectedGesture("move", "forward"); return; }
-    if (event.altKey && lower === "k") { consume(); this.beginSelectedGesture("move", "back"); return; }
+    if (event.altKey && (lower === "j" || event.code === "KeyJ")) { consume(); this.beginSelectedGesture("move", "forward"); return; }
+    if (event.altKey && (lower === "k" || event.code === "KeyK")) { consume(); this.beginSelectedGesture("move", "back"); return; }
     if (key === "+" || key === "=" || key === "＋") {
       consume();
       if (this.section === "accounts") this.openNewAccountStage();
@@ -91247,8 +91257,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaEditSelected();
       return;
     }
-    if (event.altKey && (event.key === "j" || event.key === "J")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
-    if (event.altKey && (event.key === "k" || event.key === "K")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
+    if (event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
+    if (event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
     if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }

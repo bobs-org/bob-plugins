@@ -598,7 +598,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
     const consume = () => bankCategoryUiConsume(event);
-    if (key === "Escape" || (!mod && !event.altKey && lower === "q")) {
+    if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
       consume();
       if (this.busy) return;
       if (!this.cancelStage()) this.close();
@@ -696,8 +696,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (mod && lower === "d") { consume(); this.beginSelectedGesture("remove"); return; }
     if (mod && lower === "n") { consume(); this.moveSelection("forward"); return; }
     if (mod && lower === "p") { consume(); this.moveSelection("back"); return; }
-    if (event.altKey && lower === "j") { consume(); this.beginSelectedGesture("move", "forward"); return; }
-    if (event.altKey && lower === "k") { consume(); this.beginSelectedGesture("move", "back"); return; }
+    if (event.altKey && (lower === "j" || event.code === "KeyJ")) { consume(); this.beginSelectedGesture("move", "forward"); return; }
+    if (event.altKey && (lower === "k" || event.code === "KeyK")) { consume(); this.beginSelectedGesture("move", "back"); return; }
     if (key === "+" || key === "=" || key === "＋") {
       consume();
       if (this.section === "accounts") this.openNewAccountStage();

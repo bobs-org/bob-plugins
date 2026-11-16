@@ -34,9 +34,17 @@ function albumSchemaTargetByKey(model, key) {
 }
 
 function albumSchemaChoiceParts(value) {
-  const text = String(value || "");
-  const match = /^(\p{Extended_Pictographic}(?:\uFE0F|\uFE0E|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic}\uFE0F?)*|(?:\p{Regional_Indicator}{2})|[0-9#*]\uFE0F?\u20E3)\s+(.+)$/u.exec(text);
-  return match ? { emoji: match[1], label: match[2] } : { emoji: "", label: text };
+  const text = String(value || "").trim();
+  const first = Array.from(text)[0];
+  if (!first || /^[A-Za-z0-9]$/.test(first)) return { emoji: "", label: text };
+  let end = first.length;
+  for (const character of Array.from(text).slice(1)) {
+    if (/\s/.test(character) || /^[A-Za-z0-9]$/.test(character)) break;
+    end += character.length;
+  }
+  const emoji = text.slice(0, end).trim();
+  const label = text.slice(end).trim();
+  return emoji ? { emoji, label } : { emoji: "", label: text };
 }
 
 function albumSchemaControl(doc, host, labelText, type, name, value, options = {}) {

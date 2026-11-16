@@ -153,7 +153,7 @@ function windowPrefixReadRect(group) {
   }
 }
 
-function windowPrefixLeafLabel(leaf) {
+function windowPrefixLiveLeafLabel(leaf) {
   try {
     if (typeof leaf?.getDisplayText === "function") {
       const text = leaf.getDisplayText();
@@ -462,7 +462,7 @@ class BobNavigationHotkeysWindowLayoutMixin {
         this.windowPrefixLeafById.set(id, leaf);
         let pinned = false;
         try { pinned = leaf.pinned === true; } catch (_error) { /* best effort */ }
-        return { id, label: windowPrefixLeafLabel(leaf), pinned };
+        return { id, label: windowPrefixLiveLeafLabel(leaf), pinned };
       });
       const selected = windowPrefixSelectedLeaf(workspace, group, groupLeaves);
       let mostRecent = null;

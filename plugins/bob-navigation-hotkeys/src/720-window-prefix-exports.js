@@ -11,6 +11,7 @@ try {
       normalizeWindowPrefixKeydown,
       getWindowPrefixArmingVerdict,
       buildWindowPrefixViewModel,
+      createWindowHintHost,
     });
   }
 } catch (_error) {

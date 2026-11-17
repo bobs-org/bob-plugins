@@ -21,7 +21,9 @@ function isDoneArchivePath(path) {
 const obsidian = require("obsidian");
 const { MarkdownView, Modal, Notice, Plugin, parseYaml } = obsidian;
 const Scope = obsidian.Scope;
-const Platform = obsidian.Platform;
+// No module-level `Platform` const: fragments read the ambient global
+// through guarded lookups, so tests can simulate mobile/macOS via
+// `globalThis.Platform` and Obsidian's own global keeps working.
 const setIcon = typeof obsidian.setIcon === "function" ? obsidian.setIcon : undefined;
 const { EditorView, Decoration } = require("@codemirror/view");
 let codeMirrorState = {};

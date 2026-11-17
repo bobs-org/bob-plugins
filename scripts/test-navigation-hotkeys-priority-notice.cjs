@@ -365,7 +365,14 @@ test("priority notice stylesheet scopes Obsidian notice overrides and uses theme
   const marker = "/* --- Priority notice";
   const priorityNoticeStart = styles.indexOf(marker);
   assert.notEqual(priorityNoticeStart, -1);
-  const priorityNoticeStyles = styles.slice(priorityNoticeStart);
+  // Later sections (lane-walk notice, highlights hints, bracket-mode
+  // indicator) carry their own hex fallbacks, so the guard covers only the
+  // priority-notice section: up to the next section marker.
+  const nextSectionStart = styles.indexOf("/* --- ", priorityNoticeStart + marker.length);
+  const priorityNoticeStyles = styles.slice(
+    priorityNoticeStart,
+    nextSectionStart === -1 ? undefined : nextSectionStart,
+  );
 
   // The lane-walk card reuses the shared ledger-tools chip fallbacks
   // (`#d9822b` pending, `#3f8f5f` next) inside theme `var()` chains; every

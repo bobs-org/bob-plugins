@@ -148,6 +148,7 @@
   "241nb-plugin-bank-badge-hosts.js",
   "241ha-plugin-bank-charts-decode.js",
   "241nc-plugin-bank-period-model.js",
+  "241nca-plugin-bank-period-balance.js",
   "241nd-plugin-bank-period-paint.js",
   "241ne-plugin-bank-period-hosts.js",
   "241o-plugin-bank-marks-model.js",

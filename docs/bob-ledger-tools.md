@@ -82,28 +82,29 @@ On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `cla
 ## Bank Period Charts
 
 The read-only Bank Period Charts panel is the third child of a period
-`bob-stats-strip` fence, after strip host and badge host, on week, quarter,
-ISO-year, and all-time notes. It never mounts for Day strips, `bob-day-stats`,
-`bob-period-parts`, embeds, hover popovers, mobile, or future periods. The
-panel runs its own `bank report -p <id> -s -c` fetch on a separate cache entry,
-so an older bob or bad `charts` payload hides only the panel (with one
-`console.warn` per session) and never the badge. Bank file events and existing
-focus and visibility revalidation refresh it; period-stats repaints never touch
-it, and its repaint clears only its host.
+`bob-stats-strip` fence on week, quarter, ISO-year, and all-time notes. It
+never mounts for Day strips, `bob-day-stats`, `bob-period-parts`, embeds,
+hover popovers, mobile, or future periods. The panel runs its own
+`bank report -p <id> -s -c` fetch on a separate cache entry, so an older bob
+or bad `charts` payload hides only the panel (with one `console.warn` per
+session) and never the badge. Bank file events and revalidation refresh it;
+its repaint clears only its host.
 
 The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
-Both → In / Out → Categories (shown only when both charts are available),
-and a readout naming the hovered or focused bucket. Per-device view and
-collapse persist under the `bob-ledger-tools-bank-period-view` localStorage
-key (`{"view": "both"|"cashflow"|"categories", "collapsed": false}`;
-invalid values fall back to defaults) and repaint only period hosts. The
-cashflow axis is one roving tab stop: Arrow Left/Right and Home/End move
-focus, hover and focus dim siblings and fill the readout, Escape clears it,
-and Enter, Space, or click activates — Ctrl/Cmd-click and middle-click open
-a new leaf. Each chart ships a hidden table twin, so no value hides behind
-hover. Activation is read-only: day buckets open the month note at the day
-heading and period buckets open the child note, with a Notice when the note is
-missing; notes are never created and vault bytes never written. `stats.bank_period` (default on) gates every period host,
+Both → In / Out → Categories (when both charts are available),
+a readout naming the hovered or focused bucket, and a resting `BALANCE`
+readout with the hero close: a bare amount at close, an as-of date while
+coverage arrives, or a muted `not imported yet` / `not imported` /
+`unverified` word. It yields to the hover readout; quiet weeks render
+header-only. View and collapse
+persist per device under the `bob-ledger-tools-bank-period-view` key. The
+cashflow axis and the balance are roving tab stops: arrows move focus, hover
+and focus dim siblings and fill the readout, Escape clears it, and Enter,
+Space, or click activates. Each chart ships a hidden table twin. Activation
+is read-only and never creates a note: buckets open the day heading or the
+child note, and the balance opens the as-of day (inert with no month note).
+Exact cents; only a negative balance takes warning ink.
+`stats.bank_period` (default on) gates every period host,
 independently of `stats.bank_badge`.
 
 ## Snippets and the plan block

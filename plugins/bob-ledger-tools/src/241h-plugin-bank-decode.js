@@ -666,6 +666,10 @@ function bankDecodeReport(stdout, stderr) {
     }
     report.charts = charts.value;
   }
+  if (Object.prototype.hasOwnProperty.call(body, "balances")) {
+    const balances = bankNormalizeBalances(body.balances);
+    if (balances.present) report.balances = balances.value;
+  }
   return { ok: true, report };
 }
 

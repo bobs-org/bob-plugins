@@ -173,6 +173,9 @@ class BobLedgerToolsBankPeriodHostsMixin {
       openWaiting: (target, newLeaf) => {
         if (!panel.unloaded) void this.bankBadgeNavigate(target, newLeaf);
       },
+      openBalance: (target, newLeaf) => {
+        if (!panel.unloaded) void this.bankBadgeNavigate(target, newLeaf);
+      },
       setView: (view) => {
         if (!panel.unloaded) this.bankPeriodSetView(view);
       },

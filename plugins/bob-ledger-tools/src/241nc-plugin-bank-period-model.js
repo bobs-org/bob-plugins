@@ -96,6 +96,25 @@ function bankPeriodUnavailable(reason, hint) {
   return model;
 }
 
+function bankPeriodBalanceOnly(reason, balance, ctx) {
+  const model = {
+    state: "balance",
+    reason,
+    hint: "",
+    stale: ctx.stale === true,
+    header: { label: "BANK", static: true },
+    balance,
+    cashflow: null,
+    categories: null,
+    notCounted: null,
+    waitingLine: null,
+    ariaLabel: (balance && balance.aria) || "Bank closing balance",
+    tables: null,
+  };
+  model.digest = bankPeriodDigest(model);
+  return model;
+}
+
 function bankPeriodDigest(model) {
   try {
     const source = JSON.stringify({
@@ -116,6 +135,7 @@ function bankPeriodDigest(model) {
       waitingLine: model.waitingLine,
       ariaLabel: model.ariaLabel,
       tables: model.tables,
+      balance: model.balance || undefined,
     });
     let hash = 2166136261;
     for (let index = 0; index < source.length; index += 1) {
@@ -529,15 +549,23 @@ function bankPeriodChartsModel(report, context = {}) {
   const inCents = report.totals.in_cents;
   const outCents = report.totals.out_cents;
   const waiting = report.waiting.period;
-  if (inCents === 0 && outCents === 0 && waiting === 0) return bankPeriodHidden("empty");
+  const balance = bankPeriodBalanceModel(report, ctx);
+  if (inCents === 0 && outCents === 0 && waiting === 0) {
+    if (balance) return bankPeriodBalanceOnly("empty", balance, ctx);
+    return bankPeriodHidden("empty");
+  }
   if (inCents === 0 && outCents === 0 && waiting > 0) {
-    if (ctx.badgeEnabled === true) return bankPeriodHidden("waiting-badge");
+    if (ctx.badgeEnabled === true) {
+      if (balance) return bankPeriodBalanceOnly("waiting-badge", balance, ctx);
+      return bankPeriodHidden("waiting-badge");
+    }
     const waitingModel = {
       state: "waiting",
       reason: "waiting",
       hint: "",
       stale: ctx.stale === true,
       waitingLine: bankPeriodWaitingLine(report, ctx),
+      balance,
       ariaLabel: `${report.period.label || report.period.key || "This period"}, ${waiting} waiting`,
     };
     waitingModel.digest = bankPeriodDigest(waitingModel);
@@ -582,6 +610,7 @@ function bankPeriodChartsModel(report, context = {}) {
     categories,
     notCounted: bankPeriodNotCounted(report, ctx),
     waitingLine: null,
+    balance,
     ariaLabel: bankPeriodAriaLabel(report, ctx, cashflow, categories),
     tables: bankPeriodTables(cashflow, categories),
   };

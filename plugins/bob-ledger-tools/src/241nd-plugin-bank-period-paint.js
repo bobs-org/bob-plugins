@@ -95,6 +95,23 @@ function bankPeriodRenderHeader(doc, model, handlers, readoutRef) {
     wrap.appendChild(readout);
     if (readoutRef) readoutRef.node = readout;
   }
+  if (model.balance) {
+    const balance = bankPeriodBuildBalance(doc, model.balance, handlers);
+    if (balance) wrap.appendChild(balance);
+  }
+  return wrap;
+}
+
+function bankPeriodRenderStaticHeader(doc, model, handlers) {
+  const header = model.header || {};
+  const wrap = statsEl(doc, "div", { class: "bob-bank-period-header" });
+  if (!wrap) return null;
+  const label = statsEl(doc, "span", { class: "bob-bank-period-static" }, header.label || "BANK");
+  if (label) wrap.appendChild(label);
+  if (model.balance) {
+    const balance = bankPeriodBuildBalance(doc, model.balance, handlers);
+    if (balance) wrap.appendChild(balance);
+  }
   return wrap;
 }
 
@@ -642,12 +659,41 @@ function bankPeriodPaint(host, model, handlers = {}) {
     } else {
       line.appendChild(statsEl(doc, "span", { class: "bob-bank-period-waiting-text" }, text));
     }
+    if (model.balance) {
+      const balance = bankPeriodBuildBalance(doc, model.balance, handlers);
+      if (balance) line.appendChild(balance);
+    }
     try {
       host.appendChild(line);
     } catch (error) {
       return null;
     }
     return line;
+  }
+  if (model.state === "balance") {
+    clear();
+    if (!model.balance) return null;
+    const root = statsEl(doc, "div", {
+      class: "bob-bank-period"
+        + (model.stale ? " bob-bank-period-stale" : ""),
+      role: "group",
+      "aria-label": model.ariaLabel || "Bank closing balance",
+      "data-state": "balance",
+      "data-stale": model.stale ? "true" : "false",
+      title: model.stale && model.hint ? model.hint : null,
+    });
+    if (!root) return null;
+    try {
+      if (!bankPeriodSeen(host)) root.setAttribute("class", `${root.getAttribute("class")} bob-bank-period-enter`);
+    } catch (error) {}
+    const headerNode = bankPeriodRenderStaticHeader(doc, model, handlers);
+    if (headerNode) root.appendChild(headerNode);
+    try {
+      host.appendChild(root);
+    } catch (error) {
+      return null;
+    }
+    return root;
   }
   if (model.state !== "charts") {
     clear();

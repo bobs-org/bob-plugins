@@ -69,6 +69,13 @@
       { id: "all-collapse", title: "All time · leading untracked collapse", report: "all-collapse" },
       { id: "unavailable", title: "Unavailable · muted line", report: "unavailable" },
       { id: "stale", title: "Stale · dashed edge and hint", report: "stale" },
+      { id: "balance-asof", title: "Balance · active week as of Fri Nov 13", report: "balance-asof" },
+      { id: "balance-settled", title: "Balance · settled week", report: "balance-settled" },
+      { id: "balance-quiet", title: "Balance · quiet week, header only", report: "balance-quiet" },
+      { id: "balance-collapsed", title: "Balance · collapsed panel keeps BALANCE", report: "balance-collapsed" },
+      { id: "balance-negative", title: "Balance · negative amount in warning ink", report: "balance-negative" },
+      { id: "balance-stale", title: "Balance · stale so far", report: "balance-stale" },
+      { id: "balance-unverified", title: "Balance · unverified", report: "balance-unverified" },
     ];
     function paintCase(host, entry, view) {
       const fixture = fixtures[entry.report];
@@ -80,6 +87,7 @@
       helpers.bankPeriodPaint(host, model, {
         activateBucket: () => {},
         openWaiting: () => {},
+        openBalance: () => {},
         setView: () => {},
         toggleCollapsed: () => {},
       });

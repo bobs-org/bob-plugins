@@ -86,6 +86,24 @@ function buildFixtures() {
         ? overrides.net_cents : inCents - outCents,
     };
   };
+  const balanceEntry = (overrides = {}) => ({
+    alias: "checking",
+    label: "Checking",
+    kind: "checking",
+    hero: true,
+    state: "as_of",
+    reason: null,
+    cents: 123456,
+    as_of: "2026-11-13",
+    wanted: "2026-11-15",
+    stale: false,
+    open: { date: "2026-11-08", cents: 130000 },
+    change_cents: -6544,
+    coverage: { since: "2026-05-01", through: "2026-11-13" },
+    anchors: { count: 5, agree: true },
+    target: { path: "bank/2026-11.md", line: 26, date: "2026-11-13" },
+    ...overrides,
+  });
   const weekStart = monday(2026, 46);
   const weekEnd = shift(weekStart, 6);
   const weekDays = (fill) => {
@@ -232,6 +250,67 @@ function buildFixtures() {
     stale: {
       report: baseReport({ charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories } }),
       ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: true, refreshFailed: true, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-asof": {
+      report: baseReport({
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry()],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-settled": {
+      report: baseReport({
+        period: { kind: "week", key: "2026-W46", start: weekStart, end: weekEnd, label: "2026-W46", so_far: false, note: null },
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry({ state: "settled", as_of: weekEnd, wanted: weekEnd, open: null, change_cents: null, anchors: { count: 1, agree: true } })],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-16", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-quiet": {
+      report: baseReport({
+        totals: totals(),
+        waiting: { period: 0, all: 0, oldest: null },
+        balances: [balanceEntry()],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-collapsed": {
+      report: baseReport({
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry()],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: true },
+    },
+    "balance-negative": {
+      report: baseReport({
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry({ cents: -4510, change_cents: -4510 })],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-stale": {
+      report: baseReport({
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry({ state: "so_far", wanted: "2026-11-14", stale: true })],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
+    },
+    "balance-unverified": {
+      report: baseReport({
+        charts: { version: 1, granularity: "day", buckets: weekBuckets, groups: [], categories: weekCategories },
+        balances: [balanceEntry({
+          state: "unverified",
+          reason: "anchor_mismatch",
+          cents: null,
+          as_of: null,
+          open: null,
+          change_cents: null,
+          coverage: null,
+          anchors: { count: 2, agree: false },
+          target: null,
+        })],
+      }),
+      ctx: { kind: "week", periodId: "2026-W46", today: "2026-11-14", stale: false, refreshFailed: false, badgeEnabled: true, view: "both", collapsed: false },
     },
   };
   fixtures.unavailable = null;

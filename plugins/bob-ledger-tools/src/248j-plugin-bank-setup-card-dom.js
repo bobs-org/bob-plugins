@@ -15,6 +15,135 @@ function bankSetupCardListen(node, handler) {
   else node.addEventListener?.("click", handler);
 }
 
+function bankSetupCardArrangeContext(modal) {
+  return modal && modal.bankPaintArrange && typeof modal.bankPaintArrange === "object"
+    ? modal.bankPaintArrange
+    : {};
+}
+
+function bankSetupCardPaintGrip(parent, scope, id) {
+  return bankSetupCardAppend(parent, "span", "bob-bank-setup-card-grip", "⠿", {
+    "data-drag-scope": String(scope || ""),
+    "data-drag-id": String(id ?? ""),
+    "aria-hidden": "true",
+  });
+}
+
+function bankSetupCardDecorateArrange(node, arrangeId, arrange) {
+  if (!node || !arrangeId) return;
+  try { node.setAttribute?.("data-arrange-id", String(arrangeId)); } catch (_) {}
+  const deltas = arrange?.deltas || {};
+  const delta = Object.prototype.hasOwnProperty.call(deltas, arrangeId) ? deltas[arrangeId] : null;
+  if (delta !== null && delta !== undefined) {
+    try { node.classList?.add?.("is-arrange-moved"); } catch (_) {}
+    if (arrange?.saving) {
+      try { node.classList?.add?.("is-arrange-saving"); } catch (_) {}
+    }
+    const text = typeof schemaArrangeDeltaBadge === "function" ? schemaArrangeDeltaBadge(delta) : "";
+    if (text) bankSetupCardAppend(node, "span", "bob-bank-setup-card-delta-badge", text);
+  }
+}
+
+function bankSetupCardShiftBadgeFor(entry, arrange) {
+  const shifted = Array.isArray(arrange?.shifted) ? arrange.shifted : [];
+  if (!entry || !shifted.length) return "";
+  const hit = shifted.find((row) => row && (row.key === entry.key
+    || (entry.hotkey && (row.from === entry.hotkey || row.to === entry.hotkey))));
+  if (!hit) return "";
+  if (typeof schemaArrangeHotkeyShiftBadge === "function") {
+    const badge = schemaArrangeHotkeyShiftBadge(hit);
+    if (badge) return badge;
+  }
+  const from = String(hit.from || "");
+  const to = String(hit.to || "");
+  if (from.length === 1 && to.length === 1) return `${from.toUpperCase()}→${to.toUpperCase()}`;
+  return "";
+}
+
+function bankSetupCardProjectedSections(model, arrange) {
+  const sections = Array.isArray(model?.sections) ? model.sections.slice() : [];
+  const projectedGroups = Array.isArray(arrange?.projected?.groups) ? arrange.projected.groups : null;
+  if (!projectedGroups || !projectedGroups.length) return sections;
+  const byGroup = new Map(sections.filter((section) => section.group).map((section) => [section.group, section]));
+  const ordered = [];
+  const seen = new Set();
+  for (const group of projectedGroups) {
+    const section = byGroup.get(group);
+    if (section) {
+      ordered.push(section);
+      seen.add(group);
+    }
+  }
+  for (const section of sections) {
+    if (!section.group || !seen.has(section.group)) ordered.push(section);
+  }
+  return ordered.map((section) => {
+    const scope = section.group ? `group:${section.group}` : "";
+    const keys = scope && Array.isArray(arrange?.projected?.[scope]) ? arrange.projected[scope] : null;
+    if (!keys || !section.tiles) return section;
+    const byKey = new Map((section.tiles || []).map((tile) => [tile.key, tile]));
+    const tiles = [];
+    const used = new Set();
+    for (const key of keys) {
+      const tile = byKey.get(key);
+      if (tile) {
+        tiles.push(tile);
+        used.add(key);
+      }
+    }
+    for (const tile of section.tiles || []) {
+      if (!used.has(tile.key)) tiles.push(tile);
+    }
+    return { ...section, tiles };
+  });
+}
+
+function bankSetupCardProjectedRules(model, arrange) {
+  const items = Array.isArray(model?.ruleItems) ? model.ruleItems.slice() : [];
+  const projected = Array.isArray(arrange?.projected?.rules) ? arrange.projected.rules : null;
+  if (!projected || !projected.length) return items;
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const ordered = [];
+  const seen = new Set();
+  for (const id of projected) {
+    const item = byId.get(id);
+    if (item) {
+      ordered.push(item);
+      seen.add(id);
+    }
+  }
+  for (const item of items) {
+    if (!seen.has(item.id)) ordered.push(item);
+  }
+  return ordered;
+}
+
+function bankSetupCardPaintGapButton(host, modal, scope, gap, label) {
+  if (!host || !label) return null;
+  const button = bankSetupCardAppend(host, "button", "bob-bank-setup-card-gap-hint", label, {
+    type: "button",
+    "data-gap-index": String(gap),
+    "data-gap-scope": String(scope || ""),
+    "aria-label": `Place here (gap ${label})`,
+  });
+  bankSetupCardListen(button, () => {
+    try { modal.bankArrangeHintKey?.(label); } catch (_) {}
+  });
+  return button;
+}
+
+function bankSetupCardGapMap(modal, scope) {
+  const mode = modal?.bankHintMode;
+  const map = new Map();
+  if (!mode || mode.scope !== scope) return map;
+  const gaps = Array.isArray(mode.gaps) ? mode.gaps : [];
+  const labels = Array.isArray(mode.labels) ? mode.labels : [];
+  for (let index = 0; index < gaps.length; index += 1) {
+    if (labels[index]) map.set(gaps[index], labels[index]);
+  }
+  return map;
+}
+
 function bankSetupCardInput(parent, modal, field, caption, value, options = {}) {
   const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
   if (!row) return null;
@@ -64,6 +193,7 @@ function bankSetupCardPaintTabs(root, modal, model) {
 function bankSetupCardPaintTile(parent, modal, item, doc) {
   const selected = modal.selection?.id === item.id;
   const tile = item.tile;
+  const arrange = bankSetupCardArrangeContext(modal);
   const button = bankSharedCategoryTile(doc, tile, {
     card: true,
     selected,
@@ -79,17 +209,26 @@ function bankSetupCardPaintTile(parent, modal, item, doc) {
   if (Number.isInteger(tile.rows) && tile.rows > 0) {
     bankSetupCardAppend(button, "span", "bob-bank-setup-card-count", String(tile.rows), { "aria-label": `${tile.rows} rows` });
   }
+  const group = String(item.entry?.group || item.group || "");
+  if (group && item.entry?.hidden !== true) {
+    const arrangeId = `group:${group}:${item.key}`;
+    if (!modal.readOnly) bankSetupCardPaintGrip(button, `group:${group}`, item.key);
+    bankSetupCardDecorateArrange(button, arrangeId, arrange);
+    const shift = bankSetupCardShiftBadgeFor(item.entry, arrange);
+    if (shift) bankSetupCardAppend(button, "span", "bob-bank-setup-card-hotkey-shift", shift);
+  }
   bankSetupCardListen(button, () => modal.selectItem(item.id));
   parent.appendChild?.(button);
   return button;
 }
 
 function bankSetupCardPaintCategories(panel, modal, model, doc) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Letters select a category. Enter edits it; all changes preview through bob.");
   if (!model.categories.length) {
     bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No categories are available.");
   }
-  for (const section of model.sections) {
+  const arrange = bankSetupCardArrangeContext(modal);
+  const sections = bankSetupCardProjectedSections(model, arrange);
+  for (const section of sections) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group");
     if (!wrap) continue;
     if (section.group) {
@@ -100,13 +239,24 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
         "data-setup-card-group": section.group,
         "data-setup-card-focus": `group-${section.group}`,
       });
+      if (label && !modal.readOnly) bankSetupCardPaintGrip(label, "groups", section.group);
+      if (label) bankSetupCardDecorateArrange(label, `groups:${section.group}`, arrange);
       bankSetupCardListen(label, () => groupItem && modal.selectItem(groupItem.id));
       if (section.group === BANK_SETUP_MONEY_GROUP) bankSetupCardAppend(wrap, "span", "bob-bank-setup-card-group-note", "built in · shown first for money in");
     }
-    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, { role: "group", "aria-label": section.group || "Ungrouped categories" });
-    for (const tile of section.tiles || []) {
-      const item = model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key);
-      if (item) bankSetupCardPaintTile(tiles, modal, item, doc);
+    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, {
+      role: "group",
+      "aria-label": section.group || "Ungrouped categories",
+      "data-drag-scope": section.group ? `group:${section.group}` : "",
+    });
+    const tileItems = (section.tiles || [])
+      .map((tile) => model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key))
+      .filter(Boolean);
+    const scope = section.group ? `group:${section.group}` : "";
+    const gaps = scope ? bankSetupCardGapMap(modal, scope) : new Map();
+    for (let index = 0; index <= tileItems.length; index += 1) {
+      if (gaps.has(index)) bankSetupCardPaintGapButton(tiles, modal, scope, index, gaps.get(index));
+      if (index < tileItems.length) bankSetupCardPaintTile(tiles, modal, tileItems[index], doc);
     }
   }
   if (model.hiddenTiles.length) {
@@ -215,13 +365,22 @@ function bankSetupCardRuleRowText(rule, position) {
 }
 
 function bankSetupCardPaintRules(panel, modal, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom and only affect future imports and hints; filed rows never change.");
-  const items = Array.isArray(model.ruleItems) ? model.ruleItems : [];
+  const arrange = bankSetupCardArrangeContext(modal);
+  const items = bankSetupCardProjectedRules(model, arrange);
   if (!items.length) {
     bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "None yet. bob already learns each merchant's name and category from your last filing; add a rule only to override that.");
   } else {
-    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, { "aria-label": "Rules" });
-    for (let position = 0; position < items.length; position += 1) {
+    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, {
+      "aria-label": "Rules",
+      "data-drag-scope": "rules",
+    });
+    const gaps = bankSetupCardGapMap(modal, "rules");
+    for (let position = 0; position <= items.length; position += 1) {
+      if (gaps.has(position)) {
+        const holder = bankSetupCardAppend(list, "li", "bob-bank-setup-card-rule-gap");
+        bankSetupCardPaintGapButton(holder, modal, "rules", position, gaps.get(position));
+      }
+      if (position >= items.length) continue;
       const item = items[position];
       const rule = item.entry || {};
       const selected = modal.selection?.id === item.id;
@@ -235,6 +394,8 @@ function bankSetupCardPaintRules(panel, modal, model) {
         "aria-label": bankSetupCardRuleRowText(rule, position),
       });
       if (button) {
+        if (!modal.readOnly) bankSetupCardPaintGrip(button, "rules", item.id);
+        bankSetupCardDecorateArrange(button, `rules:${item.id}`, arrange);
         bankSetupCardAppend(button, "strong", "", `${position + 1} ${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`);
         if (rule.payee || rule.link) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", [rule.payee ? `payee ${rule.payee}` : null, rule.link || null].filter(Boolean).join(" · "));
         if (rule.readTimeDead) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");

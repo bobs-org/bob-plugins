@@ -180,11 +180,45 @@ class BobLedgerToolsBankConfigUpdateMixin {
   }
 }
 
+function bankSetupRememberUndo(plugin, inverseOps, afterFingerprint) {
+  try {
+    if (!plugin || !Array.isArray(inverseOps) || !inverseOps.length) return null;
+    const record = {
+      inverseOps: inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+      afterFingerprint: typeof afterFingerprint === "string" ? afterFingerprint : "",
+    };
+    plugin.bankSetupUndoRecord = record;
+    return record;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bankSetupLastUndo(plugin) {
+  try {
+    return plugin && plugin.bankSetupUndoRecord ? plugin.bankSetupUndoRecord : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bankSetupRecordTiming(plugin, kind, ms) {
+  try {
+    if (!plugin) return;
+    if (!Array.isArray(plugin.bankSetupTimings)) plugin.bankSetupTimings = [];
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return;
+    plugin.bankSetupTimings.push({ kind: String(kind || ""), ms: value, at: Date.now() });
+    while (plugin.bankSetupTimings.length > 60) plugin.bankSetupTimings.shift();
+  } catch (_) {}
+}
+
 function createBankConfigUpdateSession(init = {}, deps = {}) {
   return createGuardedUpdateSession({
     identity: "bank",
     ownPath: BANK_CONFIG_UPDATE_HUB_PATH,
     expect: init.expect,
+    undo: init.undo,
     debounceMs: BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
     buildEnvelope: bankConfigUpdateEnvelopeText,
     isStaleCode: bankIsStaleConfigUpdateCode,

@@ -598,6 +598,7 @@ function schemaArrangeExpectedBankCategories(arrangement, categories, groups) {
       }
     }
     for (const category of categories) {
+      if (category?.hidden === true) continue;
       if (String(category.group) === String(group) && !emitted.has(category.key)) {
         result.push(category);
         emitted.add(category.key);

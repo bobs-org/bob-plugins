@@ -904,14 +904,14 @@ test("Setup card model preserves Category-card order and maps category gestures 
 
   assert.deepEqual(H.bankSetupCardSetCategoryOp(report.categories[0], {
     label: "Cafe", group: "Everyday", hotkey: "c", hotkeyTouched: false,
-  }), { op: "category.set", key: "coffee", set: { label: "Cafe" } });
+  }), { op: "category.set", key: "coffee", set: { label: "☕ Cafe" } });
   assert.deepEqual(H.bankSetupCardSetCategoryOp(report.categories[0], {
     label: "Coffee", group: "", hotkey: "", hotkeyTouched: false,
   }), { op: "category.set", key: "coffee", unset: ["group"] });
-  const derived = configCategory({ key: "market", hotkey: "m", hotkey_source: "derived" });
+  const derived = configCategory({ key: "market", emoji: "", label: "Market", hotkey: "m", hotkey_source: "derived" });
   assert.deepEqual(H.bankSetupCardSetCategoryOp(derived, {
     label: "Market", group: "Everyday", hotkey: "m", hotkeyTouched: true,
-  }), { op: "category.set", key: "market", set: { label: "Market", hotkey: "m" } });
+  }), { op: "category.set", key: "market", set: { hotkey: "m" } });
   assert.deepEqual(H.bankSetupCardCategoryMoveOp(report.categories, "coffee", "forward"), {
     op: "category.move", key: "coffee", after: "groceries",
   });
@@ -995,8 +995,8 @@ test("Setup card selects by key, protects focused typing, and stages shared New 
   assert.deepEqual(modal.session.getState().draftOps, [{ op: "category.add", label: "🍔 Fast food", group: "Everyday", hotkey: "a" }]);
   const cancel = { key: "q", target: { closest: () => ({}) }, preventDefault() { this.prevented = true; }, stopPropagation() {} };
   await modal.onKeyDown(cancel);
-  assert.equal(cancel.prevented, true, "q cancels a stage even while an input has focus");
-  assert.equal(modal.stage, null);
+  assert.equal(cancel.prevented, undefined, "q in an input types instead of cancelling the stage");
+  assert.equal(modal.stage.kind, "new");
   modal.close();
 });
 
@@ -1233,7 +1233,7 @@ test("Setup card paints interactive account, rule, and finding rows", () => {
   H.bankSetupCardPaintRules(rulesPanel, fakeModal("rules"), model);
   assert.ok(rulesPanel.querySelector("[data-setup-card-rule]"), "rules paint as numbered rows");
   assert.ok(rulesPanel.querySelector("[data-setup-new-rule]"), "rules offer + New rule");
-  assert.match(rulesPanel.textContent, /future imports and hints/);
+  assert.match(rulesPanel.textContent, /VENMO/);
   const checksPanel = doc.createElement("div");
   H.bankSetupCardPaintChecks(checksPanel, fakeModal("checks"), model);
   assert.match(checksPanel.textContent, /valid — bob uses it as shown/);
@@ -1297,8 +1297,11 @@ test("Setup card stages account and rule gestures through bob previews", async (
   const firstRule = modal.model.ruleItems[0];
   modal.selection = { type: "rule", key: null, group: null, alias: null, index: firstRule.entry.index, id: firstRule.id };
   modal.paint();
-  assert.equal(modal.beginSelectedGesture("move", "forward")?.kind || modal.stage?.kind, "confirm");
-  modal.cancelStage();
+  assert.equal(modal.beginSelectedGesture("move", "forward"), true);
+  assert.equal(modal.stage, null, "rule moves no longer open a confirm stage");
+  assert.equal(modal.bankArrangeDirty(), true, "a rule move is a local arrangement");
+  modal.bankArrangeRevert();
+  assert.equal(modal.bankArrangeDirty(), false);
   modal.openStaleAfterStage();
   assert.equal(modal.stage.kind, "stale-after");
   modal.onFieldInput("stale-after", "14");

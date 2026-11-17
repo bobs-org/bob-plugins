@@ -73,7 +73,7 @@ function schemaArrangeDeltaBadge(delta) {
   return value < 0 ? `↑${-value}` : `↓${value}`;
 }
 
-function schemaArrangePendingText(arrangement, model) {
+function schemaArrangePendingText(arrangement, model, options = {}) {
   try {
     if (!arrangement || typeof arrangement.summary !== "function") return "";
     const summary = arrangement.summary();
@@ -83,6 +83,12 @@ function schemaArrangePendingText(arrangement, model) {
     const noun = count === 1 ? "move" : "moves";
     let detail = "";
     const moved = Array.isArray(summary.movedIds) ? summary.movedIds : [];
+    const labelFor = typeof options.labelFor === "function"
+      ? options.labelFor
+      : (scope, id) => schemaArrangeAlbumLabelFor(model, scope, id);
+    const stepLabel = typeof options.stepLabel === "string" && options.stepLabel
+      ? options.stepLabel
+      : "u step back";
     if (count === 1 && moved.length === 1) {
       const entry = moved[0];
       const scope = typeof entry === "string" ? null : entry?.scope;
@@ -93,14 +99,99 @@ function schemaArrangePendingText(arrangement, model) {
         ? (arrangement.saved(targetScope) || []).indexOf(id) : -1;
       const to = typeof arrangement.projected === "function"
         ? (arrangement.projected(targetScope) || []).indexOf(id) : -1;
-      const label = schemaArrangeAlbumLabelFor(model, targetScope, id);
+      const label = labelFor(targetScope, id);
       if (from >= 0 && to >= 0) {
         detail = ` · ${label} ${from + 1} → ${to + 1}`;
       }
     }
-    return `↕ ${count} ${noun}${detail} · ⏎ save · esc revert · u step back`;
+    return `↕ ${count} ${noun}${detail} · ⏎ save · esc revert · ${stepLabel}`;
   } catch (_) {
     return "";
+  }
+}
+
+function schemaArrangeBankLabelFor(model, scope, id) {
+  try {
+    const name = String(scope || "");
+    const key = String(id ?? "");
+    if (name === "groups") return key;
+    if (name === "rules") {
+      const item = (Array.isArray(model?.ruleItems) ? model.ruleItems : [])
+        .find((row) => String(row?.id || "") === key);
+      return String(item?.entry?.match || key);
+    }
+    if (name.startsWith("group:")) {
+      const categories = Array.isArray(model?.categories) ? model.categories : [];
+      const entry = categories.find((row) => String(row?.key || "") === key);
+      return String(entry?.label || entry?.key || key);
+    }
+  } catch (_) {}
+  return String(id ?? "");
+}
+
+function schemaArrangeBankScopeLabel(scope) {
+  const name = String(scope || "");
+  if (name === "groups") return "group";
+  if (name === "rules") return "rule";
+  if (name.startsWith("group:")) return "category";
+  return name;
+}
+
+function schemaArrangeIsLoudBankReport(report, arrangement) {
+  try {
+    const reasons = [];
+    if (arrangement && typeof arrangement.saved === "function" && typeof schemaArrangeSameOrder === "function") {
+      const saved = arrangement.saved("rules") || [];
+      const projected = arrangement.projected("rules") || [];
+      if (saved.length && projected.length && !schemaArrangeSameOrder(saved, projected)) {
+        reasons.push("rule");
+      }
+    }
+    const shifted = report?.hotkeys?.shifted;
+    if (Array.isArray(shifted) && shifted.length > 0) reasons.push("hotkey");
+    if (Array.isArray(report?.warnings) && report.warnings.length > 0) reasons.push("warnings");
+    return { loud: reasons.length > 0, reasons };
+  } catch (_) {
+    return { loud: false, reasons: [] };
+  }
+}
+
+function schemaArrangeHotkeyShiftBadge(shift) {
+  try {
+    const from = String(shift?.from || "");
+    const to = String(shift?.to || "");
+    if (from.length === 1 && to.length === 1 && from.toLowerCase() !== to.toLowerCase()) {
+      return `${from.toUpperCase()}→${to.toUpperCase()}`;
+    }
+  } catch (_) {}
+  return "";
+}
+
+function schemaArrangeBankOrderDisagrees(report, arrangement, categories) {
+  try {
+    const listed = Array.isArray(report?.categories) ? report.categories : null;
+    if (!listed || !listed.length || !arrangement || typeof arrangement.projected !== "function") {
+      return false;
+    }
+    const groups = arrangement.projected("groups") || [];
+    const rows = typeof schemaArrangeExpectedBankCategories === "function"
+      ? schemaArrangeExpectedBankCategories(arrangement, Array.isArray(categories) ? categories : [], groups)
+      : [];
+    const want = rows
+      .filter((row) => row && row.hidden !== true)
+      .map((row) => String(row?.key || ""))
+      .filter(Boolean);
+    if (!want.length) return false;
+    const wantSet = new Set(want);
+    const got = listed
+      .map((row) => (typeof row === "string" ? row : String(row?.key || "")))
+      .filter((key) => key && wantSet.has(key));
+    if (!got.length) return false;
+    return typeof schemaArrangeSameOrder === "function"
+      ? !schemaArrangeSameOrder(want, got)
+      : want.join("\0") !== got.join("\0");
+  } catch (_) {
+    return false;
   }
 }
 
@@ -285,7 +376,8 @@ function schemaDragCollectRects(root, scope) {
 }
 
 function schemaDragScopeOrientation(scope) {
-  return String(scope || "").startsWith("choices:") ? "horizontal" : "vertical";
+  const name = String(scope || "");
+  return name.startsWith("choices:") || name.startsWith("group:") ? "horizontal" : "vertical";
 }
 
 function createSchemaDragSession({ scope, id, order, legalGaps }) {

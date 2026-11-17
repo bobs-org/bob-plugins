@@ -169,6 +169,8 @@
   "248i-plugin-bank-setup-card-model.js",
   "248j-plugin-bank-setup-card-dom.js",
   "248k-plugin-bank-setup-card.js",
+  "248ka-plugin-bank-setup-card-arrange.js",
+  "248kb-plugin-bank-setup-card-regions.js",
   "248l-plugin-bank-setup-card-entrypoints.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",

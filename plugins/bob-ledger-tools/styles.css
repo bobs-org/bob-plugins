@@ -9800,6 +9800,80 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-setup-card-saved { color: var(--text-muted); font-size: 0.82em; }
 .bob-bank-setup-card-footer { margin: 0.55em 0 0; color: var(--text-faint); font-size: 0.76em; overflow-wrap: anywhere; }
 .bob-bank-setup-card-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.bob-bank-setup-card-grip {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.3em;
+  color: var(--text-faint, var(--text-muted));
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+  user-select: none;
+}
+.bob-bank-setup-card-group-label:hover .bob-bank-setup-card-grip,
+.bob-bank-category-tile:hover .bob-bank-setup-card-grip,
+.bob-bank-setup-card-rule-button:hover .bob-bank-setup-card-grip,
+.bob-bank-setup-card-group-label:focus-within .bob-bank-setup-card-grip,
+.bob-bank-category-tile:focus-within .bob-bank-setup-card-grip,
+.bob-bank-setup-card-rule-button:focus-within .bob-bank-setup-card-grip {
+  opacity: 1;
+}
+.bob-bank-setup-card-delta-badge {
+  display: inline-block;
+  margin-left: 0.35em;
+  padding: 0 0.3em;
+  border-radius: 3px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+.bob-bank-setup-card-hotkey-shift {
+  display: inline-block;
+  margin-left: 0.35em;
+  padding: 0 0.3em;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-warning, #c9a227) 22%, var(--background-primary));
+  color: var(--text-warning, var(--text-normal));
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+.bob-bank-setup-card-gap-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  min-height: 1.4em;
+  margin: 0.15em;
+  padding: 0 0.35em;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  color: var(--text-normal);
+  font: inherit;
+  font-size: 0.82em;
+}
+.bob-bank-setup-card .is-arrange-moved { outline: 1px dashed color-mix(in srgb, var(--interactive-accent) 55%, transparent); }
+.bob-bank-setup-card .is-arrange-saving { opacity: 0.75; }
+.bob-bank-setup-card-hint-strip { display: flex; flex-wrap: wrap; gap: 0.35em 0.85em; margin: 0.45em 0 0; color: var(--text-muted); font-size: 0.78em; }
+.bob-bank-setup-card-hint { display: inline-flex; align-items: baseline; gap: 0.3em; }
+.bob-bank-setup-card-hint kbd {
+  display: inline-block;
+  padding: 0.05em 0.35em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 3px;
+  background: var(--background-secondary);
+  font: inherit;
+  font-size: 0.9em;
+}
+.bob-bank-setup-card-status-host { margin: 0.35em 0 0; font-size: 0.82em; }
+.bob-bank-setup-card-status-host.is-previewing { color: var(--text-muted); }
+.bob-bank-setup-card-status-host.is-refused { color: var(--text-error, var(--text-normal)); }
+.bob-bank-setup-card-status-host.is-confirm { color: var(--text-warning, var(--text-normal)); }
+.bob-bank-setup-card-status-host.is-saved,
+.bob-bank-setup-card-status-host.is-ready { color: var(--text-success, var(--text-muted)); }
+.bob-bank-setup-card-status-line { margin: 0; }
+.bob-bank-setup-card-header { margin: 0; }
 @media (max-width: 480px) {
   .bob-bank-setup-card-dialog { min-width: 0; max-width: calc(100vw - 1em); }
   .bob-bank-setup-card-control { grid-template-columns: minmax(0, 1fr); gap: 0.2em; }

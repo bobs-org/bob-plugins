@@ -406,6 +406,37 @@ function bankSetupCardMoveFindingSelection(model, selection, direction) {
   return bankSetupCardMoveInList(list, id, direction);
 }
 
+function bankSetupCardArrangeScopes(model) {
+  const scopes = {};
+  const groups = [];
+  for (const section of Array.isArray(model?.sections) ? model.sections : []) {
+    const group = String(section?.group || "");
+    if (!group) continue;
+    groups.push(group);
+    scopes[`group:${group}`] = (Array.isArray(section.tiles) ? section.tiles : [])
+      .map((tile) => String(tile?.key || ""))
+      .filter(Boolean);
+  }
+  scopes.groups = groups;
+  scopes.rules = (Array.isArray(model?.ruleItems) ? model.ruleItems : [])
+    .map((item) => String(item?.id || ""))
+    .filter(Boolean);
+  return scopes;
+}
+
+function bankSetupCardArrangeFixed(model) {
+  const groups = [];
+  for (const section of Array.isArray(model?.sections) ? model.sections : []) {
+    const group = String(section?.group || "");
+    if (group) groups.push(group);
+  }
+  const fixed = {};
+  if (groups[0] === BANK_SETUP_MONEY_GROUP) {
+    fixed.groups = { ids: [BANK_SETUP_MONEY_GROUP], slots: [0] };
+  }
+  return fixed;
+}
+
 function bankSetupCardStatus(report) {
   if (!report) return { state: "unavailable", readOnly: true, label: "Loading the current bank config report." };
   const state = String(report?.state || "missing");

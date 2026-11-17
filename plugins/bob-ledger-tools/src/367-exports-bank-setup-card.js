@@ -38,6 +38,11 @@ try {
       bankSetupCardPaintAccounts,
       bankSetupCardPaintRules,
       bankSetupCardPaintChecks,
+      bankSetupCardArrangeScopes,
+      bankSetupCardArrangeFixed,
+      bankSetupRememberUndo,
+      bankSetupLastUndo,
+      bankSetupRecordTiming,
     });
   }
 } catch (_) {}

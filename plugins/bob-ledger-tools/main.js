@@ -65581,6 +65581,7 @@ function schemaArrangeExpectedBankCategories(arrangement, categories, groups) {
       }
     }
     for (const category of categories) {
+      if (category?.hidden === true) continue;
       if (String(category.group) === String(group) && !emitted.has(category.key)) {
         result.push(category);
         emitted.add(category.key);
@@ -65788,7 +65789,7 @@ function schemaArrangeDeltaBadge(delta) {
   return value < 0 ? `↑${-value}` : `↓${value}`;
 }
 
-function schemaArrangePendingText(arrangement, model) {
+function schemaArrangePendingText(arrangement, model, options = {}) {
   try {
     if (!arrangement || typeof arrangement.summary !== "function") return "";
     const summary = arrangement.summary();
@@ -65798,6 +65799,12 @@ function schemaArrangePendingText(arrangement, model) {
     const noun = count === 1 ? "move" : "moves";
     let detail = "";
     const moved = Array.isArray(summary.movedIds) ? summary.movedIds : [];
+    const labelFor = typeof options.labelFor === "function"
+      ? options.labelFor
+      : (scope, id) => schemaArrangeAlbumLabelFor(model, scope, id);
+    const stepLabel = typeof options.stepLabel === "string" && options.stepLabel
+      ? options.stepLabel
+      : "u step back";
     if (count === 1 && moved.length === 1) {
       const entry = moved[0];
       const scope = typeof entry === "string" ? null : entry?.scope;
@@ -65808,14 +65815,99 @@ function schemaArrangePendingText(arrangement, model) {
         ? (arrangement.saved(targetScope) || []).indexOf(id) : -1;
       const to = typeof arrangement.projected === "function"
         ? (arrangement.projected(targetScope) || []).indexOf(id) : -1;
-      const label = schemaArrangeAlbumLabelFor(model, targetScope, id);
+      const label = labelFor(targetScope, id);
       if (from >= 0 && to >= 0) {
         detail = ` · ${label} ${from + 1} → ${to + 1}`;
       }
     }
-    return `↕ ${count} ${noun}${detail} · ⏎ save · esc revert · u step back`;
+    return `↕ ${count} ${noun}${detail} · ⏎ save · esc revert · ${stepLabel}`;
   } catch (_) {
     return "";
+  }
+}
+
+function schemaArrangeBankLabelFor(model, scope, id) {
+  try {
+    const name = String(scope || "");
+    const key = String(id ?? "");
+    if (name === "groups") return key;
+    if (name === "rules") {
+      const item = (Array.isArray(model?.ruleItems) ? model.ruleItems : [])
+        .find((row) => String(row?.id || "") === key);
+      return String(item?.entry?.match || key);
+    }
+    if (name.startsWith("group:")) {
+      const categories = Array.isArray(model?.categories) ? model.categories : [];
+      const entry = categories.find((row) => String(row?.key || "") === key);
+      return String(entry?.label || entry?.key || key);
+    }
+  } catch (_) {}
+  return String(id ?? "");
+}
+
+function schemaArrangeBankScopeLabel(scope) {
+  const name = String(scope || "");
+  if (name === "groups") return "group";
+  if (name === "rules") return "rule";
+  if (name.startsWith("group:")) return "category";
+  return name;
+}
+
+function schemaArrangeIsLoudBankReport(report, arrangement) {
+  try {
+    const reasons = [];
+    if (arrangement && typeof arrangement.saved === "function" && typeof schemaArrangeSameOrder === "function") {
+      const saved = arrangement.saved("rules") || [];
+      const projected = arrangement.projected("rules") || [];
+      if (saved.length && projected.length && !schemaArrangeSameOrder(saved, projected)) {
+        reasons.push("rule");
+      }
+    }
+    const shifted = report?.hotkeys?.shifted;
+    if (Array.isArray(shifted) && shifted.length > 0) reasons.push("hotkey");
+    if (Array.isArray(report?.warnings) && report.warnings.length > 0) reasons.push("warnings");
+    return { loud: reasons.length > 0, reasons };
+  } catch (_) {
+    return { loud: false, reasons: [] };
+  }
+}
+
+function schemaArrangeHotkeyShiftBadge(shift) {
+  try {
+    const from = String(shift?.from || "");
+    const to = String(shift?.to || "");
+    if (from.length === 1 && to.length === 1 && from.toLowerCase() !== to.toLowerCase()) {
+      return `${from.toUpperCase()}→${to.toUpperCase()}`;
+    }
+  } catch (_) {}
+  return "";
+}
+
+function schemaArrangeBankOrderDisagrees(report, arrangement, categories) {
+  try {
+    const listed = Array.isArray(report?.categories) ? report.categories : null;
+    if (!listed || !listed.length || !arrangement || typeof arrangement.projected !== "function") {
+      return false;
+    }
+    const groups = arrangement.projected("groups") || [];
+    const rows = typeof schemaArrangeExpectedBankCategories === "function"
+      ? schemaArrangeExpectedBankCategories(arrangement, Array.isArray(categories) ? categories : [], groups)
+      : [];
+    const want = rows
+      .filter((row) => row && row.hidden !== true)
+      .map((row) => String(row?.key || ""))
+      .filter(Boolean);
+    if (!want.length) return false;
+    const wantSet = new Set(want);
+    const got = listed
+      .map((row) => (typeof row === "string" ? row : String(row?.key || "")))
+      .filter((key) => key && wantSet.has(key));
+    if (!got.length) return false;
+    return typeof schemaArrangeSameOrder === "function"
+      ? !schemaArrangeSameOrder(want, got)
+      : want.join("\0") !== got.join("\0");
+  } catch (_) {
+    return false;
   }
 }
 
@@ -66000,7 +66092,8 @@ function schemaDragCollectRects(root, scope) {
 }
 
 function schemaDragScopeOrientation(scope) {
-  return String(scope || "").startsWith("choices:") ? "horizontal" : "vertical";
+  const name = String(scope || "");
+  return name.startsWith("choices:") || name.startsWith("group:") ? "horizontal" : "vertical";
 }
 
 function createSchemaDragSession({ scope, id, order, legalGaps }) {
@@ -82880,11 +82973,45 @@ class BobLedgerToolsBankConfigUpdateMixin {
   }
 }
 
+function bankSetupRememberUndo(plugin, inverseOps, afterFingerprint) {
+  try {
+    if (!plugin || !Array.isArray(inverseOps) || !inverseOps.length) return null;
+    const record = {
+      inverseOps: inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+      afterFingerprint: typeof afterFingerprint === "string" ? afterFingerprint : "",
+    };
+    plugin.bankSetupUndoRecord = record;
+    return record;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bankSetupLastUndo(plugin) {
+  try {
+    return plugin && plugin.bankSetupUndoRecord ? plugin.bankSetupUndoRecord : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bankSetupRecordTiming(plugin, kind, ms) {
+  try {
+    if (!plugin) return;
+    if (!Array.isArray(plugin.bankSetupTimings)) plugin.bankSetupTimings = [];
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return;
+    plugin.bankSetupTimings.push({ kind: String(kind || ""), ms: value, at: Date.now() });
+    while (plugin.bankSetupTimings.length > 60) plugin.bankSetupTimings.shift();
+  } catch (_) {}
+}
+
 function createBankConfigUpdateSession(init = {}, deps = {}) {
   return createGuardedUpdateSession({
     identity: "bank",
     ownPath: BANK_CONFIG_UPDATE_HUB_PATH,
     expect: init.expect,
+    undo: init.undo,
     debounceMs: BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
     buildEnvelope: bankConfigUpdateEnvelopeText,
     isStaleCode: bankIsStaleConfigUpdateCode,
@@ -84563,6 +84690,37 @@ function bankSetupCardMoveFindingSelection(model, selection, direction) {
   return bankSetupCardMoveInList(list, id, direction);
 }
 
+function bankSetupCardArrangeScopes(model) {
+  const scopes = {};
+  const groups = [];
+  for (const section of Array.isArray(model?.sections) ? model.sections : []) {
+    const group = String(section?.group || "");
+    if (!group) continue;
+    groups.push(group);
+    scopes[`group:${group}`] = (Array.isArray(section.tiles) ? section.tiles : [])
+      .map((tile) => String(tile?.key || ""))
+      .filter(Boolean);
+  }
+  scopes.groups = groups;
+  scopes.rules = (Array.isArray(model?.ruleItems) ? model.ruleItems : [])
+    .map((item) => String(item?.id || ""))
+    .filter(Boolean);
+  return scopes;
+}
+
+function bankSetupCardArrangeFixed(model) {
+  const groups = [];
+  for (const section of Array.isArray(model?.sections) ? model.sections : []) {
+    const group = String(section?.group || "");
+    if (group) groups.push(group);
+  }
+  const fixed = {};
+  if (groups[0] === BANK_SETUP_MONEY_GROUP) {
+    fixed.groups = { ids: [BANK_SETUP_MONEY_GROUP], slots: [0] };
+  }
+  return fixed;
+}
+
 function bankSetupCardStatus(report) {
   if (!report) return { state: "unavailable", readOnly: true, label: "Loading the current bank config report." };
   const state = String(report?.state || "missing");
@@ -84587,6 +84745,135 @@ function bankSetupCardListen(node, handler) {
   if (!node || typeof handler !== "function") return;
   if (typeof bankSetupListen === "function") bankSetupListen(node, handler);
   else node.addEventListener?.("click", handler);
+}
+
+function bankSetupCardArrangeContext(modal) {
+  return modal && modal.bankPaintArrange && typeof modal.bankPaintArrange === "object"
+    ? modal.bankPaintArrange
+    : {};
+}
+
+function bankSetupCardPaintGrip(parent, scope, id) {
+  return bankSetupCardAppend(parent, "span", "bob-bank-setup-card-grip", "⠿", {
+    "data-drag-scope": String(scope || ""),
+    "data-drag-id": String(id ?? ""),
+    "aria-hidden": "true",
+  });
+}
+
+function bankSetupCardDecorateArrange(node, arrangeId, arrange) {
+  if (!node || !arrangeId) return;
+  try { node.setAttribute?.("data-arrange-id", String(arrangeId)); } catch (_) {}
+  const deltas = arrange?.deltas || {};
+  const delta = Object.prototype.hasOwnProperty.call(deltas, arrangeId) ? deltas[arrangeId] : null;
+  if (delta !== null && delta !== undefined) {
+    try { node.classList?.add?.("is-arrange-moved"); } catch (_) {}
+    if (arrange?.saving) {
+      try { node.classList?.add?.("is-arrange-saving"); } catch (_) {}
+    }
+    const text = typeof schemaArrangeDeltaBadge === "function" ? schemaArrangeDeltaBadge(delta) : "";
+    if (text) bankSetupCardAppend(node, "span", "bob-bank-setup-card-delta-badge", text);
+  }
+}
+
+function bankSetupCardShiftBadgeFor(entry, arrange) {
+  const shifted = Array.isArray(arrange?.shifted) ? arrange.shifted : [];
+  if (!entry || !shifted.length) return "";
+  const hit = shifted.find((row) => row && (row.key === entry.key
+    || (entry.hotkey && (row.from === entry.hotkey || row.to === entry.hotkey))));
+  if (!hit) return "";
+  if (typeof schemaArrangeHotkeyShiftBadge === "function") {
+    const badge = schemaArrangeHotkeyShiftBadge(hit);
+    if (badge) return badge;
+  }
+  const from = String(hit.from || "");
+  const to = String(hit.to || "");
+  if (from.length === 1 && to.length === 1) return `${from.toUpperCase()}→${to.toUpperCase()}`;
+  return "";
+}
+
+function bankSetupCardProjectedSections(model, arrange) {
+  const sections = Array.isArray(model?.sections) ? model.sections.slice() : [];
+  const projectedGroups = Array.isArray(arrange?.projected?.groups) ? arrange.projected.groups : null;
+  if (!projectedGroups || !projectedGroups.length) return sections;
+  const byGroup = new Map(sections.filter((section) => section.group).map((section) => [section.group, section]));
+  const ordered = [];
+  const seen = new Set();
+  for (const group of projectedGroups) {
+    const section = byGroup.get(group);
+    if (section) {
+      ordered.push(section);
+      seen.add(group);
+    }
+  }
+  for (const section of sections) {
+    if (!section.group || !seen.has(section.group)) ordered.push(section);
+  }
+  return ordered.map((section) => {
+    const scope = section.group ? `group:${section.group}` : "";
+    const keys = scope && Array.isArray(arrange?.projected?.[scope]) ? arrange.projected[scope] : null;
+    if (!keys || !section.tiles) return section;
+    const byKey = new Map((section.tiles || []).map((tile) => [tile.key, tile]));
+    const tiles = [];
+    const used = new Set();
+    for (const key of keys) {
+      const tile = byKey.get(key);
+      if (tile) {
+        tiles.push(tile);
+        used.add(key);
+      }
+    }
+    for (const tile of section.tiles || []) {
+      if (!used.has(tile.key)) tiles.push(tile);
+    }
+    return { ...section, tiles };
+  });
+}
+
+function bankSetupCardProjectedRules(model, arrange) {
+  const items = Array.isArray(model?.ruleItems) ? model.ruleItems.slice() : [];
+  const projected = Array.isArray(arrange?.projected?.rules) ? arrange.projected.rules : null;
+  if (!projected || !projected.length) return items;
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const ordered = [];
+  const seen = new Set();
+  for (const id of projected) {
+    const item = byId.get(id);
+    if (item) {
+      ordered.push(item);
+      seen.add(id);
+    }
+  }
+  for (const item of items) {
+    if (!seen.has(item.id)) ordered.push(item);
+  }
+  return ordered;
+}
+
+function bankSetupCardPaintGapButton(host, modal, scope, gap, label) {
+  if (!host || !label) return null;
+  const button = bankSetupCardAppend(host, "button", "bob-bank-setup-card-gap-hint", label, {
+    type: "button",
+    "data-gap-index": String(gap),
+    "data-gap-scope": String(scope || ""),
+    "aria-label": `Place here (gap ${label})`,
+  });
+  bankSetupCardListen(button, () => {
+    try { modal.bankArrangeHintKey?.(label); } catch (_) {}
+  });
+  return button;
+}
+
+function bankSetupCardGapMap(modal, scope) {
+  const mode = modal?.bankHintMode;
+  const map = new Map();
+  if (!mode || mode.scope !== scope) return map;
+  const gaps = Array.isArray(mode.gaps) ? mode.gaps : [];
+  const labels = Array.isArray(mode.labels) ? mode.labels : [];
+  for (let index = 0; index < gaps.length; index += 1) {
+    if (labels[index]) map.set(gaps[index], labels[index]);
+  }
+  return map;
 }
 
 function bankSetupCardInput(parent, modal, field, caption, value, options = {}) {
@@ -84638,6 +84925,7 @@ function bankSetupCardPaintTabs(root, modal, model) {
 function bankSetupCardPaintTile(parent, modal, item, doc) {
   const selected = modal.selection?.id === item.id;
   const tile = item.tile;
+  const arrange = bankSetupCardArrangeContext(modal);
   const button = bankSharedCategoryTile(doc, tile, {
     card: true,
     selected,
@@ -84653,17 +84941,26 @@ function bankSetupCardPaintTile(parent, modal, item, doc) {
   if (Number.isInteger(tile.rows) && tile.rows > 0) {
     bankSetupCardAppend(button, "span", "bob-bank-setup-card-count", String(tile.rows), { "aria-label": `${tile.rows} rows` });
   }
+  const group = String(item.entry?.group || item.group || "");
+  if (group && item.entry?.hidden !== true) {
+    const arrangeId = `group:${group}:${item.key}`;
+    if (!modal.readOnly) bankSetupCardPaintGrip(button, `group:${group}`, item.key);
+    bankSetupCardDecorateArrange(button, arrangeId, arrange);
+    const shift = bankSetupCardShiftBadgeFor(item.entry, arrange);
+    if (shift) bankSetupCardAppend(button, "span", "bob-bank-setup-card-hotkey-shift", shift);
+  }
   bankSetupCardListen(button, () => modal.selectItem(item.id));
   parent.appendChild?.(button);
   return button;
 }
 
 function bankSetupCardPaintCategories(panel, modal, model, doc) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Letters select a category. Enter edits it; all changes preview through bob.");
   if (!model.categories.length) {
     bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "No categories are available.");
   }
-  for (const section of model.sections) {
+  const arrange = bankSetupCardArrangeContext(modal);
+  const sections = bankSetupCardProjectedSections(model, arrange);
+  for (const section of sections) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group");
     if (!wrap) continue;
     if (section.group) {
@@ -84674,13 +84971,24 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
         "data-setup-card-group": section.group,
         "data-setup-card-focus": `group-${section.group}`,
       });
+      if (label && !modal.readOnly) bankSetupCardPaintGrip(label, "groups", section.group);
+      if (label) bankSetupCardDecorateArrange(label, `groups:${section.group}`, arrange);
       bankSetupCardListen(label, () => groupItem && modal.selectItem(groupItem.id));
       if (section.group === BANK_SETUP_MONEY_GROUP) bankSetupCardAppend(wrap, "span", "bob-bank-setup-card-group-note", "built in · shown first for money in");
     }
-    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, { role: "group", "aria-label": section.group || "Ungrouped categories" });
-    for (const tile of section.tiles || []) {
-      const item = model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key);
-      if (item) bankSetupCardPaintTile(tiles, modal, item, doc);
+    const tiles = bankSetupCardAppend(wrap, "div", "bob-bank-setup-card-tiles", null, {
+      role: "group",
+      "aria-label": section.group || "Ungrouped categories",
+      "data-drag-scope": section.group ? `group:${section.group}` : "",
+    });
+    const tileItems = (section.tiles || [])
+      .map((tile) => model.items.find((candidate) => candidate.type === "category" && candidate.key === tile.key))
+      .filter(Boolean);
+    const scope = section.group ? `group:${section.group}` : "";
+    const gaps = scope ? bankSetupCardGapMap(modal, scope) : new Map();
+    for (let index = 0; index <= tileItems.length; index += 1) {
+      if (gaps.has(index)) bankSetupCardPaintGapButton(tiles, modal, scope, index, gaps.get(index));
+      if (index < tileItems.length) bankSetupCardPaintTile(tiles, modal, tileItems[index], doc);
     }
   }
   if (model.hiddenTiles.length) {
@@ -84789,13 +85097,22 @@ function bankSetupCardRuleRowText(rule, position) {
 }
 
 function bankSetupCardPaintRules(panel, modal, model) {
-  bankSetupCardAppend(panel, "p", "bob-bank-setup-card-section-note", "Rules are checked top to bottom and only affect future imports and hints; filed rows never change.");
-  const items = Array.isArray(model.ruleItems) ? model.ruleItems : [];
+  const arrange = bankSetupCardArrangeContext(modal);
+  const items = bankSetupCardProjectedRules(model, arrange);
   if (!items.length) {
     bankSetupCardAppend(panel, "p", "bob-bank-setup-card-empty", "None yet. bob already learns each merchant's name and category from your last filing; add a rule only to override that.");
   } else {
-    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, { "aria-label": "Rules" });
-    for (let position = 0; position < items.length; position += 1) {
+    const list = bankSetupCardAppend(panel, "ol", "bob-bank-setup-card-rules", null, {
+      "aria-label": "Rules",
+      "data-drag-scope": "rules",
+    });
+    const gaps = bankSetupCardGapMap(modal, "rules");
+    for (let position = 0; position <= items.length; position += 1) {
+      if (gaps.has(position)) {
+        const holder = bankSetupCardAppend(list, "li", "bob-bank-setup-card-rule-gap");
+        bankSetupCardPaintGapButton(holder, modal, "rules", position, gaps.get(position));
+      }
+      if (position >= items.length) continue;
       const item = items[position];
       const rule = item.entry || {};
       const selected = modal.selection?.id === item.id;
@@ -84809,6 +85126,8 @@ function bankSetupCardPaintRules(panel, modal, model) {
         "aria-label": bankSetupCardRuleRowText(rule, position),
       });
       if (button) {
+        if (!modal.readOnly) bankSetupCardPaintGrip(button, "rules", item.id);
+        bankSetupCardDecorateArrange(button, `rules:${item.id}`, arrange);
         bankSetupCardAppend(button, "strong", "", `${position + 1} ${rule.match || "?"} → ${rule.catLabel || rule.cat || "no category"}`);
         if (rule.payee || rule.link) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", [rule.payee ? `payee ${rule.payee}` : null, rule.link || null].filter(Boolean).join(" · "));
         if (rule.readTimeDead) bankSetupCardAppend(button, "span", "bob-bank-setup-card-muted", "read-time-dead pattern");
@@ -85815,6 +86134,1232 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     }
   }
 }
+// ---- src/248ka-plugin-bank-setup-card-arrange.js ----
+// Bank setup arrangement controller: local projection, gestures, and the
+// one-envelope save pipeline. Moves no longer open confirm stages; bob
+// still owns the only write through the guarded config session.
+Object.assign(BankSetupCardModal.prototype, {
+  bankArrangeScopes() {
+    const model = this.model || bankSetupCardModel(this.report, this.selection);
+    return typeof bankSetupCardArrangeScopes === "function" ? bankSetupCardArrangeScopes(model) : {};
+  },
+
+  bankArrangeFixed() {
+    const model = this.model || bankSetupCardModel(this.report, this.selection);
+    return typeof bankSetupCardArrangeFixed === "function" ? bankSetupCardArrangeFixed(model) : {};
+  },
+
+  bankArrangeFingerprint() {
+    return typeof bankConfigFingerprintFromReport === "function"
+      ? String(bankConfigFingerprintFromReport(this.report) || "")
+      : String(this.report?.fingerprint || this.report?.config_fingerprint || "");
+  },
+
+  bankEnsureArrangement() {
+    try {
+      const fingerprint = this.bankArrangeFingerprint();
+      const scopes = this.bankArrangeScopes();
+      const fixed = this.bankArrangeFixed();
+      if (!this.bankArrangement || this.bankArrangeBaseFingerprint !== fingerprint) {
+        this.bankArrangement = typeof createArrangement === "function"
+          ? createArrangement({ scopes, fixed })
+          : null;
+        this.bankArrangeBaseFingerprint = fingerprint;
+        this.bankHintMode = null;
+        this.bankArrangeConfirm = false;
+      } else {
+        const current = typeof this.bankArrangement.scopeIds === "function"
+          ? this.bankArrangement.scopeIds() : [];
+        const wanted = Object.keys(scopes);
+        const same = current.length === wanted.length && wanted.every((key) => current.includes(key));
+        if (!same) {
+          this.bankArrangement = typeof createArrangement === "function"
+            ? createArrangement({ scopes, fixed })
+            : null;
+          this.bankHintMode = null;
+          this.bankArrangeConfirm = false;
+        }
+      }
+    } catch (_) {
+      this.bankArrangement = null;
+    }
+    return this.bankArrangement;
+  },
+
+  bankArrangeDirty() {
+    try {
+      this.bankEnsureArrangement();
+      return Boolean(this.bankArrangement?.dirty?.());
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeSelectedScope() {
+    try {
+      const item = this.selectedItem();
+      if (!item) return null;
+      if (item.type === "group" && item.hidden !== true && item.group) {
+        return { scope: "groups", id: String(item.group) };
+      }
+      if (item.type === "category" && item.entry?.hidden !== true && item.key) {
+        const group = String(item.entry?.group || item.group || "");
+        if (!group) return null;
+        return { scope: `group:${group}`, id: String(item.key) };
+      }
+      if (item.type === "rule" && item.id) {
+        return { scope: "rules", id: String(item.id) };
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  },
+
+  bankArrangeFlashPending() {
+    try {
+      this.paint?.("session");
+      const text = typeof schemaArrangePendingText === "function"
+        ? schemaArrangePendingText(this.bankArrangement, this.model, {
+          labelFor: (scope, id) => schemaArrangeBankLabelFor(this.model, scope, id),
+          stepLabel: "Ctrl+Z step back",
+        })
+        : "";
+      schemaArrangeAnnounce?.(this.contentEl, text || "Save or revert the pending arrangement first.");
+    } catch (_) {}
+  },
+
+  bankArrangeNudge(direction, options = {}) {
+    const started = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now() : 0;
+    try {
+      if (this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
+      const selected = this.bankArrangeSelectedScope();
+      if (!selected || !selected.id) return false;
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement) return false;
+      const step = Number(direction);
+      if (!Number.isFinite(step) || step === 0) return false;
+      const before = typeof schemaArrangeCollectRects === "function"
+        ? schemaArrangeCollectRects(this.contentEl) : null;
+      const result = this.bankArrangement.nudge(selected.scope, selected.id, step, {
+        coalesceKey: options.coalesceKey || null,
+      });
+      this.bankHintMode = null;
+      if (result && result.ok && !result.clamped) {
+        this.bankArrangeConfirm = false;
+        this.bankClearEnterLatch?.();
+        this.bankArrangeSyncDraft();
+        this.paint?.("body");
+        schemaArrangePlayFlip?.(this.contentEl, before);
+        const projected = this.bankArrangement.projected(selected.scope) || [];
+        const index = projected.indexOf(selected.id);
+        if (index >= 0) {
+          const label = schemaArrangeBankLabelFor(this.model, selected.scope, selected.id);
+          schemaArrangeAnnounce?.(this.contentEl, `${label}, position ${index + 1} of ${projected.length}`);
+        }
+      } else if (result && result.clamped) {
+        const categoryEdge = String(selected.scope || "").startsWith("group:");
+        schemaArrangeAnnounce?.(this.contentEl, categoryEdge ? "⏎ edit to change group" : (step < 0 ? "Already first." : "Already last."));
+        try {
+          const node = this.contentEl?.querySelector?.(`[data-arrange-id="${selected.scope}:${selected.id}"]`);
+          if (node?.animate) {
+            node.animate(
+              [{ transform: "translateX(0)" }, { transform: `translateX(${step > 0 ? 3 : -3}px)` }, { transform: "translateX(0)" }],
+              { duration: 90, easing: "ease-out" },
+            );
+          }
+        } catch (_) {}
+      }
+      try { bankSetupRecordTiming?.(this.pluginRef, "nudge-paint", started ? performance.now() - started : 0); } catch (_) {}
+      return Boolean(result && result.ok && !result.clamped);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeToEdge(edge) {
+    try {
+      if (this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
+      const selected = this.bankArrangeSelectedScope();
+      if (!selected || !selected.id) return false;
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement) return false;
+      const before = typeof schemaArrangeCollectRects === "function"
+        ? schemaArrangeCollectRects(this.contentEl) : null;
+      const result = this.bankArrangement.toEdge(selected.scope, selected.id, edge);
+      this.bankHintMode = null;
+      if (result && result.ok && !result.clamped) {
+        this.bankArrangeConfirm = false;
+        this.bankClearEnterLatch?.();
+        this.bankArrangeSyncDraft();
+        this.paint?.("body");
+        schemaArrangePlayFlip?.(this.contentEl, before);
+        return true;
+      }
+      const categoryEdge = String(selected.scope || "").startsWith("group:");
+      schemaArrangeAnnounce?.(this.contentEl, categoryEdge ? "⏎ edit to change group" : (edge === "first" ? "Already first." : "Already last."));
+      return false;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeEnterHintMode() {
+    try {
+      if (this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
+      const selected = this.bankArrangeSelectedScope();
+      if (!selected || !selected.id) return false;
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement) return false;
+      const gaps = typeof this.bankArrangement.legalGaps === "function"
+        ? this.bankArrangement.legalGaps(selected.scope, selected.id) : [];
+      if (!gaps.length) {
+        schemaArrangeAnnounce?.(this.contentEl, "No legal gaps for this item.");
+        return false;
+      }
+      const labels = typeof schemaArrangeGapBadges === "function" ? schemaArrangeGapBadges(gaps.length) : [];
+      this.bankHintMode = { scope: selected.scope, id: selected.id, gaps: gaps.slice(), labels };
+      this.paint?.("body");
+      schemaArrangeAnnounce?.(this.contentEl,
+        `Move to… type a gap badge for ${schemaArrangeBankLabelFor(this.model, selected.scope, selected.id)}. Esc leaves hint mode.`);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeHintKey(key) {
+    try {
+      const mode = this.bankHintMode;
+      if (!mode) return false;
+      const typed = String(key || "").toLowerCase();
+      if (!typed) return false;
+      if (typed === "escape") {
+        this.bankHintMode = null;
+        this.paint?.("body");
+        return true;
+      }
+      const index = (mode.labels || []).indexOf(typed);
+      if (index < 0) {
+        const prefix = (mode.labels || []).filter((label) => label.startsWith(typed));
+        return prefix.length > 0;
+      }
+      const gap = (mode.gaps || [])[index];
+      if (!Number.isInteger(gap)) return false;
+      this.bankEnsureArrangement();
+      const before = typeof schemaArrangeCollectRects === "function"
+        ? schemaArrangeCollectRects(this.contentEl) : null;
+      const result = this.bankArrangement.placeAtGap(mode.scope, mode.id, gap);
+      this.bankHintMode = null;
+      if (result && result.ok) {
+        this.bankArrangeConfirm = false;
+        this.bankClearEnterLatch?.();
+        this.bankArrangeSyncDraft();
+        this.paint?.("body");
+        schemaArrangePlayFlip?.(this.contentEl, before);
+        return true;
+      }
+      this.paint?.("body");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeSyncDraft() {
+    try {
+      if (!this.session) return;
+      if (this.sessionState?.status === "applying") return;
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement) return;
+      if (!this.bankArrangement.dirty()) {
+        const current = this.session.getState?.().draftOps || [];
+        if (current.length && !this.stage) {
+          this.sessionState = this.session.setDraft([]);
+          this.bankArrangeConfirm = false;
+          this.bankClearEnterLatch?.();
+        }
+        return;
+      }
+      const compiled = typeof compileBankArrangement === "function"
+        ? compileBankArrangement(this.bankArrangement, {
+          categories: this.categories || this.model?.categories || [],
+          rules: this.report?.rules || this.model?.rules || [],
+        })
+        : { ok: false, code: "compile-mismatch" };
+      if (!compiled || compiled.ok === false || !Array.isArray(compiled)) return;
+      this.sessionState = this.session.setDraft(compiled);
+      this.bankArrangeConfirm = false;
+    } catch (_) {}
+  },
+
+  bankArrangeRevert() {
+    try {
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement || !this.bankArrangement.dirty()) return false;
+      this.bankArrangement.revert();
+      this.bankHintMode = null;
+      this.bankArrangeConfirm = false;
+      this.bankClearEnterLatch?.();
+      if (this.session && this.sessionState?.status !== "applying" && !this.stage) {
+        try { this.sessionState = this.session.setDraft([]); } catch (_) {}
+      }
+      this.paint?.("body");
+      schemaArrangeAnnounce?.(this.contentEl, "Reverted pending moves. Nothing was written.");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeStepBackOrUndo() {
+    try {
+      this.bankEnsureArrangement();
+      if (this.bankArrangement && this.bankArrangement.dirty()) {
+        const stepped = this.bankArrangement.stepBack();
+        if (!stepped) return false;
+        this.bankHintMode = null;
+        this.bankArrangeConfirm = false;
+        this.bankClearEnterLatch?.();
+        this.bankArrangeSyncDraft();
+        this.paint?.("body");
+        return true;
+      }
+      if (this.stage) return false;
+      const result = this.session?.stageUndo?.();
+      if (result?.ok) {
+        try { this.sessionState = this.session.getState(); } catch (_) {}
+        this.bankUndoStaged = true;
+        this.stage = {
+          kind: "undo",
+          title: "Undo last bank setup edit",
+          confirmation: "Preview the inverse operation. Enter applies the undo as one normal edit.",
+        };
+        this.bankArrangePaintUndoProjection();
+        this.paint?.("body");
+        schemaArrangeAnnounce?.(this.contentEl, "Undo staged. Press Enter to apply.");
+        return true;
+      }
+      this.errorMessage = result?.message || "There is no bank config edit to undo.";
+      this.paint?.("session");
+      return false;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangePaintUndoProjection() {
+    try {
+      const ops = this.session?.getState?.()?.draftOps || [];
+      if (!ops.length || typeof simulateBankOps !== "function") {
+        this.bankUndoView = null;
+        return;
+      }
+      const groups = this.bankArrangement?.saved?.("groups") || this.bankArrangeScopes().groups || [];
+      const sim = simulateBankOps({
+        groups,
+        categories: (this.categories || []).map((row) => ({ ...row })),
+        rules: (this.report?.rules || []).map((row) => ({ ...row })),
+      }, ops, { rules: this.report?.rules || [] });
+      this.bankUndoView = sim && sim.ok !== false ? sim : null;
+    } catch (_) {
+      this.bankUndoView = null;
+    }
+  },
+
+  bankArrangeIsLoud() {
+    try {
+      const report = this.sessionState?.preview || this.session?.getState?.()?.preview || null;
+      return schemaArrangeIsLoudBankReport(report, this.bankArrangement);
+    } catch (_) {
+      return { loud: false, reasons: [] };
+    }
+  },
+
+  bankArrangeOrderBlocked() {
+    try {
+      const report = this.sessionState?.preview || this.session?.getState?.()?.preview || null;
+      return typeof schemaArrangeBankOrderDisagrees === "function"
+        ? schemaArrangeBankOrderDisagrees(report, this.bankArrangement, this.categories || [])
+        : false;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  bankArrangeEnter() {
+    try {
+      if (this.stage) {
+        void this.applyStage?.();
+        return true;
+      }
+      this.bankEnsureArrangement();
+      if (!this.bankArrangement || !this.bankArrangement.dirty()) {
+        this.beginSelectedGesture?.("edit");
+        return true;
+      }
+      const state = this.session?.getState?.() || {};
+      this.sessionState = state;
+      if (state.status === "preview-pending" || state.busy || state.status === "applying") {
+        this.bankArmEnterLatch?.();
+        this.paint?.("session");
+        return true;
+      }
+      if (!state.canApply) {
+        if ((state.draftOps || []).length && !state.refusal) {
+          try { this.session?.previewNow?.(); } catch (_) {}
+          this.bankArmEnterLatch?.();
+        } else {
+          this.paint?.("session");
+        }
+        return true;
+      }
+      if (this.bankArrangeOrderBlocked()) {
+        this.errorMessage = "bob disagrees with this order";
+        this.paint?.("session");
+        return true;
+      }
+      const { loud } = this.bankArrangeIsLoud();
+      if (loud && !this.bankArrangeConfirm) {
+        this.bankArrangeConfirm = true;
+        this.paint?.("session");
+        schemaArrangeAnnounce?.(this.contentEl, "Loud arrangement. Press Enter again to confirm the save.");
+        return true;
+      }
+      this.bankArrangeConfirm = false;
+      return this.bankArrangeApply();
+    } catch (_) {
+      return false;
+    }
+  },
+
+  async bankArrangeApply() {
+    if (this.bankApplyPromise) return this.bankApplyPromise;
+    const work = this.bankArrangeApplyCurrent();
+    const guarded = work.finally(() => {
+      if (this.bankApplyPromise === guarded) this.bankApplyPromise = null;
+    });
+    this.bankApplyPromise = guarded;
+    return guarded;
+  },
+
+  async bankArrangeApplyCurrent() {
+    try {
+      if (!this.session) return { ok: false, code: "unavailable" };
+      this.bankEnsureArrangement();
+      let current = this.session.getState();
+      this.sessionState = current;
+      if (!current.canApply) {
+        this.paint?.("session");
+        return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
+      }
+      if (this.bankArrangeOrderBlocked()) {
+        this.errorMessage = "bob disagrees with this order";
+        this.paint?.("session");
+        return { ok: false, code: "order-mismatch" };
+      }
+      const started = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now() : 0;
+      try { this.bankArrangement?.beginSave?.(); } catch (_) {}
+      this.bankSaving = true;
+      this.bankClosedDuringSave = false;
+      this.paint?.("session");
+      const result = await this.session.apply();
+      this.sessionState = this.session.getState();
+      this.bankSaving = false;
+      try { bankSetupRecordTiming?.(this.pluginRef, "apply", started ? performance.now() - started : 0); } catch (_) {}
+      if (result?.ok && result.changed) {
+        try { this.bankArrangement?.settleSave?.(true); } catch (_) {}
+        const report = result.report || this.sessionState?.preview || null;
+        const inverseOps = Array.isArray(report?.inverse_ops) ? report.inverse_ops : [];
+        const afterFingerprint = String(report?.after_fingerprint || this.sessionState?.expect || "");
+        try { bankSetupRememberUndo?.(this.pluginRef, inverseOps, afterFingerprint); } catch (_) {}
+        this.stage = null;
+        this.bankHintMode = null;
+        this.bankArrangeConfirm = false;
+        this.bankUndoStaged = false;
+        this.bankUndoView = null;
+        this.savedMessage = "Saved · Ctrl+Z undo";
+        const closed = this.bankClosedDuringSave === true || !this.contentEl?.parentNode;
+        try {
+          const NoticeCtor = typeof Notice !== "undefined" ? Notice : globalThis.Notice;
+          if (typeof NoticeCtor === "function") {
+            new NoticeCtor(closed ? "Bank setup saved." : "Bank setup saved. Press Ctrl+Z to preview Undo.");
+          }
+        } catch (_) {}
+        const refreshed = result.refreshed && result.refreshed.report ? result.refreshed.report : null;
+        if (refreshed && refreshed.state === "valid") {
+          this.report = refreshed;
+          if (Array.isArray(refreshed.categories)) this.categories = refreshed.categories;
+        } else if (report) {
+          if (Array.isArray(report.categories)) this.categories = report.categories;
+          this.report = { ...this.report, ...report, state: this.report?.state || "valid" };
+          const after = typeof report.after_fingerprint === "string" ? report.after_fingerprint : "";
+          if (after) {
+            this.report.config_fingerprint = after;
+            this.report.fingerprint = after;
+          }
+        }
+        this.bankArrangeBaseFingerprint = this.bankArrangeFingerprint();
+        if (closed) {
+          try { this.session?.close?.(); } catch (_) {}
+          this.session = null;
+        } else {
+          this.paint?.("body");
+          schemaArrangeAnnounce?.(this.contentEl, "Bank setup saved. Press Ctrl+Z to preview Undo.");
+        }
+      } else {
+        try { this.bankArrangement?.settleSave?.(false); } catch (_) {}
+        if (result && !result.ok && result.code !== "superseded") {
+          const closed = this.bankClosedDuringSave === true || !this.contentEl?.parentNode;
+          if (closed) {
+            try {
+              const NoticeCtor = typeof Notice !== "undefined" ? Notice : globalThis.Notice;
+              if (typeof NoticeCtor === "function") {
+                new NoticeCtor(`Bank setup not saved: ${result.message || result.code || "refused"}`);
+              }
+            } catch (_) {}
+          } else {
+            this.errorMessage = result?.message || "The bank config edit was refused.";
+            this.paint?.("session");
+          }
+        } else if (this.contentEl?.parentNode) {
+          this.paint?.("session");
+        }
+      }
+      if (this.bankClosedDuringSave === true) {
+        try { this.session?.close?.(); } catch (_) {}
+        this.session = null;
+      }
+      return result;
+    } catch (error) {
+      try { this.bankArrangement?.settleSave?.(false); } catch (_) {}
+      this.bankSaving = false;
+      try { this.paint?.("session"); } catch (_) {}
+      return { ok: false, code: "failed", message: String(error?.message || error) };
+    }
+  },
+});
+
+(function bankArrangeWireCard() {
+  try {
+    const proto = BankSetupCardModal.prototype;
+    if (!proto || proto.__bankArrangeWired) return;
+    const origBegin = proto.beginSelectedGesture;
+    const origKeyDown = proto.onKeyDown;
+    const origSetReport = proto.setReport;
+    const origOnClose = proto.onClose;
+    const origApplyStage = proto.applyStage;
+    const origCancelStage = proto.cancelStage;
+    const origOpenNew = proto.openNewCategoryStage;
+    const origOpenAccount = proto.openNewAccountStage;
+    const origOpenRule = proto.openNewRuleStage;
+    const origStageUndo = proto.stageUndo;
+    const origOnOpen = proto.onOpen;
+
+    proto.onOpen = function bankArrangeOnOpen() {
+      origOnOpen.call(this);
+      try {
+        const host = this.contentEl;
+        if (!host || this.__bankComposeBound) return;
+        this.bankOnComposeStart = () => { this.bankComposing = true; };
+        this.bankOnComposeEnd = () => { this.bankComposing = false; };
+        host.addEventListener?.("compositionstart", this.bankOnComposeStart);
+        host.addEventListener?.("compositionend", this.bankOnComposeEnd);
+        this.__bankComposeBound = true;
+      } catch (_) {}
+    };
+
+    proto.setReport = function bankArrangeSetReport(report, options = {}) {
+      const hasDraft = Boolean(this.stage && this.sessionState?.draftOps?.length)
+        || (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty());
+      if (hasDraft && options.force !== true && report && this.closed !== true) {
+        if (options.initial === true) return origSetReport.call(this, report, options);
+        return false;
+      }
+      const result = origSetReport.call(this, report, options);
+      try {
+        if (result && !this.bankArrangeDirty()) this.bankEnsureArrangement?.();
+      } catch (_) {}
+      return result;
+    };
+
+    proto.createSession = function bankArrangeCreateSession(fingerprint) {
+      if (!this.pluginRef || typeof createBankConfigUpdateSession !== "function") return null;
+      let seedUndo = null;
+      try {
+        const last = typeof bankSetupLastUndo === "function" ? bankSetupLastUndo(this.pluginRef) : null;
+        if (last && Array.isArray(last.inverseOps) && last.inverseOps.length
+          && String(last.afterFingerprint || "") === String(fingerprint || "")
+          && last.afterFingerprint) {
+          seedUndo = last;
+        }
+      } catch (_) {}
+      this.session = createBankConfigUpdateSession(
+        { expect: fingerprint, undo: seedUndo },
+        bankConfigUpdateServiceDeps(this.pluginRef, { onChange: (state) => this.onSessionChange(state) }),
+      );
+      this.sessionState = this.session.getState();
+      return this.session;
+    };
+
+    proto.onSessionChange = function bankArrangeOnSessionChange(state) {
+      if (this.closed && this.bankClosedDuringSave !== true) return;
+      this.sessionState = state || null;
+      if (state?.syncWarning) this.syncWarning = { ...state.syncWarning };
+      if (state?.refusal?.kind === "stale" || state?.refusal?.code === "stale_config") {
+        void this.refreshStaleDraft();
+      }
+      if (typeof this.bankMaybeFireEnterLatch === "function" && this.bankMaybeFireEnterLatch(state)) return;
+      this.paint?.("session");
+    };
+
+    proto.onClose = function bankArrangeOnClose() {
+      try {
+        const status = this.session?.getState?.()?.status;
+        if (status === "applying") {
+          this.bankClosedDuringSave = true;
+          try { this.contentEl?.removeEventListener?.("click", this.clickListener); } catch (_) {}
+          try { this.contentEl?.removeEventListener?.("keydown", this.keyListener, true); } catch (_) {}
+          try {
+            this.contentEl?.removeEventListener?.("compositionstart", this.bankOnComposeStart);
+            this.contentEl?.removeEventListener?.("compositionend", this.bankOnComposeEnd);
+          } catch (_) {}
+          try { this.pluginRef?.bankSetupCardModalClosed?.(this); } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+      try {
+        this.contentEl?.removeEventListener?.("compositionstart", this.bankOnComposeStart);
+        this.contentEl?.removeEventListener?.("compositionend", this.bankOnComposeEnd);
+      } catch (_) {}
+      return origOnClose.call(this);
+    };
+
+    proto.beginSelectedGesture = function bankArrangeBeginSelected(kind, direction = "") {
+      try {
+        if (kind === "move") {
+          if (this.readOnly || this.stage) return false;
+          const step = direction === "back" ? -1 : 1;
+          return this.bankArrangeNudge?.(step, { coalesceKey: null });
+        }
+        if (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()
+          && (kind === "hide" || kind === "remove" || kind === "restore" || kind === "edit")) {
+          if (kind === "edit") {
+            this.bankArrangeEnter?.();
+            return true;
+          }
+          this.bankArrangeFlashPending?.();
+          return false;
+        }
+      } catch (_) {}
+      return origBegin.call(this, kind, direction);
+    };
+
+    proto.openNewCategoryStage = function bankArrangeOpenNew() {
+      try {
+        if (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+          this.bankArrangeFlashPending?.();
+          return false;
+        }
+      } catch (_) {}
+      return origOpenNew.call(this);
+    };
+
+    proto.openNewAccountStage = function bankArrangeOpenAccount() {
+      try {
+        if (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+          this.bankArrangeFlashPending?.();
+          return false;
+        }
+      } catch (_) {}
+      return origOpenAccount.call(this);
+    };
+
+    proto.openNewRuleStage = function bankArrangeOpenRule() {
+      try {
+        if (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+          this.bankArrangeFlashPending?.();
+          return false;
+        }
+      } catch (_) {}
+      return origOpenRule.call(this);
+    };
+
+    proto.stageUndo = function bankArrangeStageUndo() {
+      try {
+        if (typeof this.bankArrangeStepBackOrUndo === "function") {
+          return this.bankArrangeStepBackOrUndo();
+        }
+      } catch (_) {}
+      return origStageUndo.call(this);
+    };
+
+    proto.cancelStage = function bankArrangeCancelStage() {
+      const wasUndo = this.stage?.kind === "undo";
+      const result = origCancelStage.call(this);
+      if (wasUndo) {
+        this.bankUndoStaged = false;
+        this.bankUndoView = null;
+      }
+      return result;
+    };
+
+    proto.applyStage = function bankArrangeApplyStage() {
+      try {
+        if (!this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+          return this.bankArrangeEnter?.();
+        }
+      } catch (_) {}
+      return origApplyStage.call(this);
+    };
+
+    proto.onKeyDown = async function bankArrangeOnKeyDown(event) {
+      try {
+        if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) {
+          return origKeyDown.call(this, event);
+        }
+        const key = String(event.key || "");
+        const lower = key.toLowerCase();
+        const mod = Boolean(event.ctrlKey || event.metaKey);
+        const inInput = Boolean(event.target?.closest?.("input,select,textarea"));
+        const altJ = event.altKey && (lower === "j" || event.code === "KeyJ");
+        const altK = event.altKey && (lower === "k" || event.code === "KeyK");
+        const altM = event.altKey && (lower === "m" || event.code === "KeyM");
+        const consume = () => bankCategoryUiConsume(event);
+
+        if (this.bankHintMode && !this.stage && this.sessionState?.status !== "applying") {
+          if (key === "Escape") {
+            consume();
+            this.bankHintMode = null;
+            this.paint?.("body");
+            return;
+          }
+          if (!inInput && !mod && !event.altKey && key.length === 1) {
+            if (this.bankArrangeHintKey?.(lower)) {
+              consume();
+              return;
+            }
+          }
+        }
+
+        if ((key === "Escape" || (lower === "q" && !mod && !event.altKey && !inInput))
+          && !this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()
+          && this.sessionState?.status !== "applying") {
+          consume();
+          this.bankArrangeRevert?.();
+          return;
+        }
+
+        if (!this.stage && !this.readOnly && this.sessionState?.status !== "applying") {
+          if (altJ || altK) {
+            consume();
+            if (event.shiftKey) this.bankArrangeToEdge?.(altJ ? "last" : "first");
+            else this.bankArrangeNudge?.(altJ ? 1 : -1, { coalesceKey: "alt-hold" });
+            return;
+          }
+          if (altM && !inInput) {
+            consume();
+            this.bankArrangeEnterHintMode?.();
+            return;
+          }
+        }
+
+        if (mod && lower === "z" && !inInput) {
+          consume();
+          if (this.stage?.kind === "undo") void this.applyStage();
+          else this.bankArrangeStepBackOrUndo?.();
+          return;
+        }
+
+        if (key === "Enter" && !inInput && !this.stage
+          && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+          consume();
+          this.bankArrangeEnter?.();
+          return;
+        }
+      } catch (_) {}
+      return origKeyDown.call(this, event);
+    };
+
+    try {
+      Object.defineProperty(proto, "__bankArrangeWired", { value: true, configurable: true });
+    } catch (_) {
+      proto.__bankArrangeWired = true;
+    }
+  } catch (_) {}
+})();
+// ---- src/248kb-plugin-bank-setup-card-regions.js ----
+// Stable Bank setup card regions, status line, hint strip, and Enter latch.
+// Painters refill one region at a time so session previews never rebuild
+// the shell or open stage inputs.
+
+function bankSetupCardRegionEmpty(node) {
+  if (!node) return;
+  try {
+    if (typeof node.empty === "function") {
+      node.empty();
+      return;
+    }
+  } catch (_) {}
+  try {
+    if (typeof node.textContent === "string") node.textContent = "";
+  } catch (_) {}
+  try {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  } catch (_) {}
+}
+
+function bankSetupCardRegion(card, name) {
+  if (!card || !name) return null;
+  const nodes = card.querySelectorAll?.("[data-setup-region]") || [];
+  for (const node of nodes) {
+    if (node.getAttribute?.("data-setup-region") === name) return node;
+  }
+  return null;
+}
+
+function bankSetupCardStageKey(stage) {
+  if (!stage) return "";
+  const id = stage.entry?.key || stage.entry?.alias || stage.entry?.index || stage.group || "";
+  return `${stage.kind}:${id}`;
+}
+
+function bankSetupCardBuildShell(doc) {
+  const host = doc && typeof doc.createElement === "function" ? doc.createElement("div") : null;
+  if (!host) return null;
+  host.className = "bob-bank-setup-card";
+  host.setAttribute("data-bank-setup-card", "true");
+  host.setAttribute("role", "document");
+  host.setAttribute("aria-label", "Bank setup editor");
+  const regions = [
+    ["header", "bob-bank-setup-card-header"],
+    ["tabs", "bob-bank-setup-card-tabs-host"],
+    ["panel", "bob-bank-setup-card-panel"],
+    ["selection", "bob-bank-setup-card-selection-host"],
+    ["stage", "bob-bank-setup-card-stage-host"],
+    ["status", "bob-bank-setup-card-status-host"],
+    ["hints", "bob-bank-setup-card-hints"],
+    ["live", "bob-bank-setup-card-live"],
+  ];
+  for (const [name, className] of regions) {
+    const region = doc.createElement("div");
+    region.className = className;
+    region.setAttribute("data-setup-region", name);
+    if (name === "panel") {
+      region.id = "bob-bank-setup-card-panel";
+      region.setAttribute("role", "tabpanel");
+    }
+    if (name === "status") {
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+    }
+    if (name === "live") {
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+      region.setAttribute("aria-atomic", "true");
+    }
+    host.appendChild(region);
+  }
+  return host;
+}
+
+function bankSetupCardPaintHeader(card) {
+  const host = bankSetupCardRegion(card, "header");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  bankSetupCardAppend(host, "h2", "bob-bank-setup-card-title", "🏦 Bank setup");
+}
+
+function bankSetupCardPaintTabsRegion(card, modal, model) {
+  const host = bankSetupCardRegion(card, "tabs");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  bankSetupCardPaintTabs(host, modal, model);
+}
+
+function bankSetupCardPaintPanel(card, modal, model, doc) {
+  const host = bankSetupCardRegion(card, "panel");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  host.setAttribute("aria-label", BANK_SETUP_CARD_SECTION_LABELS[modal.section] || "Categories");
+  if (modal.section === "categories") bankSetupCardPaintCategories(host, modal, model, doc);
+  else if (modal.section === "accounts") bankSetupCardPaintAccounts(host, modal, model);
+  else if (modal.section === "rules") bankSetupCardPaintRules(host, modal, model);
+  else bankSetupCardPaintChecks(host, modal, model);
+}
+
+function bankSetupCardPaintSelectionRegion(card, modal, model) {
+  const host = bankSetupCardRegion(card, "selection");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  bankSetupCardPaintSelection(host, modal, model);
+}
+
+function bankSetupCardPaintStageRegion(card, modal, doc, force) {
+  const host = bankSetupCardRegion(card, "stage");
+  if (!host) return;
+  const key = bankSetupCardStageKey(modal.stage);
+  if (!force && key && key === modal.bankStagePaintKey && host.firstChild) {
+    bankSetupCardPaintStageStatus(host, modal);
+    return;
+  }
+  bankSetupCardRegionEmpty(host);
+  if (modal.stage) bankSetupCardPaintStage(host, modal, doc);
+  modal.bankStagePaintKey = key;
+}
+
+function bankSetupCardPaintStageStatus(host, modal) {
+  if (!host) return;
+  const state = modal.sessionState || {};
+  const latched = Boolean(modal.bankEnterLatch);
+  const apply = host.querySelector?.('[data-setup-action="apply"]');
+  if (apply) {
+    apply.disabled = modal.busy || modal.readOnly || (state.canApply !== true && !latched);
+    const label = latched ? "Saving as soon as bob confirms…" : (modal.stage?.kind === "undo" ? "Undo" : "Apply");
+    try {
+      if (typeof notebookSetText === "function") notebookSetText(apply, label);
+      else apply.textContent = label;
+    } catch (_) {}
+  }
+  const pending = host.querySelector?.(".bob-bank-setup-card-consequence.is-pending");
+  if (latched && !pending) {
+    bankSetupCardAppend(host, "p", "bob-bank-setup-card-consequence is-pending", "Saving as soon as bob confirms…", {
+      role: "status",
+      "aria-live": "polite",
+    });
+  }
+}
+
+function bankSetupCardStatusText(modal) {
+  const state = modal.sessionState || {};
+  const arrange = modal.bankPaintArrange || {};
+  if (modal.bankEnterLatch) return "Saving as soon as bob confirms…";
+  if (arrange.saving) return `Saving… · ${arrange.pendingText || "Saving…"}`;
+  if (modal.errorMessage) return modal.errorMessage;
+  if (state.refusal) return state.refusal.message || "bob refused this edit.";
+  if (arrange.orderBlocked) return "bob disagrees with this order";
+  if (arrange.dirty && arrange.confirm) return "Loud arrangement. Press Enter again to confirm the save.";
+  if (arrange.dirty && arrange.pendingText) return arrange.pendingText;
+  if (arrange.shifted && arrange.shifted.length) {
+    const first = arrange.shifted[0];
+    const badge = typeof schemaArrangeHotkeyShiftBadge === "function"
+      ? schemaArrangeHotkeyShiftBadge(first)
+      : "";
+    return badge ? `Hotkey shift ${badge}` : "Hotkeys will shift.";
+  }
+  if (state.consequence) return state.consequence;
+  if (modal.savedMessage) return modal.savedMessage;
+  if (modal.staleMessage) return modal.staleMessage;
+  return "";
+}
+
+function bankSetupCardStatusTone(modal) {
+  const state = modal.sessionState || {};
+  const arrange = modal.bankPaintArrange || {};
+  if (modal.bankEnterLatch || arrange.saving || state.status === "preview-pending" || state.busy) return "is-previewing";
+  if (modal.errorMessage || state.refusal || arrange.orderBlocked) return "is-refused";
+  if (arrange.dirty && arrange.loud && state.canApply) return "is-confirm";
+  if (modal.savedMessage) return "is-saved";
+  if (state.canApply) return "is-ready";
+  return "";
+}
+
+function bankSetupCardPaintStatusRegion(card, modal) {
+  const host = bankSetupCardRegion(card, "status");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  const text = bankSetupCardStatusText(modal);
+  host.className = `bob-bank-setup-card-status-host ${bankSetupCardStatusTone(modal)}`.trim();
+  if (!text) return;
+  bankSetupCardAppend(host, "p", "bob-bank-setup-card-status-line", text, { role: "status" });
+}
+
+function bankSetupCardHintItems(modal) {
+  const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
+  const arrange = modal.bankPaintArrange || {};
+  const items = [];
+  if (arrange.saving) {
+    return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];
+  }
+  if (arrange.hintMode && !modal.stage) {
+    items.push({ keys: "a–z", label: "pick gap" });
+    items.push({ keys: "esc", label: "leave hint mode" });
+    return items;
+  }
+  if (arrange.dirty && !modal.stage) {
+    items.push({ keys: "⏎", label: arrange.confirm ? "confirm save" : "save" });
+    items.push({ keys: "esc", label: "revert" });
+    items.push({ keys: `${mod}+Z`, label: "step back" });
+    items.push({ keys: "⌥M", label: "move to…" });
+    return items;
+  }
+  if (modal.stage) {
+    items.push({ keys: "⏎", label: modal.bankEnterLatch ? "saving" : "apply" });
+    items.push({ keys: "esc", label: "cancel" });
+    items.push({ keys: `${mod}+E`, label: "YAML" });
+    return items;
+  }
+  if (modal.section === "accounts") {
+    items.push({ keys: "⏎", label: "relabel" });
+    items.push({ keys: "+", label: "add" });
+    items.push({ keys: `${mod}+D`, label: "remove" });
+  } else if (modal.section === "rules") {
+    items.push({ keys: "⏎", label: "edit" });
+    items.push({ keys: "+", label: "new" });
+    items.push({ keys: "⌥J/K", label: "move" });
+    items.push({ keys: `${mod}+D`, label: "remove" });
+  } else if (modal.section === "checks") {
+    items.push({ keys: "⏎", label: "open line" });
+  } else {
+    items.push({ keys: "⏎", label: "edit" });
+    items.push({ keys: "+", label: "new" });
+    items.push({ keys: "⌥J/K", label: "move" });
+    items.push({ keys: "⌥M", label: "move to…" });
+    items.push({ keys: `${mod}+H`, label: "hide" });
+    items.push({ keys: `${mod}+D`, label: "remove" });
+  }
+  items.push({ keys: `${mod}+E`, label: "YAML" });
+  if (modal.sessionState?.undoAvailable || modal.pluginRef?.bankSetupUndoRecord) {
+    items.push({ keys: `${mod}+Z`, label: "undo" });
+  }
+  items.push({ keys: "esc", label: "close" });
+  return items;
+}
+
+function bankSetupCardPaintHintsRegion(card, modal, doc) {
+  const host = bankSetupCardRegion(card, "hints");
+  if (!host) return;
+  bankSetupCardRegionEmpty(host);
+  const strip = bankSetupCardAppend(host, "div", "bob-bank-setup-card-hint-strip");
+  for (const item of bankSetupCardHintItems(modal)) {
+    const row = bankSetupCardAppend(strip, "span", "bob-bank-setup-card-hint");
+    bankSetupCardAppend(row, "kbd", "", item.keys);
+    if (typeof doc?.createTextNode === "function") {
+      try { row.appendChild(doc.createTextNode(" ")); } catch (_) {}
+    }
+    bankSetupCardAppend(row, "span", "bob-bank-setup-card-hint-label", item.label);
+  }
+}
+
+function bankSetupCardPaintLive(card, modal) {
+  const host = bankSetupCardRegion(card, "live");
+  if (!host) return;
+  try {
+    if (typeof notebookSetText === "function") notebookSetText(host, modal.liveText || "");
+    else host.textContent = modal.liveText || "";
+  } catch (_) {}
+  modal.liveRegion = host;
+}
+
+function bankSetupCardArrangePaintState(modal) {
+  const dirty = typeof modal.bankArrangeDirty === "function" ? modal.bankArrangeDirty() : false;
+  const loud = typeof modal.bankArrangeIsLoud === "function" ? modal.bankArrangeIsLoud() : { loud: false, reasons: [] };
+  let pendingText = "";
+  let projected = null;
+  let deltas = {};
+  try {
+    if (dirty && modal.bankArrangement) {
+      pendingText = typeof schemaArrangePendingText === "function"
+        ? schemaArrangePendingText(modal.bankArrangement, modal.model, {
+          labelFor: (scope, id) => schemaArrangeBankLabelFor(modal.model, scope, id),
+          stepLabel: "Ctrl+Z step back",
+        })
+        : "";
+      projected = modal.bankArrangement.scopes();
+      for (const scope of modal.bankArrangement.scopeIds()) {
+        for (const id of modal.bankArrangement.projected(scope)) {
+          const delta = modal.bankArrangement.delta(scope, id);
+          if (Number.isInteger(delta) && delta !== 0) deltas[`${scope}:${id}`] = delta;
+        }
+      }
+    } else if (modal.bankUndoView && modal.stage?.kind === "undo") {
+      const view = modal.bankUndoView;
+      projected = {
+        groups: (view.groups || []).slice(),
+        rules: (modal.model?.ruleItems || []).map((item) => item.id),
+      };
+      for (const group of projected.groups || []) {
+        projected[`group:${group}`] = (view.categories || [])
+          .filter((row) => String(row?.group || "") === group && row.hidden !== true)
+          .map((row) => row.key);
+      }
+      if (Array.isArray(view.rules) && modal.model?.ruleItems) {
+        const byIndex = new Map((modal.model.ruleItems || []).map((item) => [item.entry?.index, item.id]));
+        projected.rules = view.rules.map((rule, index) => byIndex.get(rule.index) || `rule:${index}`).filter(Boolean);
+      }
+    }
+  } catch (_) {}
+  const preview = modal.sessionState?.preview || null;
+  const shifted = Array.isArray(preview?.hotkeys?.shifted) ? preview.hotkeys.shifted : [];
+  return {
+    dirty: dirty === true,
+    loud: Boolean(loud?.loud),
+    loudReasons: Array.isArray(loud?.reasons) ? loud.reasons : [],
+    confirm: modal.bankArrangeConfirm === true,
+    saving: modal.bankSaving === true,
+    hintMode: modal.bankHintMode || null,
+    pendingText,
+    projected,
+    deltas,
+    shifted,
+    orderBlocked: typeof modal.bankArrangeOrderBlocked === "function" ? modal.bankArrangeOrderBlocked() : false,
+  };
+}
+
+Object.assign(BankSetupCardModal.prototype, {
+  bankCardEl() {
+    return this.contentEl?.querySelector?.("[data-bank-setup-card]") || null;
+  },
+
+  bankClearEnterLatch() {
+    if (!this.bankEnterLatch) return;
+    this.bankEnterLatch = null;
+  },
+
+  bankArmEnterLatch() {
+    const state = this.session?.getState?.() || {};
+    this.bankEnterLatch = { revision: state.revision, expect: state.expect };
+    this.paint?.("session");
+  },
+
+  bankLatchShouldFire(state) {
+    const latch = this.bankEnterLatch;
+    if (!latch || !state) return false;
+    if (state.revision !== latch.revision) return false;
+    return state.canApply === true;
+  },
+
+  bankLatchShouldClear(state) {
+    const latch = this.bankEnterLatch;
+    if (!latch || !state) return false;
+    if (state.revision !== latch.revision) return true;
+    if (state.status === "preview-pending" || state.status === "applying" || state.busy) return false;
+    return state.canApply !== true;
+  },
+
+  bankMaybeFireEnterLatch(state) {
+    const current = state || this.session?.getState?.() || {};
+    if (this.bankLatchShouldFire(current)) {
+      this.bankClearEnterLatch();
+      if (typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty() && !this.stage) {
+        void this.bankArrangeApply?.();
+      } else {
+        void this.applyStage?.();
+      }
+      return true;
+    }
+    if (this.bankLatchShouldClear(current)) {
+      this.bankClearEnterLatch();
+      this.paint?.("session");
+    }
+    return false;
+  },
+
+  bankFocusAfterPaint(force = false) {
+    const host = this.contentEl;
+    if (!host || this.bankComposing) return;
+    const doc = host.ownerDocument;
+    const active = doc?.activeElement;
+    const activeInCard = Boolean(active && (active === host || host.contains?.(active)));
+    if (this.stage) {
+      const wanted = this.stage.focus;
+      const input = wanted
+        ? host.querySelector?.(`[data-setup-card-focus="${wanted}"]`)
+        : host.querySelector?.(".bob-bank-setup-card-input");
+      if (!force && activeInCard && active?.getAttribute?.("data-setup-card-focus")) return;
+      try { input?.focus?.({ preventScroll: true }); } catch (_) {}
+      return;
+    }
+    const focusId = this.selection?.type === "category" ? `category-${this.selection.key}`
+      : this.selection?.type === "group" ? `group-${this.selection.group || "hidden"}`
+      : this.selection?.type === "account" ? `account-${this.selection.alias || ""}`
+      : this.selection?.type === "rule" ? `rule-${this.selection.index}`
+      : "";
+    if (!force && activeInCard && focusId && active?.getAttribute?.("data-setup-card-focus") === focusId) return;
+    const selected = (focusId && host.querySelector?.(`[data-setup-card-focus="${focusId}"]`))
+      || host.querySelector?.(".bob-bank-setup-card-tab.is-active");
+    try { selected?.focus?.({ preventScroll: true }); } catch (_) {}
+  },
+
+  paint(reason = "full") {
+    try {
+      const content = this.contentEl;
+      if (!content || typeof content.querySelector !== "function") {
+        return bankSetupCardPaint(this);
+      }
+      const doc = content.ownerDocument || this.app?.document || (typeof document !== "undefined" ? document : null);
+      const model = bankSetupCardModel(this.report, this.selection);
+      this.model = model;
+      this.readOnly = model.state !== "valid";
+      this.selection = model.selection;
+      this.bankPaintArrange = bankSetupCardArrangePaintState(this);
+      let card = this.bankCardEl();
+      const composing = this.bankComposing === true;
+      if (!card || reason === "full" || !card.parentNode) {
+        try {
+          if (typeof content.empty === "function") content.empty();
+          else content.textContent = "";
+        } catch (_) {}
+        card = bankSetupCardBuildShell(doc);
+        if (card) content.appendChild(card);
+        card.setAttribute?.("data-state", model.state);
+        bankSetupCardPaintHeader(card);
+        bankSetupCardPaintTabsRegion(card, this, model);
+        bankSetupCardPaintPanel(card, this, model, doc);
+        bankSetupCardPaintSelectionRegion(card, this, model);
+        bankSetupCardPaintStageRegion(card, this, doc, true);
+        bankSetupCardPaintStatusRegion(card, this);
+        bankSetupCardPaintHintsRegion(card, this, doc);
+        bankSetupCardPaintLive(card, this);
+        this.bankStagePaintKey = bankSetupCardStageKey(this.stage);
+        this.bankFocusAfterPaint(true);
+        return model;
+      }
+      card.setAttribute?.("data-state", model.state);
+      if (composing && (reason === "full" || reason === "stage" || reason === "body")) {
+        bankSetupCardPaintStatusRegion(card, this);
+        bankSetupCardPaintHintsRegion(card, this, doc);
+        return model;
+      }
+      if (reason === "session") {
+        bankSetupCardPaintStatusRegion(card, this);
+        bankSetupCardPaintHintsRegion(card, this, doc);
+        if (this.bankPaintArrange?.dirty || this.bankPaintArrange?.shifted?.length) {
+          bankSetupCardPaintPanel(card, this, model, doc);
+          bankSetupCardPaintSelectionRegion(card, this, model);
+        }
+        const stageKey = bankSetupCardStageKey(this.stage);
+        if (stageKey !== this.bankStagePaintKey) {
+          bankSetupCardPaintStageRegion(card, this, doc, true);
+        } else {
+          bankSetupCardPaintStageStatus(bankSetupCardRegion(card, "stage"), this);
+        }
+        return model;
+      }
+      if (reason === "stage") {
+        bankSetupCardPaintStageRegion(card, this, doc, true);
+        bankSetupCardPaintStatusRegion(card, this);
+        bankSetupCardPaintHintsRegion(card, this, doc);
+        this.bankFocusAfterPaint(true);
+        return model;
+      }
+      bankSetupCardPaintHeader(card);
+      bankSetupCardPaintTabsRegion(card, this, model);
+      bankSetupCardPaintPanel(card, this, model, doc);
+      bankSetupCardPaintSelectionRegion(card, this, model);
+      bankSetupCardPaintStageRegion(card, this, doc, reason === "full");
+      bankSetupCardPaintStatusRegion(card, this);
+      bankSetupCardPaintHintsRegion(card, this, doc);
+      bankSetupCardPaintLive(card, this);
+      this.bankFocusAfterPaint(reason === "body");
+      return model;
+    } catch (_) {
+      try { return bankSetupCardPaint(this); } catch (error) { return null; }
+    }
+  },
+});
 // ---- src/248l-plugin-bank-setup-card-entrypoints.js ----
 // Bank Setup card entry points, lifecycle, and its branch of the shared
 // album/bank YAML excursion. The palette command stays an object literal so
@@ -142938,6 +144483,11 @@ try {
       bankSetupCardPaintAccounts,
       bankSetupCardPaintRules,
       bankSetupCardPaintChecks,
+      bankSetupCardArrangeScopes,
+      bankSetupCardArrangeFixed,
+      bankSetupRememberUndo,
+      bankSetupLastUndo,
+      bankSetupRecordTiming,
     });
   }
 } catch (_) {}
@@ -142955,6 +144505,10 @@ try {
       arrangeFlipPlan,
       schemaArrangeScopesFromAlbumModel,
       schemaArrangeIsLoudAlbumReport,
+      schemaArrangeIsLoudBankReport,
+      schemaArrangeBankLabelFor,
+      schemaArrangeHotkeyShiftBadge,
+      schemaArrangeBankOrderDisagrees,
       schemaArrangeDeltaBadge,
       schemaArrangePendingText,
       schemaArrangeCollectRects,

@@ -16,6 +16,14 @@ try {
       schemaArrangeCollectRects,
       schemaArrangePlayFlip,
       schemaArrangeGapBadges,
+      schemaDragGapFromPoint,
+      schemaDragScopeAtPoint,
+      schemaDragCollectRects,
+      schemaDragScopeOrientation,
+      createSchemaDragSession,
+      schemaDragAutoscrollStep,
+      schemaGhostDefaultFor,
+      schemaGhostClampGap,
     });
   }
 } catch (_) {}

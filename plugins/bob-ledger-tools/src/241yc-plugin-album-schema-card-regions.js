@@ -42,6 +42,65 @@ function albumSchemaCardAppendPill(doc, host, text, className) {
   return pill;
 }
 
+function albumSchemaCardPaintGrip(doc, host, scope, id, label) {
+  if (!doc || !host || !scope) return null;
+  const grip = notebookCreateEl(doc, "span", "bob-album-schema-grip");
+  if (!grip) return null;
+  notebookSetText(grip, "⠿");
+  grip.setAttribute("data-drag-scope", String(scope));
+  grip.setAttribute("data-drag-id", String(id ?? ""));
+  grip.setAttribute("aria-hidden", "true");
+  grip.setAttribute("title", `Drag ${label || "item"} to reorder`);
+  try {
+    if (typeof host.insertBefore === "function") host.insertBefore(grip, host.firstChild || null);
+    else host.appendChild(grip);
+  } catch (_) {
+    try { host.appendChild(grip); } catch (_) {}
+  }
+  return grip;
+}
+
+function albumSchemaCardPaintGhostNode(doc, ghost) {
+  if (!doc || !ghost) return null;
+  if (ghost.kind === "choice") {
+    const chip = notebookCreateEl(doc, "span", "bob-album-schema-choice is-ghost");
+    if (!chip) return null;
+    chip.setAttribute("data-schema-ghost", "true");
+    chip.setAttribute("aria-label", "New choice lands here");
+    const text = `${ghost.emoji ? `${ghost.emoji} ` : ""}${String(ghost.label || "").trim() || "New choice"}`;
+    notebookSetText(chip, text);
+    return chip;
+  }
+  const row = notebookCreateEl(doc, "div", "bob-album-schema-field is-ghost");
+  if (!row) return null;
+  row.setAttribute("data-schema-ghost", "true");
+  row.setAttribute("aria-label", "New field lands here");
+  notebookSetText(row, `+ ${String(ghost.label || "").trim() || "New field"}`);
+  return row;
+}
+
+function albumSchemaCardInsertGhost(doc, host, scope, ghost) {
+  if (!doc || !host || !ghost || ghost.scope !== scope) return null;
+  const node = albumSchemaCardPaintGhostNode(doc, ghost);
+  if (!node) return null;
+  const prefix = `${scope}:`;
+  let items = [];
+  try {
+    items = Array.from(host.children || []).filter((child) =>
+      String(child.getAttribute?.("data-arrange-id") || "").startsWith(prefix));
+  } catch (_) {
+    items = [];
+  }
+  const before = items[Math.min(Math.max(Number(ghost.gap) || 0, 0), items.length)] || null;
+  try {
+    if (typeof host.insertBefore === "function") host.insertBefore(node, before);
+    else host.appendChild(node);
+  } catch (_) {
+    try { host.appendChild(node); } catch (_) {}
+  }
+  return node;
+}
+
 function albumSchemaCardPaintChoiceChip(doc, host, field, choice, options) {
   const selectedKey = options?.selectedKey || "";
   const key = `choice:${field.key}:${choice.value}`;
@@ -57,6 +116,7 @@ function albumSchemaCardPaintChoiceChip(doc, host, field, choice, options) {
   });
   chip.setAttribute("data-field-key", field.key);
   chip.setAttribute("data-choice-value", choice.value);
+  if (options?.grip) albumSchemaCardPaintGrip(doc, chip, `choices:${field.key}`, choice.value, label);
   if (parts.emoji) {
     const glyph = notebookCreateEl(doc, "span", "bob-album-schema-choice-glyph");
     notebookSetText(glyph, parts.emoji);
@@ -105,6 +165,8 @@ function albumSchemaCardPaintFieldRow(doc, host, field, options) {
   }
   row.setAttribute("data-field-key", field.key);
   if (field.line != null) row.setAttribute("data-yaml-line", String(field.line));
+  row.setAttribute("data-drag-scope", "fields");
+  if (options?.grip) albumSchemaCardPaintGrip(doc, row, "fields", field.key, field.label);
   const main = notebookCreateEl(doc, "span", "bob-album-schema-field-main");
   const label = notebookCreateEl(doc, "span", "bob-album-schema-label");
   notebookSetText(label, field.label);
@@ -227,6 +289,8 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
   const deltas = arrange?.deltas || {};
   const saving = arrange?.saving === true;
   const hintMode = arrange?.hintMode || null;
+  const ghost = options?.ghost || null;
+  const itemOptions = editable && !options?.stage ? Object.assign({}, options, { grip: true }) : options;
   if (model.emptySchema && !model.schemaInvalid) {
     const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
     notebookSetText(empty, albumHeaderSummaryText(model));
@@ -249,21 +313,23 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
         const wantsChoices = presented.choices?.length || field.kind === "choices";
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        cloud.setAttribute("data-drag-scope", scope);
         for (const choice of presented.choices || []) {
-          albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+          albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
           const chip = cloud.children?.[cloud.children.length - 1] || null;
           if (chip) {
             const value = String(choice?.value ?? "");
             albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
+        albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
           albumSchemaCardButton(doc, cloud, "+ choice", {
@@ -275,18 +341,20 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         }
         host.appendChild(cloud);
       }
+      albumSchemaCardInsertGhost(doc, host, "fields", ghost);
     } else {
       for (const key of fieldOrder) {
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
         const wantsChoices = presented.choices?.length || field.kind === "choices";
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        cloud.setAttribute("data-drag-scope", scope);
         const choicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
         let choiceOrder = (presented.choices || []).map((choice) => String(choice?.value ?? ""));
         if (projected && Array.isArray(projected[scope])) {
@@ -305,7 +373,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
             const choice = choicesByValue.get(value);
             if (!choice) continue;
             const beforeCount = cloud.children?.length || 0;
-            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
             const chip = cloud.children?.[cloud.children.length - 1] || null;
             if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
             void beforeCount;
@@ -314,11 +382,12 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
           for (const value of choiceOrder) {
             const choice = choicesByValue.get(value);
             if (!choice) continue;
-            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
             const chip = cloud.children?.[cloud.children.length - 1] || null;
             if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
+        albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
           albumSchemaCardButton(doc, cloud, "+ choice", {
@@ -330,6 +399,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         }
         host.appendChild(cloud);
       }
+      albumSchemaCardInsertGhost(doc, host, "fields", ghost);
     }
     for (const pattern of model.legacy || []) {
       const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");

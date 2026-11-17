@@ -9284,6 +9284,47 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   font: inherit;
   font-size: 0.82em;
 }
+.bob-album-schema-choice.is-ghost,
+.bob-album-schema-field.is-ghost {
+  border-style: dashed;
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+  color: var(--text-muted);
+}
+.bob-album-schema-grip {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.3em;
+  color: var(--text-faint, var(--text-muted));
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+  user-select: none;
+}
+.bob-album-schema-choice-button:hover .bob-album-schema-grip,
+.bob-album-schema-field:hover .bob-album-schema-grip,
+.bob-album-schema-choice-button:focus-within .bob-album-schema-grip,
+.bob-album-schema-field:focus-within .bob-album-schema-grip {
+  opacity: 1;
+}
+.bob-album-schema-choice-button.is-dragging,
+.bob-album-schema-field.is-dragging {
+  opacity: 0.7;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+}
+.bob-album-schema-insert-caret {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 2px;
+  min-height: 1.4em;
+  margin: 0.15em 0.1em;
+  background: var(--interactive-accent);
+  border-radius: 1px;
+}
+.bob-album-schema-insert-caret.is-not-allowed {
+  background: var(--text-error, var(--text-muted));
+  cursor: not-allowed;
+}
 .bob-album-schema-pending-bar {
   margin: 0.15em 0;
   color: var(--text-normal);

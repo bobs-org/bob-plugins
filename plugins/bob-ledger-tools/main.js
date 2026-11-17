@@ -65927,6 +65927,245 @@ function schemaArrangeGapBadges(count) {
   } catch (_) {}
   return [];
 }
+
+// Shared pointer-drag controller (album now, bank later). The math and the
+// caret are scope-agnostic: each card wires pointer events to placeAtGap.
+// Gap numbers match the engine: gap g inserts before order[g] with the
+// dragged item still in place; the two no-op gaps next to the dragged item
+// are legal to hover but drop as a quiet snap-back.
+function schemaDragOrientationRect(rect, horizontal) {
+  if (!rect) return null;
+  const start = Number(horizontal ? rect.left : rect.top);
+  const end = Number(horizontal ? rect.right : rect.bottom);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return { start, end, center: (start + end) / 2 };
+}
+
+function schemaDragGapFromPoint(order, id, rects, point, orientation) {
+  try {
+    const horizontal = orientation === "horizontal";
+    const value = Number(horizontal ? point?.x : point?.y);
+    if (!Array.isArray(order) || !Number.isFinite(value)) return null;
+    const get = rects instanceof Map
+      ? (key) => rects.get(key)
+      : (key) => rects?.[key];
+    for (let index = 0; index < order.length; index += 1) {
+      const span = schemaDragOrientationRect(get(order[index]), horizontal);
+      if (!span) continue;
+      if (value < span.center) return index;
+    }
+    return order.length;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragScopeAtPoint(doc, x, y) {
+  try {
+    const el = doc?.elementFromPoint?.(x, y) || null;
+    const scope = el?.closest?.("[data-drag-scope]") || null;
+    const name = scope?.getAttribute?.("data-drag-scope");
+    return name ? String(name) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragCollectRects(root, scope) {
+  const rects = new Map();
+  try {
+    const nodes = root?.querySelectorAll?.("[data-arrange-id]") || [];
+    for (const node of Array.from(nodes)) {
+      const arrangeId = node.getAttribute?.("data-arrange-id") || "";
+      const prefix = `${scope}:`;
+      if (!arrangeId.startsWith(prefix)) continue;
+      const id = arrangeId.slice(prefix.length);
+      let rect = null;
+      try {
+        rect = node.getBoundingClientRect?.() || null;
+      } catch (_) {
+        rect = null;
+      }
+      if (rect && Number.isFinite(Number(rect.top)) && Number.isFinite(Number(rect.left))) {
+        rects.set(id, {
+          top: Number(rect.top),
+          bottom: Number(rect.bottom ?? rect.top),
+          left: Number(rect.left),
+          right: Number(rect.right ?? rect.left),
+        });
+      }
+    }
+  } catch (_) {}
+  return rects;
+}
+
+function schemaDragScopeOrientation(scope) {
+  return String(scope || "").startsWith("choices:") ? "horizontal" : "vertical";
+}
+
+function createSchemaDragSession({ scope, id, order, legalGaps }) {
+  const legal = Array.isArray(legalGaps) ? legalGaps.slice() : [];
+  return {
+    scope: String(scope || ""),
+    id: String(id ?? ""),
+    order: Array.isArray(order) ? order.slice() : [],
+    legal,
+    gap: null,
+    hoverScope: String(scope || ""),
+    valid: false,
+    moved: false,
+    moveTo(gap, hoverScope) {
+      if (Number.isInteger(gap)) {
+        this.gap = gap;
+        this.moved = true;
+      }
+      if (hoverScope !== undefined) this.hoverScope = hoverScope == null ? null : String(hoverScope);
+      this.valid = this.hoverScope === this.scope && legal.includes(this.gap);
+      return this.valid;
+    },
+    drop() {
+      if (this.hoverScope !== undefined && this.hoverScope !== null && this.hoverScope !== this.scope) {
+        return { ok: false, code: "out-of-scope", gap: this.gap };
+      }
+      if (!Number.isInteger(this.gap)) return { ok: false, code: "no-gap", gap: this.gap };
+      if (!legal.includes(this.gap)) return { ok: false, code: "no-op", gap: this.gap };
+      return { ok: true, gap: this.gap };
+    },
+    cancel() {
+      this.gap = null;
+      this.valid = false;
+      this.moved = false;
+    },
+  };
+}
+
+function schemaDragCaretEl(root) {
+  try {
+    return root?.querySelector?.("[data-drag-caret]") || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragEnsureCaret(root, doc) {
+  let caret = schemaDragCaretEl(root);
+  if (caret) return caret;
+  try {
+    const owner = doc || root?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!owner) return null;
+    if (typeof notebookCreateEl === "function") {
+      caret = notebookCreateEl(owner, "div", "bob-album-schema-insert-caret");
+    } else if (typeof owner.createElement === "function") {
+      caret = owner.createElement("div");
+      try { caret.setAttribute("class", "bob-album-schema-insert-caret"); } catch (_) {}
+    } else {
+      return null;
+    }
+    try { caret.setAttribute("data-drag-caret", "true"); } catch (_) {}
+    try { caret.setAttribute("aria-hidden", "true"); } catch (_) {}
+    return caret;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragScopeItems(container, scope) {
+  const items = [];
+  try {
+    const prefix = `${scope}:`;
+    const walk = (node) => {
+      for (const child of Array.from(node?.children || [])) {
+        if (typeof child.getAttribute === "function"
+          && String(child.getAttribute("data-arrange-id") || "").startsWith(prefix)) {
+          items.push(child);
+        } else if (typeof child.querySelectorAll === "function") {
+          for (const found of Array.from(child.querySelectorAll("[data-arrange-id]") || [])) {
+            if (String(found.getAttribute?.("data-arrange-id") || "").startsWith(prefix)) items.push(found);
+          }
+          continue;
+        }
+        walk(child);
+      }
+    };
+    walk(container);
+  } catch (_) {}
+  return items;
+}
+
+function schemaDragPaintCaret(root, session) {
+  try {
+    const existing = schemaDragCaretEl(root);
+    if (!session || !Number.isInteger(session.gap)) {
+      try { existing?.remove?.(); } catch (_) {
+        try { existing?.parentNode?.removeChild?.(existing); } catch (_) {}
+      }
+      return null;
+    }
+    const scope = session.hoverScope || session.scope;
+    const containers = root?.querySelectorAll?.(`[data-drag-scope="${String(scope).replace(/"/g, "")}"]`) || [];
+    const container = Array.from(containers)[0] || null;
+    if (!container) return null;
+    const caret = schemaDragEnsureCaret(root, root?.ownerDocument) || schemaDragEnsureCaret(root, null);
+    if (!caret) return null;
+    try {
+      const cls = `bob-album-schema-insert-caret${session.valid ? "" : " is-not-allowed"}`;
+      if (typeof caret.setAttribute === "function") caret.setAttribute("class", cls);
+      else caret.className = cls;
+    } catch (_) {}
+    try {
+      const items = schemaDragScopeItems(container, session.scope);
+      const before = items[Math.min(Math.max(session.gap, 0), items.length)] || null;
+      if (typeof container.insertBefore === "function") container.insertBefore(caret, before);
+      else if (typeof container.appendChild === "function" && !caret.parentNode) container.appendChild(caret);
+    } catch (_) {}
+    return caret;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragClearCaret(root) {
+  return schemaDragPaintCaret(root, null);
+}
+
+// Nudge a scroll container when the pointer hovers near its top or bottom
+// edge. Returns true when it scrolled. Pure enough for unit tests: any
+// {scrollTop, scrollHeight, clientHeight} stub works.
+function schemaDragAutoscrollStep(container, clientY, options = {}) {
+  try {
+    if (!container || !Number.isFinite(Number(clientY))) return false;
+    const zone = Number.isFinite(Number(options.zone)) ? Number(options.zone) : 48;
+    const speed = Number.isFinite(Number(options.speed)) ? Number(options.speed) : 12;
+    let top = null;
+    let height = null;
+    try {
+      const rect = container.getBoundingClientRect?.() || null;
+      if (rect) {
+        top = Number(rect.top);
+        height = Number(rect.height ?? rect.bottom - rect.top);
+      }
+    } catch (_) {}
+    if (top === null || top === undefined) {
+      top = Number(container.offsetTop ?? 0);
+      height = Number(container.clientHeight ?? 0);
+    }
+    if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) return false;
+    const y = Number(clientY);
+    const max = Number(container.scrollHeight ?? 0) - Number(container.clientHeight ?? 0);
+    if (!(max > 0)) return false;
+    if (y < top + zone && y >= top - zone) {
+      container.scrollTop = Math.max(0, Number(container.scrollTop ?? 0) - speed);
+      return true;
+    }
+    if (y > top + height - zone && y <= top + height + zone) {
+      container.scrollTop = Math.min(max, Number(container.scrollTop ?? 0) + speed);
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
 // ---- src/241z-plugin-album-update.js ----
 // Album schema update wire helpers. `bob albums update` is the only
 // writer of album schema YAML; these helpers build its argv and envelope
@@ -91744,6 +91983,65 @@ function albumSchemaCardAppendPill(doc, host, text, className) {
   return pill;
 }
 
+function albumSchemaCardPaintGrip(doc, host, scope, id, label) {
+  if (!doc || !host || !scope) return null;
+  const grip = notebookCreateEl(doc, "span", "bob-album-schema-grip");
+  if (!grip) return null;
+  notebookSetText(grip, "⠿");
+  grip.setAttribute("data-drag-scope", String(scope));
+  grip.setAttribute("data-drag-id", String(id ?? ""));
+  grip.setAttribute("aria-hidden", "true");
+  grip.setAttribute("title", `Drag ${label || "item"} to reorder`);
+  try {
+    if (typeof host.insertBefore === "function") host.insertBefore(grip, host.firstChild || null);
+    else host.appendChild(grip);
+  } catch (_) {
+    try { host.appendChild(grip); } catch (_) {}
+  }
+  return grip;
+}
+
+function albumSchemaCardPaintGhostNode(doc, ghost) {
+  if (!doc || !ghost) return null;
+  if (ghost.kind === "choice") {
+    const chip = notebookCreateEl(doc, "span", "bob-album-schema-choice is-ghost");
+    if (!chip) return null;
+    chip.setAttribute("data-schema-ghost", "true");
+    chip.setAttribute("aria-label", "New choice lands here");
+    const text = `${ghost.emoji ? `${ghost.emoji} ` : ""}${String(ghost.label || "").trim() || "New choice"}`;
+    notebookSetText(chip, text);
+    return chip;
+  }
+  const row = notebookCreateEl(doc, "div", "bob-album-schema-field is-ghost");
+  if (!row) return null;
+  row.setAttribute("data-schema-ghost", "true");
+  row.setAttribute("aria-label", "New field lands here");
+  notebookSetText(row, `+ ${String(ghost.label || "").trim() || "New field"}`);
+  return row;
+}
+
+function albumSchemaCardInsertGhost(doc, host, scope, ghost) {
+  if (!doc || !host || !ghost || ghost.scope !== scope) return null;
+  const node = albumSchemaCardPaintGhostNode(doc, ghost);
+  if (!node) return null;
+  const prefix = `${scope}:`;
+  let items = [];
+  try {
+    items = Array.from(host.children || []).filter((child) =>
+      String(child.getAttribute?.("data-arrange-id") || "").startsWith(prefix));
+  } catch (_) {
+    items = [];
+  }
+  const before = items[Math.min(Math.max(Number(ghost.gap) || 0, 0), items.length)] || null;
+  try {
+    if (typeof host.insertBefore === "function") host.insertBefore(node, before);
+    else host.appendChild(node);
+  } catch (_) {
+    try { host.appendChild(node); } catch (_) {}
+  }
+  return node;
+}
+
 function albumSchemaCardPaintChoiceChip(doc, host, field, choice, options) {
   const selectedKey = options?.selectedKey || "";
   const key = `choice:${field.key}:${choice.value}`;
@@ -91759,6 +92057,7 @@ function albumSchemaCardPaintChoiceChip(doc, host, field, choice, options) {
   });
   chip.setAttribute("data-field-key", field.key);
   chip.setAttribute("data-choice-value", choice.value);
+  if (options?.grip) albumSchemaCardPaintGrip(doc, chip, `choices:${field.key}`, choice.value, label);
   if (parts.emoji) {
     const glyph = notebookCreateEl(doc, "span", "bob-album-schema-choice-glyph");
     notebookSetText(glyph, parts.emoji);
@@ -91807,6 +92106,8 @@ function albumSchemaCardPaintFieldRow(doc, host, field, options) {
   }
   row.setAttribute("data-field-key", field.key);
   if (field.line != null) row.setAttribute("data-yaml-line", String(field.line));
+  row.setAttribute("data-drag-scope", "fields");
+  if (options?.grip) albumSchemaCardPaintGrip(doc, row, "fields", field.key, field.label);
   const main = notebookCreateEl(doc, "span", "bob-album-schema-field-main");
   const label = notebookCreateEl(doc, "span", "bob-album-schema-label");
   notebookSetText(label, field.label);
@@ -91929,6 +92230,8 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
   const deltas = arrange?.deltas || {};
   const saving = arrange?.saving === true;
   const hintMode = arrange?.hintMode || null;
+  const ghost = options?.ghost || null;
+  const itemOptions = editable && !options?.stage ? Object.assign({}, options, { grip: true }) : options;
   if (model.emptySchema && !model.schemaInvalid) {
     const empty = notebookCreateEl(doc, "p", "bob-album-schema-empty");
     notebookSetText(empty, albumHeaderSummaryText(model));
@@ -91951,21 +92254,23 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
         const wantsChoices = presented.choices?.length || field.kind === "choices";
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        cloud.setAttribute("data-drag-scope", scope);
         for (const choice of presented.choices || []) {
-          albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+          albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
           const chip = cloud.children?.[cloud.children.length - 1] || null;
           if (chip) {
             const value = String(choice?.value ?? "");
             albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
+        albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
           albumSchemaCardButton(doc, cloud, "+ choice", {
@@ -91977,18 +92282,20 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         }
         host.appendChild(cloud);
       }
+      albumSchemaCardInsertGhost(doc, host, "fields", ghost);
     } else {
       for (const key of fieldOrder) {
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, options);
+        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
         const wantsChoices = presented.choices?.length || field.kind === "choices";
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
+        cloud.setAttribute("data-drag-scope", scope);
         const choicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
         let choiceOrder = (presented.choices || []).map((choice) => String(choice?.value ?? ""));
         if (projected && Array.isArray(projected[scope])) {
@@ -92007,7 +92314,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
             const choice = choicesByValue.get(value);
             if (!choice) continue;
             const beforeCount = cloud.children?.length || 0;
-            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
             const chip = cloud.children?.[cloud.children.length - 1] || null;
             if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
             void beforeCount;
@@ -92016,11 +92323,12 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
           for (const value of choiceOrder) {
             const choice = choicesByValue.get(value);
             if (!choice) continue;
-            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, options);
+            albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
             const chip = cloud.children?.[cloud.children.length - 1] || null;
             if (chip) albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
+        albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
           albumSchemaCardButton(doc, cloud, "+ choice", {
@@ -92032,6 +92340,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         }
         host.appendChild(cloud);
       }
+      albumSchemaCardInsertGhost(doc, host, "fields", ghost);
     }
     for (const pattern of model.legacy || []) {
       const chip = notebookCreateEl(doc, "span", "bob-album-schema-legacy");
@@ -94574,6 +94883,619 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     return false;
   },
 });
+// ---- src/241ye-plugin-album-schema-place.js ----
+// Add-and-place ghosts and shared pointer-drag wiring for the album card.
+// A ghost is the live placement preview for choice-add / field-add: the move
+// keys (and gap badges) slide it while focus stays in the stage, and the
+// single choice.add / field.add op carries its gap as position. The ghost
+// never enters arrangement scopes, so compileAlbumArrangement excludes it by
+// construction. Pointer drag feeds the same engine via placeAtGap; the
+// scope-agnostic math and caret live in 241xb so the bank card reuses them.
+function schemaGhostDefaultFor(model, stage) {
+  try {
+    if (!stage || !model) return null;
+    if (stage.kind === "choice-add") {
+      const target = typeof albumSchemaTargetByKey === "function"
+        ? albumSchemaTargetByKey(model, stage.targetKey)
+        : null;
+      const field = target?.field || null;
+      if (!field) return null;
+      const scope = `choices:${field.key}`;
+      const order = (Array.isArray(field.choices) ? field.choices : []).map((choice) => String(choice?.value ?? ""));
+      let gap = order.length;
+      if (target.kind === "choice") {
+        const index = order.indexOf(String(target.choice?.value ?? ""));
+        if (index >= 0) gap = index + 1;
+      }
+      return { kind: "choice", scope, gap };
+    }
+    if (stage.kind === "field-add") {
+      const target = typeof albumSchemaTargetByKey === "function"
+        ? albumSchemaTargetByKey(model, stage.targetKey)
+        : null;
+      const fields = Array.isArray(model?.fields) ? model.fields : [];
+      let gap = fields.length;
+      if (target?.kind === "field" && target.field) {
+        const index = fields.findIndex((field) => String(field?.key) === String(target.field.key));
+        if (index >= 0) gap = index + 1;
+      }
+      return { kind: "field", scope: "fields", gap };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaGhostScopeLength(model, scope) {
+  try {
+    if (scope === "fields") return Array.isArray(model?.fields) ? model.fields.length : 0;
+    if (String(scope || "").startsWith("choices:")) {
+      const key = String(scope).slice("choices:".length);
+      const field = (Array.isArray(model?.fields) ? model.fields : [])
+        .find((item) => String(item?.key || "") === key);
+      return Array.isArray(field?.choices) ? field.choices.length : 0;
+    }
+    return 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function schemaGhostClampGap(model, scope, gap) {
+  const length = schemaGhostScopeLength(model, scope);
+  const value = Number(gap);
+  if (!Number.isFinite(value)) return length;
+  return Math.min(Math.max(Math.floor(value), 0), length);
+}
+
+Object.assign(AlbumSchemaCardModal.prototype, {
+  schemaGhostActive() {
+    return Boolean(this.schemaAddGhost
+      && this.stage
+      && (this.stage.kind === "choice-add" || this.stage.kind === "field-add"));
+  },
+
+  schemaGhostEnsure() {
+    try {
+      if (!this.stage || (this.stage.kind !== "choice-add" && this.stage.kind !== "field-add")) {
+        this.schemaAddGhost = null;
+        return null;
+      }
+      const current = this.schemaAddGhost;
+      const fresh = schemaGhostDefaultFor(this.schemaModel, this.stage);
+      if (!fresh) {
+        this.schemaAddGhost = null;
+        return null;
+      }
+      if (!current || current.kind !== fresh.kind || current.scope !== fresh.scope) {
+        this.schemaAddGhost = fresh;
+      } else {
+        this.schemaAddGhost.gap = schemaGhostClampGap(this.schemaModel, current.scope, current.gap);
+      }
+      return this.schemaAddGhost;
+    } catch (_) {
+      return null;
+    }
+  },
+
+  schemaGhostClear() {
+    this.schemaAddGhost = null;
+    if (this.schemaHintMode?.ghost) this.schemaHintMode = null;
+  },
+
+  schemaGhostView() {
+    try {
+      if (!this.schemaGhostActive()) return null;
+      const ghost = this.schemaAddGhost;
+      const gap = schemaGhostClampGap(this.schemaModel, ghost.scope, ghost.gap);
+      if (ghost.kind === "choice") {
+        return {
+          kind: "choice",
+          scope: ghost.scope,
+          gap,
+          label: String(this.stageDraft?.values?.choiceLabel ?? ""),
+          emoji: String(this.stageDraft?.values?.choiceEmoji ?? ""),
+        };
+      }
+      return {
+        kind: "field",
+        scope: ghost.scope,
+        gap,
+        label: String(this.stageDraft?.values?.newFieldLabel ?? ""),
+        emoji: "",
+      };
+    } catch (_) {
+      return null;
+    }
+  },
+
+  schemaGhostPosition() {
+    try {
+      if (!this.schemaGhostActive()) return null;
+      return schemaGhostClampGap(this.schemaModel, this.schemaAddGhost.scope, this.schemaAddGhost.gap);
+    } catch (_) {
+      return null;
+    }
+  },
+
+  schemaGhostDescribe() {
+    try {
+      const view = this.schemaGhostView();
+      if (!view) return "";
+      const length = schemaGhostScopeLength(this.schemaModel, view.scope);
+      const name = view.kind === "choice"
+        ? (view.label.trim() ? `choice ${view.label.trim()}` : "new choice")
+        : (view.label.trim() ? `field ${view.label.trim()}` : "new field");
+      return `${name}, position ${view.gap + 1} of ${length + 1}`;
+    } catch (_) {
+      return "";
+    }
+  },
+
+  schemaGhostRepaintAndPreview(announce = true) {
+    try {
+      this.paintSchemaCard?.("body");
+      this.schemaClearEnterLatch?.();
+      this.schemaQueueStagePreview(false);
+      this.schemaGhostRefreshText();
+      if (announce) {
+        schemaArrangeAnnounce(this.schemaCardEl?.() || this.contentEl, this.schemaGhostDescribe());
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaGhostRefreshText() {
+    try {
+      const view = this.schemaGhostView();
+      if (!view) return;
+      const card = this.schemaCardEl?.() || this.contentEl;
+      const node = card?.querySelector?.("[data-schema-ghost]") || null;
+      if (!node) return;
+      const text = view.kind === "choice"
+        ? `${view.emoji ? `${view.emoji} ` : ""}${view.label.trim() || "New choice"}`
+        : `+ ${view.label.trim() || "New field"}`;
+      if (typeof notebookSetText === "function") notebookSetText(node, text);
+      else node.textContent = text;
+    } catch (_) {}
+  },
+
+  schemaGhostNudge(delta) {
+    try {
+      if (!this.schemaGhostActive()) return false;
+      const ghost = this.schemaEnsureArrangement ? this.schemaGhostEnsure() : this.schemaAddGhost;
+      if (!ghost) return false;
+      const before = schemaGhostClampGap(this.schemaModel, ghost.scope, ghost.gap);
+      const after = schemaGhostClampGap(this.schemaModel, ghost.scope, before + Number(delta));
+      if (after === before) {
+        schemaArrangeAnnounce(this.schemaCardEl?.() || this.contentEl,
+          after <= 0 ? "Already first." : "Already last.");
+        return false;
+      }
+      ghost.gap = after;
+      return this.schemaGhostRepaintAndPreview(true);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaGhostToEdge(edge) {
+    try {
+      if (!this.schemaGhostActive()) return false;
+      const ghost = this.schemaGhostEnsure();
+      if (!ghost) return false;
+      const length = schemaGhostScopeLength(this.schemaModel, ghost.scope);
+      ghost.gap = edge === "first" ? 0 : length;
+      return this.schemaGhostRepaintAndPreview(true);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaGhostPlace(gap) {
+    try {
+      if (!this.schemaGhostActive()) return false;
+      const ghost = this.schemaGhostEnsure();
+      if (!ghost || !Number.isInteger(Number(gap))) return false;
+      ghost.gap = schemaGhostClampGap(this.schemaModel, ghost.scope, gap);
+      this.schemaHintMode = null;
+      return this.schemaGhostRepaintAndPreview(true);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaGhostEnterHintMode() {
+    try {
+      if (!this.schemaGhostActive()) return false;
+      const ghost = this.schemaGhostEnsure();
+      if (!ghost) return false;
+      const length = schemaGhostScopeLength(this.schemaModel, ghost.scope);
+      const gaps = [];
+      for (let gap = 0; gap <= length; gap += 1) gaps.push(gap);
+      if (!gaps.length) return false;
+      const labels = typeof schemaArrangeGapBadges === "function" ? schemaArrangeGapBadges(gaps.length) : [];
+      this.schemaHintMode = { scope: ghost.scope, id: "__ghost__", gaps, labels, ghost: true };
+      this.paintSchemaCard?.("body");
+      schemaArrangeAnnounce(this.schemaCardEl?.() || this.contentEl,
+        `Move to… type a gap badge for ${this.schemaGhostDescribe()}. Esc leaves hint mode.`);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaGhostHintKey(key) {
+    try {
+      const mode = this.schemaHintMode;
+      if (!mode?.ghost || !this.schemaGhostActive()) return false;
+      const typed = String(key || "").toLowerCase();
+      if (!typed) return false;
+      const index = (mode.labels || []).indexOf(typed);
+      if (index < 0) {
+        const prefix = (mode.labels || []).filter((label) => label.startsWith(typed));
+        if (!prefix.length) return false;
+        return true;
+      }
+      const gap = (mode.gaps || [])[index];
+      if (!Number.isInteger(gap)) return false;
+      return this.schemaGhostPlace(gap);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragActive() {
+    return Boolean(this.schemaDrag?.session);
+  },
+
+  schemaDragBegin(scope, id, event) {
+    try {
+      if (this.schemaDrag?.session) return false;
+      if (this.stage || this.sessionState?.status === "applying" || !this.schemaFresh()) return false;
+      if (!scope || id === undefined || id === null || String(id) === "") return false;
+      this.schemaEnsureArrangement?.();
+      const arrangement = this.schemaArrangement;
+      if (!arrangement || typeof arrangement.legalGaps !== "function") return false;
+      const order = arrangement.projected(scope) || [];
+      if (!order.includes(String(id))) return false;
+      const session = typeof createSchemaDragSession === "function"
+        ? createSchemaDragSession({ scope, id: String(id), order, legalGaps: arrangement.legalGaps(scope, String(id)) })
+        : null;
+      if (!session) return false;
+      try { event?.preventDefault?.(); } catch (_) {}
+      this.schemaDrag = { session, pointerId: event?.pointerId ?? null, scope, id: String(id) };
+      try {
+        const card = this.schemaCardEl?.() || this.contentEl;
+        const node = card?.querySelector?.(`[data-arrange-id="${scope}:${String(id).replace(/"/g, "")}"]`) || null;
+        const grip = event?.target?.closest?.(".bob-album-schema-grip") || null;
+        const lift = node || grip?.closest?.("[data-arrange-id]") || null;
+        if (lift?.classList?.add) lift.classList.add("is-dragging");
+        this.schemaDrag.lift = lift || null;
+      } catch (_) {}
+      try {
+        if (typeof globalThis !== "undefined" && typeof globalThis.addEventListener === "function" && !this.schemaDrag.bound) {
+          const move = (moveEvent) => this.schemaDragOnMove(moveEvent);
+          const up = (upEvent) => this.schemaDragOnUp(upEvent);
+          const cancel = () => this.schemaDragFinish(true);
+          this.schemaDrag.bound = { move, up, cancel };
+          globalThis.addEventListener("pointermove", move);
+          globalThis.addEventListener("pointerup", up);
+          globalThis.addEventListener("pointercancel", cancel);
+        }
+      } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragOnMove(event) {
+    try {
+      const drag = this.schemaDrag;
+      if (!drag?.session) return false;
+      if (drag.pointerId !== undefined && drag.pointerId !== null
+        && event?.pointerId !== undefined && event.pointerId !== drag.pointerId) return false;
+      try { event?.preventDefault?.(); } catch (_) {}
+      const card = this.schemaCardEl?.() || this.contentEl;
+      const rects = typeof schemaDragCollectRects === "function"
+        ? schemaDragCollectRects(card, drag.scope)
+        : new Map();
+      const orientation = typeof schemaDragScopeOrientation === "function"
+        ? schemaDragScopeOrientation(drag.scope)
+        : "vertical";
+      const gap = typeof schemaDragGapFromPoint === "function"
+        ? schemaDragGapFromPoint(drag.session.order, drag.id, rects,
+          { x: event?.clientX, y: event?.clientY }, orientation)
+        : null;
+      let hoverScope = drag.scope;
+      try {
+        const doc = card?.ownerDocument || (typeof document !== "undefined" ? document : null);
+        const found = typeof schemaDragScopeAtPoint === "function"
+          ? schemaDragScopeAtPoint(doc, event?.clientX, event?.clientY)
+          : null;
+        if (found) hoverScope = found;
+      } catch (_) {}
+      drag.session.moveTo(Number.isInteger(gap) ? gap : drag.session.gap, hoverScope);
+      if (typeof schemaDragPaintCaret === "function") schemaDragPaintCaret(card, drag.session);
+      try {
+        const scroller = this.contentEl || card;
+        if (typeof schemaDragAutoscrollStep === "function") schemaDragAutoscrollStep(scroller, event?.clientY);
+      } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragOnUp(event) {
+    try {
+      const drag = this.schemaDrag;
+      if (!drag?.session) return false;
+      if (drag.pointerId !== undefined && drag.pointerId !== null
+        && event?.pointerId !== undefined && event.pointerId !== drag.pointerId) return false;
+      return this.schemaDragFinish(false);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragUpdate(clientX, clientY, hoverScope) {
+    try {
+      const drag = this.schemaDrag;
+      if (!drag?.session) return false;
+      const card = this.schemaCardEl?.() || this.contentEl;
+      const rects = typeof schemaDragCollectRects === "function"
+        ? schemaDragCollectRects(card, drag.scope)
+        : new Map();
+      const orientation = typeof schemaDragScopeOrientation === "function"
+        ? schemaDragScopeOrientation(drag.scope)
+        : "vertical";
+      const gap = typeof schemaDragGapFromPoint === "function"
+        ? schemaDragGapFromPoint(drag.session.order, drag.id, rects, { x: clientX, y: clientY }, orientation)
+        : null;
+      const scope = hoverScope === undefined ? drag.scope : hoverScope;
+      drag.session.moveTo(Number.isInteger(gap) ? gap : drag.session.gap, scope);
+      if (typeof schemaDragPaintCaret === "function") schemaDragPaintCaret(card, drag.session);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragFinish(cancelled) {
+    try {
+      const drag = this.schemaDrag;
+      if (!drag?.session) return false;
+      try {
+        if (typeof globalThis !== "undefined" && typeof globalThis.removeEventListener === "function" && drag.bound) {
+          globalThis.removeEventListener("pointermove", drag.bound.move);
+          globalThis.removeEventListener("pointerup", drag.bound.up);
+          globalThis.removeEventListener("pointercancel", drag.bound.cancel);
+        }
+      } catch (_) {}
+      try { drag.lift?.classList?.remove?.("is-dragging"); } catch (_) {}
+      const card = this.schemaCardEl?.() || this.contentEl;
+      try {
+        if (typeof schemaDragClearCaret === "function") schemaDragClearCaret(card);
+      } catch (_) {}
+      const session = drag.session;
+      this.schemaDrag = null;
+      if (cancelled) {
+        this.paintSchemaCard?.("body");
+        schemaArrangeAnnounce(card, "Drag cancelled. Nothing was written.");
+        return true;
+      }
+      const verdict = typeof session.drop === "function" ? session.drop() : { ok: false, code: "no-gap" };
+      if (!verdict.ok) {
+        this.paintSchemaCard?.("body");
+        if (verdict.code === "out-of-scope") {
+          schemaArrangeAnnounce(card, "Choices stay in their field; fields stay in place. Drag snapped back.");
+        }
+        return true;
+      }
+      this.schemaEnsureArrangement?.();
+      if (!this.schemaArrangement) {
+        this.paintSchemaCard?.("body");
+        return true;
+      }
+      const before = typeof schemaArrangeCollectRects === "function"
+        ? schemaArrangeCollectRects(card)
+        : new Map();
+      const result = this.schemaArrangement.placeAtGap(session.scope, session.id, verdict.gap);
+      this.schemaHintMode = null;
+      if (result?.ok) {
+        this.schemaArrangeConfirm = false;
+        this.schemaClearEnterLatch?.();
+        this.schemaArrangeSyncDraft?.();
+        this.paintSchemaCard?.("body");
+        if (typeof schemaArrangePlayFlip === "function") schemaArrangePlayFlip(card, before);
+        const projected = this.schemaArrangement.projected(session.scope) || [];
+        const index = projected.indexOf(session.id);
+        if (index >= 0) {
+          const label = typeof schemaArrangeAlbumLabelFor === "function"
+            ? schemaArrangeAlbumLabelFor(this.schemaModel, session.scope, session.id)
+            : session.id;
+          schemaArrangeAnnounce(card, `${label}, position ${index + 1} of ${projected.length}`);
+        }
+        return true;
+      }
+      this.paintSchemaCard?.("body");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  schemaDragPointerDown(event) {
+    try {
+      if (!event || event.button !== undefined && event.button !== 0) return;
+      const grip = event.target?.closest?.(".bob-album-schema-grip") || null;
+      if (!grip) return;
+      const scope = grip.getAttribute?.("data-drag-scope") || "";
+      const id = grip.getAttribute?.("data-drag-id") ?? "";
+      if (!scope || id === "") return;
+      this.schemaDragBegin(scope, id, event);
+    } catch (_) {}
+  },
+});
+
+// Wiring that keeps 241y under its line budget: ghost lifecycle, ghost move
+// keys inside stage inputs, ghost-aware stage positions, pointer-drag
+// plumbing, and drag-aware Escape all compose on top of the arrange wiring.
+(function schemaPlaceWireCard() {
+  try {
+    const proto = AlbumSchemaCardModal.prototype;
+    if (!proto || proto.__schemaPlaceWired) return;
+    const origStage = proto.schemaStage;
+    const origCancelStage = proto.schemaCancelStage;
+    const origBuildOp = proto.schemaBuildStageOp;
+    const origKeyDown = proto.schemaOnKeyDown;
+    const origEscape = proto.schemaHandleEscape;
+    const origPaintOptions = proto.schemaPaintOptions;
+    const origOpen = proto.onOpen;
+    const origClose = proto.onClose;
+
+    proto.schemaStage = function schemaStagePlace(...args) {
+      const opened = origStage.apply(this, args);
+      try {
+        if (opened) {
+          // Seed the ghost and repaint the body only. Like the base card,
+          // opening a stage previews nothing: the first keystroke or ghost
+          // move queues the preview, so a second stage can still open.
+          this.schemaGhostEnsure();
+          if (this.schemaAddGhost) this.paintSchemaCard?.("body");
+        }
+      } catch (_) {}
+      return opened;
+    };
+
+    proto.schemaCancelStage = function schemaCancelStagePlace(...args) {
+      try { this.schemaGhostClear(); } catch (_) {}
+      return origCancelStage.apply(this, args);
+    };
+
+    proto.schemaBuildStageOp = function schemaBuildStageOpPlace(...args) {
+      const op = origBuildOp.apply(this, args);
+      try {
+        if (op && (this.stage?.kind === "choice-add" || this.stage?.kind === "field-add")) {
+          const position = this.schemaGhostPosition?.();
+          if (Number.isInteger(position)) op.position = position;
+        }
+      } catch (_) {}
+      return op;
+    };
+
+    proto.schemaPaintOptions = function schemaPaintOptionsPlace(...args) {
+      const options = origPaintOptions.apply(this, args);
+      try {
+        if (options) options.ghost = this.schemaGhostView?.() || null;
+      } catch (_) {}
+      return options;
+    };
+
+    proto.schemaOnKeyDown = function schemaOnKeyDownPlace(event) {
+      try {
+        if (!event || event.isComposing || event.keyCode === 229) return origKeyDown.call(this, event);
+        if (event.defaultPrevented || event.__schemaEscapeHandled) return;
+        if (this.schemaGhostActive()) {
+          const inInput = Boolean(event.target?.closest?.("input,select,textarea"));
+          const altJ = event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ");
+          const altK = event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK");
+          const arrows = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+          const altArrow = event.altKey && arrows.includes(event.key);
+          if (altJ || altK || altArrow) {
+            try { event.preventDefault?.(); } catch (_) {}
+            const down = altJ || event.key === "ArrowDown" || event.key === "ArrowRight";
+            if (event.shiftKey) {
+              try { this.schemaGhostToEdge?.(down ? "last" : "first"); } catch (_) {}
+            } else {
+              try { this.schemaGhostNudge?.(down ? 1 : -1); } catch (_) {}
+            }
+            return;
+          }
+          const altM = event.altKey && (event.key === "m" || event.key === "M" || event.code === "KeyM");
+          if (altM) {
+            try { event.preventDefault?.(); } catch (_) {}
+            try { this.schemaGhostEnterHintMode?.(); } catch (_) {}
+            return;
+          }
+          if (this.schemaHintMode?.ghost) {
+            if (event.key !== "Escape" && event.key !== "Enter") {
+              const key = String(event.key || "").toLowerCase();
+              if (key && key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                try { event.preventDefault?.(); } catch (_) {}
+                try { this.schemaGhostHintKey?.(key); } catch (_) {}
+                return;
+              }
+            }
+          }
+          if (!inInput && !event.altKey && !event.ctrlKey && !event.metaKey
+            && (event.key === "m" || event.key === "M")) {
+            try {
+              if (this.schemaGhostEnterHintMode?.()) {
+                try { event.preventDefault?.(); } catch (_) {}
+                return;
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      return origKeyDown.call(this, event);
+    };
+
+    proto.schemaHandleEscape = function schemaHandleEscapePlace(...args) {
+      try {
+        if (this.schemaDragActive?.()) {
+          this.schemaDragFinish(true);
+          return "stay";
+        }
+      } catch (_) {}
+      try {
+        if (this.schemaHintMode?.ghost) {
+          this.schemaHintMode = null;
+          this.paintSchemaCard?.("body");
+          return "stay";
+        }
+      } catch (_) {}
+      return origEscape.apply(this, args);
+    };
+
+    proto.onOpen = function onOpenPlace(...args) {
+      const result = origOpen.apply(this, args);
+      try {
+        if (!this.schemaDragPointerListener) {
+          this.schemaDragPointerListener = (event) => this.schemaDragPointerDown(event);
+          this.contentEl?.addEventListener?.("pointerdown", this.schemaDragPointerListener);
+        }
+      } catch (_) {}
+      return result;
+    };
+
+    proto.onClose = function onClosePlace(...args) {
+      try {
+        if (this.schemaDrag?.bound && typeof globalThis !== "undefined"
+          && typeof globalThis.removeEventListener === "function") {
+          globalThis.removeEventListener("pointermove", this.schemaDrag.bound.move);
+          globalThis.removeEventListener("pointerup", this.schemaDrag.bound.up);
+          globalThis.removeEventListener("pointercancel", this.schemaDrag.bound.cancel);
+        }
+      } catch (_) {}
+      try { this.schemaDrag = null; } catch (_) {}
+      try { this.schemaGhostClear(); } catch (_) {}
+      return origClose.apply(this, args);
+    };
+
+    try {
+      Object.defineProperty(proto, "__schemaPlaceWired", { value: true, configurable: true });
+    } catch (_) {
+      proto.__schemaPlaceWired = true;
+    }
+  } catch (_) {}
+})();
 // ---- src/242f-plugin-emoji-slot-model.js ----
 // Pure model for the album and bank Emoji Slot. The shared component resolves
 // bob-emoji at the moment the user opens it; no catalog is copied into this
@@ -142038,6 +142960,14 @@ try {
       schemaArrangeCollectRects,
       schemaArrangePlayFlip,
       schemaArrangeGapBadges,
+      schemaDragGapFromPoint,
+      schemaDragScopeAtPoint,
+      schemaDragCollectRects,
+      schemaDragScopeOrientation,
+      createSchemaDragSession,
+      schemaDragAutoscrollStep,
+      schemaGhostDefaultFor,
+      schemaGhostClampGap,
     });
   }
 } catch (_) {}

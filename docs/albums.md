@@ -139,6 +139,17 @@ a delta badge (`↑4`, `↓2`), position changes animate with 140 ms FLIP
 pending bar such as `↕ 1 move · 🔍 label 15 → 11 · ⏎ save · esc revert ·
 u step back`; other gestures are unavailable and flash that bar.
 
+Adding a choice or field shows a dashed ghost chip or row at its landing slot:
+`Alt+J`/`K` (with `Shift` for ends, matched by `event.code` so nothing is typed
+into the stage) slide it while focus stays in the inputs, `Alt+M` opens Move
+to… gap badges, and the single `choice.add`/`field.add` carries the placement
+as its `position` — still one op and one commit. Pointer drag arranges with
+the same engine: a ⠿ grip appears on hover and focus at a chip's or row's
+leading edge, dragging lifts the item and paints a 2 px insertion caret, the
+card autoscrolls near its edges, a drop outside the item's scope shows a
+not-allowed caret and snaps back, and `Esc` cancels the drag. Drops call the
+same `placeAtGap` and one-envelope save pipeline as the keys.
+
 `Enter` saves the whole arrangement through the unchanged guarded session:
 it compiles `field.move`/`choice.move` ops, simulates them to prove the
 projection, and previews once. Quiet arrangements save on the first `Enter`;

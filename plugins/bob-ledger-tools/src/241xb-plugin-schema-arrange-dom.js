@@ -212,3 +212,242 @@ function schemaArrangeGapBadges(count) {
   } catch (_) {}
   return [];
 }
+
+// Shared pointer-drag controller (album now, bank later). The math and the
+// caret are scope-agnostic: each card wires pointer events to placeAtGap.
+// Gap numbers match the engine: gap g inserts before order[g] with the
+// dragged item still in place; the two no-op gaps next to the dragged item
+// are legal to hover but drop as a quiet snap-back.
+function schemaDragOrientationRect(rect, horizontal) {
+  if (!rect) return null;
+  const start = Number(horizontal ? rect.left : rect.top);
+  const end = Number(horizontal ? rect.right : rect.bottom);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return { start, end, center: (start + end) / 2 };
+}
+
+function schemaDragGapFromPoint(order, id, rects, point, orientation) {
+  try {
+    const horizontal = orientation === "horizontal";
+    const value = Number(horizontal ? point?.x : point?.y);
+    if (!Array.isArray(order) || !Number.isFinite(value)) return null;
+    const get = rects instanceof Map
+      ? (key) => rects.get(key)
+      : (key) => rects?.[key];
+    for (let index = 0; index < order.length; index += 1) {
+      const span = schemaDragOrientationRect(get(order[index]), horizontal);
+      if (!span) continue;
+      if (value < span.center) return index;
+    }
+    return order.length;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragScopeAtPoint(doc, x, y) {
+  try {
+    const el = doc?.elementFromPoint?.(x, y) || null;
+    const scope = el?.closest?.("[data-drag-scope]") || null;
+    const name = scope?.getAttribute?.("data-drag-scope");
+    return name ? String(name) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragCollectRects(root, scope) {
+  const rects = new Map();
+  try {
+    const nodes = root?.querySelectorAll?.("[data-arrange-id]") || [];
+    for (const node of Array.from(nodes)) {
+      const arrangeId = node.getAttribute?.("data-arrange-id") || "";
+      const prefix = `${scope}:`;
+      if (!arrangeId.startsWith(prefix)) continue;
+      const id = arrangeId.slice(prefix.length);
+      let rect = null;
+      try {
+        rect = node.getBoundingClientRect?.() || null;
+      } catch (_) {
+        rect = null;
+      }
+      if (rect && Number.isFinite(Number(rect.top)) && Number.isFinite(Number(rect.left))) {
+        rects.set(id, {
+          top: Number(rect.top),
+          bottom: Number(rect.bottom ?? rect.top),
+          left: Number(rect.left),
+          right: Number(rect.right ?? rect.left),
+        });
+      }
+    }
+  } catch (_) {}
+  return rects;
+}
+
+function schemaDragScopeOrientation(scope) {
+  return String(scope || "").startsWith("choices:") ? "horizontal" : "vertical";
+}
+
+function createSchemaDragSession({ scope, id, order, legalGaps }) {
+  const legal = Array.isArray(legalGaps) ? legalGaps.slice() : [];
+  return {
+    scope: String(scope || ""),
+    id: String(id ?? ""),
+    order: Array.isArray(order) ? order.slice() : [],
+    legal,
+    gap: null,
+    hoverScope: String(scope || ""),
+    valid: false,
+    moved: false,
+    moveTo(gap, hoverScope) {
+      if (Number.isInteger(gap)) {
+        this.gap = gap;
+        this.moved = true;
+      }
+      if (hoverScope !== undefined) this.hoverScope = hoverScope == null ? null : String(hoverScope);
+      this.valid = this.hoverScope === this.scope && legal.includes(this.gap);
+      return this.valid;
+    },
+    drop() {
+      if (this.hoverScope !== undefined && this.hoverScope !== null && this.hoverScope !== this.scope) {
+        return { ok: false, code: "out-of-scope", gap: this.gap };
+      }
+      if (!Number.isInteger(this.gap)) return { ok: false, code: "no-gap", gap: this.gap };
+      if (!legal.includes(this.gap)) return { ok: false, code: "no-op", gap: this.gap };
+      return { ok: true, gap: this.gap };
+    },
+    cancel() {
+      this.gap = null;
+      this.valid = false;
+      this.moved = false;
+    },
+  };
+}
+
+function schemaDragCaretEl(root) {
+  try {
+    return root?.querySelector?.("[data-drag-caret]") || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragEnsureCaret(root, doc) {
+  let caret = schemaDragCaretEl(root);
+  if (caret) return caret;
+  try {
+    const owner = doc || root?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!owner) return null;
+    if (typeof notebookCreateEl === "function") {
+      caret = notebookCreateEl(owner, "div", "bob-album-schema-insert-caret");
+    } else if (typeof owner.createElement === "function") {
+      caret = owner.createElement("div");
+      try { caret.setAttribute("class", "bob-album-schema-insert-caret"); } catch (_) {}
+    } else {
+      return null;
+    }
+    try { caret.setAttribute("data-drag-caret", "true"); } catch (_) {}
+    try { caret.setAttribute("aria-hidden", "true"); } catch (_) {}
+    return caret;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragScopeItems(container, scope) {
+  const items = [];
+  try {
+    const prefix = `${scope}:`;
+    const walk = (node) => {
+      for (const child of Array.from(node?.children || [])) {
+        if (typeof child.getAttribute === "function"
+          && String(child.getAttribute("data-arrange-id") || "").startsWith(prefix)) {
+          items.push(child);
+        } else if (typeof child.querySelectorAll === "function") {
+          for (const found of Array.from(child.querySelectorAll("[data-arrange-id]") || [])) {
+            if (String(found.getAttribute?.("data-arrange-id") || "").startsWith(prefix)) items.push(found);
+          }
+          continue;
+        }
+        walk(child);
+      }
+    };
+    walk(container);
+  } catch (_) {}
+  return items;
+}
+
+function schemaDragPaintCaret(root, session) {
+  try {
+    const existing = schemaDragCaretEl(root);
+    if (!session || !Number.isInteger(session.gap)) {
+      try { existing?.remove?.(); } catch (_) {
+        try { existing?.parentNode?.removeChild?.(existing); } catch (_) {}
+      }
+      return null;
+    }
+    const scope = session.hoverScope || session.scope;
+    const containers = root?.querySelectorAll?.(`[data-drag-scope="${String(scope).replace(/"/g, "")}"]`) || [];
+    const container = Array.from(containers)[0] || null;
+    if (!container) return null;
+    const caret = schemaDragEnsureCaret(root, root?.ownerDocument) || schemaDragEnsureCaret(root, null);
+    if (!caret) return null;
+    try {
+      const cls = `bob-album-schema-insert-caret${session.valid ? "" : " is-not-allowed"}`;
+      if (typeof caret.setAttribute === "function") caret.setAttribute("class", cls);
+      else caret.className = cls;
+    } catch (_) {}
+    try {
+      const items = schemaDragScopeItems(container, session.scope);
+      const before = items[Math.min(Math.max(session.gap, 0), items.length)] || null;
+      if (typeof container.insertBefore === "function") container.insertBefore(caret, before);
+      else if (typeof container.appendChild === "function" && !caret.parentNode) container.appendChild(caret);
+    } catch (_) {}
+    return caret;
+  } catch (_) {
+    return null;
+  }
+}
+
+function schemaDragClearCaret(root) {
+  return schemaDragPaintCaret(root, null);
+}
+
+// Nudge a scroll container when the pointer hovers near its top or bottom
+// edge. Returns true when it scrolled. Pure enough for unit tests: any
+// {scrollTop, scrollHeight, clientHeight} stub works.
+function schemaDragAutoscrollStep(container, clientY, options = {}) {
+  try {
+    if (!container || !Number.isFinite(Number(clientY))) return false;
+    const zone = Number.isFinite(Number(options.zone)) ? Number(options.zone) : 48;
+    const speed = Number.isFinite(Number(options.speed)) ? Number(options.speed) : 12;
+    let top = null;
+    let height = null;
+    try {
+      const rect = container.getBoundingClientRect?.() || null;
+      if (rect) {
+        top = Number(rect.top);
+        height = Number(rect.height ?? rect.bottom - rect.top);
+      }
+    } catch (_) {}
+    if (top === null || top === undefined) {
+      top = Number(container.offsetTop ?? 0);
+      height = Number(container.clientHeight ?? 0);
+    }
+    if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) return false;
+    const y = Number(clientY);
+    const max = Number(container.scrollHeight ?? 0) - Number(container.clientHeight ?? 0);
+    if (!(max > 0)) return false;
+    if (y < top + zone && y >= top - zone) {
+      container.scrollTop = Math.max(0, Number(container.scrollTop ?? 0) - speed);
+      return true;
+    }
+    if (y > top + height - zone && y <= top + height + zone) {
+      container.scrollTop = Math.min(max, Number(container.scrollTop ?? 0) + speed);
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}

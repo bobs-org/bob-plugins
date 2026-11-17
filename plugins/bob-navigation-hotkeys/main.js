@@ -80274,7 +80274,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // The vault vimrc maps normal-mode Z to this command; it has no default hotkey.
     this.addCommand({
       id: "zoom-image-on-line",
-      name: "Zoom image on cursor line",
+      name: "View image or video on cursor line",
       editorCallback: (editor, view) => this.zoomImageOnLine(editor, view),
     });
 
@@ -118799,7 +118799,7 @@ class BobNavigationHotkeysTemplaterTriggerMixin {
 // line, skips inline and fenced code, picks one by the containing/next/previous
 // rule, and resolves it against the source note to a resource URL or notice.
 const IMAGE_ZOOM_EXTENSIONS = Object.freeze(
-  new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"]),
+  new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico"]),
 );
 
 function imageZoomExtensionOfPath(pathText) {
@@ -118847,7 +118847,7 @@ class BobNavigationHotkeysImageZoomMixin {
       return;
     }
     if (typeof view.getMode === "function" && view.getMode() !== "source") {
-      new Notice("Zoom image needs the editor; in Reading view, click the image");
+      new Notice("Viewing media needs the editor; in Reading view, use the embed");
       return;
     }
     if (this.activeImageZoomModal && !this.activeImageZoomModal.imageZoomClosed) {
@@ -118871,19 +118871,19 @@ class BobNavigationHotkeysImageZoomMixin {
       inCodeFence,
     });
     if (target.kind === "notice") {
-      // A bullet holding only an image path imports through bob when the line
-      // has no image candidates ("No image on this line") and sits outside a
-      // fence, so existing image references keep priority.
-      if (target.message === "No image on this line" && !inCodeFence) {
+      // A bullet holding only a media path imports through bob when the line
+      // has no media candidates ("No image or video on this line") and sits
+      // outside a fence, so existing media references keep priority.
+      if (target.message === "No image or video on this line" && !inCodeFence) {
         let bullet = null;
         try {
-          bullet = findImagePathBullet(lineText);
+          bullet = findMediaPathBullet(lineText);
         } catch (error) {
-          new Notice(error && error.message ? error.message : "Not an image");
+          new Notice(error && error.message ? error.message : "Not an image or video");
           return;
         }
         if (bullet) {
-          void this.importImagePathOnLine(editor, view, bullet);
+          void this.importMediaPathOnLine(editor, view, bullet);
           return;
         }
       }
@@ -118937,7 +118937,8 @@ class BobNavigationHotkeysImageZoomMixin {
           justImported: false,
         };
     let modal = null;
-    modal = new ImageZoomModal(this.app, {
+    const ModalClass = target.kind === "video" ? VideoZoomModal : ImageZoomModal;
+    modal = new ModalClass(this.app, {
       src: target.src,
       title: target.title,
       context,
@@ -119230,17 +119231,18 @@ class BobNavigationHotkeysImageZoomMixin {
       if (protocol !== "http:" && protocol !== "https:") {
         return false;
       }
+      const extension = imageZoomExtensionOfPath(url.pathname || "");
+      if (VIDEO_ZOOM_EXTENSIONS.has(extension)) {
+        return false;
+      }
       // Only Markdown image syntax allows an extensionless http(s) URL.
       if (ref.form === "markdown" && ref.embed) {
         return true;
       }
-      return IMAGE_ZOOM_EXTENSIONS.has(
-        imageZoomExtensionOfPath(url.pathname || ""),
-      );
+      return IMAGE_ZOOM_EXTENSIONS.has(extension);
     }
-    return IMAGE_ZOOM_EXTENSIONS.has(
-      imageZoomExtensionOfPath(ref.target),
-    );
+    const extension = imageZoomExtensionOfPath(ref.target);
+    return IMAGE_ZOOM_EXTENSIONS.has(extension) || VIDEO_ZOOM_EXTENSIONS.has(extension);
   }
 
   pickImageZoomRef(candidates, ch) {
@@ -119274,7 +119276,7 @@ class BobNavigationHotkeysImageZoomMixin {
     if (inCodeFence) {
       return Object.freeze({
         kind: "notice",
-        message: "No image on this line",
+        message: "No image or video on this line",
       });
     }
     const text = String(lineText || "");
@@ -119320,17 +119322,24 @@ class BobNavigationHotkeysImageZoomMixin {
       if (!resolved) {
         return Object.freeze({
           kind: "notice",
-          message: `Image not found: ${picked.target}`,
+          message: VIDEO_ZOOM_EXTENSIONS.has(imageZoomExtensionOfPath(picked.target))
+            ? `Video not found: ${picked.target}`
+            : `Image not found: ${picked.target}`,
         });
       }
       const resolvedExt = String(
         resolved.extension ||
           imageZoomExtensionOfPath(resolved.path || ""),
       ).toLowerCase();
-      if (!IMAGE_ZOOM_EXTENSIONS.has(resolvedExt)) {
+      const kind = IMAGE_ZOOM_EXTENSIONS.has(resolvedExt)
+        ? "image"
+        : VIDEO_ZOOM_EXTENSIONS.has(resolvedExt)
+          ? "video"
+          : null;
+      if (!kind) {
         return Object.freeze({
           kind: "notice",
-          message: `Not an image: ${picked.target}`,
+          message: `Not an image or video: ${picked.target}`,
         });
       }
       let src = null;
@@ -119339,7 +119348,9 @@ class BobNavigationHotkeysImageZoomMixin {
       } catch (_error) {
         return Object.freeze({
           kind: "notice",
-          message: `Image not found: ${picked.target}`,
+          message: VIDEO_ZOOM_EXTENSIONS.has(imageZoomExtensionOfPath(picked.target))
+            ? `Video not found: ${picked.target}`
+            : `Image not found: ${picked.target}`,
         });
       }
       const filePath = resolved.path || "";
@@ -119348,7 +119359,7 @@ class BobNavigationHotkeysImageZoomMixin {
         (resolved.basename && String(resolved.basename)) ||
         String(filePath.split("/").pop() || picked.target);
       return Object.freeze({
-        kind: "image",
+        kind,
         source: "vault",
         path: filePath,
         src,
@@ -119361,47 +119372,47 @@ class BobNavigationHotkeysImageZoomMixin {
       if (ref.start <= pos && pos < ref.end) {
         return Object.freeze({
           kind: "notice",
-          message: `Not an image: ${ref.target}`,
+          message: `Not an image or video: ${ref.target}`,
         });
       }
     }
     return Object.freeze({
       kind: "notice",
-      message: "No image on this line",
+      message: "No image or video on this line",
     });
   }
 }
 // ---- src/679a-image-zoom-path.js ----
-// Path-bullet import for Z image zoom (pathz phase).
-// `Z` on a bullet holding only an image path imports it through
+// Path-bullet import for Z media zoom (pathz phase).
+// `Z` on a bullet holding only an image or video path imports it through
 // `bob attachments import` (the same copy rules `%c` uses), rewrites the
-// bullet to bob's embed in one undoable edit, and opens the viewer on the
-// new image with an "Imported" pill. `r` in that viewer restores the bullet
+// bullet to bob's embed in one undoable edit, and opens the matching viewer on
+// the new media with an "Imported" pill. `r` in that viewer restores the bullet
 // in display form, so `Z`/`r` round-trips.
 
 // Match an optional bullet marker (`-`, `*`, `+`, or `N.`/`N)`) plus its
 // trailing whitespace. The import content is whatever follows.
-const IMAGE_ZOOM_PATH_BULLET_PREFIX = /^[ \t]*(?:(?:-|\*|\+|\d+[.)])[ \t]+)?/;
+const MEDIA_ZOOM_PATH_BULLET_PREFIX = /^[ \t]*(?:(?:-|\*|\+|\d+[.)])[ \t]+)?/;
 
-// Task checkboxes (`[ ]`, `[x]`, …) are never image paths.
-const IMAGE_ZOOM_PATH_CHECKBOX_PREFIX = /^\[[^\]\r\n]\]/;
+// Task checkboxes (`[ ]`, `[x]`, …) are never media paths.
+const MEDIA_ZOOM_PATH_CHECKBOX_PREFIX = /^\[[^\]\r\n]\]/;
 
-// Find a bullet whose whole content is exactly one image path. Returns
+// Find a bullet whose whole content is exactly one image or video path. Returns
 // `{start, end, raw}` spanning the content (including any `'...'`, `"..."`,
 // or `<...>` wrapper), or null when the line is not a path-only bullet.
-// Throws `Not an image: <path>` for a path-only bullet whose extension is
-// not an image extension. Fences and image-reference priority are the
-// caller's job: the line must have no image candidates and be outside a
+// Throws `Not an image or video: <path>` for a path-only bullet whose
+// extension is not in either media catalog. Fences and reference priority are the
+// caller's job: the line must have no media candidates and be outside a
 // fence before this runs.
-function findImagePathBullet(lineText) {
+function findMediaPathBullet(lineText) {
   const text = String(lineText === null || lineText === undefined ? "" : lineText);
-  const prefix = IMAGE_ZOOM_PATH_BULLET_PREFIX.exec(text);
+  const prefix = MEDIA_ZOOM_PATH_BULLET_PREFIX.exec(text);
   const contentStart = prefix ? prefix[0].length : 0;
   const raw = text.slice(contentStart).replace(/[ \t]+$/, "");
   if (!raw) {
     return null;
   }
-  if (IMAGE_ZOOM_PATH_CHECKBOX_PREFIX.test(raw)) {
+  if (MEDIA_ZOOM_PATH_CHECKBOX_PREFIX.test(raw)) {
     return null;
   }
   let inner = raw;
@@ -119430,13 +119441,13 @@ function findImagePathBullet(lineText) {
   if (!extension) {
     return null;
   }
-  if (!IMAGE_ZOOM_EXTENSIONS.has(extension)) {
-    throw new Error(`Not an image: ${inner}`);
+  if (!IMAGE_ZOOM_EXTENSIONS.has(extension) && !VIDEO_ZOOM_EXTENSIONS.has(extension)) {
+    throw new Error(`Not an image or video: ${inner}`);
   }
   return { start: contentStart, end: contentStart + raw.length, raw };
 }
 
-BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = function openImageZoomViewerOnImport({ src, saved, attachment, restore }) {
+BobNavigationHotkeysImageZoomMixin.prototype.openMediaZoomViewerOnImport = function openMediaZoomViewerOnImport({ src, saved, attachment, restore }) {
   const savedName = String(saved.split("/").pop() || saved);
   const basePath = typeof this.getVaultBasePath === "function"
     ? this.getVaultBasePath()
@@ -119459,7 +119470,8 @@ BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = funct
     imported: { saved, reused: attachment.reused === true },
   };
   let modal = null;
-  modal = new ImageZoomModal(this.app, {
+  const ModalClass = attachment.kind === "video" ? VideoZoomModal : ImageZoomModal;
+  modal = new ModalClass(this.app, {
     src,
     title: savedName,
     context,
@@ -119481,7 +119493,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = funct
   }
 };
 
-BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async function importImagePathOnLine(editor, view, bullet) {
+BobNavigationHotkeysImageZoomMixin.prototype.importMediaPathOnLine = async function importMediaPathOnLine(editor, view, bullet) {
   // A second `Z` while an import is in flight is ignored.
   if (this.imageZoomImporting) {
     return;
@@ -119491,7 +119503,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
     const raw = bullet && typeof bullet.raw === "string" ? bullet.raw : "";
     const api = getNavigationAttachmentsApi(this.app);
     if (!api) {
-      new Notice("Importing images needs bob-ledger-tools on desktop");
+      new Notice("Importing media needs bob-ledger-tools on desktop");
       return;
     }
     if (
@@ -119538,12 +119550,20 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
     }
     const attachment = result.attachments && result.attachments[0];
     if (
+      attachment &&
+      attachment.kind === "file" &&
+      VIDEO_ZOOM_EXTENSIONS.has(imageZoomExtensionOfPath(attachment.saved || raw))
+    ) {
+      new Notice(`Update bob to import videos · saved ${attachment.saved}; note unchanged`);
+      return;
+    }
+    if (
       !attachment ||
-      attachment.kind !== "image" ||
+      (attachment.kind !== "image" && attachment.kind !== "video") ||
       typeof attachment.saved !== "string" ||
       typeof attachment.embed !== "string"
     ) {
-      new Notice(`Not an image: ${raw}`);
+      new Notice(`Not an image or video: ${raw}`);
       return;
     }
     const workspace = this.app && this.app.workspace;
@@ -119556,7 +119576,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
       view.file.path !== snapshot.filePath ||
       editor.getLine(snapshot.line) !== snapshot.lineText
     ) {
-      new Notice(`Line changed while importing · image saved at ${attachment.saved}; note unchanged`);
+      new Notice(`Line changed while importing · media saved at ${attachment.saved}; note unchanged`);
       return;
     }
     const from = { line: snapshot.line, ch: snapshot.start };
@@ -119602,7 +119622,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
       head: { ...cursor },
       scroll: snapshot.scroll,
     };
-    this.openImageZoomViewerOnImport({
+    this.openMediaZoomViewerOnImport({
       src,
       saved: attachment.saved,
       attachment,
@@ -124033,7 +124053,7 @@ Object.assign(module.exports.helpers, {
   imageZoomOriginSuffix,
   imageZoomMiddleTruncate,
   getNavigationAttachmentsApi,
-  findImagePathBullet,
+  findMediaPathBullet,
 });
 // ---- src/709-task-split-exports.js ----
 Object.assign(module.exports.helpers, {

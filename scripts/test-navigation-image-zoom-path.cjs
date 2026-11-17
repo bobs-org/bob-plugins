@@ -7,7 +7,7 @@ const {
   notices,
 } = require("./navigation-hotkeys-harness.cjs");
 
-const { ImageZoomModal, findImagePathBullet } = helpers;
+const { ImageZoomModal, VideoZoomModal, findMediaPathBullet } = helpers;
 
 // The import viewer schedules toast timers through the global clock; capture
 // them instead of letting 1.8s/2.6s timers hold the test process open.
@@ -144,7 +144,7 @@ test("detection accepts every bullet marker, plain lines, and nesting", () => {
     "  - ~/tmp/x.png",
     "\t* ~/tmp/x.png",
   ]) {
-    const bullet = findImagePathBullet(line);
+    const bullet = findMediaPathBullet(line);
     assert.ok(bullet, line);
     assert.equal(line.slice(bullet.start, bullet.end), "~/tmp/x.png", line);
     assert.equal(bullet.raw, "~/tmp/x.png", line);
@@ -161,12 +161,15 @@ test("detection accepts wrappers, file://, spaces, and uppercase extensions", ()
     ["- ~/X.PNG", "~/X.PNG"],
   ];
   for (const [line, expected] of cases) {
-    const bullet = findImagePathBullet(line);
+    const bullet = findMediaPathBullet(line);
     assert.ok(bullet, line);
     assert.equal(bullet.raw, expected, line);
     assert.equal(line.slice(bullet.start, bullet.end), expected, line);
   }
-  assert.equal(findImagePathBullet("-   ~/tmp/x.png  ").raw, "~/tmp/x.png");
+  assert.equal(findMediaPathBullet("-   ~/tmp/x.png  ").raw, "~/tmp/x.png");
+  for (const extension of ["mp4", "mov", "webm", "mkv"]) {
+    assert.ok(findMediaPathBullet(`- ~/tmp/x.${extension.toUpperCase()}`), extension);
+  }
 });
 
 test("detection rejects checkboxes, prose, and non-path lines", () => {
@@ -183,13 +186,13 @@ test("detection rejects checkboxes, prose, and non-path lines", () => {
     "- https://example.test/x.png",
     "- note about something",
   ]) {
-    assert.equal(findImagePathBullet(line), null, line);
+    assert.equal(findMediaPathBullet(line), null, line);
   }
 });
 
-test("detection raises Not an image for a path-only bullet with a non-image extension", () => {
-  assert.throws(() => findImagePathBullet("- ~/tmp/notes.md"), /Not an image: ~\/tmp\/notes\.md/);
-  assert.throws(() => findImagePathBullet("~/tmp/archive.tar.gz"), /Not an image/);
+test("detection raises Not an image or video for a path-only bullet outside the media catalogs", () => {
+  assert.throws(() => findMediaPathBullet("- ~/tmp/notes.md"), /Not an image or video: ~\/tmp\/notes\.md/);
+  assert.throws(() => findMediaPathBullet("~/tmp/archive.tar.gz"), /Not an image/);
 });
 
 // --- zoomImageOnLine routing ---
@@ -218,7 +221,7 @@ test("Z in a fence never imports and keeps the no-image notice", async () => {
   runtime.plugin.zoomImageOnLine(runtime.editor, runtime.view);
   await flushAsync();
   assert.deepEqual(calls, []);
-  assert.deepEqual(notices, ["No image on this line"]);
+  assert.deepEqual(notices, ["No image or video on this line"]);
   assert.equal(runtime.plugin.activeImageZoomModal, null);
 });
 
@@ -245,7 +248,7 @@ test("Z on a non-image path bullet raises its notice without importing", async (
   runtime.plugin.zoomImageOnLine(runtime.editor, runtime.view);
   await flushAsync();
   assert.deepEqual(calls, []);
-  assert.deepEqual(notices, ["Not an image: ~/tmp/notes.md"]);
+  assert.deepEqual(notices, ["Not an image or video: ~/tmp/notes.md"]);
   assert.equal(runtime.plugin.activeImageZoomModal, null);
 });
 
@@ -257,9 +260,9 @@ async function runImport(content, fakeApi, options = {}) {
   const runtime = makeRuntime(content, { attachmentsApi: fakeApi, ...(options.runtime || {}) });
   const cursorCh = options.ch ?? 2;
   runtime.editor.cursor = { line: 0, ch: cursorCh };
-  const bullet = findImagePathBullet(runtime.editor.getLine(0));
+  const bullet = findMediaPathBullet(runtime.editor.getLine(0));
   assert.ok(bullet);
-  await runtime.plugin.importImagePathOnLine(runtime.editor, runtime.view, bullet);
+  await runtime.plugin.importMediaPathOnLine(runtime.editor, runtime.view, bullet);
   return { runtime, bullet };
 }
 
@@ -313,12 +316,43 @@ test("import of a reused file links the existing viewer pill", async () => {
   modal.close();
 });
 
+test("video import rewrites the path and opens VideoZoomModal", async () => {
+  const { api } = makeApi(importResult({
+    saved: "vid/clip.mp4",
+    kind: "video",
+    embed: "![[vid/clip.mp4|400]]",
+  }));
+  const { runtime, bullet } = await runImport("- ~/tmp/clip.mp4", api);
+  assert.equal(runtime.editor.transactions.length, 1);
+  assert.equal(runtime.editor.transactions[0].changes[0].text, "![[vid/clip.mp4|400]]");
+  const modal = runtime.plugin.activeImageZoomModal;
+  assert.ok(modal instanceof VideoZoomModal);
+  assert.equal(modal.imageSrc, "resource://vid/clip.mp4");
+  assert.equal(modal.imageZoomContext.vaultPath, "vid/clip.mp4");
+  assert.equal(modal.imageZoomContext.restore.end, bullet.start + "![[vid/clip.mp4|400]]".length);
+  assert.equal(toastText(modal), "✓Imported to vid/clip.mp4 · r to undo");
+  modal.close();
+});
+
+test("an older bob file result for a video leaves the note unchanged", async () => {
+  const { api } = makeApi(importResult({
+    saved: "file/clip.mp4",
+    kind: "file",
+    embed: "[[file/clip.mp4]]",
+  }));
+  const { runtime } = await runImport("- ~/tmp/clip.mp4", api);
+  assert.deepEqual(notices, ["Update bob to import videos · saved file/clip.mp4; note unchanged"]);
+  assert.equal(runtime.editor.content, "- ~/tmp/clip.mp4");
+  assert.equal(runtime.editor.transactions.length, 0);
+  assert.equal(runtime.plugin.activeImageZoomModal, null);
+});
+
 test("import without the ledger-tools api raises its notice and edits nothing", async () => {
   resetNotices();
   const runtime = makeRuntime("- ~/tmp/x.png", {});
-  const bullet = findImagePathBullet(runtime.editor.getLine(0));
-  await runtime.plugin.importImagePathOnLine(runtime.editor, runtime.view, bullet);
-  assert.deepEqual(notices, ["Importing images needs bob-ledger-tools on desktop"]);
+  const bullet = findMediaPathBullet(runtime.editor.getLine(0));
+  await runtime.plugin.importMediaPathOnLine(runtime.editor, runtime.view, bullet);
+  assert.deepEqual(notices, ["Importing media needs bob-ledger-tools on desktop"]);
   assert.equal(runtime.editor.content, "- ~/tmp/x.png");
   assert.equal(runtime.editor.transactions.length, 0);
   assert.equal(runtime.plugin.activeImageZoomModal, null);
@@ -336,7 +370,7 @@ test("import failure raises Couldn't import with bob's message", async () => {
 test("import of a non-image kind raises Not an image", async () => {
   const { api } = makeApi(importResult({ kind: "file", embed: "[[file/x.png]]", saved: "file/x.png" }));
   const { runtime } = await runImport("- ~/tmp/x.png", api);
-  assert.deepEqual(notices, ["Not an image: ~/tmp/x.png"]);
+  assert.deepEqual(notices, ["Not an image or video: ~/tmp/x.png"]);
   assert.equal(runtime.editor.transactions.length, 0);
   assert.equal(runtime.plugin.activeImageZoomModal, null);
 });
@@ -347,12 +381,12 @@ test("import refuses a changed line and names the saved file", async () => {
   const gate = new Promise((resolve) => { resolveImport = resolve; });
   const { api } = makeApi(() => gate);
   const runtime = makeRuntime("- ~/tmp/x.png", { attachmentsApi: api });
-  const bullet = findImagePathBullet(runtime.editor.getLine(0));
-  const pending = runtime.plugin.importImagePathOnLine(runtime.editor, runtime.view, bullet);
+  const bullet = findMediaPathBullet(runtime.editor.getLine(0));
+  const pending = runtime.plugin.importMediaPathOnLine(runtime.editor, runtime.view, bullet);
   runtime.editor.content = "- something else entirely";
   resolveImport(importResult());
   await pending;
-  assert.deepEqual(notices, ["Line changed while importing · image saved at img/20261103_142837.png; note unchanged"]);
+  assert.deepEqual(notices, ["Line changed while importing · media saved at img/20261103_142837.png; note unchanged"]);
   assert.equal(runtime.editor.transactions.length, 0);
   assert.equal(runtime.plugin.activeImageZoomModal, null);
 });
@@ -363,9 +397,9 @@ test("a second Z while importing is ignored", async () => {
   const gate = new Promise((resolve) => { resolveImport = resolve; });
   const seen = makeApi(() => gate);
   const runtime = makeRuntime("- ~/tmp/x.png", { attachmentsApi: seen.api });
-  const bullet = findImagePathBullet(runtime.editor.getLine(0));
-  const first = runtime.plugin.importImagePathOnLine(runtime.editor, runtime.view, bullet);
-  await runtime.plugin.importImagePathOnLine(runtime.editor, runtime.view, bullet);
+  const bullet = findMediaPathBullet(runtime.editor.getLine(0));
+  const first = runtime.plugin.importMediaPathOnLine(runtime.editor, runtime.view, bullet);
+  await runtime.plugin.importMediaPathOnLine(runtime.editor, runtime.view, bullet);
   resolveImport(importResult());
   await first;
   assert.equal(seen.calls.length, 1);

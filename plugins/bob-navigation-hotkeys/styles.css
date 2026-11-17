@@ -3751,6 +3751,18 @@
   text-overflow: ellipsis;
 }
 
+.internal-embed.video-embed > video {
+  max-width: 100%;
+  height: auto;
+  background: #000;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.internal-embed.video-embed[width="400"] > video {
+  width: 400px;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .bob-image-zoom-origin,
   .bob-image-zoom-toast {

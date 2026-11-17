@@ -6,7 +6,7 @@ const {
   notices,
 } = require("./navigation-hotkeys-harness.cjs");
 
-const { ImageZoomModal } = helpers;
+const { ImageZoomModal, VideoZoomModal } = helpers;
 
 function makeEditor(content, options = {}) {
   const editor = {
@@ -53,7 +53,8 @@ function makeEditor(content, options = {}) {
 
 function makeFile(filePath) {
   const name = filePath.split("/").pop();
-  return { path: filePath, name, basename: name.replace(/\.[^.]+$/, ""), extension: "png" };
+  const extension = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+  return { path: filePath, name, basename: name.replace(/\.[^.]+$/, ""), extension };
 }
 
 function makeRuntime(content = "![[img/x.png]]", options = {}) {
@@ -157,7 +158,7 @@ test("onload registers the palette command without a default hotkey", () => {
 
   const command = commands.find((spec) => spec.id === "zoom-image-on-line");
   assert.ok(command);
-  assert.equal(command.name, "Zoom image on cursor line");
+  assert.equal(command.name, "View image or video on cursor line");
   assert.equal(typeof command.editorCallback, "function");
   assert.equal(Object.hasOwn(command, "hotkeys"), false);
   assert.equal(plugin.activeImageZoomModal, null);
@@ -174,6 +175,27 @@ test("an embed and a plain image link open the resolved vault resource", () => {
     modal.close();
     assert.deepEqual(runtime.writes, []);
   }
+});
+
+test("Z opens VideoZoomModal for videos and keeps origin lookup non-blocking", () => {
+  let resolveOrigin;
+  const origin = new Promise((resolve) => { resolveOrigin = resolve; });
+  const runtime = makeRuntime("See [[file/clip.mp4]]", {
+    ch: 7,
+    attachmentsApi: {
+      version: 1,
+      origin: () => origin,
+      import() {},
+    },
+  });
+  runtime.addFile("file/clip.mp4");
+  const modal = openModal(runtime.plugin, runtime.editor, runtime.view);
+  assert.ok(modal instanceof VideoZoomModal);
+  assert.equal(modal.imageSrc, "resource://file/clip.mp4");
+  assert.equal(modal.imageZoomContext.vaultPath, "file/clip.mp4");
+  assert.equal(runtime.plugin.activeImageZoomModal, modal);
+  resolveOrigin({ ok: false });
+  modal.close();
 });
 
 test("vault image viewer receives origin lookup and a guarded restore snapshot", () => {
@@ -217,7 +239,7 @@ test("vault image viewer receives origin lookup and a guarded restore snapshot",
   modal.close();
 });
 
-test("no image, a missing image, and Reading view show notices without opening", () => {
+test("no media, a missing image, and Reading view show notices without opening", () => {
   notices.length = 0;
   const empty = makeRuntime("A line with no image", { ch: 4 });
   empty.plugin.zoomImageOnLine(empty.editor, empty.view);
@@ -225,13 +247,17 @@ test("no image, a missing image, and Reading view show notices without opening",
   const missing = makeRuntime("See [[img/missing.png]]", { ch: 6 });
   missing.plugin.zoomImageOnLine(missing.editor, missing.view);
 
+  const missingVideo = makeRuntime("See [[vid/missing.mp4]]", { ch: 6 });
+  missingVideo.plugin.zoomImageOnLine(missingVideo.editor, missingVideo.view);
+
   const reading = makeRuntime("![[img/x.png]]", { mode: "preview", ch: 2 });
   reading.plugin.zoomImageOnLine(reading.editor, reading.view);
 
   assert.deepEqual(notices, [
-    "No image on this line",
+    "No image or video on this line",
     "Image not found: img/missing.png",
-    "Zoom image needs the editor; in Reading view, click the image",
+    "Video not found: vid/missing.mp4",
+    "Viewing media needs the editor; in Reading view, use the embed",
   ]);
   assert.equal(empty.plugin.activeImageZoomModal, null);
   assert.equal(missing.plugin.activeImageZoomModal, null);

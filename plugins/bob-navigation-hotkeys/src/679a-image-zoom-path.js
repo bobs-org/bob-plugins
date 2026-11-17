@@ -1,33 +1,33 @@
-// Path-bullet import for Z image zoom (pathz phase).
-// `Z` on a bullet holding only an image path imports it through
+// Path-bullet import for Z media zoom (pathz phase).
+// `Z` on a bullet holding only an image or video path imports it through
 // `bob attachments import` (the same copy rules `%c` uses), rewrites the
-// bullet to bob's embed in one undoable edit, and opens the viewer on the
-// new image with an "Imported" pill. `r` in that viewer restores the bullet
+// bullet to bob's embed in one undoable edit, and opens the matching viewer on
+// the new media with an "Imported" pill. `r` in that viewer restores the bullet
 // in display form, so `Z`/`r` round-trips.
 
 // Match an optional bullet marker (`-`, `*`, `+`, or `N.`/`N)`) plus its
 // trailing whitespace. The import content is whatever follows.
-const IMAGE_ZOOM_PATH_BULLET_PREFIX = /^[ \t]*(?:(?:-|\*|\+|\d+[.)])[ \t]+)?/;
+const MEDIA_ZOOM_PATH_BULLET_PREFIX = /^[ \t]*(?:(?:-|\*|\+|\d+[.)])[ \t]+)?/;
 
-// Task checkboxes (`[ ]`, `[x]`, …) are never image paths.
-const IMAGE_ZOOM_PATH_CHECKBOX_PREFIX = /^\[[^\]\r\n]\]/;
+// Task checkboxes (`[ ]`, `[x]`, …) are never media paths.
+const MEDIA_ZOOM_PATH_CHECKBOX_PREFIX = /^\[[^\]\r\n]\]/;
 
-// Find a bullet whose whole content is exactly one image path. Returns
+// Find a bullet whose whole content is exactly one image or video path. Returns
 // `{start, end, raw}` spanning the content (including any `'...'`, `"..."`,
 // or `<...>` wrapper), or null when the line is not a path-only bullet.
-// Throws `Not an image: <path>` for a path-only bullet whose extension is
-// not an image extension. Fences and image-reference priority are the
-// caller's job: the line must have no image candidates and be outside a
+// Throws `Not an image or video: <path>` for a path-only bullet whose
+// extension is not in either media catalog. Fences and reference priority are the
+// caller's job: the line must have no media candidates and be outside a
 // fence before this runs.
-function findImagePathBullet(lineText) {
+function findMediaPathBullet(lineText) {
   const text = String(lineText === null || lineText === undefined ? "" : lineText);
-  const prefix = IMAGE_ZOOM_PATH_BULLET_PREFIX.exec(text);
+  const prefix = MEDIA_ZOOM_PATH_BULLET_PREFIX.exec(text);
   const contentStart = prefix ? prefix[0].length : 0;
   const raw = text.slice(contentStart).replace(/[ \t]+$/, "");
   if (!raw) {
     return null;
   }
-  if (IMAGE_ZOOM_PATH_CHECKBOX_PREFIX.test(raw)) {
+  if (MEDIA_ZOOM_PATH_CHECKBOX_PREFIX.test(raw)) {
     return null;
   }
   let inner = raw;
@@ -56,13 +56,13 @@ function findImagePathBullet(lineText) {
   if (!extension) {
     return null;
   }
-  if (!IMAGE_ZOOM_EXTENSIONS.has(extension)) {
-    throw new Error(`Not an image: ${inner}`);
+  if (!IMAGE_ZOOM_EXTENSIONS.has(extension) && !VIDEO_ZOOM_EXTENSIONS.has(extension)) {
+    throw new Error(`Not an image or video: ${inner}`);
   }
   return { start: contentStart, end: contentStart + raw.length, raw };
 }
 
-BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = function openImageZoomViewerOnImport({ src, saved, attachment, restore }) {
+BobNavigationHotkeysImageZoomMixin.prototype.openMediaZoomViewerOnImport = function openMediaZoomViewerOnImport({ src, saved, attachment, restore }) {
   const savedName = String(saved.split("/").pop() || saved);
   const basePath = typeof this.getVaultBasePath === "function"
     ? this.getVaultBasePath()
@@ -85,7 +85,8 @@ BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = funct
     imported: { saved, reused: attachment.reused === true },
   };
   let modal = null;
-  modal = new ImageZoomModal(this.app, {
+  const ModalClass = attachment.kind === "video" ? VideoZoomModal : ImageZoomModal;
+  modal = new ModalClass(this.app, {
     src,
     title: savedName,
     context,
@@ -107,7 +108,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.openImageZoomViewerOnImport = funct
   }
 };
 
-BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async function importImagePathOnLine(editor, view, bullet) {
+BobNavigationHotkeysImageZoomMixin.prototype.importMediaPathOnLine = async function importMediaPathOnLine(editor, view, bullet) {
   // A second `Z` while an import is in flight is ignored.
   if (this.imageZoomImporting) {
     return;
@@ -117,7 +118,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
     const raw = bullet && typeof bullet.raw === "string" ? bullet.raw : "";
     const api = getNavigationAttachmentsApi(this.app);
     if (!api) {
-      new Notice("Importing images needs bob-ledger-tools on desktop");
+      new Notice("Importing media needs bob-ledger-tools on desktop");
       return;
     }
     if (
@@ -164,12 +165,20 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
     }
     const attachment = result.attachments && result.attachments[0];
     if (
+      attachment &&
+      attachment.kind === "file" &&
+      VIDEO_ZOOM_EXTENSIONS.has(imageZoomExtensionOfPath(attachment.saved || raw))
+    ) {
+      new Notice(`Update bob to import videos · saved ${attachment.saved}; note unchanged`);
+      return;
+    }
+    if (
       !attachment ||
-      attachment.kind !== "image" ||
+      (attachment.kind !== "image" && attachment.kind !== "video") ||
       typeof attachment.saved !== "string" ||
       typeof attachment.embed !== "string"
     ) {
-      new Notice(`Not an image: ${raw}`);
+      new Notice(`Not an image or video: ${raw}`);
       return;
     }
     const workspace = this.app && this.app.workspace;
@@ -182,7 +191,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
       view.file.path !== snapshot.filePath ||
       editor.getLine(snapshot.line) !== snapshot.lineText
     ) {
-      new Notice(`Line changed while importing · image saved at ${attachment.saved}; note unchanged`);
+      new Notice(`Line changed while importing · media saved at ${attachment.saved}; note unchanged`);
       return;
     }
     const from = { line: snapshot.line, ch: snapshot.start };
@@ -228,7 +237,7 @@ BobNavigationHotkeysImageZoomMixin.prototype.importImagePathOnLine = async funct
       head: { ...cursor },
       scroll: snapshot.scroll,
     };
-    this.openImageZoomViewerOnImport({
+    this.openMediaZoomViewerOnImport({
       src,
       saved: attachment.saved,
       attachment,

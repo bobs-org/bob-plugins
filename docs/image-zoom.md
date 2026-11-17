@@ -1,20 +1,23 @@
 ---
-title: "Zoom an image on the cursor line"
-description: "Inspect images and copy or restore their recorded original paths."
+title: "View an image or video on the cursor line"
+description: "Inspect images and videos, then copy or restore their recorded original paths."
 ---
 
-In Source mode, the **Zoom image on cursor line** command opens an image
+In Source mode, the **View image or video on cursor line** command opens a media
 reference from the cursor's line in a plugin-owned viewer. In Vim normal mode,
 `Z` runs that command through the vault's `obsidian_vimrc.md` mapping; the plugin
 does not assign `Z` by default.
 
 The command recognizes `![[image.png]]`, `[[image.png]]`,
 `![alt](image.png)`, and `[text](image.png)`, including aliases, embeds with
-size hints, Markdown titles, and supported image URLs. It picks the reference
+size hints, Markdown titles, and supported image URLs. It recognizes `.mp4`,
+`.mov`, `.webm`, and `.mkv` wiki and Markdown links, including legacy `file/`
+links. External video URLs stay unsupported.
+It picks the reference
 containing the cursor, otherwise the next reference on the line, otherwise the
 previous one. It never searches beyond the current line. Code spans and fenced
-code are skipped. When the line has no image candidates, a non-image link
-under the cursor shows a notice; otherwise the image pick rule still applies.
+code are skipped. When the line has no media candidates, a non-media link
+under the cursor shows a notice; otherwise the media pick rule still applies.
 
 The viewer opens fitted without enlarging a small image. `1` shows device-pixel
 1:1; `0` restores fit. It supports keyboard and pointer zoom and pan:
@@ -33,6 +36,44 @@ The viewer opens fitted without enlarging a small image. `1` shows device-pixel
 | Double-click | Toggle fit and 1:1 at the pointer |
 | Click outside the image | Close |
 
+## Videos
+
+Videos open in a player on the same black stage. Silent clips autoplay and loop;
+clips with audio and clips under reduced-motion preferences start paused, with
+the hint `· Space to play` until the first playback. Press
+`Space` or click the video to play or pause. `←` and `→` seek one second, or ten
+seconds with `Shift`; `+`, `=`, `-`, `0`, and `1` zoom, fit, and show a paused
+frame at 1:1. `h` / `j` / `k` / `l`, the wheel, dragging, and double-click use the
+same pan and zoom behavior as the image viewer. `o` pauses and opens the video in
+the system's default app.
+
+| Input | Action |
+| --- | --- |
+| `Esc`, `q` / `Q`, `Ctrl+[`, `Z` | Pause and close |
+| `Space` or click the video | Play / pause |
+| `←` / `→` | Seek −/+ 1 second |
+| `Shift` + `←` / `→` | Seek −/+ 10 seconds |
+| `+`, `=`, `-`, `0`, `1` | Zoom in, zoom out, fit, 1:1 |
+| `h` / `j` / `k` / `l`, wheel, drag, double-click | Pan and zoom as in the image viewer |
+| `y` / `r` | Copy the original path / restore the link to it |
+| `o` | Pause and open in the default app |
+
+If Obsidian cannot decode a clip, the viewer stays open and shows a short reason
+with `o` to open it outside Obsidian, `y` to copy its path, and `Esc` to close.
+An unsupported codec or damaged file can cause the same playback failure.
+
+| Media error | Reason shown |
+| --- | --- |
+| `4` | Obsidian's player can't decode the file; its codec may be unsupported or the file may be damaged. |
+| `3` | Decoding stopped partway; the file may be damaged. |
+| `2` | Obsidian couldn't read the file. |
+| Other | Playback failed. |
+
+### Inline video embeds
+
+Use an embed such as `![[vid/clip.mp4|400]]` to show a clip at 400 px. Plugin CSS
+applies the width hint while respecting the note column.
+
 The viewer shows a recorded origin below the title, with a state suffix when the
 source is missing, changed, or recorded on another host. `y` copies the journal's
 display path (for example, `~/tmp/photo.png`) even when the source is missing or
@@ -49,21 +90,23 @@ still own embedded images
 and Reading view. Obsidian's `g+`, `g-`, and `:image grow` resize embeds and write
 `|width` into the note; this viewer does neither.
 
-## Import an image path
+## Import a media path
 
-`Z` on a bullet holding only an image path imports the file through
+`Z` on a bullet holding only an image or video path imports the file through
 `bob attachments import` — the same copy rules `%c` uses — rewrites the bullet
-to bob's embed (`![[img/name.png|400]]`) in one undoable edit, and opens the
-viewer on the new image with the pill `Imported to img/name.png · r to undo`
+to bob's embed (`![[img/name.png|400]]` or `![[vid/name.mp4|400]]`) in one undoable
+edit, and opens the matching viewer with the pill `Imported to … · r to undo`
 (`Linked existing …` when the file was already in the vault).
 
 A path-only bullet is a list item (or a plain line) whose whole content is one
 path starting with `~/`, `/`, or `file://` and ending in an image extension;
-wrappers (`'…'`, `"…"`, `<…>`), spaces, and uppercase extensions are fine.
-Task checkboxes, prose around the path, fenced code, and non-image extensions
-(which raise `Not an image: <path>`) are refused, and a line that already holds
-an image reference opens that reference instead. Pressing `r` in the import
-viewer restores the bullet to the recorded display path, so `Z`/`r`
+video paths may end in `.mp4`, `.mov`, `.webm`, or `.mkv`. Wrappers (`'…'`,
+`"…"`, `<…>`), spaces, and uppercase extensions are fine. Task checkboxes,
+prose around the path, fenced code, and non-media extensions (which raise
+`Not an image or video: <path>`) are refused. With an older bob that returns a
+video as a generic file, the plugin asks you to update bob and leaves the note
+unchanged. A line that already holds a media reference opens it instead. Pressing
+`r` in the import viewer restores the bullet to the recorded display path, so `Z`/`r`
 round-trips; the vault copy is kept either way.
 
 Galleries, counted `NZ`, PDFs (`Cmd+Enter` opens reading PDFs in Highlights),

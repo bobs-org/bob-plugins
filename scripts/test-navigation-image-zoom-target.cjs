@@ -132,6 +132,39 @@ test("parser finds vault embed with size hint", () => {
   assert.equal(plugin.isImageZoomCandidate(ref), true);
 });
 
+test("resolver candidates cover the image catalog, video catalog, and legacy video links", () => {
+  const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const ico = plugin.findImageZoomRefs("![[img/icon.ICO|400]]")[0];
+  assert.equal(plugin.isImageZoomCandidate(ico), true);
+
+  for (const line of [
+    "[[file/old.mp4]]",
+    "![[file/old.mp4]]",
+    "[old](file/old.mp4)",
+    "![old](file/old.mp4)",
+  ]) {
+    const ref = plugin.findImageZoomRefs(line)[0];
+    assert.ok(ref, line);
+    assert.equal(plugin.isImageZoomCandidate(ref), true, line);
+  }
+
+  const webVideo = plugin.findImageZoomRefs("![clip](https://example.test/clip.mp4)")[0];
+  assert.equal(webVideo.external, true);
+  assert.equal(plugin.isImageZoomCandidate(webVideo), false);
+});
+
+test("resolved video targets carry kind video", () => {
+  const { plugin } = makeResolver({
+    "vid/clip.MP4": {},
+    "file/old.mp4": {},
+  });
+  for (const target of ["vid/clip.MP4", "file/old.mp4"]) {
+    const result = resolveOn(plugin, `![[${target}|400]]`, 4, "notes/source.md");
+    assert.equal(result.kind, "video", target);
+    assert.equal(result.path, target);
+  }
+});
+
 test("resolved target preserves the picked source span for the restore gesture", () => {
   const { plugin } = makeResolver({ "img/x.png": {} });
   const line = "before ![[img/x.png|400]] after";
@@ -304,7 +337,7 @@ test("resolution handles relative, unicode, and space names", () => {
   assert.equal(spaced.src, "resource://img/café photo.png");
 });
 
-test("missing file, non-image cursor, and fenced lines show exact notices", () => {
+test("missing media, non-media cursor, and fenced lines show exact notices", () => {
   const { plugin, resourceSeen } = makeResolver({
     "notes/note.md": {},
     "notes/doc.pdf": {},
@@ -316,6 +349,12 @@ test("missing file, non-image cursor, and fenced lines show exact notices", () =
   });
   assert.deepEqual(resourceSeen, []);
 
+  const missingVideo = resolveOn(plugin, "See [[file/gone.mp4]]", 7, "notes/note.md");
+  assert.deepEqual(missingVideo, {
+    kind: "notice",
+    message: "Video not found: file/gone.mp4",
+  });
+
   const line = "See [[doc.pdf]] here";
   const pdfRef = plugin.findImageZoomRefs(line)[0];
   const notImage = resolveOn(
@@ -326,7 +365,7 @@ test("missing file, non-image cursor, and fenced lines show exact notices", () =
   );
   assert.deepEqual(notImage, {
     kind: "notice",
-    message: "Not an image: doc.pdf",
+    message: "Not an image or video: doc.pdf",
   });
 
   const fenced = resolveOn(
@@ -338,13 +377,13 @@ test("missing file, non-image cursor, and fenced lines show exact notices", () =
   );
   assert.deepEqual(fenced, {
     kind: "notice",
-    message: "No image on this line",
+    message: "No image or video on this line",
   });
 
   const empty = resolveOn(plugin, "", 0, "notes/note.md");
   assert.deepEqual(empty, {
     kind: "notice",
-    message: "No image on this line",
+    message: "No image or video on this line",
   });
 });
 

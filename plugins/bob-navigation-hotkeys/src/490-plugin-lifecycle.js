@@ -115,7 +115,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // The vault vimrc maps normal-mode Z to this command; it has no default hotkey.
     this.addCommand({
       id: "zoom-image-on-line",
-      name: "Zoom image on cursor line",
+      name: "View image or video on cursor line",
       editorCallback: (editor, view) => this.zoomImageOnLine(editor, view),
     });
 

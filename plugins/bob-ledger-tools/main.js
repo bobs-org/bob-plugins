@@ -94713,6 +94713,40 @@ function albumSchemaCardButton(doc, host, text, options = {}) {
   return button;
 }
 
+function albumSchemaCardFieldAriaLabel(field, fieldNumber, fieldCount) {
+  const numbered = Number.isInteger(fieldNumber) && fieldNumber >= 1
+    && Number.isInteger(fieldCount) && fieldCount > 0;
+  const parts = [numbered ? `Field ${fieldNumber} of ${fieldCount}` : "Field"];
+  const label = String(field?.label || "").trim();
+  if (label) parts.push(label);
+  if (field?.required) parts.push("required");
+  if (field?.kindText) parts.push(field.kindText);
+  return parts.join(", ");
+}
+
+function albumSchemaCardFieldRowOptions(options, index, total) {
+  return Object.assign({}, options, { fieldNumber: index + 1, fieldCount: total });
+}
+
+function albumSchemaCardPaintFieldKeycap(doc, host, fieldNumber) {
+  if (!doc || !host || !Number.isInteger(fieldNumber) || fieldNumber < 1) return null;
+  const numbered = fieldNumber <= 9;
+  const keycap = notebookCreateEl(doc, "span", numbered
+    ? "bob-album-schema-field-key"
+    : "bob-album-schema-field-key is-unnumbered");
+  if (!keycap) return null;
+  keycap.setAttribute("aria-hidden", "true");
+  if (numbered) notebookSetText(keycap, String(fieldNumber));
+  try {
+    const main = host.querySelector?.(".bob-album-schema-field-main");
+    if (main && typeof host.insertBefore === "function") host.insertBefore(keycap, main);
+    else host.appendChild(keycap);
+  } catch (_) {
+    try { host.appendChild(keycap); } catch (_) {}
+  }
+  return keycap;
+}
+
 function albumSchemaSaveOpenEditors(plugin, paths) {
   const wanted = new Set((Array.isArray(paths) ? paths : []).map(albumReportPath));
   const workspace = plugin?.app?.workspace;
@@ -94900,7 +94934,11 @@ function albumSchemaCardPaintFieldRow(doc, host, field, options) {
   const selectedKey = options?.selectedKey || "";
   const editable = options?.editable === true;
   const key = `field:${field.key}`;
-  const aria = `Field ${field.label}${field.required ? ", required" : ""}${field.kindText ? `, ${field.kindText}` : ""}`;
+  const fieldNumber = Number.isInteger(options?.fieldNumber) ? options.fieldNumber : null;
+  const fieldCount = Number.isInteger(options?.fieldCount) ? options.fieldCount : null;
+  const aria = typeof albumSchemaCardFieldAriaLabel === "function"
+    ? albumSchemaCardFieldAriaLabel(field, fieldNumber, fieldCount)
+    : `Field ${field.label}${field.required ? ", required" : ""}${field.kindText ? `, ${field.kindText}` : ""}`;
   let row;
   if (editable) {
     row = albumSchemaCardButton(doc, host, "", {
@@ -94917,6 +94955,9 @@ function albumSchemaCardPaintFieldRow(doc, host, field, options) {
   row.setAttribute("data-field-key", field.key);
   if (field.line != null) row.setAttribute("data-yaml-line", String(field.line));
   row.setAttribute("data-drag-scope", "fields");
+  if (editable && fieldNumber >= 1 && fieldNumber <= 9) {
+    row.setAttribute("aria-keyshortcuts", String(fieldNumber));
+  }
   if (options?.grip) albumSchemaCardPaintGrip(doc, row, "fields", field.key, field.label);
   const main = notebookCreateEl(doc, "span", "bob-album-schema-field-main");
   const label = notebookCreateEl(doc, "span", "bob-album-schema-label");
@@ -94924,6 +94965,9 @@ function albumSchemaCardPaintFieldRow(doc, host, field, options) {
   main.appendChild(label);
   albumSchemaCardPaintFieldPills(doc, main, field);
   row.appendChild(main);
+  if (editable && fieldNumber >= 1 && typeof albumSchemaCardPaintFieldKeycap === "function") {
+    albumSchemaCardPaintFieldKeycap(doc, row, fieldNumber);
+  }
   if (field.filledText) {
     const filled = notebookCreateEl(doc, "span", "bob-album-schema-filled");
     notebookSetText(filled, field.filledText);
@@ -95062,7 +95106,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
+        albumSchemaCardPaintFieldRow(doc, host, presented, albumSchemaCardFieldRowOptions(itemOptions, gap, fieldOrder.length));
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
@@ -95083,22 +95127,24 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
-          albumSchemaCardButton(doc, cloud, "+ choice", {
+          const addChoice = albumSchemaCardButton(doc, cloud, "+ choice", {
             targetKey: addKey,
             className: "bob-album-schema-add-choice is-dashed",
             ariaLabel: `Add choice to ${presented.label}`,
             current: selectedKey === addKey,
           });
+          try { addChoice?.setAttribute?.("data-field-key", field.key); } catch (_) {}
         }
         host.appendChild(cloud);
       }
       albumSchemaCardInsertGhost(doc, host, "fields", ghost);
     } else {
-      for (const key of fieldOrder) {
+      for (let index = 0; index < fieldOrder.length; index += 1) {
+        const key = fieldOrder[index];
         const field = fieldsByKey.get(key);
         if (!field) continue;
         const presented = albumHeaderPresentField(field, model);
-        albumSchemaCardPaintFieldRow(doc, host, presented, itemOptions);
+        albumSchemaCardPaintFieldRow(doc, host, presented, albumSchemaCardFieldRowOptions(itemOptions, index, fieldOrder.length));
         const row = host.children?.[host.children.length - 1] || null;
         if (row) albumSchemaCardDecorateArrangeNode(row, `fields:${key}`, deltas, saving);
         const scope = `choices:${key}`;
@@ -95137,12 +95183,13 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         albumSchemaCardInsertGhost(doc, cloud, scope, ghost);
         if (field.kind === "choices") {
           const addKey = `add-choice:${field.key}`;
-          albumSchemaCardButton(doc, cloud, "+ choice", {
+          const addChoice = albumSchemaCardButton(doc, cloud, "+ choice", {
             targetKey: addKey,
             className: "bob-album-schema-add-choice is-dashed",
             ariaLabel: `Add choice to ${presented.label}`,
             current: selectedKey === addKey,
           });
+          try { addChoice?.setAttribute?.("data-field-key", field.key); } catch (_) {}
         }
         host.appendChild(cloud);
       }
@@ -95167,6 +95214,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
       ariaLabel: "Add field",
       current: selectedKey === "add-field",
     });
+    albumSchemaCardPaintSelection(card, selectedKey);
     return;
   }
   if (!model.emptySchema || model.schemaInvalid) {
@@ -95212,15 +95260,26 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
 function albumSchemaCardPaintSelection(card, selectedKey) {
   if (!card) return;
   const targets = card.querySelectorAll?.("[data-target-key]") || [];
+  let ownerFieldKey = "";
   for (const target of targets) {
     const current = target.getAttribute?.("data-target-key") === selectedKey;
     if (current) {
       target.classList?.add?.("is-selected");
       target.setAttribute("aria-current", "true");
+      const key = String(target.getAttribute?.("data-target-key") || "");
+      if (/^(choice:|add-choice:)/.test(key)) {
+        ownerFieldKey = String(target.getAttribute?.("data-field-key") || "");
+      }
     } else {
       target.classList?.remove?.("is-selected");
       target.removeAttribute("aria-current");
     }
+  }
+  const rows = card.querySelectorAll?.(".bob-album-schema-field") || [];
+  for (const row of rows) {
+    const fieldKey = String(row.getAttribute?.("data-field-key") || "");
+    if (ownerFieldKey && fieldKey === ownerFieldKey) row.classList?.add?.("is-current-group");
+    else row.classList?.remove?.("is-current-group");
   }
 }
 
@@ -95515,6 +95574,11 @@ function albumSchemaCardHintItems(model, options) {
   } else if (target?.kind === "issue") {
     items.push({ keys: "⏎", label: "YAML", action: "yaml" });
   }
+  const fieldCount = Array.isArray(model?.fields) ? model.fields.length : 0;
+  if (fieldCount > 0) {
+    const n = Math.min(fieldCount, 9);
+    items.push({ keys: ["⇧J/K", n === 1 ? "1" : `1–${n}`], label: "field" });
+  }
   items.push({ keys: "a", label: "add field", action: "add-field", enabled: !gated });
   if (["field", "choice", "add-choice"].includes(target?.kind)) {
     items.push({ keys: "c", label: "add choice", action: "add-choice", enabled: !gated });
@@ -95597,9 +95661,13 @@ function albumSchemaCardPaintHints(card, model, options, doc) {
   const strip = notebookCreateEl(doc, "div", "bob-album-schema-hint-strip");
   for (const item of albumSchemaCardHintItems(model, options)) {
     const row = notebookCreateEl(doc, "span", "bob-album-schema-hint");
-    const key = notebookCreateEl(doc, "kbd", "");
-    notebookSetText(key, item.keys);
-    row.appendChild(key);
+    const keyTexts = Array.isArray(item.keys) ? item.keys : [item.keys];
+    for (const text of keyTexts) {
+      if (text == null || text === "") continue;
+      const key = notebookCreateEl(doc, "kbd", "");
+      notebookSetText(key, String(text));
+      row.appendChild(key);
+    }
     if (typeof doc.createTextNode === "function") row.appendChild(doc.createTextNode(" "));
     const label = notebookCreateEl(doc, "span", "bob-album-schema-hint-label");
     notebookSetText(label, item.label);

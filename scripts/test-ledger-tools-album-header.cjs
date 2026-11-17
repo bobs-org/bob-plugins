@@ -286,6 +286,7 @@ test("rendering is idempotent, keeps schema labels as text, scopes Properties, a
   assert.equal(header.textContent.includes("<Status>"), true);
   assert.equal(header.querySelectorAll("script").length, 0);
   assert.equal(header.querySelectorAll(".bob-album-schema-field").length, 1);
+  assert.equal(header.querySelectorAll(".bob-album-schema-field-key").length, 0, "inline header paints no field keycaps");
   assert.equal(header.textContent.indexOf("First") < header.textContent.indexOf("Second"), true);
   assert.equal(header.querySelector(".bob-album-header-copy").getAttribute("title"), "Copy Name @eat/");
 

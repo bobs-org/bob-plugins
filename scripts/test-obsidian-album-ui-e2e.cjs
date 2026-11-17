@@ -42,6 +42,16 @@ test("keyboard staging targets the row selected after navigation", () => {
   assert.match(source, /selected\.dispatchEvent\(new KeyboardEvent\("keydown", \{ key: "Enter"/);
 });
 
+test("album UI e2e probes field keycap geometry and captures light/dark/375 shots", () => {
+  const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
+  assert.match(source, /schema-field-rest-transparent/);
+  assert.match(source, /schema-label-axis/);
+  assert.match(source, /schema-group-break/);
+  assert.match(source, /schema-hint-strip-bounds/);
+  assert.match(source, /album-schema-fields-light\.png/);
+  assert.match(source, /album-schema-fields-375\.png/);
+});
+
 test("album UI e2e captures the Emoji Slot in both themes", () => {
   const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
   assert.match(source, /\[data-emoji-well\]/);

@@ -80,6 +80,40 @@ function albumSchemaCardButton(doc, host, text, options = {}) {
   return button;
 }
 
+function albumSchemaCardFieldAriaLabel(field, fieldNumber, fieldCount) {
+  const numbered = Number.isInteger(fieldNumber) && fieldNumber >= 1
+    && Number.isInteger(fieldCount) && fieldCount > 0;
+  const parts = [numbered ? `Field ${fieldNumber} of ${fieldCount}` : "Field"];
+  const label = String(field?.label || "").trim();
+  if (label) parts.push(label);
+  if (field?.required) parts.push("required");
+  if (field?.kindText) parts.push(field.kindText);
+  return parts.join(", ");
+}
+
+function albumSchemaCardFieldRowOptions(options, index, total) {
+  return Object.assign({}, options, { fieldNumber: index + 1, fieldCount: total });
+}
+
+function albumSchemaCardPaintFieldKeycap(doc, host, fieldNumber) {
+  if (!doc || !host || !Number.isInteger(fieldNumber) || fieldNumber < 1) return null;
+  const numbered = fieldNumber <= 9;
+  const keycap = notebookCreateEl(doc, "span", numbered
+    ? "bob-album-schema-field-key"
+    : "bob-album-schema-field-key is-unnumbered");
+  if (!keycap) return null;
+  keycap.setAttribute("aria-hidden", "true");
+  if (numbered) notebookSetText(keycap, String(fieldNumber));
+  try {
+    const main = host.querySelector?.(".bob-album-schema-field-main");
+    if (main && typeof host.insertBefore === "function") host.insertBefore(keycap, main);
+    else host.appendChild(keycap);
+  } catch (_) {
+    try { host.appendChild(keycap); } catch (_) {}
+  }
+  return keycap;
+}
+
 function albumSchemaSaveOpenEditors(plugin, paths) {
   const wanted = new Set((Array.isArray(paths) ? paths : []).map(albumReportPath));
   const workspace = plugin?.app?.workspace;

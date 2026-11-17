@@ -81,13 +81,19 @@ The two states never impersonate each other.
 
 **⊞ Schema** opens the editable Schema Card in the Task Card idiom: one title
 line (`🍽️ Restaurant`), a truncated breadcrumb, and the album details row as
-the header subtitle and selectable **Album details** target. Field rows use
-pills for `required`, kind, and grouping, choice chips carry a count pill
-(faded at zero), and `+ choice` / `+ field` are dashed add targets. A lint
-banner, a one-line status rule (hidden when empty), and a contextual hint
-strip sit below. The strip shows only keys valid for the current selection,
-wrapping to at most two lines, with `⋯` opening an **All actions** list so
-every gesture keeps a visible button equivalent. Previews run automatically
+the header subtitle and selectable **Album details** target. Field rows are
+transparent headings: a numbered keycap hangs in the gutter beside the name
+(1–9 in painted order, with an empty placeholder from 10 up so the column
+holds), pills mark `required`, kind, and grouping, and the current group's
+keycap takes an accent border and tint so `Shift+K` from a chip is visible
+before you press it. Choice chips and `+ choice` indent to the same label
+axis as the field name, with a clear break before the next group; `+ field`
+sits on that axis too. A lint banner, a one-line status rule (hidden when
+empty), and a contextual hint strip sit below. In plain browsing the strip
+includes `⇧J/K 1–N field` (N is `min(fields, 9)`, or `1` when there is one
+field). The strip shows only keys valid for the current selection, wrapping
+to at most two lines, with `⋯` opening an **All actions** list so every
+gesture keeps a visible button equivalent. Previews run automatically
 as you type; there is no **Preview this edit** button. Stage buttons are
 **Save ⏎** (enabled when the current preview can apply, or while Enter is
 latched) and **Cancel esc**.

@@ -1604,6 +1604,143 @@ async function run(args) {
     record("schema-field-jump-no-apply", fieldJumpEdits.apply === 0,
       `jumps never write; Bob albums update applies=${fieldJumpEdits.apply}`);
 
+    const fieldVisuals = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      if (!modal) return { ok: false, error: "schema card missing" };
+      const root = modal.contentEl;
+      const win = root.ownerDocument?.defaultView || window;
+      const body = root.querySelector(".bob-album-schema-dialog-body");
+      if (!body) return { ok: false, error: "schema body missing" };
+      const fields = Array.from(body.querySelectorAll(":scope > .bob-album-schema-field:not(.is-ghost)"));
+      const label = fields[0]?.querySelector(".bob-album-schema-label");
+      const cloud = body.querySelector(":scope > .bob-album-schema-choice-cloud");
+      const chip = cloud?.querySelector(".bob-album-schema-choice-button");
+      const addField = body.querySelector(":scope > .bob-album-schema-add-field");
+      const restField = fields.find((row) => !row.classList.contains("is-selected")) || fields[1] || fields[0];
+      const selected = root.querySelector("[data-target-key].is-selected") || fields[0];
+      const cs = (el) => win.getComputedStyle(el);
+      const rect = (el) => el.getBoundingClientRect();
+      const fontSize = fields[0] ? parseFloat(cs(fields[0]).fontSize) : 0;
+      const transparent = (color) => {
+        const m = String(color || "").toLowerCase().replace(/\\s+/g, "");
+        return m === "transparent" || m === "rgba(0,0,0,0)" || m === "rgb(0,0,0,0)";
+      };
+      let noChoiceGap = null;
+      for (let i = 0; i < fields.length - 1; i += 1) {
+        const row = fields[i];
+        const next = fields[i + 1];
+        const sibling = row.nextElementSibling;
+        const hasCloud = Boolean(sibling && sibling.classList.contains("bob-album-schema-choice-cloud"));
+        if (!hasCloud) {
+          noChoiceGap = rect(next).top - rect(row).bottom;
+          break;
+        }
+      }
+      let groupGap = null;
+      let rowCloud = null;
+      if (cloud && fields[0]) {
+        rowCloud = rect(cloud).top - rect(fields[0]).bottom;
+        const nextField = cloud.nextElementSibling;
+        if (nextField && nextField.classList.contains("bob-album-schema-field")) {
+          groupGap = rect(nextField).top - rect(cloud).bottom;
+        }
+      }
+      const strip = root.querySelector(".bob-album-schema-hint-strip");
+      const stripRect = strip ? rect(strip) : null;
+      const close = strip
+        ? Array.from(strip.querySelectorAll(".bob-album-schema-hint")).find((hint) => /esc\\/q/.test(hint.textContent || "") && /close/.test(hint.textContent || ""))
+        : null;
+      const more = strip?.querySelector('[data-schema-action="more"]');
+      const inside = (el) => {
+        if (!el || !stripRect) return false;
+        const r = rect(el);
+        return r.left >= stripRect.left - 1 && r.right <= stripRect.right + 1
+          && r.top >= stripRect.top - 1 && r.bottom <= stripRect.bottom + 1;
+      };
+      const restBg = restField ? cs(restField).backgroundColor : "";
+      const chipBg = chip ? cs(chip).backgroundColor : "";
+      const selectedShadow = selected ? cs(selected).boxShadow : "";
+      const lefts = {
+        label: label ? rect(label).left : null,
+        chip: chip ? rect(chip).left : null,
+        addField: addField ? rect(addField).left : null,
+      };
+      return {
+        ok: true,
+        fontSize,
+        restTransparent: transparent(restBg),
+        restBg,
+        chipFilled: Boolean(chipBg) && !transparent(chipBg),
+        chipBg,
+        selectedShadow,
+        selectedHasRing: Boolean(selectedShadow) && selectedShadow !== "none",
+        lefts,
+        axisDelta: {
+          labelChip: lefts.label != null && lefts.chip != null ? Math.abs(lefts.label - lefts.chip) : null,
+          labelAdd: lefts.label != null && lefts.addField != null ? Math.abs(lefts.label - lefts.addField) : null,
+        },
+        groupGap,
+        noChoiceGap,
+        rowCloud,
+        minGroup: 0.6 * fontSize,
+        maxRowCloud: 0.35 * fontSize,
+        closeInside: inside(close),
+        moreInside: inside(more),
+        closeText: close ? String(close.textContent || "") : "",
+        keycaps: root.querySelectorAll(".bob-album-schema-field-key").length,
+      };`);
+    report.probes.schemaFieldVisuals = fieldVisuals;
+    record("schema-field-rest-transparent", Boolean(fieldVisuals && fieldVisuals.ok && fieldVisuals.restTransparent),
+      `rest field bg=${fieldVisuals && fieldVisuals.restBg}`);
+    record("schema-chip-filled", Boolean(fieldVisuals && fieldVisuals.ok && fieldVisuals.chipFilled),
+      `chip bg=${fieldVisuals && fieldVisuals.chipBg}`);
+    record("schema-selected-ring", Boolean(fieldVisuals && fieldVisuals.ok && fieldVisuals.selectedHasRing),
+      `selected box-shadow=${fieldVisuals && fieldVisuals.selectedShadow}`);
+    record("schema-label-axis", Boolean(fieldVisuals && fieldVisuals.ok
+      && fieldVisuals.axisDelta && fieldVisuals.axisDelta.labelChip != null
+      && fieldVisuals.axisDelta.labelChip <= 1
+      && fieldVisuals.axisDelta.labelAdd != null && fieldVisuals.axisDelta.labelAdd <= 1),
+      JSON.stringify(fieldVisuals && fieldVisuals.axisDelta));
+    record("schema-group-break", Boolean(fieldVisuals && fieldVisuals.ok
+      && fieldVisuals.groupGap != null && fieldVisuals.groupGap + 0.01 >= fieldVisuals.minGroup
+      && fieldVisuals.noChoiceGap != null && fieldVisuals.noChoiceGap + 0.01 >= fieldVisuals.minGroup),
+      `group=${fieldVisuals && fieldVisuals.groupGap} noChoice=${fieldVisuals && fieldVisuals.noChoiceGap} min=${fieldVisuals && fieldVisuals.minGroup}`);
+    record("schema-row-cloud-hug", Boolean(fieldVisuals && fieldVisuals.ok
+      && fieldVisuals.rowCloud != null && fieldVisuals.rowCloud - 0.01 <= fieldVisuals.maxRowCloud),
+      `rowCloud=${fieldVisuals && fieldVisuals.rowCloud} max=${fieldVisuals && fieldVisuals.maxRowCloud}`);
+    record("schema-hint-strip-bounds", Boolean(fieldVisuals && fieldVisuals.ok
+      && fieldVisuals.closeInside && fieldVisuals.moreInside),
+      `closeInside=${fieldVisuals && fieldVisuals.closeInside} moreInside=${fieldVisuals && fieldVisuals.moreInside} close=${fieldVisuals && fieldVisuals.closeText}`);
+
+    const chipKey = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      const chip = modal?.contentEl?.querySelector?.(".bob-album-schema-choice-button[data-target-key]");
+      const key = chip?.getAttribute?.("data-target-key");
+      if (key) modal.schemaSelect(key);
+      return { ok: Boolean(key), selected: modal?.selectedKey || null, currentGroup: Boolean(modal?.contentEl?.querySelector?.(".bob-album-schema-field.is-current-group")) };`);
+    report.probes.schemaFieldVisualsChip = chipKey;
+    const captureFieldVisualThemes = async () => {
+      await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+      await sleep(150);
+      const light = path.join(outDir, "album-schema-fields-light.png");
+      await capturePage(client, light);
+      report.screenshots.push(light);
+      await client.evaluate(`(() => { document.body.classList.remove("theme-light"); document.body.classList.add("theme-dark"); return true; })()`);
+      await sleep(150);
+      const dark = path.join(outDir, "album-schema-fields-dark.png");
+      await capturePage(client, dark);
+      report.screenshots.push(dark);
+      await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
+      await setViewport(client, 375, 812);
+      await sleep(200);
+      const narrow = path.join(outDir, "album-schema-fields-375.png");
+      await capturePage(client, narrow);
+      report.screenshots.push(narrow);
+      await setViewport(client, 1280, 800);
+      await sleep(150);
+    };
+    await captureFieldVisualThemes();
+    record("schema-field-visuals-shots", ["album-schema-fields-light.png", "album-schema-fields-dark.png", "album-schema-fields-375.png"]
+      .every((name) => fs.existsSync(path.join(outDir, name))), "light+dark+375 field visuals");
+
     const preEditFp = await schemaFp();
     record("schema-pre-fingerprint", typeof preEditFp === "string" && preEditFp.startsWith("sha256:"), "preview starts from a fresh report");
     const stagedPreview = await client.evaluate(`(() => (async () => {

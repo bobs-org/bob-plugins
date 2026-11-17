@@ -530,6 +530,7 @@ test("collapsed summary leads with the group choice and keeps per-path fold stat
   plugin.recordSheetSetCollapsed("eat/smashburger.md", true);
   plugin.recordSheetSetFold("eat/smashburger.md", true);
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  assert.equal(sheet.querySelectorAll(".bob-album-schema-field-key").length, 0, "record sheet paints no field keycaps");
   assert.match(sheet.querySelector(".bob-record-sheet-summary").textContent, /Loved/);
   assert.equal(plugin.recordSheetIsCollapsed("eat/smashburger.md"), true);
   assert.equal(plugin.recordSheetFoldOpen("eat/smashburger.md"), true);

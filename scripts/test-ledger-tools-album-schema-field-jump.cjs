@@ -546,3 +546,126 @@ test("reduced motion turns off every bump, including the nudge shake", () => {
   assert.equal(helpers.schemaCardBump(null, 1), false, "a missing node never throws");
   modal.close();
 });
+
+function fieldHint(items) {
+  return (items || []).find((item) => item.label === "field");
+}
+
+test("keycaps number painted fields 1-9 and keep a hidden column at 10", () => {
+  const fields = [];
+  for (let i = 1; i <= 10; i += 1) {
+    fields.push({ key: `f${i}`, label: `F${i}`, kind: "text", line: 10 + i });
+  }
+  const { modal } = openCard({ fields });
+  const keys = modal.contentEl.querySelectorAll(".bob-album-schema-field-key");
+  assert.equal(keys.length, 10);
+  assert.equal(keys[0].textContent, "1");
+  assert.equal(keys[8].textContent, "9");
+  assert.equal(keys[8].classList.contains("is-unnumbered"), false);
+  assert.equal(keys[9].textContent, "");
+  assert.equal(keys[9].classList.contains("is-unnumbered"), true);
+  assert.equal(keys[0].getAttribute("aria-hidden"), "true");
+  const row2 = modal.contentEl.querySelector('[data-target-key="field:f2"]');
+  assert.equal(row2.getAttribute("aria-label"), "Field 2 of 10, F2, text");
+  assert.equal(row2.getAttribute("aria-keyshortcuts"), "2");
+  assert.equal(modal.contentEl.querySelector('[data-target-key="field:f10"]').getAttribute("aria-keyshortcuts"), null);
+  modal.close();
+});
+
+test("keycap numbers re-flow after a field nudge", () => {
+  const { modal } = openCard();
+  const numberOn = (key) => modal.contentEl.querySelector(`[data-target-key="${key}"]`)
+    ?.querySelector?.(".bob-album-schema-field-key")?.textContent;
+  assert.equal(numberOn("field:status"), "1");
+  assert.equal(numberOn("field:claim"), "2");
+  assert.equal(numberOn("field:section"), "3");
+  modal.schemaSelect("field:claim");
+  assert.equal(modal.schemaArrangeNudge(1, {}), true);
+  assert.equal(numberOn("field:status"), "1");
+  assert.equal(numberOn("field:section"), "2");
+  assert.equal(numberOn("field:claim"), "3");
+  modal.close();
+});
+
+test("is-current-group follows chip and + choice selection and clears on field or stats", () => {
+  const { modal } = openCard();
+  const status = () => modal.contentEl.querySelector('[data-target-key="field:status"]');
+  const section = () => modal.contentEl.querySelector('[data-target-key="field:section"]');
+  modal.schemaSelect("choice:status:seed");
+  assert.equal(status().classList.contains("is-current-group"), true);
+  assert.equal(section().classList.contains("is-current-group"), false);
+  modal.schemaSelect("add-choice:section");
+  assert.equal(status().classList.contains("is-current-group"), false);
+  assert.equal(section().classList.contains("is-current-group"), true);
+  assert.equal(modal.contentEl.querySelector('[data-target-key="add-choice:section"]').getAttribute("data-field-key"), "section");
+  modal.schemaSelect("field:status");
+  assert.equal(status().classList.contains("is-current-group"), false);
+  assert.equal(status().classList.contains("is-selected"), true);
+  modal.schemaSelect("stats");
+  assert.equal(status().classList.contains("is-current-group"), false);
+  assert.equal(section().classList.contains("is-current-group"), false);
+  modal.close();
+});
+
+test("plain browsing paints a field hint with two keycaps after Enter", () => {
+  const { modal, model } = openCard();
+  const items = helpers.albumSchemaCardHintItems(model, {
+    editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null,
+  });
+  const enterAt = items.findIndex((item) => item.keys === "⏎");
+  assert.ok(enterAt >= 0, "Enter item exists");
+  const hint = items[enterAt + 1];
+  assert.deepEqual(hint.keys, ["⇧J/K", "1–3"]);
+  assert.equal(hint.label, "field");
+  const row = modal.contentEl.querySelectorAll(".bob-album-schema-hint")
+    .find((node) => node.querySelector(".bob-album-schema-hint-label")?.textContent === "field");
+  assert.ok(row, "the field hint is painted");
+  const kbds = row.querySelectorAll("kbd");
+  assert.equal(kbds.length, 2);
+  assert.equal(kbds[0].textContent, "⇧J/K");
+  assert.equal(kbds[1].textContent, "1–3");
+  modal.close();
+});
+
+test("the field hint uses 1 for a single field and 1-9 when there are ten", () => {
+  const one = helpers.albumSchemaCardHintItems(
+    { fields: [{ key: "only", label: "Only", kind: "text" }] },
+    { editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null },
+  );
+  assert.deepEqual(fieldHint(one).keys, ["⇧J/K", "1"]);
+  const ten = helpers.albumSchemaCardHintItems(
+    { fields: Array.from({ length: 10 }, (_, i) => ({ key: `f${i + 1}`, label: `F${i + 1}`, kind: "text" })) },
+    { editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null },
+  );
+  assert.deepEqual(fieldHint(ten).keys, ["⇧J/K", "1–9"]);
+});
+
+test("the field hint is absent with zero fields, a stage, hint mode, pending moves, saving, a lock wait, and the read-only card", () => {
+  const model = { fields: zettelFields() };
+  const browsing = { editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null };
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems({ fields: [] }, browsing)), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, { ...browsing, stage: { kind: "field" } })), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, {
+    ...browsing, arrange: { hintMode: { scope: "fields", gaps: [0] } },
+  })), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, {
+    ...browsing, arrange: { dirty: true, pendingText: "move Claim" },
+  })), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, {
+    ...browsing, arrange: { saving: true, pendingText: "Saving…" },
+  })), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, {
+    ...browsing, state: { lockWait: { startedAt: 1 } },
+  })), undefined);
+  assert.equal(fieldHint(helpers.albumSchemaCardHintItems(model, {
+    editable: false, fresh: true, selectedKey: "stats", state: {}, stage: null,
+  })), undefined);
+});
+
+test("the read-only card paints no field keycaps", () => {
+  const { modal } = openCard();
+  modal.session = null;
+  modal.paintSchemaCard("full");
+  assert.equal(modal.contentEl.querySelectorAll(".bob-album-schema-field-key").length, 0);
+  modal.close();
+});

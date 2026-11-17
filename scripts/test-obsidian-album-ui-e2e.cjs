@@ -46,6 +46,12 @@ test("album UI e2e probes field keycap geometry and captures light/dark/375 shot
   const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
   assert.match(source, /schema-field-rest-transparent/);
   assert.match(source, /schema-label-axis/);
+  assert.match(source, /schema-keycap-size/);
+  assert.match(source, /schema-filled-trailing/);
+  assert.match(source, /schema-label-axis-375/);
+  assert.match(source, /1\.45 \* fontSize/);
+  assert.match(source, /fieldLefts/);
+  assert.match(source, /isMarkdownSource/);
   assert.match(source, /schema-group-break/);
   assert.match(source, /schema-hint-strip-bounds/);
   assert.match(source, /album-schema-fields-light\.png/);

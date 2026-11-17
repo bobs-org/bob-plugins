@@ -98130,7 +98130,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     const fields = this.schemaFieldJumpFields(targets);
     const down = Number(delta) >= 0;
     if (!fields.length) {
-      return this.schemaFieldJumpMiss(1, "This album has no fields yet.", event);
+      return this.schemaFieldJumpMiss(down ? 1 : -1, "This album has no fields yet.", event);
     }
     const key = typeof albumSchemaFieldStepKey === "function"
       ? albumSchemaFieldStepKey(targets, this.selectedKey, delta)

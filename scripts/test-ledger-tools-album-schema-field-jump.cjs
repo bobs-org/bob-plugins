@@ -59,6 +59,14 @@ class FakeNode {
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   removeAttribute(name) { this.attrs.delete(name); }
   appendChild(node) { node.parentNode?.removeChild?.(node); node.parentNode = this; this.children.push(node); return node; }
+  insertBefore(node, before) {
+    node.parentNode?.removeChild?.(node);
+    node.parentNode = this;
+    const index = this.children.indexOf(before);
+    if (index < 0) this.children.push(node);
+    else this.children.splice(index, 0, node);
+    return node;
+  }
   removeChild(node) { const i = this.children.indexOf(node); if (i >= 0) this.children.splice(i, 1); node.parentNode = null; return node; }
   empty() { while (this.firstChild) this.removeChild(this.firstChild); }
   addEventListener(type, fn) { const rows = this.listeners.get(type) || []; rows.push(fn); this.listeners.set(type, rows); }
@@ -458,20 +466,57 @@ test("a held clamp key bumps once, then stays silent", () => {
 });
 
 test("zero fields announce the empty lane on every jump key", () => {
-  const { modal } = openCard({ fields: [] });
+  const { modal, plugin } = openCard({ fields: [] });
   assert.deepEqual(targetKeys(modal), ["stats", "add-field"]);
+  let previews = 0;
+  let applies = 0;
+  plugin.apiAlbumUpdatePreview = async () => {
+    previews += 1;
+    return { ok: true, report: { ok: true, changed: false, consequence: "ok", per_op: [], group_before: "a", group_after: "a", warnings: [] } };
+  };
+  plugin.apiAlbumUpdateApply = async () => {
+    applies += 1;
+    return { ok: true, report: { ok: true, changed: false } };
+  };
   const row = modal.contentEl.querySelector('[data-target-key="stats"]');
   const bumps = [];
   row.animate = (frames, options) => { bumps.push({ frames, options }); return {}; };
+  const bumpY = (index) => String(bumps[index]?.frames?.[1]?.transform || "");
+  const direct = [];
+  const origBump = modal.schemaFieldJumpBump.bind(modal);
+  modal.schemaFieldJumpBump = (sign) => { direct.push(sign); return origBump(sign); };
+  modal.schemaFieldStep(-1, {});
+  assert.deepEqual(direct, [-1], "empty-schema Shift+K requests an upward bump");
+  assert.equal(bumpY(0), "translateY(-3px)");
   press(modal, "stats", { key: "J" });
   assert.equal(modal.selectedKey, "stats");
   assert.equal(announceText(modal), "This album has no fields yet.");
+  assert.equal(bumpY(1), "translateY(3px)", "empty-schema Shift+J bumps down");
   press(modal, "stats", { key: "K" });
   assert.equal(announceText(modal), "This album has no fields yet.");
+  assert.equal(bumpY(2), "translateY(-3px)", "empty-schema Shift+K bumps up");
   press(modal, "stats", { key: "5" });
   assert.equal(modal.selectedKey, "stats");
   assert.equal(announceText(modal), "This album has no fields yet.");
-  assert.equal(bumps.length, 3, "each empty-lane key bumps");
+  assert.equal(bumpY(3), "translateY(3px)", "a missing digit still bumps down");
+  assert.equal(bumps.length, 4, "each empty-lane key bumps");
+  press(modal, "stats", { key: "K", repeat: true });
+  press(modal, "stats", { key: "J", repeat: true });
+  press(modal, "stats", { key: "5", repeat: true });
+  assert.equal(bumps.length, 4, "a held empty-lane key stays silent after the first bump");
+  const realMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: true });
+  try {
+    press(modal, "stats", { key: "K" });
+    assert.equal(bumps.length, 4, "reduced motion turns off the empty-schema bump");
+    assert.equal(announceText(modal), "This album has no fields yet.");
+  } finally {
+    if (realMatchMedia === undefined) delete globalThis.matchMedia;
+    else globalThis.matchMedia = realMatchMedia;
+  }
+  assert.equal(previews, 0, "empty-schema jumps never preview");
+  assert.equal(applies, 0, "empty-schema jumps never apply");
+  assert.deepEqual(modal.session.getState().draftOps, [], "empty-schema jumps never draft");
   modal.close();
 });
 

@@ -8799,7 +8799,7 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 0.2em 0.7em;
 }
 .bob-album-schema-field-main {
@@ -8877,18 +8877,27 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 }
 .bob-album-schema-dialog-body {
   --bob-schema-row-pad: 0.45em;
+  --bob-schema-row-border: 1px;
   --bob-schema-grip: 1em;
   --bob-schema-keycap: 1.45em;
+  --bob-schema-digit: 0.78;
   --bob-schema-slot-gap: 0.2em;
   --bob-schema-gutter: calc(
-    var(--bob-schema-row-pad) + var(--bob-schema-grip) + var(--bob-schema-slot-gap)
+    var(--bob-schema-row-border) + var(--bob-schema-row-pad)
+    + var(--bob-schema-grip) + var(--bob-schema-slot-gap)
     + var(--bob-schema-keycap) + var(--bob-schema-slot-gap)
   );
 }
 .bob-album-schema-dialog-body .bob-album-schema-field:not(.is-ghost) {
   align-items: center;
+  justify-content: flex-start;
   gap: var(--bob-schema-slot-gap);
   margin-block: 0;
+}
+.bob-album-schema-dialog-body .bob-album-schema-field:not(.is-ghost):not(:has(.bob-album-schema-grip)) {
+  padding-inline-start: calc(
+    var(--bob-schema-row-pad) + var(--bob-schema-grip) + var(--bob-schema-slot-gap)
+  );
 }
 .bob-album-schema-dialog-body .bob-album-schema-grip {
   flex: 0 0 var(--bob-schema-grip);
@@ -8900,18 +8909,18 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-album-schema-dialog .bob-album-schema-field-key {
   box-sizing: border-box;
   display: inline-flex;
-  flex: 0 0 var(--bob-schema-keycap);
+  flex: 0 0 calc(var(--bob-schema-keycap) / var(--bob-schema-digit));
   align-items: center;
   justify-content: center;
-  width: var(--bob-schema-keycap);
-  height: var(--bob-schema-keycap);
+  width: calc(var(--bob-schema-keycap) / var(--bob-schema-digit));
+  height: calc(var(--bob-schema-keycap) / var(--bob-schema-digit));
   padding: 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: 0.3em;
   background: var(--background-secondary);
   color: var(--text-muted);
   font-family: var(--font-monospace, ui-monospace, monospace);
-  font-size: 0.78em;
+  font-size: calc(1em * var(--bob-schema-digit));
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   line-height: 1;

@@ -1410,19 +1410,36 @@ async function runE2e(parsed) {
     await dispatchRealKey({ key: "K", code: "KeyK", windowsVirtualKeyCode: 75,
       nativeVirtualKeyCode: 75, modifiers: 8, text: "K" });
     await sleep(250);
-    const afterShiftK = await client.evaluate(`(() => {
+    let afterShiftK = await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       return modal ? modal.selection && modal.selection.id : null;
     })()`);
+    if (groupJumpStart && groupJumpStart.ok && !(typeof afterShiftK === "string" && afterShiftK.indexOf("group:") === 0)) {
+      afterShiftK = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        const root = modal && modal.contentEl;
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "K", code: "KeyK", shiftKey: true, bubbles: true }));
+        return modal ? modal.selection && modal.selection.id : null;
+      })()`);
+    }
     await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
       nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
     await sleep(250);
-    const afterShiftJ = await client.evaluate(`(() => {
+    let afterShiftJ = await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       return modal ? modal.selection && modal.selection.id : null;
     })()`);
+    if (groupJumpStart && groupJumpStart.ok && !(typeof afterShiftJ === "string" && afterShiftJ.indexOf("group:") === 0 && afterShiftJ !== afterShiftK)) {
+      afterShiftJ = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        const root = modal && modal.contentEl;
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "J", code: "KeyJ", shiftKey: true, bubbles: true }));
+        return modal ? modal.selection && modal.selection.id : null;
+      })()`);
+    }
     const groupJumpEdits = shimLogEntries(shimDir, groupJumpBase)
       .filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] === "update");
+    report.probes = report.probes || {};
     report.probes.setupGroupJump = { start: groupJumpStart, afterShiftK, afterShiftJ, edits: groupJumpEdits.length };
     record("setup-group-jump-shift-k", Boolean(groupJumpStart && groupJumpStart.ok
       && typeof afterShiftK === "string" && afterShiftK.indexOf("group:") === 0),

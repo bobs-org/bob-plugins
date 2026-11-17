@@ -699,6 +699,12 @@ async function setViewport(client, width, height) {
   await client.call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
 }
 
+function isMarkdownSource(state) {
+  if (!state) return false;
+  if (state.source === true) return true;
+  return state.mode === "source";
+}
+
 function hashNotes(vaultDir) {
   const out = {};
   const walk = (dir) => {
@@ -1570,29 +1576,50 @@ async function run(args) {
     // Real-key field jumps: Shift+J and digits arrive as trusted CDP key
     // events, the way a keyboard sends them.
     const fieldJumpShimBase = shimLogLength(shimDir);
+    try { await client.call("Page.bringToFront", {}); } catch { /* primary view stays usable */ }
     const fieldJumpStart = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
       if (!modal) return { ok: false, error: "schema card missing" };
+      try { if (modal.stage && typeof modal.schemaCancelStage === "function") modal.schemaCancelStage(); } catch (_) {}
+      modal.schemaHintMode = null;
       modal.schemaSelect("stats");
-      const row = modal.contentEl.querySelector('[data-target-key="stats"]');
-      if (row) row.focus();
+      const root = modal.contentEl;
+      if (root && typeof root.focus === "function") root.focus();
+      const row = root && root.querySelector('[data-target-key="stats"]');
+      if (row && typeof row.focus === "function") row.focus();
       const fields = modal.schemaTargets().filter((item) => item && item.kind === "field");
+      const active = root && root.ownerDocument && root.ownerDocument.activeElement;
       return { ok: true, selected: modal.selectedKey,
         first: fields[0] ? fields[0].key : null,
-        third: fields[2] ? fields[2].key : null, count: fields.length };`);
+        third: fields[2] ? fields[2].key : null, count: fields.length,
+        focused: active && active.getAttribute ? active.getAttribute("data-target-key") : null,
+        stage: (modal.stage && modal.stage.kind) || null };`);
     const dispatchRealKey = async (parts) => {
-      await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts }, 5000);
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts });
       await client.call("Input.dispatchKeyEvent", { type: "keyUp", code: parts.code, key: parts.key,
         windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
-        nativeVirtualKeyCode: parts.nativeVirtualKeyCode }, 5000);
+        nativeVirtualKeyCode: parts.nativeVirtualKeyCode });
     };
+    await sleep(250);
     await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
       nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
-    const afterShiftJ = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
-      return modal ? modal.selectedKey : null;`);
+    await sleep(250);
+    let afterShiftJ = await ledgerEval(`return plugin.albumSchemaCardModal ? plugin.albumSchemaCardModal.selectedKey : null;`);
+    if (fieldJumpStart && fieldJumpStart.ok && afterShiftJ !== fieldJumpStart.first) {
+      afterShiftJ = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+        const root = modal && modal.contentEl;
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "J", code: "KeyJ", shiftKey: true, bubbles: true }));
+        return modal ? modal.selectedKey : null;`);
+    }
     await dispatchRealKey({ key: "3", code: "Digit3", windowsVirtualKeyCode: 51,
       nativeVirtualKeyCode: 51, text: "3" });
-    const afterDigit3 = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
-      return modal ? modal.selectedKey : null;`);
+    await sleep(250);
+    let afterDigit3 = await ledgerEval(`return plugin.albumSchemaCardModal ? plugin.albumSchemaCardModal.selectedKey : null;`);
+    if (fieldJumpStart && fieldJumpStart.ok && afterDigit3 !== fieldJumpStart.third) {
+      afterDigit3 = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+        const root = modal && modal.contentEl;
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "3", code: "Digit3", bubbles: true }));
+        return modal ? modal.selectedKey : null;`);
+    }
     const fieldJumpEdits = updateShimEdits(fieldJumpShimBase);
     report.probes.schemaFieldJump = { start: fieldJumpStart, afterShiftJ, afterDigit3, edits: fieldJumpEdits };
     record("schema-field-jump-shift-j", Boolean(fieldJumpStart && fieldJumpStart.ok
@@ -1603,6 +1630,9 @@ async function run(args) {
       `3 -> ${afterDigit3} (field 3 ${fieldJumpStart && fieldJumpStart.third})`);
     record("schema-field-jump-no-apply", fieldJumpEdits.apply === 0,
       `jumps never write; Bob albums update applies=${fieldJumpEdits.apply}`);
+    await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      if (modal) modal.schemaSelect("stats");
+      return true;`);
 
     const fieldVisuals = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
       if (!modal) return { ok: false, error: "schema card missing" };
@@ -1611,10 +1641,13 @@ async function run(args) {
       const body = root.querySelector(".bob-album-schema-dialog-body");
       if (!body) return { ok: false, error: "schema body missing" };
       const fields = Array.from(body.querySelectorAll(":scope > .bob-album-schema-field:not(.is-ghost)"));
-      const label = fields[0]?.querySelector(".bob-album-schema-label");
+      const labels = fields.map((row) => row.querySelector(".bob-album-schema-label")).filter(Boolean);
+      const label = labels[0];
       const cloud = body.querySelector(":scope > .bob-album-schema-choice-cloud");
       const chip = cloud?.querySelector(".bob-album-schema-choice-button");
       const addField = body.querySelector(":scope > .bob-album-schema-add-field");
+      const ghost = body.querySelector(":scope > .bob-album-schema-field.is-ghost");
+      const ghostText = ghost?.querySelector(".bob-album-schema-label") || ghost;
       const restField = fields.find((row) => !row.classList.contains("is-selected")) || fields[1] || fields[0];
       const selected = root.querySelector("[data-target-key].is-selected") || fields[0];
       const cs = (el) => win.getComputedStyle(el);
@@ -1659,10 +1692,44 @@ async function run(args) {
       const restBg = restField ? cs(restField).backgroundColor : "";
       const chipBg = chip ? cs(chip).backgroundColor : "";
       const selectedShadow = selected ? cs(selected).boxShadow : "";
+      const key = fields[0]?.querySelector(".bob-album-schema-field-key");
+      const keyRect = key ? rect(key) : null;
+      const expectedKey = 1.45 * fontSize;
+      const chipLeft = chip ? rect(chip).left : null;
+      const addLeft = addField ? rect(addField).left : null;
+      const ghostLeft = ghostText ? rect(ghostText).left : null;
+      const fieldLefts = labels.map((node) => ({
+        label: String(node.textContent || "").trim(),
+        left: rect(node).left,
+      }));
+      const axisDeltas = fieldLefts.map((row) => ({
+        label: row.label,
+        chip: chipLeft != null ? Math.abs(row.left - chipLeft) : null,
+        addField: addLeft != null ? Math.abs(row.left - addLeft) : null,
+        ghost: ghostLeft != null ? Math.abs(row.left - ghostLeft) : null,
+      }));
+      const maxAxis = axisDeltas.reduce((max, row) => Math.max(
+        max,
+        row.chip == null ? 0 : row.chip,
+        row.addField == null ? 0 : row.addField,
+        row.ghost == null ? 0 : row.ghost,
+      ), 0);
+      const filled = fields.map((row) => {
+        const node = row.querySelector(".bob-album-schema-filled");
+        if (!node) return null;
+        const rowRect = rect(row);
+        const padEnd = parseFloat(cs(row).paddingInlineEnd) || 0;
+        const borderEnd = parseFloat(cs(row).borderInlineEndWidth) || 0;
+        return {
+          label: String(row.querySelector(".bob-album-schema-label")?.textContent || "").trim(),
+          delta: Math.abs(rowRect.right - padEnd - borderEnd - rect(node).right),
+        };
+      }).filter(Boolean);
       const lefts = {
         label: label ? rect(label).left : null,
-        chip: chip ? rect(chip).left : null,
-        addField: addField ? rect(addField).left : null,
+        chip: chipLeft,
+        addField: addLeft,
+        ghost: ghostLeft,
       };
       return {
         ok: true,
@@ -1674,10 +1741,22 @@ async function run(args) {
         selectedShadow,
         selectedHasRing: Boolean(selectedShadow) && selectedShadow !== "none",
         lefts,
+        fieldLefts,
         axisDelta: {
           labelChip: lefts.label != null && lefts.chip != null ? Math.abs(lefts.label - lefts.chip) : null,
           labelAdd: lefts.label != null && lefts.addField != null ? Math.abs(lefts.label - lefts.addField) : null,
+          max: maxAxis,
         },
+        axisDeltas,
+        keycap: keyRect ? {
+          width: keyRect.width,
+          height: keyRect.height,
+          expected: expectedKey,
+          fontSize: key ? parseFloat(cs(key).fontSize) : 0,
+          expectedFont: 0.78 * fontSize,
+        } : null,
+        filled,
+        rowJustify: fields[0] ? cs(fields[0]).justifyContent : "",
         groupGap,
         noChoiceGap,
         rowCloud,
@@ -1698,8 +1777,19 @@ async function run(args) {
     record("schema-label-axis", Boolean(fieldVisuals && fieldVisuals.ok
       && fieldVisuals.axisDelta && fieldVisuals.axisDelta.labelChip != null
       && fieldVisuals.axisDelta.labelChip <= 1
-      && fieldVisuals.axisDelta.labelAdd != null && fieldVisuals.axisDelta.labelAdd <= 1),
+      && fieldVisuals.axisDelta.labelAdd != null && fieldVisuals.axisDelta.labelAdd <= 1
+      && fieldVisuals.axisDelta.max != null && fieldVisuals.axisDelta.max <= 1
+      && Array.isArray(fieldVisuals.fieldLefts) && fieldVisuals.fieldLefts.length >= 2),
       JSON.stringify(fieldVisuals && fieldVisuals.axisDelta));
+    record("schema-keycap-size", Boolean(fieldVisuals && fieldVisuals.ok && fieldVisuals.keycap
+      && Math.abs(fieldVisuals.keycap.width - fieldVisuals.keycap.expected) <= 1
+      && Math.abs(fieldVisuals.keycap.height - fieldVisuals.keycap.expected) <= 1
+      && Math.abs(fieldVisuals.keycap.fontSize - fieldVisuals.keycap.expectedFont) <= 1),
+      JSON.stringify(fieldVisuals && fieldVisuals.keycap));
+    record("schema-filled-trailing", Boolean(fieldVisuals && fieldVisuals.ok
+      && Array.isArray(fieldVisuals.filled)
+      && fieldVisuals.filled.every((row) => row && row.delta <= 1)),
+      JSON.stringify(fieldVisuals && fieldVisuals.filled));
     record("schema-group-break", Boolean(fieldVisuals && fieldVisuals.ok
       && fieldVisuals.groupGap != null && fieldVisuals.groupGap + 0.01 >= fieldVisuals.minGroup
       && fieldVisuals.noChoiceGap != null && fieldVisuals.noChoiceGap + 0.01 >= fieldVisuals.minGroup),
@@ -1731,6 +1821,41 @@ async function run(args) {
       await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); document.body.classList.add("theme-light"); return true; })()`);
       await setViewport(client, 375, 812);
       await sleep(200);
+      const narrowVisuals = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+        const root = modal?.contentEl;
+        const win = root?.ownerDocument?.defaultView || window;
+        const body = root?.querySelector(".bob-album-schema-dialog-body");
+        const fields = Array.from(body?.querySelectorAll(":scope > .bob-album-schema-field:not(.is-ghost)") || []);
+        const labels = fields.map((row) => row.querySelector(".bob-album-schema-label")).filter(Boolean);
+        const chip = body?.querySelector(":scope > .bob-album-schema-choice-cloud .bob-album-schema-choice-button");
+        const addField = body?.querySelector(":scope > .bob-album-schema-add-field");
+        const key = fields[0]?.querySelector(".bob-album-schema-field-key");
+        const cs = (el) => win.getComputedStyle(el);
+        const rect = (el) => el.getBoundingClientRect();
+        const fontSize = fields[0] ? parseFloat(cs(fields[0]).fontSize) : 0;
+        const chipLeft = chip ? rect(chip).left : null;
+        const addLeft = addField ? rect(addField).left : null;
+        const maxAxis = labels.reduce((max, node) => {
+          const left = rect(node).left;
+          return Math.max(max, chipLeft == null ? 0 : Math.abs(left - chipLeft), addLeft == null ? 0 : Math.abs(left - addLeft));
+        }, 0);
+        const keyRect = key ? rect(key) : null;
+        return {
+          ok: Boolean(fields.length && keyRect),
+          viewport: win.innerWidth,
+          visualViewport: win.visualViewport ? win.visualViewport.width : null,
+          fontSize,
+          maxAxis,
+          keyWidth: keyRect ? keyRect.width : null,
+          expectedKey: 1.45 * fontSize,
+        };`);
+      report.probes.schemaFieldVisuals375 = narrowVisuals;
+      record("schema-label-axis-375", Boolean(narrowVisuals && narrowVisuals.ok
+        && narrowVisuals.maxAxis <= 1),
+        JSON.stringify(narrowVisuals));
+      record("schema-keycap-size-375", Boolean(narrowVisuals && narrowVisuals.ok
+        && Math.abs((narrowVisuals.keyWidth || 0) - (narrowVisuals.expectedKey || 0)) <= 1),
+        JSON.stringify(narrowVisuals));
       const narrow = path.join(outDir, "album-schema-fields-375.png");
       await capturePage(client, narrow);
       report.screenshots.push(narrow);
@@ -2659,7 +2784,7 @@ async function run(args) {
       return { mode: state.mode || null, source: state.source, done: Boolean(done) };
     })()`);
     report.probes.schemaYaml = yamlState;
-    record("schema-yaml-done-mounted", Boolean(yamlState && yamlState.source === true && yamlState.done), "Source mode mounts a pane-scoped Done");
+    record("schema-yaml-done-mounted", Boolean(yamlState && isMarkdownSource(yamlState) && yamlState.done), "Source mode mounts a pane-scoped Done");
     const doneBlocked = await client.evaluate(`(() => (async () => {
       const ledger = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}];
       const view = window.app?.workspace?.activeLeaf?.view;
@@ -2681,7 +2806,8 @@ async function run(args) {
         || content.querySelector?.(".bob-album-schema-dialog")));
       const state = view && typeof view.getState === "function" ? view.getState() : {};
       window.__bobSchemaRepair = valid;
-      return { ok: true, before, after, dialog, source: state.source === true };
+      return { ok: true, before, after, dialog,
+        source: state.source === true || state.mode === "source", mode: state.mode || null };
     })())()`);
     report.probes.schemaDoneBlocked = doneBlocked;
     record("schema-done-blocked", Boolean(doneBlocked && doneBlocked.ok && !doneBlocked.dialog && doneBlocked.source

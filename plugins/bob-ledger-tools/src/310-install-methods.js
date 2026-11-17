@@ -48,6 +48,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsBankMarksReadingMixin,
   BobLedgerToolsBankSetupMixin,
   BobLedgerToolsBankSetupCardMixin,
+  BobLedgerToolsSchemaDoubleEqualsMixin,
   BobLedgerToolsNotebookCatalogMixin,
   BobLedgerToolsAlbumCatalogMixin,
   BobLedgerToolsProjectsCatalogMixin,

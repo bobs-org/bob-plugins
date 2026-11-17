@@ -186,10 +186,12 @@ Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.
 
-Open the card from the header's **⊞ Schema**, the **Edit album schema**
-palette command, Command Mode's Vault row, or `Ctrl+Shift+P` on an album note
-where the Task Card has no target, including its title or a blank row. The
-chord fallback resolves direct album notes only. The palette command resolves
+Open the card from the header's **⊞ Schema**, `==` in Vim normal mode in Live
+Preview on the album note, the **Edit album schema** palette command, Command
+Mode's Vault row, or `Ctrl+Shift+P` on an album note where the Task Card has
+no target, including its title or a blank row. A counted `N==`, Source mode,
+and other notes keep Vim's reindent. The chord fallback resolves direct album
+notes only. The palette command resolves
 the owning album directly, or a record note's actual `parent:` link; missing, cyclic,
 ambiguous, or non-album parents teach instead of guessing. An invalid album
 still opens with its lint and the YAML path. A **Done** button rides along

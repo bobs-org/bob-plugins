@@ -172,6 +172,7 @@
   "248ka-plugin-bank-setup-card-arrange.js",
   "248kb-plugin-bank-setup-card-regions.js",
   "248l-plugin-bank-setup-card-entrypoints.js",
+  "248m-plugin-schema-double-equals.js",
   "249-plugin-bank-walk-model.js",
   "249a-plugin-bank-walk-index.js",
   "241b-plugin-notebook-catalog-model.js",
@@ -300,5 +301,6 @@
   "366-exports-bank-subscription-linker.js",
   "367-exports-bank-subscription-surfaces.js",
   "367-exports-bank-setup-card.js",
-  "368-exports-schema-arrange.js"
+  "368-exports-schema-arrange.js",
+  "369-exports-schema-double-equals.js"
 ]

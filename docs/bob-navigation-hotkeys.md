@@ -675,10 +675,11 @@ Three keyboard layers are in play:
   bob-mail `api.mailOpen` v1, then Obsidian's link opener. Unknown or missing
   mail APIs fall through.
 - **Editor and Vim handlers** act below the palette layer. The plugin maps
-  `\s` in Vim normal mode to toggling the current tab pin (Bob Ledger Tools
-  owns the distinct `\p` mapping for Pomodoro increments), and its
-  editor/Vim-aware dispatch narrows capture-phase fallbacks to match the
-  vault's bindings exactly. `Ctrl+S` is one such handler: exactly `Ctrl+S`
+  `\s` in Vim normal mode to toggling the current tab pin (Ledger Tools owns
+  `\p` for Pomodoro increments), and its editor/Vim-aware dispatch matches
+  vault bindings. Bob Ledger Tools owns `==` on album notes and `bank.md`;
+  vimrc `nnoremap ==` cannot beat Vim's `=` operator. `Ctrl+S`
+  is one such handler: exactly `Ctrl+S`
   with no Shift, Alt, or Meta inside a Pomodoro block of the first
   `## Pomodoros` section splits (stopping propagation only when it acts),
   with an `editor:save-file` callback fallback; everywhere else the key

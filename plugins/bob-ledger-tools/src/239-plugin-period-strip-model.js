@@ -344,6 +344,7 @@ function periodStripWeekColumns(report) {
         mark,
         tick: typeof column.tick === "string" ? column.tick : null,
         group: column.group === null || column.group === undefined ? null : column.group,
+        headline: typeof column.headline === "string" ? column.headline : "",
         tooltip,
       };
     }).filter(Boolean);
@@ -375,6 +376,7 @@ function periodStripColumnTooltip(column, missing, report) {
     const soFar = state === "current" ? " so far" : "";
     const reviewWords = periodStripColumnReviewWords(column.mark, state);
     const lines = [(label ? label + " · " : "") + "Worked " + display + soFar + (reviewWords ? " · " + reviewWords : "")];
+    if (typeof column.headline === "string" && column.headline.trim()) lines.push(column.headline.trim());
     const stack = Array.isArray(column.stack) ? column.stack : [];
     for (const entry of stack) {
       if (!entry || typeof entry.key !== "string") continue;
@@ -584,7 +586,7 @@ function periodStripTableRows(report) {
         done: row.done && typeof row.done === "object" ? row.done : null,
         review: row.review && typeof row.review === "object" ? row.review : null,
         closeout: typeof row.closeout === "string" ? row.closeout : null,
-        headline: row.review && typeof row.review.headline === "string" ? row.review.headline : "",
+        headline: typeof row.headline === "string" ? row.headline : (row.review && typeof row.review.headline === "string" ? row.review.headline : ""),
         mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
         stack,
         stacks,

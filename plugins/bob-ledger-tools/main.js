@@ -54197,6 +54197,7 @@ function periodStripWeekColumns(report) {
         mark,
         tick: typeof column.tick === "string" ? column.tick : null,
         group: column.group === null || column.group === undefined ? null : column.group,
+        headline: typeof column.headline === "string" ? column.headline : "",
         tooltip,
       };
     }).filter(Boolean);
@@ -54228,6 +54229,7 @@ function periodStripColumnTooltip(column, missing, report) {
     const soFar = state === "current" ? " so far" : "";
     const reviewWords = periodStripColumnReviewWords(column.mark, state);
     const lines = [(label ? label + " · " : "") + "Worked " + display + soFar + (reviewWords ? " · " + reviewWords : "")];
+    if (typeof column.headline === "string" && column.headline.trim()) lines.push(column.headline.trim());
     const stack = Array.isArray(column.stack) ? column.stack : [];
     for (const entry of stack) {
       if (!entry || typeof entry.key !== "string") continue;
@@ -54437,7 +54439,7 @@ function periodStripTableRows(report) {
         done: row.done && typeof row.done === "object" ? row.done : null,
         review: row.review && typeof row.review === "object" ? row.review : null,
         closeout: typeof row.closeout === "string" ? row.closeout : null,
-        headline: row.review && typeof row.review.headline === "string" ? row.review.headline : "",
+        headline: typeof row.headline === "string" ? row.headline : (row.review && typeof row.review.headline === "string" ? row.review.headline : ""),
         mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
         stack,
         stacks,
@@ -54865,6 +54867,13 @@ function paintPeriodPartsTable(host, model) {
         if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }, row.done && typeof row.done.display === "string" ? row.done.display : "–"));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }, periodPartsReviewText(row)));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary " + (row.headline ? "bob-period-parts-summary-headline" : "bob-period-parts-summary-mostly"), role: "cell" }, row.headline || row.mostly || ""));
+      } else if (row.headline) {
+        // Keep a planned headline in the Summary column while the rest of a
+        // future day stays empty. The row's faint styling marks it as a plan.
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-worked", role: "cell" }));
+        if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary bob-period-parts-summary-headline", role: "cell" }, row.headline));
       }
       table.appendChild(line);
     }

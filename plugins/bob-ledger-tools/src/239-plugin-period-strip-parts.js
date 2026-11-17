@@ -415,6 +415,13 @@ function paintPeriodPartsTable(host, model) {
         if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }, row.done && typeof row.done.display === "string" ? row.done.display : "–"));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }, periodPartsReviewText(row)));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary " + (row.headline ? "bob-period-parts-summary-headline" : "bob-period-parts-summary-mostly"), role: "cell" }, row.headline || row.mostly || ""));
+      } else if (row.headline) {
+        // Keep a planned headline in the Summary column while the rest of a
+        // future day stays empty. The row's faint styling marks it as a plan.
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-worked", role: "cell" }));
+        if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary bob-period-parts-summary-headline", role: "cell" }, row.headline));
       }
       table.appendChild(line);
     }

@@ -111,6 +111,25 @@ test("parts table uses live internal links, Headline or mostly, review states, a
   assert.ok(byClass(quarterHost, "bob-period-parts-cell-review").some((node) => node.textContent === "✓ reflected"));
 });
 
+test("Daily Headlines render for completed and planned days and under each strip tooltip's Worked line", () => {
+  const report = JSON.parse(JSON.stringify(week));
+  report.children[0].headline = "Ship the first draft";
+  report.children[2].headline = "Prepare tomorrow's review";
+  report.children[2].state = "future";
+  report.children[2].worked = undefined;
+  report.columns[0].headline = report.children[0].headline;
+  const { model, host } = paintTable(report, "2026-W44");
+  assert.equal(model.children[0].headline, "Ship the first draft");
+  assert.equal(byClass(host, "bob-period-parts-summary-headline")[0].textContent, "Ship the first draft");
+  const future = byClass(host, "bob-period-parts-row-future")[0];
+  assert.equal(findAll(future, (node) => node.getAttribute("role") === "cell").length, 6);
+  assert.equal(byClass(future, "bob-period-parts-summary-headline")[0].textContent, "Prepare tomorrow's review");
+
+  const strip = helpers.periodStripModel(report, "2026-W44");
+  assert.equal(strip.columns[0].headline, "Ship the first draft");
+  assert.match(strip.columns[0].tooltip, /Worked[\s\S]*\nShip the first draft/);
+});
+
 test("table future rows stop at Child and Dates; not-tracked years and missing pre-adoption links are clear", () => {
   const { host: quarterHost } = paintTable(fixtures.currentQuarter, "2026-Q4");
   const future = byClass(quarterHost, "bob-period-parts-row-future")[0];

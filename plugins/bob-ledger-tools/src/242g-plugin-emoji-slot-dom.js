@@ -20,6 +20,14 @@ function albumEmojiSlotFusedToken(label, emoji) {
   return glyph ? (text ? `${glyph} ${text}` : glyph) : text;
 }
 
+function albumEmojiSlotUpdateHint(slot) {
+  if (!slot || slot.fallback || !slot.hint) return;
+  const disabled = slot.well?.disabled === true;
+  const show = !disabled && !slot.glyph && !slot.isOpen;
+  if (show) slot.hint.removeAttribute?.("hidden");
+  else slot.hint.setAttribute?.("hidden", "");
+}
+
 function albumEmojiSlotUpdatePreview(slot) {
   if (!slot) return;
   const value = albumEmojiSlotFusedToken(slot.labelInput?.value, slot.glyph);
@@ -34,6 +42,7 @@ function albumEmojiSlotUpdatePreview(slot) {
     if (slot.glyph) slot.well.classList?.remove?.("is-empty");
     else slot.well.classList?.add?.("is-empty");
   }
+  albumEmojiSlotUpdateHint(slot);
 }
 
 function albumEmojiSlotResolveSiblings(slot) {
@@ -136,6 +145,7 @@ function albumEmojiSlotClose(slot, options = {}) {
   if (!slot?.isOpen) return false;
   slot.isOpen = false;
   slot.panel.setAttribute("hidden", "");
+  albumEmojiSlotUpdateHint(slot);
   slot.well?.setAttribute?.("aria-expanded", "false");
   slot.search.setAttribute("aria-expanded", "false");
   slot.search.removeAttribute("aria-activedescendant");
@@ -178,6 +188,7 @@ function albumEmojiSlotOpen(slot, initialQuery = "") {
   slot.activeIndex = 0;
   slot.isOpen = true;
   slot.panel.removeAttribute("hidden");
+  albumEmojiSlotUpdateHint(slot);
   slot.well?.setAttribute?.("aria-expanded", "true");
   slot.search.setAttribute("aria-expanded", "true");
   slot.model = albumEmojiSlotResultModel(api, {
@@ -262,7 +273,11 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     well.setAttribute("aria-haspopup", "listbox");
     well.setAttribute("aria-expanded", "false");
     well.setAttribute("aria-label", value ? `Emoji ${value}; choose another` : "Choose an emoji");
+    well.setAttribute("title", "Choose an emoji: click, or Tab here and type to search");
     if (options.disabled) well.disabled = true;
+    const hint = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-hint",
+      "Emoji: click \u263B or press Tab, then type to search");
+    hint.setAttribute("hidden", "");
 
     panel = albumEmojiSlotCreateEl(doc, "section", "bob-emoji-slot-panel");
     panel.setAttribute("hidden", "");
@@ -316,6 +331,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
       fallback: false,
       preview,
       note,
+      hint,
     };
     well.addEventListener("click", () => {
       if (slot.isOpen) albumEmojiSlotClose(slot, { focusWell: true });
@@ -353,6 +369,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     content.appendChild(hidden);
     content.appendChild(well);
     content.appendChild(preview);
+    content.appendChild(hint);
     content.appendChild(note);
     content.appendChild(panel);
   } else {

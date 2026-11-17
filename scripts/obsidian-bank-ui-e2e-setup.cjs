@@ -1304,6 +1304,39 @@ async function runE2e(parsed) {
       return { ok: Boolean(search), categories: root?.querySelectorAll?.("[data-emoji-category]")?.length || 0 };
     })()`).catch((error) => ({ error: String(error) }));
     record("setup-card-emoji-panel", Boolean(emojiPanel?.ok && emojiPanel.categories === 9), jsonDetail(emojiPanel));
+    await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const root = modal?.contentEl?.querySelector?.(".bob-bank-setup-card-stage");
+      if (root?.querySelector?.(".bob-emoji-slot-panel") && !root.querySelector(".bob-emoji-slot-panel").hasAttribute("hidden")) {
+        try {
+          modal?.onKeyDown?.({ key: "Escape", preventDefault() {}, stopPropagation() {}, target: root.querySelector(".bob-emoji-slot-search") });
+        } catch (_) {}
+      }
+      root?.querySelector?.(".bob-emoji-slot-label")?.focus?.();
+      return true;
+    })()`);
+    await sleep(150);
+    const emojiWellStyle = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const root = modal?.contentEl?.querySelector?.(".bob-bank-setup-card-stage");
+      const well = root?.querySelector?.("[data-emoji-well]");
+      const label = root?.querySelector?.(".bob-emoji-slot-label");
+      if (!well || !label) return { ok: false, error: "well or label missing" };
+      const wellStyle = getComputedStyle(well);
+      const labelStyle = getComputedStyle(label);
+      return {
+        ok: true,
+        boxShadow: wellStyle.boxShadow,
+        borderStyle: wellStyle.borderTopStyle,
+        wellBackground: wellStyle.backgroundColor,
+        labelBackground: labelStyle.backgroundColor,
+        title: well.getAttribute("title") || "",
+      };
+    })()`).catch((error) => ({ ok: false, error: String(error) }));
+    record("setup-card-emoji-well-style", Boolean(emojiWellStyle?.ok
+      && emojiWellStyle.boxShadow === "none"
+      && emojiWellStyle.wellBackground === emojiWellStyle.labelBackground
+      && String(emojiWellStyle.title || "").length > 0), jsonDetail(emojiWellStyle));
     const emojiFilter = emojiPanel?.ok ? await client.evaluate(`(async () => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       const root = modal?.contentEl?.querySelector?.(".bob-bank-setup-card-stage");

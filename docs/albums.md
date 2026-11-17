@@ -108,16 +108,15 @@ sync**, which runs only `bob vault-sync` and never replays the mutation.
 Defaults and numeric bounds edit through typed inputs with explicit Unset,
 and choice edits change label and emoji while stored values stay fixed. Choice
 edit/add and each initial choice in a new choices field use the shared Emoji
-Slot: type the label, Tab to the square glyph well, then press Enter, Space,
-or ↓ to open its in-card picker. Search filters as you type; an empty query
-offers label matches, emoji used in your albums, shared recents, and category
-tabs. Arrow keys move the highlight in two dimensions; Enter picks without
-saving the schema stage, Tab leaves without picking, and the first Esc closes
-only the picker. A live chip previews the stored token, and a small dot marks
-an emoji already used by another choice in the same field. Pasted emoji,
-including ZWJ sequences and flags, stay byte-for-byte; digit keycaps are
-accepted when pasted with a note because Bob stores a leading digit keycap as
-label text. If Bob Emoji v1 is unavailable, the glyph well falls back to a
+Slot: the dashed ☻ tile left of the label is the emoji box; click
+it, or Tab to it and type to search. An empty slot shows its hint below. Search
+filters as you type; an empty query offers label matches, album emoji,
+recents, and category tabs. Arrows move the highlight in two dimensions;
+Enter picks without saving the stage, Tab leaves without picking, and the
+first Esc closes only the picker. A live chip previews the stored token; a
+dot marks an emoji already used by another choice in the same field. Pasted
+emoji, including ZWJ sequences and flags, stay byte-for-byte; pasted digit
+keycaps carry a note because Bob stores a leading digit keycap as label text. If Bob Emoji v1 is unavailable, the glyph well falls back to a
 plain input with an enable-search hint. `y`
 from the card or a focused chip/lint row closes the card and jumps to that
 field or issue line in Source mode. Bob's `issues[]` paint as lint marks with

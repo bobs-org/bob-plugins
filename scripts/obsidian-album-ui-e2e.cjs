@@ -1622,6 +1622,166 @@ async function run(args) {
       report.screenshots.push(dark);
       await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); return true; })()`);
     };
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      modal?.schemaHandleEscape?.();
+      modal?.contentEl?.querySelector?.(".bob-emoji-slot-label")?.focus?.();
+      return true;
+    })()`);
+    await sleep(150);
+    const emojiWellStyle = await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const well = modal?.contentEl?.querySelector?.("[data-emoji-well]");
+      const label = modal?.contentEl?.querySelector?.(".bob-emoji-slot-label");
+      const hint = modal?.contentEl?.querySelector?.(".bob-emoji-slot-hint");
+      if (!well || !label) return { ok: false, error: "well or label missing" };
+      const wellStyle = getComputedStyle(well);
+      const labelStyle = getComputedStyle(label);
+      const doc = modal.contentEl.ownerDocument;
+      const active = doc?.activeElement;
+      return {
+        ok: true,
+        boxShadow: wellStyle.boxShadow,
+        borderStyle: wellStyle.borderTopStyle,
+        wellBackground: wellStyle.backgroundColor,
+        labelBackground: labelStyle.backgroundColor,
+        title: well.getAttribute("title") || "",
+        hintHidden: hint ? hint.hasAttribute("hidden") : null,
+        hover: well.matches(":hover"),
+        focus: well.matches(":focus"),
+        focusVisible: well.matches(":focus-visible"),
+        ariaExpanded: well.getAttribute("aria-expanded"),
+        activeTag: active?.tagName || null,
+        activeClass: active ? active.getAttribute("class") : null,
+        activeInModal: Boolean(active && modal.contentEl.contains(active)),
+      };
+    })()`).catch((error) => ({ ok: false, error: String(error) }));
+    report.probes.schemaEmojiWellStyle = emojiWellStyle;
+    record("schema-emoji-well-style", Boolean(emojiWellStyle?.ok
+      && emojiWellStyle.boxShadow === "none"
+      && String(emojiWellStyle.borderStyle || "").toLowerCase() === "dashed"
+      && emojiWellStyle.wellBackground === emojiWellStyle.labelBackground
+      && emojiWellStyle.hintHidden === false), JSON.stringify(emojiWellStyle));
+    await captureEmojiThemes("hint");
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      modal?.contentEl?.querySelector?.("[data-emoji-well]")?.focus?.();
+      return true;
+    })()`);
+    await captureEmojiThemes("focused");
+    await client.evaluate(`(() => {
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      return true;
+    })()`);
+    const describeFocus = `(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const doc = modal?.contentEl?.ownerDocument || document;
+      const active = doc?.activeElement;
+      return {
+        tag: active?.tagName || null,
+        cls: active ? active.getAttribute("class") : null,
+        inModal: Boolean(active && modal?.contentEl?.contains(active)),
+        schemaInput: active ? active.getAttribute("data-schema-input") : null,
+        well: Boolean(active?.matches?.("[data-emoji-well]")),
+      };
+    })()`;
+    const emojiKeyboard = await (async () => {
+      try {
+        const before = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const label = modal?.contentEl?.querySelector?.(".bob-emoji-slot-label");
+          if (!label) return { ok: false, error: "label missing" };
+          label.focus();
+          return { ok: true, label: label.value };
+        })()`);
+        if (!before?.ok) return { ok: false, error: before?.error || "label missing" };
+        const focusBefore = await client.evaluate(describeFocus);
+        const tabSwallowed = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const label = modal?.contentEl?.querySelector?.(".bob-emoji-slot-label");
+          if (!label) return { ok: false };
+          const event = new KeyboardEvent("keydown", { key: "Tab", code: "Tab", bubbles: true, cancelable: true });
+          try {
+            Object.defineProperty(event, "keyCode", { value: 9 });
+            Object.defineProperty(event, "which", { value: 9 });
+          } catch (_) {}
+          const delivered = label.dispatchEvent(event);
+          return { ok: true, swallowed: delivered === false, defaultPrevented: event.defaultPrevented === true };
+        })()`);
+        await sleep(200);
+        const tabDest = await client.evaluate(describeFocus);
+        const hintVisible = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const hint = modal?.contentEl?.querySelector?.(".bob-emoji-slot-hint");
+          return Boolean(hint) && !hint.hasAttribute("hidden");
+        })()`);
+        const result = { ok: false, focusBefore, tabSwallowed, tabDest, hintVisible };
+        await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const panel = modal?.contentEl?.querySelector?.(".bob-emoji-slot-panel");
+          if (panel && !panel.hasAttribute("hidden")) modal?.schemaHandleEscape?.();
+          const well = modal?.contentEl?.querySelector?.("[data-emoji-well]");
+          if (well) {
+            well.focus?.();
+            well.dispatchEvent(new KeyboardEvent("keydown", { key: "r", code: "KeyR", bubbles: true, cancelable: true }));
+          }
+          return true;
+        })()`);
+        await sleep(250);
+        const typed = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const search = modal?.contentEl?.querySelector?.(".bob-emoji-slot-search");
+          const panel = modal?.contentEl?.querySelector?.(".bob-emoji-slot-panel");
+          const doc = modal?.contentEl?.ownerDocument || document;
+          const active = doc?.activeElement;
+          return {
+            open: Boolean(panel) && !panel.hasAttribute("hidden"),
+            query: search?.value || "",
+            activeTag: active?.tagName || null,
+            activeWell: Boolean(active?.matches?.("[data-emoji-well]")),
+            activeSearch: active === search,
+          };
+        })()`);
+        result.typed = typed;
+        if (!typed?.open || typed.query !== "r") {
+          result.error = "typing r did not open the panel";
+          return result;
+        }
+        await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const search = modal?.contentEl?.querySelector?.(".bob-emoji-slot-search");
+          if (search) search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+          return true;
+        })()`);
+        await sleep(250);
+        const escaped = await client.evaluate(`((beforeLabel) => {
+          const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+          const panel = modal?.contentEl?.querySelector?.(".bob-emoji-slot-panel");
+          const label = modal?.contentEl?.querySelector?.(".bob-emoji-slot-label");
+          return {
+            closed: Boolean(panel?.hasAttribute("hidden")),
+            stageOpen: Boolean(modal?.stage),
+            labelUnchanged: (label?.value || "") === beforeLabel,
+          };
+        })(${JSON.stringify(before.label)})`).catch((error) => ({ ok: false, error: String(error) }));
+        result.escaped = escaped;
+        result.ok = Boolean(escaped?.closed && escaped?.stageOpen && escaped?.labelUnchanged);
+        return result;
+      } catch (error) {
+        return { ok: false, error: String(error) };
+      }
+    })();
+    report.probes.schemaEmojiKeyboard = emojiKeyboard;
+    record("schema-emoji-keyboard", Boolean(emojiKeyboard?.ok), JSON.stringify(emojiKeyboard));
+    record("schema-emoji-tab-unclaimed", Boolean(emojiKeyboard?.tabSwallowed?.ok && emojiKeyboard.tabSwallowed.swallowed === false),
+      `Tab reaches the well by native DOM order: ${JSON.stringify(emojiKeyboard?.tabSwallowed || null)}`);
+    await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const panel = modal?.contentEl?.querySelector?.(".bob-emoji-slot-panel");
+      if (panel?.hasAttribute("hidden")) modal?.contentEl?.querySelector?.("[data-emoji-well]")?.click?.();
+      else modal?.contentEl?.querySelector?.(".bob-emoji-slot-search")?.focus?.();
+      return true;
+    })()`);
     if (emojiPanel?.ok) {
       await captureEmojiThemes("empty");
       await client.evaluate(`(() => {

@@ -512,3 +512,67 @@ test("lock wait paints the pending line and Esc stops without closing", () => {
   assert.equal(actions.some((item) => item.action === "preview"), false);
   modal.close();
 });
+
+test("Emoji Slot hint teaches the gesture and follows open, pick, and clear", () => {
+  const { app, modal } = openCard();
+  const fixture = emojiApiFixture();
+  app.plugins = { plugins: { "bob-emoji": { api: fixture.api } } };
+  const hintVisible = (root) => {
+    const hint = root.querySelector(".bob-emoji-slot-hint");
+    return Boolean(hint) && hint.getAttribute("hidden") === null;
+  };
+
+  modal.schemaStage("choice-add", "add-choice:status");
+  let well = modal.contentEl.querySelector("[data-emoji-well]");
+  assert.ok(well, "choice-add builds a glyph well");
+  assert.equal(well.getAttribute("title"), "Choose an emoji: click, or Tab here and type to search");
+  assert.ok(hintVisible(modal.contentEl), "an empty, enabled, closed slot shows its hint");
+  assert.match(modal.contentEl.querySelector(".bob-emoji-slot-hint").textContent, /Tab/);
+
+  well.click();
+  assert.equal(hintVisible(modal.contentEl), false, "the hint hides while the panel is open");
+
+  const search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  search.value = "rocket";
+  search.dispatchEvent({ type: "input" });
+  search.dispatchEvent({
+    type: "keydown", key: "Enter",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.equal(modal.schemaStageRead("choiceEmoji"), "🚀");
+  assert.equal(hintVisible(modal.contentEl), false, "the hint stays hidden after a pick");
+
+  well = modal.contentEl.querySelector("[data-emoji-well]");
+  well.click();
+  assert.equal(hintVisible(modal.contentEl), false, "a filled slot keeps the hint hidden while open");
+  const reopened = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  reopened.value = "";
+  reopened.dispatchEvent({
+    type: "keydown", key: "Backspace",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.equal(modal.schemaStageRead("choiceEmoji"), "");
+  assert.ok(hintVisible(modal.contentEl), "Backspace clearing the glyph brings the hint back");
+  modal.close();
+
+  const filled = openCard();
+  filled.app.plugins = { plugins: { "bob-emoji": { api: emojiApiFixture().api } } };
+  filled.modal.schemaStage("choice", "choice:status:to_try");
+  const filledWell = filled.modal.contentEl.querySelector("[data-emoji-well]");
+  assert.ok(filledWell, "the choice edit stage builds a glyph well");
+  assert.equal(filledWell.getAttribute("title"), "Choose an emoji: click, or Tab here and type to search");
+  assert.equal(hintVisible(filled.modal.contentEl), false, "a pre-filled glyph hides the hint");
+  filled.modal.close();
+});
+
+test("every field-add initial choice shows the hint until its glyph is set", () => {
+  const live = openCard();
+  live.app.plugins = { plugins: { "bob-emoji": { api: emojiApiFixture().api } } };
+  live.modal.schemaStage("field-add", "add-field");
+  const hints = () => live.modal.contentEl.querySelectorAll(".bob-emoji-slot-hint")
+    .filter((node) => node.getAttribute("hidden") === null);
+  assert.equal(hints().length, 1, "the first initial choice shows its hint");
+  live.modal.schemaStageAddInitialChoice();
+  assert.equal(hints().length, 2, "a dynamically added initial choice shows its hint too");
+  live.modal.close();
+});

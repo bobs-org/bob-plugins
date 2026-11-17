@@ -220,3 +220,113 @@ test("the fused slot falls back without bob-emoji and keeps the enable-search hi
   assert.equal(fallback.getAttribute("placeholder"), "Enable Bob Emoji for search");
   assert.equal(fallback.value, "☕");
 });
+
+function emojiSlotTestApi() {
+  return {
+    version: 1,
+    search: (query, options = {}) => [{ emoji: "🍕", name: "pizza", alias: "pizza", category: "Food & Drink" }].slice(0, options.limit || 30),
+    suggestForLabel: () => [{ emoji: "☕", name: "coffee", alias: "coffee", category: "Food & Drink" }],
+    categories: () => ["Food & Drink"],
+    browse: () => [{ emoji: "🍕", name: "pizza", alias: "pizza", category: "Food & Drink" }],
+    recents: () => [],
+    remember: () => true,
+  };
+}
+
+function mountBankSlot(overrides = {}, slotOptions = {}) {
+  const doc = makeDoc();
+  const host = doc.createElement("div");
+  const label = doc.createElement("input");
+  host.appendChild(label);
+  const owner = {
+    app: { document: doc, plugins: { plugins: { "bob-emoji": { api: emojiSlotTestApi() } } } },
+    categories: CATEGORIES,
+    onFieldInput: () => {},
+    ...overrides,
+  };
+  const slot = h.bankCategoryEmojiSlotMount(host, label, owner, { emoji: "", ...slotOptions });
+  return { doc, host, label, owner, slot };
+}
+
+const hintShown = (host) => {
+  const hint = host.querySelector(".bob-emoji-slot-hint");
+  return Boolean(hint) && hint.getAttribute("hidden") === null;
+};
+
+test("the fused hint shows for an empty slot and follows open, pick, and clear", () => {
+  const { host, slot } = mountBankSlot();
+  assert.ok(slot && !slot.fallback);
+  const well = host.querySelector("[data-emoji-well]");
+  assert.ok(well, "Bank setup mounts a glyph well");
+  assert.equal(well.getAttribute("title"), "Choose an emoji: click, or Tab here and type to search");
+  assert.ok(hintShown(host), "an empty, enabled, closed Bank slot shows its hint");
+
+  well.dispatchEvent({ type: "click" });
+  assert.equal(hintShown(host), false, "the hint hides while the panel is open");
+
+  const search = host.querySelector(".bob-emoji-slot-search");
+  search.dispatchEvent({
+    type: "keydown", key: "Enter",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.ok(String(slot.glyph).length > 0, "Enter picks the highlighted emoji");
+  assert.equal(hintShown(host), false, "the hint stays hidden after a pick");
+
+  host.querySelector("[data-emoji-well]").dispatchEvent({ type: "click" });
+  const reopened = host.querySelector(".bob-emoji-slot-search");
+  reopened.value = "";
+  reopened.dispatchEvent({
+    type: "keydown", key: "Backspace",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.equal(slot.glyph, "");
+  assert.ok(hintShown(host), "Backspace clearing the glyph brings the hint back");
+});
+
+test("the hint stays hidden for filled, disabled, and fallback slots; the Category card shows it", () => {
+  const filled = mountBankSlot({}, { emoji: "☕" });
+  assert.equal(hintShown(filled.host), false, "a pre-filled Bank glyph hides the hint");
+
+  const disabled = mountBankSlot({}, { disabled: true });
+  assert.equal(hintShown(disabled.host), false, "a disabled Bank slot hides the hint");
+
+  const fallbackDoc = makeDoc();
+  const fallbackHost = fallbackDoc.createElement("div");
+  const fallbackLabel = fallbackDoc.createElement("input");
+  fallbackHost.appendChild(fallbackLabel);
+  const fallbackOwner = { app: { document: fallbackDoc, plugins: { plugins: {} } }, categories: CATEGORIES };
+  const fallback = h.bankCategoryEmojiSlotMount(fallbackHost, fallbackLabel, fallbackOwner, { emoji: "" });
+  assert.equal(fallback.fallback, true);
+  assert.equal(fallbackHost.querySelector(".bob-emoji-slot-hint"), null, "fallback mode builds no hint");
+
+  const categoryApp = { document: makeDoc(), plugins: { plugins: { "bob-emoji": { api: emojiSlotTestApi() } } } };
+  const categoryModal = new h.BankCategoryCardModal(categoryApp, { categories: CATEGORIES });
+  const categoryDoc = makeDoc();
+  const categoryHost = categoryDoc.createElement("div");
+  const categoryLabel = categoryDoc.createElement("input");
+  categoryHost.appendChild(categoryLabel);
+  const categorySlot = h.bankCategoryEmojiSlotMount(categoryHost, categoryLabel, categoryModal, { emoji: "" });
+  assert.ok(categorySlot && !categorySlot.fallback);
+  assert.equal(categoryHost.querySelector("[data-emoji-well]").getAttribute("title"),
+    "Choose an emoji: click, or Tab here and type to search");
+  const categoryHint = categoryHost.querySelector(".bob-emoji-slot-hint");
+  assert.ok(categoryHint && categoryHint.getAttribute("hidden") === null,
+    "an empty Category card slot shows its hint");
+});
+
+test("glyph-well stylesheet beats Obsidian button chrome with no hex colors", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const marker = "Glyph well: beat Obsidian";
+  const start = css.indexOf(marker);
+  assert.ok(start !== -1, "the well override block ships in styles.css");
+  const slice = css.slice(start, start + 6000);
+  assert.ok(slice.includes(".bob-emoji-slot-fused > button.bob-emoji-slot-well"),
+    "a fused well selector outranks button:not(.clickable-icon)");
+  for (const property of ["box-shadow: none", "background", "padding", "width"]) {
+    assert.ok(slice.includes(property), `the well override sets ${property}`);
+  }
+  assert.ok(slice.includes(".is-empty") && slice.includes("dashed"), "the empty state sets a dashed border");
+  assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(slice), "the new well and hint rules use CSS variables, not hex colors");
+});

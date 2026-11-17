@@ -8976,29 +8976,107 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   grid-column: 1;
   grid-row: 1;
   order: 1;
+}
+/* Glyph well: beat Obsidian `button:not(.clickable-icon)` (0,1,1) with
+   (0,2,1) fused selectors; plugin styles load after app.css so the tie
+   `button.bob-emoji-slot-well` also wins. */
+.bob-emoji-slot-fused > button.bob-emoji-slot-well,
+.bob-emoji-slot-content > button.bob-emoji-slot-well,
+button.bob-emoji-slot-well {
   box-sizing: border-box;
   width: 2.45em;
   height: 2.45em;
   min-width: 0;
+  margin: 0;
   padding: 0.15em;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   background: var(--background-primary);
+  background-color: var(--background-primary);
+  box-shadow: none;
   color: var(--text-normal);
   font: inherit;
   font-size: 1.1em;
   text-align: center;
-}
-.bob-emoji-slot-well {
   cursor: pointer;
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.bob-emoji-slot-well:hover,
-.bob-emoji-slot-well:focus-visible {
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:not(.is-empty),
+button.bob-emoji-slot-well:not(.is-empty) {
+  border-style: solid;
+  color: var(--text-normal);
+}
+.bob-emoji-slot-fused > button.bob-emoji-slot-well.is-empty,
+button.bob-emoji-slot-well.is-empty {
+  border-style: dashed;
+  border-width: 1px;
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}
+button.bob-emoji-slot-well.is-empty::after {
+  content: "+";
+  position: absolute;
+  top: -0.4em;
+  right: -0.4em;
+  width: 1.05em;
+  height: 1.05em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 0.55em;
+  line-height: 1;
+  pointer-events: none;
+}
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:hover,
+button.bob-emoji-slot-well:hover,
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:focus-visible,
+button.bob-emoji-slot-well:focus-visible,
+.bob-emoji-slot-fused > button.bob-emoji-slot-well[aria-expanded="true"],
+button.bob-emoji-slot-well[aria-expanded="true"] {
   border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 35%, transparent);
 }
-.bob-emoji-slot-well.is-empty {
-  color: var(--text-faint);
-  border-style: dotted;
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:disabled,
+button.bob-emoji-slot-well:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:disabled:hover,
+button.bob-emoji-slot-well:disabled:hover,
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:disabled:focus-visible,
+button.bob-emoji-slot-well:disabled:focus-visible,
+.bob-emoji-slot-fused > button.bob-emoji-slot-well:disabled[aria-expanded="true"],
+button.bob-emoji-slot-well:disabled[aria-expanded="true"] {
+  border-color: var(--background-modifier-border);
+  box-shadow: none;
+}
+/* Fallback input: same Obsidian input chrome can wash it out, so pin the
+   token background and kill the shadow with a fused selector. */
+.bob-emoji-slot-fused > input.bob-emoji-slot-fallback,
+input.bob-emoji-slot-fallback {
+  background: var(--background-primary);
+  background-color: var(--background-primary);
+  box-shadow: none;
+}
+.bob-emoji-slot-hint {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  color: var(--text-muted);
+  font-size: 0.78em;
+}
+.bob-emoji-slot-hint[hidden] {
+  display: none;
+}
+.bob-emoji-slot-fused:has(.bob-emoji-slot-hint:not([hidden])) > .bob-emoji-slot-note {
+  grid-row: 4;
+}
+.bob-emoji-slot-fused:has(.bob-emoji-slot-hint:not([hidden])) > .bob-emoji-slot-panel {
+  grid-row: 5;
 }
 .bob-emoji-slot-fallback {
   font-size: 0.9em;

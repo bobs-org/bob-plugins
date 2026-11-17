@@ -120,6 +120,17 @@ function albumEmojiSlotRenderResults(slot) {
   notebookSetText(slot.footer, `${name}${duplicate}${note} · ⏎ pick`);
 }
 
+function albumEmojiSlotRevealActive(slot) {
+  try {
+    const option = slot?.results?.querySelector?.(
+      `#bob-emoji-slot-${slot.id}-option-${slot.activeIndex}`
+    ) || slot?.results?.querySelector?.(
+      `[data-emoji-option-index="${slot.activeIndex}"]`
+    ) || null;
+    option?.scrollIntoView?.({ block: "nearest" });
+  } catch (_) {}
+}
+
 function albumEmojiSlotRenderCategories(slot) {
   const categories = slot.model?.categories || [];
   albumEmojiSlotEmpty(slot.tabs);
@@ -244,12 +255,12 @@ function albumEmojiSlotHandleKeydown(slot, event) {
     if (active) albumEmojiSlotPick(slot, active.row.emoji, active.row);
     return;
   }
-  const isMove = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) ||
-    (event.ctrlKey && ["n", "N", "p", "P"].includes(event.key));
-  if (isMove && slot.optionRows.length) {
+  const move = albumEmojiSlotMoveKey(event);
+  if (move && slot.optionRows.length) {
     stop();
-    slot.activeIndex = albumEmojiSlotMoveHighlight(slot.activeIndex, event.key, slot.optionRows.length);
+    slot.activeIndex = albumEmojiSlotMoveHighlight(slot.activeIndex, move, slot.optionRows.length);
     albumEmojiSlotRenderResults(slot);
+    albumEmojiSlotRevealActive(slot);
   }
 }
 

@@ -331,6 +331,27 @@ test("glyph-well stylesheet beats Obsidian button chrome with no hex colors", ()
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(slice), "the new well and hint rules use CSS variables, not hex colors");
 });
 
+test("Ctrl+N steps the shared slot by one and the card keeps the key", () => {
+  let filed = false;
+  const { host, owner, slot } = mountBankSlot({ onFieldInput: () => { filed = true; } });
+  host.querySelector("[data-emoji-well]").dispatchEvent({ type: "click" });
+  assert.equal(slot.isOpen, true, "the bank slot opens");
+  assert.ok(slot.optionRows.length >= 2, "the empty-query browse paints multiple options");
+  slot.activeIndex = 0;
+  const search = host.querySelector(".bob-emoji-slot-search");
+  search.dispatchEvent({
+    type: "keydown", key: "n", ctrlKey: true, code: "KeyN",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.equal(slot.activeIndex, 1, "Ctrl+N moves the highlight by one");
+  assert.equal(slot.glyph, "", "stepping stages nothing");
+  assert.equal(filed, false, "stepping files and saves nothing");
+  assert.equal(h.bankEmojiSlotInterceptKey(owner, {
+    key: "n", ctrlKey: true, code: "KeyN", target: search,
+    preventDefault() {}, stopPropagation() {},
+  }), true, "the card still reports the key handled");
+});
+
 test("Ctrl+[ closes the open bank Emoji Slot like Esc while q in the search types", () => {
   const noop = () => {};
   const makeSlot = () => ({

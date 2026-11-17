@@ -120,7 +120,9 @@ edit/add and each initial choice in a new choices field use the shared Emoji
 Slot: the dashed ☻ tile left of the label is the emoji box; click
 it, or Tab to it and type to search. An empty slot shows its hint below. Search
 filters as you type; an empty query offers label matches, album emoji,
-recents, and category tabs. Arrows move the highlight in two dimensions;
+recents, and category tabs. Arrows move the highlight in two dimensions, `Ctrl+N` / `Ctrl+P` step to the next or
+previous emoji in the order shown and wrap at the ends, and the highlight stays in
+view;
 Enter picks without saving the stage, Tab leaves without picking, and the
 first Esc closes only the picker. A live chip previews the stored token; a
 dot marks an emoji already used by another choice in the same field. Pasted

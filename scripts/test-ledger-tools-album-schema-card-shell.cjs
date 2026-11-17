@@ -448,6 +448,101 @@ test("Emoji Slot result assembly handles full catalogs under the filter paint bu
   assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "ArrowDown", 40, 8), 8);
 });
 
+test("Emoji Slot Ctrl+N / Ctrl+P step one emoji at a time and wrap at the ends", () => {
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(7, "next", 11), 8, "next crosses a row");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(10, "previous", 11), 9, "previous from the last row walks back one");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(10, "next", 11), 0, "next on the last emoji wraps to the first");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "previous", 11), 10, "previous on the first emoji wraps to the last");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "ArrowDown", 40, 8), 8, "arrows still move by row");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(2, "ArrowUp", 11), 0, "ArrowUp clamps at the top");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(10, "ArrowRight", 11), 10, "ArrowRight clamps at the end");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "n", 11), 0, "raw n no longer moves a row");
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "p", 11), 0, "raw p no longer moves a row");
+});
+
+test("Emoji Slot move-key alias matches the exact Ctrl chord only", () => {
+  const moveKey = helpers.albumEmojiSlotMoveKey;
+  assert.equal(moveKey({ key: "n", ctrlKey: true }), "next");
+  assert.equal(moveKey({ key: "N", ctrlKey: true }), "next");
+  assert.equal(moveKey({ key: "p", ctrlKey: true }), "previous");
+  assert.equal(moveKey({ key: "P", ctrlKey: true }), "previous");
+  assert.equal(moveKey({ key: "т", code: "KeyN", ctrlKey: true }), "next", "code covers non-QWERTY layouts");
+  assert.equal(moveKey({ key: "ArrowDown" }), "ArrowDown");
+  assert.equal(moveKey({ key: "ArrowUp", ctrlKey: true }), "ArrowUp", "arrows keep working with modifiers");
+  for (const event of [
+    { key: "n", ctrlKey: true, altKey: true },
+    { key: "n", ctrlKey: true, metaKey: true },
+    { key: "n", ctrlKey: true, shiftKey: true },
+    { key: "p", ctrlKey: true, altKey: true },
+    { key: "n" },
+    { key: "Enter", ctrlKey: true },
+  ]) {
+    assert.equal(moveKey(event), null, `${JSON.stringify(event)} is not a move`);
+  }
+});
+
+test("Emoji Slot Ctrl+N steps one emoji, Ctrl+P wraps to the last, and the highlight stays in view", () => {
+  const { app, modal, plugin } = openCard();
+  const fixture = emojiApiFixture();
+  app.plugins = { plugins: { "bob-emoji": { api: fixture.api } } };
+  let applies = 0;
+  plugin.apiAlbumUpdateApply = async () => { applies += 1; return { ok: true, report: { ok: true, changed: false } }; };
+
+  modal.schemaStage("choice-add", "add-choice:status");
+  modal.contentEl.querySelector("[data-emoji-well]").click();
+  const search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  search.value = "a";
+  search.dispatchEvent({ type: "input" });
+  const options = () => modal.contentEl.querySelectorAll("[data-emoji-option-index]");
+  assert.ok(options().length >= 3, "the query paints at least three options");
+  const last = options().length - 1;
+  const prefix = search.getAttribute("aria-activedescendant").replace(/-option-\d+$/, "");
+  assert.match(search.getAttribute("aria-activedescendant"), /-option-0$/, "the highlight starts on the first emoji");
+
+  const seen = [];
+  const had = Object.prototype.hasOwnProperty.call(FakeNode.prototype, "scrollIntoView")
+    ? FakeNode.prototype.scrollIntoView
+    : undefined;
+  FakeNode.prototype.scrollIntoView = function (scrollOptions) { seen.push({ node: this, options: scrollOptions }); };
+  try {
+    const step = {
+      type: "keydown", key: "n", ctrlKey: true, code: "KeyN",
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+    };
+    search.dispatchEvent(step);
+    assert.equal(step.defaultPrevented, true, "the chord is consumed so the caret stays put");
+    assert.equal(search.getAttribute("aria-activedescendant"), `${prefix}-option-1`);
+    assert.equal(options()[1].getAttribute("aria-selected"), "true");
+    assert.match(modal.contentEl.querySelector(".bob-emoji-slot-footer").textContent, /🔍/,
+      "the footer names the newly highlighted emoji");
+    assert.deepEqual(seen.map((call) => call.options), [{ block: "nearest" }],
+      "the revealed option scrolls into view");
+    assert.equal(seen[0].node.getAttribute("data-emoji-option-index"), "1");
+
+    search.dispatchEvent({
+      type: "keydown", key: "p", ctrlKey: true, code: "KeyP",
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+    });
+    assert.equal(search.getAttribute("aria-activedescendant"), `${prefix}-option-0`);
+    search.dispatchEvent({
+      type: "keydown", key: "p", ctrlKey: true, code: "KeyP",
+      preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+    });
+    assert.equal(search.getAttribute("aria-activedescendant"), `${prefix}-option-${last}`,
+      "Ctrl+P on the first option wraps to the last");
+    assert.ok(modal.stage, "the stage stays open");
+    assert.equal(applies, 0, "stepping never stages or applies");
+
+    seen.length = 0;
+    search.dispatchEvent({ type: "input" });
+    assert.equal(seen.length, 0, "typing repaints without scrolling");
+  } finally {
+    if (had === undefined) delete FakeNode.prototype.scrollIntoView;
+    else FakeNode.prototype.scrollIntoView = had;
+  }
+  modal.close();
+});
+
 test("lock wait paints the pending line and Esc stops without closing", () => {
   const { modal } = openCard();
   let stopped = 0;

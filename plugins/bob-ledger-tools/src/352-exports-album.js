@@ -57,6 +57,7 @@ try {
       albumEmojiSlotDuplicateLabels,
       albumEmojiSlotResultModel,
       albumEmojiSlotMoveHighlight,
+      albumEmojiSlotMoveKey,
       albumEmojiSlotFusedToken,
       albumSchemaStageBuildEl,
       albumSchemaTypedDefault,

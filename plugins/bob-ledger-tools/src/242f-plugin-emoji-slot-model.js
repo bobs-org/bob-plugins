@@ -192,10 +192,29 @@ function albumEmojiSlotMoveHighlight(index, key, count, columns = ALBUM_EMOJI_SL
   const total = Math.max(0, Number(count) || 0);
   if (!total) return -1;
   const current = Math.min(Math.max(0, Number(index) || 0), total - 1);
+  if (key === "next") return (current + 1) % total;
+  if (key === "previous") return (current - 1 + total) % total;
   const delta = key === "ArrowLeft" ? -1
     : key === "ArrowRight" ? 1
-      : key === "ArrowUp" || key === "p" || key === "P" ? -columns
-        : key === "ArrowDown" || key === "n" || key === "N" ? columns
+      : key === "ArrowUp" ? -columns
+        : key === "ArrowDown" ? columns
           : 0;
   return Math.min(total - 1, Math.max(0, current + delta));
+}
+
+// Normalized move token for the Emoji Slot picker: one of the four arrow
+// keys, "next"/"previous" for the exact Ctrl+N / Ctrl+P chord, or null.
+// Ctrl matches on key (n/N/p/P) or code (KeyN/KeyP) so Caps Lock and
+// non-QWERTY layouts work; Alt, Meta, and Shift variants never count.
+function albumEmojiSlotMoveKey(event) {
+  if (!event || typeof event.key !== "string") return null;
+  if (event.isComposing) return null;
+  const key = String(event.key || "");
+  if (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown") return key;
+  if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return null;
+  const lower = key.toLowerCase();
+  const code = String(event.code || "");
+  if (lower === "n" || code === "KeyN") return "next";
+  if (lower === "p" || code === "KeyP") return "previous";
+  return null;
 }

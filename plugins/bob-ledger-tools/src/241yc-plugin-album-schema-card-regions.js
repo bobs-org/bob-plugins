@@ -718,7 +718,7 @@ function albumSchemaCardHintItems(model, options) {
     return [
       { keys: "↑/↓", label: "navigate" },
       { keys: "y", label: "YAML", action: "yaml" },
-      { keys: "esc", label: "close", action: "close" },
+      { keys: "esc/q", label: "close", action: "close" },
     ];
   }
   if (state.lockWait) {
@@ -782,7 +782,7 @@ function albumSchemaCardHintItems(model, options) {
   }
   items.push({ keys: "y", label: "YAML", action: "yaml" });
   if (state.undoAvailable) items.push({ keys: "u", label: "undo", action: "undo", enabled: !gated });
-  items.push({ keys: "esc", label: "close", action: "close" });
+  items.push({ keys: "esc/q", label: "close", action: "close" });
   return items.filter((item) => item.enabled !== false);
 }
 

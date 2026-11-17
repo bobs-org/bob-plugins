@@ -30,6 +30,55 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     this.keyListener = (event) => { void this.onKeyDown(event); };
   }
 
+  bankSetupBackOut() {
+    const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
+    if (waiting) {
+      try { this.bankClearEnterLatch?.(); } catch (_) {}
+      try { this.session?.stopWaiting?.(); } catch (_) {}
+      this.sessionState = this.session?.getState?.() || this.sessionState;
+      this.paint();
+      return "stop-waiting";
+    }
+    if (this.busy) return "ignore";
+    if (this.cancelStage()) return "stay";
+    this.close();
+    return "close";
+  }
+
+  bankSetupCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    if (event && event.key === "Escape") return "escape";
+    return null;
+  }
+
+  bankSetupShouldBackOutForKind(kind, event) {
+    try {
+      if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+      if (kind === "q") {
+        if (Boolean(this.bankHintMode)) return true;
+        try {
+          if (typeof bobCardTypesText === "function" &&
+              bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+        } catch (_) {}
+        const target = event && event.target;
+        if (target && typeof target.closest === "function" &&
+            Boolean(target.closest("input,select,textarea"))) return false;
+        return true;
+      }
+      return true;
+    } catch (_) {
+      return event && event.key === "Escape";
+    }
+  }
+
+  onEscapeKey(event) {
+    try { bankCategoryUiConsume(event); } catch (_) {}
+    this.bankSetupBackOut();
+    return false;
+  }
+
   onOpen() {
     try {
       this.modalEl?.addClass?.("bob-bank-setup-card-modal");
@@ -40,11 +89,22 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
       this.contentEl?.addEventListener?.("click", this.clickListener);
       this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
     } catch (_) {}
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, {
+          backOut: () => this.bankSetupBackOut(),
+          hintActive: () => Boolean(this.bankHintMode),
+        });
+      }
+    } catch (_) {}
     if (!this.setReport(this.report, { initial: true })) this.paint();
   }
 
   onClose() {
     this.closed = true;
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
     try { this.session?.close?.(); } catch (_) {}
     this.session = null;
     this.stage = null;
@@ -612,19 +672,20 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
     const consume = () => bankCategoryUiConsume(event);
-    if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
-      consume();
-      const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
-      if (waiting) {
-        try { this.bankClearEnterLatch?.(); } catch (_) {}
-        try { this.session?.stopWaiting?.(); } catch (_) {}
-        this.sessionState = this.session?.getState?.() || this.sessionState;
-        this.paint();
+    {
+      const closeKind = this.bankSetupCloseKind(event);
+      if (closeKind && this.bankSetupShouldBackOutForKind(closeKind, event)) {
+        consume();
+        try {
+          if (event && !event.defaultPrevented) {
+            try { Object.defineProperty(event, "defaultPrevented", { value: true, configurable: true }); }
+            catch (_) { try { event.defaultPrevented = true; } catch (_) {} }
+          }
+        } catch (_) {}
+        this.bankSetupBackOut();
         return;
       }
-      if (this.busy) return;
-      if (!this.cancelStage()) this.close();
-      return;
+      if (closeKind === "q") return;
     }
     if (mod && lower === "e") {
       consume();

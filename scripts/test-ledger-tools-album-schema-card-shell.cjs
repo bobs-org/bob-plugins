@@ -576,3 +576,202 @@ test("every field-add initial choice shows the hint until its glyph is set", () 
   assert.equal(hints().length, 2, "a dynamically added initial choice shows its hint too");
   live.modal.close();
 });
+
+test("close-key predicate accepts q/Q/Ctrl+[ and rejects modifiers/composition", () => {
+  const { bobCardCloseKey, bobCardTypesText } = helpers;
+  assert.equal(bobCardCloseKey({ key: "q" }), "q");
+  assert.equal(bobCardCloseKey({ key: "Q", shiftKey: true }), "q");
+  assert.equal(bobCardCloseKey({ key: "[", ctrlKey: true, code: "BracketLeft" }), "ctrl-bracket");
+  assert.equal(bobCardCloseKey({ key: "[", ctrlKey: true }), "ctrl-bracket");
+  assert.equal(bobCardCloseKey({ key: "Escape" }), "escape");
+  assert.equal(bobCardCloseKey({ key: "q", ctrlKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "q", metaKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "q", altKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "[", ctrlKey: true, shiftKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "[", ctrlKey: true, altKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "[", metaKey: true, ctrlKey: true }), null);
+  assert.equal(bobCardCloseKey({ key: "[", ctrlKey: true, code: "KeyA" }), "ctrl-bracket");
+  assert.equal(bobCardCloseKey({ key: "q", isComposing: true }), null);
+  assert.equal(bobCardCloseKey({ key: "q", keyCode: 229 }), null);
+  assert.equal(bobCardCloseKey({ key: "a" }), null);
+  assert.equal(bobCardCloseKey({ key: "Enter" }), null);
+  const { doc } = fixture();
+  const panel = doc.createElement("div");
+  const outside = doc.createElement("div");
+  assert.equal(bobCardTypesText({ target: outside }, panel), false, "target outside the panel is not text");
+});
+
+test("q and Ctrl+[ close from the editor behind the modal and are consumed", () => {
+  const { modal, app } = openCard();
+  const doc = app.document;
+  let closed = 0;
+  const origClose = modal.close.bind(modal);
+  modal.close = () => { closed += 1; return origClose(); };
+  const outside = doc.createElement("div");
+  for (const event of [{ key: "q", target: outside }, { key: "[", ctrlKey: true, code: "BracketLeft", target: outside }]) {
+    const payload = {
+      ...event,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() {},
+    };
+    modal.schemaOnKeyDown(payload);
+    assert.equal(payload.defaultPrevented, true, `${event.key} from the editor is consumed`);
+  }
+  assert.equal(closed, 2, "both keys close like Esc from outside the card");
+  modal.close = origClose;
+  try { modal.close(); } catch (_) {}
+});
+
+test("q types in a stage input while Ctrl+[ cancels the stage then closes", () => {
+  const { modal } = openCard();
+  modal.schemaStage("field", "field:status");
+  assert.ok(modal.stage, "stage opens");
+  const input = modal.schemaInput("fieldLabel");
+  assert.ok(input, "stage has an input");
+  const typed = {
+    key: "q", target: input,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(typed);
+  assert.equal(typed.defaultPrevented, undefined, "q in an input is not consumed");
+  assert.ok(modal.stage, "the stage stays open");
+  const bracket = {
+    key: "[", ctrlKey: true, code: "BracketLeft", target: input,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(bracket);
+  assert.equal(bracket.defaultPrevented, true, "Ctrl+[ in an input is consumed");
+  assert.equal(modal.stage, null, "Ctrl+[ cancels the stage and the card stays");
+  assert.ok(modal.session, "the card stays open after cancelling the stage");
+  const closer = {
+    key: "[", ctrlKey: true, code: "BracketLeft", target: modal.contentEl,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  let closed = false;
+  const origClose = modal.close.bind(modal);
+  modal.close = () => { closed = true; return origClose(); };
+  modal.schemaOnKeyDown(closer);
+  assert.equal(closed, true, "a second Ctrl+[ closes from browsing");
+  modal.close = origClose;
+  try { modal.close(); } catch (_) {}
+});
+
+test("q and Ctrl+[ leave hint mode without picking a gap", () => {
+  const { modal } = openCard();
+  modal.selectedKey = "choice:status:skip";
+  assert.equal(modal.schemaArrangeEnterHintMode(), true);
+  assert.ok(modal.schemaHintMode, "hint mode opens");
+  const labels = modal.schemaHintMode.labels.slice();
+  const qEvent = {
+    key: "q", target: modal.contentEl,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(qEvent);
+  assert.equal(modal.schemaHintMode, null, "q leaves hint mode");
+  assert.equal(modal.session.getState().draftOps.length, 0, "leaving hint mode picks no gap");
+  modal.selectedKey = "choice:status:skip";
+  assert.equal(modal.schemaArrangeEnterHintMode(), true);
+  const bracketEvent = {
+    key: "[", ctrlKey: true, code: "BracketLeft", target: modal.contentEl,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(bracketEvent);
+  assert.equal(modal.schemaHintMode, null, "Ctrl+[ leaves hint mode");
+  assert.deepEqual(modal.schemaHintMode, null);
+  assert.ok(!labels.includes("q"), "no gap badge is q");
+  modal.close();
+});
+
+test("close keys follow Esc through pending moves, All actions, drag, and applying", () => {
+  const { modal } = openCard();
+  modal.selectedKey = "choice:status:skip";
+  modal.schemaArrangeNudge(-1, {});
+  assert.equal(modal.schemaArrangeDirty(), true);
+  modal.schemaBackOut({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(modal.schemaArrangeDirty(), false, "q/Ctrl+[ revert pending moves like Esc");
+  modal.schemaMoreOpen = true;
+  modal.schemaBackOut({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(modal.schemaMoreOpen, false, "an open All actions list closes first");
+  assert.ok(modal.session, "the card stays open");
+  modal.schemaDrag = { session: {}, active: true };
+  modal.schemaDragActive = () => true;
+  modal.schemaDragFinish = () => { modal.schemaDrag = null; return true; };
+  modal.schemaBackOut({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(modal.schemaDrag, null, "a drag cancels like Esc");
+  modal.sessionState = { ...(modal.sessionState || {}), status: "applying" };
+  let closed = false;
+  const origClose = modal.close.bind(modal);
+  modal.close = () => { closed = true; };
+  modal.schemaBackOut({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(closed, false, "applying ignores the keys exactly like Esc");
+  modal.close = origClose;
+  modal.sessionState = modal.session?.getState?.() || modal.sessionState;
+  modal.close();
+});
+
+test("scope handler passes unrelated keys through and unregisters on close", () => {
+  const { modal } = openCard();
+  modal.close();
+  const { app, plugin, state, model } = (() => { const f = openCard(); f.modal.close(); return f; })();
+  const fresh = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  const calls = [];
+  fresh.scope = {
+    register: (m, k, fn) => { calls.push(fn); return 7; },
+    unregister: (ref) => { calls.push(["unregister", ref]); },
+  };
+  fresh.close();
+  const reopened = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  reopened.scope = fresh.scope;
+  reopened.close();
+  const second = plugin.openAlbumSchemaCard(model, "eat.md").modal;
+  second.scope = {
+    register: (m, k, fn) => { second.__captured = fn; return 9; },
+    unregister: (ref) => { second.__unregistered = ref; },
+  };
+  second.open();
+  assert.equal(typeof second.__captured, "function", "the scope handler is registered on open");
+  for (const key of ["j", "a", "Enter"]) {
+    const event = { key, target: second.contentEl, preventDefault() { this.touched = true; }, stopPropagation() {} };
+    assert.equal(second.__captured(event), true, `${key} passes through untouched`);
+    assert.equal(event.touched, undefined);
+  }
+  second.close();
+  assert.equal(second.__unregistered, 9, "onClose unregisters the handler");
+  try { fresh.close(); } catch (_) {}
+  try { reopened.close(); } catch (_) {}
+});
+
+test("Emoji Slot search types q while Ctrl+[ closes only the picker", () => {
+  const { modal } = openCard();
+  const fixtureApi = emojiApiFixture().api;
+  modal.app.plugins = { plugins: { "bob-emoji": { api: fixtureApi } } };
+  modal.schemaStage("choice", "choice:status:to_try");
+  const well = modal.contentEl.querySelector("[data-emoji-well]");
+  assert.ok(well, "stage has an emoji well");
+  well.click();
+  const search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  assert.ok(search, "the picker opens with a search input");
+  const typed = {
+    key: "q", target: search,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(typed);
+  assert.equal(typed.defaultPrevented, undefined, "q in the search types");
+  assert.ok(modal.schemaEmojiSlotActive?.isOpen, "the picker stays open");
+  const bracket = {
+    key: "[", ctrlKey: true, code: "BracketLeft", target: search,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  };
+  modal.schemaOnKeyDown(bracket);
+  assert.equal(modal.schemaEmojiSlotActive, null, "Ctrl+[ closes only the panel");
+  assert.ok(modal.stage, "the stage stays open");
+  modal.close();
+});
+
+test("plain-browsing close hint reads esc/q", () => {
+  const { model } = openCard();
+  const items = helpers.albumSchemaCardHintItems(model, { editable: true, fresh: true, state: {}, stage: null });
+  const close = items.find((item) => item.label === "close");
+  assert.ok(close, "a close chip exists");
+  assert.equal(close.keys, "esc/q");
+});

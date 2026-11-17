@@ -45,6 +45,17 @@ function bankEmojiSlotInterceptKey(owner, event) {
       albumEmojiSlotClose(slot, { focusWell: true });
       return true;
     }
+    try {
+      const bracket = typeof bobCardCloseKey === "function"
+        ? bobCardCloseKey(event) === "ctrl-bracket"
+        : Boolean(event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey &&
+            (event.code === "BracketLeft" || event.key === "["));
+      if (bracket) {
+        consume();
+        albumEmojiSlotClose(slot, { focusWell: true });
+        return true;
+      }
+    } catch (_) {}
     if (key === "Enter") {
       consume();
       albumEmojiSlotHandleKeydown(slot, event);
@@ -96,12 +107,24 @@ function bankCategoryEmojiSlotMount(host, labelInput, owner, options = {}) {
   if (typeof BankSetupCardModal === "function") {
     const proto = BankSetupCardModal.prototype;
     const origKeyDown = proto.onKeyDown;
+    const origBackOut = proto.bankSetupBackOut;
     const origCancel = proto.cancelStage;
     const origClose = proto.onClose;
     proto.onKeyDown = async function bankEmojiOnKeyDown(event) {
       if (bankEmojiSlotInterceptKey(this, event)) return;
       return origKeyDown.call(this, event);
     };
+    if (typeof origBackOut === "function") {
+      proto.bankSetupBackOut = function bankEmojiBackOut(...args) {
+        try {
+          if (this.bankEmojiSlot?.isOpen) {
+            try { albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: true }); } catch (_) {}
+            return "stay";
+          }
+        } catch (_) {}
+        return origBackOut.apply(this, args);
+      };
+    }
     proto.cancelStage = function bankEmojiCancelStage() {
       if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
       this.bankEmojiSlot = null;

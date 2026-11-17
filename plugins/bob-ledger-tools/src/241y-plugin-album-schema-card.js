@@ -705,6 +705,44 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     try { event.__schemaEscapeHandled = true; } catch (_) {}
   }
 
+  schemaBackOut(event) {
+    const action = this.schemaHandleEscape();
+    if (action === "ignore") {
+      this.schemaMarkEscapeHandled(event);
+      return action;
+    }
+    this.schemaMarkEscapeHandled(event);
+    if (action === "close") this.close();
+    return action;
+  }
+
+  schemaCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    return event && event.key === "Escape" ? "escape" : null;
+  }
+
+  schemaShouldBackOutForKind(kind, event) {
+    try {
+      if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+      if (kind === "q") {
+        if (Boolean(this.schemaHintMode)) return true;
+        try {
+          if (typeof bobCardTypesText === "function" &&
+              bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+        } catch (_) {}
+        const target = event && event.target;
+        if (target && typeof target.closest === "function" &&
+            Boolean(target.closest("input,select,textarea"))) return false;
+        return true;
+      }
+      return true;
+    } catch (_) {
+      return event && event.key === "Escape";
+    }
+  }
+
   // Obsidian binds this scope's Escape to Modal's onEscapeKey at construction, and
   // the scope chain is first-registered-wins, so an appended contentEl keydown
   // handler can never preempt the default close. Overriding onEscapeKey instead:
@@ -713,14 +751,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   // phase, before the contentEl listener, so the contentEl Escape branch only
   // fires in tests unless onEscapeKey already handled it.)
   onEscapeKey(event) {
-    const action = this.schemaHandleEscape();
-    if (action === "ignore" || action === "stay") {
-      this.schemaMarkEscapeHandled(event);
-      return false;
-    }
-    if (event && (event.defaultPrevented || event.__schemaEscapeHandled)) return;
-    this.schemaMarkEscapeHandled(event);
-    this.close();
+    this.schemaBackOut(event);
+    return false;
   }
 
   async schemaAction(action) {
@@ -794,11 +826,9 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const targetButton = target?.closest?.("button[data-target-key]") || null;
     const inButton = Boolean(target?.closest?.("button"));
     if (inInput) {
-      if (event.key === "Escape") {
-        const action = this.schemaHandleEscape();
-        if (action === "ignore") return;
-        this.schemaMarkEscapeHandled(event);
-        if (action === "close") this.close();
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
       }
       else if (event.key === "Enter" && target.tagName !== "TEXTAREA" && this.stage) {
         event.preventDefault?.();
@@ -811,21 +841,20 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.selectedIndex = this.schemaTargets().findIndex((item) => item.key === this.selectedKey);
     } else if (inButton) return;
     if (this.stage) {
-      if (event.key === "Escape") {
-        const action = this.schemaHandleEscape();
-        if (action === "ignore") return;
-        this.schemaMarkEscapeHandled(event);
-        if (action === "close") this.close();
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
       }
       else if (event.key === "Enter") { event.preventDefault?.(); this.schemaStageEnter(); }
       return;
     }
-    if (event.key === "Escape") {
-      const action = this.schemaHandleEscape();
-      if (action === "ignore") return;
-      this.schemaMarkEscapeHandled(event);
-      if (action === "close") this.close();
-      return;
+    {
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
+        return;
+      }
+      if (closeKind === "q") return;
     }
     if (event.key === "Enter") {
       event.preventDefault?.();
@@ -881,10 +910,21 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaComposing = false;
       this.schemaStageInput(event);
     });
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, {
+          backOut: (event) => this.schemaBackOut(event),
+          hintActive: () => Boolean(this.schemaHintMode),
+        });
+      }
+    } catch (_) {}
     this.schemaUnsubscribe = this.schemaPlugin?.apiAlbumSubscribe?.((state) => this.schemaAlbumState(state)) || null;
   }
 
   onClose() {
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
     this.session?.close?.();
     this.session = null;
     try { this.schemaUnsubscribe?.(); } catch (_) {}

@@ -690,6 +690,33 @@ Object.assign(BankSetupCardModal.prototype, {
       return origApplyStage.call(this);
     };
 
+    const origBackOut = proto.bankSetupBackOut;
+    proto.bankSetupBackOut = function bankSetupBackOutArrange(...args) {
+      try {
+        if (this.sessionState?.status !== "applying") {
+          if (this.bankHintMode) {
+            this.bankHintMode = null;
+            try { this.paint?.("body"); } catch (_) {}
+            return "stay";
+          }
+          if (!this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+            try { this.bankArrangeRevert?.(); } catch (_) {}
+            return "stay";
+          }
+        }
+      } catch (_) {}
+      try {
+        if (typeof origBackOut === "function") return origBackOut.apply(this, args);
+      } catch (_) {}
+      try {
+        if (typeof BankSetupCardModal !== "undefined" && BankSetupCardModal.prototype.bankSetupBackOut &&
+            BankSetupCardModal.prototype.bankSetupBackOut !== proto.bankSetupBackOut) {
+          return BankSetupCardModal.prototype.bankSetupBackOut.apply(this, args);
+        }
+      } catch (_) {}
+      return "ignore";
+    };
+
     proto.onKeyDown = async function bankArrangeOnKeyDown(event) {
       try {
         if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) {
@@ -705,13 +732,14 @@ Object.assign(BankSetupCardModal.prototype, {
         const consume = () => bankCategoryUiConsume(event);
 
         if (this.bankHintMode && !this.stage && this.sessionState?.status !== "applying") {
-          if (key === "Escape") {
-            consume();
-            this.bankHintMode = null;
-            this.paint?.("body");
-            return;
-          }
-          if (!inInput && !mod && !event.altKey && key.length === 1) {
+          let hintCloseKind = null;
+          try {
+            hintCloseKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (key === "Escape" ? "escape" : null);
+          } catch (_) { hintCloseKind = key === "Escape" ? "escape" : null; }
+          if (hintCloseKind !== "escape" && hintCloseKind !== "q" && hintCloseKind !== "ctrl-bracket" &&
+              !inInput && !mod && !event.altKey && key.length === 1) {
             if (this.bankArrangeHintKey?.(lower)) {
               consume();
               return;
@@ -719,12 +747,40 @@ Object.assign(BankSetupCardModal.prototype, {
           }
         }
 
-        if ((key === "Escape" || (lower === "q" && !mod && !event.altKey && !inInput))
-          && !this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()
-          && this.sessionState?.status !== "applying") {
-          consume();
-          this.bankArrangeRevert?.();
-          return;
+        {
+          let closeKind = null;
+          try {
+            closeKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (key === "Escape" ? "escape" : null);
+          } catch (_) { closeKind = key === "Escape" ? "escape" : null; }
+          if (closeKind) {
+            let should = closeKind === "escape" || closeKind === "ctrl-bracket";
+            if (closeKind === "q") {
+              if (Boolean(this.bankHintMode)) should = true;
+              else {
+                let types = false;
+                try {
+                  types = typeof bobCardTypesText === "function" &&
+                    bobCardTypesText(event, this.modalEl || this.contentEl);
+                } catch (_) { types = false; }
+                if (!types && !inInput) should = true;
+                else if (!types) {
+                  try {
+                    const target = event.target;
+                    should = !(target && typeof target.closest === "function" &&
+                      Boolean(target.closest("input,select,textarea")));
+                  } catch (_) { should = false; }
+                } else should = false;
+              }
+            }
+            if (should) {
+              consume();
+              try { this.bankSetupBackOut?.(); } catch (_) {}
+              return;
+            }
+            if (closeKind === "q") return;
+          }
         }
 
         if (!this.stage && !this.readOnly && this.sessionState?.status !== "applying") {

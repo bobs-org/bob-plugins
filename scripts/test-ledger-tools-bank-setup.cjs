@@ -1373,3 +1373,110 @@ test("Setup card paints lock wait as pending and Esc stops without closing", asy
   assert.equal(H.bankSetupCardStatusTone(modal), "is-previewing");
   modal.close();
 });
+
+test("q, Ctrl+[, and onEscapeKey stop a lock wait without closing", async () => {
+  for (const makeEvent of [
+    () => ({ key: "q", target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} }),
+    () => ({ key: "[", ctrlKey: true, code: "BracketLeft", target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} }),
+  ]) {
+    const plugin = setupCardPlugin();
+    const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+    modal.open();
+    let stopped = 0;
+    modal.session = {
+      getState: () => modal.sessionState,
+      stopWaiting() {
+        stopped += 1;
+        modal.sessionState = { status: "preview-ready", canApply: true, lockWait: null };
+        return modal.sessionState;
+      },
+    };
+    modal.sessionState = { status: "applying", busy: false, canApply: false, lockWait: { since: 0, attempts: 1 } };
+    await modal.onKeyDown(makeEvent());
+    assert.equal(stopped, 1);
+    assert.equal(modal.closed, false, "stopping the wait keeps the card open");
+    modal.close();
+  }
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  let stopped = 0;
+  modal.session = {
+    getState: () => modal.sessionState,
+    stopWaiting() {
+      stopped += 1;
+      modal.sessionState = { status: "preview-ready", canApply: true, lockWait: null };
+      return modal.sessionState;
+    },
+  };
+  modal.sessionState = { status: "applying", busy: false, canApply: false, lockWait: { since: 0, attempts: 1 } };
+  modal.onEscapeKey({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(stopped, 1);
+  assert.equal(modal.closed, false, "onEscapeKey stops waiting instead of closing");
+  modal.close();
+});
+
+test("onEscapeKey cancels a stage without closing, then closes from browsing", async () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  modal.beginGesture({ op: "category.set", key: "coffee", set: { hidden: true } }, "Hide Coffee");
+  assert.ok(modal.stage, "a stage opens");
+  modal.onEscapeKey({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(modal.stage, null, "onEscapeKey cancels the stage");
+  assert.equal(modal.closed, false, "the card stays open");
+  let closed = false;
+  const origClose = modal.close.bind(modal);
+  modal.close = () => { closed = true; return origClose(); };
+  const outside = { closest: () => null };
+  for (const key of ["q", "Escape"]) {
+    closed = false;
+    const event = key === "q"
+      ? { key: "q", target: outside, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} }
+      : { key: "Escape", target: outside, preventDefault() {}, stopPropagation() {} };
+    await modal.onKeyDown(event);
+    if (key === "q") assert.equal(event.defaultPrevented, true, "q from the editor is consumed");
+    assert.equal(closed, true, `${key} closes from browsing`);
+    modal.closed = false;
+  }
+  modal.close = origClose;
+  modal.close();
+});
+
+test("bank scope handler routes q/Ctrl+[ through backOut and leaves other keys alone", async () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.scope = {
+    register: (m, k, fn) => { modal.__captured = fn; return 11; },
+    unregister: (ref) => { modal.__unregistered = ref; },
+  };
+  modal.open();
+  assert.equal(typeof modal.__captured, "function", "the scope handler is registered on open");
+  for (const key of ["j", "a", "Enter"]) {
+    const event = { key, target: { closest: () => null }, preventDefault() { this.touched = true; }, stopPropagation() {} };
+    assert.equal(modal.__captured(event), true, `${key} passes through untouched`);
+    assert.equal(event.touched, undefined);
+  }
+  const outside = { closest: () => null };
+  let closed = false;
+  const origClose = modal.close.bind(modal);
+  modal.close = () => { closed = true; return origClose(); };
+  const qEvent = { key: "q", target: outside, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+  assert.equal(modal.__captured(qEvent), false, "q from the editor is handled");
+  assert.equal(qEvent.defaultPrevented, true, "q is consumed so Vim never sees it");
+  assert.equal(closed, true, "q closes through the scope path");
+  modal.close = origClose;
+  modal.close();
+  assert.equal(modal.__unregistered, 11, "onClose unregisters the handler");
+});
+
+test("bank plain-browsing close hint reads esc/q", () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  const items = H.bankSetupCardHintItems(modal);
+  const close = items.find((item) => item.label === "close");
+  assert.ok(close, "a close chip exists");
+  assert.equal(close.keys, "esc/q");
+  modal.close();
+});

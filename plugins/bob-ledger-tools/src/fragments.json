@@ -124,6 +124,7 @@
   "241aj-plugin-areas-catalog.js",
   "241xa-plugin-schema-arrange-model.js",
   "241xb-plugin-schema-arrange-dom.js",
+  "241xc-plugin-card-close-keys.js",
   "241z-plugin-album-update.js",
   "242a-plugin-album-update-service.js",
   "242aa-plugin-guarded-update-session.js",
@@ -302,5 +303,6 @@
   "367-exports-bank-subscription-surfaces.js",
   "367-exports-bank-setup-card.js",
   "368-exports-schema-arrange.js",
-  "369-exports-schema-double-equals.js"
+  "369-exports-schema-double-equals.js",
+  "370-exports-card-close-keys.js"
 ]

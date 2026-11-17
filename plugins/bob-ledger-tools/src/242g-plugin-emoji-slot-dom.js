@@ -217,6 +217,18 @@ function albumEmojiSlotHandleKeydown(slot, event) {
     albumEmojiSlotClose(slot, { focusWell: true });
     return;
   }
+  try {
+    if (typeof bobCardCloseKey === "function" && bobCardCloseKey(event) === "ctrl-bracket") {
+      stop();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return;
+    } else if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey &&
+        (event.code === "BracketLeft" || event.key === "[")) {
+      stop();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return;
+    }
+  } catch (_) {}
   if (event.key === "Tab") {
     albumEmojiSlotClose(slot, { focusWell: true });
     return;

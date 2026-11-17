@@ -254,7 +254,7 @@ function bankSetupCardHintItems(modal) {
   if (modal.sessionState?.undoAvailable || modal.pluginRef?.bankSetupUndoRecord) {
     items.push({ keys: `${mod}+Z`, label: "undo" });
   }
-  items.push({ keys: "esc", label: "close" });
+  items.push({ keys: "esc/q", label: "close" });
   return items;
 }
 

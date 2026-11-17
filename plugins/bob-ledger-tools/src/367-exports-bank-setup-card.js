@@ -47,6 +47,7 @@ try {
       bankSetupRememberUndo,
       bankSetupLastUndo,
       bankSetupRecordTiming,
+      bankEmojiSlotInterceptKey,
     });
   }
 } catch (_) {}

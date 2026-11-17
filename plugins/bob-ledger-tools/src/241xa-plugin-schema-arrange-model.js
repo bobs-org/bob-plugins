@@ -2,7 +2,7 @@
 // Cards can preview arbitrary reorder gestures locally, then submit one
 // compiler-verified envelope through their existing guarded update session.
 
-const SCHEMA_ARRANGE_GAP_ALPHABET = "asdfghjklqwertyuiopzxcvbnm";
+const SCHEMA_ARRANGE_GAP_ALPHABET = "asdfghjklwertyuiopzxcvbnm";
 
 function schemaArrangeCloneScopes(scopes) {
   const copy = {};

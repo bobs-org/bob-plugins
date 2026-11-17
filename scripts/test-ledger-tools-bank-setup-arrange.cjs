@@ -368,3 +368,43 @@ test("category moves clamp at the group edge and Money is not auto-reordered on 
   assert.ok(!scopes.groups.includes("HIDDEN"));
   modal.close();
 });
+
+test("q and Ctrl+[ leave gap-hint mode without picking a gap", async () => {
+  for (const makeEvent of [
+    () => ({ key: "q", target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} }),
+    () => ({ key: "[", ctrlKey: true, code: "BracketLeft", target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} }),
+  ]) {
+    const { modal } = openCard();
+    modal.selection = { type: "category", key: "groceries", group: "Everyday", id: "category:groceries" };
+    modal.paint();
+    assert.equal(modal.bankArrangeEnterHintMode(), true);
+    assert.ok(modal.bankHintMode, "hint mode opens");
+    const labels = (modal.bankHintMode.labels || []).slice();
+    assert.ok(!labels.some((label) => label.includes("q")), "no gap badge is q");
+    await modal.onKeyDown(makeEvent());
+    assert.equal(modal.bankHintMode, null, "the hint mode closes");
+    assert.equal(modal.bankArrangeDirty(), false, "leaving hint mode picks no gap");
+    modal.close();
+  }
+});
+
+test("hint badge letters never claim Ctrl+[ and dirty moves revert through backOut", async () => {
+  const { modal } = openCard();
+  modal.selection = { type: "category", key: "groceries", group: "Everyday", id: "category:groceries" };
+  modal.paint();
+  assert.equal(modal.bankArrangeEnterHintMode(), true);
+  const labels = modal.bankHintMode.labels || [];
+  assert.ok(labels.length > 0);
+  await modal.onKeyDown({
+    key: "[", ctrlKey: true, code: "BracketLeft", target: { closest: () => null },
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() {},
+  });
+  assert.equal(modal.bankHintMode, null, "Ctrl+[ leaves hint mode instead of filing a badge");
+  modal.selection = { type: "category", key: "groceries", group: "Everyday", id: "category:groceries" };
+  modal.paint();
+  modal.bankArrangeNudge(-1);
+  assert.equal(modal.bankArrangeDirty(), true);
+  assert.equal(modal.bankSetupBackOut(), "stay", "dirty moves revert through the shared back-out");
+  assert.equal(modal.bankArrangeDirty(), false);
+  modal.close();
+});

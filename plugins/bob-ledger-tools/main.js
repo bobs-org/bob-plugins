@@ -64990,7 +64990,7 @@ class BobLedgerToolsAreasCatalogMixin {
 // Cards can preview arbitrary reorder gestures locally, then submit one
 // compiler-verified envelope through their existing guarded update session.
 
-const SCHEMA_ARRANGE_GAP_ALPHABET = "asdfghjklqwertyuiopzxcvbnm";
+const SCHEMA_ARRANGE_GAP_ALPHABET = "asdfghjklwertyuiopzxcvbnm";
 
 function schemaArrangeCloneScopes(scopes) {
   const copy = {};
@@ -66266,6 +66266,132 @@ function schemaDragAutoscrollStep(container, clientY, options = {}) {
   } catch (_) {
     return false;
   }
+}
+// ---- src/241xc-plugin-card-close-keys.js ----
+// Shared close-key helpers for Bob panels: every panel Esc closes or backs
+// out of also does so with bare `q` and `Ctrl+[`, through Esc's own dispatch.
+// DOM-free: no top-level document access; all DOM reads go through the
+// event and panel arguments the card passes in.
+function bobCardCloseKey(event) {
+  try {
+    if (!event || event.isComposing || event.keyCode === 229) return null;
+    const hasCtrl = event.ctrlKey === true;
+    const hasAlt = event.altKey === true;
+    const hasMeta = event.metaKey === true;
+    const hasShift = event.shiftKey === true;
+    if (hasCtrl && !hasAlt && !hasMeta && !hasShift &&
+        (event.code === "BracketLeft" || event.key === "[")) {
+      return "ctrl-bracket";
+    }
+    if (event.key === "Escape") return "escape";
+    if ((event.key === "q" || event.key === "Q") && !hasCtrl && !hasMeta && !hasAlt) return "q";
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bobCardCloseCandidate(event, panelEl) {
+  try {
+    const target = event && event.target && typeof event.target.closest === "function" ? event.target : null;
+    if (target) return target;
+    const doc = panelEl && panelEl.ownerDocument ? panelEl.ownerDocument : null;
+    const active = doc ? doc.activeElement : null;
+    if (active && typeof active.closest === "function") return active;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bobCardTypesText(event, panelEl) {
+  try {
+    const candidate = bobCardCloseCandidate(event, panelEl);
+    if (!candidate) return false;
+    try {
+      if (panelEl && typeof panelEl.contains === "function" && !panelEl.contains(candidate)) return false;
+    } catch (_) {}
+    const inField = Boolean(candidate.closest?.("input,select,textarea"));
+    if (inField) return true;
+    try {
+      const editable = candidate.closest?.("[contenteditable]");
+      if (editable) {
+        const value = typeof editable.getAttribute === "function"
+          ? editable.getAttribute("contenteditable")
+          : editable.contentEditable;
+        if (String(value).toLowerCase() !== "false") return true;
+      }
+    } catch (_) {}
+    try {
+      if (candidate.closest?.("[data-emoji-well]")) return true;
+    } catch (_) {}
+    try {
+      if (candidate.closest?.(".bob-emoji-slot-search")) return true;
+    } catch (_) {}
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function bobCardConsume(event) {
+  try { event?.preventDefault?.(); } catch (_) {}
+  try { event?.stopPropagation?.(); } catch (_) {}
+}
+
+function bobCardWireCloseKeys(modal, options = {}) {
+  try {
+    if (!modal || !modal.scope || typeof modal.scope.register !== "function") return null;
+    const backOut = typeof options.backOut === "function" ? options.backOut : null;
+    const hintActive = typeof options.hintActive === "function" ? options.hintActive : null;
+    if (!backOut) return null;
+    const handler = (event) => {
+      try {
+        if (event && (event.defaultPrevented || event.__schemaEscapeHandled)) return true;
+        const kind = bobCardCloseKey(event);
+        if (kind !== "q" && kind !== "ctrl-bracket") return true;
+        if (kind === "q") {
+          let hinted = false;
+          try { hinted = hintActive ? hintActive() === true : false; } catch (_) { hinted = false; }
+          if (!hinted) {
+            let panel = null;
+            try { panel = modal.modalEl || modal.containerEl || modal.contentEl || null; } catch (_) { panel = null; }
+            if (bobCardTypesText(event, panel)) return true;
+          }
+        }
+        bobCardConsume(event);
+        try { backOut(event); } catch (_) {}
+        return false;
+      } catch (_) {
+        return true;
+      }
+    };
+    let ref = null;
+    try { ref = modal.scope.register(null, null, handler); } catch (_) { ref = null; }
+    try {
+      modal.bobCardCloseKeyRef = ref;
+      modal.bobCardCloseKeyHandler = handler;
+    } catch (_) {}
+    return ref;
+  } catch (_) {
+    return null;
+  }
+}
+
+function bobCardUnwireCloseKeys(modal) {
+  try {
+    if (!modal) return;
+    const ref = modal.bobCardCloseKeyRef || null;
+    try {
+      if (ref && modal.scope && typeof modal.scope.unregister === "function") {
+        modal.scope.unregister(ref);
+      }
+    } catch (_) {}
+    try {
+      modal.bobCardCloseKeyRef = null;
+      modal.bobCardCloseKeyHandler = null;
+    } catch (_) {}
+  } catch (_) {}
 }
 // ---- src/241z-plugin-album-update.js ----
 // Album schema update wire helpers. `bob albums update` is the only
@@ -85927,6 +86053,55 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     this.keyListener = (event) => { void this.onKeyDown(event); };
   }
 
+  bankSetupBackOut() {
+    const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
+    if (waiting) {
+      try { this.bankClearEnterLatch?.(); } catch (_) {}
+      try { this.session?.stopWaiting?.(); } catch (_) {}
+      this.sessionState = this.session?.getState?.() || this.sessionState;
+      this.paint();
+      return "stop-waiting";
+    }
+    if (this.busy) return "ignore";
+    if (this.cancelStage()) return "stay";
+    this.close();
+    return "close";
+  }
+
+  bankSetupCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    if (event && event.key === "Escape") return "escape";
+    return null;
+  }
+
+  bankSetupShouldBackOutForKind(kind, event) {
+    try {
+      if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+      if (kind === "q") {
+        if (Boolean(this.bankHintMode)) return true;
+        try {
+          if (typeof bobCardTypesText === "function" &&
+              bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+        } catch (_) {}
+        const target = event && event.target;
+        if (target && typeof target.closest === "function" &&
+            Boolean(target.closest("input,select,textarea"))) return false;
+        return true;
+      }
+      return true;
+    } catch (_) {
+      return event && event.key === "Escape";
+    }
+  }
+
+  onEscapeKey(event) {
+    try { bankCategoryUiConsume(event); } catch (_) {}
+    this.bankSetupBackOut();
+    return false;
+  }
+
   onOpen() {
     try {
       this.modalEl?.addClass?.("bob-bank-setup-card-modal");
@@ -85937,11 +86112,22 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
       this.contentEl?.addEventListener?.("click", this.clickListener);
       this.contentEl?.addEventListener?.("keydown", this.keyListener, true);
     } catch (_) {}
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, {
+          backOut: () => this.bankSetupBackOut(),
+          hintActive: () => Boolean(this.bankHintMode),
+        });
+      }
+    } catch (_) {}
     if (!this.setReport(this.report, { initial: true })) this.paint();
   }
 
   onClose() {
     this.closed = true;
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
     try { this.session?.close?.(); } catch (_) {}
     this.session = null;
     this.stage = null;
@@ -86509,19 +86695,20 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const target = event.target;
     const inInput = Boolean(target?.closest?.("input,select,textarea"));
     const consume = () => bankCategoryUiConsume(event);
-    if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
-      consume();
-      const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
-      if (waiting) {
-        try { this.bankClearEnterLatch?.(); } catch (_) {}
-        try { this.session?.stopWaiting?.(); } catch (_) {}
-        this.sessionState = this.session?.getState?.() || this.sessionState;
-        this.paint();
+    {
+      const closeKind = this.bankSetupCloseKind(event);
+      if (closeKind && this.bankSetupShouldBackOutForKind(closeKind, event)) {
+        consume();
+        try {
+          if (event && !event.defaultPrevented) {
+            try { Object.defineProperty(event, "defaultPrevented", { value: true, configurable: true }); }
+            catch (_) { try { event.defaultPrevented = true; } catch (_) {} }
+          }
+        } catch (_) {}
+        this.bankSetupBackOut();
         return;
       }
-      if (this.busy) return;
-      if (!this.cancelStage()) this.close();
-      return;
+      if (closeKind === "q") return;
     }
     if (mod && lower === "e") {
       consume();
@@ -87376,6 +87563,33 @@ Object.assign(BankSetupCardModal.prototype, {
       return origApplyStage.call(this);
     };
 
+    const origBackOut = proto.bankSetupBackOut;
+    proto.bankSetupBackOut = function bankSetupBackOutArrange(...args) {
+      try {
+        if (this.sessionState?.status !== "applying") {
+          if (this.bankHintMode) {
+            this.bankHintMode = null;
+            try { this.paint?.("body"); } catch (_) {}
+            return "stay";
+          }
+          if (!this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()) {
+            try { this.bankArrangeRevert?.(); } catch (_) {}
+            return "stay";
+          }
+        }
+      } catch (_) {}
+      try {
+        if (typeof origBackOut === "function") return origBackOut.apply(this, args);
+      } catch (_) {}
+      try {
+        if (typeof BankSetupCardModal !== "undefined" && BankSetupCardModal.prototype.bankSetupBackOut &&
+            BankSetupCardModal.prototype.bankSetupBackOut !== proto.bankSetupBackOut) {
+          return BankSetupCardModal.prototype.bankSetupBackOut.apply(this, args);
+        }
+      } catch (_) {}
+      return "ignore";
+    };
+
     proto.onKeyDown = async function bankArrangeOnKeyDown(event) {
       try {
         if (!event || event.isComposing || event.keyCode === 229 || event.defaultPrevented) {
@@ -87391,13 +87605,14 @@ Object.assign(BankSetupCardModal.prototype, {
         const consume = () => bankCategoryUiConsume(event);
 
         if (this.bankHintMode && !this.stage && this.sessionState?.status !== "applying") {
-          if (key === "Escape") {
-            consume();
-            this.bankHintMode = null;
-            this.paint?.("body");
-            return;
-          }
-          if (!inInput && !mod && !event.altKey && key.length === 1) {
+          let hintCloseKind = null;
+          try {
+            hintCloseKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (key === "Escape" ? "escape" : null);
+          } catch (_) { hintCloseKind = key === "Escape" ? "escape" : null; }
+          if (hintCloseKind !== "escape" && hintCloseKind !== "q" && hintCloseKind !== "ctrl-bracket" &&
+              !inInput && !mod && !event.altKey && key.length === 1) {
             if (this.bankArrangeHintKey?.(lower)) {
               consume();
               return;
@@ -87405,12 +87620,40 @@ Object.assign(BankSetupCardModal.prototype, {
           }
         }
 
-        if ((key === "Escape" || (lower === "q" && !mod && !event.altKey && !inInput))
-          && !this.stage && typeof this.bankArrangeDirty === "function" && this.bankArrangeDirty()
-          && this.sessionState?.status !== "applying") {
-          consume();
-          this.bankArrangeRevert?.();
-          return;
+        {
+          let closeKind = null;
+          try {
+            closeKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (key === "Escape" ? "escape" : null);
+          } catch (_) { closeKind = key === "Escape" ? "escape" : null; }
+          if (closeKind) {
+            let should = closeKind === "escape" || closeKind === "ctrl-bracket";
+            if (closeKind === "q") {
+              if (Boolean(this.bankHintMode)) should = true;
+              else {
+                let types = false;
+                try {
+                  types = typeof bobCardTypesText === "function" &&
+                    bobCardTypesText(event, this.modalEl || this.contentEl);
+                } catch (_) { types = false; }
+                if (!types && !inInput) should = true;
+                else if (!types) {
+                  try {
+                    const target = event.target;
+                    should = !(target && typeof target.closest === "function" &&
+                      Boolean(target.closest("input,select,textarea")));
+                  } catch (_) { should = false; }
+                } else should = false;
+              }
+            }
+            if (should) {
+              consume();
+              try { this.bankSetupBackOut?.(); } catch (_) {}
+              return;
+            }
+            if (closeKind === "q") return;
+          }
         }
 
         if (!this.stage && !this.readOnly && this.sessionState?.status !== "applying") {
@@ -87708,7 +87951,7 @@ function bankSetupCardHintItems(modal) {
   if (modal.sessionState?.undoAvailable || modal.pluginRef?.bankSetupUndoRecord) {
     items.push({ keys: `${mod}+Z`, label: "undo" });
   }
-  items.push({ keys: "esc", label: "close" });
+  items.push({ keys: "esc/q", label: "close" });
   return items;
 }
 
@@ -95052,7 +95295,7 @@ function albumSchemaCardHintItems(model, options) {
     return [
       { keys: "↑/↓", label: "navigate" },
       { keys: "y", label: "YAML", action: "yaml" },
-      { keys: "esc", label: "close", action: "close" },
+      { keys: "esc/q", label: "close", action: "close" },
     ];
   }
   if (state.lockWait) {
@@ -95116,7 +95359,7 @@ function albumSchemaCardHintItems(model, options) {
   }
   items.push({ keys: "y", label: "YAML", action: "yaml" });
   if (state.undoAvailable) items.push({ keys: "u", label: "undo", action: "undo", enabled: !gated });
-  items.push({ keys: "esc", label: "close", action: "close" });
+  items.push({ keys: "esc/q", label: "close", action: "close" });
   return items.filter((item) => item.enabled !== false);
 }
 
@@ -95968,6 +96211,44 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     try { event.__schemaEscapeHandled = true; } catch (_) {}
   }
 
+  schemaBackOut(event) {
+    const action = this.schemaHandleEscape();
+    if (action === "ignore") {
+      this.schemaMarkEscapeHandled(event);
+      return action;
+    }
+    this.schemaMarkEscapeHandled(event);
+    if (action === "close") this.close();
+    return action;
+  }
+
+  schemaCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    return event && event.key === "Escape" ? "escape" : null;
+  }
+
+  schemaShouldBackOutForKind(kind, event) {
+    try {
+      if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+      if (kind === "q") {
+        if (Boolean(this.schemaHintMode)) return true;
+        try {
+          if (typeof bobCardTypesText === "function" &&
+              bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+        } catch (_) {}
+        const target = event && event.target;
+        if (target && typeof target.closest === "function" &&
+            Boolean(target.closest("input,select,textarea"))) return false;
+        return true;
+      }
+      return true;
+    } catch (_) {
+      return event && event.key === "Escape";
+    }
+  }
+
   // Obsidian binds this scope's Escape to Modal's onEscapeKey at construction, and
   // the scope chain is first-registered-wins, so an appended contentEl keydown
   // handler can never preempt the default close. Overriding onEscapeKey instead:
@@ -95976,14 +96257,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   // phase, before the contentEl listener, so the contentEl Escape branch only
   // fires in tests unless onEscapeKey already handled it.)
   onEscapeKey(event) {
-    const action = this.schemaHandleEscape();
-    if (action === "ignore" || action === "stay") {
-      this.schemaMarkEscapeHandled(event);
-      return false;
-    }
-    if (event && (event.defaultPrevented || event.__schemaEscapeHandled)) return;
-    this.schemaMarkEscapeHandled(event);
-    this.close();
+    this.schemaBackOut(event);
+    return false;
   }
 
   async schemaAction(action) {
@@ -96057,11 +96332,9 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const targetButton = target?.closest?.("button[data-target-key]") || null;
     const inButton = Boolean(target?.closest?.("button"));
     if (inInput) {
-      if (event.key === "Escape") {
-        const action = this.schemaHandleEscape();
-        if (action === "ignore") return;
-        this.schemaMarkEscapeHandled(event);
-        if (action === "close") this.close();
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
       }
       else if (event.key === "Enter" && target.tagName !== "TEXTAREA" && this.stage) {
         event.preventDefault?.();
@@ -96074,21 +96347,20 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.selectedIndex = this.schemaTargets().findIndex((item) => item.key === this.selectedKey);
     } else if (inButton) return;
     if (this.stage) {
-      if (event.key === "Escape") {
-        const action = this.schemaHandleEscape();
-        if (action === "ignore") return;
-        this.schemaMarkEscapeHandled(event);
-        if (action === "close") this.close();
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
       }
       else if (event.key === "Enter") { event.preventDefault?.(); this.schemaStageEnter(); }
       return;
     }
-    if (event.key === "Escape") {
-      const action = this.schemaHandleEscape();
-      if (action === "ignore") return;
-      this.schemaMarkEscapeHandled(event);
-      if (action === "close") this.close();
-      return;
+    {
+      const closeKind = this.schemaCloseKind(event);
+      if (closeKind && this.schemaShouldBackOutForKind(closeKind, event)) {
+        this.schemaBackOut(event);
+        return;
+      }
+      if (closeKind === "q") return;
     }
     if (event.key === "Enter") {
       event.preventDefault?.();
@@ -96144,10 +96416,21 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaComposing = false;
       this.schemaStageInput(event);
     });
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, {
+          backOut: (event) => this.schemaBackOut(event),
+          hintActive: () => Boolean(this.schemaHintMode),
+        });
+      }
+    } catch (_) {}
     this.schemaUnsubscribe = this.schemaPlugin?.apiAlbumSubscribe?.((state) => this.schemaAlbumState(state)) || null;
   }
 
   onClose() {
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
     this.session?.close?.();
     this.session = null;
     try { this.schemaUnsubscribe?.(); } catch (_) {}
@@ -97014,13 +97297,20 @@ Object.assign(AlbumSchemaCardModal.prototype, {
           if (this.stage) return;
         }
         if (this.schemaHintMode && !this.stage && this.sessionState?.status !== "applying") {
-          const key = String(event.key || "").toLowerCase();
-          if (event.key === "Escape") {
+          const hintCloseKind = typeof bobCardCloseKey === "function"
+            ? bobCardCloseKey(event)
+            : (event.key === "Escape" ? "escape" : null);
+          if (hintCloseKind === "escape" || hintCloseKind === "ctrl-bracket" || hintCloseKind === "q") {
             this.schemaHintMode = null;
             this.paintSchemaCard("body");
             try { event.preventDefault?.(); } catch (_) {}
+            try { event.stopPropagation?.(); } catch (_) {}
+            try {
+              if (typeof this.schemaMarkEscapeHandled === "function") this.schemaMarkEscapeHandled(event);
+            } catch (_) {}
             return;
           }
+          const key = String(event.key || "").toLowerCase();
           if (key && key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
             try {
               if (typeof this.schemaArrangeHintKey === "function" && this.schemaArrangeHintKey(key)) {
@@ -97094,6 +97384,9 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         const status = this.session?.getState?.()?.status;
         if (status === "applying") {
           this.schemaClosedDuringSave = true;
+          try {
+            if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+          } catch (_) {}
           try { this.schemaUnsubscribe?.(); } catch (_) {}
           this.schemaUnsubscribe = null;
           try {
@@ -97856,7 +98149,11 @@ Object.assign(AlbumSchemaCardModal.prototype, {
             return;
           }
           if (this.schemaHintMode?.ghost) {
-            if (event.key !== "Escape" && event.key !== "Enter") {
+            const ghostCloseKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (event.key === "Escape" ? "escape" : null);
+            if (ghostCloseKind !== "escape" && ghostCloseKind !== "q" && ghostCloseKind !== "ctrl-bracket" &&
+                event.key !== "Enter") {
               const key = String(event.key || "").toLowerCase();
               if (key && key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
                 try { event.preventDefault?.(); } catch (_) {}
@@ -98350,6 +98647,18 @@ function albumEmojiSlotHandleKeydown(slot, event) {
     albumEmojiSlotClose(slot, { focusWell: true });
     return;
   }
+  try {
+    if (typeof bobCardCloseKey === "function" && bobCardCloseKey(event) === "ctrl-bracket") {
+      stop();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return;
+    } else if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey &&
+        (event.code === "BracketLeft" || event.key === "[")) {
+      stop();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return;
+    }
+  } catch (_) {}
   if (event.key === "Tab") {
     albumEmojiSlotClose(slot, { focusWell: true });
     return;
@@ -98696,6 +99005,17 @@ function bankEmojiSlotInterceptKey(owner, event) {
       albumEmojiSlotClose(slot, { focusWell: true });
       return true;
     }
+    try {
+      const bracket = typeof bobCardCloseKey === "function"
+        ? bobCardCloseKey(event) === "ctrl-bracket"
+        : Boolean(event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey &&
+            (event.code === "BracketLeft" || event.key === "["));
+      if (bracket) {
+        consume();
+        albumEmojiSlotClose(slot, { focusWell: true });
+        return true;
+      }
+    } catch (_) {}
     if (key === "Enter") {
       consume();
       albumEmojiSlotHandleKeydown(slot, event);
@@ -98747,12 +99067,24 @@ function bankCategoryEmojiSlotMount(host, labelInput, owner, options = {}) {
   if (typeof BankSetupCardModal === "function") {
     const proto = BankSetupCardModal.prototype;
     const origKeyDown = proto.onKeyDown;
+    const origBackOut = proto.bankSetupBackOut;
     const origCancel = proto.cancelStage;
     const origClose = proto.onClose;
     proto.onKeyDown = async function bankEmojiOnKeyDown(event) {
       if (bankEmojiSlotInterceptKey(this, event)) return;
       return origKeyDown.call(this, event);
     };
+    if (typeof origBackOut === "function") {
+      proto.bankSetupBackOut = function bankEmojiBackOut(...args) {
+        try {
+          if (this.bankEmojiSlot?.isOpen) {
+            try { albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: true }); } catch (_) {}
+            return "stay";
+          }
+        } catch (_) {}
+        return origBackOut.apply(this, args);
+      };
+    }
     proto.cancelStage = function bankEmojiCancelStage() {
       if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
       this.bankEmojiSlot = null;
@@ -145562,6 +145894,7 @@ try {
       bankSetupRememberUndo,
       bankSetupLastUndo,
       bankSetupRecordTiming,
+      bankEmojiSlotInterceptKey,
     });
   }
 } catch (_) {}
@@ -145607,6 +145940,18 @@ try {
       schemaDoubleEqualsVimSnapshot,
       schemaDoubleEqualsGate,
       schemaDoubleEqualsTargetKind,
+    });
+  }
+} catch (_) {}
+// ---- src/370-exports-card-close-keys.js ----
+// Test-facing exports for the shared panel close-key helpers.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      bobCardCloseKey,
+      bobCardTypesText,
+      bobCardWireCloseKeys,
+      bobCardUnwireCloseKeys,
     });
   }
 } catch (_) {}

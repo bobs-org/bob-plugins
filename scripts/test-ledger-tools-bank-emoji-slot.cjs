@@ -330,3 +330,27 @@ test("glyph-well stylesheet beats Obsidian button chrome with no hex colors", ()
   assert.ok(slice.includes(".is-empty") && slice.includes("dashed"), "the empty state sets a dashed border");
   assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(slice), "the new well and hint rules use CSS variables, not hex colors");
 });
+
+test("Ctrl+[ closes the open bank Emoji Slot like Esc while q in the search types", () => {
+  const noop = () => {};
+  const makeSlot = () => ({
+    isOpen: true,
+    panel: { setAttribute: noop },
+    search: { setAttribute: noop, removeAttribute: noop, focus: noop },
+    well: { setAttribute: noop, focus: noop },
+    config: {},
+  });
+  const owner = (slot) => ({ bankEmojiSlot: slot });
+  const searchTarget = { closest: () => ({}) };
+  const qSlot = makeSlot();
+  assert.equal(h.bankEmojiSlotInterceptKey(owner(qSlot), {
+    key: "q", target: searchTarget, preventDefault: noop, stopPropagation: noop,
+  }), true, "q is isolated from the card so it types");
+  assert.equal(qSlot.isOpen, true, "the picker stays open for q");
+  const bracketSlot = makeSlot();
+  assert.equal(h.bankEmojiSlotInterceptKey(owner(bracketSlot), {
+    key: "[", ctrlKey: true, code: "BracketLeft", target: searchTarget,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation: noop,
+  }), true);
+  assert.equal(bracketSlot.isOpen, false, "Ctrl+[ closes only the panel like Esc");
+});

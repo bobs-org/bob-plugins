@@ -538,7 +538,11 @@ Object.assign(AlbumSchemaCardModal.prototype, {
             return;
           }
           if (this.schemaHintMode?.ghost) {
-            if (event.key !== "Escape" && event.key !== "Enter") {
+            const ghostCloseKind = typeof bobCardCloseKey === "function"
+              ? bobCardCloseKey(event)
+              : (event.key === "Escape" ? "escape" : null);
+            if (ghostCloseKind !== "escape" && ghostCloseKind !== "q" && ghostCloseKind !== "ctrl-bracket" &&
+                event.key !== "Enter") {
               const key = String(event.key || "").toLowerCase();
               if (key && key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
                 try { event.preventDefault?.(); } catch (_) {}

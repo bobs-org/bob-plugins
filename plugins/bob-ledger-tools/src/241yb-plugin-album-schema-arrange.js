@@ -837,13 +837,20 @@ Object.assign(AlbumSchemaCardModal.prototype, {
           if (this.stage) return;
         }
         if (this.schemaHintMode && !this.stage && this.sessionState?.status !== "applying") {
-          const key = String(event.key || "").toLowerCase();
-          if (event.key === "Escape") {
+          const hintCloseKind = typeof bobCardCloseKey === "function"
+            ? bobCardCloseKey(event)
+            : (event.key === "Escape" ? "escape" : null);
+          if (hintCloseKind === "escape" || hintCloseKind === "ctrl-bracket" || hintCloseKind === "q") {
             this.schemaHintMode = null;
             this.paintSchemaCard("body");
             try { event.preventDefault?.(); } catch (_) {}
+            try { event.stopPropagation?.(); } catch (_) {}
+            try {
+              if (typeof this.schemaMarkEscapeHandled === "function") this.schemaMarkEscapeHandled(event);
+            } catch (_) {}
             return;
           }
+          const key = String(event.key || "").toLowerCase();
           if (key && key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
             try {
               if (typeof this.schemaArrangeHintKey === "function" && this.schemaArrangeHintKey(key)) {
@@ -917,6 +924,9 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         const status = this.session?.getState?.()?.status;
         if (status === "applying") {
           this.schemaClosedDuringSave = true;
+          try {
+            if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+          } catch (_) {}
           try { this.schemaUnsubscribe?.(); } catch (_) {}
           this.schemaUnsubscribe = null;
           try {

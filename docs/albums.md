@@ -134,8 +134,9 @@ Reorders arrange locally and save as one envelope. `Alt+J`/`K` (or
 `Alt+↑`/`↓`/`←`/`→`, matched by `event.code` so macOS Option never inserts
 `∆`/`˚`) nudge the selected field or choice one slot, `Alt+Shift+J/K` jump to
 the first or last slot, a count prefix such as `4Alt+K` repeats the nudge, and
-`m` (or `Alt+M`) opens Move to… gap badges (`a`–`z`, two characters past 26
-gaps) where typing a badge drops the item. Moved rows keep an accent ring and
+`m` (or `Alt+M`) opens Move to… gap badges (letters except `q`, two
+characters past 25 gaps; `q` leaves hint mode) where typing a badge drops the
+item. Moved rows keep an accent ring and
 a delta badge (`↑4`, `↓2`), position changes animate with 140 ms FLIP
 (`prefers-reduced-motion` disables it), and a polite live region announces
 “label, position X of N”. While moves are pending the hint strip becomes a
@@ -150,7 +151,8 @@ as its `position` — still one op and one commit. Pointer drag arranges with
 the same engine: a ⠿ grip appears on hover and focus at a chip's or row's
 leading edge, dragging lifts the item and paints a 2 px insertion caret, the
 card autoscrolls near its edges, a drop outside the item's scope shows a
-not-allowed caret and snaps back, and `Esc` cancels the drag. Drops call the
+not-allowed caret and snaps back, and `Esc`, `q`, or `Ctrl+[` cancels the
+drag. Drops call the
 same `placeAtGap` and one-envelope save pipeline as the keys.
 
 `Enter` saves the whole arrangement through the unchanged guarded session:
@@ -164,8 +166,10 @@ and follow-on moves compile after the apply settles without ever calling
 `setDraft` mid-apply. Success paints `Saved · u undo` (fading after ~3 s)
 and records one commit with one Undo; refusals keep the arrangement pending
 with a red rule. `u` steps back one local move while moves are pending and
-otherwise stages Undo of the last save; `esc` leaves hint mode, then reverts
-pending moves (nothing was written), then cancels a stage, then closes.
+otherwise stages Undo of the last save; `esc`, `q`, or `Ctrl+[` leaves hint
+mode, then reverts pending moves (nothing was written), then cancels a stage,
+then closes. `q` types inside fields and the Emoji Slot well while `Ctrl+[`
+always backs out, and all three work with editor focus.
 Closing during a save is allowed: the plugin-level apply finishes, an
 Obsidian Notice reports “Album schema saved” (or the refusal), and a
 reopened card offers Undo when its fresh fingerprint equals the saved
@@ -178,10 +182,12 @@ pending arrangement (latching while that revision's preview is pending),
 `a` adds a field, `c` adds a choice, `!` and `s` stage required/suggest
 toggles, `Alt+J`/`K` (with `Shift` for ends, counts, and `m` gaps) arrange,
 `Ctrl+D` stages removal, `y` jumps to Source, `u` steps back or previews
-Undo, and `Esc` closes the All actions list, then cancels an open stage,
-then leaves hint mode, then reverts pending moves, then closes from plain
-browsing through one dispatch that survives Obsidian's capture-phase close;
-an open Emoji Slot panel closes before the stage or pending arrangement.
+Undo, and `Esc`, `q`, or `Ctrl+[` closes the All actions list, then cancels
+an open stage, then leaves hint mode, then reverts pending moves, then closes
+from plain browsing through one dispatch that survives Obsidian's
+capture-phase close; the first `Esc` or `Ctrl+[` closes only the picker. `q`
+types inside fields and the Emoji Slot well while `Ctrl+[` always backs out,
+and all three work with editor focus.
 Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.

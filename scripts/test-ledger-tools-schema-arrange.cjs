@@ -315,14 +315,16 @@ test("bank category and duplicate-match rule compilers fuzz all permutations thr
 });
 
 test("gap labels are home-row-first, fixed-width, and prefix-free", () => {
-  const alphabet = "asdfghjklqwertyuiopzxcvbnm";
+  const alphabet = "asdfghjklwertyuiopzxcvbnm";
   assert.deepEqual(arrangeGapHintLabels(1), ["a"]);
-  assert.equal(arrangeGapHintLabels(26).join(""), alphabet);
-  for (const count of [27, 200]) {
+  assert.equal(arrangeGapHintLabels(25).join(""), alphabet);
+  assert.ok(!arrangeGapHintLabels(25).some((label) => label.includes("q")), "no gap badge is q");
+  for (const count of [26, 200]) {
     const labels = arrangeGapHintLabels(count);
     assert.equal(labels.length, count);
     assert.ok(labels.every((label) => label.length === 2));
     assert.equal(new Set(labels).size, count);
+    assert.ok(!labels.some((label) => label.includes("q")), "two-character labels never contain q");
     assert.ok(labels.every((label, index) => labels.every((other, otherIndex) =>
       index === otherIndex || !other.startsWith(label))));
   }

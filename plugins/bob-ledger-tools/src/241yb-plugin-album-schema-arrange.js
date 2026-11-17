@@ -78,14 +78,6 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     } catch (_) {}
   },
 
-  schemaArrangeConsumeCount(defaultStep = 1) {
-    const raw = String(this.schemaArrangeCountBuffer || "");
-    this.schemaArrangeCountBuffer = "";
-    const value = Number.parseInt(raw, 10);
-    if (Number.isInteger(value) && value > 0 && value <= 999) return value;
-    return defaultStep;
-  },
-
   schemaArrangeNudge(direction, options = {}) {
     const started = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now() : 0;
@@ -95,8 +87,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       if (!selected || !selected.id) return false;
       this.schemaEnsureArrangement();
       if (!this.schemaArrangement) return false;
-      const count = this.schemaArrangeConsumeCount(1);
-      const step = Number(direction) * count;
+      const step = Number(direction);
       if (!Number.isFinite(step) || step === 0) return false;
       const before = schemaArrangeCollectRects(this.schemaCardEl?.() || this.contentEl);
       const result = this.schemaArrangement.nudge(selected.scope, selected.id, step, {
@@ -121,12 +112,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         try {
           const card = this.schemaCardEl?.() || this.contentEl;
           const node = card?.querySelector?.(`[data-arrange-id="${selected.scope}:${selected.id}"]`);
-          if (node?.animate) {
-            node.animate(
-              [{ transform: "translateX(0)" }, { transform: `translateX(${step > 0 ? 3 : -3}px)` }, { transform: "translateX(0)" }],
-              { duration: 90, easing: "ease-out" },
-            );
-          }
+          if (typeof schemaCardBump === "function") schemaCardBump(node, step > 0 ? 1 : -1, { axis: "x" });
         } catch (_) {}
       }
       try {
@@ -883,8 +869,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         }
         if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
           const key = String(event.key || "");
-          if (/^[0-9]$/.test(key)) {
-            this.schemaArrangeCountBuffer = `${this.schemaArrangeCountBuffer || ""}${key}`.slice(-3);
+          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k")) {
             try { event.preventDefault?.(); } catch (_) {}
             return;
           }

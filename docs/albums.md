@@ -136,7 +136,7 @@ explicit rebase.
 Reorders arrange locally and save as one envelope. `Alt+J`/`K` (or
 `Alt+↑`/`↓`/`←`/`→`, matched by `event.code` so macOS Option never inserts
 `∆`/`˚`) nudge the selected field or choice one slot, `Alt+Shift+J/K` jump to
-the first or last slot, a count prefix such as `4Alt+K` repeats the nudge, and
+the first or last slot, and
 `m` (or `Alt+M`) opens Move to… gap badges (letters except `q`, two
 characters past 25 gaps; `q` leaves hint mode) where typing a badge drops the
 item. Moved rows keep an accent ring and
@@ -183,7 +183,10 @@ gesture (on the hint strip, or under `⋯`): `↑`/`↓` (or `j`/`k`, `←`/`→
 across choices) move selection, `Enter` edits the selected row or saves a
 pending arrangement (latching while that revision's preview is pending),
 `a` adds a field, `c` adds a choice, `!` and `s` stage required/suggest
-toggles, `Alt+J`/`K` (with `Shift` for ends, counts, and `m` gaps) arrange,
+toggles, `Shift+J`/`Shift+K` jump to the next/previous field (from a chip,
+`Shift+K` first returns to its own field, and jumps stop at the ends),
+`1`–`9` jump straight to field N as painted, pending moves included,
+`Alt+J`/`K` (with `Shift` for ends and `m` gaps) arrange,
 `Ctrl+D` stages removal, `y` jumps to Source, `u` steps back or previews
 Undo, and `Esc`, `q`, or `Ctrl+[` closes the All actions list, then cancels
 an open stage, then leaves hint mode, then reverts pending moves, then closes

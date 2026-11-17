@@ -32,7 +32,17 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaTargets() {
-    return albumSchemaTargets(this.schemaModel);
+    let projected = null;
+    try {
+      const arrangement = this.schemaArrangement;
+      if (arrangement && typeof arrangement.dirty === "function" && arrangement.dirty() === true
+        && typeof arrangement.scopes === "function") {
+        projected = arrangement.scopes();
+      }
+    } catch (_) {
+      projected = null;
+    }
+    return albumSchemaPaintedTargets(this.schemaModel, projected);
   }
 
   schemaSelectedTarget() {
@@ -863,6 +873,16 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     if (event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
     if (event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === "J" || event.key === "K")) {
+      event.preventDefault?.();
+      this.schemaFieldStep(event.key === "J" ? 1 : -1, event);
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && /^[1-9]$/.test(event.key || "")) {
+      event.preventDefault?.();
+      this.schemaFieldNumber(Number(event.key), event);
+      return;
+    }
     if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }

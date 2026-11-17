@@ -2,11 +2,51 @@
 // fragment only collects user intent; bob remains the schema validator and
 // the only writer.
 function albumSchemaTargets(model) {
+  return albumSchemaPaintedTargets(model, null);
+}
+
+// Painted field order: the pending projection while dirty (filtered to
+// known keys), else saved model order. Shared with the body painter so
+// target order and DOM order cannot drift apart.
+function albumSchemaPaintedFieldOrder(model, projected) {
+  const fields = Array.isArray(model?.fields) ? model.fields : [];
+  if (projected && Array.isArray(projected.fields)) {
+    const known = new Set(fields.map((field) => String(field?.key ?? "")));
+    return projected.fields.map(String).filter((key) => known.has(key));
+  }
+  return fields.map((field) => String(field?.key ?? ""));
+}
+
+// Painted choice order for one field: the pending projection when it
+// covers every declared choice, else declared order.
+function albumSchemaPaintedChoiceOrder(field, projected) {
+  const declared = (Array.isArray(field?.choices) ? field.choices : [])
+    .map((choice) => String(choice?.value ?? ""));
+  const scope = `choices:${String(field?.key ?? "")}`;
+  if (projected && Array.isArray(projected[scope])) {
+    const wanted = projected[scope].map(String).filter((value) => declared.includes(value));
+    if (wanted.length === declared.length) return wanted;
+  }
+  return declared;
+}
+
+// Painted target order: stats, then each field with its chips and
+// `+ choice` in painted order, then body issues, then `+ field`.
+function albumSchemaPaintedTargets(model, projected) {
   const targets = [{ key: "stats", kind: "stats" }];
   const fields = Array.isArray(model?.fields) ? model.fields : [];
-  for (const field of fields) {
+  const byKey = new Map(fields.map((field) => [String(field?.key ?? ""), field]));
+  for (const key of albumSchemaPaintedFieldOrder(model, projected)) {
+    const field = byKey.get(key);
+    if (!field) continue;
     targets.push({ key: `field:${field.key}`, kind: "field", field });
-    for (const choice of Array.isArray(field.choices) ? field.choices : []) {
+    const choicesByValue = new Map(
+      (Array.isArray(field.choices) ? field.choices : [])
+        .map((choice) => [String(choice?.value ?? ""), choice]),
+    );
+    for (const value of albumSchemaPaintedChoiceOrder(field, projected)) {
+      const choice = choicesByValue.get(value);
+      if (!choice) continue;
       targets.push({
         key: `choice:${field.key}:${choice.value}`,
         kind: "choice",
@@ -18,7 +58,6 @@ function albumSchemaTargets(model) {
       targets.push({ key: `add-choice:${field.key}`, kind: "add-choice", field });
     }
   }
-  targets.push({ key: "add-field", kind: "add-field" });
   for (const issue of Array.isArray(model?.issues) ? model.issues : []) {
     targets.push({
       key: albumHeaderIssueKey(issue),
@@ -26,7 +65,29 @@ function albumSchemaTargets(model) {
       issue,
     });
   }
+  targets.push({ key: "add-field", kind: "add-field" });
   return targets;
+}
+
+// Next/previous `field:` key strictly after/before the current index,
+// or null at the ends. One scan covers every row of the field-step table:
+// from a chip or `+ choice` Shift+K lands on the parent field first.
+function albumSchemaFieldStepKey(targets, selectedKey, direction) {
+  const order = Array.isArray(targets) ? targets : [];
+  const index = order.findIndex((target) => target?.key === selectedKey);
+  if (index < 0) return null;
+  const step = Number(direction) < 0 ? -1 : 1;
+  for (let at = index + step; at >= 0 && at < order.length; at += step) {
+    if (order[at]?.kind === "field") return order[at].key;
+  }
+  return null;
+}
+
+// Nth field key in painted order (1-based), or null when field N is missing.
+function albumSchemaFieldNumberKey(targets, n) {
+  const fields = (Array.isArray(targets) ? targets : []).filter((target) => target?.kind === "field");
+  const index = Number(n) - 1;
+  return Number.isInteger(index) && index >= 0 && index < fields.length ? fields[index].key : null;
 }
 
 function albumSchemaTargetByKey(model, key) {

@@ -195,6 +195,7 @@
   "241y-plugin-album-schema-card.js",
   "241yb-plugin-album-schema-arrange.js",
   "241yd-plugin-album-schema-card-paint.js",
+  "241yf-plugin-album-schema-field-jump.js",
   "241ye-plugin-album-schema-place.js",
   "242f-plugin-emoji-slot-model.js",
   "242g-plugin-emoji-slot-dom.js",

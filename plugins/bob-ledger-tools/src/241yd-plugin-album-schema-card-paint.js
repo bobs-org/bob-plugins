@@ -125,6 +125,15 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     if (reason === "select") {
       albumSchemaCardPaintSelection(card, this.selectedKey);
       albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      try {
+        let selected = null;
+        try {
+          selected = card.querySelector?.(`[data-target-key="${String(this.selectedKey || "")}"]`) || null;
+        } catch (_) {
+          selected = null;
+        }
+        selected?.scrollIntoView?.({ block: "nearest" });
+      } catch (_) {}
       this.schemaFocusAfterPaint(false);
       return;
     }

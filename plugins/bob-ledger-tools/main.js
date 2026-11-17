@@ -66018,12 +66018,42 @@ function schemaArrangeAnnounce(card, message) {
       live.setAttribute("data-arrange-announcer", "true");
       live.setAttribute("role", "status");
       live.setAttribute("aria-live", "polite");
-      try { live.setAttribute("hidden", ""); } catch (_) {}
       card.appendChild(live);
     }
+    try { live.removeAttribute?.("hidden"); } catch (_) {}
     if (typeof notebookSetText === "function") notebookSetText(live, String(message));
     else live.textContent = String(message);
   } catch (_) {}
+}
+
+// Shared refusal bump: a 3 px nudge that never moves layout. `sign`
+// picks the direction (down for Shift+J and missing digits, up for
+// Shift+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
+// on reduced motion, uses node.animate when present, else a no-op.
+function schemaCardBump(node, sign, options = {}) {
+  try {
+    if (schemaArrangeReducedMotion()) return false;
+    if (!node || typeof node.animate !== "function") return false;
+    const axis = options?.axis === "x" ? "x" : "y";
+    const distance = Number(sign) < 0 ? -3 : 3;
+    const prop = axis === "x" ? "translateX" : "translateY";
+    node.animate(
+      [{ transform: `${prop}(0)` }, { transform: `${prop}(${distance}px)` }, { transform: `${prop}(0)` }],
+      { duration: 90, easing: "ease-out" },
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Shared group reveal: scroll the chip cloud (or tile block) into view
+// first, then the heading row, so the heading stays visible with as many
+// choices as fit. Every hop is optional-chained, so a missing scroller
+// never throws.
+function schemaCardRevealGroup(head, body) {
+  try { body?.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
+  try { head?.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
 }
 
 function schemaArrangeGapBadges(count) {
@@ -67796,11 +67826,51 @@ function albumUpdateServiceDeps(plugin, options = {}) {
 // fragment only collects user intent; bob remains the schema validator and
 // the only writer.
 function albumSchemaTargets(model) {
+  return albumSchemaPaintedTargets(model, null);
+}
+
+// Painted field order: the pending projection while dirty (filtered to
+// known keys), else saved model order. Shared with the body painter so
+// target order and DOM order cannot drift apart.
+function albumSchemaPaintedFieldOrder(model, projected) {
+  const fields = Array.isArray(model?.fields) ? model.fields : [];
+  if (projected && Array.isArray(projected.fields)) {
+    const known = new Set(fields.map((field) => String(field?.key ?? "")));
+    return projected.fields.map(String).filter((key) => known.has(key));
+  }
+  return fields.map((field) => String(field?.key ?? ""));
+}
+
+// Painted choice order for one field: the pending projection when it
+// covers every declared choice, else declared order.
+function albumSchemaPaintedChoiceOrder(field, projected) {
+  const declared = (Array.isArray(field?.choices) ? field.choices : [])
+    .map((choice) => String(choice?.value ?? ""));
+  const scope = `choices:${String(field?.key ?? "")}`;
+  if (projected && Array.isArray(projected[scope])) {
+    const wanted = projected[scope].map(String).filter((value) => declared.includes(value));
+    if (wanted.length === declared.length) return wanted;
+  }
+  return declared;
+}
+
+// Painted target order: stats, then each field with its chips and
+// `+ choice` in painted order, then body issues, then `+ field`.
+function albumSchemaPaintedTargets(model, projected) {
   const targets = [{ key: "stats", kind: "stats" }];
   const fields = Array.isArray(model?.fields) ? model.fields : [];
-  for (const field of fields) {
+  const byKey = new Map(fields.map((field) => [String(field?.key ?? ""), field]));
+  for (const key of albumSchemaPaintedFieldOrder(model, projected)) {
+    const field = byKey.get(key);
+    if (!field) continue;
     targets.push({ key: `field:${field.key}`, kind: "field", field });
-    for (const choice of Array.isArray(field.choices) ? field.choices : []) {
+    const choicesByValue = new Map(
+      (Array.isArray(field.choices) ? field.choices : [])
+        .map((choice) => [String(choice?.value ?? ""), choice]),
+    );
+    for (const value of albumSchemaPaintedChoiceOrder(field, projected)) {
+      const choice = choicesByValue.get(value);
+      if (!choice) continue;
       targets.push({
         key: `choice:${field.key}:${choice.value}`,
         kind: "choice",
@@ -67812,7 +67882,6 @@ function albumSchemaTargets(model) {
       targets.push({ key: `add-choice:${field.key}`, kind: "add-choice", field });
     }
   }
-  targets.push({ key: "add-field", kind: "add-field" });
   for (const issue of Array.isArray(model?.issues) ? model.issues : []) {
     targets.push({
       key: albumHeaderIssueKey(issue),
@@ -67820,7 +67889,29 @@ function albumSchemaTargets(model) {
       issue,
     });
   }
+  targets.push({ key: "add-field", kind: "add-field" });
   return targets;
+}
+
+// Next/previous `field:` key strictly after/before the current index,
+// or null at the ends. One scan covers every row of the field-step table:
+// from a chip or `+ choice` Shift+K lands on the parent field first.
+function albumSchemaFieldStepKey(targets, selectedKey, direction) {
+  const order = Array.isArray(targets) ? targets : [];
+  const index = order.findIndex((target) => target?.key === selectedKey);
+  if (index < 0) return null;
+  const step = Number(direction) < 0 ? -1 : 1;
+  for (let at = index + step; at >= 0 && at < order.length; at += step) {
+    if (order[at]?.kind === "field") return order[at].key;
+  }
+  return null;
+}
+
+// Nth field key in painted order (1-based), or null when field N is missing.
+function albumSchemaFieldNumberKey(targets, n) {
+  const fields = (Array.isArray(targets) ? targets : []).filter((target) => target?.kind === "field");
+  const index = Number(n) - 1;
+  return Number.isInteger(index) && index >= 0 && index < fields.length ? fields[index].key : null;
 }
 
 function albumSchemaTargetByKey(model, key) {
@@ -94895,9 +94986,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
   }
   if (editable) {
     const fieldsByKey = new Map((model.fields || []).map((field) => [String(field?.key || ""), field]));
-    const fieldOrder = projected && Array.isArray(projected.fields)
-      ? projected.fields.map(String).filter((key) => fieldsByKey.has(key))
-      : (model.fields || []).map((field) => String(field?.key || ""));
+    const fieldOrder = albumSchemaPaintedFieldOrder(model, projected);
     if (hintMode && hintMode.scope === "fields" && Array.isArray(hintMode.gaps)) {
       const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
       for (let gap = 0; gap <= fieldOrder.length; gap += 1) {
@@ -94918,11 +95007,13 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
         cloud.setAttribute("data-drag-scope", scope);
-        for (const choice of presented.choices || []) {
+        const hintChoicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
+        for (const value of albumSchemaPaintedChoiceOrder(presented, projected)) {
+          const choice = hintChoicesByValue.get(value);
+          if (!choice) continue;
           albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
           const chip = cloud.children?.[cloud.children.length - 1] || null;
           if (chip) {
-            const value = String(choice?.value ?? "");
             albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
@@ -94953,11 +95044,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
         cloud.setAttribute("data-drag-scope", scope);
         const choicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
-        let choiceOrder = (presented.choices || []).map((choice) => String(choice?.value ?? ""));
-        if (projected && Array.isArray(projected[scope])) {
-          const wanted = projected[scope].map(String).filter((value) => choicesByValue.has(value));
-          if (wanted.length === choiceOrder.length) choiceOrder = wanted;
-        }
+        const choiceOrder = albumSchemaPaintedChoiceOrder(presented, projected);
         if (hintMode && hintMode.scope === scope && Array.isArray(hintMode.gaps)) {
           const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
           for (let gap = 0; gap <= choiceOrder.length; gap += 1) {
@@ -95558,7 +95645,17 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaTargets() {
-    return albumSchemaTargets(this.schemaModel);
+    let projected = null;
+    try {
+      const arrangement = this.schemaArrangement;
+      if (arrangement && typeof arrangement.dirty === "function" && arrangement.dirty() === true
+        && typeof arrangement.scopes === "function") {
+        projected = arrangement.scopes();
+      }
+    } catch (_) {
+      projected = null;
+    }
+    return albumSchemaPaintedTargets(this.schemaModel, projected);
   }
 
   schemaSelectedTarget() {
@@ -96389,6 +96486,16 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     if (event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
     if (event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === "J" || event.key === "K")) {
+      event.preventDefault?.();
+      this.schemaFieldStep(event.key === "J" ? 1 : -1, event);
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && /^[1-9]$/.test(event.key || "")) {
+      event.preventDefault?.();
+      this.schemaFieldNumber(Number(event.key), event);
+      return;
+    }
     if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }
@@ -96558,14 +96665,6 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     } catch (_) {}
   },
 
-  schemaArrangeConsumeCount(defaultStep = 1) {
-    const raw = String(this.schemaArrangeCountBuffer || "");
-    this.schemaArrangeCountBuffer = "";
-    const value = Number.parseInt(raw, 10);
-    if (Number.isInteger(value) && value > 0 && value <= 999) return value;
-    return defaultStep;
-  },
-
   schemaArrangeNudge(direction, options = {}) {
     const started = typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now() : 0;
@@ -96575,8 +96674,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       if (!selected || !selected.id) return false;
       this.schemaEnsureArrangement();
       if (!this.schemaArrangement) return false;
-      const count = this.schemaArrangeConsumeCount(1);
-      const step = Number(direction) * count;
+      const step = Number(direction);
       if (!Number.isFinite(step) || step === 0) return false;
       const before = schemaArrangeCollectRects(this.schemaCardEl?.() || this.contentEl);
       const result = this.schemaArrangement.nudge(selected.scope, selected.id, step, {
@@ -96601,12 +96699,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         try {
           const card = this.schemaCardEl?.() || this.contentEl;
           const node = card?.querySelector?.(`[data-arrange-id="${selected.scope}:${selected.id}"]`);
-          if (node?.animate) {
-            node.animate(
-              [{ transform: "translateX(0)" }, { transform: `translateX(${step > 0 ? 3 : -3}px)` }, { transform: "translateX(0)" }],
-              { duration: 90, easing: "ease-out" },
-            );
-          }
+          if (typeof schemaCardBump === "function") schemaCardBump(node, step > 0 ? 1 : -1, { axis: "x" });
         } catch (_) {}
       }
       try {
@@ -97363,8 +97456,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
         }
         if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
           const key = String(event.key || "");
-          if (/^[0-9]$/.test(key)) {
-            this.schemaArrangeCountBuffer = `${this.schemaArrangeCountBuffer || ""}${key}`.slice(-3);
+          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k")) {
             try { event.preventDefault?.(); } catch (_) {}
             return;
           }
@@ -97555,6 +97647,15 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     if (reason === "select") {
       albumSchemaCardPaintSelection(card, this.selectedKey);
       albumSchemaCardPaintHints(card, this.schemaModel, options, doc);
+      try {
+        let selected = null;
+        try {
+          selected = card.querySelector?.(`[data-target-key="${String(this.selectedKey || "")}"]`) || null;
+        } catch (_) {
+          selected = null;
+        }
+        selected?.scrollIntoView?.({ block: "nearest" });
+      } catch (_) {}
       this.schemaFocusAfterPaint(false);
       return;
     }
@@ -97626,6 +97727,114 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       this.paintSchemaCard("session");
     }
     return false;
+  },
+});
+// ---- src/241yf-plugin-album-schema-field-jump.js ----
+// Album Schema Card field jumps: Shift+J/K steps and 1-9 jumps in
+// painted order. Pure navigation: selection, reveal, and announcement
+// only. Never touches the session, previews, writers, or the arrangement.
+Object.assign(AlbumSchemaCardModal.prototype, {
+  schemaFieldJumpFields(targets) {
+    return (Array.isArray(targets) ? targets : []).filter((target) => target?.kind === "field");
+  },
+
+  schemaFieldJumpAnnounce(message) {
+    try {
+      schemaArrangeAnnounce(this.schemaCardEl?.() || this.contentEl, message);
+    } catch (_) {}
+  },
+
+  schemaFieldJumpBump(sign) {
+    try {
+      const root = this.schemaCardEl?.() || this.contentEl;
+      let node = null;
+      try {
+        node = root?.querySelector?.(`[data-target-key="${String(this.selectedKey || "")}"]`) || null;
+      } catch (_) {
+        node = null;
+      }
+      if (typeof schemaCardBump === "function") schemaCardBump(node, sign);
+    } catch (_) {}
+  },
+
+  schemaFieldJumpMiss(sign, message, event) {
+    if (event?.repeat) return true;
+    try { this.schemaFieldJumpBump(sign); } catch (_) {}
+    try { this.schemaFieldJumpAnnounce(message); } catch (_) {}
+    return true;
+  },
+
+  schemaFieldJumpGoto(key, fields) {
+    const index = fields.findIndex((field) => field?.key === key);
+    if (index < 0) return false;
+    const targets = this.schemaTargets();
+    const targetIndex = targets.findIndex((target) => target?.key === key);
+    this.selectedKey = key;
+    this.selectedIndex = targetIndex >= 0 ? targetIndex : 0;
+    try { this.paintSchemaCard("select"); } catch (_) {}
+    try { this.schemaFieldRevealGroup(fields[index]?.field?.key); } catch (_) {}
+    const label = String(fields[index]?.field?.label || fields[index]?.field?.key || "Field");
+    try { this.schemaFieldJumpAnnounce(`${label}, field ${index + 1} of ${fields.length}`); } catch (_) {}
+    return true;
+  },
+
+  schemaFieldRevealGroup(fieldKey) {
+    try {
+      const root = this.schemaCardEl?.() || this.contentEl;
+      if (!root?.querySelector) return;
+      let head = null;
+      try {
+        head = root.querySelector(`[data-target-key="field:${String(fieldKey ?? "")}"]`);
+      } catch (_) {
+        head = null;
+      }
+      if (!head) return;
+      let body = null;
+      try {
+        const siblings = Array.from(head.parentNode?.children || []);
+        const at = siblings.indexOf(head);
+        const next = at >= 0 ? siblings[at + 1] : null;
+        const cls = String(next?.getAttribute?.("class") || "");
+        if (next && /bob-album-schema-choice-cloud/.test(cls)) body = next;
+      } catch (_) {
+        body = null;
+      }
+      if (typeof schemaCardRevealGroup === "function") schemaCardRevealGroup(head, body);
+    } catch (_) {}
+  },
+
+  schemaFieldStep(delta, event) {
+    if (!this.session) return false;
+    const targets = this.schemaTargets();
+    const fields = this.schemaFieldJumpFields(targets);
+    const down = Number(delta) >= 0;
+    if (!fields.length) {
+      return this.schemaFieldJumpMiss(1, "This album has no fields yet.", event);
+    }
+    const key = typeof albumSchemaFieldStepKey === "function"
+      ? albumSchemaFieldStepKey(targets, this.selectedKey, delta)
+      : null;
+    if (!key) {
+      return this.schemaFieldJumpMiss(down ? 1 : -1, down ? "No next field" : "No previous field", event);
+    }
+    return this.schemaFieldJumpGoto(key, fields);
+  },
+
+  schemaFieldNumber(n, event) {
+    if (!this.session) return false;
+    const targets = this.schemaTargets();
+    const fields = this.schemaFieldJumpFields(targets);
+    if (!fields.length) {
+      return this.schemaFieldJumpMiss(1, "This album has no fields yet.", event);
+    }
+    const key = typeof albumSchemaFieldNumberKey === "function"
+      ? albumSchemaFieldNumberKey(targets, n)
+      : null;
+    if (!key) {
+      const noun = fields.length === 1 ? "1 field" : `${fields.length} fields`;
+      return this.schemaFieldJumpMiss(1, `No field ${Number(n)} · this album has ${noun}`, event);
+    }
+    return this.schemaFieldJumpGoto(key, fields);
   },
 });
 // ---- src/241ye-plugin-album-schema-place.js ----
@@ -147118,6 +147327,13 @@ try {
       createAlbumUpdateSession,
       albumUpdateServiceDeps,
       albumSchemaTargets,
+      albumSchemaPaintedFieldOrder,
+      albumSchemaPaintedChoiceOrder,
+      albumSchemaPaintedTargets,
+      albumSchemaFieldStepKey,
+      albumSchemaFieldNumberKey,
+      schemaCardBump,
+      schemaCardRevealGroup,
       albumSchemaTargetByKey,
       albumSchemaChoiceParts,
       ALBUM_EMOJI_SLOT_RESULT_LIMIT,

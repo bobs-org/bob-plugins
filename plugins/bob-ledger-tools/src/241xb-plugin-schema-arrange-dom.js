@@ -289,12 +289,42 @@ function schemaArrangeAnnounce(card, message) {
       live.setAttribute("data-arrange-announcer", "true");
       live.setAttribute("role", "status");
       live.setAttribute("aria-live", "polite");
-      try { live.setAttribute("hidden", ""); } catch (_) {}
       card.appendChild(live);
     }
+    try { live.removeAttribute?.("hidden"); } catch (_) {}
     if (typeof notebookSetText === "function") notebookSetText(live, String(message));
     else live.textContent = String(message);
   } catch (_) {}
+}
+
+// Shared refusal bump: a 3 px nudge that never moves layout. `sign`
+// picks the direction (down for Shift+J and missing digits, up for
+// Shift+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
+// on reduced motion, uses node.animate when present, else a no-op.
+function schemaCardBump(node, sign, options = {}) {
+  try {
+    if (schemaArrangeReducedMotion()) return false;
+    if (!node || typeof node.animate !== "function") return false;
+    const axis = options?.axis === "x" ? "x" : "y";
+    const distance = Number(sign) < 0 ? -3 : 3;
+    const prop = axis === "x" ? "translateX" : "translateY";
+    node.animate(
+      [{ transform: `${prop}(0)` }, { transform: `${prop}(${distance}px)` }, { transform: `${prop}(0)` }],
+      { duration: 90, easing: "ease-out" },
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Shared group reveal: scroll the chip cloud (or tile block) into view
+// first, then the heading row, so the heading stays visible with as many
+// choices as fit. Every hop is optional-chained, so a missing scroller
+// never throws.
+function schemaCardRevealGroup(head, body) {
+  try { body?.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
+  try { head?.scrollIntoView?.({ block: "nearest" }); } catch (_) {}
 }
 
 function schemaArrangeGapBadges(count) {

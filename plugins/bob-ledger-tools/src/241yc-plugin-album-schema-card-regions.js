@@ -298,9 +298,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
   }
   if (editable) {
     const fieldsByKey = new Map((model.fields || []).map((field) => [String(field?.key || ""), field]));
-    const fieldOrder = projected && Array.isArray(projected.fields)
-      ? projected.fields.map(String).filter((key) => fieldsByKey.has(key))
-      : (model.fields || []).map((field) => String(field?.key || ""));
+    const fieldOrder = albumSchemaPaintedFieldOrder(model, projected);
     if (hintMode && hintMode.scope === "fields" && Array.isArray(hintMode.gaps)) {
       const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
       for (let gap = 0; gap <= fieldOrder.length; gap += 1) {
@@ -321,11 +319,13 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         if (!wantsChoices) continue;
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
         cloud.setAttribute("data-drag-scope", scope);
-        for (const choice of presented.choices || []) {
+        const hintChoicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
+        for (const value of albumSchemaPaintedChoiceOrder(presented, projected)) {
+          const choice = hintChoicesByValue.get(value);
+          if (!choice) continue;
           albumSchemaCardPaintChoiceChip(doc, cloud, presented, choice, itemOptions);
           const chip = cloud.children?.[cloud.children.length - 1] || null;
           if (chip) {
-            const value = String(choice?.value ?? "");
             albumSchemaCardDecorateArrangeNode(chip, `${scope}:${value}`, deltas, saving);
           }
         }
@@ -356,11 +356,7 @@ function albumSchemaCardPaintBody(card, model, options, doc) {
         const cloud = notebookCreateEl(doc, "div", "bob-album-schema-choice-cloud");
         cloud.setAttribute("data-drag-scope", scope);
         const choicesByValue = new Map((presented.choices || []).map((choice) => [String(choice?.value ?? ""), choice]));
-        let choiceOrder = (presented.choices || []).map((choice) => String(choice?.value ?? ""));
-        if (projected && Array.isArray(projected[scope])) {
-          const wanted = projected[scope].map(String).filter((value) => choicesByValue.has(value));
-          if (wanted.length === choiceOrder.length) choiceOrder = wanted;
-        }
+        const choiceOrder = albumSchemaPaintedChoiceOrder(presented, projected);
         if (hintMode && hintMode.scope === scope && Array.isArray(hintMode.gaps)) {
           const labels = Array.isArray(hintMode.labels) ? hintMode.labels : [];
           for (let gap = 0; gap <= choiceOrder.length; gap += 1) {

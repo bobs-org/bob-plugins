@@ -1567,6 +1567,43 @@ async function run(args) {
     record("schema-escape-cancel", Boolean(keyState && keyState.cancelled), "Escape cancels the stage");
     record("schema-focus-retained", Boolean(keyState && keyState.focus), `focus returns to ${keyState.focus}`);
 
+    // Real-key field jumps: Shift+J and digits arrive as trusted CDP key
+    // events, the way a keyboard sends them.
+    const fieldJumpShimBase = shimLogLength(shimDir);
+    const fieldJumpStart = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      if (!modal) return { ok: false, error: "schema card missing" };
+      modal.schemaSelect("stats");
+      const row = modal.contentEl.querySelector('[data-target-key="stats"]');
+      if (row) row.focus();
+      const fields = modal.schemaTargets().filter((item) => item && item.kind === "field");
+      return { ok: true, selected: modal.selectedKey,
+        first: fields[0] ? fields[0].key : null,
+        third: fields[2] ? fields[2].key : null, count: fields.length };`);
+    const dispatchRealKey = async (parts) => {
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts }, 5000);
+      await client.call("Input.dispatchKeyEvent", { type: "keyUp", code: parts.code, key: parts.key,
+        windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
+        nativeVirtualKeyCode: parts.nativeVirtualKeyCode }, 5000);
+    };
+    await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
+      nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
+    const afterShiftJ = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      return modal ? modal.selectedKey : null;`);
+    await dispatchRealKey({ key: "3", code: "Digit3", windowsVirtualKeyCode: 51,
+      nativeVirtualKeyCode: 51, text: "3" });
+    const afterDigit3 = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      return modal ? modal.selectedKey : null;`);
+    const fieldJumpEdits = updateShimEdits(fieldJumpShimBase);
+    report.probes.schemaFieldJump = { start: fieldJumpStart, afterShiftJ, afterDigit3, edits: fieldJumpEdits };
+    record("schema-field-jump-shift-j", Boolean(fieldJumpStart && fieldJumpStart.ok
+      && afterShiftJ === fieldJumpStart.first),
+      `Stats Shift+J -> ${afterShiftJ} (field 1 ${fieldJumpStart && fieldJumpStart.first})`);
+    record("schema-field-jump-digit", Boolean(fieldJumpStart && fieldJumpStart.ok
+      && fieldJumpStart.count >= 3 && afterDigit3 === fieldJumpStart.third),
+      `3 -> ${afterDigit3} (field 3 ${fieldJumpStart && fieldJumpStart.third})`);
+    record("schema-field-jump-no-apply", fieldJumpEdits.apply === 0,
+      `jumps never write; Bob albums update applies=${fieldJumpEdits.apply}`);
+
     const preEditFp = await schemaFp();
     record("schema-pre-fingerprint", typeof preEditFp === "string" && preEditFp.startsWith("sha256:"), "preview starts from a fresh report");
     const stagedPreview = await client.evaluate(`(() => (async () => {

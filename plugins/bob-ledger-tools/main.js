@@ -67028,12 +67028,13 @@ function albumSchemaTargetByKey(model, key) {
 
 function albumSchemaChoiceParts(value) {
   const text = String(value || "").trim();
-  const first = Array.from(text)[0];
-  if (!first || /^[A-Za-z0-9]$/.test(first)) return { emoji: "", label: text };
+  const parts = albumEmojiSlotGraphemes(text);
+  const first = parts[0];
+  if (!first || /^[A-Za-z0-9]$/.test(Array.from(first)[0] || "")) return { emoji: "", label: text };
   let end = first.length;
-  for (const character of Array.from(text).slice(1)) {
-    if (/\s/.test(character) || /^[A-Za-z0-9]$/.test(character)) break;
-    end += character.length;
+  for (const grapheme of parts.slice(1)) {
+    if (/^\s+$/u.test(grapheme) || /^[A-Za-z0-9]$/.test(grapheme)) break;
+    end += grapheme.length;
   }
   const emoji = text.slice(0, end).trim();
   const label = text.slice(end).trim();
@@ -67079,11 +67080,39 @@ function albumSchemaStageAction(doc, host, text, action, className = "") {
   return button;
 }
 
+function albumSchemaChoiceEmojiField(doc, host, captionText, labelName, labelValue, emojiName, emojiValue, emojiOptions = {}, options = {}) {
+  const field = notebookCreateEl(doc, "div", `bob-album-schema-choice-emoji-field${options.initial ? " is-initial" : ""}`);
+  const caption = notebookCreateEl(doc, "span", "bob-album-schema-emoji-label");
+  notebookSetText(caption, captionText);
+  const fused = notebookCreateEl(doc, "div", "bob-emoji-slot-fused");
+  const labelInput = notebookCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-label");
+  labelInput.setAttribute("type", "text");
+  labelInput.setAttribute("data-schema-input", labelName);
+  labelInput.setAttribute("aria-label", `${captionText} label`);
+  labelInput.setAttribute("placeholder", "Choice label");
+  labelInput.value = labelValue == null ? "" : String(labelValue);
+  if (options.required) labelInput.setAttribute("required", "");
+  if (options.disabled) labelInput.disabled = true;
+  fused.appendChild(labelInput);
+  albumSchemaEmojiSlotControl(doc, fused, `${captionText} emoji`, emojiName, emojiValue, labelInput, {
+    ...emojiOptions,
+    inputName: emojiName,
+  }, { disabled: options.disabled, fused: true });
+  field.appendChild(caption);
+  field.appendChild(fused);
+  host.appendChild(field);
+  return { field, labelInput };
+}
+
 function albumSchemaAddInitialChoiceRow(doc, host, index, draft = {}, options = {}) {
   const row = notebookCreateEl(doc, "div", "bob-album-schema-initial-choice");
   row.setAttribute("data-choice-index", String(index));
-  albumSchemaControl(doc, row, `Choice ${index + 1} label`, "text", `choiceLabel${index}`, draft.label || "", { disabled: options.disabled });
-  albumSchemaControl(doc, row, `Choice ${index + 1} emoji`, "text", `choiceEmoji${index}`, draft.emoji || "", { disabled: options.disabled });
+  const emojiOptions = options.emojiSlot || {};
+  albumSchemaChoiceEmojiField(doc, row, `Choice ${index + 1}`, `choiceLabel${index}`, draft.label || "", `choiceEmoji${index}`, draft.emoji || "", {
+    ...emojiOptions,
+    inputName: `choiceEmoji${index}`,
+    getSiblings: () => emojiOptions.getInitialChoiceSiblings?.(index) || [],
+  }, { disabled: options.disabled, initial: true });
   const remove = albumSchemaStageAction(doc, row, `Remove choice ${index + 1}`, `remove-initial-choice:${index}`, "is-quiet");
   if (options.disabled) remove.disabled = true;
   host.appendChild(row);
@@ -67156,7 +67185,10 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
     const choices = notebookCreateEl(doc, "div", "bob-album-schema-initial-choices");
     choices.setAttribute("data-schema-initial-choices", "");
     const initialChoices = Array.isArray(options?.stageDraft?.initialChoices) ? options.stageDraft.initialChoices : [{ label: "", emoji: "" }];
-    initialChoices.forEach((choice, index) => albumSchemaAddInitialChoiceRow(doc, choices, index, choice, { disabled: locked }));
+    initialChoices.forEach((choice, index) => albumSchemaAddInitialChoiceRow(doc, choices, index, choice, {
+      disabled: locked,
+      emojiSlot: options?.emojiSlot,
+    }));
     panel.appendChild(choices);
     const addChoice = albumSchemaStageAction(doc, panel, "Add initial choice", "add-initial-choice", "is-quiet");
     if (locked) addChoice.disabled = true;
@@ -67168,8 +67200,20 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
       panel.appendChild(identity);
     }
     const parts = albumSchemaChoiceParts(value.label);
-    albumSchemaControl(doc, panel, "Choice label", "text", "choiceLabel", read("choiceLabel", stage.kind === "choice" ? parts.label : ""), { required: true, disabled: locked });
-    albumSchemaControl(doc, panel, "Choice emoji", "text", "choiceEmoji", read("choiceEmoji", stage.kind === "choice" ? parts.emoji : ""), { disabled: locked });
+    const siblings = stage.kind === "choice" && target?.field
+      ? (target.field.choices || []).filter((choice) => choice.value !== target.choice?.value).map((choice) => {
+        const sibling = albumSchemaChoiceParts(choice.label);
+        return { emoji: sibling.emoji, label: sibling.label };
+      })
+      : target?.field ? (target.field.choices || []).map((choice) => {
+        const sibling = albumSchemaChoiceParts(choice.label);
+        return { emoji: sibling.emoji, label: sibling.label };
+      }) : [];
+    albumSchemaChoiceEmojiField(doc, panel, "Choice", "choiceLabel", read("choiceLabel", stage.kind === "choice" ? parts.label : ""), "choiceEmoji", read("choiceEmoji", stage.kind === "choice" ? parts.emoji : ""), {
+      ...(options?.emojiSlot || {}),
+      inputName: "choiceEmoji",
+      getSiblings: () => siblings,
+    }, { disabled: locked, required: true });
   }
 
   const buttons = notebookCreateEl(doc, "div", "bob-album-schema-stage-actions");
@@ -92823,8 +92867,9 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
     const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
     const locked = this.schemaPaintOptions().stageLocked === true;
+    const emojiSlot = this.schemaPaintOptions().emojiSlot;
     if (host && doc) {
-      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked });
+      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked, emojiSlot });
     } else {
       this.paintSchemaCard("stage");
     }
@@ -92851,10 +92896,11 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
     const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
     const locked = this.schemaPaintOptions().stageLocked === true;
+    const emojiSlot = this.schemaPaintOptions().emojiSlot;
     if (host && doc) {
       albumSchemaRegionEmpty(host);
       this.stageDraft.initialChoices.forEach((choice, next) => {
-        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked });
+        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked, emojiSlot });
       });
     } else {
       this.paintSchemaCard("stage");
@@ -94528,6 +94574,705 @@ Object.assign(AlbumSchemaCardModal.prototype, {
     return false;
   },
 });
+// ---- src/242f-plugin-emoji-slot-model.js ----
+// Pure model for the album and bank Emoji Slot. The shared component resolves
+// bob-emoji at the moment the user opens it; no catalog is copied into this
+// plugin.
+const ALBUM_EMOJI_SLOT_RESULT_LIMIT = 64;
+const ALBUM_EMOJI_SLOT_CATEGORY_LIMIT = 96;
+const ALBUM_EMOJI_SLOT_COLUMNS = 8;
+
+function albumEmojiSlotResolveApi(app) {
+  try {
+    const api = app?.plugins?.plugins?.["bob-emoji"]?.api;
+    if (!api || !Number.isFinite(Number(api.version)) || Number(api.version) < 1) return null;
+    for (const method of ["search", "suggestForLabel", "categories", "browse", "recents", "remember"]) {
+      if (typeof api[method] !== "function") return null;
+    }
+    return api;
+  } catch (_) {
+    return null;
+  }
+}
+
+function albumEmojiSlotGraphemes(value) {
+  const text = String(value ?? "");
+  if (!text) return [];
+  try {
+    if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+      const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+      return Array.from(segmenter.segment(text), (part) => part.segment);
+    }
+  } catch (_) {}
+
+  // Older Obsidian engines lack Intl.Segmenter. Keep combining marks,
+  // variation selectors, modifiers, flags, tag sequences, and ZWJ chains
+  // together without splitting surrogate pairs.
+  const codepoints = Array.from(text);
+  const rows = [];
+  const isMark = (character) => {
+    try { return /^\p{Mark}$/u.test(character); } catch (_) { return false; }
+  };
+  const isExtend = (character) => isMark(character) ||
+    /[\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u.test(character);
+  const isRegional = (character) => /^[\u{1F1E6}-\u{1F1FF}]$/u.test(character);
+
+  for (let index = 0; index < codepoints.length;) {
+    let grapheme = codepoints[index++];
+    if (isRegional(grapheme) && index < codepoints.length && isRegional(codepoints[index])) {
+      grapheme += codepoints[index++];
+    }
+    while (index < codepoints.length) {
+      const next = codepoints[index];
+      if (isExtend(next)) {
+        grapheme += next;
+        index += 1;
+      } else if (next === "\u200D" && index + 1 < codepoints.length) {
+        grapheme += next + codepoints[index + 1];
+        index += 2;
+      } else break;
+    }
+    rows.push(grapheme);
+  }
+  return rows;
+}
+
+function albumEmojiSlotIsDigitKeycap(glyph) {
+  return /^[0-9]\uFE0F?\u20E3$/u.test(String(glyph || ""));
+}
+
+function albumEmojiSlotIsEmojiGrapheme(value) {
+  const glyph = String(value || "");
+  if (!glyph || albumEmojiSlotGraphemes(glyph).length !== 1) return false;
+  if (albumEmojiSlotIsDigitKeycap(glyph)) return true;
+  try {
+    return /\p{Extended_Pictographic}/u.test(glyph) ||
+      /\p{Regional_Indicator}/u.test(glyph) ||
+      /\uFE0F/u.test(glyph) || /[\u{1F3FB}-\u{1F3FF}]/u.test(glyph);
+  } catch (_) {
+    return /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(glyph) || /\uFE0F/u.test(glyph);
+  }
+}
+
+function albumEmojiSlotGlyphKey(glyph) {
+  return String(glyph || "").replace(/\uFE0F/g, "");
+}
+
+function albumEmojiSlotWords(value) {
+  return new Set(String(value || "").toLowerCase().split(/[^\p{Letter}\p{Number}]+/u).filter((word) => word.length > 1));
+}
+
+function albumEmojiSlotNormalizeRows(rows, limit = ALBUM_EMOJI_SLOT_RESULT_LIMIT) {
+  const cap = Math.max(0, Number(limit) || 0);
+  if (!cap) return [];
+  const output = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(rows) ? rows : []) {
+    const emoji = typeof raw?.emoji === "string" ? raw.emoji : "";
+    if (!emoji || albumEmojiSlotIsDigitKeycap(emoji)) continue;
+    const key = albumEmojiSlotGlyphKey(emoji);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push({
+      ...raw,
+      emoji,
+      name: String(raw?.name || raw?.description || raw?.label || raw?.alias || emoji),
+      alias: String(raw?.alias || ""),
+      category: String(raw?.category || ""),
+    });
+    if (output.length >= cap) break;
+  }
+  return output;
+}
+
+function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12) {
+  const labelWords = albumEmojiSlotWords(label);
+  const rows = [];
+  for (const [index, item] of (Array.isArray(vocabulary) ? vocabulary : []).entries()) {
+    const emoji = typeof item?.emoji === "string" ? item.emoji : "";
+    if (!emoji || albumEmojiSlotIsDigitKeycap(emoji)) continue;
+    const name = String(item?.label || emoji);
+    let overlap = 0;
+    for (const word of albumEmojiSlotWords(name)) if (labelWords.has(word)) overlap += 1;
+    rows.push({
+      emoji,
+      name,
+      label: name,
+      alias: "",
+      category: "In your albums",
+      vocabulary: true,
+      overlap,
+      sourceIndex: index,
+    });
+  }
+  rows.sort((left, right) => right.overlap - left.overlap ||
+    left.name.localeCompare(right.name) || left.sourceIndex - right.sourceIndex);
+  return albumEmojiSlotNormalizeRows(rows, Math.max(0, limit));
+}
+
+function albumEmojiSlotDuplicateLabels(glyph, siblings) {
+  const key = albumEmojiSlotGlyphKey(glyph);
+  if (!key) return [];
+  return [...new Set((Array.isArray(siblings) ? siblings : [])
+    .filter((item) => albumEmojiSlotGlyphKey(item?.emoji) === key)
+    .map((item) => String(item?.label || "").trim())
+    .filter(Boolean))];
+}
+
+function albumEmojiSlotResultModel(api, options = {}) {
+  const query = String(options.query || "").trim();
+  const categories = (() => {
+    try { return [...new Set((api?.categories?.() || []).filter((value) => typeof value === "string" && value))]; }
+    catch (_) { return []; }
+  })();
+  const sections = [];
+  const add = (title, rawRows, limit = ALBUM_EMOJI_SLOT_RESULT_LIMIT) => {
+    const rows = albumEmojiSlotNormalizeRows(rawRows, limit);
+    if (rows.length) sections.push({ title, rows });
+  };
+
+  if (query) {
+    let rows = [];
+    try { rows = api.search(query, { limit: ALBUM_EMOJI_SLOT_RESULT_LIMIT }); } catch (_) {}
+    add("Results", rows);
+  } else if (options.category) {
+    let rows = [];
+    try { rows = api.browse(options.category, { limit: ALBUM_EMOJI_SLOT_CATEGORY_LIMIT, offset: 0 }); } catch (_) {}
+    add(options.category, rows, ALBUM_EMOJI_SLOT_CATEGORY_LIMIT);
+  } else {
+    let labelRows = [];
+    let recentRows = [];
+    try { labelRows = api.suggestForLabel(String(options.label || ""), { limit: 9 }); } catch (_) {}
+    try { recentRows = api.recents({ limit: 9 }); } catch (_) {}
+    if (String(options.label || "").trim()) add(`For “${String(options.label || "").trim()}”`, labelRows, 9);
+    add("In your albums", albumEmojiSlotVocabularyRows(options.vocabulary, options.label, 12), 12);
+    add("Recent", recentRows, 9);
+  }
+
+  const rows = [];
+  const seen = new Set();
+  for (const section of sections) {
+    section.rows = section.rows.filter((row) => {
+      const key = albumEmojiSlotGlyphKey(row.emoji);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    rows.push(...section.rows);
+  }
+  return { query, category: String(options.category || ""), categories, sections: sections.filter((section) => section.rows.length), rows };
+}
+
+function albumEmojiSlotMoveHighlight(index, key, count, columns = ALBUM_EMOJI_SLOT_COLUMNS) {
+  const total = Math.max(0, Number(count) || 0);
+  if (!total) return -1;
+  const current = Math.min(Math.max(0, Number(index) || 0), total - 1);
+  const delta = key === "ArrowLeft" ? -1
+    : key === "ArrowRight" ? 1
+      : key === "ArrowUp" || key === "p" || key === "P" ? -columns
+        : key === "ArrowDown" || key === "n" || key === "N" ? columns
+          : 0;
+  return Math.min(total - 1, Math.max(0, current + delta));
+}
+// ---- src/242g-plugin-emoji-slot-dom.js ----
+// In-card Emoji Slot shared by the album Schema Card and bank setup card.
+// Focus stays in the search input while results repaint; the card owns the
+// selected glyph through its existing staged input contract.
+let ALBUM_EMOJI_SLOT_ID = 0;
+
+function albumEmojiSlotCreateEl(doc, tag, className = "", text = "") {
+  const element = notebookCreateEl(doc, tag, className);
+  if (text) notebookSetText(element, text);
+  return element;
+}
+
+function albumEmojiSlotEmpty(host) {
+  if (!host) return;
+  try { host.empty?.(); } catch (_) { while (host.firstChild) host.removeChild(host.firstChild); }
+}
+
+function albumEmojiSlotFusedToken(label, emoji) {
+  const glyph = String(emoji || "").trim();
+  const text = String(label || "").trim();
+  return glyph ? (text ? `${glyph} ${text}` : glyph) : text;
+}
+
+function albumEmojiSlotUpdatePreview(slot) {
+  if (!slot) return;
+  const value = albumEmojiSlotFusedToken(slot.labelInput?.value, slot.glyph);
+  notebookSetText(slot.preview, value ? `Preview · ${value}` : "Preview · —");
+  slot.preview?.setAttribute?.("aria-label", value ? `Preview: ${value}` : "Empty emoji preview");
+  notebookSetText(slot.note, albumEmojiSlotIsDigitKeycap(slot.glyph)
+    ? "bob stores a leading digit keycap as label text"
+    : "");
+  if (slot.well) {
+    notebookSetText(slot.well, slot.glyph || "☻");
+    slot.well.setAttribute("aria-label", slot.glyph ? `Emoji ${slot.glyph}; choose another` : "Choose an emoji");
+    if (slot.glyph) slot.well.classList?.remove?.("is-empty");
+    else slot.well.classList?.add?.("is-empty");
+  }
+}
+
+function albumEmojiSlotResolveSiblings(slot) {
+  try {
+    const value = typeof slot?.config?.getSiblings === "function" ? slot.config.getSiblings() : slot?.config?.siblings;
+    return Array.isArray(value) ? value : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function albumEmojiSlotRowLabel(row) {
+  return String(row?.name || row?.description || row?.label || row?.alias || row?.emoji || "emoji");
+}
+
+function albumEmojiSlotRenderResults(slot) {
+  const api = slot.api;
+  if (!api) return;
+  const model = albumEmojiSlotResultModel(api, {
+    query: slot.search.value,
+    category: slot.category,
+    label: slot.labelInput?.value || "",
+    vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+  });
+  slot.model = model;
+  const results = slot.results;
+  albumEmojiSlotEmpty(results);
+  slot.optionRows = model.rows.map((row) => ({
+    row,
+    duplicateLabels: albumEmojiSlotDuplicateLabels(row.emoji, albumEmojiSlotResolveSiblings(slot)),
+  }));
+
+  let index = 0;
+  for (const section of model.sections) {
+    const sectionHost = albumEmojiSlotCreateEl(slot.doc, "section", "bob-emoji-slot-section");
+    const heading = albumEmojiSlotCreateEl(slot.doc, "h4", "bob-emoji-slot-section-title", section.title);
+    sectionHost.appendChild(heading);
+    const grid = albumEmojiSlotCreateEl(slot.doc, "div", "bob-emoji-slot-grid");
+    for (const row of section.rows) {
+      const optionIndex = index++;
+      const option = albumEmojiSlotCreateEl(slot.doc, "div", "bob-emoji-slot-option");
+      const id = `bob-emoji-slot-${slot.id}-option-${optionIndex}`;
+      const duplicateLabels = albumEmojiSlotDuplicateLabels(row.emoji, albumEmojiSlotResolveSiblings(slot));
+      option.setAttribute("id", id);
+      option.setAttribute("role", "option");
+      option.setAttribute("data-emoji-option-index", String(optionIndex));
+      option.setAttribute("aria-selected", optionIndex === slot.activeIndex ? "true" : "false");
+      const duplicateText = duplicateLabels.length ? `; also used by ${duplicateLabels.join(", ")}` : "";
+      option.setAttribute("aria-label", `${row.emoji} ${albumEmojiSlotRowLabel(row)}${duplicateText}`);
+      const glyph = albumEmojiSlotCreateEl(slot.doc, "span", "bob-emoji-slot-option-glyph", row.emoji);
+      const name = albumEmojiSlotCreateEl(slot.doc, "span", "bob-emoji-slot-option-name", albumEmojiSlotRowLabel(row));
+      option.appendChild(glyph);
+      option.appendChild(name);
+      if (duplicateLabels.length) {
+        const dot = albumEmojiSlotCreateEl(slot.doc, "span", "bob-emoji-slot-duplicate-dot");
+        dot.setAttribute("aria-hidden", "true");
+        dot.setAttribute("title", `Also used by ${duplicateLabels.join(", ")}`);
+        option.appendChild(dot);
+      }
+      grid.appendChild(option);
+    }
+    sectionHost.appendChild(grid);
+    results.appendChild(sectionHost);
+  }
+
+  const active = slot.optionRows[slot.activeIndex];
+  if (active) slot.search.setAttribute("aria-activedescendant", `bob-emoji-slot-${slot.id}-option-${slot.activeIndex}`);
+  else slot.search.removeAttribute("aria-activedescendant");
+  const duplicateLabels = active?.duplicateLabels || [];
+  const alias = active?.row?.alias ? `:${active.row.alias}: ` : "";
+  const name = active ? `${active.row.emoji} ${alias}${albumEmojiSlotRowLabel(active.row)}` : "No emoji found";
+  const duplicate = duplicateLabels.length ? ` · also used by ${duplicateLabels.join(", ")}` : "";
+  const note = albumEmojiSlotIsDigitKeycap(slot.glyph) ? " · bob stores a leading digit keycap as label text" : "";
+  notebookSetText(slot.footer, `${name}${duplicate}${note} · ⏎ pick`);
+}
+
+function albumEmojiSlotRenderCategories(slot) {
+  const categories = slot.model?.categories || [];
+  albumEmojiSlotEmpty(slot.tabs);
+  for (const category of categories) {
+    const tab = albumEmojiSlotCreateEl(slot.doc, "button", "bob-emoji-slot-category", category);
+    tab.setAttribute("type", "button");
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", slot.category === category ? "true" : "false");
+    tab.setAttribute("data-emoji-category", category);
+    tab.addEventListener("click", () => {
+      slot.category = category;
+      slot.search.value = "";
+      slot.activeIndex = 0;
+      albumEmojiSlotRenderResults(slot);
+      albumEmojiSlotRenderCategories(slot);
+      try { slot.search.focus?.({ preventScroll: true }); } catch (_) {}
+    });
+    slot.tabs.appendChild(tab);
+  }
+}
+
+function albumEmojiSlotClose(slot, options = {}) {
+  if (!slot?.isOpen) return false;
+  slot.isOpen = false;
+  slot.panel.setAttribute("hidden", "");
+  slot.well?.setAttribute?.("aria-expanded", "false");
+  slot.search.setAttribute("aria-expanded", "false");
+  slot.search.removeAttribute("aria-activedescendant");
+  if (slot.config.onClose) {
+    try { slot.config.onClose(slot); } catch (_) {}
+  }
+  if (options.focusWell !== false) {
+    try { slot.well?.focus?.({ preventScroll: true }); } catch (_) {}
+  }
+  return true;
+}
+
+function albumEmojiSlotPick(slot, glyph, row = null) {
+  const value = String(glyph || "");
+  slot.glyph = value;
+  if (value) {
+    try {
+      const api = albumEmojiSlotResolveApi(slot.config.app);
+      api?.remember?.(value);
+    } catch (_) {}
+  }
+  if (typeof slot.config.onPick === "function") {
+    try { slot.config.onPick(slot.config.inputName, value, row); } catch (_) {}
+  }
+  albumEmojiSlotUpdatePreview(slot);
+  albumEmojiSlotClose(slot, { focusWell: true });
+}
+
+function albumEmojiSlotOpen(slot, initialQuery = "") {
+  if (!slot || slot.fallback) return false;
+  const api = albumEmojiSlotResolveApi(slot.config.app);
+  if (!api) {
+    notebookSetText(slot.footer, "Enable Bob Emoji for search.");
+    return false;
+  }
+  if (slot.isOpen) return true;
+  slot.api = api;
+  slot.category = "";
+  slot.search.value = String(initialQuery || "");
+  slot.activeIndex = 0;
+  slot.isOpen = true;
+  slot.panel.removeAttribute("hidden");
+  slot.well?.setAttribute?.("aria-expanded", "true");
+  slot.search.setAttribute("aria-expanded", "true");
+  slot.model = albumEmojiSlotResultModel(api, {
+    query: slot.search.value,
+    label: slot.labelInput?.value || "",
+    vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+  });
+  albumEmojiSlotRenderCategories(slot);
+  albumEmojiSlotRenderResults(slot);
+  if (slot.config.onOpen) {
+    try { slot.config.onOpen(slot); } catch (_) {}
+  }
+  try { slot.search.focus?.({ preventScroll: true }); } catch (_) {}
+  return true;
+}
+
+function albumEmojiSlotHandleKeydown(slot, event) {
+  if (!event || event.isComposing || event.keyCode === 229) return;
+  const stop = () => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+  };
+  if (event.key === "Escape") {
+    stop();
+    albumEmojiSlotClose(slot, { focusWell: true });
+    return;
+  }
+  if (event.key === "Tab") {
+    albumEmojiSlotClose(slot, { focusWell: true });
+    return;
+  }
+  if (event.key === "Backspace" && !slot.search.value) {
+    stop();
+    albumEmojiSlotPick(slot, "");
+    return;
+  }
+  if (event.key === "Enter") {
+    stop();
+    const active = slot.optionRows[slot.activeIndex];
+    if (active) albumEmojiSlotPick(slot, active.row.emoji, active.row);
+    return;
+  }
+  const isMove = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) ||
+    (event.ctrlKey && ["n", "N", "p", "P"].includes(event.key));
+  if (isMove && slot.optionRows.length) {
+    stop();
+    slot.activeIndex = albumEmojiSlotMoveHighlight(slot.activeIndex, event.key, slot.optionRows.length);
+    albumEmojiSlotRenderResults(slot);
+  }
+}
+
+function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInput, config = {}, options = {}) {
+  const fused = options.fused === true;
+  const row = fused ? host : albumEmojiSlotCreateEl(doc, "div", "bob-album-schema-emoji-control");
+  if (!fused) row.classList?.add?.("bob-album-schema-emoji-control");
+  const label = fused ? null : albumEmojiSlotCreateEl(doc, "span", "bob-album-schema-emoji-label", labelText);
+  const content = fused ? host : albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-content");
+  const preview = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-preview");
+  const note = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-note");
+  const hidden = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-value");
+  hidden.setAttribute("type", "hidden");
+  hidden.setAttribute("data-schema-input", inputName);
+  hidden.value = String(value || "");
+  const slotConfig = {
+    ...config,
+    inputName,
+    label: String(labelInput?.value || ""),
+    vocabulary: typeof config.getVocabulary === "function" ? config.getVocabulary() : (config.vocabulary || []),
+    siblings: typeof config.getSiblings === "function" ? config.getSiblings() : (config.siblings || []),
+  };
+  const api = albumEmojiSlotResolveApi(slotConfig.app);
+  let well = null;
+  let fallbackInput = null;
+  let panel = null;
+  let slot = null;
+
+  if (api) {
+    well = albumEmojiSlotCreateEl(doc, "button", "bob-emoji-slot-well", value || "☻");
+    well.setAttribute("type", "button");
+    well.setAttribute("data-emoji-well", "");
+    well.setAttribute("aria-haspopup", "listbox");
+    well.setAttribute("aria-expanded", "false");
+    well.setAttribute("aria-label", value ? `Emoji ${value}; choose another` : "Choose an emoji");
+    if (options.disabled) well.disabled = true;
+
+    panel = albumEmojiSlotCreateEl(doc, "section", "bob-emoji-slot-panel");
+    panel.setAttribute("hidden", "");
+    panel.setAttribute("role", "group");
+    panel.setAttribute("aria-label", "Emoji picker");
+    const searchLabel = albumEmojiSlotCreateEl(doc, "label", "bob-emoji-slot-search-label", "Search emoji");
+    const search = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-search");
+    const results = albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-results");
+    search.setAttribute("type", "search");
+    search.setAttribute("aria-label", "Search emoji");
+    search.setAttribute("role", "combobox");
+    search.setAttribute("aria-autocomplete", "list");
+    search.setAttribute("aria-expanded", "true");
+    const resultsId = `bob-emoji-slot-${ALBUM_EMOJI_SLOT_ID + 1}-results`;
+    results.setAttribute("id", resultsId);
+    search.setAttribute("aria-controls", resultsId);
+    search.setAttribute("autocomplete", "off");
+    search.setAttribute("spellcheck", "false");
+    const tabs = albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-tabs");
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Emoji categories");
+    results.setAttribute("role", "listbox");
+    const footer = albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-footer");
+    footer.setAttribute("role", "status");
+    footer.setAttribute("aria-live", "polite");
+    panel.appendChild(searchLabel);
+    panel.appendChild(search);
+    panel.appendChild(tabs);
+    panel.appendChild(results);
+    panel.appendChild(footer);
+    slot = {
+      id: ++ALBUM_EMOJI_SLOT_ID,
+      doc,
+      config: slotConfig,
+      glyph: String(value || ""),
+      labelInput,
+      hidden,
+      well,
+      panel,
+      search,
+      tabs,
+      results,
+      footer,
+      category: "",
+      activeIndex: 0,
+      optionRows: [],
+      isOpen: false,
+      api,
+      model: null,
+      composing: false,
+      fallback: false,
+      preview,
+      note,
+    };
+    well.addEventListener("click", () => {
+      if (slot.isOpen) albumEmojiSlotClose(slot, { focusWell: true });
+      else albumEmojiSlotOpen(slot);
+    });
+    well.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " " || event.key === "ArrowDown") {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        albumEmojiSlotOpen(slot);
+        return;
+      }
+      if (!event.altKey && !event.ctrlKey && !event.metaKey && albumEmojiSlotGraphemes(event.key || "").length === 1 && event.key.length > 0) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        if (albumEmojiSlotIsEmojiGrapheme(event.key)) albumEmojiSlotPick(slot, event.key);
+        else albumEmojiSlotOpen(slot, event.key);
+      }
+    });
+    search.addEventListener("compositionstart", () => { slot.composing = true; });
+    search.addEventListener("compositionend", () => {
+      slot.composing = false;
+      albumEmojiSlotSearchInput(slot);
+    });
+    search.addEventListener("input", (event) => {
+      if (slot.composing || event?.isComposing) return;
+      albumEmojiSlotSearchInput(slot);
+    });
+    search.addEventListener("keydown", (event) => albumEmojiSlotHandleKeydown(slot, event));
+    panel.addEventListener("click", (event) => {
+      const option = event?.target?.closest?.("[data-emoji-option-index]");
+      const index = Number(option?.getAttribute?.("data-emoji-option-index"));
+      if (Number.isInteger(index) && slot.optionRows[index]) albumEmojiSlotPick(slot, slot.optionRows[index].row.emoji, slot.optionRows[index].row);
+    });
+    content.appendChild(hidden);
+    content.appendChild(well);
+    content.appendChild(preview);
+    content.appendChild(note);
+    content.appendChild(panel);
+  } else {
+    fallbackInput = albumEmojiSlotCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-fallback");
+    fallbackInput.setAttribute("type", "text");
+    fallbackInput.setAttribute("data-schema-input", inputName);
+    fallbackInput.setAttribute("aria-label", labelText);
+    fallbackInput.setAttribute("placeholder", "Enable Bob Emoji for search");
+    fallbackInput.setAttribute("title", "Enable Bob Emoji for search");
+    fallbackInput.value = String(value || "");
+    if (options.disabled) fallbackInput.disabled = true;
+    slot = {
+      id: ++ALBUM_EMOJI_SLOT_ID,
+      doc,
+      config: slotConfig,
+      glyph: String(value || ""),
+      labelInput,
+      well: fallbackInput,
+      preview,
+      note,
+      fallback: true,
+      isOpen: false,
+    };
+    fallbackInput.addEventListener("input", () => {
+      slot.glyph = String(fallbackInput.value || "");
+      slot.config.onPick?.(inputName, slot.glyph, null);
+      albumEmojiSlotUpdatePreview(slot);
+    });
+    content.appendChild(fallbackInput);
+    content.appendChild(preview);
+    content.appendChild(note);
+    albumEmojiSlotUpdatePreview(slot);
+  }
+
+  if (!fused) {
+    row.appendChild(label);
+    row.appendChild(content);
+    host.appendChild(row);
+  }
+  const updatePreview = () => albumEmojiSlotUpdatePreview(slot);
+  labelInput?.addEventListener?.("input", updatePreview);
+  labelInput?.addEventListener?.("change", updatePreview);
+  if (api) albumEmojiSlotUpdatePreview(slot);
+  return slot;
+}
+
+function albumEmojiSlotSearchInput(slot) {
+  const query = String(slot.search.value || "");
+  if (albumEmojiSlotIsEmojiGrapheme(query)) {
+    albumEmojiSlotPick(slot, query, null);
+    return;
+  }
+  slot.category = "";
+  slot.activeIndex = 0;
+  albumEmojiSlotRenderCategories(slot);
+  albumEmojiSlotRenderResults(slot);
+}
+
+function albumSchemaEmojiSlotControl(doc, host, labelText, inputName, value, labelInput, config, options = {}) {
+  return albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInput, config, options);
+}
+
+// Modal integration is intentionally late-bound. The schema card can be open
+// while Bob Emoji is disabled, reloaded, or upgraded; each picker opening
+// checks the live plugin registry again.
+{
+  const prototype = AlbumSchemaCardModal.prototype;
+  const originalPaintOptions = prototype.schemaPaintOptions;
+  const originalEscape = prototype.schemaHandleEscape;
+  const originalCancelStage = prototype.schemaCancelStage;
+  const originalQueueOp = prototype.schemaQueueOp;
+  const originalClose = prototype.onClose;
+
+  prototype.schemaEmojiVocabulary = function schemaEmojiVocabulary() {
+    const report = this.schemaPlugin?.albumReportState?.()?.report;
+    const albums = Array.isArray(report?.albums) ? report.albums : [];
+    const rows = [];
+    const seen = new Set();
+    for (const album of albums) {
+      for (const field of Array.isArray(album?.fields) ? album.fields : []) {
+        for (const choice of Array.isArray(field?.choices) ? field.choices : []) {
+          const parts = albumSchemaChoiceParts(choice?.label);
+          const key = albumEmojiSlotGlyphKey(parts.emoji);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          rows.push({ emoji: parts.emoji, label: parts.label });
+        }
+      }
+    }
+    return rows;
+  };
+
+  prototype.schemaEmojiSlotHostOptions = function schemaEmojiSlotHostOptions() {
+    return {
+      app: this.app,
+      getVocabulary: () => this.schemaEmojiVocabulary(),
+      getInitialChoiceSiblings: (index) => (Array.isArray(this.stageDraft?.initialChoices) ? this.stageDraft.initialChoices : [])
+        .filter((_, siblingIndex) => siblingIndex !== index)
+        .map((choice) => ({ emoji: String(choice?.emoji || ""), label: String(choice?.label || "") })),
+      onPick: (name, glyph) => {
+        const input = this.schemaInput(name);
+        if (!input) return;
+        input.value = glyph;
+        this.schemaStageInput({ target: input });
+      },
+      onOpen: (slot) => {
+        if (this.schemaEmojiSlotActive && this.schemaEmojiSlotActive !== slot) {
+          albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: false });
+        }
+        this.schemaEmojiSlotActive = slot;
+      },
+      onClose: (slot) => {
+        if (this.schemaEmojiSlotActive === slot) this.schemaEmojiSlotActive = null;
+      },
+    };
+  };
+
+  prototype.schemaPaintOptions = function schemaPaintOptionsWithEmojiSlot(...args) {
+    const options = originalPaintOptions.apply(this, args);
+    return { ...options, emojiSlot: this.schemaEmojiSlotHostOptions() };
+  };
+
+  prototype.schemaHandleEscape = function schemaHandleEscapeEmojiSlot(...args) {
+    if (this.sessionState?.status !== "applying" && this.schemaEmojiSlotActive?.isOpen) {
+      albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: true });
+      return "stay";
+    }
+    return originalEscape.apply(this, args);
+  };
+
+  prototype.schemaCancelStage = function schemaCancelStageEmojiSlot(...args) {
+    if (this.schemaEmojiSlotActive?.isOpen) albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: false });
+    return originalCancelStage.apply(this, args);
+  };
+
+  prototype.schemaQueueOp = function schemaQueueOpEmojiSlot(...args) {
+    if (this.schemaEmojiSlotActive?.isOpen) albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: false });
+    return originalQueueOp.apply(this, args);
+  };
+
+  prototype.onClose = function onCloseEmojiSlot(...args) {
+    if (this.schemaEmojiSlotActive?.isOpen) albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: false });
+    return originalClose.apply(this, args);
+  };
+}
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
 // Bob remains the source of truth; this fragment never writes note bytes
@@ -140594,6 +141339,20 @@ try {
       albumSchemaTargets,
       albumSchemaTargetByKey,
       albumSchemaChoiceParts,
+      ALBUM_EMOJI_SLOT_RESULT_LIMIT,
+      ALBUM_EMOJI_SLOT_CATEGORY_LIMIT,
+      ALBUM_EMOJI_SLOT_COLUMNS,
+      albumEmojiSlotResolveApi,
+      albumEmojiSlotGraphemes,
+      albumEmojiSlotIsDigitKeycap,
+      albumEmojiSlotIsEmojiGrapheme,
+      albumEmojiSlotGlyphKey,
+      albumEmojiSlotNormalizeRows,
+      albumEmojiSlotVocabularyRows,
+      albumEmojiSlotDuplicateLabels,
+      albumEmojiSlotResultModel,
+      albumEmojiSlotMoveHighlight,
+      albumEmojiSlotFusedToken,
       albumSchemaStageBuildEl,
       albumSchemaTypedDefault,
       albumSchemaSameValue,

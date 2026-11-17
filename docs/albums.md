@@ -102,7 +102,19 @@ repaints instead of retrying, keeping the retained draft unconfirmed and
 never silently rebasing it. Saved-local post-sync failures offer **Retry
 sync**, which runs only `bob vault-sync` and never replays the mutation.
 Defaults and numeric bounds edit through typed inputs with explicit Unset,
-and choice edits change label and emoji while stored values stay fixed. `y`
+and choice edits change label and emoji while stored values stay fixed. Choice
+edit/add and each initial choice in a new choices field use the shared Emoji
+Slot: type the label, Tab to the square glyph well, then press Enter, Space,
+or ↓ to open its in-card picker. Search filters as you type; an empty query
+offers label matches, emoji used in your albums, shared recents, and category
+tabs. Arrow keys move the highlight in two dimensions; Enter picks without
+saving the schema stage, Tab leaves without picking, and the first Esc closes
+only the picker. A live chip previews the stored token, and a small dot marks
+an emoji already used by another choice in the same field. Pasted emoji,
+including ZWJ sequences and flags, stay byte-for-byte; digit keycaps are
+accepted when pasted with a note because Bob stores a leading digit keycap as
+label text. If Bob Emoji v1 is unavailable, the glyph well falls back to a
+plain input with an enable-search hint. `y`
 from the card or a focused chip/lint row closes the card and jumps to that
 field or issue line in Source mode. Bob's `issues[]` paint as lint marks with
 their message and suggestions as text. The album's `record` property is
@@ -154,7 +166,8 @@ toggles, `Alt+J`/`K` (with `Shift` for ends, counts, and `m` gaps) arrange,
 `Ctrl+D` stages removal, `y` jumps to Source, `u` steps back or previews
 Undo, and `Esc` closes the All actions list, then cancels an open stage,
 then leaves hint mode, then reverts pending moves, then closes from plain
-browsing through one dispatch that survives Obsidian's capture-phase close.
+browsing through one dispatch that survives Obsidian's capture-phase close;
+an open Emoji Slot panel closes before the stage or pending arrangement.
 Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.

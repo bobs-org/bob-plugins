@@ -331,8 +331,9 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
     const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
     const locked = this.schemaPaintOptions().stageLocked === true;
+    const emojiSlot = this.schemaPaintOptions().emojiSlot;
     if (host && doc) {
-      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked });
+      albumSchemaAddInitialChoiceRow(doc, host, index, {}, { disabled: locked, emojiSlot });
     } else {
       this.paintSchemaCard("stage");
     }
@@ -359,10 +360,11 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     const host = this.contentEl?.querySelector?.("[data-schema-initial-choices]");
     const doc = notebookDomDoc(this.contentEl) || this.contentEl?.ownerDocument;
     const locked = this.schemaPaintOptions().stageLocked === true;
+    const emojiSlot = this.schemaPaintOptions().emojiSlot;
     if (host && doc) {
       albumSchemaRegionEmpty(host);
       this.stageDraft.initialChoices.forEach((choice, next) => {
-        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked });
+        albumSchemaAddInitialChoiceRow(doc, host, next, choice, { disabled: locked, emojiSlot });
       });
     } else {
       this.paintSchemaCard("stage");

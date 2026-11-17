@@ -42,6 +42,15 @@ test("keyboard staging targets the row selected after navigation", () => {
   assert.match(source, /selected\.dispatchEvent\(new KeyboardEvent\("keydown", \{ key: "Enter"/);
 });
 
+test("album UI e2e captures the Emoji Slot in both themes", () => {
+  const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
+  assert.match(source, /\[data-emoji-well\]/);
+  assert.match(source, /captureEmojiThemes\("empty"\)/);
+  assert.match(source, /captureEmojiThemes\("filtered"\)/);
+  assert.match(source, /captureEmojiThemes\("browse"\)/);
+  assert.match(source, /album-schema-emoji-\$\{stem\}-375-dark\.png/);
+});
+
 const album = require("./obsidian-album-ui-e2e-lib.cjs");
 const properties = require("./obsidian-album-properties-e2e.cjs");
 

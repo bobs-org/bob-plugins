@@ -1585,6 +1585,58 @@ async function run(args) {
     record("schema-stage-choice", Boolean(stagedPreview && stagedPreview.ok), JSON.stringify(stagedPreview));
     record("schema-no-preview-button", stagedPreview && stagedPreview.previewButton === false,
       "Preview this edit is gone; previews run automatically");
+    const emojiPanel = await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const well = modal?.contentEl?.querySelector?.("[data-emoji-well]");
+      if (!well) return { ok: false, error: "Bob Emoji v1 glyph well missing" };
+      well.click();
+      const search = modal?.contentEl?.querySelector?.(".bob-emoji-slot-search");
+      return { ok: Boolean(search), query: search?.value || "", categories: modal?.contentEl?.querySelectorAll?.("[data-emoji-category]")?.length || 0 };
+    })()`);
+    report.probes.schemaEmojiSlot = emojiPanel;
+    record("schema-emoji-slot-panel", Boolean(emojiPanel?.ok && emojiPanel.categories === 9), JSON.stringify(emojiPanel));
+    const captureEmojiThemes = async (stem) => {
+      await setViewport(client, 375, 812);
+      await sleep(200);
+      const light = path.join(outDir, `album-schema-emoji-${stem}-375-light.png`);
+      await capturePage(client, light);
+      report.screenshots.push(light);
+      await client.evaluate(`(() => { document.body.classList.add("theme-dark"); return true; })()`);
+      await sleep(150);
+      const dark = path.join(outDir, `album-schema-emoji-${stem}-375-dark.png`);
+      await capturePage(client, dark);
+      report.screenshots.push(dark);
+      await client.evaluate(`(() => { document.body.classList.remove("theme-dark"); return true; })()`);
+    };
+    if (emojiPanel?.ok) {
+      await captureEmojiThemes("empty");
+      await client.evaluate(`(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const search = modal?.contentEl?.querySelector?.(".bob-emoji-slot-search");
+        if (!search) return false;
+        search.value = "rocket";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      })()`);
+      await captureEmojiThemes("filtered");
+      await client.evaluate(`(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const search = modal?.contentEl?.querySelector?.(".bob-emoji-slot-search");
+        if (!search) return false;
+        search.value = "";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+        const category = modal?.contentEl?.querySelector?.('[data-emoji-category="Food & Drink"]');
+        if (!category) return false;
+        category.click();
+        return true;
+      })()`);
+      await captureEmojiThemes("browse");
+      await client.evaluate(`(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        modal?.schemaHandleEscape?.();
+        return true;
+      })()`);
+    }
     await captureSchemaThemes("stage");
     if (!stagedPreview?.ok) throw new Error(`could not stage choice preview: ${stagedPreview?.error || "unknown failure"}`);
     const previewed = await waitFor(client, probe, (value) => (value.schemaConsequence || []).some((item) => /cdp/.test(item.text || "")),

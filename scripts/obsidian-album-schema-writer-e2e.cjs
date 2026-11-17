@@ -345,6 +345,44 @@ function selfTest() {
       fail("undo of the add must restore the original fingerprint");
     }
 
+    // The schema UI must preserve whole grapheme clusters through Bob's
+    // writer and report: a ZWJ sequence, a flag, and a leading digit keycap.
+    const unicodeOps = [
+      { op: "choice.add", field: "status", label: "Dev", emoji: "👩🏽‍💻", position: 2 },
+      { op: "choice.add", field: "status", label: "United Nations", emoji: "🇺🇳", position: 3 },
+      { op: "choice.add", field: "status", label: "1️⃣ First", position: 4 },
+    ];
+    const unicodeEnvelope = { schema_version: 1, expect: eat.fingerprint, ops: unicodeOps };
+    const unicodePreview = preview("eat", unicodeEnvelope);
+    if (unicodePreview.parsed.ok !== true || unicodePreview.parsed.changed !== true) {
+      fail(`Unicode choice preview must succeed: ${JSON.stringify(unicodePreview.parsed.error)}`);
+    }
+    const commitsBeforeUnicode = commitCount();
+    const unicodeApplied = update("eat", unicodeEnvelope);
+    if (unicodeApplied.parsed.ok !== true || unicodeApplied.parsed.changed !== true) {
+      fail(`Unicode choice apply must succeed: ${JSON.stringify(unicodeApplied.parsed.error)}`);
+    }
+    if (commitCount() !== commitsBeforeUnicode + 1) fail("Unicode choice envelope must make one commit");
+    const unicodeAlbum = albumFingerprint(bobBin, vaultDir, "eat");
+    const statusChoices = unicodeAlbum.entry.fields.find((field) => field.key === "status")?.choices || [];
+    for (const expected of ["👩🏽‍💻 Dev", "🇺🇳 United Nations", "1️⃣ First"]) {
+      if (!statusChoices.some((choice) => choice.label === expected)) {
+        fail(`Bob report must round-trip ${JSON.stringify(expected)} exactly: ${JSON.stringify(statusChoices.map((choice) => choice.label))}`);
+      }
+    }
+    const unicodeYaml = fs.readFileSync(path.join(vaultDir, "eat.md"), "utf8");
+    for (const expected of ["👩🏽‍💻 Dev", "🇺🇳 United Nations", "1️⃣ First"]) {
+      if (!unicodeYaml.includes(expected)) fail(`stored YAML must preserve ${JSON.stringify(expected)} bytes`);
+    }
+    const unicodeUndo = update("eat", {
+      schema_version: 1,
+      expect: unicodeAlbum.fingerprint,
+      ops: unicodeApplied.parsed.inverse_ops,
+    });
+    if (unicodeUndo.parsed.ok !== true || unicodeUndo.parsed.after_fingerprint !== eat.fingerprint) {
+      fail("Unicode choice inverse ops must restore the original schema fingerprint");
+    }
+
     // No-op and refusals leave vault bytes and commit counts unchanged.
     const stableHashes = hashNotes(vaultDir);
     const stableCommits = commitCount();

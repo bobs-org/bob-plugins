@@ -275,3 +275,175 @@ test("a further edit clears the Enter latch before a stale preview can apply", a
   assert.notEqual(modal.session.getState().revision, latchedRevision);
   modal.close();
 });
+
+function emojiApiFixture() {
+  const rows = [
+    { emoji: "🔖", name: "bookmark", alias: "bookmark", category: "Objects", keywords: ["mark", "saved"] },
+    { emoji: "🔍", name: "magnifying glass tilted left", alias: "mag", category: "Objects", keywords: ["search"] },
+    { emoji: "🚀", name: "rocket", alias: "rocket", category: "Travel & Places", keywords: ["space"] },
+    { emoji: "👩🏽‍💻", name: "woman technologist medium skin tone", alias: "woman_technologist", category: "People & Body", keywords: ["computer"] },
+    { emoji: "🇺🇳", name: "flag United Nations", alias: "flag_un", category: "Flags", keywords: ["flag"] },
+    { emoji: "1️⃣", name: "keycap 1", alias: "one", category: "Symbols", keywords: ["keycap"] },
+    { emoji: "🍕", name: "pizza", alias: "pizza", category: "Food & Drink", keywords: ["slice"] },
+  ];
+  const remembered = [];
+  const calls = { browse: [], search: [], label: [] };
+  const api = {
+    version: 1,
+    search(query, options = {}) {
+      calls.search.push(String(query));
+      const q = String(query || "").toLowerCase();
+      return rows.filter((row) => `${row.name} ${row.alias} ${(row.keywords || []).join(" ")}`.toLowerCase().includes(q)).slice(0, options.limit || 30);
+    },
+    suggestForLabel(label) {
+      calls.label.push(String(label || ""));
+      return [rows[0], rows[1], rows[5]];
+    },
+    categories: () => ["Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Travel & Places", "Activities", "Objects", "Symbols", "Flags"],
+    browse(category, options = {}) {
+      calls.browse.push({ category, options });
+      return rows.filter((row) => row.category === category);
+    },
+    recents: () => [rows[2]],
+    remember(value) { remembered.push(value); return true; },
+    info(glyph) { return rows.find((row) => row.emoji === glyph) || null; },
+  };
+  return { api, rows, remembered, calls };
+}
+
+test("Emoji Slot preserves graphemes and ports split_icon fixtures", () => {
+  const fixtures = [
+    ["✅ Done", { emoji: "✅", label: "Done" }],
+    ["👩🏽‍💻 Dev", { emoji: "👩🏽‍💻", label: "Dev" }],
+    ["🇺🇳 UN", { emoji: "🇺🇳", label: "UN" }],
+    ["1️⃣ First", { emoji: "", label: "1️⃣ First" }],
+    ["#️⃣ Tag", { emoji: "#️⃣", label: "Tag" }],
+    ["🌱Seed", { emoji: "🌱", label: "Seed" }],
+    ["★ Star", { emoji: "★", label: "Star" }],
+    ["(x) Foo", { emoji: "(", label: "x) Foo" }],
+    ["plain label", { emoji: "", label: "plain label" }],
+    ["", { emoji: "", label: "" }],
+  ];
+  for (const [value, expected] of fixtures) assert.deepEqual(helpers.albumSchemaChoiceParts(value), expected, value);
+  for (const glyph of ["👩🏽‍💻", "🇺🇳", "1️⃣", "#️⃣"]) {
+    assert.deepEqual(helpers.albumEmojiSlotGraphemes(glyph), [glyph]);
+    assert.equal(helpers.albumEmojiSlotIsEmojiGrapheme(glyph), true);
+  }
+  assert.equal(helpers.albumEmojiSlotIsDigitKeycap("1️⃣"), true);
+  assert.equal(helpers.albumEmojiSlotIsEmojiGrapheme("rocket"), false);
+});
+
+test("Emoji Slot searches, browses, marks sibling duplicates, and Enter picks without saving the stage", () => {
+  const { app, modal, plugin } = openCard();
+  const fixture = emojiApiFixture();
+  app.plugins = { plugins: { "bob-emoji": { api: fixture.api } } };
+  let applies = 0;
+  plugin.apiAlbumUpdateApply = async () => { applies += 1; return { ok: true, report: { ok: true, changed: false } }; };
+
+  modal.schemaStage("choice-add", "add-choice:status");
+  let well = modal.contentEl.querySelector("[data-emoji-well]");
+  assert.ok(well, "the live bob-emoji v1 api builds a glyph well");
+  well.click();
+  let search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  assert.equal(app.document.activeElement, search, "the panel search owns focus");
+  assert.equal(modal.contentEl.querySelectorAll(".bob-emoji-slot-section-title")[0]?.textContent, "In your albums");
+  assert.ok(modal.contentEl.querySelectorAll(".bob-emoji-slot-option").some((row) => row.querySelector(".bob-emoji-slot-duplicate-dot")),
+    "an emoji used by a sibling has a duplicate dot");
+  assert.equal(modal.contentEl.querySelectorAll("[data-emoji-category]").length, 9, "the empty query paints all category tabs");
+
+  const food = modal.contentEl.querySelector('[data-emoji-category="Food & Drink"]');
+  food.click();
+  assert.ok(fixture.calls.browse.some((call) => call.category === "Food & Drink"));
+  assert.ok(modal.contentEl.querySelectorAll("[data-emoji-option-index]").some((row) => row.textContent === "🍕pizza"));
+  search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+  search.value = "rocket";
+  search.dispatchEvent({ type: "input" });
+  assert.equal(modal.contentEl.querySelectorAll("[data-emoji-option-index]").length, 1, "filter results repaint immediately");
+  search.dispatchEvent({
+    type: "keydown", key: "Enter",
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.propagationStopped = true; },
+  });
+  assert.deepEqual(modal.stage, { kind: "choice-add", targetKey: "add-choice:status" }, "picker Enter stays inside the stage");
+  assert.equal(modal.schemaStageRead("choiceEmoji"), "🚀");
+  assert.ok(fixture.remembered.includes("🚀"), "picks are sent to bob-emoji recents");
+  assert.match(modal.contentEl.querySelector(".bob-emoji-slot-preview").textContent, /🚀/);
+  assert.equal(applies, 0, "picking never applies the schema stage");
+  assert.equal(modal.contentEl.querySelector(".bob-emoji-slot-panel").getAttribute("hidden"), "");
+
+  well = modal.contentEl.querySelector("[data-emoji-well]");
+  well.click();
+  const tabEvent = { type: "keydown", key: "Tab", preventDefault() { this.defaultPrevented = true; }, stopPropagation() {} };
+  modal.contentEl.querySelector(".bob-emoji-slot-search").dispatchEvent(tabEvent);
+  assert.equal(tabEvent.defaultPrevented, undefined, "Tab closes without swallowing normal focus movement");
+  assert.equal(modal.contentEl.querySelector(".bob-emoji-slot-panel").getAttribute("hidden"), "");
+  modal.close();
+});
+
+test("Emoji Slot Escape closes the panel before the stage and direct pasted graphemes stay exact", () => {
+  const { app, modal } = openCard();
+  const fixture = emojiApiFixture();
+  app.plugins = { plugins: { "bob-emoji": { api: fixture.api } } };
+  modal.schemaStage("choice", "choice:status:to_try");
+  modal.contentEl.querySelector("[data-emoji-well]").click();
+  assert.equal(modal.schemaHandleEscape(), "stay");
+  assert.ok(modal.stage, "the first Esc leaves the edit stage open");
+  assert.equal(modal.contentEl.querySelector(".bob-emoji-slot-panel").getAttribute("hidden"), "");
+  assert.equal(modal.schemaHandleEscape(), "stay");
+  assert.equal(modal.stage, null, "the next Esc cancels the stage");
+
+  modal.schemaStage("choice", "choice:status:to_try");
+  for (const glyph of ["👩🏽‍💻", "🇺🇳", "1️⃣"]) {
+    modal.contentEl.querySelector("[data-emoji-well]").click();
+    const search = modal.contentEl.querySelector(".bob-emoji-slot-search");
+    search.value = glyph;
+    search.dispatchEvent({ type: "input" });
+    assert.equal(modal.schemaStageRead("choiceEmoji"), glyph, `paste keeps ${glyph} byte-for-byte`);
+  }
+  assert.match(modal.contentEl.querySelector(".bob-emoji-slot-note").textContent,
+    /leading digit keycap as label text/);
+  modal.close();
+});
+
+test("every field-add initial choice gets an Emoji Slot and missing or v0 apis use the plain input", () => {
+  const live = openCard();
+  const fixture = emojiApiFixture();
+  live.app.plugins = { plugins: { "bob-emoji": { api: fixture.api } } };
+  live.modal.schemaStage("field-add", "add-field");
+  assert.equal(live.modal.contentEl.querySelectorAll("[data-emoji-well]").length, 1);
+  live.modal.schemaStageAddInitialChoice();
+  assert.equal(live.modal.contentEl.querySelectorAll("[data-emoji-well]").length, 2,
+    "dynamically added initial-choice rows use the shared component too");
+  live.modal.close();
+
+  for (const api of [null, { version: 0, search() {} }]) {
+    const fallback = openCard();
+    if (api) fallback.app.plugins = { plugins: { "bob-emoji": { api } } };
+    fallback.modal.schemaStage("choice", "choice:status:to_try");
+    const input = fallback.modal.contentEl.querySelector(".bob-emoji-slot-fallback");
+    assert.ok(input);
+    assert.match(input.getAttribute("placeholder"), /Enable Bob Emoji/);
+    input.value = "👩🏽‍💻";
+    input.dispatchEvent({ type: "input" });
+    assert.equal(fallback.modal.schemaStageRead("choiceEmoji"), "👩🏽‍💻");
+    fallback.modal.close();
+  }
+});
+
+test("Emoji Slot result assembly handles full catalogs under the filter paint budget", () => {
+  const catalog = Array.from({ length: 2500 }, (_, index) => ({
+    emoji: String.fromCodePoint(0x1F300 + index), name: index % 2 ? "rocket trail" : "planet", alias: `row_${index}`, category: "Objects",
+  }));
+  const api = {
+    categories: () => ["Objects"],
+    search: () => catalog,
+    suggestForLabel: () => [],
+    browse: () => catalog,
+    recents: () => [],
+  };
+  const started = performance.now();
+  const result = helpers.albumEmojiSlotResultModel(api, { query: "rocket" });
+  const elapsed = performance.now() - started;
+  assert.ok(result.rows.length <= helpers.ALBUM_EMOJI_SLOT_RESULT_LIMIT);
+  assert.ok(elapsed < 50, `filter model should stay below 50 ms (took ${elapsed.toFixed(2)} ms)`);
+  assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "ArrowDown", 40, 8), 8);
+});

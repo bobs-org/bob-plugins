@@ -35,12 +35,13 @@ function albumSchemaTargetByKey(model, key) {
 
 function albumSchemaChoiceParts(value) {
   const text = String(value || "").trim();
-  const first = Array.from(text)[0];
-  if (!first || /^[A-Za-z0-9]$/.test(first)) return { emoji: "", label: text };
+  const parts = albumEmojiSlotGraphemes(text);
+  const first = parts[0];
+  if (!first || /^[A-Za-z0-9]$/.test(Array.from(first)[0] || "")) return { emoji: "", label: text };
   let end = first.length;
-  for (const character of Array.from(text).slice(1)) {
-    if (/\s/.test(character) || /^[A-Za-z0-9]$/.test(character)) break;
-    end += character.length;
+  for (const grapheme of parts.slice(1)) {
+    if (/^\s+$/u.test(grapheme) || /^[A-Za-z0-9]$/.test(grapheme)) break;
+    end += grapheme.length;
   }
   const emoji = text.slice(0, end).trim();
   const label = text.slice(end).trim();
@@ -86,11 +87,39 @@ function albumSchemaStageAction(doc, host, text, action, className = "") {
   return button;
 }
 
+function albumSchemaChoiceEmojiField(doc, host, captionText, labelName, labelValue, emojiName, emojiValue, emojiOptions = {}, options = {}) {
+  const field = notebookCreateEl(doc, "div", `bob-album-schema-choice-emoji-field${options.initial ? " is-initial" : ""}`);
+  const caption = notebookCreateEl(doc, "span", "bob-album-schema-emoji-label");
+  notebookSetText(caption, captionText);
+  const fused = notebookCreateEl(doc, "div", "bob-emoji-slot-fused");
+  const labelInput = notebookCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-label");
+  labelInput.setAttribute("type", "text");
+  labelInput.setAttribute("data-schema-input", labelName);
+  labelInput.setAttribute("aria-label", `${captionText} label`);
+  labelInput.setAttribute("placeholder", "Choice label");
+  labelInput.value = labelValue == null ? "" : String(labelValue);
+  if (options.required) labelInput.setAttribute("required", "");
+  if (options.disabled) labelInput.disabled = true;
+  fused.appendChild(labelInput);
+  albumSchemaEmojiSlotControl(doc, fused, `${captionText} emoji`, emojiName, emojiValue, labelInput, {
+    ...emojiOptions,
+    inputName: emojiName,
+  }, { disabled: options.disabled, fused: true });
+  field.appendChild(caption);
+  field.appendChild(fused);
+  host.appendChild(field);
+  return { field, labelInput };
+}
+
 function albumSchemaAddInitialChoiceRow(doc, host, index, draft = {}, options = {}) {
   const row = notebookCreateEl(doc, "div", "bob-album-schema-initial-choice");
   row.setAttribute("data-choice-index", String(index));
-  albumSchemaControl(doc, row, `Choice ${index + 1} label`, "text", `choiceLabel${index}`, draft.label || "", { disabled: options.disabled });
-  albumSchemaControl(doc, row, `Choice ${index + 1} emoji`, "text", `choiceEmoji${index}`, draft.emoji || "", { disabled: options.disabled });
+  const emojiOptions = options.emojiSlot || {};
+  albumSchemaChoiceEmojiField(doc, row, `Choice ${index + 1}`, `choiceLabel${index}`, draft.label || "", `choiceEmoji${index}`, draft.emoji || "", {
+    ...emojiOptions,
+    inputName: `choiceEmoji${index}`,
+    getSiblings: () => emojiOptions.getInitialChoiceSiblings?.(index) || [],
+  }, { disabled: options.disabled, initial: true });
   const remove = albumSchemaStageAction(doc, row, `Remove choice ${index + 1}`, `remove-initial-choice:${index}`, "is-quiet");
   if (options.disabled) remove.disabled = true;
   host.appendChild(row);
@@ -163,7 +192,10 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
     const choices = notebookCreateEl(doc, "div", "bob-album-schema-initial-choices");
     choices.setAttribute("data-schema-initial-choices", "");
     const initialChoices = Array.isArray(options?.stageDraft?.initialChoices) ? options.stageDraft.initialChoices : [{ label: "", emoji: "" }];
-    initialChoices.forEach((choice, index) => albumSchemaAddInitialChoiceRow(doc, choices, index, choice, { disabled: locked }));
+    initialChoices.forEach((choice, index) => albumSchemaAddInitialChoiceRow(doc, choices, index, choice, {
+      disabled: locked,
+      emojiSlot: options?.emojiSlot,
+    }));
     panel.appendChild(choices);
     const addChoice = albumSchemaStageAction(doc, panel, "Add initial choice", "add-initial-choice", "is-quiet");
     if (locked) addChoice.disabled = true;
@@ -175,8 +207,20 @@ function albumSchemaStageBuildEl(stage, model, options, doc) {
       panel.appendChild(identity);
     }
     const parts = albumSchemaChoiceParts(value.label);
-    albumSchemaControl(doc, panel, "Choice label", "text", "choiceLabel", read("choiceLabel", stage.kind === "choice" ? parts.label : ""), { required: true, disabled: locked });
-    albumSchemaControl(doc, panel, "Choice emoji", "text", "choiceEmoji", read("choiceEmoji", stage.kind === "choice" ? parts.emoji : ""), { disabled: locked });
+    const siblings = stage.kind === "choice" && target?.field
+      ? (target.field.choices || []).filter((choice) => choice.value !== target.choice?.value).map((choice) => {
+        const sibling = albumSchemaChoiceParts(choice.label);
+        return { emoji: sibling.emoji, label: sibling.label };
+      })
+      : target?.field ? (target.field.choices || []).map((choice) => {
+        const sibling = albumSchemaChoiceParts(choice.label);
+        return { emoji: sibling.emoji, label: sibling.label };
+      }) : [];
+    albumSchemaChoiceEmojiField(doc, panel, "Choice", "choiceLabel", read("choiceLabel", stage.kind === "choice" ? parts.label : ""), "choiceEmoji", read("choiceEmoji", stage.kind === "choice" ? parts.emoji : ""), {
+      ...(options?.emojiSlot || {}),
+      inputName: "choiceEmoji",
+      getSiblings: () => siblings,
+    }, { disabled: locked, required: true });
   }
 
   const buttons = notebookCreateEl(doc, "div", "bob-album-schema-stage-actions");

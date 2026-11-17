@@ -205,6 +205,10 @@
   "242k-plugin-record-sheet.js",
   "242l-plugin-record-update-service.js",
   "242m-plugin-record-update-session.js",
+  "242n-plugin-record-card-model.js",
+  "242o-plugin-record-card-dom.js",
+  "242p-plugin-record-card.js",
+  "242pa-plugin-record-card-entrypoints.js",
   "241e-plugin-notebook-header-model.js",
   "241f-plugin-notebook-header.js",
   "241g-plugin-notebook-header-live.js",
@@ -312,5 +316,6 @@
   "369-exports-schema-double-equals.js",
   "370-exports-card-close-keys.js",
   "370-exports-record-sheet.js",
-  "371-exports-record-update.js"
+  "371-exports-record-update.js",
+  "372-exports-record-card.js"
 ]

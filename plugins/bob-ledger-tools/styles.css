@@ -11151,4 +11151,227 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
     background: color-mix(in srgb, var(--bob-record-accent) 4%, var(--background-primary));
   }
 }
+.bob-record-card-modal {
+  width: min(42em, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+}
+.bob-record-card-modal .modal-content,
+.bob-record-card {
+  min-width: 0;
+  max-width: 100%;
+  font-family: var(--font-interface);
+  font-variant-numeric: tabular-nums;
+}
+.bob-record-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12em;
+  min-width: 0;
+}
+.bob-record-card-title {
+  margin: 0;
+  font-size: 1.05em;
+  overflow-wrap: anywhere;
+}
+.bob-record-card-subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+.bob-record-card-warning {
+  margin: 0.35em 0 0;
+  padding: 0.35em 0.55em;
+  border-radius: 6px;
+  color: var(--text-warning);
+  background: color-mix(in srgb, var(--text-warning) 12%, var(--background-primary));
+}
+.bob-record-card-body { margin-top: 0.55em; }
+.bob-record-card-fields { display: flex; flex-direction: column; gap: 0.2em; }
+.bob-record-card-row {
+  display: grid;
+  grid-template-columns: minmax(6em, 32%) 1fr;
+  gap: 0.5em;
+  align-items: baseline;
+  width: 100%;
+  margin: 0;
+  padding: 0.35em 0.45em;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-record-card-row:hover {
+  background: var(--background-modifier-hover);
+}
+.bob-record-card-row.is-selected,
+.bob-record-card-row[aria-current="true"] {
+  border-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+}
+.bob-record-card-row:focus-visible,
+.bob-record-card-choice:focus-visible,
+.bob-record-card-action:focus-visible,
+.bob-record-card-more-toggle:focus-visible,
+.bob-record-card-choice-filter:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-record-card-label { font-weight: 600; overflow-wrap: anywhere; }
+.bob-record-card-required { margin-inline-start: 0.15em; color: var(--text-warning); }
+.bob-record-card-value { min-width: 0; overflow-wrap: anywhere; }
+.bob-record-card-row.is-ghost .bob-record-card-value { color: var(--text-faint); }
+.bob-record-card-empty,
+.bob-record-card-choice-empty,
+.bob-record-card-stage-note {
+  margin: 0.35em 0;
+  color: var(--text-muted);
+}
+.bob-record-card-stage,
+.bob-record-card-stage-host { margin-top: 0.35em; }
+.bob-record-card-choice-filter {
+  width: 100%;
+  margin-bottom: 0.35em;
+  padding: 0.3em 0.45em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: inherit;
+  font: inherit;
+}
+.bob-record-card-choice-list { display: flex; flex-direction: column; gap: 0.15em; }
+.bob-record-card-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  width: 100%;
+  margin: 0;
+  padding: 0.3em 0.45em;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.bob-record-card-choice.is-current {
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+.bob-record-card-choice.is-selected,
+.bob-record-card-choice[aria-selected="true"] {
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+}
+.bob-record-card-choice-badge {
+  min-width: 1.2em;
+  padding: 0 0.2em;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  font-size: 0.82em;
+  text-align: center;
+}
+.bob-record-card-choice-count {
+  margin-inline-start: auto;
+  color: var(--text-faint);
+  font-size: 0.86em;
+}
+.bob-record-card-status {
+  margin-top: 0.55em;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.bob-record-card-status.is-saved { color: var(--text-success, var(--text-normal)); }
+.bob-record-card-status.is-refusal,
+.bob-record-card-status.is-stale { color: var(--text-warning); }
+.bob-record-card-hints { margin-top: 0.55em; }
+.bob-record-card-hint-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45em 0.7em;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 0.86em;
+}
+.bob-record-card-hint kbd {
+  margin-inline-end: 0.2em;
+  padding: 0 0.25em;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  font: inherit;
+  font-size: 0.92em;
+}
+.bob-record-card-more-toggle {
+  min-width: 1.7em;
+  justify-content: center;
+}
+.bob-record-card-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em;
+  margin-top: 0.45em;
+  padding-top: 0.4em;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bob-record-card-more[hidden] { display: none; }
+.bob-record-card-more-title {
+  flex: 1 0 100%;
+  margin: 0 0 0.15em;
+  color: var(--text-muted);
+  font-size: 0.82em;
+}
+.bob-record-card-action {
+  margin: 0;
+  padding: 0.25em 0.5em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: inherit;
+  font: inherit;
+  font-size: 0.86em;
+  cursor: pointer;
+}
+.bob-record-card-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.bob-record-card-live.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 375px) {
+  .bob-record-card-row {
+    display: block;
+    margin: 0.2em 0;
+  }
+  .bob-record-card-label { display: block; }
+  .bob-record-card-value { display: block; margin-top: 0.15em; }
+  .bob-record-card-action,
+  .bob-record-card-choice,
+  .bob-record-card-row {
+    min-height: 2.2em;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-record-card,
+  .bob-record-card * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .bob-record-card-row.is-selected,
+  .bob-record-card-choice.is-selected {
+    background: color-mix(in srgb, var(--interactive-accent) 16%, var(--background-primary));
+  }
+}
 

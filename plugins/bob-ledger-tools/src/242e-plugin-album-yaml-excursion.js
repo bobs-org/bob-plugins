@@ -57,6 +57,14 @@ function albumYamlDoneButtonDoc(host) {
   return null;
 }
 
+function albumYamlExcursionOwnPath(record) {
+  if (!record) return "";
+  if (record.kind === "record" && record.recordPath) {
+    return typeof albumHeaderPath === "function" ? albumHeaderPath(record.recordPath) : String(record.recordPath || "");
+  }
+  return typeof albumHeaderPath === "function" ? albumHeaderPath(record.albumPath || "") : String(record.albumPath || "");
+}
+
 function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   if (!doc || typeof doc.createElement !== "function") return null;
   let button = null;
@@ -69,7 +77,12 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   button.setAttribute("type", "button");
   button.setAttribute("class", "bob-album-yaml-done");
   button.setAttribute("data-album-yaml-done", albumPath || "");
-  button.setAttribute("aria-label", kind === "bank" ? "Done editing bank setup" : "Done editing album schema");
+  button.setAttribute(
+    "aria-label",
+    kind === "bank" ? "Done editing bank setup"
+      : kind === "record" ? "Done editing record"
+        : "Done editing album schema",
+  );
   try {
     button.textContent = "Done";
   } catch (_) {}
@@ -127,7 +140,10 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
         : "";
     } catch (_) {}
-    return Boolean(path && path === record.albumPath);
+    const ownPath = typeof albumYamlExcursionOwnPath === "function"
+      ? albumYamlExcursionOwnPath(record)
+      : record.albumPath;
+    return Boolean(path && ownPath && path === ownPath);
   }
 
   albumYamlSaveExcursionEditors(paths) {
@@ -150,11 +166,17 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
     if (!albumPath) return null;
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : "album";
+    const recordPath = kind === "record"
+      ? (typeof albumHeaderPath === "function" ? albumHeaderPath(details.recordPath || "") : String(details.recordPath || ""))
+      : "";
     const record = {
       albumPath,
-      kind: details.kind === "bank" ? "bank" : "album",
+      recordPath,
+      kind,
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
+      selectedField: typeof details.selectedField === "string" ? details.selectedField : (typeof details.selectedKey === "string" ? details.selectedKey : ""),
       selectedSection: typeof details.selectedSection === "string" ? details.selectedSection : "categories",
       selection: details.selection && typeof details.selection === "object" ? { ...details.selection } : null,
       reopenCard: details.reopenCard === true,
@@ -234,7 +256,10 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         const leafPath = leaf?.view?.file?.path
           ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
           : openPath;
-        if (!record.restoring && openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
+        const ownPath = typeof albumYamlExcursionOwnPath === "function"
+          ? albumYamlExcursionOwnPath(record)
+          : record.albumPath;
+        if (!record.restoring && openPath && leafPath && openPath !== ownPath && leafPath !== ownPath) {
           this.albumYamlExcursionClear(leaf);
         } else if (!openPath && !leafPath) {
           this.albumYamlExcursionClear(leaf);
@@ -290,6 +315,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   async albumYamlDoneAttempt(leaf, record) {
     if (record?.kind === "bank" && typeof this.bankSetupYamlDoneAttempt === "function") {
       return this.bankSetupYamlDoneAttempt(leaf, record);
+    }
+    if (record?.kind === "record" && typeof this.recordCardYamlDoneAttempt === "function") {
+      return this.recordCardYamlDoneAttempt(leaf, record);
     }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };

@@ -34541,7 +34541,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupRecordUpdate?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34666,7 +34666,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -68535,6 +68535,14 @@ function albumYamlDoneButtonDoc(host) {
   return null;
 }
 
+function albumYamlExcursionOwnPath(record) {
+  if (!record) return "";
+  if (record.kind === "record" && record.recordPath) {
+    return typeof albumHeaderPath === "function" ? albumHeaderPath(record.recordPath) : String(record.recordPath || "");
+  }
+  return typeof albumHeaderPath === "function" ? albumHeaderPath(record.albumPath || "") : String(record.albumPath || "");
+}
+
 function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   if (!doc || typeof doc.createElement !== "function") return null;
   let button = null;
@@ -68547,7 +68555,12 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
   button.setAttribute("type", "button");
   button.setAttribute("class", "bob-album-yaml-done");
   button.setAttribute("data-album-yaml-done", albumPath || "");
-  button.setAttribute("aria-label", kind === "bank" ? "Done editing bank setup" : "Done editing album schema");
+  button.setAttribute(
+    "aria-label",
+    kind === "bank" ? "Done editing bank setup"
+      : kind === "record" ? "Done editing record"
+        : "Done editing album schema",
+  );
   try {
     button.textContent = "Done";
   } catch (_) {}
@@ -68605,7 +68618,10 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
         : "";
     } catch (_) {}
-    return Boolean(path && path === record.albumPath);
+    const ownPath = typeof albumYamlExcursionOwnPath === "function"
+      ? albumYamlExcursionOwnPath(record)
+      : record.albumPath;
+    return Boolean(path && ownPath && path === ownPath);
   }
 
   albumYamlSaveExcursionEditors(paths) {
@@ -68628,11 +68644,17 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
     if (!albumPath) return null;
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
+    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : "album";
+    const recordPath = kind === "record"
+      ? (typeof albumHeaderPath === "function" ? albumHeaderPath(details.recordPath || "") : String(details.recordPath || ""))
+      : "";
     const record = {
       albumPath,
-      kind: details.kind === "bank" ? "bank" : "album",
+      recordPath,
+      kind,
       viewState: details.viewState || null,
       selectedKey: typeof details.selectedKey === "string" ? details.selectedKey : "stats",
+      selectedField: typeof details.selectedField === "string" ? details.selectedField : (typeof details.selectedKey === "string" ? details.selectedKey : ""),
       selectedSection: typeof details.selectedSection === "string" ? details.selectedSection : "categories",
       selection: details.selection && typeof details.selection === "object" ? { ...details.selection } : null,
       reopenCard: details.reopenCard === true,
@@ -68712,7 +68734,10 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
         const leafPath = leaf?.view?.file?.path
           ? (typeof albumHeaderPath === "function" ? albumHeaderPath(leaf.view.file.path) : String(leaf.view.file.path))
           : openPath;
-        if (!record.restoring && openPath && leafPath && openPath !== record.albumPath && leafPath !== record.albumPath) {
+        const ownPath = typeof albumYamlExcursionOwnPath === "function"
+          ? albumYamlExcursionOwnPath(record)
+          : record.albumPath;
+        if (!record.restoring && openPath && leafPath && openPath !== ownPath && leafPath !== ownPath) {
           this.albumYamlExcursionClear(leaf);
         } else if (!openPath && !leafPath) {
           this.albumYamlExcursionClear(leaf);
@@ -68768,6 +68793,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
   async albumYamlDoneAttempt(leaf, record) {
     if (record?.kind === "bank" && typeof this.bankSetupYamlDoneAttempt === "function") {
       return this.bankSetupYamlDoneAttempt(leaf, record);
+    }
+    if (record?.kind === "record" && typeof this.recordCardYamlDoneAttempt === "function") {
+      return this.recordCardYamlDoneAttempt(leaf, record);
     }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };
@@ -94805,6 +94833,9 @@ function albumSchemaCardModalBase() {
         empty() { this.children = []; },
         addClass() {},
         setAttribute() {},
+        get textContent() {
+          return (this.children || []).map((child) => (child && child.textContent) || "").join("");
+        },
         appendChild(node) { node.parentNode = this; this.children.push(node); return node; },
         addEventListener(type, callback) {
           const listeners = this.listeners.get(type) || [];
@@ -102174,6 +102205,1722 @@ function recordUpdateServiceDeps(plugin, options = {}) {
     },
   };
 }
+// ---- src/242n-plugin-record-card-model.js ----
+// Pure Record Card helpers: targets, opening selection, navigation, choices
+// filtering, status/hint/All-actions models, Esc ladder, and YAML line.
+// Field identity is the schema key. Choices are the only typed stage here;
+// other kinds keep discrete actions and teach YAML until ms.6.
+const RECORD_CARD_CLASS = "bob-record-card";
+const RECORD_CARD_READING_TEXT = "Reading record…";
+const RECORD_CARD_SAVING_TEXT = "Saving…";
+const RECORD_CARD_SAVED_TEXT = "✓ Saved · u undo";
+const RECORD_CARD_STALE_TEXT = "This record changed elsewhere — refreshed; your draft is kept · ↵ retry";
+const RECORD_CARD_CAPABILITY_TEXT = "Update bob to edit here";
+const RECORD_CARD_TYPED_STAGE_HINT = "YAML is the available edit route until this field's typed stage exists.";
+const RECORD_CARD_NON_RECORD_NOTICE = "Open a record note to edit its fields.";
+const RECORD_CARD_MOBILE_NOTICE = "Record editing needs desktop Obsidian.";
+const RECORD_CARD_NO_REPORT_NOTICE = "This record is not in the album report — run Sync albums and retry.";
+
+function recordCardPath(value) {
+  if (typeof recordSheetPath === "function") return recordSheetPath(value);
+  if (typeof albumHeaderPath === "function") return albumHeaderPath(value);
+  return String(value || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+}
+
+function recordCardIsChoiceField(field) {
+  if (typeof recordSheetIsChoiceField === "function") return recordSheetIsChoiceField(field);
+  const kind = String(field?.kind || "").toLowerCase();
+  if (kind === "choice" || kind === "choices") return true;
+  return Array.isArray(field?.choices) && field.choices.length > 0 && kind !== "text";
+}
+
+function recordCardFieldKind(field) {
+  if (recordCardIsChoiceField(field)) return "choices";
+  const kind = String(field?.kind || "text").toLowerCase();
+  if (kind === "choice") return "choices";
+  return kind || "text";
+}
+
+function recordCardStageKindFor(field) {
+  return recordCardFieldKind(field) === "choices" ? "choices" : null;
+}
+
+function recordCardAlbumFields(sheetModel) {
+  const album = sheetModel && sheetModel.gate && sheetModel.gate.album;
+  const raw = Array.isArray(album && album.fields) ? album.fields : [];
+  return raw.map((field) => (
+    typeof albumHeaderFieldModel === "function" ? albumHeaderFieldModel(field) : field
+  )).filter((field) => field && field.key);
+}
+
+function recordCardShowRecord(report) {
+  return report && report.record && typeof report.record === "object" ? report.record : null;
+}
+
+function recordCardPropertyFromReport(report, key) {
+  const record = recordCardShowRecord(report);
+  const properties = record && Array.isArray(record.properties) ? record.properties : [];
+  return properties.find((row) => row && row.key === key) || null;
+}
+
+function recordCardFieldFromReport(report, key) {
+  const fields = report && Array.isArray(report.fields) ? report.fields : [];
+  return fields.find((field) => field && field.key === key) || null;
+}
+
+function recordCardTargets(sheetModel, report) {
+  const albumFields = recordCardAlbumFields(sheetModel);
+  const rowsByKey = new Map();
+  for (const row of Array.isArray(sheetModel && sheetModel.rows) ? sheetModel.rows : []) {
+    if (row && row.key) rowsByKey.set(row.key, row);
+  }
+  const ghostKeys = new Set(
+    (Array.isArray(sheetModel && sheetModel.ghosts) ? sheetModel.ghosts : [])
+      .map((ghost) => ghost && ghost.key)
+      .filter(Boolean),
+  );
+  return albumFields.map((field, index) => {
+    const row = rowsByKey.get(field.key) || null;
+    const property = recordCardPropertyFromReport(report, field.key);
+    let state = property && typeof property.state === "string" ? property.state : "";
+    if (!state) {
+      if (row && row.state === "missing") state = "missing";
+      else if (row && (row.state === "empty" || ghostKeys.has(field.key))) state = "none";
+      else if (row && row.state === "invalid") state = "invalid";
+      else if (row) state = "set";
+      else if (ghostKeys.has(field.key)) state = "none";
+      else if (field.required) state = "missing";
+      else state = "none";
+    }
+    const ghost = state === "none" || (ghostKeys.has(field.key) && !row);
+    const value = property && Object.prototype.hasOwnProperty.call(property, "value")
+      ? property.value
+      : (row && row.state !== "missing" && row.state !== "empty" ? row.raw : null);
+    return {
+      key: field.key,
+      index,
+      field,
+      row,
+      property,
+      ghost: Boolean(ghost),
+      required: field.required === true,
+      kind: recordCardFieldKind(field),
+      stageKind: recordCardStageKindFor(field),
+      label: field.label || field.key,
+      state,
+      value: value === undefined ? null : value,
+      display: (property && property.display) || (row && row.text) || "",
+      line: Number.isInteger(property && property.line) && property.line > 0 ? property.line : null,
+      readOnly: false,
+    };
+  });
+}
+
+function recordCardTargetByKey(targets, key) {
+  if (!key) return null;
+  return (Array.isArray(targets) ? targets : []).find((target) => target.key === key) || null;
+}
+
+function recordCardOpeningSelection(targets, requestedField) {
+  const rows = Array.isArray(targets) ? targets : [];
+  const want = typeof requestedField === "string" ? requestedField : "";
+  if (want && rows.some((target) => target.key === want)) return want;
+  const missing = rows.find((target) => target.required && (target.state === "missing" || target.ghost));
+  if (missing) return missing.key;
+  return rows[0] ? rows[0].key : "";
+}
+
+function recordCardPreserveSelection(targets, selectedKey, formerIndex) {
+  const rows = Array.isArray(targets) ? targets : [];
+  if (selectedKey && rows.some((target) => target.key === selectedKey)) return selectedKey;
+  if (!rows.length) return "";
+  const index = Number.isInteger(formerIndex) ? formerIndex : 0;
+  const clamped = Math.max(0, Math.min(index, rows.length - 1));
+  return rows[clamped].key;
+}
+
+function recordCardNavigate(targets, selectedKey, delta) {
+  const rows = Array.isArray(targets) ? targets : [];
+  if (!rows.length) return "";
+  let index = rows.findIndex((target) => target.key === selectedKey);
+  if (index < 0) index = 0;
+  const next = ((index + Number(delta || 0)) % rows.length + rows.length) % rows.length;
+  return rows[next].key;
+}
+
+function recordCardHomeEnd(targets, which) {
+  const rows = Array.isArray(targets) ? targets : [];
+  if (!rows.length) return "";
+  return which === "end" ? rows[rows.length - 1].key : rows[0].key;
+}
+
+function recordCardChoiceList(field, reportField) {
+  const source = reportField && Array.isArray(reportField.choices) && reportField.choices.length
+    ? reportField.choices
+    : (Array.isArray(field && field.choices) ? field.choices : []);
+  return source.map((choice, index) => {
+    const modeled = typeof albumHeaderChoiceModel === "function" ? albumHeaderChoiceModel(choice) : choice;
+    const value = String((modeled && modeled.value) || (choice && choice.value) || "");
+    const label = String((modeled && modeled.label) || (choice && (choice.label || choice.value)) || value);
+    const count = modeled && modeled.count != null
+      ? modeled.count
+      : (choice && Number.isInteger(choice.count) ? choice.count : null);
+    return {
+      value,
+      label,
+      count,
+      schemaIndex: index,
+      digit: index < 9 ? index + 1 : null,
+    };
+  }).filter((choice) => choice.value);
+}
+
+function recordCardFilterChoices(choices, filter) {
+  const rows = Array.isArray(choices) ? choices : [];
+  const text = String(filter || "").trim().toLowerCase();
+  if (!text) return rows.slice();
+  return rows.filter((choice) => (
+    String(choice.label || "").toLowerCase().includes(text)
+    || String(choice.value || "").toLowerCase().includes(text)
+  ));
+}
+
+function recordCardChoiceByDigit(choices, digit) {
+  const number = Number(digit);
+  if (!Number.isInteger(number) || number < 1 || number > 9) return null;
+  return (Array.isArray(choices) ? choices : []).find((choice) => choice.digit === number) || null;
+}
+
+function recordCardTodayValue(clock) {
+  if (clock && typeof clock.today === "string" && clock.today) return clock.today;
+  const now = clock && clock.now instanceof Date ? clock.now : new Date();
+  if (typeof albumLocalDate === "function") return albumLocalDate(now);
+  try {
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  } catch (_) {
+    return "";
+  }
+}
+
+function recordCardRequiredClearMessage(target) {
+  const label = (target && (target.label || target.key)) || "Field";
+  if (target && target.kind === "choices") {
+    const count = Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0;
+    return `${label} is required — pick one of ${count} choices`;
+  }
+  return `${label} is required`;
+}
+
+function recordCardEscLadder(state) {
+  if (state && state.pendingApply) return "ignore";
+  if (state && state.menuOpen) return "close-menu";
+  if (state && state.stage) return "cancel-stage";
+  return "close-card";
+}
+
+function recordCardStatusText(state) {
+  const kind = state && state.statusKind;
+  if (kind === "reading") return RECORD_CARD_READING_TEXT;
+  if (kind === "saving") return RECORD_CARD_SAVING_TEXT;
+  if (kind === "saved") return RECORD_CARD_SAVED_TEXT;
+  if (kind === "stale") return RECORD_CARD_STALE_TEXT;
+  if (kind === "typed-stage") return RECORD_CARD_TYPED_STAGE_HINT;
+  if (kind === "capability") return RECORD_CARD_CAPABILITY_TEXT;
+  if (kind === "broken") return (state && state.warning) || "The album schema is invalid.";
+  if (kind === "refusal") {
+    const message = (state && state.refusalMessage) || "";
+    const hint = (state && state.refusalHint) || "";
+    return hint ? `${message} ${hint}`.trim() : message;
+  }
+  if (kind === "consequence") return (state && state.consequence) || "";
+  if (state && state.writable === false && state.capabilityOk === false) return RECORD_CARD_CAPABILITY_TEXT;
+  return (state && state.statusText) || "";
+}
+
+function recordCardHintItems(state) {
+  const target = state && state.target;
+  const writable = state && state.writable === true;
+  if (state && state.menuOpen) {
+    return [{ keys: "esc/q", label: "close menu", action: "close-menu" }];
+  }
+  if (state && state.stage && state.stage.kind === "choices") {
+    return [
+      { keys: "⏎", label: "pick", action: "apply-choice" },
+      { keys: "esc/q", label: "cancel", action: "cancel-stage" },
+      { keys: "y", label: "YAML", action: "yaml" },
+    ];
+  }
+  const items = [{ keys: "j/k", label: "fields" }];
+  if (target && target.kind === "choices" && writable) {
+    items.push({ keys: "⏎", label: "choices", action: "open-stage" });
+    const count = Math.min(Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0, 9);
+    if (count > 0) items.push({ keys: count === 1 ? "1" : `1–${count}`, label: "pick" });
+  } else if (target) {
+    items.push({ keys: "⏎", label: "YAML", action: "open-stage" });
+  }
+  if (target && target.kind === "date" && writable) {
+    items.push({ keys: "t", label: "today", action: "today" });
+  }
+  if (target && writable && !target.required && !target.ghost) {
+    items.push({ keys: "⌃D", label: "clear", action: "clear" });
+  }
+  if (state && state.undoAvailable && writable) {
+    items.push({ keys: "u", label: "undo", action: "undo" });
+  }
+  items.push({ keys: "y", label: "YAML", action: "yaml" });
+  items.push({ keys: "=", label: "schema", action: "schema" });
+  items.push({ keys: "esc/q", label: "close", action: "close" });
+  return items;
+}
+
+function recordCardAllActions(state) {
+  const target = state && state.target;
+  const writable = state && state.writable === true;
+  const applying = state && state.pendingApply === true;
+  const actions = [];
+  if (target && target.kind === "choices") {
+    actions.push({ action: "open-stage", text: "Open choices", enabled: writable && !applying });
+  } else if (target) {
+    actions.push({
+      action: "open-stage",
+      text: "Edit in YAML",
+      enabled: !applying,
+      reason: RECORD_CARD_TYPED_STAGE_HINT,
+    });
+  }
+  if (target && target.kind === "date") {
+    actions.push({ action: "today", text: "Set today", enabled: writable && !applying });
+  }
+  actions.push({
+    action: "clear",
+    text: "Clear field",
+    enabled: writable && !applying && Boolean(target) && !target.required && !target.ghost,
+    reason: target && target.required ? recordCardRequiredClearMessage(target) : "",
+  });
+  actions.push({
+    action: "undo",
+    text: "Undo",
+    enabled: writable && !applying && Boolean(state && state.undoAvailable),
+  });
+  actions.push({ action: "yaml", text: "YAML", enabled: !applying });
+  actions.push({ action: "schema", text: "Album schema", enabled: !applying });
+  if (state && state.statusKind === "stale") {
+    actions.push({ action: "retry", text: "Retry", enabled: writable && !applying });
+  }
+  if (state && state.stage) {
+    actions.push({ action: "cancel-stage", text: "Cancel", enabled: !applying });
+  }
+  actions.push({ action: "close", text: "Close", enabled: true });
+  return actions;
+}
+
+function recordCardYamlLine(target, report, sourceText) {
+  if (Number.isInteger(target && target.line) && target.line > 0) return target.line;
+  const property = recordCardPropertyFromReport(report, target && target.key);
+  if (Number.isInteger(property && property.line) && property.line > 0) return property.line;
+  if (typeof recordSheetYamlKeyLine === "function" && sourceText && target && target.key) {
+    const line = recordSheetYamlKeyLine(sourceText, target.key);
+    if (Number.isInteger(line) && line > 1) return line;
+  }
+  const record = recordCardShowRecord(report);
+  const end = record && record.frontmatter_end_line;
+  if (Number.isInteger(end) && end > 0) return end;
+  return 1;
+}
+
+function recordCardTitle(sheetModel) {
+  const emoji = String((sheetModel && sheetModel.emoji) || "").trim();
+  const title = (sheetModel && sheetModel.title) || "Record";
+  return emoji ? `${emoji} ${title}` : title;
+}
+
+function recordCardSubtitle(sheetModel) {
+  const album = (sheetModel && sheetModel.albumTitle) || "Album";
+  const noun = String((sheetModel && sheetModel.noun) || "record");
+  const path = (sheetModel && sheetModel.path) || "";
+  const nounTitle = noun ? noun.charAt(0).toUpperCase() + noun.slice(1) : "Record";
+  return `${album} › ${nounTitle} · ${path}`;
+}
+
+function recordCardCaptureStage(state) {
+  if (!state || !state.stage) return null;
+  return {
+    kind: state.stage.kind || "",
+    field: state.stage.field || "",
+    filter: state.choiceFilter || "",
+    selectedChoice: state.selectedChoice || "",
+    draft: state.stageDraft || "",
+    caret: state.stageCaret || null,
+  };
+}
+
+function recordCardRestoreStage(captured, targets) {
+  if (!captured || !captured.kind || !captured.field) return null;
+  if (!(Array.isArray(targets) ? targets : []).some((target) => target.key === captured.field)) return null;
+  return captured;
+}
+
+function recordCardLiveAnnouncement(kind, payload) {
+  if (kind === "select") return String((payload && (payload.label || payload.key)) || "");
+  if (kind === "saved") return "Saved";
+  if (kind === "refusal") return String((payload && payload.message) || "Refused");
+  if (kind === "stale") return "This record changed elsewhere";
+  return "";
+}
+
+function recordCardGateNotice(gate) {
+  if (!gate) return { reason: "missing-path", message: RECORD_CARD_NON_RECORD_NOTICE };
+  if (gate.mount === true) return null;
+  const reason = String(gate.reason || "");
+  if (reason === "mobile") return { reason, message: RECORD_CARD_MOBILE_NOTICE };
+  if (reason === "no-report") return { reason, message: RECORD_CARD_NO_REPORT_NOTICE };
+  if (reason === "not-record" || reason === "other-type" || reason === "mixed-type" || reason === "bank-month") {
+    return { reason, message: RECORD_CARD_NON_RECORD_NOTICE };
+  }
+  const resolution = gate.resolution;
+  if (resolution && typeof resolution.message === "string" && resolution.message) {
+    return { reason, message: resolution.message };
+  }
+  if (reason === "no-metadata" || reason === "missing-path") {
+    return { reason, message: RECORD_CARD_NON_RECORD_NOTICE };
+  }
+  return { reason, message: RECORD_CARD_NON_RECORD_NOTICE };
+}
+
+function recordCardWritable(gate) {
+  return Boolean(gate && gate.mount === true && gate.editable === true && gate.state === "ready");
+}
+// ---- src/242o-plugin-record-card-dom.js ----
+// Record Card DOM: bob-key-card chrome, sheet value renderers, choices
+// stage, status, hints, All actions, and a polite live region.
+function recordCardDomDoc(root) {
+  try {
+    if (typeof notebookDomDoc === "function") return notebookDomDoc(root);
+  } catch (_) {}
+  try {
+    if (root && root.ownerDocument) return root.ownerDocument;
+  } catch (_) {}
+  try {
+    if (typeof document !== "undefined") return document;
+  } catch (_) {}
+  return null;
+}
+
+function recordCardEl(doc, tag, className) {
+  return typeof notebookCreateEl === "function"
+    ? notebookCreateEl(doc, tag, className)
+    : (doc && typeof doc.createElement === "function"
+      ? (() => {
+        const node = doc.createElement(tag);
+        if (className && typeof node.setAttribute === "function") node.setAttribute("class", className);
+        return node;
+      })()
+      : null);
+}
+
+function recordCardText(el, text) {
+  if (typeof notebookSetText === "function") notebookSetText(el, text);
+  else if (el) el.textContent = String(text == null ? "" : text);
+}
+
+function recordCardRegionEmpty(node) {
+  if (typeof albumSchemaRegionEmpty === "function") {
+    albumSchemaRegionEmpty(node);
+    return;
+  }
+  if (!node) return;
+  try {
+    if (typeof node.empty === "function") { node.empty(); return; }
+  } catch (_) {}
+  try {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  } catch (_) {}
+}
+
+function recordCardRegion(card, name) {
+  if (!card || !name) return null;
+  const nodes = card.querySelectorAll?.("[data-record-card-region]") || [];
+  for (const node of nodes) {
+    if (node.getAttribute?.("data-record-card-region") === name) return node;
+  }
+  return null;
+}
+
+function recordCardButton(doc, host, text, options = {}) {
+  const button = recordCardEl(doc, "button", options.className || "bob-record-card-action");
+  if (!button) return null;
+  button.setAttribute("type", "button");
+  if (options.action) button.setAttribute("data-record-action", options.action);
+  if (options.targetKey) button.setAttribute("data-target-key", options.targetKey);
+  if (options.choice) button.setAttribute("data-choice-value", options.choice);
+  button.setAttribute("aria-label", options.ariaLabel || text);
+  if (options.current) {
+    const cls = `${button.getAttribute("class") || ""} is-selected`.trim();
+    button.setAttribute("class", cls);
+    button.setAttribute("aria-current", "true");
+  }
+  if (options.disabled) {
+    button.disabled = true;
+    if (options.reason) button.setAttribute("title", options.reason);
+  }
+  recordCardText(button, text);
+  if (host) host.appendChild(button);
+  return button;
+}
+
+function recordCardPaintValue(host, doc, target, options) {
+  if (!host) return;
+  if (target && target.ghost) {
+    const ghost = recordCardEl(doc, "span", "bob-record-sheet-ghost bob-record-card-ghost");
+    recordCardText(ghost, `＋ ${target.label || target.key}`);
+    host.appendChild(ghost);
+    return;
+  }
+  if (target && target.state === "missing") {
+    const missing = recordCardEl(doc, "span", "bob-record-sheet-missing bob-record-card-missing");
+    recordCardText(missing, "missing");
+    host.appendChild(missing);
+    return;
+  }
+  const row = target && target.row;
+  if (row && typeof recordSheetRenderSpans === "function") {
+    recordSheetRenderSpans(host, doc, row.spans, options);
+    if (row.lint && row.state === "invalid") {
+      const lint = recordCardEl(doc, "span", "bob-record-sheet-lint");
+      recordCardText(lint, row.lint);
+      host.appendChild(lint);
+    }
+    return;
+  }
+  recordCardText(host, (target && (target.display || target.value)) || "—");
+}
+
+function recordCardPaintHeader(card, sheetModel, options, doc) {
+  const host = recordCardRegion(card, "header");
+  if (!host || !doc) return;
+  recordCardRegionEmpty(host);
+  const title = recordCardEl(doc, "h2", "bob-record-card-title bob-key-card-title");
+  recordCardText(title, recordCardTitle(sheetModel));
+  host.appendChild(title);
+  const subtitle = recordCardEl(doc, "p", "bob-record-card-subtitle bob-key-card-subtitle");
+  recordCardText(subtitle, recordCardSubtitle(sheetModel));
+  host.appendChild(subtitle);
+  if (options && options.warning) {
+    const warning = recordCardEl(doc, "p", "bob-record-card-warning");
+    recordCardText(warning, options.warning);
+    host.appendChild(warning);
+  }
+}
+
+function recordCardPaintBody(card, targets, options, doc) {
+  const host = recordCardRegion(card, "body");
+  if (!host || !doc) return;
+  recordCardRegionEmpty(host);
+  const list = recordCardEl(doc, "div", "bob-record-card-fields");
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", "Record fields");
+  const selectedKey = options && options.selectedKey;
+  for (const target of Array.isArray(targets) ? targets : []) {
+    const row = recordCardEl(doc, "button", `bob-record-card-row${target.ghost ? " is-ghost" : ""}`);
+    row.setAttribute("type", "button");
+    row.setAttribute("role", "option");
+    row.setAttribute("data-target-key", target.key);
+    row.setAttribute("aria-label", `${target.label}${target.required ? ", required" : ""}`);
+    if (target.key === selectedKey) {
+      row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
+      row.setAttribute("aria-selected", "true");
+      row.setAttribute("aria-current", "true");
+    } else {
+      row.setAttribute("aria-selected", "false");
+    }
+    const label = recordCardEl(doc, "span", "bob-record-card-label");
+    recordCardText(label, target.label || target.key);
+    if (target.required) {
+      const mark = recordCardEl(doc, "span", "bob-record-card-required");
+      recordCardText(mark, "*");
+      label.appendChild(mark);
+    }
+    row.appendChild(label);
+    const value = recordCardEl(doc, "span", "bob-record-card-value");
+    recordCardPaintValue(value, doc, target, options);
+    row.appendChild(value);
+    list.appendChild(row);
+    if (options && options.stage && options.stage.field === target.key) {
+      const stage = recordCardEl(doc, "div", "bob-record-card-stage");
+      stage.setAttribute("data-record-card-stage", options.stage.kind || "");
+      list.appendChild(stage);
+    }
+  }
+  if (!(Array.isArray(targets) && targets.length)) {
+    const empty = recordCardEl(doc, "p", "bob-record-card-empty");
+    recordCardText(empty, "This album declares no fields.");
+    list.appendChild(empty);
+  }
+  host.appendChild(list);
+}
+
+function recordCardPaintChoices(host, choices, options, doc) {
+  if (!host || !doc) return;
+  recordCardRegionEmpty(host);
+  const filter = recordCardEl(doc, "input", "bob-record-card-choice-filter");
+  filter.setAttribute("type", "text");
+  filter.setAttribute("data-record-input", "choice-filter");
+  filter.setAttribute("aria-label", "Filter choices");
+  filter.setAttribute("placeholder", "Filter choices");
+  filter.value = (options && options.filter) || "";
+  host.appendChild(filter);
+  const list = recordCardEl(doc, "div", "bob-record-card-choice-list");
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", "Choices");
+  const visible = Array.isArray(choices) ? choices : [];
+  if (!visible.length) {
+    const empty = recordCardEl(doc, "p", "bob-record-card-choice-empty");
+    recordCardText(empty, options && options.filter ? "No matching choices." : "No choices.");
+    list.appendChild(empty);
+  }
+  const currentValue = options && options.currentValue != null ? String(options.currentValue) : "";
+  const selectedChoice = options && options.selectedChoice;
+  for (const choice of visible) {
+    const row = recordCardEl(doc, "button", "bob-record-card-choice");
+    row.setAttribute("type", "button");
+    row.setAttribute("role", "option");
+    row.setAttribute("data-record-action", "pick-choice");
+    row.setAttribute("data-choice-value", choice.value);
+    const parts = [choice.label || choice.value];
+    if (Number.isInteger(choice.count)) parts.push(`${choice.count} records`);
+    if (choice.value === currentValue) parts.push("current");
+    row.setAttribute("aria-label", parts.join(", "));
+    if (choice.value === currentValue) {
+      row.setAttribute("class", `${row.getAttribute("class") || ""} is-current`.trim());
+    }
+    if (choice.value === selectedChoice || (!selectedChoice && choice.value === currentValue)) {
+      row.setAttribute("class", `${row.getAttribute("class") || ""} is-selected`.trim());
+      row.setAttribute("aria-selected", "true");
+    } else {
+      row.setAttribute("aria-selected", "false");
+    }
+    if (choice.digit) {
+      const badge = recordCardEl(doc, "kbd", "bob-record-card-choice-badge");
+      recordCardText(badge, String(choice.digit));
+      row.appendChild(badge);
+    }
+    const label = recordCardEl(doc, "span", "bob-record-card-choice-label");
+    recordCardText(label, choice.label || choice.value);
+    row.appendChild(label);
+    if (Number.isInteger(choice.count)) {
+      const count = recordCardEl(doc, "span", "bob-record-card-choice-count");
+      recordCardText(count, String(choice.count));
+      row.appendChild(count);
+    }
+    list.appendChild(row);
+  }
+  host.appendChild(list);
+}
+
+function recordCardPaintStage(card, options, doc) {
+  const host = recordCardRegion(card, "stage");
+  if (!host || !doc) return;
+  const inline = card.querySelector?.("[data-record-card-stage]") || null;
+  const target = inline || host;
+  if (!options || !options.stage) {
+    recordCardRegionEmpty(host);
+    host.setAttribute("hidden", "");
+    if (inline) recordCardRegionEmpty(inline);
+    return;
+  }
+  host.removeAttribute("hidden");
+  if (options.stage.kind === "choices") {
+    recordCardPaintChoices(inline || host, options.visibleChoices || [], options, doc);
+    if (inline && host !== inline) recordCardRegionEmpty(host);
+    return;
+  }
+  recordCardRegionEmpty(target);
+  const note = recordCardEl(doc, "p", "bob-record-card-stage-note");
+  recordCardText(note, RECORD_CARD_TYPED_STAGE_HINT);
+  target.appendChild(note);
+}
+
+function recordCardPaintStatus(card, options, doc) {
+  const host = recordCardRegion(card, "status");
+  if (!host || !doc) return;
+  recordCardRegionEmpty(host);
+  const text = recordCardStatusText(options && options.status);
+  if (!text) {
+    host.setAttribute("hidden", "");
+    return;
+  }
+  host.removeAttribute("hidden");
+  host.setAttribute("class", `bob-record-card-status is-${(options && options.status && options.status.statusKind) || "idle"}`);
+  recordCardText(host, text);
+}
+
+function recordCardPaintHints(card, options, doc) {
+  const host = recordCardRegion(card, "hints");
+  if (!host || !doc) return;
+  recordCardRegionEmpty(host);
+  host.setAttribute("class", "bob-record-card-hints bob-key-card-footer");
+  const strip = recordCardEl(doc, "div", "bob-record-card-hint-strip");
+  for (const item of recordCardHintItems(options && options.status)) {
+    const row = recordCardEl(doc, "span", "bob-record-card-hint");
+    const keys = Array.isArray(item.keys) ? item.keys : [item.keys];
+    for (const text of keys) {
+      if (text == null || text === "") continue;
+      const key = recordCardEl(doc, "kbd", "");
+      recordCardText(key, String(text));
+      row.appendChild(key);
+    }
+    if (typeof doc.createTextNode === "function") row.appendChild(doc.createTextNode(" "));
+    const label = recordCardEl(doc, "span", "bob-record-card-hint-label");
+    recordCardText(label, item.label);
+    row.appendChild(label);
+    strip.appendChild(row);
+  }
+  const more = recordCardButton(doc, strip, "⋯", {
+    action: "more",
+    className: "bob-record-card-more-toggle is-quiet",
+    ariaLabel: "All actions",
+  });
+  if (more) more.setAttribute("aria-expanded", options && options.menuOpen === true ? "true" : "false");
+  host.appendChild(strip);
+  const list = recordCardEl(doc, "div", "bob-record-card-more");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", "All actions");
+  if (!options || options.menuOpen !== true) list.setAttribute("hidden", "");
+  const heading = recordCardEl(doc, "p", "bob-record-card-more-title");
+  recordCardText(heading, "All actions");
+  list.appendChild(heading);
+  for (const item of recordCardAllActions(options && options.status)) {
+    recordCardButton(doc, list, item.text, {
+      action: item.action,
+      className: "bob-record-card-action",
+      ariaLabel: item.text,
+      disabled: item.enabled === false,
+      reason: item.reason || "",
+    });
+  }
+  host.appendChild(list);
+}
+
+function recordCardPaintLive(card, announcement, doc) {
+  const host = recordCardRegion(card, "live");
+  if (!host || !doc) return;
+  if (!announcement) return;
+  recordCardRegionEmpty(host);
+  recordCardText(host, announcement);
+}
+
+function recordCardPaintAll(card, sheetModel, options, doc) {
+  if (!card || !doc) return;
+  recordCardPaintHeader(card, sheetModel, options, doc);
+  recordCardPaintBody(card, options && options.targets, options, doc);
+  recordCardPaintStage(card, options, doc);
+  recordCardPaintStatus(card, options, doc);
+  recordCardPaintHints(card, options, doc);
+  if (options && options.announce) recordCardPaintLive(card, options.announce, doc);
+}
+
+function recordCardBuildEl(sheetModel, options, doc) {
+  const card = recordCardEl(doc, "div", `${RECORD_CARD_CLASS} bob-key-card`);
+  if (!card) return null;
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.setAttribute("aria-label", "Edit record");
+  const regions = [
+    ["header", "bob-record-card-header"],
+    ["body", "bob-record-card-body"],
+    ["stage", "bob-record-card-stage-host"],
+    ["status", "bob-record-card-status"],
+    ["hints", "bob-record-card-hints bob-key-card-footer"],
+    ["live", "bob-record-card-live"],
+  ];
+  for (const [name, className] of regions) {
+    const region = recordCardEl(doc, "div", className);
+    if (!region) continue;
+    region.setAttribute("data-record-card-region", name);
+    if (name === "status") region.setAttribute("role", "status");
+    if (name === "live") {
+      region.setAttribute("aria-live", "polite");
+      region.setAttribute("aria-atomic", "true");
+      region.setAttribute("class", `${className} sr-only`);
+    }
+    card.appendChild(region);
+  }
+  recordCardPaintAll(card, sheetModel, options, doc);
+  return card;
+}
+// ---- src/242p-plugin-record-card.js ----
+// Keyboard-first Record Card modal: browse, choices, discrete writes, and
+// the shared guarded record session. Typed stages other than choices belong
+// to a later phase; this file leaves a single stage-open dispatch for them.
+const RecordCardModalBase = typeof albumSchemaCardModalBase === "function"
+  ? albumSchemaCardModalBase()
+  : class RecordCardFallback { constructor(app) { this.app = app; } open() { this.onOpen?.(); } close() { this.onClose?.(); } };
+
+class RecordCardModal extends RecordCardModalBase {
+  constructor(app, options = {}) {
+    super(app);
+    this.recordPlugin = options.plugin || null;
+    this.recordPath = recordCardPath(options.recordPath || "");
+    this.albumPath = recordCardPath(options.albumPath || "");
+    this.recordType = String(options.type || options.recordType || "");
+    this.recordStem = String(options.stem || "");
+    this.sheetModel = options.sheetModel || null;
+    this.gate = options.gate || (this.sheetModel && this.sheetModel.gate) || null;
+    this.latestReport = options.report || null;
+    this.writable = recordCardWritable(this.gate) && options.writable !== false;
+    this.capabilityOk = Boolean(this.gate && this.gate.capabilityOk);
+    this.selectedKey = "";
+    this.selectedIndex = 0;
+    this.stage = null;
+    this.choiceFilter = "";
+    this.selectedChoice = "";
+    this.stageDraft = "";
+    this.stageCaret = null;
+    this.menuOpen = false;
+    this.session = null;
+    this.sessionState = null;
+    this.readSeq = 0;
+    this.closeToken = 0;
+    this.pendingApply = false;
+    this.closed = false;
+    this.composing = false;
+    this.statusKind = this.writable ? "reading" : (this.gate && this.gate.state === "broken" ? "broken" : "capability");
+    this.refusalMessage = "";
+    this.refusalHint = "";
+    this.consequence = "";
+    this.warning = (this.sheetModel && this.sheetModel.warning) || "";
+    this.retainedOps = null;
+    this.announce = "";
+    this.ownWriteUntil = 0;
+    this.refreshTimer = null;
+    this.unsubscribeAlbum = null;
+    this.unsubscribeVault = null;
+    this.requestedField = typeof options.field === "string" ? options.field : "";
+    this.requestedStage = options.stage || null;
+    const targets = this.recordTargets();
+    this.selectedKey = recordCardOpeningSelection(targets, this.requestedField);
+    this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
+  }
+
+  recordTargets() {
+    return recordCardTargets(this.sheetModel, this.latestReport);
+  }
+
+  recordSelected() {
+    return recordCardTargetByKey(this.recordTargets(), this.selectedKey);
+  }
+
+  recordStatusModel() {
+    const target = this.recordSelected();
+    const undo = this.sessionState && this.sessionState.undoAvailable;
+    return {
+      statusKind: this.statusKind,
+      statusText: "",
+      refusalMessage: this.refusalMessage,
+      refusalHint: this.refusalHint,
+      consequence: this.consequence,
+      warning: this.warning,
+      writable: this.writable,
+      capabilityOk: this.capabilityOk,
+      pendingApply: this.pendingApply,
+      menuOpen: this.menuOpen,
+      stage: this.stage,
+      target,
+      undoAvailable: Boolean(undo || (this.recordPlugin && this.recordPlugin.recordUpdateLastUndo?.(this.recordPath))),
+    };
+  }
+
+  recordPaintOptions() {
+    const target = this.recordSelected();
+    const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+    const allChoices = target && target.kind === "choices"
+      ? recordCardChoiceList(target.field, reportField)
+      : [];
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    return {
+      selectedKey: this.selectedKey,
+      targets: this.recordTargets(),
+      stage: this.stage,
+      filter: this.choiceFilter,
+      selectedChoice: this.selectedChoice,
+      currentValue: target && target.value != null ? String(target.value) : "",
+      visibleChoices,
+      menuOpen: this.menuOpen,
+      warning: this.warning,
+      status: this.recordStatusModel(),
+      announce: this.announce,
+      handlers: {
+        openPath: (href, event) => this.recordPlugin?.recordSheetOpenPath?.(href, this.recordPath, event),
+        hoverLink: (event, el, linktext) => this.recordPlugin?.recordSheetHoverLink?.(event, el, linktext, this.recordPath),
+      },
+    };
+  }
+
+  recordDoc() {
+    return recordCardDomDoc(this.contentEl || this.modalEl || this.app?.document);
+  }
+
+  paintRecordCard() {
+    if (this.closed) return;
+    const doc = this.recordDoc();
+    if (!doc) return;
+    const options = this.recordPaintOptions();
+    let card = this.contentEl?.querySelector?.(".bob-record-card");
+    if (!card) {
+      try { this.contentEl?.empty?.(); } catch (_) {}
+      card = recordCardBuildEl(this.sheetModel, options, doc);
+      if (card) this.contentEl?.appendChild?.(card);
+      this.recordRestoreFocus();
+      return;
+    }
+    recordCardPaintAll(card, this.sheetModel, options, doc);
+    this.recordRestoreFocus();
+  }
+
+  recordRestoreFocus() {
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      if (!card) return;
+      if (this.stage && this.stage.kind === "choices") {
+        const input = card.querySelector?.("[data-record-input='choice-filter']");
+        if (input && typeof input.focus === "function") {
+          input.focus();
+          if (this.stageCaret && typeof input.setSelectionRange === "function") {
+            input.setSelectionRange(this.stageCaret.start, this.stageCaret.end);
+          }
+          return;
+        }
+      }
+      const row = card.querySelector?.(`[data-target-key="${this.selectedKey}"]`);
+      if (row && typeof row.focus === "function") row.focus();
+    } catch (_) {}
+  }
+
+  recordSelect(key) {
+    const targets = this.recordTargets();
+    const index = targets.findIndex((target) => target.key === key);
+    if (index < 0) return;
+    this.selectedKey = key;
+    this.selectedIndex = index;
+    this.announce = recordCardLiveAnnouncement("select", targets[index]);
+    this.paintRecordCard();
+  }
+
+  recordMove(delta) {
+    const next = recordCardNavigate(this.recordTargets(), this.selectedKey, delta);
+    if (next) this.recordSelect(next);
+  }
+
+  recordOpenStage(kind, fieldKey = this.selectedKey, options = {}) {
+    const target = recordCardTargetByKey(this.recordTargets(), fieldKey);
+    if (!target) return false;
+    this.selectedKey = fieldKey;
+    const resolved = kind || target.stageKind;
+    if (!resolved) {
+      this.statusKind = "typed-stage";
+      this.paintRecordCard();
+      return false;
+    }
+    this.stage = { kind: resolved, field: fieldKey };
+    this.choiceFilter = options.filter || "";
+    this.selectedChoice = options.selectedChoice || (target.value != null ? String(target.value) : "");
+    this.stageDraft = options.draft || "";
+    this.menuOpen = false;
+    this.paintRecordCard();
+    return true;
+  }
+
+  recordCancelStage() {
+    this.stage = null;
+    this.choiceFilter = "";
+    this.selectedChoice = "";
+    this.stageDraft = "";
+    this.stageCaret = null;
+    this.paintRecordCard();
+  }
+
+  recordHandleEscape() {
+    const action = recordCardEscLadder({
+      pendingApply: this.pendingApply,
+      menuOpen: this.menuOpen,
+      stage: this.stage,
+    });
+    if (action === "ignore") return "ignore";
+    if (action === "close-menu") {
+      this.menuOpen = false;
+      this.paintRecordCard();
+      return "stay";
+    }
+    if (action === "cancel-stage") {
+      this.recordCancelStage();
+      return "stay";
+    }
+    return "close";
+  }
+
+  recordMarkEscapeHandled(event) {
+    if (!event) return;
+    try { event.preventDefault?.(); } catch (_) {}
+    try { event.stopPropagation?.(); } catch (_) {}
+    if (!event.defaultPrevented) {
+      try { Object.defineProperty(event, "defaultPrevented", { value: true, configurable: true }); }
+      catch (_) { try { event.defaultPrevented = true; } catch (_) {} }
+    }
+    try { event.__schemaEscapeHandled = true; } catch (_) {}
+  }
+
+  recordBackOut(event) {
+    const action = this.recordHandleEscape();
+    this.recordMarkEscapeHandled(event);
+    if (action === "close") this.close();
+    return action;
+  }
+
+  recordCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    return event && event.key === "Escape" ? "escape" : null;
+  }
+
+  recordShouldBackOut(kind, event) {
+    if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+    if (kind === "q") {
+      try {
+        if (typeof bobCardTypesText === "function"
+            && bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+      } catch (_) {}
+      return true;
+    }
+    return true;
+  }
+
+  onEscapeKey(event) {
+    this.recordBackOut(event);
+    return false;
+  }
+
+  recordBare(event) {
+    return event && !event.ctrlKey && !event.metaKey && !event.altKey;
+  }
+
+  recordInInput(event) {
+    const target = event && event.target;
+    return Boolean(target && target.closest && target.closest("input,select,textarea,[contenteditable]"));
+  }
+
+  recordAction(action, payload) {
+    if (!action || this.closed) return;
+    if (action === "close") { this.close(); return; }
+    if (action === "more") {
+      this.menuOpen = !this.menuOpen;
+      this.paintRecordCard();
+      return;
+    }
+    if (action === "close-menu") {
+      this.menuOpen = false;
+      this.paintRecordCard();
+      return;
+    }
+    if (action === "cancel-stage") { this.recordCancelStage(); return; }
+    if (action === "open-stage") {
+      const target = this.recordSelected();
+      if (target && target.stageKind) this.recordOpenStage(target.stageKind, target.key);
+      else if (target) {
+        this.statusKind = "typed-stage";
+        this.paintRecordCard();
+      }
+      return;
+    }
+    if (action === "pick-choice" || action === "apply-choice") {
+      void this.recordApplyChoice(payload && payload.value);
+      return;
+    }
+    if (action === "today") { void this.recordApplyToday(); return; }
+    if (action === "clear") { void this.recordClear(); return; }
+    if (action === "undo") { void this.recordUndo(); return; }
+    if (action === "yaml") { void this.recordYaml(); return; }
+    if (action === "schema") { void this.recordSchema(); return; }
+    if (action === "retry") { void this.recordRetry(); return; }
+  }
+
+  recordOnClick(event) {
+    const button = event?.target?.closest?.("button[data-record-action], button[data-target-key]");
+    if (!button) return;
+    const action = button.getAttribute("data-record-action");
+    if (action) {
+      event.preventDefault?.();
+      void this.recordAction(action, { value: button.getAttribute("data-choice-value") });
+      return;
+    }
+    const key = button.getAttribute("data-target-key");
+    if (key) this.recordSelect(key);
+  }
+
+  recordOnKeyDown(event) {
+    if (!event || event.isComposing || event.keyCode === 229 || this.composing) return;
+    if (event.defaultPrevented || event.__schemaEscapeHandled) return;
+    if (this.pendingApply) return;
+    const closeKind = this.recordCloseKind(event);
+    if (closeKind && this.recordShouldBackOut(closeKind, event)) {
+      this.recordBackOut(event);
+      return;
+    }
+    if (this.recordInInput(event)) {
+      if (event.key === "Enter") {
+        event.preventDefault?.();
+        const target = this.recordSelected();
+        if (this.stage && this.stage.kind === "choices") {
+          void this.recordApplyChoice(this.selectedChoice || (target && target.value));
+        }
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault?.();
+        this.recordMoveChoice(1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault?.();
+        this.recordMoveChoice(-1);
+      }
+      return;
+    }
+    if (this.stage && this.stage.kind === "choices") {
+      if (event.key === "Enter") {
+        event.preventDefault?.();
+        void this.recordApplyChoice(this.selectedChoice);
+        return;
+      }
+      if (event.key === "ArrowDown" || (this.recordBare(event) && event.key === "j")) {
+        event.preventDefault?.();
+        this.recordMoveChoice(1);
+        return;
+      }
+      if (event.key === "ArrowUp" || (this.recordBare(event) && event.key === "k")) {
+        event.preventDefault?.();
+        this.recordMoveChoice(-1);
+        return;
+      }
+      if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+        event.preventDefault?.();
+        this.recordDigit(event.key, true);
+      }
+      return;
+    }
+    if (event.key === "Tab") {
+      event.preventDefault?.();
+      this.recordMove(event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.key === "Home") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "home")); return; }
+    if (event.key === "End") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "end")); return; }
+    if (event.key === "ArrowDown" || event.key === "ArrowRight" || (this.recordBare(event) && event.key === "j")) {
+      event.preventDefault?.(); this.recordMove(1); return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft" || (this.recordBare(event) && event.key === "k")) {
+      event.preventDefault?.(); this.recordMove(-1); return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault?.();
+      this.recordAction("open-stage");
+      return;
+    }
+    if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+      event.preventDefault?.();
+      this.recordDigit(event.key, false);
+      return;
+    }
+    if (this.recordBare(event) && (event.key === "t" || event.key === "T")) {
+      event.preventDefault?.();
+      void this.recordApplyToday();
+      return;
+    }
+    if (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "d" || event.key === "D")) {
+      event.preventDefault?.();
+      void this.recordClear();
+      return;
+    }
+    if ((this.recordBare(event) && event.key === "u")
+        || (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "z" || event.key === "Z"))) {
+      event.preventDefault?.();
+      void this.recordUndo();
+      return;
+    }
+    if ((this.recordBare(event) && (event.key === "y" || event.key === "Y"))
+        || (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "e" || event.key === "E"))) {
+      event.preventDefault?.();
+      void this.recordYaml();
+      return;
+    }
+    if (this.recordBare(event) && event.key === "=") {
+      event.preventDefault?.();
+      void this.recordSchema();
+    }
+  }
+
+  recordMoveChoice(delta) {
+    const target = this.recordSelected();
+    const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+    const visible = recordCardFilterChoices(
+      recordCardChoiceList(target && target.field, reportField),
+      this.choiceFilter,
+    );
+    if (!visible.length) return;
+    let index = visible.findIndex((choice) => choice.value === this.selectedChoice);
+    if (index < 0) index = 0;
+    index = (index + delta + visible.length) % visible.length;
+    this.selectedChoice = visible[index].value;
+    this.paintRecordCard();
+  }
+
+  recordDigit(digit, fromStage) {
+    const target = this.recordSelected();
+    if (!target || target.kind !== "choices") return;
+    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+    const all = recordCardChoiceList(target.field, reportField);
+    const choice = recordCardChoiceByDigit(all, digit);
+    if (!choice) return;
+    if (fromStage) {
+      const visible = recordCardFilterChoices(all, this.choiceFilter);
+      if (!visible.some((item) => item.value === choice.value)) return;
+    }
+    void this.recordApplyChoice(choice.value);
+  }
+
+  recordOps(op) {
+    return Array.isArray(op) ? op : [op];
+  }
+
+  async recordApplyOps(ops, options = {}) {
+    if (this.closed || this.pendingApply) return null;
+    if (!this.writable || !this.session) return null;
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintRecordCard();
+    let result = null;
+    try {
+      result = await this.session.applyOps(this.recordOps(ops));
+    } catch (error) {
+      result = { ok: false, code: "failed", message: String((error && error.message) || error) };
+    }
+    if (this.closed) return result;
+    this.pendingApply = false;
+    this.sessionState = this.session?.getState?.() || this.sessionState;
+    if (result && result.ok === true && result.changed === true) {
+      this.ownWriteUntil = Date.now() + 1500;
+      this.retainedOps = null;
+      this.recordConsumeApplied(result);
+      this.recordCancelStage();
+      this.statusKind = "saved";
+      this.announce = recordCardLiveAnnouncement("saved");
+      this.paintRecordCard();
+      return result;
+    }
+    if (result && result.ok === true) {
+      this.retainedOps = null;
+      this.recordCancelStage();
+      this.statusKind = result.report && result.report.consequence ? "consequence" : "";
+      this.consequence = (result.report && result.report.consequence) || "";
+      this.paintRecordCard();
+      return result;
+    }
+    const stale = Boolean(result && (
+      result.kind === "stale" || result.code === "stale_record"
+      || (result.report && result.report.error && result.report.error.code === "stale_record")
+    ));
+    if (stale) {
+      this.retainedOps = this.recordOps(ops);
+      this.statusKind = "stale";
+      this.announce = recordCardLiveAnnouncement("stale");
+      await this.recordRefresh({ keepStage: true });
+      return result;
+    }
+    this.refusalMessage = (result && result.message) || "The record update was refused.";
+    this.refusalHint = (result && result.hint) || "";
+    this.statusKind = "refusal";
+    this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+    this.paintRecordCard();
+    return result;
+  }
+
+  recordConsumeApplied(result) {
+    const report = result && result.report;
+    if (!report) return;
+    if (report.record) this.latestReport = { ...(this.latestReport || {}), record: report.record, ok: true };
+    else if (Array.isArray(report.properties) && this.latestReport && this.latestReport.record) {
+      this.latestReport = {
+        ...this.latestReport,
+        record: { ...this.latestReport.record, properties: report.properties, fingerprint: report.fingerprint_after },
+      };
+    }
+    try {
+      this.sheetModel = this.recordPlugin?.recordSheetModelFor?.(this.recordPath) || this.sheetModel;
+    } catch (_) {}
+    const targets = this.recordTargets();
+    this.selectedKey = recordCardPreserveSelection(targets, this.selectedKey, this.selectedIndex);
+    this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
+  }
+
+  async recordApplyChoice(value) {
+    const target = this.recordSelected();
+    if (!target || !value) return null;
+    return this.recordApplyOps({ op: "field.set", field: target.key, value: String(value) });
+  }
+
+  async recordApplyToday() {
+    const target = this.recordSelected();
+    if (!target || target.kind !== "date") return null;
+    const today = recordCardTodayValue({
+      today: this.recordPlugin?.recordSheetDay,
+      now: new Date(),
+    });
+    if (!today) return null;
+    return this.recordApplyOps({ op: "field.set", field: target.key, value: today });
+  }
+
+  async recordClear() {
+    const target = this.recordSelected();
+    if (!target) return null;
+    if (target.required) {
+      this.statusKind = "refusal";
+      this.refusalMessage = recordCardRequiredClearMessage(target);
+      this.refusalHint = "";
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.paintRecordCard();
+      return { ok: false, code: "required" };
+    }
+    return this.recordApplyOps({ op: "field.unset", field: target.key });
+  }
+
+  async recordUndo() {
+    if (!this.session) return null;
+    if (this.pendingApply) return null;
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintRecordCard();
+    let result = null;
+    try { result = await this.session.undo(); }
+    catch (error) { result = { ok: false, message: String((error && error.message) || error) }; }
+    if (this.closed) return result;
+    this.pendingApply = false;
+    this.sessionState = this.session?.getState?.() || this.sessionState;
+    if (result && result.ok === true && result.changed === true) {
+      this.ownWriteUntil = Date.now() + 1500;
+      this.recordConsumeApplied(result);
+      this.statusKind = "saved";
+    } else if (result && result.ok === true) {
+      this.statusKind = "";
+    } else {
+      this.statusKind = "refusal";
+      this.refusalMessage = (result && result.message) || "There is no record edit to undo.";
+      this.refusalHint = (result && result.hint) || "";
+    }
+    this.paintRecordCard();
+    return result;
+  }
+
+  async recordRetry() {
+    if (!this.retainedOps) return this.recordRefresh({ keepStage: true });
+    const ops = this.retainedOps;
+    this.retainedOps = null;
+    return this.recordApplyOps(ops, { retry: true });
+  }
+
+  async recordYaml() {
+    const field = this.selectedKey;
+    const plugin = this.recordPlugin;
+    this.close();
+    if (plugin && typeof plugin.recordCardStartYamlExcursion === "function") {
+      return plugin.recordCardStartYamlExcursion({
+        recordPath: this.recordPath,
+        albumPath: this.albumPath,
+        field,
+        report: this.latestReport,
+        target: recordCardTargetByKey(recordCardTargets(this.sheetModel, this.latestReport), field),
+        broken: this.gate && this.gate.state === "broken",
+        warningLine: this.sheetModel && this.sheetModel.warningLine,
+      });
+    }
+    return null;
+  }
+
+  async recordSchema() {
+    const plugin = this.recordPlugin;
+    const path = this.recordPath;
+    this.close();
+    if (plugin && typeof plugin.openAlbumSchemaEntry === "function") {
+      return plugin.openAlbumSchemaEntry({ filePath: path });
+    }
+    return null;
+  }
+
+  recordEnsureSession(fingerprint) {
+    if (!this.writable || this.session || !fingerprint) return;
+    const plugin = this.recordPlugin;
+    const undo = plugin && typeof plugin.recordUpdateLastUndo === "function"
+      ? plugin.recordUpdateLastUndo(this.recordPath)
+      : null;
+    const deps = typeof recordUpdateServiceDeps === "function"
+      ? recordUpdateServiceDeps(plugin, {
+        type: this.recordType,
+        stem: this.recordStem,
+        recordPath: this.recordPath,
+        albumPath: this.albumPath,
+        onChange: (snapshot) => {
+          if (this.closed) return;
+          this.sessionState = snapshot;
+          if (this.statusKind === "saving" && this.pendingApply) return;
+          this.paintRecordCard();
+        },
+      })
+      : {};
+    this.session = createRecordUpdateSession({
+      recordPath: this.recordPath,
+      albumPath: this.albumPath,
+      type: this.recordType,
+      stem: this.recordStem,
+      expect: fingerprint,
+      undo: undo && undo.inverseOps ? { inverseOps: undo.inverseOps, afterFingerprint: undo.afterFingerprint } : undo,
+    }, deps);
+    this.sessionState = this.session.getState?.() || null;
+  }
+
+  async recordRead() {
+    if (this.closed) return null;
+    if (!this.writable && !(this.capabilityOk && this.gate && this.gate.state === "ready")) return null;
+    const seq = ++this.readSeq;
+    const token = this.closeToken;
+    const plugin = this.recordPlugin;
+    let result = null;
+    try {
+      result = await plugin.apiRecordShow(this.recordType, this.recordStem);
+    } catch (error) {
+      result = { ok: false, code: "failed", message: String((error && error.message) || error) };
+    }
+    if (this.closed || token !== this.closeToken || seq !== this.readSeq) return result;
+    const report = result && result.ok && result.report ? result.report : null;
+    const record = report && report.ok !== false && recordCardShowRecord(report);
+    if (!record || !record.fingerprint) {
+      const model = typeof recordUpdateErrorModel === "function" ? recordUpdateErrorModel(result) : null;
+      this.statusKind = "refusal";
+      this.refusalMessage = (result && result.message) || (report && report.error && report.error.message) || "The record could not be read.";
+      this.refusalHint = (result && result.hint) || (model && model.hint) || (report && report.error && report.error.hint) || "";
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.paintRecordCard();
+      return result;
+    }
+    this.latestReport = report;
+    if (this.writable) this.recordEnsureSession(record.fingerprint);
+    else if (this.session) {
+      this.session.rebase?.(record.fingerprint);
+    }
+    if (this.statusKind === "reading" || this.statusKind === "stale") {
+      if (this.statusKind !== "stale") this.statusKind = this.writable ? "" : (this.capabilityOk ? "" : "capability");
+    }
+    this.paintRecordCard();
+    return result;
+  }
+
+  async recordRefresh(options = {}) {
+    if (this.closed) return;
+    try {
+      this.gate = this.recordPlugin?.recordSheetGateFor?.(this.recordPath) || this.gate;
+      this.sheetModel = this.recordPlugin?.recordSheetModelFor?.(this.recordPath) || this.sheetModel;
+    } catch (_) {}
+    const stillMount = Boolean(this.gate && this.gate.mount);
+    if (!stillMount) {
+      this.close();
+      return;
+    }
+    this.writable = recordCardWritable(this.gate);
+    this.capabilityOk = Boolean(this.gate && this.gate.capabilityOk);
+    this.warning = (this.sheetModel && this.sheetModel.warning) || this.warning;
+    const captured = options.keepStage ? recordCardCaptureStage({
+      stage: this.stage, choiceFilter: this.choiceFilter, selectedChoice: this.selectedChoice,
+      stageDraft: this.stageDraft, stageCaret: this.stageCaret,
+    }) : null;
+    const targets = this.recordTargets();
+    this.selectedKey = recordCardPreserveSelection(targets, this.selectedKey, this.selectedIndex);
+    this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
+    const restored = recordCardRestoreStage(captured, targets);
+    if (restored) {
+      this.stage = { kind: restored.kind, field: restored.field };
+      this.choiceFilter = restored.filter || "";
+      this.selectedChoice = restored.selectedChoice || "";
+      this.stageDraft = restored.draft || "";
+    } else if (!options.keepStage) {
+      this.stage = null;
+    }
+    this.paintRecordCard();
+    await this.recordRead();
+    if (this.session && this.latestReport && recordCardShowRecord(this.latestReport)) {
+      this.session.rebase?.(recordCardShowRecord(this.latestReport).fingerprint);
+      this.sessionState = this.session.getState?.() || this.sessionState;
+    }
+  }
+
+  recordScheduleRefresh() {
+    if (this.closed) return;
+    if (this.ownWriteUntil && Date.now() < this.ownWriteUntil) return;
+    try { this.recordPlugin?.albumClearTimeout?.(this.refreshTimer); } catch (_) {}
+    this.refreshTimer = this.recordPlugin?.albumSetTimeout?.(() => {
+      void this.recordRefresh({ keepStage: true });
+    }, 40) || setTimeout(() => { void this.recordRefresh({ keepStage: true }); }, 40);
+  }
+
+  onOpen() {
+    try {
+      this.modalEl?.addClass?.("bob-record-card-modal");
+      this.modalEl?.setAttribute?.("role", "dialog");
+      this.modalEl?.setAttribute?.("aria-modal", "true");
+      this.modalEl?.setAttribute?.("aria-label", "Edit record");
+      this.contentEl?.addClass?.("bob-record-card");
+      this.contentEl?.addClass?.("bob-key-card");
+    } catch (_) {}
+    this.paintRecordCard();
+    this.recordClickListener = (event) => this.recordOnClick(event);
+    this.recordKeyListener = (event) => this.recordOnKeyDown(event);
+    this.recordInputListener = (event) => {
+      const input = event?.target?.closest?.("[data-record-input='choice-filter']");
+      if (!input) return;
+      this.choiceFilter = String(input.value || "");
+      if (typeof input.selectionStart === "number") {
+        this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
+      }
+      this.paintRecordCard();
+    };
+    this.contentEl?.addEventListener?.("click", this.recordClickListener);
+    this.contentEl?.addEventListener?.("keydown", this.recordKeyListener);
+    this.contentEl?.addEventListener?.("input", this.recordInputListener);
+    this.contentEl?.addEventListener?.("compositionstart", () => { this.composing = true; });
+    this.contentEl?.addEventListener?.("compositionend", () => { this.composing = false; });
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, { backOut: (event) => this.recordBackOut(event) });
+      }
+    } catch (_) {}
+    try {
+      const root = this.modalEl?.ownerDocument || this.contentEl?.ownerDocument;
+      this.recordDomKeyListener = (event) => {
+        if (this.closed || event?.__schemaEscapeHandled) return;
+        const kind = this.recordCloseKind(event);
+        if (kind && this.recordShouldBackOut(kind, event)) this.recordBackOut(event);
+      };
+      root?.addEventListener?.("keydown", this.recordDomKeyListener, true);
+      this.recordDomKeyRoot = root;
+    } catch (_) {}
+    try {
+      this.unsubscribeAlbum = this.recordPlugin?.apiAlbumSubscribe?.(() => this.recordScheduleRefresh()) || null;
+    } catch (_) {}
+    try {
+      const cache = this.recordPlugin?.app?.metadataCache;
+      if (cache && typeof cache.on === "function") {
+        this.unsubscribeVault = cache.on("changed", (file) => {
+          const path = recordCardPath(file && file.path);
+          if (path === this.recordPath || path === this.albumPath) this.recordScheduleRefresh();
+        });
+        if (this.recordPlugin && typeof this.recordPlugin.registerEvent === "function" && this.unsubscribeVault) {
+          this.recordPlugin.registerEvent(this.unsubscribeVault);
+        }
+      }
+    } catch (_) {}
+    if (this.requestedStage) this.recordOpenStage(this.requestedStage, this.selectedKey);
+    void this.recordRead();
+  }
+
+  onClose() {
+    this.closed = true;
+    this.closeToken += 1;
+    this.pendingApply = false;
+    try { if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this); } catch (_) {}
+    try { this.recordDomKeyRoot?.removeEventListener?.("keydown", this.recordDomKeyListener, true); } catch (_) {}
+    try { this.unsubscribeAlbum?.(); } catch (_) {}
+    this.unsubscribeAlbum = null;
+    try { this.recordPlugin?.albumClearTimeout?.(this.refreshTimer); } catch (_) {}
+    this.refreshTimer = null;
+    try { this.session?.close?.(); } catch (_) {}
+    this.session = null;
+    try { this.contentEl?.empty?.(); } catch (_) {}
+    if (this.recordPlugin && this.recordPlugin.recordCardModal === this) {
+      this.recordPlugin.recordCardModal = null;
+    }
+  }
+}
+// ---- src/242pa-plugin-record-card-entrypoints.js ----
+// Record Card entry points, palette command, lifecycle, and the record
+// branch of the shared YAML excursion. Findings never block Done.
+class BobLedgerToolsRecordCardMixin {
+  setupRecordCard() {
+    this.recordCardModal = null;
+    this.recordCardActive = true;
+    try {
+      this.addCommand({
+        id: "edit-record",
+        name: "Edit record",
+        callback: () => { void this.openRecordCard(); },
+      });
+    } catch (_) {}
+  }
+
+  teardownRecordCard() {
+    this.recordCardActive = false;
+    try { this.recordCardModal?.close?.(); } catch (_) {}
+    this.recordCardModal = null;
+  }
+
+  recordCardActiveFilePath(overridePath = "") {
+    if (overridePath) return recordCardPath(overridePath);
+    try {
+      const view = typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : this.app?.workspace?.getActiveViewOfType?.(MarkdownView);
+      if (view && view.file && view.file.path) return recordCardPath(view.file.path);
+    } catch (_) {}
+    try {
+      const file = this.app?.workspace?.activeLeaf?.view?.file;
+      if (file && file.path) return recordCardPath(file.path);
+    } catch (_) {}
+    return "";
+  }
+
+  recordCardAlbumStem(gate) {
+    const album = gate && gate.album;
+    return String((album && album.stem) || "").trim();
+  }
+
+  recordCardStem(path) {
+    const filePath = recordCardPath(path);
+    const base = filePath.split("/").pop() || "";
+    return base.replace(/\.md$/i, "");
+  }
+
+  async openRecordCard(options = {}) {
+    if (this.recordCardActive === false) return { ok: false, reason: "unloaded" };
+    const desktop = typeof this.recordSheetDesktop === "function"
+      ? this.recordSheetDesktop()
+      : (typeof albumHeaderIsDesktopPlatform === "function" ? albumHeaderIsDesktopPlatform() : false);
+    if (desktop !== true) {
+      try { new Notice(RECORD_CARD_MOBILE_NOTICE); } catch (_) {}
+      return { ok: false, reason: "mobile" };
+    }
+    const filePath = this.recordCardActiveFilePath(options.filePath || "");
+    if (!filePath) {
+      try { new Notice(RECORD_CARD_NON_RECORD_NOTICE); } catch (_) {}
+      return { ok: false, reason: "missing-path" };
+    }
+    let gate = null;
+    try { gate = this.recordSheetGateFor(filePath); } catch (_) { gate = null; }
+    if (!gate || gate.mount !== true) {
+      const notice = recordCardGateNotice(gate);
+      try { new Notice(notice.message); } catch (_) {}
+      return { ok: false, reason: notice.reason };
+    }
+    let sheetModel = null;
+    try { sheetModel = this.recordSheetModelFor(filePath); } catch (_) { sheetModel = null; }
+    if (!sheetModel) {
+      try { new Notice(RECORD_CARD_NON_RECORD_NOTICE); } catch (_) {}
+      return { ok: false, reason: "missing-model" };
+    }
+    const writable = recordCardWritable(gate);
+    try { this.recordCardModal?.close?.(); } catch (_) {}
+    const modal = new RecordCardModal(this.app, {
+      plugin: this,
+      recordPath: filePath,
+      albumPath: gate.albumPath,
+      type: this.recordCardAlbumStem(gate),
+      stem: this.recordCardStem(filePath),
+      sheetModel,
+      gate,
+      writable,
+      field: options.field,
+      stage: options.stage,
+    });
+    this.recordCardModal = modal;
+    try { modal.open(); } catch (_) {}
+    return { ok: true, modal, readOnly: !writable };
+  }
+
+  recordCardMarkdownLeaf(path) {
+    const target = recordCardPath(path);
+    try {
+      const leaves = this.app?.workspace?.getLeavesOfType?.("markdown") || [];
+      return leaves.find((leaf) => recordCardPath(leaf?.view?.file?.path) === target)
+        || this.app?.workspace?.getMostRecentLeaf?.()
+        || this.app?.workspace?.activeLeaf
+        || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async recordCardJumpSource(path, line) {
+    if (typeof this.recordSheetOpenSource === "function") {
+      return this.recordSheetOpenSource(path, line);
+    }
+    return { ok: false, reason: "missing-jump" };
+  }
+
+  async recordCardStartYamlExcursion(options = {}) {
+    const recordPath = recordCardPath(options.recordPath || "");
+    const albumPath = recordCardPath(options.albumPath || "");
+    if (options.broken === true && albumPath) {
+      const line = Number.isInteger(options.warningLine) && options.warningLine > 0 ? options.warningLine : 1;
+      return this.recordCardJumpSource(albumPath, line);
+    }
+    if (!recordPath) return { ok: false, reason: "missing-path" };
+    const leaf = this.recordCardMarkdownLeaf(recordPath);
+    if (!leaf) return this.recordCardJumpSource(recordPath, recordCardYamlLine(options.target, options.report, ""));
+    let viewState = null;
+    try { viewState = typeof leaf.getViewState === "function" ? leaf.getViewState() : null; } catch (_) {}
+    let source = "";
+    try { source = await this.recordSheetReadSource?.(recordPath); } catch (_) { source = ""; }
+    const line = recordCardYamlLine(options.target, options.report, source);
+    const record = this.albumYamlExcursionBegin(leaf, {
+      kind: "record",
+      albumPath,
+      recordPath,
+      viewState,
+      selectedKey: options.field || "",
+      selectedField: options.field || "",
+      reopenCard: true,
+    });
+    if (!record) return this.recordCardJumpSource(recordPath, line);
+    return this.recordCardJumpSource(recordPath, line);
+  }
+
+  async recordCardYamlDoneAttempt(leaf, record) {
+    const ownPath = albumYamlExcursionOwnPath(record);
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    let save = { ok: true };
+    try { save = await this.albumYamlSaveExcursionEditors([ownPath]); }
+    catch (error) { save = { ok: false, code: "save-failed", message: String((error && error.message) || error) }; }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    if (!save || save.ok !== true) {
+      try { new Notice(save?.message || "Saving the record pane failed — fix it before Done."); } catch (_) {}
+      return { ok: false, reason: save?.code || "save-failed" };
+    }
+    if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
+    let restoreError = null;
+    try {
+      record.restoring = true;
+      if (record.viewState && typeof leaf.setViewState === "function") await leaf.setViewState(record.viewState);
+      else if (record.viewState?.state && typeof leaf.openFile === "function") {
+        const file = this.app?.vault?.getAbstractFileByPath?.(ownPath) || { path: ownPath };
+        await leaf.openFile(file, { state: { ...record.viewState.state, file: ownPath } });
+      }
+    } catch (error) { restoreError = error; }
+    record.restoring = false;
+    if (this.albumYamlExcursionForLeaf(leaf) !== record && !restoreError) return { ok: false, reason: "stale-excursion" };
+    if (restoreError) return { ok: false, reason: "restore-failed", message: String(restoreError.message || restoreError) };
+    this.albumYamlExcursionClear(leaf);
+    if (record.reopenCard !== false) {
+      const opened = await this.openRecordCard({
+        filePath: record.recordPath || ownPath,
+        field: record.selectedField || record.selectedKey,
+      });
+      return { ok: true, reopened: Boolean(opened?.modal) };
+    }
+    return { ok: true, reopened: false };
+  }
+}
+
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
 // Bob remains the source of truth; this fragment never writes note bytes
@@ -145056,6 +146803,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordUpdateMixin,
+  BobLedgerToolsRecordCardMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsAlbumEntryMixin,
@@ -148287,6 +150035,7 @@ try {
       albumYamlErrorFocus,
       albumYamlDoneDecision,
       albumYamlBuildDoneEl,
+      albumYamlExcursionOwnPath,
       ALBUM_UPDATE_SCHEMA_VERSION,
       ALBUM_UPDATE_TIMEOUT_MS,
       ALBUM_UPDATE_MAX_BUFFER,
@@ -149080,6 +150829,55 @@ try {
       recordOverlayFromReport,
       createRecordUpdateSession,
       recordUpdateServiceDeps,
+    });
+  }
+} catch (_) {}
+// ---- src/372-exports-record-card.js ----
+// Test-facing exports for the Record Card model, DOM, and YAML helpers.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      RECORD_CARD_CLASS,
+      RECORD_CARD_READING_TEXT,
+      RECORD_CARD_SAVING_TEXT,
+      RECORD_CARD_SAVED_TEXT,
+      RECORD_CARD_STALE_TEXT,
+      RECORD_CARD_CAPABILITY_TEXT,
+      RECORD_CARD_TYPED_STAGE_HINT,
+      RECORD_CARD_NON_RECORD_NOTICE,
+      RECORD_CARD_MOBILE_NOTICE,
+      RECORD_CARD_NO_REPORT_NOTICE,
+      recordCardPath,
+      recordCardIsChoiceField,
+      recordCardFieldKind,
+      recordCardStageKindFor,
+      recordCardTargets,
+      recordCardTargetByKey,
+      recordCardOpeningSelection,
+      recordCardPreserveSelection,
+      recordCardNavigate,
+      recordCardHomeEnd,
+      recordCardChoiceList,
+      recordCardFilterChoices,
+      recordCardChoiceByDigit,
+      recordCardTodayValue,
+      recordCardRequiredClearMessage,
+      recordCardEscLadder,
+      recordCardStatusText,
+      recordCardHintItems,
+      recordCardAllActions,
+      recordCardYamlLine,
+      recordCardTitle,
+      recordCardSubtitle,
+      recordCardCaptureStage,
+      recordCardRestoreStage,
+      recordCardLiveAnnouncement,
+      recordCardGateNotice,
+      recordCardWritable,
+      recordCardBuildEl,
+      recordCardRegion,
+      albumYamlExcursionOwnPath,
+      RecordCardModal,
     });
   }
 } catch (_) {}

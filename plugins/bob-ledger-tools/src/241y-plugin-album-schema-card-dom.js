@@ -13,6 +13,9 @@ function albumSchemaCardModalBase() {
         empty() { this.children = []; },
         addClass() {},
         setAttribute() {},
+        get textContent() {
+          return (this.children || []).map((child) => (child && child.textContent) || "").join("");
+        },
         appendChild(node) { node.parentNode = this; this.children.push(node); return node; },
         addEventListener(type, callback) {
           const listeners = this.listeners.get(type) || [];

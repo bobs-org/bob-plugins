@@ -58,6 +58,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordUpdateMixin,
+  BobLedgerToolsRecordCardMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsAlbumEntryMixin,

@@ -72,6 +72,7 @@ try {
       albumYamlErrorFocus,
       albumYamlDoneDecision,
       albumYamlBuildDoneEl,
+      albumYamlExcursionOwnPath,
       ALBUM_UPDATE_SCHEMA_VERSION,
       ALBUM_UPDATE_TIMEOUT_MS,
       ALBUM_UPDATE_MAX_BUFFER,

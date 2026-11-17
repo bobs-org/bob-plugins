@@ -15,7 +15,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.130.1 |
+| Version | 1.131.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -34,6 +34,7 @@ Album owner cards, group navigation, and sync controls are described in
 | Cycle period stats charts | `cycle-period-stats-charts` | — |
 | Edit album schema | `edit-album-schema` | — |
 | Edit bank setup | `edit-bank-setup` | — |
+| Edit record | `edit-record` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
 | Jump to current Pomodoro line | `jump-to-current-pomodoro` | Ctrl+9 |

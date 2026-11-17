@@ -58,14 +58,15 @@ formats amount plus cadence as `$9.99 a month`, and adds a quiet
 `next ≈ Dec 21` chip from `bob bank subscriptions -f json`. Each
 `subscriptions/*.md` record shows a header strip with the same money line,
 a 12-dot charge timeline, and any finding as a sentence. Canonical
-`type: [[record]]` notes also show a read-only [record sheet](record-card.md)
+`type: [[record]]` notes also show a [record sheet](record-card.md)
 under the first heading; the subscription strip docks on that sheet. Native
-Properties stays visible. A `bob-bank` fence
+Properties stays visible. **Edit record** opens the Record Card for value
+edits through bob. A `bob-bank` fence
 with `view: subscriptions` on `subscriptions.md` draws the album summary
 card: monthly and yearly estimates labeled as an estimate of commitments,
 not bank spend, status counts, the top five by monthly equivalent, and the
-findings count. Unknown `bob-bank` views stay quiet. None of these surfaces
-write the note.
+findings count. Unknown `bob-bank` views stay quiet. The sheet, index, and
+summary surfaces never write the note.
 
 Album notes also show a breadcrumb from their resolved area/project ancestry
 and an expanded-by-default schema summary in Reading view and Live Preview.

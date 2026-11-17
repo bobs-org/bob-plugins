@@ -482,12 +482,15 @@ class BobLedgerToolsBankDataMixin {
     }, BANK_REVALIDATE_DEBOUNCE_MS);
   }
 
-  bankRevalidateMounts() {
+  bankRevalidateMounts(options = {}) {
     if (this.bankDataActive === false) {
       return;
     }
     const generation = this.bankVaultGeneration || 0;
     const seen = new Set();
+    if (options.refreshedKey && options.refreshedGeneration === generation) {
+      seen.add(options.refreshedKey);
+    }
     for (const mount of this.bankMountsStore()) {
       if (!mount || mount.unloaded === true) {
         continue;

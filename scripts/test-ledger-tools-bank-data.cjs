@@ -374,6 +374,49 @@ test("only hub and canonical month notes invalidate, and debounce coalesces", as
   }
 });
 
+test("config apply refreshes once, updates other mounts, and retains newer invalidations", async () => {
+  for (const invalidateDuringRead of [false, true]) {
+    const { plugin, timers } = makeBankPlugin();
+    const calls = [];
+    const gate = deferred();
+    let blockConfig = false;
+    plugin.bankSpawnFetch = async (args) => {
+      calls.push(args[1]);
+      if (args[1] === "config" && blockConfig) {
+        blockConfig = false;
+        await gate.promise;
+      }
+      return { ok: true, report: { state: "valid", rules: [{ index: 0, match: "Moved rule" }] } };
+    };
+    try {
+      plugin.apiBankSubscribe({ fetches: [{ command: "config" }, { command: "list" }] }, () => {});
+      await flushMicrotasks();
+      calls.length = 0;
+      blockConfig = true;
+      const refreshing = plugin.bankConfigRevalidateAfterApply();
+      await flushMicrotasks();
+      timers.tick(BANK_REVALIDATE_DEBOUNCE_MS * 2);
+      await flushMicrotasks();
+      assert.deepEqual(calls, ["config"], "the invalidation timer must not queue a duplicate during the read");
+      if (invalidateDuringRead) plugin.apiBankInvalidate("external-edit");
+      gate.resolve();
+      const result = await refreshing;
+      await flushMicrotasks();
+      assert.equal(result.report.rules[0].match, "Moved rule");
+      assert.equal(calls.filter((command) => command === "list").length, 1);
+      assert.equal(calls.filter((command) => command === "config").length, invalidateDuringRead ? 2 : 1,
+        "only a newer external generation needs another config read");
+      if (!invalidateDuringRead) {
+        timers.tick(BANK_REVALIDATE_DEBOUNCE_MS * 2);
+        await flushMicrotasks();
+        assert.deepEqual(calls, ["config", "list"], "no delayed redundant refresh remains");
+      }
+    } finally {
+      plugin.teardownBankData();
+    }
+  }
+});
+
 test("local midnight bumps generation and command-mode bank tag invalidates", async () => {
   const { plugin, timers } = makeBankPlugin();
   plugin.bankSpawnFetch = async () => okList();

@@ -1879,6 +1879,181 @@ async function runE2e(parsed) {
     }
     record("setup-card-add-rule", Boolean(addRule && addRule.ok) && /CORNER CAFE/.test(fs.readFileSync(hubPath, "utf8")), jsonDetail(addRule));
 
+    // Keep the initial no-rules fixture: seed this walkthrough through the card
+    // after testing that empty state. Two nudges must still be one loud save.
+    for (const match of ["ACCEPTANCE SECOND", "ACCEPTANCE THIRD"]) {
+      const opened = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        modal.setSection("rules");
+        if (!modal.openNewRuleStage()) return false;
+        modal.onFieldInput("match", ${JSON.stringify(match)});
+        modal.onFieldInput("cat", "coffee");
+        return true;
+      })()`);
+      if (!opened) throw new Error(`could not stage rule fixture: ${match}`);
+      await waitCard(client, (value) => value?.canApply, `preview ${match}`, 15000);
+      await client.evaluate(`window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal.applyStage()`, 30000);
+      await waitCard(client, (value) => value && !value.stage, `save ${match}`, 15000);
+    }
+    report.probes.setupRuleSeed = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      return { rules: modal.report?.rules, ids: modal.model?.ruleItems?.map((item) => item.id),
+        busy: modal.busy, stage: modal.stage?.kind || "", status: modal.session?.getState()?.status };
+    })()`);
+    report.probes.setupRuleSeed.hub = fs.readFileSync(hubPath, "utf8");
+    await waitFor(client, `(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      return { busy: modal?.busy, rules: modal?.report?.rules || [], ids: modal?.model?.ruleItems?.map((item) => item.id) || [] };
+    })()`, (value) => !value?.busy && value?.ids?.includes("rule:0") && value.rules.length === 3,
+    "card displays three saved rules without reopening", 15000);
+    const ruleProbe = `(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const state = modal.session.getState();
+      const items = modal.model?.ruleItems || [];
+      const names = new Map(items.map((item) => [item.id, item.entry.match]));
+      const projected = modal.bankArrangement?.projected("rules") || [];
+      const painted = Array.from(modal.contentEl.querySelectorAll("[data-setup-card-rule]"))
+        .map((row) => names.get("rule:" + row.getAttribute("data-setup-card-rule")));
+      return { status: state.status, canApply: state.canApply, previewOk: state.preview?.ok === true,
+        dirty: modal.bankArrangeDirty(), confirm: modal.bankArrangeConfirm === true,
+        loud: modal.bankArrangeIsLoud(), stage: modal.stage?.kind || "", undo: state.undoAvailable === true,
+        draftOps: state.draftOps, rules: (modal.report?.rules || []).map((rule) => rule.match),
+        projected: projected.map((id) => names.get(id)), painted };
+    })()`;
+    const ruleKey = (key, options = {}) => client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const index = String(modal.selection?.id || "").replace(/^rule:/, "");
+      const row = Array.from(modal.contentEl.querySelectorAll("[data-setup-card-rule]"))
+        .find((item) => item.getAttribute("data-setup-card-rule") === index);
+      const target = modal.stage ? modal.contentEl : row;
+      if (!target) throw new Error("selected rule row missing");
+      target.focus();
+      const event = new KeyboardEvent("keydown", ${JSON.stringify({ key, bubbles: true, cancelable: true, ...options })});
+      target.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, confirm: modal.bankArrangeConfirm === true };
+    })()`);
+    const ruleCallsSince = (base) => {
+      const calls = shimLogEntries(shimDir, base).filter((entry) =>
+        entry.argv?.[0] === "bank" && entry.argv?.[1] === "config");
+      return {
+        dryRuns: calls.filter((entry) => entry.argv[2] === "update" && entry.argv.includes("-d")).length,
+        applies: calls.filter((entry) => entry.argv[2] === "update" && !entry.argv.includes("-d")).length,
+        revalidations: calls.filter((entry) => entry.argv[2] !== "update").length,
+        calls,
+      };
+    };
+    const waitBankIdle = () => waitFor(client, `(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      return !plugin.bankRevalidateTimer && !plugin.bankFlights?.size && !plugin.bankPendingFetches?.size;
+    })()`, (value) => value === true, "bank background reads settled", 15000);
+    const originalRules = ["CORNER CAFE", "ACCEPTANCE SECOND", "ACCEPTANCE THIRD"];
+    const movedRules = [...originalRules.slice(1), originalRules[0]];
+    const sameOrder = (actual, expected) => JSON.stringify(actual) === JSON.stringify(expected);
+    // These fixture strings occur only in rules. Read the bytes written by bob
+    // without issuing another config command that would inflate revalidation counts.
+    const persistedRuleOrder = () => {
+      const text = fs.readFileSync(hubPath, "utf8");
+      return originalRules.filter((match) => text.includes(match))
+        .sort((a, b) => text.indexOf(a) - text.indexOf(b));
+    };
+    await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      modal.setSection("rules");
+      modal.bankEnsureArrangement();
+      if (!modal.selectItem("rule:0")) throw new Error("first rule missing");
+    })()`);
+    const ruleBefore = await client.evaluate(ruleProbe);
+    record("setup-rule-arrange-fixture", sameOrder(ruleBefore.rules, originalRules), jsonDetail(ruleBefore));
+    await waitBankIdle();
+    const ruleHeadBefore = gitHead(vaultDir);
+    const ruleHashBefore = hashFile(hubPath);
+    const ruleLogBase = shimLogLength(shimDir);
+    const ruleNudges = [];
+    for (let index = 0; index < 2; index += 1) {
+      ruleNudges.push(await ruleKey("∆", { code: "KeyJ", altKey: true }));
+    }
+    const rulePreview = await waitFor(client, ruleProbe,
+      (value) => value?.canApply && value.previewOk && value.status === "preview-ready",
+      "rule arrangement preview", 20000);
+    const beforeConfirm = ruleCallsSince(ruleLogBase);
+    record("setup-rule-arrange-local", ruleNudges.every((event) => event.prevented)
+      && rulePreview.dirty && !rulePreview.stage && sameOrder(rulePreview.projected, movedRules)
+      && sameOrder(rulePreview.painted, movedRules) && beforeConfirm.applies === 0
+      && gitHead(vaultDir) === ruleHeadBefore && hashFile(hubPath) === ruleHashBefore,
+    jsonDetail({ nudges: ruleNudges, preview: rulePreview, calls: beforeConfirm }));
+    record("setup-rule-arrange-envelope", rulePreview.draftOps?.length > 0
+      && rulePreview.draftOps.every((op) => op.op === "rule.move" && typeof op.match_was === "string")
+      && beforeConfirm.dryRuns === 1 && rulePreview.loud?.loud === true, jsonDetail(rulePreview.draftOps));
+
+    const ruleFirstEnter = await ruleKey("Enter");
+    await sleep(350);
+    const ruleConfirmation = await client.evaluate(ruleProbe);
+    const firstEnterCalls = ruleCallsSince(ruleLogBase);
+    record("setup-rule-arrange-first-enter-confirms", ruleFirstEnter.prevented && ruleConfirmation.confirm
+      && ruleConfirmation.dirty && firstEnterCalls.applies === 0 && gitHead(vaultDir) === ruleHeadBefore
+      && hashFile(hubPath) === ruleHashBefore, jsonDetail({ ruleFirstEnter, ruleConfirmation, firstEnterCalls }));
+    await setViewport(client, 375, 812);
+    for (const theme of ["light", "dark", "reduced-motion"]) {
+      await setDark(client, theme === "dark");
+      await client.call("Emulation.setEmulatedMedia", {
+        features: theme === "reduced-motion" ? [{ name: "prefers-reduced-motion", value: "reduce" }] : [],
+      });
+      const shot = path.join(outDir, `setup-card-rule-confirm-375-${theme}.png`);
+      await capturePage(client, shot, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(shot);
+    }
+    await client.call("Emulation.setEmulatedMedia", { features: [] });
+    await setViewport(client, 1280, 900);
+    await waitBankIdle();
+    const ruleApplyLog = shimLogLength(shimDir);
+    const ruleSecondEnter = await ruleKey("Enter");
+    const ruleSaved = await waitFor(client, ruleProbe,
+      (value) => value && value.status !== "applying" && !value.dirty && value.undo,
+      "rule arrangement saved", 30000);
+    await waitBankIdle();
+    const ruleSaveCalls = ruleCallsSince(ruleApplyLog);
+    const ruleSaveSubjects = gitSubjectsSince(vaultDir, ruleHeadBefore);
+    const ruleSaveCommits = ruleSaveSubjects.filter((subject) => /^bank: config \(/.test(subject));
+    report.probes.setupRuleArrangeSave = { before: ruleBefore, preview: rulePreview,
+      firstEnter: ruleFirstEnter, confirmation: ruleConfirmation, secondEnter: ruleSecondEnter,
+      saved: ruleSaved, persisted: persistedRuleOrder(), ...ruleSaveCalls,
+      bobConfigCommits: ruleSaveCommits.length, commitSubjects: ruleSaveSubjects,
+      commitEvidence: gitEvidenceSince(vaultDir, ruleHeadBefore) };
+    record("setup-rule-arrange-one-commit", ruleSecondEnter.prevented
+      && ruleSaveCalls.applies === 1 && ruleSaveCommits.length === 1,
+    jsonDetail(report.probes.setupRuleArrangeSave));
+    record("setup-rule-arrange-one-revalidation", ruleSaveCalls.revalidations === 1,
+      `bank config reads after rule arrangement=${ruleSaveCalls.revalidations}`);
+    record("setup-rule-arrange-saved-order", sameOrder(ruleSaved.rules, movedRules)
+      && sameOrder(ruleSaved.projected, movedRules) && sameOrder(ruleSaved.painted, movedRules)
+      && sameOrder(persistedRuleOrder(), movedRules),
+    jsonDetail({ saved: ruleSaved.rules, painted: ruleSaved.painted, persisted: persistedRuleOrder() }));
+
+    const ruleUndoHead = gitHead(vaultDir);
+    const ruleUndoLog = shimLogLength(shimDir);
+    const ruleUndoKey = await ruleKey("z", { ctrlKey: true });
+    const ruleUndoPreview = await waitFor(client, ruleProbe,
+      (value) => value?.stage === "undo" && value.canApply && value.previewOk,
+      "rule arrangement Undo preview", 20000);
+    const ruleUndoEnter = await ruleKey("Enter");
+    const ruleRestored = await waitFor(client, ruleProbe,
+      (value) => value && value.status !== "applying" && !value.stage && !value.dirty,
+      "rule arrangement Undo saved", 30000);
+    await waitBankIdle();
+    const ruleUndoCalls = ruleCallsSince(ruleUndoLog);
+    const ruleUndoSubjects = gitSubjectsSince(vaultDir, ruleUndoHead);
+    report.probes.setupRuleArrangeUndo = { key: ruleUndoKey, preview: ruleUndoPreview, enter: ruleUndoEnter,
+      restored: ruleRestored, persisted: persistedRuleOrder(), ...ruleUndoCalls,
+      commitSubjects: ruleUndoSubjects, commitEvidence: gitEvidenceSince(vaultDir, ruleUndoHead) };
+    record("setup-rule-arrange-undo-one-commit", ruleUndoKey.prevented && ruleUndoEnter.prevented
+      && ruleUndoCalls.applies === 1 && ruleUndoSubjects.filter((subject) => /^bank: config \(/.test(subject)).length === 1,
+    jsonDetail(report.probes.setupRuleArrangeUndo));
+    record("setup-rule-arrange-undo-one-revalidation", ruleUndoCalls.revalidations === 1,
+      `bank config reads after rule Undo=${ruleUndoCalls.revalidations}`);
+    record("setup-rule-arrange-undo-restores", sameOrder(ruleRestored.rules, originalRules)
+      && sameOrder(ruleRestored.painted, originalRules) && sameOrder(persistedRuleOrder(), originalRules),
+    jsonDetail({ saved: ruleRestored.rules, painted: ruleRestored.painted, persisted: persistedRuleOrder() }));
+
     const yamlExcursion = await client.evaluate(`(() => (async () => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       if (modal && typeof modal.openYamlExcursion === "function") await modal.openYamlExcursion();

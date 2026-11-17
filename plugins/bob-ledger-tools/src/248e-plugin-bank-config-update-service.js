@@ -58,6 +58,10 @@ class BobLedgerToolsBankConfigUpdateMixin {
   async bankConfigRevalidateAfterApply() {
     try {
       this.apiBankInvalidate("config-update");
+      // This call performs the scheduled refresh now. Do not let its debounce
+      // queue a second config read while the first one is still in flight.
+      this.bankClearTimeout(this.bankRevalidateTimer);
+      this.bankRevalidateTimer = null;
     } catch (error) {
       // Invalidation is best-effort; the forced fetch below still runs.
     }
@@ -72,7 +76,13 @@ class BobLedgerToolsBankConfigUpdateMixin {
       refreshed = null;
     }
     try {
-      this.bankRevalidateMounts();
+      // The forced config fetch already delivered to its subscribers. Other
+      // mounted reports still need updating; a newer invalidation must also
+      // refresh config again, so only reuse this exact generation.
+      this.bankRevalidateMounts({
+        refreshedKey: refreshed && !refreshed.stale && !refreshed.error ? refreshed.key : null,
+        refreshedGeneration: refreshed?.generation,
+      });
     } catch (error) {
       // Mount revalidation is best-effort after a write.
     }

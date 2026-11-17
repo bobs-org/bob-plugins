@@ -588,6 +588,24 @@ test("close cancels a pending preview and ignores late work", async () => {
   pending.close();
 });
 
+test("apply returns the refreshed display report for changed and unchanged saves", async () => {
+  for (const changed of [true, false]) {
+    const deps = makeSessionDeps();
+    const refreshed = { report: { albums: [{ stem: "eat", fields: [] }] }, generation: 2 };
+    deps.setApplyImpl(async () => ({ ok: true, report: updateReport({ dry_run: false, changed }), refreshed }));
+    const session = await previewReadySession(deps);
+    try {
+      const result = await session.apply();
+      assert.equal(result.ok, true);
+      assert.equal(result.changed, changed);
+      assert.equal(result.refreshed, refreshed, "cards receive the writer service's post-save report");
+      assert.equal(deps.calls.apply, 1);
+    } finally {
+      session.close();
+    }
+  }
+});
+
 test("apply awaits editor saves, refuses on failure, and teaches missing support", async () => {
   const deps = makeSessionDeps();
   const session = await previewReadySession(deps);

@@ -464,7 +464,15 @@ Object.assign(BankSetupCardModal.prototype, {
             this.report.fingerprint = after;
           }
         }
-        this.bankArrangeBaseFingerprint = this.bankArrangeFingerprint();
+        // Rule ids name indices in the saved report. Once bob has reordered
+        // that report, keep selection on the moved rule and seed the next
+        // arrangement from the new indices instead of reusing the old ids.
+        if (refreshed && this.selection?.type === "rule") {
+          const index = (this.bankArrangement?.saved?.("rules") || []).indexOf(this.selection.id);
+          if (index >= 0) this.selection = { ...this.selection, index, id: `rule:${index}` };
+        }
+        this.bankArrangement = null;
+        this.bankArrangeBaseFingerprint = "";
         if (closed) {
           try { this.session?.close?.(); } catch (_) {}
           this.session = null;

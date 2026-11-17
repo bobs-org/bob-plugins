@@ -67153,7 +67153,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         session.refusal = null;
         session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
         notify();
-        return { ok: true, changed: false, report };
+        return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
       }
       session.expect = String(report.after_fingerprint || session.expect);
       session.undo = {
@@ -67179,7 +67179,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         session.status = "browsing";
       }
       notify();
-      return { ok: true, changed: true, report };
+      return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
     })();
     session.applyPromise = run;
     try {
@@ -71791,12 +71791,15 @@ class BobLedgerToolsBankDataMixin {
     }, BANK_REVALIDATE_DEBOUNCE_MS);
   }
 
-  bankRevalidateMounts() {
+  bankRevalidateMounts(options = {}) {
     if (this.bankDataActive === false) {
       return;
     }
     const generation = this.bankVaultGeneration || 0;
     const seen = new Set();
+    if (options.refreshedKey && options.refreshedGeneration === generation) {
+      seen.add(options.refreshedKey);
+    }
     for (const mount of this.bankMountsStore()) {
       if (!mount || mount.unloaded === true) {
         continue;
@@ -82858,6 +82861,10 @@ class BobLedgerToolsBankConfigUpdateMixin {
   async bankConfigRevalidateAfterApply() {
     try {
       this.apiBankInvalidate("config-update");
+      // This call performs the scheduled refresh now. Do not let its debounce
+      // queue a second config read while the first one is still in flight.
+      this.bankClearTimeout(this.bankRevalidateTimer);
+      this.bankRevalidateTimer = null;
     } catch (error) {
       // Invalidation is best-effort; the forced fetch below still runs.
     }
@@ -82872,7 +82879,13 @@ class BobLedgerToolsBankConfigUpdateMixin {
       refreshed = null;
     }
     try {
-      this.bankRevalidateMounts();
+      // The forced config fetch already delivered to its subscribers. Other
+      // mounted reports still need updating; a newer invalidation must also
+      // refresh config again, so only reuse this exact generation.
+      this.bankRevalidateMounts({
+        refreshedKey: refreshed && !refreshed.stale && !refreshed.error ? refreshed.key : null,
+        refreshedGeneration: refreshed?.generation,
+      });
     } catch (error) {
       // Mount revalidation is best-effort after a write.
     }
@@ -86723,7 +86736,15 @@ Object.assign(BankSetupCardModal.prototype, {
             this.report.fingerprint = after;
           }
         }
-        this.bankArrangeBaseFingerprint = this.bankArrangeFingerprint();
+        // Rule ids name indices in the saved report. Once bob has reordered
+        // that report, keep selection on the moved rule and seed the next
+        // arrangement from the new indices instead of reusing the old ids.
+        if (refreshed && this.selection?.type === "rule") {
+          const index = (this.bankArrangement?.saved?.("rules") || []).indexOf(this.selection.id);
+          if (index >= 0) this.selection = { ...this.selection, index, id: `rule:${index}` };
+        }
+        this.bankArrangement = null;
+        this.bankArrangeBaseFingerprint = "";
         if (closed) {
           try { this.session?.close?.(); } catch (_) {}
           this.session = null;

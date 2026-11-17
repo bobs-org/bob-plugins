@@ -422,7 +422,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         session.refusal = null;
         session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
         notify();
-        return { ok: true, changed: false, report };
+        return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
       }
       session.expect = String(report.after_fingerprint || session.expect);
       session.undo = {
@@ -448,7 +448,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         session.status = "browsing";
       }
       notify();
-      return { ok: true, changed: true, report };
+      return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
     })();
     session.applyPromise = run;
     try {

@@ -6,8 +6,8 @@ description: "Reference for the read-only record sheet on canonical album record
 Bob Ledger Tools paints a read-only **record sheet** directly under the first
 heading of a canonical album record (`type: [[record]]`) in Reading view and
 Live Preview. Native Properties and the filename-derived inline title stay
-visible. Editing, hiding Properties, and the Record Card dialog arrive in a
-later phase.
+visible. The Record Card dialog arrives in a later phase; the write machine
+it will drive is already in Ledger Tools.
 
 The sheet is desktop-only and reads the cached album report plus Obsidian
 metadata. Opening, folding, or collapsing a record never requests a new
@@ -65,6 +65,20 @@ legacy nouns, and Source mode keep their native surfaces.
 A broken album schema still mounts a warning sheet with the diagnostic and
 **Open album YAML**. Missing `record_values_v1` still mounts a healthy
 read-only sheet; it does not enable editing or hide Properties.
+
+## Write machine
+
+Record edits go through `bob records show` and `bob records update -i -` only.
+The plugin never calls `processFrontMatter`. A record session wraps the shared
+guarded update session with opt-in direct apply (`applyOps`), saves every pane
+showing the record or its album, and replays Undo from `inverse_ops` with
+`expect` set to `fingerprint_after`. A successful apply suppresses the writer's
+own album-sync echo and pushes an optimistic sheet overlay for at most 5s, or
+until metadataCache matches the applied properties.
+
+Identity fields (`parent`, `type`, `title`, `created`) stay uneditable here.
+BOM notes refuse with `record_uneditable` and keep every byte; CRLF notes keep
+their newlines.
 
 See [Album cards](albums.md) for owner catalogs, generated indexes, and the
 Schema Card.

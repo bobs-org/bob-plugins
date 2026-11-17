@@ -27,6 +27,8 @@ try {
       GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
       GUARDED_UPDATE_LOCK_WAIT_HINT,
       guardedUpdateReportLockBusy,
+      guardedUpdateReportChanged,
+      guardedUpdateAfterFingerprint,
       guardedUpdateSameConsequence,
       guardedUpdateLockWaitText,
       createGuardedUpdateSession,

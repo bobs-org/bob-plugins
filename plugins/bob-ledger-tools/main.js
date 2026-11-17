@@ -34541,7 +34541,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupRecordUpdate?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34666,7 +34666,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordSheet?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -66920,6 +66920,24 @@ function guardedUpdateReportLockBusy(report) {
   return Boolean(failure && failure.code === "lock_busy");
 }
 
+function guardedUpdateReportChanged(report) {
+  if (!guardedUpdateJsonObject(report)) return false;
+  if (report.changed === true) return true;
+  return Array.isArray(report.changed) && report.changed.length > 0;
+}
+
+function guardedUpdateAfterFingerprint(report, fallback) {
+  if (guardedUpdateJsonObject(report)) {
+    if (typeof report.after_fingerprint === "string" && report.after_fingerprint) {
+      return report.after_fingerprint;
+    }
+    if (typeof report.fingerprint_after === "string" && report.fingerprint_after) {
+      return report.fingerprint_after;
+    }
+  }
+  return typeof fallback === "string" ? fallback : "";
+}
+
 function guardedUpdateIsLockBusy(outcome, failureFromReport) {
   if (!outcome || outcome.ok !== true || !outcome.report || outcome.report.ok === true) {
     return false;
@@ -67003,6 +67021,10 @@ function guardedUpdateCopy(overrides = {}) {
 function createGuardedUpdateSession(init = {}, deps = {}) {
   const identity = String(init.identity || "");
   const ownPath = typeof init.ownPath === "string" ? init.ownPath : identity;
+  const savePaths = Array.isArray(init.savePaths) && init.savePaths.length
+    ? init.savePaths.map((path) => String(path || "")).filter(Boolean)
+    : [ownPath];
+  const allowDirectApply = init.allowDirectApply === true;
   const extras = guardedUpdateJsonObject(init.snapshotExtras) ? init.snapshotExtras : {};
   const copy = guardedUpdateCopy(init.copy);
   const debounceMs = Number.isFinite(init.debounceMs) && init.debounceMs >= 0
@@ -67424,7 +67446,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       }
       let saved;
       try {
-        saved = await deps.saveEditors([ownPath]);
+        saved = await deps.saveEditors(savePaths.slice());
       } catch (error) {
         saved = { ok: false, message: error && error.message ? String(error.message) : "Saving failed." };
       }
@@ -67619,9 +67641,9 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
           session.status = "refused";
           session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
           notify();
-          return { ok: false, ...session.refusal };
+          return { ok: false, ...session.refusal, report };
         }
-        if (report.changed !== true) {
+        if (!guardedUpdateReportChanged(report)) {
           session.revision += 1;
           session.draftOps = [];
           session.preview = null;
@@ -67630,10 +67652,11 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
           notify();
           return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
         }
-        session.expect = String(report.after_fingerprint || session.expect);
+        const afterFingerprint = guardedUpdateAfterFingerprint(report, session.expect);
+        session.expect = afterFingerprint;
         session.undo = {
           inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
-          afterFingerprint: String(report.after_fingerprint || ""),
+          afterFingerprint,
         };
         session.revision += 1;
         session.draftOps = [];
@@ -67671,6 +67694,45 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         notify();
       }
     }
+  }
+
+  async function applyOps(ops) {
+    if (allowDirectApply !== true) {
+      return {
+        ok: false,
+        code: "direct-apply-disabled",
+        message: "This session applies only after a current preview.",
+      };
+    }
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (session.applyPromise) {
+      return session.applyPromise;
+    }
+    const next = Array.isArray(ops) ? ops.slice() : [];
+    if (!next.length) {
+      return { ok: false, code: "empty-ops", message: copy.previewEmpty };
+    }
+    dropLockWait("direct-apply");
+    session.lockNotice = null;
+    session.revision += 1;
+    session.draftOps = next;
+    session.refusal = null;
+    const expect = session.expect;
+    const generation = vaultGeneration();
+    session.preview = {
+      epoch: session.epoch,
+      revision: session.revision,
+      identity,
+      expect,
+      generation,
+      envelopeText: buildEnvelope(expect, next),
+      report: { ok: true, consequence: "", changed: true },
+    };
+    session.status = "preview-ready";
+    notify();
+    return apply();
   }
 
   function stageUndo() {
@@ -67747,6 +67809,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return requestPreview();
     },
     apply,
+    applyOps,
     stopWaiting,
     stageUndo,
     retrySync,
@@ -99367,6 +99430,7 @@ const RECORD_SHEET_MONTHS = [
 const RECORD_SHEET_IDENTITY_KEYS = new Set(["parent", "type", "title", "created"]);
 const RECORD_SHEET_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const RECORD_SHEET_SAFE_URL_RE = /^(https?:)\/\//i;
+const RECORD_SHEET_OVERLAY_TTL_MS = 5000;
 
 function recordSheetPath(value) {
   return typeof albumHeaderPath === "function"
@@ -99893,10 +99957,21 @@ function recordSheetValueModel(field, raw, options = {}) {
 }
 
 function recordSheetMergeFrontmatter(frontmatter, overlay) {
-  if (!overlay || typeof overlay !== "object") return frontmatter && typeof frontmatter === "object" ? frontmatter : {};
+  const base = frontmatter && typeof frontmatter === "object" ? { ...frontmatter } : {};
+  if (!overlay || typeof overlay !== "object") return base;
   const properties = overlay.properties && typeof overlay.properties === "object" ? overlay.properties : null;
-  if (!properties) return frontmatter && typeof frontmatter === "object" ? frontmatter : {};
-  return { ...(frontmatter || {}), ...properties };
+  const next = properties ? { ...base, ...properties } : base;
+  if (properties) {
+    for (const [key, value] of Object.entries(properties)) {
+      if (value === null || value === undefined) delete next[key];
+    }
+  }
+  if (Array.isArray(overlay.unsetKeys)) {
+    for (const key of overlay.unsetKeys) {
+      if (typeof key === "string" && key) delete next[key];
+    }
+  }
+  return next;
 }
 
 function recordSheetCompactValue(value) {
@@ -100559,6 +100634,7 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetCollapsed = new Map();
     this.recordSheetFolds = new Map();
     this.recordSheetOverlays = new Map();
+    this.recordSheetOverlayTimers = new Map();
     this.recordSheetOwnedKey = "";
     this.recordSheetDomBuilds = 0;
     this.recordSheetRefreshTimer = null;
@@ -100598,6 +100674,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetEditorScopes?.clear?.();
     this.recordSheetCollapsed?.clear?.();
     this.recordSheetFolds?.clear?.();
+    for (const timer of this.recordSheetOverlayTimers?.values?.() || []) this.albumClearTimeout?.(timer);
+    this.recordSheetOverlayTimers?.clear?.();
     this.recordSheetOverlays?.clear?.();
     this.recordSheetOwnedKey = "";
   }
@@ -100615,6 +100693,9 @@ class BobLedgerToolsRecordSheetMixin {
     if (!this.recordSheetActive) return;
     const path = recordSheetPath(file && file.path);
     if (!path) return;
+    if (this.recordSheetOverlayMatchesFrontmatter(path)) {
+      this.recordSheetPushOverlay(path, null);
+    }
     if (this.recordSheetOwnsPath(path) || this.recordSheetWatchesParent(path)) {
       this.scheduleRecordSheetRefresh();
     }
@@ -100718,9 +100799,54 @@ class BobLedgerToolsRecordSheetMixin {
   refreshRecordSheetOverlay(path, overlay) {
     const key = recordSheetPath(path);
     if (!key) return;
+    if (!(this.recordSheetOverlays instanceof Map)) this.recordSheetOverlays = new Map();
     if (overlay) this.recordSheetOverlays.set(key, overlay);
     else this.recordSheetOverlays.delete(key);
     this.scheduleRecordSheetRefresh();
+  }
+
+  recordSheetPushOverlay(path, overlay, options = {}) {
+    const key = recordSheetPath(path);
+    if (!key) return null;
+    if (!(this.recordSheetOverlayTimers instanceof Map)) this.recordSheetOverlayTimers = new Map();
+    this.albumClearTimeout?.(this.recordSheetOverlayTimers.get(key));
+    this.recordSheetOverlayTimers.delete(key);
+    this.refreshRecordSheetOverlay(key, overlay || null);
+    if (!overlay) return null;
+    const ttl = Number.isFinite(options.ttlMs) && options.ttlMs >= 0
+      ? options.ttlMs
+      : RECORD_SHEET_OVERLAY_TTL_MS;
+    if (ttl === 0) return overlay;
+    const token = overlay;
+    const timer = this.albumSetTimeout?.(() => {
+      this.recordSheetOverlayTimers?.delete(key);
+      if (this.recordSheetOverlays?.get?.(key) === token) {
+        this.refreshRecordSheetOverlay(key, null);
+      }
+    }, ttl);
+    if (timer !== undefined && timer !== null) this.recordSheetOverlayTimers.set(key, timer);
+    return overlay;
+  }
+
+  recordSheetOverlayMatchesFrontmatter(path) {
+    const key = recordSheetPath(path);
+    const overlay = this.recordSheetOverlays?.get?.(key);
+    if (!overlay || !overlay.properties || typeof overlay.properties !== "object") return false;
+    const frontmatter = this.recordSheetFrontmatter(key) || {};
+    const keys = new Set([
+      ...Object.keys(overlay.properties),
+      ...(Array.isArray(overlay.unsetKeys) ? overlay.unsetKeys.filter((item) => typeof item === "string") : []),
+    ]);
+    for (const propKey of keys) {
+      const expected = Object.prototype.hasOwnProperty.call(overlay.properties, propKey)
+        ? overlay.properties[propKey]
+        : null;
+      const actual = Object.prototype.hasOwnProperty.call(frontmatter, propKey) ? frontmatter[propKey] : null;
+      const want = expected === undefined ? null : expected;
+      const have = actual === undefined ? null : actual;
+      if (JSON.stringify(want) !== JSON.stringify(have)) return false;
+    }
+    return keys.size > 0;
   }
 
   recordSheetHue(path) {
@@ -101253,6 +101379,543 @@ class BobLedgerToolsRecordSheetMixin {
       this.recordSheetNotifyOwnership();
     }, 100);
   }
+}
+// ---- src/242l-plugin-record-update-service.js ----
+// Record value update service. Preview is a dry-run with no vault bytes;
+// apply reuses album own-path echo suppression so the write never schedules
+// an automatic albums sync, then invalidates the cached album report.
+const RECORD_UPDATE_SCHEMA_VERSION = 1;
+const RECORD_UPDATE_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const RECORD_UPDATE_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const RECORD_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+
+function recordJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordUpdateNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
+function recordShowArgs(typeId, stem) {
+  return ["records", "show", String(typeId), String(stem), "-f", "json"];
+}
+
+function recordUpdateArgs(typeId, stem, options = {}) {
+  const opts = recordJsonObject(options) ? options : {};
+  const args = ["records", "update", String(typeId), String(stem), "-f", "json", "-i", "-"];
+  if (opts.dryRun === true) args.push("-d");
+  return args;
+}
+
+function recordUpdateEnvelope(expect, ops) {
+  return {
+    schema_version: RECORD_UPDATE_SCHEMA_VERSION,
+    expect: String(expect || ""),
+    ops: Array.isArray(ops) ? ops : [],
+  };
+}
+
+function recordUpdateEnvelopeText(expect, ops) {
+  return JSON.stringify(recordUpdateEnvelope(expect, ops));
+}
+
+function recordIsStaleUpdateCode(code) {
+  return code === "stale_record";
+}
+
+function recordUpdateErrorShape(error) {
+  if (error === null || error === undefined) return true;
+  if (!recordJsonObject(error)) return false;
+  if (typeof error.code !== "string" || !error.code) return false;
+  if (typeof error.message !== "string") return false;
+  return recordUpdateNullableString(error.hint) && recordUpdateNullableString(error.field);
+}
+
+function recordShowRecordShape(record) {
+  if (!recordJsonObject(record)) return false;
+  if (typeof record.stem !== "string" || typeof record.path !== "string") return false;
+  if (typeof record.fingerprint !== "string") return false;
+  return Array.isArray(record.properties);
+}
+
+function recordShowReportShape(body) {
+  if (!recordJsonObject(body) || body.schema_version !== RECORD_UPDATE_SCHEMA_VERSION) return false;
+  if (recordJsonObject(body.error) && typeof body.error.message === "string") return true;
+  return typeof body.type === "string" && recordShowRecordShape(body.record);
+}
+
+function recordUpdateReportShape(body) {
+  if (!recordJsonObject(body) || body.schema_version !== RECORD_UPDATE_SCHEMA_VERSION) return false;
+  if (body.command !== "update" || typeof body.ok !== "boolean") return false;
+  if (typeof body.dry_run !== "boolean") return false;
+  if (!Array.isArray(body.changed)) return false;
+  if (typeof body.stem !== "string" || typeof body.path !== "string") return false;
+  if (typeof body.fingerprint_before !== "string" || typeof body.fingerprint_after !== "string") return false;
+  if (typeof body.consequence !== "string") return false;
+  if (!Array.isArray(body.inverse_ops) || !Array.isArray(body.properties) || !Array.isArray(body.changes)) return false;
+  if (body.record !== undefined && body.record !== null && !recordShowRecordShape(body.record)) return false;
+  return recordUpdateErrorShape(body.error);
+}
+
+function recordDecodeShowReport(stdout, stderr = "", exitCode = null) {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob records show returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (!recordShowReportShape(body)) {
+    if (recordJsonObject(body) && body.schema_version !== RECORD_UPDATE_SCHEMA_VERSION) {
+      return {
+        ok: false,
+        code: "schema-mismatch",
+        message: "bob records show uses a different schema.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob records show returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (recordJsonObject(body.error) && !recordShowRecordShape(body.record)) {
+    return { ok: true, report: { ...body, ok: false }, exitCode };
+  }
+  return { ok: true, report: { ...body, ok: true }, exitCode };
+}
+
+function recordDecodeUpdateReport(stdout, stderr = "", exitCode = null) {
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false,
+      code: "bad-json",
+      message: "bob records update returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (!recordUpdateReportShape(body)) {
+    if (recordJsonObject(body) && body.schema_version !== RECORD_UPDATE_SCHEMA_VERSION) {
+      return {
+        ok: false,
+        code: "schema-mismatch",
+        message: "bob records update uses a different schema.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return {
+      ok: false,
+      code: "bad-shape",
+      message: "bob records update returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+function recordUpdateErrorModel(result) {
+  const source = recordJsonObject(result) ? result : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Record editing needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found") {
+    return { code, hint: "bob was not found. Install or update bob-cli, or set stats.bob_path." };
+  }
+  if (code === "needs-bob") {
+    return { code, hint: "Update bob (just install) to edit records here." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob records update timed out. Refresh and reconcile before retrying; never blind-retry." };
+  }
+  if (code === "stdin-failed") {
+    return { code, hint: "The update envelope never reached bob. Nothing was written; preview again." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "The record update failed. Refresh before retrying.",
+  };
+}
+
+function recordOverlayFromReport(report) {
+  const properties = {};
+  const unsetKeys = [];
+  const changedKeys = Array.isArray(report && report.changed)
+    ? report.changed.map((key) => String(key || "")).filter(Boolean)
+    : [];
+  for (const row of Array.isArray(report && report.properties) ? report.properties : []) {
+    if (!row || typeof row.key !== "string" || !row.key) continue;
+    const empty = row.state === "none" || row.state === "missing" || row.value === null || row.value === undefined;
+    if (empty) {
+      properties[row.key] = null;
+      unsetKeys.push(row.key);
+    } else {
+      properties[row.key] = row.value;
+    }
+  }
+  return { properties, unsetKeys, changedKeys };
+}
+
+class BobLedgerToolsRecordUpdateMixin {
+  recordUpdateUndoStore() {
+    if (!(this.recordUpdateUndoByPath instanceof Map)) {
+      this.recordUpdateUndoByPath = new Map();
+    }
+    return this.recordUpdateUndoByPath;
+  }
+
+  setupRecordUpdate() {
+    this.recordUpdateUndoByPath = new Map();
+    this.recordUpdateFlight = null;
+    this.recordUpdateBusy = false;
+    this.recordUpdateEpoch = this.recordUpdateEpoch || 0;
+  }
+
+  teardownRecordUpdate() {
+    this.recordUpdateBusy = false;
+    this.recordUpdateFlight = null;
+    this.recordUpdateEpoch = (this.recordUpdateEpoch || 0) + 1;
+    if (this.recordUpdateUndoByPath instanceof Map) this.recordUpdateUndoByPath.clear();
+  }
+
+  recordUpdateRememberUndo(path, inverseOps, afterFingerprint) {
+    try {
+      const key = typeof albumReportPath === "function" ? albumReportPath(path) : String(path || "");
+      if (!key || !Array.isArray(inverseOps) || !inverseOps.length) return null;
+      const record = {
+        inverseOps: inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+        afterFingerprint: typeof afterFingerprint === "string" ? afterFingerprint : "",
+      };
+      this.recordUpdateUndoStore().set(key, record);
+      return record;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  recordUpdateLastUndo(path) {
+    try {
+      const key = typeof albumReportPath === "function" ? albumReportPath(path) : String(path || "");
+      return this.recordUpdateUndoStore().get(key) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  apiRecordUpdateCapable() {
+    try {
+      const report = typeof this.albumReportState === "function"
+        ? this.albumReportState()?.report
+        : null;
+      return typeof recordSheetHasValuesCapability === "function"
+        && recordSheetHasValuesCapability(report);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  recordSpawnJson(args, decode, options = {}) {
+    const opts = recordJsonObject(options) ? options : {};
+    return bobSpawnJson(args, decode, {
+      ...opts,
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: RECORD_UPDATE_TIMEOUT_MS,
+      maxBuffer: RECORD_UPDATE_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  recordSpawnShow(typeId, stem, options = {}) {
+    return this.recordSpawnJson(
+      recordShowArgs(typeId, stem),
+      recordDecodeShowReport,
+      { ...options, commandLabel: "bob records show" },
+    );
+  }
+
+  recordSpawnUpdate(typeId, stem, envelopeText, options = {}) {
+    const opts = recordJsonObject(options) ? options : {};
+    const dryRun = opts.dryRun === true;
+    return this.recordSpawnJson(
+      recordUpdateArgs(typeId, stem, { dryRun }),
+      recordDecodeUpdateReport,
+      {
+        ...opts,
+        stdin: typeof envelopeText === "string" ? envelopeText : "",
+        commandLabel: dryRun ? "bob records update -d" : "bob records update",
+      },
+    );
+  }
+
+  apiRecordShow(typeId, stem, options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    return this.recordSpawnShow(typeId, stem, options);
+  }
+
+  apiRecordUpdatePreview(typeId, stem, envelopeText, options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    if (!this.apiRecordUpdateCapable()) {
+      return Promise.resolve({
+        ok: false,
+        code: "needs-bob",
+        message: "Update bob (just install) to edit records here.",
+      });
+    }
+    return this.recordSpawnUpdate(typeId, stem, envelopeText, { ...options, dryRun: true });
+  }
+
+  apiRecordUpdateApply(typeId, stem, envelopeText, options = {}) {
+    const opts = recordJsonObject(options) ? options : {};
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Album data has unloaded." });
+    }
+    if (!this.apiRecordUpdateCapable()) {
+      return Promise.resolve({
+        ok: false,
+        code: "needs-bob",
+        message: "Update bob (just install) to edit records here.",
+      });
+    }
+    if (this.recordUpdateFlight) {
+      return Promise.resolve({
+        ok: false,
+        code: "apply-busy",
+        message: "Another record apply is already running.",
+        hint: "Wait for it to settle, then preview again.",
+      });
+    }
+    const epoch = this.albumDataEpoch || 0;
+    const ownPaths = (Array.isArray(opts.ownPaths) ? opts.ownPaths : [opts.ownPath])
+      .map((path) => (typeof albumReportPath === "function" ? albumReportPath(path) : String(path || "")))
+      .filter(Boolean);
+    const waitForSync = this.albumSyncFlight && typeof this.albumSyncFlight.then === "function"
+      ? this.albumSyncFlight.catch(() => null)
+      : null;
+    const run = async () => {
+      if (waitForSync) {
+        try { await waitForSync; } catch (_) {}
+      }
+      if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+        return { ok: false, code: "unloaded", message: "Album data has unloaded." };
+      }
+      if (this.recordUpdateFlight && this.recordUpdateFlight !== applyPromise) {
+        return {
+          ok: false,
+          code: "apply-busy",
+          message: "Another record apply is already running.",
+          hint: "Wait for it to settle, then preview again.",
+        };
+      }
+      this.recordUpdateBusy = true;
+      for (const ownPath of ownPaths) this.albumUpdateOwnPathsStore().add(ownPath);
+      let outcome;
+      try {
+        try {
+          outcome = await this.recordSpawnUpdate(typeId, stem, envelopeText, { ...opts, dryRun: false });
+        } catch (error) {
+          outcome = {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : "bob records update failed.",
+          };
+        }
+        const wrote = Boolean(
+          outcome && outcome.ok && outcome.report && outcome.report.ok === true &&
+          outcome.report.dry_run === false && guardedUpdateReportChanged(outcome.report),
+        );
+        const unknown = Boolean(outcome && !outcome.ok && (outcome.code === "timeout" || outcome.code === "failed"));
+        if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+          return { ...outcome, refreshed: this.albumReportState?.() || null, wrote, unknown };
+        }
+        let refreshed = this.albumReportState?.() || null;
+        if (wrote || unknown) {
+          try { refreshed = this.apiAlbumInvalidate("record-update"); } catch (_) {}
+        }
+        return { ...outcome, refreshed, wrote, unknown };
+      } finally {
+        this.recordUpdateBusy = false;
+        if (this.recordUpdateFlight === applyPromise) this.recordUpdateFlight = null;
+        for (const ownPath of ownPaths) this.albumUpdateOwnPathsStore().delete(ownPath);
+      }
+    };
+    const applyPromise = Promise.resolve().then(run);
+    this.recordUpdateFlight = applyPromise;
+    return applyPromise;
+  }
+}
+// ---- src/242m-plugin-record-update-session.js ----
+// Record value update session: a thin wrapper over the shared guarded
+// session with direct apply, inverse-op Undo, pane saves, and the sheet overlay.
+function createRecordUpdateSession(init = {}, deps = {}) {
+  const recordPath = typeof albumReportPath === "function"
+    ? albumReportPath(init.recordPath || init.ownPath || "")
+    : String(init.recordPath || init.ownPath || "");
+  const albumPath = typeof albumReportPath === "function"
+    ? albumReportPath(init.albumPath || "")
+    : String(init.albumPath || "");
+  const typeId = String(init.type || init.recordType || "");
+  const stem = String(init.stem || "");
+  const inner = createGuardedUpdateSession({
+    identity: recordPath || `${typeId}:${stem}`,
+    ownPath: recordPath,
+    savePaths: [recordPath, albumPath].filter(Boolean),
+    allowDirectApply: true,
+    expect: init.expect,
+    undo: init.undo,
+    debounceMs: RECORD_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
+    buildEnvelope: recordUpdateEnvelopeText,
+    isStaleCode: recordIsStaleUpdateCode,
+    failureFromReport: (report) => (recordJsonObject(report) && recordJsonObject(report.error) ? report.error : {}),
+    snapshotExtras: { recordPath, albumPath, type: typeId, stem },
+    copy: {
+      previewEmpty: "There is nothing to preview.",
+      previewFailed: "The record preview failed.",
+      previewRefused: "The record preview was refused.",
+      applyFailed: "The record apply failed.",
+      applyRefused: "The record apply was refused.",
+      stalePreview: "The vault changed while this preview was running.",
+      stalePreviewHint: "Refresh the record and preview the retained draft against the current fingerprint.",
+      staleGeneration: "The vault changed under this preview.",
+      staleGenerationHint: "Preview again before applying; nothing was written.",
+      saveUnsupported: "Open editors could not confirm the record is saved.",
+      saveUnsupportedHint: "Save every pane showing the record or its album in Source mode, then preview again. Nothing was written.",
+      saveFailedHint: "Apply is refused until every pane showing the record or its album saves. Nothing was written.",
+      supersededDuringSave: "The record draft changed while panes were saving; preview the current draft before applying.",
+      saveInvalidated: "Saving changed the vault; preview again before applying.",
+      nothingToUndo: "There is no record edit to undo.",
+      syncWarningHint: "The record edit is saved and Undo is available. Retry sync with `bob vault-sync` only.",
+      retryHint: "Retry `bob vault-sync` later. The saved edit and Undo are kept.",
+    },
+  }, deps);
+
+  function staleFingerprint(result) {
+    const report = result && result.report;
+    const record = report && recordJsonObject(report.record) ? report.record : null;
+    if (record && typeof record.fingerprint === "string" && record.fingerprint) return record.fingerprint;
+    if (report && typeof report.fingerprint_before === "string" && report.fingerprint_before) {
+      return report.fingerprint_before;
+    }
+    return "";
+  }
+
+  async function settle(result) {
+    if (!result) return result;
+    const stale = result.ok === false && (
+      result.kind === "stale" ||
+      result.code === "stale_record" ||
+      (result.report && result.report.error && result.report.error.code === "stale_record")
+    );
+    if (stale) {
+      const fingerprint = staleFingerprint(result);
+      if (fingerprint) inner.rebase(fingerprint);
+      return result;
+    }
+    if (result.ok === true && result.changed === true && result.report && typeof deps.onApplied === "function") {
+      try { deps.onApplied(result); } catch (_) {}
+    }
+    return result;
+  }
+
+  return {
+    setDraft: inner.setDraft,
+    previewNow: inner.previewNow,
+    apply: async () => settle(await inner.apply()),
+    applyOps: async (ops) => settle(await inner.applyOps(ops)),
+    undo: async () => {
+      const staged = inner.stageUndo();
+      if (!staged || staged.ok !== true) return staged;
+      return settle(await inner.applyOps(inner.getState().draftOps));
+    },
+    stopWaiting: inner.stopWaiting,
+    stageUndo: inner.stageUndo,
+    retrySync: inner.retrySync,
+    noteGenerationChanged: inner.noteGenerationChanged,
+    rebase: inner.rebase,
+    close: inner.close,
+    getState: inner.getState,
+  };
+}
+
+function recordUpdateServiceDeps(plugin, options = {}) {
+  const typeId = String(options.type || "");
+  const stem = String(options.stem || "");
+  const recordPath = typeof albumReportPath === "function"
+    ? albumReportPath(options.recordPath || "")
+    : String(options.recordPath || "");
+  const albumPath = typeof albumReportPath === "function"
+    ? albumReportPath(options.albumPath || "")
+    : String(options.albumPath || "");
+  const saveEditors = options.saveEditors || ((paths) =>
+    typeof albumSchemaSaveOpenEditors === "function"
+      ? albumSchemaSaveOpenEditors(plugin, paths)
+      : Promise.resolve({
+        ok: false,
+        code: "save-unsupported",
+        message: "Open editors could not confirm they are saved.",
+      }));
+  return {
+    spawnPreview: (_identity, envelopeText) => plugin.apiRecordUpdatePreview(typeId, stem, envelopeText),
+    spawnApply: (_identity, envelopeText, applyOptions) =>
+      plugin.apiRecordUpdateApply(typeId, stem, envelopeText, {
+        ...applyOptions,
+        ownPaths: [recordPath, albumPath].filter(Boolean),
+      }),
+    spawnVaultSync: () =>
+      typeof plugin.apiAlbumVaultSyncRetry === "function"
+        ? plugin.apiAlbumVaultSyncRetry()
+        : Promise.resolve({ ok: false, code: "sync-unsupported", message: "Sync retry is unavailable here." }),
+    saveEditors,
+    getGeneration: () => {
+      try {
+        if (plugin && Number.isInteger(plugin.albumVaultGeneration)) return plugin.albumVaultGeneration;
+      } catch (_) {}
+      return 0;
+    },
+    timers: options.timers,
+    onChange: options.onChange,
+    onApplied: (result) => {
+      const report = result && result.report;
+      if (!report) return;
+      plugin.recordUpdateRememberUndo(
+        recordPath,
+        report.inverse_ops,
+        report.fingerprint_after || report.after_fingerprint,
+      );
+      if (typeof plugin.recordSheetPushOverlay === "function") {
+        plugin.recordSheetPushOverlay(recordPath, recordOverlayFromReport(report));
+      }
+    },
+  };
 }
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
@@ -144135,6 +144798,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
+  BobLedgerToolsRecordUpdateMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,
   BobLedgerToolsAlbumSchemaCardMixin,
   BobLedgerToolsAlbumEntryMixin,
@@ -147321,6 +147985,8 @@ try {
       GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
       GUARDED_UPDATE_LOCK_WAIT_HINT,
       guardedUpdateReportLockBusy,
+      guardedUpdateReportChanged,
+      guardedUpdateAfterFingerprint,
       guardedUpdateSameConsequence,
       guardedUpdateLockWaitText,
       createGuardedUpdateSession,
@@ -148102,6 +148768,7 @@ try {
       RECORD_SHEET_SURFACE_CLASS,
       RECORD_SHEET_HIDES_CLASS,
       RECORD_SHEET_BAND_ATTR,
+      RECORD_SHEET_OVERLAY_TTL_MS,
       recordSheetPath,
       recordSheetFail,
       recordSheetIsCanonicalRecordType,
@@ -148130,6 +148797,29 @@ try {
       recordSheetBuildEl,
       recordSheetAppendSubscriptionBand,
       albumSubscriptionHeaderIsSheetOwned,
+    });
+  }
+} catch (_) {}
+// ---- src/371-exports-record-update.js ----
+// Test-facing exports for the record update service and session.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      RECORD_UPDATE_SCHEMA_VERSION,
+      RECORD_UPDATE_TIMEOUT_MS,
+      RECORD_UPDATE_MAX_BUFFER,
+      RECORD_UPDATE_PREVIEW_DEBOUNCE_MS,
+      recordShowArgs,
+      recordUpdateArgs,
+      recordUpdateEnvelope,
+      recordUpdateEnvelopeText,
+      recordIsStaleUpdateCode,
+      recordDecodeShowReport,
+      recordDecodeUpdateReport,
+      recordUpdateErrorModel,
+      recordOverlayFromReport,
+      createRecordUpdateSession,
+      recordUpdateServiceDeps,
     });
   }
 } catch (_) {}

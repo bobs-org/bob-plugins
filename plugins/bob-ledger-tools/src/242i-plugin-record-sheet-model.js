@@ -11,6 +11,7 @@ const RECORD_SHEET_MONTHS = [
 const RECORD_SHEET_IDENTITY_KEYS = new Set(["parent", "type", "title", "created"]);
 const RECORD_SHEET_WIKILINK_RE = /\[\[([^\]\n]+)\]\]/g;
 const RECORD_SHEET_SAFE_URL_RE = /^(https?:)\/\//i;
+const RECORD_SHEET_OVERLAY_TTL_MS = 5000;
 
 function recordSheetPath(value) {
   return typeof albumHeaderPath === "function"
@@ -537,10 +538,21 @@ function recordSheetValueModel(field, raw, options = {}) {
 }
 
 function recordSheetMergeFrontmatter(frontmatter, overlay) {
-  if (!overlay || typeof overlay !== "object") return frontmatter && typeof frontmatter === "object" ? frontmatter : {};
+  const base = frontmatter && typeof frontmatter === "object" ? { ...frontmatter } : {};
+  if (!overlay || typeof overlay !== "object") return base;
   const properties = overlay.properties && typeof overlay.properties === "object" ? overlay.properties : null;
-  if (!properties) return frontmatter && typeof frontmatter === "object" ? frontmatter : {};
-  return { ...(frontmatter || {}), ...properties };
+  const next = properties ? { ...base, ...properties } : base;
+  if (properties) {
+    for (const [key, value] of Object.entries(properties)) {
+      if (value === null || value === undefined) delete next[key];
+    }
+  }
+  if (Array.isArray(overlay.unsetKeys)) {
+    for (const key of overlay.unsetKeys) {
+      if (typeof key === "string" && key) delete next[key];
+    }
+  }
+  return next;
 }
 
 function recordSheetCompactValue(value) {

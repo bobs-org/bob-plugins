@@ -6,6 +6,7 @@ try {
       RECORD_SHEET_SURFACE_CLASS,
       RECORD_SHEET_HIDES_CLASS,
       RECORD_SHEET_BAND_ATTR,
+      RECORD_SHEET_OVERLAY_TTL_MS,
       recordSheetPath,
       recordSheetFail,
       recordSheetIsCanonicalRecordType,

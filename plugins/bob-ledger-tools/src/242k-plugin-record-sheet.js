@@ -18,6 +18,7 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetCollapsed = new Map();
     this.recordSheetFolds = new Map();
     this.recordSheetOverlays = new Map();
+    this.recordSheetOverlayTimers = new Map();
     this.recordSheetOwnedKey = "";
     this.recordSheetDomBuilds = 0;
     this.recordSheetRefreshTimer = null;
@@ -57,6 +58,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetEditorScopes?.clear?.();
     this.recordSheetCollapsed?.clear?.();
     this.recordSheetFolds?.clear?.();
+    for (const timer of this.recordSheetOverlayTimers?.values?.() || []) this.albumClearTimeout?.(timer);
+    this.recordSheetOverlayTimers?.clear?.();
     this.recordSheetOverlays?.clear?.();
     this.recordSheetOwnedKey = "";
   }
@@ -74,6 +77,9 @@ class BobLedgerToolsRecordSheetMixin {
     if (!this.recordSheetActive) return;
     const path = recordSheetPath(file && file.path);
     if (!path) return;
+    if (this.recordSheetOverlayMatchesFrontmatter(path)) {
+      this.recordSheetPushOverlay(path, null);
+    }
     if (this.recordSheetOwnsPath(path) || this.recordSheetWatchesParent(path)) {
       this.scheduleRecordSheetRefresh();
     }
@@ -177,9 +183,54 @@ class BobLedgerToolsRecordSheetMixin {
   refreshRecordSheetOverlay(path, overlay) {
     const key = recordSheetPath(path);
     if (!key) return;
+    if (!(this.recordSheetOverlays instanceof Map)) this.recordSheetOverlays = new Map();
     if (overlay) this.recordSheetOverlays.set(key, overlay);
     else this.recordSheetOverlays.delete(key);
     this.scheduleRecordSheetRefresh();
+  }
+
+  recordSheetPushOverlay(path, overlay, options = {}) {
+    const key = recordSheetPath(path);
+    if (!key) return null;
+    if (!(this.recordSheetOverlayTimers instanceof Map)) this.recordSheetOverlayTimers = new Map();
+    this.albumClearTimeout?.(this.recordSheetOverlayTimers.get(key));
+    this.recordSheetOverlayTimers.delete(key);
+    this.refreshRecordSheetOverlay(key, overlay || null);
+    if (!overlay) return null;
+    const ttl = Number.isFinite(options.ttlMs) && options.ttlMs >= 0
+      ? options.ttlMs
+      : RECORD_SHEET_OVERLAY_TTL_MS;
+    if (ttl === 0) return overlay;
+    const token = overlay;
+    const timer = this.albumSetTimeout?.(() => {
+      this.recordSheetOverlayTimers?.delete(key);
+      if (this.recordSheetOverlays?.get?.(key) === token) {
+        this.refreshRecordSheetOverlay(key, null);
+      }
+    }, ttl);
+    if (timer !== undefined && timer !== null) this.recordSheetOverlayTimers.set(key, timer);
+    return overlay;
+  }
+
+  recordSheetOverlayMatchesFrontmatter(path) {
+    const key = recordSheetPath(path);
+    const overlay = this.recordSheetOverlays?.get?.(key);
+    if (!overlay || !overlay.properties || typeof overlay.properties !== "object") return false;
+    const frontmatter = this.recordSheetFrontmatter(key) || {};
+    const keys = new Set([
+      ...Object.keys(overlay.properties),
+      ...(Array.isArray(overlay.unsetKeys) ? overlay.unsetKeys.filter((item) => typeof item === "string") : []),
+    ]);
+    for (const propKey of keys) {
+      const expected = Object.prototype.hasOwnProperty.call(overlay.properties, propKey)
+        ? overlay.properties[propKey]
+        : null;
+      const actual = Object.prototype.hasOwnProperty.call(frontmatter, propKey) ? frontmatter[propKey] : null;
+      const want = expected === undefined ? null : expected;
+      const have = actual === undefined ? null : actual;
+      if (JSON.stringify(want) !== JSON.stringify(have)) return false;
+    }
+    return keys.size > 0;
   }
 
   recordSheetHue(path) {

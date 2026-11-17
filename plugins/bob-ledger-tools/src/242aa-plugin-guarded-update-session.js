@@ -21,6 +21,24 @@ function guardedUpdateReportLockBusy(report) {
   return Boolean(failure && failure.code === "lock_busy");
 }
 
+function guardedUpdateReportChanged(report) {
+  if (!guardedUpdateJsonObject(report)) return false;
+  if (report.changed === true) return true;
+  return Array.isArray(report.changed) && report.changed.length > 0;
+}
+
+function guardedUpdateAfterFingerprint(report, fallback) {
+  if (guardedUpdateJsonObject(report)) {
+    if (typeof report.after_fingerprint === "string" && report.after_fingerprint) {
+      return report.after_fingerprint;
+    }
+    if (typeof report.fingerprint_after === "string" && report.fingerprint_after) {
+      return report.fingerprint_after;
+    }
+  }
+  return typeof fallback === "string" ? fallback : "";
+}
+
 function guardedUpdateIsLockBusy(outcome, failureFromReport) {
   if (!outcome || outcome.ok !== true || !outcome.report || outcome.report.ok === true) {
     return false;
@@ -104,6 +122,10 @@ function guardedUpdateCopy(overrides = {}) {
 function createGuardedUpdateSession(init = {}, deps = {}) {
   const identity = String(init.identity || "");
   const ownPath = typeof init.ownPath === "string" ? init.ownPath : identity;
+  const savePaths = Array.isArray(init.savePaths) && init.savePaths.length
+    ? init.savePaths.map((path) => String(path || "")).filter(Boolean)
+    : [ownPath];
+  const allowDirectApply = init.allowDirectApply === true;
   const extras = guardedUpdateJsonObject(init.snapshotExtras) ? init.snapshotExtras : {};
   const copy = guardedUpdateCopy(init.copy);
   const debounceMs = Number.isFinite(init.debounceMs) && init.debounceMs >= 0
@@ -525,7 +547,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       }
       let saved;
       try {
-        saved = await deps.saveEditors([ownPath]);
+        saved = await deps.saveEditors(savePaths.slice());
       } catch (error) {
         saved = { ok: false, message: error && error.message ? String(error.message) : "Saving failed." };
       }
@@ -720,9 +742,9 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
           session.status = "refused";
           session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
           notify();
-          return { ok: false, ...session.refusal };
+          return { ok: false, ...session.refusal, report };
         }
-        if (report.changed !== true) {
+        if (!guardedUpdateReportChanged(report)) {
           session.revision += 1;
           session.draftOps = [];
           session.preview = null;
@@ -731,10 +753,11 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
           notify();
           return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
         }
-        session.expect = String(report.after_fingerprint || session.expect);
+        const afterFingerprint = guardedUpdateAfterFingerprint(report, session.expect);
+        session.expect = afterFingerprint;
         session.undo = {
           inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
-          afterFingerprint: String(report.after_fingerprint || ""),
+          afterFingerprint,
         };
         session.revision += 1;
         session.draftOps = [];
@@ -772,6 +795,45 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         notify();
       }
     }
+  }
+
+  async function applyOps(ops) {
+    if (allowDirectApply !== true) {
+      return {
+        ok: false,
+        code: "direct-apply-disabled",
+        message: "This session applies only after a current preview.",
+      };
+    }
+    if (session.closed) {
+      return { ok: false, code: "closed", message: "The edit session is closed." };
+    }
+    if (session.applyPromise) {
+      return session.applyPromise;
+    }
+    const next = Array.isArray(ops) ? ops.slice() : [];
+    if (!next.length) {
+      return { ok: false, code: "empty-ops", message: copy.previewEmpty };
+    }
+    dropLockWait("direct-apply");
+    session.lockNotice = null;
+    session.revision += 1;
+    session.draftOps = next;
+    session.refusal = null;
+    const expect = session.expect;
+    const generation = vaultGeneration();
+    session.preview = {
+      epoch: session.epoch,
+      revision: session.revision,
+      identity,
+      expect,
+      generation,
+      envelopeText: buildEnvelope(expect, next),
+      report: { ok: true, consequence: "", changed: true },
+    };
+    session.status = "preview-ready";
+    notify();
+    return apply();
   }
 
   function stageUndo() {
@@ -848,6 +910,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return requestPreview();
     },
     apply,
+    applyOps,
     stopWaiting,
     stageUndo,
     retrySync,

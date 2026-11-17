@@ -137,14 +137,23 @@ function bankSetupCardMoveSelection(model, selection, direction) {
   return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
 }
 
+function bankSetupCardComposeLabel(entry, draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const emoji = Object.prototype.hasOwnProperty.call(draft, "emoji")
+    ? String(draft.emoji || "")
+    : String(entry?.emoji || "");
+  if (typeof albumEmojiSlotFusedToken === "function") return albumEmojiSlotFusedToken(label, emoji);
+  return emoji ? (label ? `${emoji} ${label}` : emoji) : label;
+}
+
 function bankSetupCardSetCategoryOp(entry, draft = {}) {
   if (!entry || typeof entry.key !== "string" || !entry.key) return null;
   const set = {};
   const unset = [];
   const label = typeof draft.label === "string" ? draft.label.trim() : "";
-  if (label && label !== (entry.label || entry.key)) {
-    set.label = entry.emoji ? `${entry.emoji} ${label}` : label;
-  }
+  const composed = bankSetupCardComposeLabel(entry, draft);
+  const previous = bankSetupCardComposeLabel(entry, { label: entry.label || entry.key, emoji: entry.emoji || "" });
+  if (label && composed !== previous) set.label = composed;
   const group = typeof draft.group === "string" ? draft.group.trim() : "";
   const oldGroup = typeof entry.group === "string" ? entry.group.trim() : "";
   if (group !== oldGroup) {

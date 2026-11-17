@@ -57,6 +57,7 @@ function albumEmojiSlotRenderResults(slot) {
     category: slot.category,
     label: slot.labelInput?.value || "",
     vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+    vocabularyTitle: slot.config.vocabularyTitle,
   });
   slot.model = model;
   const results = slot.results;
@@ -183,6 +184,7 @@ function albumEmojiSlotOpen(slot, initialQuery = "") {
     query: slot.search.value,
     label: slot.labelInput?.value || "",
     vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+    vocabularyTitle: slot.config.vocabularyTitle,
   });
   albumEmojiSlotRenderCategories(slot);
   albumEmojiSlotRenderResults(slot);

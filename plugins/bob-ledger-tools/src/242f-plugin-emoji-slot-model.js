@@ -108,9 +108,10 @@ function albumEmojiSlotNormalizeRows(rows, limit = ALBUM_EMOJI_SLOT_RESULT_LIMIT
   return output;
 }
 
-function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12) {
+function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12, title = "In your albums") {
   const labelWords = albumEmojiSlotWords(label);
   const rows = [];
+  const category = String(title || "In your albums");
   for (const [index, item] of (Array.isArray(vocabulary) ? vocabulary : []).entries()) {
     const emoji = typeof item?.emoji === "string" ? item.emoji : "";
     if (!emoji || albumEmojiSlotIsDigitKeycap(emoji)) continue;
@@ -122,7 +123,7 @@ function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12) {
       name,
       label: name,
       alias: "",
-      category: "In your albums",
+      category,
       vocabulary: true,
       overlap,
       sourceIndex: index,
@@ -168,7 +169,8 @@ function albumEmojiSlotResultModel(api, options = {}) {
     try { labelRows = api.suggestForLabel(String(options.label || ""), { limit: 9 }); } catch (_) {}
     try { recentRows = api.recents({ limit: 9 }); } catch (_) {}
     if (String(options.label || "").trim()) add(`For “${String(options.label || "").trim()}”`, labelRows, 9);
-    add("In your albums", albumEmojiSlotVocabularyRows(options.vocabulary, options.label, 12), 12);
+    const vocabularyTitle = String(options.vocabularyTitle || "In your albums");
+    add(vocabularyTitle, albumEmojiSlotVocabularyRows(options.vocabulary, options.label, 12, vocabularyTitle), 12);
     add("Recent", recentRows, 9);
   }
 

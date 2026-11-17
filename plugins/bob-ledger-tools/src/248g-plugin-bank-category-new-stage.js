@@ -23,7 +23,7 @@
     try {
       const root = this.contentEl;
       const node = root && typeof root.querySelector === "function"
-        ? root.querySelector(`input[data-bank-new-field="${wanted}"]`)
+        ? root.querySelector(`[data-bank-new-field="${wanted}"]`)
         : null;
       if (node && typeof node.focus === "function") node.focus();
     } catch (_) {}
@@ -120,6 +120,7 @@
     const stage = this.newStage;
     if (!stage) return;
     const field = stage.focus || "label";
+    if (field === "emoji") return;
     if (key === "Backspace") {
       stage[field] = String(stage[field] || "").slice(0, -1);
     } else if (key === "Delete") {
@@ -153,18 +154,20 @@
     }
     if (key === "Enter" || key === "Ctrl+Enter") {
       bankCategoryUiConsume(event);
+      if (this.bankEmojiSlot?.isOpen) return;
       await this.applyNewCategoryAndFile();
       return;
     }
     if (key === "Tab") {
       bankCategoryUiConsume(event);
-      const order = ["label", "group", "hotkey"];
+      const order = ["label", "emoji", "group", "hotkey"];
       const at = order.indexOf(this.newStage.focus || "label");
       const next = event.shiftKey
         ? order[(at - 1 + order.length) % order.length]
         : order[(at + 1) % order.length];
       this.focusNewCategoryField(next);
       try { this.paint(); } catch (_) {}
+      this.focusNewCategoryField(next);
       return;
     }
     const groupFocused = (this.newStage.focus === "group") ||
@@ -248,6 +251,7 @@
     this.didInteract = true;
     this.syncNewCategoryDraft();
     try { this.paint(); } catch (_) {}
+    if (field === "emoji") return;
     this.focusNewCategoryField(field);
   };
 
@@ -266,19 +270,95 @@
     bankCategoryUiAppend(button, "span", "bob-bank-category-tile-label", tile.text);
   };
 
+  proto.refreshNewCategoryStageStatus = function refreshNewCategoryStageStatus(host) {
+    const stage = this.newStage;
+    if (!host || !stage) return;
+    const stale = [];
+    for (const child of Array.from(host.children || [])) {
+      if (child !== this.newStageForm) stale.push(child);
+    }
+    for (const child of stale) {
+      try { host.removeChild(child); } catch (_) {}
+    }
+    const hotkey = bankCategoryNewHotkeyStatus(this.categories, stage.hotkey);
+    if (hotkey.text) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
+    }
+    if (stage.consequence) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
+    }
+    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
+        stage.refusal.hint || stage.refusal.message, { role: "status" });
+    }
+    if (this.syncWarning) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
+        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
+      const retry = bankCategoryUiAppend(host, "button", "bob-bank-category-retry", "Retry sync", {
+        type: "button",
+      });
+      if (retry) {
+        retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
+      }
+    }
+    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+  };
+
   proto.paintNewCategoryStage = function paintNewCategoryStage(root) {
     const stage = this.newStage;
-    if (!stage) return;
-    const form = bankCategoryUiAppend(root, "form", "bob-bank-category-stage", null, {
+    if (!stage || !root) return;
+    if (this.newStageHost) {
+      if (this.newStageHost.parentNode !== root && typeof root.appendChild === "function") {
+        root.appendChild(this.newStageHost);
+      }
+      this.refreshNewCategoryStageStatus(this.newStageHost);
+      return;
+    }
+    const host = bankCategoryUiAppend(root, "div", "bob-bank-category-stage-host");
+    if (!host) return;
+    this.newStageHost = host;
+    const form = bankCategoryUiAppend(host, "form", "bob-bank-category-stage", null, {
       autocomplete: "off",
     });
     if (!form) return;
+    this.newStageForm = form;
+    this.newStagePainted = true;
     form.addEventListener?.("submit", (event) => {
       bankCategoryUiConsume(event);
+      if (this.bankEmojiSlot?.isOpen) return;
       void this.applyNewCategoryAndFile();
     });
+    const labelRow = bankCategoryUiAppend(form, "label", "bob-bank-category-stage-row");
+    if (labelRow) {
+      bankCategoryUiAppend(labelRow, "span", "bob-bank-category-stage-caption", "Label");
+      const fused = bankCategoryUiAppend(labelRow, "div", "bob-emoji-slot-fused");
+      const input = fused ? bankCategoryUiAppend(fused, "input",
+        "bob-bank-category-stage-input bob-emoji-slot-label", null, {
+          type: "text",
+          "data-bank-new-field": "label",
+          placeholder: "Category label",
+          value: stage.label || "",
+          spellcheck: "false",
+          autocomplete: "off",
+        }) : null;
+      if (input) {
+        try { input.value = stage.label || ""; } catch (_) {}
+        input.addEventListener?.("input", (event) => {
+          this.onNewCategoryFieldInput("label", event && event.target && event.target.value);
+        });
+        input.addEventListener?.("focus", () => {
+          if (this.newStage) this.newStage.focus = "label";
+        });
+        if (typeof bankCategoryEmojiSlotMount === "function") {
+          bankCategoryEmojiSlotMount(fused, input, this, {
+            emoji: stage.emoji || "",
+            caption: "Emoji",
+            inputName: "emoji",
+          });
+        }
+      }
+    }
     const fields = [
-      { field: "label", caption: "Label", placeholder: "e.g. 🍔 Fast food" },
       { field: "group", caption: "Group", placeholder: "e.g. Everyday" },
       { field: "hotkey", caption: "Key", placeholder: stage.suggestedHotkey || "free key" },
     ];
@@ -304,29 +384,7 @@
         });
       }
     }
-    const hotkey = bankCategoryNewHotkeyStatus(this.categories, stage.hotkey);
-    if (hotkey.text) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
-    }
-    if (stage.consequence) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
-    }
-    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
-        stage.refusal.hint || stage.refusal.message, { role: "status" });
-    }
-    if (this.syncWarning) {
-      const warn = bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
-        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
-      const retry = bankCategoryUiAppend(root, "button", "bob-bank-category-retry", "Retry sync", {
-        type: "button",
-      });
-      if (retry) {
-        retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
-      }
-      void warn;
-    }
-    bankCategoryUiAppend(root, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+    this.refreshNewCategoryStageStatus(host);
   };
 
   proto.retryBankConfigSync = async function retryBankConfigSync() {

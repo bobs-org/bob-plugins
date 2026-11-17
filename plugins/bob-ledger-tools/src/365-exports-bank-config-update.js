@@ -46,6 +46,10 @@ try {
       bankCategoryCardKeysText,
       bankCategoryNewStageKeysText,
       bankCategoryIsNewCategoryKey,
+      bankCategoryEmojiVocabulary,
+      bankCategoryEmojiSiblings,
+      bankEmojiSlotInterceptKey,
+      bankCategoryEmojiSlotMount,
     });
   }
 } catch (error) {

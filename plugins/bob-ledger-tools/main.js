@@ -79999,6 +79999,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const content = this.contentEl;
     if (!content) return;
     const live = this.liveRegion && this.liveRegion.parentNode === content ? this.liveRegion : null;
+    const keepHost = this.newStage && this.newStageHost ? this.newStageHost : null;
+    if (keepHost && keepHost.parentNode) {
+      try { keepHost.parentNode.removeChild(keepHost); } catch (_) {}
+    }
     try {
       if (typeof content.empty === "function") {
         content.empty();
@@ -83110,6 +83114,7 @@ function bankCategoryNewStageInit(categories, highlightKey) {
   const hotkey = bankCategoryNewSuggestedHotkey(categories);
   return {
     label: "",
+    emoji: "",
     group: bankCategoryNewDefaultGroup(categories, highlightKey),
     hotkey,
     suggestedHotkey: hotkey,
@@ -83163,8 +83168,11 @@ function bankCategoryNewCycleGroup(stage, direction) {
 
 function bankCategoryNewDraftOp(stage) {
   if (typeof bankConfigAddOp !== "function") return null;
+  const fused = typeof albumEmojiSlotFusedToken === "function"
+    ? albumEmojiSlotFusedToken(stage && stage.label, stage && stage.emoji)
+    : (stage && stage.label);
   return bankConfigAddOp({
-    label: stage && stage.label,
+    label: fused,
     group: stage && stage.group,
     hotkey: stage && stage.hotkey,
   });
@@ -83226,7 +83234,7 @@ function bankCategoryIsNewCategoryKey(key) {
     try {
       const root = this.contentEl;
       const node = root && typeof root.querySelector === "function"
-        ? root.querySelector(`input[data-bank-new-field="${wanted}"]`)
+        ? root.querySelector(`[data-bank-new-field="${wanted}"]`)
         : null;
       if (node && typeof node.focus === "function") node.focus();
     } catch (_) {}
@@ -83323,6 +83331,7 @@ function bankCategoryIsNewCategoryKey(key) {
     const stage = this.newStage;
     if (!stage) return;
     const field = stage.focus || "label";
+    if (field === "emoji") return;
     if (key === "Backspace") {
       stage[field] = String(stage[field] || "").slice(0, -1);
     } else if (key === "Delete") {
@@ -83356,18 +83365,20 @@ function bankCategoryIsNewCategoryKey(key) {
     }
     if (key === "Enter" || key === "Ctrl+Enter") {
       bankCategoryUiConsume(event);
+      if (this.bankEmojiSlot?.isOpen) return;
       await this.applyNewCategoryAndFile();
       return;
     }
     if (key === "Tab") {
       bankCategoryUiConsume(event);
-      const order = ["label", "group", "hotkey"];
+      const order = ["label", "emoji", "group", "hotkey"];
       const at = order.indexOf(this.newStage.focus || "label");
       const next = event.shiftKey
         ? order[(at - 1 + order.length) % order.length]
         : order[(at + 1) % order.length];
       this.focusNewCategoryField(next);
       try { this.paint(); } catch (_) {}
+      this.focusNewCategoryField(next);
       return;
     }
     const groupFocused = (this.newStage.focus === "group") ||
@@ -83451,6 +83462,7 @@ function bankCategoryIsNewCategoryKey(key) {
     this.didInteract = true;
     this.syncNewCategoryDraft();
     try { this.paint(); } catch (_) {}
+    if (field === "emoji") return;
     this.focusNewCategoryField(field);
   };
 
@@ -83469,19 +83481,95 @@ function bankCategoryIsNewCategoryKey(key) {
     bankCategoryUiAppend(button, "span", "bob-bank-category-tile-label", tile.text);
   };
 
+  proto.refreshNewCategoryStageStatus = function refreshNewCategoryStageStatus(host) {
+    const stage = this.newStage;
+    if (!host || !stage) return;
+    const stale = [];
+    for (const child of Array.from(host.children || [])) {
+      if (child !== this.newStageForm) stale.push(child);
+    }
+    for (const child of stale) {
+      try { host.removeChild(child); } catch (_) {}
+    }
+    const hotkey = bankCategoryNewHotkeyStatus(this.categories, stage.hotkey);
+    if (hotkey.text) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
+    }
+    if (stage.consequence) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
+    }
+    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
+        stage.refusal.hint || stage.refusal.message, { role: "status" });
+    }
+    if (this.syncWarning) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
+        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
+      const retry = bankCategoryUiAppend(host, "button", "bob-bank-category-retry", "Retry sync", {
+        type: "button",
+      });
+      if (retry) {
+        retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
+      }
+    }
+    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+  };
+
   proto.paintNewCategoryStage = function paintNewCategoryStage(root) {
     const stage = this.newStage;
-    if (!stage) return;
-    const form = bankCategoryUiAppend(root, "form", "bob-bank-category-stage", null, {
+    if (!stage || !root) return;
+    if (this.newStageHost) {
+      if (this.newStageHost.parentNode !== root && typeof root.appendChild === "function") {
+        root.appendChild(this.newStageHost);
+      }
+      this.refreshNewCategoryStageStatus(this.newStageHost);
+      return;
+    }
+    const host = bankCategoryUiAppend(root, "div", "bob-bank-category-stage-host");
+    if (!host) return;
+    this.newStageHost = host;
+    const form = bankCategoryUiAppend(host, "form", "bob-bank-category-stage", null, {
       autocomplete: "off",
     });
     if (!form) return;
+    this.newStageForm = form;
+    this.newStagePainted = true;
     form.addEventListener?.("submit", (event) => {
       bankCategoryUiConsume(event);
+      if (this.bankEmojiSlot?.isOpen) return;
       void this.applyNewCategoryAndFile();
     });
+    const labelRow = bankCategoryUiAppend(form, "label", "bob-bank-category-stage-row");
+    if (labelRow) {
+      bankCategoryUiAppend(labelRow, "span", "bob-bank-category-stage-caption", "Label");
+      const fused = bankCategoryUiAppend(labelRow, "div", "bob-emoji-slot-fused");
+      const input = fused ? bankCategoryUiAppend(fused, "input",
+        "bob-bank-category-stage-input bob-emoji-slot-label", null, {
+          type: "text",
+          "data-bank-new-field": "label",
+          placeholder: "Category label",
+          value: stage.label || "",
+          spellcheck: "false",
+          autocomplete: "off",
+        }) : null;
+      if (input) {
+        try { input.value = stage.label || ""; } catch (_) {}
+        input.addEventListener?.("input", (event) => {
+          this.onNewCategoryFieldInput("label", event && event.target && event.target.value);
+        });
+        input.addEventListener?.("focus", () => {
+          if (this.newStage) this.newStage.focus = "label";
+        });
+        if (typeof bankCategoryEmojiSlotMount === "function") {
+          bankCategoryEmojiSlotMount(fused, input, this, {
+            emoji: stage.emoji || "",
+            caption: "Emoji",
+            inputName: "emoji",
+          });
+        }
+      }
+    }
     const fields = [
-      { field: "label", caption: "Label", placeholder: "e.g. 🍔 Fast food" },
       { field: "group", caption: "Group", placeholder: "e.g. Everyday" },
       { field: "hotkey", caption: "Key", placeholder: stage.suggestedHotkey || "free key" },
     ];
@@ -83507,29 +83595,7 @@ function bankCategoryIsNewCategoryKey(key) {
         });
       }
     }
-    const hotkey = bankCategoryNewHotkeyStatus(this.categories, stage.hotkey);
-    if (hotkey.text) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
-    }
-    if (stage.consequence) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
-    }
-    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
-      bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
-        stage.refusal.hint || stage.refusal.message, { role: "status" });
-    }
-    if (this.syncWarning) {
-      const warn = bankCategoryUiAppend(root, "p", "bob-bank-category-hint",
-        this.syncWarning.message || "Saved locally; sync failed.", { role: "status" });
-      const retry = bankCategoryUiAppend(root, "button", "bob-bank-category-retry", "Retry sync", {
-        type: "button",
-      });
-      if (retry) {
-        retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
-      }
-      void warn;
-    }
-    bankCategoryUiAppend(root, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+    this.refreshNewCategoryStageStatus(host);
   };
 
   proto.retryBankConfigSync = async function retryBankConfigSync() {
@@ -84421,14 +84487,23 @@ function bankSetupCardMoveSelection(model, selection, direction) {
   return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
 }
 
+function bankSetupCardComposeLabel(entry, draft = {}) {
+  const label = typeof draft.label === "string" ? draft.label.trim() : "";
+  const emoji = Object.prototype.hasOwnProperty.call(draft, "emoji")
+    ? String(draft.emoji || "")
+    : String(entry?.emoji || "");
+  if (typeof albumEmojiSlotFusedToken === "function") return albumEmojiSlotFusedToken(label, emoji);
+  return emoji ? (label ? `${emoji} ${label}` : emoji) : label;
+}
+
 function bankSetupCardSetCategoryOp(entry, draft = {}) {
   if (!entry || typeof entry.key !== "string" || !entry.key) return null;
   const set = {};
   const unset = [];
   const label = typeof draft.label === "string" ? draft.label.trim() : "";
-  if (label && label !== (entry.label || entry.key)) {
-    set.label = entry.emoji ? `${entry.emoji} ${label}` : label;
-  }
+  const composed = bankSetupCardComposeLabel(entry, draft);
+  const previous = bankSetupCardComposeLabel(entry, { label: entry.label || entry.key, emoji: entry.emoji || "" });
+  if (label && composed !== previous) set.label = composed;
   const group = typeof draft.group === "string" ? draft.group.trim() : "";
   const oldGroup = typeof entry.group === "string" ? entry.group.trim() : "";
   if (group !== oldGroup) {
@@ -84900,6 +84975,41 @@ function bankSetupCardInput(parent, modal, field, caption, value, options = {}) 
   return input;
 }
 
+function bankSetupCardFusedLabel(parent, modal, stage) {
+  const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
+  if (!row) return null;
+  bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", "Label");
+  const fused = bankSetupCardAppend(row, "div", "bob-emoji-slot-fused");
+  if (!fused) return null;
+  const input = bankSetupCardAppend(fused, "input", "bob-bank-setup-card-input bob-emoji-slot-label", null, {
+    type: "text",
+    "data-setup-field": "label",
+    "data-setup-card-focus": "label",
+    "aria-label": "Category label",
+    placeholder: "Category label",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  if (!input) return null;
+  input.value = typeof stage?.label === "string" ? stage.label : "";
+  input.addEventListener?.("input", (event) => {
+    modal.onFieldInput("label", event?.target?.value);
+  });
+  input.addEventListener?.("focus", () => {
+    if (modal.stage) modal.stage.focus = "label";
+  });
+  if (typeof bankCategoryEmojiSlotMount === "function") {
+    bankCategoryEmojiSlotMount(fused, input, modal, {
+      emoji: stage?.emoji || "",
+      ignoreKey: stage?.kind === "edit" && stage.entry ? stage.entry.key : "",
+      caption: "Emoji",
+      inputName: "emoji",
+      disabled: modal.readOnly === true || modal.busy === true,
+    });
+  }
+  return input;
+}
+
 function bankSetupCardPaintTabs(root, modal, model) {
   const tabs = bankSetupCardAppend(root, "div", "bob-bank-setup-card-tabs", null, {
     role: "tablist",
@@ -85232,8 +85342,12 @@ function bankSetupCardPaintStage(parent, modal, doc) {
   if (stage.title) bankSetupCardAppend(section, "h3", "", stage.title);
   if (stage.kind === "edit" || stage.kind === "new") {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
-    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
-    bankSetupCardInput(form, modal, "label", "Label", stage.label, { placeholder: "e.g. ☕ Coffee" });
+    form?.addEventListener?.("submit", (event) => {
+      bankCategoryUiConsume(event);
+      if (modal.bankEmojiSlot?.isOpen) return;
+      void modal.applyStage();
+    });
+    bankSetupCardFusedLabel(form, modal, stage);
     bankSetupCardInput(form, modal, "group", "Group", stage.group, { placeholder: "e.g. Everyday" });
     bankSetupCardInput(form, modal, "hotkey", "Key", stage.hotkey, { placeholder: "free key" });
     if (stage.kind === "edit") {
@@ -85243,7 +85357,10 @@ function bankSetupCardPaintStage(parent, modal, doc) {
         : "This key is pinned. Clear it to let bob derive a key.");
     } else {
       const status = bankCategoryNewHotkeyStatus(modal.categories, stage.hotkey);
-      if (status.text) bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text, { role: "status" });
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text || "", {
+        role: "status",
+        "data-setup-stage-owner": "true",
+      });
     }
   } else if (stage.kind === "rename-group") {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
@@ -85586,6 +85703,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     return this.startStage({
       kind: "edit", title: `Edit ${entry.label || entry.key}`, entry,
       label: entry.label || entry.key,
+      emoji: entry.emoji || "",
       group: entry.group || "",
       hotkey: entry.hotkey || "",
       hotkeyTouched: false,
@@ -85728,7 +85846,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (op) this.session?.setDraft?.([op]);
     else this.session?.setDraft?.([]);
     this.sessionState = this.session?.getState?.() || null;
-    this.paint();
+    this.paint(field === "emoji" ? "session" : "full");
+    if (field === "emoji") return;
     try { this.contentEl?.querySelector?.(`[data-setup-card-focus="${field}"]`)?.focus?.(); } catch (_) {}
   }
 
@@ -87014,6 +87133,16 @@ function bankSetupCardPaintStageStatus(host, modal) {
   if (!host) return;
   const state = modal.sessionState || {};
   const latched = Boolean(modal.bankEnterLatch);
+  const owner = host.querySelector?.("[data-setup-stage-owner]");
+  if (owner && modal.stage?.kind === "new") {
+    const status = typeof bankCategoryNewHotkeyStatus === "function"
+      ? bankCategoryNewHotkeyStatus(modal.categories, modal.stage.hotkey)
+      : { text: "" };
+    try {
+      if (typeof notebookSetText === "function") notebookSetText(owner, status.text || "");
+      else owner.textContent = status.text || "";
+    } catch (_) {}
+  }
   const apply = host.querySelector?.('[data-setup-action="apply"]');
   if (apply) {
     apply.disabled = modal.busy || modal.readOnly || (state.canApply !== true && !latched);
@@ -97152,9 +97281,10 @@ function albumEmojiSlotNormalizeRows(rows, limit = ALBUM_EMOJI_SLOT_RESULT_LIMIT
   return output;
 }
 
-function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12) {
+function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12, title = "In your albums") {
   const labelWords = albumEmojiSlotWords(label);
   const rows = [];
+  const category = String(title || "In your albums");
   for (const [index, item] of (Array.isArray(vocabulary) ? vocabulary : []).entries()) {
     const emoji = typeof item?.emoji === "string" ? item.emoji : "";
     if (!emoji || albumEmojiSlotIsDigitKeycap(emoji)) continue;
@@ -97166,7 +97296,7 @@ function albumEmojiSlotVocabularyRows(vocabulary, label, limit = 12) {
       name,
       label: name,
       alias: "",
-      category: "In your albums",
+      category,
       vocabulary: true,
       overlap,
       sourceIndex: index,
@@ -97212,7 +97342,8 @@ function albumEmojiSlotResultModel(api, options = {}) {
     try { labelRows = api.suggestForLabel(String(options.label || ""), { limit: 9 }); } catch (_) {}
     try { recentRows = api.recents({ limit: 9 }); } catch (_) {}
     if (String(options.label || "").trim()) add(`For “${String(options.label || "").trim()}”`, labelRows, 9);
-    add("In your albums", albumEmojiSlotVocabularyRows(options.vocabulary, options.label, 12), 12);
+    const vocabularyTitle = String(options.vocabularyTitle || "In your albums");
+    add(vocabularyTitle, albumEmojiSlotVocabularyRows(options.vocabulary, options.label, 12, vocabularyTitle), 12);
     add("Recent", recentRows, 9);
   }
 
@@ -97301,6 +97432,7 @@ function albumEmojiSlotRenderResults(slot) {
     category: slot.category,
     label: slot.labelInput?.value || "",
     vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+    vocabularyTitle: slot.config.vocabularyTitle,
   });
   slot.model = model;
   const results = slot.results;
@@ -97427,6 +97559,7 @@ function albumEmojiSlotOpen(slot, initialQuery = "") {
     query: slot.search.value,
     label: slot.labelInput?.value || "",
     vocabulary: typeof slot.config.getVocabulary === "function" ? slot.config.getVocabulary() : slot.config.vocabulary,
+    vocabularyTitle: slot.config.vocabularyTitle,
   });
   albumEmojiSlotRenderCategories(slot);
   albumEmojiSlotRenderResults(slot);
@@ -97739,6 +97872,150 @@ function albumSchemaEmojiSlotControl(doc, host, labelText, inputName, value, lab
     if (this.schemaEmojiSlotActive?.isOpen) albumEmojiSlotClose(this.schemaEmojiSlotActive, { focusWell: false });
     return originalClose.apply(this, args);
   };
+}
+// ---- src/242h-plugin-bank-emoji-slot.js ----
+// Bank Emoji Slot host: vocabulary from the config report, fused bob labels,
+// and capture-phase key isolation so an open panel never saves or files.
+
+function bankCategoryEmojiVocabulary(categories) {
+  const rows = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(categories) ? categories : []) {
+    const emoji = typeof entry?.emoji === "string" ? entry.emoji : "";
+    const key = typeof albumEmojiSlotGlyphKey === "function" ? albumEmojiSlotGlyphKey(emoji) : emoji;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ emoji, label: String(entry.label || entry.key || "") });
+  }
+  return rows;
+}
+
+function bankCategoryEmojiSiblings(categories, ignoreKey = "") {
+  const visible = typeof bankCategoryVisible === "function"
+    ? bankCategoryVisible(categories)
+    : (Array.isArray(categories) ? categories : []);
+  return visible
+    .filter((entry) => entry && entry.key !== ignoreKey)
+    .map((entry) => ({ emoji: entry.emoji || "", label: entry.label || entry.key || "" }));
+}
+
+function bankCategoryEmojiSlotTarget(event) {
+  return Boolean(event?.target?.closest?.(".bob-emoji-slot-panel, .bob-emoji-slot-search, [data-emoji-well]"));
+}
+
+function bankEmojiSlotInterceptKey(owner, event) {
+  const slot = owner?.bankEmojiSlot;
+  if (!slot || !event) return false;
+  const inSlot = bankCategoryEmojiSlotTarget(event);
+  const key = String(event.key || "");
+  const consume = () => {
+    if (typeof bankCategoryUiConsume === "function") bankCategoryUiConsume(event);
+    else {
+      try { event.preventDefault?.(); } catch (_) {}
+      try { event.stopPropagation?.(); } catch (_) {}
+    }
+  };
+  if (slot.isOpen) {
+    if (key === "Escape") {
+      consume();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return true;
+    }
+    if (key === "Enter") {
+      consume();
+      albumEmojiSlotHandleKeydown(slot, event);
+      return true;
+    }
+    if (key === "Tab") {
+      consume();
+      albumEmojiSlotClose(slot, { focusWell: true });
+      return true;
+    }
+    return true;
+  }
+  if (inSlot) return true;
+  return false;
+}
+
+function bankCategoryEmojiSlotMount(host, labelInput, owner, options = {}) {
+  if (!host || !labelInput || typeof albumEmojiSlotControl !== "function") return null;
+  const doc = host.ownerDocument || owner?.contentEl?.ownerDocument || owner?.app?.document;
+  const ignoreKey = options.ignoreKey || "";
+  const slot = albumEmojiSlotControl(doc, host, options.caption || "Emoji", options.inputName || "emoji",
+    options.emoji || "", labelInput, {
+      app: owner.app,
+      vocabularyTitle: "In your bank",
+      getVocabulary: () => bankCategoryEmojiVocabulary(owner.categories),
+      getSiblings: () => bankCategoryEmojiSiblings(owner.categories, ignoreKey),
+      onPick: (name, glyph) => {
+        if (typeof owner.onFieldInput === "function" && owner.stage) owner.onFieldInput(name, glyph);
+        else if (typeof owner.onNewCategoryFieldInput === "function") owner.onNewCategoryFieldInput(name, glyph);
+      },
+      onOpen: (openSlot) => {
+        if (owner.bankEmojiSlot && owner.bankEmojiSlot !== openSlot && owner.bankEmojiSlot.isOpen) {
+          albumEmojiSlotClose(owner.bankEmojiSlot, { focusWell: false });
+        }
+        owner.bankEmojiSlot = openSlot;
+      },
+      onClose: () => {},
+    }, { fused: true, disabled: options.disabled === true });
+  owner.bankEmojiSlot = slot;
+  const well = slot?.well;
+  if (well?.setAttribute) {
+    well.setAttribute("data-setup-card-focus", "emoji");
+    well.setAttribute("data-bank-new-field", "emoji");
+  }
+  return slot;
+}
+
+{
+  if (typeof BankSetupCardModal === "function") {
+    const proto = BankSetupCardModal.prototype;
+    const origKeyDown = proto.onKeyDown;
+    const origCancel = proto.cancelStage;
+    const origClose = proto.onClose;
+    proto.onKeyDown = async function bankEmojiOnKeyDown(event) {
+      if (bankEmojiSlotInterceptKey(this, event)) return;
+      return origKeyDown.call(this, event);
+    };
+    proto.cancelStage = function bankEmojiCancelStage() {
+      if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
+      this.bankEmojiSlot = null;
+      return origCancel.call(this);
+    };
+    proto.onClose = function bankEmojiOnClose() {
+      if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
+      this.bankEmojiSlot = null;
+      return origClose.call(this);
+    };
+  }
+
+  if (typeof BankCategoryCardModal === "function") {
+    const proto = BankCategoryCardModal.prototype;
+    const origRoute = proto.routeNewCategoryKey;
+    const origCloseStage = proto.closeNewCategoryStage;
+    const origClose = proto.onClose;
+    proto.routeNewCategoryKey = async function bankEmojiRouteNewCategoryKey(event) {
+      if (bankEmojiSlotInterceptKey(this, event)) return;
+      return origRoute.call(this, event);
+    };
+    proto.closeNewCategoryStage = function bankEmojiCloseNewCategoryStage() {
+      if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
+      this.bankEmojiSlot = null;
+      this.newStageForm = null;
+      this.newStageHost = null;
+      this.newStagePainted = false;
+      return origCloseStage.call(this);
+    };
+    proto.onClose = function bankEmojiCategoryOnClose() {
+      if (this.bankEmojiSlot?.isOpen) albumEmojiSlotClose(this.bankEmojiSlot, { focusWell: false });
+      this.bankEmojiSlot = null;
+      this.newStageForm = null;
+      this.newStageHost = null;
+      this.newStagePainted = false;
+      return origClose.call(this);
+    };
+  }
 }
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
@@ -144382,6 +144659,10 @@ try {
       bankCategoryCardKeysText,
       bankCategoryNewStageKeysText,
       bankCategoryIsNewCategoryKey,
+      bankCategoryEmojiVocabulary,
+      bankCategoryEmojiSiblings,
+      bankEmojiSlotInterceptKey,
+      bankCategoryEmojiSlotMount,
     });
   }
 } catch (error) {
@@ -144453,6 +144734,7 @@ try {
       bankSetupCardSelection,
       bankSetupCardSelectionByHotkey,
       bankSetupCardMoveSelection,
+      bankSetupCardComposeLabel,
       bankSetupCardSetCategoryOp,
       bankSetupCardHotkeyStatus,
       bankSetupCardCategoryMoveOp,

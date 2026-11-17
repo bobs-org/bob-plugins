@@ -168,6 +168,41 @@ function bankSetupCardInput(parent, modal, field, caption, value, options = {}) 
   return input;
 }
 
+function bankSetupCardFusedLabel(parent, modal, stage) {
+  const row = bankSetupCardAppend(parent, "label", "bob-bank-setup-card-control");
+  if (!row) return null;
+  bankSetupCardAppend(row, "span", "bob-bank-setup-card-control-label", "Label");
+  const fused = bankSetupCardAppend(row, "div", "bob-emoji-slot-fused");
+  if (!fused) return null;
+  const input = bankSetupCardAppend(fused, "input", "bob-bank-setup-card-input bob-emoji-slot-label", null, {
+    type: "text",
+    "data-setup-field": "label",
+    "data-setup-card-focus": "label",
+    "aria-label": "Category label",
+    placeholder: "Category label",
+    autocomplete: "off",
+    spellcheck: "false",
+  });
+  if (!input) return null;
+  input.value = typeof stage?.label === "string" ? stage.label : "";
+  input.addEventListener?.("input", (event) => {
+    modal.onFieldInput("label", event?.target?.value);
+  });
+  input.addEventListener?.("focus", () => {
+    if (modal.stage) modal.stage.focus = "label";
+  });
+  if (typeof bankCategoryEmojiSlotMount === "function") {
+    bankCategoryEmojiSlotMount(fused, input, modal, {
+      emoji: stage?.emoji || "",
+      ignoreKey: stage?.kind === "edit" && stage.entry ? stage.entry.key : "",
+      caption: "Emoji",
+      inputName: "emoji",
+      disabled: modal.readOnly === true || modal.busy === true,
+    });
+  }
+  return input;
+}
+
 function bankSetupCardPaintTabs(root, modal, model) {
   const tabs = bankSetupCardAppend(root, "div", "bob-bank-setup-card-tabs", null, {
     role: "tablist",
@@ -500,8 +535,12 @@ function bankSetupCardPaintStage(parent, modal, doc) {
   if (stage.title) bankSetupCardAppend(section, "h3", "", stage.title);
   if (stage.kind === "edit" || stage.kind === "new") {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });
-    form?.addEventListener?.("submit", (event) => { bankCategoryUiConsume(event); void modal.applyStage(); });
-    bankSetupCardInput(form, modal, "label", "Label", stage.label, { placeholder: "e.g. ☕ Coffee" });
+    form?.addEventListener?.("submit", (event) => {
+      bankCategoryUiConsume(event);
+      if (modal.bankEmojiSlot?.isOpen) return;
+      void modal.applyStage();
+    });
+    bankSetupCardFusedLabel(form, modal, stage);
     bankSetupCardInput(form, modal, "group", "Group", stage.group, { placeholder: "e.g. Everyday" });
     bankSetupCardInput(form, modal, "hotkey", "Key", stage.hotkey, { placeholder: "free key" });
     if (stage.kind === "edit") {
@@ -511,7 +550,10 @@ function bankSetupCardPaintStage(parent, modal, doc) {
         : "This key is pinned. Clear it to let bob derive a key.");
     } else {
       const status = bankCategoryNewHotkeyStatus(modal.categories, stage.hotkey);
-      if (status.text) bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text, { role: "status" });
+      bankSetupCardAppend(section, "p", "bob-bank-setup-card-owner", status.text || "", {
+        role: "status",
+        "data-setup-stage-owner": "true",
+      });
     }
   } else if (stage.kind === "rename-group") {
     const form = bankSetupCardAppend(section, "form", "bob-bank-setup-card-form", null, { autocomplete: "off" });

@@ -196,6 +196,7 @@
   "241ye-plugin-album-schema-place.js",
   "242f-plugin-emoji-slot-model.js",
   "242g-plugin-emoji-slot-dom.js",
+  "242h-plugin-bank-emoji-slot.js",
   "241e-plugin-notebook-header-model.js",
   "241f-plugin-notebook-header.js",
   "241g-plugin-notebook-header-live.js",

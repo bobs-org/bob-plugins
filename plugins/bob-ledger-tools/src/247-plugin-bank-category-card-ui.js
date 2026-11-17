@@ -583,6 +583,10 @@ class BankCategoryCardModal extends bankCategoryCardModalBase() {
     const content = this.contentEl;
     if (!content) return;
     const live = this.liveRegion && this.liveRegion.parentNode === content ? this.liveRegion : null;
+    const keepHost = this.newStage && this.newStageHost ? this.newStageHost : null;
+    if (keepHost && keepHost.parentNode) {
+      try { keepHost.parentNode.removeChild(keepHost); } catch (_) {}
+    }
     try {
       if (typeof content.empty === "function") {
         content.empty();

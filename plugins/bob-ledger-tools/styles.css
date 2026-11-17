@@ -9520,6 +9520,7 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-bank-category-new-tile { border-style: dashed; }
 .bob-bank-category-stage { display: grid; gap: 0.4rem; margin-top: 0.7rem; }
 .bob-bank-category-stage-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0.4rem; align-items: center; }
+.bob-bank-category-stage-row:has(.bob-emoji-slot-fused) { align-items: start; }
 .bob-bank-category-stage-caption { color: var(--text-muted); font-size: 0.78em; }
 .bob-bank-category-stage-input { width: 100%; font: inherit; }
 .bob-bank-category-consequence { margin: 0.15rem 0; color: var(--bob-bank-accent); font-size: 0.84em; }
@@ -9768,6 +9769,9 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-setup-card-stage h3 { margin: 0 0 0.4em; font-size: 0.98em; }
 .bob-bank-setup-card-form { display: grid; gap: 0.4em; }
 .bob-bank-setup-card-control { display: grid; grid-template-columns: minmax(6em, 0.55fr) minmax(0, 1fr); align-items: center; gap: 0.5em; }
+.bob-bank-setup-card-control:has(.bob-emoji-slot-fused) { align-items: start; }
+.bob-bank-setup-card-control .bob-emoji-slot-fused,
+.bob-bank-category-stage-row .bob-emoji-slot-fused { min-width: 0; width: 100%; }
 .bob-bank-setup-card-control-label { color: var(--text-muted); font-size: 0.86em; }
 .bob-bank-setup-card-input { box-sizing: border-box; min-width: 0; width: 100%; border: 1px solid var(--background-modifier-border); border-radius: 0.4em; background: var(--background-primary); color: var(--text-normal); font: inherit; padding: 0.35em 0.45em; }
 .bob-bank-setup-card-consequence { margin: 0.5em 0; color: var(--text-normal); font-weight: 550; overflow-wrap: anywhere; }

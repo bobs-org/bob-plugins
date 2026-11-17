@@ -38,6 +38,7 @@ function bankCategoryNewStageInit(categories, highlightKey) {
   const hotkey = bankCategoryNewSuggestedHotkey(categories);
   return {
     label: "",
+    emoji: "",
     group: bankCategoryNewDefaultGroup(categories, highlightKey),
     hotkey,
     suggestedHotkey: hotkey,
@@ -91,8 +92,11 @@ function bankCategoryNewCycleGroup(stage, direction) {
 
 function bankCategoryNewDraftOp(stage) {
   if (typeof bankConfigAddOp !== "function") return null;
+  const fused = typeof albumEmojiSlotFusedToken === "function"
+    ? albumEmojiSlotFusedToken(stage && stage.label, stage && stage.emoji)
+    : (stage && stage.label);
   return bankConfigAddOp({
-    label: stage && stage.label,
+    label: fused,
     group: stage && stage.group,
     hotkey: stage && stage.hotkey,
   });

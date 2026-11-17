@@ -216,6 +216,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     return this.startStage({
       kind: "edit", title: `Edit ${entry.label || entry.key}`, entry,
       label: entry.label || entry.key,
+      emoji: entry.emoji || "",
       group: entry.group || "",
       hotkey: entry.hotkey || "",
       hotkeyTouched: false,
@@ -358,7 +359,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (op) this.session?.setDraft?.([op]);
     else this.session?.setDraft?.([]);
     this.sessionState = this.session?.getState?.() || null;
-    this.paint();
+    this.paint(field === "emoji" ? "session" : "full");
+    if (field === "emoji") return;
     try { this.contentEl?.querySelector?.(`[data-setup-card-focus="${field}"]`)?.focus?.(); } catch (_) {}
   }
 

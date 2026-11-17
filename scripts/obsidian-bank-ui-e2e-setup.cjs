@@ -763,6 +763,7 @@ function runSelfTest() {
       "xvfb-run", "Input.dispatchKeyEvent", "Emulation.setDeviceMetricsOverride",
       "leftSplit.collapse", "scrollIntoView", "json/list", "bob-e2e-modal-shot",
       "setup-collapsed-375-light", "setup-invalid-375-dark", "setup-card-categories",
+      "setup-card-category-emoji", "bob-emoji-slot-fused",
     ]) {
       if (!source.includes(token)) throw new Error(`e2e source missing ${token}`);
     }
@@ -1210,6 +1211,28 @@ async function runE2e(parsed) {
     await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       if (modal && typeof modal.setSection === "function") modal.setSection("categories");
+      return true;
+    })()`);
+    await sleep(200);
+    const emojiStage = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      if (!modal) return { ok: false, reason: "no modal" };
+      const coffee = (modal.categories || []).find((row) => row && row.key === "coffee");
+      const started = coffee && typeof modal.openEditStage === "function" ? modal.openEditStage(coffee) : false;
+      return {
+        ok: Boolean(started),
+        fused: Boolean(document.querySelector(".bob-bank-setup-card-stage .bob-emoji-slot-fused")),
+        well: Boolean(document.querySelector(".bob-bank-setup-card-stage [data-emoji-well], .bob-bank-setup-card-stage .bob-emoji-slot-fallback")),
+        placeholder: (document.querySelector(".bob-bank-setup-card-stage .bob-emoji-slot-label") || {}).placeholder || "",
+      };
+    })()`).catch((error) => ({ error: String(error) }));
+    record("setup-card-emoji-slot", Boolean(emojiStage && emojiStage.ok && emojiStage.fused && emojiStage.well && emojiStage.placeholder === "Category label"), jsonDetail(emojiStage));
+    const emojiShot = path.join(outDir, "setup-card-category-emoji.png");
+    await capturePage(client, emojiShot, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+    report.screenshots.push(emojiShot);
+    await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      if (modal && typeof modal.cancelStage === "function") modal.cancelStage();
       return true;
     })()`);
     await sleep(200);

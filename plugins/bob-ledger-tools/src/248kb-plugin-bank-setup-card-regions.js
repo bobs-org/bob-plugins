@@ -121,6 +121,16 @@ function bankSetupCardPaintStageStatus(host, modal) {
   if (!host) return;
   const state = modal.sessionState || {};
   const latched = Boolean(modal.bankEnterLatch);
+  const owner = host.querySelector?.("[data-setup-stage-owner]");
+  if (owner && modal.stage?.kind === "new") {
+    const status = typeof bankCategoryNewHotkeyStatus === "function"
+      ? bankCategoryNewHotkeyStatus(modal.categories, modal.stage.hotkey)
+      : { text: "" };
+    try {
+      if (typeof notebookSetText === "function") notebookSetText(owner, status.text || "");
+      else owner.textContent = status.text || "";
+    } catch (_) {}
+  }
   const apply = host.querySelector?.('[data-setup-action="apply"]');
   if (apply) {
     apply.disabled = modal.busy || modal.readOnly || (state.canApply !== true && !latched);

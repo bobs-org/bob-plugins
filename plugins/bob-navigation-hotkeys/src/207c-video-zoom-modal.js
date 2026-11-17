@@ -101,6 +101,9 @@ class VideoZoomModal extends ImageZoomModal {
       this.openVideoZoomExternal();
       return true;
     }
+    if (this.handleVideoZoomTransportMappedKey(mapped, event)) {
+      return true;
+    }
     if (this.videoZoomFailed || this.videoZoomZoomDisabled) {
       if (
         mapped.action === "zoomIn" ||
@@ -132,12 +135,13 @@ class VideoZoomModal extends ImageZoomModal {
       addChip("Esc", "close");
       return;
     }
-    addChip("Esc", "close");
-    addChip("Space", "play");
-    addChip("← →", "seek");
-    addChip("+ −", "zoom");
-    addChip("0", "fit");
-    addChip("1", "1:1");
+    const chips = videoZoomFooterChipPlan({
+      hasAudio: this.videoZoomHasAudio === true,
+      compact: this.videoZoomFooterCompact === true,
+    });
+    for (const [key, label] of chips) {
+      addChip(key, label);
+    }
   }
 
   collectImageZoomTrailingFooterChips(addChip) {
@@ -160,9 +164,11 @@ class VideoZoomModal extends ImageZoomModal {
         item.createSpan({ cls: "bob-image-zoom-chip-label", text: label });
       };
       this.addImageZoomPrimaryFooterChips(addChip);
+      this.ensureVideoZoomScrubber();
       return;
     }
     super.renderImageZoomFooter();
+    this.ensureVideoZoomScrubber();
   }
 
   imageZoomReadoutText() {
@@ -186,6 +192,7 @@ class VideoZoomModal extends ImageZoomModal {
       currentTime: video ? Number(video.currentTime) : 0,
       duration: video ? Number(video.duration) : 0,
       zoomPercent,
+      speed: Number(this.videoZoomSpeed) || VIDEO_ZOOM_DEFAULT_SPEED,
       muted: Boolean(this.videoZoomHasAudio && video && video.muted === true),
       hint: this.videoZoomHasPlayed ? "" : this.videoZoomHint,
     };
@@ -198,6 +205,7 @@ class VideoZoomModal extends ImageZoomModal {
     if (this.readoutEl && typeof this.readoutEl.setText === "function") {
       this.readoutEl.setText(this.imageZoomReadoutText());
     }
+    this.updateVideoZoomScrubber();
   }
 
   prefersVideoZoomReducedMotion() {
@@ -262,8 +270,11 @@ class VideoZoomModal extends ImageZoomModal {
     this.videoZoomHasPlayed = false;
     this.updateVideoZoomReadout();
     this.renderImageZoomFooter();
+    this.maybeCompactVideoZoomFooter();
     if (policy.autoplay) {
       this.playVideoZoom();
+    } else {
+      this.showVideoZoomRestingFlash();
     }
   }
 
@@ -342,9 +353,11 @@ class VideoZoomModal extends ImageZoomModal {
     }
     if (this.imgEl.paused === false) {
       this.pauseVideoZoom();
+      this.showVideoZoomFlash(VIDEO_ZOOM_PAUSE_GLYPH);
       return;
     }
     this.playVideoZoom();
+    this.showVideoZoomFlash(VIDEO_ZOOM_PLAY_GLYPH);
   }
 
   pauseVideoZoom() {
@@ -357,6 +370,7 @@ class VideoZoomModal extends ImageZoomModal {
       // Pause is best effort.
     }
     this.cancelVideoZoomRaf();
+    this.cancelVideoZoomFrameCallbacks();
     this.updateVideoZoomReadout();
   }
 
@@ -384,6 +398,7 @@ class VideoZoomModal extends ImageZoomModal {
           }
           this.videoZoomHasPlayed = true;
           this.videoZoomHint = "";
+          this.clearVideoZoomRestingFlash();
           this.startVideoZoomRaf();
           this.updateVideoZoomReadout();
         },
@@ -420,6 +435,7 @@ class VideoZoomModal extends ImageZoomModal {
     }
     this.videoZoomHasPlayed = true;
     this.videoZoomHint = "";
+    this.clearVideoZoomRestingFlash();
     this.startVideoZoomRaf();
     this.updateVideoZoomReadout();
   }
@@ -434,6 +450,7 @@ class VideoZoomModal extends ImageZoomModal {
 
   startVideoZoomRaf() {
     this.cancelVideoZoomRaf();
+    this.startVideoZoomFrameSampling();
     const win = this.getImageZoomWindow();
     const raf = win && win.requestAnimationFrame;
     if (typeof raf !== "function") {
@@ -550,6 +567,7 @@ class VideoZoomModal extends ImageZoomModal {
     this.renderVideoZoomFailureCard(copy);
     this.updateVideoZoomReadout();
     this.renderImageZoomFooter();
+    this.hideVideoZoomTransportOnFailure();
   }
 
   renderVideoZoomFailureCard(copy) {
@@ -584,6 +602,7 @@ class VideoZoomModal extends ImageZoomModal {
     this.videoZoomPlayToken += 1;
     this.cancelVideoZoomRaf();
     this.cancelVideoZoomFrameCallbacks();
+    this.releaseVideoZoomTransport();
     const video = this.imgEl;
     if (!video) {
       return;

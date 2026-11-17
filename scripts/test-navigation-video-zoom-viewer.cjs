@@ -10,12 +10,20 @@ const {
 const {
   VideoZoomModal,
   VIDEO_ZOOM_EXTENSIONS,
+  VIDEO_ZOOM_SPEEDS,
+  VIDEO_ZOOM_FALLBACK_FRAME_DURATION,
   videoZoomKeyAction,
   formatVideoZoomTime,
   clampVideoZoomSeek,
   videoZoomStartPolicy,
   videoZoomReadout,
   videoZoomFailureCopy,
+  videoZoomStepSpeed,
+  videoZoomLearnFrameDuration,
+  videoZoomFrameStepTarget,
+  videoZoomJumpTarget,
+  videoZoomEscapeAction,
+  videoZoomFooterChipPlan,
   computeImageZoomFitScale,
   IMAGE_ZOOM_PADDING,
 } = helpers;
@@ -238,6 +246,21 @@ const KEY_CASES = [
   [{ key: "o" }, { action: "openExternal" }],
   [{ key: "O" }, { action: "openExternal" }],
   [{ key: "o", repeat: true }, { action: "ignore" }],
+  [{ key: "," }, { action: "frameStep", delta: -1 }],
+  [{ key: "." }, { action: "frameStep", delta: 1 }],
+  [{ key: "[" }, { action: "speedStep", delta: -1 }],
+  [{ key: "]" }, { action: "speedStep", delta: 1 }],
+  [{ key: "g" }, { action: "jumpStart" }],
+  [{ key: "G" }, { action: "jumpEnd" }],
+  [{ key: "m" }, { action: "toggleMute" }],
+  [{ key: "f" }, { action: "toggleFullscreen" }],
+  [{ key: ",", ctrlKey: true }, { action: "ignore" }],
+  [{ key: "[", metaKey: true }, { action: "ignore" }],
+  [{ key: "g", ctrlKey: true }, { action: "ignore" }],
+  [{ key: "m", repeat: true }, { action: "ignore" }],
+  [{ key: "f", repeat: true }, { action: "ignore" }],
+  [{ key: "M", shiftKey: true }, { action: "ignore" }],
+  [{ key: "F", shiftKey: true }, { action: "ignore" }],
   [{ key: "y" }, { action: "copySource" }],
   [{ key: "r" }, { action: "restoreSource" }],
   [{ key: "+" }, { action: "zoomIn" }],
@@ -498,6 +521,8 @@ test("footer chips drop hjkl pan and add Space, seek, and o", () => {
     "Escclose",
     "Spaceplay",
     "← →seek",
+    ", .frame",
+    "[ ]speed",
     "+ −zoom",
     "0fit",
     "11:1",
@@ -831,4 +856,345 @@ test("video zoom CSS covers the player, placeholder, and failure card", () => {
   assert.match(css, /max-width:\s*420px/);
   assert.match(css, /border-radius:\s*12px/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
+});
+
+test("speed steps snap to the ladder and clamp at the ends", () => {
+  assert.deepEqual(VIDEO_ZOOM_SPEEDS, [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]);
+  assert.equal(videoZoomStepSpeed(1, 1), 1.25);
+  assert.equal(videoZoomStepSpeed(1, -1), 0.75);
+  assert.equal(videoZoomStepSpeed(1.5, 1), 2);
+  assert.equal(videoZoomStepSpeed(0.5, -1), 0.25);
+  assert.equal(videoZoomStepSpeed(2, 1), 2);
+  assert.equal(videoZoomStepSpeed(0.25, -1), 0.25);
+  assert.equal(videoZoomStepSpeed(1.1, 1), 1.25);
+  assert.equal(videoZoomStepSpeed(1.3, 1), 1.5);
+  assert.equal(videoZoomStepSpeed(1.4, 1), 2);
+  assert.equal(videoZoomStepSpeed(undefined, 1), 1.25);
+  assert.equal(videoZoomStepSpeed(Number.NaN, -1), 0.75);
+});
+
+test("frame duration learns the median delta with a 1/30 fallback", () => {
+  assert.equal(videoZoomLearnFrameDuration([]), VIDEO_ZOOM_FALLBACK_FRAME_DURATION);
+  assert.equal(videoZoomLearnFrameDuration([0.1]), VIDEO_ZOOM_FALLBACK_FRAME_DURATION);
+  assert.ok(Math.abs(videoZoomLearnFrameDuration([0, 1 / 30, 2 / 30, 3 / 30]) - 1 / 30) < 1e-12);
+  assert.equal(videoZoomLearnFrameDuration([0, 0.04, 0.08]), 0.04);
+  assert.equal(videoZoomLearnFrameDuration([0, 5]), VIDEO_ZOOM_FALLBACK_FRAME_DURATION);
+  assert.ok(Math.abs(videoZoomLearnFrameDuration([0, 1 / 30, 5, 2 / 30, 3 / 30]) - 1 / 30) < 1e-9);
+});
+
+test("frame targets land mid-frame and clamp to the clip", () => {
+  const fd = 1 / 30;
+  assert.equal(videoZoomFrameStepTarget(0, 1, fd, 6.2), 1.5 * fd);
+  assert.equal(videoZoomFrameStepTarget(0, -1, fd, 6.2), 0);
+  assert.equal(videoZoomFrameStepTarget(6.2, 1, fd, 6.2), 6.2);
+  assert.ok(Math.abs(videoZoomFrameStepTarget(3, 1, fd, 6.2) - 91.5 * fd) < 1e-9);
+  assert.ok(Math.abs(videoZoomFrameStepTarget(3, -1, fd, 6.2) - 89.5 * fd) < 1e-9);
+  assert.ok(Math.abs(videoZoomFrameStepTarget(3, 1, Number.NaN, Number.NaN) - 91.5 / 30) < 1e-9);
+  assert.equal(videoZoomFrameStepTarget(Number.NaN, 1, fd, 6.2), 1.5 * fd);
+});
+
+test("jump targets land on the first and last frame", () => {
+  const fd = 1 / 30;
+  assert.equal(videoZoomJumpTarget("start", fd, 6.2), fd / 2);
+  assert.ok(Math.abs(videoZoomJumpTarget("end", fd, 6.2) - (6.2 - fd / 2)) < 1e-9);
+  assert.equal(videoZoomJumpTarget("start", Number.NaN, Number.NaN), fd / 2);
+  assert.equal(videoZoomJumpTarget("end", fd, Number.NaN), Number.POSITIVE_INFINITY);
+});
+
+test("Escape exits fullscreen first and only closes when not fullscreen", () => {
+  assert.deepEqual(videoZoomEscapeAction({ fullscreenActive: true }), { action: "exitFullscreen" });
+  assert.deepEqual(videoZoomEscapeAction({ fullscreenActive: false }), { action: "close" });
+  assert.deepEqual(videoZoomEscapeAction({}), { action: "close" });
+  assert.deepEqual(videoZoomEscapeAction(), { action: "close" });
+});
+
+test("Esc leaves fullscreen first and never also closes", () => {
+  const exited = [];
+  const session = openViewer();
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  session.win.document = {
+    fullscreenElement: session.modal.modalEl,
+    exitFullscreen() {
+      exited.push(1);
+      session.win.document = { fullscreenElement: null };
+    },
+  };
+  sendKey(session.modal, keyEvent("Escape"));
+  assert.equal(exited.length, 1);
+  assert.equal(session.modal.isOpen, true);
+  assert.equal(session.closed.count, 0);
+  sendKey(session.modal, keyEvent("Escape"));
+  assert.equal(session.closed.count, 1);
+});
+
+test("f toggles fullscreen on the modal element", () => {
+  const exited = [];
+  const requested = [];
+  const session = openViewer();
+  arm(session);
+  loadVideo(session, { audioBytes: 0 });
+  session.win.document = { fullscreenElement: null };
+  session.modal.modalEl.requestFullscreen = () => {
+    requested.push(1);
+    session.win.document = {
+      fullscreenElement: session.modal.modalEl,
+      exitFullscreen() {
+        exited.push(1);
+        session.win.document = { fullscreenElement: null };
+      },
+    };
+    return Promise.resolve();
+  };
+  sendKey(session.modal, keyEvent("f"));
+  assert.equal(requested.length, 1);
+  assert.equal(session.modal.isVideoZoomFullscreen(), true);
+  sendKey(session.modal, keyEvent("f"));
+  assert.equal(exited.length, 1);
+  assert.equal(session.modal.isVideoZoomFullscreen(), false);
+  session.modal.close();
+});
+
+test(", and . step one frame and pause", () => {
+  const fd = 1 / 30;
+  const session = openViewer({ video: { audioBytes: 0, duration: 6.2, currentTime: 3 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 0, duration: 6.2 });
+  session.video.currentTime = 3;
+  assert.equal(session.video.paused, false);
+  sendKey(session.modal, keyEvent("."));
+  assert.equal(session.video.paused, true);
+  assert.ok(Math.abs(session.video.currentTime - 91.5 * fd) < 1e-9);
+  sendKey(session.modal, keyEvent(","));
+  assert.ok(Math.abs(session.video.currentTime - 90.5 * fd) < 1e-9);
+  session.modal.close();
+});
+
+test("] and [ step the playback rate and the readout shows it", () => {
+  const session = openViewer({ video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  sendKey(session.modal, keyEvent("]"));
+  assert.equal(session.video.playbackRate, 1.25);
+  assert.match(session.modal.readoutEl.textContent, /1\.25×/);
+  sendKey(session.modal, keyEvent("]"));
+  assert.equal(session.video.playbackRate, 1.5);
+  sendKey(session.modal, keyEvent("["));
+  sendKey(session.modal, keyEvent("["));
+  assert.equal(session.video.playbackRate, 1);
+  assert.ok(!session.modal.readoutEl.textContent.includes("×"));
+  session.modal.close();
+});
+
+test("g jumps to the first frame and G pauses on the last frame", () => {
+  const fd = 1 / 30;
+  const session = openViewer({ video: { audioBytes: 0, duration: 6.2, currentTime: 3 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 0, duration: 6.2 });
+  session.video.currentTime = 3;
+  assert.equal(session.video.paused, false);
+  sendKey(session.modal, keyEvent("G"));
+  assert.equal(session.video.paused, true);
+  assert.ok(Math.abs(session.video.currentTime - (6.2 - fd / 2)) < 1e-9);
+  sendKey(session.modal, keyEvent("g"));
+  assert.ok(Math.abs(session.video.currentTime - fd / 2) < 1e-9);
+  assert.equal(session.video.paused, true);
+  session.modal.close();
+});
+
+test("m toggles mute and the readout only reports it for audible clips", () => {
+  const session = openViewer({ video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  sendKey(session.modal, keyEvent("m"));
+  assert.equal(session.video.muted, true);
+  assert.match(session.modal.readoutEl.textContent, /muted/);
+  sendKey(session.modal, keyEvent("m"));
+  assert.equal(session.video.muted, false);
+  assert.ok(!session.modal.readoutEl.textContent.includes("muted"));
+  session.modal.close();
+});
+
+test("footer chip plan orders transport before zoom and gates mute on audio", () => {
+  assert.deepEqual(
+    videoZoomFooterChipPlan({ hasAudio: true, compact: false }).map(([key]) => key),
+    ["Esc", "Space", "← →", ", .", "[ ]", "m", "+ −", "0", "1"],
+  );
+  assert.deepEqual(
+    videoZoomFooterChipPlan({ hasAudio: false, compact: false }).map(([key]) => key),
+    ["Esc", "Space", "← →", ", .", "[ ]", "+ −", "0", "1"],
+  );
+  assert.deepEqual(
+    videoZoomFooterChipPlan({ hasAudio: true, compact: true }).map(([key]) => key),
+    ["Esc", "Space", "← →", ", .", "[ ]", "m"],
+  );
+});
+
+test("readout appends the playback rate only when it is not 1×", () => {
+  assert.equal(
+    videoZoomReadout({ playing: true, currentTime: 1, duration: 6.2, speed: 1 }),
+    `${PLAY_GLYPH} 0:01.0 / 0:06.2`,
+  );
+  assert.equal(
+    videoZoomReadout({ playing: true, currentTime: 1, duration: 6.2, speed: 1.25 }),
+    `${PLAY_GLYPH} 0:01.0 / 0:06.2 · 1.25×`,
+  );
+  assert.equal(
+    videoZoomReadout({ playing: false, currentTime: 1, duration: 6.2 }),
+    `${PAUSE_GLYPH} 0:01.0 / 0:06.2`,
+  );
+});
+
+test("the scrubber renders above the footer chips and tracks playback", () => {
+  const session = openViewer({ video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  const scrubber = session.modal.videoZoomScrubberEl;
+  assert.ok(scrubber);
+  assert.ok(scrubber.classList.contains("bob-video-zoom-scrubber"));
+  assert.equal(session.modal.imageZoomFooterEl.children[0], scrubber);
+  assert.equal(session.modal.videoZoomScrubberPlayedEl.parent, scrubber);
+  assert.equal(session.modal.videoZoomScrubberBufferedEl.parent, scrubber);
+  session.video.currentTime = 3.1;
+  session.modal.updateVideoZoomReadout();
+  assert.equal(session.modal.videoZoomScrubberPlayedEl.style.width, "50%");
+  assert.equal(session.modal.videoZoomScrubSeeking, false);
+  assert.equal(session.modal.viewportEl.focused, true);
+  session.modal.close();
+});
+
+test("scrubber drag pauses, seeks, and resumes only when the clip was playing", () => {
+  const session = openViewer({ video: { audioBytes: 0, duration: 6.2, currentTime: 1 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 0, duration: 6.2 });
+  assert.equal(session.video.paused, false);
+  assert.equal(session.video.playCalls.length, 1);
+  const scrubber = session.modal.videoZoomScrubberEl;
+  scrubber.getBoundingClientRect = () => ({
+    left: 100, width: 200, top: 0, height: 3, right: 300, bottom: 3,
+  });
+  fire(scrubber, "pointerdown", { clientX: 200 });
+  assert.equal(scrubber.classList.contains("is-seeking"), true);
+  assert.equal(session.video.paused, true);
+  assert.ok(Math.abs(session.video.currentTime - 3.1) < 1e-9);
+  fire(scrubber, "pointermove", { clientX: 300 });
+  assert.ok(Math.abs(session.video.currentTime - 6.2) < 1e-9);
+  assert.equal(session.modal.videoZoomScrubberBubbleEl.textContent, "0:06.2");
+  fire(scrubber, "pointerup", { clientX: 300 });
+  assert.equal(scrubber.classList.contains("is-seeking"), false);
+  assert.equal(session.video.paused, false);
+  assert.equal(session.video.playCalls.length, 2);
+  session.modal.close();
+});
+
+test("scrubber drag from pause seeks and stays paused", () => {
+  const session = openViewer({ video: { audioBytes: 2334, duration: 6.2 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334, duration: 6.2 });
+  assert.equal(session.video.paused, true);
+  const scrubber = session.modal.videoZoomScrubberEl;
+  scrubber.getBoundingClientRect = () => ({
+    left: 0, width: 400, top: 0, height: 3, right: 400, bottom: 3,
+  });
+  fire(scrubber, "pointerdown", { clientX: 200 });
+  assert.ok(Math.abs(session.video.currentTime - 3.1) < 1e-9);
+  assert.equal(session.modal.videoZoomScrubberBubbleEl.textContent, "0:03.1");
+  fire(scrubber, "pointerleave", {});
+  assert.equal(session.modal.videoZoomScrubberBubbleEl.classList.contains("is-visible"), true);
+  fire(scrubber, "pointerup", { clientX: 200 });
+  assert.equal(session.video.paused, true);
+  assert.equal(session.video.playCalls.length, 0);
+  assert.equal(session.modal.videoZoomScrubberBubbleEl.classList.contains("is-visible"), false);
+  session.modal.close();
+});
+
+test("an overflowing footer compacts by dropping the zoom chips", () => {
+  const session = openViewer({ video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  let chips = allByClass(session.modal.imageZoomFooterEl, "bob-image-zoom-chip").map(childText);
+  assert.ok(chips.some((chip) => chip.includes("zoom")));
+  session.modal.imageZoomFooterEl.scrollHeight = 60;
+  session.modal.imageZoomFooterEl.clientHeight = 40;
+  session.modal.maybeCompactVideoZoomFooter();
+  assert.equal(session.modal.videoZoomFooterCompact, true);
+  chips = allByClass(session.modal.imageZoomFooterEl, "bob-image-zoom-chip").map(childText);
+  assert.ok(!chips.some((chip) => chip.includes("zoom")));
+  assert.ok(!chips.includes("0fit"));
+  assert.ok(!chips.includes("11:1"));
+  assert.ok(chips.some((chip) => chip.includes("frame")));
+  assert.ok(chips.some((chip) => chip.includes("mute")));
+  assert.equal(session.modal.imageZoomFooterEl.children[0], session.modal.videoZoomScrubberEl);
+  session.modal.close();
+});
+
+test("play and pause show a flash glyph and a paused start rests until first play", () => {
+  const session = openViewer({ video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  const flash = session.modal.videoZoomFlashEl;
+  assert.ok(flash);
+  assert.ok(flash.classList.contains("is-visible"));
+  assert.ok(flash.classList.contains("is-resting"));
+  assert.equal(flash.textContent, PAUSE_GLYPH);
+  sendKey(session.modal, keyEvent(" "));
+  assert.equal(flash.textContent, PLAY_GLYPH);
+  assert.equal(flash.classList.contains("is-resting"), false);
+  assert.equal(flash.classList.contains("is-visible"), true);
+  sendKey(session.modal, keyEvent(" "));
+  assert.equal(flash.textContent, PAUSE_GLYPH);
+  assert.equal(flash.classList.contains("is-resting"), false);
+  session.modal.close();
+});
+
+test("reduced motion suppresses the flash", () => {
+  const session = openViewer({ reducedMotion: true, video: { audioBytes: 2334 } });
+  arm(session);
+  loadVideo(session, { audioBytes: 2334 });
+  assert.equal(session.modal.videoZoomFlashEl, undefined);
+  sendKey(session.modal, keyEvent(" "));
+  assert.equal(session.modal.videoZoomFlashEl, undefined);
+  session.modal.close();
+});
+
+test("the failure card hides the scrubber", () => {
+  const session = openViewer({ title: "broken.mp4" });
+  arm(session);
+  assert.equal(session.modal.videoZoomScrubberEl.classList.contains("is-hidden"), false);
+  session.video.error = { code: 4 };
+  fire(session.video, "error");
+  assert.equal(session.modal.videoZoomScrubberEl.classList.contains("is-hidden"), true);
+  session.modal.close();
+});
+
+test("frame duration learns from mediaTime deltas while playing", () => {
+  const session = openViewer({ video: { audioBytes: 0 } });
+  arm(session);
+  const callbacks = [];
+  session.video.requestVideoFrameCallback = (callback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  };
+  loadVideo(session, { audioBytes: 0 });
+  assert.equal(callbacks.length, 1);
+  callbacks[0](0, { mediaTime: 0 });
+  assert.equal(callbacks.length, 2);
+  callbacks[1](16, { mediaTime: 1 / 30 });
+  assert.ok(Math.abs(session.modal.videoZoomLearnedFrameDuration - 1 / 30) < 1e-9);
+  assert.equal(session.modal.videoZoomFrameDuration(), session.modal.videoZoomLearnedFrameDuration);
+  session.modal.close();
+});
+
+test("video zoom CSS covers the scrubber and the flash", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "../plugins/bob-navigation-hotkeys/styles.css"),
+    "utf8",
+  );
+  assert.match(css, /\.bob-video-zoom-scrubber\s*\{/);
+  assert.match(css, /\.bob-video-zoom-scrubber-played\s*\{/);
+  assert.match(css, /\.bob-video-zoom-scrubber-bubble/);
+  assert.match(css, /rgba\(255,\s*255,\s*255,\s*0\.9\)/);
+  assert.match(css, /\.bob-video-zoom-flash\s*\{/);
+  assert.match(css, /font-size:\s*56px/);
+  assert.match(css, /bob-video-zoom-flash-fade\s+350ms/);
 });

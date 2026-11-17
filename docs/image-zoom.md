@@ -45,14 +45,30 @@ the hint `· Space to play` until the first playback. Press
 seconds with `Shift`; `+`, `=`, `-`, `0`, and `1` zoom, fit, and show a paused
 frame at 1:1. `h` / `j` / `k` / `l`, the wheel, dragging, and double-click use the
 same pan and zoom behavior as the image viewer. `o` pauses and opens the video in
-the system's default app.
+the system's default app. Every toggle flashes a centered glyph; a paused start
+rests dimmed until the first play, and reduced motion disables the flash.
+
+A hairline scrubber sits just above the footer: hover to grow it and preview the
+time, click to seek, or drag to scrub (the drag pauses and resumes a playing
+clip). `,` and `.` step one frame, `[` and `]` move through the
+`0.25 – 2` speed ladder (the readout appends `· 1.25×` away from `1×`), `g` and
+`G` jump to the first and last frame, `m` mutes clips that have audio, and `f`
+toggles fullscreen on the viewer. `Esc` leaves fullscreen first and never closes
+in the same press. On narrow footers the zoom chips drop before the transport
+chips.
 
 | Input | Action |
 | --- | --- |
-| `Esc`, `q` / `Q`, `Ctrl+[`, `Z` | Pause and close |
+| `Esc`, `q` / `Q`, `Ctrl+[`, `Z` | Pause and close (`Esc` leaves fullscreen first) |
 | `Space` or click the video | Play / pause |
 | `←` / `→` | Seek −/+ 1 second |
 | `Shift` + `←` / `→` | Seek −/+ 10 seconds |
+| Scrubber: hover, click, drag | Preview time, seek, scrub with pause and resume |
+| `,` / `.` | Step one frame back / forward (pauses) |
+| `[` / `]` | Speed down / up through 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2 |
+| `g` / `G` | First frame / last frame (pauses on `G`) |
+| `m` | Mute / unmute (clips with audio) |
+| `f` | Fullscreen on / off |
 | `+`, `=`, `-`, `0`, `1` | Zoom in, zoom out, fit, 1:1 |
 | `h` / `j` / `k` / `l`, wheel, drag, double-click | Pan and zoom as in the image viewer |
 | `y` / `r` | Copy the original path / restore the link to it |

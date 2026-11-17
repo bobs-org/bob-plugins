@@ -29,6 +29,32 @@ function videoZoomKeyAction(event) {
   if (key.toLowerCase() === "o" && !ctrl && !meta && !alt && !shift && !event.repeat) {
     return Object.freeze({ action: "openExternal" });
   }
+  if (!ctrl && !meta && !alt) {
+    if (key === ",") {
+      return Object.freeze({ action: "frameStep", delta: -1 });
+    }
+    if (key === ".") {
+      return Object.freeze({ action: "frameStep", delta: 1 });
+    }
+    if (key === "[") {
+      return Object.freeze({ action: "speedStep", delta: -1 });
+    }
+    if (key === "]") {
+      return Object.freeze({ action: "speedStep", delta: 1 });
+    }
+    if (key === "g") {
+      return Object.freeze({ action: "jumpStart" });
+    }
+    if (key === "G") {
+      return Object.freeze({ action: "jumpEnd" });
+    }
+    if (key.toLowerCase() === "m" && !shift && !event.repeat) {
+      return Object.freeze({ action: "toggleMute" });
+    }
+    if (key.toLowerCase() === "f" && !shift && !event.repeat) {
+      return Object.freeze({ action: "toggleFullscreen" });
+    }
+  }
   return imageZoomKeyAction(event);
 }
 
@@ -86,6 +112,10 @@ function videoZoomReadout(state) {
   const extras = [];
   if (current.zoomPercent) {
     extras.push(String(current.zoomPercent));
+  }
+  const speed = Number(current.speed);
+  if (Number.isFinite(speed) && speed !== 1) {
+    extras.push(`${speed}×`);
   }
   if (current.muted === true) {
     extras.push("muted");

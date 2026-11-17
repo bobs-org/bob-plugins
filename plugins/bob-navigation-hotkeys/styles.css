@@ -3833,6 +3833,99 @@
   line-height: 1.45;
 }
 
+.bob-video-zoom-scrubber {
+  flex: 0 0 100%;
+  position: relative;
+  height: 3px;
+  margin: 4px 0 8px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.15);
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.bob-video-zoom-scrubber:hover {
+  height: 6px;
+  margin: 2px 0 7px;
+}
+
+.bob-video-zoom-scrubber.is-hidden {
+  display: none;
+}
+
+.bob-video-zoom-scrubber-buffered,
+.bob-video-zoom-scrubber-played {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.bob-video-zoom-scrubber-buffered {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.bob-video-zoom-scrubber-played {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.bob-video-zoom-scrubber-bubble {
+  position: absolute;
+  bottom: 12px;
+  display: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.bob-video-zoom-scrubber:hover .bob-video-zoom-scrubber-bubble,
+.bob-video-zoom-scrubber-bubble.is-visible {
+  display: block;
+}
+
+.bob-video-zoom-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 3;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 56px;
+  line-height: 1;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.bob-video-zoom-flash.is-visible {
+  animation: bob-video-zoom-flash-fade 350ms ease-out forwards;
+}
+
+.bob-video-zoom-flash.is-resting {
+  animation: none;
+  opacity: 0.45;
+}
+
+@keyframes bob-video-zoom-flash-fade {
+  from {
+    opacity: 0.95;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .bob-video-zoom-placeholder,
   .bob-video-zoom-failure {
@@ -3842,8 +3935,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .bob-video-zoom-placeholder,
-  .bob-video-zoom-failure {
+  .bob-video-zoom-failure,
+  .bob-video-zoom-flash {
     transition: none;
+  }
+  .bob-video-zoom-flash {
+    animation: none;
   }
 }
 

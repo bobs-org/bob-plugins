@@ -27,8 +27,14 @@ const VIEWER_PROBE = `(() => {
     currentTime: Number(video.currentTime || 0),
     duration: Number(video.duration || 0),
     readyState: Number(video.readyState || 0),
+    playbackRate: Number(video.playbackRate || 1),
+    muted: Boolean(video.muted),
+    fullscreen: Boolean(document.fullscreenElement),
     source: video.getAttribute("src"),
     failureCard: Boolean(modal.containerEl && modal.containerEl.querySelector(".bob-video-zoom-failure")),
+    scrubber: Boolean(modal.containerEl && modal.containerEl.querySelector(".bob-video-zoom-scrubber:not(.is-hidden)")),
+    flashVisible: Boolean(modal.containerEl && modal.containerEl.querySelector(".bob-video-zoom-flash.is-visible")),
+    readout: (modal.readoutEl && modal.readoutEl.textContent) || "",
     classes: modal.contentEl && modal.contentEl.className || ""
   };
 })()`;
@@ -278,6 +284,100 @@ async function runE2e(args) {
       const after = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.currentTime >= before.currentTime + 0.85, "Right seek", 5000);
       await closeViewer(client);
       return `seek ${before.currentTime.toFixed(1)}s → ${after.currentTime.toFixed(1)}s`;
+    });
+
+    await runCase(client, cases, "period steps exactly one frame", async () => {
+      await startViewer(client, "Audible:");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready && value.hasAudio && value.paused, "audible paused video", 15_000);
+      await lib.dispatchKey(client, ".");
+      const first = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.currentTime > 0.01, "first frame step", 5000);
+      await lib.dispatchKey(client, ".");
+      const second = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.currentTime > first.currentTime + 0.005, "second frame step", 5000);
+      const delta = second.currentTime - first.currentTime;
+      if (Math.abs(delta - 1 / 30) > 0.012) throw new Error(`expected one 30fps frame, got ${delta}`);
+      if (!second.paused) throw new Error("frame stepping resumed playback");
+      await closeViewer(client);
+      return `step ${delta.toFixed(4)}s`;
+    });
+
+    await runCase(client, cases, "right bracket raises the speed to 1.25x", async () => {
+      await startViewer(client, "Audible:");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready && value.hasAudio && value.paused, "audible paused video", 15_000);
+      await lib.dispatchKey(client, "]");
+      const state = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.playbackRate === 1.25, "1.25x speed", 5000);
+      if (!String(state.readout).includes("1.25×")) throw new Error(`readout misses the rate: ${state.readout}`);
+      await closeViewer(client);
+      return `playbackRate=${state.playbackRate}`;
+    });
+
+    await runCase(client, cases, "m toggles mute on the audible clip", async () => {
+      await startViewer(client, "Audible:");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready && value.hasAudio && value.paused, "audible paused video", 15_000);
+      await lib.dispatchKey(client, "m");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.muted === true, "mute on", 5000);
+      await lib.dispatchKey(client, "m");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.muted === false, "mute off", 5000);
+      await closeViewer(client);
+      return "muted then unmuted";
+    });
+
+    await runCase(client, cases, "f enters fullscreen and Esc leaves it with the viewer open", async () => {
+      await startViewer(client, "Audible:");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready, "video ready", 15_000);
+      await lib.dispatchKey(client, "f");
+      await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.fullscreen === true, "fullscreen on", 5000);
+      await lib.dispatchKey(client, "Escape");
+      const state = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.fullscreen === false, "fullscreen off", 5000);
+      if (!state) throw new Error("viewer closed along with fullscreen");
+      await closeViewer(client);
+      return "fullscreen on; Esc exited first";
+    });
+
+    await runCase(client, cases, "scrubber drag seeks", async () => {
+      await startViewer(client, "Audible:");
+      const ready = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready && value.hasAudio && value.paused, "audible paused video", 15_000);
+      if (!ready.scrubber) throw new Error("transport scrubber is missing");
+      const rect = await client.evaluate(`(() => {
+        const el = document.querySelector(".bob-video-zoom-scrubber");
+        if (!el) return null;
+        const box = el.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      })()`);
+      if (!rect || !(rect.width > 0)) throw new Error("scrubber is not laid out");
+      const y = rect.y + rect.height / 2;
+      await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: rect.x + rect.width * 0.2, y, button: "left", clickCount: 1 });
+      await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: rect.x + rect.width * 0.8, y, button: "left", buttons: 1 });
+      await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: rect.x + rect.width * 0.8, y, button: "left", clickCount: 1 });
+      const state = await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.currentTime > 3, "scrubber seek", 5000);
+      await closeViewer(client);
+      return `drag seeked to ${state.currentTime.toFixed(1)}s`;
+    });
+
+    await runCase(client, cases, "reduced motion shows no flash", async () => {
+      await client.evaluate(`(() => {
+        if (window.__bobVideoZoomMatchMedia) return "already stubbed";
+        window.__bobVideoZoomMatchMedia = window.matchMedia.bind(window);
+        window.matchMedia = (query) => String(query).indexOf("prefers-reduced-motion") >= 0
+          ? { matches: true, media: String(query), addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } }
+          : window.__bobVideoZoomMatchMedia(query);
+        return "stubbed";
+      })()`);
+      try {
+        await startViewer(client, "Audible:");
+        await lib.waitFor(client, VIEWER_PROBE, (value) => value && value.ready && value.hasAudio && value.paused, "reduced-motion paused video", 15_000);
+        const state = await client.evaluate(VIEWER_PROBE);
+        if (state.flashVisible) throw new Error("flash showed under reduced motion");
+      } finally {
+        await client.evaluate(`(() => {
+          if (window.__bobVideoZoomMatchMedia) {
+            window.matchMedia = window.__bobVideoZoomMatchMedia;
+            delete window.__bobVideoZoomMatchMedia;
+          }
+          return "restored";
+        })()`);
+        await closeViewer(client);
+      }
+      return "no flash while paused under reduced motion";
     });
 
     await runCase(client, cases, "VP9 WebM opens and plays", async () => {

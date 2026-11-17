@@ -125,6 +125,19 @@ class ElementStub {
     this.focused = true;
   }
 
+  insertBefore(node, before) {
+    if (!node) return node;
+    if (node.parent) {
+      const from = node.parent.children.indexOf(node);
+      if (from >= 0) node.parent.children.splice(from, 1);
+    }
+    node.parent = this;
+    const index = before ? this.children.indexOf(before) : -1;
+    if (index >= 0) this.children.splice(index, 0, node);
+    else this.children.push(node);
+    return node;
+  }
+
   blur() {
     if (activeElement === this) body.focus();
     this.focused = false;

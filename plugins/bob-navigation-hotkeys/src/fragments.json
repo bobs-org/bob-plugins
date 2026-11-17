@@ -59,6 +59,7 @@
   "207a-image-zoom-origin.js",
   "207b-video-zoom-model.js",
   "207c-video-zoom-modal.js",
+  "207d-video-zoom-transport.js",
   "208-parent-note-picker-model.js",
   "209-parent-note-picker-modal.js",
   "210-rename-and-line-context.js",

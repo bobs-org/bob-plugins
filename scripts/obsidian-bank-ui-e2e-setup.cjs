@@ -136,13 +136,13 @@ if (expectsInput) {
   try { input = fs.readFileSync(0, "utf8"); } catch {}
 }
 const record = { t: Date.now(), argv, cwd: process.cwd(), bobDir: process.env.BOB_DIR || "", expectsInput, stdinBytes: Buffer.byteLength(input) };
-fs.appendFileSync(path.join(dir, "argv.jsonl"), JSON.stringify(record) + "\\n");
 let realBob = "";
 try { realBob = fs.readFileSync(path.join(dir, "real-bob-path.txt"), "utf8").trim(); } catch {}
 if (!realBob) {
   process.stderr.write("setup e2e shim: real bob path missing\\n");
   process.exit(127);
 }
+const startedAt = Date.now();
 const spawned = spawnSync(realBob, argv, {
   encoding: "utf8",
   env: { ...process.env, NO_COLOR: "1" },
@@ -150,6 +150,10 @@ const spawned = spawnSync(realBob, argv, {
   timeout: 60_000,
   maxBuffer: 32 * 1024 * 1024,
 });
+record.durationMs = Date.now() - startedAt;
+record.status = spawned.status == null ? 1 : spawned.status;
+record.signal = spawned.signal || null;
+fs.appendFileSync(path.join(dir, "argv.jsonl"), JSON.stringify(record) + "\\n");
 if (spawned.stdout) process.stdout.write(spawned.stdout);
 if (spawned.stderr) process.stderr.write(spawned.stderr);
 process.exit(spawned.status == null ? 1 : spawned.status);
@@ -164,8 +168,11 @@ function buildFixture(vaultDir) {
   const notes = bank.setupFixtureNotes();
   for (const [name, body] of Object.entries(notes)) writeNote(path.join(vaultDir, name), body);
   const enabled = [];
-  for (const id of ["bob-ledger-tools", "task-status-cycler"]) {
-    const source = path.join(repoRoot, "plugins", id);
+  for (const id of ["bob-ledger-tools", "bob-emoji", "task-status-cycler"]) {
+    const ledgerToolsOverride = id === "bob-ledger-tools" && process.env.BOB_LEDGER_TOOLS_PLUGIN_DIR;
+    const source = ledgerToolsOverride
+      ? path.resolve(ledgerToolsOverride)
+      : path.join(repoRoot, "plugins", id);
     if (!fs.existsSync(path.join(source, "manifest.json"))) continue;
     copyPluginFiles(source, path.join(vaultDir, ".obsidian", "plugins", id));
     enabled.push(id);
@@ -210,6 +217,48 @@ function ensureGitWorktree(vaultDir) {
 function gitCount(vaultDir) {
   const run = spawnSync("git", ["rev-list", "--count", "HEAD"], { cwd: vaultDir, encoding: "utf8", timeout: 20_000 });
   return Number(String(run.stdout || "").trim());
+}
+
+function gitHead(vaultDir) {
+  const run = spawnSync("git", ["rev-parse", "HEAD"], { cwd: vaultDir, encoding: "utf8", timeout: 20_000 });
+  return String(run.stdout || "").trim();
+}
+
+function gitEvidenceSince(vaultDir, base) {
+  if (!base) return "";
+  const run = spawnSync("git", ["log", "--format=%h%x09%s", "--name-status", `${base}..HEAD`], {
+    cwd: vaultDir,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  return String(run.stdout || "").trim();
+}
+
+function gitSubjectsSince(vaultDir, base) {
+  if (!base) return [];
+  const run = spawnSync("git", ["log", "--format=%s", `${base}..HEAD`], {
+    cwd: vaultDir,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  return String(run.stdout || "").split("\n").map((subject) => subject.trim()).filter(Boolean);
+}
+
+function p95(values) {
+  const sorted = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] : null;
+}
+
+function shimLogEntries(shimDir, since = 0) {
+  try {
+    return fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(since)
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  } catch { return []; }
+}
+
+function shimLogLength(shimDir) {
+  try { return fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).length; }
+  catch { return 0; }
 }
 
 function gitSubjects(vaultDir, count) {
@@ -943,10 +992,16 @@ async function runE2e(parsed) {
     executable,
     vault: fixtureRealPath,
     realBob,
+    pluginSources: {
+      bobLedgerTools: process.env.BOB_LEDGER_TOOLS_PLUGIN_DIR
+        ? path.resolve(process.env.BOB_LEDGER_TOOLS_PLUGIN_DIR)
+        : path.join(repoRoot, "plugins", "bob-ledger-tools"),
+    },
     cases: [],
     skipped: [],
     unverified: [],
     screenshots: [],
+    timings: { bank: {} },
     pass: false,
   };
 
@@ -958,6 +1013,8 @@ async function runE2e(parsed) {
     client = launched.client;
     const loaded = await waitLoaded(client, "bob-ledger-tools");
     record("ledger-loaded", loaded, loaded ? "bob-ledger-tools" : "plugin missing");
+    const emojiLoaded = await waitLoaded(client, "bob-emoji");
+    record("bob-emoji-loaded", emojiLoaded, emojiLoaded ? "Bob Emoji api v1" : "Bob Emoji did not load in the scratch vault");
 
     const paintHashBefore = hashFile(hubPath);
     await openNote(client, "bank.md", "live");
@@ -1219,23 +1276,501 @@ async function runE2e(parsed) {
       if (!modal) return { ok: false, reason: "no modal" };
       const coffee = (modal.categories || []).find((row) => row && row.key === "coffee");
       const started = coffee && typeof modal.openEditStage === "function" ? modal.openEditStage(coffee) : false;
+      const root = modal.contentEl?.querySelector?.(".bob-bank-setup-card-stage");
+      const fused = root?.querySelector?.(".bob-emoji-slot-fused");
+      const label = fused?.querySelector?.(".bob-emoji-slot-label");
       return {
         ok: Boolean(started),
-        fused: Boolean(document.querySelector(".bob-bank-setup-card-stage .bob-emoji-slot-fused")),
-        well: Boolean(document.querySelector(".bob-bank-setup-card-stage [data-emoji-well], .bob-bank-setup-card-stage .bob-emoji-slot-fallback")),
-        placeholder: (document.querySelector(".bob-bank-setup-card-stage .bob-emoji-slot-label") || {}).placeholder || "",
+        fused: Boolean(fused),
+        well: Boolean(root?.querySelector?.("[data-emoji-well], .bob-emoji-slot-fallback")),
+        placeholder: label?.placeholder || "",
+        stageFound: Boolean(root),
+        stageClass: root?.className || "",
+        emojiSlot: modal.bankEmojiSlot ? { fallback: modal.bankEmojiSlot.fallback === true, open: modal.bankEmojiSlot.isOpen === true } : null,
       };
     })()`).catch((error) => ({ error: String(error) }));
     record("setup-card-emoji-slot", Boolean(emojiStage && emojiStage.ok && emojiStage.fused && emojiStage.well && emojiStage.placeholder === "Category label"), jsonDetail(emojiStage));
     const emojiShot = path.join(outDir, "setup-card-category-emoji.png");
     await capturePage(client, emojiShot, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
     report.screenshots.push(emojiShot);
+
+    const emojiPanel = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const root = modal?.contentEl?.querySelector?.(".bob-bank-setup-card-stage");
+      const well = root?.querySelector?.("[data-emoji-well]");
+      if (!well) return { ok: false, error: "Emoji Slot well missing" };
+      well.click();
+      const search = root?.querySelector?.(".bob-emoji-slot-search");
+      return { ok: Boolean(search), categories: root?.querySelectorAll?.("[data-emoji-category]")?.length || 0 };
+    })()`).catch((error) => ({ error: String(error) }));
+    record("setup-card-emoji-panel", Boolean(emojiPanel?.ok && emojiPanel.categories === 9), jsonDetail(emojiPanel));
+    const emojiFilter = emojiPanel?.ok ? await client.evaluate(`(async () => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const root = modal?.contentEl?.querySelector?.(".bob-bank-setup-card-stage");
+      const samples = [];
+      const queries = ["rocket", "coffee", "memory", "food", "thumbs up", "ready", "pizza", "smile", "book", "seed",
+        "fire", "leaf", "bank", "house", "music", "check", "flower", "star", "heart", "car"];
+      for (const query of queries) {
+        const input = root?.querySelector?.(".bob-emoji-slot-search");
+        if (!input) return { ok: false, error: "filter input disappeared", samples };
+        const started = performance.now();
+        input.value = query;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await new Promise(requestAnimationFrame);
+        samples.push(performance.now() - started);
+      }
+      const input = root?.querySelector?.(".bob-emoji-slot-search");
+      if (input) { input.value = "rocket"; input.dispatchEvent(new Event("input", { bubbles: true })); }
+      return { ok: samples.length === queries.length, samples, resultCount: root?.querySelectorAll?.("[data-emoji-result]")?.length || 0 };
+    })()`) : null;
+    const emojiFilterP95 = p95(emojiFilter?.samples || []);
+    report.timings.bank.emojiFilterPaintSamplesMs = emojiFilter?.samples || [];
+    report.timings.bank.emojiFilterPaintP95Ms = emojiFilterP95;
+    record("setup-card-emoji-filter-budget", Boolean(emojiFilter?.ok && emojiFilterP95 !== null && emojiFilterP95 < 50),
+      `n=${(emojiFilter?.samples || []).length}, p95=${emojiFilterP95} ms, budget <50 ms`);
+    if (emojiPanel?.ok) {
+      await setViewport(client, 375, 812);
+      await setDark(client, false);
+      const lightEmoji = path.join(outDir, "setup-card-emoji-filter-375-light.png");
+      await capturePage(client, lightEmoji, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(lightEmoji);
+      await setDark(client, true);
+      const darkEmoji = path.join(outDir, "setup-card-emoji-filter-375-dark.png");
+      await capturePage(client, darkEmoji, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(darkEmoji);
+      await setDark(client, false);
+      await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      const reducedEmoji = await client.evaluate(`window.matchMedia("(prefers-reduced-motion: reduce)").matches`);
+      const reducedEmojiShot = path.join(outDir, "setup-card-emoji-filter-375-reduced-motion.png");
+      await capturePage(client, reducedEmojiShot, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(reducedEmojiShot);
+      record("setup-card-emoji-reduced-motion", reducedEmoji === true, `media preference=${reducedEmoji}`);
+      await client.call("Emulation.setEmulatedMedia", { features: [] });
+      await setViewport(client, 1280, 900);
+    }
     await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       if (modal && typeof modal.cancelStage === "function") modal.cancelStage();
       return true;
     })()`);
     await sleep(200);
+
+    // Measure and accept one local category arrangement in real Obsidian.
+    // The preview stays speculative; one Enter must produce exactly one Bob
+    // transaction and the card's Undo must produce one inverse transaction.
+    const arrangeLocal = await client.evaluate(`(() => {
+      const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+      const modal = plugin?.bankSetupCardModal;
+      if (!modal) return { ok: false, error: "setup card missing" };
+      modal.setSection("categories");
+      modal.bankEnsureArrangement?.();
+      const entry = Object.entries(modal.bankArrangeScopes?.() || {})
+        .find(([scope, ids]) => scope.startsWith("group:") && Array.isArray(ids) && ids.length >= 2);
+      if (!entry) return { ok: false, error: "no reorderable category group" };
+      const [scope, ids] = entry;
+      const key = String(ids[0]);
+      if (!modal.selectItem("category:" + key)) return { ok: false, error: "category selection failed", scope, ids };
+      const before = (plugin.bankSetupTimings || []).length;
+      const row = Array.from(modal.contentEl?.querySelectorAll?.("[data-setup-card-category]") || [])
+        .find((item) => item.getAttribute("data-setup-card-category") === key);
+      const event = new KeyboardEvent("keydown", { key: "∆", code: "KeyJ", altKey: true, bubbles: true, cancelable: true });
+      row?.dispatchEvent(event);
+      const projected = modal.bankArrangement?.projected?.(scope) || [];
+      const keyPathMoved = projected[1] === key;
+      if (keyPathMoved) modal.bankArrangeNudge?.(-1);
+      for (let index = 0; index < 30; index += 1) {
+        if (!modal.bankArrangeNudge?.(1) || !modal.bankArrangeNudge?.(-1)) break;
+      }
+      const timings = (plugin.bankSetupTimings || []).slice(before)
+        .filter((item) => item?.kind === "nudge-paint").map((item) => Number(item.ms)).filter(Number.isFinite);
+      return { ok: keyPathMoved && !modal.bankArrangeDirty?.(), scope, key, keyPrevented: event.defaultPrevented,
+        timings, saved: modal.bankArrangement?.saved?.(scope) || [], projected: modal.bankArrangement?.projected?.(scope) || [],
+        dirty: modal.bankArrangeDirty?.(), draftOps: modal.session?.getState?.()?.draftOps?.length || 0 };
+    })()`).catch((error) => ({ error: String(error) }));
+    report.probes = report.probes || {};
+    report.probes.setupArrangeLocal = arrangeLocal;
+    const localLogBase = shimLogLength(shimDir);
+    await sleep(350);
+    const localEntries = shimLogEntries(shimDir, localLogBase);
+    const localUpdateCalls = localEntries.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] === "update");
+    const localP95 = p95(arrangeLocal?.timings || []);
+    report.timings.bank.nudgePaintSamplesMs = arrangeLocal?.timings || [];
+    report.timings.bank.nudgePaintP95Ms = localP95;
+    record("setup-arrange-option-code-local", Boolean(arrangeLocal?.ok && arrangeLocal?.keyPrevented
+      && !arrangeLocal?.dirty && arrangeLocal?.draftOps === 0 && localUpdateCalls.length === 0),
+      `Option+J code path returned to saved order; bank update calls=${localUpdateCalls.length}`);
+    record("setup-arrange-nudge-budget", Boolean(localP95 !== null && localP95 < 50),
+      `n=${(arrangeLocal?.timings || []).length}, p95=${localP95} ms, budget <50 ms`);
+
+    report.probes.setupArrangeSession = await client.evaluate(`(() => {
+      const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+      const session = modal?.session;
+      if (!session || typeof session.setDraft !== "function") return { present: false };
+      if (!session.__bankArrangeProbeWrapped) {
+        const setDraft = session.setDraft;
+        session.setDraft = function bankArrangeProbeSetDraft(ops) {
+          const result = setDraft.call(this, ops);
+          const state = this.getState?.() || {};
+          modal.__bankArrangeSetDraftProbe = {
+            closed: this.closed === true,
+            ops: Array.isArray(ops) ? ops : null,
+            status: state.status || "",
+            draftOps: state.draftOps || [],
+            revision: state.revision ?? null,
+          };
+          return result;
+        };
+        session.__bankArrangeProbeWrapped = true;
+      }
+      const state = session.getState?.() || {};
+      return {
+        present: true,
+        closed: session.closed === true,
+        status: state.status || "",
+        revision: state.revision ?? null,
+        draftOps: state.draftOps || [],
+        categoryRows: (modal.categories || []).map((item) => ({ key: item.key, group: item.group })),
+        modelCategoryRows: (modal.model?.categories || []).map((item) => ({ key: item.key, group: item.group })),
+      };
+    })()`).catch((error) => ({ error: String(error) }));
+
+    const previewSamples = [];
+    let previewFailure = "";
+    for (let index = 0; index < 6; index += 1) {
+      const startedAt = Date.now();
+      const moved = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        return Boolean(modal?.bankArrangeNudge?.(1));
+      })()`);
+      if (!moved) break;
+      try {
+        await waitFor(client, `(() => {
+          const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+          const state = modal?.session?.getState?.() || {};
+          return { status: state.status || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true };
+        })()`, (value) => value?.status === "preview-ready" && value.canApply && value.previewOk,
+        `bank arrangement timing preview ${index + 1}`, 20_000);
+      } catch (error) {
+        previewFailure = String(error && error.message || error);
+        report.probes = report.probes || {};
+        report.probes.setupArrangePreviewTimeout = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+          const state = modal?.session?.getState?.() || {};
+          return { status: state.status || "", canApply: state.canApply === true,
+            preview: state.preview ? { ok: state.preview.ok === true, failure: state.preview.failure || null,
+              consequence: state.preview.consequence || "" } : null,
+            draftOps: state.draftOps || [], refusal: state.refusal || null, busy: state.busy === true,
+            stage: modal?.stage?.kind || "", dirty: Boolean(modal?.bankArrangeDirty?.()),
+            selection: modal?.selection?.id || "", sessionState: modal?.sessionState?.status || "" };
+        })()`).catch((diagnostic) => ({ error: String(diagnostic) }));
+        await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+          return Boolean(modal?.bankArrangeRevert?.());
+        })()`).catch(() => false);
+        await sleep(400);
+        break;
+      }
+      previewSamples.push(Date.now() - startedAt);
+      const reverted = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        return Boolean(modal?.bankArrangeRevert?.());
+      })()`);
+      if (!reverted) break;
+      await sleep(280);
+    }
+    const previewP95 = p95(previewSamples);
+    report.timings.bank.settledDryRunSamplesMs = previewSamples;
+    report.timings.bank.settledDryRunP95Ms = previewP95;
+    record("setup-arrange-dry-run-budget", Boolean(previewSamples.length === 6 && previewP95 !== null && previewP95 <= 1300),
+      previewFailure ? `${previewFailure}; state=${jsonDetail(report.probes.setupArrangePreviewTimeout)}`
+        : `n=${previewSamples.length}, p95=${previewP95} ms, budget <=1300 ms`);
+
+    const arrangeLogBase = shimLogLength(shimDir);
+    const arrangeCommitsBefore = gitCount(vaultDir);
+    const arrangeCommitHeadBefore = gitHead(vaultDir);
+    const arrangeGesture = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      const key = String(modal?.selection?.id || "").replace(/^category:/, "");
+      const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-setup-card-category]") || [])
+        .find((item) => item.getAttribute("data-setup-card-category") === key);
+      if (!row) return { ok: false, error: "selected category row missing", key };
+      row.focus();
+      const event = new KeyboardEvent("keydown", { key: "∆", code: "KeyJ", altKey: true, bubbles: true, cancelable: true });
+      row.dispatchEvent(event);
+      return { ok: Boolean(modal.bankArrangeDirty?.()), prevented: event.defaultPrevented, key };
+    })()`).catch((error) => ({ error: String(error) }));
+    const arrangePreviewStarted = Date.now();
+    let arrangePreview = null;
+    let arrangePreviewError = "";
+    if (arrangeGesture?.ok) {
+      try {
+        arrangePreview = await waitFor(client, `(() => {
+          const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+          const state = modal?.session?.getState?.() || {};
+          const loud = modal?.bankArrangeIsLoud?.() || {};
+          return { status: state.status || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true,
+            loud: loud.loud === true, draftOps: (state.draftOps || []).length };
+        })()`, (value) => value?.status === "preview-ready" && value.canApply && value.previewOk,
+        "bank quiet arrangement preview", 20_000);
+      } catch (error) {
+        arrangePreviewError = String(error && error.message || error);
+        report.probes.setupArrangePreviewTimeout = await client.evaluate(`(() => {
+          const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+          const state = modal?.session?.getState?.() || {};
+          const arrangement = modal?.bankArrangement;
+          const scopes = arrangement?.scopeIds?.() || [];
+          const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+          const compileBank = plugin?.constructor?.helpers?.compileBankArrangement;
+          const compiled = typeof compileBank === "function"
+            ? compileBank(arrangement, {
+              categories: modal?.categories || modal?.model?.categories || [],
+              rules: modal?.report?.rules || modal?.model?.rules || [],
+            }) : null;
+          return {
+            status: state.status || "", canApply: state.canApply === true,
+            preview: state.preview ? { ok: state.preview.ok === true, failure: state.preview.failure || null,
+              consequence: state.preview.consequence || "" } : null,
+            draftOps: state.draftOps || [], refusal: state.refusal || null, busy: state.busy === true,
+            stage: modal?.stage?.kind || "", dirty: Boolean(modal?.bankArrangeDirty?.()),
+            selection: modal?.selection?.id || "", selectedScope: modal?.bankArrangeSelectedScope?.() || null,
+            scopes: scopes.map((scope) => ({ scope, saved: arrangement?.saved?.(scope) || [],
+              projected: arrangement?.projected?.(scope) || [] })),
+            compiled, sessionState: modal?.sessionState?.status || "",
+            session: modal?.session ? { closed: modal.session.closed === true,
+              state: modal.session.getState?.() || null } : null,
+            categories: (modal?.categories || []).map((item) => ({ key: item.key, group: item.group })),
+            modelCategories: (modal?.model?.categories || []).map((item) => ({ key: item.key, group: item.group })),
+            lastSetDraft: modal?.__bankArrangeSetDraftProbe || null,
+            recentTimings: (modal?.pluginRef?.bankSetupTimings || []).slice(-12),
+          };
+        })()`).catch((diagnostic) => ({ error: String(diagnostic) }));
+        report.probes.setupArrangePreviewTimeout = {
+          message: arrangePreviewError,
+          state: report.probes.setupArrangePreviewTimeout,
+          bobCalls: shimLogEntries(shimDir, arrangeLogBase),
+        };
+        try {
+          await setViewport(client, 375, 812);
+          await setDark(client, false);
+          const light = path.join(outDir, "setup-card-arrangement-375-light.png");
+          await capturePage(client, light, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+          report.screenshots.push(light);
+          await setDark(client, true);
+          const dark = path.join(outDir, "setup-card-arrangement-375-dark.png");
+          await capturePage(client, dark, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+          report.screenshots.push(dark);
+          await setDark(client, false);
+          await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+          const reduced = path.join(outDir, "setup-card-arrangement-375-reduced-motion.png");
+          await capturePage(client, reduced, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+          report.screenshots.push(reduced);
+          await client.call("Emulation.setEmulatedMedia", { features: [] });
+          await setViewport(client, 1280, 900);
+        } catch (screenshotError) {
+          report.probes.setupArrangePreviewTimeout.screenshotError = String(screenshotError);
+        }
+      }
+    }
+    const arrangePreviewMs = Date.now() - arrangePreviewStarted;
+    report.probes.setupArrangeGesture = arrangeGesture;
+    report.probes.setupArrangePreview = arrangePreview;
+    if (arrangePreview?.canApply) {
+      report.probes.setupArrangeDraft = await client.evaluate(`(() => {
+        const plugin = window.app?.plugins?.plugins?.["bob-ledger-tools"];
+        const modal = plugin?.bankSetupCardModal;
+        const state = modal?.session?.getState?.() || {};
+        const arrangement = modal?.bankArrangement;
+        const compileBank = plugin?.constructor?.helpers?.compileBankArrangement;
+        const compiled = typeof compileBank === "function"
+          ? compileBank(arrangement, {
+            categories: modal?.categories || modal?.model?.categories || [],
+            rules: modal?.report?.rules || modal?.model?.rules || [],
+          }) : null;
+        return {
+          status: state.status || "",
+          canApply: state.canApply === true,
+          draftOps: state.draftOps || [],
+          lastSetDraft: modal?.__bankArrangeSetDraftProbe || null,
+          compiled,
+          scopes: (arrangement?.scopeIds?.() || []).map((scope) => ({
+            scope,
+            saved: arrangement?.saved?.(scope) || [],
+            projected: arrangement?.projected?.(scope) || [],
+          })),
+          categories: (modal?.categories || []).map((item) => ({ key: item.key, group: item.group })),
+          modelCategories: (modal?.model?.categories || []).map((item) => ({ key: item.key, group: item.group })),
+        };
+      })()`).catch((error) => ({ error: String(error) }));
+    }
+    const savedOrderBeforeMove = Array.isArray(arrangeLocal?.saved) ? arrangeLocal.saved : [];
+    const movedKey = String(arrangeLocal?.key || "");
+    const movedIndex = savedOrderBeforeMove.indexOf(movedKey);
+    const movedAfter = movedIndex >= 0 ? (savedOrderBeforeMove[movedIndex + 1] || null) : null;
+    const expectedMove = movedAfter ? { op: "category.move", key: movedKey, after: movedAfter } : null;
+    const compiledOps = Array.isArray(report.probes.setupArrangeDraft?.compiled)
+      ? report.probes.setupArrangeDraft.compiled
+      : report.probes.setupArrangeDraft?.compiled?.ops || [];
+    const lastSetDraftOps = report.probes.setupArrangeDraft?.lastSetDraft?.ops || [];
+    const selectedDraftScope = report.probes.setupArrangeDraft?.scopes?.find((item) => item.scope === arrangeLocal?.scope);
+    const expectedProjectedOrder = expectedMove ? [movedAfter, movedKey] : [];
+    const sameOps = (actual) => JSON.stringify(actual) === JSON.stringify(expectedMove ? [expectedMove] : []);
+    record("setup-arrange-compiled-category-move", Boolean(expectedMove && sameOps(compiledOps)),
+      jsonDetail({ expected: expectedMove, compiled: compiledOps }));
+    record("setup-arrange-last-set-draft-category-move", Boolean(expectedMove && sameOps(lastSetDraftOps)),
+      jsonDetail({ expected: expectedMove, lastSetDraftOps }));
+    record("setup-arrange-projected-category-order", Boolean(expectedMove
+      && JSON.stringify(selectedDraftScope?.saved) === JSON.stringify(savedOrderBeforeMove)
+      && JSON.stringify(selectedDraftScope?.projected) === JSON.stringify(expectedProjectedOrder)),
+      jsonDetail({ scope: arrangeLocal?.scope, saved: selectedDraftScope?.saved,
+        projected: selectedDraftScope?.projected, expectedSaved: savedOrderBeforeMove,
+        expectedProjected: expectedProjectedOrder }));
+    const arrangePreSave = shimLogEntries(shimDir, arrangeLogBase);
+    const arrangeDryCount = arrangePreSave.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config"
+      && entry.argv?.[2] === "update" && entry.argv.includes("-d")).length;
+    report.timings.bank.quietArrangementPreviewMs = arrangePreviewMs;
+    record("setup-arrange-preview-is-one-envelope", Boolean(arrangeGesture?.ok && arrangeGesture.prevented
+      && arrangePreview?.canApply && !arrangePreview?.loud && arrangePreview.draftOps === 1 && arrangeDryCount === 1),
+      arrangePreviewError ? `${arrangePreviewError}; dry=${arrangeDryCount}, ms=${arrangePreviewMs}`
+        : `one quiet preview; dry=${arrangeDryCount}, ms=${arrangePreviewMs}`);
+
+    if (arrangePreview?.canApply && !arrangePreview.loud) {
+      await setViewport(client, 375, 812);
+      await setDark(client, false);
+      const arrangeLight = path.join(outDir, "setup-card-arrangement-375-light.png");
+      await capturePage(client, arrangeLight, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(arrangeLight);
+      await setDark(client, true);
+      const arrangeDark = path.join(outDir, "setup-card-arrangement-375-dark.png");
+      await capturePage(client, arrangeDark, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(arrangeDark);
+      await setDark(client, false);
+      await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      const reducedMotion = await client.evaluate(`window.matchMedia("(prefers-reduced-motion: reduce)").matches`);
+      const reducedShot = path.join(outDir, "setup-card-arrangement-375-reduced-motion.png");
+      await capturePage(client, reducedShot, { collapse: true, clip: ".bob-bank-setup-card-modal, .bob-bank-setup-card" });
+      report.screenshots.push(reducedShot);
+      record("setup-arrange-reduced-motion", reducedMotion === true, `media preference=${reducedMotion}`);
+      await client.call("Emulation.setEmulatedMedia", { features: [] });
+      await setViewport(client, 1280, 900);
+
+      const oneEnter = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        const key = String(modal?.selection?.id || "").replace(/^category:/, "");
+        const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-setup-card-category]") || [])
+          .find((item) => item.getAttribute("data-setup-card-category") === key);
+        const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+        row?.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, confirm: modal?.bankArrangeConfirm === true,
+          status: modal?.session?.getState?.()?.status || "" };
+      })()`);
+      const saved = await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+        const state = modal?.session?.getState?.() || {};
+        const arrangement = modal?.bankArrangement;
+        const selected = modal?.bankArrangeSelectedScope?.();
+        const scope = typeof selected === "string" ? selected : String(selected?.scope || "");
+        const group = scope.startsWith("group:") ? scope.slice("group:".length) : null;
+        const categoryOrder = (modal?.categories || []).filter((item) => item.group === group).map((item) => item.key);
+        const modelCategoryOrder = (modal?.model?.categories || []).filter((item) => item.group === group).map((item) => item.key);
+        return { status: state.status || "", dirty: Boolean(modal?.bankArrangeDirty?.()), undo: state.undoAvailable === true,
+          scope, selectedId: typeof selected === "string" ? "" : String(selected?.id || ""),
+          savedOrder: arrangement?.saved?.(scope) || [], projectedOrder: arrangement?.projected?.(scope) || [],
+          categoryOrder, modelCategoryOrder };
+      })()`, (value) => value && value.status !== "applying" && !value.dirty && value.undo,
+      "bank arrangement saved after one Enter", 30_000);
+      const afterSave = shimLogEntries(shimDir, arrangeLogBase);
+      const applyCount = afterSave.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config"
+        && entry.argv?.[2] === "update" && !entry.argv.includes("-d")).length;
+      const revalidationCount = afterSave.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config"
+        && entry.argv?.[2] !== "update").length;
+      const arrangeCommitsAfter = gitCount(vaultDir);
+      const arrangeCommitHeadAfterSave = gitHead(vaultDir);
+      const arrangeCommitEvidence = gitEvidenceSince(vaultDir, arrangeCommitHeadBefore);
+      const arrangeCommitSubjects = gitSubjectsSince(vaultDir, arrangeCommitHeadBefore);
+      const arrangeBobConfigCommits = arrangeCommitSubjects.filter((subject) => /^bank: config \(/.test(subject));
+      const arrangeOtherCommits = arrangeCommitSubjects.filter((subject) => !/^bank: config \(/.test(subject));
+      const applyMs = await client.evaluate(`(() => window.app.plugins.plugins["bob-ledger-tools"].bankSetupTimings
+        .filter((item) => item?.kind === "apply").map((item) => Number(item.ms)).filter(Number.isFinite).slice(-1)[0] ?? null)()`);
+      report.timings.bank.applyMs = applyMs;
+      report.probes.setupArrangeSave = { oneEnter, saved, applyCount, revalidationCount,
+        commitsBefore: arrangeCommitsBefore, commitsAfter: arrangeCommitsAfter,
+        totalGitCommits: arrangeCommitsAfter - arrangeCommitsBefore,
+        bobConfigCommits: arrangeBobConfigCommits.length, bobConfigCommitSubjects: arrangeBobConfigCommits,
+        otherCommitSubjects: arrangeOtherCommits, commitEvidence: arrangeCommitEvidence };
+      record("setup-arrange-saved-category-order", Boolean(expectedMove
+        && JSON.stringify(saved?.savedOrder) === JSON.stringify(expectedProjectedOrder)
+        && JSON.stringify(saved?.projectedOrder) === JSON.stringify(expectedProjectedOrder)
+        && JSON.stringify(saved?.categoryOrder) === JSON.stringify(expectedProjectedOrder)
+        && JSON.stringify(saved?.modelCategoryOrder) === JSON.stringify(expectedProjectedOrder)),
+        jsonDetail({ scope: saved?.scope, saved: saved?.savedOrder, projected: saved?.projectedOrder,
+          categories: saved?.categoryOrder, modelCategories: saved?.modelCategoryOrder,
+          expected: expectedProjectedOrder }));
+      record("setup-arrange-one-enter-one-commit", Boolean(oneEnter?.prevented && !oneEnter?.confirm
+        && applyCount === 1 && arrangeBobConfigCommits.length === 1),
+        `Enter applies once; Bob apply=${applyCount}, Bob config commits=${arrangeBobConfigCommits.length}, total Git commits=${arrangeCommitsAfter - arrangeCommitsBefore}, other commits=${jsonDetail(arrangeOtherCommits)}`);
+      record("setup-arrange-one-revalidation", revalidationCount === 1, `bank config reads after apply=${revalidationCount}`);
+
+      const firstUndo = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        const key = String(modal?.selection?.id || "").replace(/^category:/, "");
+        const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-setup-card-category]") || [])
+          .find((item) => item.getAttribute("data-setup-card-category") === key);
+        const event = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true });
+        row?.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, stage: modal?.stage?.kind || "" };
+      })()`);
+      const undoPreview = await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { stage: modal?.stage?.kind || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true };
+      })()`, (value) => value?.stage === "undo" && value.canApply && value.previewOk,
+      "bank arrangement undo preview", 20_000);
+      const secondUndo = await client.evaluate(`(() => {
+        const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+        const event = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true });
+        modal.contentEl.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, stage: modal?.stage?.kind || "" };
+      })()`);
+      await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.["bob-ledger-tools"]?.bankSetupCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { status: state.status || "", dirty: Boolean(modal?.bankArrangeDirty?.()), stage: modal?.stage?.kind || "" };
+      })()`, (value) => value && value.status !== "applying" && !value.dirty && !value.stage,
+      "bank arrangement undo applied", 30_000);
+      const afterUndo = shimLogEntries(shimDir, arrangeLogBase);
+      const totalApplies = afterUndo.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config"
+        && entry.argv?.[2] === "update" && !entry.argv.includes("-d")).length;
+      const arrangeCommitsAfterUndo = gitCount(vaultDir);
+      const undoCommitEvidence = gitEvidenceSince(vaultDir, arrangeCommitHeadAfterSave);
+      const undoCommitSubjects = gitSubjectsSince(vaultDir, arrangeCommitHeadAfterSave);
+      const undoBobConfigCommits = undoCommitSubjects.filter((subject) => /^bank: config \(/.test(subject));
+      const undoOtherCommits = undoCommitSubjects.filter((subject) => !/^bank: config \(/.test(subject));
+      const arrangementConfigCalls = afterUndo.filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config");
+      report.probes.setupArrangeUndo = { firstUndo, preview: undoPreview, secondUndo, totalApplies,
+        commits: arrangeCommitsAfterUndo - arrangeCommitsAfter,
+        bobConfigCommits: undoBobConfigCommits.length, bobConfigCommitSubjects: undoBobConfigCommits,
+        otherCommitSubjects: undoOtherCommits, commitEvidence: undoCommitEvidence };
+      record("setup-arrange-undo-one-commit", Boolean(firstUndo?.prevented && undoPreview?.canApply
+        && secondUndo?.prevented && totalApplies === 2 && undoBobConfigCommits.length === 1),
+        `arrangement Undo adds one Bob config commit; total applies=${totalApplies}, other commits=${jsonDetail(undoOtherCommits)}`);
+      report.probes.setupArrangeUndo.revalidationCount = afterUndo.filter((entry) =>
+        entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] !== "update").length;
+      report.probes.setupArrangeUndo.dryRunCount = afterUndo.filter((entry) =>
+        entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] === "update" && entry.argv.includes("-d")).length;
+      const commandTimingSamples = (entries, predicate) => entries.filter(predicate)
+        .map((entry) => Number(entry.durationMs)).filter(Number.isFinite);
+      report.timings.bank.bobConfigDryRunSamplesMs = commandTimingSamples(arrangementConfigCalls,
+        (entry) => entry.argv?.[2] === "update" && entry.argv.includes("-d"));
+      report.timings.bank.bobConfigApplySamplesMs = commandTimingSamples(arrangementConfigCalls,
+        (entry) => entry.argv?.[2] === "update" && !entry.argv.includes("-d"));
+      report.timings.bank.bobConfigRevalidationSamplesMs = commandTimingSamples(arrangementConfigCalls,
+        (entry) => entry.argv?.[2] !== "update");
+    } else {
+      record("setup-arrange-one-enter-one-commit", false, "quiet arrangement preview was not ready");
+      record("setup-arrange-one-revalidation", false, "quiet arrangement preview was not ready");
+      record("setup-arrange-undo-one-commit", false, "quiet arrangement preview was not ready");
+    }
+
     const hideGesture = await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       if (!modal) return { ok: false, reason: "no modal" };
@@ -1460,6 +1995,15 @@ async function runE2e(parsed) {
     const nativeVisible = Array.isArray(disabled && disabled.bankProps) && disabled.bankProps.some((row) => row.visible);
     record("plugin-disable-restores-bank-row", Boolean(nativeVisible || (disabled && !disabled.header && !disabled.surface)), jsonDetail(disabled));
 
+    const bankConfigCalls = shimLogEntries(shimDir).filter((entry) =>
+      entry.argv?.[0] === "bank" && entry.argv?.[1] === "config");
+    report.probes.bankBobCalls = {
+      all: {
+        dryRuns: bankConfigCalls.filter((entry) => entry.argv?.[2] === "update" && entry.argv.includes("-d")).length,
+        applies: bankConfigCalls.filter((entry) => entry.argv?.[2] === "update" && !entry.argv.includes("-d")).length,
+        revalidations: bankConfigCalls.filter((entry) => entry.argv?.[2] !== "update").length,
+      },
+    };
     report.cases = cases;
     report.skipped = skipped;
     report.unverified = unverified;
@@ -1479,6 +2023,18 @@ async function runE2e(parsed) {
     }, null, 2));
     if (!report.pass) fail(`e2e failed: ${cases.filter((item) => !item.ok).map((item) => item.name).join(", ")}`, 1);
     return report;
+  } catch (error) {
+    report.pass = false;
+    if (!cases.some((item) => !item.ok)) report.fatalError = String(error && error.stack || error);
+    report.cases = cases;
+    report.skipped = skipped;
+    report.unverified = unverified;
+    report.out = outDir;
+    if (parsed.report) {
+      fs.mkdirSync(path.dirname(path.resolve(parsed.report)), { recursive: true });
+      fs.writeFileSync(parsed.report, JSON.stringify(report, null, 2));
+    }
+    throw error;
   } finally {
     await stopObsidian(child, client);
     const cleanup = lib.planOwnedCleanup([runRoot], [runRoot]);

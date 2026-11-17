@@ -724,6 +724,20 @@ function gitHead(vaultDir) {
   return result.status === 0 ? String(result.stdout || "").trim() : "";
 }
 
+function gitCount(vaultDir) {
+  const result = spawnSync("git", ["rev-list", "--count", "HEAD"], {
+    cwd: vaultDir,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  return result.status === 0 ? Number(String(result.stdout || "").trim()) : 0;
+}
+
+function p95(values) {
+  const sorted = (Array.isArray(values) ? values : []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] : null;
+}
+
 function writeLoggingShim(shimDir, realBob) {
   fs.mkdirSync(shimDir, { recursive: true });
   const shimPath = path.join(shimDir, "bob");
@@ -1421,9 +1435,9 @@ async function run(args) {
     // byte and sync assertions above stay clean.
     const LEDGER_ID = "bob-ledger-tools";
     const updateShimBase = shimLogLength(shimDir);
-    const updateShimEdits = () => {
+    const updateShimEdits = (since = updateShimBase) => {
       try {
-        const lines = fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(updateShimBase);
+        const lines = fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(since);
         let dry = 0;
         let apply = 0;
         const requests = [];
@@ -1788,6 +1802,196 @@ async function run(args) {
     const editsAfterUndo = updateShimEdits();
     record("schema-undo-restores", restoredFp === preEditFp, "Undo replays inverse ops to the original fingerprint");
     record("schema-undo-one-commit", editsAfterUndo.apply === 2, `non-dry applies=${editsAfterUndo.apply}`);
+
+    // Acceptance for the local arrangement path: exercise the Option code
+    // fallback, collect paint and settled-preview budgets, then prove one
+    // quiet arrangement and its Undo each use one writer transaction.
+    const arrangeTimingBase = await ledgerEval(`
+      const modal = plugin.albumSchemaCardModal;
+      modal?.schemaEnsureArrangement?.();
+      const entry = Object.entries(modal?.schemaArrangeScopes?.() || {})
+        .find(([scope, ids]) => scope.startsWith("choices:") && Array.isArray(ids) && ids.length >= 2);
+      if (!modal || !entry) return { ok: false, error: "no reorderable choice scope" };
+      const [scope, ids] = entry;
+      const fieldKey = scope.slice("choices:".length);
+      const target = (modal.schemaTargets?.() || []).find((item) => item?.kind === "choice"
+        && String(item.field?.key || "") === fieldKey && String(item.choice?.value ?? "") === String(ids[0]));
+      if (!target) return { ok: false, error: "first choice target missing", scope, ids };
+      modal.selectedKey = target.key;
+      modal.selectedIndex = modal.schemaTargets().findIndex((item) => item.key === target.key);
+      modal.paintSchemaCard?.("body");
+      const before = (plugin.albumSchemaTimings || []).length;
+      const row = Array.from(modal.contentEl?.querySelectorAll?.("[data-target-key]") || [])
+        .find((item) => item.getAttribute("data-target-key") === target.key);
+      const event = new KeyboardEvent("keydown", { key: "∆", code: "KeyJ", altKey: true, bubbles: true, cancelable: true });
+      row?.dispatchEvent(event);
+      const keyPathProjected = modal.schemaArrangement?.projected?.(scope) || [];
+      const keyPathMoved = keyPathProjected[1] === String(ids[0]);
+      if (keyPathMoved) modal.schemaArrangeNudge?.(-1);
+      for (let index = 0; index < 30; index += 1) {
+        if (!modal.schemaArrangeNudge?.(1) || !modal.schemaArrangeNudge?.(-1)) break;
+      }
+      const timings = (plugin.albumSchemaTimings || []).slice(before)
+        .filter((item) => item?.kind === "nudge-paint").map((item) => Number(item.ms)).filter(Number.isFinite);
+      return { ok: keyPathMoved && !modal.schemaArrangeDirty?.(), scope, id: String(ids[0]), targetKey: target.key,
+        keyPrevented: event.defaultPrevented, timings, saved: modal.schemaArrangement?.saved?.(scope) || [],
+        projected: modal.schemaArrangement?.projected?.(scope) || [], dirty: modal.schemaArrangeDirty?.(),
+        draftOps: modal.session?.getState?.()?.draftOps?.length || 0 };
+    `);
+    report.probes.schemaArrangeLocal = arrangeTimingBase;
+    const localCommandBase = shimLogLength(shimDir);
+    await sleep(350);
+    const localWriterCalls = updateShimEdits(localCommandBase);
+    const localP95 = p95(arrangeTimingBase?.timings || []);
+    report.timings = report.timings || {};
+    report.timings.album = { nudgePaintSamplesMs: arrangeTimingBase?.timings || [], nudgePaintP95Ms: localP95 };
+    record("schema-arrange-option-code-local", Boolean(arrangeTimingBase?.ok && arrangeTimingBase?.keyPrevented
+      && !arrangeTimingBase?.dirty && arrangeTimingBase?.draftOps === 0
+      && localWriterCalls.apply === 0 && localWriterCalls.dry === 0),
+      `Option+J code path returned to saved order; writer calls=${localWriterCalls.dry + localWriterCalls.apply}`);
+    record("schema-arrange-nudge-budget", Boolean(localP95 !== null && localP95 < 50),
+      `n=${(arrangeTimingBase?.timings || []).length}, p95=${localP95} ms, budget <50 ms`);
+
+    const previewSamples = [];
+    for (let index = 0; index < 6; index += 1) {
+      const startedAt = Date.now();
+      const moved = await ledgerEval(`const modal = plugin.albumSchemaCardModal; return Boolean(modal?.schemaArrangeNudge?.(1));`);
+      if (!moved) break;
+      await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { status: state.status || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true };
+      })()`, (value) => value?.status === "preview-ready" && value.canApply && value.previewOk,
+      `album arrangement timing preview ${index + 1}`, 20_000);
+      previewSamples.push(Date.now() - startedAt);
+      const reverted = await ledgerEval(`const modal = plugin.albumSchemaCardModal; return Boolean(modal?.schemaArrangeRevert?.());`);
+      if (!reverted) break;
+      await sleep(280);
+    }
+    const previewP95 = p95(previewSamples);
+    report.timings.album.settledDryRunSamplesMs = previewSamples;
+    report.timings.album.settledDryRunP95Ms = previewP95;
+    record("schema-arrange-dry-run-budget", Boolean(previewSamples.length === 6 && previewP95 !== null && previewP95 <= 1300),
+      `n=${previewSamples.length}, p95=${previewP95} ms, budget <=1300 ms`);
+
+    const arrangeLogBase = shimLogLength(shimDir);
+    const arrangeCommitsBefore = gitCount(vaultDir);
+    const arrangeGesture = await ledgerEval(`
+      const modal = plugin.albumSchemaCardModal;
+      const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-target-key]") || [])
+        .find((item) => item.getAttribute("data-target-key") === modal?.selectedKey);
+      if (!row) return { ok: false, error: "selected choice row missing" };
+      row.focus();
+      const event = new KeyboardEvent("keydown", { key: "∆", code: "KeyJ", altKey: true, bubbles: true, cancelable: true });
+      row.dispatchEvent(event);
+      return { ok: Boolean(modal.schemaArrangeDirty?.()), prevented: event.defaultPrevented,
+        projected: modal.schemaArrangement?.projected?.(modal.schemaArrangeSelectedScope?.()?.scope) || [] };
+    `);
+    const arrangePreviewStarted = Date.now();
+    const arrangePreview = arrangeGesture?.ok ? await waitFor(client, `(() => {
+      const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+      const state = modal?.session?.getState?.() || {};
+      const loud = modal?.schemaArrangeIsLoud?.() || {};
+      return { status: state.status || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true,
+        loud: loud.loud === true, draftOps: (state.draftOps || []).length };
+    })()`, (value) => value?.status === "preview-ready" && value.canApply && value.previewOk,
+    "album quiet arrangement preview", 20_000) : null;
+    const arrangePreviewMs = Date.now() - arrangePreviewStarted;
+    report.probes.schemaArrangeGesture = arrangeGesture;
+    report.probes.schemaArrangePreview = arrangePreview;
+    const arrangePreSaveCommands = updateShimEdits(arrangeLogBase);
+    const arrangeReadCountBeforeSave = (() => {
+      try {
+        return fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(arrangeLogBase)
+          .map((line) => { try { return JSON.parse(line).argv || []; } catch { return []; } })
+          .filter((argv) => argv[0] === "albums" && argv[1] === "list").length;
+      } catch { return 0; }
+    })();
+    report.timings.album.quietArrangementPreviewMs = arrangePreviewMs;
+    record("schema-arrange-preview-is-one-envelope", Boolean(arrangeGesture?.ok && arrangeGesture.prevented
+      && arrangePreview?.canApply && !arrangePreview?.loud && arrangePreview.draftOps === 1
+      && arrangePreSaveCommands.apply === 0 && arrangePreSaveCommands.dry === 1),
+      `one quiet preview; dry=${arrangePreSaveCommands.dry}, apply=${arrangePreSaveCommands.apply}, ms=${arrangePreviewMs}`);
+
+    if (arrangePreview?.canApply && !arrangePreview.loud) {
+      await setViewport(client, 375, 812);
+      await captureSchemaThemes("arrangement");
+      await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      const reducedMotion = await client.evaluate(`window.matchMedia("(prefers-reduced-motion: reduce)").matches`);
+      const reducedShot = path.join(outDir, "album-schema-arrangement-375-reduced-motion.png");
+      await capturePage(client, reducedShot);
+      report.screenshots.push(reducedShot);
+      record("schema-arrange-reduced-motion", reducedMotion === true, `media preference=${reducedMotion}`);
+      await client.call("Emulation.setEmulatedMedia", { features: [] });
+
+      const oneEnter = await ledgerEval(`
+        const modal = plugin.albumSchemaCardModal;
+        const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-target-key]") || [])
+          .find((item) => item.getAttribute("data-target-key") === modal?.selectedKey);
+        const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+        row?.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, status: modal?.session?.getState?.()?.status || "",
+          confirm: modal?.schemaArrangeConfirm === true };
+      `);
+      await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { status: state.status || "", dirty: Boolean(modal?.schemaArrangeDirty?.()), undo: state.undoAvailable === true };
+      })()`, (value) => value && value.status !== "applying" && !value.dirty && value.undo,
+      "album arrangement saved after one Enter", 30_000);
+      const arrangeWrites = updateShimEdits(arrangeLogBase);
+      const arrangeCommitsAfter = gitCount(vaultDir);
+      const arrangeApplyMs = await ledgerEval(`return (plugin.albumSchemaTimings || []).filter((item) => item?.kind === "apply").map((item) => Number(item.ms)).filter(Number.isFinite).slice(-1)[0] ?? null;`);
+      const postApplyReads = (() => {
+        try {
+          return fs.readFileSync(path.join(shimDir, "argv.jsonl"), "utf8").split("\n").filter(Boolean).slice(arrangeLogBase)
+            .map((line) => { try { return JSON.parse(line).argv || []; } catch { return []; } })
+            .filter((argv) => argv[0] === "albums" && argv[1] === "list").length;
+        } catch { return 0; }
+      })();
+      report.timings.album.applyMs = arrangeApplyMs;
+      report.probes.schemaArrangeSave = { oneEnter, writes: arrangeWrites, commitsBefore: arrangeCommitsBefore,
+        commitsAfter: arrangeCommitsAfter, postApplyReads, previewReadsBefore: arrangeReadCountBeforeSave };
+      record("schema-arrange-one-enter-one-commit", Boolean(oneEnter?.prevented && arrangeWrites.apply === 1
+        && arrangeCommitsAfter - arrangeCommitsBefore === 1),
+        `Enter applies once; Bob apply=${arrangeWrites.apply}, git commits=${arrangeCommitsAfter - arrangeCommitsBefore}`);
+      record("schema-arrange-one-revalidation", postApplyReads === 1,
+        `albums list revalidations after apply=${postApplyReads}`);
+
+      const undoGesture = await ledgerEval(`
+        const modal = plugin.albumSchemaCardModal;
+        const row = Array.from(modal?.contentEl?.querySelectorAll?.("[data-target-key]") || [])
+          .find((item) => item.getAttribute("data-target-key") === modal?.selectedKey);
+        const event = new KeyboardEvent("keydown", { key: "u", bubbles: true, cancelable: true });
+        row?.dispatchEvent(event);
+        return { prevented: event.defaultPrevented, staged: Boolean(modal?.session?.getState?.()?.draftOps?.length) };
+      `);
+      const arrangeUndoPreview = await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { status: state.status || "", canApply: state.canApply === true, previewOk: state.preview?.ok === true,
+          undo: state.undoAvailable === true, draftOps: (state.draftOps || []).length };
+      })()`, (value) => value?.canApply && value.previewOk && value.draftOps > 0,
+      "album arrangement undo preview", 20_000);
+      await ledgerEval(`const modal = plugin.albumSchemaCardModal; modal?.schemaArrangeEnter?.(); return true;`);
+      await waitFor(client, `(() => {
+        const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
+        const state = modal?.session?.getState?.() || {};
+        return { status: state.status || "", dirty: Boolean(modal?.schemaArrangeDirty?.()) };
+      })()`, (value) => value && value.status !== "applying" && !value.dirty,
+      "album arrangement undo applied", 30_000);
+      const arrangeWritesAfterUndo = updateShimEdits(arrangeLogBase);
+      const arrangeCommitsAfterUndo = gitCount(vaultDir);
+      report.probes.schemaArrangeUndo = { gesture: undoGesture, preview: arrangeUndoPreview,
+        writes: arrangeWritesAfterUndo, commits: arrangeCommitsAfterUndo - arrangeCommitsAfter };
+      record("schema-arrange-undo-one-commit", Boolean(undoGesture?.prevented && arrangeUndoPreview?.canApply
+        && arrangeWritesAfterUndo.apply === 2 && arrangeCommitsAfterUndo - arrangeCommitsAfter === 1),
+        `arrangement Undo adds one commit; total applies=${arrangeWritesAfterUndo.apply}`);
+    } else {
+      record("schema-arrange-one-enter-one-commit", false, "quiet arrangement preview was not ready");
+      record("schema-arrange-one-revalidation", false, "quiet arrangement preview was not ready");
+      record("schema-arrange-undo-one-commit", false, "quiet arrangement preview was not ready");
+    }
     await closeSchemaCard();
     await sleep(300);
 
@@ -1808,9 +2012,12 @@ async function run(args) {
       const modal = window.app?.plugins?.plugins?.[${JSON.stringify(LEDGER_ID)}]?.albumSchemaCardModal;
       const doc = modal?.contentEl?.ownerDocument || document;
       const title = doc.querySelector(".bob-album-schema-dialog-title");
-      return { dialog: Boolean(doc.querySelector(".bob-album-schema-dialog")), title: title ? title.textContent : "" };
+      return { dialog: Boolean(doc.querySelector(".bob-album-schema-dialog")), title: title ? title.textContent : "",
+        sourcePath: String(modal?.schemaSourcePath || ""), modelPath: String(modal?.schemaModel?.path || "") };
     })())()`);
-    record("schema-entry-record", Boolean(paletteRecord && paletteRecord.dialog && /Eat/.test(paletteRecord.title || "")), "record notes resolve their album parent");
+    report.probes.schemaEntryRecord = paletteRecord;
+    record("schema-entry-record", Boolean(paletteRecord && paletteRecord.dialog && paletteRecord.sourcePath === "eat.md"),
+      `record note resolves album path=${paletteRecord?.sourcePath || "(none)"}; card title=${paletteRecord?.title || "(none)"}`);
     await closeSchemaCard();
     await openNote(client, "unrelated.md", "preview");
     await sleep(700);

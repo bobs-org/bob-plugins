@@ -211,6 +211,39 @@ test("bank group and category compilers preserve blocks, Money, and no-cross-gro
     "a category in another declared group cannot compile as an in-group move");
 });
 
+test("bank category compiler preserves interleaved ungrouped and built-in rows", () => {
+  const groups = ["Everyday", "Bills", "Money moves"];
+  const categories = [
+    { key: "groceries", group: null },
+    { key: "dining", group: null },
+    { key: "coffee", group: "Everyday" },
+    { key: "convenience", group: "Everyday" },
+    { key: "housing", group: "Bills" },
+    { key: "utilities", group: "Bills" },
+    { key: "income", group: "Money moves" },
+    { key: "refund", group: "Money moves" },
+    { key: "kids", group: null, hidden: true },
+    { key: "misc", group: null },
+    { key: "transfer", group: "Money moves" },
+    { key: "cash", group: "Money moves" },
+  ];
+  const arrangement = createArrangement({ scopes: {
+    groups,
+    "group:Everyday": ["coffee", "convenience"],
+    "group:Bills": ["housing", "utilities"],
+    "group:Money moves": ["income", "refund", "transfer", "cash"],
+    rules: [],
+  } });
+  assert.deepEqual(arrangement.nudge("group:Everyday", "coffee", 1), { ok: true, clamped: false });
+  const ops = compileBankArrangement(arrangement, { categories, rules: [] });
+  assert.deepEqual(ops, [{ op: "category.move", key: "coffee", after: "convenience" }]);
+  const replay = simulateBankOps({ groups, categories, rules: [] }, ops);
+  assert.deepEqual(replay.categories.map((category) => category.key), [
+    "groceries", "dining", "convenience", "coffee", "housing", "utilities",
+    "income", "refund", "kids", "misc", "transfer", "cash",
+  ]);
+});
+
 test("bank compiler uses current rule indices even when match text is duplicated", () => {
   const rules = [
     { match: "VENMO", category: "a" },

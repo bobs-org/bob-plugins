@@ -65567,29 +65567,32 @@ function simulateBankOps(source, ops = [], context = {}) {
 }
 
 function schemaArrangeExpectedBankCategories(arrangement, categories, groups) {
-  const byKey = new Map(categories.map((category) => [category.key, category]));
-  const result = [];
-  const emitted = new Set();
-  for (const group of groups) {
-    const scope = `group:${group}`;
-    const listed = arrangement.scopeIds().includes(scope) ? arrangement.projected(scope) : [];
-    for (const key of listed) {
-      const category = byKey.get(key);
-      if (category && String(category.group) === String(group)) {
-        result.push(category);
-        emitted.add(key);
-      }
-    }
-    for (const category of categories) {
-      if (category?.hidden === true) continue;
-      if (String(category.group) === String(group) && !emitted.has(category.key)) {
-        result.push(category);
-        emitted.add(category.key);
-      }
-    }
+  let result = categories.map((category) => ({ ...category }));
+  const savedGroups = arrangement.saved("groups");
+  if (!schemaArrangeSameOrder(savedGroups, groups)) {
+    result = schemaArrangeBankOrderCategories(result, groups);
   }
-  for (const category of categories) {
-    if (!emitted.has(category.key)) result.push(category);
+
+  for (const scope of arrangement.scopeIds().filter((scopeId) => scopeId.startsWith("group:"))) {
+    const group = scope.slice("group:".length);
+    const saved = arrangement.saved(scope);
+    const projected = arrangement.projected(scope);
+    const moves = schemaArrangeTargetOrderOps(saved, projected, (id, index, target, moved) => {
+      const anchor = schemaArrangeAnchorForTarget(index, target, moved);
+      if (!anchor) return null;
+      const item = result.find((category) => category.key === id);
+      const neighbor = result.find((category) => category.key === anchor.anchor);
+      if (!item || !neighbor || String(item.group) !== group || String(neighbor.group) !== group) return null;
+      return { key: id, ...anchor };
+    });
+    if (!moves) return [];
+    for (const move of moves) {
+      const order = result.map((category) => category.key);
+      const next = schemaArrangeMoveByAnchor(order, move.key, move.anchor, move.side);
+      if (!next) return [];
+      const byKey = new Map(result.map((category) => [category.key, category]));
+      result = next.map((key) => byKey.get(key));
+    }
   }
   return result;
 }

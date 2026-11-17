@@ -244,6 +244,7 @@ function bankSetupCardHintItems(modal) {
     items.push({ keys: "⏎", label: "open line" });
   } else {
     items.push({ keys: "⏎", label: "edit" });
+    items.push({ keys: "⇧J/K", label: "group" });
     items.push({ keys: "+", label: "new" });
     items.push({ keys: "⌥J/K", label: "move" });
     items.push({ keys: "⌥M", label: "move to…" });

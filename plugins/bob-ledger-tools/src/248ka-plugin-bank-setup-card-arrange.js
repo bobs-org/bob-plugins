@@ -126,12 +126,7 @@ Object.assign(BankSetupCardModal.prototype, {
         schemaArrangeAnnounce?.(this.contentEl, categoryEdge ? "⏎ edit to change group" : (step < 0 ? "Already first." : "Already last."));
         try {
           const node = this.contentEl?.querySelector?.(`[data-arrange-id="${selected.scope}:${selected.id}"]`);
-          if (node?.animate) {
-            node.animate(
-              [{ transform: "translateX(0)" }, { transform: `translateX(${step > 0 ? 3 : -3}px)` }, { transform: "translateX(0)" }],
-              { duration: 90, easing: "ease-out" },
-            );
-          }
+          if (typeof schemaCardBump === "function") schemaCardBump(node, step > 0 ? 1 : -1, { axis: "x" });
         } catch (_) {}
       }
       try { bankSetupRecordTiming?.(this.pluginRef, "nudge-paint", started ? performance.now() - started : 0); } catch (_) {}
@@ -744,6 +739,10 @@ Object.assign(BankSetupCardModal.prototype, {
               consume();
               return;
             }
+          }
+          if (!inInput && !mod && !event.altKey && (lower === "j" || lower === "k")) {
+            consume();
+            return;
           }
         }
 

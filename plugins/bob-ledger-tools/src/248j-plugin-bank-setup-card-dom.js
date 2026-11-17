@@ -263,12 +263,18 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   }
   const arrange = bankSetupCardArrangeContext(modal);
   const sections = bankSetupCardProjectedSections(model, arrange);
+  const selectedTile = (modal.selection && modal.selection.type === "category")
+    ? model.items.find((item) => item.id === modal.selection.id)
+    : null;
+  const selectedGroup = selectedTile && !selectedTile.tile?.hidden ? selectedTile.entry?.group || null : null;
+  const selectedHidden = Boolean(selectedTile && selectedTile.tile?.hidden === true);
   for (const section of sections) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group");
     if (!wrap) continue;
     if (section.group) {
       const groupItem = model.items.find((item) => item.type === "group" && item.group === section.group);
-      const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", section.group, {
+      const current = selectedGroup === section.group;
+      const label = bankSetupCardAppend(wrap, "button", `bob-bank-setup-card-group-label${current ? " is-current-group" : ""}`, section.group, {
         type: "button",
         "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
         "data-setup-card-group": section.group,
@@ -297,7 +303,7 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   if (model.hiddenTiles.length) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group is-hidden-group");
     const groupItem = model.items.find((item) => item.id === "group:hidden");
-    const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", "HIDDEN", {
+    const label = bankSetupCardAppend(wrap, "button", `bob-bank-setup-card-group-label${selectedHidden ? " is-current-group" : ""}`, "HIDDEN", {
       type: "button", "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
       "data-setup-card-group": "__hidden__", "data-setup-card-focus": "group-hidden",
     });

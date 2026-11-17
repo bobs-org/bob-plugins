@@ -1388,6 +1388,51 @@ async function runE2e(parsed) {
     })()`);
     await sleep(200);
 
+    // Real-key group jumps: Shift+K and Shift+J arrive as trusted CDP
+    // key events, the way a keyboard sends them.
+    const groupJumpBase = shimLogLength(shimDir);
+    const groupJumpStart = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      if (!modal) return { ok: false, error: "setup card missing" };
+      modal.setSection("categories");
+      const first = (modal.model?.items || []).find((item) => item && item.type === "category");
+      if (!first || !modal.selectItem(first.id)) return { ok: false, error: "category selection failed" };
+      const row = modal.contentEl?.querySelector?.('[data-setup-card-category="' + first.key + '"]');
+      if (row && typeof row.focus === "function") row.focus();
+      return { ok: true, before: modal.selection && modal.selection.id };
+    })()`);
+    const dispatchRealKey = async (parts) => {
+      await client.call("Input.dispatchKeyEvent", { type: "keyDown", ...parts });
+      await client.call("Input.dispatchKeyEvent", { type: "keyUp", code: parts.code, key: parts.key,
+        windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
+        nativeVirtualKeyCode: parts.nativeVirtualKeyCode });
+    };
+    await dispatchRealKey({ key: "K", code: "KeyK", windowsVirtualKeyCode: 75,
+      nativeVirtualKeyCode: 75, modifiers: 8, text: "K" });
+    await sleep(250);
+    const afterShiftK = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      return modal ? modal.selection && modal.selection.id : null;
+    })()`);
+    await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
+      nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
+    await sleep(250);
+    const afterShiftJ = await client.evaluate(`(() => {
+      const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
+      return modal ? modal.selection && modal.selection.id : null;
+    })()`);
+    const groupJumpEdits = shimLogEntries(shimDir, groupJumpBase)
+      .filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] === "update");
+    report.probes.setupGroupJump = { start: groupJumpStart, afterShiftK, afterShiftJ, edits: groupJumpEdits.length };
+    record("setup-group-jump-shift-k", Boolean(groupJumpStart && groupJumpStart.ok
+      && typeof afterShiftK === "string" && afterShiftK.indexOf("group:") === 0),
+      `Shift+K -> ${afterShiftK} (from ${groupJumpStart && groupJumpStart.before})`);
+    record("setup-group-jump-shift-j", Boolean(groupJumpStart && groupJumpStart.ok
+      && typeof afterShiftJ === "string" && afterShiftJ.indexOf("group:") === 0 && afterShiftJ !== afterShiftK),
+      `Shift+J -> ${afterShiftJ} (from ${afterShiftK})`);
+    record("setup-group-jump-no-apply", groupJumpEdits.length === 0,
+      `jumps never write; bob bank config update calls=${groupJumpEdits.length}`);
+
     // Measure and accept one local category arrangement in real Obsidian.
     // The preview stays speculative; one Enter must produce exactly one Bob
     // transaction and the card's Undo must produce one inverse transaction.

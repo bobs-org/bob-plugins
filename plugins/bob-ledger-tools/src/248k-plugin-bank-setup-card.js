@@ -790,7 +790,10 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     }
     if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
     if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
-    if (key.length === 1 && /[a-z0-9]/i.test(key) && this.section === "categories") {
+    if ((key === "J" || key === "K") && !mod && !event.altKey && this.section === "categories") {
+      consume(); this.jumpGroup(key === "J" ? 1 : -1, event); return;
+    }
+    if (key.length === 1 && /^[a-z0-9]$/.test(key) && this.section === "categories") {
       const selection = bankSetupCardSelectionByHotkey(this.categories, key);
       if (selection) { consume(); this.selection = selection; this.didInteract = true; this.paint(); }
     }
@@ -806,7 +809,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     } else if (this.section === "checks" && typeof bankSetupCardMoveFindingSelection === "function") {
       next = bankSetupCardMoveFindingSelection(this.model, this.selection, direction);
     } else if (this.section === "categories") {
-      next = bankSetupCardMoveSelection(this.model, this.selection, direction);
+      next = bankSetupCardMoveSelection(this.model, this.selection, direction, this.bankPaintArrange);
     } else {
       return false;
     }
@@ -814,6 +817,102 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     this.selection = next;
     this.didInteract = true;
     this.paint();
+    return true;
+  }
+
+  bankSetupJumpNode() {
+    try {
+      const item = this.selection;
+      if (!item) return null;
+      let attr = "data-setup-card-category";
+      let wanted = item.key;
+      if (item.type === "group") {
+        attr = "data-setup-card-group";
+        wanted = item.group ? item.group : "__hidden__";
+      } else if (item.type === "account") { attr = "data-setup-card-account"; wanted = item.alias; }
+      else if (item.type === "rule") { attr = "data-setup-card-rule"; wanted = String(item.entry?.index ?? item.index ?? ""); }
+      else if (item.type === "finding") { attr = "data-setup-card-finding"; wanted = String(item.index ?? ""); }
+      else if (item.type !== "category") return null;
+      const nodes = Array.from(this.contentEl?.querySelectorAll?.(`[${attr}]`) || []);
+      return nodes.find((node) => node.getAttribute?.(attr) === wanted) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bankSetupJumpReveal(groupId) {
+    try {
+      const root = this.contentEl;
+      if (!root?.querySelector) return;
+      const attr = groupId === "group:hidden" ? "__hidden__" : String(groupId || "").replace(/^group:/, "");
+      let head = null;
+      try {
+        head = root.querySelector(`[data-setup-card-group="${attr}"]`);
+      } catch (_) {
+        head = null;
+      }
+      if (!head) return;
+      let body = null;
+      try {
+        const tiles = head.parentNode?.querySelector?.(".bob-bank-setup-card-tiles") || null;
+        if (tiles) body = tiles;
+      } catch (_) {
+        body = null;
+      }
+      if (typeof schemaCardRevealGroup === "function") schemaCardRevealGroup(head, body);
+    } catch (_) {}
+  }
+
+  // Shift+J/K group jumps: pure navigation that never writes. From a
+  // tile, Shift+K lands on its own group first (parent first); at an
+  // end the selection stays and the row bumps with an announcement.
+  jumpGroup(delta, event) {
+    if (this.busy || this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
+    if (this.section !== "categories") return false;
+    const down = Number(delta) >= 0;
+    let items = [];
+    try {
+      if (typeof bankSetupCardPaintedCategoryItems === "function") {
+        items = bankSetupCardPaintedCategoryItems(this.model, this.bankPaintArrange) || [];
+      }
+    } catch (_) {
+      items = [];
+    }
+    const groups = items.filter((item) => item && item.type === "group");
+    const next = typeof bankSetupCardGroupStep === "function"
+      ? bankSetupCardGroupStep(items, this.selection, down ? "forward" : "back")
+      : null;
+    if (!next || !groups.length) {
+      if (event && event.repeat) return true;
+      try {
+        if (typeof schemaCardBump === "function") schemaCardBump(this.bankSetupJumpNode(), down ? 1 : -1);
+      } catch (_) {}
+      try {
+        if (typeof schemaArrangeAnnounce === "function") {
+          schemaArrangeAnnounce(this.contentEl, down ? "No next group" : "No previous group");
+        }
+      } catch (_) {}
+      return true;
+    }
+    let selection = null;
+    try {
+      selection = typeof bankSetupCardSelection === "function"
+        ? bankSetupCardSelection(this.model, next.id)
+        : null;
+    } catch (_) {
+      selection = null;
+    }
+    if (!selection) return false;
+    this.selection = selection;
+    this.didInteract = true;
+    try { this.paint(); } catch (_) {}
+    try { this.bankSetupJumpReveal(next.id); } catch (_) {}
+    try {
+      const name = next.hidden ? "HIDDEN" : String(next.group || "Group");
+      if (typeof schemaArrangeAnnounce === "function") {
+        schemaArrangeAnnounce(this.contentEl, `${name}, group ${groups.findIndex((item) => item.id === next.id) + 1} of ${groups.length}`);
+      }
+    } catch (_) {}
     return true;
   }
 

@@ -8,6 +8,8 @@ try {
       bankSetupCardSelection,
       bankSetupCardSelectionByHotkey,
       bankSetupCardMoveSelection,
+      bankSetupCardPaintedCategoryItems,
+      bankSetupCardGroupStep,
       bankSetupCardComposeLabel,
       bankSetupCardSetCategoryOp,
       bankSetupCardHotkeyStatus,

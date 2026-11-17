@@ -85187,14 +85187,68 @@ function bankSetupCardSelectionByHotkey(categories, hotkey) {
   return entry ? { type: "category", key: entry.key, group: entry.group || null, id: `category:${entry.key}` } : null;
 }
 
-function bankSetupCardMoveSelection(model, selection, direction) {
-  const items = Array.isArray(model?.items) ? model.items : [];
+function bankSetupCardMoveSelection(model, selection, direction, arrange) {
+  let items = Array.isArray(model?.items) ? model.items : [];
+  if (arrange && typeof bankSetupCardPaintedCategoryItems === "function") {
+    try {
+      const byId = new Map(items.map((item) => [item.id, item]));
+      const painted = bankSetupCardPaintedCategoryItems(model, arrange)
+        .map((entry) => byId.get(entry.id))
+        .filter(Boolean);
+      if (painted.length === items.length) items = painted;
+    } catch (_) {}
+  }
   if (!items.length) return null;
   const current = selection && items.findIndex((item) => item.id === selection.id);
   const at = Number.isInteger(current) && current >= 0 ? current : 0;
   const next = Math.max(0, Math.min(items.length - 1, at + (direction === "back" ? -1 : 1)));
   const item = items[next];
   return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+}
+
+// Painted category-walk items: group labels and tiles in the order the
+// Categories tab paints them, so keys and arrows never drift from the
+// screen while a reorder is pending. Ends with group:hidden and its
+// tiles when hidden categories exist.
+function bankSetupCardPaintedCategoryItems(model, arrange) {
+  const out = [];
+  let sections = Array.isArray(model?.sections) ? model.sections : [];
+  if (arrange && typeof bankSetupCardProjectedSections === "function") {
+    try {
+      sections = bankSetupCardProjectedSections(model, arrange) || sections;
+    } catch (_) {}
+  }
+  for (const section of sections) {
+    if (section && section.group) {
+      out.push({ type: "group", group: section.group, key: null, id: `group:${section.group}` });
+    }
+    for (const tile of (section && section.tiles) || []) {
+      if (tile && tile.key) out.push({ type: "category", group: section.group || null, key: tile.key, id: `category:${tile.key}` });
+    }
+  }
+  const hiddenTiles = Array.isArray(model?.hiddenTiles) ? model.hiddenTiles : [];
+  if (hiddenTiles.length) {
+    out.push({ type: "group", group: "", key: null, id: "group:hidden", hidden: true });
+    for (const tile of hiddenTiles) {
+      if (tile && tile.key) out.push({ type: "category", group: null, key: tile.key, id: `category:${tile.key}`, hidden: true });
+    }
+  }
+  return out;
+}
+
+// Next/previous group label strictly after/before the selection in
+// painted order. From a tile, Shift+K lands on its own group first
+// (parent first); at an end there is no group, so the caller bumps.
+function bankSetupCardGroupStep(items, selection, direction) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return null;
+  const step = direction === "back" ? -1 : 1;
+  const at = selection && list.findIndex((item) => item && item.id === selection.id);
+  const from = Number.isInteger(at) && at >= 0 ? at : (step < 0 ? list.length : -1);
+  for (let index = from + step; index >= 0 && index < list.length; index += step) {
+    if (list[index] && list[index].type === "group") return list[index];
+  }
+  return null;
 }
 
 function bankSetupCardComposeLabel(entry, draft = {}) {
@@ -85780,12 +85834,18 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   }
   const arrange = bankSetupCardArrangeContext(modal);
   const sections = bankSetupCardProjectedSections(model, arrange);
+  const selectedTile = (modal.selection && modal.selection.type === "category")
+    ? model.items.find((item) => item.id === modal.selection.id)
+    : null;
+  const selectedGroup = selectedTile && !selectedTile.tile?.hidden ? selectedTile.entry?.group || null : null;
+  const selectedHidden = Boolean(selectedTile && selectedTile.tile?.hidden === true);
   for (const section of sections) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group");
     if (!wrap) continue;
     if (section.group) {
       const groupItem = model.items.find((item) => item.type === "group" && item.group === section.group);
-      const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", section.group, {
+      const current = selectedGroup === section.group;
+      const label = bankSetupCardAppend(wrap, "button", `bob-bank-setup-card-group-label${current ? " is-current-group" : ""}`, section.group, {
         type: "button",
         "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
         "data-setup-card-group": section.group,
@@ -85814,7 +85874,7 @@ function bankSetupCardPaintCategories(panel, modal, model, doc) {
   if (model.hiddenTiles.length) {
     const wrap = bankSetupCardAppend(panel, "section", "bob-bank-setup-card-group is-hidden-group");
     const groupItem = model.items.find((item) => item.id === "group:hidden");
-    const label = bankSetupCardAppend(wrap, "button", "bob-bank-setup-card-group-label", "HIDDEN", {
+    const label = bankSetupCardAppend(wrap, "button", `bob-bank-setup-card-group-label${selectedHidden ? " is-current-group" : ""}`, "HIDDEN", {
       type: "button", "aria-pressed": groupItem && modal.selection?.id === groupItem.id ? "true" : "false",
       "data-setup-card-group": "__hidden__", "data-setup-card-focus": "group-hidden",
     });
@@ -86987,7 +87047,10 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     }
     if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
     if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
-    if (key.length === 1 && /[a-z0-9]/i.test(key) && this.section === "categories") {
+    if ((key === "J" || key === "K") && !mod && !event.altKey && this.section === "categories") {
+      consume(); this.jumpGroup(key === "J" ? 1 : -1, event); return;
+    }
+    if (key.length === 1 && /^[a-z0-9]$/.test(key) && this.section === "categories") {
       const selection = bankSetupCardSelectionByHotkey(this.categories, key);
       if (selection) { consume(); this.selection = selection; this.didInteract = true; this.paint(); }
     }
@@ -87003,7 +87066,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     } else if (this.section === "checks" && typeof bankSetupCardMoveFindingSelection === "function") {
       next = bankSetupCardMoveFindingSelection(this.model, this.selection, direction);
     } else if (this.section === "categories") {
-      next = bankSetupCardMoveSelection(this.model, this.selection, direction);
+      next = bankSetupCardMoveSelection(this.model, this.selection, direction, this.bankPaintArrange);
     } else {
       return false;
     }
@@ -87011,6 +87074,102 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     this.selection = next;
     this.didInteract = true;
     this.paint();
+    return true;
+  }
+
+  bankSetupJumpNode() {
+    try {
+      const item = this.selection;
+      if (!item) return null;
+      let attr = "data-setup-card-category";
+      let wanted = item.key;
+      if (item.type === "group") {
+        attr = "data-setup-card-group";
+        wanted = item.group ? item.group : "__hidden__";
+      } else if (item.type === "account") { attr = "data-setup-card-account"; wanted = item.alias; }
+      else if (item.type === "rule") { attr = "data-setup-card-rule"; wanted = String(item.entry?.index ?? item.index ?? ""); }
+      else if (item.type === "finding") { attr = "data-setup-card-finding"; wanted = String(item.index ?? ""); }
+      else if (item.type !== "category") return null;
+      const nodes = Array.from(this.contentEl?.querySelectorAll?.(`[${attr}]`) || []);
+      return nodes.find((node) => node.getAttribute?.(attr) === wanted) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bankSetupJumpReveal(groupId) {
+    try {
+      const root = this.contentEl;
+      if (!root?.querySelector) return;
+      const attr = groupId === "group:hidden" ? "__hidden__" : String(groupId || "").replace(/^group:/, "");
+      let head = null;
+      try {
+        head = root.querySelector(`[data-setup-card-group="${attr}"]`);
+      } catch (_) {
+        head = null;
+      }
+      if (!head) return;
+      let body = null;
+      try {
+        const tiles = head.parentNode?.querySelector?.(".bob-bank-setup-card-tiles") || null;
+        if (tiles) body = tiles;
+      } catch (_) {
+        body = null;
+      }
+      if (typeof schemaCardRevealGroup === "function") schemaCardRevealGroup(head, body);
+    } catch (_) {}
+  }
+
+  // Shift+J/K group jumps: pure navigation that never writes. From a
+  // tile, Shift+K lands on its own group first (parent first); at an
+  // end the selection stays and the row bumps with an announcement.
+  jumpGroup(delta, event) {
+    if (this.busy || this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
+    if (this.section !== "categories") return false;
+    const down = Number(delta) >= 0;
+    let items = [];
+    try {
+      if (typeof bankSetupCardPaintedCategoryItems === "function") {
+        items = bankSetupCardPaintedCategoryItems(this.model, this.bankPaintArrange) || [];
+      }
+    } catch (_) {
+      items = [];
+    }
+    const groups = items.filter((item) => item && item.type === "group");
+    const next = typeof bankSetupCardGroupStep === "function"
+      ? bankSetupCardGroupStep(items, this.selection, down ? "forward" : "back")
+      : null;
+    if (!next || !groups.length) {
+      if (event && event.repeat) return true;
+      try {
+        if (typeof schemaCardBump === "function") schemaCardBump(this.bankSetupJumpNode(), down ? 1 : -1);
+      } catch (_) {}
+      try {
+        if (typeof schemaArrangeAnnounce === "function") {
+          schemaArrangeAnnounce(this.contentEl, down ? "No next group" : "No previous group");
+        }
+      } catch (_) {}
+      return true;
+    }
+    let selection = null;
+    try {
+      selection = typeof bankSetupCardSelection === "function"
+        ? bankSetupCardSelection(this.model, next.id)
+        : null;
+    } catch (_) {
+      selection = null;
+    }
+    if (!selection) return false;
+    this.selection = selection;
+    this.didInteract = true;
+    try { this.paint(); } catch (_) {}
+    try { this.bankSetupJumpReveal(next.id); } catch (_) {}
+    try {
+      const name = next.hidden ? "HIDDEN" : String(next.group || "Group");
+      if (typeof schemaArrangeAnnounce === "function") {
+        schemaArrangeAnnounce(this.contentEl, `${name}, group ${groups.findIndex((item) => item.id === next.id) + 1} of ${groups.length}`);
+      }
+    } catch (_) {}
     return true;
   }
 
@@ -87173,12 +87332,7 @@ Object.assign(BankSetupCardModal.prototype, {
         schemaArrangeAnnounce?.(this.contentEl, categoryEdge ? "⏎ edit to change group" : (step < 0 ? "Already first." : "Already last."));
         try {
           const node = this.contentEl?.querySelector?.(`[data-arrange-id="${selected.scope}:${selected.id}"]`);
-          if (node?.animate) {
-            node.animate(
-              [{ transform: "translateX(0)" }, { transform: `translateX(${step > 0 ? 3 : -3}px)` }, { transform: "translateX(0)" }],
-              { duration: 90, easing: "ease-out" },
-            );
-          }
+          if (typeof schemaCardBump === "function") schemaCardBump(node, step > 0 ? 1 : -1, { axis: "x" });
         } catch (_) {}
       }
       try { bankSetupRecordTiming?.(this.pluginRef, "nudge-paint", started ? performance.now() - started : 0); } catch (_) {}
@@ -87792,6 +87946,10 @@ Object.assign(BankSetupCardModal.prototype, {
               return;
             }
           }
+          if (!inInput && !mod && !event.altKey && (lower === "j" || lower === "k")) {
+            consume();
+            return;
+          }
         }
 
         {
@@ -88115,6 +88273,7 @@ function bankSetupCardHintItems(modal) {
     items.push({ keys: "⏎", label: "open line" });
   } else {
     items.push({ keys: "⏎", label: "edit" });
+    items.push({ keys: "⇧J/K", label: "group" });
     items.push({ keys: "+", label: "new" });
     items.push({ keys: "⌥J/K", label: "move" });
     items.push({ keys: "⌥M", label: "move to…" });
@@ -148727,6 +148886,8 @@ try {
       bankSetupCardSelection,
       bankSetupCardSelectionByHotkey,
       bankSetupCardMoveSelection,
+      bankSetupCardPaintedCategoryItems,
+      bankSetupCardGroupStep,
       bankSetupCardComposeLabel,
       bankSetupCardSetCategoryOp,
       bankSetupCardHotkeyStatus,

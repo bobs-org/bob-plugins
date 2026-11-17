@@ -127,14 +127,68 @@ function bankSetupCardSelectionByHotkey(categories, hotkey) {
   return entry ? { type: "category", key: entry.key, group: entry.group || null, id: `category:${entry.key}` } : null;
 }
 
-function bankSetupCardMoveSelection(model, selection, direction) {
-  const items = Array.isArray(model?.items) ? model.items : [];
+function bankSetupCardMoveSelection(model, selection, direction, arrange) {
+  let items = Array.isArray(model?.items) ? model.items : [];
+  if (arrange && typeof bankSetupCardPaintedCategoryItems === "function") {
+    try {
+      const byId = new Map(items.map((item) => [item.id, item]));
+      const painted = bankSetupCardPaintedCategoryItems(model, arrange)
+        .map((entry) => byId.get(entry.id))
+        .filter(Boolean);
+      if (painted.length === items.length) items = painted;
+    } catch (_) {}
+  }
   if (!items.length) return null;
   const current = selection && items.findIndex((item) => item.id === selection.id);
   const at = Number.isInteger(current) && current >= 0 ? current : 0;
   const next = Math.max(0, Math.min(items.length - 1, at + (direction === "back" ? -1 : 1)));
   const item = items[next];
   return item ? { type: item.type, key: item.key || null, group: item.group || null, id: item.id } : null;
+}
+
+// Painted category-walk items: group labels and tiles in the order the
+// Categories tab paints them, so keys and arrows never drift from the
+// screen while a reorder is pending. Ends with group:hidden and its
+// tiles when hidden categories exist.
+function bankSetupCardPaintedCategoryItems(model, arrange) {
+  const out = [];
+  let sections = Array.isArray(model?.sections) ? model.sections : [];
+  if (arrange && typeof bankSetupCardProjectedSections === "function") {
+    try {
+      sections = bankSetupCardProjectedSections(model, arrange) || sections;
+    } catch (_) {}
+  }
+  for (const section of sections) {
+    if (section && section.group) {
+      out.push({ type: "group", group: section.group, key: null, id: `group:${section.group}` });
+    }
+    for (const tile of (section && section.tiles) || []) {
+      if (tile && tile.key) out.push({ type: "category", group: section.group || null, key: tile.key, id: `category:${tile.key}` });
+    }
+  }
+  const hiddenTiles = Array.isArray(model?.hiddenTiles) ? model.hiddenTiles : [];
+  if (hiddenTiles.length) {
+    out.push({ type: "group", group: "", key: null, id: "group:hidden", hidden: true });
+    for (const tile of hiddenTiles) {
+      if (tile && tile.key) out.push({ type: "category", group: null, key: tile.key, id: `category:${tile.key}`, hidden: true });
+    }
+  }
+  return out;
+}
+
+// Next/previous group label strictly after/before the selection in
+// painted order. From a tile, Shift+K lands on its own group first
+// (parent first); at an end there is no group, so the caller bumps.
+function bankSetupCardGroupStep(items, selection, direction) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return null;
+  const step = direction === "back" ? -1 : 1;
+  const at = selection && list.findIndex((item) => item && item.id === selection.id);
+  const from = Number.isInteger(at) && at >= 0 ? at : (step < 0 ? list.length : -1);
+  for (let index = from + step; index >= 0 && index < list.length; index += step) {
+    if (list[index] && list[index].type === "group") return list[index];
+  }
+  return null;
 }
 
 function bankSetupCardComposeLabel(entry, draft = {}) {

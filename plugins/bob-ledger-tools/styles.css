@@ -9940,6 +9940,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-setup-card-group-note { color: var(--text-muted); font-size: 0.82em; }
 .bob-bank-setup-card-group { min-width: 0; margin: 0.55em 0; }
 .bob-bank-setup-card-group-label { display: inline-block; border: 0; background: none; color: var(--text-faint); font-size: 0.75em; font-variant: small-caps; letter-spacing: 0.07em; text-align: start; cursor: pointer; padding: 0; }
+.bob-bank-setup-card-group-label.is-current-group { color: var(--text-muted); }
 .bob-bank-setup-card-group-label[aria-pressed="true"] { color: var(--text-normal); text-decoration: underline; text-decoration-color: var(--bob-setup-accent); text-underline-offset: 0.25em; }
 .bob-bank-setup-card-tiles { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
 .bob-bank-setup-card .bob-bank-category-tile { background: color-mix(in srgb, var(--bob-setup-accent) 6%, var(--background-primary)); }

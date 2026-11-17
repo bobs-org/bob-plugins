@@ -1,0 +1,39 @@
+// Test-facing exports for the read-only record sheet.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      RECORD_SHEET_CLASS,
+      RECORD_SHEET_SURFACE_CLASS,
+      RECORD_SHEET_HIDES_CLASS,
+      RECORD_SHEET_BAND_ATTR,
+      recordSheetPath,
+      recordSheetFail,
+      recordSheetIsCanonicalRecordType,
+      recordSheetIsSyntheticKey,
+      recordSheetAuthoredKeys,
+      recordSheetCapabilities,
+      recordSheetHasValuesCapability,
+      recordSheetAlbumHealthy,
+      recordSheetFolderKind,
+      recordSheetGate,
+      recordSheetClock,
+      recordSheetCalendarDate,
+      recordSheetDatePresentation,
+      recordSheetCreatedFooter,
+      recordSheetParseWikilink,
+      recordSheetWikilinkSpans,
+      recordSheetSafeUrl,
+      recordSheetMiddleTruncate,
+      recordSheetValueModel,
+      recordSheetMergeFrontmatter,
+      recordSheetFirstHeading,
+      recordSheetHeadingFromCache,
+      recordSheetYamlKeyLine,
+      recordSheetModel,
+      recordSheetSignature,
+      recordSheetBuildEl,
+      recordSheetAppendSubscriptionBand,
+      albumSubscriptionHeaderIsSheetOwned,
+    });
+  }
+} catch (_) {}

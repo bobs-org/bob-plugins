@@ -72,6 +72,7 @@ class BobLedgerToolsSubscriptionSurfacesMixin {
     const root = this.albumHeaderReadingRoot?.(el) || el;
     if (!root || !sourcePath) return null;
     albumCleanSubscriptionHeader(root);
+    if (this.recordSheetOwnsPath?.(sourcePath)) return null;
     if (!bankSubscriptionIsRecordPath(sourcePath)) return null;
     this.ensureSubscriptionSurfacesSubscribe();
     const model = bankSubscriptionHeaderModel(this.subscriptionSurfacesReport, sourcePath);
@@ -134,6 +135,7 @@ class BobLedgerToolsSubscriptionSurfacesMixin {
       if (!path || !bankSubscriptionIsRecordPath(path) || !view?.state?.doc) {
         return Decoration.none;
       }
+      if (this.recordSheetOwnsPath?.(path)) return Decoration.none;
       this.ensureSubscriptionSurfacesSubscribe();
       const model = bankSubscriptionHeaderModel(this.subscriptionSurfacesReport, path);
       if (!model || model.kind !== "header") return Decoration.none;
@@ -224,6 +226,7 @@ class BobLedgerToolsSubscriptionSurfacesMixin {
       if (typeof this.scheduleAlbumRecordsRefresh === "function") {
         this.scheduleAlbumRecordsRefresh();
       }
+      this.scheduleRecordSheetRefresh?.();
     }, 100);
   }
 }

@@ -57,7 +57,10 @@ category subgroup headings with the bank emoji and label (`💻 Tech & AI`),
 formats amount plus cadence as `$9.99 a month`, and adds a quiet
 `next ≈ Dec 21` chip from `bob bank subscriptions -f json`. Each
 `subscriptions/*.md` record shows a header strip with the same money line,
-a 12-dot charge timeline, and any finding as a sentence. A `bob-bank` fence
+a 12-dot charge timeline, and any finding as a sentence. Canonical
+`type: [[record]]` notes also show a read-only [record sheet](record-card.md)
+under the first heading; the subscription strip docks on that sheet. Native
+Properties stays visible. A `bob-bank` fence
 with `view: subscriptions` on `subscriptions.md` draws the album summary
 card: monthly and yearly estimates labeled as an estimate of commitments,
 not bank spend, status counts, the top five by monthly equivalent, and the

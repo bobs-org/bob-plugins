@@ -277,10 +277,22 @@ function albumCleanSubscriptionRecords(root) {
   }
 }
 
+function albumSubscriptionHeaderIsSheetOwned(node) {
+  try {
+    if (!node) return false;
+    if (node.getAttribute?.("data-bob-record-sheet-band") === "true") return true;
+    if (node.getAttribute?.("data-bob-record-sheet-owned") === "true") return true;
+    if (typeof node.closest === "function" && node.closest(".bob-record-sheet")) return true;
+  } catch (_) {}
+  return false;
+}
+
 function albumCleanSubscriptionHeader(root) {
-  notebookRemovePainted(root, SUBSCRIPTION_HEADER_CLASS);
-  for (const node of root.querySelectorAll?.(`section.${SUBSCRIPTION_HEADER_CLASS}, .${SUBSCRIPTION_HEADER_CLASS}`) || []) {
+  for (const node of Array.from(root?.querySelectorAll?.(`.${SUBSCRIPTION_HEADER_CLASS}`) || [])) {
+    if (albumSubscriptionHeaderIsSheetOwned(node)) continue;
     if (typeof node.remove === "function") node.remove();
-    else node.parentNode && node.parentNode.removeChild(node);
+    else if (node.parentNode && typeof node.parentNode.removeChild === "function") {
+      node.parentNode.removeChild(node);
+    }
   }
 }

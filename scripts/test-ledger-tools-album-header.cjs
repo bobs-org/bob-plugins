@@ -601,7 +601,7 @@ test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer",
       `${target.getAttribute("data-target-key")} keeps the shared wrapping and focus styles`);
   }
   assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /y YAML/);
-  assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /esc close/);
+  assert.match(card.querySelector(".bob-album-schema-dialog-footer").textContent, /esc\/q close/);
   assert.ok(card.querySelector(".bob-album-schema-dialog-subtitle"), "details live in the header subtitle");
   const region = (host, name) => (host.querySelectorAll("[data-schema-region]") || [])
     .find((node) => node.getAttribute("data-schema-region") === name);

@@ -460,14 +460,16 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     const active = expected.active === true;
     bracketModeToggleClass(node, "is-active", active);
     bracketModeToggleClass(node, "has-attention", expected.attention === true);
-    if (expected.attention === true) {
+    bracketModeToggleClass(node, "has-attention-ink", expected.attentionInk === true);
+    const showsAttention = expected.attention === true || expected.attentionInk === true;
+    if (showsAttention) {
       bracketModeSetAttr(node, "data-attention-tier", expected.attentionTier || "");
     } else {
       bracketModeRemoveAttr(node, "data-attention-tier");
     }
     bracketModeSetAttr(node, "aria-pressed", active ? "true" : "false");
     bracketModeSetAttr(node, "aria-label", expected.ariaLabel || "");
-    if (expected.attention === true && expected.attentionLabel) {
+    if (showsAttention && expected.attentionLabel) {
       bracketModeSetAttr(node, "title", expected.attentionLabel);
     } else {
       bracketModeRemoveAttr(node, "title");

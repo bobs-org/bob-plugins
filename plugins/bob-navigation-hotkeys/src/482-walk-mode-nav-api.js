@@ -1,4 +1,4 @@
-// Additive nav `api.walkMode` v5: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v6: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -10,7 +10,9 @@
 // reports resolved or creation-eligible paths without opening or creating.
 // v3 adds display-only review attention for the selector's `s` letter. v4
 // keeps attention per family so the bank's waiting dot can coexist with it.
-// v5 adds `w` attention for lanes over limit.
+// v5 adds `w` attention for lanes over limit. v6 paints the selected family's
+// attention as letter ink instead of hiding it; ledger keeps pushing attention
+// for the selected family.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -32,7 +34,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 5,
+    version: 6,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {

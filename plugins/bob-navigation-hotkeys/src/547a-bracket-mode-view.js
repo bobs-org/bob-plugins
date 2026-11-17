@@ -13,8 +13,8 @@ function bracketModeAttentionMap(value) {
 function bracketModeViewKey(view) {
   const segments = view && Array.isArray(view.segments) ? view.segments : [];
   const attention = segments
-    .filter((segment) => segment && segment.attention === true)
-    .map((segment) => `${segment.type}:${segment.attentionTier || ""}:${segment.attentionLabel || ""}`)
+    .filter((segment) => segment && (segment.attention === true || segment.attentionInk === true))
+    .map((segment) => `${segment.type}:${segment.attentionInk === true ? "ink" : "dot"}:${segment.attentionTier || ""}:${segment.attentionLabel || ""}`)
     .join("\u0001");
   return `${view && view.mode || "none"}\0${attention}`;
 }
@@ -40,8 +40,9 @@ function buildBracketModeView(type, attention = {}) {
   });
   const segments = BRACKET_MODE_FAMILIES.map((item) => {
     const raw = attentionByType[item.type];
-    const visible = Boolean(raw && typeof raw === "object" && item.type !== normalized);
-    const label = visible
+    const present = Boolean(raw && typeof raw === "object");
+    const selected = item.type === normalized;
+    const label = present
       ? String(raw.label || BRACKET_MODE_ATTENTION_DEFAULT_LABELS[item.type] || "")
       : "";
     return Object.freeze({
@@ -49,9 +50,10 @@ function buildBracketModeView(type, attention = {}) {
       letter: item.letter,
       name: item.name,
       active: item.type === normalized,
-      ariaLabel: visible ? `${item.segmentAria}. ${label}` : item.segmentAria,
-      attention: visible,
-      attentionTier: visible ? String(raw.tier || "") : "",
+      ariaLabel: present ? `${item.segmentAria}. ${label}` : item.segmentAria,
+      attention: present && !selected,
+      attentionInk: present && selected,
+      attentionTier: present ? String(raw.tier || "") : "",
       attentionLabel: label,
     });
   });

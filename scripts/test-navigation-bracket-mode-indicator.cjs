@@ -16,6 +16,13 @@ global.window = global.window || { setTimeout: (callback) => callback() };
 
 class TestMarkdownView {}
 class TestPlugin {}
+const testPlatform = new Proxy({}, {
+  get(_target, property) {
+    const current = global.Platform;
+    if (current && property in current) return current[property];
+    return property === "isDesktopApp" ? true : undefined;
+  },
+});
 const originalLoad = Module._load;
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
@@ -23,7 +30,7 @@ Module._load = function loadWithObsidianStubs(request, parent, isMain) {
       MarkdownView: TestMarkdownView,
       Modal: class {},
       Notice: global.Notice,
-      Platform: { isDesktopApp: true },
+      Platform: testPlatform,
       Plugin: TestPlugin,
       normalizePath: (value) => value,
       parseYaml: (text) => JSON.parse(text),
@@ -638,24 +645,27 @@ test("uppercase repeat flashes forward and backward; no-uppercase flashes empty"
   await sleep(BRACKET_MODE_FLASH_MS.empty + 60);
 });
 
-test("per-family attention lands on s and b only while another family is selected", () => {
+test("per-family attention dots off-family and inks the selected s and b letters", () => {
   const attention = {
     s: { tier: "next", label: "Review: 9 due" },
     b: { tier: "waiting", label: "Bank: 4 waiting" },
   };
-  for (const mode of ["w", "n", "b", null]) {
+  for (const mode of ["w", "n", "s", "b", null]) {
     const view = buildBracketModeView(mode, attention);
     const s = view.segments.find((segment) => segment.type === "s");
     assert.equal(s.attention, mode !== "s", `mode ${mode}`);
-    assert.equal(s.attentionTier, mode === "s" ? "" : "next", `mode ${mode}`);
-    assert.equal(s.attentionLabel, mode === "s" ? "" : "Review: 9 due", `mode ${mode}`);
+    assert.equal(s.attentionInk, mode === "s", `mode ${mode}`);
+    assert.equal(s.attentionTier, "next", `mode ${mode}`);
+    assert.equal(s.attentionLabel, "Review: 9 due", `mode ${mode}`);
     const b = view.segments.find((segment) => segment.type === "b");
     assert.equal(b.attention, mode !== "b", `bank mode ${mode}`);
-    assert.equal(b.attentionTier, mode === "b" ? "" : "waiting", `bank mode ${mode}`);
-    assert.equal(b.attentionLabel, mode === "b" ? "" : "Bank: 4 waiting", `bank mode ${mode}`);
+    assert.equal(b.attentionInk, mode === "b", `bank mode ${mode}`);
+    assert.equal(b.attentionTier, "waiting", `bank mode ${mode}`);
+    assert.equal(b.attentionLabel, "Bank: 4 waiting", `bank mode ${mode}`);
     for (const other of ["w", "n"]) {
       const seg = view.segments.find((segment) => segment.type === other);
       assert.equal(seg.attention, false, `mode ${mode} seg ${other}`);
+      assert.equal(seg.attentionInk, false, `mode ${mode} seg ${other}`);
       assert.equal(seg.attentionTier, "", `mode ${mode} seg ${other}`);
       assert.equal(seg.attentionLabel, "", `mode ${mode} seg ${other}`);
       assert.ok(!seg.ariaLabel.includes("Review: 9 due"), `mode ${mode} seg ${other}`);
@@ -667,7 +677,7 @@ test("per-family attention lands on s and b only while another family is selecte
   assert.ok(none.segments.every((segment) => segment.attention === false));
 });
 
-test("paint sets and clears the s dot without touching instant or animation classes", () => {
+test("paint sets and clears the off-family s dot without touching instant or animation classes", () => {
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
   const attention = { s: { tier: "Pending", label: "  Review: 5 due  " } };
@@ -685,6 +695,40 @@ test("paint sets and clears the s dot without touching instant or animation clas
   assert.equal(el.classes.includes("is-instant"), false);
 });
 
+test("selected attention ink swaps cleanly with dots and clears its attributes", () => {
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  const sAttention = { s: { tier: "new", label: "Review: 5 due · NEW first" } };
+  paintBracketModeIndicator(el, parts, buildBracketModeView("s", sAttention), undefined);
+  const sButton = findSegment(parts, "s");
+  assert.ok(sButton.classes.includes("has-attention-ink"));
+  assert.ok(!sButton.classes.includes("has-attention"));
+  assert.equal(sButton.attrs["data-attention-tier"], "new");
+  assert.equal(sButton.attrs.title, "Review: 5 due · NEW first");
+  assert.match(sButton.attrs["aria-label"], /Review: 5 due · NEW first/);
+
+  const allAttention = {
+    ...sAttention,
+    w: { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" },
+  };
+  paintBracketModeIndicator(el, parts, buildBracketModeView("w", allAttention), "s");
+  const wButton = findSegment(parts, "w");
+  assert.ok(!sButton.classes.includes("has-attention-ink"));
+  assert.ok(sButton.classes.includes("has-attention"));
+  assert.ok(wButton.classes.includes("has-attention-ink"));
+  assert.ok(!wButton.classes.includes("has-attention"));
+  paintBracketModeIndicator(el, parts, buildBracketModeView("s", allAttention), "w");
+  assert.ok(sButton.classes.includes("has-attention-ink"));
+  assert.ok(!sButton.classes.includes("has-attention"));
+  assert.ok(wButton.classes.includes("has-attention"));
+  assert.ok(!wButton.classes.includes("has-attention-ink"));
+
+  paintBracketModeIndicator(el, parts, buildBracketModeView("s", {}), "s");
+  assert.ok(!sButton.classes.includes("has-attention-ink"));
+  assert.equal(sButton.attrs["data-attention-tier"], undefined);
+  assert.equal(sButton.attrs.title, undefined);
+});
+
 test("bank waiting attention paints only the b dot and uses warning ink", () => {
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
@@ -699,7 +743,7 @@ test("bank waiting attention paints only the b dot and uses warning ink", () => 
   assert.match(css, /data-attention-tier="waiting"[^}]*var\(--text-warning\)/);
 });
 
-test("attention-only change repaints while an unchanged view key skips DOM writes", () => {
+test("selected ink tier changes repaint while an unchanged view key skips DOM writes", () => {
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
   const first = buildBracketModeView("w", { s: { tier: "next", label: "one" } });
@@ -719,28 +763,51 @@ test("attention-only change repaints while an unchanged view key skips DOM write
   writes = 0;
   paintBracketModeIndicator(el, parts, second, "w");
   assert.equal(writes, 0);
+  const selectedFirst = buildBracketModeView("s", { s: { tier: "new", label: "one" } });
+  const selectedSecond = buildBracketModeView("s", { s: { tier: "projects", label: "two" } });
+  assert.notEqual(bracketModeViewKey(selectedFirst), bracketModeViewKey(selectedSecond));
+  paintBracketModeIndicator(el, parts, selectedFirst, "w");
+  let selectedWrites = 0;
+  const selectedOriginalSet = sButton.setAttribute.bind(sButton);
+  sButton.setAttribute = (name, value) => {
+    selectedWrites += 1;
+    return selectedOriginalSet(name, value);
+  };
+  paintBracketModeIndicator(el, parts, selectedSecond, "s");
+  assert.ok(selectedWrites > 0);
+  assert.equal(sButton.attrs.title, "two");
+  selectedWrites = 0;
+  paintBracketModeIndicator(el, parts, selectedSecond, "s");
+  assert.equal(selectedWrites, 0);
   assert.equal(bracketModeViewKey(second), bracketModeViewKey(buildBracketModeView("w", { s: { tier: "next", label: "two" } })));
 });
 
-test("attention styles carry no motion and forced-colors uses Highlight", () => {
+test("attention ink styles carry no motion and forced-colors uses HighlightText", () => {
   const cssPath = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css");
   const css = fs.readFileSync(cssPath, "utf8");
   const dotRule = css.match(/button\.bob-bracket-mode-seg\.has-attention::after\s*\{[^}]*\}/);
   assert.ok(dotRule, "missing has-attention::after rule");
   assert.doesNotMatch(dotRule[0], /animation\s*:/);
   assert.doesNotMatch(dotRule[0], /transition\s*:/);
+  const inkRule = css.match(/button\.bob-bracket-mode-seg\.is-active\.has-attention-ink\s*\{[^}]*\}/);
+  assert.ok(inkRule, "missing selected attention ink rule");
+  assert.match(inkRule[0], /--bob-review-attention/);
+  assert.doesNotMatch(inkRule[0], /animation\s*:/);
+  assert.doesNotMatch(inkRule[0], /transition\s*:/);
+  assert.ok(css.includes("@supports (color: oklch(from red l c h))"));
   assert.ok(css.includes("@media (forced-colors: active)"));
   const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
   assert.ok(forced.includes("button.bob-bracket-mode-seg.has-attention::after"));
-  assert.ok(forced.includes("Highlight"));
+  assert.ok(forced.includes("button.bob-bracket-mode-seg.is-active.has-attention-ink"));
+  assert.ok(forced.includes("HighlightText"));
 });
 
-test("walkMode v5 accepts w, still refuses n, and reports the version", () => {
+test("walkMode v6 accepts w, still refuses n, and reports the version", () => {
   const { createWalkModeApi } = helpers;
   assert.equal(typeof createWalkModeApi, "function");
   const plugin = { bracketModeAttention: null, refreshBracketModeIndicator: () => {} };
   const api = createWalkModeApi(plugin);
-  assert.equal(api.version, 5);
+  assert.equal(api.version, 6);
   assert.deepEqual(api.setAttention("w", { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" }), { ok: true });
   assert.deepEqual(plugin.bracketModeAttention.w, { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" });
   assert.deepEqual(api.setAttention("w", null), { ok: true });
@@ -750,16 +817,16 @@ test("walkMode v5 accepts w, still refuses n, and reports the version", () => {
   assert.deepEqual(api.setAttention("b", { tier: "waiting", label: "Bank: 1 waiting" }), { ok: true });
 });
 
-test("the w dot paints only while mode is not w with over tier, title, and aria", () => {
+test("the w attention dots off-family and inks on w with over tier, title, and aria", () => {
   const attention = { w: { tier: "over", label: "Lanes over limit: WIP 12/10 — click to show" } };
-  for (const mode of ["s", "n", "b", null]) {
+  for (const mode of ["s", "n", "b", "w", null]) {
     const view = buildBracketModeView(mode, attention);
     const w = view.segments.find((segment) => segment.type === "w");
     assert.equal(w.attention, mode !== "w", `mode ${mode}`);
-    assert.equal(w.attentionTier, mode === "w" ? "" : "over", `mode ${mode}`);
-    assert.equal(w.attentionLabel, mode === "w" ? "" : "Lanes over limit: WIP 12/10 — click to show", `mode ${mode}`);
+    assert.equal(w.attentionInk, mode === "w", `mode ${mode}`);
+    assert.equal(w.attentionTier, "over", `mode ${mode}`);
+    assert.equal(w.attentionLabel, "Lanes over limit: WIP 12/10 — click to show", `mode ${mode}`);
   }
-  assert.equal(buildBracketModeView("w", attention).segments.find((seg) => seg.type === "w").attention, false);
   const el = makeStatusBarEl();
   const parts = ensureBracketModeDom(el);
   const view = buildBracketModeView("s", attention);
@@ -768,6 +835,10 @@ test("the w dot paints only while mode is not w with over tier, title, and aria"
   assert.ok(wButton.classes.includes("has-attention"));
   assert.equal(wButton.attrs["data-attention-tier"], "over");
   assert.equal(wButton.attrs.title, "Lanes over limit: WIP 12/10 — click to show");
+  paintBracketModeIndicator(el, parts, buildBracketModeView("w", { w: { tier: "over", label: "Lanes over limit: WIP 12/10" } }), "s");
+  assert.ok(wButton.classes.includes("has-attention-ink"));
+  assert.ok(!wButton.classes.includes("has-attention"));
+  assert.equal(wButton.attrs.title, "Lanes over limit: WIP 12/10");
 });
 
 test("s, w, and b dots coexist on mode n and on unset mode", () => {
@@ -810,12 +881,13 @@ test("the over tier rule exists, carries no motion, and is covered by forced col
   const cssPath = path.join(__dirname, "..", "plugins", "bob-navigation-hotkeys", "styles.css");
   const css = fs.readFileSync(cssPath, "utf8");
   assert.match(css, /data-attention-tier="over"[^}]*var\(--color-red, #c65367\)/);
-  const overRule = css.match(/button\.bob-bracket-mode-seg\.has-attention\[data-attention-tier="over"\][^{]*\{[^}]*\}/);
+  const overRule = css.match(/button\.bob-bracket-mode-seg\[data-attention-tier="over"\][^{]*\{[^}]*\}/);
   assert.ok(overRule, "missing over tier rule");
   assert.doesNotMatch(overRule[0], /animation\s*:/);
   assert.doesNotMatch(overRule[0], /transition\s*:/);
   const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
   assert.ok(forced.includes("button.bob-bracket-mode-seg.has-attention::after"));
+  assert.ok(forced.includes("button.bob-bracket-mode-seg.is-active.has-attention-ink"));
 });
 
 test("s dot hues match the review footer tier hues", () => {
@@ -839,4 +911,11 @@ test("s dot hues match the review footer tier hues", () => {
     assert.ok(ledgerRule[0].includes(hue), `ledger ${tier} should use ${hue}`);
   }
   assert.match(navCss, /data-attention-tier="waiting"[^}]*var\(--text-warning\)/);
+  for (const tier of [...Object.keys(expected), "over", "waiting"]) {
+    assert.match(
+      navCss,
+      new RegExp(`button\\.bob-bracket-mode-seg\\[data-attention-tier="${tier}"\\]`),
+      `ink-capable tier ${tier}`,
+    );
+  }
 });

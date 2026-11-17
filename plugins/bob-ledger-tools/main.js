@@ -10638,8 +10638,9 @@ const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
 // Push only the commitment tiers; ROTTEN and POST are upkeep and must not
-// light the review selector. This is a display projection over the existing
-// memo and never changes task or walk state.
+// light the review selector. Keep pushing while s is selected so nav v6 can
+// paint its attention as readable ink. This is a display projection over the
+// existing memo and never changes task or walk state.
 function walkerFooterPushReviewAttention(plugin, route, memo) {
   try {
     const api = plugin && typeof plugin.dependencyNavApi === "function"
@@ -10653,7 +10654,7 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "s") {
+    if (!route || route.legacy) {
       walkMode.setAttention("s", null);
       return;
     }
@@ -10680,9 +10681,10 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
     }
     const due = read.walk;
     const dueLabel = freshnessTierFooterLabel(tier);
+    const clickHint = route.mode === "s" ? "" : "; click to show";
     walkMode.setAttention("s", {
       tier,
-      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first; click to show`,
+      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first${clickHint}`,
     });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.
@@ -11073,8 +11075,9 @@ function laneWalkerFooterOverLanes(counts, caps) {
   }
 }
 
-// Push the lane-over-limit dot through nav `api.walkMode` v5, mirroring the
-// bank push. Never throws; old nav makes no call.
+// Push lane-over-limit attention through nav `api.walkMode` v5, mirroring the
+// bank push. Keep it while w is selected for v6's readable ink; the click hint
+// only applies off-family. Never throws; old nav makes no call.
 function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
   try {
     const api = plugin && typeof plugin.dependencyNavApi === "function"
@@ -11088,7 +11091,7 @@ function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "w") {
+    if (!route || route.legacy) {
       walkMode.setAttention("w", null);
       return;
     }
@@ -11102,7 +11105,8 @@ function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
       walkMode.setAttention("w", null);
       return;
     }
-    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")} — click to show`;
+    const clickHint = route.mode === "w" ? "" : " — click to show";
+    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")}${clickHint}`;
     walkMode.setAttention("w", { tier: "over", label });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.
@@ -12095,7 +12099,7 @@ function walkerFooterPushBankAttention(plugin, route, snapshot) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "b") {
+    if (!route || route.legacy) {
       walkMode.setAttention("b", null);
       return;
     }
@@ -12113,9 +12117,10 @@ function walkerFooterPushBankAttention(plugin, route, snapshot) {
     const entries = Array.isArray(snapshot.entries) ? snapshot.entries : [];
     const oldest = entries.find((entry) => entry && entry.waiting) || entries[0];
     const oldestLabel = oldest && oldest.label ? oldest.label : "";
+    const clickHint = route.mode === "b" ? "" : " — click to show";
     const label = oldestLabel
-      ? `Bank: ${waiting} waiting · oldest ${oldestLabel} — click to show`
-      : `Bank: ${waiting} waiting — click to show`;
+      ? `Bank: ${waiting} waiting · oldest ${oldestLabel}${clickHint}`
+      : `Bank: ${waiting} waiting${clickHint}`;
     walkMode.setAttention("b", { tier: "waiting", label });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.

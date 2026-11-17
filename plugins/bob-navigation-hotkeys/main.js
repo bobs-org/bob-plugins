@@ -80761,7 +80761,7 @@ function planReviewGroupJump(queue, options = {}) {
   });
 }
 // ---- src/482-walk-mode-nav-api.js ----
-// Additive nav `api.walkMode` v5: the persisted bracket-walk family plus a
+// Additive nav `api.walkMode` v6: the persisted bracket-walk family plus a
 // workspace doorbell. `current()` returns the persisted family ("s", "w",
 // "n", or null for unset) via `readBracketRepeatType()`; invalid stored
 // values normalize to null and it never throws. `select(type)` behaves
@@ -80773,7 +80773,9 @@ function planReviewGroupJump(queue, options = {}) {
 // reports resolved or creation-eligible paths without opening or creating.
 // v3 adds display-only review attention for the selector's `s` letter. v4
 // keeps attention per family so the bank's waiting dot can coexist with it.
-// v5 adds `w` attention for lanes over limit.
+// v5 adds `w` attention for lanes over limit. v6 paints the selected family's
+// attention as letter ink instead of hiding it; ledger keeps pushing attention
+// for the selected family.
 // Ledger feature-detects each member version.
 // The doorbell fires from `rememberBracketRepeatType` only on an actual
 // change and once at plugin setup after the stored value is first read. It
@@ -80795,7 +80797,7 @@ function fireWalkModeDoorbell(plugin) {
 
 function createWalkModeApi(plugin) {
   return Object.freeze({
-    version: 5,
+    version: 6,
     current() {
       try {
         if (!plugin || typeof plugin.readBracketRepeatType !== "function") {
@@ -92962,8 +92964,8 @@ function bracketModeAttentionMap(value) {
 function bracketModeViewKey(view) {
   const segments = view && Array.isArray(view.segments) ? view.segments : [];
   const attention = segments
-    .filter((segment) => segment && segment.attention === true)
-    .map((segment) => `${segment.type}:${segment.attentionTier || ""}:${segment.attentionLabel || ""}`)
+    .filter((segment) => segment && (segment.attention === true || segment.attentionInk === true))
+    .map((segment) => `${segment.type}:${segment.attentionInk === true ? "ink" : "dot"}:${segment.attentionTier || ""}:${segment.attentionLabel || ""}`)
     .join("\u0001");
   return `${view && view.mode || "none"}\0${attention}`;
 }
@@ -92989,8 +92991,9 @@ function buildBracketModeView(type, attention = {}) {
   });
   const segments = BRACKET_MODE_FAMILIES.map((item) => {
     const raw = attentionByType[item.type];
-    const visible = Boolean(raw && typeof raw === "object" && item.type !== normalized);
-    const label = visible
+    const present = Boolean(raw && typeof raw === "object");
+    const selected = item.type === normalized;
+    const label = present
       ? String(raw.label || BRACKET_MODE_ATTENTION_DEFAULT_LABELS[item.type] || "")
       : "";
     return Object.freeze({
@@ -92998,9 +93001,10 @@ function buildBracketModeView(type, attention = {}) {
       letter: item.letter,
       name: item.name,
       active: item.type === normalized,
-      ariaLabel: visible ? `${item.segmentAria}. ${label}` : item.segmentAria,
-      attention: visible,
-      attentionTier: visible ? String(raw.tier || "") : "",
+      ariaLabel: present ? `${item.segmentAria}. ${label}` : item.segmentAria,
+      attention: present && !selected,
+      attentionInk: present && selected,
+      attentionTier: present ? String(raw.tier || "") : "",
       attentionLabel: label,
     });
   });
@@ -93484,14 +93488,16 @@ function paintBracketModeIndicator(el, parts, view, previousMode) {
     const active = expected.active === true;
     bracketModeToggleClass(node, "is-active", active);
     bracketModeToggleClass(node, "has-attention", expected.attention === true);
-    if (expected.attention === true) {
+    bracketModeToggleClass(node, "has-attention-ink", expected.attentionInk === true);
+    const showsAttention = expected.attention === true || expected.attentionInk === true;
+    if (showsAttention) {
       bracketModeSetAttr(node, "data-attention-tier", expected.attentionTier || "");
     } else {
       bracketModeRemoveAttr(node, "data-attention-tier");
     }
     bracketModeSetAttr(node, "aria-pressed", active ? "true" : "false");
     bracketModeSetAttr(node, "aria-label", expected.ariaLabel || "");
-    if (expected.attention === true && expected.attentionLabel) {
+    if (showsAttention && expected.attentionLabel) {
       bracketModeSetAttr(node, "title", expected.attentionLabel);
     } else {
       bracketModeRemoveAttr(node, "title");

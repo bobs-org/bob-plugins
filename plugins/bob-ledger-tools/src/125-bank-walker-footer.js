@@ -371,7 +371,7 @@ function walkerFooterPushBankAttention(plugin, route, snapshot) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "b") {
+    if (!route || route.legacy) {
       walkMode.setAttention("b", null);
       return;
     }
@@ -389,9 +389,10 @@ function walkerFooterPushBankAttention(plugin, route, snapshot) {
     const entries = Array.isArray(snapshot.entries) ? snapshot.entries : [];
     const oldest = entries.find((entry) => entry && entry.waiting) || entries[0];
     const oldestLabel = oldest && oldest.label ? oldest.label : "";
+    const clickHint = route.mode === "b" ? "" : " — click to show";
     const label = oldestLabel
-      ? `Bank: ${waiting} waiting · oldest ${oldestLabel} — click to show`
-      : `Bank: ${waiting} waiting — click to show`;
+      ? `Bank: ${waiting} waiting · oldest ${oldestLabel}${clickHint}`
+      : `Bank: ${waiting} waiting${clickHint}`;
     walkMode.setAttention("b", { tier: "waiting", label });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.

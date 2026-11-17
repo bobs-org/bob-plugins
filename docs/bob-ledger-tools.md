@@ -226,16 +226,17 @@ detail, hint, meter. The button jumps like `]s`; TICK rows show a tinted
 keeping the Alt+P preview on rows; hints read `]] next` (`]s next` legacy). The `w` lane footer shows `api.laneWalk` v2
 counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
 Pending…` states, red `n/cap` over tokens (over lanes stay visible);
-`Lanes` acts like `]]`, counts never filter. A red `w` dot is pushed
-through nav `api.walkMode` v5 when any PENDING/NEXT/READY badge is red. The `n` links compass previews via `walkMode.links()` v2 with `[n` /
+`Lanes` acts like `]]`, counts never filter. Red `w` attention is pushed via nav
+`api.walkMode` v5 for any over-limit lane. Ledger pushes `s`/`w`/`b` attention
+including selected families; labels omit “click to show”. The `n` links
+compass previews via `walkMode.links()` v2 with `[n` /
 `]n` arms. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
 arms from the planner (`[B` / `]B`), money only for the cursor row, and an account meter that never claims untold health: `✓ balanced`
 only from a cached `bob bank list` result where every
 account is balanced, otherwise the worst account's status in bob's own words.
-Hidden when unset, indexing, loading, or mobile. Off-`s` review commitments
-arrive via `setAttention` (v3) as a dot on the selector's `s`; bank waiting
-rows arrive via per-family attention (v4) as an amber dot on the selector's
-`b`.
+Hidden when unset, indexing, loading, or mobile. Review uses `setAttention` v3:
+off-`s` dots, selected-`s` ink in v6; bank uses per-family v4: off-`b` amber
+dots, selected-`b` ink in v6.
 
 ## Marks and rendered blocks
 

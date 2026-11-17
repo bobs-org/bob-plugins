@@ -645,7 +645,7 @@ test("walkMode api is versioned and the top-level api version is unchanged", () 
   const { plugin } = createDoorbellPlugin();
   assert.equal(plugin.api.version, 3);
   assert.ok(plugin.api.walkMode);
-  assert.equal(plugin.api.walkMode.version, 4);
+  assert.equal(plugin.api.walkMode.version, 6);
   assert.equal(
     WALK_MODE_DOORBELL_EVENT,
     "bob-navigation-hotkeys:walk-mode",
@@ -752,9 +752,9 @@ test("a throwing workspace trigger never breaks recording or selection", () => {
   assert.equal(plugin.api.walkMode.current(), "w");
 });
 
-test("walkMode degrades with a null plugin", () => {
+test("walkMode v6 degrades with a null plugin", () => {
   const api = createWalkModeApi(null);
-  assert.equal(api.version, 4);
+  assert.equal(api.version, 6);
   assert.ok(Object.isFrozen(api));
   assert.equal(api.current(), null);
   assert.deepEqual(api.select("s"), { ok: false, reason: "unavailable" });
@@ -771,10 +771,7 @@ test("walkMode degrades with a null plugin", () => {
 test("walkMode.setAttention validates type and value", () => {
   const { plugin } = createDoorbellPlugin();
   const api = plugin.api.walkMode;
-  assert.deepEqual(api.setAttention("w", { tier: "next", label: "x" }), {
-    ok: false,
-    reason: "invalid-type",
-  });
+  assert.deepEqual(api.setAttention("w", { tier: "over", label: "x" }), { ok: true });
   assert.deepEqual(api.setAttention("n", null), { ok: false, reason: "invalid-type" });
   assert.deepEqual(api.setAttention("b", { tier: "waiting", label: "x" }), { ok: true });
   for (const bad of ["x", "", null, undefined, 1, "ss"]) {

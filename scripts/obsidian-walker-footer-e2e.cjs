@@ -389,8 +389,8 @@ async function runE2e(args) {
       const navApi = nav && nav.api && nav.api.walkMode;
       return { navApi: Boolean(navApi), version: navApi && navApi.version, ledger: Boolean(ledger) };
     })()`,
-    (value) => value && value.navApi && value.version >= 4 && value.ledger,
-    "walker walkMode v4 api",
+    (value) => value && value.navApi && value.version >= 6 && value.ledger,
+    "walker walkMode v6 api",
     30_000);
 
     await waitFor(client, `(() => {
@@ -468,7 +468,10 @@ async function runE2e(args) {
       const rectS = rectOf(selector());
       const panelS = footer() && footer().getAttribute("data-walker-panel");
       const textS = footer() && String(footer().innerText || "").slice(0, 400);
-      const dotOnS = Boolean(dot());
+      const sButton = () => document.querySelector('button.bob-bracket-mode-seg[data-bracket-type="s"]');
+      const dotOnS = Boolean(sButton() && sButton().classList.contains("has-attention"));
+      const inkOnS = Boolean(sButton() && sButton().classList.contains("has-attention-ink"));
+      const inkTierOnS = sButton() && sButton().getAttribute("data-attention-tier");
 
       api.select("w");
       const rectWImmediate = rectOf(selector());
@@ -497,9 +500,9 @@ async function runE2e(args) {
       const panelN = footer() && footer().getAttribute("data-walker-panel");
       const textN = footer() && String(footer().innerText || "").slice(0, 400);
 
-      const dotOffS = Boolean(dot());
-      const dotTier = dot() && dot().getAttribute("data-attention-tier");
-      const dotTitle = dot() && (dot().getAttribute("title") || dot().title || "");
+      const dotOffS = Boolean(sButton() && sButton().classList.contains("has-attention"));
+      const dotTier = sButton() && sButton().getAttribute("data-attention-tier");
+      const dotTitle = sButton() && (sButton().getAttribute("title") || sButton().title || "");
 
       api.select("b");
       const rectBImmediate = rectOf(selector());
@@ -515,7 +518,7 @@ async function runE2e(args) {
 
       api.select("s");
       await twoFrames();
-      const dotCleared = !dot();
+      const dotCleared = !document.querySelector('button.bob-bracket-mode-seg[data-bracket-type="s"].has-attention');
       const panelBackS = footer() && footer().getAttribute("data-walker-panel");
 
       const reviewFile = window.app.vault.getAbstractFileByPath("review.md");
@@ -577,7 +580,7 @@ async function runE2e(args) {
 
       return {
         rectS, rectWImmediate, rectW, rectNImmediate, rectN, rectBImmediate, rectB,
-        panelS, textS, dotOnS,
+        panelS, textS, dotOnS, inkOnS, inkTierOnS,
         panelW, textW, laneDispatched, panelAfterCommand, textAfterCommand,
         panelN, textN, panelB, textB, bSwapMs,
         dotOffS, dotTier, dotTitle, dotCleared, panelBackS,
@@ -596,6 +599,7 @@ async function runE2e(args) {
       && result.panelB === "b";
     const singleItem = result.footerItems === 1;
     const dotBehaves = result.dotOffS === true && result.dotCleared === true && result.dotOnS === false;
+    const inkBehaves = result.inkOnS === true && Boolean(result.dotTier) && result.inkTierOnS === result.dotTier;
     const bankLanding = Boolean(result.afterRow)
       && result.afterRow.path === "bank/2026-11.md"
       && result.afterRow.payeeAt >= 0
@@ -606,11 +610,11 @@ async function runE2e(args) {
       && result.afterDay.payeeAt >= 0
       && result.afterDay.ch === result.afterDay.payeeAt;
     const tasksOk = Boolean(tasksReady && tasksReady.ready);
-    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && tasksOk && bankLanding && bankDayJump;
+    const passed = geometryStable && panelsSwap && singleItem && dotBehaves && inkBehaves && tasksOk && bankLanding && bankDayJump;
     if (passed) {
       return report("passed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, ...result });
     }
-    report("failed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, geometryStable, panelsSwap, singleItem, dotBehaves, ...result });
+    report("failed", { executable, vault: vaultPath, trustButtonClicked, tasksPlugin: fixture.tasksPlugin, tasksReady, geometryStable, panelsSwap, singleItem, dotBehaves, inkBehaves, ...result });
     process.exitCode = 1;
     return null;
   } catch (error) {

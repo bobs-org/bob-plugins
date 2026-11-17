@@ -785,10 +785,12 @@ test("rotten-only and post-only queues push null", () => {
   }
 });
 
-test("mode s, legacy routes, and unavailable tasks push null", () => {
+test("selected s keeps attention without click hint; legacy and unavailable tasks push null", () => {
   const { plugin: onS, calls: onSCalls } = makePushPlugin({ mode: "s" });
   walkerFooterPushReviewAttention(onS, { legacy: false, mode: "s" }, commitmentMemo({ byTier: { next: 1 }, walk: 1 }));
-  assert.deepEqual(onSCalls[0].value, null);
+  assert.equal(onSCalls[0].value.tier, "next");
+  assert.match(onSCalls[0].value.label, /Review: 1 due/);
+  assert.doesNotMatch(onSCalls[0].value.label, /click to show/);
   const { plugin: legacy, calls: legacyCalls } = makePushPlugin({ mode: "w" });
   walkerFooterPushReviewAttention(legacy, { legacy: true, mode: null }, commitmentMemo({ byTier: { next: 1 }, walk: 1 }));
   assert.deepEqual(legacyCalls[0].value, null);
@@ -818,7 +820,7 @@ test("old or missing nav attention makes no call and throwing never escapes", ()
   assert.equal(throwingCalls.length, 1);
 });
 
-test("updateFreshnessStatusBar pushes non-null off-s and null on s", () => {
+test("updateFreshnessStatusBar pushes non-null attention off-s and on s", () => {
   let mode = "w";
   const calls = [];
   const plugin = Object.create(LedgerToolsPlugin.prototype);
@@ -848,7 +850,8 @@ test("updateFreshnessStatusBar pushes non-null off-s and null on s", () => {
   assert.equal(calls.at(-1).value.tier, "next");
   mode = "s";
   plugin.updateFreshnessStatusBar();
-  assert.equal(calls.at(-1).value, null);
+  assert.equal(calls.at(-1).value.tier, "next");
+  assert.doesNotMatch(calls.at(-1).value.label, /click to show/);
   assert.equal(walkerFooterWalkMode(plugin).mode, "s");
 });
 
@@ -1389,7 +1392,7 @@ test("bank footer hides while indexing, on other families, and when nav predates
   assert.equal(unset.freshnessFooterLastView.visible, false);
 });
 
-test("bank attention is waiting-amber off-b and null on b, zero, or old nav", () => {
+test("bank attention is waiting-amber off-b and on b without click hint", () => {
   const waiting = bankSnap(WAITING_ROWS);
   const { plugin, calls } = makeBankFooterPlugin({ mode: "w", snapshot: waiting });
   walkerFooterPushBankAttention(plugin, { legacy: false, mode: "w" }, waiting);
@@ -1399,7 +1402,8 @@ test("bank attention is waiting-amber off-b and null on b, zero, or old nav", ()
 
   const onB = makeBankFooterPlugin({ mode: "b", snapshot: waiting });
   walkerFooterPushBankAttention(onB.plugin, { legacy: false, mode: "b" }, waiting);
-  assert.equal(onB.calls[0].value, null);
+  assert.equal(onB.calls[0].value.tier, "waiting");
+  assert.doesNotMatch(onB.calls[0].value.label, /click to show/);
 
   const none = bankSnap(ALL_ROWS);
   const clear = makeBankFooterPlugin({ mode: "w", snapshot: none });
@@ -1657,7 +1661,8 @@ test("lane attention lights off-w and clears on w, no overage, unavailable, or l
   assert.match(calls[0].value.label, /Lanes over limit: WIP 12\/10 — click to show/);
   const onW = lanePushPlugin({ mode: "w" });
   walkerFooterPushLaneAttention(onW.plugin, { legacy: false, mode: "w" }, overQueue, caps);
-  assert.deepEqual(onW.calls[0].value, null);
+  assert.equal(onW.calls[0].value.tier, "over");
+  assert.equal(onW.calls[0].value.label, "Lanes over limit: WIP 12/10");
   const none = lanePushPlugin({ mode: "s" });
   walkerFooterPushLaneAttention(none.plugin, { legacy: false, mode: "s" }, { available: true, counts: { pending: 1, next: 1, ready: 1 } }, caps);
   assert.deepEqual(none.calls[0].value, null);
@@ -1698,7 +1703,7 @@ test("lane tooltip lists only over lanes in dash order", () => {
   assert.doesNotMatch(lanePushCapture({ pending: 0, next: 16, ready: 0 }, caps), /WIP/);
 });
 
-test("the w panel and the w dot read the same queue object within one paint", () => {
+test("the w panel and selected-family attention read the same queue object within one paint", () => {
   const queue = snapshot(
     [entry("pending", "notes/a.md", 0, { rank: 1, total: 1, laneRank: 1, laneTotal: 1 })],
     { pending: 12, total: 1 },
@@ -1721,7 +1726,7 @@ test("the w panel and the w dot read the same queue object within one paint", ()
   plugin.freshnessMemo = plugin.freshnessEnsureMemo();
   plugin.updateFreshnessStatusBar();
   assert.equal(queueCalls, 1);
-  assert.ok(seen.some((call) => call.type === "w" && call.value === null));
+  assert.ok(seen.some((call) => call.type === "w" && call.value && call.value.tier === "over"));
   assert.equal(plugin.freshnessFooterLastView.panel, "lanes");
 });
 

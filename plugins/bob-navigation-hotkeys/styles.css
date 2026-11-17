@@ -4172,7 +4172,7 @@
   font-size: var(--font-ui-medium);
   font-weight: 600;
 }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="waiting"] {
+button.bob-bracket-mode-seg[data-attention-tier="waiting"] {
   --bob-review-attention: var(--text-warning);
 }
 .bob-nh-lane-walk-box {
@@ -4477,14 +4477,14 @@ button.bob-bracket-mode-seg.has-attention::after {
   pointer-events: none;
 }
 
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="pre"] { --bob-review-attention: var(--color-cyan, #00bfbc); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="new"] { --bob-review-attention: var(--color-red, #e93147); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="projects"] { --bob-review-attention: var(--color-purple, #7852ee); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="pending"] { --bob-review-attention: var(--task-status-in-progress, var(--color-yellow, #e0ac00)); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="next"] { --bob-review-attention: var(--task-status-next, var(--color-green, #08b94e)); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="recurring"] { --bob-review-attention: var(--color-pink, #d53984); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="tickler"] { --bob-review-attention: var(--color-blue, #086ddd); }
-button.bob-bracket-mode-seg.has-attention[data-attention-tier="over"] { --bob-review-attention: var(--color-red, #c65367); }
+button.bob-bracket-mode-seg[data-attention-tier="pre"] { --bob-review-attention: var(--color-cyan, #00bfbc); }
+button.bob-bracket-mode-seg[data-attention-tier="new"] { --bob-review-attention: var(--color-red, #e93147); }
+button.bob-bracket-mode-seg[data-attention-tier="projects"] { --bob-review-attention: var(--color-purple, #7852ee); }
+button.bob-bracket-mode-seg[data-attention-tier="pending"] { --bob-review-attention: var(--task-status-in-progress, var(--color-yellow, #e0ac00)); }
+button.bob-bracket-mode-seg[data-attention-tier="next"] { --bob-review-attention: var(--task-status-next, var(--color-green, #08b94e)); }
+button.bob-bracket-mode-seg[data-attention-tier="recurring"] { --bob-review-attention: var(--color-pink, #d53984); }
+button.bob-bracket-mode-seg[data-attention-tier="tickler"] { --bob-review-attention: var(--color-blue, #086ddd); }
+button.bob-bracket-mode-seg[data-attention-tier="over"] { --bob-review-attention: var(--color-red, #c65367); }
 
 button.bob-bracket-mode-seg:hover {
   color: var(--text-normal);
@@ -4494,6 +4494,31 @@ button.bob-bracket-mode-seg.is-active {
   color: var(--text-normal);
   font-weight: 600;
   cursor: default;
+}
+
+.bob-bracket-mode {
+  --bob-attention-ink-l: 0.44;
+}
+
+.theme-dark .bob-bracket-mode {
+  --bob-attention-ink-l: 0.84;
+}
+
+button.bob-bracket-mode-seg.is-active.has-attention-ink {
+  color: color-mix(
+    in srgb,
+    var(--bob-review-attention, var(--text-accent)) 60%,
+    var(--text-normal)
+  );
+}
+
+@supports (color: oklch(from red l c h)) {
+  button.bob-bracket-mode-seg.is-active.has-attention-ink {
+    color: oklch(
+      from var(--bob-review-attention, var(--text-accent)) var(--bob-attention-ink-l)
+        min(c, 0.16) h
+    );
+  }
 }
 
 button.bob-bracket-mode-seg:focus-visible {
@@ -4565,6 +4590,10 @@ button.bob-bracket-mode-seg:focus-visible {
   }
 
   button.bob-bracket-mode-seg.is-active {
+    color: HighlightText;
+  }
+
+  button.bob-bracket-mode-seg.is-active.has-attention-ink {
     color: HighlightText;
   }
 

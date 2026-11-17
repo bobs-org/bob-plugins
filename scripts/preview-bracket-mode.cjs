@@ -210,7 +210,7 @@ function renderIndicator(helpers, mode, attention = {}, flash = null) {
 
 function buildCases(helpers) {
   const cases = [];
-  for (const mode of [null, "s", "w", "n"]) {
+  for (const mode of [null, "s", "w", "n", "b"]) {
     const id = mode === null ? "none" : mode;
     const { html } = renderIndicator(helpers, mode);
     cases.push({ id, title: mode === null ? "unset (no thumb)" : `mode ${mode}`, html });
@@ -223,6 +223,34 @@ function buildCases(helpers) {
   cases.push({ id: "all-dots-n", title: "all three dots on mode n", html: renderIndicator(helpers, "n", allDots).html });
   cases.push({ id: "w-dot-s", title: "w dot alone on mode s", html: renderIndicator(helpers, "s", { w: allDots.w }).html });
   cases.push({ id: "sb-on-w", title: "mode w with s and b dots", html: renderIndicator(helpers, "w", { s: allDots.s, b: allDots.b }).html });
+  for (const tier of ["pre", "new", "projects", "pending", "next", "recurring", "tickler"]) {
+    cases.push({
+      id: `ink-s-${tier}`,
+      title: `mode s with ${tier} ink`,
+      html: renderIndicator(helpers, "s", {
+        s: { tier, label: `Review: 9 due · 5 commitments — ${tier.toUpperCase()} first` },
+      }).html,
+    });
+  }
+  cases.push({
+    id: "ink-w-over",
+    title: "mode w with over ink",
+    html: renderIndicator(helpers, "w", { w: { tier: "over", label: "Lanes over limit: WIP 12/10" } }).html,
+  });
+  cases.push({
+    id: "ink-b-waiting",
+    title: "mode b with waiting ink",
+    html: renderIndicator(helpers, "b", { b: { tier: "waiting", label: "Bank: 3 waiting · oldest Nov 14" } }).html,
+  });
+  cases.push({
+    id: "ink-s-all-attention",
+    title: "mode s with all three attentions",
+    html: renderIndicator(helpers, "s", {
+      s: { tier: "new", label: "Review: 9 due · 5 commitments — NEW first" },
+      w: allDots.w,
+      b: allDots.b,
+    }).html,
+  });
   for (const flash of ["forward", "backward"]) {
     const { html } = renderIndicator(helpers, "s", flash);
     cases.push({ id: `flash-${flash}`, title: `flash ${flash} (reduced motion)`, html });
@@ -276,6 +304,31 @@ ${css}
 window.bracketModePreview = {
   measure() {
     const out = [];
+    const readColor = (value) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1;
+      canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = value;
+      context.fillRect(0, 0, 1, 1);
+      const pixel = context.getImageData(0, 0, 1, 1).data;
+      return [pixel[0] / 255, pixel[1] / 255, pixel[2] / 255, pixel[3] / 255];
+    };
+    const over = (front, back) => {
+      const alpha = front[3] + back[3] * (1 - front[3]);
+      if (!alpha) return [0, 0, 0, 0];
+      return [0, 1, 2].map((index) => (front[index] * front[3] + back[index] * back[3] * (1 - front[3])) / alpha).concat(alpha);
+    };
+    const luminance = (rgba) => {
+      const linear = rgba.slice(0, 3).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    };
+    const contrast = (a, b) => {
+      const first = luminance(a);
+      const second = luminance(b);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
     for (const section of document.querySelectorAll(".preview-case")) {
       const bar = section.querySelector(".preview-status-bar");
       const indicator = section.querySelector(".bob-bracket-mode");
@@ -295,7 +348,14 @@ window.bracketModePreview = {
         });
         baseline = Math.max(...centers) - Math.min(...centers);
       } catch (e) { baseline = 0; }
-      out.push({ id: section.dataset.case, overflow, baseline, centered });
+      const statusBackground = readColor(getComputedStyle(bar).backgroundColor);
+      const thumbBackground = over(readColor(getComputedStyle(thumb).backgroundColor), statusBackground);
+      const inkContrast = Array.from(section.querySelectorAll(".has-attention-ink")).map((node) => ({
+        type: node.dataset.bracketType,
+        tier: node.getAttribute("data-attention-tier"),
+        contrast: contrast(readColor(getComputedStyle(node).color), thumbBackground),
+      }));
+      out.push({ id: section.dataset.case, overflow, baseline, centered, inkContrast });
     }
     return out;
   }
@@ -414,11 +474,21 @@ async function main() {
     const failures = [];
     for (const theme of ["light", "dark"]) {
       await client.evaluate(`document.body.dataset.theme = ${safeJson(theme)}`);
+      await client.evaluate(`document.body.classList.toggle("theme-dark", ${safeJson(theme)} === "dark")`);
       const measurements = await client.evaluate("window.bracketModePreview.measure()");
       for (const item of measurements) {
         if (item.overflow > 0.5) failures.push(`${theme}/${item.id}: status bar overflows by ${item.overflow}px`);
         if (item.baseline > 2) failures.push(`${theme}/${item.id}: glyphs off baseline by ${item.baseline}px`);
         if (!item.centered) failures.push(`${theme}/${item.id}: thumb not vertically centered`);
+        for (const ink of item.inkContrast || []) {
+          if (ink.contrast < 4.5) failures.push(`${theme}/${item.id}/${ink.type}:${ink.tier}: ink contrast ${ink.contrast.toFixed(2)}:1 is below 4.5:1`);
+        }
+      }
+      const requiredInkCases = ["pre", "new", "projects", "pending", "next", "recurring", "tickler"].map((tier) => `ink-s-${tier}`)
+        .concat(["ink-w-over", "ink-b-waiting", "ink-s-all-attention"]);
+      for (const id of requiredInkCases) {
+        const item = measurements.find((measurement) => measurement.id === id);
+        if (!item || item.inkContrast.length === 0) failures.push(`${theme}/${id}: expected an ink contrast measurement`);
       }
       const output = path.join(args.out, `bracket-mode-${theme}.png`);
       await capture(client, output);

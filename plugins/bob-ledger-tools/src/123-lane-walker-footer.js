@@ -252,8 +252,9 @@ function laneWalkerFooterOverLanes(counts, caps) {
   }
 }
 
-// Push the lane-over-limit dot through nav `api.walkMode` v5, mirroring the
-// bank push. Never throws; old nav makes no call.
+// Push lane-over-limit attention through nav `api.walkMode` v5, mirroring the
+// bank push. Keep it while w is selected for v6's readable ink; the click hint
+// only applies off-family. Never throws; old nav makes no call.
 function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
   try {
     const api = plugin && typeof plugin.dependencyNavApi === "function"
@@ -267,7 +268,7 @@ function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "w") {
+    if (!route || route.legacy) {
       walkMode.setAttention("w", null);
       return;
     }
@@ -281,7 +282,8 @@ function walkerFooterPushLaneAttention(plugin, route, queue, caps) {
       walkMode.setAttention("w", null);
       return;
     }
-    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")} — click to show`;
+    const clickHint = route.mode === "w" ? "" : " — click to show";
+    const label = `Lanes over limit: ${over.map((item) => `${item.label} ${item.count}/${item.cap}`).join(" · ")}${clickHint}`;
     walkMode.setAttention("w", { tier: "over", label });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.

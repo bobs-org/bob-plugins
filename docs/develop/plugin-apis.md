@@ -524,7 +524,10 @@ navigation api version stays 3): v4 `current()` may return `"b"` and
 accepts `"s"` and `"b"` with attention stored per type and painted per
 letter; v5 accepts `"w"` and ledger feature-detects `walkMode.version >= 5`
 before pushing it. Ledger feature-detects `walkMode.version >= 4` before
-selecting `b` or pushing the amber bank waiting dot.
+selecting `b` or pushing the amber bank waiting attention. In v6, the selected
+family's attention is readable ink on its letter while off-family attention
+remains a dot. Ledger continues pushing for selected families without a v6
+gate; older nav hides that attention as before.
 
 ## Task Status Cycler
 

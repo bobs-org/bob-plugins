@@ -8,8 +8,9 @@ const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
 // Push only the commitment tiers; ROTTEN and POST are upkeep and must not
-// light the review selector. This is a display projection over the existing
-// memo and never changes task or walk state.
+// light the review selector. Keep pushing while s is selected so nav v6 can
+// paint its attention as readable ink. This is a display projection over the
+// existing memo and never changes task or walk state.
 function walkerFooterPushReviewAttention(plugin, route, memo) {
   try {
     const api = plugin && typeof plugin.dependencyNavApi === "function"
@@ -23,7 +24,7 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
     ) {
       return;
     }
-    if (!route || route.legacy || route.mode === "s") {
+    if (!route || route.legacy) {
       walkMode.setAttention("s", null);
       return;
     }
@@ -50,9 +51,10 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
     }
     const due = read.walk;
     const dueLabel = freshnessTierFooterLabel(tier);
+    const clickHint = route.mode === "s" ? "" : "; click to show";
     walkMode.setAttention("s", {
       tier,
-      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first; click to show`,
+      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first${clickHint}`,
     });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.

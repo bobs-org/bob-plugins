@@ -9837,7 +9837,7 @@ li.bob-bank-mark-acked { opacity: 0.72; }
   margin-left: 0.35em;
   padding: 0 0.3em;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--text-warning, #c9a227) 22%, var(--background-primary));
+  background: color-mix(in srgb, var(--text-warning) 22%, var(--background-primary));
   color: var(--text-warning, var(--text-normal));
   font-size: 0.78em;
   font-variant-numeric: tabular-nums;

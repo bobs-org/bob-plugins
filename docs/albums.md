@@ -90,7 +90,11 @@ as you type; there is no **Preview this edit** button. Stage buttons are
 latched) and **Cancel esc**.
 
 Every gesture dry-runs through `bob albums update` first and Enter applies
-only the exact envelope whose dry run succeeded. If ⏎ arrives while that
+only the exact envelope whose dry run succeeded. A save that meets another
+Bob vault maintenance run keeps that preview, paints **Waiting for another
+Bob vault maintenance run…** with elapsed seconds, and retries until the
+lock frees or 10 minutes pass. Esc stops waiting with nothing written;
+Enter tries the same preview again. If ⏎ arrives while that
 revision's preview is still running, the card latches: it paints **Saving as
 soon as bob confirms…** and applies when that preview succeeds. Any further
 edit clears the latch. The dry run paints bob's consequence, affected and
@@ -228,5 +232,6 @@ Task Card priority, keyboard-only edit and Undo, previewed apply with a
 double-Apply guard, two-pane stale refusal, YAML Done with invalid repair,
 async Done navigation/unload guards, and light/dark screenshots near 375 px. The writer wrapper proves the
 preview/apply/Undo envelope, stale and used-removal refusals, typed
-semantics, single-commit and linear-history guarantees, sync-only retry, and
-source validation plus stale-Undo refusal against the real writer in a scratch Git vault.
+semantics, single-commit and linear-history guarantees, sync-only retry,
+source validation plus stale-Undo refusal, and a held-`bob_sync.lock` wait
+that saves once the lock frees, against the real writer in a scratch Git vault.

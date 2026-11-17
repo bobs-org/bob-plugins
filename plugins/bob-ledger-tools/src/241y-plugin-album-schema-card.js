@@ -377,6 +377,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaStageEnter() {
     const state = this.session?.getState?.() || {};
+    if (state.lockWait) return;
     if (state.canApply === true || (state.status === "preview-ready" && !state.canApply)) {
       this.schemaClearEnterLatch();
       void this.schemaApply();
@@ -525,6 +526,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaEditSelected() {
     const state = this.schemaState();
+    if (state.lockWait) return;
     if (state.canApply || (state.status === "preview-ready" && !this.schemaFresh())) {
       void this.schemaApply();
       return;
@@ -604,6 +606,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.paintSchemaCard("session");
       return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
     }
+    this.schemaClearEnterLatch();
     const result = await this.session.apply();
     this.sessionState = this.session.getState();
     if (result?.ok && result.changed) {
@@ -664,6 +667,13 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaHandleEscape() {
+    if (this.sessionState?.lockWait) {
+      this.schemaClearEnterLatch();
+      try { this.session?.stopWaiting?.(); } catch (_) {}
+      try { this.sessionState = this.session?.getState?.() || this.sessionState; } catch (_) {}
+      this.paintSchemaCard("session");
+      return "stay";
+    }
     if (this.sessionState?.status === "applying") return "ignore";
     if (this.schemaMoreOpen) {
       this.schemaMoreOpen = false;

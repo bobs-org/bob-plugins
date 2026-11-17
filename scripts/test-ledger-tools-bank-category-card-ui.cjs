@@ -93,6 +93,23 @@ test("the modal key contract dispatches every action in close and set modes", as
   }
 });
 
+test("new-category lockNotice paints without Preview again and keeps Save", () => {
+  const state = makeModal("close");
+  state.modal.configFingerprint = "sha256:before";
+  state.modal.newStage = h.bankCategoryNewStageInit(CATEGORIES, "coffee");
+  state.modal.newStage.label = "Fast food";
+  state.modal.newStage.hotkey = "b";
+  state.modal.newStage.canApply = true;
+  state.modal.newStage.lockNotice = {
+    message: "Stopped waiting for another Bob vault maintenance run.",
+    hint: "Nothing was written. Press Enter to try again.",
+  };
+  assert.equal(h.bankCategoryNewCanApply(state.modal.newStage, { canApply: true }, CATEGORIES), true);
+  assert.match(h.bankCategoryNewStageKeysText(state.modal.newStage), /add and file/);
+  state.modal.newStage.lockWait = { elapsedMs: 5000, stopping: false };
+  assert.equal(h.bankCategoryNewStageKeysText(state.modal.newStage), "Esc stops waiting");
+});
+
 test("plus opens the new-category stage and letters no longer file", async () => {
   const state = makeModal("close");
   state.modal.configFingerprint = "sha256:before";

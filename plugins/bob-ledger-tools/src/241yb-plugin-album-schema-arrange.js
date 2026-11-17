@@ -330,6 +330,10 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       }
       const state = this.session?.getState?.() || {};
       this.sessionState = state;
+      if (state.lockWait) {
+        this.paintSchemaCard?.("session");
+        return true;
+      }
       if (state.status === "preview-pending" || state.busy || state.status === "applying") {
         this.schemaArmEnterLatch?.();
         this.paintSchemaCard?.("session");

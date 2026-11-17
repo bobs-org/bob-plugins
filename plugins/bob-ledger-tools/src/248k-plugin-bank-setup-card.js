@@ -145,6 +145,12 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
 
   footerText() {
     const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
+    const waiting = this.sessionState?.lockWait;
+    if (waiting) {
+      return waiting.stopping
+        ? "Stopping after the current attempt…"
+        : "Esc stops waiting";
+    }
     if (this.stage) return `Enter apply · Esc/q cancel stage · ${mod}+E YAML`;
     if (this.section === "accounts") return `Enter relabel · + add · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
     if (this.section === "rules") return `Enter edit · + new · Alt+J/K move · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
@@ -463,6 +469,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (!this.session.getState().canApply) return false;
     this.busy = true;
     this.errorMessage = "";
+    this.bankClearEnterLatch();
     this.paint();
     let result;
     try { result = await this.session.apply(); }
@@ -470,6 +477,11 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (this.closed) return false;
     this.busy = false;
     this.sessionState = this.session.getState();
+    if (result && (result.code === "lock-wait-stopped" || result.code === "lock-wait-budget")) {
+      this.errorMessage = "";
+      this.paint();
+      return false;
+    }
     if (!result || result.ok !== true) {
       this.errorMessage = result?.message || "The bank config edit was refused.";
       if (result?.code === "undo_blocked") this.errorMessage = result.message || "Undo is blocked by a later bank config change.";
@@ -602,6 +614,14 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const consume = () => bankCategoryUiConsume(event);
     if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
       consume();
+      const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
+      if (waiting) {
+        try { this.bankClearEnterLatch?.(); } catch (_) {}
+        try { this.session?.stopWaiting?.(); } catch (_) {}
+        this.sessionState = this.session?.getState?.() || this.sessionState;
+        this.paint();
+        return;
+      }
       if (this.busy) return;
       if (!this.cancelStage()) this.close();
       return;

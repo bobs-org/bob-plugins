@@ -66673,13 +66673,15 @@ class BobLedgerToolsAlbumUpdateMixin {
         this.albumUpdateFlight = null;
       }
       let refreshed = this.albumReportState();
-      try {
-        // The pre-write list cannot satisfy the post-write display: wait it
-        // out, then force one fresh report. Last-good data stays visible as
-        // stale on refresh failure; editing stays disabled until it lands.
-        refreshed = await this.albumRevalidateAfterSync();
-      } catch (error) {
-        // The last report remains visible as stale/unavailable on failure.
+      if (!guardedUpdateReportLockBusy(outcome && outcome.report)) {
+        try {
+          // The pre-write list cannot satisfy the post-write display: wait it
+          // out, then force one fresh report. Last-good data stays visible as
+          // stale on refresh failure; editing stays disabled until it lands.
+          refreshed = await this.albumRevalidateAfterSync();
+        } catch (error) {
+          // The last report remains visible as stale/unavailable on failure.
+        }
       }
       if (!maybeWrote && ownPath) {
         this.albumUpdateOwnPathsStore().delete(ownPath);
@@ -66740,9 +66742,75 @@ class BobLedgerToolsAlbumUpdateMixin {
 // generation move re-previews; inverse-op Undo is staged, not reconstructed.
 // Album and bank sessions are thin wrappers over this controller.
 const GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+const GUARDED_UPDATE_LOCK_RETRY_MS = 1000;
+const GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS = 10 * 60 * 1000;
+const GUARDED_UPDATE_LOCK_TICKER_MS = 1000;
+const GUARDED_UPDATE_LOCK_WAIT_HINT = "Nothing was written. Press Enter to try again.";
 
 function guardedUpdateJsonObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function guardedUpdateReportLockBusy(report) {
+  if (!guardedUpdateJsonObject(report) || report.ok === true) return false;
+  const failure = guardedUpdateJsonObject(report.error)
+    ? report.error
+    : (guardedUpdateJsonObject(report.failure) ? report.failure : null);
+  return Boolean(failure && failure.code === "lock_busy");
+}
+
+function guardedUpdateIsLockBusy(outcome, failureFromReport) {
+  if (!outcome || outcome.ok !== true || !outcome.report || outcome.report.ok === true) {
+    return false;
+  }
+  if (typeof failureFromReport === "function") {
+    try {
+      const failure = failureFromReport(outcome.report);
+      if (failure && failure.code === "lock_busy") return true;
+    } catch (_) {}
+  }
+  return guardedUpdateReportLockBusy(outcome.report);
+}
+
+function guardedUpdateSameConsequence(left, right) {
+  if (!guardedUpdateJsonObject(left) || !guardedUpdateJsonObject(right)) return false;
+  if (String(left.consequence || "") !== String(right.consequence || "")) return false;
+  const keysOf = (report) => {
+    const derived = Array.isArray(report.derived_keys)
+      ? report.derived_keys.filter((key) => typeof key === "string" && key)
+      : [];
+    const perOp = (Array.isArray(report.per_op) ? report.per_op : [])
+      .map((op) => op && op.derived_key)
+      .filter((key) => typeof key === "string" && key);
+    return [...new Set(derived.concat(perOp))].join("\0");
+  };
+  if (keysOf(left) !== keysOf(right)) return false;
+  const opsOf = (report) => (Array.isArray(report.per_op) ? report.per_op : []).map((op) => ({
+    summary: op && op.summary != null ? String(op.summary) : "",
+    outcome: op && op.outcome != null ? String(op.outcome) : "",
+    filled: Number.isInteger(op && op.filled) ? op.filled : null,
+    count: Number.isInteger(op && op.count) ? op.count : null,
+    newly_invalid: Number.isInteger(op && op.newly_invalid) ? op.newly_invalid : null,
+  }));
+  if (JSON.stringify(opsOf(left)) !== JSON.stringify(opsOf(right))) return false;
+  const tally = (report, field) => {
+    if (Number.isInteger(report[field])) return report[field];
+    return (Array.isArray(report.per_op) ? report.per_op : []).reduce((sum, op) => {
+      const value = op && op[field];
+      return sum + (Number.isInteger(value) ? value : 0);
+    }, 0);
+  };
+  return tally(left, "affected") === tally(right, "affected")
+    && tally(left, "count") === tally(right, "count")
+    && tally(left, "newly_invalid") === tally(right, "newly_invalid");
+}
+
+function guardedUpdateLockWaitText(lockWait) {
+  if (!lockWait) return "";
+  if (lockWait.stopping) return "Stopping after the current attempt…";
+  const elapsed = Number(lockWait.elapsedMs);
+  const seconds = Math.max(0, Math.floor((Number.isFinite(elapsed) ? elapsed : 0) / 1000));
+  return `Waiting for another Bob vault maintenance run… ${seconds}s · saves when it finishes · Esc stops waiting`;
 }
 
 function guardedUpdateCopy(overrides = {}) {
@@ -66764,6 +66832,9 @@ function guardedUpdateCopy(overrides = {}) {
     nothingToUndo: "There is no edit to undo.",
     syncWarningHint: "The edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
     retryHint: "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+    lockWaitStopped: "Stopped waiting for another Bob vault maintenance run.",
+    lockWaitBudget: "Gave up waiting for another Bob vault maintenance run after 10 minutes.",
+    lockWaitHint: GUARDED_UPDATE_LOCK_WAIT_HINT,
     ...overrides,
   };
 }
@@ -66776,6 +66847,12 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
   const debounceMs = Number.isFinite(init.debounceMs) && init.debounceMs >= 0
     ? init.debounceMs
     : GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS;
+  const lockRetryMs = Number.isFinite(init.lockRetryMs) && init.lockRetryMs >= 0
+    ? init.lockRetryMs
+    : GUARDED_UPDATE_LOCK_RETRY_MS;
+  const lockWaitBudgetMs = Number.isFinite(init.lockWaitBudgetMs) && init.lockWaitBudgetMs >= 0
+    ? init.lockWaitBudgetMs
+    : GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS;
   const buildEnvelope = typeof init.buildEnvelope === "function"
     ? init.buildEnvelope
     : (expect, ops) => JSON.stringify({ schema_version: 1, expect: String(expect), ops: Array.isArray(ops) ? ops : [] });
@@ -66804,6 +66881,12 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     applyPromise: null,
     previewTimer: null,
     previewFlight: null,
+    lockWait: null,
+    lockNotice: null,
+    lockRetryTimer: null,
+    lockRetryResolve: null,
+    lockTickerTimer: null,
+    lockAttemptInFlight: false,
   };
   try {
     const seed = init && init.undo;
@@ -66831,6 +66914,96 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return;
     }
     globalThis.clearTimeout(timer);
+  }
+
+  function nowMs() {
+    if (timers && typeof timers.now === "number" && Number.isFinite(timers.now)) {
+      return timers.now;
+    }
+    if (timers && typeof timers.now === "function") {
+      try {
+        const value = Number(timers.now());
+        if (Number.isFinite(value)) return value;
+      } catch (_) {}
+    }
+    return Date.now();
+  }
+
+  function clearLockRetryWait(reason) {
+    const resolve = session.lockRetryResolve;
+    session.lockRetryResolve = null;
+    clearTimeout(session.lockRetryTimer);
+    session.lockRetryTimer = null;
+    if (typeof resolve === "function") {
+      resolve(reason || "cleared");
+    }
+  }
+
+  function clearLockTicker() {
+    clearTimeout(session.lockTickerTimer);
+    session.lockTickerTimer = null;
+  }
+
+  function dropLockWait(reason) {
+    clearLockTicker();
+    clearLockRetryWait(reason);
+    session.lockWait = null;
+    session.lockAttemptInFlight = false;
+  }
+
+  function startLockTicker() {
+    clearLockTicker();
+    const tick = () => {
+      session.lockTickerTimer = null;
+      if (session.closed || !session.lockWait) return;
+      notify();
+      session.lockTickerTimer = setTimeout(tick, GUARDED_UPDATE_LOCK_TICKER_MS);
+    };
+    session.lockTickerTimer = setTimeout(tick, GUARDED_UPDATE_LOCK_TICKER_MS);
+  }
+
+  function waitForRetry() {
+    return new Promise((resolve) => {
+      session.lockRetryResolve = resolve;
+      session.lockRetryTimer = setTimeout(() => {
+        session.lockRetryTimer = null;
+        session.lockRetryResolve = null;
+        resolve("timeout");
+      }, lockRetryMs);
+    });
+  }
+
+  function lockWaitSnapshot() {
+    if (!session.lockWait) return null;
+    return {
+      since: session.lockWait.since,
+      elapsedMs: Math.max(0, nowMs() - session.lockWait.since),
+      attempts: session.lockWait.attempts,
+      stopping: session.lockWait.stopping === true,
+    };
+  }
+
+  function finishLockWaitWithoutWrite(reason) {
+    const bobMessage = session.lockWait && typeof session.lockWait.message === "string"
+      ? session.lockWait.message
+      : "";
+    const message = reason === "budget"
+      ? (copy.lockWaitBudget || bobMessage)
+      : (copy.lockWaitStopped || bobMessage || "Stopped waiting for another Bob vault maintenance run.");
+    dropLockWait(reason);
+    session.lockNotice = {
+      message,
+      hint: copy.lockWaitHint || GUARDED_UPDATE_LOCK_WAIT_HINT,
+    };
+    session.status = "preview-ready";
+    session.refusal = null;
+    notify();
+    return {
+      ok: false,
+      code: reason === "budget" ? "lock-wait-budget" : "lock-wait-stopped",
+      message,
+      hint: session.lockNotice.hint,
+    };
   }
 
   function notify() {
@@ -66879,11 +67052,13 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       expect: session.expect,
       draftOps: session.draftOps.slice(),
       canApply: canApply(),
-      busy: session.status === "preview-pending" || session.status === "applying",
-      consequence: previewReport && session.status === "preview-ready"
+      busy: session.status === "preview-pending" || session.status === "applying" || Boolean(session.lockWait),
+      consequence: previewReport && (session.status === "preview-ready" || session.lockWait)
         ? String(previewReport.consequence || "")
         : "",
       preview: previewReport,
+      lockWait: lockWaitSnapshot(),
+      lockNotice: session.lockNotice ? { ...session.lockNotice } : null,
       refusal: session.refusal ? { ...session.refusal } : null,
       undoAvailable: Boolean(session.undo && Array.isArray(session.undo.inverseOps) && session.undo.inverseOps.length > 0),
       syncWarning: session.syncWarning ? { ...session.syncWarning } : null,
@@ -67009,6 +67184,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.revision += 1;
     session.draftOps = next;
     session.preview = null;
+    dropLockWait("superseded");
+    session.lockNotice = null;
     if (next.length === 0) {
       session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
       session.refusal = null;
@@ -67049,6 +67226,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.revision += 1;
     session.preview = null;
     session.refusal = null;
+    dropLockWait("superseded");
+    session.lockNotice = null;
     session.status = session.draftOps.length ? "draft" : (session.syncWarning ? "saved-with-sync-warning" : "browsing");
     clearPreviewTimer();
     notify();
@@ -67069,6 +67248,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     const epoch = session.epoch;
     const run = (async () => {
       session.status = "applying";
+      session.lockNotice = null;
       notify();
       if (typeof deps.saveEditors !== "function") {
         session.status = "refused";
@@ -67114,77 +67294,207 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         await requestPreview();
         return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
       }
-      let outcome;
-      try {
-        outcome = await deps.spawnApply(identity, preview.envelopeText, { ownPath });
-      } catch (error) {
-        outcome = {
-          ok: false,
-          code: "failed",
-          message: error && error.message ? String(error.message) : copy.applyFailed,
-        };
-      }
-      if (session.closed || session.epoch !== epoch || session.revision !== preview.revision) {
-        return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
-      }
-      if (!outcome || outcome.ok !== true || !outcome.report) {
-        session.preview = null;
-        session.status = "refused";
-        const unknown = Boolean(outcome && (outcome.code === "timeout" || outcome.unknown === true));
-        session.refusal = {
-          kind: unknown ? "timeout-unknown" : "transport",
-          code: (outcome && outcome.code) || "failed",
-          message: (outcome && outcome.message) || copy.applyFailed,
-          hint: unknown
-            ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
-            : "Nothing was written. Refresh and preview again.",
-        };
+      let captured = preview;
+      let attempts = 0;
+      for (;;) {
+        if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+          dropLockWait("superseded");
+          return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+        }
+        if (session.lockWait && session.lockWait.stopping) {
+          return finishLockWaitWithoutWrite("stopped");
+        }
+        if (session.lockWait && nowMs() - session.lockWait.since >= lockWaitBudgetMs) {
+          return finishLockWaitWithoutWrite("budget");
+        }
+        if (session.lockWait && vaultGeneration() !== captured.generation) {
+          session.lockAttemptInFlight = true;
+          let dry;
+          try {
+            dry = await deps.spawnPreview(identity, captured.envelopeText);
+          } catch (error) {
+            dry = {
+              ok: false,
+              code: "failed",
+              message: error && error.message ? String(error.message) : copy.previewFailed,
+            };
+          }
+          session.lockAttemptInFlight = false;
+          if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+            dropLockWait("superseded");
+            return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+          }
+          if (session.lockWait && session.lockWait.stopping) {
+            return finishLockWaitWithoutWrite("stopped");
+          }
+          const dryReport = dry && dry.ok === true && dry.report && dry.report.ok === true ? dry.report : null;
+          if (dryReport && guardedUpdateSameConsequence(captured.report, dryReport)) {
+            captured = {
+              ...captured,
+              generation: vaultGeneration(),
+              report: dryReport,
+            };
+            session.preview = captured;
+            notify();
+          } else {
+            dropLockWait();
+            session.lockNotice = null;
+            if (dryReport) {
+              session.preview = {
+                epoch,
+                revision: captured.revision,
+                identity,
+                expect: captured.expect,
+                generation: vaultGeneration(),
+                envelopeText: captured.envelopeText,
+                report: dryReport,
+              };
+              session.status = "preview-ready";
+              session.refusal = null;
+              notify();
+              return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+            }
+            if (!dry || dry.ok !== true || !dry.report) {
+              session.preview = null;
+              session.status = "refused";
+              session.refusal = {
+                kind: dry && dry.code === "timeout" ? "timeout-unknown" : "transport",
+                code: (dry && dry.code) || "failed",
+                message: (dry && dry.message) || copy.previewFailed,
+                hint: copy.saveInvalidated,
+              };
+              notify();
+              return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+            }
+            const failure = failureFromReport(dry.report);
+            session.preview = null;
+            session.status = "refused";
+            session.refusal = refusalFromFailure("refused", failure, copy.previewRefused);
+            notify();
+            return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+          }
+        }
+        attempts += 1;
+        if (session.lockWait) {
+          session.lockWait.attempts = attempts;
+        }
+        session.lockAttemptInFlight = true;
         notify();
-        return { ok: false, ...session.refusal };
-      }
-      const report = outcome.report;
-      if (report.ok !== true) {
-        const failure = failureFromReport(report);
-        session.preview = null;
-        session.status = "refused";
-        session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
-        notify();
-        return { ok: false, ...session.refusal };
-      }
-      if (report.changed !== true) {
+        let outcome;
+        try {
+          outcome = await deps.spawnApply(identity, captured.envelopeText, { ownPath });
+        } catch (error) {
+          outcome = {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : copy.applyFailed,
+          };
+        }
+        session.lockAttemptInFlight = false;
+        if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+          dropLockWait("superseded");
+          return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+        }
+        if (guardedUpdateIsLockBusy(outcome, failureFromReport)) {
+          const failure = failureFromReport(outcome.report) || {};
+          if (!session.lockWait) {
+            session.lockWait = {
+              since: nowMs(),
+              attempts,
+              message: typeof failure.message === "string" && failure.message
+                ? failure.message
+                : "another Bob vault maintenance run is already active",
+              stopping: false,
+            };
+            startLockTicker();
+          } else {
+            session.lockWait.attempts = attempts;
+            if (typeof failure.message === "string" && failure.message) {
+              session.lockWait.message = failure.message;
+            }
+          }
+          if (session.lockWait.stopping) {
+            return finishLockWaitWithoutWrite("stopped");
+          }
+          if (nowMs() - session.lockWait.since >= lockWaitBudgetMs) {
+            return finishLockWaitWithoutWrite("budget");
+          }
+          notify();
+          const waitReason = await waitForRetry();
+          if (!session.lockWait) {
+            if (session.lockNotice) {
+              return {
+                ok: false,
+                code: waitReason === "budget" ? "lock-wait-budget" : "lock-wait-stopped",
+                message: session.lockNotice.message,
+                hint: session.lockNotice.hint,
+              };
+            }
+            return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+          }
+          continue;
+        }
+        dropLockWait();
+        session.lockNotice = null;
+        if (!outcome || outcome.ok !== true || !outcome.report) {
+          session.preview = null;
+          session.status = "refused";
+          const unknown = Boolean(outcome && (outcome.code === "timeout" || outcome.unknown === true));
+          session.refusal = {
+            kind: unknown ? "timeout-unknown" : "transport",
+            code: (outcome && outcome.code) || "failed",
+            message: (outcome && outcome.message) || copy.applyFailed,
+            hint: unknown
+              ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
+              : "Nothing was written. Refresh and preview again.",
+          };
+          notify();
+          return { ok: false, ...session.refusal };
+        }
+        const report = outcome.report;
+        if (report.ok !== true) {
+          const failure = failureFromReport(report);
+          session.preview = null;
+          session.status = "refused";
+          session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
+          notify();
+          return { ok: false, ...session.refusal };
+        }
+        if (report.changed !== true) {
+          session.revision += 1;
+          session.draftOps = [];
+          session.preview = null;
+          session.refusal = null;
+          session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+          notify();
+          return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
+        }
+        session.expect = String(report.after_fingerprint || session.expect);
+        session.undo = {
+          inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
+          afterFingerprint: String(report.after_fingerprint || ""),
+        };
         session.revision += 1;
         session.draftOps = [];
         session.preview = null;
         session.refusal = null;
-        session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+        const postSyncFailed = Boolean(
+          (report.sync && report.sync.post === "failed") ||
+          (Array.isArray(report.warnings) && report.warnings.some((warning) => /saved locally/i.test(String(warning)))),
+        );
+        if (postSyncFailed) {
+          session.syncWarning = {
+            message: "Saved locally; sync failed.",
+            hint: copy.syncWarningHint,
+          };
+          session.status = "saved-with-sync-warning";
+        } else {
+          session.syncWarning = null;
+          session.status = "browsing";
+        }
         notify();
-        return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
+        return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
       }
-      session.expect = String(report.after_fingerprint || session.expect);
-      session.undo = {
-        inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
-        afterFingerprint: String(report.after_fingerprint || ""),
-      };
-      session.revision += 1;
-      session.draftOps = [];
-      session.preview = null;
-      session.refusal = null;
-      const postSyncFailed = Boolean(
-        (report.sync && report.sync.post === "failed") ||
-        (Array.isArray(report.warnings) && report.warnings.some((warning) => /saved locally/i.test(String(warning)))),
-      );
-      if (postSyncFailed) {
-        session.syncWarning = {
-          message: "Saved locally; sync failed.",
-          hint: copy.syncWarningHint,
-        };
-        session.status = "saved-with-sync-warning";
-      } else {
-        session.syncWarning = null;
-        session.status = "browsing";
-      }
-      notify();
-      return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
     })();
     session.applyPromise = run;
     try {
@@ -67195,6 +67505,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       }
       if (!session.closed && session.status === "applying") {
         session.status = "draft";
+        notify();
+      } else if (!session.closed && session.lockNotice && session.status === "preview-ready") {
         notify();
       }
     }
@@ -67249,7 +67561,22 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.epoch += 1;
     session.closed = true;
     clearPreviewTimer();
+    dropLockWait("closed");
     session.previewFlight = null;
+  }
+
+  function stopWaiting() {
+    if (session.closed || !session.lockWait) {
+      return snapshot();
+    }
+    session.lockWait.stopping = true;
+    clearLockTicker();
+    clearLockRetryWait("stopped");
+    if (!session.lockAttemptInFlight) {
+      return finishLockWaitWithoutWrite("stopped"), snapshot();
+    }
+    notify();
+    return snapshot();
   }
 
   return {
@@ -67259,6 +67586,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return requestPreview();
     },
     apply,
+    stopWaiting,
     stageUndo,
     retrySync,
     noteGenerationChanged,
@@ -67279,6 +67607,8 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     expect: init.expect,
     undo: init.undo,
     debounceMs: ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
     buildEnvelope: albumUpdateEnvelopeText,
     isStaleCode: albumIsStaleUpdateCode,
     failureFromReport: (report) => (albumJsonObject(report) && albumJsonObject(report.error) ? report.error : {}),
@@ -82958,10 +83288,29 @@ class BobLedgerToolsBankConfigUpdateMixin {
         this.bankConfigUpdateFlight = null;
       }
       let refreshed = null;
-      try {
-        refreshed = await this.bankConfigRevalidateAfterApply();
-      } catch (error) {
-        refreshed = null;
+      if (guardedUpdateReportLockBusy(outcome && outcome.report)) {
+        try {
+          const key = typeof bankCacheKey === "function" && typeof bankBuildArgs === "function"
+            ? bankCacheKey(bankBuildArgs({ command: "config" }))
+            : "";
+          const cached = key && typeof this.bankLastGoodReport === "function"
+            ? this.bankLastGoodReport(key)
+            : null;
+          refreshed = {
+            report: cached,
+            stale: false,
+            key,
+            generation: this.bankVaultGeneration || 0,
+          };
+        } catch (error) {
+          refreshed = null;
+        }
+      } else {
+        try {
+          refreshed = await this.bankConfigRevalidateAfterApply();
+        } catch (error) {
+          refreshed = null;
+        }
       }
       if (ownPath) {
         this.bankConfigUpdateOwnPathsStore().delete(ownPath);
@@ -83038,6 +83387,8 @@ function createBankConfigUpdateSession(init = {}, deps = {}) {
     expect: init.expect,
     undo: init.undo,
     debounceMs: BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
     buildEnvelope: bankConfigUpdateEnvelopeText,
     isStaleCode: bankIsStaleConfigUpdateCode,
     failureFromReport: (report) =>
@@ -83222,7 +83573,10 @@ function bankCategoryCardKeysText(mode, kind) {
   return `↵ accept · letter choose · ${space} · + new category · Esc cancel`;
 }
 
-function bankCategoryNewStageKeysText() {
+function bankCategoryNewStageKeysText(stage) {
+  if (stage && stage.lockWait) {
+    return stage.lockWait.stopping ? "Stopping after the current attempt…" : "Esc stops waiting";
+  }
   return "↵ add and file · ↑↓ cycle group · Esc close stage";
 }
 
@@ -83279,6 +83633,8 @@ function bankCategoryIsNewCategoryKey(key) {
     this.newStage.canApply = Boolean(state && state.canApply);
     this.newStage.consequence = state && state.consequence ? String(state.consequence) : "";
     this.newStage.refusal = state && state.refusal ? { ...state.refusal } : null;
+    this.newStage.lockWait = state && state.lockWait ? { ...state.lockWait } : null;
+    this.newStage.lockNotice = state && state.lockNotice ? { ...state.lockNotice } : null;
     if (state && state.syncWarning) this.syncWarning = { ...state.syncWarning };
     if (state && state.refusal && state.refusal.code === "stale_config") {
       void this.rebaseNewCategoryPreview();
@@ -83377,6 +83733,15 @@ function bankCategoryIsNewCategoryKey(key) {
       && target.closest("input,select,textarea"));
     if (key === "Escape" || key === "Ctrl+[" || (!inInput && (key === "q" || key === "Q"))) {
       bankCategoryUiConsume(event);
+      const waiting = this.newStage.lockWait || this.newSession?.getState?.()?.lockWait;
+      if (waiting) {
+        try { this.newSession?.stopWaiting?.(); } catch (_) {}
+        try {
+          const after = this.newSession?.getState?.();
+          if (after) this.onNewCategorySessionChange(after);
+        } catch (_) {}
+        return;
+      }
       this.closeNewCategoryStage();
       return;
     }
@@ -83443,6 +83808,19 @@ function bankCategoryIsNewCategoryKey(key) {
       result = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "apply failed" };
     }
     if (this.closed) return false;
+    if (result && (result.code === "lock-wait-stopped" || result.code === "lock-wait-budget")) {
+      this.newStage.applying = false;
+      this.busy = false;
+      this.newStage.refusal = null;
+      const after = this.newSession && typeof this.newSession.getState === "function"
+        ? this.newSession.getState()
+        : null;
+      this.newStage.lockNotice = after && after.lockNotice ? { ...after.lockNotice } : null;
+      this.newStage.lockWait = null;
+      this.newStage.canApply = Boolean(after && after.canApply);
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
     if (!result || result.ok !== true) {
       this.newStage.applying = false;
       this.busy = false;
@@ -83516,10 +83894,21 @@ function bankCategoryIsNewCategoryKey(key) {
     if (hotkey.text) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
     }
-    if (stage.consequence) {
+    const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+      ? guardedUpdateLockWaitText(stage.lockWait)
+      : "";
+    if (lockWaitText) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", lockWaitText, { role: "status" });
+    } else if (stage.lockNotice && (stage.lockNotice.message || stage.lockNotice.hint)) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence",
+        stage.lockNotice.message || "Stopped waiting for another Bob vault maintenance run.", { role: "status" });
+      if (stage.lockNotice.hint) {
+        bankCategoryUiAppend(host, "p", "bob-bank-category-hint", stage.lockNotice.hint, { role: "status" });
+      }
+    } else if (stage.consequence) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
     }
-    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
+    if (!lockWaitText && !stage.lockNotice && stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
         stage.refusal.hint || stage.refusal.message, { role: "status" });
     }
@@ -83533,7 +83922,7 @@ function bankCategoryIsNewCategoryKey(key) {
         retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
       }
     }
-    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText(stage));
   };
 
   proto.paintNewCategoryStage = function paintNewCategoryStage(root) {
@@ -85653,6 +86042,12 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
 
   footerText() {
     const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
+    const waiting = this.sessionState?.lockWait;
+    if (waiting) {
+      return waiting.stopping
+        ? "Stopping after the current attempt…"
+        : "Esc stops waiting";
+    }
     if (this.stage) return `Enter apply · Esc/q cancel stage · ${mod}+E YAML`;
     if (this.section === "accounts") return `Enter relabel · + add · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
     if (this.section === "rules") return `Enter edit · + new · Alt+J/K move · ${mod}+D remove · ${mod}+E YAML · ${mod}+Z undo · Esc/q close`;
@@ -85971,6 +86366,7 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (!this.session.getState().canApply) return false;
     this.busy = true;
     this.errorMessage = "";
+    this.bankClearEnterLatch();
     this.paint();
     let result;
     try { result = await this.session.apply(); }
@@ -85978,6 +86374,11 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     if (this.closed) return false;
     this.busy = false;
     this.sessionState = this.session.getState();
+    if (result && (result.code === "lock-wait-stopped" || result.code === "lock-wait-budget")) {
+      this.errorMessage = "";
+      this.paint();
+      return false;
+    }
     if (!result || result.ok !== true) {
       this.errorMessage = result?.message || "The bank config edit was refused.";
       if (result?.code === "undo_blocked") this.errorMessage = result.message || "Undo is blocked by a later bank config change.";
@@ -86110,6 +86511,14 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     const consume = () => bankCategoryUiConsume(event);
     if (key === "Escape" || (!inInput && !mod && !event.altKey && lower === "q")) {
       consume();
+      const waiting = this.sessionState?.lockWait || this.session?.getState?.()?.lockWait;
+      if (waiting) {
+        try { this.bankClearEnterLatch?.(); } catch (_) {}
+        try { this.session?.stopWaiting?.(); } catch (_) {}
+        this.sessionState = this.session?.getState?.() || this.sessionState;
+        this.paint();
+        return;
+      }
       if (this.busy) return;
       if (!this.cancelStage()) this.close();
       return;
@@ -86641,6 +87050,10 @@ Object.assign(BankSetupCardModal.prototype, {
       }
       const state = this.session?.getState?.() || {};
       this.sessionState = state;
+      if (state.lockWait) {
+        this.paint?.("session");
+        return true;
+      }
       if (state.status === "preview-pending" || state.busy || state.status === "applying") {
         this.bankArmEnterLatch?.();
         this.paint?.("session");
@@ -87193,7 +87606,15 @@ function bankSetupCardPaintStageStatus(host, modal) {
 function bankSetupCardStatusText(modal) {
   const state = modal.sessionState || {};
   const arrange = modal.bankPaintArrange || {};
+  const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+    ? guardedUpdateLockWaitText(state.lockWait)
+    : "";
+  if (lockWaitText) return lockWaitText;
   if (modal.bankEnterLatch) return "Saving as soon as bob confirms…";
+  if (state.lockNotice) {
+    const hint = state.lockNotice.hint ? ` ${state.lockNotice.hint}` : "";
+    return `${state.lockNotice.message || "Stopped waiting for another Bob vault maintenance run."}${hint}`;
+  }
   if (arrange.saving) return `Saving… · ${arrange.pendingText || "Saving…"}`;
   if (modal.errorMessage) return modal.errorMessage;
   if (state.refusal) return state.refusal.message || "bob refused this edit.";
@@ -87216,6 +87637,7 @@ function bankSetupCardStatusText(modal) {
 function bankSetupCardStatusTone(modal) {
   const state = modal.sessionState || {};
   const arrange = modal.bankPaintArrange || {};
+  if (state.lockWait || state.lockNotice) return "is-previewing";
   if (modal.bankEnterLatch || arrange.saving || state.status === "preview-pending" || state.busy) return "is-previewing";
   if (modal.errorMessage || state.refusal || arrange.orderBlocked) return "is-refused";
   if (arrange.dirty && arrange.loud && state.canApply) return "is-confirm";
@@ -87237,7 +87659,11 @@ function bankSetupCardPaintStatusRegion(card, modal) {
 function bankSetupCardHintItems(modal) {
   const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
   const arrange = modal.bankPaintArrange || {};
+  const state = modal.sessionState || {};
   const items = [];
+  if (state.lockWait) {
+    return [{ keys: "esc", label: state.lockWait.stopping ? "stopping" : "stop waiting" }];
+  }
   if (arrange.saving) {
     return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];
   }
@@ -94169,6 +94595,7 @@ function albumSchemaCardPaintStageStatus(card, options) {
 
 function albumSchemaCardStatusTone(state, options) {
   if (options?.enterLatched) return "is-previewing";
+  if (state?.lockWait || state?.lockNotice) return "is-previewing";
   if (options?.arrange?.saving || state?.status === "applying") {
     return state?.refusal ? "is-refused" : "is-previewing";
   }
@@ -94198,9 +94625,25 @@ function albumSchemaCardPaintStatus(card, options, doc) {
     host.setAttribute("class", cls);
   }
   let filled = false;
-  if (options?.enterLatched) {
+  const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+    ? guardedUpdateLockWaitText(state.lockWait)
+    : "";
+  if (lockWaitText) {
+    notebookSetText(host, lockWaitText);
+    filled = true;
+  } else if (options?.enterLatched) {
     notebookSetText(host, "Saving as soon as bob confirms…");
     filled = true;
+  } else if (state.lockNotice && (state.lockNotice.message || state.lockNotice.hint)) {
+    const message = notebookCreateEl(doc, "p", "bob-album-schema-lock-notice");
+    notebookSetText(message, state.lockNotice.message || "Stopped waiting for another Bob vault maintenance run.");
+    host.appendChild(message);
+    filled = true;
+    if (state.lockNotice.hint) {
+      const hint = notebookCreateEl(doc, "p", "bob-album-schema-lock-notice-hint");
+      notebookSetText(hint, state.lockNotice.hint);
+      host.appendChild(hint);
+    }
   } else if (options?.arrange?.saving) {
     const pending = options.arrange.pendingText || "Saving…";
     notebookSetText(host, `Saving… · ${pending}`);
@@ -94347,6 +94790,14 @@ function albumSchemaCardHintItems(model, options) {
       { keys: "y", label: "YAML", action: "yaml" },
       { keys: "esc", label: "close", action: "close" },
     ];
+  }
+  if (state.lockWait) {
+    return [{
+      keys: "esc",
+      label: state.lockWait.stopping ? "stopping" : "stop waiting",
+      action: "stop-wait",
+      enabled: true,
+    }];
   }
   if (arrange?.saving) {
     return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];
@@ -94925,6 +95376,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaStageEnter() {
     const state = this.session?.getState?.() || {};
+    if (state.lockWait) return;
     if (state.canApply === true || (state.status === "preview-ready" && !state.canApply)) {
       this.schemaClearEnterLatch();
       void this.schemaApply();
@@ -95073,6 +95525,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 
   schemaEditSelected() {
     const state = this.schemaState();
+    if (state.lockWait) return;
     if (state.canApply || (state.status === "preview-ready" && !this.schemaFresh())) {
       void this.schemaApply();
       return;
@@ -95152,6 +95605,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.paintSchemaCard("session");
       return { ok: false, code: "not-previewed", message: "Enter is inert until a current preview succeeds." };
     }
+    this.schemaClearEnterLatch();
     const result = await this.session.apply();
     this.sessionState = this.session.getState();
     if (result?.ok && result.changed) {
@@ -95212,6 +95666,13 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
   }
 
   schemaHandleEscape() {
+    if (this.sessionState?.lockWait) {
+      this.schemaClearEnterLatch();
+      try { this.session?.stopWaiting?.(); } catch (_) {}
+      try { this.sessionState = this.session?.getState?.() || this.sessionState; } catch (_) {}
+      this.paintSchemaCard("session");
+      return "stay";
+    }
     if (this.sessionState?.status === "applying") return "ignore";
     if (this.schemaMoreOpen) {
       this.schemaMoreOpen = false;
@@ -95782,6 +96243,10 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       }
       const state = this.session?.getState?.() || {};
       this.sessionState = state;
+      if (state.lockWait) {
+        this.paintSchemaCard?.("session");
+        return true;
+      }
       if (state.status === "preview-pending" || state.busy || state.status === "applying") {
         this.schemaArmEnterLatch?.();
         this.paintSchemaCard?.("session");
@@ -96438,7 +96903,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       state,
       stage: this.stage,
       stageDraft: this.stageDraft,
-      stageLocked: state.status === "applying" || !this.schemaFresh(),
+      stageLocked: state.status === "applying" || Boolean(state.lockWait) || !this.schemaFresh(),
       hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
       enterLatched: Boolean(this.schemaEnterLatch),
       moreOpen: this.schemaMoreOpen === true,
@@ -144106,6 +144571,13 @@ try {
       albumVaultSyncArgs,
       albumIsStaleUpdateCode,
       albumUpdateErrorModel,
+      GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS,
+      GUARDED_UPDATE_LOCK_RETRY_MS,
+      GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
+      GUARDED_UPDATE_LOCK_WAIT_HINT,
+      guardedUpdateReportLockBusy,
+      guardedUpdateSameConsequence,
+      guardedUpdateLockWaitText,
       createGuardedUpdateSession,
       createAlbumUpdateSession,
       albumUpdateServiceDeps,
@@ -144650,6 +145122,12 @@ try {
   ) {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS,
+      GUARDED_UPDATE_LOCK_RETRY_MS,
+      GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
+      GUARDED_UPDATE_LOCK_WAIT_HINT,
+      guardedUpdateReportLockBusy,
+      guardedUpdateSameConsequence,
+      guardedUpdateLockWaitText,
       createGuardedUpdateSession,
       BANK_CONFIG_UPDATE_SCHEMA_VERSION,
       BANK_CONFIG_UPDATE_TIMEOUT_MS,
@@ -144794,6 +145272,9 @@ try {
       bankSetupCardPaintAccounts,
       bankSetupCardPaintRules,
       bankSetupCardPaintChecks,
+      bankSetupCardStatusText,
+      bankSetupCardStatusTone,
+      bankSetupCardHintItems,
       bankSetupCardArrangeScopes,
       bankSetupCardArrangeFixed,
       bankSetupRememberUndo,

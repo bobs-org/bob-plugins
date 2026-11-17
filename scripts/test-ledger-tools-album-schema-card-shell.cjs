@@ -447,3 +447,68 @@ test("Emoji Slot result assembly handles full catalogs under the filter paint bu
   assert.ok(elapsed < 50, `filter model should stay below 50 ms (took ${elapsed.toFixed(2)} ms)`);
   assert.equal(helpers.albumEmojiSlotMoveHighlight(0, "ArrowDown", 40, 8), 8);
 });
+
+test("lock wait paints the pending line and Esc stops without closing", () => {
+  const { modal } = openCard();
+  let stopped = 0;
+  const waitingState = {
+    status: "applying",
+    busy: true,
+    canApply: false,
+    lockWait: { since: 0, elapsedMs: 42000, attempts: 3, stopping: false },
+    lockNotice: null,
+    preview: { ok: true, consequence: "add choice", per_op: [] },
+    draftOps: [{ op: "choice.add" }],
+    refusal: null,
+  };
+  const stoppedState = {
+    status: "preview-ready",
+    canApply: true,
+    busy: false,
+    lockWait: null,
+    lockNotice: { message: "Stopped waiting for another Bob vault maintenance run.", hint: "Nothing was written. Press Enter to try again." },
+    preview: { ok: true, consequence: "add choice", per_op: [] },
+    draftOps: [{ op: "choice.add" }],
+    refusal: null,
+  };
+  modal.session.getState = () => modal.sessionState;
+  modal.session.stopWaiting = () => {
+    stopped += 1;
+    modal.sessionState = stoppedState;
+    return modal.sessionState;
+  };
+  modal.sessionState = waitingState;
+  modal.paintSchemaCard("session");
+  const status = modal.contentEl.querySelector("[data-schema-region='status']")
+    || modal.contentEl.querySelector(".bob-album-schema-status");
+  assert.match(status.textContent, /Waiting for another Bob vault maintenance run… 42s/);
+  assert.match(status.textContent, /Esc stops waiting/);
+  assert.equal(status.classList.contains("is-previewing"), true);
+  assert.equal(modal.schemaHandleEscape(), "stay");
+  assert.equal(stopped, 1);
+  assert.ok(modal.contentEl.querySelector(".bob-album-schema-dialog"), "the card stays open");
+  modal.sessionState = {
+    ...modal.sessionState,
+    status: "preview-ready",
+    canApply: true,
+    busy: false,
+    lockWait: null,
+    lockNotice: { message: "Stopped waiting for another Bob vault maintenance run.", hint: "Nothing was written. Press Enter to try again." },
+    preview: { ok: true, consequence: "add choice", per_op: [] },
+    draftOps: [{ op: "choice.add" }],
+  };
+  modal.paintSchemaCard("session");
+  const notice = modal.contentEl.querySelector(".bob-album-schema-status");
+  assert.match(notice.textContent, /Stopped waiting/);
+  assert.match(notice.textContent, /Nothing was written/);
+  assert.equal(notice.textContent.includes("Preview again"), false);
+  const hints = helpers.albumSchemaCardHintItems(modal.schemaModel, {
+    editable: true, fresh: true, state: modal.sessionState,
+  });
+  assert.ok(hints.some((item) => item.action === "apply" && item.enabled !== false));
+  const actions = helpers.albumSchemaCardAllActions(modal.schemaModel, {
+    fresh: true, state: modal.sessionState,
+  });
+  assert.equal(actions.some((item) => item.action === "preview"), false);
+  modal.close();
+});

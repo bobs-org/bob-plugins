@@ -364,6 +364,10 @@ Object.assign(BankSetupCardModal.prototype, {
       }
       const state = this.session?.getState?.() || {};
       this.sessionState = state;
+      if (state.lockWait) {
+        this.paint?.("session");
+        return true;
+      }
       if (state.status === "preview-pending" || state.busy || state.status === "applying") {
         this.bankArmEnterLatch?.();
         this.paint?.("session");

@@ -7,7 +7,7 @@
 // Never launches Obsidian and never opens the live vault.
 "use strict";
 
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -17,6 +17,43 @@ const album = require("./obsidian-album-ui-e2e-lib.cjs");
 
 function fail(message) {
   throw new Error(message);
+}
+
+function awaitSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function loadLedgerHelpers() {
+  const Module = require("node:module");
+  const originalLoad = Module._load;
+  Module._load = function loadWithObsidianStubs(request, parent, isMain) {
+    if (request === "obsidian") {
+      return {
+        MarkdownView: class {},
+        Notice: class {},
+        Platform: { isDesktopApp: true },
+        Plugin: class {},
+        normalizePath: (value) => value,
+        parseYaml: () => ({}),
+      };
+    }
+    if (request === "@codemirror/state") {
+      return { Prec: { highest: (value) => value } };
+    }
+    if (request === "@codemirror/view") {
+      return {
+        EditorView: { updateListener: { of: (listener) => ({ listener }) } },
+        keymap: { of: (value) => value },
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const LedgerToolsPlugin = require("../plugins/bob-ledger-tools/main.js");
+    return LedgerToolsPlugin.helpers;
+  } finally {
+    Module._load = originalLoad;
+  }
 }
 
 function writeNote(filePath, content) {
@@ -183,7 +220,7 @@ function check(shaped, label) {
   if (!shaped.ok) fail(`${label}: ${shaped.reason}`);
 }
 
-function selfTest() {
+async function selfTest() {
   const bobBin = process.env.BOB_BIN ? path.resolve(process.env.BOB_BIN) : "";
   if (!bobBin) {
     process.stdout.write("UNRUN: offline schema-writer self-test skipped real-bob assertions (set BOB_BIN)\n");
@@ -545,6 +582,72 @@ function selfTest() {
     }
     if (commitCount() !== commitsBeforeStaleUndo) fail("stale Undo must not create another commit");
 
+    const flock = spawnSync("which", ["flock"], { encoding: "utf8", timeout: 5_000 });
+    if (flock.status !== 0) {
+      process.stdout.write("UNRUN: held-lock session wait skipped (flock unavailable)\n");
+    } else {
+      const helpers = loadLedgerHelpers();
+      const lockFile = path.join(scratch, "bob_sync.lock");
+      const holder = spawn("flock", ["-x", lockFile, "sleep", "6"], { stdio: "ignore" });
+      await awaitSleep(250);
+      const beforeLockCommits = commitCount();
+      const envForLock = () => {
+        const env = bobEnv(vaultDir);
+        env.BOB_VAULT_SYNC_LOCK_FILE = lockFile;
+        return env;
+      };
+      const spawnUpdate = (dryRun) => (stem, envelopeText) => {
+        const args = ["albums", "update", stem, "-f", "json", "-i", "-"];
+        if (dryRun === true) args.push("-d");
+        const result = spawnSync(bobBin, args, {
+          encoding: "utf8",
+          env: envForLock(),
+          timeout: 60_000,
+          maxBuffer: 32 * 1024 * 1024,
+          input: envelopeText,
+        });
+        let parsed = null;
+        try { parsed = JSON.parse(String(result.stdout || "")); }
+        catch {
+          return { ok: false, code: "bad-json", message: String(result.stderr || "bad json") };
+        }
+        return { ok: true, report: parsed };
+      };
+      const waits = [];
+      const session = helpers.createAlbumUpdateSession({
+        stem: "eat",
+        expect: eat.fingerprint,
+        debounceMs: 0,
+      }, {
+        saveEditors: async () => ({ ok: true }),
+        getGeneration: () => 0,
+        spawnPreview: spawnUpdate(true),
+        spawnApply: spawnUpdate(false),
+        onChange: (state) => { if (state.lockWait) waits.push({ ...state.lockWait }); },
+      });
+      try {
+        const fresh = albumFingerprint(bobBin, vaultDir, "eat");
+        session.rebase(fresh.fingerprint);
+        session.setDraft([{ op: "choice.add", field: "status", label: "HeldLock", position: 0 }]);
+        await session.previewNow();
+        if (session.getState().status !== "preview-ready") {
+          fail(`held-lock preview did not ready: ${session.getState().status} ${JSON.stringify(session.getState().refusal)}`);
+        }
+        const result = session.apply();
+        const applied = await result;
+        if (!applied || applied.ok !== true || applied.changed !== true) {
+          fail(`held-lock apply must succeed after the wait: ${JSON.stringify(applied)}`);
+        }
+        if (!waits.length) fail("held-lock apply must paint a lock wait");
+        if (commitCount() !== beforeLockCommits + 1) {
+          fail(`held-lock apply must create exactly one commit, saw ${commitCount() - beforeLockCommits}`);
+        }
+      } finally {
+        try { session.close(); } catch { /* ignore */ }
+        try { holder.kill("SIGTERM"); } catch { /* ignore */ }
+      }
+    }
+
     const version = spawnSync(bobBin, ["--version"], { encoding: "utf8", timeout: 10_000 });
     process.stdout.write(`offline schema-writer self-test complete (BOB_BIN=${bobBin}; ${String(version.stdout || version.stderr || "").trim()})\n`);
   } finally {
@@ -574,10 +677,12 @@ function main(argv) {
     return;
   }
   if (args.selfTest) {
-    selfTest();
-    return;
+    return selfTest();
   }
   fail("no CDP walkthrough here: real-Obsidian schema-card proof lives in scripts/obsidian-album-ui-e2e.cjs; rerun with -s/--self-test");
 }
 
-main(process.argv.slice(2));
+Promise.resolve(main(process.argv.slice(2))).catch((error) => {
+  process.stderr.write(`${error && error.stack ? error.stack : error}\n`);
+  process.exitCode = 1;
+});

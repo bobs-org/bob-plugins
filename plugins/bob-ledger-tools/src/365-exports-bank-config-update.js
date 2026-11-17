@@ -8,6 +8,12 @@ try {
   ) {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS,
+      GUARDED_UPDATE_LOCK_RETRY_MS,
+      GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
+      GUARDED_UPDATE_LOCK_WAIT_HINT,
+      guardedUpdateReportLockBusy,
+      guardedUpdateSameConsequence,
+      guardedUpdateLockWaitText,
       createGuardedUpdateSession,
       BANK_CONFIG_UPDATE_SCHEMA_VERSION,
       BANK_CONFIG_UPDATE_TIMEOUT_MS,

@@ -150,10 +150,29 @@ class BobLedgerToolsBankConfigUpdateMixin {
         this.bankConfigUpdateFlight = null;
       }
       let refreshed = null;
-      try {
-        refreshed = await this.bankConfigRevalidateAfterApply();
-      } catch (error) {
-        refreshed = null;
+      if (guardedUpdateReportLockBusy(outcome && outcome.report)) {
+        try {
+          const key = typeof bankCacheKey === "function" && typeof bankBuildArgs === "function"
+            ? bankCacheKey(bankBuildArgs({ command: "config" }))
+            : "";
+          const cached = key && typeof this.bankLastGoodReport === "function"
+            ? this.bankLastGoodReport(key)
+            : null;
+          refreshed = {
+            report: cached,
+            stale: false,
+            key,
+            generation: this.bankVaultGeneration || 0,
+          };
+        } catch (error) {
+          refreshed = null;
+        }
+      } else {
+        try {
+          refreshed = await this.bankConfigRevalidateAfterApply();
+        } catch (error) {
+          refreshed = null;
+        }
       }
       if (ownPath) {
         this.bankConfigUpdateOwnPathsStore().delete(ownPath);
@@ -230,6 +249,8 @@ function createBankConfigUpdateSession(init = {}, deps = {}) {
     expect: init.expect,
     undo: init.undo,
     debounceMs: BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
     buildEnvelope: bankConfigUpdateEnvelopeText,
     isStaleCode: bankIsStaleConfigUpdateCode,
     failureFromReport: (report) =>

@@ -1332,3 +1332,44 @@ test("Setup card checks Enter jumps to the finding line", async () => {
   assert.equal(calls[0].line, 14);
   modal.close();
 });
+
+test("Setup card paints lock wait as pending and Esc stops without closing", async () => {
+  const plugin = setupCardPlugin();
+  const modal = new H.BankSetupCardModal(plugin.app, { plugin, report: configReport() });
+  modal.open();
+  let stopped = 0;
+  modal.session = {
+    getState: () => modal.sessionState,
+    stopWaiting() {
+      stopped += 1;
+      modal.sessionState = {
+        status: "preview-ready",
+        canApply: true,
+        lockWait: null,
+        lockNotice: { message: "Stopped waiting for another Bob vault maintenance run.", hint: "Nothing was written. Press Enter to try again." },
+      };
+      return modal.sessionState;
+    },
+  };
+  modal.sessionState = {
+    status: "applying",
+    busy: true,
+    canApply: false,
+    lockWait: { since: 0, elapsedMs: 42000, attempts: 2, stopping: false },
+  };
+  assert.match(H.bankSetupCardStatusText(modal), /Waiting for another Bob vault maintenance run… 42s/);
+  assert.equal(H.bankSetupCardStatusTone(modal), "is-previewing");
+  assert.deepEqual(H.bankSetupCardHintItems(modal).map((item) => item.label), ["stop waiting"]);
+  await modal.onKeyDown({
+    key: "Escape",
+    target: { closest: () => null },
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(stopped, 1);
+  assert.equal(modal.closed, false);
+  assert.match(H.bankSetupCardStatusText(modal), /Stopped waiting/);
+  assert.match(H.bankSetupCardStatusText(modal), /Nothing was written/);
+  assert.equal(H.bankSetupCardStatusTone(modal), "is-previewing");
+  modal.close();
+});

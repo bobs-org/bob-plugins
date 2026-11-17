@@ -153,13 +153,15 @@ class BobLedgerToolsAlbumUpdateMixin {
         this.albumUpdateFlight = null;
       }
       let refreshed = this.albumReportState();
-      try {
-        // The pre-write list cannot satisfy the post-write display: wait it
-        // out, then force one fresh report. Last-good data stays visible as
-        // stale on refresh failure; editing stays disabled until it lands.
-        refreshed = await this.albumRevalidateAfterSync();
-      } catch (error) {
-        // The last report remains visible as stale/unavailable on failure.
+      if (!guardedUpdateReportLockBusy(outcome && outcome.report)) {
+        try {
+          // The pre-write list cannot satisfy the post-write display: wait it
+          // out, then force one fresh report. Last-good data stays visible as
+          // stale on refresh failure; editing stays disabled until it lands.
+          refreshed = await this.albumRevalidateAfterSync();
+        } catch (error) {
+          // The last report remains visible as stale/unavailable on failure.
+        }
       }
       if (!maybeWrote && ownPath) {
         this.albumUpdateOwnPathsStore().delete(ownPath);

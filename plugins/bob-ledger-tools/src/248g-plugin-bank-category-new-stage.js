@@ -47,6 +47,8 @@
     this.newStage.canApply = Boolean(state && state.canApply);
     this.newStage.consequence = state && state.consequence ? String(state.consequence) : "";
     this.newStage.refusal = state && state.refusal ? { ...state.refusal } : null;
+    this.newStage.lockWait = state && state.lockWait ? { ...state.lockWait } : null;
+    this.newStage.lockNotice = state && state.lockNotice ? { ...state.lockNotice } : null;
     if (state && state.syncWarning) this.syncWarning = { ...state.syncWarning };
     if (state && state.refusal && state.refusal.code === "stale_config") {
       void this.rebaseNewCategoryPreview();
@@ -145,6 +147,15 @@
       && target.closest("input,select,textarea"));
     if (key === "Escape" || key === "Ctrl+[" || (!inInput && (key === "q" || key === "Q"))) {
       bankCategoryUiConsume(event);
+      const waiting = this.newStage.lockWait || this.newSession?.getState?.()?.lockWait;
+      if (waiting) {
+        try { this.newSession?.stopWaiting?.(); } catch (_) {}
+        try {
+          const after = this.newSession?.getState?.();
+          if (after) this.onNewCategorySessionChange(after);
+        } catch (_) {}
+        return;
+      }
       this.closeNewCategoryStage();
       return;
     }
@@ -211,6 +222,19 @@
       result = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "apply failed" };
     }
     if (this.closed) return false;
+    if (result && (result.code === "lock-wait-stopped" || result.code === "lock-wait-budget")) {
+      this.newStage.applying = false;
+      this.busy = false;
+      this.newStage.refusal = null;
+      const after = this.newSession && typeof this.newSession.getState === "function"
+        ? this.newSession.getState()
+        : null;
+      this.newStage.lockNotice = after && after.lockNotice ? { ...after.lockNotice } : null;
+      this.newStage.lockWait = null;
+      this.newStage.canApply = Boolean(after && after.canApply);
+      try { this.paint(); } catch (_) {}
+      return false;
+    }
     if (!result || result.ok !== true) {
       this.newStage.applying = false;
       this.busy = false;
@@ -284,10 +308,21 @@
     if (hotkey.text) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-stage-owner", hotkey.text, { role: "status" });
     }
-    if (stage.consequence) {
+    const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+      ? guardedUpdateLockWaitText(stage.lockWait)
+      : "";
+    if (lockWaitText) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", lockWaitText, { role: "status" });
+    } else if (stage.lockNotice && (stage.lockNotice.message || stage.lockNotice.hint)) {
+      bankCategoryUiAppend(host, "p", "bob-bank-category-consequence",
+        stage.lockNotice.message || "Stopped waiting for another Bob vault maintenance run.", { role: "status" });
+      if (stage.lockNotice.hint) {
+        bankCategoryUiAppend(host, "p", "bob-bank-category-hint", stage.lockNotice.hint, { role: "status" });
+      }
+    } else if (stage.consequence) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-consequence", stage.consequence, { role: "status" });
     }
-    if (stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
+    if (!lockWaitText && !stage.lockNotice && stage.refusal && (stage.refusal.message || stage.refusal.hint)) {
       bankCategoryUiAppend(host, "p", "bob-bank-category-hint",
         stage.refusal.hint || stage.refusal.message, { role: "status" });
     }
@@ -301,7 +336,7 @@
         retry.addEventListener?.("click", () => { void this.retryBankConfigSync(); });
       }
     }
-    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText());
+    bankCategoryUiAppend(host, "p", "bob-bank-category-keys", bankCategoryNewStageKeysText(stage));
   };
 
   proto.paintNewCategoryStage = function paintNewCategoryStage(root) {

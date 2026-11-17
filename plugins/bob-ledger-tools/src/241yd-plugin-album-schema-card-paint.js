@@ -50,7 +50,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
       state,
       stage: this.stage,
       stageDraft: this.stageDraft,
-      stageLocked: state.status === "applying" || !this.schemaFresh(),
+      stageLocked: state.status === "applying" || Boolean(state.lockWait) || !this.schemaFresh(),
       hasFreshReplacement: Boolean(this.latestSchemaModel?.schemaFingerprint),
       enterLatched: Boolean(this.schemaEnterLatch),
       moreOpen: this.schemaMoreOpen === true,

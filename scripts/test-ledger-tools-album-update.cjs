@@ -61,6 +61,10 @@ const {
   albumIsStaleUpdateCode,
   albumUpdateErrorModel,
   createAlbumUpdateSession,
+  GUARDED_UPDATE_LOCK_RETRY_MS,
+  GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS,
+  GUARDED_UPDATE_LOCK_WAIT_HINT,
+  guardedUpdateSameConsequence,
 } = LedgerToolsPlugin.helpers;
 
 // --- shared fakes -----------------------------------------------------------
@@ -280,6 +284,13 @@ function refusalError(overrides = {}) {
 // --- wire contract ----------------------------------------------------------
 
 test("update argv, envelope, and timeout follow the guarded writer contract", () => {
+  assert.equal(GUARDED_UPDATE_LOCK_RETRY_MS, 1000);
+  assert.equal(GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS, 10 * 60 * 1000);
+  assert.equal(guardedUpdateSameConsequence(updateReport(), updateReport()), true);
+  assert.equal(
+    guardedUpdateSameConsequence(updateReport(), updateReport({ consequence: "different" })),
+    false,
+  );
   assert.equal(ALBUM_UPDATE_SCHEMA_VERSION, 1);
   assert.deepEqual(albumUpdateArgs("eat"), ["albums", "update", "eat", "-f", "json", "-i", "-"]);
   assert.deepEqual(
@@ -502,13 +513,35 @@ function draftOps() {
   return [{ op: "choice.add", field: "status", label: "Regular", position: 2 }];
 }
 
-async function previewReadySession(deps, ops = draftOps()) {
-  const session = createAlbumUpdateSession({ stem: "eat", expect: "sha256:before" }, deps);
+async function previewReadySession(deps, ops = draftOps(), init = {}) {
+  const session = createAlbumUpdateSession({ stem: "eat", expect: "sha256:before", ...init }, deps);
   session.setDraft(ops);
   deps.timers.tick(ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS);
   await flushMicrotasks();
   assert.equal(session.getState().status, "preview-ready");
   return session;
+}
+
+function lockBusyReport(overrides = {}) {
+  return updateReport({
+    ok: false,
+    dry_run: false,
+    changed: false,
+    error: refusalError({
+      code: "lock_busy",
+      message: "another Bob vault maintenance run is already active (waited on /tmp/bob_sync.lock)",
+      hint: "wait for the other maintenance run to finish, then retry",
+      affected: null,
+      op_index: null,
+      field: null,
+      choice: null,
+    }),
+    ...overrides,
+  });
+}
+
+function lockBusyOutcome() {
+  return { ok: true, report: lockBusyReport(), refreshed: null, wrote: false, unknown: false };
 }
 
 test("typing settles through a 250 ms debounce; navigation never previews", async () => {
@@ -825,6 +858,241 @@ test("stale apply responses refresh and keep the draft without retrying", async 
   }
 });
 
+test("lock_busy then success retries the identical envelope once and never resaves", async () => {
+  const deps = makeSessionDeps();
+  let applies = 0;
+  deps.setApplyImpl(async () => {
+    applies += 1;
+    if (applies === 1) return lockBusyOutcome();
+    return { ok: true, report: updateReport({ dry_run: false }), refreshed: null, wrote: true, unknown: false };
+  });
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    assert.equal(session.getState().status, "applying");
+    assert.equal(session.getState().busy, true);
+    assert.equal(session.getState().lockWait.attempts, 1);
+    assert.equal(session.getState().canApply, false);
+    assert.equal(session.getState().preview && session.getState().preview.ok, true, "the preview stays");
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.ok, true);
+    assert.equal(result.changed, true);
+    assert.equal(applies, 2);
+    assert.equal(deps.calls.lastPreviewEnvelope, deps.calls.lastApplyEnvelope);
+    assert.equal(deps.calls.saves.length, 1, "saveEditors runs only on the first attempt");
+    assert.equal(session.getState().status, "browsing");
+    assert.equal(session.getState().undoAvailable, true);
+    assert.equal(session.getState().lockWait, null);
+    assert.equal(session.getState().lockNotice, null);
+  } finally {
+    session.close();
+  }
+});
+
+test("repeated lock_busy advances attempts and ticks elapsed time every second", async () => {
+  const notes = [];
+  const deps = makeSessionDeps({ onChange: (state) => notes.push(state.lockWait ? { ...state.lockWait } : null) });
+  let applies = 0;
+  deps.setApplyImpl(async () => {
+    applies += 1;
+    if (applies < 4) return lockBusyOutcome();
+    return { ok: true, report: updateReport({ dry_run: false }), refreshed: null, wrote: true, unknown: false };
+  });
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 1000, lockWaitBudgetMs: 60_000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    assert.equal(session.getState().lockWait.attempts, 1);
+    assert.equal(session.getState().lockWait.elapsedMs, 0);
+    deps.timers.tick(1000);
+    await flushMicrotasks();
+    assert.equal(session.getState().lockWait.elapsedMs, 1000);
+    assert.ok(notes.some((wait) => wait && wait.elapsedMs >= 1000), "the ticker notifies at one second");
+    deps.timers.tick(1000);
+    await flushMicrotasks();
+    deps.timers.tick(1000);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.ok, true);
+    assert.equal(applies, 4);
+    assert.equal(session.getState().lockWait, null);
+  } finally {
+    session.close();
+  }
+});
+
+test("stopWaiting with no in-flight attempt restores preview-ready and Enter retries", async () => {
+  const deps = makeSessionDeps();
+  deps.setApplyImpl(async () => lockBusyOutcome());
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    assert.equal(session.getState().lockWait.attempts, 1);
+    session.stopWaiting();
+    const stopped = await applying;
+    assert.equal(stopped.code, "lock-wait-stopped");
+    assert.equal(session.getState().status, "preview-ready");
+    assert.equal(session.getState().canApply, true);
+    assert.equal(session.getState().refusal, null);
+    assert.equal(session.getState().lockNotice.hint, GUARDED_UPDATE_LOCK_WAIT_HINT);
+    const envelope = deps.calls.lastApplyEnvelope;
+    deps.setApplyImpl(async () => ({ ok: true, report: updateReport({ dry_run: false }), refreshed: null, wrote: true, unknown: false }));
+    const retried = await session.apply();
+    assert.equal(retried.ok, true);
+    assert.equal(deps.calls.lastApplyEnvelope, envelope);
+    assert.equal(deps.calls.saves.length, 2, "a fresh Enter after stop starts a new apply");
+  } finally {
+    session.close();
+  }
+});
+
+test("stopWaiting during an in-flight attempt that succeeds is a normal save", async () => {
+  const deps = makeSessionDeps();
+  const flight = deferred();
+  let applies = 0;
+  deps.setApplyImpl(() => {
+    applies += 1;
+    if (applies === 1) return Promise.resolve(lockBusyOutcome());
+    return flight.promise;
+  });
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    assert.equal(applies, 2);
+    assert.equal(session.getState().lockWait.stopping, false);
+    session.stopWaiting();
+    assert.equal(session.getState().lockWait.stopping, true);
+    flight.resolve({ ok: true, report: updateReport({ dry_run: false }), refreshed: null, wrote: true, unknown: false });
+    const result = await applying;
+    assert.equal(result.ok, true);
+    assert.equal(session.getState().status, "browsing");
+    assert.equal(session.getState().undoAvailable, true);
+    assert.equal(session.getState().lockNotice, null);
+  } finally {
+    session.close();
+  }
+});
+
+test("budget exhaustion restores preview-ready with lockNotice", async () => {
+  const deps = makeSessionDeps();
+  deps.setApplyImpl(async () => lockBusyOutcome());
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 120 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.code, "lock-wait-budget");
+    assert.equal(session.getState().status, "preview-ready");
+    assert.equal(session.getState().canApply, true);
+    assert.equal(session.getState().refusal, null);
+    assert.match(session.getState().lockNotice.message, /Gave up waiting/);
+    assert.equal(session.getState().lockNotice.hint, GUARDED_UPDATE_LOCK_WAIT_HINT);
+    assert.ok(deps.calls.apply >= 2);
+  } finally {
+    session.close();
+  }
+});
+
+test("generation move with the same consequence keeps waiting; a different one ends the wait", async () => {
+  const same = makeSessionDeps();
+  let applies = 0;
+  same.setApplyImpl(async () => {
+    applies += 1;
+    if (applies === 1) return lockBusyOutcome();
+    return { ok: true, report: updateReport({ dry_run: false }), refreshed: null, wrote: true, unknown: false };
+  });
+  const session = await previewReadySession(same, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    same.bumpGeneration();
+    same.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.ok, true);
+    assert.equal(same.calls.preview, 2, "a same-consequence dry-run runs before the retry");
+    assert.equal(applies, 2);
+  } finally {
+    session.close();
+  }
+
+  const different = makeSessionDeps();
+  different.setApplyImpl(async () => lockBusyOutcome());
+  const drifted = await previewReadySession(different, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  different.setPreviewImpl(async () => ({
+    ok: true,
+    report: updateReport({ consequence: "a different schema consequence", per_op: [{ summary: "different", count: 3, newly_invalid: 1 }] }),
+  }));
+  try {
+    const applying = drifted.apply();
+    await flushMicrotasks();
+    different.bumpGeneration();
+    different.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.code, "save-invalidated");
+    assert.equal(drifted.getState().status, "preview-ready");
+    assert.equal(drifted.getState().canApply, true);
+    assert.match(drifted.getState().consequence, /different schema consequence/);
+    assert.equal(different.calls.apply, 1, "a changed consequence never retries apply");
+  } finally {
+    drifted.close();
+  }
+});
+
+test("close mid-wait starts no further spawnApply calls", async () => {
+  const deps = makeSessionDeps();
+  deps.setApplyImpl(async () => lockBusyOutcome());
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  const applying = session.apply();
+  await flushMicrotasks();
+  assert.equal(deps.calls.apply, 1);
+  session.close();
+  deps.timers.tick(200);
+  await flushMicrotasks();
+  assert.equal(deps.calls.apply, 1, "close cancels the retry timer");
+  const result = await applying;
+  assert.equal(result.code, "superseded");
+});
+
+test("transport failure after lock_busy takes today's unknown path with no retry", async () => {
+  const deps = makeSessionDeps();
+  let applies = 0;
+  deps.setApplyImpl(async () => {
+    applies += 1;
+    if (applies === 1) return lockBusyOutcome();
+    return { ok: false, code: "timeout", message: "bob albums update timed out.", unknown: true };
+  });
+  const session = await previewReadySession(deps, draftOps(), { lockRetryMs: 50, lockWaitBudgetMs: 1000 });
+  try {
+    const applying = session.apply();
+    await flushMicrotasks();
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.kind, "timeout-unknown");
+    assert.match(result.hint, /Never blind-retry/);
+    assert.equal(session.getState().status, "refused");
+    assert.equal(session.getState().lockWait, null);
+    assert.equal(applies, 2);
+  } finally {
+    session.close();
+  }
+});
+
 test("unknown apply outcomes refuse and demand explicit reconciliation", async () => {
   const deps = makeSessionDeps();
   const session = await previewReadySession(deps);
@@ -902,6 +1170,33 @@ test("vault-sync retry failures keep the warning without losing Undo", async () 
 });
 
 // --- service coordination ----------------------------------------------------
+
+test("the service skips the forced revalidate on lock_busy", async () => {
+  const { plugin } = makeAlbumPlugin();
+  let lists = 0;
+  plugin.albumSpawnList = async () => {
+    lists += 1;
+    return decodedList();
+  };
+  plugin.albumSpawnUpdate = async () => ({
+    ok: true,
+    report: lockBusyReport(),
+  });
+  try {
+    const before = plugin.albumReportState();
+    const result = await plugin.apiAlbumUpdateApply(
+      "eat",
+      albumUpdateEnvelopeText("sha256:before", draftOps()),
+      { ownPath: "eat.md" },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.report.error.code, "lock_busy");
+    assert.equal(lists, 0, "lock_busy never forces a post-apply list");
+    assert.deepEqual(result.refreshed, before);
+  } finally {
+    plugin.teardownAlbumData();
+  }
+});
 
 test("duplicate applies refuse busy while the first flight owns the lifecycle", async () => {
   const { plugin } = makeAlbumPlugin();

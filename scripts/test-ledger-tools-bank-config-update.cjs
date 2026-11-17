@@ -32,6 +32,7 @@ const {
   bankCategoryNewAddedKey,
   bankCategoryCardKeysText,
   bankDecodeList,
+  GUARDED_UPDATE_LOCK_WAIT_HINT,
 } = h;
 
 class FakeTimers {
@@ -570,6 +571,119 @@ test("setCategories repaints after interaction; setReport stays ignored then", (
   assert.equal(modal.categories[0].key, "coffee");
   assert.equal(modal.setCategories([{ key: "fast_food", label: "Fast food", hotkey: "b" }]), true);
   assert.equal(modal.categories[0].key, "fast_food");
+});
+
+test("bank lock_busy waits then retries the same envelope", async () => {
+  const deps = makeSessionDeps();
+  let applies = 0;
+  deps.setApplyImpl(async () => {
+    applies += 1;
+    if (applies === 1) {
+      return {
+        ok: true,
+        report: updateReport({
+          ok: false,
+          dry_run: false,
+          changed: false,
+          failure: { code: "lock_busy", message: "another Bob vault maintenance run is already active", hint: "retry" },
+        }),
+        refreshed: null,
+        wrote: false,
+        unknown: false,
+      };
+    }
+    return {
+      ok: true,
+      report: updateReport({ dry_run: false }),
+      refreshed: null,
+      wrote: true,
+      unknown: false,
+    };
+  });
+  const session = createBankConfigUpdateSession(
+    { expect: "sha256:before", lockRetryMs: 50, lockWaitBudgetMs: 1000 },
+    deps,
+  );
+  try {
+    session.setDraft([{ op: "category.add", label: "🍔 Fast food", hotkey: "b", group: "Everyday" }]);
+    deps.timers.tick(BANK_CONFIG_UPDATE_PREVIEW_DEBOUNCE_MS);
+    await flushMicrotasks();
+    const applying = session.apply();
+    await flushMicrotasks();
+    assert.equal(session.getState().lockWait.attempts, 1);
+    deps.timers.tick(50);
+    await flushMicrotasks();
+    const result = await applying;
+    assert.equal(result.ok, true);
+    assert.equal(applies, 2);
+    assert.equal(deps.calls.saves.length, 1);
+    assert.equal(session.getState().undoAvailable, true);
+  } finally {
+    session.close();
+  }
+});
+
+test("the bank service skips forced revalidate on lock_busy", async () => {
+  const plugin = new LedgerToolsPlugin({
+    vault: { adapter: { basePath: "/fixture-vault" }, getMarkdownFiles: () => [], on() { return {}; } },
+    metadataCache: { on() { return {}; } },
+    workspace: { on() { return {}; }, getLeavesOfType: () => [] },
+  }, {});
+  plugin.registerEvent = () => {};
+  plugin.registerInterval = () => {};
+  plugin.setupBankData();
+  try {
+    let refreshes = 0;
+    plugin.apiBankRefresh = async () => {
+      refreshes += 1;
+      return { report: null };
+    };
+    plugin.bankSpawnConfigUpdate = async () => ({
+      ok: true,
+      report: updateReport({
+        ok: false,
+        dry_run: false,
+        changed: false,
+        failure: { code: "lock_busy", message: "locked", hint: "retry" },
+      }),
+    });
+    const result = await plugin.apiBankConfigUpdateApply("{}", { ownPath: "bank.md" });
+    assert.equal(result.ok, true);
+    assert.equal(result.report.failure.code, "lock_busy");
+    assert.equal(refreshes, 0, "lock_busy never forces a post-apply config refresh");
+  } finally {
+    plugin.teardownBankData();
+  }
+});
+
+test("new-category Esc during a lock wait stops waiting and keeps the stage open", async () => {
+  const { modal } = makeModal();
+  await modal.onKeyDown(event("+"));
+  modal.newStage.label = "🍔 Fast food";
+  modal.newStage.hotkey = "b";
+  let stopped = 0;
+  modal.newSession = {
+    getState: () => ({
+      canApply: false,
+      lockWait: modal.newStage && modal.newStage.lockWait,
+      lockNotice: modal.newStage && modal.newStage.lockNotice,
+    }),
+    stopWaiting() {
+      stopped += 1;
+      modal.newStage.lockWait = null;
+      modal.newStage.lockNotice = { message: "Stopped", hint: GUARDED_UPDATE_LOCK_WAIT_HINT };
+      modal.newStage.canApply = true;
+    },
+    apply: async () => ({ ok: false, code: "lock-wait-stopped" }),
+    close() {},
+  };
+  modal.newStage.lockWait = { since: 0, elapsedMs: 42000, attempts: 2, stopping: false };
+  await modal.onKeyDown(event("Escape"));
+  assert.equal(stopped, 1);
+  assert.ok(modal.newStage, "Esc during a wait keeps the new-category stage open");
+  assert.notEqual(modal.closed, true);
+  await modal.onKeyDown(event("Escape"));
+  assert.equal(modal.newStage, null, "the next Esc closes the stage");
 });
 
 test("apply-busy refuses a second plugin apply; timeout is never a blind retry", async () => {

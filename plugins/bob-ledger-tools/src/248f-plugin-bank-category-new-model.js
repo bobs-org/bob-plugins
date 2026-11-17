@@ -125,7 +125,10 @@ function bankCategoryCardKeysText(mode, kind) {
   return `↵ accept · letter choose · ${space} · + new category · Esc cancel`;
 }
 
-function bankCategoryNewStageKeysText() {
+function bankCategoryNewStageKeysText(stage) {
+  if (stage && stage.lockWait) {
+    return stage.lockWait.stopping ? "Stopping after the current attempt…" : "Esc stops waiting";
+  }
   return "↵ add and file · ↑↓ cycle group · Esc close stage";
 }
 

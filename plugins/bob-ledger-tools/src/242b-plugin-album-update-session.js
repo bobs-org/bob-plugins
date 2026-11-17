@@ -9,6 +9,8 @@ function createAlbumUpdateSession(init = {}, deps = {}) {
     expect: init.expect,
     undo: init.undo,
     debounceMs: ALBUM_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
     buildEnvelope: albumUpdateEnvelopeText,
     isStaleCode: albumIsStaleUpdateCode,
     failureFromReport: (report) => (albumJsonObject(report) && albumJsonObject(report.error) ? report.error : {}),

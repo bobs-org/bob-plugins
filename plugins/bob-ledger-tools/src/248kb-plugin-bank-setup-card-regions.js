@@ -152,7 +152,15 @@ function bankSetupCardPaintStageStatus(host, modal) {
 function bankSetupCardStatusText(modal) {
   const state = modal.sessionState || {};
   const arrange = modal.bankPaintArrange || {};
+  const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+    ? guardedUpdateLockWaitText(state.lockWait)
+    : "";
+  if (lockWaitText) return lockWaitText;
   if (modal.bankEnterLatch) return "Saving as soon as bob confirms…";
+  if (state.lockNotice) {
+    const hint = state.lockNotice.hint ? ` ${state.lockNotice.hint}` : "";
+    return `${state.lockNotice.message || "Stopped waiting for another Bob vault maintenance run."}${hint}`;
+  }
   if (arrange.saving) return `Saving… · ${arrange.pendingText || "Saving…"}`;
   if (modal.errorMessage) return modal.errorMessage;
   if (state.refusal) return state.refusal.message || "bob refused this edit.";
@@ -175,6 +183,7 @@ function bankSetupCardStatusText(modal) {
 function bankSetupCardStatusTone(modal) {
   const state = modal.sessionState || {};
   const arrange = modal.bankPaintArrange || {};
+  if (state.lockWait || state.lockNotice) return "is-previewing";
   if (modal.bankEnterLatch || arrange.saving || state.status === "preview-pending" || state.busy) return "is-previewing";
   if (modal.errorMessage || state.refusal || arrange.orderBlocked) return "is-refused";
   if (arrange.dirty && arrange.loud && state.canApply) return "is-confirm";
@@ -196,7 +205,11 @@ function bankSetupCardPaintStatusRegion(card, modal) {
 function bankSetupCardHintItems(modal) {
   const mod = typeof Platform !== "undefined" && Platform?.isMacOS === true ? "⌘" : "Ctrl";
   const arrange = modal.bankPaintArrange || {};
+  const state = modal.sessionState || {};
   const items = [];
+  if (state.lockWait) {
+    return [{ keys: "esc", label: state.lockWait.stopping ? "stopping" : "stop waiting" }];
+  }
   if (arrange.saving) {
     return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];
   }

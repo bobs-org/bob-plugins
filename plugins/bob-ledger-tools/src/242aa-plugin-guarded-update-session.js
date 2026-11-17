@@ -4,9 +4,75 @@
 // generation move re-previews; inverse-op Undo is staged, not reconstructed.
 // Album and bank sessions are thin wrappers over this controller.
 const GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+const GUARDED_UPDATE_LOCK_RETRY_MS = 1000;
+const GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS = 10 * 60 * 1000;
+const GUARDED_UPDATE_LOCK_TICKER_MS = 1000;
+const GUARDED_UPDATE_LOCK_WAIT_HINT = "Nothing was written. Press Enter to try again.";
 
 function guardedUpdateJsonObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function guardedUpdateReportLockBusy(report) {
+  if (!guardedUpdateJsonObject(report) || report.ok === true) return false;
+  const failure = guardedUpdateJsonObject(report.error)
+    ? report.error
+    : (guardedUpdateJsonObject(report.failure) ? report.failure : null);
+  return Boolean(failure && failure.code === "lock_busy");
+}
+
+function guardedUpdateIsLockBusy(outcome, failureFromReport) {
+  if (!outcome || outcome.ok !== true || !outcome.report || outcome.report.ok === true) {
+    return false;
+  }
+  if (typeof failureFromReport === "function") {
+    try {
+      const failure = failureFromReport(outcome.report);
+      if (failure && failure.code === "lock_busy") return true;
+    } catch (_) {}
+  }
+  return guardedUpdateReportLockBusy(outcome.report);
+}
+
+function guardedUpdateSameConsequence(left, right) {
+  if (!guardedUpdateJsonObject(left) || !guardedUpdateJsonObject(right)) return false;
+  if (String(left.consequence || "") !== String(right.consequence || "")) return false;
+  const keysOf = (report) => {
+    const derived = Array.isArray(report.derived_keys)
+      ? report.derived_keys.filter((key) => typeof key === "string" && key)
+      : [];
+    const perOp = (Array.isArray(report.per_op) ? report.per_op : [])
+      .map((op) => op && op.derived_key)
+      .filter((key) => typeof key === "string" && key);
+    return [...new Set(derived.concat(perOp))].join("\0");
+  };
+  if (keysOf(left) !== keysOf(right)) return false;
+  const opsOf = (report) => (Array.isArray(report.per_op) ? report.per_op : []).map((op) => ({
+    summary: op && op.summary != null ? String(op.summary) : "",
+    outcome: op && op.outcome != null ? String(op.outcome) : "",
+    filled: Number.isInteger(op && op.filled) ? op.filled : null,
+    count: Number.isInteger(op && op.count) ? op.count : null,
+    newly_invalid: Number.isInteger(op && op.newly_invalid) ? op.newly_invalid : null,
+  }));
+  if (JSON.stringify(opsOf(left)) !== JSON.stringify(opsOf(right))) return false;
+  const tally = (report, field) => {
+    if (Number.isInteger(report[field])) return report[field];
+    return (Array.isArray(report.per_op) ? report.per_op : []).reduce((sum, op) => {
+      const value = op && op[field];
+      return sum + (Number.isInteger(value) ? value : 0);
+    }, 0);
+  };
+  return tally(left, "affected") === tally(right, "affected")
+    && tally(left, "count") === tally(right, "count")
+    && tally(left, "newly_invalid") === tally(right, "newly_invalid");
+}
+
+function guardedUpdateLockWaitText(lockWait) {
+  if (!lockWait) return "";
+  if (lockWait.stopping) return "Stopping after the current attempt…";
+  const elapsed = Number(lockWait.elapsedMs);
+  const seconds = Math.max(0, Math.floor((Number.isFinite(elapsed) ? elapsed : 0) / 1000));
+  return `Waiting for another Bob vault maintenance run… ${seconds}s · saves when it finishes · Esc stops waiting`;
 }
 
 function guardedUpdateCopy(overrides = {}) {
@@ -28,6 +94,9 @@ function guardedUpdateCopy(overrides = {}) {
     nothingToUndo: "There is no edit to undo.",
     syncWarningHint: "The edit is committed and Undo is available. Retry sync with `bob vault-sync` only.",
     retryHint: "Retry `bob vault-sync` later. The committed edit and Undo are kept.",
+    lockWaitStopped: "Stopped waiting for another Bob vault maintenance run.",
+    lockWaitBudget: "Gave up waiting for another Bob vault maintenance run after 10 minutes.",
+    lockWaitHint: GUARDED_UPDATE_LOCK_WAIT_HINT,
     ...overrides,
   };
 }
@@ -40,6 +109,12 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
   const debounceMs = Number.isFinite(init.debounceMs) && init.debounceMs >= 0
     ? init.debounceMs
     : GUARDED_UPDATE_PREVIEW_DEBOUNCE_MS;
+  const lockRetryMs = Number.isFinite(init.lockRetryMs) && init.lockRetryMs >= 0
+    ? init.lockRetryMs
+    : GUARDED_UPDATE_LOCK_RETRY_MS;
+  const lockWaitBudgetMs = Number.isFinite(init.lockWaitBudgetMs) && init.lockWaitBudgetMs >= 0
+    ? init.lockWaitBudgetMs
+    : GUARDED_UPDATE_LOCK_WAIT_BUDGET_MS;
   const buildEnvelope = typeof init.buildEnvelope === "function"
     ? init.buildEnvelope
     : (expect, ops) => JSON.stringify({ schema_version: 1, expect: String(expect), ops: Array.isArray(ops) ? ops : [] });
@@ -68,6 +143,12 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     applyPromise: null,
     previewTimer: null,
     previewFlight: null,
+    lockWait: null,
+    lockNotice: null,
+    lockRetryTimer: null,
+    lockRetryResolve: null,
+    lockTickerTimer: null,
+    lockAttemptInFlight: false,
   };
   try {
     const seed = init && init.undo;
@@ -95,6 +176,96 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return;
     }
     globalThis.clearTimeout(timer);
+  }
+
+  function nowMs() {
+    if (timers && typeof timers.now === "number" && Number.isFinite(timers.now)) {
+      return timers.now;
+    }
+    if (timers && typeof timers.now === "function") {
+      try {
+        const value = Number(timers.now());
+        if (Number.isFinite(value)) return value;
+      } catch (_) {}
+    }
+    return Date.now();
+  }
+
+  function clearLockRetryWait(reason) {
+    const resolve = session.lockRetryResolve;
+    session.lockRetryResolve = null;
+    clearTimeout(session.lockRetryTimer);
+    session.lockRetryTimer = null;
+    if (typeof resolve === "function") {
+      resolve(reason || "cleared");
+    }
+  }
+
+  function clearLockTicker() {
+    clearTimeout(session.lockTickerTimer);
+    session.lockTickerTimer = null;
+  }
+
+  function dropLockWait(reason) {
+    clearLockTicker();
+    clearLockRetryWait(reason);
+    session.lockWait = null;
+    session.lockAttemptInFlight = false;
+  }
+
+  function startLockTicker() {
+    clearLockTicker();
+    const tick = () => {
+      session.lockTickerTimer = null;
+      if (session.closed || !session.lockWait) return;
+      notify();
+      session.lockTickerTimer = setTimeout(tick, GUARDED_UPDATE_LOCK_TICKER_MS);
+    };
+    session.lockTickerTimer = setTimeout(tick, GUARDED_UPDATE_LOCK_TICKER_MS);
+  }
+
+  function waitForRetry() {
+    return new Promise((resolve) => {
+      session.lockRetryResolve = resolve;
+      session.lockRetryTimer = setTimeout(() => {
+        session.lockRetryTimer = null;
+        session.lockRetryResolve = null;
+        resolve("timeout");
+      }, lockRetryMs);
+    });
+  }
+
+  function lockWaitSnapshot() {
+    if (!session.lockWait) return null;
+    return {
+      since: session.lockWait.since,
+      elapsedMs: Math.max(0, nowMs() - session.lockWait.since),
+      attempts: session.lockWait.attempts,
+      stopping: session.lockWait.stopping === true,
+    };
+  }
+
+  function finishLockWaitWithoutWrite(reason) {
+    const bobMessage = session.lockWait && typeof session.lockWait.message === "string"
+      ? session.lockWait.message
+      : "";
+    const message = reason === "budget"
+      ? (copy.lockWaitBudget || bobMessage)
+      : (copy.lockWaitStopped || bobMessage || "Stopped waiting for another Bob vault maintenance run.");
+    dropLockWait(reason);
+    session.lockNotice = {
+      message,
+      hint: copy.lockWaitHint || GUARDED_UPDATE_LOCK_WAIT_HINT,
+    };
+    session.status = "preview-ready";
+    session.refusal = null;
+    notify();
+    return {
+      ok: false,
+      code: reason === "budget" ? "lock-wait-budget" : "lock-wait-stopped",
+      message,
+      hint: session.lockNotice.hint,
+    };
   }
 
   function notify() {
@@ -143,11 +314,13 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       expect: session.expect,
       draftOps: session.draftOps.slice(),
       canApply: canApply(),
-      busy: session.status === "preview-pending" || session.status === "applying",
-      consequence: previewReport && session.status === "preview-ready"
+      busy: session.status === "preview-pending" || session.status === "applying" || Boolean(session.lockWait),
+      consequence: previewReport && (session.status === "preview-ready" || session.lockWait)
         ? String(previewReport.consequence || "")
         : "",
       preview: previewReport,
+      lockWait: lockWaitSnapshot(),
+      lockNotice: session.lockNotice ? { ...session.lockNotice } : null,
       refusal: session.refusal ? { ...session.refusal } : null,
       undoAvailable: Boolean(session.undo && Array.isArray(session.undo.inverseOps) && session.undo.inverseOps.length > 0),
       syncWarning: session.syncWarning ? { ...session.syncWarning } : null,
@@ -273,6 +446,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.revision += 1;
     session.draftOps = next;
     session.preview = null;
+    dropLockWait("superseded");
+    session.lockNotice = null;
     if (next.length === 0) {
       session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
       session.refusal = null;
@@ -313,6 +488,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.revision += 1;
     session.preview = null;
     session.refusal = null;
+    dropLockWait("superseded");
+    session.lockNotice = null;
     session.status = session.draftOps.length ? "draft" : (session.syncWarning ? "saved-with-sync-warning" : "browsing");
     clearPreviewTimer();
     notify();
@@ -333,6 +510,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     const epoch = session.epoch;
     const run = (async () => {
       session.status = "applying";
+      session.lockNotice = null;
       notify();
       if (typeof deps.saveEditors !== "function") {
         session.status = "refused";
@@ -378,77 +556,207 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
         await requestPreview();
         return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
       }
-      let outcome;
-      try {
-        outcome = await deps.spawnApply(identity, preview.envelopeText, { ownPath });
-      } catch (error) {
-        outcome = {
-          ok: false,
-          code: "failed",
-          message: error && error.message ? String(error.message) : copy.applyFailed,
-        };
-      }
-      if (session.closed || session.epoch !== epoch || session.revision !== preview.revision) {
-        return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
-      }
-      if (!outcome || outcome.ok !== true || !outcome.report) {
-        session.preview = null;
-        session.status = "refused";
-        const unknown = Boolean(outcome && (outcome.code === "timeout" || outcome.unknown === true));
-        session.refusal = {
-          kind: unknown ? "timeout-unknown" : "transport",
-          code: (outcome && outcome.code) || "failed",
-          message: (outcome && outcome.message) || copy.applyFailed,
-          hint: unknown
-            ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
-            : "Nothing was written. Refresh and preview again.",
-        };
+      let captured = preview;
+      let attempts = 0;
+      for (;;) {
+        if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+          dropLockWait("superseded");
+          return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+        }
+        if (session.lockWait && session.lockWait.stopping) {
+          return finishLockWaitWithoutWrite("stopped");
+        }
+        if (session.lockWait && nowMs() - session.lockWait.since >= lockWaitBudgetMs) {
+          return finishLockWaitWithoutWrite("budget");
+        }
+        if (session.lockWait && vaultGeneration() !== captured.generation) {
+          session.lockAttemptInFlight = true;
+          let dry;
+          try {
+            dry = await deps.spawnPreview(identity, captured.envelopeText);
+          } catch (error) {
+            dry = {
+              ok: false,
+              code: "failed",
+              message: error && error.message ? String(error.message) : copy.previewFailed,
+            };
+          }
+          session.lockAttemptInFlight = false;
+          if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+            dropLockWait("superseded");
+            return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+          }
+          if (session.lockWait && session.lockWait.stopping) {
+            return finishLockWaitWithoutWrite("stopped");
+          }
+          const dryReport = dry && dry.ok === true && dry.report && dry.report.ok === true ? dry.report : null;
+          if (dryReport && guardedUpdateSameConsequence(captured.report, dryReport)) {
+            captured = {
+              ...captured,
+              generation: vaultGeneration(),
+              report: dryReport,
+            };
+            session.preview = captured;
+            notify();
+          } else {
+            dropLockWait();
+            session.lockNotice = null;
+            if (dryReport) {
+              session.preview = {
+                epoch,
+                revision: captured.revision,
+                identity,
+                expect: captured.expect,
+                generation: vaultGeneration(),
+                envelopeText: captured.envelopeText,
+                report: dryReport,
+              };
+              session.status = "preview-ready";
+              session.refusal = null;
+              notify();
+              return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+            }
+            if (!dry || dry.ok !== true || !dry.report) {
+              session.preview = null;
+              session.status = "refused";
+              session.refusal = {
+                kind: dry && dry.code === "timeout" ? "timeout-unknown" : "transport",
+                code: (dry && dry.code) || "failed",
+                message: (dry && dry.message) || copy.previewFailed,
+                hint: copy.saveInvalidated,
+              };
+              notify();
+              return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+            }
+            const failure = failureFromReport(dry.report);
+            session.preview = null;
+            session.status = "refused";
+            session.refusal = refusalFromFailure("refused", failure, copy.previewRefused);
+            notify();
+            return { ok: false, code: "save-invalidated", message: copy.saveInvalidated };
+          }
+        }
+        attempts += 1;
+        if (session.lockWait) {
+          session.lockWait.attempts = attempts;
+        }
+        session.lockAttemptInFlight = true;
         notify();
-        return { ok: false, ...session.refusal };
-      }
-      const report = outcome.report;
-      if (report.ok !== true) {
-        const failure = failureFromReport(report);
-        session.preview = null;
-        session.status = "refused";
-        session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
-        notify();
-        return { ok: false, ...session.refusal };
-      }
-      if (report.changed !== true) {
+        let outcome;
+        try {
+          outcome = await deps.spawnApply(identity, captured.envelopeText, { ownPath });
+        } catch (error) {
+          outcome = {
+            ok: false,
+            code: "failed",
+            message: error && error.message ? String(error.message) : copy.applyFailed,
+          };
+        }
+        session.lockAttemptInFlight = false;
+        if (session.closed || session.epoch !== epoch || session.revision !== captured.revision) {
+          dropLockWait("superseded");
+          return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+        }
+        if (guardedUpdateIsLockBusy(outcome, failureFromReport)) {
+          const failure = failureFromReport(outcome.report) || {};
+          if (!session.lockWait) {
+            session.lockWait = {
+              since: nowMs(),
+              attempts,
+              message: typeof failure.message === "string" && failure.message
+                ? failure.message
+                : "another Bob vault maintenance run is already active",
+              stopping: false,
+            };
+            startLockTicker();
+          } else {
+            session.lockWait.attempts = attempts;
+            if (typeof failure.message === "string" && failure.message) {
+              session.lockWait.message = failure.message;
+            }
+          }
+          if (session.lockWait.stopping) {
+            return finishLockWaitWithoutWrite("stopped");
+          }
+          if (nowMs() - session.lockWait.since >= lockWaitBudgetMs) {
+            return finishLockWaitWithoutWrite("budget");
+          }
+          notify();
+          const waitReason = await waitForRetry();
+          if (!session.lockWait) {
+            if (session.lockNotice) {
+              return {
+                ok: false,
+                code: waitReason === "budget" ? "lock-wait-budget" : "lock-wait-stopped",
+                message: session.lockNotice.message,
+                hint: session.lockNotice.hint,
+              };
+            }
+            return { ok: false, code: "superseded", message: "A newer session superseded this apply." };
+          }
+          continue;
+        }
+        dropLockWait();
+        session.lockNotice = null;
+        if (!outcome || outcome.ok !== true || !outcome.report) {
+          session.preview = null;
+          session.status = "refused";
+          const unknown = Boolean(outcome && (outcome.code === "timeout" || outcome.unknown === true));
+          session.refusal = {
+            kind: unknown ? "timeout-unknown" : "transport",
+            code: (outcome && outcome.code) || "failed",
+            message: (outcome && outcome.message) || copy.applyFailed,
+            hint: unknown
+              ? "The outcome is unknown: refresh and explicitly reconcile before retrying. Never blind-retry."
+              : "Nothing was written. Refresh and preview again.",
+          };
+          notify();
+          return { ok: false, ...session.refusal };
+        }
+        const report = outcome.report;
+        if (report.ok !== true) {
+          const failure = failureFromReport(report);
+          session.preview = null;
+          session.status = "refused";
+          session.refusal = refusalFromFailure("refused", failure, copy.applyRefused);
+          notify();
+          return { ok: false, ...session.refusal };
+        }
+        if (report.changed !== true) {
+          session.revision += 1;
+          session.draftOps = [];
+          session.preview = null;
+          session.refusal = null;
+          session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+          notify();
+          return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
+        }
+        session.expect = String(report.after_fingerprint || session.expect);
+        session.undo = {
+          inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
+          afterFingerprint: String(report.after_fingerprint || ""),
+        };
         session.revision += 1;
         session.draftOps = [];
         session.preview = null;
         session.refusal = null;
-        session.status = session.syncWarning ? "saved-with-sync-warning" : "browsing";
+        const postSyncFailed = Boolean(
+          (report.sync && report.sync.post === "failed") ||
+          (Array.isArray(report.warnings) && report.warnings.some((warning) => /saved locally/i.test(String(warning)))),
+        );
+        if (postSyncFailed) {
+          session.syncWarning = {
+            message: "Saved locally; sync failed.",
+            hint: copy.syncWarningHint,
+          };
+          session.status = "saved-with-sync-warning";
+        } else {
+          session.syncWarning = null;
+          session.status = "browsing";
+        }
         notify();
-        return { ok: true, changed: false, report, refreshed: outcome.refreshed || null };
+        return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
       }
-      session.expect = String(report.after_fingerprint || session.expect);
-      session.undo = {
-        inverseOps: Array.isArray(report.inverse_ops) ? report.inverse_ops : [],
-        afterFingerprint: String(report.after_fingerprint || ""),
-      };
-      session.revision += 1;
-      session.draftOps = [];
-      session.preview = null;
-      session.refusal = null;
-      const postSyncFailed = Boolean(
-        (report.sync && report.sync.post === "failed") ||
-        (Array.isArray(report.warnings) && report.warnings.some((warning) => /saved locally/i.test(String(warning)))),
-      );
-      if (postSyncFailed) {
-        session.syncWarning = {
-          message: "Saved locally; sync failed.",
-          hint: copy.syncWarningHint,
-        };
-        session.status = "saved-with-sync-warning";
-      } else {
-        session.syncWarning = null;
-        session.status = "browsing";
-      }
-      notify();
-      return { ok: true, changed: true, report, refreshed: outcome.refreshed || null };
     })();
     session.applyPromise = run;
     try {
@@ -459,6 +767,8 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       }
       if (!session.closed && session.status === "applying") {
         session.status = "draft";
+        notify();
+      } else if (!session.closed && session.lockNotice && session.status === "preview-ready") {
         notify();
       }
     }
@@ -513,7 +823,22 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
     session.epoch += 1;
     session.closed = true;
     clearPreviewTimer();
+    dropLockWait("closed");
     session.previewFlight = null;
+  }
+
+  function stopWaiting() {
+    if (session.closed || !session.lockWait) {
+      return snapshot();
+    }
+    session.lockWait.stopping = true;
+    clearLockTicker();
+    clearLockRetryWait("stopped");
+    if (!session.lockAttemptInFlight) {
+      return finishLockWaitWithoutWrite("stopped"), snapshot();
+    }
+    notify();
+    return snapshot();
   }
 
   return {
@@ -523,6 +848,7 @@ function createGuardedUpdateSession(init = {}, deps = {}) {
       return requestPreview();
     },
     apply,
+    stopWaiting,
     stageUndo,
     retrySync,
     noteGenerationChanged,

@@ -525,6 +525,7 @@ function albumSchemaCardPaintStageStatus(card, options) {
 
 function albumSchemaCardStatusTone(state, options) {
   if (options?.enterLatched) return "is-previewing";
+  if (state?.lockWait || state?.lockNotice) return "is-previewing";
   if (options?.arrange?.saving || state?.status === "applying") {
     return state?.refusal ? "is-refused" : "is-previewing";
   }
@@ -554,9 +555,25 @@ function albumSchemaCardPaintStatus(card, options, doc) {
     host.setAttribute("class", cls);
   }
   let filled = false;
-  if (options?.enterLatched) {
+  const lockWaitText = typeof guardedUpdateLockWaitText === "function"
+    ? guardedUpdateLockWaitText(state.lockWait)
+    : "";
+  if (lockWaitText) {
+    notebookSetText(host, lockWaitText);
+    filled = true;
+  } else if (options?.enterLatched) {
     notebookSetText(host, "Saving as soon as bob confirms…");
     filled = true;
+  } else if (state.lockNotice && (state.lockNotice.message || state.lockNotice.hint)) {
+    const message = notebookCreateEl(doc, "p", "bob-album-schema-lock-notice");
+    notebookSetText(message, state.lockNotice.message || "Stopped waiting for another Bob vault maintenance run.");
+    host.appendChild(message);
+    filled = true;
+    if (state.lockNotice.hint) {
+      const hint = notebookCreateEl(doc, "p", "bob-album-schema-lock-notice-hint");
+      notebookSetText(hint, state.lockNotice.hint);
+      host.appendChild(hint);
+    }
   } else if (options?.arrange?.saving) {
     const pending = options.arrange.pendingText || "Saving…";
     notebookSetText(host, `Saving… · ${pending}`);
@@ -703,6 +720,14 @@ function albumSchemaCardHintItems(model, options) {
       { keys: "y", label: "YAML", action: "yaml" },
       { keys: "esc", label: "close", action: "close" },
     ];
+  }
+  if (state.lockWait) {
+    return [{
+      keys: "esc",
+      label: state.lockWait.stopping ? "stopping" : "stop waiting",
+      action: "stop-wait",
+      enabled: true,
+    }];
   }
   if (arrange?.saving) {
     return [{ keys: "Saving…", label: (arrange.pendingText || "Saving…").slice(0, 80) }];

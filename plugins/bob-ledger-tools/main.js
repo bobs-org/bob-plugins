@@ -10807,6 +10807,9 @@ function walkerFooterClearView(memo, options = {}) {
 // options it would pass to `freshnessFooterView`.
 function walkerFooterReviewView(memo, options = {}) {
   try {
+    if (memo && typeof memo === "object" && memo.tasksAvailable === false) {
+      return freshnessFooterHiddenView();
+    }
     const fromMemo =
       memo && Array.isArray(memo.queue) ? memo.queue : null;
     const fromOptions =

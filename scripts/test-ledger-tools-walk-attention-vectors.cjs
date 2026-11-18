@@ -56,6 +56,14 @@ const { helpers } = LedgerToolsPlugin;
 Module._load = originalLoad;
 
 const {
+  D: FRESHNESS_DAY,
+  LedgerToolsPlugin: FreshnessLedgerToolsPlugin,
+  makeFreshnessApp,
+  makeFreshnessTask,
+  withMissingConfig,
+} = require("./ledger-tools-harness.cjs");
+
+const {
   bankWalkBuildEntries,
   defaultPlanCaps,
   laneWalkQueueFromTasks,
@@ -70,6 +78,10 @@ const DAY = new Date(2026, 9, 28);
 const REVIEW_TIERS = [
   "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
 ];
+const [REVIEW_YEAR, REVIEW_MONTH, REVIEW_DAY_OF_MONTH] = FRESHNESS_DAY
+  .split("-")
+  .map(Number);
+const REVIEW_NOW = new Date(REVIEW_YEAR, REVIEW_MONTH - 1, REVIEW_DAY_OF_MONTH, 12);
 
 // Strip the plugin-only click hints so the assertion equals bob's
 // contract label (`docs/walks.md` "Labels").
@@ -110,6 +122,89 @@ function reviewMemo(byTier = {}, tasksAvailable = true) {
     queue,
     tasksAvailable,
   };
+}
+
+function freshnessTaskForTier(tier, index = 0) {
+  const name = `${tier}-${index + 1}`;
+  const base = {
+    path: `notes/review-${name}.md`,
+    lineNumber: 0,
+    description: `${tier} review fixture`,
+  };
+  switch (tier) {
+    case "pre":
+    case "post":
+      return makeFreshnessTask({
+        ...base,
+        tags: ["#gtd", `#${tier}`],
+        originalMarkdown: `- [ ] #gtd #${tier} ${name}`,
+      });
+    case "projects":
+      return makeFreshnessTask({
+        ...base,
+        tags: ["#prj"],
+        blockLink: " ^prj",
+        originalMarkdown: `- [ ] #prj ${name}`,
+      });
+    case "pending":
+      return makeFreshnessTask({
+        ...base,
+        status: { type: "IN_PROGRESS", name: "In Progress", symbol: "/" },
+        originalMarkdown: `- [/] #task ${name}`,
+      });
+    case "next":
+      return makeFreshnessTask({
+        ...base,
+        status: { type: "ON_HOLD", name: "Next", symbol: "*" },
+        originalMarkdown: `- [*] #task ${name}`,
+      });
+    case "recurring":
+      return makeFreshnessTask({
+        ...base,
+        recurrence: "every day",
+        scheduledDate: FRESHNESS_DAY,
+        originalMarkdown:
+          `- [ ] #task ${name} [repeat:: every day] [scheduled:: ${FRESHNESS_DAY}]`,
+      });
+    case "tickler":
+      return makeFreshnessTask({
+        ...base,
+        originalMarkdown:
+          `- [ ] #task ${name} [fresh:: 2026-10-06] [scheduled:: 2026-10-07]`,
+      });
+    case "rotten":
+      return makeFreshnessTask({
+        ...base,
+        originalMarkdown: `- [ ] #task ${name} [fresh:: 2026-10-01]`,
+      });
+    case "new":
+      return makeFreshnessTask({
+        ...base,
+        originalMarkdown: `- [ ] #task ${name}`,
+      });
+    default:
+      throw new Error(`Unknown review tier: ${tier}`);
+  }
+}
+
+function productionReviewMemo(tiers) {
+  const occurrences = new Map();
+  const tasks = tiers === null
+    ? null
+    : tiers.map((tier) => {
+      const index = occurrences.get(tier) || 0;
+      occurrences.set(tier, index + 1);
+      return freshnessTaskForTier(tier, index);
+    });
+  return withMissingConfig(() => {
+    const plugin = new FreshnessLedgerToolsPlugin(makeFreshnessApp({ tasks }), {});
+    plugin.onload();
+    try {
+      return plugin.freshnessEnsureMemo(REVIEW_NOW);
+    } finally {
+      plugin.onunload();
+    }
+  });
 }
 
 function pushReview({ mode = "w", byTier = {}, memo = null } = {}) {
@@ -266,6 +361,75 @@ test("s attention matches the review footer's non-clear walk across tier fixture
     const view = walkerFooterReviewView(memo, { navAvailable: true });
     assert.equal(attention !== null, view.mode !== "clear", JSON.stringify(byTier));
   }
+});
+
+test("production memo counts, tier order, attention, and labels match all review fixtures", () => {
+  const fixtures = [
+    { name: "PRE alone", tiers: ["pre"], label: "Review: 1 due · 1 commitment — PRE first" },
+    { name: "NEW alone", tiers: ["new"], label: "Review: 1 due · 1 commitment — NEW first" },
+    { name: "PROJECTS alone", tiers: ["projects"], label: "Review: 1 due · 1 commitment — PROJECTS first" },
+    { name: "PENDING alone", tiers: ["pending"], label: "Review: 1 due · 1 commitment — WIP first" },
+    { name: "NEXT alone", tiers: ["next"], label: "Review: 1 due · 1 commitment — NEXT first" },
+    { name: "RECURRING alone", tiers: ["recurring"], label: "Review: 1 due · 1 commitment — RECUR first" },
+    { name: "TICKLER alone", tiers: ["tickler"], label: "Review: 1 due · 1 commitment — TICKS first" },
+    { name: "ROTTEN alone", tiers: ["rotten"], label: "Review: 1 due · commitments done — ROTTEN first" },
+    { name: "POST alone", tiers: ["post"], label: "Review: 1 due · commitments done — POST first" },
+    { name: "S1", tiers: ["rotten"], label: "Review: 1 due · commitments done — ROTTEN first" },
+    { name: "S2", tiers: ["post"], label: "Review: 1 due · commitments done — POST first" },
+    { name: "S3", tiers: ["new", "rotten"], label: "Review: 2 due · 1 commitment — NEW first" },
+    { name: "S4", tiers: ["pre", "next", "next"], label: "Review: 3 due · 3 commitments — PRE first" },
+    { name: "S5", tiers: ["tickler", "tickler"], label: "Review: 2 due · 2 commitments — TICKS first" },
+    { name: "S6", tiers: ["rotten", "rotten", "post"], label: "Review: 3 due · commitments done — ROTTEN first" },
+    { name: "S7", tiers: [], label: null },
+  ];
+
+  for (const fixture of fixtures) {
+    const memo = productionReviewMemo(fixture.tiers);
+    const expectedTiers = fixture.tiers;
+    assert.equal(memo.tasksAvailable, true, `${fixture.name}: tasks available`);
+    assert.equal(memo.dateText, FRESHNESS_DAY, `${fixture.name}: pinned local date`);
+    assert.equal(memo.counts.walk, memo.queue.length, `${fixture.name}: memo count matches real queue`);
+    assert.equal(memo.counts.walk, expectedTiers.length, `${fixture.name}: expected fixture count`);
+    assert.deepEqual(
+      memo.queue.map((entry) => entry.tier),
+      expectedTiers,
+      `${fixture.name}: production queue tier order`,
+    );
+
+    const view = walkerFooterReviewView(memo, { navAvailable: true });
+    assert.equal(view.mode === "clear", expectedTiers.length === 0, `${fixture.name}: footer clear state`);
+    for (const mode of ["s", "w"]) {
+      const value = pushReview({ mode, memo });
+      assert.equal(
+        value !== null,
+        view.mode !== "clear",
+        `${fixture.name}: ${mode} attention follows footer state`,
+      );
+      if (fixture.label !== null) {
+        assert.equal(value.tier, expectedTiers[0], `${fixture.name}: first tier`);
+        assert.equal(
+          value.label,
+          mode === "s" ? fixture.label : `${fixture.label}; click to show`,
+          `${fixture.name}: ${mode} label`,
+        );
+      }
+    }
+  }
+});
+
+test("unavailable Tasks data clears s and stays distinct from an available empty walk", () => {
+  const unavailable = productionReviewMemo(null);
+  const unavailableView = walkerFooterReviewView(unavailable, { navAvailable: true });
+  assert.equal(unavailable.tasksAvailable, false);
+  assert.equal(unavailable.queue.length, 0);
+  assert.equal(unavailableView.mode, "hidden");
+  assert.equal(pushReview({ memo: unavailable }), null);
+
+  const empty = productionReviewMemo([]);
+  const emptyView = walkerFooterReviewView(empty, { navAvailable: true });
+  assert.equal(empty.tasksAvailable, true);
+  assert.equal(emptyView.mode, "clear");
+  assert.equal(pushReview({ memo: empty }), null);
 });
 
 test("s stays off when a positive walk count has no known tier", () => {

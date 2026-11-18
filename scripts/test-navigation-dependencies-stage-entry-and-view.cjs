@@ -23,6 +23,34 @@ const {
   validateBulletPropertyConfig,
 } = require("./navigation-dependencies-stage-harness.cjs");
 
+// CPU-work clock for the stage-ranker gate. Same convention as the stable
+// Task Wikilink Index benchmarks in task-wikilink-index-perf-support.cjs:
+// prefer per-thread CPU accounting when the runtime offers it, else fall
+// back to process-wide CPU. Either way the clock advances only on this
+// process's own work, never while it waits for a CPU under parallel
+// `node --test` load.
+function rankerCpuClockSource() {
+  return typeof process.threadCpuUsage === "function" ? "threadCpuUsage" : "process.cpuUsage";
+}
+
+function rankerCpuTimeMs() {
+  const usage =
+    typeof process.threadCpuUsage === "function" ? process.threadCpuUsage() : process.cpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+function rankerHostLoad() {
+  let load = "n/a";
+  let cpus = "n/a";
+  try {
+    load = require("node:os").loadavg().map((value) => value.toFixed(1)).join("/");
+    cpus = String(require("node:os").cpus().length);
+  } catch (error) {
+    // Diagnostics only; the gate never depends on host metadata.
+  }
+  return `${load} on ${cpus} cpus`;
+}
+
 test("stage entry resolves the line itself and refuses prose", () => {
   const content = [
     "- [?] #task Dependent ^dependent",
@@ -518,27 +546,67 @@ test("stage ranker filters 1,000 synthetic tasks under 16 ms per keystroke", () 
     });
   }
   // Warm up JIT compilation before timing: a single cold call absorbs
-  // compilation plus any parallel-test CPU contention, which flaked the old
-  // one-shot assertion under `npm test` (bob-cli-3w). Time several warmed
-  // runs and assert on the minimum, so transient scheduling noise cannot
-  // fail the gate while a real ranker slowdown still pushes every sample
-  // over budget.
+  // compilation, which flaked the old one-shot assertion under
+  // `npm test` (bob-cli-3w). The gate asserts on CPU work, not wall time:
+  // under parallel-test load this process waits for a CPU while other
+  // files burn theirs, so wall time charges scheduler contention to the
+  // ranker and best-of-seven wall still missed (16.09 ms on 2026-11-17).
+  // The CPU clock below advances only on this process's own work, so
+  // descheduling cannot consume the budget while a real ranker slowdown
+  // still pushes every sample over it. Warmed wall samples stay as
+  // diagnostics.
   for (let i = 0; i < 3; i += 1) {
     dependencyStageRank(pool, "synthetic cash");
   }
-  const samples = [];
+  const cpuSamples = [];
+  const wallSamples = [];
   let ranked = [];
   for (let i = 0; i < 7; i += 1) {
-    const start = process.hrtime.bigint();
+    const cpuStart = rankerCpuTimeMs();
+    const wallStart = process.hrtime.bigint();
     ranked = dependencyStageRank(pool, "synthetic cash");
-    samples.push(Number(process.hrtime.bigint() - start) / 1e6);
+    wallSamples.push(Number(process.hrtime.bigint() - wallStart) / 1e6);
+    cpuSamples.push(rankerCpuTimeMs() - cpuStart);
   }
-  const elapsedMs = Math.min(...samples);
+  const cpuMs = Math.min(...cpuSamples);
+  const wallMs = Math.min(...wallSamples);
   assert.ok(ranked.length > 0, "synthetic pool matches");
   assert.ok(
-    elapsedMs < 16,
-    `filtering 1,000 tasks took ${elapsedMs.toFixed(2)} ms` +
-      ` (best of ${samples.length}: ${samples.map((sample) => sample.toFixed(2)).join(", ")} ms; budget 16 ms)`,
+    cpuMs < 16,
+    `filtering 1,000 tasks took ${cpuMs.toFixed(2)} ms CPU` +
+      ` (best of ${cpuSamples.length}: ${cpuSamples.map((sample) => sample.toFixed(2)).join(", ")} ms CPU;` +
+      ` wall best ${wallMs.toFixed(2)} ms of ${wallSamples.map((sample) => sample.toFixed(2)).join(", ")} ms;` +
+      ` budget 16 ms; clock ${rankerCpuClockSource()}; load ${rankerHostLoad()})`,
+  );
+});
+
+// The gate above is only meaningful if its clock separates scheduling
+// noise from CPU work (bob-cli-3w). Park the thread past the whole budget
+// in wall time without burning CPU: the budget must survive. Then burn
+// past the budget in real CPU work: the same budget must fail.
+test("ranker cpu clock charges cpu work, not descheduling", () => {
+  const parkedStart = rankerCpuTimeMs();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  const parkedCpuMs = rankerCpuTimeMs() - parkedStart;
+  assert.ok(
+    parkedCpuMs < 16,
+    `50 ms parked sleep charged ${parkedCpuMs.toFixed(2)} ms CPU (budget 16 ms)`,
+  );
+  let accumulator = 0;
+  const spinStart = rankerCpuTimeMs();
+  const wallDeadline = Date.now() + 15000;
+  let spinCpuMs = 0;
+  while (spinCpuMs < 25) {
+    for (let i = 0; i < 100000; i += 1) {
+      accumulator += Math.sqrt(i % 97);
+    }
+    spinCpuMs = rankerCpuTimeMs() - spinStart;
+    assert.ok(Date.now() < wallDeadline, "cpu spin exceeded 15 s wall time");
+  }
+  assert.ok(accumulator > 0, "spin work ran");
+  assert.ok(
+    spinCpuMs > 16,
+    `spin burned ${spinCpuMs.toFixed(2)} ms CPU but stayed under the 16 ms budget`,
   );
 });
 

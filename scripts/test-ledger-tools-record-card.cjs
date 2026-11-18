@@ -589,7 +589,7 @@ test("= closes before schema; YAML Done restores and reopens the same field", as
   modal.recordSelect("url");
   await modal.recordSchema();
   assert.equal(modal.closed, true);
-  assert.deepEqual(plugin._schemaOpens[0], { filePath: "eat/smashburger.md" });
+  assert.deepEqual(plugin._schemaOpens[0], { filePath: "eat/smashburger.md", field: "url" });
   const opened = await plugin.openRecordCard({ filePath: "eat/smashburger.md", field: "url" });
   await pause(0);
   await opened.modal.recordYaml();

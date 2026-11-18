@@ -9,6 +9,7 @@ const RECORD_CARD_SAVED_TEXT = "✓ Saved · u undo";
 const RECORD_CARD_STALE_TEXT = "This record changed elsewhere — refreshed; your draft is kept · ↵ retry";
 const RECORD_CARD_CAPABILITY_TEXT = "Update bob to edit here";
 const RECORD_CARD_TYPED_STAGE_HINT = "YAML is the available edit route until this field's typed stage exists.";
+const RECORD_CARD_DIGIT_TEACH = "Digits pick a choice on choice fields";
 const RECORD_CARD_NON_RECORD_NOTICE = "Open a record note to edit its fields.";
 const RECORD_CARD_MOBILE_NOTICE = "Record editing needs desktop Obsidian.";
 const RECORD_CARD_NO_REPORT_NOTICE = "This record is not in the album report — run Sync albums and retry.";
@@ -34,7 +35,17 @@ function recordCardFieldKind(field) {
 }
 
 function recordCardStageKindFor(field) {
-  return recordCardFieldKind(field) === "choices" ? "choices" : null;
+  if (!field) return "text";
+  if (field.list === true) return "list";
+  if (recordCardIsChoiceField(field)) return "choices";
+  const kind = String(field.kind || "text").toLowerCase();
+  if (kind === "choice" || kind === "choices") return "choices";
+  if (kind === "text" && field.suggest === true) return "suggest";
+  if (kind === "date") return "date";
+  if (kind === "number") return "number";
+  if (kind === "url") return "url";
+  if (kind === "link") return "link";
+  return "text";
 }
 
 function recordCardAlbumFields(sheetModel) {
@@ -242,11 +253,21 @@ function recordCardHintItems(state) {
       { keys: "y", label: "YAML", action: "yaml" },
     ];
   }
+  if (state && state.stage) {
+    return [
+      { keys: "⏎", label: "save", action: "save-stage" },
+      { keys: "⇥", label: "save+next", action: "save-next" },
+      { keys: "esc/q", label: "cancel", action: "cancel-stage" },
+      { keys: "y", label: "YAML", action: "yaml" },
+    ];
+  }
   const items = [{ keys: "j/k", label: "fields" }];
   if (target && target.kind === "choices" && writable) {
     items.push({ keys: "⏎", label: "choices", action: "open-stage" });
     const count = Math.min(Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0, 9);
     if (count > 0) items.push({ keys: count === 1 ? "1" : `1–${count}`, label: "pick" });
+  } else if (target && writable && target.stageKind) {
+    items.push({ keys: "⏎", label: "edit", action: "open-stage" });
   } else if (target) {
     items.push({ keys: "⏎", label: "YAML", action: "open-stage" });
   }
@@ -270,8 +291,19 @@ function recordCardAllActions(state) {
   const writable = state && state.writable === true;
   const applying = state && state.pendingApply === true;
   const actions = [];
-  if (target && target.kind === "choices") {
-    actions.push({ action: "open-stage", text: "Open choices", enabled: writable && !applying });
+  actions.push({ action: "prev-field", text: "Previous field", enabled: !applying });
+  actions.push({ action: "next-field", text: "Next field", enabled: !applying });
+  if (target && target.stageKind) {
+    const names = {
+      choices: "Open choices", text: "Edit text", suggest: "Edit suggestion",
+      date: "Edit date", number: "Edit number", url: "Edit URL",
+      link: "Edit link", list: "Edit list",
+    };
+    actions.push({
+      action: "open-stage",
+      text: names[target.stageKind] || "Edit field",
+      enabled: writable && !applying,
+    });
   } else if (target) {
     actions.push({
       action: "open-stage",
@@ -298,6 +330,11 @@ function recordCardAllActions(state) {
   actions.push({ action: "schema", text: "Album schema", enabled: !applying });
   if (state && state.statusKind === "stale") {
     actions.push({ action: "retry", text: "Retry", enabled: writable && !applying });
+  }
+  if (state && state.stage && state.stage.kind !== "choices") {
+    actions.push({ action: "save-stage", text: "Save", enabled: writable && !applying });
+    actions.push({ action: "save-next", text: "Save + next", enabled: writable && !applying });
+    actions.push({ action: "save-prev", text: "Save + prev", enabled: writable && !applying });
   }
   if (state && state.stage) {
     actions.push({ action: "cancel-stage", text: "Cancel", enabled: !applying });
@@ -343,6 +380,9 @@ function recordCardCaptureStage(state) {
     selectedChoice: state.selectedChoice || "",
     draft: state.stageDraft || "",
     caret: state.stageCaret || null,
+    text: state.stageDraftText != null ? String(state.stageDraftText) : "",
+    list: Array.isArray(state.stageList) ? state.stageList.slice() : [],
+    itemDraft: state.stageItemDraft != null ? String(state.stageItemDraft) : "",
   };
 }
 
@@ -381,4 +421,112 @@ function recordCardGateNotice(gate) {
 
 function recordCardWritable(gate) {
   return Boolean(gate && gate.mount === true && gate.editable === true && gate.state === "ready");
+}
+
+function recordCardShiftStep(targets, selectedKey, delta) {
+  const rows = Array.isArray(targets) ? targets : [];
+  if (!rows.length) return null;
+  let index = rows.findIndex((target) => target.key === selectedKey);
+  if (index < 0) index = Number(delta) < 0 ? rows.length : -1;
+  const next = index + (Number(delta) < 0 ? -1 : 1);
+  if (next < 0 || next >= rows.length) return null;
+  return rows[next].key;
+}
+
+function recordCardShiftAnnouncement(target, index, total) {
+  const label = (target && (target.label || target.key)) || "Field";
+  return `${label}, field ${index + 1} of ${total}`;
+}
+
+function recordCardSeedText(target) {
+  const property = target && target.property;
+  if (property && typeof property.raw === "string" && property.state === "invalid") return property.raw;
+  if (property && property.value !== null && property.value !== undefined) {
+    if (typeof property.value === "string") return property.value;
+    if (typeof property.value === "number") return String(property.value);
+    return "";
+  }
+  if (target && typeof target.raw === "string") return target.raw;
+  const value = target && target.value;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function recordCardSeedList(target) {
+  const property = target && target.property;
+  const value = property && property.value !== undefined ? property.value : (target && target.value);
+  if (Array.isArray(value)) return value.map((item) => String(item == null ? "" : item));
+  if (typeof value === "string" && value) return [value];
+  if (property && typeof property.raw === "string" && property.raw) return [property.raw];
+  return [];
+}
+
+function recordCardSeedStage(target) {
+  if (!target) return { text: "", list: [], filter: "", itemDraft: "", selectedChoice: "" };
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  if (kind === "list") return { text: "", list: recordCardSeedList(target), filter: "", itemDraft: "", selectedChoice: "" };
+  if (kind === "choices") {
+    const value = target.value != null ? String(target.value) : "";
+    return { text: "", list: [], filter: "", itemDraft: "", selectedChoice: value };
+  }
+  return { text: recordCardSeedText(target), list: [], filter: "", itemDraft: "", selectedChoice: "" };
+}
+
+function recordCardIsEmptyScalarText(text) {
+  return String(text == null ? "" : text) === "";
+}
+
+function recordCardBuildOps(target, draft) {
+  if (!target || !target.key) return { ok: false, code: "missing-target", message: "No field is selected." };
+  const key = target.key;
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  const required = target.required === true;
+  const list = target.field && target.field.list === true;
+  if (list || kind === "list") {
+    const items = Array.isArray(draft && draft.list) ? draft.list : [];
+    const pending = String((draft && draft.itemDraft) || "");
+    const full = pending ? [...items, pending] : items.slice();
+    if (!full.length) {
+      if (required) {
+        return { ok: false, code: "required", message: `${target.label || key} is required`, hint: "", emptyList: true };
+      }
+      return { ok: true, ops: [{ op: "field.unset", field: key }], empty: true };
+    }
+    return { ok: true, ops: [{ op: "field.set", field: key, value: full.map((item) => String(item)) }] };
+  }
+  let text = draft && draft.text !== undefined ? String(draft.text) : recordCardSeedText(target);
+  if (kind === "choices" && draft && draft.selectedChoice !== undefined) {
+    text = String(draft.selectedChoice || "");
+  }
+  if (recordCardIsEmptyScalarText(text)) {
+    if (required) {
+      const count = Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0;
+      const message = target.kind === "choices" && count
+        ? `${target.label || key} is required — pick one of ${count} choices`
+        : `${target.label || key} is required`;
+      return { ok: false, code: "required", message, hint: "" };
+    }
+    return { ok: true, ops: [{ op: "field.unset", field: key }], empty: true };
+  }
+  return { ok: true, ops: [{ op: "field.set", field: key, value: text }] };
+}
+
+function recordCardDraftEqualsSeed(target, draft) {
+  if (!target) return true;
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  if (kind === "list" || (target.field && target.field.list === true)) {
+    const seed = recordCardSeedList(target);
+    const items = Array.isArray(draft && draft.list) ? draft.list : [];
+    const pending = String((draft && draft.itemDraft) || "");
+    if (pending) return false;
+    if (seed.length !== items.length) return false;
+    return seed.every((item, index) => String(item) === String(items[index]));
+  }
+  if (kind === "choices") {
+    const seed = target.value != null ? String(target.value) : "";
+    const current = draft && draft.selectedChoice !== undefined ? String(draft.selectedChoice || "") : seed;
+    return current === seed;
+  }
+  return String((draft && draft.text) ?? "") === recordCardSeedText(target);
 }

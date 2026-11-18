@@ -957,7 +957,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 }
 
 class BobLedgerToolsAlbumSchemaCardMixin {
-  openAlbumSchemaCard(model, sourcePath) {
+  openAlbumSchemaCard(model, sourcePath, options = {}) {
     if (!this.albumHeaderDesktop()) return { ok: false, reason: "mobile" };
     if (!model) return { ok: false, reason: "missing model" };
     try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
@@ -966,6 +966,17 @@ class BobLedgerToolsAlbumSchemaCardMixin {
       sourcePath: sourcePath || model.path,
       plugin: this,
     });
+    const field = options && typeof options.field === "string" ? options.field : "";
+    if (field) {
+      try {
+        const targets = typeof modal.schemaTargets === "function" ? modal.schemaTargets() : [];
+        const want = `field:${field}`;
+        if (targets.some((target) => target && target.key === want)) {
+          modal.selectedKey = want;
+          modal.selectedIndex = Math.max(0, targets.findIndex((target) => target && target.key === want));
+        }
+      } catch (_) {}
+    }
     this.albumSchemaCardModal = modal;
     try { modal.open(); } catch (_) {}
     return { ok: true, modal };

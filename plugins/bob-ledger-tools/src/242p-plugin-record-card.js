@@ -25,6 +25,12 @@ class RecordCardModal extends RecordCardModalBase {
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
+    this.stageDraftText = "";
+    this.stageList = [];
+    this.stageItemDraft = "";
+    this.stagePreview = null;
+    this.stageEnterSeq = 0;
+    this.pendingTab = null;
     this.menuOpen = false;
     this.session = null;
     this.sessionState = null;

@@ -68477,7 +68477,8 @@ class BobLedgerToolsAlbumEntryMixin {
       return { ok: false, reason: "unavailable", albumPath: target.albumPath };
     }
     try {
-      return this.openAlbumSchemaCard(model, target.albumPath);
+      const field = typeof options.field === "string" ? options.field : "";
+      return this.openAlbumSchemaCard(model, target.albumPath, field ? { field } : {});
     } catch (error) {
       try { new Notice("Could not open the Schema Card."); } catch (_) {}
       return { ok: false, reason: "open-failed", albumPath: target.albumPath };
@@ -96900,7 +96901,7 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
 }
 
 class BobLedgerToolsAlbumSchemaCardMixin {
-  openAlbumSchemaCard(model, sourcePath) {
+  openAlbumSchemaCard(model, sourcePath, options = {}) {
     if (!this.albumHeaderDesktop()) return { ok: false, reason: "mobile" };
     if (!model) return { ok: false, reason: "missing model" };
     try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
@@ -96909,6 +96910,17 @@ class BobLedgerToolsAlbumSchemaCardMixin {
       sourcePath: sourcePath || model.path,
       plugin: this,
     });
+    const field = options && typeof options.field === "string" ? options.field : "";
+    if (field) {
+      try {
+        const targets = typeof modal.schemaTargets === "function" ? modal.schemaTargets() : [];
+        const want = `field:${field}`;
+        if (targets.some((target) => target && target.key === want)) {
+          modal.selectedKey = want;
+          modal.selectedIndex = Math.max(0, targets.findIndex((target) => target && target.key === want));
+        }
+      } catch (_) {}
+    }
     this.albumSchemaCardModal = modal;
     try { modal.open(); } catch (_) {}
     return { ok: true, modal };
@@ -102226,6 +102238,7 @@ const RECORD_CARD_SAVED_TEXT = "✓ Saved · u undo";
 const RECORD_CARD_STALE_TEXT = "This record changed elsewhere — refreshed; your draft is kept · ↵ retry";
 const RECORD_CARD_CAPABILITY_TEXT = "Update bob to edit here";
 const RECORD_CARD_TYPED_STAGE_HINT = "YAML is the available edit route until this field's typed stage exists.";
+const RECORD_CARD_DIGIT_TEACH = "Digits pick a choice on choice fields";
 const RECORD_CARD_NON_RECORD_NOTICE = "Open a record note to edit its fields.";
 const RECORD_CARD_MOBILE_NOTICE = "Record editing needs desktop Obsidian.";
 const RECORD_CARD_NO_REPORT_NOTICE = "This record is not in the album report — run Sync albums and retry.";
@@ -102251,7 +102264,17 @@ function recordCardFieldKind(field) {
 }
 
 function recordCardStageKindFor(field) {
-  return recordCardFieldKind(field) === "choices" ? "choices" : null;
+  if (!field) return "text";
+  if (field.list === true) return "list";
+  if (recordCardIsChoiceField(field)) return "choices";
+  const kind = String(field.kind || "text").toLowerCase();
+  if (kind === "choice" || kind === "choices") return "choices";
+  if (kind === "text" && field.suggest === true) return "suggest";
+  if (kind === "date") return "date";
+  if (kind === "number") return "number";
+  if (kind === "url") return "url";
+  if (kind === "link") return "link";
+  return "text";
 }
 
 function recordCardAlbumFields(sheetModel) {
@@ -102459,11 +102482,21 @@ function recordCardHintItems(state) {
       { keys: "y", label: "YAML", action: "yaml" },
     ];
   }
+  if (state && state.stage) {
+    return [
+      { keys: "⏎", label: "save", action: "save-stage" },
+      { keys: "⇥", label: "save+next", action: "save-next" },
+      { keys: "esc/q", label: "cancel", action: "cancel-stage" },
+      { keys: "y", label: "YAML", action: "yaml" },
+    ];
+  }
   const items = [{ keys: "j/k", label: "fields" }];
   if (target && target.kind === "choices" && writable) {
     items.push({ keys: "⏎", label: "choices", action: "open-stage" });
     const count = Math.min(Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0, 9);
     if (count > 0) items.push({ keys: count === 1 ? "1" : `1–${count}`, label: "pick" });
+  } else if (target && writable && target.stageKind) {
+    items.push({ keys: "⏎", label: "edit", action: "open-stage" });
   } else if (target) {
     items.push({ keys: "⏎", label: "YAML", action: "open-stage" });
   }
@@ -102487,8 +102520,19 @@ function recordCardAllActions(state) {
   const writable = state && state.writable === true;
   const applying = state && state.pendingApply === true;
   const actions = [];
-  if (target && target.kind === "choices") {
-    actions.push({ action: "open-stage", text: "Open choices", enabled: writable && !applying });
+  actions.push({ action: "prev-field", text: "Previous field", enabled: !applying });
+  actions.push({ action: "next-field", text: "Next field", enabled: !applying });
+  if (target && target.stageKind) {
+    const names = {
+      choices: "Open choices", text: "Edit text", suggest: "Edit suggestion",
+      date: "Edit date", number: "Edit number", url: "Edit URL",
+      link: "Edit link", list: "Edit list",
+    };
+    actions.push({
+      action: "open-stage",
+      text: names[target.stageKind] || "Edit field",
+      enabled: writable && !applying,
+    });
   } else if (target) {
     actions.push({
       action: "open-stage",
@@ -102515,6 +102559,11 @@ function recordCardAllActions(state) {
   actions.push({ action: "schema", text: "Album schema", enabled: !applying });
   if (state && state.statusKind === "stale") {
     actions.push({ action: "retry", text: "Retry", enabled: writable && !applying });
+  }
+  if (state && state.stage && state.stage.kind !== "choices") {
+    actions.push({ action: "save-stage", text: "Save", enabled: writable && !applying });
+    actions.push({ action: "save-next", text: "Save + next", enabled: writable && !applying });
+    actions.push({ action: "save-prev", text: "Save + prev", enabled: writable && !applying });
   }
   if (state && state.stage) {
     actions.push({ action: "cancel-stage", text: "Cancel", enabled: !applying });
@@ -102560,6 +102609,9 @@ function recordCardCaptureStage(state) {
     selectedChoice: state.selectedChoice || "",
     draft: state.stageDraft || "",
     caret: state.stageCaret || null,
+    text: state.stageDraftText != null ? String(state.stageDraftText) : "",
+    list: Array.isArray(state.stageList) ? state.stageList.slice() : [],
+    itemDraft: state.stageItemDraft != null ? String(state.stageItemDraft) : "",
   };
 }
 
@@ -102598,6 +102650,114 @@ function recordCardGateNotice(gate) {
 
 function recordCardWritable(gate) {
   return Boolean(gate && gate.mount === true && gate.editable === true && gate.state === "ready");
+}
+
+function recordCardShiftStep(targets, selectedKey, delta) {
+  const rows = Array.isArray(targets) ? targets : [];
+  if (!rows.length) return null;
+  let index = rows.findIndex((target) => target.key === selectedKey);
+  if (index < 0) index = Number(delta) < 0 ? rows.length : -1;
+  const next = index + (Number(delta) < 0 ? -1 : 1);
+  if (next < 0 || next >= rows.length) return null;
+  return rows[next].key;
+}
+
+function recordCardShiftAnnouncement(target, index, total) {
+  const label = (target && (target.label || target.key)) || "Field";
+  return `${label}, field ${index + 1} of ${total}`;
+}
+
+function recordCardSeedText(target) {
+  const property = target && target.property;
+  if (property && typeof property.raw === "string" && property.state === "invalid") return property.raw;
+  if (property && property.value !== null && property.value !== undefined) {
+    if (typeof property.value === "string") return property.value;
+    if (typeof property.value === "number") return String(property.value);
+    return "";
+  }
+  if (target && typeof target.raw === "string") return target.raw;
+  const value = target && target.value;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function recordCardSeedList(target) {
+  const property = target && target.property;
+  const value = property && property.value !== undefined ? property.value : (target && target.value);
+  if (Array.isArray(value)) return value.map((item) => String(item == null ? "" : item));
+  if (typeof value === "string" && value) return [value];
+  if (property && typeof property.raw === "string" && property.raw) return [property.raw];
+  return [];
+}
+
+function recordCardSeedStage(target) {
+  if (!target) return { text: "", list: [], filter: "", itemDraft: "", selectedChoice: "" };
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  if (kind === "list") return { text: "", list: recordCardSeedList(target), filter: "", itemDraft: "", selectedChoice: "" };
+  if (kind === "choices") {
+    const value = target.value != null ? String(target.value) : "";
+    return { text: "", list: [], filter: "", itemDraft: "", selectedChoice: value };
+  }
+  return { text: recordCardSeedText(target), list: [], filter: "", itemDraft: "", selectedChoice: "" };
+}
+
+function recordCardIsEmptyScalarText(text) {
+  return String(text == null ? "" : text) === "";
+}
+
+function recordCardBuildOps(target, draft) {
+  if (!target || !target.key) return { ok: false, code: "missing-target", message: "No field is selected." };
+  const key = target.key;
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  const required = target.required === true;
+  const list = target.field && target.field.list === true;
+  if (list || kind === "list") {
+    const items = Array.isArray(draft && draft.list) ? draft.list : [];
+    const pending = String((draft && draft.itemDraft) || "");
+    const full = pending ? [...items, pending] : items.slice();
+    if (!full.length) {
+      if (required) {
+        return { ok: false, code: "required", message: `${target.label || key} is required`, hint: "", emptyList: true };
+      }
+      return { ok: true, ops: [{ op: "field.unset", field: key }], empty: true };
+    }
+    return { ok: true, ops: [{ op: "field.set", field: key, value: full.map((item) => String(item)) }] };
+  }
+  let text = draft && draft.text !== undefined ? String(draft.text) : recordCardSeedText(target);
+  if (kind === "choices" && draft && draft.selectedChoice !== undefined) {
+    text = String(draft.selectedChoice || "");
+  }
+  if (recordCardIsEmptyScalarText(text)) {
+    if (required) {
+      const count = Array.isArray(target.field && target.field.choices) ? target.field.choices.length : 0;
+      const message = target.kind === "choices" && count
+        ? `${target.label || key} is required — pick one of ${count} choices`
+        : `${target.label || key} is required`;
+      return { ok: false, code: "required", message, hint: "" };
+    }
+    return { ok: true, ops: [{ op: "field.unset", field: key }], empty: true };
+  }
+  return { ok: true, ops: [{ op: "field.set", field: key, value: text }] };
+}
+
+function recordCardDraftEqualsSeed(target, draft) {
+  if (!target) return true;
+  const kind = target.stageKind || recordCardStageKindFor(target.field);
+  if (kind === "list" || (target.field && target.field.list === true)) {
+    const seed = recordCardSeedList(target);
+    const items = Array.isArray(draft && draft.list) ? draft.list : [];
+    const pending = String((draft && draft.itemDraft) || "");
+    if (pending) return false;
+    if (seed.length !== items.length) return false;
+    return seed.every((item, index) => String(item) === String(items[index]));
+  }
+  if (kind === "choices") {
+    const seed = target.value != null ? String(target.value) : "";
+    const current = draft && draft.selectedChoice !== undefined ? String(draft.selectedChoice || "") : seed;
+    return current === seed;
+  }
+  return String((draft && draft.text) ?? "") === recordCardSeedText(target);
 }
 // ---- src/242o-plugin-record-card-dom.js ----
 // Record Card DOM: bob-key-card chrome, sheet value renderers, choices
@@ -102843,6 +103003,46 @@ function recordCardPaintStage(card, options, doc) {
     if (inline && host !== inline) recordCardRegionEmpty(host);
     return;
   }
+  if (options.stage.kind && options.stage.kind !== "choices") {
+    const stageTarget = (options.targets || []).find((row) => row.key === options.stage.field)
+      || options.status?.target
+      || null;
+    if (stageTarget && typeof recordCardPaintTypedStage === "function") {
+      const inlineHost = inline || host;
+      recordCardPaintTypedStage(doc, inlineHost, {
+        kind: options.stage.kind,
+        target: stageTarget,
+        draft: {
+          text: options.stageDraftText ?? options.draftText ?? "",
+          list: options.stageList || options.draftList || [],
+          itemDraft: options.stageItemDraft ?? options.draftItemDraft ?? "",
+          selectedChoice: options.selectedChoice || "",
+        },
+        reportField: options.reportField || null,
+        preview: options.stagePreview || null,
+        plugin: options.plugin || null,
+        recordPath: options.recordPath || "",
+        applying: options.status?.pendingApply === true,
+      });
+      if (inline && host !== inline) recordCardRegionEmpty(host);
+      try {
+        const input = inlineHost.querySelector?.("[data-record-input^='stage-']");
+        if (input && options.focusStage !== false && typeof input.focus === "function") {
+          const active = recordCardDomDoc(inlineHost)?.activeElement;
+          const isComposing = options.composing === true;
+          if (!isComposing && active !== input) {
+            const caret = options.stageCaret;
+            input.focus();
+            if (caret && typeof input.setSelectionRange === "function"
+              && Number.isInteger(caret.start) && input.value != null) {
+              try { input.setSelectionRange(caret.start, caret.end ?? caret.start); } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+      return;
+    }
+  }
   recordCardRegionEmpty(target);
   const note = recordCardEl(doc, "p", "bob-record-card-stage-note");
   recordCardText(note, RECORD_CARD_TYPED_STAGE_HINT);
@@ -102985,6 +103185,12 @@ class RecordCardModal extends RecordCardModalBase {
     this.selectedChoice = "";
     this.stageDraft = "";
     this.stageCaret = null;
+    this.stageDraftText = "";
+    this.stageList = [];
+    this.stageItemDraft = "";
+    this.stagePreview = null;
+    this.stageEnterSeq = 0;
+    this.pendingTab = null;
     this.menuOpen = false;
     this.session = null;
     this.sessionState = null;
@@ -103930,6 +104136,1626 @@ class BobLedgerToolsRecordCardMixin {
   }
 }
 
+// ---- src/242q-plugin-record-card-stages.js ----
+// Record Card typed stages: model seeds, op builders, and DOM painters for
+// text, suggest, date, number, URL, link, and list kinds. Pure helpers stay
+// presentation-only; bob remains the validation authority.
+function recordCardSuggestValues(reportField, albumField) {
+  const fromReport = reportField && Array.isArray(reportField.values) ? reportField.values : null;
+  if (fromReport) return fromReport;
+  const fromAlbum = albumField && Array.isArray(albumField.values) ? albumField.values : null;
+  if (fromAlbum) return fromAlbum;
+  return [];
+}
+
+function recordCardFilterSuggest(values, filter) {
+  const rows = Array.isArray(values) ? values : [];
+  const text = String(filter || "").trim().toLowerCase();
+  if (!text) return rows.slice();
+  return rows.filter((row) => {
+    const value = String((row && row.value) || "");
+    return value.toLowerCase().includes(text);
+  });
+}
+
+function recordCardSuggestByValue(values, value) {
+  const want = String(value == null ? "" : value);
+  return (Array.isArray(values) ? values : []).find((row) => String((row && row.value) || "") === want) || null;
+}
+
+function recordCardLinkCandidates(plugin, recordPath, filter) {
+  const text = String(filter || "").trim().toLowerCase();
+  let files = [];
+  try {
+    const vault = plugin && plugin.app && plugin.app.vault;
+    if (vault && typeof vault.getMarkdownFiles === "function") {
+      files = vault.getMarkdownFiles() || [];
+    } else if (vault && typeof vault.getFiles === "function") {
+      files = (vault.getFiles() || []).filter((file) => file && /\.md$/i.test(file.path || file));
+    }
+  } catch (_) {
+    files = [];
+  }
+  let paths = files.map((file) => (typeof file === "string" ? file : file.path)).filter(Boolean);
+  if (!paths.length) {
+    try {
+      const cache = plugin && plugin.app && plugin.app.metadataCache;
+      if (cache && typeof cache.getCache === "function") { paths = []; }
+    } catch (_) {}
+  }
+  const seen = new Set();
+  const ranked = [];
+  for (const path of paths) {
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const base = String(path).split("/").pop().replace(/\.md$/i, "");
+    if (text && !(String(path).toLowerCase().includes(text) || base.toLowerCase().includes(text))) continue;
+    ranked.push({ path, base });
+    if (ranked.length >= 30) break;
+  }
+  return ranked;
+}
+
+function recordCardParseLinkDraft(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return { kind: "empty", value: "" };
+  const match = /^\[\[([^\]]+)\]\]$/.exec(raw);
+  if (match) return { kind: "wikilink", value: raw, target: match[1] };
+  return { kind: "bare", value: raw };
+}
+
+function recordCardNumberHint(field) {
+  const min = field && field.min != null ? String(field.min) : "";
+  const max = field && field.max != null ? String(field.max) : "";
+  if (min !== "" && max !== "") return `Range ${min}–${max}`;
+  if (min !== "") return `Min ${min}`;
+  if (max !== "") return `Max ${max}`;
+  return "";
+}
+
+function recordCardStageInputAttrs(kind) {
+  if (kind === "number") return { type: "text", inputmode: "numeric" };
+  if (kind === "url") return { type: "url", inputmode: "url" };
+  if (kind === "date") return { type: "text", inputmode: "text" };
+  return { type: "text", inputmode: "text" };
+}
+
+function recordCardStageLabel(kind, target) {
+  const label = (target && (target.label || target.key)) || "Field";
+  if (kind === "text") return `${label} text`;
+  if (kind === "suggest") return `${label} suggestion`;
+  if (kind === "date") return `${label} date`;
+  if (kind === "number") return `${label} number`;
+  if (kind === "url") return `${label} URL`;
+  if (kind === "link") return `${label} link`;
+  if (kind === "list") return `${label} list`;
+  return label;
+}
+
+function recordCardStageHintText(kind, field, reportField) {
+  if (kind === "text") return "Enter saves; newlines are refused.";
+  if (kind === "suggest") {
+    const count = recordCardSuggestValues(reportField, field).length;
+    return count ? `Pick a suggestion or type freely · ${count} ranked` : "Type freely; bob validates.";
+  }
+  if (kind === "date") return "today, t, yesterday, or YYYY-MM-DD";
+  if (kind === "number") {
+    const hint = recordCardNumberHint(field);
+    return hint ? `${hint} · invalid entries are refused` : "Invalid entries are refused";
+  }
+  if (kind === "url") return "Full http(s) URL; bob validates";
+  if (kind === "link") return "Bare name or [[wikilink]]; preview before save";
+  if (kind === "list") return "Enter adds · empty Enter saves · empty Backspace removes last";
+  return "";
+}
+
+function recordCardPaintStageInput(doc, host, options) {
+  const kind = options.kind;
+  const target = options.target;
+  const draft = options.draft || {};
+  const attrs = recordCardStageInputAttrs(kind);
+  const labelText = recordCardStageLabel(kind, target);
+  const label = recordCardEl(doc, "label", "bob-record-card-stage-label");
+  recordCardText(label, labelText);
+  label.setAttribute("for", `bob-record-card-input-${target.key}`);
+  host.appendChild(label);
+  let input;
+  if (kind === "text") {
+    input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
+    input.setAttribute("rows", "3");
+    input.value = String(draft.text || "");
+  } else {
+    input = recordCardEl(doc, "input", `bob-record-card-stage-input bob-record-card-${kind}`);
+    input.setAttribute("type", attrs.type);
+    if (attrs.inputmode) input.setAttribute("inputmode", attrs.inputmode);
+    if (kind === "url") input.setAttribute("autocomplete", "url");
+    input.value = String(draft.text || "");
+  }
+  input.setAttribute("id", `bob-record-card-input-${target.key}`);
+  input.setAttribute("data-record-input", `stage-${kind}`);
+  input.setAttribute("data-target-key", target.key);
+  input.setAttribute("aria-label", labelText);
+  if (kind === "suggest") {
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-controls", `bob-record-card-suggest-${target.key}`);
+  }
+  host.appendChild(input);
+  const hint = recordCardEl(doc, "p", "bob-record-card-stage-hint");
+  recordCardText(hint, recordCardStageHintText(kind, target.field, options.reportField));
+  host.appendChild(hint);
+  if (kind === "suggest") {
+    const values = recordCardSuggestValues(options.reportField, target.field);
+    const visible = recordCardFilterSuggest(values, draft.text || "");
+    const list = recordCardEl(doc, "div", "bob-record-card-suggest-list");
+    list.setAttribute("id", `bob-record-card-suggest-${target.key}`);
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Suggestions");
+    if (!visible.length) {
+      const empty = recordCardEl(doc, "p", "bob-record-card-suggest-empty");
+      recordCardText(empty, String(draft.text || "").trim() ? "No matching suggestions — Enter previews free text." : "No suggestions.");
+      list.appendChild(empty);
+    }
+    for (const row of visible.slice(0, 30)) {
+      const value = String((row && row.value) || "");
+      if (!value) continue;
+      const item = recordCardEl(doc, "button", "bob-record-card-suggest-row");
+      item.setAttribute("type", "button");
+      item.setAttribute("role", "option");
+      item.setAttribute("data-record-action", "pick-suggest");
+      item.setAttribute("data-choice-value", value);
+      item.setAttribute("data-target-key", target.key);
+      const exact = String(draft.text || "") === value;
+      item.setAttribute("aria-selected", exact ? "true" : "false");
+      if (exact) item.setAttribute("class", `${item.getAttribute("class") || ""} is-selected`.trim());
+      const labelNode = recordCardEl(doc, "span", "bob-record-card-suggest-label");
+      recordCardText(labelNode, value);
+      item.appendChild(labelNode);
+      if (Number.isInteger(row && row.count)) {
+        const count = recordCardEl(doc, "span", "bob-record-card-suggest-count");
+        recordCardText(count, String(row.count));
+        item.appendChild(count);
+      }
+      list.appendChild(item);
+    }
+    host.appendChild(list);
+  }
+  if (kind === "link") {
+    const candidates = recordCardLinkCandidates(options.plugin, options.recordPath, draft.text || "");
+    const list = recordCardEl(doc, "div", "bob-record-card-link-list");
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Note suggestions");
+    for (const candidate of candidates.slice(0, 12)) {
+      const item = recordCardEl(doc, "button", "bob-record-card-link-row");
+      item.setAttribute("type", "button");
+      item.setAttribute("role", "option");
+      item.setAttribute("data-record-action", "pick-link");
+      item.setAttribute("data-choice-value", candidate.path);
+      item.setAttribute("data-target-key", target.key);
+      item.setAttribute("aria-label", candidate.path);
+      recordCardText(item, candidate.base || candidate.path);
+      list.appendChild(item);
+    }
+    if (candidates.length) host.appendChild(list);
+  }
+  return input;
+}
+
+function recordCardPaintStageList(doc, host, options) {
+  const target = options.target;
+  const draft = options.draft || {};
+  const labelText = recordCardStageLabel("list", target);
+  const label = recordCardEl(doc, "span", "bob-record-card-stage-label");
+  label.setAttribute("id", `bob-record-card-list-${target.key}`);
+  recordCardText(label, `${labelText} · ${recordCardStageHintText("list")}`);
+  host.appendChild(label);
+  const chips = recordCardEl(doc, "div", "bob-record-card-chip-list");
+  chips.setAttribute("role", "list");
+  chips.setAttribute("aria-labelledby", `bob-record-card-list-${target.key}`);
+  const items = Array.isArray(draft.list) ? draft.list : [];
+  items.forEach((item, index) => {
+    const chip = recordCardEl(doc, "span", "bob-record-card-chip");
+    chip.setAttribute("role", "listitem");
+    const text = recordCardEl(doc, "span", "bob-record-card-chip-text");
+    recordCardText(text, String(item));
+    chip.appendChild(text);
+    const edit = recordCardEl(doc, "button", "bob-record-card-chip-edit");
+    edit.setAttribute("type", "button");
+    edit.setAttribute("data-record-action", "edit-chip");
+    edit.setAttribute("data-chip-index", String(index));
+    edit.setAttribute("data-target-key", target.key);
+    edit.setAttribute("aria-label", `Edit item ${index + 1}`);
+    recordCardText(edit, "Edit");
+    chip.appendChild(edit);
+    const remove = recordCardEl(doc, "button", "bob-record-card-chip-remove");
+    remove.setAttribute("type", "button");
+    remove.setAttribute("data-record-action", "remove-chip");
+    remove.setAttribute("data-chip-index", String(index));
+    remove.setAttribute("data-target-key", target.key);
+    remove.setAttribute("aria-label", `Remove item ${index + 1}`);
+    recordCardText(remove, "×");
+    chip.appendChild(remove);
+    chips.appendChild(chip);
+  });
+  host.appendChild(chips);
+  const itemLabel = recordCardEl(doc, "label", "bob-record-card-stage-label");
+  recordCardText(itemLabel, "Add item");
+  itemLabel.setAttribute("for", `bob-record-card-item-${target.key}`);
+  host.appendChild(itemLabel);
+  const input = recordCardEl(doc, "input", "bob-record-card-stage-input bob-record-card-list-input");
+  input.setAttribute("type", "text");
+  input.setAttribute("id", `bob-record-card-item-${target.key}`);
+  input.setAttribute("data-record-input", "stage-list-item");
+  input.setAttribute("data-target-key", target.key);
+  input.setAttribute("aria-label", "Add item");
+  input.value = String(draft.itemDraft || "");
+  host.appendChild(input);
+  return input;
+}
+
+function recordCardPaintStageActions(doc, host, options) {
+  const target = options.target;
+  const bar = recordCardEl(doc, "div", "bob-record-card-stage-actions");
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", "Stage actions");
+  const defs = [
+    { action: "save-stage", text: "Save", ariaLabel: "Save" },
+    { action: "save-next", text: "Save + next", ariaLabel: "Save and open next field" },
+    { action: "save-prev", text: "Save + prev", ariaLabel: "Save and open previous field" },
+    { action: "cancel-stage", text: "Cancel", ariaLabel: "Cancel" },
+  ];
+  for (const def of defs) {
+    const button = recordCardButton(doc, bar, def.text, {
+      action: def.action,
+      targetKey: target && target.key,
+      className: "bob-record-card-action",
+      ariaLabel: def.ariaLabel,
+      disabled: options.applying === true && def.action !== "cancel-stage",
+    });
+    if (button && def.action === "save-stage") button.setAttribute("data-record-input", "stage-save");
+  }
+  return bar;
+}
+
+function recordCardPaintTypedStage(doc, host, options) {
+  if (!host || !doc || !options || !options.target) return null;
+  recordCardRegionEmpty(host);
+  const kind = options.kind;
+  let input = null;
+  if (kind === "list") {
+    input = recordCardPaintStageList(doc, host, options);
+  } else {
+    input = recordCardPaintStageInput(doc, host, options);
+  }
+  const preview = options.preview;
+  if (preview && preview.consequence) {
+    const echo = recordCardEl(doc, "p", "bob-record-card-stage-preview");
+    recordCardText(echo, String(preview.consequence));
+    host.appendChild(echo);
+  }
+  if (preview && Array.isArray(preview.warnings) && preview.warnings.length) {
+    for (const warning of preview.warnings) {
+      const node = recordCardEl(doc, "p", "bob-record-card-stage-warning");
+      recordCardText(node, String((warning && warning.message) || warning));
+      host.appendChild(node);
+    }
+  }
+  recordCardPaintStageActions(doc, host, options);
+  return input;
+}
+// ---- src/242r-plugin-record-card-typed-stages.js ----
+// Record Card typed stages: seeding, list/suggest/link picks, and key dispatch.
+Object.assign(RecordCardModal.prototype, {
+  recordPaintOptions() {
+    const target = this.recordSelected();
+    const reportField = recordCardFieldFromReport(this.latestReport, target && target.key);
+    const stageTarget = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : target;
+    const stageReportField = stageTarget ? recordCardFieldFromReport(this.latestReport, stageTarget.key) : reportField;
+    const allChoices = target && target.kind === "choices"
+      ? recordCardChoiceList(target.field, reportField)
+      : [];
+    const visibleChoices = recordCardFilterChoices(allChoices, this.choiceFilter);
+    return {
+      selectedKey: this.selectedKey,
+      targets: this.recordTargets(),
+      stage: this.stage,
+      filter: this.choiceFilter,
+      selectedChoice: this.selectedChoice,
+      currentValue: target && target.value != null ? String(target.value) : "",
+      visibleChoices,
+      reportField: stageReportField,
+      stageDraftText: this.stageDraftText,
+      draftText: this.stageDraftText,
+      stageList: this.stageList.slice ? this.stageList.slice() : [],
+      draftList: this.stageList.slice ? this.stageList.slice() : [],
+      stageItemDraft: this.stageItemDraft,
+      draftItemDraft: this.stageItemDraft,
+      stagePreview: this.stagePreview,
+      stageCaret: this.stageCaret,
+      composing: this.composing,
+      focusStage: true,
+      recordPath: this.recordPath,
+      plugin: this.recordPlugin,
+      menuOpen: this.menuOpen,
+      warning: this.warning,
+      status: this.recordStatusModel(),
+      announce: this.announce,
+      handlers: {
+        openPath: (href, event) => this.recordPlugin?.recordSheetOpenPath?.(href, this.recordPath, event),
+        hoverLink: (event, el, linktext) => this.recordPlugin?.recordSheetHoverLink?.(event, el, linktext, this.recordPath),
+      },
+    };
+  }
+,
+  recordRestoreFocus() {
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-record-card");
+      if (!card) return;
+      if (this.composing) return;
+      const doc = this.recordDoc();
+      const active = doc && doc.activeElement;
+      if (this.stage && this.stage.kind === "choices") {
+        const input = card.querySelector?.("[data-record-input='choice-filter']");
+        if (input && typeof input.focus === "function" && active !== input) {
+          if (active && active !== input && active.tagName === "INPUT" && this.statusKind !== "stale") return;
+          input.focus();
+          if (this.stageCaret && typeof input.setSelectionRange === "function") {
+            try { input.setSelectionRange(this.stageCaret.start, this.stageCaret.end); } catch (_) {}
+          }
+          return;
+        }
+        if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+        return;
+      }
+      if (this.stage) {
+        const activeInput = active && active.getAttribute?.("data-record-input");
+        if (activeInput && String(activeInput).startsWith("stage-")) return;
+        const input = card.querySelector?.("[data-record-card-stage] [data-record-input^='stage-']")
+          || card.querySelector?.("[data-record-card-stage-host] [data-record-input^='stage-']");
+        if (input && typeof input.focus === "function") {
+          input.focus();
+          if (this.stageCaret && typeof input.setSelectionRange === "function" && input.value != null) {
+            try { input.setSelectionRange(this.stageCaret.start, this.stageCaret.end ?? this.stageCaret.start); } catch (_) {}
+          }
+          return;
+        }
+      }
+      if (active && active.tagName === "INPUT" && active.getAttribute?.("data-record-input")?.startsWith("stage-")) return;
+      const row = card.querySelector?.(`[data-target-key="${this.selectedKey}"]`);
+      if (row && typeof row.focus === "function" && active !== row) row.focus();
+    } catch (_) {}
+  }
+,
+  recordSelect(key) {
+    const targets = this.recordTargets();
+    const index = targets.findIndex((target) => target.key === key);
+    if (index < 0) return;
+    this.recordInvalidatePendingTab();
+    this.selectedKey = key;
+    this.selectedIndex = index;
+    this.announce = recordCardLiveAnnouncement("select", targets[index]);
+    this.paintRecordCard();
+  }
+,
+  recordShiftStep(delta, event) {
+    if (event && event.repeat) return true;
+    const targets = this.recordTargets();
+    const next = typeof recordCardShiftStep === "function"
+      ? recordCardShiftStep(targets, this.selectedKey, delta)
+      : null;
+    const card = this.contentEl?.querySelector?.(".bob-record-card");
+    const row = card?.querySelector?.(`[data-target-key="${this.selectedKey}"]`) || card;
+    if (!next) {
+      try { if (typeof schemaCardBump === "function") schemaCardBump(row, Number(delta) < 0 ? -1 : 1); } catch (_) {}
+      const message = Number(delta) < 0 ? "No previous field" : "No next field";
+      this.announce = message;
+      try { if (typeof schemaArrangeAnnounce === "function") schemaArrangeAnnounce(card, message); } catch (_) {}
+      this.paintRecordCard();
+      return true;
+    }
+    const index = targets.findIndex((target) => target.key === next);
+    this.recordInvalidatePendingTab();
+    this.selectedKey = next;
+    this.selectedIndex = Math.max(0, index);
+    const target = targets[Math.max(0, index)];
+    const total = targets.length;
+    const message = typeof recordCardShiftAnnouncement === "function"
+      ? recordCardShiftAnnouncement(target, Math.max(0, index), total)
+      : `${target.label || target.key}, field ${index + 1} of ${total}`;
+    this.announce = message;
+    try { if (typeof schemaArrangeAnnounce === "function") schemaArrangeAnnounce(card, message); } catch (_) {}
+    this.paintRecordCard();
+    return true;
+  }
+,
+  recordInvalidatePendingTab() {
+    this.pendingTab = null;
+  }
+,
+  recordTypedDraftFor(target) {
+    return {
+      text: String(this.stageDraftText || ""),
+      list: Array.isArray(this.stageList) ? this.stageList.slice() : [],
+      itemDraft: String(this.stageItemDraft || ""),
+      selectedChoice: String(this.selectedChoice || ""),
+    };
+  }
+,
+  recordTypedChanged(target) {
+    if (!target || !this.stage || this.stage.field !== target.key) return false;
+    if (typeof recordCardDraftEqualsSeed === "function") {
+      return !recordCardDraftEqualsSeed(target, this.recordTypedDraftFor(target));
+    }
+    return String(this.stageDraftText || "") !== (typeof recordCardSeedText === "function" ? recordCardSeedText(target) : "");
+  }
+,
+  recordOpenStage(kind, fieldKey = this.selectedKey, options = {}) {
+    const target = recordCardTargetByKey(this.recordTargets(), fieldKey);
+    if (!target) return false;
+    this.recordInvalidatePendingTab();
+    this.selectedKey = fieldKey;
+    this.selectedIndex = Math.max(0, this.recordTargets().findIndex((row) => row.key === fieldKey));
+    const resolved = kind || target.stageKind;
+    if (!resolved) {
+      this.statusKind = "typed-stage";
+      this.paintRecordCard();
+      return false;
+    }
+    this.stage = { kind: resolved, field: fieldKey };
+    this.menuOpen = false;
+    this.stagePreview = null;
+    this.stageEnterSeq = 0;
+    if (resolved === "choices") {
+      this.choiceFilter = options.filter || "";
+      this.selectedChoice = options.selectedChoice || (target.value != null ? String(target.value) : "");
+      this.stageDraft = options.draft || "";
+      this.stageDraftText = "";
+      this.stageList = [];
+      this.stageItemDraft = "";
+    } else if (resolved === "list") {
+      const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { list: [] };
+      this.stageList = Array.isArray(options.list) ? options.list.slice() : (seed.list || []).slice();
+      this.stageItemDraft = options.itemDraft || "";
+      this.stageDraftText = "";
+      this.choiceFilter = "";
+      this.selectedChoice = "";
+    } else {
+      const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(target) : { text: "" };
+      this.stageDraftText = options.draft !== undefined ? String(options.draft) : String(seed.text || "");
+      this.stageList = [];
+      this.stageItemDraft = "";
+      this.choiceFilter = options.filter || "";
+      this.selectedChoice = "";
+    }
+    this.stageCaret = options.caret || null;
+    if (this.session && this.writable) {
+      try { this.session.setDraft([]); } catch (_) {}
+      this.sessionState = this.session.getState?.() || this.sessionState;
+    }
+    if (this.statusKind === "stale" || this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "saved") {
+      this.statusKind = this.writable ? "" : this.statusKind;
+      this.refusalMessage = "";
+      this.refusalHint = "";
+      this.consequence = "";
+    }
+    this.paintRecordCard();
+    return true;
+  }
+,
+  recordCancelStage() {
+    this.recordInvalidatePendingTab();
+    this.stage = null;
+    this.choiceFilter = "";
+    this.selectedChoice = "";
+    this.stageDraft = "";
+    this.stageCaret = null;
+    this.stageDraftText = "";
+    this.stageList = [];
+    this.stageItemDraft = "";
+    this.stagePreview = null;
+    this.stageEnterSeq = 0;
+    if (this.session && !this.closed) {
+      try { this.session.setDraft([]); } catch (_) {}
+      try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+    }
+    if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "stale") {
+      this.statusKind = this.writable ? "" : this.statusKind;
+      this.refusalMessage = "";
+      this.refusalHint = "";
+      this.consequence = "";
+    }
+    this.paintRecordCard();
+  }
+,
+  recordAction(action, payload) {
+    if (!action || this.closed) return;
+    if (action === "close") { this.close(); return; }
+    if (action === "more") {
+      this.menuOpen = !this.menuOpen;
+      this.paintRecordCard();
+      return;
+    }
+    if (action === "close-menu") {
+      this.menuOpen = false;
+      this.paintRecordCard();
+      return;
+    }
+    if (action === "cancel-stage") { this.recordCancelStage(); return; }
+    if (action === "open-stage") {
+      const target = this.recordSelected();
+      if (target && target.stageKind) this.recordOpenStage(target.stageKind, target.key);
+      else if (target) {
+        this.statusKind = "typed-stage";
+        this.paintRecordCard();
+      }
+      return;
+    }
+    if (action === "next-field") { this.recordShiftStep(1, { repeat: false }); return; }
+    if (action === "prev-field") { this.recordShiftStep(-1, { repeat: false }); return; }
+    if (action === "save-stage") { void this.recordSaveTyped(0); return; }
+    if (action === "save-next") { void this.recordSaveTyped(1); return; }
+    if (action === "save-prev") { void this.recordSaveTyped(-1); return; }
+    if (action === "pick-choice" || action === "apply-choice") {
+      void this.recordApplyChoice(payload && payload.value);
+      return;
+    }
+    if (action === "pick-suggest") {
+      void this.recordPickSuggest(payload && payload.value);
+      return;
+    }
+    if (action === "pick-link") {
+      void this.recordPickLink(payload && payload.value);
+      return;
+    }
+    if (action === "edit-chip") {
+      this.recordEditChip(payload);
+      return;
+    }
+    if (action === "remove-chip") {
+      this.recordRemoveChip(payload);
+      return;
+    }
+    if (action === "today") { void this.recordApplyToday(); return; }
+    if (action === "clear") { void this.recordClear(); return; }
+    if (action === "undo") { void this.recordUndo(); return; }
+    if (action === "yaml") { void this.recordYaml(); return; }
+    if (action === "schema") { void this.recordSchema(); return; }
+    if (action === "retry") { void this.recordRetry(); return; }
+  }
+,
+  recordOnClick(event) {
+    const button = event?.target?.closest?.("button[data-record-action], button[data-target-key]");
+    if (!button) return;
+    const action = button.getAttribute("data-record-action");
+    if (action) {
+      event.preventDefault?.();
+      void this.recordAction(action, {
+        value: button.getAttribute("data-choice-value"),
+        index: button.getAttribute("data-chip-index"),
+        key: button.getAttribute("data-target-key"),
+      });
+      return;
+    }
+    const key = button.getAttribute("data-target-key");
+    if (key) {
+      if (this.stage) this.recordOpenStage(null, key);
+      else this.recordSelect(key);
+    }
+  }
+,
+  recordOnKeyDown(event) {
+    if (!event || event.isComposing || event.keyCode === 229 || this.composing) return;
+    if (event.defaultPrevented || event.__schemaEscapeHandled) return;
+    if (this.pendingApply) return;
+    const closeKind = this.recordCloseKind(event);
+    if (closeKind && this.recordShouldBackOut(closeKind, event)) {
+      this.recordBackOut(event);
+      return;
+    }
+    if (this.recordInInput(event)) {
+      const inputKind = event.target?.getAttribute?.("data-record-input") || "";
+      if (event.key === "Tab") {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        void this.recordTab(event.shiftKey ? -1 : 1);
+        return;
+      }
+      if (event.key === "Enter") {
+        if (event.repeat) { event.preventDefault?.(); return; }
+        event.preventDefault?.();
+        const target = this.recordSelected();
+        if (this.stage && this.stage.kind === "choices") {
+          void this.recordApplyChoice(this.selectedChoice || (target && target.value));
+        } else if (this.stage && this.stage.kind === "list") {
+          if (String(inputKind) === "stage-list-item") {
+            if (String(this.stageItemDraft || "").trim() !== "") this.recordCommitListItem();
+            else void this.recordSaveTyped(0);
+          } else {
+            void this.recordSaveTyped(0);
+          }
+        } else if (this.stage) {
+          if (String(inputKind) === "choice-filter") {
+            void this.recordApplyChoice(this.selectedChoice || (target && target.value));
+          } else {
+            void this.recordSaveTyped(0);
+          }
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault?.();
+        this.recordBackOut(event);
+        return;
+      }
+      if (String(inputKind) === "stage-list-item" && event.key === "Backspace"
+        && String(this.stageItemDraft || "") === "") {
+        event.preventDefault?.();
+        this.recordPopListChip();
+        return;
+      }
+      if (String(inputKind) === "choice-filter" || (this.stage && this.stage.kind === "choices")) {
+        if (event.key === "ArrowDown") { event.preventDefault?.(); this.recordMoveChoice(1); return; }
+        if (event.key === "ArrowUp") { event.preventDefault?.(); this.recordMoveChoice(-1); return; }
+      }
+      if (this.stage && (this.stage.kind === "suggest" || this.stage.kind === "link")
+        && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        event.preventDefault?.();
+        this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      return;
+    }
+    if (this.stage && this.stage.kind === "choices") {
+      if (event.key === "Enter") {
+        event.preventDefault?.();
+        void this.recordApplyChoice(this.selectedChoice);
+        return;
+      }
+      if (event.key === "ArrowDown" || (this.recordBare(event) && event.key === "j")) {
+        event.preventDefault?.();
+        this.recordMoveChoice(1);
+        return;
+      }
+      if (event.key === "ArrowUp" || (this.recordBare(event) && event.key === "k")) {
+        event.preventDefault?.();
+        this.recordMoveChoice(-1);
+        return;
+      }
+      if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+        event.preventDefault?.();
+        this.recordDigit(event.key, true);
+      }
+      return;
+    }
+    if (event.key === "Tab") {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (event.repeat) return;
+      if (this.stage) void this.recordTab(event.shiftKey ? -1 : 1);
+      else this.recordMove(event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.shiftKey && (event.key === "J" || event.key === "K")) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      if (!this.stage && !this.menuOpen && !this.composing && !event.isComposing && !this.recordInInput(event)) {
+        this.recordShiftStep(event.key === "K" ? -1 : 1, event);
+      }
+      return;
+    }
+    if (this.stage && this.stage.kind !== "choices") {
+      if (event.key === "Enter" && !event.repeat) {
+        event.preventDefault?.();
+        void this.recordSaveTyped(0);
+        return;
+      }
+      return;
+    }
+    if (event.key === "Home") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "home")); return; }
+    if (event.key === "End") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "end")); return; }
+    if (event.key === "ArrowDown" || event.key === "ArrowRight" || (this.recordBare(event) && event.key === "j")) {
+      event.preventDefault?.(); this.recordMove(1); return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft" || (this.recordBare(event) && event.key === "k")) {
+      event.preventDefault?.(); this.recordMove(-1); return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault?.();
+      if (event.repeat) return;
+      this.recordAction("open-stage");
+      return;
+    }
+    if (this.recordBare(event) && /^[1-9]$/.test(event.key || "")) {
+      event.preventDefault?.();
+      this.recordDigit(event.key, false);
+      return;
+    }
+    if (this.recordBare(event) && (event.key === "t" || event.key === "T")) {
+      event.preventDefault?.();
+      void this.recordApplyToday();
+      return;
+    }
+    if (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "d" || event.key === "D")) {
+      event.preventDefault?.();
+      void this.recordClear();
+      return;
+    }
+    if ((this.recordBare(event) && event.key === "u")
+        || (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "z" || event.key === "Z"))) {
+      event.preventDefault?.();
+      void this.recordUndo();
+      return;
+    }
+    if ((this.recordBare(event) && (event.key === "y" || event.key === "Y"))
+        || (event.ctrlKey && !event.altKey && !event.metaKey && (event.key === "e" || event.key === "E"))) {
+      event.preventDefault?.();
+      void this.recordYaml();
+      return;
+    }
+    if (this.recordBare(event) && event.key === "=") {
+      event.preventDefault?.();
+      void this.recordSchema();
+    }
+  }
+,
+  recordDigit(digit, fromStage) {
+    const target = this.recordSelected();
+    if (!target) return;
+    if (target.kind !== "choices") {
+      if (!fromStage) {
+        this.statusKind = "refusal";
+        this.refusalMessage = typeof RECORD_CARD_DIGIT_TEACH !== "undefined"
+          ? RECORD_CARD_DIGIT_TEACH
+          : "Digits pick a choice on choice fields";
+        this.refusalHint = "";
+        this.announce = this.refusalMessage;
+        this.paintRecordCard();
+      }
+      return;
+    }
+    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+    const all = recordCardChoiceList(target.field, reportField);
+    const choice = recordCardChoiceByDigit(all, digit);
+    if (!choice) return;
+    if (fromStage) {
+      const visible = recordCardFilterChoices(all, this.choiceFilter);
+      if (!visible.some((item) => item.value === choice.value)) return;
+    }
+    if (this.stage && this.stage.kind === "list") {
+      this.recordListPickChoice(choice.value);
+      return;
+    }
+    void this.recordApplyChoice(choice.value);
+  }
+,
+  recordMoveSuggest(delta) {
+    if (!this.stage || (this.stage.kind !== "suggest" && this.stage.kind !== "link")) return;
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    if (!target) return;
+    if (this.stage.kind === "suggest") {
+      const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+      const values = typeof recordCardSuggestValues === "function"
+        ? recordCardSuggestValues(reportField, target.field) : [];
+      const visible = typeof recordCardFilterSuggest === "function"
+        ? recordCardFilterSuggest(values, this.stageDraftText || "") : values;
+      if (!visible.length) return;
+      const current = String(this.stageDraftText || "");
+      let index = visible.findIndex((row) => String((row && row.value) || "") === current);
+      if (index < 0) index = Number(delta) < 0 ? visible.length : -1;
+      index = (index + (Number(delta) < 0 ? -1 : 1) + visible.length) % visible.length;
+      this.stageDraftText = String(visible[index].value || "");
+      try {
+        const doc = this.recordDoc();
+        const card = this.contentEl?.querySelector?.(".bob-record-card");
+        const input = card?.querySelector?.("[data-record-input^='stage-']");
+        if (input) this.stageCaret = { start: input.value.length, end: input.value.length };
+      } catch (_) {}
+      this.recordTypedInput();
+      return;
+    }
+    const candidates = typeof recordCardLinkCandidates === "function"
+      ? recordCardLinkCandidates(this.recordPlugin, this.recordPath, this.stageDraftText || "") : [];
+    if (!candidates.length) return;
+    const current = String(this.stageDraftText || "").replace(/^\[\[|\]\]$/g, "");
+    let index = candidates.findIndex((row) => row.path === current || row.base === current);
+    if (index < 0) index = Number(delta) < 0 ? candidates.length : -1;
+    index = (index + (Number(delta) < 0 ? -1 : 1) + candidates.length) % candidates.length;
+    this.stageDraftText = `[[${candidates[index].path.replace(/\.md$/i, "")}]]`;
+    this.recordTypedInput();
+  }
+,
+  recordCommitListItem() {
+    const text = String(this.stageItemDraft || "").trim();
+    if (!text) return;
+    this.stageList = [...(this.stageList || []), text];
+    this.stageItemDraft = "";
+    this.stageCaret = null;
+    this.recordTypedInput();
+  }
+,
+  recordPopListChip() {
+    if (!this.stageList || !this.stageList.length) return;
+    const popped = this.stageList[this.stageList.length - 1];
+    this.stageList = this.stageList.slice(0, -1);
+    this.stageItemDraft = String(popped || "");
+    this.recordTypedInput();
+  }
+,
+  recordEditChip(payload) {
+    const index = Number(payload && payload.index);
+    if (!Number.isInteger(index) || index < 0 || !this.stageList || index >= this.stageList.length) return;
+    this.stageItemDraft = String(this.stageList[index] || "");
+    this.stageList = this.stageList.filter((_, at) => at !== index);
+    this.recordTypedInput();
+  }
+,
+  recordRemoveChip(payload) {
+    const index = Number(payload && payload.index);
+    if (!Number.isInteger(index) || index < 0 || !this.stageList || index >= this.stageList.length) return;
+    this.stageList = this.stageList.filter((_, at) => at !== index);
+    this.recordTypedInput();
+  }
+,
+  recordListPickChoice(value) {
+    if (!this.stage || this.stage.kind !== "list") return;
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    if (!target) return;
+    const scalarKind = String(target.field?.kind || "text").toLowerCase();
+    void this.recordListPickValue(String(value), scalarKind);
+  }
+});
+// ---- src/242s-plugin-record-card-typed-save.js ----
+// Record Card typed preview/save/Tab and refresh: settlement, preview sync, save-and-advance, retry, and lifecycle.
+Object.assign(RecordCardModal.prototype, {
+  async recordListPickValue(value, scalarKind) {
+    if (!this.stage) return null;
+    this.stageList = [...(this.stageList || []), String(value)];
+    this.stageItemDraft = "";
+    return this.recordTypedInput();
+  }
+,
+  async recordPickSuggest(value) {
+    if (!value) return null;
+    const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
+    if (!target) return null;
+    if (this.stage && this.stage.kind === "list") {
+      return this.recordListPickValue(String(value), "suggest");
+    }
+    const reportField = recordCardFieldFromReport(this.latestReport, target.key);
+    const values = typeof recordCardSuggestValues === "function"
+      ? recordCardSuggestValues(reportField, target.field) : [];
+    const exact = typeof recordCardSuggestByValue === "function"
+      ? recordCardSuggestByValue(values, String(value)) : null;
+    if (exact && this.stage) {
+      return this.recordApplyOps({ op: "field.set", field: target.key, value: String(exact.value) });
+    }
+    this.stageDraftText = String(value);
+    return this.recordTypedInput();
+  }
+,
+  async recordPickLink(value) {
+    if (!value) return null;
+    const target = this.stage ? recordCardTargetByKey(this.recordTargets(), this.stage.field) : this.recordSelected();
+    if (!target) return null;
+    if (this.stage && this.stage.kind === "list") {
+      return this.recordListPickValue(String(value), "link");
+    }
+    const path = String(value).replace(/\.md$/i, "");
+    this.stageDraftText = /\[\[/.test(String(value)) ? String(value) : `[[${path}]]`;
+    return this.recordTypedInput();
+  }
+,
+  async recordSettleApplyResult(result, ops) {
+    if (this.closed) return result;
+    this.sessionState = this.session?.getState?.() || this.sessionState;
+    if (result && result.ok === true && result.changed === true) {
+      this.ownWriteUntil = Date.now() + 1500;
+      this.retainedOps = null;
+      this.recordConsumeApplied(result);
+      const pending = this.pendingTab;
+      this.recordInvalidatePendingTab();
+      if (pending && (pending.direction === 1 || pending.direction === -1)) {
+        const nextKey = recordCardNavigate(this.recordTargets(), pending.field, pending.direction);
+        this.statusKind = "saved";
+        this.announce = recordCardLiveAnnouncement("saved");
+        if (nextKey) {
+          const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
+          this.selectedKey = nextKey;
+          this.selectedIndex = Math.max(0, this.recordTargets().findIndex((row) => row.key === nextKey));
+          if (nextTarget && nextTarget.stageKind) {
+            this.stage = { kind: nextTarget.stageKind, field: nextKey };
+            const seed = typeof recordCardSeedStage === "function" ? recordCardSeedStage(nextTarget) : { text: "" };
+            if (nextTarget.stageKind === "list") {
+              this.stageList = (seed.list || []).slice();
+              this.stageItemDraft = "";
+              this.stageDraftText = "";
+            } else if (nextTarget.stageKind === "choices") {
+              this.selectedChoice = nextTarget.value != null ? String(nextTarget.value) : "";
+              this.choiceFilter = "";
+              this.stageDraftText = "";
+              this.stageList = [];
+              this.stageItemDraft = "";
+            } else {
+              this.stageDraftText = String(seed.text || "");
+              this.stageList = [];
+              this.stageItemDraft = "";
+            }
+            this.stagePreview = null;
+            this.stageCaret = null;
+            if (this.session) { try { this.session.setDraft([]); } catch (_) {} }
+            this.statusKind = "saved";
+          } else {
+            this.stage = null;
+          }
+        } else {
+          this.stage = null;
+        }
+        this.paintRecordCard();
+        return result;
+      }
+      const wasTyped = Boolean(this.stage && this.stage.kind !== "choices");
+      if (wasTyped) {
+        this.stage = null;
+        this.stageDraftText = "";
+        this.stageList = [];
+        this.stageItemDraft = "";
+        this.stagePreview = null;
+      } else {
+        this.recordCancelStageSilent();
+      }
+      this.statusKind = "saved";
+      this.announce = recordCardLiveAnnouncement("saved");
+      this.paintRecordCard();
+      return result;
+    }
+    if (result && result.ok === true) {
+      this.retainedOps = null;
+      const pending = this.pendingTab;
+      this.recordInvalidatePendingTab();
+      if (pending && (pending.direction === 1 || pending.direction === -1)) {
+        const nextKey = recordCardNavigate(this.recordTargets(), pending.field, pending.direction);
+        if (nextKey) {
+          const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
+          if (nextTarget && nextTarget.stageKind) {
+            this.selectedKey = nextKey;
+            this.selectedIndex = Math.max(0, this.recordTargets().findIndex((row) => row.key === nextKey));
+            this.recordOpenStage(nextTarget.stageKind, nextKey);
+            this.statusKind = result.report && result.report.consequence ? "consequence" : "";
+            this.consequence = (result.report && result.report.consequence) || "";
+            this.paintRecordCard();
+            return result;
+          }
+        }
+        this.stage = null;
+        this.statusKind = result.report && result.report.consequence ? "consequence" : "";
+        this.consequence = (result.report && result.report.consequence) || "";
+        this.paintRecordCard();
+        return result;
+      }
+      if (this.stage && this.stage.kind !== "choices") {
+        this.stage = null;
+        this.stageDraftText = "";
+        this.stageList = [];
+        this.stageItemDraft = "";
+        this.stagePreview = null;
+      } else {
+        this.recordCancelStageSilent();
+      }
+      this.statusKind = result.report && result.report.consequence ? "consequence" : "";
+      this.consequence = (result.report && result.report.consequence) || "";
+      this.paintRecordCard();
+      return result;
+    }
+    const stale = Boolean(result && (
+      result.kind === "stale" || result.code === "stale_record"
+      || (result.report && result.error && result.report.error.code === "stale_record")
+      || (result.report && result.report.error && result.report.error.code === "stale_record")
+      || (result.code === "stale_generation" || result.code === "stale")
+    ));
+    if (stale) {
+      this.retainedOps = this.recordOps(ops);
+      this.recordInvalidatePendingTab();
+      this.statusKind = "stale";
+      this.announce = recordCardLiveAnnouncement("stale");
+      this.stageEnterSeq += 1;
+      await this.recordRefresh({ keepStage: true });
+      return result;
+    }
+    this.recordInvalidatePendingTab();
+    this.refusalMessage = (result && (result.message || (result.report && result.report.error && result.report.error.message))) || "The record update was refused.";
+    this.refusalHint = (result && (result.hint || (result.report && result.report.error && result.report.error.hint))) || "";
+    this.statusKind = "refusal";
+    this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+    this.stageEnterSeq += 1;
+    this.paintRecordCard();
+    return result;
+  }
+,
+  recordCancelStageSilent() {
+    this.stage = null;
+    this.choiceFilter = "";
+    this.selectedChoice = "";
+    this.stageDraft = "";
+    this.stageCaret = null;
+    this.stageDraftText = "";
+    this.stageList = [];
+    this.stageItemDraft = "";
+    this.stagePreview = null;
+    this.stageEnterSeq = 0;
+    this.recordInvalidatePendingTab();
+    if (this.session && !this.closed) {
+      try { this.session.setDraft([]); } catch (_) {}
+      try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+    }
+  }
+,
+  async recordApplyOps(ops, options = {}) {
+    if (this.closed || this.pendingApply) return null;
+    if (!this.writable || !this.session) return null;
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintRecordCard();
+    let result = null;
+    try {
+      result = await this.session.applyOps(this.recordOps(ops));
+    } catch (error) {
+      result = { ok: false, code: "failed", message: String((error && error.message) || error) };
+    }
+    if (this.closed) return result;
+    this.pendingApply = false;
+    return this.recordSettleApplyResult(result, ops);
+  }
+,
+  recordTypedInput() {
+    if (this.closed || !this.stage || !this.writable || !this.session) {
+      this.paintRecordCard();
+      return null;
+    }
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    if (!target) {
+      this.statusKind = "refusal";
+      this.refusalMessage = "That field is no longer in the schema — your draft is kept.";
+      this.refusalHint = "";
+      this.paintRecordCard();
+      return null;
+    }
+    this.recordInvalidatePendingTabOnEdit();
+    if (!this.recordTypedChanged(target)) {
+      try { this.session.setDraft([]); } catch (_) {}
+      this.sessionState = this.session.getState?.() || this.sessionState;
+      this.stagePreview = null;
+      if (this.statusKind === "refusal" || this.statusKind === "consequence") {
+        this.statusKind = "";
+        this.refusalMessage = "";
+        this.refusalHint = "";
+        this.consequence = "";
+      }
+      this.paintRecordCard();
+      return null;
+    }
+    let built = null;
+    try {
+      built = typeof recordCardBuildOps === "function"
+        ? recordCardBuildOps(target, this.recordTypedDraftFor(target))
+        : null;
+    } catch (error) {
+      built = { ok: false, message: String((error && error.message) || error) };
+    }
+    if (!built || built.ok !== true) {
+      try { this.session.setDraft([]); } catch (_) {}
+      this.statusKind = "refusal";
+      this.refusalMessage = (built && built.message) || "That value is required.";
+      this.refusalHint = (built && built.hint) || "";
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.stagePreview = null;
+      this.paintRecordCard();
+      return built;
+    }
+    try { this.session.setDraft(built.ops); } catch (_) {}
+    try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+    this.recordSyncSessionPreview();
+    return built;
+  }
+,
+  recordInvalidatePendingTabOnEdit() {
+    this.pendingTab = null;
+  }
+,
+  recordSyncSessionPreview() {
+    if (this.closed || !this.session) return;
+    try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+    const snapshot = this.sessionState;
+    if (!snapshot || !this.stage) {
+      this.paintRecordCard();
+      return;
+    }
+    const status = String(snapshot.status || "");
+    if (status === "preview-pending" || status === "applying" || snapshot.busy === true) {
+      if (this.statusKind !== "saving") {
+        this.statusKind = "saving";
+        this.paintRecordCard();
+      }
+      return;
+    }
+    if (status === "preview-ready" && snapshot.canApply) {
+      const report = snapshot.preview;
+      this.stagePreview = report || snapshot.preview || null;
+      const consequence = String(snapshot.consequence || (report && report.consequence) || "");
+      const warnings = (report && report.warnings) || (snapshot.preview && snapshot.preview.warnings) || [];
+      this.consequence = consequence;
+      this.refusalMessage = "";
+      this.refusalHint = "";
+      this.statusKind = consequence ? "consequence" : "";
+      this.stagePreview = { consequence, warnings: Array.isArray(warnings) ? warnings : [] };
+      const pending = this.pendingTab;
+      if (pending && pending.enterSeq === this.stageEnterSeq && pending.field === (this.stage && this.stage.field)) {
+        const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+        const draftIdentity = JSON.stringify(this.recordTypedDraftFor(target));
+        if (pending.draftIdentity === draftIdentity) {
+          const latched = pending;
+          this.pendingTab = null;
+          void this.recordApplyTyped(latched);
+        }
+      }
+      this.paintRecordCard();
+      return;
+    }
+    if (status === "refused" && snapshot.refusal) {
+      const refusal = snapshot.refusal;
+      if (refusal.kind === "stale" || refusal.code === "stale_record" || refusal.code === "stale_generation") {
+        this.statusKind = "stale";
+        this.announce = recordCardLiveAnnouncement("stale");
+        this.stageEnterSeq += 1;
+        this.recordInvalidatePendingTab();
+        this.retainedOps = this.recordTypedOpsForRetry();
+        void this.recordRefresh({ keepStage: true });
+        return;
+      }
+      this.statusKind = "refusal";
+      this.refusalMessage = String(refusal.message || "The record preview was refused.");
+      this.refusalHint = String(refusal.hint || "");
+      this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      this.stagePreview = null;
+      this.stageEnterSeq += 1;
+      this.recordInvalidatePendingTab();
+      this.paintRecordCard();
+      return;
+    }
+    this.paintRecordCard();
+  }
+,
+  recordTypedOpsForRetry() {
+    if (!this.stage) return null;
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    if (!target) return null;
+    try {
+      const built = typeof recordCardBuildOps === "function"
+        ? recordCardBuildOps(target, this.recordTypedDraftFor(target)) : null;
+      if (built && built.ok === true) return built.ops;
+    } catch (_) {}
+    return null;
+  }
+,
+  async recordSaveTyped(direction) {
+    if (this.closed || this.pendingApply) return null;
+    if (!this.stage) return null;
+    if (!this.writable || !this.session) return null;
+    if (this.stage.kind === "choices") {
+      return this.recordApplyChoice(this.selectedChoice);
+    }
+    const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+    if (!target) return null;
+    if (typeof recordCardBuildOps === "function") {
+      let built = null;
+      try { built = recordCardBuildOps(target, this.recordTypedDraftFor(target)); } catch (error) {
+        built = { ok: false, message: String((error && error.message) || error) };
+      }
+      if (!built || built.ok !== true) {
+        try { this.session.setDraft([]); } catch (_) {}
+        this.statusKind = "refusal";
+        this.refusalMessage = (built && built.message) || "That value is required.";
+        this.refusalHint = (built && built.hint) || "";
+        this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+        this.paintRecordCard();
+        return built;
+      }
+    }
+    if (!this.recordTypedChanged(target)) {
+      if (direction === 1 || direction === -1) {
+        const nextKey = recordCardNavigate(this.recordTargets(), this.stage.field, direction);
+        if (nextKey) {
+          const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
+          this.selectedKey = nextKey;
+          this.selectedIndex = Math.max(0, this.recordTargets().findIndex((row) => row.key === nextKey));
+          if (nextTarget && nextTarget.stageKind) this.recordOpenStage(nextTarget.stageKind, nextKey);
+          else this.recordSelect(nextKey);
+        }
+      }
+      return { ok: true, changed: false, noOp: true };
+    }
+    if (direction === 1 || direction === -1) {
+      this.pendingTab = {
+        direction,
+        field: this.stage.field,
+        kind: this.stage.kind,
+        draftIdentity: JSON.stringify(this.recordTypedDraftFor(target)),
+        enterSeq: this.stageEnterSeq,
+      };
+    } else {
+      this.recordInvalidatePendingTab();
+    }
+    try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+    const snapshot = this.sessionState;
+    if (snapshot && snapshot.canApply && String(snapshot.status || "") === "preview-ready") {
+      const draftIdentity = JSON.stringify(this.recordTypedDraftFor(target));
+      const previewOps = Array.isArray(snapshot.draftOps) ? snapshot.draftOps : [];
+      let builtOps = null;
+      try {
+        const built = typeof recordCardBuildOps === "function"
+          ? recordCardBuildOps(target, this.recordTypedDraftFor(target)) : null;
+        if (built && built.ok === true) builtOps = built.ops;
+      } catch (_) {}
+      const matches = builtOps && JSON.stringify(previewOps) === JSON.stringify(builtOps);
+      if (matches) {
+        const latched = this.pendingTab && (direction === 1 || direction === -1) ? this.pendingTab : null;
+        if (!latched) {
+          return this.recordApplyTyped(null);
+        }
+        this.pendingTab = null;
+        return this.recordApplyTyped(latched);
+      }
+    }
+    this.statusKind = "saving";
+    this.paintRecordCard();
+    return { ok: false, code: "preview-pending", message: "Waiting for a current preview before saving." };
+  }
+,
+  async recordApplyTyped(latched) {
+    if (this.closed || this.pendingApply) return null;
+    if (!this.stage || !this.session) return null;
+    const seqAtCall = this.stageEnterSeq;
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintRecordCard();
+    let result = null;
+    try {
+      result = await this.session.apply();
+    } catch (error) {
+      result = { ok: false, code: "failed", message: String((error && error.message) || error) };
+    }
+    if (this.closed) return result;
+    if (seqAtCall !== this.stageEnterSeq && !(latched && latched.direction)) {
+      this.pendingApply = false;
+      return result;
+    }
+    this.pendingApply = false;
+    const ops = this.recordTypedOpsForRetry();
+    return this.recordSettleApplyResult(result, ops || []);
+  }
+,
+  async recordTab(direction) {
+    if (this.closed) return null;
+    if (!this.stage) {
+      this.recordMove(direction);
+      return { ok: true, moved: true };
+    }
+    if (this.stage.kind === "choices") {
+      const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
+      if (target && this.selectedChoice && String(this.selectedChoice) !== String(target.value || "")) {
+        this.pendingTab = { direction, field: this.stage.field, kind: "choices", draftIdentity: String(this.selectedChoice), enterSeq: this.stageEnterSeq };
+        return this.recordApplyChoice(this.selectedChoice).then((result) => {
+          if (result && result.ok === true) {
+            const nextKey = recordCardNavigate(this.recordTargets(), this.stage ? this.stage.field : this.selectedKey, direction);
+            if (nextKey) {
+              const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
+              if (nextTarget && nextTarget.stageKind) this.recordOpenStage(nextTarget.stageKind, nextKey);
+            }
+          } else {
+            this.recordInvalidatePendingTab();
+          }
+          return result;
+        });
+      }
+      const nextKey = recordCardNavigate(this.recordTargets(), this.stage.field, direction);
+      if (nextKey) {
+        const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
+        if (nextTarget && nextTarget.stageKind) this.recordOpenStage(nextTarget.stageKind, nextKey);
+        else this.recordSelect(nextKey);
+      }
+      return { ok: true, moved: true };
+    }
+    return this.recordSaveTyped(direction);
+  }
+,
+  async recordRetry() {
+    if (this.stage && this.stage.kind !== "choices") {
+      const ops = this.recordTypedOpsForRetry() || this.retainedOps;
+      this.retainedOps = null;
+      if (!ops) return this.recordRefresh({ keepStage: true });
+      if (this.session && this.writable) {
+        try { this.session.setDraft(ops); } catch (_) {}
+        try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+        this.recordSyncSessionPreview();
+        try {
+          const snap = this.session.getState?.() || null;
+          if (snap && snap.canApply) return this.recordApplyTyped(null);
+        } catch (_) {}
+        return { ok: false, code: "preview-pending" };
+      }
+      return this.recordRefresh({ keepStage: true });
+    }
+    if (!this.retainedOps) return this.recordRefresh({ keepStage: true });
+    const ops = this.retainedOps;
+    this.retainedOps = null;
+    return this.recordApplyOps(ops, { retry: true });
+  }
+,
+  async recordSchema() {
+    const plugin = this.recordPlugin;
+    const path = this.recordPath;
+    const field = this.selectedKey || (this.stage && this.stage.field) || "";
+    this.close();
+    if (plugin && typeof plugin.openAlbumSchemaEntry === "function") {
+      return plugin.openAlbumSchemaEntry({ filePath: path, field });
+    }
+    return null;
+  }
+,
+  recordEnsureSession(fingerprint) {
+    if (!this.writable || this.session || !fingerprint) return;
+    const plugin = this.recordPlugin;
+    const undo = plugin && typeof plugin.recordUpdateLastUndo === "function"
+      ? plugin.recordUpdateLastUndo(this.recordPath)
+      : null;
+    const self = this;
+    const deps = typeof recordUpdateServiceDeps === "function"
+      ? recordUpdateServiceDeps(plugin, {
+        type: this.recordType,
+        stem: this.recordStem,
+        recordPath: this.recordPath,
+        albumPath: this.albumPath,
+        onChange: (snapshot) => {
+          if (self.closed) return;
+          self.sessionState = snapshot;
+          if (self.statusKind === "saving" && self.pendingApply) return;
+          if (self.stage && self.stage.kind !== "choices") {
+            self.recordSyncSessionPreview();
+            return;
+          }
+          self.paintRecordCard();
+        },
+      })
+      : {};
+    this.session = createRecordUpdateSession({
+      recordPath: this.recordPath,
+      albumPath: this.albumPath,
+      type: this.recordType,
+      stem: this.recordStem,
+      expect: fingerprint,
+      undo: undo && undo.inverseOps ? { inverseOps: undo.inverseOps, afterFingerprint: undo.afterFingerprint } : undo,
+    }, deps);
+    this.sessionState = this.session.getState?.() || null;
+  }
+,
+  async recordRefresh(options = {}) {
+    if (this.closed) return;
+    if (this.session && options.keepStage !== true) {
+      try { this.session.setDraft([]); } catch (_) {}
+    }
+    this.recordInvalidatePendingTab();
+    try {
+      this.gate = this.recordPlugin?.recordSheetGateFor?.(this.recordPath) || this.gate;
+      this.sheetModel = this.recordPlugin?.recordSheetModelFor?.(this.recordPath) || this.sheetModel;
+    } catch (_) {}
+    const stillMount = Boolean(this.gate && this.gate.mount);
+    if (!stillMount) {
+      this.close();
+      return;
+    }
+    const wasWritable = this.writable;
+    this.writable = recordCardWritable(this.gate);
+    this.capabilityOk = Boolean(this.gate && this.gate.capabilityOk);
+    this.warning = (this.sheetModel && this.sheetModel.warning) || this.warning;
+    if (!this.writable && wasWritable && this.stage) {
+      this.recordInvalidatePendingTab();
+      this.stagePreview = null;
+      this.stageEnterSeq += 1;
+      this.statusKind = this.gate && this.gate.state === "broken" ? "broken" : "capability";
+      this.paintRecordCard();
+      await this.recordRead();
+      return;
+    }
+    const captured = options.keepStage ? {
+      kind: this.stage && this.stage.kind,
+      field: this.stage && this.stage.field,
+      filter: this.choiceFilter,
+      selectedChoice: this.selectedChoice,
+      draft: this.stageDraft,
+      caret: this.stageCaret,
+      text: this.stageDraftText,
+      list: Array.isArray(this.stageList) ? this.stageList.slice() : [],
+      itemDraft: this.stageItemDraft,
+    } : null;
+    const targets = this.recordTargets();
+    this.selectedKey = recordCardPreserveSelection(targets, this.selectedKey, this.selectedIndex);
+    this.selectedIndex = Math.max(0, targets.findIndex((target) => target.key === this.selectedKey));
+    let restored = null;
+    if (captured && captured.field) {
+      const stillThere = targets.some((target) => target.key === captured.field);
+      if (!stillThere) {
+        this.stage = null;
+        this.stageDraftText = "";
+        this.stageList = [];
+        this.stageItemDraft = "";
+        this.stagePreview = null;
+        this.statusKind = "refusal";
+        this.refusalMessage = "That field is no longer in the schema — your draft is kept.";
+        this.refusalHint = "Pick another field; nothing was written.";
+        this.announce = recordCardLiveAnnouncement("refusal", { message: this.refusalMessage });
+      } else {
+        const nextTarget = targets.find((target) => target.key === captured.field);
+        if (nextTarget && captured.kind && nextTarget.stageKind !== captured.kind) {
+          this.stage = null;
+          this.stageDraftText = "";
+          this.stageList = [];
+          this.stageItemDraft = "";
+          this.stagePreview = null;
+          this.statusKind = "refusal";
+          this.refusalMessage = "That field changed kind — your draft is kept.";
+          this.refusalHint = "Reopen the field; nothing was written.";
+        } else {
+          this.stage = captured.kind ? { kind: captured.kind, field: captured.field } : null;
+          this.choiceFilter = captured.filter || "";
+          this.selectedChoice = captured.selectedChoice || "";
+          this.stageDraft = captured.draft || "";
+          this.stageDraftText = captured.text || "";
+          this.stageList = Array.isArray(captured.list) ? captured.list.slice() : [];
+          this.stageItemDraft = captured.itemDraft || "";
+          this.stageCaret = captured.caret || null;
+        }
+        restored = { kind: captured.kind, field: captured.field };
+      }
+    } else if (!options.keepStage) {
+      this.stage = null;
+      this.stageDraftText = "";
+      this.stageList = [];
+      this.stageItemDraft = "";
+      this.stagePreview = null;
+    }
+    this.paintRecordCard();
+    await this.recordRead();
+    if (this.session && this.latestReport && recordCardShowRecord(this.latestReport)) {
+      try { this.session.rebase?.(recordCardShowRecord(this.latestReport).fingerprint); } catch (_) {}
+      try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+      if (this.stage && this.stage.kind !== "choices" && options.keepStage) {
+        const ops = this.recordTypedOpsForRetry();
+        if (ops && ops.length) {
+          try { this.session.setDraft(ops); } catch (_) {}
+        }
+      }
+    }
+  }
+,
+  onOpen() {
+    try {
+      this.modalEl?.addClass?.("bob-record-card-modal");
+      this.modalEl?.setAttribute?.("role", "dialog");
+      this.modalEl?.setAttribute?.("aria-modal", "true");
+      this.modalEl?.setAttribute?.("aria-label", "Edit record");
+      this.contentEl?.addClass?.("bob-record-card");
+      this.contentEl?.addClass?.("bob-key-card");
+    } catch (_) {}
+    this.paintRecordCard();
+    this.recordClickListener = (event) => this.recordOnClick(event);
+    this.recordKeyListener = (event) => this.recordOnKeyDown(event);
+    this.recordInputListener = (event) => {
+      const input = event?.target?.closest?.("[data-record-input]");
+      if (!input) return;
+      const kind = input.getAttribute?.("data-record-input") || "";
+      if (kind === "choice-filter") {
+        this.choiceFilter = String(input.value || "");
+        if (typeof input.selectionStart === "number") {
+          this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
+        }
+        this.recordInvalidatePendingTab();
+        this.paintRecordCard();
+        return;
+      }
+      if (kind === "stage-text" || kind === "stage-suggest" || kind === "stage-date"
+        || kind === "stage-number" || kind === "stage-url" || kind === "stage-link") {
+        if (this.composing || (event && event.isComposing)) return;
+        this.stageDraftText = String(input.value || "");
+        if (typeof input.selectionStart === "number") {
+          this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
+        }
+        void this.recordTypedInput();
+        return;
+      }
+      if (kind === "stage-list-item") {
+        if (this.composing || (event && event.isComposing)) return;
+        this.stageItemDraft = String(input.value || "");
+        if (typeof input.selectionStart === "number") {
+          this.stageCaret = { start: input.selectionStart, end: input.selectionEnd };
+        }
+        this.recordInvalidatePendingTab();
+        this.recordTypedInput();
+        return;
+      }
+    };
+    this.contentEl?.addEventListener?.("click", this.recordClickListener);
+    this.contentEl?.addEventListener?.("keydown", this.recordKeyListener);
+    this.contentEl?.addEventListener?.("input", this.recordInputListener);
+    this.contentEl?.addEventListener?.("compositionstart", () => {
+      this.composing = true;
+      this.recordInvalidatePendingTab();
+    });
+    this.contentEl?.addEventListener?.("compositionend", (event) => {
+      this.composing = false;
+      const input = event?.target?.closest?.("[data-record-input]");
+      if (input) {
+        const kind = input.getAttribute?.("data-record-input") || "";
+        if (kind.startsWith("stage-")) {
+          if (kind === "stage-list-item") this.stageItemDraft = String(input.value || "");
+          else this.stageDraftText = String(input.value || "");
+          void this.recordTypedInput();
+        }
+      }
+    });
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, { backOut: (event) => this.recordBackOut(event) });
+      }
+    } catch (_) {}
+    try {
+      const root = this.modalEl?.ownerDocument || this.contentEl?.ownerDocument;
+      this.recordDomKeyListener = (event) => {
+        if (this.closed || event?.__schemaEscapeHandled) return;
+        const kind = this.recordCloseKind(event);
+        if (kind && this.recordShouldBackOut(kind, event)) this.recordBackOut(event);
+      };
+      root?.addEventListener?.("keydown", this.recordDomKeyListener, true);
+      this.recordDomKeyRoot = root;
+    } catch (_) {}
+    try {
+      this.unsubscribeAlbum = this.recordPlugin?.apiAlbumSubscribe?.(() => this.recordScheduleRefresh()) || null;
+    } catch (_) {}
+    try {
+      const cache = this.recordPlugin?.app?.metadataCache;
+      if (cache && typeof cache.on === "function") {
+        this.unsubscribeVault = cache.on("changed", (file) => {
+          const path = recordCardPath(file && file.path);
+          if (path === this.recordPath || path === this.albumPath) this.recordScheduleRefresh();
+        });
+        if (this.recordPlugin && typeof this.recordPlugin.registerEvent === "function" && this.unsubscribeVault) {
+          this.recordPlugin.registerEvent(this.unsubscribeVault);
+        }
+      }
+    } catch (_) {}
+    if (this.requestedStage) this.recordOpenStage(this.requestedStage, this.selectedKey);
+    void this.recordRead();
+  }
+,
+  onClose() {
+    this.closed = true;
+    this.closeToken += 1;
+    this.pendingApply = false;
+    this.pendingTab = null;
+    this.stageEnterSeq += 1;
+    try { if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this); } catch (_) {}
+    try { this.recordDomKeyRoot?.removeEventListener?.("keydown", this.recordDomKeyListener, true); } catch (_) {}
+    try { this.unsubscribeAlbum?.(); } catch (_) {}
+    this.unsubscribeAlbum = null;
+    try { this.recordPlugin?.albumClearTimeout?.(this.refreshTimer); } catch (_) {}
+    this.refreshTimer = null;
+    try { this.session?.close?.(); } catch (_) {}
+    this.session = null;
+    try { this.contentEl?.empty?.(); } catch (_) {}
+    if (this.recordPlugin && this.recordPlugin.recordCardModal === this) {
+      this.recordPlugin.recordCardModal = null;
+    }
+  }
+});
 // ---- src/241e-plugin-notebook-header-model.js ----
 // Linked notebook headers: pure ancestry and child models.
 // Bob remains the source of truth; this fragment never writes note bytes
@@ -150853,6 +152679,7 @@ try {
       RECORD_CARD_STALE_TEXT,
       RECORD_CARD_CAPABILITY_TEXT,
       RECORD_CARD_TYPED_STAGE_HINT,
+      RECORD_CARD_DIGIT_TEACH,
       RECORD_CARD_NON_RECORD_NOTICE,
       RECORD_CARD_MOBILE_NOTICE,
       RECORD_CARD_NO_REPORT_NOTICE,
@@ -150866,6 +152693,14 @@ try {
       recordCardPreserveSelection,
       recordCardNavigate,
       recordCardHomeEnd,
+      recordCardShiftStep,
+      recordCardShiftAnnouncement,
+      recordCardSeedText,
+      recordCardSeedList,
+      recordCardSeedStage,
+      recordCardIsEmptyScalarText,
+      recordCardBuildOps,
+      recordCardDraftEqualsSeed,
       recordCardChoiceList,
       recordCardFilterChoices,
       recordCardChoiceByDigit,
@@ -150885,6 +152720,14 @@ try {
       recordCardWritable,
       recordCardBuildEl,
       recordCardRegion,
+      recordCardSuggestValues,
+      recordCardFilterSuggest,
+      recordCardSuggestByValue,
+      recordCardLinkCandidates,
+      recordCardParseLinkDraft,
+      recordCardNumberHint,
+      recordCardStageHintText,
+      recordCardPaintTypedStage,
       albumYamlExcursionOwnPath,
       RecordCardModal,
     });

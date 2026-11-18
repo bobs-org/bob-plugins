@@ -269,7 +269,8 @@ class BobLedgerToolsAlbumEntryMixin {
       return { ok: false, reason: "unavailable", albumPath: target.albumPath };
     }
     try {
-      return this.openAlbumSchemaCard(model, target.albumPath);
+      const field = typeof options.field === "string" ? options.field : "";
+      return this.openAlbumSchemaCard(model, target.albumPath, field ? { field } : {});
     } catch (error) {
       try { new Notice("Could not open the Schema Card."); } catch (_) {}
       return { ok: false, reason: "open-failed", albumPath: target.albumPath };

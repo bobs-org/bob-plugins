@@ -241,6 +241,46 @@ function recordCardPaintStage(card, options, doc) {
     if (inline && host !== inline) recordCardRegionEmpty(host);
     return;
   }
+  if (options.stage.kind && options.stage.kind !== "choices") {
+    const stageTarget = (options.targets || []).find((row) => row.key === options.stage.field)
+      || options.status?.target
+      || null;
+    if (stageTarget && typeof recordCardPaintTypedStage === "function") {
+      const inlineHost = inline || host;
+      recordCardPaintTypedStage(doc, inlineHost, {
+        kind: options.stage.kind,
+        target: stageTarget,
+        draft: {
+          text: options.stageDraftText ?? options.draftText ?? "",
+          list: options.stageList || options.draftList || [],
+          itemDraft: options.stageItemDraft ?? options.draftItemDraft ?? "",
+          selectedChoice: options.selectedChoice || "",
+        },
+        reportField: options.reportField || null,
+        preview: options.stagePreview || null,
+        plugin: options.plugin || null,
+        recordPath: options.recordPath || "",
+        applying: options.status?.pendingApply === true,
+      });
+      if (inline && host !== inline) recordCardRegionEmpty(host);
+      try {
+        const input = inlineHost.querySelector?.("[data-record-input^='stage-']");
+        if (input && options.focusStage !== false && typeof input.focus === "function") {
+          const active = recordCardDomDoc(inlineHost)?.activeElement;
+          const isComposing = options.composing === true;
+          if (!isComposing && active !== input) {
+            const caret = options.stageCaret;
+            input.focus();
+            if (caret && typeof input.setSelectionRange === "function"
+              && Number.isInteger(caret.start) && input.value != null) {
+              try { input.setSelectionRange(caret.start, caret.end ?? caret.start); } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+      return;
+    }
+  }
   recordCardRegionEmpty(target);
   const note = recordCardEl(doc, "p", "bob-record-card-stage-note");
   recordCardText(note, RECORD_CARD_TYPED_STAGE_HINT);

@@ -50,24 +50,80 @@ keys stay read-only. The card opens on a requested field, else the first
 missing required field, else the first field, and stays open after saves.
 
 Writes go through the guarded `bob records update` session. Discrete
-actions apply one field operation with the current fingerprint. Typed
-editors for text, date, number, URL, link, and list fields arrive in a
-later phase.
+actions (choice picks, `t` today, clear, Undo, explicit suggestion picks)
+apply one field operation with the current fingerprint. Typed values
+preview through a 250ms debounced dry run; Enter stays latched until a
+current preview succeeds, then applies exactly once.
+
+Digits here pick a choice; on the album Schema Card they jump to field N.
 
 ### Browse keys
 
 | Gesture | Outcome |
 | --- | --- |
-| `j` / `k`, arrows, Tab / Shift+Tab | Next or previous field, including ghosts. |
+| `j` / `k`, arrows, Tab / Shift+Tab | Next or previous field, including ghosts. Tab wraps; Shift+J/K clamps. |
+| Shift+J / Shift+K | Step to the adjacent schema field including ghosts, clamp at the ends with a bump and `No next field` / `No previous field`, and announce `<Label>, field N of M`. Inert in stages, inputs, menus, and IME; never writes. All actions offers Previous/Next field. |
 | Home / End | First or last field. |
-| Enter | Open the selected field's stage. Choices open the pick list; other kinds teach that YAML is the available edit route. |
-| `1`–`9` on a choices row | Apply that schema-order choice. |
+| Enter | Open the selected field's stage. |
+| `1`–`9` on a choices row | Pick that schema-order choice and save. Elsewhere a digit does nothing and teaches `Digits pick a choice on choice fields`. |
 | `t` on a date | Set today in the local calendar date. |
 | Ctrl+D | Unset an optional field. Required fields refuse, for example `Status is required — pick one of 6 choices`. |
 | `u` / Ctrl+Z | Undo the last save for this record path. |
 | `y` / Ctrl+E | Close and open Source on the field's YAML line, with Done. |
-| `=` | Close and open the parent album Schema Card. |
-| Esc / `q` / Ctrl+[ | Close All actions, then the stage, then the card. `q` types in the filter input. |
+| `=` | Close and open the parent album Schema Card on the same field, falling back to Album details. |
+| Esc / `q` / Ctrl+[ | Close All actions, then the stage, then the card. `q` types only in text controls. |
+
+### Stages
+
+Stages expand inline under their field with labelled controls, combobox
+and listbox relationships, visible focus, and text-only user strings.
+
+| Stage | Behavior |
+| --- | --- |
+| Text | Auto-growing textarea. Pasted newlines are preserved for bob to refuse; Enter saves, never inserts a newline. |
+| Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. |
+| Date | Text input accepting `today`, `t`, `yesterday`, and ISO. The parsed echo comes from bob's preview. Browse `t` keeps its direct route. |
+| Number | Text input with numeric inputmode and schema min/max hints. Incomplete tokens are preserved for bob; no `parseFloat`, empty-to-zero, NaN, or clamping. |
+| URL | Text/URL input with bob's validation and hint; no normalization of invalid URLs. |
+| Link | Vault note suggester accepting a bare name or `[[wikilink]]`, resolved relative to the record with Obsidian metadata. Aliases, headings, and block anchors are preserved; picks preview before save. |
+| List | Chip editor with a separate item input. Enter on a nonempty item adds it; Enter on an empty item saves the list. Empty-input Backspace removes the last chip; chips expose edit/remove. Order and literal commas are preserved; values submit as a JSON array. |
+
+For list fields a choice or suggestion pick edits the list draft instead
+of emitting a scalar `field.set`. Tab includes a nonempty pending list
+item before preview so typed input is never lost. Scalar kind rules govern
+each item.
+
+Save, Save + next/previous, Cancel, and picker/list controls live in the
+stage. Hints stay contextual; YAML stays available through its action.
+
+### Save and advance
+
+One changed field produces one operation. Explicitly empty optional
+scalars and lists produce `field.unset`; a deliberately cleared required
+field refuses with the teaching pattern and never applies. Tab and
+Shift+Tab consume the key in every stage, including choices and
+comboboxes: unchanged moves with no preview or write using wrapping
+navigation; changed latches one advance with the current stage and draft
+identity, waits for its current successful preview, applies once, then
+advances only on success including no-ops. Refusal or stale ends the
+pending advance and keeps the stage open. Editing, canceling, changing
+field, closing, or starting composition invalidates it. A new stage starts
+from the applied or read state, preserving the optimistic overlay and Undo.
+
+### Refusals and retry
+
+The status rule shows the loading line, the preview consequence, `✓ Saved
+· u undo`, bob's refusal message and hint verbatim, and the stale line
+`This record changed elsewhere — refreshed; your draft is kept · ↵
+retry`. The complete stage draft, chip state, selected candidate, active
+control, caret, and field identity survive record and album refreshes and
+stale refusals. Queued saves are invalidated before rebasing; retry
+schedules a fresh preview of the retained ops. A refreshed schema that
+removes or changes the field, or a lost capability, stops the old write
+intent with a teaching line while keeping the safe read-only and YAML
+route. Focus and selection survive repaints; IME composition nodes are
+never replaced. Cancel and close clear timers, preview drafts, queued Tab
+intent, and listeners.
 
 ### Choices
 

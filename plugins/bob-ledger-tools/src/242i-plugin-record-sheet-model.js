@@ -736,6 +736,16 @@ function recordSheetModel(input = {}) {
   const stem = typeof notebookHeaderStem === "function"
     ? notebookHeaderStem(gate.filePath)
     : String(gate.filePath || "").split("/").pop().replace(/\.md$/i, "");
+  const walk = typeof recordWalkModel === "function"
+    ? recordWalkModel({
+      path: gate.filePath,
+      frontmatter,
+      sourceText: input.sourceText,
+      report: input.report,
+      metadataCache: input.metadataCache,
+      vault: input.vault,
+    })
+    : null;
   return {
     path: gate.filePath,
     albumPath: gate.albumPath,
@@ -767,6 +777,7 @@ function recordSheetModel(input = {}) {
     overlay: overlay || null,
     subscription,
     schemaFingerprint: album.schema_fingerprint == null ? "" : String(album.schema_fingerprint),
+    walk,
   };
 }
 
@@ -788,6 +799,7 @@ function recordSheetSignature(model, extra = {}) {
       warningLine: model.warningLine,
       hideEligible: model.hideEligible,
       editable: model.editable,
+      walk: model.walk || null,
       collapsed: extra.collapsed === undefined ? model.collapsed === true : extra.collapsed === true,
       foldOpen: extra.foldOpen === undefined ? model.foldOpen === true : extra.foldOpen === true,
       hue: extra.hue === undefined ? model.hue : extra.hue,

@@ -144,6 +144,13 @@ class BobLedgerToolsFreshnessStatusMixin {
       this.observeFreshnessFooterWidth(el);
       this.subscribeWalkerFooterDoorbell();
       this.subscribeBankWalkerFooter();
+      this.linkWalkerFooterAlbumUnsubscribe = linksWalkerFooterSubscribeAlbum(this);
+      if (typeof this.register === "function") {
+        this.register(() => {
+          this.linkWalkerFooterAlbumUnsubscribe?.();
+          this.linkWalkerFooterAlbumUnsubscribe = null;
+        });
+      }
       this.refreshWalkerFooterOnLayoutReady();
     } catch (error) {
       this.freshnessStatusEl = null;

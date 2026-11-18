@@ -7,6 +7,8 @@ try {
   ) {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       linksWalkerFooterLabel,
+      linksWalkerFooterRecordWalk,
+      linksWalkerFooterSubscribeAlbum,
       linksWalkerFooterView,
       linksWalkerFooterSource,
       linksWalkerFooterRequest,

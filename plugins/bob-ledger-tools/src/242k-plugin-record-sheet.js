@@ -31,6 +31,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetFolds = new Map();
     this.recordSheetOverlays = new Map();
     this.recordSheetOverlayTimers = new Map();
+    this.recordSheetSourceCache = new Map();
+    this.recordSheetSourceFlights = new Map();
     this.recordSheetOwnedKey = "";
     this.recordSheetDomBuilds = 0;
     this.recordSheetRefreshTimer = null;
@@ -87,6 +89,8 @@ class BobLedgerToolsRecordSheetMixin {
     for (const timer of this.recordSheetOverlayTimers?.values?.() || []) this.albumClearTimeout?.(timer);
     this.recordSheetOverlayTimers?.clear?.();
     this.recordSheetOverlays?.clear?.();
+    this.recordSheetSourceCache?.clear?.();
+    this.recordSheetSourceFlights?.clear?.();
     this.recordSheetOwnedKey = "";
   }
 
@@ -110,13 +114,17 @@ class BobLedgerToolsRecordSheetMixin {
     if (this.recordSheetOverlayMatchesFrontmatter(path)) {
       this.recordSheetPushOverlay(path, null);
     }
+    const owns = this.recordSheetOwnsPath(path);
+    if (owns) {
+      this.recordSheetSourceCache?.delete?.(path);
+      this.recordSheetEnsureWalkSource(path);
+    }
     const openPath = this.recordSheetHasOpenPath(path);
     // A metadata edit can make an open ordinary note eligible for a Record
     // Card again. Keep observing the open path after the first edit removes
     // ownership so the inverse transition can rebuild its sheet and hide
     // class without requiring the user to reopen the note.
-    if (this.recordSheetOwnsPath(path) || this.recordSheetWatchesParent(path)
-        || openPath) {
+    if (owns || this.recordSheetWatchesParent(path) || openPath) {
       this.scheduleRecordSheetRefresh();
     }
   }
@@ -322,13 +330,18 @@ class BobLedgerToolsRecordSheetMixin {
     const gate = this.recordSheetGateFor(path);
     if (!gate.mount) return null;
     const cache = this.recordSheetCache(path);
+    const state = this.recordSheetState();
+    const currentSource = typeof sourceText === "string"
+      ? sourceText
+      : this.recordSheetSourceCache?.get?.(recordSheetPath(path));
     const heading = sourceText
       ? recordSheetFirstHeading(sourceText)
       : recordSheetHeadingFromCache(cache);
-    return recordSheetModel({
+    const model = recordSheetModel({
       path,
       frontmatter: this.recordSheetFrontmatter(path) || {},
-      report: this.recordSheetState()?.report || null,
+      report: state?.report || null,
+      sourceText: currentSource,
       heading,
       clock: { now: new Date(), today: this.recordSheetDay || undefined },
       overlay: this.recordSheetOverlays?.get?.(recordSheetPath(path)) || null,
@@ -340,6 +353,8 @@ class BobLedgerToolsRecordSheetMixin {
       subscription: this.recordSheetSubscription(path),
       gate,
     });
+    if (typeof recordWalkRequestSync === "function") recordWalkRequestSync(this, model?.walk);
+    return model;
   }
 
   recordSheetOptions(path, model) {
@@ -412,6 +427,28 @@ class BobLedgerToolsRecordSheetMixin {
       if (adapter && typeof adapter.read === "function") return await adapter.read(path);
     } catch (_) {}
     return "";
+  }
+
+  recordSheetEnsureWalkSource(path) {
+    const key = recordSheetPath(path);
+    if (!key || !this.recordSheetActive) return null;
+    if (!(this.recordSheetSourceCache instanceof Map)) this.recordSheetSourceCache = new Map();
+    if (!(this.recordSheetSourceFlights instanceof Map)) this.recordSheetSourceFlights = new Map();
+    if (this.recordSheetSourceCache.has(key)) return Promise.resolve(this.recordSheetSourceCache.get(key));
+    if (this.recordSheetSourceFlights.has(key)) return this.recordSheetSourceFlights.get(key);
+    const flight = Promise.resolve()
+      .then(() => this.recordSheetReadSource(key))
+      .then((source) => {
+        if (!this.recordSheetActive) return "";
+        const text = String(source == null ? "" : source);
+        this.recordSheetSourceCache.set(key, text);
+        this.scheduleRecordSheetRefresh();
+        return text;
+      })
+      .catch(() => "")
+      .finally(() => this.recordSheetSourceFlights.delete(key));
+    this.recordSheetSourceFlights.set(key, flight);
+    return flight;
   }
 
   async recordSheetJumpYaml(recordPath, key) {
@@ -678,6 +715,7 @@ class BobLedgerToolsRecordSheetMixin {
     widget.path = ctx.sourcePath;
     widget.viewFallback = false;
     widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
+    if (widget.albumPath) this.recordSheetEnsureWalkSource(ctx.sourcePath);
     const binding = {};
     widget.binding = binding;
     const child = typeof MarkdownRenderChild === "function"

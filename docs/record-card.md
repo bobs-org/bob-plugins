@@ -17,6 +17,17 @@ The sheet is desktop-only and reads the cached album report plus Obsidian
 metadata. Opening, folding, or collapsing a record never requests a new
 report and never writes the note. Source mode keeps native YAML.
 
+## Record walk position
+
+On a record with a recognized walk line and verified neighbor targets, the
+`n` links footer shows the compact position, such as `Links 3/104`. Its tooltip
+names the album and spells out the position. The count is derived from the
+immediate Markdown children of the album folder; it is never written into the
+record. If the stored neighbor targets disagree with the title order, the
+footer shows `Links ⟳`; when the cached album report enables walk repair, the
+plugin requests one album sync for that mismatch episode. Missing or damaged
+walk lines do not show a numeric count.
+
 ## What the sheet shows
 
 The sheet is a labelled group, *Title record details*. Its first row shows the

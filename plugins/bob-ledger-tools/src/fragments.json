@@ -200,6 +200,7 @@
   "242f-plugin-emoji-slot-model.js",
   "242g-plugin-emoji-slot-dom.js",
   "242h-plugin-bank-emoji-slot.js",
+  "242t-plugin-record-walk-model.js",
   "242i-plugin-record-sheet-model.js",
   "242j-plugin-record-sheet-dom.js",
   "242k-plugin-record-sheet.js",
@@ -320,5 +321,6 @@
   "370-exports-card-close-keys.js",
   "370-exports-record-sheet.js",
   "371-exports-record-update.js",
-  "372-exports-record-card.js"
+  "372-exports-record-card.js",
+  "373-exports-record-walk.js"
 ]

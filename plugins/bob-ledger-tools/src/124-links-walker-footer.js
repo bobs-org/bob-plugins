@@ -101,6 +101,45 @@ function linksWalkerFooterAlbumRecords(plugin, preview) {
   };
 }
 
+function linksWalkerFooterRecordWalk(walk) {
+  if (!walk || !walk.album) return { dueText: "Links", tooltip: "", ariaLabel: "" };
+  const albumName = [walk.album.emoji, walk.album.title].filter(Boolean).join(" ");
+  const recordName = String(walk.title || walk.stem || "This record");
+  if (walk.state === "ok" && Number.isInteger(walk.position) && Number.isInteger(walk.total)) {
+    return {
+      dueText: `Links ${walk.position}/${walk.total}`,
+      tooltip: `${recordName} is ${walk.position} of ${walk.total} in ${albumName} · alphabetical, wraps around`,
+      ariaLabel: `Links ${walk.position} of ${walk.total}`,
+    };
+  }
+  if (walk.state === "syncing") {
+    return {
+      dueText: "Links ⟳",
+      tooltip: `Record walk is syncing for ${recordName} in ${albumName}`,
+      ariaLabel: "Links, record walk is syncing",
+    };
+  }
+  return { dueText: "Links", tooltip: "", ariaLabel: "" };
+}
+
+function linksWalkerFooterSubscribeAlbum(plugin) {
+  if (!plugin || typeof plugin.apiAlbumSubscribe !== "function") return () => {};
+  try {
+    const unsubscribe = plugin.apiAlbumSubscribe((state) => {
+      if (typeof recordWalkClearSyncedEpisodes === "function") {
+        recordWalkClearSyncedEpisodes(plugin, state);
+      }
+      linksWalkerFooterInvalidate(plugin);
+      const route = walkerFooterWalkMode(plugin);
+      if (!route.legacy && route.mode === "n") linksWalkerFooterRequest(plugin);
+      else plugin.scheduleFreshnessStatusBar?.();
+    });
+    return typeof unsubscribe === "function" ? unsubscribe : () => {};
+  } catch (_) {
+    return () => {};
+  }
+}
+
 function linksWalkerFooterArm(link, direction) {
   if (!link) {
     return null;
@@ -135,6 +174,7 @@ function linksWalkerFooterArm(link, direction) {
 
 function linksWalkerFooterView(preview, options = {}) {
   try {
+    const walkDue = linksWalkerFooterRecordWalk(preview && preview.recordWalk);
     if (options.state === "open-note") {
       return {
         visible: true,
@@ -180,7 +220,7 @@ function linksWalkerFooterView(preview, options = {}) {
 
     let prev = linksWalkerFooterArm(preview.prev, "prev");
     let next = linksWalkerFooterArm(preview.next, "next");
-    if (!prev && !next) {
+    if (!prev && !next && walkDue.dueText === "Links") {
       return {
         visible: true,
         mode: "links",
@@ -213,20 +253,24 @@ function linksWalkerFooterView(preview, options = {}) {
       }
     }
 
-    const linkState = prev && next ? "both" : prev ? "prev-only" : "next-only";
+    const linkState = prev && next ? "both" : prev ? "prev-only" : next ? "next-only" : "empty";
     const statusText = prev && !next ? "no next" : !prev && next ? "no prev" : "";
     const arms = [prev, next].filter(Boolean);
     const summary = arms.map((arm) => arm.text).join(" · ");
-    const tooltip = arms
+    const armsTooltip = arms
       .map((arm) => `${arm.text}\n${arm.tooltip}`)
       .concat(statusText ? [statusText] : [])
       .join("\n");
+    const tooltip = walkDue.tooltip
+      ? `⇄ Links · ${walkDue.tooltip}${armsTooltip ? `\n${armsTooltip}` : ""}`
+      : `⇄ Links · ${summary}${statusText ? ` · ${statusText}` : ""}${armsTooltip ? `\n${armsTooltip}` : ""}`;
+    const summaryText = [walkDue.ariaLabel, summary, statusText].filter(Boolean).join(" · ");
     return {
       visible: true,
       mode: "links",
       panel: "links",
       glyph: "⇄",
-      dueText: "Links",
+      dueText: walkDue.dueText,
       contextText: "",
       linkState,
       linkStatusText: statusText,
@@ -237,8 +281,8 @@ function linksWalkerFooterView(preview, options = {}) {
       groups: [],
       groupsText: "",
       meterText: "",
-      tooltip: `⇄ Links · ${summary}${statusText ? ` · ${statusText}` : ""}\n${tooltip}`,
-      ariaLabel: `Links · ${summary}${statusText ? ` · ${statusText}` : ""}`,
+      tooltip,
+      ariaLabel: summaryText ? `Links · ${summaryText}` : "Links · no previous or next links",
     };
   } catch (error) {
     return linksWalkerFooterView(null, { state: "unavailable" });
@@ -381,7 +425,20 @@ function linksWalkerFooterRequest(plugin) {
       if (!linksWalkerFooterIsCurrent(plugin, generation, source)) {
         return;
       }
-      const displayPreview = linksWalkerFooterAlbumRecords(plugin, preview);
+      let recordWalk = null;
+      if (preview && preview.ok === true && typeof recordWalkModel === "function") {
+        const albumState = typeof plugin.albumReportState === "function"
+          ? plugin.albumReportState() : null;
+        recordWalk = recordWalkModel({
+          path: source.path,
+          sourceText: source.content,
+          report: albumState?.report || null,
+          metadataCache: plugin.app?.metadataCache,
+          vault: plugin.app?.vault,
+        });
+        if (typeof recordWalkRequestSync === "function") recordWalkRequestSync(plugin, recordWalk);
+      }
+      const displayPreview = linksWalkerFooterAlbumRecords(plugin, { ...preview, recordWalk });
       linksWalkerFooterPaint(
         plugin,
         linksWalkerFooterView(displayPreview),

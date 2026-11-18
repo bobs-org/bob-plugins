@@ -1142,6 +1142,35 @@ test("keepInboxRecountNow stores the inbox-tree total and notes", () => {
   );
 });
 
+test("layout-ready callbacks are not registered as disposable events", () => {
+  const layoutCallbacks = [];
+  const registeredEvents = [];
+  const app = {
+    plugins: { plugins: {} },
+    workspace: {
+      onLayoutReady: (callback) => { layoutCallbacks.push(callback); },
+      on: (name, callback) => ({ name, callback }),
+    },
+    vault: {
+      on: (name, callback) => ({ name, callback }),
+      getMarkdownFiles: () => [],
+    },
+    metadataCache: { on: () => ({}) },
+  };
+  const plugin = new LedgerToolsPlugin(app, {});
+  plugin.addStatusBarItem = () => makeStatusEl();
+  plugin.registerEvent = (event) => registeredEvents.push(event);
+  plugin.registerDomEvent = () => {};
+  plugin.registerInterval = () => {};
+  plugin.setupKeepInboxActions = () => {};
+  plugin.keepInboxUpdateView = () => {};
+  plugin.setupKeepInboxIndicator();
+
+  assert.equal(layoutCallbacks.length, 1);
+  assert.ok(registeredEvents.length > 0);
+  assert.ok(registeredEvents.every((event) => event != null));
+});
+
 test("inbox click opens the note with the most open tasks", async () => {
   const fake = makeFakeVault(inboxTreeNotes());
   const opened = [];

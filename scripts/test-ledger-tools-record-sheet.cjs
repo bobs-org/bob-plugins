@@ -1,5 +1,7 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const path = require("node:path");
 const test = require("node:test");
 
 class TestPlugin {
@@ -335,9 +337,15 @@ function liveView(doc, path, text, live = true) {
   });
   const sourceView = node(doc, "div", "markdown-source-view");
   const root = node(doc, "div", "cm-editor");
+  const scroller = node(doc, "div", "cm-scroller");
+  const sizer = node(doc, "div", "cm-sizer");
+  sizer.appendChild(node(doc, "div", "metadata-container"));
+  sizer.appendChild(node(doc, "div", "inline-title"));
+  scroller.appendChild(sizer);
+  root.appendChild(scroller);
   sourceView.appendChild(root);
   return {
-    path, dom: root, sourceView,
+    path, dom: root, sourceView, scroller, sizer,
     state: {
       doc: { toString: () => text, line: (n) => lines[n - 1], get lines() { return lines.length; }, get length() { return text.length; } },
       field(key) {
@@ -563,6 +571,15 @@ test("Live Preview places H1-less sheets after frontmatter and before body secti
   assert.equal(plugin.recordSheetAnchor(liveView(doc, "eat/bare.md", legacyH1), legacyH1), headingEnd);
 });
 
+test("reading Record Card precedes the authored legacy H1", () => {
+  const { plugin, doc } = fixture();
+  const root = node(doc, "div", "markdown-preview-view");
+  const heading = node(doc, "h1", "", "Legacy heading");
+  root.appendChild(heading);
+  const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  assert.ok(root.children.indexOf(sheet) < root.children.indexOf(heading), "the card must precede the body heading");
+});
+
 test("collapsed summary leads with the group choice and keeps per-path fold state", () => {
   const fm = {
     type: "[[record]]", parent: "[[eat]]", title: "Smashburger",
@@ -646,7 +663,7 @@ test("Live Preview caches decorations across body edits and rebuilds on model ch
   const widget = overlayed[0].deco.widget.toDOM();
   assert.match(widget.textContent, /Loved/);
   assert.equal(widget.querySelectorAll(".bob-record-sheet-row").some((row) => row.classList.contains("is-changed")), true);
-  assert.equal(view.sourceView.classList.contains(HIDES), true);
+  assert.equal(view.dom.classList.contains(HIDES), true);
 });
 
 test("Source mode stays native YAML and Live Preview restores after the switch", () => {
@@ -655,17 +672,18 @@ test("Source mode stays native YAML and Live Preview restores after the switch",
   const text = "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n";
   const source = liveView(doc, "eat/smashburger.md", text, false);
   assert.deepEqual(plugin.buildRecordSheetDecorations(source), Decoration.none);
-  assert.equal(source.sourceView.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false);
-  assert.equal(source.sourceView.classList.contains(HIDES), false);
+  assert.equal(source.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false);
+  assert.equal(source.dom.classList.contains(HIDES), false);
   const live = liveView(doc, "eat/smashburger.md", text, true);
   const decorations = plugin.buildRecordSheetDecorations(live);
   assert.equal(decorations.length, 1);
-  assert.equal(live.sourceView.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
-  assert.equal(live.sourceView.classList.contains(HIDES), true);
+  assert.equal(live.dom.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
+  assert.equal(live.dom.classList.contains(HIDES), true);
+  assert.equal(live.sourceView.classList.contains(HIDES), false);
   caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
   live.state.doc = liveView(doc, "eat/smashburger.md", "---\ntype: [[note]]\n---\n# Smashburger\n", true).state.doc;
   assert.deepEqual(plugin.buildRecordSheetDecorations(live), Decoration.none);
-  assert.equal(live.sourceView.classList.contains(HIDES), false);
+  assert.equal(live.dom.classList.contains(HIDES), false);
 });
 
 test("Reading paints one owned sheet, ignores nested embeds, and cleans up on unload", () => {
@@ -776,7 +794,8 @@ test("hide class applies exactly when the gate is hide-eligible", () => {
   assert.equal(plugin.recordSheetEditorScopes.size, 0);
   const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n", true);
   plugin.buildRecordSheetDecorations(view);
-  assert.equal(view.sourceView.classList.contains(HIDES), true);
+  assert.equal(view.dom.classList.contains(HIDES), true);
+  assert.equal(view.sourceView.classList.contains(HIDES), false);
   const edit = root.querySelector(".bob-record-sheet-edit");
   assert.equal(edit && edit.textContent, "⊞ Edit");
   caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
@@ -784,7 +803,89 @@ test("hide class applies exactly when the gate is hide-eligible", () => {
   assert.equal(root.classList.contains(HIDES), false);
   plugin.teardownRecordSheet();
   assert.equal(plugin.recordSheetActive, false);
-  assert.equal(view.sourceView.classList.contains(HIDES), false);
+  assert.equal(view.dom.classList.contains(HIDES), false);
+});
+
+test("metadata edits on an open path refresh after eligibility is restored", () => {
+  const { plugin } = fixture();
+  let refreshes = 0;
+  plugin.scheduleRecordSheetRefresh = () => { refreshes += 1; };
+  const openPath = { view: { file: { path: "eat/smashburger.md" } } };
+  plugin.app.workspace.getLeavesOfType = () => [openPath];
+  assert.equal(plugin.recordSheetHasOpenPath("eat/smashburger.md"), true);
+  plugin.recordSheetOnMetadata({ path: "eat/smashburger.md" });
+  assert.equal(refreshes, 1);
+  plugin.recordSheetOnMetadata({ path: "eat.md" });
+  assert.equal(refreshes, 1);
+
+  let editorRefreshes = 0;
+  openPath.view.editor = { cm: { dispatch: () => { editorRefreshes += 1; } } };
+  plugin.refreshRecordSheetEditors();
+  assert.equal(editorRefreshes, 1);
+});
+
+test("Properties selectors follow the observed editor and Reading paths and leave embedded Properties visible", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const editorProperties = `.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .metadata-container`;
+  const editorTitle = `.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .inline-title`;
+  const readingProperties = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .metadata-container`;
+  const readingTitle = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .inline-title`;
+  for (const selector of [editorProperties, editorTitle, readingProperties, readingTitle]) {
+    assert.ok(styles.includes(selector), `missing observed Properties selector: ${selector}`);
+  }
+  assert.ok(styles.includes(`.${HIDES} .markdown-embed .metadata-container:not(.is-collapsed)`),
+    "expanded embedded Properties remain visible inside a hidden parent");
+  for (const obsoleteSelector of [
+    `.${HIDES} > .metadata-container`,
+    `.markdown-source-view.${HIDES} > .metadata-container`,
+    `.markdown-preview-view.${HIDES} > .metadata-container`,
+    `.workspace-leaf-content.${HIDES} > .view-content > .metadata-container`,
+    `.cm-editor.${HIDES} .metadata-container`,
+  ]) {
+    assert.doesNotMatch(styles, new RegExp(obsoleteSelector.replaceAll(".", "\\.").replaceAll(" ", "\\s+")),
+      `obsolete direct or unbounded Properties selector remains: ${obsoleteSelector}`);
+  }
+
+  const editorWorld = fixture();
+  const view = liveView(editorWorld.doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n", true);
+  editorWorld.plugin.buildRecordSheetDecorations(view);
+  assert.equal(view.dom.classList.contains(HIDES), true, "Live Preview hide ownership sits on the observed .cm-editor");
+  assert.equal(view.sourceView.classList.contains(HIDES), false, "the broader source view does not own the hide");
+  assert.equal(view.dom.children[0], view.scroller);
+  assert.equal(view.scroller.children[0], view.sizer);
+  assert.equal(view.sizer.children[0].classList.contains("metadata-container"), true);
+
+  const readingWorld = fixture();
+  const preview = node(readingWorld.doc, "div", "markdown-preview-view");
+  const sizer = node(readingWorld.doc, "div", "markdown-preview-sizer");
+  const header = node(readingWorld.doc, "div", "mod-header mod-ui");
+  const ownProperties = node(readingWorld.doc, "div", "metadata-container");
+  const ownTitle = node(readingWorld.doc, "div", "inline-title");
+  header.appendChild(ownProperties);
+  header.appendChild(ownTitle);
+  sizer.appendChild(header);
+  preview.appendChild(sizer);
+  const embed = node(readingWorld.doc, "div", "markdown-embed internal-embed");
+  const embedPreview = node(readingWorld.doc, "div", "markdown-preview-view");
+  const embedSizer = node(readingWorld.doc, "div", "markdown-preview-sizer");
+  const embedHeader = node(readingWorld.doc, "div", "mod-header mod-ui");
+  const embedProperties = node(readingWorld.doc, "div", "metadata-container");
+  embedHeader.appendChild(embedProperties);
+  embedSizer.appendChild(embedHeader);
+  embedPreview.appendChild(embedSizer);
+  embed.appendChild(embedPreview);
+  sizer.appendChild(embed);
+  readingWorld.plugin.paintRecordSheetReading(preview, "eat/smashburger.md");
+  assert.equal(preview.classList.contains(HIDES), true, "the owning Reading surface receives the hide class");
+  assert.equal(embedPreview.classList.contains(HIDES), false, "nested embedded notes never receive hide ownership");
+  assert.equal(ownProperties.parentNode, header);
+  assert.equal(embedProperties.parentNode, embedHeader);
+  assert.equal(embedProperties.closest(".markdown-embed"), embed);
+  const hover = node(readingWorld.doc, "div", "hover-popover");
+  const hoverPreview = node(readingWorld.doc, "div", "markdown-preview-view");
+  hover.appendChild(hoverPreview);
+  readingWorld.plugin.paintRecordSheetReading(hoverPreview, "eat/smashburger.md");
+  assert.equal(hoverPreview.classList.contains(HIDES), false, "hover previews keep their native Properties");
 });
 
 test("old-bob and broken-schema sheets leave Properties visible", () => {

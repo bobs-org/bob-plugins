@@ -246,17 +246,15 @@ class BobLedgerToolsKeepInboxMixin {
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.onLayoutReady === "function") {
-        this.registerEvent(
-          workspace.onLayoutReady(() => {
-            try {
-              this.keepInboxRecountFromTasks("layout-ready");
-            } catch (error) {}
-            void this.keepInboxRequestRead("layout-ready");
-            try {
-              this.keepInboxActionScheduleInitialCheck();
-            } catch (error) {}
-          }),
-        );
+        workspace.onLayoutReady(() => {
+          try {
+            this.keepInboxRecountFromTasks("layout-ready");
+          } catch (error) {}
+          void this.keepInboxRequestRead("layout-ready");
+          try {
+            this.keepInboxActionScheduleInitialCheck();
+          } catch (error) {}
+        });
       }
     } catch (error) {
       // Layout scheduling is best-effort.

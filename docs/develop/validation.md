@@ -85,6 +85,33 @@ Review every screenshot and the report's checks, note-byte hashes, and logged
 Bob sync/list calls. The offline self-test is fixture coverage only; it does
 not count as real Obsidian acceptance.
 
+The Record Card sheet wrapper is also part of `npm test`. It checks canonical
+record fixtures, the captured-DOM probe assertions, and negative visibility cases
+without Obsidian or a Bob installation. This is fixture coverage only.
+
+For real sheet acceptance, use athena's Obsidian Electron binary and a clean copy
+of the current bob-cli checkout and bob-plugins source under a disposable
+directory. Build `bob` from that checkout and place the exact binary at its
+`target/debug/bob`. Then run:
+
+```bash
+BOB_CLI_DIR=<disposable-bob-cli-checkout> \
+BOB_BIN=<disposable-bob-cli-checkout>/target/debug/bob \
+xvfb-run -a node scripts/obsidian-record-card-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/record-card-e2e.json -o /tmp/record-card-e2e-shots
+```
+
+The runner refuses a missing or incompatible supplied binary; it records the
+bob-cli source SHA, binary SHA256, version, and the real `record_values_v1`
+capability from `bob albums list`. It creates a unique scratch Git vault with a
+local bare remote, an owned Obsidian profile/process/debug port, and explicit
+`BOB_DIR` plus a missing test-config path. The scratch app starts with native
+Properties and the inline title enabled. It preserves a failure report and
+screenshots for diagnosis, records pass/fail/skipped assertions and console
+exceptions, and never opens the live vault. Copy the report and screenshots back
+from athena and inspect every PNG; `--self-test` is not real-Obsidian acceptance.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

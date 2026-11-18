@@ -101110,7 +101110,7 @@ function ensureRecordSheetRefresh() {
 function recordSheetScopeIsEmbed(scope) {
   try {
     return Boolean(scope && typeof scope.closest === "function"
-      && scope.closest(".markdown-embed, .internal-embed"));
+      && scope.closest(".markdown-embed, .internal-embed, .hover-popover"));
   } catch (_) {
     return false;
   }
@@ -101208,8 +101208,25 @@ class BobLedgerToolsRecordSheetMixin {
     if (this.recordSheetOverlayMatchesFrontmatter(path)) {
       this.recordSheetPushOverlay(path, null);
     }
-    if (this.recordSheetOwnsPath(path) || this.recordSheetWatchesParent(path)) {
+    const openPath = this.recordSheetHasOpenPath(path);
+    // A metadata edit can make an open ordinary note eligible for a Record
+    // Card again. Keep observing the open path after the first edit removes
+    // ownership so the inverse transition can rebuild its sheet and hide
+    // class without requiring the user to reopen the note.
+    if (this.recordSheetOwnsPath(path) || this.recordSheetWatchesParent(path)
+        || openPath) {
       this.scheduleRecordSheetRefresh();
+    }
+  }
+
+  recordSheetHasOpenPath(path) {
+    const wanted = recordSheetPath(path);
+    if (!wanted) return false;
+    try {
+      return (this.app?.workspace?.getLeavesOfType?.("markdown") || []).some((leaf) =>
+        recordSheetPath(leaf?.view?.file?.path) === wanted);
+    } catch (_) {
+      return false;
     }
   }
 
@@ -101621,7 +101638,9 @@ class BobLedgerToolsRecordSheetMixin {
       return null;
     }
     const anchor = this.albumHeaderReadingAnchor?.(root);
-    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor.nextSibling || null);
+    // The card is the record's rendered title surface, so keep it before an
+    // authored legacy H1 instead of letting that heading precede the card.
+    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor);
     else if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
     else root.prepend?.(sheet);
     if (focusKey) {
@@ -101891,7 +101910,11 @@ class BobLedgerToolsRecordSheetMixin {
     if (!(this.recordSheetEditorScopes instanceof Map)) this.recordSheetEditorScopes = new Map();
     let scope = root;
     try {
-      scope = root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
+      // Live Preview's native Properties and inline title are nested below the
+      // CodeMirror editor, not direct children of .markdown-source-view. Own
+      // the exact editor node so the CSS can follow that observed path without
+      // reaching into sibling editors or embedded notes.
+      if (!root.matches?.(".cm-editor")) scope = root.closest?.(".cm-editor") || root;
     } catch (_) {}
     const previous = this.recordSheetEditorScopes?.get(view);
     if (previous && previous !== scope) {
@@ -101964,7 +101987,12 @@ class BobLedgerToolsRecordSheetMixin {
   refreshRecordSheetEditors() {
     try {
       const effect = ensureRecordSheetRefresh();
-      for (const view of this.recordSheetEditors || []) {
+      const views = new Set(this.recordSheetEditors || []);
+      for (const leaf of this.app?.workspace?.getLeavesOfType?.("markdown") || []) {
+        const view = leaf?.view?.editor?.cm || null;
+        if (view?.dispatch) views.add(view);
+      }
+      for (const view of views) {
         if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
         else this.buildRecordSheetDecorations(view);
       }
@@ -147467,17 +147495,15 @@ class BobLedgerToolsKeepInboxMixin {
     try {
       const workspace = this.app && this.app.workspace;
       if (workspace && typeof workspace.onLayoutReady === "function") {
-        this.registerEvent(
-          workspace.onLayoutReady(() => {
-            try {
-              this.keepInboxRecountFromTasks("layout-ready");
-            } catch (error) {}
-            void this.keepInboxRequestRead("layout-ready");
-            try {
-              this.keepInboxActionScheduleInitialCheck();
-            } catch (error) {}
-          }),
-        );
+        workspace.onLayoutReady(() => {
+          try {
+            this.keepInboxRecountFromTasks("layout-ready");
+          } catch (error) {}
+          void this.keepInboxRequestRead("layout-ready");
+          try {
+            this.keepInboxActionScheduleInitialCheck();
+          } catch (error) {}
+        });
       }
     } catch (error) {
       // Layout scheduling is best-effort.

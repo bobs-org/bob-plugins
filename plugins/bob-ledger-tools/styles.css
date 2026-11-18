@@ -10966,19 +10966,24 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 /* Bank Period Charts paint (bob-cli-lj paint): end. */
 
-/* Record sheet: quieter album-header family. The hide class is dormant until
-   record-entry; child combinators keep nested embeds' Properties visible. */
-.bob-record-sheet-hides-properties > .metadata-container,
-.markdown-preview-view.bob-record-sheet-hides-properties > .metadata-container,
-.markdown-source-view.bob-record-sheet-hides-properties > .metadata-container,
-.workspace-leaf-content.bob-record-sheet-hides-properties > .view-content > .metadata-container {
+/* Record sheet: hide only Properties owned by the record surface. Live Preview
+   puts them under cm-editor > cm-scroller > cm-sizer; Reading view puts them
+   under markdown-preview-view > markdown-preview-sizer > mod-header. These
+   direct paths keep nested embeds' native Properties visible. */
+.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .metadata-container,
+.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .metadata-container {
   display: none !important;
 }
-.bob-record-sheet-hides-properties > .inline-title,
-.markdown-preview-view.bob-record-sheet-hides-properties > .inline-title,
-.markdown-source-view.bob-record-sheet-hides-properties > .inline-title,
-.workspace-leaf-content.bob-record-sheet-hides-properties > .view-content > .inline-title {
+.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .inline-title,
+.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .inline-title {
   display: none !important;
+}
+/* Obsidian suppresses expanded Properties inside rendered embeds. A record
+   card owns the parent note's Properties, but an expanded embedded record keeps
+   its native fields. The collapsed class still honors the reader's fold. */
+.bob-record-sheet-hides-properties .markdown-embed .metadata-container:not(.is-collapsed),
+.bob-record-sheet-hides-properties .internal-embed .metadata-container:not(.is-collapsed) {
+  display: block !important;
 }
 .bob-record-sheet {
   --bob-record-accent: var(--bob-area-ink, var(--interactive-accent));

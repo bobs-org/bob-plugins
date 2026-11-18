@@ -54439,7 +54439,9 @@ function periodStripTableRows(report) {
         done: row.done && typeof row.done === "object" ? row.done : null,
         review: row.review && typeof row.review === "object" ? row.review : null,
         closeout: typeof row.closeout === "string" ? row.closeout : null,
-        headline: typeof row.headline === "string" ? row.headline : (row.review && typeof row.review.headline === "string" ? row.review.headline : ""),
+        headline: row.review && typeof row.review.headline === "string" && row.review.headline.trim()
+          ? row.review.headline
+          : (typeof row.headline === "string" ? row.headline : ""),
         mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
         stack,
         stacks,
@@ -54866,14 +54868,14 @@ function paintPeriodPartsTable(host, model) {
         line.appendChild(workedCell);
         if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }, row.done && typeof row.done.display === "string" ? row.done.display : "–"));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }, periodPartsReviewText(row)));
-        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary " + (row.headline ? "bob-period-parts-summary-headline" : "bob-period-parts-summary-mostly"), role: "cell" }, row.headline || row.mostly || ""));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary " + (row.headline ? "bob-period-parts-summary-headline" : "bob-period-parts-summary-mostly"), role: "cell", title: row.headline || null }, row.headline || row.mostly || ""));
       } else if (row.headline) {
         // Keep a planned headline in the Summary column while the rest of a
         // future day stays empty. The row's faint styling marks it as a plan.
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-worked", role: "cell" }));
         if (hasDone) line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-done", role: "cell" }));
         line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-review", role: "cell" }));
-        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary bob-period-parts-summary-headline", role: "cell" }, row.headline));
+        line.appendChild(statsEl(doc, "span", { class: "bob-period-parts-cell bob-period-parts-cell-summary bob-period-parts-summary-headline", role: "cell", title: row.headline }, row.headline));
       }
       table.appendChild(line);
     }
@@ -55742,7 +55744,7 @@ class BobLedgerToolsPeriodStripMixin {
         model.charts ? model.charts.version : 0,
         model.error ? model.error.code : "",
         (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
-        (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),
+        (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || "", column.headline || ""].join(":")).join(","),
         (model.children || []).map((child) => [child.id, child.state, (child.worked && child.worked.display) || "", child.headline || "", child.mostly || ""].join(":")).join(","),
       ].join("|");
       if (record.paintedKey === key) return model;
@@ -56326,6 +56328,7 @@ function periodStripChartColumnTooltip(column, roots, types, fallback) {
     ? periodStripColumnReviewWords(column && column.mark, column && column.state)
     : "";
   const lines = [((column && column.label) || (column && column.id) || "Period") + " · Worked " + display + soFar + (review ? " · " + review : "")];
+  if (column && typeof column.headline === "string" && column.headline.trim()) lines.push(column.headline.trim());
   const append = (title, entries) => {
     for (const entry of entries || []) lines.push(title + " · " + entry.label + " " + periodStripFormatMinutes(entry.minutes));
   };
@@ -56361,6 +56364,7 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
         start: typeof column.start === "string" ? column.start : "",
         end: typeof column.end === "string" ? column.end : "",
         state,
+        headline: typeof column.headline === "string" ? column.headline : "",
         partial: typeof periodStripPartialCaption === "function" ? periodStripPartialCaption(column) : null,
         worked: worked ? {
           display: typeof worked.display === "string" ? worked.display : "–",

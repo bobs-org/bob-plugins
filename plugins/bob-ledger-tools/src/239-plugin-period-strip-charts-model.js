@@ -123,6 +123,7 @@ function periodStripChartColumnTooltip(column, roots, types, fallback) {
     ? periodStripColumnReviewWords(column && column.mark, column && column.state)
     : "";
   const lines = [((column && column.label) || (column && column.id) || "Period") + " · Worked " + display + soFar + (review ? " · " + review : "")];
+  if (column && typeof column.headline === "string" && column.headline.trim()) lines.push(column.headline.trim());
   const append = (title, entries) => {
     for (const entry of entries || []) lines.push(title + " · " + entry.label + " " + periodStripFormatMinutes(entry.minutes));
   };
@@ -158,6 +159,7 @@ function periodStripChartBuildColumns(rawRows, kind, rootSeries, typeSeries, fal
         start: typeof column.start === "string" ? column.start : "",
         end: typeof column.end === "string" ? column.end : "",
         state,
+        headline: typeof column.headline === "string" ? column.headline : "",
         partial: typeof periodStripPartialCaption === "function" ? periodStripPartialCaption(column) : null,
         worked: worked ? {
           display: typeof worked.display === "string" ? worked.display : "–",

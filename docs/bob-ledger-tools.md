@@ -82,14 +82,12 @@ On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `cla
 
 ## Bank Period Charts
 
-The read-only Bank Period Charts panel is the third child of a period
-`bob-stats-strip` fence on week, quarter, ISO-year, and all-time notes. It
-never mounts for Day strips, `bob-day-stats`, `bob-period-parts`, embeds,
-hover popovers, mobile, or future periods. The panel runs its own
-`bank report -p <id> -s -c` fetch on a separate cache entry, so an older bob
-or bad `charts` payload hides only the panel (with one `console.warn` per
-session) and never the badge. Bank file events and revalidation refresh it;
-its repaint clears only its host.
+The read-only Bank Period Charts panel is third in week, quarter, ISO-year,
+and all-time `bob-stats-strip` fences. It skips Day strips, `bob-day-stats`,
+`bob-period-parts`, embeds, hover popovers, mobile, and future periods. A
+separate `bank report -p <id> -s -c` cache isolates old-bob or bad-`charts`
+failures; one warning per session. Bank events and revalidation refresh it;
+repaint clears only its host.
 
 The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
 Both → In / Out → Categories (when available),
@@ -373,7 +371,9 @@ Off-clock lens. Notes without `bob-plan` show no strip. Place one explicitly
 with a `bob-day-stats` fence in any note, optionally with `day: YYYY-MM-DD`; a
 fence inside a daily note renders its own strip.
 
-The **period stats strip** (`bob-stats-strip`) paints Roots above Types for every period note. ●/■ and `Cycle period stats charts` cycle Both → Roots → Types per device, not Day strips. Arrows move, Enter opens the note, Alt+Enter opens Stats (days pin the day). Cache-driven read-only; Retry on failure. See bob-cli `docs/stats.md`.
+The **period stats strip** (`bob-stats-strip`) paints Roots and Types on period notes. `Cycle period stats charts` changes the per-device view. Arrows move, Enter opens the note, and Alt+Enter opens Stats pinned to the day. Cached and read-only; Retry on failure. See bob-cli `docs/stats.md`.
+
+Week `bob-period-parts` Days Summary shows each day's `**Headline:**` instead of mostly shares. Text wraps to two lines; hover shows the full text. Planned future headlines stay faint. Day columns include headlines in their strip tooltips. Older bob keeps mostly shares and omits headline tooltip text.
 
 `DEPENDS ON` lines render as live dependency chips plus generated `BLOCKS` rows
 with live dependents, last-blocker 🔑 badges, stale-entry styling, and `frees

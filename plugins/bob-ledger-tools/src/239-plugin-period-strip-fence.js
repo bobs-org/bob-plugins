@@ -498,7 +498,7 @@ class BobLedgerToolsPeriodStripMixin {
         model.charts ? model.charts.version : 0,
         model.error ? model.error.code : "",
         (model.facts || []).map((fact) => [fact.display, (fact.ref && fact.ref.mark) || "", (fact.ref && fact.ref.display) || ""].join(":")).join(","),
-        (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || ""].join(":")).join(","),
+        (model.columns || []).map((column) => [column.id, column.state, (column.worked && column.worked.display) || "", column.mark || "", column.headline || ""].join(":")).join(","),
         (model.children || []).map((child) => [child.id, child.state, (child.worked && child.worked.display) || "", child.headline || "", child.mostly || ""].join(":")).join(","),
       ].join("|");
       if (record.paintedKey === key) return model;

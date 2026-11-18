@@ -586,7 +586,9 @@ function periodStripTableRows(report) {
         done: row.done && typeof row.done === "object" ? row.done : null,
         review: row.review && typeof row.review === "object" ? row.review : null,
         closeout: typeof row.closeout === "string" ? row.closeout : null,
-        headline: typeof row.headline === "string" ? row.headline : (row.review && typeof row.review.headline === "string" ? row.review.headline : ""),
+        headline: row.review && typeof row.review.headline === "string" && row.review.headline.trim()
+          ? row.review.headline
+          : (typeof row.headline === "string" ? row.headline : ""),
         mostly: typeof row.mostly_display === "string" ? row.mostly_display : "",
         stack,
         stacks,

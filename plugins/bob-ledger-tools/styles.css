@@ -7964,6 +7964,15 @@ body:not(.bob-root-marks) .bob-root-mark-native {
 .bob-period-parts-cell-dates,
 .bob-period-parts-cell-review,
 .bob-period-parts-summary-mostly { color: var(--text-muted); }
+.bob-period-parts-summary-headline {
+  display: -webkit-box;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  align-self: start;
+}
 .bob-period-parts-child-link { color: var(--text-normal); text-decoration: none; }
 .bob-period-parts-child-link:hover { color: var(--text-accent); text-decoration: underline; }
 .bob-period-parts-mini-bar {

@@ -103,6 +103,7 @@ test("parts table uses live internal links, Headline or mostly, review states, a
   assert.ok(byClass(table, "bob-period-parts-child-link").every((node) => node.tagName === "A" && node.getAttribute("data-href")));
   assert.ok(byClass(table, "bob-period-parts-summary-mostly").length > 0);
   assert.ok(byClass(table, "bob-period-parts-summary-headline").length === 0);
+  assert.equal(byClass(table, "bob-period-parts-summary-mostly")[0].getAttribute("title"), null);
   assert.equal(model.children[0].kind, "day");
 
   const { host: quarterHost } = paintTable(fixtures.closedQuarter, "2026-Q2");
@@ -113,21 +114,88 @@ test("parts table uses live internal links, Headline or mostly, review states, a
 
 test("Daily Headlines render for completed and planned days and under each strip tooltip's Worked line", () => {
   const report = JSON.parse(JSON.stringify(week));
-  report.children[0].headline = "Ship the first draft";
-  report.children[2].headline = "Prepare tomorrow's review";
+  report.children[0].headline = "Ship the first draft and publish the album";
+  report.children[2].headline = "Prepare tomorrow's review and agenda";
   report.children[2].state = "future";
   report.children[2].worked = undefined;
   report.columns[0].headline = report.children[0].headline;
   const { model, host } = paintTable(report, "2026-W44");
-  assert.equal(model.children[0].headline, "Ship the first draft");
-  assert.equal(byClass(host, "bob-period-parts-summary-headline")[0].textContent, "Ship the first draft");
+  assert.equal(model.children[0].headline, "Ship the first draft and publish the album");
+  const completedHeadline = byClass(host, "bob-period-parts-summary-headline")[0];
+  assert.equal(completedHeadline.textContent, "Ship the first draft and publish the album");
+  assert.equal(completedHeadline.getAttribute("title"), "Ship the first draft and publish the album");
   const future = byClass(host, "bob-period-parts-row-future")[0];
-  assert.equal(findAll(future, (node) => node.getAttribute("role") === "cell").length, 6);
-  assert.equal(byClass(future, "bob-period-parts-summary-headline")[0].textContent, "Prepare tomorrow's review");
+  const futureCells = findAll(future, (node) => node.getAttribute("role") === "cell");
+  assert.deepEqual(futureCells.map((node) => (node.getAttribute("class") || "").split(/\s+/).at(-1)), [
+    "bob-period-parts-cell-child",
+    "bob-period-parts-cell-dates",
+    "bob-period-parts-cell-worked",
+    "bob-period-parts-cell-done",
+    "bob-period-parts-cell-review",
+    "bob-period-parts-summary-headline",
+  ]);
+  const futureHeadline = byClass(future, "bob-period-parts-summary-headline")[0];
+  assert.equal(futureHeadline.textContent, "Prepare tomorrow's review and agenda");
+  assert.equal(futureHeadline.getAttribute("title"), "Prepare tomorrow's review and agenda");
 
   const strip = helpers.periodStripModel(report, "2026-W44");
-  assert.equal(strip.columns[0].headline, "Ship the first draft");
-  assert.match(strip.columns[0].tooltip, /Worked[\s\S]*\nShip the first draft/);
+  assert.equal(strip.columns[0].headline, "Ship the first draft and publish the album");
+  assert.match(strip.columns[0].tooltip, /Worked[\s\S]*\nShip the first draft and publish the album/);
+});
+
+test("period child Review headline takes precedence, then falls back to its day headline", () => {
+  const report = JSON.parse(JSON.stringify(week));
+  report.children[0].headline = "Day headline";
+  report.children[0].review = { headline: "Review headline" };
+  assert.equal(helpers.periodStripTableRows(report)[0].headline, "Review headline");
+
+  report.children[0].review = { headline: "" };
+  assert.equal(helpers.periodStripTableRows(report)[0].headline, "Day headline");
+
+  delete report.children[0].headline;
+  assert.equal(helpers.periodStripTableRows(report)[0].headline, "");
+});
+
+test("headline-only report changes repaint the table and refresh day-column hover text", () => {
+  const report = JSON.parse(JSON.stringify(week));
+  report.children[0].headline = "Day summary";
+  report.columns[0].headline = "First hover headline";
+  const plugin = new LedgerToolsPlugin({});
+
+  const tableDoc = fakeDocument();
+  const tableHost = new FakeNode("div", tableDoc);
+  const tableRecord = { surface: "table", el: tableHost, paintedKey: null };
+  const firstTableModel = helpers.periodStripModel(report, "2026-W44");
+  plugin.periodStripFinishPaint(tableRecord, firstTableModel, {}, null);
+  const firstCell = byClass(tableHost, "bob-period-parts-summary-headline")[0];
+  assert.equal(firstCell.textContent, "Day summary");
+  const firstTableKey = tableRecord.paintedKey;
+
+  report.children[0].headline = "Updated day summary";
+  const secondTableModel = helpers.periodStripModel(report, "2026-W44");
+  plugin.periodStripFinishPaint(tableRecord, secondTableModel, {}, null);
+  assert.notEqual(tableRecord.paintedKey, firstTableKey);
+  assert.equal(byClass(tableHost, "bob-period-parts-summary-headline").at(-1).textContent, "Updated day summary");
+
+  const stripDoc = fakeDocument();
+  const stripHost = new FakeNode("div", stripDoc);
+  const stripRecord = { surface: "strip", el: stripHost, paintedKey: null };
+  const firstStripModel = helpers.periodStripModel(report, "2026-W44");
+  plugin.periodStripFinishPaint(stripRecord, firstStripModel, {}, null);
+  const mondayColumn = () => findAll(stripHost, (node) =>
+    (node.getAttribute("class") || "").split(/\s+/).includes("bob-period-strip-column")
+      && node.getAttribute("data-period-strip-column") === "2026-10-26",
+  ).at(-1);
+  const firstColumn = mondayColumn();
+  assert.match(firstColumn.getAttribute("title"), /First hover headline/);
+  const firstStripKey = stripRecord.paintedKey;
+
+  report.columns[0].headline = "Updated hover headline";
+  const secondStripModel = helpers.periodStripModel(report, "2026-W44");
+  plugin.periodStripFinishPaint(stripRecord, secondStripModel, {}, null);
+  assert.notEqual(stripRecord.paintedKey, firstStripKey);
+  assert.match(mondayColumn().getAttribute("title"), /Updated hover headline/);
+  assert.doesNotMatch(mondayColumn().getAttribute("title"), /First hover headline/);
 });
 
 test("table future rows stop at Child and Dates; not-tracked years and missing pre-adoption links are clear", () => {

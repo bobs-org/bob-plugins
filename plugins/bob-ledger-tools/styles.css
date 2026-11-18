@@ -11434,3 +11434,74 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
 }
 
+
+/* Record walk: position in an alphabetical ring, never completion progress. */
+.bob-record-walk-source { display: none !important; }
+.bob-record-walk-rail {
+  --bob-walk-ink: var(--text-muted);
+  display: block;
+  container-type: inline-size;
+  container-name: record-walk;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 0.9em;
+  padding: 0.2em 0.75em 0.45em;
+  border: 1px solid var(--background-modifier-border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--background-primary);
+  font: var(--font-ui-small)/1.4 var(--font-interface);
+  white-space: normal;
+}
+.bob-record-sheet.docks-record-walk { margin-bottom: 0; border-radius: 8px 8px 0 0; }
+.bob-record-sheet.has-record-walk { padding-bottom: 0; }
+.bob-record-sheet > .bob-record-walk-rail {
+  width: calc(100% + 1.5em);
+  margin: 0.45em -0.75em 0;
+  border: 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.bob-record-walk-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.6em; }
+.bob-record-walk-arm,
+.bob-record-walk-centre { display: flex; align-items: center; gap: 0.35em; min-width: 0; }
+.bob-record-walk-arm { min-height: 32px; min-width: 32px; color: var(--text-muted) !important; text-decoration: none !important; }
+.bob-record-walk-arm.is-prev { grid-column: 1; grid-row: 1; }
+.bob-record-walk-arm.is-next { grid-column: 3; grid-row: 1; justify-content: flex-end; text-align: right; }
+.bob-record-walk-centre { grid-column: 2; grid-row: 1; max-width: 48cqw; justify-content: center; }
+.bob-record-walk-arm-title,
+.bob-record-walk-album { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bob-record-walk-album { display: block; min-width: 0; min-height: 32px; line-height: 32px; color: var(--text-normal) !important; text-decoration: none !important; }
+.bob-record-walk-count { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.bob-record-walk-count-narrow { display: none; }
+.bob-record-walk-wrap,
+.bob-record-walk-separator { color: var(--text-faint); }
+.bob-record-walk-glyph { flex: none; font-size: 1.35em; }
+.bob-record-walk-rail a:hover { color: var(--text-normal) !important; background: var(--background-modifier-hover); border-radius: 4px; }
+.bob-record-walk-rail a:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; border-radius: 3px; }
+.bob-record-walk-track { position: relative; height: 1px; margin-top: 3px; background: color-mix(in srgb, var(--bob-walk-ink) 28%, transparent); }
+.bob-record-walk-thumb { position: absolute; top: -2.5px; width: 6px; height: 6px; border-radius: 50%; transform: translateX(-50%); background: var(--bob-walk-ink); }
+.bob-record-walk-rail[data-root-hue="aqua"] { --bob-walk-ink: var(--bob-area-aqua, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="blue"] { --bob-walk-ink: var(--bob-area-blue, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="green"] { --bob-walk-ink: var(--bob-area-green, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="magenta"] { --bob-walk-ink: var(--bob-area-magenta, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="orange"] { --bob-walk-ink: var(--bob-area-orange, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="purple"] { --bob-walk-ink: var(--bob-area-purple, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="red"] { --bob-walk-ink: var(--bob-area-red, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="yellow"] { --bob-walk-ink: var(--bob-area-yellow, var(--text-muted)); }
+@container record-walk (max-width: 28rem) {
+  .bob-record-walk-arm-title,
+  .bob-record-walk-wrap,
+  .bob-record-walk-album,
+  .bob-record-walk-separator,
+  .bob-record-walk-count-wide { display: none; }
+  .bob-record-walk-count-narrow { display: inline; }
+  .bob-record-walk-arm { width: 32px; justify-content: center; }
+  .bob-record-walk-arm.is-next { justify-self: end; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-record-walk-rail, .bob-record-walk-rail * { animation: none; transition: none; }
+}
+@media (forced-colors: active) {
+  .bob-record-walk-track, .bob-record-walk-thumb { background: CanvasText; forced-color-adjust: none; }
+}

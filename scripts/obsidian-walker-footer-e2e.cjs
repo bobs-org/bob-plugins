@@ -672,4 +672,4 @@ async function main() {
 
 if (require.main === module) void main();
 
-module.exports = { parseArgs, probeExecutable, seedVault };
+module.exports = { parseArgs, probeExecutable, seedVault, copyPluginFiles, seedProfileVault, freePort, connectToOwnedPage, dismissTrustModal, waitFor, sleep };

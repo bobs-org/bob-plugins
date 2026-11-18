@@ -387,6 +387,8 @@ function recordWalkModel(input = {}) {
     wrapsNext: Boolean(next && position === total),
     album,
     lineState: classification?.state || null,
+    lineIndex: classification?.lineIndex ?? null,
+    writtenLinks: classification?.links || [],
   };
 }
 

@@ -3,6 +3,11 @@ try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       RECORD_WALK_CAPABILITY,
+      recordWalkHasRail,
+      recordWalkArm,
+      recordWalkRailBuildEl,
+      recordWalkSelectionTouches,
+      recordWalkReadingParagraphMatches,
       recordWalkCompareCodePoints,
       recordWalkHumanizeStem,
       recordWalkOrder,

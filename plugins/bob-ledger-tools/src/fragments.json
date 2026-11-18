@@ -201,6 +201,8 @@
   "242g-plugin-emoji-slot-dom.js",
   "242h-plugin-bank-emoji-slot.js",
   "242t-plugin-record-walk-model.js",
+  "242u-plugin-record-walk-rail-dom.js",
+  "242v-plugin-record-walk-rail.js",
   "242i-plugin-record-sheet-model.js",
   "242j-plugin-record-sheet-dom.js",
   "242k-plugin-record-sheet.js",

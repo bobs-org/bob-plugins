@@ -115,11 +115,12 @@ class BobLedgerToolsRecordSheetMixin {
       this.recordSheetPushOverlay(path, null);
     }
     const owns = this.recordSheetOwnsPath(path);
-    if (owns) {
+    const openPath = this.recordSheetHasOpenPath(path);
+    if (owns || openPath) {
       this.recordSheetSourceCache?.delete?.(path);
+      this.recordSheetSourceFlights?.delete?.(path);
       this.recordSheetEnsureWalkSource(path);
     }
-    const openPath = this.recordSheetHasOpenPath(path);
     // A metadata edit can make an open ordinary note eligible for a Record
     // Card again. Keep observing the open path after the first edit removes
     // ownership so the inverse transition can rebuild its sheet and hide
@@ -439,14 +440,16 @@ class BobLedgerToolsRecordSheetMixin {
     const flight = Promise.resolve()
       .then(() => this.recordSheetReadSource(key))
       .then((source) => {
-        if (!this.recordSheetActive) return "";
+        if (!this.recordSheetActive || this.recordSheetSourceFlights.get(key) !== flight) return "";
         const text = String(source == null ? "" : source);
         this.recordSheetSourceCache.set(key, text);
         this.scheduleRecordSheetRefresh();
         return text;
       })
       .catch(() => "")
-      .finally(() => this.recordSheetSourceFlights.delete(key));
+      .finally(() => {
+        if (this.recordSheetSourceFlights.get(key) === flight) this.recordSheetSourceFlights.delete(key);
+      });
     this.recordSheetSourceFlights.set(key, flight);
     return flight;
   }
@@ -524,6 +527,7 @@ class BobLedgerToolsRecordSheetMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;
       const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
@@ -567,6 +571,7 @@ class BobLedgerToolsRecordSheetMixin {
       ? active.getAttribute?.("data-record-sheet-focus") : "";
     this.recordSheetRemoveReading(root, scope, sourcePath);
     if (!model) {
+      this.recordWalkPaintReading(root, sourcePath, null);
       this.recordSheetNotifyOwnership();
       return null;
     }
@@ -582,6 +587,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor);
     else if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
     else root.prepend?.(sheet);
+    this.recordWalkPaintReading(root, sourcePath, sheet);
     if (focusKey) {
       const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
@@ -715,7 +721,7 @@ class BobLedgerToolsRecordSheetMixin {
     widget.path = ctx.sourcePath;
     widget.viewFallback = false;
     widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
-    if (widget.albumPath) this.recordSheetEnsureWalkSource(ctx.sourcePath);
+    this.recordSheetEnsureWalkSource(ctx.sourcePath);
     const binding = {};
     widget.binding = binding;
     const child = typeof MarkdownRenderChild === "function"
@@ -785,65 +791,6 @@ class BobLedgerToolsRecordSheetMixin {
     return at;
   }
 
-  buildRecordSheetDecorations(view) {
-    try {
-      if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
-      const live = this.recordSheetLivePreview(view);
-      const path = live ? this.recordSheetLivePath(view) : null;
-      if (!path || !view?.state?.doc) {
-        this.recordSheetSetEditorScope(view, false);
-        this.recordSheetEditorCache?.delete?.(view);
-        return Decoration.none;
-      }
-      const text = view.state.doc.toString();
-      const model = this.recordSheetModelFor(path, text);
-      this.recordSheetSetEditorScope(view, Boolean(model));
-      if (!model) {
-        this.recordSheetEditorCache?.delete?.(view);
-        this.recordSheetNotifyOwnership();
-        return Decoration.none;
-      }
-      const at = this.recordSheetAnchor(view, text);
-      const signature = recordSheetSignature(model);
-      this.recordSheetSetEditorHide(view, model.hideEligible === true);
-      const previous = this.recordSheetEditorCache?.get?.(view);
-      if (previous && previous.path === path && previous.signature === signature && previous.anchor === at) {
-        return previous.decorations;
-      }
-      const doc = recordSheetDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.recordSheetOptions(path, model);
-      const sheet = this.recordSheetBuildMounted(model, options, doc);
-      if (!sheet) return Decoration.none;
-      const widget = new class extends WidgetType {
-        constructor() {
-          super();
-          this.path = path;
-          this.signature = signature;
-        }
-        eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
-        toDOM() {
-          sheet.setAttribute?.("data-cm-widget", "true");
-          sheet.setAttribute?.("data-record-source", path);
-          return sheet;
-        }
-      }();
-      const builder = new RangeSetBuilder();
-      builder.add(at, at, Decoration.widget({ widget, side: 1 }));
-      const decorations = builder.finish();
-      this.recordSheetEditorCache?.set?.(view, {
-        path,
-        signature,
-        anchor: at,
-        decorations,
-        albumPath: model.albumPath,
-      });
-      this.recordSheetNotifyOwnership();
-      return decorations;
-    } catch (_) {
-      return Decoration?.none || null;
-    }
-  }
-
   recordSheetSetEditorScope(view, enabled) {
     const root = view?.dom;
     if (!root) return;
@@ -910,7 +857,7 @@ class BobLedgerToolsRecordSheetMixin {
               }
             })()
             : false;
-          const rebuild = path !== this.path || notified || liveChanged || update.docChanged || update.viewportChanged;
+          const rebuild = path !== this.path || notified || liveChanged || update.docChanged || update.viewportChanged || update.selectionSet;
           this.path = path;
           if (rebuild) this.decorations = plugin.buildRecordSheetDecorations(update.view);
         }

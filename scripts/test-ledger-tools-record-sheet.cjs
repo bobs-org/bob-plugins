@@ -18,7 +18,7 @@ const editorLivePreviewField = { live: true };
 const StateEffect = { define: () => ({ of(value) { return { effect: this, value }; }, is(other) { return this === other; } }) };
 class WidgetType {}
 class RangeSetBuilder { constructor() { this.rows = []; } add(from, to, deco) { this.rows.push({ from, to, deco }); } finish() { return this.rows; } }
-const Decoration = { none: [], widget: (options) => ({ widget: options.widget, side: options.side }) };
+const Decoration = { none: [], widget: (options) => ({ ...options, startSide: options.side }), replace: (options) => ({ ...options, startSide: 0, replace: true }) };
 const originalLoad = Module._load;
 Module._load = function loadWithStubs(request, parent, isMain) {
   if (request === "obsidian") return {
@@ -85,10 +85,11 @@ class FakeNode {
       const value = part.trim();
       const cls = /^\.([\w-]+)$/.exec(value);
       const tag = /^[a-z][\w-]*$/i.exec(value);
+      const tagClass = /^([a-z][\w-]*)\.([\w-]+)$/i.exec(value);
       const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(value);
       const taggedAttr = /^([a-z][\w-]*)\[([\w-]+)(?:="([^"]*)")?\]$/i.exec(value);
       const hasAttr = (name, expected) => this.attrs.has(name) && (expected === undefined || this.getAttribute(name) === expected);
-      return Boolean((cls && this.classList.contains(cls[1])) || (tag && this.tagName === tag[0].toUpperCase()) ||
+      return Boolean((tagClass && this.tagName === tagClass[1].toUpperCase() && this.classList.contains(tagClass[2])) || (cls && this.classList.contains(cls[1])) || (tag && this.tagName === tag[0].toUpperCase()) ||
         (attr && hasAttr(attr[1], attr[2])) ||
         (taggedAttr && this.tagName === taggedAttr[1].toUpperCase() && hasAttr(taggedAttr[2], taggedAttr[3])));
     });
@@ -1067,4 +1068,191 @@ test("stage:true resolves to the field stage kind", () => {
   assert.equal(plugin.recordCardRequestedStage(model, "status", undefined), null);
   assert.equal(plugin.recordCardRequestedStage(model, "status", "text"), "text");
   assert.equal(plugin.recordCardRequestedStage(model, "nope", true), null);
+});
+
+function walkFixture(total = 2) {
+  const world = fixture();
+  const { files, caches, app, plugin } = world;
+  files.delete("eat/smashburger.md");
+  for (let index = 0; index < total; index += 1) {
+    const path = `eat/${index}.md`;
+    files.set(path, { path, extension: "md" });
+    caches.set(path, { frontmatter: { type: "[[record]]", parent: "[[eat]]", title: ["Alpha", "Bravo", "Charlie"][index] } });
+  }
+  files.get("eat.md").extension = "md";
+  app.vault.getMarkdownFiles = () => [...files.values()];
+  const lines = helpers.recordWalkRenderLines({ stem: "eat", title: "Restaurants" }, [...files.values()]
+    .filter((file) => /^eat\//.test(file.path)).map((file) => ({ ...file, stem: file.path.slice(4, -3), title: caches.get(file.path).frontmatter.title })));
+  const source = (index, line = lines[index]) => `---\ntype: "[[record]]"\nparent: "[[eat]]"\n---\n\n${line}\n\n## Notes\n`;
+  plugin.recordSheetSourceCache = new Map(lines.map((line, index) => [`eat/${index}.md`, source(index)]));
+  return { ...world, lines, source, walk: (index = 0) => plugin.recordWalkFor(`eat/${index}.md`, source(index)) };
+}
+
+function walkParagraph(doc, walk) {
+  const paragraph = node(doc, "p");
+  walk.writtenLinks.forEach((link, index) => {
+    if (index) paragraph.appendChild(doc.createTextNode(" · "));
+    const anchor = node(doc, "a", "internal-link", link.label);
+    anchor.setAttribute("data-href", link.target);
+    paragraph.appendChild(anchor);
+  });
+  return paragraph;
+}
+
+test("rail gives both two-record arms the written destination, names wrap, and paints location", () => {
+  const { doc, walk } = walkFixture();
+  const rail = helpers.recordWalkRailBuildEl(walk(), { hue: "blue" }, doc);
+  assert.equal(rail.tagName, "NAV");
+  assert.equal(rail.getAttribute("data-root-hue"), "blue");
+  for (const direction of ["prev", "next"]) {
+    const arm = rail.querySelector(`.is-${direction}`);
+    assert.equal(arm.getAttribute("href"), "eat/1");
+    assert.match(arm.getAttribute("aria-label"), /Bravo, 2 of 2 in Restaurants/);
+  }
+  assert.match(rail.querySelector(".is-prev").getAttribute("title"), /Wraps around to Bravo/);
+  assert.equal(rail.querySelector(".bob-record-walk-count-wide").textContent, "1 of 2");
+  assert.equal(rail.querySelector(".bob-record-walk-count-narrow").textContent, "1/2");
+  assert.equal(rail.querySelector(".bob-record-walk-track").getAttribute("aria-hidden"), "true");
+  assert.equal(rail.querySelector(".bob-record-walk-thumb").getAttribute("style"), "left: 25%");
+  const last = helpers.recordWalkRailBuildEl(walk(1), {}, doc);
+  assert.match(last.querySelector(".is-next").getAttribute("title"), /Wraps around to Alpha \(1 of 2\)/);
+});
+
+test("singleton, syncing, missing, and damaged rail states never invent a destination or count", () => {
+  const solo = walkFixture(1);
+  const singleton = helpers.recordWalkRailBuildEl(solo.walk(), {}, solo.doc);
+  assert.equal(singleton.querySelectorAll(".bob-record-walk-arm").length, 0);
+  assert.equal(singleton.querySelectorAll(".bob-record-walk-track").length, 0);
+  assert.equal(singleton.querySelector(".bob-record-walk-count-wide").textContent, "1 of 1");
+  const world = walkFixture(3);
+  const stale = world.plugin.recordWalkFor("eat/0.md", world.source(0, world.lines[0].replace("eat/2", "eat/gone")));
+  const rail = helpers.recordWalkRailBuildEl(stale, {}, world.doc);
+  assert.equal(rail.getAttribute("data-walk-state"), "syncing");
+  assert.equal(rail.querySelector(".is-prev").getAttribute("href"), "eat/gone");
+  assert.equal(rail.querySelector(".bob-record-walk-count-wide").textContent, "⟳");
+  assert.doesNotMatch(rail.textContent, /of 3|↺/);
+  assert.equal(rail.querySelectorAll(".bob-record-walk-track").length, 0);
+  for (const line of ["", `${world.lines[0]} prose`, `${world.lines[0]}\n${world.lines[0]}`]) {
+    const model = world.plugin.recordWalkFor("eat/0.md", world.source(0, line));
+    assert.equal(helpers.recordWalkRailBuildEl(model, {}, world.doc), null);
+  }
+});
+
+test("Live Preview rail reveals raw line for any touching selection and survives sheet collapse", () => {
+  const { plugin, doc, source } = walkFixture();
+  const text = source(0);
+  const view = liveView(doc, "eat/0.md", text);
+  view.state.selection = { ranges: [{ from: text.length, to: text.length }] };
+  const initial = plugin.buildRecordSheetDecorations(view);
+  assert.equal(initial.length, 1);
+  const replacement = initial.find((row) => row.deco.replace);
+  assert.match(text.slice(replacement.from, replacement.to), /^\[\[eat\/1/);
+  assert.equal(initial[0].from, replacement.from);
+  assert.equal(initial[0].deco.widget.toDOM().querySelector(".bob-record-sheet").classList.contains("docks-record-walk"), true);
+  assert.equal(plugin.buildRecordSheetDecorations(view), initial);
+  for (const range of [
+    { from: replacement.from, to: replacement.from },
+    { from: replacement.to, to: replacement.to },
+    { from: replacement.from - 1, to: replacement.to + 1 },
+  ]) {
+    view.state.selection.ranges = [{ from: text.length, to: text.length }, range];
+    const revealed = plugin.buildRecordSheetDecorations(view);
+    assert.equal(revealed.length, 1);
+    assert.equal(revealed[0].deco.widget.toDOM().classList.contains("docks-record-walk"), false);
+  }
+  view.state.selection.ranges = [{ from: text.length, to: text.length }];
+  plugin.recordSheetSetCollapsed("eat/0.md", true);
+  assert.equal(plugin.buildRecordSheetDecorations(view)[0].deco.widget.toDOM().querySelectorAll(".bob-record-walk-rail").length, 1);
+  assert.deepEqual(plugin.buildRecordSheetDecorations(liveView(doc, "eat/0.md", text, false)), []);
+});
+
+test("rail mounts with no album report, keeps moved lines, and follows selection-only updates", () => {
+  const { plugin, doc, source, state, lines } = walkFixture();
+  state.report = null;
+  const text = source(0, `## Notes\n\nMoved prose\n\n${lines[0]}`);
+  const view = liveView(doc, "eat/0.md", text);
+  const extension = plugin.createRecordSheetExtension();
+  const instance = new extension.cls(view);
+  assert.equal(instance.decorations.length, 1);
+  const row = instance.decorations[0];
+  assert.equal(row.from, text.indexOf(lines[0]));
+  view.state.selection = { ranges: [{ from: row.from, to: row.from }] };
+  instance.update({ view, selectionSet: true });
+  assert.equal(instance.decorations.length, 0);
+});
+
+test("Reading rail hides only its whole paragraph, stays on collapsed sheet, restores on teardown", () => {
+  const { plugin, doc, walk, state } = walkFixture();
+  const root = node(doc, "div", "markdown-preview-view");
+  const paragraph = walkParagraph(doc, walk());
+  const authored = walkParagraph(doc, walk());
+  authored.appendChild(doc.createTextNode(" extra prose"));
+  root.appendChild(paragraph);
+  root.appendChild(authored);
+  plugin.recordSheetSetCollapsed("eat/0.md", true);
+  const sheet = plugin.paintRecordSheetReading(root, "eat/0.md");
+  assert.equal(sheet.querySelectorAll(".bob-record-walk-rail").length, 1);
+  assert.equal(paragraph.classList.contains("bob-record-walk-source"), true);
+  assert.equal(authored.classList.contains("bob-record-walk-source"), false);
+  plugin.paintRecordSheetReading(root, "eat/0.md");
+  assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 1);
+  state.report = null;
+  plugin.paintRecordSheetReading(root, "eat/0.md");
+  assert.equal(root.querySelectorAll(".bob-record-sheet").length, 0);
+  assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 1);
+  plugin.recordSheetRemoveReading(root, root, "eat/0.md");
+  assert.equal(root.querySelectorAll(".bob-record-walk-rail").length, 0);
+  assert.equal(paragraph.classList.contains("bob-record-walk-source"), false);
+});
+
+test("rail routes plain clicks through n commands and guards modified and fallback destinations", async () => {
+  const { plugin, app, files, walk, doc } = walkFixture();
+  const calls = [];
+  const leaf = { view: { file: files.get("eat/0.md") } };
+  app.workspace.getLeavesOfType = () => [leaf];
+  app.workspace.setActiveLeaf = (active) => calls.push(["active", active.view.file.path]);
+  app.workspace.openLinkText = async (...args) => calls.push(["open", ...args]);
+  app.commands = { commands: { "bob-navigation-hotkeys:open-prev-link": {} }, executeCommandById: (id) => calls.push(["command", id]) };
+  assert.equal(await plugin.recordWalkOpen("eat/1", "prev", "eat/0.md", {}), true);
+  assert.deepEqual(calls.splice(0), [["active", "eat/0.md"], ["command", "bob-navigation-hotkeys:open-prev-link"]]);
+  for (const event of [{ ctrlKey: true }, { metaKey: true }, { button: 1 }]) {
+    await plugin.recordWalkOpen("eat/1", "prev", "eat/0.md", event);
+    assert.deepEqual(calls.pop(), ["open", "eat/1", "eat/0.md", true]);
+  }
+  app.commands = null;
+  await plugin.recordWalkOpen("eat/1", "prev", "eat/0.md", {});
+  assert.deepEqual(calls.pop(), ["open", "eat/1", "eat/0.md", false]);
+  files.delete("eat/1.md");
+  assert.equal(await plugin.recordWalkOpen("eat/1", "prev", "eat/0.md", { button: 1 }), false);
+  assert.match(TestNotice.messages.at(-1), /catching up/);
+  assert.deepEqual(calls, []);
+  let hover = null;
+  let opened = null;
+  const rail = helpers.recordWalkRailBuildEl({ ...walk(), ...{ lineState: "stale", lineIndex: 5, writtenPrev: { target: "eat/gone", label: "‹ Gone", stem: "gone" } } }, {
+    handlers: { hoverLink: (...args) => { hover = args; }, walkOpen: (...args) => { opened = args; } },
+  }, doc);
+  const arm = rail.querySelector(".is-prev");
+  arm.dispatchEvent({ type: "mouseover" });
+  assert.equal(hover[2], "eat/gone");
+  arm.dispatchEvent({ type: "auxclick", button: 1 });
+  assert.equal(opened[0], "eat/gone");
+  assert.equal(opened[1], "prev");
+});
+
+test("Reading source refresh ignores a late read invalidated by newer metadata", async () => {
+  const { plugin, app, files } = walkFixture();
+  plugin.recordSheetSourceCache.clear();
+  plugin.recordSheetSourceFlights = new Map();
+  const resolvers = [];
+  app.vault.read = () => new Promise(resolve => resolvers.push(resolve));
+  const old = plugin.recordSheetEnsureWalkSource("eat/0.md");
+  await Promise.resolve();
+  plugin.recordSheetOnMetadata(files.get("eat/0.md"));
+  const current = plugin.recordSheetSourceFlights.get("eat/0.md");
+  await Promise.resolve();
+  resolvers[1]("new source");
+  await current;
+  resolvers[0]("stale source");
+  await old;
+  assert.equal(plugin.recordSheetSourceCache.get("eat/0.md"), "new source");
 });

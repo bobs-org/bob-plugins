@@ -28,6 +28,49 @@ footer shows `Links ⟳`; when the cached album report enables walk repair, the
 plugin requests one album sync for that mismatch episode. Missing or damaged
 walk lines do not show a numeric count.
 
+## Record walk rail
+
+A recognized walk line becomes a rail under the record sheet in desktop Live
+Preview and Reading view:
+
+```text
+‹ Pho House          🍽️ Eat · 3 of 104          Ramen Ya ›
+```
+
+The left and right links follow the destinations stored in the note. The
+centre links to the album; its count is computed live in alphabetical title
+order. A thin line in the sheet's root hue marks your location in the ring,
+not task progress. At either end, `↺` and a tooltip announce the wrap. Two
+records point both ways to each other. A singleton shows `1 of 1` with only
+the album link and no track.
+
+When the written neighbors disagree with the current album membership,
+the count becomes `⟳` with “Record walk is syncing”. The links still follow
+the written destinations. Missing or damaged lines stay as Markdown; a
+frontmatter-only record has no rail. Rendering needs no cached album report
+or CLI capability; automatic repair requests require `record_walk_v1`.
+
+Below 28rem the rail becomes `‹ 3/104 ›`, retaining full accessible names
+and at least 32px link targets. Collapsing the sheet keeps the rail. Links
+have visible keyboard focus and page previews. Ordinary arm clicks use the
+same [navigation commands](bob-navigation-hotkeys.md) as `[n` / `]n`, including
+jump history and bracket repeat. Mod-click and middle-click open new tabs;
+missing records refuse navigation instead of creating an empty note.
+
+In Live Preview, touching the walk line with any cursor or selection reveals
+the raw Markdown; leaving it restores the rail. Source mode always shows the
+original line. Reading view replaces only the complete walk paragraph and
+restores it when the plugin unloads. Neither view writes a count into the
+note. A moved walk line remains in its authored position in Live Preview.
+
+The isolated editor walkthrough covers both views, cursor reveal, wrap,
+footer agreement, narrow layout, singletons, and the missing-target guard:
+
+```bash
+xvfb-run -a node scripts/obsidian-record-walk-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian -r /tmp/record-walk.json
+```
+
 ## What the sheet shows
 
 The sheet is a labelled group, *Title record details*. Its first row shows the

@@ -100265,6 +100265,8 @@ function recordWalkModel(input = {}) {
     wrapsNext: Boolean(next && position === total),
     album,
     lineState: classification?.state || null,
+    lineIndex: classification?.lineIndex ?? null,
+    writtenLinks: classification?.links || [],
   };
 }
 
@@ -100300,6 +100302,298 @@ function recordWalkRequestSync(plugin, model) {
   });
   plugin.albumScheduleSync("record-walk-mismatch");
   return true;
+}
+// ---- src/242u-plugin-record-walk-rail-dom.js ----
+// Read-only rail: links always follow the written line, counts only a checked ring.
+const RECORD_WALK_RAIL_CLASS = "bob-record-walk-rail";
+const RECORD_WALK_SOURCE_CLASS = "bob-record-walk-source";
+
+function recordWalkHasRail(walk) {
+  return Boolean(walk && Number.isInteger(walk.lineIndex)
+    && ["current", "stale"].includes(walk.lineState));
+}
+
+function recordWalkSelectionTouches(state, line) {
+  return (state?.selection?.ranges || []).some((range) =>
+    Math.min(range.from ?? range.anchor, range.to ?? range.head) <= line.to
+    && Math.max(range.from ?? range.anchor, range.to ?? range.head) >= line.from);
+}
+
+function recordWalkDisplayLabel(value) {
+  return String(value || "").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1");
+}
+
+function recordWalkArm(walk, direction) {
+  const previous = direction === "prev";
+  const written = previous ? walk.writtenPrev : walk.writtenNext;
+  if (!written) return null;
+  const title = recordWalkDisplayLabel(written.label).replace(/^[‹<]\s*|\s*[›>]$/g, "").trim()
+    || recordWalkHumanizeStem(written.stem) || written.stem;
+  const healthy = walk.state === "ok";
+  const position = previous
+    ? (walk.position === 1 ? walk.total : walk.position - 1)
+    : (walk.position === walk.total ? 1 : walk.position + 1);
+  const wraps = healthy && (previous ? walk.wrapsPrev : walk.wrapsNext);
+  const destination = healthy ? `${title}, ${position} of ${walk.total} in ${walk.album.title}`
+    : `${title} — Record walk is syncing`;
+  return {
+    target: written.target, title, wraps,
+    ariaLabel: `${previous ? "Previous" : "Next"} record: ${destination}`,
+    tooltip: wraps ? `Wraps around to ${title} (${position} of ${walk.total})`
+      : `${previous ? "Previous" : "Next"} record: ${destination}`,
+  };
+}
+
+function recordWalkRailLink(doc, target, className, options, direction) {
+  const link = recordSheetEl(doc, "a", `internal-link ${className}`);
+  link.setAttribute("href", target);
+  link.setAttribute("data-href", target);
+  const open = (event) => {
+    if (event.type === "auxclick" && event.button !== 1) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    options?.handlers?.walkOpen?.(target, direction, event);
+  };
+  link.addEventListener?.("click", open);
+  link.addEventListener?.("auxclick", open);
+  recordSheetBindHover(link, options, target);
+  return link;
+}
+
+function recordWalkRailBuildEl(walk, options = {}, doc) {
+  if (!recordWalkHasRail(walk) || !doc) return null;
+  const rail = recordSheetEl(doc, "nav", RECORD_WALK_RAIL_CLASS);
+  rail.setAttribute("aria-label", `Record walk in ${walk.album.title}`);
+  rail.setAttribute("data-record-source", walk.path);
+  rail.setAttribute("data-walk-state", walk.state);
+  rail.setAttribute("data-root-hue", options.hue || walk.album.hue || "");
+  const grid = recordSheetEl(doc, "div", "bob-record-walk-grid");
+  rail.appendChild(grid);
+  const armEl = (direction) => {
+    const arm = recordWalkArm(walk, direction);
+    if (!arm) return;
+    const previous = direction === "prev";
+    const link = recordWalkRailLink(doc, arm.target, `bob-record-walk-arm is-${direction}`, options, direction);
+    link.setAttribute("aria-label", arm.ariaLabel);
+    link.setAttribute("title", arm.tooltip);
+    link.setAttribute("data-record-sheet-focus", `walk-${direction}`);
+    const glyph = recordSheetEl(doc, "span", "bob-record-walk-glyph");
+    glyph.setAttribute("aria-hidden", "true");
+    recordSheetText(glyph, previous ? "‹" : "›");
+    const title = recordSheetEl(doc, "span", "bob-record-walk-arm-title");
+    recordSheetText(title, arm.title);
+    const wrap = recordSheetEl(doc, "span", "bob-record-walk-wrap");
+    wrap.setAttribute("aria-hidden", "true");
+    recordSheetText(wrap, arm.wraps ? "↺" : "");
+    for (const child of previous ? [glyph, wrap, title] : [title, wrap, glyph]) link.appendChild(child);
+    grid.appendChild(link);
+  };
+  armEl("prev");
+  const centre = recordSheetEl(doc, "div", "bob-record-walk-centre");
+  const album = recordWalkRailLink(doc, walk.album.stem, "bob-record-walk-album", options, null);
+  album.setAttribute("aria-label", `Album: ${walk.album.title}`);
+  album.setAttribute("title", walk.album.title);
+  album.setAttribute("data-record-sheet-focus", "walk-album");
+  recordSheetText(album, `${walk.album.emoji ? walk.album.emoji + " " : ""}${walk.album.title}`);
+  centre.appendChild(album);
+  const separator = recordSheetEl(doc, "span", "bob-record-walk-separator");
+  separator.setAttribute("aria-hidden", "true");
+  recordSheetText(separator, "·");
+  centre.appendChild(separator);
+  const count = recordSheetEl(doc, "span", "bob-record-walk-count");
+  const healthy = walk.state === "ok";
+  count.setAttribute("aria-label", healthy ? `${walk.position} of ${walk.total}` : "Record walk is syncing");
+  count.setAttribute("title", healthy ? "Alphabetical, wraps around" : "Record walk is syncing");
+  for (const [kind, text] of [
+    ["wide", healthy ? `${walk.position} of ${walk.total}` : "⟳"],
+    ["narrow", healthy ? `${walk.position}/${walk.total}` : "⟳"],
+  ]) {
+    const span = recordSheetEl(doc, "span", `bob-record-walk-count-${kind}`);
+    span.setAttribute("aria-hidden", "true");
+    recordSheetText(span, text);
+    count.appendChild(span);
+  }
+  centre.appendChild(count);
+  grid.appendChild(centre);
+  armEl("next");
+  if (healthy && walk.total > 1) {
+    const track = recordSheetEl(doc, "div", "bob-record-walk-track");
+    track.setAttribute("aria-hidden", "true");
+    const thumb = recordSheetEl(doc, "span", "bob-record-walk-thumb");
+    thumb.setAttribute("style", `left: ${100 * (walk.position - 0.5) / walk.total}%`);
+    track.appendChild(thumb);
+    rail.appendChild(track);
+  }
+  return rail;
+}
+
+// Only replace an entire rendered walk paragraph. A moved line stays recognizable;
+// paragraphs containing authored prose, code, or another note's embed stay untouched.
+function recordWalkReadingParagraphMatches(paragraph, walk) {
+  const links = Array.from(paragraph?.querySelectorAll?.("a.internal-link") || []);
+  const written = walk?.writtenLinks || [];
+  if (!written.length || links.length !== written.length) return false;
+  const normalize = (value) => String(value || "").replace(/\.md$/i, "");
+  if (!links.every((link, index) => normalize(link.getAttribute("data-href") || link.getAttribute("href"))
+    === normalize(written[index].target))) return false;
+  const text = (value) => String(value || "").replace(/\s+/g, "").trim();
+  return text(paragraph.textContent) === text(written.map((link) => recordWalkDisplayLabel(link.label)).join("·"));
+}
+// ---- src/242v-plugin-record-walk-rail.js ----
+// Rail hosts share the sheet's source cache, decorations, refresh, and teardown.
+class BobLedgerToolsRecordWalkRailMixin {
+  recordWalkFor(path, sourceText) {
+    if (!this.recordSheetDesktop()) return null;
+    const walk = recordWalkModel({
+      path,
+      sourceText: typeof sourceText === "string" ? sourceText : this.recordSheetSourceCache?.get(path),
+      report: this.recordSheetState()?.report,
+      frontmatter: this.recordSheetFrontmatter(path),
+      metadataCache: this.app?.metadataCache,
+      vault: this.app?.vault,
+    });
+    recordWalkRequestSync(this, walk);
+    return walk;
+  }
+
+  recordWalkOptions(path, model) {
+    const options = this.recordSheetOptions(path, model);
+    options.handlers.walkOpen = (target, direction, event) => {
+      void this.recordWalkOpen(target, direction, path, event);
+    };
+    return options;
+  }
+
+  async recordWalkOpen(target, direction, sourcePath, event) {
+    // This also guards modified clicks and the no-navigation-plugin fallback.
+    const path = `${String(target).replace(/\.md$/i, "")}.md`;
+    const exists = this.app?.vault?.getAbstractFileByPath?.(path);
+    if (!exists || exists.extension !== "md") {
+      new Notice(`Record walk is catching up — ${path} isn't there yet`);
+      if (this.recordSheetState()?.report?.capabilities?.includes(RECORD_WALK_CAPABILITY)) {
+        this.albumScheduleSync?.("record-walk-missing-target");
+      }
+      return false;
+    }
+    const modified = event?.ctrlKey || event?.metaKey || event?.shiftKey || event?.altKey || event?.button === 1;
+    if (direction && !modified) {
+      const commandId = `bob-navigation-hotkeys:open-${direction}-link`;
+      const commands = this.app?.commands;
+      const command = commands?.commands?.[commandId] || commands?.findCommand?.(commandId);
+      const leaf = this.recordSheetMarkdownLeaf(sourcePath);
+      // A click in an inactive pane must run the command against that pane.
+      if (command && commands?.executeCommandById && leaf?.view?.file?.path === sourcePath) {
+        this.app.workspace.setActiveLeaf?.(leaf, { focus: true });
+        commands.executeCommandById(commandId);
+        return true;
+      }
+    }
+    await this.app?.workspace?.openLinkText?.(String(target).replace(/\.md$/i, ""), sourcePath, Boolean(modified));
+    return true;
+  }
+
+  recordWalkRemoveReading(root, sourcePath) {
+    for (const rail of Array.from(root?.querySelectorAll?.(`.${RECORD_WALK_RAIL_CLASS}`) || [])) {
+      if (!this.recordSheetNodeBelongs(rail, root)) continue;
+      if (sourcePath && rail.getAttribute("data-record-source") !== sourcePath) continue;
+      rail.remove?.();
+    }
+    for (const paragraph of Array.from(root?.querySelectorAll?.(`.${RECORD_WALK_SOURCE_CLASS}`) || [])) {
+      if (!this.recordSheetNodeBelongs(paragraph, root)) continue;
+      if (sourcePath && paragraph.getAttribute("data-record-walk-source") !== sourcePath) continue;
+      paragraph.classList.remove(RECORD_WALK_SOURCE_CLASS);
+      paragraph.removeAttribute("data-record-walk-source");
+    }
+  }
+
+  recordWalkPaintReading(root, path, sheet) {
+    const walk = this.recordWalkFor(path);
+    if (!recordWalkHasRail(walk)) return null;
+    const paragraph = Array.from(root.querySelectorAll?.("p") || []).find((node) =>
+      this.recordSheetNodeBelongs(node, root) && !notebookInsideCode(node)
+      && !node.closest?.(`.${RECORD_SHEET_CLASS}`) && recordWalkReadingParagraphMatches(node, walk));
+    if (!paragraph) return null;
+    const rail = recordWalkRailBuildEl(walk, this.recordWalkOptions(path, sheet ? { hue: sheet.getAttribute("data-root-hue") } : null), recordSheetDomDoc(root));
+    if (!rail) return null;
+    if (sheet) {
+      sheet.classList.add("has-record-walk");
+      sheet.appendChild(rail);
+    } else paragraph.parentNode.insertBefore(rail, paragraph);
+    paragraph.classList.add(RECORD_WALK_SOURCE_CLASS);
+    paragraph.setAttribute("data-record-walk-source", path);
+    return rail;
+  }
+
+  buildRecordSheetDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
+      const path = this.recordSheetLivePreview(view) ? this.recordSheetLivePath(view) : null;
+      if (!path || !view?.state?.doc) {
+        this.recordSheetSetEditorScope(view, false);
+        this.recordSheetEditorCache?.delete?.(view);
+        return Decoration.none;
+      }
+      const text = view.state.doc.toString();
+      const model = this.recordSheetModelFor(path, text);
+      const walk = model?.walk || this.recordWalkFor(path, text);
+      this.recordSheetSetEditorScope(view, Boolean(model));
+      this.recordSheetSetEditorHide(view, model?.hideEligible === true);
+      if (!model && !recordWalkHasRail(walk)) {
+        this.recordSheetEditorCache?.delete?.(view);
+        this.recordSheetNotifyOwnership();
+        return Decoration.none;
+      }
+      const line = recordWalkHasRail(walk) ? view.state.doc.line(walk.lineIndex + 1) : null;
+      const reveal = line && recordWalkSelectionTouches(view.state, line);
+      // A first-body walk line is the sheet anchor, even before a legacy H1.
+      const beforeWalk = line ? text.slice(0, line.from).split(/\r?\n/) : [];
+      const fmEnd = recordWalkFrontmatterClose(beforeWalk);
+      const docks = line && fmEnd !== null && beforeWalk.slice(fmEnd + 1).every((value) => !value.trim());
+      const at = docks ? line.from : this.recordSheetAnchor(view, text);
+      const signature = JSON.stringify([recordSheetSignature(model), walk, Boolean(reveal), line?.from, line?.to]);
+      const previous = this.recordSheetEditorCache?.get?.(view);
+      if (previous?.path === path && previous.signature === signature && previous.anchor === at) return previous.decorations;
+      const doc = recordSheetDomDoc(view.dom);
+      const options = this.recordWalkOptions(path, model);
+      const rows = [];
+      const widgetFor = (element, kind) => new class extends WidgetType {
+        constructor() { super(); this.path = path; this.signature = signature; this.kind = kind; }
+        eq(other) { return other?.path === path && other.signature === signature && other.kind === kind; }
+        toDOM() {
+          element.setAttribute("data-cm-widget", "true");
+          element.setAttribute("data-record-source", path);
+          return element;
+        }
+      }();
+      const sheet = model ? this.recordSheetBuildMounted(model, options, doc) : null;
+      const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
+      if (sheet && rail && docks) {
+        // One inline replacement owns the pair. Two adjacent inline widgets
+        // get CodeMirror cursor buffers between their block-shaped DOM nodes,
+        // leaving a line-height gap that prevents the rail docking flush.
+        const dock = recordSheetEl(doc, "div", "bob-record-walk-dock");
+        sheet.classList.add("docks-record-walk");
+        sheet.setAttribute("data-cm-widget", "true");
+        dock.appendChild(sheet);
+        dock.appendChild(rail);
+        rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(dock, "dock") }) });
+      } else {
+        if (sheet) rows.push({ from: at, to: at, decoration: Decoration.widget({ widget: widgetFor(sheet, "sheet"), side: docks ? -1 : 1 }) });
+        if (rail) rows.push({ from: line.from, to: line.to, decoration: Decoration.replace({ widget: widgetFor(rail, "walk") }) });
+      }
+      const builder = new RangeSetBuilder();
+      rows.sort((a, b) => a.from - b.from || a.decoration.startSide - b.decoration.startSide);
+      for (const row of rows) builder.add(row.from, row.to, row.decoration);
+      const decorations = builder.finish();
+      this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
+      // The rail still refreshes when there is no cached album report/sheet.
+      this.recordSheetEditors?.add(view);
+      this.recordSheetNotifyOwnership();
+      return decorations;
+    } catch (_) {
+      return Decoration?.none || null;
+    }
+  }
 }
 // ---- src/242i-plugin-record-sheet-model.js ----
 // Pure gate, value models, and coverage for the read-only record sheet.
@@ -101715,11 +102009,12 @@ class BobLedgerToolsRecordSheetMixin {
       this.recordSheetPushOverlay(path, null);
     }
     const owns = this.recordSheetOwnsPath(path);
-    if (owns) {
+    const openPath = this.recordSheetHasOpenPath(path);
+    if (owns || openPath) {
       this.recordSheetSourceCache?.delete?.(path);
+      this.recordSheetSourceFlights?.delete?.(path);
       this.recordSheetEnsureWalkSource(path);
     }
-    const openPath = this.recordSheetHasOpenPath(path);
     // A metadata edit can make an open ordinary note eligible for a Record
     // Card again. Keep observing the open path after the first edit removes
     // ownership so the inverse transition can rebuild its sheet and hide
@@ -102039,14 +102334,16 @@ class BobLedgerToolsRecordSheetMixin {
     const flight = Promise.resolve()
       .then(() => this.recordSheetReadSource(key))
       .then((source) => {
-        if (!this.recordSheetActive) return "";
+        if (!this.recordSheetActive || this.recordSheetSourceFlights.get(key) !== flight) return "";
         const text = String(source == null ? "" : source);
         this.recordSheetSourceCache.set(key, text);
         this.scheduleRecordSheetRefresh();
         return text;
       })
       .catch(() => "")
-      .finally(() => this.recordSheetSourceFlights.delete(key));
+      .finally(() => {
+        if (this.recordSheetSourceFlights.get(key) === flight) this.recordSheetSourceFlights.delete(key);
+      });
     this.recordSheetSourceFlights.set(key, flight);
     return flight;
   }
@@ -102124,6 +102421,7 @@ class BobLedgerToolsRecordSheetMixin {
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.recordWalkRemoveReading(root, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${RECORD_SHEET_CLASS}`) || [])) {
       if (!this.recordSheetNodeBelongs(node, root)) continue;
       const ownedPath = recordSheetPath(node.getAttribute?.("data-record-source") || "");
@@ -102167,6 +102465,7 @@ class BobLedgerToolsRecordSheetMixin {
       ? active.getAttribute?.("data-record-sheet-focus") : "";
     this.recordSheetRemoveReading(root, scope, sourcePath);
     if (!model) {
+      this.recordWalkPaintReading(root, sourcePath, null);
       this.recordSheetNotifyOwnership();
       return null;
     }
@@ -102182,6 +102481,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(sheet, anchor);
     else if (root.insertBefore) root.insertBefore(sheet, root.firstChild || null);
     else root.prepend?.(sheet);
+    this.recordWalkPaintReading(root, sourcePath, sheet);
     if (focusKey) {
       const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
@@ -102315,7 +102615,7 @@ class BobLedgerToolsRecordSheetMixin {
     widget.path = ctx.sourcePath;
     widget.viewFallback = false;
     widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
-    if (widget.albumPath) this.recordSheetEnsureWalkSource(ctx.sourcePath);
+    this.recordSheetEnsureWalkSource(ctx.sourcePath);
     const binding = {};
     widget.binding = binding;
     const child = typeof MarkdownRenderChild === "function"
@@ -102385,65 +102685,6 @@ class BobLedgerToolsRecordSheetMixin {
     return at;
   }
 
-  buildRecordSheetDecorations(view) {
-    try {
-      if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
-      const live = this.recordSheetLivePreview(view);
-      const path = live ? this.recordSheetLivePath(view) : null;
-      if (!path || !view?.state?.doc) {
-        this.recordSheetSetEditorScope(view, false);
-        this.recordSheetEditorCache?.delete?.(view);
-        return Decoration.none;
-      }
-      const text = view.state.doc.toString();
-      const model = this.recordSheetModelFor(path, text);
-      this.recordSheetSetEditorScope(view, Boolean(model));
-      if (!model) {
-        this.recordSheetEditorCache?.delete?.(view);
-        this.recordSheetNotifyOwnership();
-        return Decoration.none;
-      }
-      const at = this.recordSheetAnchor(view, text);
-      const signature = recordSheetSignature(model);
-      this.recordSheetSetEditorHide(view, model.hideEligible === true);
-      const previous = this.recordSheetEditorCache?.get?.(view);
-      if (previous && previous.path === path && previous.signature === signature && previous.anchor === at) {
-        return previous.decorations;
-      }
-      const doc = recordSheetDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.recordSheetOptions(path, model);
-      const sheet = this.recordSheetBuildMounted(model, options, doc);
-      if (!sheet) return Decoration.none;
-      const widget = new class extends WidgetType {
-        constructor() {
-          super();
-          this.path = path;
-          this.signature = signature;
-        }
-        eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
-        toDOM() {
-          sheet.setAttribute?.("data-cm-widget", "true");
-          sheet.setAttribute?.("data-record-source", path);
-          return sheet;
-        }
-      }();
-      const builder = new RangeSetBuilder();
-      builder.add(at, at, Decoration.widget({ widget, side: 1 }));
-      const decorations = builder.finish();
-      this.recordSheetEditorCache?.set?.(view, {
-        path,
-        signature,
-        anchor: at,
-        decorations,
-        albumPath: model.albumPath,
-      });
-      this.recordSheetNotifyOwnership();
-      return decorations;
-    } catch (_) {
-      return Decoration?.none || null;
-    }
-  }
-
   recordSheetSetEditorScope(view, enabled) {
     const root = view?.dom;
     if (!root) return;
@@ -102510,7 +102751,7 @@ class BobLedgerToolsRecordSheetMixin {
               }
             })()
             : false;
-          const rebuild = path !== this.path || notified || liveChanged || update.docChanged || update.viewportChanged;
+          const rebuild = path !== this.path || notified || liveChanged || update.docChanged || update.viewportChanged || update.selectionSet;
           this.path = path;
           if (rebuild) this.decorations = plugin.buildRecordSheetDecorations(update.view);
         }
@@ -149520,6 +149761,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumRecordsMixin,
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
+  BobLedgerToolsRecordWalkRailMixin,
   BobLedgerToolsRecordUpdateMixin,
   BobLedgerToolsRecordCardMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,
@@ -153628,6 +153870,11 @@ try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
       RECORD_WALK_CAPABILITY,
+      recordWalkHasRail,
+      recordWalkArm,
+      recordWalkRailBuildEl,
+      recordWalkSelectionTouches,
+      recordWalkReadingParagraphMatches,
       recordWalkCompareCodePoints,
       recordWalkHumanizeStem,
       recordWalkOrder,

@@ -223,13 +223,21 @@ function buildCases(helpers) {
   cases.push({ id: "all-dots-n", title: "all three dots on mode n", html: renderIndicator(helpers, "n", allDots).html });
   cases.push({ id: "w-dot-s", title: "w dot alone on mode s", html: renderIndicator(helpers, "s", { w: allDots.w }).html });
   cases.push({ id: "sb-on-w", title: "mode w with s and b dots", html: renderIndicator(helpers, "w", { s: allDots.s, b: allDots.b }).html });
-  for (const tier of ["pre", "new", "projects", "pending", "next", "recurring", "tickler"]) {
+  for (const tier of ["pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post"]) {
     cases.push({
       id: `ink-s-${tier}`,
       title: `mode s with ${tier} ink`,
       html: renderIndicator(helpers, "s", {
         s: { tier, label: `Review: 9 due · 5 commitments — ${tier.toUpperCase()} first` },
       }).html,
+    });
+  }
+  for (const tier of ["rotten", "post"]) {
+    const label = `Review: 1 due · commitments done — ${tier.toUpperCase()} first`;
+    cases.push({
+      id: `dot-s-${tier}`,
+      title: `off-s dot · ${tier.toUpperCase()} first`,
+      html: renderIndicator(helpers, "w", { s: { tier, label } }).html,
     });
   }
   cases.push({

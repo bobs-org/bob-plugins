@@ -62,9 +62,14 @@ const {
   walkerFooterPushBankAttention,
   walkerFooterPushLaneAttention,
   walkerFooterPushReviewAttention,
+  walkerFooterReviewAttentionLabel,
+  walkerFooterReviewView,
 } = helpers;
 
 const DAY = new Date(2026, 9, 28);
+const REVIEW_TIERS = [
+  "pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post",
+];
 
 // Strip the plugin-only click hints so the assertion equals bob's
 // contract label (`docs/walks.md` "Labels").
@@ -93,16 +98,26 @@ function pushPlugin(mode = "w") {
   return { plugin, calls };
 }
 
-function commitmentMemo({ byTier = {}, walk = 0, tasksAvailable = true } = {}) {
-  return { counts: { byTier, walk }, tasksAvailable };
+function reviewMemo(byTier = {}, tasksAvailable = true) {
+  const normalized = Object.fromEntries(
+    REVIEW_TIERS.map((tier) => [tier, Number(byTier[tier]) || 0]),
+  );
+  const queue = REVIEW_TIERS.flatMap((tier) =>
+    Array.from({ length: normalized[tier] }, () => ({ tier })),
+  );
+  return {
+    counts: { byTier: normalized, walk: queue.length },
+    queue,
+    tasksAvailable,
+  };
 }
 
-function pushReview({ mode = "w", byTier = {}, walk = 0 } = {}) {
+function pushReview({ mode = "w", byTier = {}, memo = null } = {}) {
   const { plugin, calls } = pushPlugin(mode);
   walkerFooterPushReviewAttention(
     plugin,
     { legacy: false, mode },
-    commitmentMemo({ byTier, walk }),
+    memo || reviewMemo(byTier),
   );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].type, "s");
@@ -179,12 +194,16 @@ function bankSnapshot(rows) {
 
 // --- s: review -------------------------------------------------------------
 
-test("S1: only ROTTEN due keeps s off", () => {
-  assert.equal(pushReview({ byTier: { rotten: 1 }, walk: 1 }), null);
+test("S1: only ROTTEN due lights s and uses the ROTTEN hue", () => {
+  const value = pushReview({ byTier: { rotten: 1 } });
+  assert.equal(value.tier, "rotten");
+  assert.equal(stripClickHint(value.label), "Review: 1 due · commitments done — ROTTEN first");
 });
 
-test("S2: only POST due keeps s off", () => {
-  assert.equal(pushReview({ byTier: { post: 1 }, walk: 1 }), null);
+test("S2: only POST due lights s and uses the POST hue", () => {
+  const value = pushReview({ byTier: { post: 1 } });
+  assert.equal(value.tier, "post");
+  assert.equal(stripClickHint(value.label), "Review: 1 due · commitments done — POST first");
 });
 
 test("S3: NEW 1 and ROTTEN 1 lights s with tier new", () => {
@@ -193,7 +212,7 @@ test("S3: NEW 1 and ROTTEN 1 lights s with tier new", () => {
   assert.equal(value.tier, "new");
   assert.equal(
     stripClickHint(value.label),
-    "Review: 2 due · 1 commitments — NEW first",
+    "Review: 2 due · 1 commitment — NEW first",
   );
 });
 
@@ -212,6 +231,46 @@ test("S5: TICKLER only lights s with tier tickler", () => {
   assert.notEqual(value, null);
   assert.equal(value.tier, "tickler");
   assert.match(stripClickHint(value.label), /TICKS first$/);
+});
+
+test("S6: ROTTEN then POST counts every row and enters ROTTEN", () => {
+  const value = pushReview({ byTier: { rotten: 2, post: 1 } });
+  assert.equal(value.tier, "rotten");
+  assert.equal(stripClickHint(value.label), "Review: 3 due · commitments done — ROTTEN first");
+});
+
+test("S7: an empty walk clears s", () => {
+  assert.equal(pushReview({}), null);
+});
+
+test("review labels distinguish singular, plural, and completed commitments", () => {
+  assert.equal(walkerFooterReviewAttentionLabel(3, 1, "NEXT"), "Review: 3 due · 1 commitment — NEXT first");
+  assert.equal(walkerFooterReviewAttentionLabel(3, 3, "PRE"), "Review: 3 due · 3 commitments — PRE first");
+  assert.equal(walkerFooterReviewAttentionLabel(2, 0, "POST"), "Review: 2 due · commitments done — POST first");
+});
+
+test("s attention matches the review footer's non-clear walk across tier fixtures", () => {
+  const fixtures = [
+    { rotten: 1 },
+    { post: 1 },
+    { new: 1, rotten: 1 },
+    { pre: 1, next: 2 },
+    { tickler: 2 },
+    { rotten: 2, post: 1 },
+    {},
+  ];
+  for (const byTier of fixtures) {
+    const memo = reviewMemo(byTier);
+    assert.equal(memo.counts.walk, memo.queue.length);
+    const attention = pushReview({ memo });
+    const view = walkerFooterReviewView(memo, { navAvailable: true });
+    assert.equal(attention !== null, view.mode !== "clear", JSON.stringify(byTier));
+  }
+});
+
+test("s stays off when a positive walk count has no known tier", () => {
+  const memo = { counts: { walk: 1, byTier: {} }, queue: [{}], tasksAvailable: true };
+  assert.equal(pushReview({ memo }), null);
 });
 
 // --- w: lanes --------------------------------------------------------------

@@ -872,7 +872,7 @@ test("per-family default labels cover w without overriding explicit labels", () 
   const explicit = buildBracketModeView("n", { w: { tier: "over", label: "Lanes over limit: WIP 2/1 — click to show" } });
   assert.equal(explicit.segments.find((segment) => segment.type === "w").attentionLabel, "Lanes over limit: WIP 2/1 — click to show");
   const sDefault = buildBracketModeView("n", { s: { tier: "next", label: "" } });
-  assert.equal(sDefault.segments.find((segment) => segment.type === "s").attentionLabel, "Review commitments are due");
+  assert.equal(sDefault.segments.find((segment) => segment.type === "s").attentionLabel, "Review rows are due");
   const bDefault = buildBracketModeView("n", { b: { tier: "waiting", label: "" } });
   assert.equal(bDefault.segments.find((segment) => segment.type === "b").attentionLabel, "Bank rows are waiting");
 });
@@ -901,6 +901,8 @@ test("s dot hues match the review footer tier hues", () => {
     next: "var(--task-status-next, var(--color-green, #08b94e))",
     recurring: "var(--color-pink, #d53984)",
     tickler: "var(--color-blue, #086ddd)",
+    rotten: "var(--color-orange, #ec7500)",
+    post: "var(--color-cyan, #00bfbc)",
   };
   for (const [tier, hue] of Object.entries(expected)) {
     const navRule = navCss.match(new RegExp(`data-attention-tier="${tier}"[^}]*\\{[^}]*\\}`));
@@ -917,5 +919,22 @@ test("s dot hues match the review footer tier hues", () => {
       new RegExp(`button\\.bob-bracket-mode-seg\\[data-attention-tier="${tier}"\\]`),
       `ink-capable tier ${tier}`,
     );
+  }
+});
+
+test("ROTTEN and POST tiers paint both the off-s dot and selected-s ink", () => {
+  const el = makeStatusBarEl();
+  const parts = ensureBracketModeDom(el);
+  for (const tier of ["rotten", "post"]) {
+    const attention = { s: { tier, label: `Review: 1 due — ${tier.toUpperCase()} first` } };
+    paintBracketModeIndicator(el, parts, buildBracketModeView("w", attention), undefined);
+    const sButton = findSegment(parts, "s");
+    assert.ok(sButton.classes.includes("has-attention"), `${tier} dot`);
+    assert.equal(sButton.attrs["data-attention-tier"], tier);
+
+    paintBracketModeIndicator(el, parts, buildBracketModeView("s", attention), "w");
+    assert.ok(sButton.classes.includes("has-attention-ink"), `${tier} selected ink`);
+    assert.ok(!sButton.classes.includes("has-attention"), `${tier} no selected dot`);
+    assert.equal(sButton.attrs["data-attention-tier"], tier);
   }
 });

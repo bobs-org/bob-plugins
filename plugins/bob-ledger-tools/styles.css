@@ -317,10 +317,10 @@ a.bob-plan-ready:hover {
 }
 
 /* Task freshness review footer (freshness namespace v5): one compact
-   native status-bar item. Every walk tier has its own theme-native hue,
+   native status-bar item. Every walk tier has its theme-native hue,
    normalized to one OKLCH lightness per theme so every ink clears 4.5:1
-   on the status bar. POST uses the neutral text ink. Text, never color
-   alone, carries meaning. */
+   on the status bar. PRE and POST share cyan. Text, never color alone,
+   carries meaning. */
 .bob-freshness {
   display: flex;
   align-items: center;
@@ -518,6 +518,9 @@ a.bob-plan-ready:hover {
 .bob-freshness [data-review-tier="rotten"] {
   --bob-review-hue: var(--color-orange, #ec7500);
 }
+.bob-freshness [data-review-tier="post"] {
+  --bob-review-hue: var(--color-cyan, #00bfbc);
+}
 
 .bob-freshness [data-review-tier] {
   --bob-review-ink: color-mix(
@@ -535,10 +538,6 @@ a.bob-plan-ready:hover {
       from var(--bob-review-hue) var(--bob-review-ink-l) min(c, 0.16) h
     );
   }
-}
-
-.bob-freshness [data-review-tier="post"] {
-  --bob-review-ink: var(--text-normal);
 }
 
 /* TICK answer chip: the Alt+P preview rendered as a tier-tinted pill with an

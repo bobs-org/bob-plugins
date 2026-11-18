@@ -15,7 +15,7 @@ Album cards and sync: [Album cards](albums.md); record titles and editing:
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.134.0 |
+| Version | 1.135.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -215,14 +215,13 @@ missing or invalid. The block re-renders live when the daily note or Tasks
 cache changes and shows `–` placeholders, never an error, with no daily note,
 Pomodoros section, or Tasks plugin.
 
-One walker footer follows the bracket walk (`s`/`w`/`n`/`b`), routed through
-nav `api.walkMode` v1 and the walk-mode doorbell. The `s` panel is the review
-footer, gated on `s`: nonempty groups (PRE → NEW → PROJECTS → PENDING →
-NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN) minus the
-active tier, tier-colored, shedding groups,
-detail, hint, meter. The button jumps like `]s`; TICK rows show a tinted
-`Alt+P` chip (red when cancel). Empty shows `⟳ Review clear · ✓ N today`,
-keeping the Alt+P preview; hints read `]] next`. The `w` lane footer shows `api.laneWalk` v2
+One walker footer follows `s/w/n/b` via nav `api.walkMode` v1 and its doorbell.
+Review attention is on iff `]s` has a row, including ROTTEN and POST; its hue
+is the first due group (PRE/POST cyan, ROTTEN orange). Its label shows walk and
+commitment counts, or `commitments done`. The gated `s` panel lists remaining
+groups (TICK splits ROTTEN), details, `]] next`, and meter; it jumps like `]s`
+and clears as `Review clear`. TICK rows show a tinted `Alt+P` chip (red on
+cancel). The `w` lane footer shows `api.laneWalk` v2
 counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
 Pending…` states, red `n/cap` over tokens (over lanes stay visible);
 `Lanes` acts like `]]`, counts never filter. Red `w` attention is pushed via nav

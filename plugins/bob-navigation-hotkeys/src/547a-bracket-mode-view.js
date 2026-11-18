@@ -34,7 +34,7 @@ function buildBracketModeView(type, attention = {}) {
     ? BRACKET_REPEAT_EMPTY_NOTICE
     : "Nothing to repeat yet — press ]s, ]w, ]n, or ]b first";
   const BRACKET_MODE_ATTENTION_DEFAULT_LABELS = Object.freeze({
-    s: "Review commitments are due",
+    s: "Review rows are due",
     w: "Lanes are over limit",
     b: "Bank rows are waiting",
   });

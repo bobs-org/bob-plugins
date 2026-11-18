@@ -7,10 +7,25 @@
 const WALKER_FOOTER_DOORBELL_EVENT = "bob-navigation-hotkeys:walk-mode";
 const WALKER_FOOTER_REPEAT_HINT = "]] next";
 
-// Push only the commitment tiers; ROTTEN and POST are upkeep and must not
-// light the review selector. Keep pushing while s is selected so nav v6 can
-// paint its attention as readable ink. This is a display projection over the
-// existing memo and never changes task or walk state.
+// The s mark is on exactly when ]s has a row to land on. Keep pushing while s
+// is selected so nav v6 can paint its attention as readable ink. This is a
+// display projection over the existing memo and never changes task or walk
+// state.
+function walkerFooterReviewAttentionLabel(walk, commitments, tierLabel) {
+  const due = Number.isInteger(walk) && walk > 0 ? walk : 0;
+  const count = Number.isInteger(commitments) && commitments >= 0
+    ? commitments
+    : 0;
+  const first = String(tierLabel || "");
+  if (count === 1) {
+    return `Review: ${due} due · 1 commitment — ${first} first`;
+  }
+  if (count > 1) {
+    return `Review: ${due} due · ${count} commitments — ${first} first`;
+  }
+  return `Review: ${due} due · commitments done — ${first} first`;
+}
+
 function walkerFooterPushReviewAttention(plugin, route, memo) {
   try {
     const api = plugin && typeof plugin.dependencyNavApi === "function"
@@ -40,21 +55,20 @@ function walkerFooterPushReviewAttention(plugin, route, memo) {
     }
     const read = freshnessFooterReadTiers(snapshot.counts || snapshot);
     const commitments = read.commitments;
-    if (commitments <= 0) {
+    if (read.walk <= 0) {
       walkMode.setAttention("s", null);
       return;
     }
-    const tier = FRESHNESS_FOOTER_COMMITMENT_TIERS.find((key) => read.tiers[key] > 0);
+    const tier = FRESHNESS_FOOTER_TIERS.find((key) => read.tiers[key] > 0);
     if (!tier) {
       walkMode.setAttention("s", null);
       return;
     }
-    const due = read.walk;
     const dueLabel = freshnessTierFooterLabel(tier);
     const clickHint = route.mode === "s" ? "" : "; click to show";
     walkMode.setAttention("s", {
       tier,
-      label: `Review: ${due} due · ${commitments} commitments — ${dueLabel} first${clickHint}`,
+      label: `${walkerFooterReviewAttentionLabel(read.walk, commitments, dueLabel)}${clickHint}`,
     });
   } catch (_error) {
     // A stale or throwing nav listener never blocks footer painting.

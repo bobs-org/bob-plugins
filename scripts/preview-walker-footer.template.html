@@ -158,6 +158,8 @@
     const reviewFixtures = [
       { id: "s-all", title: "s · off-row · all nine groups", make: () => ledger.walkerFooterReviewView(memoFor({ pre: 1, new: 1, projects: 1, pending: 1, next: 1, recurring: 1, tickler: 1, rotten: 1, post: 1 }), { navAvailable: true, todayText: "2026-10-30" }) },
       { id: "s-morning", title: "s · typical morning", make: () => ledger.walkerFooterReviewView(memoFor(morning, [reviewRow("next")]), { current: reviewRow("next"), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("next")] }) },
+      { id: "s-rotten-first", title: "s · ROTTEN first · only ROTTEN due", make: () => ledger.walkerFooterReviewView(memoFor({ rotten: 1 }, [reviewRow("rotten", { rank: 1, tierTotal: 1 })]), { current: reviewRow("rotten", { rank: 1, tierTotal: 1 }), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("rotten", { rank: 1, tierTotal: 1 })] }) },
+      { id: "s-post-first", title: "s · POST first · only POST due", make: () => ledger.walkerFooterReviewView(memoFor({ post: 1 }, [reviewRow("post", { rank: 1, tierTotal: 1 })]), { current: reviewRow("post", { rank: 1, tierTotal: 1 }), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("post", { rank: 1, tierTotal: 1 })] }) },
       { id: "s-clear", title: "s · empty queue · Review clear", make: () => ledger.walkerFooterReviewView(memoFor({}, []), { navAvailable: true, todayText: "2026-10-30", queue: [] }) },
       { id: "s-tick-decay", title: "s · TICK decay chip", make: () => ledger.walkerFooterReviewView(memoFor(morning, [reviewRow("tickler", { bucket: "tickler", state: "todo" })]), { current: reviewRow("tickler", { bucket: "tickler", state: "todo" }), navAvailable: true, todayText: "2026-10-30", queue: [reviewRow("tickler")], quickRoll: reviewTickDecay }) },
     ];
@@ -562,9 +564,10 @@
     function paintIntegratedMode(integrated, mode, views, previousMode) {
       const started = performance.now();
       ledger.freshnessFooterPaint(integrated.footer, views[mode]);
-      const attention = mode === "b"
-        ? {}
-        : { b: { tier: "waiting", label: "Bank: 9 waiting · oldest Mon Nov 10 — click to show" } };
+      const attention = {
+        s: { tier: "post", label: "Review: 1 due · commitments done — POST first" },
+        ...(mode === "b" ? {} : { b: { tier: "waiting", label: "Bank: 9 waiting · oldest Mon Nov 10 — click to show" } }),
+      };
       const painted = nav.paintBracketModeIndicator(
         integrated.selector, integrated.selectorParts, nav.buildBracketModeView(mode, attention), previousMode,
       );
@@ -572,6 +575,7 @@
       const rect = integrated.selector.getBoundingClientRect();
       const main = integrated.footer.querySelector(".bob-freshness-main");
       const bSeg = integrated.selector.querySelector('[data-bracket-type="b"]');
+      const sSeg = integrated.selector.querySelector('[data-bracket-type="s"]');
       return {
         mode,
         panel: integrated.footer.getAttribute("data-walker-panel"),
@@ -579,6 +583,10 @@
         contentWidth: main ? main.getBoundingClientRect().width : 0,
         barHeight: integrated.bar.getBoundingClientRect().height,
         selectorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        sTier: sSeg && sSeg.getAttribute("data-attention-tier"),
+        sAttentionDot: Boolean(sSeg && sSeg.classList.contains("has-attention")),
+        sAttentionInk: Boolean(sSeg && sSeg.classList.contains("has-attention-ink")),
+        sDotColor: sSeg ? getComputedStyle(sSeg, "::after").backgroundColor : null,
         bAttention: Boolean(bSeg && bSeg.classList.contains("has-attention")),
         swapMs: performance.now() - started,
       };

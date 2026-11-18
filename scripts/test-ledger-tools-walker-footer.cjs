@@ -776,12 +776,26 @@ test("push sends the first nonzero commitment tier off-s", () => {
   assert.match(calls[0].value.label, /3 commitments/);
 });
 
-test("rotten-only and post-only queues push null", () => {
-  for (const byTier of [{ rotten: 4, walk: 4 }, { post: 2 }]) {
+test("rotten-only and post-only queues push their walk attention", () => {
+  for (const { byTier, walk, tier, label } of [
+    {
+      byTier: { rotten: 4 },
+      walk: 4,
+      tier: "rotten",
+      label: "Review: 4 due · commitments done — ROTTEN first; click to show",
+    },
+    {
+      byTier: { post: 2 },
+      walk: 2,
+      tier: "post",
+      label: "Review: 2 due · commitments done — POST first; click to show",
+    },
+  ]) {
     const { plugin, calls } = makePushPlugin({ mode: "w" });
-    walkerFooterPushReviewAttention(plugin, { legacy: false, mode: "w" }, commitmentMemo({ byTier, walk: 4 }));
+    walkerFooterPushReviewAttention(plugin, { legacy: false, mode: "w" }, commitmentMemo({ byTier, walk }));
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].value, null);
+    assert.equal(calls[0].value.tier, tier);
+    assert.equal(calls[0].value.label, label);
   }
 });
 

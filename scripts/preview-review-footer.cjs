@@ -145,13 +145,8 @@ function validateMatrix(entry) {
   const failures = [];
   const colors = tiers.map((tier) => entry.allTierColors[tier]);
   if (colors.some((color) => !color)) failures.push("the all-tier fixture is missing an ink");
-  if (new Set(colors).size !== tiers.length) failures.push("the nine group inks are not pairwise distinct");
-  if (entry.theme === "light" && entry.allTierColors.post !== "rgb(34, 34, 34)") {
-    failures.push(`POST is ${entry.allTierColors.post}, not the light normal text ink`);
-  }
-  if (entry.theme === "dark" && entry.allTierColors.post !== "rgb(218, 218, 218)") {
-    failures.push(`POST is ${entry.allTierColors.post}, not the dark normal text ink`);
-  }
+  if (new Set(colors).size !== tiers.length - 1) failures.push("the eight walk hues are not distinct with PRE/POST bookends");
+  if (entry.allTierColors.post !== entry.allTierColors.pre) failures.push("POST does not share PRE's cyan ink");
   for (const fixture of entry.fixtures) {
     if (fixture.overflow > 1) failures.push(`${fixture.id} overflows its host by ${fixture.overflow}px`);
     if (!fixture.prefixOk) failures.push(`${fixture.id} visible groups are not a walk-order prefix`);
@@ -263,7 +258,7 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: all nine groups, a typical morning, staged Monday PRE/POST rows, NEW, NEXT with quickRoll, ROTTEN, and TICK decay/cancel/legacy chips.",
+      "- Fixtures: all nine groups, a typical morning, staged Monday PRE/POST rows, POST-first and ROTTEN-first walks, NEW, NEXT with quickRoll, ROTTEN, and TICK decay/cancel/legacy chips.",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
       "- Checks: AA contrast for group, current-tier, stage-detail, chip, and keycap inks; nine distinct group inks; chips on every tick-* fixture and none on next-roll; hint text matches the view; chips stay visible at every width; no host overflow; walk-order prefixes; and ellipsis only for a partial cut.",
       "",

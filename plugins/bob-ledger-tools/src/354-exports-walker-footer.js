@@ -18,6 +18,7 @@ try {
       walkerFooterClearView,
       walkerFooterReviewView,
       walkerFooterPushReviewAttention,
+      walkerFooterReviewAttentionLabel,
       walkerFooterWalkMode,
     });
   }

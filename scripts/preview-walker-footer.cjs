@@ -170,7 +170,8 @@ function validateMatrix(entry) {
   const tiers = ["pre", "new", "projects", "pending", "next", "recurring", "tickler", "rotten", "post"];
   const colors = tiers.map((tier) => entry.allTierColors[tier]);
   if (colors.some((color) => !color)) failures.push("the all-tier fixture is missing an ink");
-  if (new Set(colors).size !== tiers.length) failures.push("the nine group inks are not pairwise distinct");
+  if (new Set(colors).size !== tiers.length - 1) failures.push("the eight walk hues are not distinct with PRE/POST bookends");
+  if (entry.allTierColors.pre !== entry.allTierColors.post) failures.push("POST does not share PRE's cyan ink");
   const byId = Object.fromEntries(entry.fixtures.map((item) => [item.id, item]));
   for (const fixture of entry.fixtures) {
     const wantPanel = fixture.id.startsWith("s-")
@@ -240,6 +241,10 @@ function validateMatrix(entry) {
     if (mode.panel !== expectedPanel[mode.mode] || mode.settledPanel !== expectedPanel[mode.mode]) {
       failures.push(`integrated ${mode.mode} paints panel ${mode.panel}/${mode.settledPanel}`);
     }
+    if (mode.sTier !== "post") failures.push(`integrated ${mode.mode} s tier is ${mode.sTier}, not post`);
+    if (mode.mode === "s" && !mode.sAttentionInk) failures.push("integrated selected s has no attention ink");
+    if (mode.mode !== "s" && !mode.sAttentionDot) failures.push(`integrated off-s has no attention dot in mode ${mode.mode}`);
+    if (mode.mode !== "s" && mode.sDotColor === "rgba(0, 0, 0, 0)") failures.push(`integrated off-s dot is transparent in mode ${mode.mode}`);
   }
   const rects = modes.map((mode) => mode.selectorRect);
   const settled = modes.map((mode) => mode.settledSelectorRect);
@@ -334,7 +339,7 @@ async function main() {
       "",
       `- Browser: ${summary.browser}.`,
       `- Renderer checkout revision: ${summary.rendererRevision}.`,
-      "- Fixtures: every walker panel state (s review + clear, w lane states + stress, n compass states + Unicode/dupe, b bank WAITING/ALL/empty/wrap), plus an integrated s/w/n/b bar (footer + Keep chip + production four-letter selector and the b attention dot).",
+      "- Fixtures: every walker panel state (including ROTTEN-first and POST-first s review + clear, w lane states + stress, n compass states + Unicode/dupe, b bank WAITING/ALL/empty/wrap), plus an integrated s/w/n/b bar with a POST-first s ink and off-s dot.",
       "- Matrix: 1100, 700, and 460 px in light and dark default-theme colors.",
       "- Checks: AA contrast for every panel ink; no host overflow; panel attribute per fixture id; links arms match the view; dashed create target; selector rect identical across s/w/n/b immediately and after frames while footer widths change; b attention dot off-b; fixed host height.",
       "",

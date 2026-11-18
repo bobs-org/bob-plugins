@@ -8,7 +8,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
-const { performance } = require("node:perf_hooks");
+const {
+  cpuBudgetDiagnostic,
+  isWithinCpuBudget,
+  sampleCpuWork,
+} = require("./cpu-work-perf-support.cjs");
 
 const editorInfoField = { chipField: "info" };
 const editorLivePreviewField = { chipField: "live" };
@@ -483,7 +487,7 @@ test("progress context and the off-clock chip recognize the ⏭ host as a ledger
   assert.match(families, /this\.setupKeepMovingMarks\(\);/); // The lifecycle wires the family.
 });
 
-test("200-link / 50-target Live Preview build memoizes targets and stays near the 25 ms budget", () => {
+test("200-link / 50-target Live Preview build memoizes targets under the 250 ms CPU-work budget", (t) => {
   // §7: parse once for the whole day, count once per project, build widgets
   // only inside visible ranges, never read from disk during render.
   const residents = ["- [ ] #task Root ^prj", "- [*] #task Trigger ^x"];
@@ -492,16 +496,23 @@ test("200-link / 50-target Live Preview build memoizes targets and stays near th
   const lines = ["## Pomodoros", "- [ ] () — WRITE"];
   for (let index = 0; index < 200; index += 1) lines.push("\t- [[job_email_recruiters#^x]]");
   const day = lines.join("\n");
-  const plugin = makePlugin(day, source);
-  let resolutions = 0;
-  const inner = plugin.app.metadataCache.getFirstLinkpathDest;
-  plugin.app.metadataCache.getFirstLinkpathDest = (...args) => { resolutions += 1; return inner(...args); };
-  const start = performance.now();
-  const decorations = plugin.buildKeepMovingMarkDecorations(makeView(day));
-  const elapsed = performance.now() - start;
-  assert.equal(decorations.adds.length, 200);
-  assert.equal(resolutions, 1); // One ancestor resolution is shared by all 200 links.
-  assert.ok(elapsed < 250, `200-link build took ${elapsed.toFixed(1)} ms`);
+  const makeBuild = () => {
+    const plugin = makePlugin(day, source);
+    let resolutions = 0;
+    const inner = plugin.app.metadataCache.getFirstLinkpathDest;
+    plugin.app.metadataCache.getFirstLinkpathDest = (...args) => { resolutions += 1; return inner(...args); };
+    const view = makeView(day);
+    return () => {
+      const decorations = plugin.buildKeepMovingMarkDecorations(view);
+      assert.equal(decorations.adds.length, 200);
+      assert.equal(resolutions, 1); // One ancestor resolution is shared by all 200 links.
+    };
+  };
+
+  const { cpuSamples, wallSamples } = sampleCpuWork(makeBuild);
+  const diagnostic = cpuBudgetDiagnostic("200-link build", cpuSamples, wallSamples, 250);
+  t.diagnostic(diagnostic);
+  assert.ok(isWithinCpuBudget(cpuSamples, 250), diagnostic);
 });
 
 function projectTextHeader() {

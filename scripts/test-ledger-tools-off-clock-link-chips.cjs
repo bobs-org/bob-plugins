@@ -5,6 +5,12 @@ const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
 const {
+  cpuBudgetDiagnostic,
+  cpuTimeMs,
+  isWithinCpuBudget,
+  sampleCpuWork,
+} = require("./cpu-work-perf-support.cjs");
+const {
   clockEnvFor: vectorClockEnv,
   planCapsForVector,
 } = require("./pomodoro-clock-vector-helpers.cjs");
@@ -352,28 +358,63 @@ test("setup registers the default-on command, Live Preview extension, Reading pr
   assert.ok(plugin.registeredEvents.some((event) => event.event === "rename"));
 });
 
-test("200-link / 50-target Live Preview build memoizes targets and stays near the 25 ms budget", () => {
-  const plugin = Object.create(LedgerToolsPlugin.prototype);
-  plugin.offClockLinkChipsEnabled = true;
+test("200-link / 50-target Live Preview build memoizes targets under the 35 ms CPU-work budget", (t) => {
   const source = ["## Pomodoros", "- [ ] () — BUILD"];
   for (let index = 0; index < 200; index += 1) source.push(`  - [[note${index % 50}#^task${index % 50}]]`);
   const text = source.join("\n");
-  let taskReads = 0;
-  let clockReads = 0;
-  plugin.pomodoroClockResolveTaskLineFrom = () => { taskReads += 1; return "- [ ] #task Work ^task"; };
-  plugin.pomodoroClockResolveLinkClockFrom = () => { clockReads += 1; return { offClock: true, source: "note", note: "love.md" }; };
-  const doc = {
-    toString: () => text,
-    line(number) { let from = 0; const rows = text.split("\n"); for (let i = 1; i < number; i++) from += rows[i - 1].length + 1; return { from }; },
+  const makeBuild = () => {
+    const plugin = Object.create(LedgerToolsPlugin.prototype);
+    plugin.offClockLinkChipsEnabled = true;
+    let taskReads = 0;
+    let clockReads = 0;
+    plugin.pomodoroClockResolveTaskLineFrom = () => { taskReads += 1; return "- [ ] #task Work ^task"; };
+    plugin.pomodoroClockResolveLinkClockFrom = () => { clockReads += 1; return { offClock: true, source: "note", note: "love.md" }; };
+    const doc = {
+      toString: () => text,
+      line(number) { let from = 0; const rows = text.split("\n"); for (let i = 1; i < number; i++) from += rows[i - 1].length + 1; return { from }; },
+    };
+    const state = { doc, field: (field) => field === editorLivePreviewField ? true : { file: { path: DAILY } } };
+    return () => {
+      const decorations = plugin.buildOffClockLinkChipDecorations({ state, visibleRanges: [{ from: 0, to: text.length }] });
+      assert.equal(decorations.adds.length, 200);
+      assert.equal(taskReads, 50);
+      assert.equal(clockReads, 50);
+    };
   };
-  const state = { doc, field: (field) => field === editorLivePreviewField ? true : { file: { path: DAILY } } };
-  const start = performance.now();
-  const decorations = plugin.buildOffClockLinkChipDecorations({ state, visibleRanges: [{ from: 0, to: text.length }] });
-  const elapsed = performance.now() - start;
-  assert.equal(decorations.adds.length, 200);
-  assert.equal(taskReads, 50);
-  assert.equal(clockReads, 50);
-  assert.ok(elapsed < 35, `200-link build took ${elapsed.toFixed(1)} ms`);
+
+  const { cpuSamples, wallSamples } = sampleCpuWork(makeBuild);
+  const diagnostic = cpuBudgetDiagnostic("200-link build", cpuSamples, wallSamples, 35);
+  t.diagnostic(diagnostic);
+  assert.ok(isWithinCpuBudget(cpuSamples, 35), diagnostic);
+});
+
+test("CPU-work budget ignores scheduler parking and rejects excess CPU work", () => {
+  const budgetMs = 35;
+  const parkedCpuStart = cpuTimeMs();
+  const parkedWallStart = performance.now();
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  const parkedWallMs = performance.now() - parkedWallStart;
+  const parkedCpuMs = cpuTimeMs() - parkedCpuStart;
+  assert.ok(parkedWallMs > budgetMs, `park lasted only ${parkedWallMs.toFixed(2)} ms wall`);
+  assert.ok(
+    isWithinCpuBudget([parkedCpuMs], budgetMs),
+    `park charged ${parkedCpuMs.toFixed(2)} ms CPU against the ${budgetMs} ms budget`,
+  );
+
+  let accumulator = 0;
+  const spinCpuStart = cpuTimeMs();
+  const wallDeadline = Date.now() + 15000;
+  let spinCpuMs = 0;
+  while (isWithinCpuBudget([spinCpuMs], budgetMs)) {
+    for (let index = 0; index < 100000; index += 1) accumulator += Math.sqrt(index % 97);
+    spinCpuMs = cpuTimeMs() - spinCpuStart;
+    assert.ok(Date.now() < wallDeadline, "CPU spin exceeded 15 s wall time");
+  }
+  assert.ok(accumulator > 0, "spin work ran");
+  assert.ok(
+    !isWithinCpuBudget([spinCpuMs], budgetMs),
+    `spin burned ${spinCpuMs.toFixed(2)} ms CPU but stayed under the ${budgetMs} ms budget`,
+  );
 });
 
 test("Reading sweep handles closed daily ledger rows and reconciles the chip after its anchor", () => {

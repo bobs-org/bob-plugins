@@ -353,8 +353,8 @@ function probeSource(notePath) {
       }
       return result;
     };
-    const describeNative = (selector) => {
-      const node = Array.from(surface?.querySelectorAll?.(selector) || []).find(belongs) || null;
+    const describeNative = (selector, target = null) => {
+      const node = target || Array.from(surface?.querySelectorAll?.(selector) || []).find(belongs) || null;
       if (!node) return { present: false };
       const style = getComputedStyle(node);
       const rect = node.getBoundingClientRect();
@@ -443,6 +443,11 @@ function probeSource(notePath) {
       hideClassPresent: scopeNodes.length > 0,
       hideClassPaths: scopeNodes.map(describePath),
       properties: describeNative(".metadata-container"),
+      addProperty: describeNative(".metadata-add-button"),
+      propertyRows: Array.from(surface?.querySelectorAll?.(".metadata-property") || [])
+        .filter(belongs).map((node) => ({ key: node.getAttribute("data-property-key"), ...describeNative("", node) })),
+      schemaKeys: (model?.gate?.album?.fields || []).map((field) => field.key),
+      titlePropertyInSheet: Boolean(String(frontmatter.title ?? "").trim()),
       inlineTitle: describeNative(".inline-title"),
       sheet: sheet ? {
         count: Array.from(surface.querySelectorAll(".bob-record-sheet")).filter((node) => node.getAttribute("data-record-source") === path && belongs(node)).length,
@@ -853,7 +858,10 @@ function writeAssertion(report, name, status, detail, mandatory = true) {
 function expectVisibility(report, name, probe, hidden) {
   try {
     lib.assertNativeVisibility(probe, hidden);
-    writeAssertion(report, name, "pass", { hidden, properties: probe.properties, inlineTitle: probe.inlineTitle });
+    writeAssertion(report, name, "pass", {
+      hidden, properties: probe.properties, propertyRows: probe.propertyRows,
+      schemaKeys: probe.schemaKeys, inlineTitle: probe.inlineTitle,
+    });
   } catch (error) {
     writeAssertion(report, name, "fail", error.message);
   }
@@ -1006,6 +1014,7 @@ async function run(args) {
     const open = async (notePath, mode = "live") => {
       const opened = await openNote(client, notePath, mode);
       if (!opened.ok) throw new Error("Could not open " + notePath + ": " + JSON.stringify(opened));
+      if (mode !== "source") await expandNativeProperties(client, notePath);
       return opened;
     };
     const waitSheet = async (notePath) => waitFor(client, probeSource(notePath), (value) =>
@@ -1019,7 +1028,7 @@ async function run(args) {
       appendCapturedCheck(report, name + "-sheet-title-role-and-text",
         state.sheet?.titleRole === "heading" && state.sheet?.titleLevel === "1" && state.sheet?.title === options.title,
         { title: state.sheet?.title, role: state.sheet?.titleRole, level: state.sheet?.titleLevel, expected: options.title });
-      expectVisibility(report, name + "-native-properties-and-inline-title-hide", state, true);
+      expectVisibility(report, name + "-only-schema-properties-and-inline-title-hide", state, true);
       appendCapturedCheck(report, name + "-coverage-each-frontmatter-key-once",
         state.missingCoverage?.length === 0 && state.duplicateCoverage?.length === 0,
         { authoredKeys: state.authoredKeys, coverage: state.coverage, missing: state.missingCoverage, duplicates: state.duplicateCoverage });
@@ -1063,6 +1072,7 @@ async function run(args) {
     (report.probes.clicks ||= []).push(await clickBy(client, '[data-record-sheet-focus="collapse"]'));
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.collapsed === true, "sheet collapse");
     report.probes.collapsed = state;
+    expectVisibility(report, "collapsed-sheet-keeps-only-schema-rows-hidden", state, true);
     appendCapturedCheck(report, "collapse-button-works", state.sheet?.collapsed === true, state.sheet);
     appendCapturedCheck(report, "collapse-does-not-write-markdown", markdownFilesHash(vaultDir) === beforePassive, state.sheet);
     report.screenshots.push(await capture(client, outDir, "record-sheet-collapsed", 1400, "light", "Live Preview"));
@@ -1104,16 +1114,13 @@ async function run(args) {
     state = await waitSheet("zettels/frontmatter-only.md");
     report.probes.frontmatterOnlyLive = state;
     checkPositive("frontmatter-only-live-preview", state, { title: "Frontmatter Only", h1Count: 0 });
-    const frontmatterCursor = await client.evaluate(`(() => {
-      const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === "zettels/frontmatter-only.md");
-      const cm = leaf?.view?.editor?.cm;
-      if (!cm) return { ok: false, reason: "Live Preview CodeMirror view unavailable" };
-      const text = cm.state.doc.toString();
-      const end = cm.state.doc.length;
-      cm.dispatch({ selection: { anchor: end }, scrollIntoView: true });
-      return { ok: cm.state.selection.main.head === end, end, textLength: text.length, endsWithDelimiter: text.trimEnd().endsWith("---") };
-    })()`);
-    appendCapturedCheck(report, "frontmatter-only-editor-reaches-closing-delimiter", frontmatterCursor.ok && frontmatterCursor.endsWithDelimiter, frontmatterCursor);
+    const frontmatterBodyCursor = await client.evaluate(lib.frontmatterBodyCursorExpression("zettels/frontmatter-only.md"));
+    appendCapturedCheck(report, "frontmatter-only-live-preview-reaches-body-boundary", frontmatterBodyCursor.ok, frontmatterBodyCursor);
+    // Native Properties replaces YAML in Live Preview. Check the actual closing
+    // delimiter in Source, independently of the managed walk footer after it.
+    await open("zettels/frontmatter-only.md", "source");
+    const frontmatterCursor = await client.evaluate(lib.frontmatterBodyCursorExpression("zettels/frontmatter-only.md", true));
+    appendCapturedCheck(report, "frontmatter-only-source-editor-reaches-closing-delimiter", frontmatterCursor.ok && frontmatterCursor.delimiter === "---", frontmatterCursor);
     await open("zettels/frontmatter-only.md", "reading");
     state = await waitSheet("zettels/frontmatter-only.md");
     report.probes.frontmatterOnly = state;
@@ -1147,7 +1154,8 @@ async function run(args) {
       state.coverage.lid === "fold" && state.coverage.source_title === "fold" && state.coverage.source_url === "fold",
       state.coverage);
     await open("movies/equilibrium.md", "reading");
-    report.probes.hoverTarget = await hoverBy(client, 'a[data-href="movies/embedded-record"]');
+    // The walk rail links to this record too; hover the authored body link.
+    report.probes.hoverTarget = await hoverBy(client, '.markdown-preview-view li a[data-href="movies/embedded-record"]:not(.bob-record-walk-arm)');
     const hover = await waitFor(client, `(() => Array.from(document.querySelectorAll(".hover-popover")).map((root) => ({
       classes: String(root.className || ""),
       properties: Array.from(root.querySelectorAll(".metadata-container")).map((node) => {
@@ -1222,6 +1230,7 @@ async function run(args) {
     await open("zettels/bead_lifecycle.md", "live");
     state = await waitSheet("zettels/bead_lifecycle.md");
     appendCapturedCheck(report, "live-preview-hide-recovers-after-source-mode", state.hideClassPresent, state);
+    expectVisibility(report, "mode-return-restores-schema-only-hiding", state, true);
     const lifecycleBefore = await client.evaluate(`(async () => {
       const file = app.vault.getAbstractFileByPath("zettels/bead_lifecycle.md");
       const text = await app.vault.read(file);
@@ -1232,6 +1241,7 @@ async function run(args) {
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.gate?.mount === false || value.sheet?.count === 0, "type-change hide cleanup");
     report.probes.typeChanged = state;
     appendCapturedCheck(report, "type-change-clears-hide", !state.hideClassPresent && !state.sheet, state);
+    expectVisibility(report, "type-change-restores-every-native-row", state, false);
     await client.evaluate(`(async () => {
       const file = app.vault.getAbstractFileByPath("zettels/bead_lifecycle.md");
       const current = await app.vault.read(file);
@@ -1241,6 +1251,7 @@ async function run(args) {
     })()`);
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.count === 1 && value.hideClassPresent, "healthy return after type change");
     appendCapturedCheck(report, "healthy-return-restores-sheet-and-hide", state.sheet?.count === 1 && state.hideClassPresent, state);
+    expectVisibility(report, "type-recovery-hides-only-schema-rows", state, true);
 
     const parentChange = await client.evaluate(`(async () => {
       const file = app.vault.getAbstractFileByPath("zettels/bead_lifecycle.md");
@@ -1251,6 +1262,7 @@ async function run(args) {
     })()`);
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.gate?.mount === false || value.sheet?.count === 0, "parent-change cleanup");
     appendCapturedCheck(report, "parent-change-clears-hide", !state.hideClassPresent && !state.sheet, state);
+    expectVisibility(report, "parent-change-restores-every-native-row", state, false);
     await client.evaluate(`(async () => {
       const file = app.vault.getAbstractFileByPath("zettels/bead_lifecycle.md");
       const current = await app.vault.read(file);
@@ -1260,12 +1272,35 @@ async function run(args) {
     })()`);
     state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"), (value) => value.sheet?.count === 1 && value.hideClassPresent, "parent healthy return");
     appendCapturedCheck(report, "parent-healthy-return-restores-hide", state.sheet?.count === 1 && state.hideClassPresent, state);
+    expectVisibility(report, "parent-recovery-hides-only-schema-rows", state, true);
     report.noteSafety.fixtureLifecycleEdits = { typeAndParentChangedInScratchOnly: true, originalPrefixBytes: lifecycleBefore.original.slice(0, 60), parentFixtureChanged: Boolean(parentChange) };
 
     await open("zettels/bead_lifecycle.md", "reading");
     const switches = await open("ordinary.md", "reading");
     state = await waitFor(client, probeSource("ordinary.md"), (value) => value.status === "pass", "ordinary view after file switch");
     appendCapturedCheck(report, "file-switch-clears-owned-hide", !state.hideClassPresent && !state.sheet, { opened: switches, current: state });
+    expectVisibility(report, "ordinary-note-keeps-all-properties-after-file-switch", state, false);
+    await open("zettels/bead_lifecycle.md", "live");
+    state = await waitSheet("zettels/bead_lifecycle.md");
+    expectVisibility(report, "record-return-hides-only-schema-rows", state, true);
+    const tabRoundTrip = await client.evaluate(`(async () => {
+      const record = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === "zettels/bead_lifecycle.md");
+      const other = app.workspace.getLeaf("tab");
+      await other.openFile(app.vault.getAbstractFileByPath("ordinary.md"));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (!record?.tabHeaderEl?.isConnected) throw new Error("Record tab header is not connected");
+      record.tabHeaderEl.click();
+      return { otherLeafId: other.id };
+    })()`);
+    state = await waitFor(client, probeSource("zettels/bead_lifecycle.md"),
+      (value) => value.activePath === "zettels/bead_lifecycle.md" && value.sheet?.count === 1, "record tab return");
+    report.probes.tabReturn = state;
+    expectVisibility(report, "tab-return-hides-only-schema-rows", state, true);
+    report.screenshots.push(await capture(client, outDir, "record-sheet-tab-return", 1400, "light", "Live Preview"));
+    await client.evaluate(`(() => {
+      app.workspace.getLeavesOfType("markdown").find((item) => item.id === ${JSON.stringify(tabRoundTrip.otherLeafId)})?.detach();
+    })()`);
+    await open("ordinary.md", "reading");
     const destroy = await client.evaluate(`(() => {
       const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === "ordinary.md");
       if (!leaf) return { ok: false, reason: "scratch markdown leaf missing" };
@@ -1274,7 +1309,7 @@ async function run(args) {
       return { ok: true };
     })()`);
     await sleep(450);
-    const leaked = await client.evaluate(`(() => Array.from(document.querySelectorAll(".${HIDE_CLASS}")).map((node) => String(node.className || "")))()`);
+    const leaked = await client.evaluate(`(() => Array.from(document.querySelectorAll(".${HIDE_CLASS}, .bob-record-sheet-owned-property")).map((node) => String(node.className || "")))()`);
     appendCapturedCheck(report, "view-destruction-removes-owned-hide", destroy.ok && leaked.length === 0, { destroy, leaked });
 
     await open("zettels/bead_lifecycle.md", "reading");
@@ -1295,7 +1330,7 @@ async function run(args) {
       const surface = view?.previewMode?.containerEl || view?.containerEl || view?.contentEl;
       const hides = [surface, ...Array.from(surface?.querySelectorAll?.(".${HIDE_CLASS}") || [])]
         .filter((node) => node?.classList?.contains("${HIDE_CLASS}")).length;
-      const properties = Array.from(surface?.querySelectorAll?.(".metadata-container") || []).map((node) => ({
+      const properties = Array.from(surface?.querySelectorAll?.(".metadata-container, .metadata-property") || []).map((node) => ({
         display: getComputedStyle(node).display, visibility: getComputedStyle(node).visibility,
       }));
       return {

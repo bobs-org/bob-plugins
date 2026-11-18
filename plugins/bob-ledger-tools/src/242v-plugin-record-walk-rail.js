@@ -95,7 +95,6 @@ class BobLedgerToolsRecordWalkRailMixin {
       const model = this.recordSheetModelFor(path, text);
       const walk = model?.walk || this.recordWalkFor(path, text);
       this.recordSheetSetEditorScope(view, Boolean(model));
-      this.recordSheetSetEditorHide(view, model?.hideEligible === true);
       if (!model && !recordWalkHasRail(walk)) {
         this.recordSheetEditorCache?.delete?.(view);
         this.recordSheetNotifyOwnership();
@@ -110,7 +109,10 @@ class BobLedgerToolsRecordWalkRailMixin {
       const at = docks ? line.from : this.recordSheetAnchor(view, text);
       const signature = JSON.stringify([recordSheetSignature(model), walk, Boolean(reveal), line?.from, line?.to]);
       const previous = this.recordSheetEditorCache?.get?.(view);
-      if (previous?.path === path && previous.signature === signature && previous.anchor === at) return previous.decorations;
+      if (previous?.path === path && previous.signature === signature && previous.anchor === at) {
+        this.recordSheetSetEditorHide(view, model);
+        return previous.decorations;
+      }
       const doc = recordSheetDomDoc(view.dom);
       const options = this.recordWalkOptions(path, model);
       const rows = [];
@@ -124,6 +126,7 @@ class BobLedgerToolsRecordWalkRailMixin {
         }
       }();
       const sheet = model ? this.recordSheetBuildMounted(model, options, doc) : null;
+      this.recordSheetSetEditorHide(view, sheet ? model : null);
       const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
       if (sheet && rail && docks) {
         // One inline replacement owns the pair. Two adjacent inline widgets
@@ -143,7 +146,10 @@ class BobLedgerToolsRecordWalkRailMixin {
       rows.sort((a, b) => a.from - b.from || a.decoration.startSide - b.decoration.startSide);
       for (const row of rows) builder.add(row.from, row.to, row.decoration);
       const decorations = builder.finish();
-      this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
+      // A failed sheet build must stay native and retry. Caching a rail-only
+      // result for a healthy model would hide its properties on the next hit.
+      if (model && !sheet) this.recordSheetEditorCache?.delete?.(view);
+      else this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
       // The rail still refreshes when there is no cached album report/sheet.
       this.recordSheetEditors?.add(view);
       this.recordSheetNotifyOwnership();

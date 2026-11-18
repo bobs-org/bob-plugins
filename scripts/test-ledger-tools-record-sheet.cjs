@@ -29,6 +29,7 @@ Module._load = function loadWithStubs(request, parent, isMain) {
   if (request === "@codemirror/state") return { Prec: { highest: (value) => value }, StateEffect, RangeSetBuilder };
   if (request === "@codemirror/view") return {
     Decoration, WidgetType, ViewPlugin: { fromClass: (cls, options) => ({ cls, options }) },
+    EditorView: { editorAttributes: { of: (attributes) => attributes } },
   };
   return originalLoad.call(this, request, parent, isMain);
 };
@@ -687,6 +688,34 @@ test("Source mode stays native YAML and Live Preview restores after the switch",
   assert.equal(live.dom.classList.contains(HIDES), false);
 });
 
+test("CodeMirror preserves mounted sheet ownership across focus-only class replacement", () => {
+  const { plugin, doc, caches } = fixture();
+  const text = "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n";
+  const view = liveView(doc, "eat/smashburger.md", text, true);
+  const extension = plugin.createRecordSheetExtension();
+  const instance = new extension.cls(view);
+  const attributes = extension.options.provide();
+  const expected = `${helpers.RECORD_SHEET_SURFACE_CLASS} ${HIDES}`;
+  const builds = plugin.recordSheetDomBuilds;
+  view.dom.setAttribute("class", "cm-editor cm-focused");
+  instance.update({ view, focusChanged: true });
+  assert.equal(attributes(view).class, expected);
+  assert.equal(plugin.recordSheetDomBuilds, builds, "focus does not require a sheet rebuild");
+  assert.equal(attributes(liveView(doc, "ordinary.md", "body", true)).class, undefined);
+
+  caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
+  plugin.buildRecordSheetDecorations(view);
+  assert.deepEqual(attributes(view), {}, "gate loss releases CodeMirror ownership");
+  caches.get("eat/smashburger.md").frontmatter.type = "[[record]]";
+  plugin.buildRecordSheetDecorations(view);
+  assert.equal(attributes(view).class, expected);
+  instance.destroy();
+  assert.deepEqual(attributes(view), {}, "destroy releases CodeMirror ownership");
+  plugin.buildRecordSheetDecorations(view);
+  plugin.teardownRecordSheet();
+  assert.deepEqual(attributes(view), {}, "disable cannot leave hidden native fields");
+});
+
 test("Reading paints one owned sheet, ignores nested embeds, and cleans up on unload", () => {
   const { plugin, doc, flush } = fixture();
   const preview = node(doc, "div", "markdown-preview-view");
@@ -831,7 +860,12 @@ test("Properties selectors follow the observed editor and Reading paths and leav
   const editorTitle = `.cm-editor.${HIDES} > .cm-scroller > .cm-sizer > .inline-title`;
   const readingProperties = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .metadata-container`;
   const readingTitle = `.markdown-preview-view.${HIDES} > .markdown-preview-sizer > .mod-header > .inline-title`;
-  for (const selector of [editorProperties, editorTitle, readingProperties, readingTitle]) {
+  for (const selector of [editorProperties, readingProperties]) {
+    assert.ok(styles.includes(`${selector} .metadata-property.bob-record-sheet-owned-property`));
+    assert.ok(!styles.includes(`${selector},`) && !styles.includes(`${selector} {`),
+      "the entire native Properties container must never be hidden");
+  }
+  for (const selector of [editorTitle, readingTitle]) {
     assert.ok(styles.includes(selector), `missing observed Properties selector: ${selector}`);
   }
   assert.ok(styles.includes(`.${HIDES} .markdown-embed .metadata-container:not(.is-collapsed)`),
@@ -887,6 +921,105 @@ test("Properties selectors follow the observed editor and Reading paths and leav
   hover.appendChild(hoverPreview);
   readingWorld.plugin.paintRecordSheetReading(hoverPreview, "eat/smashburger.md");
   assert.equal(hoverPreview.classList.contains(HIDES), false, "hover previews keep their native Properties");
+});
+
+test("native Properties hides only card title/schema rows and restores them on eligibility loss", () => {
+  for (const mode of ["live", "reading"]) {
+    const { plugin, doc, caches } = fixture();
+    const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n", true);
+    const scope = mode === "live" ? view.dom : node(doc, "div", "markdown-preview-view");
+    let properties = view.sizer.querySelector(".metadata-container");
+    if (mode === "reading") {
+      const sizer = scope.appendChild(node(doc, "div", "markdown-preview-sizer"));
+      const header = sizer.appendChild(node(doc, "div", "mod-header"));
+      properties = header.appendChild(node(doc, "div", "metadata-container"));
+    }
+    const addRow = (container, key) => {
+      const row = container.appendChild(node(doc, "div", "metadata-property"));
+      row.setAttribute("data-property-key", key);
+      return row;
+    };
+    const keys = ["title", "status", "location", "visited", "parent", "type", "created", "old_place", "source_url", "unrecognized"];
+    const rows = keys.map((key) => addRow(properties, key));
+    const embed = properties.appendChild(node(doc, "div", "internal-embed"));
+    const nestedRow = addRow(embed.appendChild(node(doc, "div", "metadata-container")), "status");
+    const hoverRow = addRow(properties.appendChild(node(doc, "div", "hover-popover")), "status");
+    const addButton = properties.appendChild(node(doc, "button", "metadata-add-button", "Add property"));
+    const paint = () => mode === "live" ? plugin.buildRecordSheetDecorations(view)
+      : plugin.paintRecordSheetReading(scope, "eat/smashburger.md");
+    const hidden = () => rows.filter((row) => row.classList.contains("bob-record-sheet-owned-property"))
+      .map((row) => row.getAttribute("data-property-key"));
+    paint();
+    assert.deepEqual(hidden(), ["title", "status", "location", "visited"], mode);
+    assert.equal(nestedRow.classList.contains("bob-record-sheet-owned-property"), false);
+    assert.equal(hoverRow.classList.contains("bob-record-sheet-owned-property"), false);
+    assert.equal(addButton.classList.contains("bob-record-sheet-owned-property"), false);
+    // Collapsing the sheet/fold does not expose duplicate schema fields.
+    plugin.recordSheetSetCollapsed("eat/smashburger.md", true);
+    plugin.recordSheetSetFold("eat/smashburger.md", true);
+    paint();
+    assert.deepEqual(hidden(), ["title", "status", "location", "visited"]);
+    caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
+    paint();
+    assert.deepEqual(hidden(), [], "changing type restores every native row");
+    assert.equal(plugin.recordSheetNativePropertiesScopes.size, 0);
+  }
+});
+
+test("failed sheet construction keeps native properties visible and retries before hiding", () => {
+  const { plugin, doc } = fixture();
+  const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n", true);
+  const properties = view.sizer.querySelector(".metadata-container");
+  const row = properties.appendChild(node(doc, "div", "metadata-property"));
+  row.setAttribute("data-property-key", "status");
+  const build = plugin.recordSheetBuildMounted;
+  plugin.recordSheetBuildMounted = () => null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    plugin.buildRecordSheetDecorations(view);
+    assert.equal(view.dom.classList.contains(HIDES), false);
+    assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+  }
+  plugin.recordSheetBuildMounted = build;
+  assert.equal(plugin.buildRecordSheetDecorations(view).length, 1);
+  assert.equal(view.dom.classList.contains(HIDES), true);
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+});
+
+test("late Properties replacements and renamed keys stay scoped and observers disconnect on teardown", () => {
+  const { plugin, doc } = fixture();
+  const observers = [];
+  doc.defaultView = { MutationObserver: class {
+    constructor(callback) { this.callback = callback; observers.push(this); }
+    observe(scope, options) { this.scope = scope; this.options = options; }
+    disconnect() { this.disconnected = true; }
+  } };
+  const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n", true);
+  const initial = view.sizer.querySelector(".metadata-container");
+  initial.remove();
+  plugin.buildRecordSheetDecorations(view);
+  assert.equal(observers.length, 1);
+  assert.deepEqual(observers[0].options.attributeFilter, ["data-property-key"]);
+  const properties = view.sizer.appendChild(node(doc, "div", "metadata-container"));
+  const row = properties.appendChild(node(doc, "div", "metadata-property"));
+  row.setAttribute("data-property-key", "status");
+  observers[0].callback();
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+  row.setAttribute("data-property-key", "unrelated");
+  observers[0].callback();
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+  row.setAttribute("data-property-key", "location");
+  observers[0].callback();
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), true);
+  properties.remove();
+  observers[0].callback();
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false, "detached rows lose ownership");
+  view.sizer.appendChild(properties);
+  observers[0].callback();
+  plugin.teardownRecordSheet();
+  assert.equal(observers[0].disconnected, true);
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false);
+  observers[0].callback();
+  assert.equal(row.classList.contains("bob-record-sheet-owned-property"), false, "late callbacks cannot restore hiding");
 });
 
 test("old-bob and broken-schema sheets leave Properties visible", () => {

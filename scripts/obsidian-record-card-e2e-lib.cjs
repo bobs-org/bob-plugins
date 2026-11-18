@@ -169,7 +169,7 @@ function pathOf(element) {
   })) : [];
 }
 
-function frontmatterBodyCursorExpression(notePath) {
+function frontmatterBodyCursorExpression(notePath, closingDelimiter = false) {
   const note = JSON.stringify(String(notePath || ""));
   return String.raw`(() => {
     const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === ${note});
@@ -179,22 +179,39 @@ function frontmatterBodyCursorExpression(notePath) {
     const close = text.indexOf("\n---", text.indexOf("---") + 3);
     if (close < 0) return { ok: false, reason: "frontmatter closing delimiter missing" };
     const firstBodyLine = text.indexOf("\n", close + 1);
-    const target = firstBodyLine < 0 ? cm.state.doc.length : firstBodyLine + 1;
+    const target = ${closingDelimiter} ? close + 4 : firstBodyLine < 0 ? cm.state.doc.length : firstBodyLine + 1;
     cm.dispatch({ selection: { anchor: target }, scrollIntoView: true });
-    return { ok: cm.state.selection.main.head === target, target, textLength: cm.state.doc.length, bodyLine: text.slice(target).split(/\r?\n/)[0] };
+    return { ok: cm.state.selection.main.head === target, target, actual: cm.state.selection.main.head, textLength: cm.state.doc.length,
+      delimiter: text.slice(close + 1, close + 4), bodyLine: text.slice(target).split(/\r?\n/)[0] };
   })()`;
 }
 
 function assertNativeVisibility(probe, shouldHide) {
   if (!probe || probe.status !== "pass") throw new Error("DOM probe is missing or failed");
-  const elements = [probe.properties, probe.inlineTitle];
-  const labels = ["native Properties", "native inline title"];
+  const elements = [probe.properties, probe.inlineTitle, probe.addProperty];
+  const labels = ["native Properties", "native inline title", "Add property"];
   for (let index = 0; index < elements.length; index += 1) {
     const item = elements[index];
     if (!item || item.present !== true) throw new Error(labels[index] + " is absent; presence must be checked");
     const hidden = item.display === "none" || item.visibility === "hidden" || item.rectVisible === false;
-    if (hidden !== shouldHide) {
-      throw new Error(labels[index] + " visibility mismatch: expected " + (shouldHide ? "hidden" : "visible") + ", saw " + JSON.stringify(item));
+    const expectedHidden = index === 1 && shouldHide;
+    if (hidden !== expectedHidden) {
+      throw new Error(labels[index] + " visibility mismatch: expected " + (expectedHidden ? "hidden" : "visible") + ", saw " + JSON.stringify(item));
+    }
+  }
+  if (!Array.isArray(probe.propertyRows) || !probe.propertyRows.length) throw new Error("native Properties rows are absent");
+  const expectedKeys = probe.authoredKeys || [];
+  const rows = probe.propertyRows;
+  for (const key of expectedKeys) {
+    if (rows.filter((row) => row.key === key).length !== 1) throw new Error("native Properties key missing or duplicated: " + key);
+  }
+  const schemaKeys = new Set(probe.schemaKeys || []);
+  if (probe.titlePropertyInSheet) schemaKeys.add("title");
+  for (const row of rows) {
+    if (row.present !== true) throw new Error("native property row is absent: " + row.key);
+    const hidden = row.display === "none" || row.visibility === "hidden" || row.rectVisible === false;
+    if (hidden !== (shouldHide && schemaKeys.has(row.key))) {
+      throw new Error("native property visibility mismatch: " + row.key);
     }
   }
   return true;
@@ -277,17 +294,28 @@ function selfTest() {
   if (!parsed.selfTest || parsed.executable !== "/opt/obsidian" || parsed.out !== "/tmp/shots" || parsed.report !== "/tmp/report.json") {
     throw new Error("argument parser fixture failed");
   }
-  const hidden = { status: "pass", properties: { present: true, display: "none", visibility: "visible", rectVisible: false }, inlineTitle: { present: true, display: "none", visibility: "visible", rectVisible: false } };
-  const visible = { status: "pass", properties: { present: true, display: "block", visibility: "visible", rectVisible: true }, inlineTitle: { present: true, display: "block", visibility: "visible", rectVisible: true } };
+  const shown = { present: true, display: "block", visibility: "visible", rectVisible: true };
+  const concealed = { ...shown, display: "none", rectVisible: false };
+  const visible = {
+    status: "pass", properties: shown, inlineTitle: shown, addProperty: shown,
+    authoredKeys: ["status", "parent"], schemaKeys: ["status"],
+    propertyRows: [{ key: "status", ...shown }, { key: "parent", ...shown }],
+  };
+  const hidden = { ...visible, inlineTitle: concealed,
+    propertyRows: [{ key: "status", ...concealed }, { key: "parent", ...shown }] };
   assertNativeVisibility(hidden, true);
   assertNativeVisibility(visible, false);
   for (const wrong of [
-    { status: "pass", properties: { ...visible.properties, display: "none" }, inlineTitle: visible.inlineTitle },
-    { status: "pass", properties: { ...hidden.properties, display: "block" }, inlineTitle: hidden.inlineTitle },
-    { status: "pass", properties: { ...visible.properties, present: false }, inlineTitle: visible.inlineTitle },
+    { ...hidden, properties: concealed },
+    { ...hidden, addProperty: concealed },
+    { ...hidden, addProperty: { ...shown, present: false } },
+    { ...hidden, propertyRows: visible.propertyRows },
+    { ...hidden, properties: { ...shown, present: false } },
+    { ...hidden, propertyRows: [{ key: "status", ...concealed }, { key: "parent", ...concealed }] },
+    { ...hidden, propertyRows: [] },
   ]) {
     let failed = false;
-    try { assertNativeVisibility(wrong, wrong.properties.display === "none" && wrong.inlineTitle.display === "none"); }
+    try { assertNativeVisibility(wrong, true); }
     catch (_) { failed = true; }
     if (!failed) throw new Error("negative DOM assertion unexpectedly passed");
   }

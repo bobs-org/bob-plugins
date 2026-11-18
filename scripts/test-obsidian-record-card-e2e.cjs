@@ -39,6 +39,24 @@ test("frontmatter cursor expression keeps escaped newlines valid for CDP evaluat
   assert.doesNotThrow(() => new Function("return " + expression + ";"));
 });
 
+test("frontmatter cursor reaches the closing delimiter even after sync appends a walk footer", () => {
+  const { frontmatterBodyCursorExpression } = require("./obsidian-record-card-e2e-lib.cjs");
+  const path = "zettels/frontmatter-only.md";
+  const frontmatter = '---\ntitle: Frontmatter Only\n---';
+  for (const text of [frontmatter, frontmatter + '\n\n[[zettels|⬆]] · [[zettels/next|→]]\n']) {
+    const cm = {
+      state: { doc: { toString: () => text, length: text.length }, selection: { main: { head: 0 } } },
+      dispatch: ({ selection }) => { cm.state.selection.main.head = selection.anchor; },
+    };
+    const app = { workspace: { getLeavesOfType: () => [{ view: { file: { path }, editor: { cm } } }] } };
+    const result = new Function("app", "return " + frontmatterBodyCursorExpression(path, true))(app);
+    assert.equal(result.ok, true);
+    assert.equal(result.target, frontmatter.length);
+    assert.equal(result.delimiter, "---");
+    assert.equal(cm.state.selection.main.head, frontmatter.length);
+  }
+});
+
 test("fixture album sync accepts only its exact malformed-schema and outside-folder findings", () => {
   const { isExpectedFixtureAlbumSync } = require("./obsidian-record-card-e2e-lib.cjs");
   const expected = {

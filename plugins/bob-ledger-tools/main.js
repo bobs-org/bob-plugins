@@ -100537,7 +100537,6 @@ class BobLedgerToolsRecordWalkRailMixin {
       const model = this.recordSheetModelFor(path, text);
       const walk = model?.walk || this.recordWalkFor(path, text);
       this.recordSheetSetEditorScope(view, Boolean(model));
-      this.recordSheetSetEditorHide(view, model?.hideEligible === true);
       if (!model && !recordWalkHasRail(walk)) {
         this.recordSheetEditorCache?.delete?.(view);
         this.recordSheetNotifyOwnership();
@@ -100552,7 +100551,10 @@ class BobLedgerToolsRecordWalkRailMixin {
       const at = docks ? line.from : this.recordSheetAnchor(view, text);
       const signature = JSON.stringify([recordSheetSignature(model), walk, Boolean(reveal), line?.from, line?.to]);
       const previous = this.recordSheetEditorCache?.get?.(view);
-      if (previous?.path === path && previous.signature === signature && previous.anchor === at) return previous.decorations;
+      if (previous?.path === path && previous.signature === signature && previous.anchor === at) {
+        this.recordSheetSetEditorHide(view, model);
+        return previous.decorations;
+      }
       const doc = recordSheetDomDoc(view.dom);
       const options = this.recordWalkOptions(path, model);
       const rows = [];
@@ -100566,6 +100568,7 @@ class BobLedgerToolsRecordWalkRailMixin {
         }
       }();
       const sheet = model ? this.recordSheetBuildMounted(model, options, doc) : null;
+      this.recordSheetSetEditorHide(view, sheet ? model : null);
       const rail = line && !reveal ? recordWalkRailBuildEl(walk, options, doc) : null;
       if (sheet && rail && docks) {
         // One inline replacement owns the pair. Two adjacent inline widgets
@@ -100585,7 +100588,10 @@ class BobLedgerToolsRecordWalkRailMixin {
       rows.sort((a, b) => a.from - b.from || a.decoration.startSide - b.decoration.startSide);
       for (const row of rows) builder.add(row.from, row.to, row.decoration);
       const decorations = builder.finish();
-      this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
+      // A failed sheet build must stay native and retry. Caching a rail-only
+      // result for a healthy model would hide its properties on the next hit.
+      if (model && !sheet) this.recordSheetEditorCache?.delete?.(view);
+      else this.recordSheetEditorCache?.set?.(view, { path, signature, anchor: at, decorations, albumPath: model?.albumPath || walk?.albumPath });
       // The rail still refreshes when there is no cached album report/sheet.
       this.recordSheetEditors?.add(view);
       this.recordSheetNotifyOwnership();
@@ -101975,6 +101981,7 @@ class BobLedgerToolsRecordSheetMixin {
       this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.recordSheetEditors || []) this.recordSheetCleanEditor(view);
+    for (const scope of this.recordSheetNativePropertiesScopes?.keys() || []) this.recordSheetClearNativeProperties(scope);
     this.recordSheetReading?.clear();
     this.recordSheetEditors?.clear();
     this.recordSheetEditorScopes?.clear?.();
@@ -102433,6 +102440,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (!anotherOwner) scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
     scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+    this.recordSheetClearNativeProperties(scope);
   }
 
   recordSheetRemoveStrays(root, sourcePath) {
@@ -102489,6 +102497,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
       scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
     }
+    this.recordSheetSetNativeProperties(scope, model);
     this.recordSheetNotifyOwnership();
     return sheet;
   }
@@ -102566,12 +102575,13 @@ class BobLedgerToolsRecordSheetMixin {
     this.refreshRecordSheetReading();
   }
 
-  recordSheetSetEditorHide(view, eligible) {
+  recordSheetSetEditorHide(view, model) {
     try {
       const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
       if (!scope || !scope.classList) return;
-      if (eligible === true) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
+      if (model?.hideEligible === true && !recordSheetScopeIsEmbed(scope)) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
       else scope.classList.remove?.(RECORD_SHEET_HIDES_CLASS);
+      this.recordSheetSetNativeProperties(scope, model);
     } catch (_) {}
   }
 
@@ -102699,11 +102709,13 @@ class BobLedgerToolsRecordSheetMixin {
     } catch (_) {}
     const previous = this.recordSheetEditorScopes?.get(view);
     if (previous && previous !== scope) {
+      this.recordSheetClearNativeProperties(previous);
       previous.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       previous.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
     if (enabled) scope.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
     else {
+      this.recordSheetClearNativeProperties(scope);
       scope.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       scope.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
@@ -102716,6 +102728,7 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetCleanEditor(view) {
     try {
       const scope = this.recordSheetEditorScopes?.get(view) || view?.dom;
+      this.recordSheetClearNativeProperties(scope);
       scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
       this.recordSheetEditorScopes?.delete(view);
@@ -102757,12 +102770,25 @@ class BobLedgerToolsRecordSheetMixin {
         }
         destroy() { plugin.recordSheetCleanEditor(this.view); }
       };
-      return Prec?.highest ? Prec.highest(ViewPlugin.fromClass(SheetPlugin, {
+      const extension = ViewPlugin.fromClass(SheetPlugin, {
         decorations: (value) => value.decorations,
-      })) : ViewPlugin.fromClass(SheetPlugin, { decorations: (value) => value.decorations });
+        provide: () => EditorView?.editorAttributes?.of((view) => plugin.recordSheetEditorAttributes(view)) || [],
+      });
+      return Prec?.highest ? Prec.highest(extension) : extension;
     } catch (_) {
       return null;
     }
+  }
+
+  recordSheetEditorAttributes(view) {
+    // CodeMirror replaces the editor's class attribute on focus/tab changes.
+    // Declare our existing ownership through its facet so a mounted sheet never
+    // temporarily exposes duplicate native fields while waiting for a rebuild.
+    const scope = this.recordSheetEditorScopes?.get(view);
+    if (!this.recordSheetActive || !scope) return {};
+    const classes = [RECORD_SHEET_SURFACE_CLASS];
+    if (this.recordSheetNativePropertiesScopes?.has(scope)) classes.push(RECORD_SHEET_HIDES_CLASS);
+    return { class: classes.join(" ") };
   }
 
   refreshRecordSheetEditors() {
@@ -102789,6 +102815,74 @@ class BobLedgerToolsRecordSheetMixin {
       this.refreshRecordSheetEditors();
       this.recordSheetNotifyOwnership();
     }, 100);
+  }
+}
+// ---- src/242ka-plugin-record-sheet-properties.js ----
+// Native Properties remain usable for metadata outside the album schema.
+// The ownership paths below were captured in the real Obsidian sheet proof.
+const RECORD_SHEET_PROPERTY_CLASS = "bob-record-sheet-owned-property";
+
+function recordSheetNativeProperties(scope) {
+  const child = (root, name) => Array.from(root?.children || [])
+    .find((node) => node.classList?.contains(name));
+  if (scope?.classList?.contains("cm-editor")) {
+    return child(child(child(scope, "cm-scroller"), "cm-sizer"), "metadata-container");
+  }
+  if (scope?.classList?.contains("markdown-preview-view")) {
+    return child(child(child(scope, "markdown-preview-sizer"), "mod-header"), "metadata-container");
+  }
+  return null;
+}
+
+class BobLedgerToolsRecordSheetPropertiesMixin {
+  recordSheetClearNativeProperties(scope) {
+    const state = this.recordSheetNativePropertiesScopes?.get(scope);
+    if (!state) return;
+    state.observer?.disconnect();
+    for (const row of state.rows) row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS);
+    this.recordSheetNativePropertiesScopes.delete(scope);
+  }
+
+  recordSheetSetNativeProperties(scope, model) {
+    if (!scope) return;
+    if (model?.hideEligible !== true || recordSheetScopeIsEmbed(scope)) {
+      this.recordSheetClearNativeProperties(scope);
+      return;
+    }
+    if (!this.recordSheetNativePropertiesScopes) this.recordSheetNativePropertiesScopes = new Map();
+    let state = this.recordSheetNativePropertiesScopes.get(scope);
+    if (!state) {
+      state = { rows: new Set(), keys: new Set(), observer: null };
+      this.recordSheetNativePropertiesScopes.set(scope, state);
+      // Obsidian can replace Properties after the sheet paints (notably on tab
+      // return). Observe DOM replacement and key edits, never our class changes.
+      const Observer = scope.ownerDocument?.defaultView?.MutationObserver;
+      if (Observer) {
+        state.observer = new Observer(() => this.recordSheetPaintNativeProperties(scope, state));
+        state.observer.observe(scope, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ["data-property-key"],
+        });
+      }
+    }
+    state.keys = new Set([...model.rows, ...model.ghosts].map((row) => row.key));
+    if (model.coverage.title === "sheet") state.keys.add("title");
+    this.recordSheetPaintNativeProperties(scope, state);
+  }
+
+  recordSheetPaintNativeProperties(scope, state) {
+    if (this.recordSheetNativePropertiesScopes?.get(scope) !== state) return;
+    const container = recordSheetNativeProperties(scope);
+    const next = new Set();
+    for (const row of container?.querySelectorAll?.(".metadata-property") || []) {
+      if (row.closest?.(".metadata-container") !== container || recordSheetScopeIsEmbed(row)) continue;
+      if (!state.keys.has(row.getAttribute("data-property-key"))) continue;
+      next.add(row);
+      if (!row.classList.contains(RECORD_SHEET_PROPERTY_CLASS)) row.classList.add(RECORD_SHEET_PROPERTY_CLASS);
+    }
+    for (const row of state.rows) {
+      if (!next.has(row)) row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS);
+    }
+    state.rows = next;
   }
 }
 // ---- src/242l-plugin-record-update-service.js ----
@@ -149762,6 +149856,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsAlbumHeaderMixin,
   BobLedgerToolsRecordSheetMixin,
   BobLedgerToolsRecordWalkRailMixin,
+  BobLedgerToolsRecordSheetPropertiesMixin,
   BobLedgerToolsRecordUpdateMixin,
   BobLedgerToolsRecordCardMixin,
   BobLedgerToolsSubscriptionSurfacesMixin,

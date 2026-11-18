@@ -9,9 +9,10 @@ first-level heading stays above the sheet until removed; notes without an H1,
 including frontmatter-only notes, still show it at the top of the body. The
 **Record Card** is the keyboard-first editor for those values.
 When the sheet is hide-eligible — healthy schema, desktop Obsidian, and the
-cached report carries `record_values_v1` — native Properties and the
-filename-derived inline title hide behind the sheet. Every other case keeps
-native Properties visible.
+cached report carries `record_values_v1` — native title and album-schema rows
+hide behind the sheet, along with the filename-derived inline title. Properties
+keeps `parent`, `type`, `created`, legacy and unrelated keys, and Add property.
+Every other case keeps all native rows visible.
 
 The sheet is desktop-only and reads the cached album report plus Obsidian
 metadata. Opening, folding, or collapsing a record never requests a new
@@ -242,10 +243,9 @@ legacy nouns, and Source mode keep their native surfaces.
 A broken album schema still mounts a warning sheet with the diagnostic and
 **Open album YAML**. Missing `record_values_v1` still mounts a healthy
 read-only sheet; it does not enable editing or hide Properties. Embedded
-sheets never hide Properties: the hide class applies only to the view's own
-source-view or preview-view container, so embedded notes keep their own
-Properties. The class is removed on file switch, type or parent change,
-mode switch, view destroy, and plugin unload or disable.
+sheets never hide native rows. Hiding belongs only to the view's own Properties
+rows, including replacements after a tab switch. File, type, parent or mode
+changes, view destruction, and plugin unload or disable restore those rows.
 
 ## Write machine
 

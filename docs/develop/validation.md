@@ -86,7 +86,7 @@ Bob sync/list calls. The offline self-test is fixture coverage only; it does
 not count as real Obsidian acceptance.
 
 The Record Card sheet wrapper is also part of `npm test`. It checks canonical
-record fixtures, the captured-DOM probe assertions, and negative visibility cases
+record fixtures, captured-DOM assertions for schema-only hiding, and negative cases
 without Obsidian or a Bob installation. This is fixture coverage only.
 
 For real sheet acceptance, use athena's Obsidian Electron binary and a clean copy
@@ -107,8 +107,12 @@ bob-cli source SHA, binary SHA256, version, and the real `record_values_v1`
 capability from `bob albums list`. It creates a unique scratch Git vault with a
 local bare remote, an owned Obsidian profile/process/debug port, and explicit
 `BOB_DIR` plus a missing test-config path. The scratch app starts with native
-Properties and the inline title enabled. It preserves a failure report and
-screenshots for diagnosis, records pass/fail/skipped assertions and console
+Properties and the inline title enabled. Per-key probes require title/schema rows
+hidden and other metadata visible, including after file/mode changes. Cursor checks
+reach the body boundary in Live Preview and the YAML closing delimiter in Source,
+where the native Properties widget does not replace YAML. Hover checks use an
+authored body link, independently of the record walk rail. It preserves a failure
+report and screenshots for diagnosis, records pass/fail/skipped assertions and console
 exceptions, and never opens the live vault. Copy the report and screenshots back
 from athena and inspect every PNG; `--self-test` is not real-Obsidian acceptance.
 

@@ -10966,12 +10966,13 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 /* Bank Period Charts paint (bob-cli-lj paint): end. */
 
-/* Record sheet: hide only Properties owned by the record surface. Live Preview
+/* Record sheet: hide only title/schema rows represented by the card, leaving
+   parent, type, created, legacy keys and Add property available. Live Preview
    puts them under cm-editor > cm-scroller > cm-sizer; Reading view puts them
    under markdown-preview-view > markdown-preview-sizer > mod-header. These
    direct paths keep nested embeds' native Properties visible. */
-.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .metadata-container,
-.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .metadata-container {
+.cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-record-sheet-owned-property,
+.markdown-preview-view.bob-record-sheet-hides-properties > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-record-sheet-owned-property {
   display: none !important;
 }
 .cm-editor.bob-record-sheet-hides-properties > .cm-scroller > .cm-sizer > .inline-title,

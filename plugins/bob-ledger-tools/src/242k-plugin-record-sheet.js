@@ -81,6 +81,7 @@ class BobLedgerToolsRecordSheetMixin {
       this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.recordSheetEditors || []) this.recordSheetCleanEditor(view);
+    for (const scope of this.recordSheetNativePropertiesScopes?.keys() || []) this.recordSheetClearNativeProperties(scope);
     this.recordSheetReading?.clear();
     this.recordSheetEditors?.clear();
     this.recordSheetEditorScopes?.clear?.();
@@ -539,6 +540,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (!anotherOwner) scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
     scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     root?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+    this.recordSheetClearNativeProperties(scope);
   }
 
   recordSheetRemoveStrays(root, sourcePath) {
@@ -595,6 +597,7 @@ class BobLedgerToolsRecordSheetMixin {
     if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
       scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
     }
+    this.recordSheetSetNativeProperties(scope, model);
     this.recordSheetNotifyOwnership();
     return sheet;
   }
@@ -672,12 +675,13 @@ class BobLedgerToolsRecordSheetMixin {
     this.refreshRecordSheetReading();
   }
 
-  recordSheetSetEditorHide(view, eligible) {
+  recordSheetSetEditorHide(view, model) {
     try {
       const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
       if (!scope || !scope.classList) return;
-      if (eligible === true) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
+      if (model?.hideEligible === true && !recordSheetScopeIsEmbed(scope)) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
       else scope.classList.remove?.(RECORD_SHEET_HIDES_CLASS);
+      this.recordSheetSetNativeProperties(scope, model);
     } catch (_) {}
   }
 
@@ -805,11 +809,13 @@ class BobLedgerToolsRecordSheetMixin {
     } catch (_) {}
     const previous = this.recordSheetEditorScopes?.get(view);
     if (previous && previous !== scope) {
+      this.recordSheetClearNativeProperties(previous);
       previous.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       previous.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
     if (enabled) scope.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
     else {
+      this.recordSheetClearNativeProperties(scope);
       scope.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       scope.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
     }
@@ -822,6 +828,7 @@ class BobLedgerToolsRecordSheetMixin {
   recordSheetCleanEditor(view) {
     try {
       const scope = this.recordSheetEditorScopes?.get(view) || view?.dom;
+      this.recordSheetClearNativeProperties(scope);
       scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
       scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
       this.recordSheetEditorScopes?.delete(view);
@@ -863,12 +870,25 @@ class BobLedgerToolsRecordSheetMixin {
         }
         destroy() { plugin.recordSheetCleanEditor(this.view); }
       };
-      return Prec?.highest ? Prec.highest(ViewPlugin.fromClass(SheetPlugin, {
+      const extension = ViewPlugin.fromClass(SheetPlugin, {
         decorations: (value) => value.decorations,
-      })) : ViewPlugin.fromClass(SheetPlugin, { decorations: (value) => value.decorations });
+        provide: () => EditorView?.editorAttributes?.of((view) => plugin.recordSheetEditorAttributes(view)) || [],
+      });
+      return Prec?.highest ? Prec.highest(extension) : extension;
     } catch (_) {
       return null;
     }
+  }
+
+  recordSheetEditorAttributes(view) {
+    // CodeMirror replaces the editor's class attribute on focus/tab changes.
+    // Declare our existing ownership through its facet so a mounted sheet never
+    // temporarily exposes duplicate native fields while waiting for a rebuild.
+    const scope = this.recordSheetEditorScopes?.get(view);
+    if (!this.recordSheetActive || !scope) return {};
+    const classes = [RECORD_SHEET_SURFACE_CLASS];
+    if (this.recordSheetNativePropertiesScopes?.has(scope)) classes.push(RECORD_SHEET_HIDES_CLASS);
+    return { class: classes.join(" ") };
   }
 
   refreshRecordSheetEditors() {

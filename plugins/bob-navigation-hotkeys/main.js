@@ -106941,6 +106941,12 @@ class BobNavigationHotkeysNotesMoveMixin {
       return this.openPeriodNoteThroughBob(creation);
     }
 
+    if (this.isAlbumFolderCreationTarget(creation)) {
+      this.requestAlbumSyncForMissingRecord();
+      new Notice(`Record walk is catching up — ${creation.path} isn't there yet`);
+      return false;
+    }
+
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");
@@ -107515,6 +107521,43 @@ class BobNavigationHotkeysNotesMoveMixin {
     }
   }
 }
+// ---- src/641-album-record-link-guard.js ----
+// Missing record links in album folders belong to bob albums sync, not
+// Templater's generic note creation path.
+Object.assign(BobNavigationHotkeysNotesMoveMixin.prototype, {
+  isAlbumFolderCreationTarget(creation) {
+    const folderPath = normalizeVaultRelativePath(creation && creation.folderPath || "")
+      .replace(/^\/+|\/+$/g, "");
+    if (!folderPath || folderPath.includes("/")) {
+      return false;
+    }
+
+    const albumFile = this.app.vault.getAbstractFileByPath(`${folderPath}.md`);
+    if (!this.isMarkdownFile(albumFile)) {
+      return false;
+    }
+    try {
+      const frontmatter = this.app.metadataCache.getFileCache(albumFile)?.frontmatter;
+      return Boolean(frontmatter && isAlbumType(frontmatter.type));
+    } catch (error) {
+      return false;
+    }
+  },
+
+  requestAlbumSyncForMissingRecord() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const ledger = plugins && plugins["bob-ledger-tools"];
+      if (ledger && typeof ledger.albumScheduleSync === "function") {
+        ledger.albumScheduleSync("missing-record-link");
+      } else if (ledger && typeof ledger.apiAlbumSync === "function") {
+        void ledger.apiAlbumSync({ automatic: true });
+      }
+    } catch (error) {
+      // A failed optional sync request must not make link navigation unsafe.
+    }
+  },
+});
 // ---- src/641-plugin-copy-card.js ----
 // Copy card plugin mixin: Cmd+Y Copy card, clipboard writes, and the
 // yank-block-id palette command. The model (101/101a/102) is frozen at open;
@@ -120601,7 +120644,7 @@ class BobNavigationHotkeysLinkParseMixin {
     const renderedText =
       aliasIndex === -1
         ? this.basenameForRenderedWikiLink(target)
-        : content.slice(aliasIndex + 1).trim();
+        : content.slice(aliasIndex + 1).trim() || this.basenameForRenderedWikiLink(target);
 
     return {
       target,
@@ -120658,7 +120701,9 @@ class BobNavigationHotkeysLinkParseMixin {
 
     return {
       target,
-      renderedText: line.slice(startIndex + 1, textEndIndex).trim(),
+      renderedText:
+        line.slice(startIndex + 1, textEndIndex).trim() ||
+        this.basenameForRenderedWikiLink(target),
       endIndex: destinationEndIndex + 1,
     };
   }

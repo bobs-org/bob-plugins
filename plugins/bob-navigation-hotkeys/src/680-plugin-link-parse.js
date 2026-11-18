@@ -81,7 +81,7 @@ class BobNavigationHotkeysLinkParseMixin {
     const renderedText =
       aliasIndex === -1
         ? this.basenameForRenderedWikiLink(target)
-        : content.slice(aliasIndex + 1).trim();
+        : content.slice(aliasIndex + 1).trim() || this.basenameForRenderedWikiLink(target);
 
     return {
       target,
@@ -138,7 +138,9 @@ class BobNavigationHotkeysLinkParseMixin {
 
     return {
       target,
-      renderedText: line.slice(startIndex + 1, textEndIndex).trim(),
+      renderedText:
+        line.slice(startIndex + 1, textEndIndex).trim() ||
+        this.basenameForRenderedWikiLink(target),
       endIndex: destinationEndIndex + 1,
     };
   }

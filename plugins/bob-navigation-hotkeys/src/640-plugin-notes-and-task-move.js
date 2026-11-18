@@ -398,6 +398,12 @@ class BobNavigationHotkeysNotesMoveMixin {
       return this.openPeriodNoteThroughBob(creation);
     }
 
+    if (this.isAlbumFolderCreationTarget(creation)) {
+      this.requestAlbumSyncForMissingRecord();
+      new Notice(`Record walk is catching up — ${creation.path} isn't there yet`);
+      return false;
+    }
+
     const templaterPlugin = this.getTemplaterPlugin();
     if (!templaterPlugin) {
       new Notice("Templater is not available");

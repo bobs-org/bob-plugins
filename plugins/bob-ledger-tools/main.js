@@ -11321,15 +11321,16 @@ const LINKS_WALKER_FOOTER_API_VERSION = 2;
 
 function linksWalkerFooterLabel(link, direction) {
   const text = String(link && link.text ? link.text : "").trim();
-  if (text !== "prev" && text !== "next") {
-    return text.replace(/^[‹<>›]\s*/, "").replace(/\s*[‹<>›]$/, "").trim();
-  }
-
   const targetPath = String(link && link.path ? link.path : "");
   const pathStem = targetPath.split("/").pop().replace(/\.md$/i, "");
   const target = String(link && link.target ? link.target : "");
-  const targetStem = target.split(/[/#^]/)[0].split("/").pop().replace(/\.md$/i, "");
+  const targetStem = target.split("#")[0].split("^")[0].split("/").pop().replace(/\.md$/i, "");
   const stem = pathStem || targetStem;
+  if (text !== "prev" && text !== "next") {
+    return text.replace(/^[‹<>›]\s*/, "").replace(/\s*[‹<>›]$/, "").trim() ||
+      stem || (direction === "prev" ? "previous" : "next");
+  }
+
   const daily = /^(\d{4})(\d{2})(\d{2})$/.exec(stem);
   if (daily) {
     const year = Number(daily[1]);
@@ -11372,18 +11373,64 @@ function linksWalkerFooterPathTooltip(link) {
   return `${link.exists ? "Open" : "Create"}: ${link.path}${subpath}`;
 }
 
+function linksWalkerFooterIsAlbumType(value) {
+  if (Array.isArray(value)) {
+    return value.some(linksWalkerFooterIsAlbumType);
+  }
+  return typeof value === "string" && value.trim() === "[[album]]";
+}
+
+function linksWalkerFooterAlbumRecord(plugin, link) {
+  const match = /^([^/]+)\/([^/]+\.md)$/i.exec(String(link && link.path || ""));
+  if (!match) {
+    return link;
+  }
+  try {
+    const albumFile = plugin.app.vault.getAbstractFileByPath(`${match[1]}.md`);
+    if (!albumFile || albumFile.extension !== "md") {
+      return link;
+    }
+    const frontmatter = plugin.app.metadataCache.getFileCache(albumFile)?.frontmatter;
+    if (!frontmatter || !linksWalkerFooterIsAlbumType(frontmatter.type)) {
+      return link;
+    }
+    const title = String(frontmatter.title || match[1]);
+    return {
+      ...link,
+      albumRecord: true,
+      albumTitle: title.charAt(0).toUpperCase() + title.slice(1),
+    };
+  } catch (error) {
+    return link;
+  }
+}
+
+function linksWalkerFooterAlbumRecords(plugin, preview) {
+  if (!preview || preview.ok !== true) {
+    return preview;
+  }
+  return {
+    ...preview,
+    prev: linksWalkerFooterAlbumRecord(plugin, preview.prev),
+    next: linksWalkerFooterAlbumRecord(plugin, preview.next),
+  };
+}
+
 function linksWalkerFooterArm(link, direction) {
   if (!link) {
     return null;
   }
   const name = linksWalkerFooterLabel(link, direction);
   const exists = link.exists === true;
-  const createEligible = link.exists === false && Boolean(link.path);
+  const albumRecord = link.albumRecord === true;
+  const createEligible = link.exists === false && Boolean(link.path) && !albumRecord;
   const arrow = direction === "prev" ? "‹" : "›";
   const text = direction === "prev"
     ? `${arrow} ${name}${createEligible ? "+" : ""}`
     : `${name}${createEligible ? "+" : ""} ${arrow}`;
-  const tooltip = createEligible
+  const tooltip = albumRecord && !exists
+    ? `Not there yet — the ${link.albumTitle || "album"} walk is syncing\n${link.path}`
+    : createEligible
     ? `No ${name} note yet — ${direction === "prev" ? "[[" : "]]"} creates it\n${linksWalkerFooterPathTooltip(link)}`
     : linksWalkerFooterPathTooltip(link);
   return {
@@ -11393,6 +11440,7 @@ function linksWalkerFooterArm(link, direction) {
     tooltip,
     enabled: exists || createEligible,
     createEligible,
+    albumRecord,
     path: link.path || null,
     target: link.target || "",
     exists,
@@ -11648,11 +11696,12 @@ function linksWalkerFooterRequest(plugin) {
       if (!linksWalkerFooterIsCurrent(plugin, generation, source)) {
         return;
       }
+      const displayPreview = linksWalkerFooterAlbumRecords(plugin, preview);
       linksWalkerFooterPaint(
         plugin,
-        linksWalkerFooterView(preview),
+        linksWalkerFooterView(displayPreview),
         source,
-        preview && preview.ok === true ? preview : null,
+        displayPreview && displayPreview.ok === true ? displayPreview : null,
         generation,
       );
     })

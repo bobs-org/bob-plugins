@@ -534,6 +534,8 @@ walk moved. The active type is:
 | `n` | `[n` / `]n` | `open-prev-link`, `open-next-link` |
 | `b` | `[b` / `]b`, `[B` / `]B` | bank rows/days; the `b` panel |
 
+Record notes carry Bob-maintained walk links; `[n` / `]n` never create missing album records.
+
 The family command records its type whenever it runs. The review footer runs
 `jump-to-next-due-task`, so it selects `s` too. Uppercase `[S` / `]S` cycle
 occupied review groups but still select family `s`, so `]]` / `[[` perform the

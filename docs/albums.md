@@ -86,12 +86,12 @@ the header subtitle and selectable **Album details** target. Field rows are
 transparent headings: a numbered keycap hangs in the gutter beside the name
 (1–9 in painted order, with an empty placeholder from 10 up so the column
 holds), pills mark `required`, kind, and grouping, and the current group's
-keycap takes an accent border and tint so `Shift+K` from a chip is visible
+keycap takes an accent border and tint so `Ctrl+K` from a chip is visible
 before you press it. Choice chips and `+ choice` indent to the same label
 axis as the field name, with a clear break before the next group; `+ field`
 sits on that axis too. A lint banner, a one-line status rule (hidden when
 empty), and a contextual hint strip sit below. In plain browsing the strip
-includes `⇧J/K 1–N field` (N is `min(fields, 9)`, or `1` when there is one
+includes `⌃J/K 1–N field` (N is `min(fields, 9)`, or `1` when there is one
 field). The strip shows only keys valid for the current selection, wrapping
 to at most two lines, with `⋯` opening an **All actions** list so every
 gesture keeps a visible button equivalent. Previews run automatically
@@ -192,8 +192,8 @@ gesture (on the hint strip, or under `⋯`): `↑`/`↓` (or `j`/`k`, `←`/`→
 across choices) move selection, `Enter` edits the selected row or saves a
 pending arrangement (latching while that revision's preview is pending),
 `a` adds a field, `c` adds a choice, `!` and `s` stage required/suggest
-toggles, `Shift+J`/`Shift+K` jump to the next/previous field (from a chip,
-`Shift+K` first returns to its own field, and jumps stop at the ends),
+toggles, `Ctrl+J`/`Ctrl+K` jump to the next/previous field (from a chip,
+`Ctrl+K` first returns to its own field, and jumps stop at the ends),
 `1`–`9` jump straight to field N as painted, pending moves included,
 `Alt+J`/`K` (with `Shift` for ends and `m` gaps) arrange,
 `Ctrl+D` stages removal, `y` jumps to Source, `u` steps back or previews

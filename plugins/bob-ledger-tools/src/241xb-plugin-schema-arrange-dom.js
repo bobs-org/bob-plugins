@@ -298,8 +298,8 @@ function schemaArrangeAnnounce(card, message) {
 }
 
 // Shared refusal bump: a 3 px nudge that never moves layout. `sign`
-// picks the direction (down for Shift+J and missing digits, up for
-// Shift+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
+// picks the direction (down for Ctrl+J and missing digits, up for
+// Ctrl+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
 // on reduced motion, uses node.animate when present, else a no-op.
 function schemaCardBump(node, sign, options = {}) {
   try {

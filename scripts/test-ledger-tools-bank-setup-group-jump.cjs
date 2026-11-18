@@ -1,4 +1,4 @@
-// Bank Setup card category-group jumps: Shift+J/K step between group
+// Bank Setup card category-group jumps: Ctrl+J/K step between group
 // labels in painted order, hotkeys match lowercase only, and jumps never
 // write. Pure navigation: selection, reveal, and announcement only.
 const assert = require("node:assert/strict");
@@ -219,7 +219,7 @@ test("group jumps walk painted groups with parent-first K and HIDDEN last", asyn
   assert.deepEqual(
     H.bankSetupCardGroupStep(items, { id: "category:groceries" }, "back")?.id,
     "group:Everyday",
-    "Shift+K from a tile returns to its own group first",
+    "Ctrl+K from a tile returns to its own group first",
   );
   assert.deepEqual(
     H.bankSetupCardGroupStep(items, { id: "group:Everyday" }, "back")?.id,
@@ -235,41 +235,41 @@ test("group jumps walk painted groups with parent-first K and HIDDEN last", asyn
   assert.equal(H.bankSetupCardGroupStep([], { id: "group:Bills" }, "forward"), null);
 
   select(modal, "category:coffee");
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "group:Bills");
   assert.equal(announceText(modal), "Bills, group 3 of 4");
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "group:hidden");
   assert.equal(announceText(modal), "HIDDEN, group 4 of 4");
-  await press(modal, { key: "J" });
-  assert.equal(modal.selection.id, "group:hidden", "the last group Shift+J stays");
+  await press(modal, { key: "j", ctrlKey: true });
+  assert.equal(modal.selection.id, "group:hidden", "the last group Ctrl+J stays");
   assert.equal(announceText(modal), "No next group");
-  await press(modal, { key: "K" });
+  await press(modal, { key: "k", ctrlKey: true });
   assert.equal(modal.selection.id, "group:Bills");
   select(modal, "category:groceries");
-  await press(modal, { key: "K" });
-  assert.equal(modal.selection.id, "group:Everyday", "a tile Shift+K lands on its own group");
+  await press(modal, { key: "k", ctrlKey: true });
+  assert.equal(modal.selection.id, "group:Everyday", "a tile Ctrl+K lands on its own group");
   assert.equal(announceText(modal), "Everyday, group 2 of 4");
   select(modal, "group:Money moves");
-  await press(modal, { key: "K" });
-  assert.equal(modal.selection.id, "group:Money moves", "the first group Shift+K stays");
+  await press(modal, { key: "k", ctrlKey: true });
+  assert.equal(modal.selection.id, "group:Money moves", "the first group Ctrl+K stays");
   assert.equal(announceText(modal), "No previous group");
   modal.close();
 });
 
-test("Shift+K never fires a hotkey while lowercase keys still select", async () => {
+test("Ctrl+K jumps before hotkeys while lowercase hotkeys still select", async () => {
   const { modal } = openCard();
   select(modal, "category:coffee");
-  await press(modal, { key: "K" });
-  assert.equal(modal.selection.id, "group:Everyday", "Shift+K jumps instead of selecting Car");
+  await press(modal, { key: "k", ctrlKey: true });
+  assert.equal(modal.selection.id, "group:Everyday", "Ctrl+K jumps to the previous group, not Car");
   await press(modal, { key: "k" });
   assert.equal(modal.selection.id, "category:car", "lowercase k still picks Car");
   await press(modal, { key: "1" });
   assert.equal(modal.selection.id, "category:rent", "1 still picks the first Bills category");
+  await press(modal, { key: "K" });
+  assert.equal(modal.selection.id, "category:rent", "uppercase K selects nothing");
   await press(modal, { key: "C" });
-  assert.equal(modal.selection.id, "category:rent", "an uppercase letter selects nothing");
-  await press(modal, { key: "K", ctrlKey: true });
-  assert.equal(modal.selection.id, "category:rent", "Ctrl+K never jumps");
+  assert.equal(modal.selection.id, "category:rent", "uppercase C selects nothing");
   modal.close();
 });
 
@@ -277,16 +277,16 @@ test("jumps stay inert on other tabs and behind every gate", async () => {
   const { modal } = openCard();
   modal.setSection("accounts");
   const parked = modal.selection.id;
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, parked, "no jumps on Accounts");
   modal.setSection("rules");
-  await press(modal, { key: "K" });
+  await press(modal, { key: "k", ctrlKey: true });
   assert.equal(modal.selection.id, parked, "no jumps on Rules");
   modal.setSection("categories");
   select(modal, "category:coffee");
   // A stage owns the keyboard.
   modal.stage = { kind: "edit" };
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "category:coffee", "no jumps in a stage");
   modal.stage = null;
   // Typing in an input never jumps.
@@ -297,17 +297,17 @@ test("jumps stay inert on other tabs and behind every gate", async () => {
   assert.equal(modal.selection.id, "category:coffee", "no jumps from an input");
   input.parentNode?.removeChild?.(input);
   // Composition and applying stay put.
-  await press(modal, { key: "J", isComposing: true });
+  await press(modal, { key: "j", ctrlKey: true, isComposing: true });
   assert.equal(modal.selection.id, "category:coffee", "no jumps during composition");
   const kept = modal.sessionState;
   modal.sessionState = { ...kept, status: "applying" };
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "category:coffee", "no jumps while applying");
   modal.sessionState = kept;
   // Hint mode swallows unmatched J/K and survives.
   modal.bankHintMode = { scope: "group:Everyday", id: "category:coffee", gaps: [0], labels: ["a"] };
   modal.paint("body");
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "category:coffee", "a swallowed J never jumps");
   assert.ok(modal.bankHintMode, "hint mode survives a swallowed J");
   await press(modal, { key: "k" });
@@ -317,14 +317,14 @@ test("jumps stay inert on other tabs and behind every gate", async () => {
   modal.close();
 });
 
-test("projected group order drives Shift+J and the arrows while dirty", async () => {
+test("projected group order drives Ctrl+J and the arrows while dirty", async () => {
   const { modal } = openCard();
   select(modal, "group:Bills");
   assert.equal(modal.bankArrangeNudge(-1, {}), true);
   assert.deepEqual(modal.bankArrangement.projected("groups"), ["Money moves", "Bills", "Everyday"]);
   select(modal, "group:Money moves");
-  await press(modal, { key: "J" });
-  assert.equal(modal.selection.id, "group:Bills", "Shift+J follows the projected order");
+  await press(modal, { key: "j", ctrlKey: true });
+  assert.equal(modal.selection.id, "group:Bills", "Ctrl+J follows the projected order");
   select(modal, "category:income");
   assert.equal(modal.moveSelection("forward"), true);
   assert.equal(modal.selection.id, "group:Bills", "arrows follow the same painted order");
@@ -332,7 +332,7 @@ test("projected group order drives Shift+J and the arrows while dirty", async ()
   assert.equal(modal.selection.id, "category:income");
   assert.equal(modal.bankArrangeRevert(), true);
   select(modal, "group:Money moves");
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "group:Everyday", "revert restores the saved order");
   modal.close();
 });
@@ -362,10 +362,10 @@ test("current-group label, footer hint, silence, and reduced-motion bumps", asyn
   );
   const hints = H.bankSetupCardHintItems(modal);
   assert.deepEqual(hints[0], { keys: "⏎", label: "edit" });
-  assert.deepEqual(hints[1], { keys: "⇧J/K", label: "group" });
+  assert.deepEqual(hints[1], { keys: "⌃J/K", label: "group" });
   modal.setSection("accounts");
   assert.ok(
-    !H.bankSetupCardHintItems(modal).some((item) => item.keys === "⇧J/K"),
+    !H.bankSetupCardHintItems(modal).some((item) => item.keys === "⌃J/K"),
     "no group hint on Accounts",
   );
   modal.setSection("categories");
@@ -377,14 +377,14 @@ test("current-group label, footer hint, silence, and reduced-motion bumps", asyn
   FakeNode.prototype.scrollIntoView = function (options) {
     scrolled.push([this.getAttribute("data-setup-card-group") || this.getAttribute("class"), options]);
   };
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "group:Bills");
   assert.deepEqual(scrolled[0], ["bob-bank-setup-card-tiles", { block: "nearest" }], "the tile block scrolls first");
   assert.deepEqual(scrolled[1], ["Bills", { block: "nearest" }], "the heading stays visible");
   delete FakeNode.prototype.scrollIntoView;
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(modal.selection.id, "group:hidden", "a missing scroller never throws");
-  await press(modal, { key: "K" });
+  await press(modal, { key: "k", ctrlKey: true });
   assert.equal(drafts, 0, "jumps never draft");
   assert.deepEqual(session.getState().draftOps, [], "no draft ops for any jump");
   assert.equal(plugin.applyOps, undefined, "no apply for any jump");
@@ -393,7 +393,7 @@ test("current-group label, footer hint, silence, and reduced-motion bumps", asyn
   const edge = modal.contentEl.querySelector('[data-setup-card-group="__hidden__"]');
   const bumps = [];
   edge.animate = (frames, options) => { bumps.push({ frames, options }); return {}; };
-  await press(modal, { key: "J" });
+  await press(modal, { key: "j", ctrlKey: true });
   assert.equal(bumps.length, 1, "one vertical bump on the clamp");
   assert.deepEqual(bumps[0].frames, [
     { transform: "translateY(0)" },
@@ -401,12 +401,12 @@ test("current-group label, footer hint, silence, and reduced-motion bumps", asyn
     { transform: "translateY(0)" },
   ]);
   assert.equal(bumps[0].options.duration, 90);
-  await press(modal, { key: "J", repeat: true });
+  await press(modal, { key: "j", ctrlKey: true, repeat: true });
   assert.equal(bumps.length, 1, "a held key clamps silently after the first bump");
   const savedMatchMedia = globalThis.matchMedia;
   globalThis.matchMedia = () => ({ matches: true });
   try {
-    await press(modal, { key: "J" });
+    await press(modal, { key: "j", ctrlKey: true });
   } finally {
     if (savedMatchMedia === undefined) delete globalThis.matchMedia;
     else globalThis.matchMedia = savedMatchMedia;

@@ -66036,8 +66036,8 @@ function schemaArrangeAnnounce(card, message) {
 }
 
 // Shared refusal bump: a 3 px nudge that never moves layout. `sign`
-// picks the direction (down for Shift+J and missing digits, up for
-// Shift+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
+// picks the direction (down for Ctrl+J and missing digits, up for
+// Ctrl+K); `axis` is "y" for jumps and "x" for arrange clamps. Gated
 // on reduced motion, uses node.animate when present, else a no-op.
 function schemaCardBump(node, sign, options = {}) {
   try {
@@ -67967,7 +67967,7 @@ function albumSchemaPaintedTargets(model, projected) {
 
 // Next/previous `field:` key strictly after/before the current index,
 // or null at the ends. One scan covers every row of the field-step table:
-// from a chip or `+ choice` Shift+K lands on the parent field first.
+// from a chip or `+ choice` Ctrl+K lands on the parent field first.
 function albumSchemaFieldStepKey(targets, selectedKey, direction) {
   const order = Array.isArray(targets) ? targets : [];
   const index = order.findIndex((target) => target?.key === selectedKey);
@@ -85275,7 +85275,7 @@ function bankSetupCardPaintedCategoryItems(model, arrange) {
 }
 
 // Next/previous group label strictly after/before the selection in
-// painted order. From a tile, Shift+K lands on its own group first
+// painted order. From a tile, Ctrl+K lands on its own group first
 // (parent first); at an end there is no group, so the caller bumps.
 function bankSetupCardGroupStep(items, selection, direction) {
   const list = Array.isArray(items) ? items : [];
@@ -87085,8 +87085,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     }
     if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
     if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
-    if ((key === "J" || key === "K") && !mod && !event.altKey && this.section === "categories") {
-      consume(); this.jumpGroup(key === "J" ? 1 : -1, event); return;
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (lower === "j" || lower === "k") && this.section === "categories") {
+      consume(); this.jumpGroup(lower === "j" ? 1 : -1, event); return;
     }
     if (key.length === 1 && /^[a-z0-9]$/.test(key) && this.section === "categories") {
       const selection = bankSetupCardSelectionByHotkey(this.categories, key);
@@ -87158,8 +87158,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     } catch (_) {}
   }
 
-  // Shift+J/K group jumps: pure navigation that never writes. From a
-  // tile, Shift+K lands on its own group first (parent first); at an
+  // Ctrl+J/K group jumps: pure navigation that never writes. From a
+  // tile, Ctrl+K lands on its own group first (parent first); at an
   // end the selection stays and the row bumps with an announcement.
   jumpGroup(delta, event) {
     if (this.busy || this.stage || this.readOnly || this.sessionState?.status === "applying") return false;
@@ -87984,7 +87984,7 @@ Object.assign(BankSetupCardModal.prototype, {
               return;
             }
           }
-          if (!inInput && !mod && !event.altKey && (lower === "j" || lower === "k")) {
+          if (!inInput && !event.metaKey && !event.altKey && (lower === "j" || lower === "k")) {
             consume();
             return;
           }
@@ -88311,7 +88311,7 @@ function bankSetupCardHintItems(modal) {
     items.push({ keys: "⏎", label: "open line" });
   } else {
     items.push({ keys: "⏎", label: "edit" });
-    items.push({ keys: "⇧J/K", label: "group" });
+    items.push({ keys: "⌃J/K", label: "group" });
     items.push({ keys: "+", label: "new" });
     items.push({ keys: "⌥J/K", label: "move" });
     items.push({ keys: "⌥M", label: "move to…" });
@@ -95787,7 +95787,7 @@ function albumSchemaCardHintItems(model, options) {
   const fieldCount = Array.isArray(model?.fields) ? model.fields.length : 0;
   if (fieldCount > 0) {
     const n = Math.min(fieldCount, 9);
-    items.push({ keys: ["⇧J/K", n === 1 ? "1" : `1–${n}`], label: "field" });
+    items.push({ keys: ["⌃J/K", n === 1 ? "1" : `1–${n}`], label: "field" });
   }
   items.push({ keys: "a", label: "add field", action: "add-field", enabled: !gated });
   if (["field", "choice", "add-choice"].includes(target?.kind)) {
@@ -96827,9 +96827,10 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
     }
     if (event.altKey && (event.key === "j" || event.key === "J" || event.code === "KeyJ")) { event.preventDefault?.(); this.schemaMoveSelected(1); return; }
     if (event.altKey && (event.key === "k" || event.key === "K" || event.code === "KeyK")) { event.preventDefault?.(); this.schemaMoveSelected(-1); return; }
-    if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key === "J" || event.key === "K")) {
+    const lower = String(event.key || "").toLowerCase();
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (lower === "j" || lower === "k")) {
       event.preventDefault?.();
-      this.schemaFieldStep(event.key === "J" ? 1 : -1, event);
+      this.schemaFieldStep(lower === "j" ? 1 : -1, event);
       return;
     }
     if (!event.ctrlKey && !event.metaKey && !event.altKey && /^[1-9]$/.test(event.key || "")) {
@@ -96837,8 +96838,8 @@ class AlbumSchemaCardModal extends albumSchemaCardModalBase() {
       this.schemaFieldNumber(Number(event.key), event);
       return;
     }
-    if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault?.(); this.schemaMove(-1); return; }
-    if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault?.(); this.schemaMove(1); return; }
+    if (event.key === "ArrowUp" || (event.key === "k" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey)) { event.preventDefault?.(); this.schemaMove(-1); return; }
+    if (event.key === "ArrowDown" || (event.key === "j" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey)) { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.key === "ArrowLeft") { event.preventDefault?.(); this.schemaMove(-1); return; }
     if (event.key === "ArrowRight") { event.preventDefault?.(); this.schemaMove(1); return; }
     if (event.ctrlKey && event.key.toLowerCase() === "d") { event.preventDefault?.(); this.schemaRemoveSelected(); return; }
@@ -97806,12 +97807,17 @@ Object.assign(AlbumSchemaCardModal.prototype, {
             return;
           }
         }
-        if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        if (!this.stage && !inInput) {
           const key = String(event.key || "");
-          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k")) {
+          const lower = key.toLowerCase();
+          const ctrlJump = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (lower === "j" || lower === "k");
+          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k" || ctrlJump)) {
             try { event.preventDefault?.(); } catch (_) {}
             return;
           }
+        }
+        if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
+          const key = String(event.key || "");
           if ((key === "m" || key === "M") && (typeof this.schemaArrangeDirty === "function")) {
             try {
               if (this.schemaArrangeEnterHintMode?.()) {
@@ -98082,7 +98088,7 @@ Object.assign(AlbumSchemaCardModal.prototype, {
   },
 });
 // ---- src/241yf-plugin-album-schema-field-jump.js ----
-// Album Schema Card field jumps: Shift+J/K steps and 1-9 jumps in
+// Album Schema Card field jumps: Ctrl+J/K steps and 1-9 jumps in
 // painted order. Pure navigation: selection, reveal, and announcement
 // only. Never touches the session, previews, writers, or the arrangement.
 Object.assign(AlbumSchemaCardModal.prototype, {

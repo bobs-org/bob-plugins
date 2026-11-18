@@ -790,8 +790,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     }
     if (key === "ArrowDown" || key === "ArrowRight") { consume(); this.moveSelection("forward"); return; }
     if (key === "ArrowUp" || key === "ArrowLeft") { consume(); this.moveSelection("back"); return; }
-    if ((key === "J" || key === "K") && !mod && !event.altKey && this.section === "categories") {
-      consume(); this.jumpGroup(key === "J" ? 1 : -1, event); return;
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (lower === "j" || lower === "k") && this.section === "categories") {
+      consume(); this.jumpGroup(lower === "j" ? 1 : -1, event); return;
     }
     if (key.length === 1 && /^[a-z0-9]$/.test(key) && this.section === "categories") {
       const selection = bankSetupCardSelectionByHotkey(this.categories, key);
@@ -863,8 +863,8 @@ class BankSetupCardModal extends bankCategoryCardModalBase() {
     } catch (_) {}
   }
 
-  // Shift+J/K group jumps: pure navigation that never writes. From a
-  // tile, Shift+K lands on its own group first (parent first); at an
+  // Ctrl+J/K group jumps: pure navigation that never writes. From a
+  // tile, Ctrl+K lands on its own group first (parent first); at an
   // end the selection stays and the row bumps with an announcement.
   jumpGroup(delta, event) {
     if (this.busy || this.stage || this.readOnly || this.sessionState?.status === "applying") return false;

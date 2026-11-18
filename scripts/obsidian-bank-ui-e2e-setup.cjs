@@ -1388,7 +1388,7 @@ async function runE2e(parsed) {
     })()`);
     await sleep(200);
 
-    // Real-key group jumps: Shift+K and Shift+J arrive as trusted CDP
+    // Real-key group jumps: Ctrl+K and Ctrl+J arrive as trusted CDP
     // key events, the way a keyboard sends them.
     const groupJumpBase = shimLogLength(shimDir);
     const groupJumpStart = await client.evaluate(`(() => {
@@ -1407,46 +1407,46 @@ async function runE2e(parsed) {
         windowsVirtualKeyCode: parts.windowsVirtualKeyCode,
         nativeVirtualKeyCode: parts.nativeVirtualKeyCode });
     };
-    await dispatchRealKey({ key: "K", code: "KeyK", windowsVirtualKeyCode: 75,
-      nativeVirtualKeyCode: 75, modifiers: 8, text: "K" });
+    await dispatchRealKey({ key: "k", code: "KeyK", windowsVirtualKeyCode: 75,
+      nativeVirtualKeyCode: 75, modifiers: 2 });
     await sleep(250);
-    let afterShiftK = await client.evaluate(`(() => {
+    let afterCtrlK = await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       return modal ? modal.selection && modal.selection.id : null;
     })()`);
-    if (groupJumpStart && groupJumpStart.ok && !(typeof afterShiftK === "string" && afterShiftK.indexOf("group:") === 0)) {
-      afterShiftK = await client.evaluate(`(() => {
+    if (groupJumpStart && groupJumpStart.ok && !(typeof afterCtrlK === "string" && afterCtrlK.indexOf("group:") === 0)) {
+      afterCtrlK = await client.evaluate(`(() => {
         const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
         const root = modal && modal.contentEl;
-        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "K", code: "KeyK", shiftKey: true, bubbles: true }));
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", ctrlKey: true, bubbles: true }));
         return modal ? modal.selection && modal.selection.id : null;
       })()`);
     }
-    await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
-      nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
+    await dispatchRealKey({ key: "j", code: "KeyJ", windowsVirtualKeyCode: 74,
+      nativeVirtualKeyCode: 74, modifiers: 2 });
     await sleep(250);
-    let afterShiftJ = await client.evaluate(`(() => {
+    let afterCtrlJ = await client.evaluate(`(() => {
       const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
       return modal ? modal.selection && modal.selection.id : null;
     })()`);
-    if (groupJumpStart && groupJumpStart.ok && !(typeof afterShiftJ === "string" && afterShiftJ.indexOf("group:") === 0 && afterShiftJ !== afterShiftK)) {
-      afterShiftJ = await client.evaluate(`(() => {
+    if (groupJumpStart && groupJumpStart.ok && !(typeof afterCtrlJ === "string" && afterCtrlJ.indexOf("group:") === 0 && afterCtrlJ !== afterCtrlK)) {
+      afterCtrlJ = await client.evaluate(`(() => {
         const modal = window.app.plugins.plugins["bob-ledger-tools"].bankSetupCardModal;
         const root = modal && modal.contentEl;
-        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "J", code: "KeyJ", shiftKey: true, bubbles: true }));
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "j", code: "KeyJ", ctrlKey: true, bubbles: true }));
         return modal ? modal.selection && modal.selection.id : null;
       })()`);
     }
     const groupJumpEdits = shimLogEntries(shimDir, groupJumpBase)
       .filter((entry) => entry.argv?.[0] === "bank" && entry.argv?.[1] === "config" && entry.argv?.[2] === "update");
     report.probes = report.probes || {};
-    report.probes.setupGroupJump = { start: groupJumpStart, afterShiftK, afterShiftJ, edits: groupJumpEdits.length };
-    record("setup-group-jump-shift-k", Boolean(groupJumpStart && groupJumpStart.ok
-      && typeof afterShiftK === "string" && afterShiftK.indexOf("group:") === 0),
-      `Shift+K -> ${afterShiftK} (from ${groupJumpStart && groupJumpStart.before})`);
-    record("setup-group-jump-shift-j", Boolean(groupJumpStart && groupJumpStart.ok
-      && typeof afterShiftJ === "string" && afterShiftJ.indexOf("group:") === 0 && afterShiftJ !== afterShiftK),
-      `Shift+J -> ${afterShiftJ} (from ${afterShiftK})`);
+    report.probes.setupGroupJump = { start: groupJumpStart, afterCtrlK, afterCtrlJ, edits: groupJumpEdits.length };
+    record("setup-group-jump-ctrl-k", Boolean(groupJumpStart && groupJumpStart.ok
+      && typeof afterCtrlK === "string" && afterCtrlK.indexOf("group:") === 0),
+      `Ctrl+K -> ${afterCtrlK} (from ${groupJumpStart && groupJumpStart.before})`);
+    record("setup-group-jump-ctrl-j", Boolean(groupJumpStart && groupJumpStart.ok
+      && typeof afterCtrlJ === "string" && afterCtrlJ.indexOf("group:") === 0 && afterCtrlJ !== afterCtrlK),
+      `Ctrl+J -> ${afterCtrlJ} (from ${afterCtrlK})`);
     record("setup-group-jump-no-apply", groupJumpEdits.length === 0,
       `jumps never write; bob bank config update calls=${groupJumpEdits.length}`);
 

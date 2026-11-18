@@ -867,12 +867,17 @@ Object.assign(AlbumSchemaCardModal.prototype, {
             return;
           }
         }
-        if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        if (!this.stage && !inInput) {
           const key = String(event.key || "");
-          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k")) {
+          const lower = key.toLowerCase();
+          const ctrlJump = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (lower === "j" || lower === "k");
+          if (this.schemaHintMode && (/^[0-9]$/.test(key) || key === "J" || key === "K" || key === "j" || key === "k" || ctrlJump)) {
             try { event.preventDefault?.(); } catch (_) {}
             return;
           }
+        }
+        if (!this.stage && !inInput && !event.altKey && !event.ctrlKey && !event.metaKey) {
+          const key = String(event.key || "");
           if ((key === "m" || key === "M") && (typeof this.schemaArrangeDirty === "function")) {
             try {
               if (this.schemaArrangeEnterHintMode?.()) {

@@ -177,7 +177,7 @@ function bankSetupCardPaintedCategoryItems(model, arrange) {
 }
 
 // Next/previous group label strictly after/before the selection in
-// painted order. From a tile, Shift+K lands on its own group first
+// painted order. From a tile, Ctrl+K lands on its own group first
 // (parent first); at an end there is no group, so the caller bumps.
 function bankSetupCardGroupStep(items, selection, direction) {
   const list = Array.isArray(items) ? items : [];

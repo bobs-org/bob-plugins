@@ -1,4 +1,4 @@
-// Album Schema Card field jumps: Shift+J/K steps and 1-9 jumps in
+// Album Schema Card field jumps: Ctrl+J/K steps and 1-9 jumps in
 // painted order. Pure navigation: selection, reveal, and announcement
 // only. Never touches the session, previews, writers, or the arrangement.
 Object.assign(AlbumSchemaCardModal.prototype, {

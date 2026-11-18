@@ -71,7 +71,7 @@ function albumSchemaPaintedTargets(model, projected) {
 
 // Next/previous `field:` key strictly after/before the current index,
 // or null at the ends. One scan covers every row of the field-step table:
-// from a chip or `+ choice` Shift+K lands on the parent field first.
+// from a chip or `+ choice` Ctrl+K lands on the parent field first.
 function albumSchemaFieldStepKey(targets, selectedKey, direction) {
   const order = Array.isArray(targets) ? targets : [];
   const index = order.findIndex((target) => target?.key === selectedKey);

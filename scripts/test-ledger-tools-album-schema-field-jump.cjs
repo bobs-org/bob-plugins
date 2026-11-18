@@ -272,34 +272,43 @@ test("field step helpers scan strictly to the next field row", () => {
   assert.equal(helpers.albumSchemaFieldNumberKey(targets, 3), null);
 });
 
-test("Shift+J/K walk every row of the field-step table", () => {
+test("Ctrl+J/K walk every row of the field-step table", () => {
   const { modal } = openCard();
-  const shifted = { key: "J", shiftKey: true };
   const check = (from, key, want, message) => {
     modal.schemaSelect(from);
     press(modal, from, key);
     assert.equal(modal.selectedKey, want, message);
   };
-  check("stats", { key: "J" }, "field:status", "Stats Shift+J lands on field 1");
-  check("stats", { key: "K" }, "stats", "Stats Shift+K stays");
+  check("stats", { key: "j", ctrlKey: true }, "field:status", "Stats Ctrl+J lands on field 1");
+  check("stats", { key: "k", ctrlKey: true }, "stats", "Stats Ctrl+K stays");
   assert.match(announceText(modal), /No previous field/);
-  check("field:status", { key: "J" }, "field:claim", "field 1 Shift+J lands on field 2");
-  check("field:claim", { key: "K" }, "field:status", "field 2 Shift+K lands on field 1");
-  check("field:section", { key: "J" }, "field:section", "last field Shift+J stays");
+  check("field:status", { key: "j", ctrlKey: true }, "field:claim", "field 1 Ctrl+J lands on field 2");
+  check("field:claim", { key: "k", ctrlKey: true }, "field:status", "field 2 Ctrl+K lands on field 1");
+  check("field:section", { key: "j", ctrlKey: true }, "field:section", "last field Ctrl+J stays");
   assert.match(announceText(modal), /No next field/);
-  check("field:status", { key: "K" }, "field:status", "first field Shift+K stays");
-  check("choice:section:sase", { key: "K" }, "field:section", "a chip Shift+K returns to its own field first");
-  check("choice:status:seed", { key: "J" }, "field:claim", "a chip Shift+J lands on the next field");
-  check("add-choice:status", { key: "K" }, "field:status", "+ choice Shift+K returns to its own field");
-  check("add-choice:status", { key: "J" }, "field:claim", "+ choice Shift+J lands on the next field");
-  check("add-choice:section", { key: "J" }, "add-choice:section", "+ choice of the last field Shift+J stays");
-  check("add-field", { key: "K" }, "field:section", "+ field Shift+K lands on the last field");
-  check("add-field", { key: "J" }, "add-field", "+ field Shift+J stays");
-  // Caps Lock counts: bare "J" without shiftKey still steps.
+  check("field:status", { key: "k", ctrlKey: true }, "field:status", "first field Ctrl+K stays");
+  check("choice:section:sase", { key: "k", ctrlKey: true }, "field:section", "a chip Ctrl+K returns to its own field first");
+  check("choice:status:seed", { key: "j", ctrlKey: true }, "field:claim", "a chip Ctrl+J lands on the next field");
+  check("add-choice:status", { key: "k", ctrlKey: true }, "field:status", "+ choice Ctrl+K returns to its own field");
+  check("add-choice:status", { key: "j", ctrlKey: true }, "field:claim", "+ choice Ctrl+J lands on the next field");
+  check("add-choice:section", { key: "j", ctrlKey: true }, "add-choice:section", "+ choice of the last field Ctrl+J stays");
+  check("add-field", { key: "k", ctrlKey: true }, "field:section", "+ field Ctrl+K lands on the last field");
+  check("add-field", { key: "j", ctrlKey: true }, "add-field", "+ field Ctrl+J stays");
+  // Caps Lock counts: Ctrl+J arrives as uppercase with shiftKey false.
   modal.schemaSelect("field:status");
-  press(modal, "field:status", { key: "J" });
+  press(modal, "field:status", { key: "J", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:claim");
   assert.match(announceText(modal), /Claim, field 2 of 3/);
+  for (const inert of [
+    { key: "J" }, { key: "J", shiftKey: true },
+    { key: "j", ctrlKey: true, shiftKey: true }, { key: "j", metaKey: true },
+  ]) {
+    modal.schemaSelect("field:status");
+    const announcementBefore = announceText(modal);
+    press(modal, "field:status", inert);
+    assert.equal(modal.selectedKey, "field:status", `inert ${JSON.stringify(inert)}`);
+    assert.equal(announceText(modal), announcementBefore);
+  }
   modal.close();
 });
 
@@ -351,7 +360,7 @@ test("Shift+1 still stages required while shifted digits jump", () => {
   modal.close();
 });
 
-test("Alt and Ctrl jumps keep their arrange meanings", () => {
+test("Alt arrange remains separate from Ctrl field jumps", () => {
   const { modal } = openCard();
   modal.schemaSelect("field:status");
   press(modal, "field:status", { key: "J", code: "KeyJ", altKey: true });
@@ -365,9 +374,10 @@ test("Alt and Ctrl jumps keep their arrange meanings", () => {
   assert.equal(modal.selectedKey, "field:status");
   modal.schemaArrangeRevert();
   modal.schemaSelect("field:status");
-  press(modal, "field:status", { key: "J", ctrlKey: true });
-  assert.equal(modal.selectedKey, "field:status", "Ctrl+J does nothing");
+  press(modal, "field:status", { key: "j", ctrlKey: true });
+  assert.equal(modal.selectedKey, "field:claim", "Ctrl+J jumps to the next field");
   assert.equal(modal.schemaArrangeDirty(), false);
+  assert.equal(modal.session.getState().draftOps.length, 0);
   modal.close();
 });
 
@@ -375,7 +385,7 @@ test("jumps are inert in stages, inputs, composition, applying, the read-only ca
   const { modal } = openCard();
   // In a stage.
   assert.equal(modal.schemaStage("field", "field:status"), true);
-  press(modal, "field:status", { key: "J" });
+  press(modal, "field:status", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status");
   // In an input: typing J never jumps.
   const input = modal.schemaInput("fieldLabel");
@@ -384,20 +394,20 @@ test("jumps are inert in stages, inputs, composition, applying, the read-only ca
   assert.equal(modal.selectedKey, "field:status");
   modal.schemaCancelStage();
   // IME composition.
-  press(modal, "field:status", { key: "J", isComposing: true });
+  press(modal, "field:status", { key: "j", ctrlKey: true, isComposing: true });
   assert.equal(modal.selectedKey, "field:status");
-  press(modal, "field:status", { key: "J", keyCode: 229 });
+  press(modal, "field:status", { key: "j", ctrlKey: true, keyCode: 229 });
   assert.equal(modal.selectedKey, "field:status");
   // While applying.
   const kept = modal.sessionState;
   modal.sessionState = { ...kept, status: "applying" };
-  press(modal, "field:status", { key: "J" });
+  press(modal, "field:status", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status");
   modal.sessionState = kept;
   // The read-only card has no session.
   const session = modal.session;
   modal.session = null;
-  press(modal, "field:status", { key: "J" });
+  press(modal, "field:status", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status");
   assert.equal(announcer(modal), null, "no announcement without a session");
   modal.session = session;
@@ -407,7 +417,7 @@ test("jumps are inert in stages, inputs, composition, applying, the read-only ca
   press(modal, "field:status", { key: "3" });
   assert.equal(modal.selectedKey, "field:status", "a swallowed digit never jumps");
   assert.ok(modal.schemaHintMode, "hint mode survives the swallowed digit");
-  press(modal, "field:status", { key: "J" });
+  press(modal, "field:status", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status", "J never jumps in hint mode");
   assert.ok(modal.schemaHintMode, "hint mode survives a swallowed J");
   modal.schemaHandleEscape();
@@ -432,11 +442,11 @@ test("jumps never touch the session preview, apply, or the arrangement nudge", (
   const origNudge = modal.schemaArrangement.nudge.bind(modal.schemaArrangement);
   modal.schemaArrangement.nudge = (...args) => { nudges += 1; return origNudge(...args); };
   modal.schemaSelect("stats");
-  press(modal, "stats", { key: "J" });
+  press(modal, "stats", { key: "j", ctrlKey: true });
   press(modal, "field:status", { key: "3" });
-  press(modal, "field:section", { key: "J" });
+  press(modal, "field:section", { key: "j", ctrlKey: true });
   press(modal, "field:section", { key: "7" });
-  press(modal, "field:section", { key: "K" });
+  press(modal, "field:section", { key: "k", ctrlKey: true });
   assert.equal(previews, 0, "no preview for any jump");
   assert.equal(applies, 0, "no apply for any jump");
   assert.equal(nudges, 0, "no arrangement nudge for any jump");
@@ -450,7 +460,7 @@ test("a held clamp key bumps once, then stays silent", () => {
   const bumps = [];
   row.animate = (frames, options) => { bumps.push({ frames, options }); return {}; };
   modal.schemaSelect("field:section");
-  press(modal, "field:section", { key: "J" });
+  press(modal, "field:section", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:section");
   assert.equal(bumps.length, 1, "one vertical bump on the clamp");
   assert.deepEqual(bumps[0].frames, [
@@ -460,7 +470,7 @@ test("a held clamp key bumps once, then stays silent", () => {
   ]);
   assert.equal(bumps[0].options.duration, 90);
   assert.match(announceText(modal), /No next field/);
-  press(modal, "field:section", { key: "J", repeat: true });
+  press(modal, "field:section", { key: "j", ctrlKey: true, repeat: true });
   assert.equal(bumps.length, 1, "a held key clamps silently after the first bump");
   modal.close();
 });
@@ -486,28 +496,28 @@ test("zero fields announce the empty lane on every jump key", () => {
   const origBump = modal.schemaFieldJumpBump.bind(modal);
   modal.schemaFieldJumpBump = (sign) => { direct.push(sign); return origBump(sign); };
   modal.schemaFieldStep(-1, {});
-  assert.deepEqual(direct, [-1], "empty-schema Shift+K requests an upward bump");
+  assert.deepEqual(direct, [-1], "empty-schema Ctrl+K requests an upward bump");
   assert.equal(bumpY(0), "translateY(-3px)");
-  press(modal, "stats", { key: "J" });
+  press(modal, "stats", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "stats");
   assert.equal(announceText(modal), "This album has no fields yet.");
-  assert.equal(bumpY(1), "translateY(3px)", "empty-schema Shift+J bumps down");
-  press(modal, "stats", { key: "K" });
+  assert.equal(bumpY(1), "translateY(3px)", "empty-schema Ctrl+J bumps down");
+  press(modal, "stats", { key: "k", ctrlKey: true });
   assert.equal(announceText(modal), "This album has no fields yet.");
-  assert.equal(bumpY(2), "translateY(-3px)", "empty-schema Shift+K bumps up");
+  assert.equal(bumpY(2), "translateY(-3px)", "empty-schema Ctrl+K bumps up");
   press(modal, "stats", { key: "5" });
   assert.equal(modal.selectedKey, "stats");
   assert.equal(announceText(modal), "This album has no fields yet.");
   assert.equal(bumpY(3), "translateY(3px)", "a missing digit still bumps down");
   assert.equal(bumps.length, 4, "each empty-lane key bumps");
-  press(modal, "stats", { key: "K", repeat: true });
-  press(modal, "stats", { key: "J", repeat: true });
+  press(modal, "stats", { key: "k", ctrlKey: true, repeat: true });
+  press(modal, "stats", { key: "j", ctrlKey: true, repeat: true });
   press(modal, "stats", { key: "5", repeat: true });
   assert.equal(bumps.length, 4, "a held empty-lane key stays silent after the first bump");
   const realMatchMedia = globalThis.matchMedia;
   globalThis.matchMedia = () => ({ matches: true });
   try {
-    press(modal, "stats", { key: "K" });
+    press(modal, "stats", { key: "k", ctrlKey: true });
     assert.equal(bumps.length, 4, "reduced motion turns off the empty-schema bump");
     assert.equal(announceText(modal), "This album has no fields yet.");
   } finally {
@@ -535,7 +545,7 @@ test("jumps reveal the group and leave the announcer visible to screen readers",
   const head = () => modal.contentEl.querySelector('[data-target-key="field:status"]');
   const seen = [];
   head().scrollIntoView = (options) => seen.push(["head", options]);
-  press(modal, "stats", { key: "J" });
+  press(modal, "stats", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status");
   assert.ok(seen.some(([part]) => part === "head"), "the heading row scrolls into view");
   const live = announcer(modal);
@@ -548,7 +558,7 @@ test("jumps reveal the group and leave the announcer visible to screen readers",
 test("a missing scroller never throws", () => {
   const { modal } = openCard();
   modal.schemaSelect("stats");
-  press(modal, "stats", { key: "J" });
+  press(modal, "stats", { key: "j", ctrlKey: true });
   assert.equal(modal.selectedKey, "field:status");
   modal.close();
 });
@@ -562,7 +572,7 @@ test("reduced motion turns off every bump, including the nudge shake", () => {
     const bumps = [];
     row.animate = (frames, options) => { bumps.push({ frames, options }); return {}; };
     modal.schemaSelect("field:section");
-    press(modal, "field:section", { key: "J" });
+    press(modal, "field:section", { key: "j", ctrlKey: true });
     assert.equal(bumps.length, 0, "no jump bump under reduced motion");
     assert.match(announceText(modal), /No next field/, "the announcement still lands");
     // The nudge clamp shake routes through the same shared helper, so it is
@@ -660,14 +670,14 @@ test("plain browsing paints a field hint with two keycaps after Enter", () => {
   const enterAt = items.findIndex((item) => item.keys === "⏎");
   assert.ok(enterAt >= 0, "Enter item exists");
   const hint = items[enterAt + 1];
-  assert.deepEqual(hint.keys, ["⇧J/K", "1–3"]);
+  assert.deepEqual(hint.keys, ["⌃J/K", "1–3"]);
   assert.equal(hint.label, "field");
   const row = modal.contentEl.querySelectorAll(".bob-album-schema-hint")
     .find((node) => node.querySelector(".bob-album-schema-hint-label")?.textContent === "field");
   assert.ok(row, "the field hint is painted");
   const kbds = row.querySelectorAll("kbd");
   assert.equal(kbds.length, 2);
-  assert.equal(kbds[0].textContent, "⇧J/K");
+  assert.equal(kbds[0].textContent, "⌃J/K");
   assert.equal(kbds[1].textContent, "1–3");
   modal.close();
 });
@@ -677,12 +687,12 @@ test("the field hint uses 1 for a single field and 1-9 when there are ten", () =
     { fields: [{ key: "only", label: "Only", kind: "text" }] },
     { editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null },
   );
-  assert.deepEqual(fieldHint(one).keys, ["⇧J/K", "1"]);
+  assert.deepEqual(fieldHint(one).keys, ["⌃J/K", "1"]);
   const ten = helpers.albumSchemaCardHintItems(
     { fields: Array.from({ length: 10 }, (_, i) => ({ key: `f${i + 1}`, label: `F${i + 1}`, kind: "text" })) },
     { editable: true, fresh: true, selectedKey: "stats", state: {}, stage: null },
   );
-  assert.deepEqual(fieldHint(ten).keys, ["⇧J/K", "1–9"]);
+  assert.deepEqual(fieldHint(ten).keys, ["⌃J/K", "1–9"]);
 });
 
 test("the field hint is absent with zero fields, a stage, hint mode, pending moves, saving, a lock wait, and the read-only card", () => {

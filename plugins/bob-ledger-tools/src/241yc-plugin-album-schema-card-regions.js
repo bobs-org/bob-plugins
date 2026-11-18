@@ -792,7 +792,7 @@ function albumSchemaCardHintItems(model, options) {
   const fieldCount = Array.isArray(model?.fields) ? model.fields.length : 0;
   if (fieldCount > 0) {
     const n = Math.min(fieldCount, 9);
-    items.push({ keys: ["⇧J/K", n === 1 ? "1" : `1–${n}`], label: "field" });
+    items.push({ keys: ["⌃J/K", n === 1 ? "1" : `1–${n}`], label: "field" });
   }
   items.push({ keys: "a", label: "add field", action: "add-field", enabled: !gated });
   if (["field", "choice", "add-choice"].includes(target?.kind)) {

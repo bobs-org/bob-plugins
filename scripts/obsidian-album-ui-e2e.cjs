@@ -176,6 +176,10 @@ function buildAuthoredFixture(vaultDir) {
   }
   fs.mkdirSync(path.join(vaultDir, ".obsidian"), { recursive: true });
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(enabled, null, 2));
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "hotkeys.json"), JSON.stringify({
+    "bob-navigation-hotkeys:jump-to-next-section-header": [{ modifiers: ["Ctrl"], key: "J" }],
+    "bob-navigation-hotkeys:jump-to-prev-section-header": [{ modifiers: ["Ctrl"], key: "K" }],
+  }, null, 2));
   fs.writeFileSync(
     path.join(vaultDir, ".obsidian", "app.json"),
     JSON.stringify({ livePreview: true, showLineNumber: false, showInlineTitle: false }, null, 2),
@@ -1573,7 +1577,7 @@ async function run(args) {
     record("schema-escape-cancel", Boolean(keyState && keyState.cancelled), "Escape cancels the stage");
     record("schema-focus-retained", Boolean(keyState && keyState.focus), `focus returns to ${keyState.focus}`);
 
-    // Real-key field jumps: Shift+J and digits arrive as trusted CDP key
+    // Real-key field jumps: Ctrl+J and digits arrive as trusted CDP key
     // events, the way a keyboard sends them.
     const fieldJumpShimBase = shimLogLength(shimDir);
     try { await client.call("Page.bringToFront", {}); } catch { /* primary view stays usable */ }
@@ -1587,10 +1591,12 @@ async function run(args) {
       const row = root && root.querySelector('[data-target-key="stats"]');
       if (row && typeof row.focus === "function") row.focus();
       const fields = modal.schemaTargets().filter((item) => item && item.kind === "field");
+      const editor = app.workspace?.activeLeaf?.view?.editor;
+      const cursor = editor && typeof editor.getCursor === "function" ? editor.getCursor() : null;
       const active = root && root.ownerDocument && root.ownerDocument.activeElement;
       return { ok: true, selected: modal.selectedKey,
         first: fields[0] ? fields[0].key : null,
-        third: fields[2] ? fields[2].key : null, count: fields.length,
+        third: fields[2] ? fields[2].key : null, count: fields.length, editorCursor: cursor,
         focused: active && active.getAttribute ? active.getAttribute("data-target-key") : null,
         stage: (modal.stage && modal.stage.kind) || null };`);
     const dispatchRealKey = async (parts) => {
@@ -1600,14 +1606,22 @@ async function run(args) {
         nativeVirtualKeyCode: parts.nativeVirtualKeyCode });
     };
     await sleep(250);
-    await dispatchRealKey({ key: "J", code: "KeyJ", windowsVirtualKeyCode: 74,
-      nativeVirtualKeyCode: 74, modifiers: 8, text: "J" });
+    await dispatchRealKey({ key: "j", code: "KeyJ", windowsVirtualKeyCode: 74,
+      nativeVirtualKeyCode: 74, modifiers: 2 });
     await sleep(250);
-    let afterShiftJ = await ledgerEval(`return plugin.albumSchemaCardModal ? plugin.albumSchemaCardModal.selectedKey : null;`);
-    if (fieldJumpStart && fieldJumpStart.ok && afterShiftJ !== fieldJumpStart.first) {
-      afterShiftJ = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+    let afterCtrlJReal = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
+      const editor = app.workspace?.activeLeaf?.view?.editor;
+      return { selected: modal ? modal.selectedKey : null,
+        editorCursor: editor && typeof editor.getCursor === "function" ? editor.getCursor() : null };`);
+    const realKeyMoved = Boolean(fieldJumpStart && fieldJumpStart.ok && afterCtrlJReal?.selected === fieldJumpStart.first);
+    const editorCursorAfter = afterCtrlJReal?.editorCursor || null;
+    const editorCursorUnchanged = !fieldJumpStart?.editorCursor || !editorCursorAfter ||
+      (fieldJumpStart.editorCursor.line === editorCursorAfter.line && fieldJumpStart.editorCursor.ch === editorCursorAfter.ch);
+    let afterCtrlJ = afterCtrlJReal?.selected || null;
+    if (fieldJumpStart && fieldJumpStart.ok && afterCtrlJ !== fieldJumpStart.first) {
+      afterCtrlJ = await ledgerEval(`const modal = plugin.albumSchemaCardModal;
         const root = modal && modal.contentEl;
-        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "J", code: "KeyJ", shiftKey: true, bubbles: true }));
+        if (root) root.dispatchEvent(new KeyboardEvent("keydown", { key: "j", code: "KeyJ", ctrlKey: true, bubbles: true }));
         return modal ? modal.selectedKey : null;`);
     }
     await dispatchRealKey({ key: "3", code: "Digit3", windowsVirtualKeyCode: 51,
@@ -1621,15 +1635,17 @@ async function run(args) {
         return modal ? modal.selectedKey : null;`);
     }
     const fieldJumpEdits = updateShimEdits(fieldJumpShimBase);
-    report.probes.schemaFieldJump = { start: fieldJumpStart, afterShiftJ, afterDigit3, edits: fieldJumpEdits };
-    record("schema-field-jump-shift-j", Boolean(fieldJumpStart && fieldJumpStart.ok
-      && afterShiftJ === fieldJumpStart.first),
-      `Stats Shift+J -> ${afterShiftJ} (field 1 ${fieldJumpStart && fieldJumpStart.first})`);
+    report.probes.schemaFieldJump = { start: fieldJumpStart, afterCtrlJReal, realKeyMoved, editorCursorAfter, editorCursorUnchanged, afterCtrlJ, afterDigit3, edits: fieldJumpEdits };
+    record("schema-field-jump-ctrl-j", Boolean(fieldJumpStart && fieldJumpStart.ok
+      && afterCtrlJ === fieldJumpStart.first),
+      `Stats Ctrl+J -> ${afterCtrlJ} (field 1 ${fieldJumpStart && fieldJumpStart.first}; real key moved=${realKeyMoved})`);
     record("schema-field-jump-digit", Boolean(fieldJumpStart && fieldJumpStart.ok
       && fieldJumpStart.count >= 3 && afterDigit3 === fieldJumpStart.third),
       `3 -> ${afterDigit3} (field 3 ${fieldJumpStart && fieldJumpStart.third})`);
     record("schema-field-jump-no-apply", fieldJumpEdits.apply === 0,
       `jumps never write; Bob albums update applies=${fieldJumpEdits.apply}`);
+    record("schema-field-jump-editor-cursor", editorCursorUnchanged,
+      `editor cursor ${JSON.stringify(fieldJumpStart?.editorCursor)} -> ${JSON.stringify(editorCursorAfter)}`);
     await ledgerEval(`const modal = plugin.albumSchemaCardModal;
       if (modal) modal.schemaSelect("stats");
       return true;`);

@@ -740,7 +740,7 @@ Object.assign(BankSetupCardModal.prototype, {
               return;
             }
           }
-          if (!inInput && !mod && !event.altKey && (lower === "j" || lower === "k")) {
+          if (!inInput && !event.metaKey && !event.altKey && (lower === "j" || lower === "k")) {
             consume();
             return;
           }

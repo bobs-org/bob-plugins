@@ -39,6 +39,22 @@ class BobLedgerToolsRecordCardMixin {
     return String((album && album.stem) || "").trim();
   }
 
+  // Sheet chips open the field's stage directly: `stage: true` resolves to
+  // the target's stage kind from the sheet model, falling back to browse
+  // mode on the field when the kind cannot be resolved.
+  recordCardRequestedStage(sheetModel, fieldKey, stage) {
+    if (stage !== true) return stage || null;
+    try {
+      const report = this.recordSheetState?.()?.report || null;
+      const target = typeof recordCardTargetByKey === "function"
+        ? recordCardTargetByKey(recordCardTargets(sheetModel, report), fieldKey)
+        : null;
+      return (target && target.stageKind) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   recordCardStem(path) {
     const filePath = recordCardPath(path);
     const base = filePath.split("/").pop() || "";
@@ -84,7 +100,7 @@ class BobLedgerToolsRecordCardMixin {
       gate,
       writable,
       field: options.field,
-      stage: options.stage,
+      stage: this.recordCardRequestedStage(sheetModel, options.field, options.stage),
     });
     this.recordCardModal = modal;
     try { modal.open(); } catch (_) {}

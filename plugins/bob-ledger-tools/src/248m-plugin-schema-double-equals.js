@@ -1,6 +1,7 @@
-// Capture-phase == on album notes and bank.md opens the schema/setup card.
-// A vimrc nnoremap == never fires: CodeMirror Vim treats = as a complete
-// operator, so the second = reindents instead of matching a mapping.
+// Capture-phase == on album notes and bank.md opens the schema/setup card;
+// == on a canonical record note opens its Record Card. A vimrc nnoremap ==
+// never fires: CodeMirror Vim treats = as a complete operator, so the
+// second = reindents instead of matching a mapping.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -69,7 +70,7 @@ function schemaDoubleEqualsGate(input) {
   }
   if (snap.countPending) return { act: false, reason: "counted" };
   if (snap.registerPending) return { act: false, reason: "register" };
-  if (input.target !== "album" && input.target !== "bank") {
+  if (input.target !== "album" && input.target !== "bank" && input.target !== "record") {
     return { act: false, reason: "not-schema-note" };
   }
   if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
@@ -85,6 +86,13 @@ function schemaDoubleEqualsTargetKind({ path, frontmatter } = {}) {
       ? albumSchemaEntryKindOf(frontmatter)
       : "other";
   if (kind === "album") return "album";
+  // Records use the canonical check, never the loose kind fallback: the
+  // fallback classifies notes like bank/2026-11.md as records, which must
+  // keep their Vim reindent.
+  if (typeof recordSheetIsCanonicalRecordType === "function"
+    && recordSheetIsCanonicalRecordType(frontmatter)) {
+    return "record";
+  }
   return null;
 }
 
@@ -257,6 +265,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         void this.openAlbumSchemaEntry({ filePath });
       } else if (target === "bank") {
         void this.openBankSetupCard({ sourcePath: filePath });
+      } else if (target === "record") {
+        void this.openRecordCard({ filePath });
       }
     } catch (_) {}
   }

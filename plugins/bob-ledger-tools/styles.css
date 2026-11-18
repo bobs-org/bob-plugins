@@ -11023,6 +11023,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-record-sheet-current { font-weight: 700; }
 .bob-record-sheet-tools { display: flex; flex-wrap: wrap; gap: 0.35em; }
 .bob-record-sheet-collapse,
+.bob-record-sheet-edit,
 .bob-record-sheet-fold-toggle,
 .bob-record-sheet-yaml {
   padding: 0.15em 0.45em;
@@ -11127,14 +11128,23 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 }
 .bob-record-sheet-crumb:focus-visible,
 .bob-record-sheet-collapse:focus-visible,
+.bob-record-sheet-edit:focus-visible,
 .bob-record-sheet-fold-toggle:focus-visible,
 .bob-record-sheet-yaml:focus-visible,
 .bob-record-sheet-row:focus-visible,
+.bob-record-sheet-chip:focus-visible,
 .bob-record-sheet-ghost:focus-visible,
+.bob-record-sheet-missing:focus-visible,
 .bob-record-sheet-fold-row:focus-visible,
 .bob-record-sheet-link:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 2px;
+}
+.bob-record-sheet-row[role="button"],
+.bob-record-sheet-chip[role="button"],
+.bob-record-sheet-ghost[role="button"],
+.bob-record-sheet-missing[role="button"] {
+  cursor: pointer;
 }
 .bob-record-sheet-row.is-changed .bob-record-sheet-value {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--bob-record-accent) 55%, transparent);

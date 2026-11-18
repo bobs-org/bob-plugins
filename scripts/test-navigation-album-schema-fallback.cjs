@@ -65,3 +65,42 @@ test("Task Card command routes a title row to the direct album Schema Card", () 
   assert.equal(plugin.openBulletPropertyPicker(editor), true);
   assert.deepEqual(opens, [{ filePath: "eat.md" }]);
 });
+
+test("Task Card command routes a record row to the Record Card", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const opens = [];
+  const schemaOpens = [];
+  const ledger = {
+    albumHeaderDesktop: () => true,
+    albumSchemaEntryTargetForFile: () => ({ ok: true, kind: "record-parent", albumPath: "eat.md" }),
+    openAlbumSchemaEntry: (options) => { schemaOpens.push(options); return { ok: true }; },
+    openRecordCard: (options) => { opens.push(options); return { ok: true }; },
+  };
+  const editor = {
+    getValue: () => "# Nagi\n",
+    getLine: (line) => ["# Nagi"][line] ?? null,
+    getCursor: () => ({ line: 0, ch: 2 }),
+  };
+  plugin.app = { plugins: { plugins: { "bob-ledger-tools": ledger } } };
+  plugin.getActiveMarkdownView = () => ({ editor, file: { path: "eat/nagi.md" } });
+
+  assert.equal(plugin.openBulletPropertyPicker(editor), true);
+  assert.deepEqual(opens, [{ filePath: "eat/nagi.md" }]);
+  assert.equal(schemaOpens.length, 0);
+});
+
+test("record rows fall through when the ledger exposes no Record Card", () => {
+  const plugin = new NavigationHotkeysPlugin();
+  const ledger = {
+    albumHeaderDesktop: () => true,
+    albumSchemaEntryTargetForFile: () => ({ ok: true, kind: "record-parent", albumPath: "eat.md" }),
+    openAlbumSchemaEntry: () => ({ ok: true }),
+  };
+  plugin.app = { plugins: { plugins: { "bob-ledger-tools": ledger } } };
+  plugin.getActiveMarkdownView = () => ({ file: { path: "eat/nagi.md" } });
+
+  const result = plugin.albumSchemaFallbackForCursor(
+    null, "# Nagi\n", { line: 0, ch: 2 }, "# Nagi", {},
+  );
+  assert.deepEqual(result, { handled: false, reason: "not-direct-album" });
+});

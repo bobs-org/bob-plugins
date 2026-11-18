@@ -6,8 +6,10 @@ description: "Reference for the record sheet and the Record Card editor on canon
 Bob Ledger Tools paints a **record sheet** directly under the first heading
 of a canonical album record (`type: [[record]]`) in Reading view and Live
 Preview. The **Record Card** is the keyboard-first editor for those values.
-Native Properties and the filename-derived inline title stay visible in this
-phase.
+When the sheet is hide-eligible — healthy schema, desktop Obsidian, and the
+cached report carries `record_values_v1` — native Properties and the
+filename-derived inline title hide behind the sheet. Every other case keeps
+native Properties visible.
 
 The sheet is desktop-only and reads the cached album report plus Obsidian
 metadata. Opening, folding, or collapsing a record never requests a new
@@ -150,19 +152,26 @@ card can still undo. YAML Done saves the record pane, restores the previous
 view, and reopens the card on the same field. Record findings never block
 Done.
 
-## Gestures still on the sheet
+## Entry points
 
 | Gesture | Outcome |
 | --- | --- |
+| `⊞ Edit` in the sheet header | Open the card (desktop plus capability; titled `Edit fields (==, Ctrl+Shift+P)`). |
+| A sheet row | Open the card on that field. |
+| A value chip, ghost chip, or missing pill | Open that field's stage directly. |
+| `==` in Vim normal mode in Live Preview on a record | Open the Record Card; `N==`, register prefixes, Source mode, insert and visual modes, and non-record notes keep Vim's reindent. |
+| `Ctrl+Shift+P` on a record where the Task Card has no target | Open the Record Card; tasks, links, and dependency rows keep priority. |
+| **Edit record** palette command | Open the card; non-records say `Open a record note to edit its fields.` |
+| Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
 | Collapse control | Session-collapse or expand this record's sheet. |
 | Other-properties disclosure | Session-show or hide leftover keys. |
 | `y` on a focused row, ghost, or fold row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |
 | Breadcrumb / wikilink / URL | Ordinary Obsidian navigation and hover previews. |
 
-Sheet Edit, row/chip clicks, `==`, Command Mode, and `Ctrl+Shift+P` still
-do not open the card. Those entry points land with the Properties hide in
-a later phase.
+Every affordance answers to click, Enter, and Space. A row click never
+steals wikilink navigation, and `=` inside the card climbs to the parent
+album's Schema Card.
 
 ## Fail-open
 
@@ -174,7 +183,11 @@ legacy nouns, and Source mode keep their native surfaces.
 
 A broken album schema still mounts a warning sheet with the diagnostic and
 **Open album YAML**. Missing `record_values_v1` still mounts a healthy
-read-only sheet; it does not enable editing or hide Properties.
+read-only sheet; it does not enable editing or hide Properties. Embedded
+sheets never hide Properties: the hide class applies only to the view's own
+source-view or preview-view container, so embedded notes keep their own
+Properties. The class is removed on file switch, type or parent change,
+mode switch, view destroy, and plugin unload or disable.
 
 ## Write machine
 

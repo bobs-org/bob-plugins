@@ -88712,9 +88712,10 @@ class BobLedgerToolsBankSetupCardMixin {
   }
 }
 // ---- src/248m-plugin-schema-double-equals.js ----
-// Capture-phase == on album notes and bank.md opens the schema/setup card.
-// A vimrc nnoremap == never fires: CodeMirror Vim treats = as a complete
-// operator, so the second = reindents instead of matching a mapping.
+// Capture-phase == on album notes and bank.md opens the schema/setup card;
+// == on a canonical record note opens its Record Card. A vimrc nnoremap ==
+// never fires: CodeMirror Vim treats = as a complete operator, so the
+// second = reindents instead of matching a mapping.
 
 function schemaDoubleEqualsKeyBufferEmpty(value) {
   if (Array.isArray(value)) return value.length === 0;
@@ -88783,7 +88784,7 @@ function schemaDoubleEqualsGate(input) {
   }
   if (snap.countPending) return { act: false, reason: "counted" };
   if (snap.registerPending) return { act: false, reason: "register" };
-  if (input.target !== "album" && input.target !== "bank") {
+  if (input.target !== "album" && input.target !== "bank" && input.target !== "record") {
     return { act: false, reason: "not-schema-note" };
   }
   if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
@@ -88799,6 +88800,13 @@ function schemaDoubleEqualsTargetKind({ path, frontmatter } = {}) {
       ? albumSchemaEntryKindOf(frontmatter)
       : "other";
   if (kind === "album") return "album";
+  // Records use the canonical check, never the loose kind fallback: the
+  // fallback classifies notes like bank/2026-11.md as records, which must
+  // keep their Vim reindent.
+  if (typeof recordSheetIsCanonicalRecordType === "function"
+    && recordSheetIsCanonicalRecordType(frontmatter)) {
+    return "record";
+  }
   return null;
 }
 
@@ -88971,6 +88979,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         void this.openAlbumSchemaEntry({ filePath });
       } else if (target === "bank") {
         void this.openBankSetupCard({ sourcePath: filePath });
+      } else if (target === "record") {
+        void this.openRecordCard({ filePath });
       }
     } catch (_) {}
   }
@@ -100650,7 +100660,7 @@ function recordSheetRenderSpans(parent, doc, spans, options) {
   }
 }
 
-function recordSheetRenderChips(parent, doc, chips, options) {
+function recordSheetRenderChips(parent, doc, chips, options, openKey, openLabel) {
   for (const chip of Array.isArray(chips) ? chips : []) {
     const node = recordSheetEl(doc, "span", chip.valid === false
       ? "bob-record-sheet-chip is-invalid"
@@ -100660,6 +100670,11 @@ function recordSheetRenderChips(parent, doc, chips, options) {
       recordSheetRenderLink(node, doc, { text: chip.text, link: chip.link }, options);
     } else {
       recordSheetText(node, chip.text || "");
+    }
+    if (openKey && typeof options?.handlers?.openStage === "function") {
+      node.setAttribute?.("data-record-key", openKey);
+      node.setAttribute?.("aria-label", recordSheetAccessName(openLabel || openKey, (chip && chip.text) || ""));
+      recordSheetBindOpen(node, options.handlers.openStage, openKey);
     }
     parent.appendChild(node);
   }
@@ -100676,6 +100691,57 @@ function recordSheetBindYamlJump(node, handler, key) {
     if (keyName !== "y" && keyName !== "Y") return;
     event.preventDefault?.();
     handler?.(key);
+  });
+}
+
+function recordSheetAccessName(label, valueText) {
+  const name = String(label || "").trim() || "Field";
+  const value = String(valueText === null || valueText === undefined ? "" : valueText).trim();
+  return value ? `${name}: ${value}. Change ${name}` : `Change ${name}`;
+}
+
+function recordSheetRowValueText(row) {
+  if (!row || typeof row !== "object") return "";
+  if (row.state === "missing") return "missing";
+  const chips = Array.isArray(row.chips) ? row.chips : [];
+  if (chips.length && (row.list === true || recordSheetIsChoiceField(row))) {
+    return chips.map((chip) => String((chip && chip.text) || "").trim()).filter(Boolean).join(", ");
+  }
+  const spans = Array.isArray(row.spans) ? row.spans : [];
+  return spans.map((span) => String((span && span.text) || "")).join("").trim();
+}
+
+// Keyboard-first affordance binding: click, Enter, or Space opens the card.
+// Rows also skip clicks claimed by chip descendants, which open the stage
+// through their own binding; keydown only fires on the focused node itself
+// so chip keys never double with their row. No binding when the handler is
+// absent (pure reads).
+function recordSheetBindOpen(node, handler, key, skipSelector) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  if (typeof handler !== "function" || !key) return;
+  node.setAttribute?.("tabindex", "0");
+  node.setAttribute?.("role", "button");
+  node.setAttribute?.("aria-haspopup", "dialog");
+  node.addEventListener("click", (event) => {
+    if (!event || event.defaultPrevented) return;
+    try {
+      const target = event.target;
+      if (target && typeof target.closest === "function") {
+        if (target.closest("a,button")) return;
+        if (skipSelector && target !== node && target.closest(skipSelector)) return;
+      }
+    } catch (_) {}
+    event.preventDefault?.();
+    handler(key);
+  });
+  node.addEventListener("keydown", (event) => {
+    if (!event || event.isComposing || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const name = event.key || "";
+    if (name !== "Enter" && name !== " ") return;
+    if (event.target && event.target !== node) return;
+    event.preventDefault?.();
+    handler(key);
   });
 }
 
@@ -100717,6 +100783,22 @@ function recordSheetRenderCrumbs(header, model, options, doc) {
 function recordSheetRenderToolbar(header, model, options, doc) {
   const tools = recordSheetEl(doc, "div", "bob-record-sheet-tools");
   if (!tools) return null;
+  if (model && model.editable === true) {
+    const edit = recordSheetEl(doc, "button", "bob-record-sheet-edit");
+    if (edit) {
+      edit.setAttribute("type", "button");
+      edit.setAttribute("data-record-sheet-focus", "edit");
+      edit.setAttribute("aria-haspopup", "dialog");
+      edit.setAttribute("title", "Edit fields (==, Ctrl+Shift+P)");
+      edit.setAttribute("aria-label", "Edit record fields");
+      recordSheetText(edit, "⊞ Edit");
+      edit.addEventListener?.("click", (event) => {
+        event.preventDefault?.();
+        options?.handlers?.openEdit?.();
+      });
+      tools.appendChild(edit);
+    }
+  }
   const collapse = recordSheetEl(doc, "button", "bob-record-sheet-collapse");
   if (collapse) {
     collapse.setAttribute("type", "button");
@@ -100741,6 +100823,9 @@ function recordSheetRenderRow(list, row, options, doc) {
   if (!wrap) return null;
   wrap.setAttribute("data-record-key", row.key);
   recordSheetBindYamlJump(wrap, options?.handlers?.jumpYaml, row.key);
+  wrap.setAttribute?.("aria-label", recordSheetAccessName(row.label || row.key, recordSheetRowValueText(row)));
+  recordSheetBindOpen(wrap, options?.handlers?.openField, row.key,
+    ".bob-record-sheet-chip,.bob-record-sheet-ghost,.bob-record-sheet-missing");
   const dt = recordSheetEl(doc, "dt", "bob-record-sheet-label");
   recordSheetText(dt, row.label || row.key);
   if (dt) wrap.appendChild(dt);
@@ -100754,10 +100839,13 @@ function recordSheetRenderRow(list, row, options, doc) {
     recordSheetText(pill, "missing");
     if (pill) {
       pill.setAttribute("title", `${row.label || row.key} is required`);
+      pill.setAttribute?.("data-record-key", row.key);
+      pill.setAttribute?.("aria-label", recordSheetAccessName(row.label || row.key, "missing"));
+      recordSheetBindOpen(pill, options?.handlers?.openStage, row.key);
       dd.appendChild(pill);
     }
   } else if (row.chips && row.chips.length && (row.list || recordSheetIsChoiceField(row))) {
-    recordSheetRenderChips(dd, doc, row.chips, options);
+    recordSheetRenderChips(dd, doc, row.chips, options, row.key, row.label || row.key);
   } else {
     recordSheetRenderSpans(dd, doc, row.spans, options);
   }
@@ -100782,6 +100870,8 @@ function recordSheetRenderGhosts(sheet, model, options, doc) {
     chip.setAttribute("data-record-key", ghost.key);
     recordSheetText(chip, `＋ ${ghost.label || ghost.key}`);
     recordSheetBindYamlJump(chip, options?.handlers?.jumpYaml, ghost.key);
+    chip.setAttribute?.("aria-label", `Add ${ghost.label || ghost.key}`);
+    recordSheetBindOpen(chip, options?.handlers?.openStage, ghost.key);
     row.appendChild(chip);
   }
   sheet.appendChild(row);
@@ -100929,6 +101019,18 @@ let recordSheetRefreshEffect = null;
 function ensureRecordSheetRefresh() {
   if (!recordSheetRefreshEffect && StateEffect?.define) recordSheetRefreshEffect = StateEffect.define();
   return recordSheetRefreshEffect;
+}
+
+// Embedded record sheets (hover popovers, embeds) always fail open: the
+// hide class never applies inside an embed scope, so embedded notes keep
+// their own Properties.
+function recordSheetScopeIsEmbed(scope) {
+  try {
+    return Boolean(scope && typeof scope.closest === "function"
+      && scope.closest(".markdown-embed, .internal-embed"));
+  } catch (_) {
+    return false;
+  }
 }
 
 class BobLedgerToolsRecordSheetMixin {
@@ -101231,6 +101333,9 @@ class BobLedgerToolsRecordSheetMixin {
         toggleFold: (next) => this.recordSheetSetFold(path, next),
         jumpYaml: (key) => { void this.recordSheetJumpYaml(path, key); },
         jumpAlbumYaml: (line) => { void this.recordSheetJumpAlbumYaml(model?.albumPath, line); },
+        openEdit: () => { void this.openRecordCard?.({ filePath: path }); },
+        openField: (key) => { void this.openRecordCard?.({ filePath: path, field: key }); },
+        openStage: (key) => { void this.openRecordCard?.({ filePath: path, field: key, stage: true }); },
       },
     };
   }
@@ -101422,8 +101527,20 @@ class BobLedgerToolsRecordSheetMixin {
       const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
+    if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
+      scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
+    }
     this.recordSheetNotifyOwnership();
     return sheet;
+  }
+
+  recordSheetSetEditorHide(view, eligible) {
+    try {
+      const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
+      if (!scope || !scope.classList) return;
+      if (eligible === true) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
+      else scope.classList.remove?.(RECORD_SHEET_HIDES_CLASS);
+    } catch (_) {}
   }
 
   renderRecordSheetInReading(el, ctx) {
@@ -101554,6 +101671,7 @@ class BobLedgerToolsRecordSheetMixin {
       }
       const at = this.recordSheetAnchor(view, text);
       const signature = recordSheetSignature(model);
+      this.recordSheetSetEditorHide(view, model.hideEligible === true);
       const previous = this.recordSheetEditorCache?.get?.(view);
       if (previous && previous.path === path && previous.signature === signature && previous.anchor === at) {
         return previous.decorations;
@@ -104000,6 +104118,22 @@ class BobLedgerToolsRecordCardMixin {
     return String((album && album.stem) || "").trim();
   }
 
+  // Sheet chips open the field's stage directly: `stage: true` resolves to
+  // the target's stage kind from the sheet model, falling back to browse
+  // mode on the field when the kind cannot be resolved.
+  recordCardRequestedStage(sheetModel, fieldKey, stage) {
+    if (stage !== true) return stage || null;
+    try {
+      const report = this.recordSheetState?.()?.report || null;
+      const target = typeof recordCardTargetByKey === "function"
+        ? recordCardTargetByKey(recordCardTargets(sheetModel, report), fieldKey)
+        : null;
+      return (target && target.stageKind) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   recordCardStem(path) {
     const filePath = recordCardPath(path);
     const base = filePath.split("/").pop() || "";
@@ -104045,7 +104179,7 @@ class BobLedgerToolsRecordCardMixin {
       gate,
       writable,
       field: options.field,
-      stage: options.stage,
+      stage: this.recordCardRequestedStage(sheetModel, options.field, options.stage),
     });
     this.recordCardModal = modal;
     try { modal.open(); } catch (_) {}
@@ -152624,6 +152758,9 @@ try {
       recordSheetFolderKind,
       recordSheetGate,
       recordSheetClock,
+      recordSheetAccessName,
+      recordSheetRowValueText,
+      recordSheetBindOpen,
       recordSheetCalendarDate,
       recordSheetDatePresentation,
       recordSheetCreatedFooter,

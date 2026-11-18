@@ -6,7 +6,8 @@ description: "Inspect task lanes, Pomodoros, freshness, planning marks, and cale
 Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
 Album owner cards, group navigation, and sync controls are described in
-[Album cards](albums.md).
+[Album cards](albums.md); record sheets and the Record Card in
+[Record Card](record-card.md).
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -15,7 +16,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.132.0 |
+| Version | 1.133.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |
@@ -92,7 +93,7 @@ session) and never the badge. Bank file events and revalidation refresh it;
 its repaint clears only its host.
 
 The header holds a collapse disclosure (`BANK CHARTS`), a view glyph cycling
-Both → In / Out → Categories (when both charts are available),
+Both → In / Out → Categories (when available),
 a readout naming the hovered or focused bucket, and a resting `BALANCE`
 readout with the hero close: a bare amount at close, an as-of date while
 coverage arrives, or a muted `not imported yet` / `not imported` /
@@ -278,7 +279,7 @@ restoring the unmarked rendering:
   off-ladder `highest`) in Live Preview and rendered views. The glyph follows
   the stored Tasks value, never the ladder position; an unknown ladder omits
   P-labels instead of guessing. Digit block-mark rows fold those bars
-  while blocked-reason marks are also on.
+  while blocked-reason marks are on.
 - The date mark renders each canonical `created`/`scheduled`/`completion`/
   `cancelled` field as one monochrome glyph plus a calendar label (`today`,
   `tomorrow`, `Fri`, `Oct 22`) in Live Preview and rendered views, including
@@ -314,7 +315,7 @@ restoring the unmarked rendering:
   on), which keeps readable pills when colors are off.
 - The root mark renders each explicit `[root:: NOTE]` / `(root:: NOTE)` task
   field as a hue-dot place mark in Live Preview, Reading view, and
-  Tasks/Dataview rows. A root that is also linked in the task text collapses
+  Tasks/Dataview rows. A root linked in the task text collapses
   to its dot; child notes that roll up show a dotted label, and invalid,
   missing, or duplicate fields keep a hollow repair mark. Clicking reveals
   the source field, Mod-click opens the named note, and **Toggle root marks**
@@ -423,7 +424,7 @@ chips, plus queue, counts, lints, and status bar. `freshness.decay` carries
 per-rung allowances (`pending_keeps` for WIP, `next_keeps` for Next,
 `ready_keeps` for Ready and every P-level, each 0–999 or `false`, resolved
 against the `keeps` fallback), and `decide` is true on due PENDING and NEXT rows
-at their rung limit as well as due Ready rows, so those rows join the
+at their rung limit and due Ready rows, so those rows join the
 `counts().decide` "need a decision" total. Folded keep pips always render; leaf
 plus `Alt+F to decide` appears only with the navigation decay-card capability
 present and decay on. Due lane rows show the leaf only with navigation's
@@ -632,7 +633,7 @@ guide](../../mail-link-marks.md).
 ## Settings
 
 The **Notebook chips** setting (default on) hides live chips, keeping styling,
-links, and sync. The plugin also reads the bob config file.
+links, and sync. The plugin reads the bob config file.
 
 ## Related
 

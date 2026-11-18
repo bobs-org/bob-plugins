@@ -314,14 +314,6 @@ function modelFor(path, frontmatter, album, extra = {}) {
   });
 }
 
-function assertNoHide(root) {
-  const walk = (node) => {
-    if (node?.classList?.contains?.(HIDES)) assert.equal(HIDES, "absent");
-    for (const child of node?.children || []) walk(child);
-  };
-  walk(root);
-}
-
 function assertHomes(model, expected) {
   for (const [key, home] of Object.entries(expected)) {
     assert.equal(model.coverage[key], home, `${key} home`);
@@ -573,7 +565,7 @@ test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes
   plugin.recordSheetSetFold("eat/smashburger.md", true);
   plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(plugin._spawns, 0);
-  assertNoHide(root);
+  assert.equal(root.classList.contains(HIDES), true);
 });
 
 test("Live Preview caches decorations across body edits and rebuilds on model changes", () => {
@@ -597,20 +589,25 @@ test("Live Preview caches decorations across body edits and rebuilds on model ch
   const widget = overlayed[0].deco.widget.toDOM();
   assert.match(widget.textContent, /Loved/);
   assert.equal(widget.querySelectorAll(".bob-record-sheet-row").some((row) => row.classList.contains("is-changed")), true);
-  assert.equal(view.sourceView.classList.contains(HIDES), false);
+  assert.equal(view.sourceView.classList.contains(HIDES), true);
 });
 
 test("Source mode stays native YAML and Live Preview restores after the switch", () => {
-  const { plugin, doc } = fixture();
+  const { plugin, doc, caches } = fixture();
   plugin.notebookCatalogLivePath = LedgerToolsPlugin.prototype.notebookCatalogLivePath;
   const text = "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n";
   const source = liveView(doc, "eat/smashburger.md", text, false);
   assert.deepEqual(plugin.buildRecordSheetDecorations(source), Decoration.none);
   assert.equal(source.sourceView.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), false);
+  assert.equal(source.sourceView.classList.contains(HIDES), false);
   const live = liveView(doc, "eat/smashburger.md", text, true);
   const decorations = plugin.buildRecordSheetDecorations(live);
   assert.equal(decorations.length, 1);
   assert.equal(live.sourceView.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
+  assert.equal(live.sourceView.classList.contains(HIDES), true);
+  caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
+  live.state.doc = liveView(doc, "eat/smashburger.md", "---\ntype: [[note]]\n---\n# Smashburger\n", true).state.doc;
+  assert.deepEqual(plugin.buildRecordSheetDecorations(live), Decoration.none);
   assert.equal(live.sourceView.classList.contains(HIDES), false);
 });
 
@@ -637,7 +634,9 @@ test("Reading paints one owned sheet, ignores nested embeds, and cleans up on un
   assert.equal(embedPreview.querySelectorAll(".bob-record-sheet").length, 1);
   assert.equal(second.querySelectorAll(".bob-record-sheet").length, 1);
   assert.equal(preview.classList.contains(helpers.RECORD_SHEET_SURFACE_CLASS), true);
-  assertNoHide(preview);
+  assert.equal(preview.classList.contains(HIDES), true);
+  assert.equal(second.classList.contains(HIDES), true);
+  assert.equal(embed.classList.contains(HIDES), false, "embeds keep their own Properties");
   const detached = node(doc, "div");
   plugin.renderRecordSheetInReading(detached, { sourcePath: "eat/smashburger.md", addChild() {} });
   flush();
@@ -708,21 +707,52 @@ test("owned-path yield restores the standalone subscription header when the shee
   assert.equal(root.querySelectorAll(".bob-subscription-header").length, 1);
 });
 
-test("hide class stays dormant even when the sheet is hide-eligible", () => {
-  const { plugin, doc } = fixture();
+test("hide class applies exactly when the gate is hide-eligible", () => {
+  const { plugin, doc, caches } = fixture();
   const root = node(doc, "div", "markdown-preview-view");
   root.appendChild(node(doc, "h1", "", "Smashburger"));
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
   assert.equal(plugin.recordSheetOwnsPath("eat/smashburger.md"), true);
   assert.equal(plugin.recordSheetGateFor("eat/smashburger.md").hideEligible, true);
-  assert.equal(root.classList.contains(HIDES), false);
+  assert.equal(root.classList.contains(HIDES), true);
   assert.equal(sheet.classList.contains(HIDES), false);
   assert.equal(plugin.recordSheetEditorScopes.size, 0);
   const view = liveView(doc, "eat/smashburger.md", "---\ntype: [[record]]\nparent: [[eat]]\n---\n# Smashburger\n", true);
   plugin.buildRecordSheetDecorations(view);
-  assert.equal(view.sourceView.classList.contains(HIDES), false);
+  assert.equal(view.sourceView.classList.contains(HIDES), true);
+  const edit = root.querySelector(".bob-record-sheet-edit");
+  assert.equal(edit && edit.textContent, "⊞ Edit");
+  caches.get("eat/smashburger.md").frontmatter.type = "[[note]]";
+  assert.equal(plugin.paintRecordSheetReading(root, "eat/smashburger.md"), null);
+  assert.equal(root.classList.contains(HIDES), false);
   plugin.teardownRecordSheet();
   assert.equal(plugin.recordSheetActive, false);
+  assert.equal(view.sourceView.classList.contains(HIDES), false);
+});
+
+test("old-bob and broken-schema sheets leave Properties visible", () => {
+  const noCap = fixture({
+    albums: [albumEntry()],
+    reportExtra: { capabilities: [] },
+  });
+  const noCapRoot = node(noCap.doc, "div", "markdown-preview-view");
+  noCapRoot.appendChild(node(noCap.doc, "h1", "", "Smashburger"));
+  noCap.plugin.paintRecordSheetReading(noCapRoot, "eat/smashburger.md");
+  assert.equal(noCap.plugin.recordSheetGateFor("eat/smashburger.md").hideEligible, false);
+  assert.equal(noCap.plugin.recordSheetGateFor("eat/smashburger.md").reason, "no-capability");
+  assert.equal(noCapRoot.classList.contains(HIDES), false);
+  assert.equal(noCapRoot.querySelector(".bob-record-sheet-edit"), null);
+  const broken = albumEntry({
+    issues: [{ severity: "error", code: "album_schema_invalid", message: "bad schema", path: "eat.md", line: 1, suggestions: [] }],
+    schema_fingerprint: "",
+  });
+  const brokenWorld = fixture({ albums: [broken] });
+  const brokenRoot = node(brokenWorld.doc, "div", "markdown-preview-view");
+  brokenRoot.appendChild(node(brokenWorld.doc, "h1", "", "Smashburger"));
+  brokenWorld.plugin.paintRecordSheetReading(brokenRoot, "eat/smashburger.md");
+  assert.equal(brokenWorld.plugin.recordSheetGateFor("eat/smashburger.md").hideEligible, false);
+  assert.equal(brokenRoot.classList.contains(HIDES), false);
+  assert.equal(brokenRoot.querySelector(".bob-record-sheet-edit"), null);
 });
 
 test("midnight rollover uses the plugin tick and never leaves a hanging timeout", () => {
@@ -762,4 +792,88 @@ test("late timers after teardown do not paint, and YAML on a broken schema opens
   plugin.teardownRecordSheet();
   flush();
   assert.equal(plugin.recordSheetActive, false);
+});
+
+test("row value text and access names describe the card action", () => {
+  assert.equal(helpers.recordSheetAccessName("Status", "🔖 To try"), "Status: 🔖 To try. Change Status");
+  assert.equal(helpers.recordSheetAccessName("Notes", ""), "Change Notes");
+  assert.equal(helpers.recordSheetRowValueText({ state: "missing" }), "missing");
+  assert.equal(
+    helpers.recordSheetRowValueText({ state: "set", list: true, chips: [{ text: "a" }, { text: "b" }] }),
+    "a, b",
+  );
+  assert.equal(
+    helpers.recordSheetRowValueText({ state: "set", kind: "choice", chips: [{ text: "💚 Loved" }] }),
+    "💚 Loved",
+  );
+  assert.equal(
+    helpers.recordSheetRowValueText({ state: "set", spans: [{ text: "See " }, { text: "body", kind: "link" }] }),
+    "See body",
+  );
+});
+
+test("sheet affordances open the card: Edit, rows, chips, ghosts, missing", () => {
+  const { plugin, doc } = fixture({
+    extraCaches: {
+      "eat/bare.md": { frontmatter: { type: "[[record]]", parent: "[[eat]]", title: "Bare" }, heading: "Bare" },
+    },
+  });
+  const calls = [];
+  plugin.openRecordCard = (options) => { calls.push(options); return { ok: true }; };
+  const root = node(doc, "div", "markdown-preview-view");
+  root.appendChild(node(doc, "h1", "", "Bare"));
+  const sheet = plugin.paintRecordSheetReading(root, "eat/bare.md");
+  const edit = sheet.querySelector(".bob-record-sheet-edit");
+  assert.equal(edit && edit.textContent, "⊞ Edit");
+  assert.equal(edit.getAttribute("title"), "Edit fields (==, Ctrl+Shift+P)");
+  edit.click();
+  assert.deepEqual(calls, [{ filePath: "eat/bare.md" }]);
+  const rows = sheet.querySelectorAll(".bob-record-sheet-row");
+  const statusRow = rows.find((row) => row.getAttribute("data-record-key") === "status");
+  assert.equal(statusRow.getAttribute("role"), "button");
+  assert.equal(statusRow.getAttribute("aria-haspopup"), "dialog");
+  assert.match(statusRow.getAttribute("aria-label"), /Status: missing/);
+  statusRow.click();
+  assert.deepEqual(calls[1], { filePath: "eat/bare.md", field: "status" });
+  statusRow.dispatchEvent({ type: "keydown", key: "Enter" });
+  assert.deepEqual(calls[2], { filePath: "eat/bare.md", field: "status" });
+  const pill = sheet.querySelector(".bob-record-sheet-missing");
+  assert.equal(pill.getAttribute("data-record-key"), "status");
+  pill.click();
+  assert.deepEqual(calls[3], { filePath: "eat/bare.md", field: "status", stage: true });
+  const ghost = sheet.querySelector(".bob-record-sheet-ghost");
+  assert.equal(ghost.getAttribute("data-record-key"), "cuisine");
+  assert.equal(ghost.getAttribute("aria-label"), "Add Cuisine");
+  ghost.dispatchEvent({ type: "keydown", key: " " });
+  assert.deepEqual(calls[4], { filePath: "eat/bare.md", field: "cuisine", stage: true });
+  assert.equal(calls.length, 5);
+});
+
+test("value chips open the field stage; wikilinks keep navigation", () => {
+  const { plugin, doc } = fixture();
+  const calls = [];
+  plugin.openRecordCard = (options) => { calls.push(options); return { ok: true }; };
+  const root = node(doc, "div", "markdown-preview-view");
+  root.appendChild(node(doc, "h1", "", "Smashburger"));
+  const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  const chip = sheet.querySelector(".bob-record-sheet-chip");
+  assert.equal(chip.getAttribute("data-record-key"), "status");
+  chip.click();
+  assert.deepEqual(calls, [{ filePath: "eat/smashburger.md", field: "status", stage: true }]);
+  const rows = sheet.querySelectorAll(".bob-record-sheet-row");
+  const locationRow = rows.find((row) => row.getAttribute("data-record-key") === "location");
+  const link = locationRow.querySelector(".bob-record-sheet-link");
+  assert.ok(link, "location renders a wikilink");
+  link.click();
+  assert.equal(calls.length, 1, "wikilink clicks navigate instead of opening the card");
+});
+
+test("stage:true resolves to the field stage kind", () => {
+  const { plugin } = fixture();
+  const model = plugin.recordSheetModelFor("eat/smashburger.md");
+  assert.equal(plugin.recordCardRequestedStage(model, "status", true), "choices");
+  assert.equal(plugin.recordCardRequestedStage(model, "visited", true), "date");
+  assert.equal(plugin.recordCardRequestedStage(model, "status", undefined), null);
+  assert.equal(plugin.recordCardRequestedStage(model, "status", "text"), "text");
+  assert.equal(plugin.recordCardRequestedStage(model, "nope", true), null);
 });

@@ -108,7 +108,7 @@ function recordSheetRenderSpans(parent, doc, spans, options) {
   }
 }
 
-function recordSheetRenderChips(parent, doc, chips, options) {
+function recordSheetRenderChips(parent, doc, chips, options, openKey, openLabel) {
   for (const chip of Array.isArray(chips) ? chips : []) {
     const node = recordSheetEl(doc, "span", chip.valid === false
       ? "bob-record-sheet-chip is-invalid"
@@ -118,6 +118,11 @@ function recordSheetRenderChips(parent, doc, chips, options) {
       recordSheetRenderLink(node, doc, { text: chip.text, link: chip.link }, options);
     } else {
       recordSheetText(node, chip.text || "");
+    }
+    if (openKey && typeof options?.handlers?.openStage === "function") {
+      node.setAttribute?.("data-record-key", openKey);
+      node.setAttribute?.("aria-label", recordSheetAccessName(openLabel || openKey, (chip && chip.text) || ""));
+      recordSheetBindOpen(node, options.handlers.openStage, openKey);
     }
     parent.appendChild(node);
   }
@@ -134,6 +139,57 @@ function recordSheetBindYamlJump(node, handler, key) {
     if (keyName !== "y" && keyName !== "Y") return;
     event.preventDefault?.();
     handler?.(key);
+  });
+}
+
+function recordSheetAccessName(label, valueText) {
+  const name = String(label || "").trim() || "Field";
+  const value = String(valueText === null || valueText === undefined ? "" : valueText).trim();
+  return value ? `${name}: ${value}. Change ${name}` : `Change ${name}`;
+}
+
+function recordSheetRowValueText(row) {
+  if (!row || typeof row !== "object") return "";
+  if (row.state === "missing") return "missing";
+  const chips = Array.isArray(row.chips) ? row.chips : [];
+  if (chips.length && (row.list === true || recordSheetIsChoiceField(row))) {
+    return chips.map((chip) => String((chip && chip.text) || "").trim()).filter(Boolean).join(", ");
+  }
+  const spans = Array.isArray(row.spans) ? row.spans : [];
+  return spans.map((span) => String((span && span.text) || "")).join("").trim();
+}
+
+// Keyboard-first affordance binding: click, Enter, or Space opens the card.
+// Rows also skip clicks claimed by chip descendants, which open the stage
+// through their own binding; keydown only fires on the focused node itself
+// so chip keys never double with their row. No binding when the handler is
+// absent (pure reads).
+function recordSheetBindOpen(node, handler, key, skipSelector) {
+  if (!node || typeof node.addEventListener !== "function") return;
+  if (typeof handler !== "function" || !key) return;
+  node.setAttribute?.("tabindex", "0");
+  node.setAttribute?.("role", "button");
+  node.setAttribute?.("aria-haspopup", "dialog");
+  node.addEventListener("click", (event) => {
+    if (!event || event.defaultPrevented) return;
+    try {
+      const target = event.target;
+      if (target && typeof target.closest === "function") {
+        if (target.closest("a,button")) return;
+        if (skipSelector && target !== node && target.closest(skipSelector)) return;
+      }
+    } catch (_) {}
+    event.preventDefault?.();
+    handler(key);
+  });
+  node.addEventListener("keydown", (event) => {
+    if (!event || event.isComposing || event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const name = event.key || "";
+    if (name !== "Enter" && name !== " ") return;
+    if (event.target && event.target !== node) return;
+    event.preventDefault?.();
+    handler(key);
   });
 }
 
@@ -175,6 +231,22 @@ function recordSheetRenderCrumbs(header, model, options, doc) {
 function recordSheetRenderToolbar(header, model, options, doc) {
   const tools = recordSheetEl(doc, "div", "bob-record-sheet-tools");
   if (!tools) return null;
+  if (model && model.editable === true) {
+    const edit = recordSheetEl(doc, "button", "bob-record-sheet-edit");
+    if (edit) {
+      edit.setAttribute("type", "button");
+      edit.setAttribute("data-record-sheet-focus", "edit");
+      edit.setAttribute("aria-haspopup", "dialog");
+      edit.setAttribute("title", "Edit fields (==, Ctrl+Shift+P)");
+      edit.setAttribute("aria-label", "Edit record fields");
+      recordSheetText(edit, "⊞ Edit");
+      edit.addEventListener?.("click", (event) => {
+        event.preventDefault?.();
+        options?.handlers?.openEdit?.();
+      });
+      tools.appendChild(edit);
+    }
+  }
   const collapse = recordSheetEl(doc, "button", "bob-record-sheet-collapse");
   if (collapse) {
     collapse.setAttribute("type", "button");
@@ -199,6 +271,9 @@ function recordSheetRenderRow(list, row, options, doc) {
   if (!wrap) return null;
   wrap.setAttribute("data-record-key", row.key);
   recordSheetBindYamlJump(wrap, options?.handlers?.jumpYaml, row.key);
+  wrap.setAttribute?.("aria-label", recordSheetAccessName(row.label || row.key, recordSheetRowValueText(row)));
+  recordSheetBindOpen(wrap, options?.handlers?.openField, row.key,
+    ".bob-record-sheet-chip,.bob-record-sheet-ghost,.bob-record-sheet-missing");
   const dt = recordSheetEl(doc, "dt", "bob-record-sheet-label");
   recordSheetText(dt, row.label || row.key);
   if (dt) wrap.appendChild(dt);
@@ -212,10 +287,13 @@ function recordSheetRenderRow(list, row, options, doc) {
     recordSheetText(pill, "missing");
     if (pill) {
       pill.setAttribute("title", `${row.label || row.key} is required`);
+      pill.setAttribute?.("data-record-key", row.key);
+      pill.setAttribute?.("aria-label", recordSheetAccessName(row.label || row.key, "missing"));
+      recordSheetBindOpen(pill, options?.handlers?.openStage, row.key);
       dd.appendChild(pill);
     }
   } else if (row.chips && row.chips.length && (row.list || recordSheetIsChoiceField(row))) {
-    recordSheetRenderChips(dd, doc, row.chips, options);
+    recordSheetRenderChips(dd, doc, row.chips, options, row.key, row.label || row.key);
   } else {
     recordSheetRenderSpans(dd, doc, row.spans, options);
   }
@@ -240,6 +318,8 @@ function recordSheetRenderGhosts(sheet, model, options, doc) {
     chip.setAttribute("data-record-key", ghost.key);
     recordSheetText(chip, `＋ ${ghost.label || ghost.key}`);
     recordSheetBindYamlJump(chip, options?.handlers?.jumpYaml, ghost.key);
+    chip.setAttribute?.("aria-label", `Add ${ghost.label || ghost.key}`);
+    recordSheetBindOpen(chip, options?.handlers?.openStage, ghost.key);
     row.appendChild(chip);
   }
   sheet.appendChild(row);

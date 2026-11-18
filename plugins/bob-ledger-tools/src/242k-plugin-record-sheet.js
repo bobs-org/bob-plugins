@@ -6,6 +6,18 @@ function ensureRecordSheetRefresh() {
   return recordSheetRefreshEffect;
 }
 
+// Embedded record sheets (hover popovers, embeds) always fail open: the
+// hide class never applies inside an embed scope, so embedded notes keep
+// their own Properties.
+function recordSheetScopeIsEmbed(scope) {
+  try {
+    return Boolean(scope && typeof scope.closest === "function"
+      && scope.closest(".markdown-embed, .internal-embed"));
+  } catch (_) {
+    return false;
+  }
+}
+
 class BobLedgerToolsRecordSheetMixin {
   setupRecordSheet() {
     this.recordSheetActive = true;
@@ -306,6 +318,9 @@ class BobLedgerToolsRecordSheetMixin {
         toggleFold: (next) => this.recordSheetSetFold(path, next),
         jumpYaml: (key) => { void this.recordSheetJumpYaml(path, key); },
         jumpAlbumYaml: (line) => { void this.recordSheetJumpAlbumYaml(model?.albumPath, line); },
+        openEdit: () => { void this.openRecordCard?.({ filePath: path }); },
+        openField: (key) => { void this.openRecordCard?.({ filePath: path, field: key }); },
+        openStage: (key) => { void this.openRecordCard?.({ filePath: path, field: key, stage: true }); },
       },
     };
   }
@@ -497,8 +512,20 @@ class BobLedgerToolsRecordSheetMixin {
       const next = sheet.querySelector?.(`[data-record-sheet-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
+    if (model.hideEligible === true && !recordSheetScopeIsEmbed(scope)) {
+      scope?.classList?.add?.(RECORD_SHEET_HIDES_CLASS);
+    }
     this.recordSheetNotifyOwnership();
     return sheet;
+  }
+
+  recordSheetSetEditorHide(view, eligible) {
+    try {
+      const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
+      if (!scope || !scope.classList) return;
+      if (eligible === true) scope.classList.add?.(RECORD_SHEET_HIDES_CLASS);
+      else scope.classList.remove?.(RECORD_SHEET_HIDES_CLASS);
+    } catch (_) {}
   }
 
   renderRecordSheetInReading(el, ctx) {
@@ -629,6 +656,7 @@ class BobLedgerToolsRecordSheetMixin {
       }
       const at = this.recordSheetAnchor(view, text);
       const signature = recordSheetSignature(model);
+      this.recordSheetSetEditorHide(view, model.hideEligible === true);
       const previous = this.recordSheetEditorCache?.get?.(view);
       if (previous && previous.path === path && previous.signature === signature && previous.anchor === at) {
         return previous.decorations;

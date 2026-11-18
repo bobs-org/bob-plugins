@@ -80,11 +80,29 @@ test("gate acts for album and bank notes", () => {
   });
 });
 
-test("record notes follow album_only and fall through", () => {
+test("canonical record notes act through the Record Card", () => {
   assert.equal(helpers.schemaDoubleEqualsTargetKind({
     path: "eat/nagi.md", frontmatter: { type: "[[record]]" },
+  }), "record");
+  assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ target: "record" })), {
+    act: true, reason: "schema-key",
+  });
+});
+
+test("bank month notes keep their Vim reindent", () => {
+  assert.equal(helpers.schemaDoubleEqualsTargetKind({
+    path: "bank/2026-11.md", frontmatter: { type: "[[bank_month]]" },
   }), null);
   assert.equal(helpers.schemaDoubleEqualsGate(actingInput({ target: null })).reason, "not-schema-note");
+});
+
+test("mixed record types fall through", () => {
+  assert.equal(helpers.schemaDoubleEqualsTargetKind({
+    path: "eat/nagi.md", frontmatter: { type: ["[[record]]", "[[album]]"] },
+  }), "album");
+  assert.equal(helpers.schemaDoubleEqualsTargetKind({
+    path: "eat/nagi.md", frontmatter: { type: ["[[record]]", "[[area]]"] },
+  }), null);
 });
 
 test("area, project, and daily notes fall through", () => {
@@ -300,6 +318,7 @@ function makeHarness(path, options = {}) {
   const view = makeView(path, options);
   const albumCalls = [];
   const bankCalls = [];
+  const recordCalls = [];
   const handleKeyCalls = [];
   const win = makeListenerHost();
   const doc = makeListenerHost();
@@ -326,7 +345,8 @@ function makeHarness(path, options = {}) {
   });
   plugin.openAlbumSchemaEntry = (args) => { albumCalls.push(args); };
   plugin.openBankSetupCard = (args) => { bankCalls.push(args); };
-  return { plugin, view, win, doc, albumCalls, bankCalls, handleKeyCalls };
+  plugin.openRecordCard = (args) => { recordCalls.push(args); };
+  return { plugin, view, win, doc, albumCalls, bankCalls, recordCalls, handleKeyCalls };
 }
 
 function withGlobals(win, doc, fn) {
@@ -383,7 +403,55 @@ test("ordinary notes keep native ==", () => {
     assert.equal(harness.handleKeyCalls.length, 0);
     assert.equal(harness.albumCalls.length, 0);
     assert.equal(harness.bankCalls.length, 0);
+    assert.equal(harness.recordCalls.length, 0);
   });
+});
+
+test("record note consumes ==, injects Esc, and opens the Record Card", () => {
+  const content = "# Nagi\n";
+  const harness = makeHarness("eat/nagi.md", {
+    frontmatter: { type: "[[record]]" },
+    content,
+  });
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    const event = makeKeyEvent();
+    harness.win.dispatch(event);
+    assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+    assert.deepEqual(harness.handleKeyCalls, [[harness.view.cm, "<Esc>", "mapping"]]);
+    assert.deepEqual(harness.recordCalls, [{ filePath: "eat/nagi.md" }]);
+    assert.equal(harness.albumCalls.length, 0);
+    assert.equal(harness.bankCalls.length, 0);
+    assert.equal(harness.view.cm.getValue(), content);
+  });
+});
+
+test("counted and register == on records keep native reindent", () => {
+  for (const vimState of [
+    {
+      insertMode: false, visualMode: false, replaceMode: false,
+      inputState: {
+        operator: "indentAuto", keyBuffer: [], prefixRepeat: ["3"], motionRepeat: [], registerName: null,
+      },
+    },
+    {
+      insertMode: false, visualMode: false, replaceMode: false,
+      inputState: {
+        operator: "indentAuto", keyBuffer: [], prefixRepeat: [], motionRepeat: [], registerName: "a",
+      },
+    },
+  ]) {
+    const harness = makeHarness("eat/nagi.md", {
+      frontmatter: { type: "[[record]]" },
+      vimState,
+    });
+    withGlobals(harness.win, harness.doc, () => {
+      harness.plugin.setupSchemaDoubleEquals();
+      harness.win.dispatch(makeKeyEvent());
+      assert.equal(harness.recordCalls.length, 0);
+      assert.equal(harness.handleKeyCalls.length, 0);
+    });
+  }
 });
 
 test("window plus document dispatch of the same event acts once", () => {

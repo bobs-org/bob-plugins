@@ -1,10 +1,11 @@
-// Album-only Task Card chord fallback (schema-entrypoints). Ctrl+Shift+P
-// opens the Schema Card on album notes only where the Task Card has no
-// target. Actual tasks and existing property routes retain priority: this
-// fallback never swallows a recognized Task Card target merely because its
-// own operation refuses. No second unconditional Ctrl+Shift+P registration;
-// the existing `set-bullet-property` command calls here after Task Link and
-// dependency/relation targeting have had priority.
+// Task Card chord fallback (schema-entrypoints). Ctrl+Shift+P opens the
+// Schema Card on album notes and the Record Card on record notes where the
+// Task Card has no target. Actual tasks and existing property routes retain
+// priority: this fallback never swallows a recognized Task Card target
+// merely because its own operation refuses. No second unconditional
+// Ctrl+Shift+P registration; the existing `set-bullet-property` command
+// calls here after Task Link and dependency/relation targeting have had
+// priority.
 function albumSchemaFallbackGate(state = {}) {
   if (state.countExplicit === true || state.hasTaskSession === true) {
     return { attempt: false, reason: "counted" };
@@ -112,6 +113,15 @@ class BobNavigationHotkeysAlbumSchemaFallbackMixin {
       target = null;
     }
     if (!target || target.ok !== true) return { handled: false, reason: target?.reason || "not-album" };
+    if (target.kind === "record-parent") {
+      if (typeof ledger.openRecordCard !== "function") {
+        return { handled: false, reason: "not-direct-album" };
+      }
+      try {
+        void ledger.openRecordCard({ filePath });
+      } catch (_) {}
+      return { handled: true, reason: "record-fallback", albumPath: target.albumPath };
+    }
     if (target.kind !== "album") return { handled: false, reason: "not-direct-album" };
     try {
       void ledger.openAlbumSchemaEntry({ filePath });

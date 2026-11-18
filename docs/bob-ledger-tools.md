@@ -5,8 +5,7 @@ description: "Inspect task lanes, Pomodoros, freshness, planning marks, and cale
 
 Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
-Album owner cards, group navigation, and sync controls are described in
-[Album cards](albums.md); record sheets and the Record Card in
+Album cards and sync: [Album cards](albums.md); record titles and editing:
 [Record Card](record-card.md).
 
 <!-- BEGIN GENERATED: facts -->
@@ -16,7 +15,7 @@ Album owner cards, group navigation, and sync controls are described in
 | --- | --- |
 | Name | Bob Ledger Tools |
 | ID | `bob-ledger-tools` |
-| Version | 1.133.0 |
+| Version | 1.134.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Render Bob’s task and Pomodoro information in Obsidian: planning and freshness marks, dependencies, relations, calendar events, task types, and ledger navigation. Report-driven cards cover bank subscriptions, Stats, Reading Board, albums, projects, and areas. Snippets, session toggles, and versioned APIs connect these views to Bob and other Bob plugins. |

@@ -100400,10 +100400,7 @@ function recordSheetModel(input = {}) {
     ? frontmatter.title
     : undefined;
   const titleText = title == null ? "" : String(title).trim();
-  const titleHome = !titleText ? "absent"
-    : heading && titleText === heading ? "heading"
-      : "fold";
-  if (titleText) coverage.title = titleHome;
+  if (titleText) coverage.title = "sheet";
   const createdPresent = frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "created");
   const createdFooter = createdPresent ? recordSheetCreatedFooter(frontmatter.created, clock) : null;
   const createdInvalid = createdPresent && !recordSheetIsEmpty(frontmatter.created) && !createdFooter;
@@ -100443,15 +100440,6 @@ function recordSheetModel(input = {}) {
 
   const schemaKeys = new Set(fields.map((field) => field.key));
   const fold = [];
-  if (titleHome === "fold") {
-    fold.push({
-      key: "title",
-      label: "Title",
-      text: titleText,
-      lint: heading ? "differs from heading" : "",
-      spans: [{ kind: "text", text: titleText }],
-    });
-  }
   if (createdInvalid) {
     fold.push({
       key: "created",
@@ -100489,13 +100477,16 @@ function recordSheetModel(input = {}) {
   const subscription = input.subscription && input.subscription.kind === "header" ? input.subscription : null;
   const fieldCount = fields.length;
   const collapsedChips = choiceChips.flatMap((group) => group.chips);
+  const stem = typeof notebookHeaderStem === "function"
+    ? notebookHeaderStem(gate.filePath)
+    : String(gate.filePath || "").split("/").pop().replace(/\.md$/i, "");
   return {
     path: gate.filePath,
     albumPath: gate.albumPath,
     albumStem: String(album.stem || ""),
     albumTitle,
     noun,
-    title: heading || titleText || albumTitle,
+    title: titleText || heading || stem || albumTitle,
     heading,
     crumbs,
     emoji: album.emoji == null ? "" : String(album.emoji),
@@ -100822,6 +100813,21 @@ function recordSheetRenderToolbar(header, model, options, doc) {
   return tools;
 }
 
+function recordSheetRenderTitleRow(header, model, options, doc) {
+  const row = recordSheetEl(doc, "div", "bob-record-sheet-title-row");
+  if (!row) return null;
+  const title = recordSheetEl(doc, "div", "bob-record-sheet-title");
+  if (title) {
+    title.setAttribute?.("role", "heading");
+    title.setAttribute?.("aria-level", "1");
+    recordSheetText(title, model.title || "Record");
+    row.appendChild(title);
+  }
+  recordSheetRenderToolbar(row, model, options, doc);
+  header.appendChild(row);
+  return row;
+}
+
 function recordSheetRenderRow(list, row, options, doc) {
   const wrap = recordSheetEl(doc, "div", row.changed
     ? "bob-record-sheet-row is-changed"
@@ -100949,8 +100955,8 @@ function recordSheetBuildEl(model, options = {}, doc) {
   if (model.state) sheet.setAttribute("data-record-state", model.state);
   const header = recordSheetEl(host, "header", "bob-record-sheet-header");
   if (header) {
-    recordSheetRenderCrumbs(header, model, options, host);
-    recordSheetRenderToolbar(header, model, options, host);
+    recordSheetRenderTitleRow(header, model, options, host);
+    if (!model.collapsed || model.broken) recordSheetRenderCrumbs(header, model, options, host);
     sheet.appendChild(header);
   }
   if (model.broken) {
@@ -100977,6 +100983,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
   if (model.collapsed) {
     const summary = recordSheetEl(host, "div", "bob-record-sheet-summary");
     if (summary) {
+      recordSheetRenderCrumbs(summary, model, options, host);
       recordSheetRenderChips(summary, host, model.choiceChips, options);
       if (Number.isInteger(model.fieldCount)) {
         const count = recordSheetEl(host, "span", "bob-record-sheet-field-count");
@@ -101055,7 +101062,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetOwnedKey = "";
     this.recordSheetDomBuilds = 0;
     this.recordSheetRefreshTimer = null;
-    this.recordSheetDay = typeof albumLocalDate === "function" ? albumLocalDate() : "";
+    this.recordSheetReadingViewMountTimer = null;
+    this.recordSheetDay = this.recordSheetToday();
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderRecordSheetInReading(el, ctx), 49);
     const extension = this.createRecordSheetExtension();
     if (extension) this.registerEditorExtension?.(extension);
@@ -101068,7 +101076,18 @@ class BobLedgerToolsRecordSheetMixin {
     try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
-        this.registerEvent(cache.on("changed", (file) => this.recordSheetOnMetadata(file)));
+        this.registerEvent(cache.on("changed", (file) => {
+          this.recordSheetOnMetadata(file);
+          this.scheduleRecordSheetReadingViewMount();
+        }));
+      }
+    } catch (_) {}
+    try {
+      const workspace = this.app?.workspace;
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        for (const event of ["layout-change", "file-open"]) {
+          this.registerEvent(workspace.on(event, () => this.scheduleRecordSheetReadingViewMount()));
+        }
       }
     } catch (_) {}
   }
@@ -101079,6 +101098,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetUnsubscribe = null;
     this.albumClearTimeout?.(this.recordSheetRefreshTimer);
     this.recordSheetRefreshTimer = null;
+    this.albumClearTimeout?.(this.recordSheetReadingViewMountTimer);
+    this.recordSheetReadingViewMountTimer = null;
     for (const timer of this.recordSheetReadingTimers?.values?.() || []) this.albumClearTimeout?.(timer);
     this.recordSheetReadingTimers?.clear();
     this.recordSheetReadingPending?.clear();
@@ -101099,11 +101120,15 @@ class BobLedgerToolsRecordSheetMixin {
 
   refreshRecordSheetForRollover(now = new Date()) {
     if (!this.recordSheetActive) return false;
-    const today = typeof albumLocalDate === "function" ? albumLocalDate(now) : "";
+    const today = this.recordSheetToday(now);
     if (!today || today === this.recordSheetDay) return false;
     this.recordSheetDay = today;
     this.scheduleRecordSheetRefresh();
     return true;
+  }
+
+  recordSheetToday(now = new Date()) {
+    return typeof albumLocalDate === "function" ? albumLocalDate(now) : "";
   }
 
   recordSheetOnMetadata(file) {
@@ -101540,6 +101565,79 @@ class BobLedgerToolsRecordSheetMixin {
     return sheet;
   }
 
+  recordSheetHasFrontmatterOnlyBody(source) {
+    const text = String(source == null ? "" : source);
+    const end = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    if (end < 0) return false;
+    return text.split(/\r?\n/).slice(end + 1).join("\n").trim() === "";
+  }
+
+  recordSheetReadingViewSurface(view) {
+    try {
+      const mode = typeof view?.getMode === "function" ? view.getMode() : "";
+      if (mode && mode !== "preview") return null;
+      const container = view?.containerEl || view?.contentEl || view?.dom;
+      if (!container) return null;
+      const preview = container.matches?.(".markdown-preview-view")
+        ? container : container.querySelector?.(".markdown-preview-view");
+      if (!preview) return null;
+      const sizer = preview.querySelector?.(".markdown-preview-sizer");
+      return this.recordSheetReadingRoot(sizer || preview);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  scheduleRecordSheetReadingViewMount() {
+    if (!this.recordSheetActive || this.recordSheetReadingViewMountTimer != null) return;
+    this.recordSheetReadingViewMountTimer = this.albumSetTimeout(() => {
+      this.recordSheetReadingViewMountTimer = null;
+      void this.mountRecordSheetFrontmatterOnlyViews();
+    }, 0);
+  }
+
+  async mountRecordSheetFrontmatterOnlyViews() {
+    if (!this.recordSheetActive) return;
+    const workspace = this.app?.workspace;
+    let leaves = [];
+    try { leaves = workspace?.getLeavesOfType?.("markdown") || []; } catch (_) {}
+    const seen = new Set();
+    for (const leaf of leaves) {
+      if (!this.recordSheetActive) return;
+      const view = leaf?.view;
+      const path = recordSheetPath(view?.file?.path);
+      const surface = this.recordSheetReadingViewSurface(view);
+      if (!path || !surface) continue;
+      const source = await this.recordSheetReadSource(path);
+      if (!this.recordSheetActive) return;
+      if (!this.recordSheetHasFrontmatterOnlyBody(source)) continue;
+      let widget = Array.from(this.recordSheetReading || []).find((item) =>
+        item.viewFallback === true && item.view === view);
+      if (widget && (widget.path !== path || widget.surface !== surface)) {
+        this.recordSheetReading.delete(widget);
+        this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
+        widget = null;
+      }
+      const owner = Array.from(this.recordSheetReading || []).find((item) =>
+        item.surface === surface && item.path === path);
+      if (owner && owner !== widget) {
+        seen.add(owner);
+        continue;
+      }
+      if (!widget) {
+        widget = { el: surface, path, surface, scope: this.recordSheetReadingScope(surface), view, viewFallback: true };
+        this.recordSheetReading.add(widget);
+      }
+      seen.add(widget);
+    }
+    for (const widget of Array.from(this.recordSheetReading || [])) {
+      if (widget.viewFallback !== true || seen.has(widget)) continue;
+      this.recordSheetReading.delete(widget);
+      this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
+    }
+    this.refreshRecordSheetReading();
+  }
+
   recordSheetSetEditorHide(view, eligible) {
     try {
       const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
@@ -101587,6 +101685,7 @@ class BobLedgerToolsRecordSheetMixin {
     }
     widget.el = el;
     widget.path = ctx.sourcePath;
+    widget.viewFallback = false;
     widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
     const binding = {};
     widget.binding = binding;
@@ -106069,6 +106168,14 @@ function notebookHeaderNoteTitle(path, metadataCache, vault) {
     const cache = file && metadataCache && typeof metadataCache.getFileCache === "function"
       ? metadataCache.getFileCache(file)
       : null;
+    const frontmatter = cache && cache.frontmatter && typeof cache.frontmatter === "object"
+      ? cache.frontmatter : null;
+    const types = frontmatter && typeof albumTypeNames === "function"
+      ? albumTypeNames(frontmatter.type) : [];
+    if (types.length === 1 && types[0] === "record") {
+      const title = frontmatter.title == null ? "" : String(frontmatter.title).trim();
+      if (title) return title;
+    }
     const heading = cache && Array.isArray(cache.headings)
       ? cache.headings.find((row) => row && row.level === 1 && row.heading)
       : null;

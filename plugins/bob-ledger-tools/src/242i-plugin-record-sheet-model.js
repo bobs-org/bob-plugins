@@ -656,10 +656,7 @@ function recordSheetModel(input = {}) {
     ? frontmatter.title
     : undefined;
   const titleText = title == null ? "" : String(title).trim();
-  const titleHome = !titleText ? "absent"
-    : heading && titleText === heading ? "heading"
-      : "fold";
-  if (titleText) coverage.title = titleHome;
+  if (titleText) coverage.title = "sheet";
   const createdPresent = frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, "created");
   const createdFooter = createdPresent ? recordSheetCreatedFooter(frontmatter.created, clock) : null;
   const createdInvalid = createdPresent && !recordSheetIsEmpty(frontmatter.created) && !createdFooter;
@@ -699,15 +696,6 @@ function recordSheetModel(input = {}) {
 
   const schemaKeys = new Set(fields.map((field) => field.key));
   const fold = [];
-  if (titleHome === "fold") {
-    fold.push({
-      key: "title",
-      label: "Title",
-      text: titleText,
-      lint: heading ? "differs from heading" : "",
-      spans: [{ kind: "text", text: titleText }],
-    });
-  }
   if (createdInvalid) {
     fold.push({
       key: "created",
@@ -745,13 +733,16 @@ function recordSheetModel(input = {}) {
   const subscription = input.subscription && input.subscription.kind === "header" ? input.subscription : null;
   const fieldCount = fields.length;
   const collapsedChips = choiceChips.flatMap((group) => group.chips);
+  const stem = typeof notebookHeaderStem === "function"
+    ? notebookHeaderStem(gate.filePath)
+    : String(gate.filePath || "").split("/").pop().replace(/\.md$/i, "");
   return {
     path: gate.filePath,
     albumPath: gate.albumPath,
     albumStem: String(album.stem || ""),
     albumTitle,
     noun,
-    title: heading || titleText || albumTitle,
+    title: titleText || heading || stem || albumTitle,
     heading,
     crumbs,
     emoji: album.emoji == null ? "" : String(album.emoji),

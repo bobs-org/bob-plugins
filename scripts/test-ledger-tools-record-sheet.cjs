@@ -414,7 +414,7 @@ test("eat, movies, sase, and subscription fixtures cover every authored key once
   const eat = modelFor("eat/smashburger.md", eatFm, albumEntry(), { heading: "Smashburger" });
   assert.deepEqual(eat.rows.map((row) => row.key), ["status", "cuisine", "location", "visited", "notes"]);
   assertHomes(eat, {
-    parent: "breadcrumb", type: "identity", title: "heading", created: "footer",
+    parent: "breadcrumb", type: "identity", title: "sheet", created: "footer",
     status: "row", cuisine: "row", location: "row", visited: "row", notes: "row",
     old_place: "fold", extra: "fold",
   });
@@ -429,7 +429,7 @@ test("eat, movies, sase, and subscription fixtures cover every authored key once
   }, moviesAlbum(), { heading: "Heat" });
   assert.deepEqual(movie.rows.map((row) => row.key), ["status"]);
   assert.deepEqual(movie.ghosts.map((row) => row.key), ["watched_on", "rating"]);
-  assertHomes(movie, { parent: "breadcrumb", type: "identity", title: "heading", status: "row", watched_on: "ghost", rating: "ghost" });
+  assertHomes(movie, { parent: "breadcrumb", type: "identity", title: "sheet", status: "row", watched_on: "ghost", rating: "ghost" });
 
   const bead = modelFor("sase/bead_lifecycle.md", {
     type: "[[record]]", parent: "[[sase]]", title: "Bead lifecycle", created: "2026-11-17T07:55:00",
@@ -451,7 +451,7 @@ test("eat, movies, sase, and subscription fixtures cover every authored key once
   assert.match(sub.rows.find((row) => row.key === "amount").text, /\$9\.99/);
   assert.deepEqual(sub.rows.find((row) => row.key === "match").chips.map((chip) => chip.text), ["TUNELY*MEDIA", "Tunely, Inc"]);
   assertHomes(sub, {
-    parent: "breadcrumb", type: "identity", title: "heading",
+    parent: "breadcrumb", type: "identity", title: "sheet",
     status: "row", amount: "row", cadence: "row", match: "row", recur_id: "row", url: "row",
   });
 });
@@ -483,18 +483,18 @@ test("invalid shapes stay visible and never coerce; missing differs from empty",
   assert.equal(bounds.rows.find((row) => row.key === "rating").state, "invalid");
 });
 
-test("title and created coverage follows H1 agreement, missing H1, and invalid dates", () => {
+test("title lives in the sheet regardless of H1 agreement; created coverage is unchanged", () => {
   const base = {
     type: "[[record]]", parent: "[[eat]]", title: "Smashburger", created: "2025-08-08", status: "to_try",
   };
   const match = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "Smashburger" });
-  assert.equal(match.coverage.title, "heading");
+  assert.equal(match.coverage.title, "sheet");
   assert.equal(match.fold.some((item) => item.key === "title"), false);
   const mismatch = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "A burger" });
-  assert.equal(mismatch.coverage.title, "fold");
-  assert.match(mismatch.fold.find((item) => item.key === "title").lint, /heading/);
+  assert.equal(mismatch.coverage.title, "sheet");
+  assert.equal(mismatch.fold.some((item) => item.key === "title"), false);
   const noH1 = modelFor("eat/smashburger.md", base, albumEntry(), { heading: "" });
-  assert.equal(noH1.coverage.title, "fold");
+  assert.equal(noH1.coverage.title, "sheet");
   const invalidCreated = modelFor("eat/smashburger.md", { ...base, created: "soon" }, albumEntry(), { heading: "Smashburger" });
   assert.equal(invalidCreated.coverage.created, "fold");
   assert.equal(invalidCreated.createdFooter, null);
@@ -504,6 +504,63 @@ test("title and created coverage follows H1 agreement, missing H1, and invalid d
   assert.equal(absentCreated.coverage.created, undefined);
   const yesterday = modelFor("eat/smashburger.md", { ...base, created: "2026-11-16" }, albumEntry(), { heading: "Smashburger" });
   assert.equal(yesterday.createdFooter, "added yesterday");
+});
+
+test("title row uses literal frontmatter title, then H1, then filename stem", () => {
+  const { plugin, doc, caches } = fixture();
+  const record = caches.get("eat/smashburger.md");
+  record.frontmatter.title = "  [[x]] <b> #tag  ";
+  record.headings = [{ level: 1, heading: "Legacy heading" }];
+  const root = node(doc, "div", "markdown-preview-view");
+  const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  const title = sheet.querySelector(".bob-record-sheet-title");
+  assert.equal(title.tagName, "DIV");
+  assert.equal(title.getAttribute("role"), "heading");
+  assert.equal(title.getAttribute("aria-level"), "1");
+  assert.equal(title.textContent, "[[x]] <b> #tag");
+  assert.equal(title.querySelector("b"), null, "title markup stays text");
+  assert.equal(sheet.getAttribute("aria-label"), "[[x]] <b> #tag record details");
+
+  delete record.frontmatter.title;
+  const legacyTitle = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  assert.equal(legacyTitle.querySelector(".bob-record-sheet-title").textContent, "Legacy heading");
+  record.headings = [];
+  const stemTitle = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  assert.equal(stemTitle.querySelector(".bob-record-sheet-title").textContent, "smashburger");
+
+  const broken = albumEntry({
+    issues: [{ severity: "error", code: "album_schema_invalid", message: "bad schema", path: "eat.md", line: 1, suggestions: [] }],
+    schema_fingerprint: "",
+  });
+  const brokenWorld = fixture({ albums: [broken] });
+  const brokenRoot = node(brokenWorld.doc, "div", "markdown-preview-view");
+  const brokenSheet = brokenWorld.plugin.paintRecordSheetReading(brokenRoot, "eat/smashburger.md");
+  assert.equal(brokenSheet.querySelector(".bob-record-sheet-title").textContent, "Smashburger");
+  assert.match(brokenSheet.querySelector(".bob-record-sheet-warning").textContent, /bad schema/);
+});
+
+test("record link labels prefer frontmatter title over a legacy H1", () => {
+  const { app, caches } = fixture();
+  caches.get("eat/smashburger.md").headings = [{ level: 1, heading: "Old heading" }];
+  const linked = helpers.recordSheetValueModel(field("related", "link"), "[[eat/smashburger]]", {
+    clock: CLOCK,
+    sourcePath: "sase/bead_lifecycle.md",
+    metadataCache: app.metadataCache,
+    vault: app.vault,
+  });
+  assert.equal(linked.text, "Smashburger");
+  assert.equal(linked.spans[0].text, "Smashburger");
+});
+
+test("Live Preview places H1-less sheets after frontmatter and before body sections", () => {
+  const { plugin, doc } = fixture();
+  const frontmatterOnly = "---\ntitle: Bare\n---\n";
+  const notesBody = `${frontmatterOnly}## Notes\n\n- item`;
+  const legacyH1 = `${frontmatterOnly}# Bare\n\n## Notes\n`;
+  assert.equal(plugin.recordSheetAnchor(liveView(doc, "eat/bare.md", frontmatterOnly), frontmatterOnly), frontmatterOnly.length);
+  assert.equal(plugin.recordSheetAnchor(liveView(doc, "eat/bare.md", notesBody), notesBody), notesBody.indexOf("## Notes"));
+  const headingEnd = legacyH1.indexOf("\n", legacyH1.indexOf("# Bare"));
+  assert.equal(plugin.recordSheetAnchor(liveView(doc, "eat/bare.md", legacyH1), legacyH1), headingEnd);
 });
 
 test("collapsed summary leads with the group choice and keeps per-path fold state", () => {
@@ -757,17 +814,50 @@ test("old-bob and broken-schema sheets leave Properties visible", () => {
 
 test("midnight rollover uses the plugin tick and never leaves a hanging timeout", () => {
   const { plugin, flush, timers } = fixture();
+  const dateText = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  plugin.recordSheetToday = (now) => now ? dateText(now) : "2032-05-06";
   plugin.setupRecordSheet();
+  assert.equal(plugin.recordSheetDay, "2032-05-06");
   assert.equal(plugin.recordSheetMidnightTimer == null || plugin.recordSheetMidnightTimer === undefined, true);
-  assert.equal(plugin.refreshRecordSheetForRollover(new Date(2026, 10, 17, 12, 0, 0)), false);
-  plugin.recordSheetDay = "2026-11-17";
-  assert.equal(plugin.refreshRecordSheetForRollover(new Date(2026, 10, 18, 0, 1, 0)), true);
-  assert.equal(plugin.recordSheetDay, "2026-11-18");
+  assert.equal(plugin.refreshRecordSheetForRollover(new Date(2032, 4, 6, 12, 0, 0)), false);
+  assert.equal(plugin.refreshRecordSheetForRollover(new Date(2032, 4, 7, 0, 1, 0)), true);
+  assert.equal(plugin.recordSheetDay, "2032-05-07");
   assert.equal(timers.size > 0, true);
   plugin.teardownRecordSheet();
   flush();
   assert.equal(plugin.recordSheetActive, false);
   assert.equal(timers.size, 0);
+});
+
+test("Reading view fallback mounts frontmatter-only records once and merges with post-processing", async () => {
+  const source = "---\ntype: [[record]]\nparent: [[eat]]\ntitle: Bare\n---\n";
+  const { plugin, doc, app, flush } = fixture({
+    extraCaches: { "eat/bare.md": { frontmatter: { type: "[[record]]", parent: "[[eat]]", title: "Bare" }, heading: "" } },
+    sources: { "eat/bare.md": source },
+  });
+  const preview = node(doc, "div", "markdown-preview-view");
+  const sizer = node(doc, "div", "markdown-preview-sizer");
+  preview.appendChild(sizer);
+  const view = { file: { path: "eat/bare.md" }, containerEl: preview, getMode: () => "preview" };
+  app.workspace.getLeavesOfType = () => [{ view }];
+  plugin.setupRecordSheet();
+
+  await plugin.mountRecordSheetFrontmatterOnlyViews();
+  assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 1);
+  assert.equal(sizer.querySelector(".bob-record-sheet-title").textContent, "Bare");
+  await plugin.mountRecordSheetFrontmatterOnlyViews();
+  assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 1);
+
+  const children = [];
+  plugin.renderRecordSheetInReading(sizer, {
+    sourcePath: "eat/bare.md",
+    addChild(child) { children.push(child); },
+  });
+  flush();
+  assert.equal(plugin.recordSheetReading.size, 1);
+  assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 1);
+  plugin.teardownRecordSheet();
+  assert.equal(sizer.querySelectorAll(".bob-record-sheet").length, 0);
 });
 
 test("late timers after teardown do not paint, and YAML on a broken schema opens the album", async () => {

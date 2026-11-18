@@ -264,6 +264,21 @@ function recordSheetRenderToolbar(header, model, options, doc) {
   return tools;
 }
 
+function recordSheetRenderTitleRow(header, model, options, doc) {
+  const row = recordSheetEl(doc, "div", "bob-record-sheet-title-row");
+  if (!row) return null;
+  const title = recordSheetEl(doc, "div", "bob-record-sheet-title");
+  if (title) {
+    title.setAttribute?.("role", "heading");
+    title.setAttribute?.("aria-level", "1");
+    recordSheetText(title, model.title || "Record");
+    row.appendChild(title);
+  }
+  recordSheetRenderToolbar(row, model, options, doc);
+  header.appendChild(row);
+  return row;
+}
+
 function recordSheetRenderRow(list, row, options, doc) {
   const wrap = recordSheetEl(doc, "div", row.changed
     ? "bob-record-sheet-row is-changed"
@@ -391,8 +406,8 @@ function recordSheetBuildEl(model, options = {}, doc) {
   if (model.state) sheet.setAttribute("data-record-state", model.state);
   const header = recordSheetEl(host, "header", "bob-record-sheet-header");
   if (header) {
-    recordSheetRenderCrumbs(header, model, options, host);
-    recordSheetRenderToolbar(header, model, options, host);
+    recordSheetRenderTitleRow(header, model, options, host);
+    if (!model.collapsed || model.broken) recordSheetRenderCrumbs(header, model, options, host);
     sheet.appendChild(header);
   }
   if (model.broken) {
@@ -419,6 +434,7 @@ function recordSheetBuildEl(model, options = {}, doc) {
   if (model.collapsed) {
     const summary = recordSheetEl(host, "div", "bob-record-sheet-summary");
     if (summary) {
+      recordSheetRenderCrumbs(summary, model, options, host);
       recordSheetRenderChips(summary, host, model.choiceChips, options);
       if (Number.isInteger(model.fieldCount)) {
         const count = recordSheetEl(host, "span", "bob-record-sheet-field-count");

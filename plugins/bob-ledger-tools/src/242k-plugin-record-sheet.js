@@ -34,7 +34,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetOwnedKey = "";
     this.recordSheetDomBuilds = 0;
     this.recordSheetRefreshTimer = null;
-    this.recordSheetDay = typeof albumLocalDate === "function" ? albumLocalDate() : "";
+    this.recordSheetReadingViewMountTimer = null;
+    this.recordSheetDay = this.recordSheetToday();
     this.registerMarkdownPostProcessor?.((el, ctx) => this.renderRecordSheetInReading(el, ctx), 49);
     const extension = this.createRecordSheetExtension();
     if (extension) this.registerEditorExtension?.(extension);
@@ -47,7 +48,18 @@ class BobLedgerToolsRecordSheetMixin {
     try {
       const cache = this.app?.metadataCache;
       if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
-        this.registerEvent(cache.on("changed", (file) => this.recordSheetOnMetadata(file)));
+        this.registerEvent(cache.on("changed", (file) => {
+          this.recordSheetOnMetadata(file);
+          this.scheduleRecordSheetReadingViewMount();
+        }));
+      }
+    } catch (_) {}
+    try {
+      const workspace = this.app?.workspace;
+      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
+        for (const event of ["layout-change", "file-open"]) {
+          this.registerEvent(workspace.on(event, () => this.scheduleRecordSheetReadingViewMount()));
+        }
       }
     } catch (_) {}
   }
@@ -58,6 +70,8 @@ class BobLedgerToolsRecordSheetMixin {
     this.recordSheetUnsubscribe = null;
     this.albumClearTimeout?.(this.recordSheetRefreshTimer);
     this.recordSheetRefreshTimer = null;
+    this.albumClearTimeout?.(this.recordSheetReadingViewMountTimer);
+    this.recordSheetReadingViewMountTimer = null;
     for (const timer of this.recordSheetReadingTimers?.values?.() || []) this.albumClearTimeout?.(timer);
     this.recordSheetReadingTimers?.clear();
     this.recordSheetReadingPending?.clear();
@@ -78,11 +92,15 @@ class BobLedgerToolsRecordSheetMixin {
 
   refreshRecordSheetForRollover(now = new Date()) {
     if (!this.recordSheetActive) return false;
-    const today = typeof albumLocalDate === "function" ? albumLocalDate(now) : "";
+    const today = this.recordSheetToday(now);
     if (!today || today === this.recordSheetDay) return false;
     this.recordSheetDay = today;
     this.scheduleRecordSheetRefresh();
     return true;
+  }
+
+  recordSheetToday(now = new Date()) {
+    return typeof albumLocalDate === "function" ? albumLocalDate(now) : "";
   }
 
   recordSheetOnMetadata(file) {
@@ -519,6 +537,79 @@ class BobLedgerToolsRecordSheetMixin {
     return sheet;
   }
 
+  recordSheetHasFrontmatterOnlyBody(source) {
+    const text = String(source == null ? "" : source);
+    const end = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
+    if (end < 0) return false;
+    return text.split(/\r?\n/).slice(end + 1).join("\n").trim() === "";
+  }
+
+  recordSheetReadingViewSurface(view) {
+    try {
+      const mode = typeof view?.getMode === "function" ? view.getMode() : "";
+      if (mode && mode !== "preview") return null;
+      const container = view?.containerEl || view?.contentEl || view?.dom;
+      if (!container) return null;
+      const preview = container.matches?.(".markdown-preview-view")
+        ? container : container.querySelector?.(".markdown-preview-view");
+      if (!preview) return null;
+      const sizer = preview.querySelector?.(".markdown-preview-sizer");
+      return this.recordSheetReadingRoot(sizer || preview);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  scheduleRecordSheetReadingViewMount() {
+    if (!this.recordSheetActive || this.recordSheetReadingViewMountTimer != null) return;
+    this.recordSheetReadingViewMountTimer = this.albumSetTimeout(() => {
+      this.recordSheetReadingViewMountTimer = null;
+      void this.mountRecordSheetFrontmatterOnlyViews();
+    }, 0);
+  }
+
+  async mountRecordSheetFrontmatterOnlyViews() {
+    if (!this.recordSheetActive) return;
+    const workspace = this.app?.workspace;
+    let leaves = [];
+    try { leaves = workspace?.getLeavesOfType?.("markdown") || []; } catch (_) {}
+    const seen = new Set();
+    for (const leaf of leaves) {
+      if (!this.recordSheetActive) return;
+      const view = leaf?.view;
+      const path = recordSheetPath(view?.file?.path);
+      const surface = this.recordSheetReadingViewSurface(view);
+      if (!path || !surface) continue;
+      const source = await this.recordSheetReadSource(path);
+      if (!this.recordSheetActive) return;
+      if (!this.recordSheetHasFrontmatterOnlyBody(source)) continue;
+      let widget = Array.from(this.recordSheetReading || []).find((item) =>
+        item.viewFallback === true && item.view === view);
+      if (widget && (widget.path !== path || widget.surface !== surface)) {
+        this.recordSheetReading.delete(widget);
+        this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
+        widget = null;
+      }
+      const owner = Array.from(this.recordSheetReading || []).find((item) =>
+        item.surface === surface && item.path === path);
+      if (owner && owner !== widget) {
+        seen.add(owner);
+        continue;
+      }
+      if (!widget) {
+        widget = { el: surface, path, surface, scope: this.recordSheetReadingScope(surface), view, viewFallback: true };
+        this.recordSheetReading.add(widget);
+      }
+      seen.add(widget);
+    }
+    for (const widget of Array.from(this.recordSheetReading || [])) {
+      if (widget.viewFallback !== true || seen.has(widget)) continue;
+      this.recordSheetReading.delete(widget);
+      this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
+    }
+    this.refreshRecordSheetReading();
+  }
+
   recordSheetSetEditorHide(view, eligible) {
     try {
       const scope = this.recordSheetEditorScopes?.get?.(view) || view?.dom;
@@ -566,6 +657,7 @@ class BobLedgerToolsRecordSheetMixin {
     }
     widget.el = el;
     widget.path = ctx.sourcePath;
+    widget.viewFallback = false;
     widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
     const binding = {};
     widget.binding = binding;

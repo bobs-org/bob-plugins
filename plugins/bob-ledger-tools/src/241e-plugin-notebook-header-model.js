@@ -170,6 +170,14 @@ function notebookHeaderNoteTitle(path, metadataCache, vault) {
     const cache = file && metadataCache && typeof metadataCache.getFileCache === "function"
       ? metadataCache.getFileCache(file)
       : null;
+    const frontmatter = cache && cache.frontmatter && typeof cache.frontmatter === "object"
+      ? cache.frontmatter : null;
+    const types = frontmatter && typeof albumTypeNames === "function"
+      ? albumTypeNames(frontmatter.type) : [];
+    if (types.length === 1 && types[0] === "record") {
+      const title = frontmatter.title == null ? "" : String(frontmatter.title).trim();
+      if (title) return title;
+    }
     const heading = cache && Array.isArray(cache.headings)
       ? cache.headings.find((row) => row && row.level === 1 && row.heading)
       : null;

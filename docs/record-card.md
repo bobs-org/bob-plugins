@@ -3,9 +3,11 @@ title: "Record Card"
 description: "Reference for the record sheet and the Record Card editor on canonical album records."
 ---
 
-Bob Ledger Tools paints a **record sheet** directly under the first heading
-of a canonical album record (`type: [[record]]`) in Reading view and Live
-Preview. The **Record Card** is the keyboard-first editor for those values.
+Bob Ledger Tools paints a **record sheet** at the top of a canonical album
+record's body (`type: [[record]]`) in Reading view and Live Preview. A legacy
+first-level heading stays above the sheet until removed; notes without an H1,
+including frontmatter-only notes, still show it at the top of the body. The
+**Record Card** is the keyboard-first editor for those values.
 When the sheet is hide-eligible — healthy schema, desktop Obsidian, and the
 cached report carries `record_values_v1` — native Properties and the
 filename-derived inline title hide behind the sheet. Every other case keeps
@@ -17,25 +19,27 @@ report and never writes the note. Source mode keeps native YAML.
 
 ## What the sheet shows
 
-The sheet is a labelled group, *Title record details*, with the album
-breadcrumb and noun, then a definition list of schema fields in declaration
-order. Choice values are chips; dates use today / yesterday or a friendly
+The sheet is a labelled group, *Title record details*. Its first row shows the
+frontmatter `title` (trimmed), falling back to the first H1 and then the file
+stem, in page-title styling. The muted album breadcrumb and noun follow on
+their own line, then a definition list of schema fields in declaration order.
+Title text is rendered literally. Choice values are chips; dates use today / yesterday or a friendly
 date plus age; URLs are safe `http(s)` anchors; wikilinks are internal
 links with hover previews. Empty optional fields sit in a shared `＋ Label`
 ghost row. A missing required field keeps its full row and an amber
 **missing** pill. Invalid values stay visible in monospace with a reason.
 
-`parent` lives in the breadcrumb and `type` is implicit identity. A title
-that matches the heading is the heading; a mismatch, or a title with no
-heading, appears in **N other properties**. A valid `created` date is a
-footer (`added today, 7:55 AM`, `added yesterday`, or `added Aug 8, 2025`).
+`parent` lives in the breadcrumb and `type` is implicit identity. The sheet is
+the one home for the frontmatter `title`; H1 agreement or mismatch does not
+create another title entry. A valid `created` date is a footer (`added today,
+7:55 AM`, `added yesterday`, or `added Aug 8, 2025`).
 An invalid created value stays in that fold with lint. Legacy keys declared
 on the album are labelled **legacy**. `null` compact values render as `—`.
 
 The sheet starts expanded. Collapse is a session toggle per record path:
-breadcrumb, selected choice chips with the group field first, then
-`· N fields`. Fold and collapse choices are not stored in frontmatter or
-plugin settings.
+the title stays visible, followed by one line with the breadcrumb, selected
+choice chips (group field first), and `· N fields`. Fold and collapse choices
+are not stored in frontmatter or plugin settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
 charge timeline, and finding sentence dock as a trailing band of this

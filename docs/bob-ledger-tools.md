@@ -224,14 +224,14 @@ NEXT → RECURRING → TICKLER → ROTTEN → POST; TICKS splits ROTTEN) minus t
 active tier, tier-colored, shedding groups,
 detail, hint, meter. The button jumps like `]s`; TICK rows show a tinted
 `Alt+P` chip (red when cancel). Empty shows `⟳ Review clear · ✓ N today`,
-keeping the Alt+P preview on rows; hints read `]] next` (`]s next` legacy). The `w` lane footer shows `api.laneWalk` v2
+keeping the Alt+P preview; hints read `]] next`. The `w` lane footer shows `api.laneWalk` v2
 counts (`Lanes N`, position, `Lanes clear` / `REVIEW n` / `No
 Pending…` states, red `n/cap` over tokens (over lanes stay visible);
 `Lanes` acts like `]]`, counts never filter. Red `w` attention is pushed via nav
-`api.walkMode` v5 for any over-limit lane. Ledger pushes `s`/`w`/`b` attention
-including selected families; labels omit “click to show”. The `n` links
-compass previews via `walkMode.links()` v2 with `[n` /
-`]n` arms. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
+`api.walkMode` v5 for any over-limit lane. Ledger pushes [`s`/`w`/`b`
+attention](https://bobs-org.github.io/walks/) including selected families,
+mirrored by Bob Mac Capture; labels omit “click to show”. The `n` links
+compass previews via `walkMode.links()` v2. The `b` bank panel shows the `api.bankWalk` v1 snapshot scope word first (`WAITING` amber while any row waits, `ALL` calm otherwise), day
 arms from the planner (`[B` / `]B`), money only for the cursor row, and an account meter that never claims untold health: `✓ balanced`
 only from a cached `bob bank list` result where every
 account is balanced, otherwise the worst account's status in bob's own words.
@@ -638,6 +638,7 @@ links, and sync. The plugin also reads the bob config file.
 
 - [Plan](https://bobs-org.github.io/plan/)
 - [Freshness](https://bobs-org.github.io/freshness/)
+- [Walk attention](https://bobs-org.github.io/walks/)
 - [Task dependencies](https://bobs-org.github.io/task-dependencies/)
 - [Task tag marks](https://bobs-org.github.io/task-tag-marks/)
 - [Date marks](https://bobs-org.github.io/date-marks/)

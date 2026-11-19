@@ -907,6 +907,7 @@ function createDependencyNavApi(plugin) {
     inboxRoute: createInboxRouteApi(plugin),
     quickRoll: createQuickRollApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
+    taskScope: createCopyCardTaskScopeApi(),
     notice: createNoticeApi(plugin),
     cancel: createCancelApi(),
     // USED BEFORE band v1. Phrase data lives in ledger-tools; this API only

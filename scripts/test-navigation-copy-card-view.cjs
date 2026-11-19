@@ -7,6 +7,7 @@ const path = require("node:path");
 const Module = require("node:module");
 const test = require("node:test");
 const { ElementStub, ModalStub, click, defer, flushDeferred } = require("./modal-harness.cjs");
+const copyChipHelpers = require("./copy-chips-test-helpers.cjs").helpers;
 
 global.window = { setTimeout: defer };
 
@@ -227,9 +228,35 @@ test("render: ready chip row with CHIP divider after TASK rows", () => {
   assert.match(flattenText(dividers[1]), /CHIP/);
   assert.ok(dividers[1].classes.includes("is-chip"));
   assert.ok(!dividers[0].classes.includes("is-chip"));
+  assert.equal(byClass(dividers[1], "bob-copy-card-divider-title").length, 0);
   const chipRow = rows.find((row) => flattenText(row).includes("Chip"));
   assert.ok(chipRow);
   assert.match(flattenText(chipRow), /Chip · deploy/);
+  modal.close();
+});
+
+test("render: task-scope CHIP title and ARIA label identify the task", () => {
+  const model = bryanModel({
+    copyChip: {
+      state: "ready",
+      scope: "task",
+      chip: { form: "inline", label: "deploy", text: "just docs-check", line: 2, from: 4, to: 31 },
+      count: 1,
+    },
+  });
+  const modal = openCard(model);
+  const chipDivider = byClass(modal.contentEl, "bob-copy-card-divider").find((el) =>
+    el.classes.includes("is-chip"),
+  );
+  assert.ok(chipDivider);
+  const title = byClass(chipDivider, "bob-copy-card-divider-title");
+  assert.equal(title.length, 1);
+  assert.equal(title[0].textContent, "in this task");
+  const chipRow = byClass(modal.contentEl, "bob-copy-card-row").find((el) =>
+    el.attributes["aria-label"] && el.attributes["aria-label"].startsWith("Chip · deploy"),
+  );
+  assert.ok(chipRow);
+  assert.equal(chipRow.attributes["aria-label"], "Chip · deploy, in this task: just docs-check");
   modal.close();
 });
 
@@ -247,6 +274,25 @@ test("render: ambiguous chip is a dimmed C row", () => {
   const chipDividers = dividers.filter((el) => el.classes.includes("is-chip"));
   assert.equal(chipDividers.length, 1);
   assert.match(flattenText(chipDividers[0]), /CHIP/);
+  modal.close();
+});
+
+test("render: ambiguous task chip stays dimmed and has no divider title", () => {
+  const model = bryanModel({
+    copyChip: { state: "ambiguous", scope: "task", count: 2 },
+  });
+  const modal = openCard(model);
+  const chipRow = byClass(modal.contentEl, "bob-copy-card-row").find((el) =>
+    flattenText(el).includes("Chip"),
+  );
+  assert.ok(chipRow);
+  assert.ok(chipRow.classes.includes("is-unavailable"));
+  assert.match(flattenText(chipRow), /2 chips in this task · move onto one/);
+  const chipDivider = byClass(modal.contentEl, "bob-copy-card-divider").find((el) =>
+    el.classes.includes("is-chip"),
+  );
+  assert.ok(chipDivider);
+  assert.equal(byClass(chipDivider, "bob-copy-card-divider-title").length, 0);
   modal.close();
 });
 
@@ -579,6 +625,7 @@ function makePluginForGuards(options = {}) {
         : null
       : options.view;
   plugin.app = {
+    plugins: { plugins: options.plugins || {} },
     workspace: {
       getActiveFile: () => activeFile,
       getActiveViewOfType: () => view,
@@ -602,6 +649,170 @@ function singleCursorEditor(content, selections) {
     listSelections: () => selections,
   };
 }
+
+test("openCopyCard: task scope follows the task, excludes nested tasks, and degrades with v1", () => {
+  const content = [
+    "- [ ] #task Deploy docs ^deploy",
+    "  - run ``copy[deploy]: just `docs` \\| deploy  ``",
+    "  - [ ] #task Nested ^nested",
+    "    - `copy: nested-only`",
+  ].join("\n");
+  const requests = [];
+  const chipApi = {
+    version: 2,
+    chipAt(request) {
+      requests.push(request);
+      return copyChipHelpers.copyChipAt(request);
+    },
+    flash() { return true; },
+  };
+  const copyPlugins = { "bob-copy-chips": { api: { copyChips: chipApi } } };
+  const selections = [{ anchor: { line: 0, ch: 5 }, head: { line: 0, ch: 5 } }];
+  openedModals.length = 0;
+  const { plugin } = makePluginForGuards({
+    activeFile: { path: "deploy.md", extension: "md" },
+    editor: singleCursorEditor(content, selections),
+    plugins: copyPlugins,
+  });
+  plugin.openCopyCard();
+  let modal = openedModals[0];
+  let chip = modal.copyCardModel.rows.find((entry) => entry.id === "chip");
+  assert.ok(chip);
+  assert.equal(chip.state, "ready");
+  assert.equal(chip.chipScope, "task");
+  assert.equal(chip.value, "just `docs` | deploy  ");
+  assert.equal(chip.copyChip.line, 1);
+  const cardScope = requests.at(-1).scope.lines;
+  const taskScopeApi = helpers.createDependencyNavApi(null).taskScope;
+  assert.deepEqual(taskScopeApi.at({ lines: content.split("\n"), line: 0 }).lines, cardScope);
+  modal.close();
+
+  const parentOnlyNestedChip = [
+    "- [ ] #task Parent ^parent",
+    "  - [ ] #task Nested ^nested",
+    "    - `copy: nested-only`",
+  ].join("\n");
+  openedModals.length = 0;
+  const parent = makePluginForGuards({
+    activeFile: { path: "nested.md", extension: "md" },
+    editor: singleCursorEditor(parentOnlyNestedChip, [
+      { anchor: { line: 0, ch: 3 }, head: { line: 0, ch: 3 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  parent.openCopyCard();
+  assert.equal(openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip"), undefined);
+  openedModals[0].close();
+
+  openedModals.length = 0;
+  const nested = makePluginForGuards({
+    activeFile: { path: "nested.md", extension: "md" },
+    editor: singleCursorEditor(parentOnlyNestedChip, [
+      { anchor: { line: 1, ch: 3 }, head: { line: 1, ch: 3 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  nested.openCopyCard();
+  chip = openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip");
+  assert.equal(chip.value, "nested-only");
+  assert.equal(chip.chipScope, "task");
+  openedModals[0].close();
+
+  const taskLineChip = [
+    "- [ ] #task Source chip ``copy: task-line`` ^source-chip",
+    "  - cursor on this chipless child note",
+  ].join("\n");
+  openedModals.length = 0;
+  const childCursor = makePluginForGuards({
+    activeFile: { path: "source.md", extension: "md" },
+    editor: singleCursorEditor(taskLineChip, [
+      { anchor: { line: 1, ch: 5 }, head: { line: 1, ch: 5 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  childCursor.openCopyCard();
+  chip = openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip");
+  assert.equal(chip.value, "task-line");
+  assert.equal(chip.chipScope, "task");
+  assert.equal(chip.copyChip.line, 0);
+  openedModals[0].close();
+
+  const outsideTask = ["- ordinary bullet", "  - `copy: outside`"].join("\n");
+  openedModals.length = 0;
+  const outside = makePluginForGuards({
+    activeFile: { path: "outside.md", extension: "md" },
+    editor: singleCursorEditor(outsideTask, [
+      { anchor: { line: 0, ch: 3 }, head: { line: 0, ch: 3 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  outside.openCopyCard();
+  assert.equal(openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip"), undefined);
+  openedModals[0].close();
+
+  const inFence = [
+    "- [ ] #task Fence task ^fence-task",
+    "  ```js",
+    "  `copy: inert`",
+    "  ```",
+  ].join("\n");
+  openedModals.length = 0;
+  const fenced = makePluginForGuards({
+    activeFile: { path: "fence.md", extension: "md" },
+    editor: singleCursorEditor(inFence, [
+      { anchor: { line: 2, ch: 5 }, head: { line: 2, ch: 5 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  fenced.openCopyCard();
+  assert.equal(openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip"), undefined);
+  openedModals[0].close();
+
+  const mixedSelection = [
+    "- [ ] #task First ^first",
+    "  - child",
+    "- [ ] #task Second `copy: line-only` ^second",
+  ].join("\n");
+  openedModals.length = 0;
+  const mixed = makePluginForGuards({
+    activeFile: { path: "mixed.md", extension: "md" },
+    editor: singleCursorEditor(mixedSelection, [
+      { anchor: { line: 0, ch: 3 }, head: { line: 2, ch: 25 } },
+    ]),
+    plugins: copyPlugins,
+  }).plugin;
+  mixed.openCopyCard();
+  chip = openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip");
+  assert.equal(chip.chipScope, "cursor");
+  assert.equal(chip.value, "line-only");
+  openedModals[0].close();
+
+  const v1Plugins = {
+    "bob-copy-chips": {
+      api: {
+        copyChips: {
+          version: 1,
+          chipAt(request) {
+            return copyChipHelpers.copyChipAt({
+              lines: request.lines,
+              line: request.line,
+              ch: request.ch,
+            });
+          },
+        },
+      },
+    },
+  };
+  openedModals.length = 0;
+  const v1 = makePluginForGuards({
+    activeFile: { path: "deploy.md", extension: "md" },
+    editor: singleCursorEditor(content, selections),
+    plugins: v1Plugins,
+  }).plugin;
+  v1.openCopyCard();
+  assert.equal(openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip"), undefined);
+  openedModals[0].close();
+});
 
 test("openCopyCard: reading view, multiple cursors, and no editor yield no TASK group", () => {
   const content = "- [ ] #task Ship it ^ship\n";

@@ -389,6 +389,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
+| `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
 | `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. |
 | `notice` | 3 | Show the Unblocked card; v2 renders `keep_moving` rows and v3 renders `relation_successors`. |
 | `successors` | 4 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, and v4 resolves verdict closes. |
@@ -659,14 +660,23 @@ tier (0–6) or `null` for browse, info, and recents rows.
 
 ## Bob Copy Chips
 
-`app.plugins.plugins["bob-copy-chips"].api.copyChips` is namespace version 1.
+`app.plugins.plugins["bob-copy-chips"].api.copyChips` is namespace version 2.
 It is frozen and never throws. Feature-detect the plugin and the namespace
 before calling it; an unloaded plugin is not a usable dependency.
 
 ```js
 const copyChips = app.plugins.plugins["bob-copy-chips"]?.api?.copyChips;
-if (copyChips?.version >= 1) {
-  const hit = copyChips.chipAt({ lines, line, ch });
+const nav = app.plugins.plugins["bob-navigation-hotkeys"]?.api;
+if (copyChips?.version >= 2) {
+  const task = nav?.version >= 3 && nav.taskScope?.version >= 1
+    ? nav.taskScope.at({ lines, line })
+    : null;
+  const hit = copyChips.chipAt({
+    lines,
+    line,
+    ch,
+    ...(task ? { scope: { kind: "task", lines: task.lines } } : {}),
+  });
   if (hit.state === "ready") await copyChips.copy(hit.chip.text);
 }
 ```
@@ -676,17 +686,21 @@ in an inline chip are line-relative offsets including the delimiters, with
 `to` exclusive, matching `scanLine`. A ready inline chip is frozen
 `{ form: "inline", label, text, line, from, to }`. A ready block chip from a
 `bob-copy` fence is frozen `{ form: "block", label, text, line, from, to }`
-where `line` is the cursor line and `[from, to]` covers it; `count` is the
-number of eligible chips on the line. Invalid inputs yield
+where `line` is the cursor line for cursor results or the opening line for a
+task-scope fence; `count` is the number of eligible chips on the resolving
+line or in the task. Ready and ambiguous results add `scope: "cursor"` or
+`scope: "task"`; `none` keeps its exact shape. A v1 provider ignores the
+optional task `scope`, which is why callers feature-detect version 2 before
+passing it. Invalid inputs yield
 `{ state: "none", count: 0 }`. Non-`bob-copy` fenced lines stay `none`.
 
 | Member | Contract |
 | --- | --- |
-| `version` | `1` |
+| `version` | `2` |
 | `parse`, `scanLine`, `serialize` | Existing grammar behavior |
 | `parseFenceInfo`, `fencePayload` | Existing additive helpers |
 | `fencePayloadFromSource(source)` | Processor `source` to payload, verbatim |
-| `chipAt({ lines, line, ch })` | Frozen none/ambiguous/ready result above |
+| `chipAt({ lines, line, ch, scope? })` | Frozen none/ambiguous/ready result above; v1 providers ignore `scope` |
 | `copy(text)` | Promise of `{ ok, reason? }`, never throws/rejects |
 | `copyChip(chip, { view? })` | One clipboard write plus success/failure feedback |
 | `flash(chip, { view? })` | Boolean success feedback shown; no write |

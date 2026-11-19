@@ -4,7 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   helpers,
-  FakeDocument,
+  FakeNotice,
   installClipboardStub,
   BobCopyChipsPlugin,
 } = require("./copy-chips-test-helpers.cjs");
@@ -96,11 +96,134 @@ test("chipAt matches the related fence helper on nested fences", () => {
   assert.equal(helpers.copyChipAt({ lines: ["```js", "`copy: x`", "```"], line: 1, ch: 2 }).state, "none");
 });
 
+test("chipAt uses one task chip only when the cursor line has none", () => {
+  const payload = "run `docs` | done  ";
+  const lines = [
+    "- [ ] #task Deploy docs ^deploy-docs",
+    "  - ``copy[deploy]: run `docs` \\| done  ``",
+  ];
+  const resolved = helpers.copyChipAt({
+    lines,
+    line: 0,
+    ch: 5,
+    scope: { kind: "task", lines: [0, 1] },
+  });
+  assert.equal(resolved.state, "ready");
+  assert.equal(resolved.scope, "task");
+  assert.equal(resolved.count, 1);
+  assert.equal(resolved.chip.text, payload);
+  assert.equal(resolved.chip.line, 1);
+  assert.equal(resolved.chip.from, lines[1].indexOf("``"));
+  assert.equal(resolved.chip.to, lines[1].length);
+  assert.ok(Object.isFrozen(resolved));
+  assert.ok(Object.isFrozen(resolved.chip));
+
+  const many = helpers.copyChipAt({
+    lines: ["- [ ] #task Example", "  - `copy: first`", "  - `copy: second`"],
+    line: 0,
+    ch: 5,
+    scope: { kind: "task", lines: [0, 1, 2] },
+  });
+  assert.deepEqual(
+    { state: many.state, count: many.count, scope: many.scope },
+    { state: "ambiguous", count: 2, scope: "task" },
+  );
+});
+
+test("chipAt keeps cursor-line precedence and counts scoped bob-copy fences once", () => {
+  const precedence = helpers.copyChipAt({
+    lines: ["`copy: line`", "  - `copy: task`"],
+    line: 0,
+    ch: 2,
+    scope: { kind: "task", lines: [0, 1] },
+  });
+  assert.equal(precedence.state, "ready");
+  assert.equal(precedence.scope, "cursor");
+  assert.equal(precedence.chip.text, "line");
+  const lineAmbiguous = helpers.copyChipAt({
+    lines: ["`copy: first` and `copy: second`", "  - `copy: task`"],
+    line: 0,
+    ch: "`copy: first` and `copy: second`".indexOf(" and"),
+    scope: { kind: "task", lines: [0, 1] },
+  });
+  assert.equal(lineAmbiguous.state, "ambiguous");
+  assert.equal(lineAmbiguous.scope, "cursor");
+  assert.equal(lineAmbiguous.count, 2);
+
+  const lines = [
+    "- [ ] #task Example",
+    "  ```bob-copy Deploy",
+    "  run docs",
+    "  ```",
+    "  ```js",
+    "  `copy: inert`",
+    "  ```",
+  ];
+  const fenced = helpers.copyChipAt({
+    lines,
+    line: 0,
+    ch: 5,
+    scope: { kind: "task", lines: [0, 1, 2, 3, 4, 5, 6] },
+  });
+  assert.equal(fenced.state, "ready");
+  assert.equal(fenced.scope, "task");
+  assert.equal(fenced.count, 1);
+  assert.equal(fenced.chip.form, "block");
+  assert.equal(fenced.chip.line, 1);
+  assert.equal(fenced.chip.from, 0);
+  assert.equal(fenced.chip.to, lines[1].length);
+  assert.equal(fenced.chip.text, "run docs");
+});
+
+test("chipAt never falls through from fences or frontmatter and ignores malformed scopes", () => {
+  const plainFence = ["- [ ] #task Example", "  ```js", "  `copy: inert`", "  ```"];
+  assert.equal(
+    helpers.copyChipAt({
+      lines: plainFence,
+      line: 2,
+      ch: 5,
+      scope: { kind: "task", lines: [0, 1, 2, 3] },
+    }).state,
+    "none",
+  );
+  const frontmatter = ["---", "`copy: hidden`", "---", "- [ ] #task Visible", "  - note"];
+  assert.equal(
+    helpers.copyChipAt({
+      lines: frontmatter,
+      line: 3,
+      ch: 5,
+      scope: { kind: "task", lines: [1, 3, 4] },
+    }).state,
+    "none",
+  );
+
+  const lines = ["- [ ] #task Example", "  - `copy: one`"];
+  for (const scope of [
+    "nope",
+    { kind: "cursor", lines: [0, 1] },
+    { kind: "task", lines: "not an array" },
+    { kind: "task", lines: [-1, 1.5, 99, "1"] },
+    { kind: "task", lines: [1] },
+  ]) {
+    const result = helpers.copyChipAt({ lines, line: 0, ch: 3, scope });
+    assert.equal(result.state, "none");
+    assert.equal(result.count, 0);
+  }
+  const cleaned = helpers.copyChipAt({
+    lines,
+    line: 0,
+    ch: 3,
+    scope: { kind: "task", lines: [1, 1, -1, 3.2, 99, 0] },
+  });
+  assert.equal(cleaned.state, "ready");
+  assert.equal(cleaned.scope, "task");
+});
+
 test("api namespace is frozen, versioned, and never throws", async () => {
   const plugin = new BobCopyChipsPlugin({});
   await plugin.onload();
   const api = plugin.api.copyChips;
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.ok(Object.isFrozen(api));
   assert.ok(Object.isFrozen(plugin.api));
   // Grammar helpers preserved.
@@ -113,6 +236,7 @@ test("api namespace is frozen, versioned, and never throws", async () => {
   // New members.
   const resolved = api.chipAt({ lines: ["`copy: ssh`"], line: 0, ch: 2 });
   assert.equal(resolved.state, "ready");
+  assert.equal(resolved.scope, "cursor");
   assert.ok(Object.isFrozen(resolved));
   assert.equal(api.chipAt(null).state, "none");
   // copy rejects empty without touching the clipboard.
@@ -170,26 +294,76 @@ test("copy unavailable clipboard reports a useful reason", async () => {
 });
 
 test("cursor command resolves through chipAt and uses the shared copy path", async () => {
-  const plugin = new BobCopyChipsPlugin({});
+  const taskLines = ["- [ ] #task Deploy docs", "  - `copy[deploy]: just docs-check`"];
+  const plugin = new BobCopyChipsPlugin({
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            taskScope: {
+              version: 1,
+              at: ({ lines, line }) => ({ ownerLine: 0, lines: [0, 1] }),
+            },
+          },
+        },
+      },
+    },
+  });
   await plugin.onload();
   const command = plugin.commands.find((item) => item.id === "copy-on-cursor-line");
   assert.ok(command);
-  assert.equal(command.name, "Copy chip on cursor line");
+  assert.equal(command.name, "Copy chip at cursor");
   assert.ok(plugin.commands.find((item) => item.id === "make-or-edit"));
-  // Command works through editorCallback with no view (Source mode).
   const clip = installClipboardStub();
   try {
+    FakeNotice.messages.length = 0;
     const editor = {
-      getValue: () => "`copy: ssh apollo`",
-      getCursor: () => ({ line: 0, ch: 2 }),
+      getValue: () => taskLines.join("\n"),
+      getCursor: () => ({ line: 0, ch: 5 }),
     };
-    let notified = [];
-    const originalNotice = helpers.copyChipNotify;
-    void originalNotice;
-    await helpers.copyChipCopyChip({ form: "inline", label: null, text: "ssh apollo", line: 0, from: 0, to: 18 }, {});
-    assert.deepEqual(clip.writes, ["ssh apollo"]);
+    command.editorCallback(editor, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(clip.writes, ["just docs-check"]);
+
+    const noticeFor = async (content, cursorLine, cursorCh, taskScope) => {
+      FakeNotice.messages.length = 0;
+      plugin.app.plugins.plugins = taskScope
+        ? {
+            "bob-navigation-hotkeys": {
+              api: { taskScope: { version: 1, at: taskScope } },
+            },
+          }
+        : {};
+      command.editorCallback({
+        getValue: () => content,
+        getCursor: () => ({ line: cursorLine, ch: cursorCh }),
+      }, null);
+      await new Promise((resolve) => setImmediate(resolve));
+      return FakeNotice.messages.slice();
+    };
+    const scope = ({ lines }) => ({ ownerLine: 0, lines: lines.map((_line, index) => index) });
+    assert.deepEqual(
+      await noticeFor("- [ ] #task Empty", 0, 5, ({ lines }) => ({ ownerLine: 0, lines: [0] })),
+      ["No copy chip in this task"],
+    );
+    assert.deepEqual(
+      await noticeFor("- [ ] #task Many\n  - `copy: one`\n  - `copy: two`", 0, 5, scope),
+      ["2 chips in this task · move onto one"],
+    );
+    assert.deepEqual(
+      await noticeFor("`copy: one` and `copy: two`", 0, "`copy: one` and `copy: two`".indexOf(" and"), () => null),
+      ["2 chips on this line · move onto one"],
+    );
+
+    assert.deepEqual(
+      await noticeFor("empty line", 0, 0, null),
+      ["No copy chip on this line"],
+    );
+    assert.deepEqual(
+      await noticeFor("empty line", 0, 0, () => { throw new Error("provider failed"); }),
+      ["No copy chip on this line"],
+    );
   } finally {
     clip.restore();
   }
-  void FakeDocument;
 });

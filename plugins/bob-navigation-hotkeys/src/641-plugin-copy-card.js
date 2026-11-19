@@ -46,7 +46,7 @@ function getCopyCardCopyChipsApi(app) {
   }
 }
 
-function resolveCopyCardChip(api, lines, selections) {
+function resolveCopyCardChip(api, lines, selections, taskScopeLines) {
   if (!api) {
     return null;
   }
@@ -64,13 +64,25 @@ function resolveCopyCardChip(api, lines, selections) {
       lines,
       line: Math.floor(head.line),
       ch: Math.floor(head.ch),
+      ...(Array.isArray(taskScopeLines)
+        ? { scope: { kind: "task", lines: taskScopeLines } }
+        : null),
     });
     if (result && result.state === "ready" && result.chip) {
-      return result;
+      return {
+        state: "ready",
+        count: Number.isInteger(result.count) ? result.count : 1,
+        scope: result.scope === "task" ? "task" : "cursor",
+        chip: result.chip,
+      };
     }
     if (result && result.state === "ambiguous") {
       const count = Number.isInteger(result.count) ? result.count : 0;
-      return { state: "ambiguous", count };
+      return {
+        state: "ambiguous",
+        count,
+        scope: result.scope === "task" ? "task" : "cursor",
+      };
     }
     return null;
   } catch (_error) {
@@ -118,7 +130,16 @@ class BobNavigationHotkeysCopyCardMixin {
 
     const task = resolveCopyCardTask(lines, selections.length === 1 ? selections : []);
     const copyChipsApi = getCopyCardCopyChipsApi(this.app);
-    const copyChip = resolveCopyCardChip(copyChipsApi, lines, selections);
+    const taskScopeLines =
+      task && (task.state === "ready" || task.state === "no-id")
+        ? copyCardTaskScopeLines(lines, task.line)
+        : null;
+    const copyChip = resolveCopyCardChip(
+      copyChipsApi,
+      lines,
+      selections,
+      taskScopeLines,
+    );
     const relativePath = getVaultRelativeFilePath(file);
     const basePath = this.getVaultBasePath();
     const homePath = getHomeDirectoryPath();

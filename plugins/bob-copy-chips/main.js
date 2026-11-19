@@ -2267,9 +2267,10 @@ function copyChipFindFenceBlock(lines, lineIndex) {
 
 // A ready block chip for a `bob-copy` fence block, or null when the block
 // is another language. Body lines dedent under the opening; a final empty
-// body line keeps one trailing LF through copyChipFencePayload. `line` is
-// the cursor line and [from, to] covers it, so a missing card still flashes
-// where the user is. Never throws.
+// body line keeps one trailing LF through copyChipFencePayload. `lineIndex`
+// is the cursor line or, for a task-scope result, the fence opening; [from,
+// to] covers that source line so a missing widget still flashes in place.
+// Never throws.
 function copyChipFenceBlockChip(lines, lineIndex, block) {
   try {
     if (!block || !block.opening) return null;
@@ -2315,6 +2316,133 @@ function copyChipFenceBlockChip(lines, lineIndex, block) {
   }
 }
 
+// Accept only a task scope that really owns the cursor line. Sanitizing here
+// keeps callers small and lets older callers omit the new option entirely.
+function copyChipNormalizeTaskScope(scope, lines, cursorLine) {
+  try {
+    if (
+      !scope ||
+      typeof scope !== "object" ||
+      scope.kind !== "task" ||
+      !Array.isArray(scope.lines)
+    ) {
+      return null;
+    }
+    const seen = new Set();
+    const indices = [];
+    for (const value of scope.lines) {
+      if (
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value >= lines.length ||
+        seen.has(value)
+      ) {
+        continue;
+      }
+      seen.add(value);
+      indices.push(value);
+    }
+    if (!seen.has(cursorLine)) return null;
+    indices.sort((left, right) => left - right);
+    return indices;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Collect chips from an already validated task scope. Fence membership is
+// determined in one forward pass; each touched bob-copy block is then parsed
+// once using its opening line and real close line. Never throws.
+function copyChipScanTaskScope(lines, scopeLines) {
+  try {
+    const wanted = new Set(scopeLines);
+    const inlineChips = [];
+    const blocks = new Map();
+    const touchedBlocks = new Set();
+    let inFrontmatter =
+      lines.length > 0 && String(lines[0] || "").trim() === "---";
+    let activeFence = null;
+
+    for (let index = 0; index < lines.length; index += 1) {
+      let text = "";
+      try {
+        text = String(lines[index] === undefined || lines[index] === null ? "" : lines[index]);
+      } catch (error) {
+        text = "";
+      }
+
+      if (inFrontmatter) {
+        if (
+          index > 0 &&
+          (text.trim() === "---" || text.trim() === "...")
+        ) {
+          inFrontmatter = false;
+        }
+        continue;
+      }
+
+      if (activeFence) {
+        if (wanted.has(index) && activeFence.isBobCopy) {
+          touchedBlocks.add(activeFence.openIndex);
+        }
+        if (copyChipCursorFenceCloses(text, activeFence.opening)) {
+          activeFence.closeIndex = index;
+          activeFence = null;
+        }
+        continue;
+      }
+
+      const opening = copyChipFenceOpeningFromLine(text);
+      if (opening) {
+        const parsed = copyChipParseFenceInfo(opening.info || "");
+        const block = {
+          openIndex: index,
+          opening,
+          closeIndex: null,
+          isBobCopy: Boolean(parsed),
+        };
+        blocks.set(index, block);
+        activeFence = block;
+        if (wanted.has(index) && block.isBobCopy) {
+          touchedBlocks.add(index);
+        }
+        continue;
+      }
+
+      if (!wanted.has(index)) continue;
+      let found = [];
+      try {
+        found = copyChipScanLine(text, {
+          table: copyChipCursorTableForLine(text),
+        });
+      } catch (error) {
+        found = [];
+      }
+      for (const chip of Array.isArray(found) ? found : []) {
+        inlineChips.push({
+          form: "inline",
+          label: chip.label,
+          text: chip.text,
+          line: index,
+          from: chip.from,
+          to: chip.to,
+        });
+      }
+    }
+
+    const chips = inlineChips;
+    for (const openIndex of touchedBlocks) {
+      const block = blocks.get(openIndex);
+      if (!block) continue;
+      const result = copyChipFenceBlockChip(lines, openIndex, block);
+      if (result && result.chip) chips.push(result.chip);
+    }
+    return chips;
+  } catch (error) {
+    return [];
+  }
+}
+
 // Zero-based lines and UTF-16 offsets. `from`/`to` include the delimiters
 // with `to` exclusive, matching scanLine. A cursor in [from, to) wins;
 // otherwise the only eligible chip on the line wins. Never throws.
@@ -2343,7 +2471,9 @@ function copyChipAt(request) {
       const block = copyChipFindFenceBlock(lines, line);
       if (block) {
         const blockChip = copyChipFenceBlockChip(lines, line, block);
-        if (blockChip) return blockChip;
+        if (blockChip) {
+          return copyChipFreeze({ ...blockChip, scope: "cursor" });
+        }
         return copyChipNone(0);
       }
     } catch (error) {
@@ -2356,7 +2486,27 @@ function copyChipAt(request) {
     } catch (error) {
       return copyChipNone(0);
     }
-    if (!chips || chips.length === 0) return copyChipNone(0);
+    if (!chips || chips.length === 0) {
+      const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
+      if (!scopeLines) return copyChipNone(0);
+      const taskChips = copyChipScanTaskScope(lines, scopeLines);
+      if (taskChips.length === 1) {
+        return copyChipFreeze({
+          state: "ready",
+          count: 1,
+          scope: "task",
+          chip: copyChipFreeze(taskChips[0]),
+        });
+      }
+      if (taskChips.length > 1) {
+        return copyChipFreeze({
+          state: "ambiguous",
+          count: taskChips.length,
+          scope: "task",
+        });
+      }
+      return copyChipNone(0);
+    }
     const count = chips.length;
     let contained = null;
     for (const chip of chips) {
@@ -2373,6 +2523,7 @@ function copyChipAt(request) {
       return copyChipFreeze({
         state: "ready",
         count,
+        scope: "cursor",
         chip: copyChipFreeze({
           form: "inline",
           label: contained.label,
@@ -2388,6 +2539,7 @@ function copyChipAt(request) {
       return copyChipFreeze({
         state: "ready",
         count,
+        scope: "cursor",
         chip: copyChipFreeze({
           form: "inline",
           label: only.label,
@@ -2398,7 +2550,7 @@ function copyChipAt(request) {
         }),
       });
     }
-    return copyChipFreeze({ state: "ambiguous", count });
+    return copyChipFreeze({ state: "ambiguous", count, scope: "cursor" });
   } catch (error) {
     return copyChipFreeze({ state: "none", count: 0 });
   }
@@ -2699,7 +2851,30 @@ function copyChipNotify(message) {
   }
 }
 
-async function copyChipRunCursorCommand(editor, view) {
+function copyChipTaskScopeFromNav(app, lines, line) {
+  try {
+    const navPlugin =
+      app && app.plugins && app.plugins.plugins
+        ? app.plugins.plugins["bob-navigation-hotkeys"]
+        : null;
+    const taskScope = navPlugin && navPlugin.api && navPlugin.api.taskScope;
+    if (
+      !taskScope ||
+      !(Number(taskScope.version) >= 1) ||
+      typeof taskScope.at !== "function"
+    ) {
+      return null;
+    }
+    const result = taskScope.at({ lines, line });
+    return result && Array.isArray(result.lines)
+      ? { kind: "task", lines: result.lines }
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function copyChipRunCursorCommand(editor, view, app) {
   try {
     const lines = copyChipReadEditorLines(editor, view);
     const cursor = copyChipReadEditorCursor(editor, view);
@@ -2707,18 +2882,20 @@ async function copyChipRunCursorCommand(editor, view) {
       copyChipNotify("No copy chip on this line");
       return false;
     }
+    const scope = copyChipTaskScopeFromNav(app, lines, cursor.line);
     let resolved = null;
     try {
-      resolved = copyChipAt({ lines, line: cursor.line, ch: cursor.ch });
+      resolved = copyChipAt({ lines, line: cursor.line, ch: cursor.ch, scope });
     } catch (error) {
       resolved = copyChipFreeze({ state: "none", count: 0 });
     }
     if (!resolved || resolved.state === "none") {
-      copyChipNotify("No copy chip on this line");
+      copyChipNotify(scope ? "No copy chip in this task" : "No copy chip on this line");
       return false;
     }
     if (resolved.state === "ambiguous") {
-      copyChipNotify(String(resolved.count) + " chips on this line · move onto one");
+      const where = resolved.scope === "task" ? "in this task" : "on this line";
+      copyChipNotify(String(resolved.count) + " chips " + where + " · move onto one");
       return false;
     }
     const chip = resolved.chip;
@@ -2748,10 +2925,10 @@ function copyChipRegisterCursorCommand(plugin) {
     try {
       plugin.addCommand({
         id: "copy-on-cursor-line",
-        name: "Copy chip on cursor line",
+        name: "Copy chip at cursor",
         editorCallback: (editor, view) => {
           try {
-            const maybe = copyChipRunCursorCommand(editor, view);
+            const maybe = copyChipRunCursorCommand(editor, view, plugin.app);
             if (maybe && typeof maybe.catch === "function") {
               maybe.catch(() => false);
             }
@@ -5080,7 +5257,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       } catch (apiError) {
         this.api = copyChipFreeze({
           copyChips: copyChipFreeze({
-            version: 1,
+            version: 2,
             parse: () => null,
             scanLine: () => copyChipFreeze([]),
             serialize: () => copyChipFreeze({ ok: false, reason: "unavailable" }),
@@ -5201,7 +5378,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
 
   copyChipsBuildApi() {
     const copyChips = copyChipFreeze({
-      version: 1,
+      version: 2,
       parse(content) {
         try {
           return copyChipParseContent(content);

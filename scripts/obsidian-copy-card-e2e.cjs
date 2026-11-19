@@ -286,7 +286,7 @@ function appDocProbe() {
 }
 
 function cardProbeExpression() {
-  return "(() => { try { const app=window.app; const doc=app&&app.workspace&&app.workspace.containerEl&&app.workspace.containerEl.ownerDocument||document; const notice=Array.from(doc.querySelectorAll('.notice')).map(el=>String(el.textContent||'').trim()).slice(-1)[0]||''; const root=doc.querySelector('.bob-copy-card'); const modal=doc.querySelector('.modal.bob-copy-card-modal'); if(!root||!modal)return {open:false,notice}; const rows=Array.from(root.querySelectorAll('.bob-copy-card-row')).map(row=>{ const key=row.querySelector('.bob-copy-card-key'); const value=row.querySelector('.bob-copy-card-value'); const reason=row.querySelector('.bob-copy-card-reason,.bob-copy-card-reason-text'); const id=String(row.id||'').replace(/^bob-copy-card-row-/,''); const state=['unavailable','error','collision'].find(name=>row.classList.contains('is-'+name))||'ready'; return {id,key:String(key&&key.textContent||'').trim().toLowerCase(),label:String((row.querySelector('.bob-copy-card-label')||{}).textContent||'').trim(),value:String(value&&value.textContent||'').trim(),reason:String(reason&&reason.textContent||'').trim(),state,disabled:row.getAttribute('aria-disabled')==='true',selected:row.getAttribute('aria-selected')==='true'}; }); const divider=root.querySelector('.bob-copy-card-divider:not(.is-chip)'); const chipDivider=root.querySelector('.bob-copy-card-divider.is-chip'); const block=rows.find(row=>row.id==='block-id'); const taskState=!divider?'none':block&&block.state==='unavailable'?'no-id':'ready'; return {open:true,title:String((root.querySelector('.bob-copy-card-title')||{}).textContent||'').trim(),subtitle:String((root.querySelector('.bob-copy-card-subtitle')||{}).textContent||'').trim(),rows,taskDivider:Boolean(divider),chipDivider:Boolean(chipDivider),taskState,taskTitle:String((divider&&divider.querySelector('.bob-copy-card-divider-title')||{}).textContent||'').trim(),footer:String((root.querySelector('.bob-copy-card-footer')||{}).textContent||'').trim(),live:String((root.querySelector('.bob-copy-card-live')||{}).textContent||'').trim(),notice}; } catch(e) { return {open:false,error:String(e&&e.message||e)}; } })()";
+  return "(() => { try { const app=window.app; const doc=app&&app.workspace&&app.workspace.containerEl&&app.workspace.containerEl.ownerDocument||document; const notice=Array.from(doc.querySelectorAll('.notice')).map(el=>String(el.textContent||'').trim()).slice(-1)[0]||''; const root=doc.querySelector('.bob-copy-card'); const modal=doc.querySelector('.modal.bob-copy-card-modal'); if(!root||!modal)return {open:false,notice}; const rows=Array.from(root.querySelectorAll('.bob-copy-card-row')).map(row=>{ const key=row.querySelector('.bob-copy-card-key'); const value=row.querySelector('.bob-copy-card-value'); const reason=row.querySelector('.bob-copy-card-reason,.bob-copy-card-reason-text'); const id=String(row.id||'').replace(/^bob-copy-card-row-/,''); const state=['unavailable','error','collision'].find(name=>row.classList.contains('is-'+name))||'ready'; return {id,key:String(key&&key.textContent||'').trim().toLowerCase(),label:String((row.querySelector('.bob-copy-card-label')||{}).textContent||'').trim(),value:String(value&&value.textContent||'').trim(),reason:String(reason&&reason.textContent||'').trim(),state,disabled:row.getAttribute('aria-disabled')==='true',selected:row.getAttribute('aria-selected')==='true'}; }); const divider=root.querySelector('.bob-copy-card-divider:not(.is-chip)'); const chipDivider=root.querySelector('.bob-copy-card-divider.is-chip'); const block=rows.find(row=>row.id==='block-id'); const taskState=!divider?'none':block&&block.state==='unavailable'?'no-id':'ready'; return {open:true,title:String((root.querySelector('.bob-copy-card-title')||{}).textContent||'').trim(),subtitle:String((root.querySelector('.bob-copy-card-subtitle')||{}).textContent||'').trim(),rows,taskDivider:Boolean(divider),chipDivider:Boolean(chipDivider),chipDividerTitle:String((chipDivider&&chipDivider.querySelector('.bob-copy-card-divider-title')||{}).textContent||'').trim(),taskState,taskTitle:String((divider&&divider.querySelector('.bob-copy-card-divider-title')||{}).textContent||'').trim(),footer:String((root.querySelector('.bob-copy-card-footer')||{}).textContent||'').trim(),live:String((root.querySelector('.bob-copy-card-live')||{}).textContent||'').trim(),notice}; } catch(e) { return {open:false,error:String(e&&e.message||e)}; } })()";
 }
 
 async function waitFor(client, expression, predicate, label, timeoutMs) {
@@ -368,6 +368,24 @@ async function writeClipboard(client, value) {
   return client.evaluate("(() => (async()=>{ try{ if(navigator.clipboard&&typeof navigator.clipboard.writeText==='function'){ await navigator.clipboard.writeText(" + text + "); return {ok:true}; } const req=window.require||require; const electron=req('electron'); if(electron&&electron.clipboard){electron.clipboard.writeText(" + text + ");return {ok:true};} return {ok:false,error:'clipboard write API unavailable'}; }catch(e){return {ok:false,error:String(e&&e.message||e)};} })())()");
 }
 
+async function waitForClipboard(client, expected) {
+  const deadline = Date.now() + 5000;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readClipboard(client);
+    if (last && last.ok && last.value === expected) return last;
+    await sleep(80);
+  }
+  return last;
+}
+
+async function executeCommandById(client, commandId) {
+  const id = JSON.stringify(String(commandId));
+  return client.evaluate(
+    "(() => { try { return { ok: window.app.commands.executeCommandById(" + id + ") !== false }; } catch (e) { return { ok: false, error: String(e&&e.message||e) }; } })()",
+  );
+}
+
 async function openCardAt(client, needle, ctrlY) {
   const cursor = await setCursor(client, needle);
   if (!cursor || cursor.ok !== true) throw new Error("could not position cursor: " + JSON.stringify(cursor));
@@ -415,6 +433,12 @@ async function capturePair(client, outDir, slug, report) {
   await setTheme(client, "light");
 }
 
+async function scrollCopyCardRowsToBottom(client) {
+  return client.evaluate(
+    "(() => { const doc=" + appDocProbe() + "; const rows=doc.querySelector('.bob-copy-card-rows'); if(!rows)return false; rows.scrollTop=rows.scrollHeight; return true; })()",
+  );
+}
+
 async function setViewportWidth(client, width) {
   await client.call("Emulation.setDeviceMetricsOverride", {
     width,
@@ -435,6 +459,9 @@ function runSelfTest() {
   assert.ok(text.includes("^" + fixture.TASKS.id.blockId));
   assert.ok(text.includes("- [ ] #task " + fixture.TASKS.noId.title));
   assert.ok(text.includes("- [x] #task " + fixture.TASKS.closed.title));
+  assert.ok(text.includes("- [ ] #task " + fixture.TASKS.taskChip.title));
+  assert.ok(text.includes("`copy: task one`"));
+  assert.ok(text.includes("- [ ] #task " + fixture.TASKS.nestedChipTask.title));
   assert.ok(text.includes("[[Copy card e2e#^" + fixture.TASKS.id.blockId));
   assert.ok(text.includes("Plain prose"));
   assert.ok(text.includes("Fence example"));
@@ -459,6 +486,7 @@ function runSelfTest() {
     taskDivider: true,
     taskState: "ready",
     taskTitle: fixture.TASKS.id.title,
+    chipDividerTitle: "",
     rows: [
       { id: "path", state: "ready" },
       { id: "block-id", state: "ready" },
@@ -793,6 +821,113 @@ async function runE2e(args) {
       );
       record("chip-single-notice", Boolean(closed && /^Copied /.test(closed.notice || "")), (closed && closed.notice) || "");
     }
+
+    // Task-scope C row: the cursor is on the task line and the only chip is
+    // in a child note. Its source line and literal payload remain intact.
+    const taskChipSeed = await seedClipboard("task-chip-single");
+    card = await openCardAt(client, fixture.CHIP.taskSingleNeedle, true);
+    {
+      const chipRow = (card.rows || []).find((entry) => entry.id === "chip");
+      record(
+        "task-chip-single-row-present",
+        Boolean(
+          card && card.open && chipRow && chipRow.state === "ready" &&
+          String(chipRow.label || "").startsWith("Chip \u00b7 deploy") &&
+          card.chipDividerTitle === "in this task",
+        ),
+        JSON.stringify({ row: chipRow, dividerTitle: card.chipDividerTitle }),
+      );
+      record("task-chip-single-payload-previewed", chipRow && chipRow.value === fixture.CHIP.taskSinglePayload.trimEnd());
+      const scrolled = await scrollCopyCardRowsToBottom(client);
+      record("task-chip-single-screenshot-row-visible", scrolled === true);
+      await capturePair(client, outDir, "task-scope", report);
+    }
+    await dispatchKey(client, { key: "c" });
+    {
+      const closed = await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "task chip C copy");
+      const copied = await readClipboard(client);
+      record(
+        "task-chip-single-copy-byte-exact",
+        Boolean(closed && copied && copied.ok && copied.value === fixture.CHIP.taskSinglePayload && copied.value !== taskChipSeed.sentinel),
+        copied && copied.ok ? JSON.stringify(copied.value) : (copied && copied.error) || "clipboard unavailable",
+      );
+      record("task-chip-single-notice", Boolean(closed && /^Copied /.test(closed.notice || "")), (closed && closed.notice) || "");
+    }
+
+    // Task-scope ambiguity remains explicit and leaves the clipboard alone.
+    const taskPairSeed = await seedClipboard("task-chip-pair");
+    card = await openCardAt(client, fixture.CHIP.taskPairNeedle, true);
+    {
+      const chipRow = (card.rows || []).find((entry) => entry.id === "chip");
+      record(
+        "task-chip-pair-row-dimmed",
+        Boolean(
+          card && card.open && chipRow && chipRow.state === "unavailable" &&
+          chipRow.reason === "2 chips in this task \u00b7 move onto one" && chipRow.key === "c",
+        ),
+        JSON.stringify(chipRow),
+      );
+    }
+    await dispatchKey(client, { key: "c" });
+    {
+      await sleep(300);
+      const still = await client.evaluate(cardProbeExpression());
+      const copied = await readClipboard(client);
+      record(
+        "task-chip-pair-keeps-clipboard",
+        Boolean(still && still.open && copied && copied.ok && copied.value === taskPairSeed.sentinel),
+        JSON.stringify({ open: still && still.open, copied: copied && copied.value }),
+      );
+      await closeCard(client);
+    }
+
+    card = await openCardAt(client, fixture.CHIP.nestedParentNeedle, true);
+    record(
+      "nested-task-chip-does-not-leak-to-parent",
+      Boolean(card && card.open && !(card.rows || []).some((entry) => entry.id === "chip")),
+      JSON.stringify((card.rows || []).map((entry) => entry.id)),
+    );
+    await closeCard(client);
+
+    // `gy` uses the same task scope when Navigation Hotkeys is present.
+    const gySeed = await seedClipboard("gy-task-chip");
+    await setCursor(client, fixture.CHIP.taskSingleNeedle);
+    const gyCommand = await executeCommandById(client, "bob-copy-chips:copy-on-cursor-line");
+    const gyCopied = await waitForClipboard(client, fixture.CHIP.taskSinglePayload);
+    record("gy-task-scope-copy", Boolean(gyCommand && gyCommand.ok && gyCopied && gyCopied.ok && gyCopied.value === fixture.CHIP.taskSinglePayload && gyCopied.value !== gySeed.sentinel), JSON.stringify(gyCopied));
+
+    const gyLineOnlySeed = await seedClipboard("gy-no-navigation");
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.disablePlugin('bob-navigation-hotkeys'); return true; } catch (e) { return false; } })())()");
+    await waitFor(
+      client,
+      "Boolean(window.app&&window.app.plugins&&window.app.plugins.plugins&&window.app.plugins.plugins['bob-navigation-hotkeys'])",
+      (value) => value === false,
+      "bob-navigation-hotkeys disabled",
+      15000,
+    );
+    await setCursor(client, fixture.CHIP.taskSingleNeedle);
+    const gyFallbackCommand = await executeCommandById(client, "bob-copy-chips:copy-on-cursor-line");
+    const gyFallbackNotice = await waitFor(
+      client,
+      cardProbeExpression(),
+      (value) => value && value.open === false && value.notice === "No copy chip on this line",
+      "gy line-only notice without navigation",
+      8000,
+    );
+    const gyFallbackClip = await readClipboard(client);
+    record(
+      "gy-without-navigation-stays-line-only",
+      Boolean(gyFallbackCommand && gyFallbackCommand.ok && gyFallbackNotice && gyFallbackClip && gyFallbackClip.ok && gyFallbackClip.value === gyLineOnlySeed.sentinel),
+      JSON.stringify({ notice: gyFallbackNotice && gyFallbackNotice.notice, clipboard: gyFallbackClip && gyFallbackClip.value }),
+    );
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.enablePlugin('bob-navigation-hotkeys'); return true; } catch (e) { return false; } })())()");
+    await waitFor(
+      client,
+      "Boolean(window.app&&window.app.plugins&&window.app.plugins.plugins&&window.app.plugins.plugins['bob-navigation-hotkeys'])",
+      (value) => value === true,
+      "bob-navigation-hotkeys re-enabled",
+      15000,
+    );
 
     // Copy-chip C row: two chips with the cursor on neither is a dimmed nudge.
     const ambiguousSeed = await seedClipboard("chip-ambiguous");

@@ -708,6 +708,10 @@ function buildCopyCardRow(fields) {
     reason: fields.reason || null,
     isPath: fields.isPath === true,
     copyChip: fields.copyChip || null,
+    chipScope:
+      fields.chipScope === "task" || fields.chipScope === "cursor"
+        ? fields.chipScope
+        : null,
   });
 }
 

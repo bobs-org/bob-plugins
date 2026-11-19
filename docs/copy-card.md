@@ -8,7 +8,8 @@ Copy card: a compact, filter-less card where every row copies with one key.
 `P` stays the `↵` default. The cursor's task contributes an `I` Block ID
 row, and `copy.templates` in `~/.config/bob/config.yml` adds rows such as
 `the ^{block_id} task in the {path} file`. An optional `C` chip row copies
-the copy chip at the cursor when Bob Copy Chips is enabled. Preview and
+the copy chip at the cursor, or the only chip in the cursor's task, when Bob
+Copy Chips is enabled. Preview and
 clipboard never disagree, and copying never writes the vault.
 
 ## Keys
@@ -20,7 +21,7 @@ clipboard never disagree, and copying never writes the vault.
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
 | `I` | Block ID (task group) | `bank-records` |
-| `C` | Chip (CHIP group; needs Bob Copy Chips) | the payload of the copy chip at the cursor, e.g. the text inside `` ``copy[deploy]: run `just check` now `` `` |
+| `C` | Chip (CHIP group; needs Bob Copy Chips) | the payload of the copy chip at the cursor, or the only chip in the cursor's task |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
 A template like `^{block_id}` copies the caret form for anyone who wants it.
@@ -68,9 +69,32 @@ or Task Link under the cursor never supplies the block ID.
 The result has three states: `none` (no group), `no-id` (dimmed group with
 `none yet · Ctrl+6 on the task line names one`), and `ready` (live group).
 
-The chip uses the same cursor rule as `gy` through `api.copyChips.chipAt`:
-ready shows a live row, ambiguous a dimmed row, and none or a missing plugin
-no group. The copy shows the card's Notice and flashes the chip.
+An optional `C` chip row copies the copy chip at the cursor, or the only chip
+in the cursor's task, when Bob Copy Chips is enabled. It appears only when
+the resolver returns one chip; an ambiguous result is dimmed, and no result
+or a missing plugin adds no group. The copy shows the card's Notice and
+flashes the chip.
+
+## What the C row shows
+
+The card asks `api.copyChips.chipAt` to resolve the current line first:
+
+1. A chip under the cursor wins.
+2. Otherwise, the only chip on the cursor line wins.
+3. A `bob-copy` fence on or under the cursor resolves as one block chip; other
+   fenced lines and frontmatter never contribute chips.
+4. Two or more chips on the cursor line with the cursor on none show a dimmed
+   `N chips on this line · move onto one` row.
+5. Only when the cursor line has no chip, the card looks for the only chip in
+   the cursor's task. A ready row's `CHIP` divider says `in this task`.
+6. Two or more chips in the task show a dimmed
+   `N chips in this task · move onto one` row. The card never guesses.
+
+The task scope is the task line, its child notes, and its Depends-On, BLOCKS,
+LINKS, and LINKED FROM lines. A nested `#task` subtree belongs to that task,
+not its parent. A `bob-copy` fence counts once as its whole payload; ordinary
+code fences contribute nothing. A Task Link to another note never lends that
+task's chip: the card reads only the live buffer in the current file.
 
 ## Variables
 

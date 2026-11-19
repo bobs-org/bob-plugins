@@ -28,7 +28,10 @@ function copyCardRowAriaLabel(row) {
     return label;
   }
   if (row.state === "ready" || row.state === "collision") {
-    return row.value ? `${label}: ${row.value}` : label;
+    const taskScope = row.id === "chip" && row.chipScope === "task"
+      ? ", in this task"
+      : "";
+    return row.value ? `${label}${taskScope}: ${row.value}` : label;
   }
   return row.reason ? `${label} unavailable: ${row.reason}` : `${label} unavailable`;
 }
@@ -170,6 +173,12 @@ class CopyCardModal extends Modal {
         });
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         divider.createDiv({ cls: "bob-copy-card-divider-label", text: "CHIP" });
+        if (row.state === "ready" && row.chipScope === "task") {
+          divider.createDiv({
+            cls: "bob-copy-card-divider-title",
+            text: "in this task",
+          });
+        }
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         chipDividerRendered = true;
       }

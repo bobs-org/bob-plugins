@@ -13526,6 +13526,10 @@ function buildCopyCardRow(fields) {
     reason: fields.reason || null,
     isPath: fields.isPath === true,
     copyChip: fields.copyChip || null,
+    chipScope:
+      fields.chipScope === "task" || fields.chipScope === "cursor"
+        ? fields.chipScope
+        : null,
   });
 }
 
@@ -13993,7 +13997,60 @@ function resolveCopyCardKey(model, event, ui) {
   return null;
 }
 // ---- src/101b-copy-card-chips.js ----
-// Copy card's optional C row. The API result is a frozen v1 copy-chip
+// The task's lines use the same ownership rule as findOwningTaskLine, but
+// share one Markdown-context parse and memoize owner walks across the block.
+function copyCardTaskScopeLines(lines, ownerLine) {
+  try {
+    const sourceLines = Array.isArray(lines)
+      ? lines
+      : String(lines || "").split(/\r?\n/);
+    if (
+      !Number.isInteger(ownerLine) ||
+      ownerLine < 0 ||
+      ownerLine >= sourceLines.length
+    ) {
+      return Object.freeze([]);
+    }
+    const content = sourceLines.join("\n");
+    const contexts = getMarkdownLineContextsForLines(sourceLines);
+    if (!isObsidianTaskAtLine(content, ownerLine, contexts, sourceLines)) {
+      return Object.freeze([]);
+    }
+    const block = findCurrentBulletChildBlock(sourceLines, ownerLine);
+    const ownerCache = new Map();
+    const ownerFor = (line) => {
+      let current = line;
+      const path = [];
+      let owner = null;
+      while (Number.isInteger(current) && current >= 0 && current < sourceLines.length) {
+        if (ownerCache.has(current)) {
+          owner = ownerCache.get(current);
+          break;
+        }
+        path.push(current);
+        if (isObsidianTaskAtLine(content, current, contexts, sourceLines)) {
+          owner = current;
+          ownerCache.set(current, current);
+          break;
+        }
+        const parent = findNearestParentListItem(sourceLines, current);
+        if (parent === null || parent >= current) break;
+        current = parent;
+      }
+      for (const visited of path) ownerCache.set(visited, owner);
+      return owner;
+    };
+    const result = [ownerLine];
+    for (let line = block.startLine; line < block.endLineExclusive; line += 1) {
+      if (ownerFor(line) === ownerLine) result.push(line);
+    }
+    return Object.freeze(result);
+  } catch (error) {
+    return Object.freeze([]);
+  }
+}
+
+// Copy card's optional C row. The API result is a frozen v2 copy-chip
 // selection; keep its literal payload and source coordinates for copying.
 function buildCopyCardChipRow(spec, result) {
   const resolved = result && typeof result === "object" ? result : null;
@@ -14018,12 +14075,14 @@ function buildCopyCardChipRow(spec, result) {
       preview: copyCardPreviewText(text),
       state: "ready",
       reason: null,
+      chipScope: resolved.scope === "task" ? "task" : "cursor",
       copyChip: chip,
     });
   }
   if (resolved.state === "ambiguous") {
     const count = Number.isInteger(resolved.count) ? resolved.count : 0;
-    const reason = `${count} chips on this line · move onto one`;
+    const where = resolved.scope === "task" ? "in this task" : "on this line";
+    const reason = `${count} chips ${where} · move onto one`;
     return buildCopyCardRow({
       id: spec.id,
       group: "chip",
@@ -14215,7 +14274,10 @@ function copyCardRowAriaLabel(row) {
     return label;
   }
   if (row.state === "ready" || row.state === "collision") {
-    return row.value ? `${label}: ${row.value}` : label;
+    const taskScope = row.id === "chip" && row.chipScope === "task"
+      ? ", in this task"
+      : "";
+    return row.value ? `${label}${taskScope}: ${row.value}` : label;
   }
   return row.reason ? `${label} unavailable: ${row.reason}` : `${label} unavailable`;
 }
@@ -14357,6 +14419,12 @@ class CopyCardModal extends Modal {
         });
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         divider.createDiv({ cls: "bob-copy-card-divider-label", text: "CHIP" });
+        if (row.state === "ready" && row.chipScope === "task") {
+          divider.createDiv({
+            cls: "bob-copy-card-divider-title",
+            text: "in this task",
+          });
+        }
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         chipDividerRendered = true;
       }
@@ -81619,6 +81687,7 @@ function createDependencyNavApi(plugin) {
     inboxRoute: createInboxRouteApi(plugin),
     quickRoll: createQuickRollApi(plugin),
     taskLinkLane: createTaskLinkLaneApi(plugin),
+    taskScope: createCopyCardTaskScopeApi(),
     notice: createNoticeApi(plugin),
     cancel: createCancelApi(),
     // USED BEFORE band v1. Phrase data lives in ledger-tools; this API only
@@ -81701,6 +81770,40 @@ function createDependencyNavApi(plugin) {
         return plugin.recordJump(from, to) === true;
       } catch (_error) {
         return false;
+      }
+    },
+  });
+}
+// ---- src/480a-task-scope-api.js ----
+// Copy card and Bob Copy Chips share this synchronous, pure task resolver.
+function createCopyCardTaskScopeApi() {
+  return Object.freeze({
+    version: 1,
+    at(request) {
+      try {
+        const req = request && typeof request === "object" ? request : {};
+        const lines = req.lines;
+        const line = req.line;
+        if (
+          !Array.isArray(lines) ||
+          !Number.isInteger(line) ||
+          line < 0 ||
+          line >= lines.length
+        ) {
+          return null;
+        }
+        const cursor = Object.freeze({ line, ch: 0 });
+        const task = resolveCopyCardTask(lines, [
+          Object.freeze({ anchor: cursor, head: cursor }),
+        ]);
+        if (!task || (task.state !== "ready" && task.state !== "no-id")) {
+          return null;
+        }
+        const scopeLines = copyCardTaskScopeLines(lines, task.line);
+        if (!scopeLines.includes(line)) return null;
+        return Object.freeze({ ownerLine: task.line, lines: scopeLines });
+      } catch (_error) {
+        return null;
       }
     },
   });
@@ -108857,7 +108960,7 @@ function getCopyCardCopyChipsApi(app) {
   }
 }
 
-function resolveCopyCardChip(api, lines, selections) {
+function resolveCopyCardChip(api, lines, selections, taskScopeLines) {
   if (!api) {
     return null;
   }
@@ -108875,13 +108978,25 @@ function resolveCopyCardChip(api, lines, selections) {
       lines,
       line: Math.floor(head.line),
       ch: Math.floor(head.ch),
+      ...(Array.isArray(taskScopeLines)
+        ? { scope: { kind: "task", lines: taskScopeLines } }
+        : null),
     });
     if (result && result.state === "ready" && result.chip) {
-      return result;
+      return {
+        state: "ready",
+        count: Number.isInteger(result.count) ? result.count : 1,
+        scope: result.scope === "task" ? "task" : "cursor",
+        chip: result.chip,
+      };
     }
     if (result && result.state === "ambiguous") {
       const count = Number.isInteger(result.count) ? result.count : 0;
-      return { state: "ambiguous", count };
+      return {
+        state: "ambiguous",
+        count,
+        scope: result.scope === "task" ? "task" : "cursor",
+      };
     }
     return null;
   } catch (_error) {
@@ -108929,7 +109044,16 @@ class BobNavigationHotkeysCopyCardMixin {
 
     const task = resolveCopyCardTask(lines, selections.length === 1 ? selections : []);
     const copyChipsApi = getCopyCardCopyChipsApi(this.app);
-    const copyChip = resolveCopyCardChip(copyChipsApi, lines, selections);
+    const taskScopeLines =
+      task && (task.state === "ready" || task.state === "no-id")
+        ? copyCardTaskScopeLines(lines, task.line)
+        : null;
+    const copyChip = resolveCopyCardChip(
+      copyChipsApi,
+      lines,
+      selections,
+      taskScopeLines,
+    );
     const relativePath = getVaultRelativeFilePath(file);
     const basePath = this.getVaultBasePath();
     const homePath = getHomeDirectoryPath();
@@ -126584,6 +126708,7 @@ Object.assign(module.exports.helpers, {
   COPY_CARD_BUILTIN_ROWS,
   COPY_CARD_RESERVED_KEYS,
   COPY_CARD_CLOSE_KEY,
+  copyCardTaskScopeLines,
   resolveCopyCardTask,
   parseCopyTemplate,
   renderCopyTemplate,

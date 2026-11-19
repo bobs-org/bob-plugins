@@ -83,7 +83,7 @@ test("the frozen api never throws and exposes grammar helpers", async () => {
   const plugin = new BobCopyChipsPlugin({});
   await plugin.onload();
   const api = plugin.api.copyChips;
-  assert.equal(api.version, 1);
+  assert.equal(api.version, 2);
   assert.deepEqual(api.parse("copy: ssh"), { label: null, text: "ssh" });
   assert.equal(api.parse("Copy: ssh"), null);
   assert.equal(api.scanLine("`copy: ssh`").length, 1);

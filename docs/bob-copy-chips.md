@@ -13,7 +13,7 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Copy Chips |
 | ID | `bob-copy-chips` |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |
@@ -24,7 +24,7 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
-| Copy chip on cursor line | `copy-on-cursor-line` | — |
+| Copy chip at cursor | `copy-on-cursor-line` | — |
 | Make or edit copy chip | `make-or-edit` | Mod+Shift+y |
 <!-- END GENERATED: commands -->
 
@@ -85,9 +85,9 @@ body selects text and never copies. Only the button copies, flipping to
 | --- | --- | --- |
 | Click / tap a chip | Live Preview, Reading view, embeds, hover previews, Tasks query results | Copy the payload |
 | Copy button on a `bob-copy` card | Live Preview, Reading view, embeds | Copy the fence payload, byte-exact |
-| Palette "Copy chip on cursor line" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor and flash it like a yank |
-| `gy` (normal mode; mapped in the vault vimrc to `copy-on-cursor-line`) | Editor, normal mode | Copy the chip at the cursor and flash it |
-| `Mod+Y` then `C` (Copy card) | Copy card | Copy the chip at the cursor, previewed first |
+| Palette "Copy chip at cursor" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor, or the only chip in the cursor's task, and flash it like a yank |
+| `gy` (normal mode; mapped in the vault vimrc to `copy-on-cursor-line`) | Editor, normal mode | Copy the chip at the cursor, or the only chip in the cursor's task, and flash it |
+| `Mod+Y` then `C` (Copy card) | Copy card | Copy the chip at the cursor, or the only chip in the cursor's task, previewed first |
 | Palette "Make or edit copy chip" (`make-or-edit`), default Mod+Shift+Y | Editor, Source mode and Live Preview | Open the authoring card for the selection, chip, or cursor |
 | Alt+Click a chip | Live Preview | Open the authoring card for that chip |
 | Move the cursor into the span | Live Preview | Reveal the Markdown source, like a link |
@@ -100,7 +100,7 @@ work; secondary buttons, cancellations, and releases outside never copy.
 
 ## Cursor rule
 
-`api.copyChips.chipAt({ lines, line, ch })` uses zero-based lines and UTF-16
+`api.copyChips.chipAt({ lines, line, ch, scope? })` uses zero-based lines and UTF-16
 character offsets. `from` / `to` are line-relative offsets including the
 delimiters, with `to` exclusive, matching `scanLine`:
 
@@ -112,12 +112,27 @@ delimiters, with `to` exclusive, matching `scanLine`:
    resolve on their own.
 4. Two or more chips on the line with the cursor on none is `ambiguous`:
    "N chips on this line · move onto one". Never guess.
-5. Zero chips, non-`bob-copy` fences, frontmatter, or invalid input is
+5. If the cursor line has no chip and the caller supplies a valid task scope,
+   the only chip on the task's owned lines wins. A nested `#task` subtree is
+   excluded. A `bob-copy` fence touched by the scope counts once; other fences
+   and frontmatter contribute nothing.
+6. Two or more chips in that task scope are `ambiguous`:
+   "N chips in this task · move onto one". Never guess.
+7. Zero chips, non-`bob-copy` cursor fences, frontmatter, or invalid input is
    `none`.
 
+`scope` is opt-in: `{ kind: "task", lines }` contains the zero-based lines
+owned by the cursor's task and must include the cursor line. Ready and
+ambiguous results add `scope: "cursor"` or `scope: "task"`; `none` keeps its
+`{ state: "none", count: 0 }` shape. Without a valid scope, resolution stays
+line-only. `gy` uses the task step when Bob Navigation Hotkeys exposes
+`taskScope`; without that plugin it stays line-only. `Mod+Shift+Y` never uses
+the task step.
+
 A block chip carries `{ form: "block", label, text, line, from, to }` where
-`line` is the cursor line and `[from, to]` covers it, so a missing card
-still flashes where the user is. Fence detection matches the Copy card's
+`line` is the cursor line for a cursor result or the fence opening line for a
+task-scope result, and `[from, to]` covers that line, so a missing card still
+flashes where the chip lives. Fence detection matches the Copy card's
 list-nested backtick and tilde fence handling. The cursor command works in
 Source mode and with revealed source as well as rendered Live Preview, and
 flashes the card when one is visible.
@@ -186,9 +201,9 @@ Context, in this order:
 2. A nonempty selection: wrap that exact text. Reversed and Vim visual
    ranges count. Label starts focused.
 3. An empty selection on a copy chip: **Edit copy chip**, filled from the
-   chip under the cursor — the same cursor rule as Copy on cursor line. Two
-   chips on the line with the cursor on neither is **N chips on this line ·
-   move onto one**.
+   chip under the cursor or the only chip on that line. `Mod+Shift+Y` never
+   uses the task fallback. Two chips on the line with the cursor on neither
+   is **N chips on this line · move onto one**.
 4. An empty selection inside a plain code span: convert that span's
    CommonMark-normalized text. Spans inside fences, links, wikilinks,
    frontmatter, math, or comments are left alone.

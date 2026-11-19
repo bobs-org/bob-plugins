@@ -293,7 +293,30 @@ function copyChipNotify(message) {
   }
 }
 
-async function copyChipRunCursorCommand(editor, view) {
+function copyChipTaskScopeFromNav(app, lines, line) {
+  try {
+    const navPlugin =
+      app && app.plugins && app.plugins.plugins
+        ? app.plugins.plugins["bob-navigation-hotkeys"]
+        : null;
+    const taskScope = navPlugin && navPlugin.api && navPlugin.api.taskScope;
+    if (
+      !taskScope ||
+      !(Number(taskScope.version) >= 1) ||
+      typeof taskScope.at !== "function"
+    ) {
+      return null;
+    }
+    const result = taskScope.at({ lines, line });
+    return result && Array.isArray(result.lines)
+      ? { kind: "task", lines: result.lines }
+      : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function copyChipRunCursorCommand(editor, view, app) {
   try {
     const lines = copyChipReadEditorLines(editor, view);
     const cursor = copyChipReadEditorCursor(editor, view);
@@ -301,18 +324,20 @@ async function copyChipRunCursorCommand(editor, view) {
       copyChipNotify("No copy chip on this line");
       return false;
     }
+    const scope = copyChipTaskScopeFromNav(app, lines, cursor.line);
     let resolved = null;
     try {
-      resolved = copyChipAt({ lines, line: cursor.line, ch: cursor.ch });
+      resolved = copyChipAt({ lines, line: cursor.line, ch: cursor.ch, scope });
     } catch (error) {
       resolved = copyChipFreeze({ state: "none", count: 0 });
     }
     if (!resolved || resolved.state === "none") {
-      copyChipNotify("No copy chip on this line");
+      copyChipNotify(scope ? "No copy chip in this task" : "No copy chip on this line");
       return false;
     }
     if (resolved.state === "ambiguous") {
-      copyChipNotify(String(resolved.count) + " chips on this line · move onto one");
+      const where = resolved.scope === "task" ? "in this task" : "on this line";
+      copyChipNotify(String(resolved.count) + " chips " + where + " · move onto one");
       return false;
     }
     const chip = resolved.chip;
@@ -342,10 +367,10 @@ function copyChipRegisterCursorCommand(plugin) {
     try {
       plugin.addCommand({
         id: "copy-on-cursor-line",
-        name: "Copy chip on cursor line",
+        name: "Copy chip at cursor",
         editorCallback: (editor, view) => {
           try {
-            const maybe = copyChipRunCursorCommand(editor, view);
+            const maybe = copyChipRunCursorCommand(editor, view, plugin.app);
             if (maybe && typeof maybe.catch === "function") {
               maybe.catch(() => false);
             }

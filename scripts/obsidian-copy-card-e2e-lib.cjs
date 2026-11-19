@@ -16,6 +16,10 @@ const TASKS = Object.freeze({
     title: "Close the old records task",
     blockId: "closed-records",
   }),
+  taskChip: Object.freeze({ title: "Copy one chip from the task", blockId: "task-chip-single" }),
+  taskChipPair: Object.freeze({ title: "Disambiguate task chips", blockId: "task-chip-pair" }),
+  nestedChipParent: Object.freeze({ title: "Keep nested task chips separate", blockId: "nested-chip-parent" }),
+  nestedChipTask: Object.freeze({ title: "Copy from the nested task", blockId: "nested-chip-task" }),
   pomodoro: "11:00-11:25 — review records",
 });
 
@@ -26,6 +30,11 @@ const CHIP = Object.freeze({
   singlePayload: "run `just check` now ",
   singleLabel: "deploy",
   pairNeedle: "Chip pair",
+  taskSingleNeedle: "Copy one chip from the task",
+  taskSinglePayload: "run `just check` once ",
+  taskPairNeedle: "Disambiguate task chips",
+  nestedParentNeedle: "Keep nested task chips separate",
+  nestedTaskNeedle: "Copy from the nested task",
 });
 
 function notePath() {
@@ -38,6 +47,15 @@ function seedNote() {
     "",
     "- [ ] #task " + TASKS.id.title + " ^" + TASKS.id.blockId,
     "  - a child note for the records task",
+    "- [ ] #task " + TASKS.taskChip.title + " ^" + TASKS.taskChip.blockId,
+    "  - Task chip single: ``copy[deploy]: run `just check` once ``",
+    "- [ ] #task " + TASKS.taskChipPair.title + " ^" + TASKS.taskChipPair.blockId,
+    "  - a chipless line inside this task",
+    "  - `copy: task one`",
+    "  - `copy: task two`",
+    "- [ ] #task " + TASKS.nestedChipParent.title + " ^" + TASKS.nestedChipParent.blockId,
+    "  - [ ] #task " + TASKS.nestedChipTask.title + " ^" + TASKS.nestedChipTask.blockId,
+    "    - `copy: nested-only`",
     "- [ ] #task " + TASKS.noId.title,
     "- [x] #task " + TASKS.closed.title + " ^" + TASKS.closed.blockId,
     "",
@@ -147,6 +165,12 @@ function assertProbe(probe, expected) {
   if (options.taskTitle && probe.taskTitle !== options.taskTitle) {
     failures.push("task title did not match: " + String(probe.taskTitle || ""));
   }
+  if (
+    options.chipDividerTitle !== undefined &&
+    probe.chipDividerTitle !== options.chipDividerTitle
+  ) {
+    failures.push("CHIP divider title was " + String(probe.chipDividerTitle || ""));
+  }
   if (options.unavailableRows) {
     for (const id of options.unavailableRows) {
       const row = rows.get(id);
@@ -187,6 +211,7 @@ function expectedScreenshotNames() {
   const states = [
     "prose",
     "identified-task",
+    "task-scope",
     "no-id",
     "broken-collision",
     "narrow-460",

@@ -9,6 +9,9 @@ const {
   COPY_CARD_RESERVED_KEYS,
   COPY_CARD_CLOSE_KEY,
   resolveCopyCardTask,
+  copyCardTaskScopeLines,
+  findOwningTaskLine,
+  createDependencyNavApi,
   parseCopyTemplate,
   renderCopyTemplate,
   buildCopyCardModel,
@@ -182,6 +185,75 @@ test("task rule: task line, child note, and Depends-On / LINKS child", () => {
   const onProse = resolveCopyCardTask(lines, cursor(5));
   assert.equal(onProse.state, "none");
   assert.equal(onProse.line, null);
+});
+
+test("task scope matches owning-task lines through nested tasks and fenced children", () => {
+  const fixtures = [
+    [
+      "- [ ] #task Parent ^parent",
+      "  - child note",
+      "  - ⛓️ **DEPENDS ON:** [[#^needed]]",
+      "  - 🧱 **BLOCKS:** [[#^blocked]]",
+      "  - 🪢 **LINKS:** [[#^linked]]",
+      "",
+      "  - [ ] #task Nested ^nested",
+      "    - nested note",
+      "",
+      "  ```",
+      "  sample",
+      "  ```",
+      "  - code:",
+      "    ````",
+      "    sample",
+      "    ````",
+      "- [ ] #task Sibling ^sibling",
+    ],
+  ];
+  for (const lines of fixtures) {
+    for (const ownerLine of [0, 6, 16]) {
+      if (!lines[ownerLine] || !lines[ownerLine].includes("#task")) continue;
+      const scope = copyCardTaskScopeLines(lines, ownerLine);
+      assert.ok(Object.isFrozen(scope));
+      assert.ok(scope.includes(ownerLine));
+      for (let line = ownerLine + 1; line < lines.length; line += 1) {
+        if (findOwningTaskLine(lines, line) === ownerLine) {
+          assert.ok(scope.includes(line), `owner ${ownerLine}, line ${line}`);
+        } else if (scope.includes(line)) {
+          assert.equal(findOwningTaskLine(lines, line), ownerLine);
+        }
+        if (line > ownerLine && !lines[line].trim()) continue;
+        const indent = (lines[line].match(/^\s*/) || [""])[0].length;
+        if (lines[line].trim() && indent === 0) break;
+      }
+    }
+  }
+  assert.deepEqual(copyCardTaskScopeLines(["- plain"], 0), []);
+  assert.ok(Object.isFrozen(copyCardTaskScopeLines(["- plain"], 99)));
+});
+
+test("taskScope nav API mirrors the card scope and rejects non-task or junk input", () => {
+  const lines = [
+    "- [ ] #task Parent ^parent",
+    "  - child",
+    "  - [ ] #task Nested ^nested",
+    "    - nested child",
+  ];
+  const api = createDependencyNavApi(null).taskScope;
+  assert.equal(api.version, 1);
+  assert.ok(Object.isFrozen(api));
+  const parent = api.at({ lines, line: 0 });
+  assert.equal(parent.ownerLine, 0);
+  assert.deepEqual(parent.lines, copyCardTaskScopeLines(lines, 0));
+  assert.ok(Object.isFrozen(parent));
+  assert.ok(Object.isFrozen(parent.lines));
+  assert.equal(api.at({ lines, line: 1 }).ownerLine, 0);
+  assert.equal(api.at({ lines, line: 2 }).ownerLine, 2);
+  assert.equal(api.at({ lines, line: 4 }), null);
+  assert.equal(api.at({ lines: ["```", "- [ ] #task Hidden", "```"], line: 1 }), null);
+  for (const request of [null, {}, { lines, line: -1 }, { lines, line: 99 }, { lines: "nope", line: 0 }]) {
+    assert.doesNotThrow(() => api.at(request));
+    assert.equal(api.at(request), null);
+  }
 });
 
 test("task rule: closed checkbox still resolves", () => {
@@ -607,6 +679,34 @@ test("model: ready unlabeled chip keeps byte-exact value and carries copyChip", 
   assert.equal(chip.label, `Chip · ${payload}`);
   assert.equal(chip.value, payload);
   assert.equal(chip.copyChip, chipInput);
+  assert.equal(chip.chipScope, "cursor");
+});
+
+test("model: task-scope chip carries its source scope and task ambiguity reason", () => {
+  const payload = "just docs-check";
+  const chipInput = { form: "inline", label: "deploy", text: payload, line: 1, from: 4, to: 38 };
+  const ready = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [],
+    copyChip: { state: "ready", chip: chipInput, count: 1, scope: "task" },
+  });
+  assert.equal(row(ready, "chip").chipScope, "task");
+  assert.equal(row(ready, "chip").value, payload);
+
+  const ambiguous = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [],
+    copyChip: { state: "ambiguous", count: 2, scope: "task" },
+  });
+  assert.equal(row(ambiguous, "chip").reason, "2 chips in this task · move onto one");
+  assert.equal(resolveCopyCardKey(ambiguous, keyEvent("c"), { highlightId: "path", busy: false }).reason,
+    "2 chips in this task · move onto one");
 });
 
 test("model: ready labeled chip uses the trimmed label for its face", () => {

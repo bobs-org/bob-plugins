@@ -15,7 +15,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       } catch (apiError) {
         this.api = copyChipFreeze({
           copyChips: copyChipFreeze({
-            version: 1,
+            version: 2,
             parse: () => null,
             scanLine: () => copyChipFreeze([]),
             serialize: () => copyChipFreeze({ ok: false, reason: "unavailable" }),
@@ -136,7 +136,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
 
   copyChipsBuildApi() {
     const copyChips = copyChipFreeze({
-      version: 1,
+      version: 2,
       parse(content) {
         try {
           return copyChipParseContent(content);

@@ -153,6 +153,40 @@ capture the refusal and completed retry separately.
 Missing workflows fail the run. `--scope sheet` explicitly skips
 interactions and proves rendering only; its result cannot stand for full acceptance.
 
+The live-vault coverage audit requires Python 3 with PyYAML (also used by the docs
+tooling). It is independent of the scratch UI walkthrough and never repairs the vault:
+
+```bash
+python3 scripts/record-card-vault-coverage.py --vault ~/bob \
+  --bob /absolute/path/to/bob --report /tmp/record-coverage.json
+```
+
+It discovers canonical records across non-hidden Markdown and cross-checks album
+folders against `bob albums list`, then calls only `bob records show`. Each authored
+YAML key must have exactly one home in properties, identity or other. Absent schema
+rows are counted separately. Duplicate YAML keys, malformed inputs, misplaced records,
+failed reads and unexpected findings fail explicitly. Reports retain paths, keys,
+hashes and finding codes, without publishing values. `--expected-findings` accepts a
+JSON array of exact `path`, `code`, `field` (or null), and nonempty `reason` entries;
+unused entries fail, so a blanket warning allowlist cannot hide new findings.
+Rejected reads retain Bob's error code and remain failures; their authored keys do not
+contribute to the covered-key count. An expected warning cannot excuse a rejected read.
+
+Up to eight independent read-only Bob processes run concurrently (`--workers`, 1–8)
+to shorten the live audit window. Each has a 30-second timeout (`--timeout`), and the
+audit hashes all inspected Markdown before and after. Results remain ordered by path;
+each discovered record is checked even when multiple paths resolve to the same route.
+Concurrent changes are recorded as unstable reads
+and trigger at most two snapshot retries (`--retries`). Successful record reads can be
+reused within a run only when all paths, all frontmatter, and complete album and record
+bytes remain unchanged. Ordinary-note body activity therefore triggers a fresh scan
+without repeating every successful subprocess. Rejections and timeouts are always
+retried. The report records executed/reused reads per attempt, and the final full
+snapshot must settle; a settled retry never claims the original run was byte-neutral.
+The report must live outside the vault. Symlinks are reported without following them.
+The registered offline test exercises positive
+coverage and deliberate omissions, duplicates, read failures and concurrent changes.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

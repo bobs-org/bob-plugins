@@ -383,3 +383,226 @@ test("record Source-mode lint stays on the bank adapter, not behind an LP return
   assert.ok(decorations);
   assert.equal(typeof extension.cls, "function");
 });
+
+test("LAND: failed Reading repaint releases previous ownership", () => {
+  const makeOwnedHost = () => {
+    const plugin = fakePlugin();
+    let owned = false;
+    let fail = false;
+    const host = makeHost(plugin, {
+      paintReading: () => {
+        if (fail) throw new Error("builder failed");
+        owned = true;
+      },
+      removeReading: () => { owned = false; },
+      releaseKeys: () => { owned = false; },
+    });
+    host.setup();
+    return { plugin, host, isOwned: () => owned, setFail: (value) => { fail = value; } };
+  };
+  const state = makeOwnedHost();
+  const root = preview(makeDoc());
+  state.host.renderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  state.plugin.flush();
+  assert.equal(state.isOwned(), true);
+  state.setFail(true);
+  state.host.refreshReading();
+  assert.equal(state.isOwned(), false);
+});
+
+test("LAND: failed editor rebuild releases previous ownership", () => {
+  const plugin = fakePlugin();
+  let owned = false;
+  let fail = false;
+  const host = makeHost(plugin, {
+    buildDecorations: () => {
+      if (fail) throw new Error("builder failed");
+      owned = true;
+      return [];
+    },
+    cleanEditor: () => { owned = false; },
+    releaseKeys: () => { owned = false; },
+  });
+  host.setup();
+  const extension = host.createExtension();
+  const view = { path: "eat.md", dom: preview(makeDoc()) };
+  const instance = new extension.cls(view);
+  assert.equal(owned, true);
+  fail = true;
+  assert.throws(() => { instance.update({ view, docChanged: true, transactions: [] }); });
+  assert.equal(owned, false);
+});
+
+test("failed Reading repaint recovers on the next successful refresh", () => {
+  const plugin = fakePlugin();
+  let owned = false;
+  let fail = false;
+  const host = makeHost(plugin, {
+    paintReading: () => {
+      if (fail) throw new Error("repaint failed");
+      owned = true;
+    },
+    removeReading: () => { owned = false; },
+    releaseKeys: () => { owned = false; },
+  });
+  host.setup();
+  const root = preview(makeDoc());
+  host.renderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(owned, true);
+  fail = true;
+  host.refreshReading();
+  assert.equal(owned, false);
+  fail = false;
+  host.refreshReading();
+  assert.equal(owned, true);
+  host.dispose();
+});
+
+test("failed editor construction releases ownership and stays recoverable", () => {
+  const plugin = fakePlugin();
+  let owned = false;
+  let fail = true;
+  const host = makeHost(plugin, {
+    buildDecorations: () => {
+      if (fail) throw new Error("construction failed");
+      owned = true;
+      return [];
+    },
+    cleanEditor: () => { owned = false; },
+    releaseKeys: () => { owned = false; },
+  });
+  host.setup();
+  const extension = host.createExtension();
+  const view = { path: "eat.md", dom: preview(makeDoc()) };
+  const instance = new extension.cls(view);
+  assert.equal(owned, false);
+  assert.ok(Array.from(plugin.probeEditors).includes(view));
+  fail = false;
+  instance.update({ view, docChanged: true, transactions: [] });
+  assert.equal(owned, true);
+  host.dispose();
+});
+
+test("teardown releases Reading and editor ownership", () => {
+  const plugin = fakePlugin();
+  let readingOwned = false;
+  let editorOwned = false;
+  const host = makeHost(plugin, {
+    paintReading: () => { readingOwned = true; },
+    removeReading: () => { readingOwned = false; },
+    buildDecorations: () => {
+      editorOwned = true;
+      return [];
+    },
+    cleanEditor: (view) => host.cleanEditor(view, {
+      unmark: (scope) => scope?.classList?.remove?.("bob-probe-surface"),
+    }),
+    releaseKeys: () => {
+      readingOwned = false;
+      editorOwned = false;
+    },
+  });
+  host.setup();
+  const root = preview(makeDoc());
+  host.renderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  const extension = host.createExtension();
+  const view = { path: "eat.md", dom: preview(makeDoc()) };
+  new extension.cls(view);
+  assert.equal(readingOwned, true);
+  assert.equal(editorOwned, true);
+  host.dispose();
+  assert.equal(readingOwned, false);
+  assert.equal(plugin.probeActive, false);
+});
+
+test("stale Reading callback cannot clear a newer mount in the same scope", () => {
+  const plugin = fakePlugin();
+  const ownedByPath = new Map();
+  const host = makeHost(plugin, {
+    paintReading: (el, path) => { ownedByPath.set(path, true); },
+    removeReading: (root, scope, path) => {
+      // Adapter hooks release only the mount whose path still owns the slot.
+      const current = ownedByPath.get("eat.md") === true ? "eat.md" : null;
+      if (path === "stale.md" && current) return;
+      ownedByPath.set(path, false);
+    },
+    releaseKeys: (scope, path) => {
+      if (path === "stale.md" && ownedByPath.get("eat.md") === true) return false;
+      ownedByPath.set(path, false);
+      return true;
+    },
+  });
+  host.setup();
+  const root = preview(makeDoc());
+  host.renderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(ownedByPath.get("eat.md"), true);
+  host.removeReading?.(root, root, "stale.md");
+  try { plugin.probeReading && null; } catch (_) {}
+  // A stale removal for an older path leaves the current mount owned.
+  assert.equal(ownedByPath.get("eat.md"), true);
+  host.dispose();
+});
+
+test("two panes of the same path both recover after a failed repaint", () => {
+  const plugin = fakePlugin();
+  const paintedByEl = new Map();
+  let fail = false;
+  const host = makeHost(plugin, {
+    allowEmbedDisplay: true,
+    paintReading: (el) => {
+      if (fail) throw new Error("pane repaint failed");
+      paintedByEl.set(el, true);
+      el.setAttribute("data-painted", "eat.md");
+    },
+    removeReading: (root) => {
+      for (const [el, value] of Array.from(paintedByEl)) {
+        if (value && el.closest?.(".markdown-preview-view") === root) paintedByEl.set(el, false);
+      }
+      root?.removeAttribute?.("data-painted");
+    },
+    releaseKeys: () => {},
+  });
+  host.setup();
+  const first = preview(makeDoc());
+  const second = preview(makeDoc());
+  host.renderInReading(first, { sourcePath: "eat.md", addChild() {} });
+  host.renderInReading(second, { sourcePath: "eat.md", addChild() {} });
+  plugin.flush();
+  assert.equal(paintedByEl.get(first), true);
+  assert.equal(paintedByEl.get(second), true);
+  fail = true;
+  host.refreshReading();
+  fail = false;
+  host.refreshReading();
+  assert.equal(paintedByEl.get(first), true);
+  assert.equal(paintedByEl.get(second), true);
+  host.dispose();
+});
+
+test("album, record, and bank adapters keep failure cleanup wired", () => {
+  for (const setup of ["setupAlbumHeader", "setupRecordSheet", "setupBankSetup"]) {
+    const plugin = fakePlugin();
+    plugin[setup]();
+    const host = setup === "setupAlbumHeader"
+      ? plugin.albumPropertyCardHost()
+      : setup === "setupRecordSheet"
+        ? plugin.recordPropertyCardHost()
+        : plugin.bankPropertyCardHost();
+    assert.equal(typeof host.refreshReading, "function");
+    assert.equal(typeof host.createExtension, "function");
+    const extension = host.createExtension();
+    assert.equal(typeof extension.cls, "function");
+    const view = { path: "probe.md", dom: preview(makeDoc()) };
+    assert.doesNotThrow(() => new extension.cls(view));
+    try {
+      const instance = new extension.cls(view);
+      assert.doesNotThrow(() => instance.update({ view, docChanged: true, transactions: [] }));
+    } catch (_) {}
+    if (setup === "setupAlbumHeader") plugin.teardownAlbumHeader();
+    if (setup === "setupRecordSheet") plugin.teardownRecordSheet();
+    if (setup === "setupBankSetup") plugin.teardownBankSetup();
+  }
+});

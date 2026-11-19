@@ -539,7 +539,10 @@ test("synthetic fourth kind opens without changing the gate or dispatcher", () =
       match: ({ path }) => path === "fourth.md",
       open: () => { fourthCalls.push("fourth"); },
     }), true);
-    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({ target: "fourth" })), {
+    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
+      target: "fourth",
+      allowedKinds: harness.plugin.propertyCardKinds(),
+    })), {
       act: true, reason: "schema-key",
     });
     const event = makeKeyEvent();
@@ -630,6 +633,152 @@ test("throwing matchers fail open without consuming Vim keys", () => {
       assert.deepEqual(missEvent.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
       miss.plugin.teardownSchemaDoubleEquals();
     });
+    harness.plugin.teardownSchemaDoubleEquals();
+  });
+});
+
+test("LAND: unregister bank remains effective during runtime dispatch", () => {
+  const harness = makeHarness("bank.md", { frontmatter: {} });
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    harness.plugin.unregisterPropertyCard("bank");
+    assert.equal(harness.plugin.resolvePropertyCard({ path: "bank.md", frontmatter: {} }), null);
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "bank.md", frontmatter: {} }, harness.plugin),
+      null,
+    );
+    harness.win.dispatch(makeKeyEvent());
+    assert.equal(harness.bankCalls.length, 0);
+    harness.plugin.teardownSchemaDoubleEquals();
+  });
+});
+
+test("facade resolves builtins and extensions through the instance registry", () => {
+  const harness = makeHarness("fourth.md", { frontmatter: { type: "[[note]]" } });
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "bank.md", frontmatter: {} }),
+      "bank",
+    );
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "eat.md", frontmatter: { type: "[[album]]" } }),
+      "album",
+    );
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind(
+        { path: "eat/nagi.md", frontmatter: { type: "[[record]]" } },
+      ),
+      "record",
+    );
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind({ path: "fourth.md", frontmatter: {} }),
+      null,
+    );
+    assert.equal(
+      harness.plugin.registerPropertyCard({
+        kind: "fourth",
+        match: ({ path }) => path === "fourth.md",
+        open: () => {},
+      }),
+      true,
+    );
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind(
+        { path: "fourth.md", frontmatter: {} },
+        harness.plugin,
+      ),
+      "fourth",
+    );
+    assert.equal(
+      helpers.schemaDoubleEqualsTargetKind(
+        { path: "fourth.md", frontmatter: {} },
+        harness.plugin.propertyCardRegistry(),
+      ),
+      "fourth",
+    );
+    const resolved = harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} });
+    assert.equal(resolved && resolved.kind, "fourth");
+    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
+      target: "fourth",
+      allowedKinds: harness.plugin.propertyCardKinds(),
+    })), { act: true, reason: "schema-key" });
+    const event = makeKeyEvent();
+    harness.win.dispatch(event);
+    assert.equal(event.counts.preventDefault, 1);
+    harness.plugin.unregisterPropertyCard("fourth");
+    harness.plugin.teardownSchemaDoubleEquals();
+  });
+});
+
+test("two instances isolate the same extension kind", () => {
+  const first = makeHarness("fourth.md", { frontmatter: { type: "[[note]]" } });
+  const second = makeHarness("fourth.md", { frontmatter: { type: "[[note]]" } });
+  withGlobals(first.win, first.doc, () => {
+    first.plugin.setupSchemaDoubleEquals();
+    assert.equal(first.plugin.registerPropertyCard({
+      kind: "fourth",
+      match: ({ path }) => path === "fourth.md",
+      open: () => { first.recordCalls.push("fourth"); },
+    }), true);
+    assert.equal(
+      first.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} })?.kind,
+      "fourth",
+    );
+  });
+  withGlobals(second.win, second.doc, () => {
+    second.plugin.setupSchemaDoubleEquals();
+    assert.equal(
+      second.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} }),
+      null,
+    );
+    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
+      target: "fourth",
+      allowedKinds: second.plugin.propertyCardKinds(),
+    })).reason, "not-schema-note");
+    const event = makeKeyEvent();
+    second.win.dispatch(event);
+    assert.deepEqual(event.counts, { preventDefault: 0, stopPropagation: 0, immediate: 0 });
+    assert.equal(second.recordCalls.length, 0);
+  });
+  withGlobals(first.win, first.doc, () => {
+    assert.deepEqual(helpers.schemaDoubleEqualsGate(actingInput({
+      target: "fourth",
+      allowedKinds: first.plugin.propertyCardKinds(),
+    })), { act: true, reason: "schema-key" });
+    const event = makeKeyEvent();
+    first.win.dispatch(event);
+    assert.deepEqual(event.counts, { preventDefault: 1, stopPropagation: 1, immediate: 1 });
+    first.plugin.teardownSchemaDoubleEquals();
+  });
+  withGlobals(second.win, second.doc, () => {
+    second.plugin.teardownSchemaDoubleEquals();
+  });
+});
+
+test("unregister teardown and setup restore builtins without reviving extensions", () => {
+  const harness = makeHarness("eat.md", { frontmatter: { type: "[[album]]" } });
+  withGlobals(harness.win, harness.doc, () => {
+    harness.plugin.setupSchemaDoubleEquals();
+    assert.equal(harness.plugin.registerPropertyCard({
+      kind: "fourth",
+      match: ({ path }) => path === "fourth.md",
+      open: () => {},
+    }), true);
+    assert.equal(harness.plugin.unregisterPropertyCard("bank"), true);
+    assert.equal(harness.plugin.resolvePropertyCard({ path: "bank.md", frontmatter: {} }), null);
+    harness.plugin.teardownSchemaDoubleEquals();
+    assert.deepEqual(harness.plugin.propertyCardRegistry(), []);
+    harness.plugin.setupSchemaDoubleEquals();
+    assert.deepEqual(harness.plugin.propertyCardKinds().slice(0, 3), ["bank", "album", "record"]);
+    assert.equal(harness.plugin.resolvePropertyCard({ path: "fourth.md", frontmatter: {} }), null);
+    const event = makeKeyEvent();
+    harness.win.dispatch(event);
+    assert.deepEqual(harness.albumCalls, [{ filePath: "eat.md" }]);
+    const both = makeKeyEvent();
+    harness.win.dispatch(both);
+    harness.doc.dispatch(both);
+    assert.equal(harness.albumCalls.length, 2);
     harness.plugin.teardownSchemaDoubleEquals();
   });
 });

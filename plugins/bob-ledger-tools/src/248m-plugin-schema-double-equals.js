@@ -51,10 +51,35 @@ function schemaDoubleEqualsVimSnapshot(cm) {
 }
 
 const PROPERTY_CARD_BUILTIN_KINDS = ["bank", "album", "record"];
-const propertyCardExtraKinds = [];
 
+// Legacy gate default: built-ins only. Extension kinds live on each plugin
+// instance's registry; callers pass that registry's kinds as allowedKinds.
 function propertyCardGateKinds() {
-  return [...PROPERTY_CARD_BUILTIN_KINDS, ...propertyCardExtraKinds];
+  return [...PROPERTY_CARD_BUILTIN_KINDS];
+}
+
+// Shared matcher behind both the registry entries and the compatibility
+// facade. One predicate per built-in kind, in bank → album → record order.
+function propertyCardBuiltinMatch(kind, { path, frontmatter } = {}) {
+  try {
+    if (kind === "bank") {
+      return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
+    }
+    if (kind === "album") {
+      return typeof albumSchemaEntryKindOf === "function"
+        && albumSchemaEntryKindOf(frontmatter) === "album";
+    }
+    if (kind === "record") {
+      // Records use the canonical check, never the loose kind fallback: the
+      // fallback classifies notes like bank/2026-11.md as records, which must
+      // keep their Vim reindent.
+      return typeof recordSheetIsCanonicalRecordType === "function"
+        && recordSheetIsCanonicalRecordType(frontmatter) === true;
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 
 function schemaDoubleEqualsGate(input) {
@@ -87,21 +112,37 @@ function schemaDoubleEqualsGate(input) {
   return { act: true, reason: "schema-key" };
 }
 
-function schemaDoubleEqualsTargetKind({ path, frontmatter } = {}) {
-  if (typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path)) {
-    return "bank";
+function schemaDoubleEqualsTargetKind(input = {}, registryOrPlugin) {
+  const { path, frontmatter } = input || {};
+  // Explicit instance registry context resolves extensions too. Accepts an
+  // entry array or a plugin exposing propertyCardRegistry().
+  let entries = null;
+  try {
+    if (Array.isArray(registryOrPlugin)) entries = registryOrPlugin;
+    else if (registryOrPlugin && typeof registryOrPlugin.propertyCardRegistry === "function") {
+      entries = registryOrPlugin.propertyCardRegistry();
+    }
+  } catch (_) {
+    entries = null;
   }
-  const kind =
-    typeof albumSchemaEntryKindOf === "function"
-      ? albumSchemaEntryKindOf(frontmatter)
-      : "other";
-  if (kind === "album") return "album";
-  // Records use the canonical check, never the loose kind fallback: the
-  // fallback classifies notes like bank/2026-11.md as records, which must
-  // keep their Vim reindent.
-  if (typeof recordSheetIsCanonicalRecordType === "function"
-    && recordSheetIsCanonicalRecordType(frontmatter)) {
-    return "record";
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      try {
+        if (entry && entry.match({ path, frontmatter }) === true) return entry.kind;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+  // Compatibility facade over the shared matcher: same bank → album →
+  // record results as the registry built-ins, without a separate predicate.
+  for (const kind of PROPERTY_CARD_BUILTIN_KINDS) {
+    try {
+      if (propertyCardBuiltinMatch(kind, { path, frontmatter }) === true) return kind;
+    } catch (_) {
+      continue;
+    }
   }
   return null;
 }
@@ -193,12 +234,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   if (kind === "bank") {
     return {
       kind: "bank",
-      match({ path } = {}) {
-        try {
-          return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
-        } catch (_) {
-          return false;
-        }
+      match(input = {}) {
+        return propertyCardBuiltinMatch("bank", input);
       },
       open({ path } = {}) {
         void plugin.openBankSetupCard({ sourcePath: path });
@@ -208,13 +245,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   if (kind === "album") {
     return {
       kind: "album",
-      match({ frontmatter } = {}) {
-        try {
-          return typeof albumSchemaEntryKindOf === "function"
-            && albumSchemaEntryKindOf(frontmatter) === "album";
-        } catch (_) {
-          return false;
-        }
+      match(input = {}) {
+        return propertyCardBuiltinMatch("album", input);
       },
       open({ path } = {}) {
         void plugin.openAlbumSchemaEntry({ filePath: path });
@@ -223,13 +255,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   }
   return {
     kind: "record",
-    match({ frontmatter } = {}) {
-      try {
-        return typeof recordSheetIsCanonicalRecordType === "function"
-          && recordSheetIsCanonicalRecordType(frontmatter) === true;
-      } catch (_) {
-        return false;
-      }
+    match(input = {}) {
+      return propertyCardBuiltinMatch("record", input);
     },
     open({ path } = {}) {
       void plugin.openRecordCard({ filePath: path });
@@ -256,9 +283,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     const registry = this.propertyCardRegistry();
     if (registry.some((item) => item.kind === kind)) return false;
     registry.push({ kind, match, open });
-    if (!PROPERTY_CARD_BUILTIN_KINDS.includes(kind) && !propertyCardExtraKinds.includes(kind)) {
-      propertyCardExtraKinds.push(kind);
-    }
     return true;
   }
 
@@ -267,8 +291,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     const index = registry.findIndex((item) => item.kind === kind);
     if (index < 0) return false;
     registry.splice(index, 1);
-    const extraIndex = propertyCardExtraKinds.indexOf(kind);
-    if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
     return true;
   }
 
@@ -326,13 +348,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
 
   teardownSchemaDoubleEquals() {
     this.schemaDoubleEqualsActive = false;
-    try {
-      const registry = this.propertyCardRegistry();
-      for (const entry of [...registry]) {
-        const extraIndex = propertyCardExtraKinds.indexOf(entry.kind);
-        if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
-      }
-    } catch (_) {}
     this.propertyCardRegistryEntries = [];
   }
 
@@ -359,6 +374,9 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
+    // The registry is the sole dispatch authority. Built-ins are seeded at
+    // setup; a runtime miss never mutates the registry or consumes Vim input.
+    // An explicit new setup restores built-ins as before.
     let entry = null;
     try {
       if (typeof this.resolvePropertyCard === "function") {
@@ -366,17 +384,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       }
     } catch (_) {
       entry = null;
-    }
-    if (!entry) {
-      try {
-        const fallback = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
-        if (fallback && typeof this.ensurePropertyCardBuiltins === "function") {
-          this.ensurePropertyCardBuiltins();
-          entry = this.resolvePropertyCard({ path: filePath, frontmatter });
-        }
-      } catch (_) {
-        entry = null;
-      }
     }
     const target = entry ? entry.kind : null;
     let allowedKinds = null;

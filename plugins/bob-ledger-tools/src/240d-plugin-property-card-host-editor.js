@@ -2,6 +2,21 @@
 // refresh-effect dispatch, editorAttributes restoration, and editor-scope
 // class tracking. Split from 240c so each host fragment stays small.
 
+function propertyCardHostCleanupEditorView(controller, options, view, path) {
+  try {
+    if (typeof options.cleanEditor === "function") options.cleanEditor(view);
+    else controller.cleanEditor(view);
+  } catch (_) {}
+  try { controller.releaseKeys?.(view?.dom, path); } catch (_) {}
+}
+
+function propertyCardHostFallbackDecorations() {
+  try {
+    if (typeof Decoration !== "undefined" && Decoration?.none !== undefined) return Decoration.none;
+  } catch (_) {}
+  return null;
+}
+
 function propertyCardHostCreateExtension(controller, options, editors) {
   try {
     if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
@@ -9,9 +24,23 @@ function propertyCardHostCreateExtension(controller, options, editors) {
     const PluginClass = class {
       constructor(view) {
         this.view = view;
-        this.path = controller.viewPath(view);
-        this.decorations = options.buildDecorations?.(view);
-        editors().add(view);
+        let path = null;
+        try { path = controller.viewPath(view); } catch (_) { path = null; }
+        this.path = path;
+        let decorations = null;
+        let failed = false;
+        try {
+          decorations = options.buildDecorations?.(view);
+        } catch (_) {
+          failed = true;
+          decorations = null;
+        }
+        if (failed || decorations == null) {
+          propertyCardHostCleanupEditorView(controller, options, view, path);
+          if (decorations == null) decorations = propertyCardHostFallbackDecorations();
+        }
+        this.decorations = decorations;
+        try { editors().add(view); } catch (_) {}
       }
       update(update) {
         const path = controller.viewPath(update.view);
@@ -23,7 +52,21 @@ function propertyCardHostCreateExtension(controller, options, editors) {
         const rebuild = path !== this.path || notified || extra
           || update.docChanged || update.viewportChanged;
         this.path = path;
-        if (rebuild) this.decorations = options.buildDecorations?.(update.view);
+        if (rebuild) {
+          let next = null;
+          try {
+            next = options.buildDecorations?.(update.view);
+          } catch (error) {
+            propertyCardHostCleanupEditorView(controller, options, update.view, path);
+            this.decorations = propertyCardHostFallbackDecorations();
+            throw error;
+          }
+          if (next == null) {
+            propertyCardHostCleanupEditorView(controller, options, update.view, path);
+            next = propertyCardHostFallbackDecorations();
+          }
+          this.decorations = next;
+        }
       }
       destroy() {
         try {

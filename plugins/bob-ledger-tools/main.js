@@ -79764,14 +79764,23 @@ function propertyCardOwnBankKeys(scope, desktop) {
 // and editor-extension hooks. Adapters keep their models, gates, builders,
 // anchors, and post-paint behavior.
 //
+// Failure contract: paintReading owns its mount. When it throws, the host
+// removes that mount through the adapter's path-bound removeReading and
+// releases only that mount's generation/path-bound ownership, so native
+// Properties are exposed. The widget stays tracked so a later successful
+// refresh recovers. Editor construction/rebuild failures clear stale
+// decorations and release the same view's ownership the same way.
+//
 // Options (final API):
 //   plugin, kind, readingPriority,
 //   fields: { active, reading, readingPending, readingTimers, editors,
 //             editorScopes, refreshTimer, keySlots? },
 //   setTimeout, clearTimeout, pathOf(path),
 //   readingRoot(el), readingScope(root),
-//   acceptReading(el, ctx), paintReading(el, path),
-//   removeReading(root, scope, path),
+//   acceptReading(el, ctx), paintReading(el, path) (throwing paint counts as
+//     a failed mount; a null return means no card and stays native),
+//   removeReading(root, scope, path) (path-bound DOM removal plus that
+//     mount's ownership release; must stay idempotent),
 //   onBind(widget, el, ctx, root), onUnbind(widget),
 //   afterRefreshReading(),
 //   allowEmbedDisplay (default false; album/record/bank pass true),
@@ -79781,7 +79790,9 @@ function propertyCardOwnBankKeys(scope, desktop) {
 //   cleanEditor(view),
 //   ownKeys(scope, path), releaseKeys(scope, path) (wrap the adapter's
 //     property-card slot; controller.commitMount(scope, path, mounted) owns
-//     after a successful mount and releases after a failed one),
+//     after a successful mount and releases after a failed one for generic
+//     hosts — production adapters own directly inside paint/build and the
+//     host calls their remove/clean hooks on failure),
 //   editorScopeOf(root, view), markEditorScope(scope, view, enabled),
 //   workspaceEvents: string[] (each schedules refresh() unless
 //     onWorkspaceEvent(name, controller) is given, which replaces it),
@@ -80089,7 +80100,16 @@ function createPropertyCardHost(options) {
         if (!widget.surface || painted.has(widget.surface)) continue;
         if (!allowEmbedDisplay && propertyCardScopeIsEmbed(widget.scope || widget.surface)) continue;
         painted.add(widget.surface);
-        try { options.paintReading?.(widget.el, widget.path); } catch (_) {}
+        try {
+          options.paintReading?.(widget.el, widget.path);
+        } catch (_) {
+          // Failed repaint: remove this mount's DOM and release only its
+          // generation/path-bound ownership. The adapter hook already owns
+          // the path check, so a stale callback cannot clear a newer mount
+          // in the same scope. Keep the widget tracked for recovery.
+          try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
+          try { controller.releaseKeys?.(widget.scope, widget.path); } catch (_) {}
+        }
       }
       try { options.afterRefreshReading?.(); } catch (_) {}
     },
@@ -80169,6 +80189,21 @@ function createPropertyCardHost(options) {
 // refresh-effect dispatch, editorAttributes restoration, and editor-scope
 // class tracking. Split from 240c so each host fragment stays small.
 
+function propertyCardHostCleanupEditorView(controller, options, view, path) {
+  try {
+    if (typeof options.cleanEditor === "function") options.cleanEditor(view);
+    else controller.cleanEditor(view);
+  } catch (_) {}
+  try { controller.releaseKeys?.(view?.dom, path); } catch (_) {}
+}
+
+function propertyCardHostFallbackDecorations() {
+  try {
+    if (typeof Decoration !== "undefined" && Decoration?.none !== undefined) return Decoration.none;
+  } catch (_) {}
+  return null;
+}
+
 function propertyCardHostCreateExtension(controller, options, editors) {
   try {
     if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
@@ -80176,9 +80211,23 @@ function propertyCardHostCreateExtension(controller, options, editors) {
     const PluginClass = class {
       constructor(view) {
         this.view = view;
-        this.path = controller.viewPath(view);
-        this.decorations = options.buildDecorations?.(view);
-        editors().add(view);
+        let path = null;
+        try { path = controller.viewPath(view); } catch (_) { path = null; }
+        this.path = path;
+        let decorations = null;
+        let failed = false;
+        try {
+          decorations = options.buildDecorations?.(view);
+        } catch (_) {
+          failed = true;
+          decorations = null;
+        }
+        if (failed || decorations == null) {
+          propertyCardHostCleanupEditorView(controller, options, view, path);
+          if (decorations == null) decorations = propertyCardHostFallbackDecorations();
+        }
+        this.decorations = decorations;
+        try { editors().add(view); } catch (_) {}
       }
       update(update) {
         const path = controller.viewPath(update.view);
@@ -80190,7 +80239,21 @@ function propertyCardHostCreateExtension(controller, options, editors) {
         const rebuild = path !== this.path || notified || extra
           || update.docChanged || update.viewportChanged;
         this.path = path;
-        if (rebuild) this.decorations = options.buildDecorations?.(update.view);
+        if (rebuild) {
+          let next = null;
+          try {
+            next = options.buildDecorations?.(update.view);
+          } catch (error) {
+            propertyCardHostCleanupEditorView(controller, options, update.view, path);
+            this.decorations = propertyCardHostFallbackDecorations();
+            throw error;
+          }
+          if (next == null) {
+            propertyCardHostCleanupEditorView(controller, options, update.view, path);
+            next = propertyCardHostFallbackDecorations();
+          }
+          this.decorations = next;
+        }
       }
       destroy() {
         try {
@@ -89486,10 +89549,35 @@ function schemaDoubleEqualsVimSnapshot(cm) {
 }
 
 const PROPERTY_CARD_BUILTIN_KINDS = ["bank", "album", "record"];
-const propertyCardExtraKinds = [];
 
+// Legacy gate default: built-ins only. Extension kinds live on each plugin
+// instance's registry; callers pass that registry's kinds as allowedKinds.
 function propertyCardGateKinds() {
-  return [...PROPERTY_CARD_BUILTIN_KINDS, ...propertyCardExtraKinds];
+  return [...PROPERTY_CARD_BUILTIN_KINDS];
+}
+
+// Shared matcher behind both the registry entries and the compatibility
+// facade. One predicate per built-in kind, in bank → album → record order.
+function propertyCardBuiltinMatch(kind, { path, frontmatter } = {}) {
+  try {
+    if (kind === "bank") {
+      return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
+    }
+    if (kind === "album") {
+      return typeof albumSchemaEntryKindOf === "function"
+        && albumSchemaEntryKindOf(frontmatter) === "album";
+    }
+    if (kind === "record") {
+      // Records use the canonical check, never the loose kind fallback: the
+      // fallback classifies notes like bank/2026-11.md as records, which must
+      // keep their Vim reindent.
+      return typeof recordSheetIsCanonicalRecordType === "function"
+        && recordSheetIsCanonicalRecordType(frontmatter) === true;
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 
 function schemaDoubleEqualsGate(input) {
@@ -89522,21 +89610,37 @@ function schemaDoubleEqualsGate(input) {
   return { act: true, reason: "schema-key" };
 }
 
-function schemaDoubleEqualsTargetKind({ path, frontmatter } = {}) {
-  if (typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path)) {
-    return "bank";
+function schemaDoubleEqualsTargetKind(input = {}, registryOrPlugin) {
+  const { path, frontmatter } = input || {};
+  // Explicit instance registry context resolves extensions too. Accepts an
+  // entry array or a plugin exposing propertyCardRegistry().
+  let entries = null;
+  try {
+    if (Array.isArray(registryOrPlugin)) entries = registryOrPlugin;
+    else if (registryOrPlugin && typeof registryOrPlugin.propertyCardRegistry === "function") {
+      entries = registryOrPlugin.propertyCardRegistry();
+    }
+  } catch (_) {
+    entries = null;
   }
-  const kind =
-    typeof albumSchemaEntryKindOf === "function"
-      ? albumSchemaEntryKindOf(frontmatter)
-      : "other";
-  if (kind === "album") return "album";
-  // Records use the canonical check, never the loose kind fallback: the
-  // fallback classifies notes like bank/2026-11.md as records, which must
-  // keep their Vim reindent.
-  if (typeof recordSheetIsCanonicalRecordType === "function"
-    && recordSheetIsCanonicalRecordType(frontmatter)) {
-    return "record";
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      try {
+        if (entry && entry.match({ path, frontmatter }) === true) return entry.kind;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+  // Compatibility facade over the shared matcher: same bank → album →
+  // record results as the registry built-ins, without a separate predicate.
+  for (const kind of PROPERTY_CARD_BUILTIN_KINDS) {
+    try {
+      if (propertyCardBuiltinMatch(kind, { path, frontmatter }) === true) return kind;
+    } catch (_) {
+      continue;
+    }
   }
   return null;
 }
@@ -89628,12 +89732,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   if (kind === "bank") {
     return {
       kind: "bank",
-      match({ path } = {}) {
-        try {
-          return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
-        } catch (_) {
-          return false;
-        }
+      match(input = {}) {
+        return propertyCardBuiltinMatch("bank", input);
       },
       open({ path } = {}) {
         void plugin.openBankSetupCard({ sourcePath: path });
@@ -89643,13 +89743,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   if (kind === "album") {
     return {
       kind: "album",
-      match({ frontmatter } = {}) {
-        try {
-          return typeof albumSchemaEntryKindOf === "function"
-            && albumSchemaEntryKindOf(frontmatter) === "album";
-        } catch (_) {
-          return false;
-        }
+      match(input = {}) {
+        return propertyCardBuiltinMatch("album", input);
       },
       open({ path } = {}) {
         void plugin.openAlbumSchemaEntry({ filePath: path });
@@ -89658,13 +89753,8 @@ function propertyCardBuiltinEntry(plugin, kind) {
   }
   return {
     kind: "record",
-    match({ frontmatter } = {}) {
-      try {
-        return typeof recordSheetIsCanonicalRecordType === "function"
-          && recordSheetIsCanonicalRecordType(frontmatter) === true;
-      } catch (_) {
-        return false;
-      }
+    match(input = {}) {
+      return propertyCardBuiltinMatch("record", input);
     },
     open({ path } = {}) {
       void plugin.openRecordCard({ filePath: path });
@@ -89691,9 +89781,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     const registry = this.propertyCardRegistry();
     if (registry.some((item) => item.kind === kind)) return false;
     registry.push({ kind, match, open });
-    if (!PROPERTY_CARD_BUILTIN_KINDS.includes(kind) && !propertyCardExtraKinds.includes(kind)) {
-      propertyCardExtraKinds.push(kind);
-    }
     return true;
   }
 
@@ -89702,8 +89789,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
     const index = registry.findIndex((item) => item.kind === kind);
     if (index < 0) return false;
     registry.splice(index, 1);
-    const extraIndex = propertyCardExtraKinds.indexOf(kind);
-    if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
     return true;
   }
 
@@ -89761,13 +89846,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
 
   teardownSchemaDoubleEquals() {
     this.schemaDoubleEqualsActive = false;
-    try {
-      const registry = this.propertyCardRegistry();
-      for (const entry of [...registry]) {
-        const extraIndex = propertyCardExtraKinds.indexOf(entry.kind);
-        if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
-      }
-    } catch (_) {}
     this.propertyCardRegistryEntries = [];
   }
 
@@ -89794,6 +89872,9 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
+    // The registry is the sole dispatch authority. Built-ins are seeded at
+    // setup; a runtime miss never mutates the registry or consumes Vim input.
+    // An explicit new setup restores built-ins as before.
     let entry = null;
     try {
       if (typeof this.resolvePropertyCard === "function") {
@@ -89801,17 +89882,6 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       }
     } catch (_) {
       entry = null;
-    }
-    if (!entry) {
-      try {
-        const fallback = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
-        if (fallback && typeof this.ensurePropertyCardBuiltins === "function") {
-          this.ensurePropertyCardBuiltins();
-          entry = this.resolvePropertyCard({ path: filePath, frontmatter });
-        }
-      } catch (_) {
-        entry = null;
-      }
     }
     const target = entry ? entry.kind : null;
     let allowedKinds = null;

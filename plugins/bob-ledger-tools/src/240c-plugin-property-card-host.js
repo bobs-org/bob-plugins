@@ -4,14 +4,23 @@
 // and editor-extension hooks. Adapters keep their models, gates, builders,
 // anchors, and post-paint behavior.
 //
+// Failure contract: paintReading owns its mount. When it throws, the host
+// removes that mount through the adapter's path-bound removeReading and
+// releases only that mount's generation/path-bound ownership, so native
+// Properties are exposed. The widget stays tracked so a later successful
+// refresh recovers. Editor construction/rebuild failures clear stale
+// decorations and release the same view's ownership the same way.
+//
 // Options (final API):
 //   plugin, kind, readingPriority,
 //   fields: { active, reading, readingPending, readingTimers, editors,
 //             editorScopes, refreshTimer, keySlots? },
 //   setTimeout, clearTimeout, pathOf(path),
 //   readingRoot(el), readingScope(root),
-//   acceptReading(el, ctx), paintReading(el, path),
-//   removeReading(root, scope, path),
+//   acceptReading(el, ctx), paintReading(el, path) (throwing paint counts as
+//     a failed mount; a null return means no card and stays native),
+//   removeReading(root, scope, path) (path-bound DOM removal plus that
+//     mount's ownership release; must stay idempotent),
 //   onBind(widget, el, ctx, root), onUnbind(widget),
 //   afterRefreshReading(),
 //   allowEmbedDisplay (default false; album/record/bank pass true),
@@ -21,7 +30,9 @@
 //   cleanEditor(view),
 //   ownKeys(scope, path), releaseKeys(scope, path) (wrap the adapter's
 //     property-card slot; controller.commitMount(scope, path, mounted) owns
-//     after a successful mount and releases after a failed one),
+//     after a successful mount and releases after a failed one for generic
+//     hosts — production adapters own directly inside paint/build and the
+//     host calls their remove/clean hooks on failure),
 //   editorScopeOf(root, view), markEditorScope(scope, view, enabled),
 //   workspaceEvents: string[] (each schedules refresh() unless
 //     onWorkspaceEvent(name, controller) is given, which replaces it),
@@ -329,7 +340,16 @@ function createPropertyCardHost(options) {
         if (!widget.surface || painted.has(widget.surface)) continue;
         if (!allowEmbedDisplay && propertyCardScopeIsEmbed(widget.scope || widget.surface)) continue;
         painted.add(widget.surface);
-        try { options.paintReading?.(widget.el, widget.path); } catch (_) {}
+        try {
+          options.paintReading?.(widget.el, widget.path);
+        } catch (_) {
+          // Failed repaint: remove this mount's DOM and release only its
+          // generation/path-bound ownership. The adapter hook already owns
+          // the path check, so a stale callback cannot clear a newer mount
+          // in the same scope. Keep the widget tracked for recovery.
+          try { options.removeReading?.(widget.surface, widget.scope, widget.path); } catch (_) {}
+          try { controller.releaseKeys?.(widget.scope, widget.path); } catch (_) {}
+        }
       }
       try { options.afterRefreshReading?.(); } catch (_) {}
     },

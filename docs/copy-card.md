@@ -7,8 +7,9 @@ description: "Reference for the Cmd+Y Copy card: keys, task rows, template gramm
 Copy card: a compact, filter-less card where every row copies with one key.
 `P` stays the `↵` default. The cursor's task contributes an `I` Block ID
 row, and `copy.templates` in `~/.config/bob/config.yml` adds rows such as
-`the ^{block_id} task in the {path} file`. Preview and clipboard never disagree,
-and copying never writes the vault.
+`the ^{block_id} task in the {path} file`. An optional `C` chip row copies
+the copy chip at the cursor when Bob Copy Chips is enabled. Preview and
+clipboard never disagree, and copying never writes the vault.
 
 ## Keys
 
@@ -19,16 +20,17 @@ and copying never writes the vault.
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
 | `I` | Block ID (task group) | `bank-records` |
+| `C` | Chip (CHIP group; needs Bob Copy Chips) | the payload of the copy chip at the cursor, e.g. the text inside `` ``copy[deploy]: run `just check` now `` `` |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
 A template like `^{block_id}` copies the caret form for anyone who wants it.
 
-`P A F N I` are reserved even when their row is hidden, and `q` is reserved
+`P A F N I C` are reserved even when their row is hidden, and `q` is reserved
 for closing, so a key never changes meaning. `Esc`, `q`, and `Ctrl+[` close
 the card without copying; `Shift+Q` closes like `q`. Other `Shift+letter`
 keys are ignored.
-Row order is fixed: file rows, then file-only templates, then the `TASK`
-group (`I`, then templates that use `{block_id}`). Templates keep the order
+Row order is fixed: file rows, file-only templates, the `TASK` group,
+then the `CHIP` group. Templates keep the order
 they have in `copy.templates`. The highlight starts on Path, or on the
 first copyable row when Path is unavailable. `↵` copies the highlighted
 row. `↑` / `↓` and `Ctrl+P` / `Ctrl+N` move the highlight among copyable
@@ -66,6 +68,10 @@ or Task Link under the cursor never supplies the block ID.
 The result has three states: `none` (no group), `no-id` (dimmed group with
 `none yet · Ctrl+6 on the task line names one`), and `ready` (live group).
 
+The chip uses the same cursor rule as `gy` through `api.copyChips.chipAt`:
+ready shows a live row, ambiguous a dimmed row, and none or a missing plugin
+no group. The copy shows the card's Notice and flashes the chip.
+
 ## Variables
 
 | Variable | Value |
@@ -96,8 +102,8 @@ the card, never on the clipboard: unknown variables (with a
 empty or non-string templates (`quote the template`), blank labels
 (`add a label`), non-mapping entries (`expected label and template`),
 missing values (`needs a block ID`, `needs an absolute vault path`), and
-collisions (`key p is Path's`, `key q closes the card`) which stay copyable
-by `↑↓ ↵` or click.
+collisions (`key p is Path's`, `key c is Chip's`, `key q closes the card`)
+which stay copyable by `↑↓ ↵` or click.
 An explicit `key:` must be one letter or digit after lowercasing, with no
 trimming: blank, whitespace, padded, and null keys are invalid. Only an
 omitted `key` gets the positional `1`–`9` default. Entries past the ninth
@@ -106,3 +112,5 @@ disabling the row or changing the clipboard payload. A present `copy:` that
 is not a mapping — including YAML `null`, `~`, or a blank value — diagnoses
 `copy must be a mapping`. A broken `copy` block adds one diagnostic row; the
 built-in rows always work.
+
+Authored payloads live on copy chips; live context lives on the Copy card.

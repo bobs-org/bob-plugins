@@ -61,9 +61,9 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     needs: Object.freeze(["block_id"]),
   }),
   Object.freeze({
-    id: "copy-chip",
+    id: "chip",
     key: "c",
-    label: "Copy chip",
+    label: "Chip",
     needs: Object.freeze([]),
   }),
 ]);
@@ -900,10 +900,13 @@ function buildCopyCardModel(input) {
       : null;
   const fileBuiltins = [];
   const taskBuiltins = [];
+  let chipRow = null;
   for (const spec of COPY_CARD_BUILTIN_ROWS) {
-    const row = spec.id === "copy-chip"
-      ? buildCopyCardChipRow(spec, options.copyChip)
-      : buildCopyCardBuiltinRow(spec, values, taskState);
+    if (spec.id === "chip") {
+      chipRow = buildCopyCardChipRow(spec, options.copyChip);
+      continue;
+    }
+    const row = buildCopyCardBuiltinRow(spec, values, taskState);
     if (!row) {
       continue;
     }
@@ -947,6 +950,7 @@ function buildCopyCardModel(input) {
     ...diagnosticRow,
     ...taskBuiltins,
     ...taskTemplates,
+    ...(chipRow ? [chipRow] : []),
   ];
   const copyable = rows.filter(isCopyableCopyCardRow);
   const pathRow = rows.find((row) => row.id === "path");

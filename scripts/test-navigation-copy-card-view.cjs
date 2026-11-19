@@ -184,9 +184,9 @@ test("render: rows, keycaps, ARIA, divider, and footer chip", () => {
   assert.ok(modal.rowsEl.attributes["aria-activedescendant"]);
 
   const rows = byClass(modal.contentEl, "bob-copy-card-row");
-  assert.equal(rows.length, 7);
+  assert.equal(rows.length, 6);
   const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
-  assert.deepEqual(keys, ["P", "A", "F", "N", "C", "I", "T"]);
+  assert.deepEqual(keys, ["P", "A", "F", "N", "I", "T"]);
   for (const row of rows) {
     assert.equal(row.attributes.role, "option");
     assert.ok(row.attributes["aria-selected"] === "true" || row.attributes["aria-selected"] === "false");
@@ -205,6 +205,48 @@ test("render: rows, keycaps, ARIA, divider, and footer chip", () => {
 
   const footerText = flattenText(modal.footerEl);
   assert.match(footerText, /copy path/);
+  modal.close();
+});
+
+test("render: ready chip row with CHIP divider after TASK rows", () => {
+  const model = bryanModel({
+    copyChip: {
+      state: "ready",
+      chip: { form: "inline", label: "deploy", text: "run `just check` now", line: 0, from: 0, to: 1 },
+      count: 1,
+    },
+  });
+  const modal = openCard(model);
+  const rows = byClass(modal.contentEl, "bob-copy-card-row");
+  assert.equal(rows.length, 7);
+  const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
+  assert.deepEqual(keys, ["P", "A", "F", "N", "I", "T", "C"]);
+  const dividers = byClass(modal.contentEl, "bob-copy-card-divider");
+  assert.equal(dividers.length, 2);
+  assert.match(flattenText(dividers[0]), /TASK/);
+  assert.match(flattenText(dividers[1]), /CHIP/);
+  assert.ok(dividers[1].classes.includes("is-chip"));
+  assert.ok(!dividers[0].classes.includes("is-chip"));
+  const chipRow = rows.find((row) => flattenText(row).includes("Chip"));
+  assert.ok(chipRow);
+  assert.match(flattenText(chipRow), /Chip · deploy/);
+  modal.close();
+});
+
+test("render: ambiguous chip is a dimmed C row", () => {
+  const model = bryanModel({
+    copyChip: { state: "ambiguous", count: 2 },
+  });
+  const modal = openCard(model);
+  const rows = byClass(modal.contentEl, "bob-copy-card-row");
+  const chipRow = rows.find((row) => flattenText(row).includes("Chip"));
+  assert.ok(chipRow);
+  assert.ok(chipRow.classes.includes("is-unavailable"));
+  assert.match(flattenText(chipRow), /2 chips on this line · move onto one/);
+  const dividers = byClass(modal.contentEl, "bob-copy-card-divider");
+  const chipDividers = dividers.filter((el) => el.classes.includes("is-chip"));
+  assert.equal(chipDividers.length, 1);
+  assert.match(flattenText(chipDividers[0]), /CHIP/);
   modal.close();
 });
 

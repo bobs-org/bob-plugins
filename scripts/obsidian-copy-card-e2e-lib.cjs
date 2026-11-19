@@ -21,6 +21,13 @@ const TASKS = Object.freeze({
 
 const NOTE = "Copy card e2e.md";
 
+const CHIP = Object.freeze({
+  singleNeedle: "Chip single",
+  singlePayload: "run `just check` now ",
+  singleLabel: "deploy",
+  pairNeedle: "Chip pair",
+});
+
 function notePath() {
   return NOTE;
 }
@@ -38,6 +45,10 @@ function seedNote() {
     "  - [[Copy card e2e#^" + TASKS.id.blockId + "|Use records to start tracking bank transactions]]",
     "",
     "Plain prose for the file-only Copy card state.",
+    "",
+    "Chip single: ``copy[deploy]: run `just check` now ``",
+    "",
+    "Chip pair: `copy: one` plus `copy: two`",
     "",
     "- [ ] 2026-11-01 grocery store",
     "",
@@ -197,6 +208,7 @@ function assertScreenshotList(paths) {
 module.exports = {
   NOTE,
   TASKS,
+  CHIP,
   assertProbe,
   assertScreenshotList,
   baseConfigYaml,

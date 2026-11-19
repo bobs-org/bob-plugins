@@ -86,6 +86,8 @@ body selects text and never copies. Only the button copies, flipping to
 | Click / tap a chip | Live Preview, Reading view, embeds, hover previews, Tasks query results | Copy the payload |
 | Copy button on a `bob-copy` card | Live Preview, Reading view, embeds | Copy the fence payload, byte-exact |
 | Palette "Copy chip on cursor line" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor and flash it like a yank |
+| `gy` (normal mode; mapped in the vault vimrc to `copy-on-cursor-line`) | Editor, normal mode | Copy the chip at the cursor and flash it |
+| `Mod+Y` then `C` (Copy card) | Copy card | Copy the chip at the cursor, previewed first |
 | Palette "Make or edit copy chip" (`make-or-edit`), default Mod+Shift+Y | Editor, Source mode and Live Preview | Open the authoring card for the selection, chip, or cursor |
 | Alt+Click a chip | Live Preview | Open the authoring card for that chip |
 | Move the cursor into the span | Live Preview | Reveal the Markdown source, like a link |
@@ -212,8 +214,7 @@ item indents to the item's content column using the line's own whitespace.
 If the note, editor, or captured source changed, save refuses with **The
 note changed — reopen the card** and writes nothing.
 
-Authored payloads live on copy chips; live context lives on the Copy card
-`C` row.
+Authored payloads live on copy chips; live context lives on the Copy card, whose `C` row copies the chip at the cursor.
 
 ## Non-goals
 

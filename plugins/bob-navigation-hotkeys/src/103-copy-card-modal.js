@@ -145,6 +145,7 @@ class CopyCardModal extends Modal {
     const model = this.copyCardModel;
     const rows = (model && Array.isArray(model.rows) ? model.rows : []).filter(Boolean);
     let dividerRendered = false;
+    let chipDividerRendered = false;
     for (const row of rows) {
       if (
         !dividerRendered &&
@@ -162,6 +163,15 @@ class CopyCardModal extends Modal {
         });
         divider.createDiv({ cls: "bob-copy-card-divider-rule" });
         dividerRendered = true;
+      }
+      if (!chipDividerRendered && row.group === "chip") {
+        const divider = this.rowsEl.createDiv({
+          cls: "bob-copy-card-divider is-chip",
+        });
+        divider.createDiv({ cls: "bob-copy-card-divider-rule" });
+        divider.createDiv({ cls: "bob-copy-card-divider-label", text: "CHIP" });
+        divider.createDiv({ cls: "bob-copy-card-divider-rule" });
+        chipDividerRendered = true;
       }
       const selected = row.id === this.highlightId;
       const classes = ["bob-copy-card-row", "bob-key-card-row"];

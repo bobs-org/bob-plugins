@@ -143,7 +143,7 @@ function loadTemplates(parsed, extras = {}) {
 test("builtin row table and reserved keys", () => {
   assert.deepEqual(
     COPY_CARD_BUILTIN_ROWS.map((entry) => entry.id),
-    ["path", "absolute", "file", "note", "block-id", "copy-chip"],
+    ["path", "absolute", "file", "note", "block-id", "chip"],
   );
   assert.deepEqual(COPY_CARD_RESERVED_KEYS, ["p", "a", "f", "n", "i", "c"]);
   assert.equal(COPY_CARD_BUILTIN_ROWS[0].label, "Path");
@@ -560,6 +560,182 @@ test("model: row order is file builtins, file templates, then TASK group", () =>
     ["path", "absolute", "file", "note", "template-2", "block-id", "template-1"],
   );
   assert.equal(model.subtitle, "notes/bob.md");
+});
+
+test("model: ready chip row comes last, after TASK group", () => {
+  const payload = "run `just check` now ";
+  const model = buildCopyCardModel({
+    filePath: "notes/bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [
+      { label: "Task ref", key: "t", template: TASK_REF_TEMPLATE },
+      { label: "Wiki link", template: "[[{note_name}]]" },
+    ],
+    copyChip: {
+      state: "ready",
+      chip: { form: "inline", label: "", text: payload, line: 0, from: 0, to: 1 },
+      count: 1,
+    },
+  });
+  assert.deepEqual(
+    model.rows.map((entry) => entry.id),
+    ["path", "absolute", "file", "note", "template-2", "block-id", "template-1", "chip"],
+  );
+  const chip = row(model, "chip");
+  assert.equal(chip.group, "chip");
+  assert.equal(chip.value, payload);
+  assert.equal(model.defaultRowId, "path");
+});
+
+test("model: ready unlabeled chip keeps byte-exact value and carries copyChip", () => {
+  const payload = "run `just check` now ";
+  const chipInput = { form: "inline", label: "", text: payload, line: 3, from: 5, to: 9 };
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [{ label: "Task ref", key: "t", template: TASK_REF_TEMPLATE }],
+    copyChip: { state: "ready", chip: chipInput, count: 1 },
+  });
+  const chip = row(model, "chip");
+  assert.equal(chip.state, "ready");
+  assert.equal(chip.group, "chip");
+  assert.equal(chip.key, "c");
+  assert.equal(chip.label, `Chip · ${payload}`);
+  assert.equal(chip.value, payload);
+  assert.equal(chip.copyChip, chipInput);
+});
+
+test("model: ready labeled chip uses the trimmed label for its face", () => {
+  const chipInput = {
+    form: "inline",
+    label: "  deploy  ",
+    text: "run `just check` now",
+    line: 0,
+    from: 0,
+    to: 1,
+  };
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [],
+    copyChip: { state: "ready", chip: chipInput, count: 1 },
+  });
+  const chip = row(model, "chip");
+  assert.equal(chip.label, "Chip · deploy");
+  assert.equal(chip.value, "run `just check` now");
+});
+
+test("model: block-form chip preview shows ⏎ but value keeps LF", () => {
+  const payload = "line one\nline two";
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [],
+    copyChip: {
+      state: "ready",
+      chip: { form: "block", label: "", text: payload, line: 0, from: 0, to: 2 },
+      count: 1,
+    },
+  });
+  const chip = row(model, "chip");
+  assert.equal(chip.value, payload);
+  assert.ok(chip.preview.includes("⏎"));
+  assert.ok(!chip.preview.includes("\n"));
+  assert.ok(chip.label.includes("⏎"));
+});
+
+test("model: ambiguous chip is a dimmed C row that nudges", () => {
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [{ label: "Task ref", key: "t", template: TASK_REF_TEMPLATE }],
+    copyChip: { state: "ambiguous", count: 2 },
+  });
+  const chip = row(model, "chip");
+  assert.equal(chip.state, "unavailable");
+  assert.equal(chip.group, "chip");
+  assert.equal(chip.key, "c");
+  assert.equal(chip.label, "Chip");
+  assert.equal(chip.value, null);
+  assert.equal(chip.reason, "2 chips on this line · move onto one");
+  assert.equal(chip.preview, "2 chips on this line · move onto one");
+  const action = resolveCopyCardKey(
+    model,
+    keyEvent("c"),
+    { highlightId: "path", busy: false },
+  );
+  assert.equal(action.type, "refuse");
+  assert.equal(action.rowId, "chip");
+  assert.equal(action.reason, "2 chips on this line · move onto one");
+});
+
+test("model: no chip row for none, absent plugin, or whitespace-only text", () => {
+  for (const copyChip of [
+    { state: "none", count: 0 },
+    null,
+    undefined,
+    { state: "ready", chip: { form: "inline", label: "", text: "   \n  ", line: 0, from: 0, to: 1 }, count: 1 },
+  ]) {
+    const model = buildCopyCardModel({
+      filePath: "bob.md",
+      basePath: BRYAN_VAULT,
+      homePath: BRYAN_HOME,
+      task: readyTask(),
+      templates: [],
+      copyChip,
+    });
+    assert.equal(row(model, "chip"), null, JSON.stringify(copyChip));
+  }
+});
+
+test("model: template keyed c collides with Chip and stays copyable", () => {
+  const loaded = loadTemplates({
+    copy: { templates: [{ label: "Custom c", key: "c", template: "{note_name}" }] },
+  });
+  assert.equal(loaded.templates[0].state, "collision");
+  assert.equal(loaded.templates[0].reason, "key c is Chip's");
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: { state: "none" },
+    templates: loaded.templates,
+  });
+  const collided = row(model, "template-1");
+  assert.equal(collided.state, "collision");
+  assert.equal(collided.key, null);
+  assert.deepEqual(resolveCopyCardKey(
+    model,
+    keyEvent("Enter"),
+    { highlightId: "template-1", busy: false },
+  ), { type: "copy", rowId: "template-1" });
+});
+
+test("model: Path stays default when a chip row exists", () => {
+  const model = buildCopyCardModel({
+    filePath: "bob.md",
+    basePath: BRYAN_VAULT,
+    homePath: BRYAN_HOME,
+    task: readyTask(),
+    templates: [{ label: "Task ref", key: "t", template: TASK_REF_TEMPLATE }],
+    copyChip: {
+      state: "ready",
+      chip: { form: "inline", label: "deploy", text: "run now", line: 0, from: 0, to: 1 },
+      count: 1,
+    },
+  });
+  assert.equal(model.defaultRowId, "path");
+  assert.equal(row(model, "chip").state, "ready");
 });
 
 test("keys: letters are case-insensitive", () => {

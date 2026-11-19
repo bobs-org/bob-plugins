@@ -117,9 +117,13 @@ function makeFixture(runRoot) {
   const noteBytes = fs.readFileSync(noteFile);
   const configPath = writeConfig(configHome, fixture.baseConfigYaml());
   copyPlugin(path.join(repoRoot, "plugins", "bob-navigation-hotkeys"), pluginDir);
+  copyPlugin(
+    path.join(repoRoot, "plugins", "bob-copy-chips"),
+    path.join(vaultDir, ".obsidian", "plugins", "bob-copy-chips"),
+  );
   fs.writeFileSync(
     path.join(vaultDir, ".obsidian", "community-plugins.json"),
-    JSON.stringify(["bob-navigation-hotkeys"], null, 2),
+    JSON.stringify(["bob-navigation-hotkeys", "bob-copy-chips"], null, 2),
   );
   fs.writeFileSync(
     path.join(vaultDir, ".obsidian", "app.json"),
@@ -282,7 +286,7 @@ function appDocProbe() {
 }
 
 function cardProbeExpression() {
-  return "(() => { try { const app=window.app; const doc=app&&app.workspace&&app.workspace.containerEl&&app.workspace.containerEl.ownerDocument||document; const notice=Array.from(doc.querySelectorAll('.notice')).map(el=>String(el.textContent||'').trim()).slice(-1)[0]||''; const root=doc.querySelector('.bob-copy-card'); const modal=doc.querySelector('.modal.bob-copy-card-modal'); if(!root||!modal)return {open:false,notice}; const rows=Array.from(root.querySelectorAll('.bob-copy-card-row')).map(row=>{ const key=row.querySelector('.bob-copy-card-key'); const value=row.querySelector('.bob-copy-card-value'); const reason=row.querySelector('.bob-copy-card-reason,.bob-copy-card-reason-text'); const id=String(row.id||'').replace(/^bob-copy-card-row-/,''); const state=['unavailable','error','collision'].find(name=>row.classList.contains('is-'+name))||'ready'; return {id,key:String(key&&key.textContent||'').trim().toLowerCase(),label:String((row.querySelector('.bob-copy-card-label')||{}).textContent||'').trim(),value:String(value&&value.textContent||'').trim(),reason:String(reason&&reason.textContent||'').trim(),state,disabled:row.getAttribute('aria-disabled')==='true',selected:row.getAttribute('aria-selected')==='true'}; }); const divider=root.querySelector('.bob-copy-card-divider'); const block=rows.find(row=>row.id==='block-id'); const taskState=!divider?'none':block&&block.state==='unavailable'?'no-id':'ready'; return {open:true,title:String((root.querySelector('.bob-copy-card-title')||{}).textContent||'').trim(),subtitle:String((root.querySelector('.bob-copy-card-subtitle')||{}).textContent||'').trim(),rows,taskDivider:Boolean(divider),taskState,taskTitle:String((divider&&divider.querySelector('.bob-copy-card-divider-title')||{}).textContent||'').trim(),footer:String((root.querySelector('.bob-copy-card-footer')||{}).textContent||'').trim(),live:String((root.querySelector('.bob-copy-card-live')||{}).textContent||'').trim(),notice}; } catch(e) { return {open:false,error:String(e&&e.message||e)}; } })()";
+  return "(() => { try { const app=window.app; const doc=app&&app.workspace&&app.workspace.containerEl&&app.workspace.containerEl.ownerDocument||document; const notice=Array.from(doc.querySelectorAll('.notice')).map(el=>String(el.textContent||'').trim()).slice(-1)[0]||''; const root=doc.querySelector('.bob-copy-card'); const modal=doc.querySelector('.modal.bob-copy-card-modal'); if(!root||!modal)return {open:false,notice}; const rows=Array.from(root.querySelectorAll('.bob-copy-card-row')).map(row=>{ const key=row.querySelector('.bob-copy-card-key'); const value=row.querySelector('.bob-copy-card-value'); const reason=row.querySelector('.bob-copy-card-reason,.bob-copy-card-reason-text'); const id=String(row.id||'').replace(/^bob-copy-card-row-/,''); const state=['unavailable','error','collision'].find(name=>row.classList.contains('is-'+name))||'ready'; return {id,key:String(key&&key.textContent||'').trim().toLowerCase(),label:String((row.querySelector('.bob-copy-card-label')||{}).textContent||'').trim(),value:String(value&&value.textContent||'').trim(),reason:String(reason&&reason.textContent||'').trim(),state,disabled:row.getAttribute('aria-disabled')==='true',selected:row.getAttribute('aria-selected')==='true'}; }); const divider=root.querySelector('.bob-copy-card-divider:not(.is-chip)'); const chipDivider=root.querySelector('.bob-copy-card-divider.is-chip'); const block=rows.find(row=>row.id==='block-id'); const taskState=!divider?'none':block&&block.state==='unavailable'?'no-id':'ready'; return {open:true,title:String((root.querySelector('.bob-copy-card-title')||{}).textContent||'').trim(),subtitle:String((root.querySelector('.bob-copy-card-subtitle')||{}).textContent||'').trim(),rows,taskDivider:Boolean(divider),chipDivider:Boolean(chipDivider),taskState,taskTitle:String((divider&&divider.querySelector('.bob-copy-card-divider-title')||{}).textContent||'').trim(),footer:String((root.querySelector('.bob-copy-card-footer')||{}).textContent||'').trim(),live:String((root.querySelector('.bob-copy-card-live')||{}).textContent||'').trim(),notice}; } catch(e) { return {open:false,error:String(e&&e.message||e)}; } })()";
 }
 
 async function waitFor(client, expression, predicate, label, timeoutMs) {
@@ -760,6 +764,79 @@ async function runE2e(args) {
     ), JSON.stringify({ switched, path: stillOpen && (stillOpen.rows || []).find((row) => row.id === "path") }));
     if (stillOpen && stillOpen.open) await closeCard(client);
     await openNote(client, fixture.notePath());
+
+    // Copy-chip C row: single chip copies byte for byte with a Notice and flash.
+    const chipPayload = fixture.CHIP.singlePayload;
+    const chipSeed = await seedClipboard("chip-single");
+    card = await openCardAt(client, fixture.CHIP.singleNeedle, true);
+    {
+      const chipRow = (card.rows || []).find((entry) => entry.id === "chip");
+      record(
+        "chip-single-row-present",
+        Boolean(
+          card && card.open && chipRow && chipRow.state === "ready" &&
+          String(chipRow.label || "").startsWith("Chip \u00b7 deploy") &&
+          chipRow.key === "c",
+        ),
+        JSON.stringify(chipRow),
+      );
+      record("chip-single-divider", Boolean(card && card.chipDivider === true));
+    }
+    await dispatchKey(client, { key: "c" });
+    {
+      const closed = await waitFor(client, cardProbeExpression(), (state) => !state || !state.open, "chip single C copy");
+      const copied = await readClipboard(client);
+      record(
+        "chip-single-copy",
+        Boolean(closed && copied && copied.ok && copied.value === chipPayload && copied.value !== chipSeed.sentinel),
+        copied && copied.ok ? JSON.stringify(copied.value) : (copied && copied.error) || "clipboard unavailable",
+      );
+      record("chip-single-notice", Boolean(closed && /^Copied /.test(closed.notice || "")), (closed && closed.notice) || "");
+    }
+
+    // Copy-chip C row: two chips with the cursor on neither is a dimmed nudge.
+    const ambiguousSeed = await seedClipboard("chip-ambiguous");
+    card = await openCardAt(client, fixture.CHIP.pairNeedle, true);
+    {
+      const chipRow = (card.rows || []).find((entry) => entry.id === "chip");
+      record(
+        "chip-ambiguous-row-dimmed",
+        Boolean(
+          card && card.open && chipRow && chipRow.state === "unavailable" &&
+          /2 chips on this line \u00b7 move onto one/.test(chipRow.reason || "") &&
+          chipRow.key === "c",
+        ),
+        JSON.stringify(chipRow),
+      );
+    }
+    await dispatchKey(client, { key: "c" });
+    {
+      await sleep(300);
+      const still = await client.evaluate(cardProbeExpression());
+      const copied = await readClipboard(client);
+      record(
+        "chip-ambiguous-nudge-keeps-clipboard",
+        Boolean(still && still.open && copied && copied.ok && copied.value === ambiguousSeed.sentinel),
+        JSON.stringify({ open: still && still.open, copied: copied && copied.value }),
+      );
+      await closeCard(client);
+    }
+
+    // Copy-chip C row: with the plugin disabled there is no C row and no divider.
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.disablePlugin(\"bob-copy-chips\"); return true; } catch (e) { return false; } })())()");
+    await sleep(400);
+    card = await openCardAt(client, fixture.CHIP.singleNeedle, true);
+    {
+      const rows = Array.isArray(card.rows) ? card.rows : [];
+      record(
+        "chip-disabled-no-row-or-divider",
+        Boolean(card && card.open && !rows.some((entry) => entry.id === "chip") && !card.chipDivider),
+        JSON.stringify({ rows: rows.map((entry) => entry.id), chipDivider: card && card.chipDivider }),
+      );
+      await closeCard(client);
+    }
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.enablePlugin(\"bob-copy-chips\"); return true; } catch (e) { return false; } })())()");
+    await waitFor(client, "Boolean(window.app&&window.app.plugins&&window.app.plugins.plugins&&window.app.plugins.plugins['bob-copy-chips'])", (value) => value === true, "bob-copy-chips re-enabled", 15000);
 
     fs.writeFileSync(scratch.configPath, fixture.overflowConfigYaml());
     await sleep(30);

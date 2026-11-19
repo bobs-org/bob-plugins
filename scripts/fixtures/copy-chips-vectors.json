@@ -1,0 +1,240 @@
+{
+  "chips": [
+    {
+      "id": "several-on-one-line",
+      "line": "see `copy: ssh apollo` and `copy: pwd`",
+      "expected": [
+        {
+          "from": 4,
+          "to": 22,
+          "raw": "`copy: ssh apollo`",
+          "label": null,
+          "text": "ssh apollo"
+        },
+        {
+          "from": 27,
+          "to": 38,
+          "raw": "`copy: pwd`",
+          "label": null,
+          "text": "pwd"
+        }
+      ]
+    },
+    {
+      "id": "double-run-with-inner-backticks",
+      "line": "``copy: run `bob plan` first``",
+      "expected": [
+        {
+          "from": 0,
+          "to": 30,
+          "raw": "``copy: run `bob plan` first``",
+          "label": null,
+          "text": "run `bob plan` first"
+        }
+      ]
+    },
+    {
+      "id": "padded-span",
+      "line": "`` copy: ends with ` ``",
+      "expected": [
+        {
+          "from": 0,
+          "to": 23,
+          "raw": "`` copy: ends with ` ``",
+          "label": null,
+          "text": "ends with `"
+        }
+      ]
+    },
+    {
+      "id": "table-escaped-pipe",
+      "line": "| cmd | `copy: a\\|b` |",
+      "table": true,
+      "expected": [
+        {
+          "from": 8,
+          "to": 20,
+          "raw": "`copy: a\\|b`",
+          "label": null,
+          "text": "a|b"
+        }
+      ]
+    },
+    {
+      "id": "unicode-text",
+      "line": "`copy: café 日本語 🙂`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 19,
+          "raw": "`copy: café 日本語 🙂`",
+          "label": null,
+          "text": "café 日本語 🙂"
+        }
+      ]
+    },
+    {
+      "id": "trailing-spaces",
+      "line": "`copy: ssh  `",
+      "expected": [
+        {
+          "from": 0,
+          "to": 13,
+          "raw": "`copy: ssh  `",
+          "label": null,
+          "text": "ssh  "
+        }
+      ]
+    },
+    {
+      "id": "labeled-escaped-bracket",
+      "line": "`copy[Zoom \\]]: https://zoom.example/j/1`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 41,
+          "raw": "`copy[Zoom \\]]: https://zoom.example/j/1`",
+          "label": "Zoom ]",
+          "text": "https://zoom.example/j/1"
+        }
+      ]
+    },
+    {
+      "id": "labeled-chip",
+      "line": "`copy[Zoom]: https://zoom.us/j/123`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 35,
+          "raw": "`copy[Zoom]: https://zoom.us/j/123`",
+          "label": "Zoom",
+          "text": "https://zoom.us/j/123"
+        }
+      ]
+    },
+    {
+      "id": "no-space-after-colon",
+      "line": "`copy:ssh apollo`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 17,
+          "raw": "`copy:ssh apollo`",
+          "label": null,
+          "text": "ssh apollo"
+        }
+      ]
+    },
+    {
+      "id": "kept-leading-space-after-optional-separator",
+      "line": "`copy:  ssh`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 12,
+          "raw": "`copy:  ssh`",
+          "label": null,
+          "text": " ssh"
+        }
+      ]
+    }
+  ],
+  "not_chips": [
+    { "id": "empty-payload", "line": "`copy:`" },
+    { "id": "capital-copy", "line": "`Copy: x`" },
+    { "id": "missing-colon", "line": "`copy x`" },
+    { "id": "whitespace-only", "line": "`copy:    `" },
+    { "id": "tab-only-payload", "line": "`copy: \t `" },
+    { "id": "escaped-backtick", "line": "\\`copy: x\\`" },
+    { "id": "inside-markdown-link-label", "line": "[see `copy: x`](https://example.com)" },
+    { "id": "inside-wikilink", "line": "[[`copy: x`]]" },
+    { "id": "inside-wikilink-alias", "line": "[[note|`copy: x`]]" },
+    { "id": "dataview-equals", "line": "`= dataview`" },
+    { "id": "copyright", "line": "`copyright: foo`" },
+    { "id": "space-before-colon", "line": "`copy : x`" }
+  ],
+  "serialize": [
+    {
+      "id": "unlabeled-inline",
+      "input": { "label": null, "text": "ssh apollo" },
+      "expected": { "ok": true, "form": "inline", "markdown": "`copy: ssh apollo`" }
+    },
+    {
+      "id": "labeled-inline",
+      "input": { "label": "Zoom", "text": "https://zoom.us/j/123" },
+      "expected": { "ok": true, "form": "inline", "markdown": "`copy[Zoom]: https://zoom.us/j/123`" }
+    },
+    {
+      "id": "label-escapes",
+      "input": { "label": "Zoom ]\\", "text": "x" },
+      "expected": { "ok": true, "form": "inline", "markdown": "`copy[Zoom \\]\\\\]: x`" }
+    },
+    {
+      "id": "table-pipe",
+      "input": { "label": null, "text": "a|b" },
+      "opts": { "table": true },
+      "expected": { "ok": true, "form": "inline", "markdown": "`copy: a\\|b`" }
+    },
+    {
+      "id": "inner-backticks",
+      "input": { "label": null, "text": "run `bob plan` first" },
+      "expected": { "ok": true, "form": "inline", "markdown": "``copy: run `bob plan` first``" }
+    },
+    {
+      "id": "padded-ending-backtick",
+      "input": { "label": null, "text": "ends with `" },
+      "expected": { "ok": true, "form": "inline", "markdown": "`` copy: ends with ` ``" }
+    },
+    {
+      "id": "block-fence",
+      "input": { "label": "Weekly status", "text": "Hi team —\nHere is where things stand this week:" },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "```bob-copy Weekly status\nHi team —\nHere is where things stand this week:\n```"
+      }
+    },
+    {
+      "id": "block-trailing-lf",
+      "input": { "label": null, "text": "hello\n" },
+      "expected": { "ok": true, "form": "block", "markdown": "```bob-copy\nhello\n\n```" }
+    },
+    {
+      "id": "tilde-when-label-has-backtick",
+      "input": { "label": "see `this`", "text": "one\ntwo" },
+      "expected": { "ok": true, "form": "block", "markdown": "~~~bob-copy see `this`\none\ntwo\n~~~" }
+    },
+    {
+      "id": "indented-block",
+      "input": { "label": "note", "text": "a\nb" },
+      "opts": { "indent": "  " },
+      "expected": { "ok": true, "form": "block", "markdown": "  ```bob-copy note\n  a\n  b\n  ```" }
+    },
+    {
+      "id": "nothing-to-copy",
+      "input": { "label": null, "text": "   " },
+      "expected": { "ok": false, "reason": "nothing to copy" }
+    },
+    {
+      "id": "label-newline",
+      "input": { "label": "a\nb", "text": "x" },
+      "expected": { "ok": false, "reason": "labels are one line" }
+    },
+    {
+      "id": "crlf-normalizes-to-lf",
+      "input": { "label": null, "text": "a\r\nb" },
+      "expected": { "ok": true, "form": "block", "markdown": "```bob-copy\na\nb\n```" }
+    }
+  ],
+  "fence_info": [
+    { "id": "unlabeled", "info": "bob-copy", "expected": { "label": null } },
+    { "id": "label", "info": "bob-copy Weekly status", "expected": { "label": "Weekly status" } },
+    { "id": "bracket-label", "info": "bob-copy [Weekly status]", "expected": { "label": "Weekly status" } },
+    { "id": "padded-brackets", "info": "  bob-copy  [ foo ]  ", "expected": { "label": "foo" } },
+    { "id": "blank-bracket-label", "info": "bob-copy []", "expected": { "label": null } },
+    { "id": "other-language", "info": "python", "expected": null },
+    { "id": "uppercase", "info": "BOB-COPY x", "expected": null },
+    { "id": "prefixed", "info": "bob-copy-extra x", "expected": null },
+    { "id": "empty", "info": "", "expected": null }
+  ]
+}

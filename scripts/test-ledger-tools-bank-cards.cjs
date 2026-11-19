@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { LedgerToolsPlugin, makeFreshnessApp, withMissingConfig } = require("./ledger-tools-harness.cjs");
+const { LedgerToolsPlugin, TestNotice, makeFreshnessApp, withMissingConfig } = require("./ledger-tools-harness.cjs");
 
 const helpers = LedgerToolsPlugin.helpers;
 const fixtureDir = path.join(__dirname, "../plugins/bob-ledger-tools/scripts/fixtures/bank");
@@ -612,7 +612,14 @@ test("queue card keeps account caveats visible, lists bounded report months, and
     const card = el.querySelector(".bob-bank-card-queue");
     assert.ok(card);
     assert.match(textOf(card), /unverified/);
-    assert.match(textOf(card), /Weekly import: bob bank import/);
+    const importLine = card.querySelector(".bob-bank-import-command");
+    assert.ok(importLine);
+    assert.match(textOf(importLine), /Weekly import/);
+    const chip = card.querySelector(".bob-bank-import-chip");
+    assert.ok(chip);
+    assert.equal(chip.tagName, "BUTTON");
+    assert.equal(textOf(chip), "bob bank import -D ~/Downloads/*.qfx");
+    assert.equal(chip.getAttribute("aria-label"), "Preview the weekly import in command mode");
     assert.match(textOf(card), /2026-11 · Out/);
     assert.equal(nodes(card, ".bob-bank-queue-row").length, 2);
     const day = helpers.bankCardQueueModel(listDecoded.report).days[0];
@@ -621,6 +628,88 @@ test("queue card keeps account caveats visible, lists bounded report months, and
     await plugin.bankCardAckSnapshot({ date: day.date, ids: ["^bank-AbC", "abc", "abc"], idLess: 1 });
     assert.deepEqual(captured, [[ ["^bank-AbC"], { label: day.date, idLess: 1 } ]]);
     assert.match(textOf(card), /typed row needs its individual checkbox|typed rows need their individual checkbox/);
+    unloadChild(children[0]);
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
+});
+
+test("queue card weekly-import chip previews the exact argv in Command Mode", async () => {
+  await withMissingConfig(async () => {
+    TestNotice.messages.length = 0;
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    const previews = [];
+    plugin.app.plugins.plugins["bob-command-mode"] = {
+      api: {
+        commandMode: {
+          preview: async function (argv) {
+            previews.push([this, argv]);
+            return { ok: true, runId: "run-1", stage: "preview" };
+          },
+        },
+      },
+    };
+    const { el } = fakeDom();
+    const children = [];
+    plugin.renderBankCard(el, { sourcePath: "bank.md", addChild: (child) => children.push(child) }, "view: queue");
+    await drain();
+    const chip = el.querySelector(".bob-bank-import-chip");
+    assert.ok(chip);
+    await Promise.all(chip.fire("click"));
+    await drain();
+    assert.equal(previews.length, 1);
+    assert.deepEqual(previews[0][1], ["bank", "import", "-D", "~/Downloads/*.qfx"]);
+    assert.equal(previews[0][0], plugin.app.plugins.plugins["bob-command-mode"].api.commandMode);
+    assert.deepEqual(TestNotice.messages, []);
+    unloadChild(children[0]);
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
+});
+
+test("queue card weekly-import chip falls back to a notice without Command Mode", async () => {
+  await withMissingConfig(async () => {
+    TestNotice.messages.length = 0;
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    assert.equal(plugin.app.plugins.plugins["bob-command-mode"], undefined);
+    const { el } = fakeDom();
+    const children = [];
+    plugin.renderBankCard(el, { sourcePath: "bank.md", addChild: (child) => children.push(child) }, "view: queue");
+    await drain();
+    const chip = el.querySelector(".bob-bank-import-chip");
+    assert.ok(chip);
+    await Promise.all(chip.fire("click"));
+    await drain();
+    assert.deepEqual(TestNotice.messages, ["Run: bob bank import -D ~/Downloads/*.qfx"]);
+    unloadChild(children[0]);
+    plugin.teardownBankCards();
+    plugin.teardownBankData();
+  });
+});
+
+test("queue card weekly-import chip stays quiet when preview settles refused", async () => {
+  await withMissingConfig(async () => {
+    TestNotice.messages.length = 0;
+    const { plugin } = makeHarness();
+    plugin.setupBankCards();
+    plugin.app.plugins.plugins["bob-command-mode"] = {
+      api: {
+        commandMode: {
+          preview: async () => ({ ok: false, reason: "no files match ~/Downloads/*.qfx" }),
+        },
+      },
+    };
+    const { el } = fakeDom();
+    const children = [];
+    plugin.renderBankCard(el, { sourcePath: "bank.md", addChild: (child) => children.push(child) }, "view: queue");
+    await drain();
+    const chip = el.querySelector(".bob-bank-import-chip");
+    assert.ok(chip);
+    await Promise.all(chip.fire("click"));
+    await drain();
+    assert.deepEqual(TestNotice.messages, []);
     unloadChild(children[0]);
     plugin.teardownBankCards();
     plugin.teardownBankData();

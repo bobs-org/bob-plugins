@@ -599,9 +599,32 @@ class BobLedgerToolsBankCardsMixin {
     if (jump) bankCardSetData(jump, "line", row.line);
   }
 
+  bankCardWeeklyImportArgv() {
+    return ["bank", "import", "-D", "~/Downloads/*.qfx"];
+  }
+
+  async bankCardPreviewWeeklyImport() {
+    const commandMode = commandModePreviewFor(this.app);
+    const fallback = "Run: bob bank import -D ~/Downloads/*.qfx";
+    if (!commandMode) {
+      try { new Notice(fallback); } catch (error) {}
+      return false;
+    }
+    try {
+      await commandMode.preview.call(commandMode.owner, this.bankCardWeeklyImportArgv());
+    } catch (error) {
+      try { new Notice(fallback); } catch (error) {}
+      return false;
+    }
+    return true;
+  }
+
   bankCardRenderQueueFooter(root, view, model) {
     const footer = bankCardAppend(root, "footer", { class: "bob-bank-card-footer bob-bank-queue-footer" });
-    bankCardAppend(footer, "p", { class: "bob-bank-import-command" }, "Weekly import: bob bank import ~/Downloads/*.qfx");
+    const line = bankCardAppend(footer, "p", { class: "bob-bank-import-command" });
+    bankCardAppend(line, "span", { class: "bob-bank-import-label" }, "Weekly import ");
+    this.bankCardButton(line, "Preview the weekly import in command mode", "bob bank import -D ~/Downloads/*.qfx",
+      () => this.bankCardPreviewWeeklyImport(), { class: "bob-bank-import-chip" });
     const months = bankCardAppend(footer, "div", { class: "bob-bank-recent-months", "aria-label": "Recent bank months" });
     bankCardAppend(months, "span", { class: "bob-bank-section-label" }, "Recent months");
     for (const entry of model.recentMonths) {

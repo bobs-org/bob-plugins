@@ -450,9 +450,9 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionScheduleInFlightReread = f
   }, KEEP_INBOX_ACTION_REREAD_DELAY_MS);
 };
 
-BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionCommandMode = function () {
+function commandModePreviewFor(app) {
   try {
-    const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+    const plugins = app && app.plugins && app.plugins.plugins;
     const commandMode = plugins && plugins["bob-command-mode"];
     const preview = commandMode && commandMode.api && commandMode.api.commandMode
       ? commandMode.api.commandMode.preview
@@ -461,6 +461,10 @@ BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionCommandMode = function () 
   } catch (error) {
     return null;
   }
+}
+
+BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionCommandMode = function () {
+  return commandModePreviewFor(this.app);
 };
 
 BobLedgerToolsKeepInboxMixin.prototype.keepInboxActionPreview = async function (argv, fallback) {

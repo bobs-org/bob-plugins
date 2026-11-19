@@ -9671,6 +9671,9 @@ input.bob-emoji-slot-fallback {
 .bob-bank-row-link { flex: 0 0 auto; border: 0; padding: 0.2em 0.35em; background: transparent; color: var(--text-muted); }
 .bob-bank-idless-note { margin: 0.25rem 0; color: var(--text-warning, var(--text-muted)); font-size: 0.78em; }
 .bob-bank-import-command { margin: 0; color: var(--text-muted); font-family: var(--font-monospace); font-size: 0.9em; }
+.bob-bank-import-chip { border: 0; padding: 0; background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; }
+.bob-bank-import-chip:hover, .bob-bank-import-chip:focus-visible { color: var(--text-accent); }
+.bob-bank-import-chip:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 .bob-bank-recent-months { display: flex; flex-wrap: wrap; gap: 0.3rem 0.75rem; align-items: center; }
 .bob-bank-recent-months > .bob-bank-section-label { flex-basis: 100%; }
 .bob-bank-teaching { padding: 0.6rem 0; }

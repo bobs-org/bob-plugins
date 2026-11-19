@@ -1,6 +1,12 @@
 [
   "010-load.js",
   "020-grammar.js",
+  "030-feedback.js",
+  "040-chip-dom.js",
+  "050-live-preview.js",
+  "060-reading.js",
+  "065-cursor.js",
+  "070-commands.js",
   "090-plugin.js",
   "099-exports.js"
 ]

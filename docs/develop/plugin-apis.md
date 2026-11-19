@@ -641,6 +641,44 @@ tier (0–6) or `null` for browse, info, and recents rows.
 - `remember(glyphOrRow)` maps a glyph to its primary alias, shares the
   editor's persisted recents, and returns `true` when remembered.
 
+## Bob Copy Chips
+
+`app.plugins.plugins["bob-copy-chips"].api.copyChips` is namespace version 1.
+It is frozen and never throws. Feature-detect the plugin and the namespace
+before calling it; an unloaded plugin is not a usable dependency.
+
+```js
+const copyChips = app.plugins.plugins["bob-copy-chips"]?.api?.copyChips;
+if (copyChips?.version >= 1) {
+  const hit = copyChips.chipAt({ lines, line, ch });
+  if (hit.state === "ready") await copyChips.copy(hit.chip.text);
+}
+```
+
+Coordinates are zero-based lines and UTF-16 character offsets. `from` / `to`
+in an inline chip are line-relative offsets including the delimiters, with
+`to` exclusive, matching `scanLine`. A ready chip is frozen
+`{ form: "inline", label, text, line, from, to }`; `count` is the number of
+eligible chips on the line. Invalid inputs yield `{ state: "none", count: 0 }`.
+Fenced lines always return `none` in this phase; the block fallback lands
+later.
+
+| Member | Contract |
+| --- | --- |
+| `version` | `1` |
+| `parse`, `scanLine`, `serialize` | Existing grammar behavior |
+| `parseFenceInfo`, `fencePayload` | Existing additive helpers |
+| `chipAt({ lines, line, ch })` | Frozen none/ambiguous/ready result above |
+| `copy(text)` | Promise of `{ ok, reason? }`, never throws/rejects |
+| `copyChip(chip, { view? })` | One clipboard write plus success/failure feedback |
+| `flash(chip, { view? })` | Boolean success feedback shown; no write |
+
+`copyChip` locates the matching widget in the supplied editor view; two
+identical payloads at different positions stay independent. A revealed source
+span uses a short-lived `StateEffect` / mark-decoration flash in
+`--bob-yank-flash-bg`. A failed visual lookup never turns a successful
+clipboard write into a false failure.
+
 ## Related
 
 - [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)

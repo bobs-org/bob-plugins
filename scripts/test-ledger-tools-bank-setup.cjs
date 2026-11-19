@@ -588,6 +588,7 @@ function paintModel(report, options = {}) {
   const model = H.bankSetupModel(report, { desktop: true, expanded: true, ...options });
   const el = H.bankSetupBuildEl(model, handlers, doc);
   assert.ok(el);
+  assert.equal(el.classList.contains("bob-property-card"), true);
   doc.body.appendChild(el);
   return { doc, el, model, calls };
 }

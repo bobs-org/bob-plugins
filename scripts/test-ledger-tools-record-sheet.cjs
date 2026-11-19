@@ -523,6 +523,7 @@ test("title row uses literal frontmatter title, then H1, then filename stem", ()
   record.headings = [{ level: 1, heading: "Legacy heading" }];
   const root = node(doc, "div", "markdown-preview-view");
   const sheet = plugin.paintRecordSheetReading(root, "eat/smashburger.md");
+  assert.equal(sheet.classList.contains("bob-property-card"), true);
   const title = sheet.querySelector(".bob-record-sheet-title");
   assert.equal(title.tagName, "DIV");
   assert.equal(title.getAttribute("role"), "heading");

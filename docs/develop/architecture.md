@@ -49,6 +49,60 @@ helpers, plugin prototype methods and descriptors, and module-load dependency
 calls. Split helpers must keep their name, superclass, and own prototype
 methods; the checker does not compare the whole class source text.
 
+## Property-card extension API
+
+Bob Ledger Tools keeps the property-card `==` dispatcher open to registered
+card editors. Each plugin instance owns its registry. `registerPropertyCard`
+accepts `{ kind, match({ path, frontmatter }), open({ path, frontmatter }) }`;
+it returns `false` for an invalid or duplicate kind. `unregisterPropertyCard`
+removes a kind, and plugin unload clears the registry. The built-ins are kept
+in bank → album → record order, with extension kinds after them. Matching
+continues until a matcher returns exactly `true`; a thrown matcher is skipped,
+so an extension failure leaves the key with Vim. The `==` gate still enforces
+the existing normal-mode, Live Preview, and pending-equals checks. The
+compatibility helper `schemaDoubleEqualsTargetKind` resolves through this
+same registry.
+
+The three panels share `createPropertyCardHost(options)`, which returns a
+controller with `setup`, `dispose`, `refresh`, `scheduleRefresh`, Reading
+mounting, and CodeMirror extension hooks. An adapter supplies its `plugin`,
+`kind`, `readingPriority`, state `fields`, `pathOf`, Reading root/scope and
+acceptance functions, `paintReading`/`removeReading`, Live Preview path and
+decoration builder, editor cleanup, and `ownKeys`/`releaseKeys`. Optional
+hooks cover binding cleanup, refresh effects, timers, workspace events,
+embed display eligibility, and adapter setup/disposal. `docs/develop/validation.md`
+describes the acceptance gates; the source comment above
+`createPropertyCardHost` lists the full options and their meanings.
+
+`ownKeys(scope, path)` must acquire ownership only after a card mounted
+successfully. The host releases that mount's handle when it is replaced,
+removed, or fails, and disposal releases every remaining mount. A failed or
+throwing builder must leave native Properties available. Shared ownership is
+limited to the note's own native Properties in Reading or Live Preview;
+Source, embeds, hover popovers, and failed mounts never hide fields.
+`allowEmbedDisplay` controls whether an adapter may render its panel in an
+embed; it never enables property ownership there.
+
+The rendered panel element carries `.bob-property-card` plus its existing
+species class. Editors, bank fence cards, and category cards do not use the
+shared class. Common chrome uses `--bob-property-card-accent`; the hue ladder
+reads `data-root-hue`, while each species maps its existing accent variable to
+that shared value. Adapters retain fallback accent, tint, padding, font-size,
+and wrapping through `--bob-property-card-fallback-accent`,
+`--bob-property-card-tint`, `--bob-property-card-padding`,
+`--bob-property-card-font-size`, and
+`--bob-property-card-overflow-wrap`. Keep the album/bank 8% tint, record 4%
+tint, record padding, bank font size and wrapping, and the record rail's
+radius overrides unchanged.
+
+The intention-card adapter can register a fourth kind with
+`registerPropertyCard` and provide its own host adapter. The registry places
+it after bank, album, and record; no gate changes or edits to those three
+hosts are needed. Core unit entry points are
+`scripts/test-ledger-tools-schema-double-equals.cjs`,
+`scripts/test-ledger-tools-property-card-ownership.cjs`, and
+`scripts/test-ledger-tools-property-card-host.cjs`.
+
 ## Plugin files
 
 | Path | Role |

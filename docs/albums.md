@@ -58,18 +58,21 @@ formats amount plus cadence as `$9.99 a month`, and adds a quiet
 `next ≈ Dec 21` chip from `bob bank subscriptions -f json`. Each
 `subscriptions/*.md` record shows a header strip with the same money line,
 a 12-dot charge timeline, and any finding as a sentence. Canonical
-`type: [[record]]` notes also show a [record sheet](record-card.md)
-under the first heading; the subscription strip docks on that sheet. Native
-Properties stays visible. **Edit record** opens the Record Card for value
-edits through bob. A `bob-bank` fence
+`type: [[record]]` notes also show a [record card](record-card.md) at the top
+of the body, before any authored first-level heading; the subscription strip
+docks on that card. When eligible, the card hides only its owned native
+Properties rows; unrelated rows and Add property stay visible, and Source mode
+keeps the native fields. **Edit record** opens the Record Card editor for
+value edits through bob. A `bob-bank` fence
 with `view: subscriptions` on `subscriptions.md` draws the album summary
 card: monthly and yearly estimates labeled as an estimate of commitments,
 not bank spend, status counts, the top five by monthly equivalent, and the
-findings count. Unknown `bob-bank` views stay quiet. The sheet, index, and
+findings count. Unknown `bob-bank` views stay quiet. The card, index, and
 summary surfaces never write the note.
 
-Album notes also show a breadcrumb from their resolved area/project ancestry
-and an expanded-by-default schema summary in Reading view and Live Preview.
+Album notes also show an **album card** (formerly the album header) with a
+breadcrumb from their resolved area/project ancestry and an expanded-by-default
+schema summary in Reading view and Live Preview.
 The summary names the schema, field count, dated notes, and index grouping.
 Chip rows show by default, one per field in declaration order: human labels,
 kind and flag suffixes, required as a quiet `*`, choice chips with usage
@@ -80,7 +83,8 @@ paints the first diagnostic on the summary and expands to the lint list; an
 empty schema teaches how to add fields so `Name @stem/` can collect facts.
 The two states never impersonate each other.
 
-**⊞ Schema** opens the editable Schema Card in the Task Card idiom: one title
+**⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
+Card idiom: one title
 line (`🍽️ Restaurant`), a truncated breadcrumb, and the album details row as
 the header subtitle and selectable **Album details** target. Field rows are
 transparent headings: a numbered keycap hangs in the gutter beside the name
@@ -105,7 +109,7 @@ Bob vault maintenance run keeps that preview, paints **Waiting for another
 Bob vault maintenance run…** with elapsed seconds, and retries until the
 lock frees or 10 minutes pass. Esc stops waiting with nothing written;
 Enter tries the same preview again. If ⏎ arrives while that
-revision's preview is still running, the card latches: it paints **Saving as
+revision's preview is still running, the editor latches: it paints **Saving as
 soon as bob confirms…** and applies when that preview succeeds. Any further
 edit clears the latch. The dry run paints bob's consequence, affected and
 newly-invalid counts, and derived keys in the status rule before Enter can
@@ -130,13 +134,13 @@ dot marks an emoji already used by another choice in the same field. Pasted
 emoji, including ZWJ sequences and flags, stay byte-for-byte; pasted digit
 keycaps carry a note because Bob stores a leading digit keycap as label text. If Bob Emoji v1 is unavailable, the glyph well falls back to a
 plain input with an enable-search hint. `y`
-from the card or a focused chip/lint row closes the card and jumps to that
+from the editor or a focused chip/lint row closes the editor and jumps to that
 field or issue line in Source mode. Bob's `issues[]` paint as lint marks with
 their message and suggestions as text. The album's `record` property is
 hidden only in that album's rendered Properties surface, and stays editable
 in Source mode.
 
-The card keeps typed stage drafts, choice rows, focus, and caret through its
+The editor keeps typed stage drafts, choice rows, focus, and caret through its
 debounced previews; adding or removing a staged initial choice never loses
 other row edits. Undo carries the fingerprint from the successful apply, so
 an intervening schema edit leaves the inverse draft unconfirmed until an
@@ -162,7 +166,7 @@ to… gap badges, and the single `choice.add`/`field.add` carries the placement
 as its `position` — still one op and one commit. Pointer drag arranges with
 the same engine: a ⠿ grip appears on hover and focus at a chip's or row's
 leading edge, dragging lifts the item and paints a 2 px insertion caret, the
-card autoscrolls near its edges, a drop outside the item's scope shows a
+editor autoscrolls near its edges, a drop outside the item's scope shows a
 not-allowed caret and snaps back, and `Esc`, `q`, or `Ctrl+[` cancels the
 drag. Drops call the
 same `placeAtGap` and one-envelope save pipeline as the keys.
@@ -173,7 +177,7 @@ projection, and previews once. Quiet arrangements save on the first `Enter`;
 loud ones (index grouping changed, any newly-invalid count, or warnings)
 paint amber with bob's consequence and need a second `Enter` (or **Confirm
 save**). A pending preview latches `Enter`; any further move clears the
-latch. Saves run in the background with a shimmer: the card stays navigable
+latch. Saves run in the background with a shimmer: the editor stays navigable
 and follow-on moves compile after the apply settles without ever calling
 `setDraft` mid-apply. Success paints `Saved · u undo` (fading after ~3 s)
 and records one commit with one Undo; refusals keep the arrangement pending
@@ -184,10 +188,10 @@ then closes. `q` types inside fields and the Emoji Slot well while `Ctrl+[`
 always backs out, and all three work with editor focus.
 Closing during a save is allowed: the plugin-level apply finishes, an
 Obsidian Notice reports “Album schema saved” (or the refusal), and a
-reopened card offers Undo when its fresh fingerprint equals the saved
+reopened editor offers Undo when its fresh fingerprint equals the saved
 `afterFingerprint`.
 
-The card is keyboard-first with visible button equivalents for every
+The editor is keyboard-first with visible button equivalents for every
 gesture (on the hint strip, or under `⋯`): `↑`/`↓` (or `j`/`k`, `←`/`→`
 across choices) move selection, `Enter` edits the selected row or saves a
 pending arrangement (latching while that revision's preview is pending),
@@ -207,22 +211,22 @@ Typing inside inputs never triggers
 navigation letters, and composition keystrokes never apply. Consequence and
 refusal paint in a live region with accessible names on every control.
 
-Open the card from the header's **⊞ Schema**, `==` in Vim normal mode in Live
+Open the album card editor from the album card's **⊞ Schema**, `==` in Vim normal mode in Live
 Preview on the album note, the **Edit album schema** palette command, Command
 Mode's Vault row, or `Ctrl+Shift+P` on an album note where the Task Card has
 no target, including its title or a blank row. A counted `N==`, Source mode,
 and other notes keep Vim's reindent. On a canonical record note, `==` opens
-its Record Card instead, and `=` inside the card climbs to the parent album's
-Schema Card. The chord fallback resolves direct album
+its Record Card editor instead, and `=` inside the editor climbs to the parent
+album card editor. The chord fallback resolves direct album
 notes only. The palette command resolves
 the owning album directly, or a record note's actual `parent:` link; missing, cyclic,
 ambiguous, or non-album parents teach instead of guessing. An invalid album
 still opens with its lint and the YAML path. A **Done** button rides along
 into Source mode for that album's pane: it shares a pending save across clicks,
 checks pane identity after each asynchronous step, forces a fresh report, and
-only returns and reopens the card when Bob reports a valid schema. Navigation,
+only returns and reopens the editor when Bob reports a valid schema. Navigation,
 pane close, or unload during save/report/restore abandons the excursion without
-reopening a stale card; invalid schemas stay on the diagnostic line.
+reopening a stale editor; invalid schemas stay on the diagnostic line.
 
 On Obsidian mobile the summary and chips still render from last-good album
 data with an edit-in-YAML hint. The Schema button and write gestures are

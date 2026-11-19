@@ -420,6 +420,10 @@ test("one bounded stylesheet rule hides owned rows without a species surface gat
   const fs = require("node:fs");
   const path = require("node:path");
   const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  assert.match(css, /\.bob-property-card\s*\{[\s\S]*?--bob-property-card-accent:/);
+  assert.match(css, /\.bob-property-card\[data-root-hue="blue"\]\s*\{\s*--bob-property-card-accent:/);
+  assert.match(css, /\.bob-record-sheet\s*\{[\s\S]*?--bob-property-card-tint:\s*4%/);
+  assert.match(css, /\.bob-bank-setup\s*\{[\s\S]*?--bob-property-card-font-size:\s*0\.9em/);
   const owned = css.split("\n").filter((line) => line.includes(".metadata-property.bob-property-card-owned-property"));
   assert.deepEqual(owned.map((line) => line.replace(/\s*[,{]\s*$/, "")), [
     ".cm-editor > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-property-card-owned-property",

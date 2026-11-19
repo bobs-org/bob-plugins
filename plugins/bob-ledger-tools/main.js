@@ -82960,7 +82960,7 @@ function bankSetupBuildEl(model, handlers, doc) {
   if (!model) {
     return null;
   }
-  const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} is-${model.state}`, null, {
+  const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
     "aria-label": "Bank setup",
@@ -95341,7 +95341,7 @@ class BobLedgerToolsAlbumHeaderMixin {
 
   albumHeaderBuildEl(model, options, doc) {
     try {
-      const header = notebookCreateEl(doc, "section", ALBUM_HEADER_CLASS);
+      const header = notebookCreateEl(doc, "section", `${ALBUM_HEADER_CLASS} bob-property-card`);
       if (!header) return null;
       header.setAttribute?.("data-album-header", "true");
       header.setAttribute?.("data-album-source", model.path);
@@ -102454,7 +102454,7 @@ function recordSheetRenderFold(sheet, model, options, doc) {
 function recordSheetBuildEl(model, options = {}, doc) {
   if (!model) return null;
   const host = doc || recordSheetDomDoc(options.root);
-  const sheet = recordSheetEl(host, "section", RECORD_SHEET_CLASS);
+  const sheet = recordSheetEl(host, "section", `${RECORD_SHEET_CLASS} bob-property-card`);
   if (!sheet) return null;
   sheet.setAttribute("role", "group");
   sheet.setAttribute("aria-label", `${model.title || "Record"} record details`);

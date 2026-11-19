@@ -1,20 +1,21 @@
 ---
 title: "Record Card"
-description: "Reference for the record sheet and the Record Card editor on canonical album records."
+description: "Reference for the record card and its editor on canonical album records."
 ---
 
-Bob Ledger Tools paints a **record sheet** at the top of a canonical album
-record's body (`type: [[record]]`) in Reading view and Live Preview. A legacy
-first-level heading stays above the sheet until removed; notes without an H1,
-including frontmatter-only notes, still show it at the top of the body. The
-**Record Card** is the keyboard-first editor for those values.
-When the sheet is hide-eligible — healthy schema, desktop Obsidian, and the
+Bob Ledger Tools paints a **record card** (formerly the record sheet) at the
+top of a canonical album record's body (`type: [[record]]`) in Reading view
+and Live Preview. An authored first-level heading stays below the card. Notes
+without an H1, including frontmatter-only notes, still show it at the top of
+the body. The **Record Card editor** is the keyboard-first editor for those
+values.
+When the card is hide-eligible — healthy schema, desktop Obsidian, and the
 cached report carries `record_values_v1` — native title and album-schema rows
-hide behind the sheet, along with the filename-derived inline title. Properties
+hide behind the card, along with the filename-derived inline title. Properties
 keeps `parent`, `type`, `created`, legacy and unrelated keys, and Add property.
 Every other case keeps all native rows visible.
 
-The sheet is desktop-only and reads the cached album report plus Obsidian
+The card is desktop-only and reads the cached album report plus Obsidian
 metadata. Opening, folding, or collapsing a record never requests a new
 report and never writes the note. Source mode keeps native YAML.
 
@@ -31,7 +32,7 @@ walk lines do not show a numeric count.
 
 ## Record walk rail
 
-A recognized walk line becomes a rail under the record sheet in desktop Live
+A recognized walk line becomes a rail under the record card in desktop Live
 Preview and Reading view:
 
 ```text
@@ -40,7 +41,7 @@ Preview and Reading view:
 
 The left and right links follow the destinations stored in the note. The
 centre links to the album; its count is computed live in alphabetical title
-order. A thin line in the sheet's root hue marks your location in the ring,
+order. A thin line in the card's root hue marks your location in the ring,
 not task progress. At either end, `↺` and a tooltip announce the wrap. Two
 records point both ways to each other. A singleton shows `1 of 1` with only
 the album link and no track.
@@ -52,7 +53,7 @@ frontmatter-only record has no rail. Rendering needs no cached album report
 or CLI capability; automatic repair requests require `record_walk_v1`.
 
 Below 28rem the rail becomes `‹ 3/104 ›`, retaining full accessible names
-and at least 32px link targets. Collapsing the sheet keeps the rail. Links
+and at least 32px link targets. Collapsing the card keeps the rail. Links
 have visible keyboard focus and page previews. Ordinary arm clicks use the
 same [navigation commands](bob-navigation-hotkeys.md) as `[n` / `]n`, including
 jump history and bracket repeat. Mod-click and middle-click open new tabs;
@@ -72,9 +73,9 @@ xvfb-run -a node scripts/obsidian-record-walk-e2e.cjs \
   -e /snap/obsidian/current/app/obsidian -r /tmp/record-walk.json
 ```
 
-## What the sheet shows
+## What the record card shows
 
-The sheet is a labelled group, *Title record details*. Its first row shows the
+The card is a labelled group, *Title record details*. Its first row shows the
 frontmatter `title` (trimmed), falling back to the first H1 and then the file
 stem, in page-title styling. The muted album breadcrumb and noun follow on
 their own line, then a definition list of schema fields in declaration order.
@@ -84,30 +85,31 @@ links with hover previews. Empty optional fields sit in a shared `＋ Label`
 ghost row. A missing required field keeps its full row and an amber
 **missing** pill. Invalid values stay visible in monospace with a reason.
 
-`parent` lives in the breadcrumb and `type` is implicit identity. The sheet is
+`parent` lives in the breadcrumb and `type` is implicit identity. The card is
 the one home for the frontmatter `title`; H1 agreement or mismatch does not
 create another title entry. A valid `created` date is a footer (`added today,
 7:55 AM`, `added yesterday`, or `added Aug 8, 2025`).
 An invalid created value stays in that fold with lint. Legacy keys declared
 on the album are labelled **legacy**. `null` compact values render as `—`.
 
-The sheet starts expanded. Collapse is a session toggle per record path:
+The card starts expanded. Collapse is a session toggle per record path:
 the title stays visible, followed by one line with the breadcrumb, selected
 choice chips (group field first), and `· N fields`. Fold and collapse choices
 are not stored in frontmatter or plugin settings.
 
 On a `subscriptions/*.md` record the existing subscription money line,
 charge timeline, and finding sentence dock as a trailing band of this
-sheet. Standalone subscription headers yield while the sheet owns the
+card. Standalone subscription headers yield while the card owns the
 path.
 
-## Record Card
+<a id="record-card"></a>
+## Record Card editor
 
-**Edit record** (`edit-record`) opens the card on the active canonical
+**Edit record** (`edit-record`) opens the editor on the active canonical
 record. Title is `<album emoji> <record title>`; subtitle is
 `<Album> › <Noun> · <path>`. One selectable row exists for every schema
 field, including a ghost row for each empty optional. Identity and leftover
-keys stay read-only. The card opens on a requested field, else the first
+keys stay read-only. The editor opens on a requested field, else the first
 missing required field, else the first field, and stays open after saves.
 
 Writes go through the guarded `bob records update` session. Discrete
@@ -116,7 +118,7 @@ apply one field operation with the current fingerprint. Typed values
 preview through a 250ms debounced dry run; Enter stays latched until a
 current preview succeeds, then applies exactly once.
 
-Digits here pick a choice; on the album Schema Card they jump to field N.
+Digits here pick a choice; on the album card editor they jump to field N.
 
 ### Browse keys
 
@@ -131,8 +133,8 @@ Digits here pick a choice; on the album Schema Card they jump to field N.
 | Ctrl+D | Unset an optional field. Required fields refuse, for example `Status is required — pick one of 6 choices`. |
 | `u` / Ctrl+Z | Undo the last save for this record path. |
 | `y` / Ctrl+E | Close and open Source on the field's YAML line, with Done. |
-| `=` | Close and open the parent album Schema Card on the same field, falling back to Album details. |
-| Esc / `q` / Ctrl+[ | Close All actions, then the stage, then the card. `q` types only in text controls. |
+| `=` | Close and open the parent album card editor on the same field, falling back to Album details. |
+| Esc / `q` / Ctrl+[ | Close All actions, then the stage, then the editor. `q` types only in text controls. |
 
 ### Stages
 
@@ -208,7 +210,7 @@ current choice are explicit. Filter text never invents a choice.
 
 A healthy canonical record without `record_values_v1` opens read-only with
 **Update bob to edit here** and never starts a writable session. A broken
-album schema opens a warning card with the album diagnostic and the album
+album schema opens the editor with a warning, the album diagnostic, and the album
 YAML route. Mobile, missing report, bad parent, and non-record notes never
 guess a record target. The palette on a non-record says
 `Open a record note to edit its fields.`
@@ -216,43 +218,43 @@ guess a record target. The palette on a non-record says
 ### Undo and YAML
 
 Undo memory is per record path for the plugin session, so reopening the
-card can still undo. YAML Done saves the record pane, restores the previous
-view, and reopens the card on the same field. Record findings never block
+editor can still undo. YAML Done saves the record pane, restores the previous
+view, and reopens the editor on the same field. Record findings never block
 Done.
 
 ## Entry points
 
 | Gesture | Outcome |
 | --- | --- |
-| `⊞ Edit` in the sheet header | Open the card (desktop plus capability; titled `Edit fields (==, Ctrl+Shift+P)`). |
-| A sheet row | Open the card on that field. |
+| `⊞ Edit` in the card header | Open the Record Card editor (desktop plus capability; titled `Edit fields (==, Ctrl+Shift+P)`). |
+| A card row | Open the editor on that field. |
 | A value chip, ghost chip, or missing pill | Open that field's stage directly. |
-| `==` in Vim normal mode in Live Preview on a record | Open the Record Card; `N==`, register prefixes, Source mode, insert and visual modes, and non-record notes keep Vim's reindent. |
-| `Ctrl+Shift+P` on a record where the Task Card has no target | Open the Record Card; tasks, links, and dependency rows keep priority. |
-| **Edit record** palette command | Open the card; non-records say `Open a record note to edit its fields.` |
+| `==` in Vim normal mode in Live Preview on a record | Open the Record Card editor; `N==`, register prefixes, Source mode, insert and visual modes, and non-record notes keep Vim's reindent. |
+| `Ctrl+Shift+P` on a record where the Task Card has no target | Open the Record Card editor; tasks, links, and dependency rows keep priority. |
+| **Edit record** palette command | Open the editor; non-records say `Open a record note to edit its fields.` |
 | Command Mode Vault row | Run **Edit record** through Obsidian's command route. |
-| Collapse control | Session-collapse or expand this record's sheet. |
+| Collapse control | Session-collapse or expand this record card. |
 | Other-properties disclosure | Session-show or hide leftover keys. |
 | `y` on a focused row, ghost, or fold row | Open this record in Source on that YAML key. |
 | Open album YAML (broken schema) | Open the parent album in Source on the diagnostic line. |
 | Breadcrumb / wikilink / URL | Ordinary Obsidian navigation and hover previews. |
 
 Every affordance answers to click, Enter, and Space. A row click never
-steals wikilink navigation, and `=` inside the card climbs to the parent
-album's Schema Card.
+steals wikilink navigation, and `=` inside the editor climbs to the parent
+album's card editor.
 
 ## Fail-open
 
-The sheet stays off when the note is not a canonical `[[record]]`, the
+The card stays off when the note is not a canonical `[[record]]`, the
 device is mobile, the album report is missing, metadata is missing, the
 parent is missing, ambiguous, cyclic, or not an album, or the file is not
 an immediate Markdown child of `<album-stem>/`. Bank months, mixed types,
 legacy nouns, and Source mode keep their native surfaces.
 
-A broken album schema still mounts a warning sheet with the diagnostic and
+A broken album schema still mounts a warning card with the diagnostic and
 **Open album YAML**. Missing `record_values_v1` still mounts a healthy
-read-only sheet; it does not enable editing or hide Properties. Embedded
-sheets never hide native rows. Hiding belongs only to the view's own Properties
+read-only card; it does not enable editing or hide Properties. Embedded
+cards never hide native rows. Hiding belongs only to the view's own Properties
 rows, including replacements after a tab switch. File, type, parent or mode
 changes, view destruction, and plugin unload or disable restore those rows.
 
@@ -263,7 +265,7 @@ The plugin never calls `processFrontMatter`. A record session wraps the shared
 guarded update session with opt-in direct apply (`applyOps`), saves every pane
 showing the record or its album, and replays Undo from `inverse_ops` with
 `expect` set to `fingerprint_after`. A successful apply suppresses the writer's
-own album-sync echo and pushes an optimistic sheet overlay for at most 5s, or
+own album-sync echo and pushes an optimistic card overlay for at most 5s, or
 until metadataCache matches the applied properties.
 
 Identity fields (`parent`, `type`, `title`, `created`) stay uneditable here.
@@ -271,4 +273,4 @@ BOM notes refuse with `record_uneditable` and keep every byte; CRLF notes keep
 their newlines.
 
 See [Album cards](albums.md) for owner catalogs, generated indexes, and the
-Schema Card.
+album card editor.

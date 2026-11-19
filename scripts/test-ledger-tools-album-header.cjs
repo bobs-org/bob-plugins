@@ -283,6 +283,7 @@ test("rendering is idempotent, keeps schema labels as text, scopes Properties, a
   assert.equal(root.querySelectorAll(".bob-album-header").length, 1);
   assert.equal(root.classList.contains("bob-album-header-surface"), true);
   const header = root.querySelector(".bob-album-header");
+  assert.equal(header.classList.contains("bob-property-card"), true);
   assert.equal(header.textContent.includes("<Status>"), true);
   assert.equal(header.querySelectorAll("script").length, 0);
   assert.equal(header.querySelectorAll(".bob-album-schema-field").length, 1);

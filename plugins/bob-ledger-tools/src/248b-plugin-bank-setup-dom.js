@@ -410,7 +410,7 @@ function bankSetupBuildEl(model, handlers, doc) {
   if (!model) {
     return null;
   }
-  const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} is-${model.state}`, null, {
+  const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
     "aria-label": "Bank setup",

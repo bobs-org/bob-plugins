@@ -8531,32 +8531,46 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .markdown-preview-view > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-property-card-owned-property {
   display: none !important;
 }
-.bob-album-header {
-  --bob-album-accent: var(--bob-area-ink, var(--interactive-accent));
+/* Shared chrome for the three view-only property cards. Species keep their
+   exact padding, tint, font size, wrapping, and accent fallbacks below. */
+.bob-property-card {
+  --bob-property-card-accent: var(--bob-property-card-fallback-accent, var(--interactive-accent));
+  --bob-property-card-tint: 8%;
+  --bob-property-card-padding: 0.65em 0.8em;
+  --bob-property-card-font-size: var(--font-ui-small);
+  --bob-property-card-overflow-wrap: anywhere;
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
   margin: 0 0 0.9em;
-  padding: 0.65em 0.8em;
-  border: 1px solid color-mix(in srgb, var(--bob-album-accent) 30%, var(--background-modifier-border));
-  border-inline-start: 2px solid var(--bob-album-accent);
+  padding: var(--bob-property-card-padding);
+  border: 1px solid color-mix(in srgb, var(--bob-property-card-accent) 30%, var(--background-modifier-border));
+  border-inline-start: 2px solid var(--bob-property-card-accent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bob-album-accent) 8%, var(--background-primary));
+  background: color-mix(in srgb, var(--bob-property-card-accent) var(--bob-property-card-tint), var(--background-primary));
   font-family: var(--font-interface);
-  font-size: var(--font-ui-small);
-  font-weight: var(--font-normal);
+  font-size: var(--bob-property-card-font-size);
   line-height: 1.4;
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: var(--bob-property-card-overflow-wrap);
 }
-.bob-album-header[data-root-hue="aqua"] { --bob-album-accent: var(--bob-area-aqua, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="blue"] { --bob-album-accent: var(--bob-area-blue, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="green"] { --bob-album-accent: var(--bob-area-green, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="magenta"] { --bob-album-accent: var(--bob-area-magenta, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="orange"] { --bob-album-accent: var(--bob-area-orange, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="red"] { --bob-album-accent: var(--bob-area-red, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="violet"] { --bob-album-accent: var(--bob-area-violet, var(--interactive-accent)); }
-.bob-album-header[data-root-hue="yellow"] { --bob-album-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="aqua"] { --bob-property-card-accent: var(--bob-area-aqua, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="blue"] { --bob-property-card-accent: var(--bob-area-blue, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="green"] { --bob-property-card-accent: var(--bob-area-green, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="magenta"] { --bob-property-card-accent: var(--bob-area-magenta, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="orange"] { --bob-property-card-accent: var(--bob-area-orange, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="red"] { --bob-property-card-accent: var(--bob-area-red, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="violet"] { --bob-property-card-accent: var(--bob-area-violet, var(--interactive-accent)); }
+.bob-property-card[data-root-hue="yellow"] { --bob-property-card-accent: var(--bob-area-yellow, var(--interactive-accent)); }
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-card .bob-record-sheet-row.is-changed .bob-record-sheet-value { animation: none; }
+}
+
+.bob-album-header {
+  --bob-property-card-fallback-accent: var(--bob-area-ink, var(--interactive-accent));
+  --bob-album-accent: var(--bob-property-card-accent);
+  font-weight: var(--font-normal);
+}
 .bob-album-header-nav {
   display: flex;
   flex-wrap: wrap;
@@ -9860,29 +9874,11 @@ li.bob-bank-mark-acked { opacity: 0.72; }
    property on any other note is never hidden. The owned bank row hides through
    the shared property-card ownership rule in the album section. */
 .bob-bank-setup {
-  --bob-setup-accent: var(--bob-bank-accent, var(--interactive-accent));
-  box-sizing: border-box;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0 0 0.9em;
-  padding: 0.65em 0.8em;
-  border: 1px solid color-mix(in srgb, var(--bob-setup-accent) 30%, var(--background-modifier-border));
-  border-inline-start: 2px solid var(--bob-setup-accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bob-setup-accent) 8%, var(--background-primary));
-  font-family: var(--font-interface);
-  font-size: 0.9em;
-  line-height: 1.4;
-  overflow-wrap: break-word;
+  --bob-property-card-fallback-accent: var(--bob-bank-accent, var(--interactive-accent));
+  --bob-property-card-font-size: 0.9em;
+  --bob-property-card-overflow-wrap: break-word;
+  --bob-setup-accent: var(--bob-property-card-accent);
 }
-.bob-bank-setup[data-root-hue="aqua"] { --bob-setup-accent: var(--bob-area-aqua, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="blue"] { --bob-setup-accent: var(--bob-area-blue, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="green"] { --bob-setup-accent: var(--bob-area-green, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="magenta"] { --bob-setup-accent: var(--bob-area-magenta, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="orange"] { --bob-setup-accent: var(--bob-area-orange, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="red"] { --bob-setup-accent: var(--bob-area-red, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="violet"] { --bob-setup-accent: var(--bob-area-violet, var(--interactive-accent)); }
-.bob-bank-setup[data-root-hue="yellow"] { --bob-setup-accent: var(--bob-area-yellow, var(--interactive-accent)); }
 .bob-bank-setup-head { display: flex; align-items: baseline; gap: 0.6em; }
 .bob-bank-setup-toggle { border: none; background: none; color: var(--text-normal); font: inherit; font-weight: 650; cursor: pointer; padding: 0; }
 .bob-bank-setup-collapsed { flex: 1 1 auto; min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -10994,31 +10990,12 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   display: block !important;
 }
 .bob-record-sheet {
-  --bob-record-accent: var(--bob-area-ink, var(--interactive-accent));
-  box-sizing: border-box;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0 0 0.9em;
-  padding: 0.6em 0.75em;
-  border: 1px solid color-mix(in srgb, var(--bob-record-accent) 30%, var(--background-modifier-border));
-  border-inline-start: 2px solid var(--bob-record-accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bob-record-accent) 4%, var(--background-primary));
-  font-family: var(--font-interface);
-  font-size: var(--font-ui-small);
+  --bob-property-card-fallback-accent: var(--bob-area-ink, var(--interactive-accent));
+  --bob-property-card-tint: 4%;
+  --bob-property-card-padding: 0.6em 0.75em;
+  --bob-record-accent: var(--bob-property-card-accent);
   font-weight: var(--font-normal);
-  line-height: 1.4;
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
-.bob-record-sheet[data-root-hue="aqua"] { --bob-record-accent: var(--bob-area-aqua, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="blue"] { --bob-record-accent: var(--bob-area-blue, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="green"] { --bob-record-accent: var(--bob-area-green, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="magenta"] { --bob-record-accent: var(--bob-area-magenta, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="orange"] { --bob-record-accent: var(--bob-area-orange, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="red"] { --bob-record-accent: var(--bob-area-red, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="violet"] { --bob-record-accent: var(--bob-area-violet, var(--interactive-accent)); }
-.bob-record-sheet[data-root-hue="yellow"] { --bob-record-accent: var(--bob-area-yellow, var(--interactive-accent)); }
 .bob-record-sheet-header {
   display: flex;
   flex-direction: column;
@@ -11212,14 +11189,6 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
   .bob-record-sheet-row { display: block; margin: 0.35em 0; }
   .bob-record-sheet-label { display: block; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .bob-record-sheet-row.is-changed .bob-record-sheet-value { animation: none; }
-}
-@media (prefers-color-scheme: dark) {
-  .bob-record-sheet {
-    background: color-mix(in srgb, var(--bob-record-accent) 4%, var(--background-primary));
-  }
 }
 .bob-record-card-modal {
   width: min(42em, calc(100vw - 2rem));

@@ -273,7 +273,7 @@ class BobLedgerToolsAlbumHeaderMixin {
 
   albumHeaderBuildEl(model, options, doc) {
     try {
-      const header = notebookCreateEl(doc, "section", ALBUM_HEADER_CLASS);
+      const header = notebookCreateEl(doc, "section", `${ALBUM_HEADER_CLASS} bob-property-card`);
       if (!header) return null;
       header.setAttribute?.("data-album-header", "true");
       header.setAttribute?.("data-album-source", model.path);

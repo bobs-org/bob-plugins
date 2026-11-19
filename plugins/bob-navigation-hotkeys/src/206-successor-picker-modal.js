@@ -374,6 +374,23 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       }
       return;
     }
+    if (
+      event.key === " " &&
+      event.ctrlKey !== true && event.metaKey !== true && event.altKey !== true &&
+      event.shiftKey !== true && event.isComposing !== true && event.keyCode !== 229 &&
+      this.inputEl && this.inputEl.value === ""
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat === true) {
+        return;
+      }
+      const active = this.visibleItems[this.selectedIndex];
+      if (active && active.kind === "offer" && active.row.selectable) {
+        this.toggleMark(active.row.key);
+      }
+      return;
+    }
     // Unmatched keys go to the base picker for its navigation (↑/↓ and
     // Ctrl+N/Ctrl+P), as every other FilteredPickerModal subclass does.
     // Enter never reaches the base because the Enter branch above always returns.

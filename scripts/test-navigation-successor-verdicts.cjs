@@ -408,6 +408,25 @@ test("Ctrl+A skips verdict rows and Tab on a verdict row makes it Pull in", asyn
   assert.equal(await pending, null);
 });
 
+test("empty-filter Space converts a staged Done row into a Pull-in mark", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, verdictModel(2));
+  pressVerdict(modal, false);
+  modal.selectedIndex = modal.visibleItems.findIndex(
+    (item) => item.kind === "offer" && item.row.key === "verdict:key/0",
+  );
+  modal.renderResults();
+  const selectedIndex = modal.selectedIndex;
+  const event = pressKey(modal, " ");
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(modal.selectedIndex, selectedIndex);
+  assert.equal(modal.verdicts.size, 0);
+  assert.deepEqual(Array.from(modal.markedKeys), ["verdict:key/0"]);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("retarget ignores verdict rows with a soft refusal", async () => {
   const plugin = makePlugin();
   plugin.app.plugins.plugins["block-id-prompt"] = {

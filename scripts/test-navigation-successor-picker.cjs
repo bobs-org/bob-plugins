@@ -233,6 +233,89 @@ test("Tab marks a subset, returns model order, and group Ctrl+A includes collaps
   assert.deepEqual((await all.pending).picks.map((item) => item.key), expected);
 });
 
+test("empty-filter Space toggles the highlighted offer in place and submits only marked rows", async () => {
+  const plugin = makePlugin();
+  const model = modelFor(3);
+  const { pending, modal } = await openPicker(plugin, model);
+  const firstKey = model.groups[0].rows[0].key;
+  const originalIndex = modal.selectedIndex;
+
+  let event = pressKey(modal, " ");
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(modal.inputEl.value, "");
+  assert.equal(modal.selectedIndex, originalIndex, "Space does not move the highlight");
+  assert.deepEqual(Array.from(modal.markedKeys), [firstKey]);
+
+  event = pressKey(modal, " ");
+  assert.equal(event.defaultPrevented, true);
+  assert.deepEqual(Array.from(modal.markedKeys), [], "a second Space unmarks the offer");
+
+  pressKey(modal, " ");
+  plugin.setNow(1350);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, { picks: [{ key: firstKey }] });
+
+  const repeatPlugin = makePlugin();
+  const repeat = await openPicker(repeatPlugin, modelFor(2));
+  event = pressKey(repeat.modal, " ", { repeat: true });
+  assert.equal(event.defaultPrevented, true, "repeated Space is consumed");
+  assert.equal(repeat.modal.markedKeys.size, 0, "repeated Space does not toggle");
+  repeat.modal.close();
+  assert.equal(await repeat.pending, null);
+});
+
+test("empty-filter Space consumes inert rows and leaves typed or modified Space native", async () => {
+  const mutedPlugin = makePlugin();
+  const muted = await openPicker(mutedPlugin, modelFor(3, {
+    rowOptions: (index) => index === 0 ? { selectable: false, mutedReason: "blocked" } : {},
+  }));
+  muted.modal.selectedIndex = muted.modal.visibleItems.findIndex(
+    (item) => item.kind === "offer" && !item.row.selectable,
+  );
+  let event = pressKey(muted.modal, " ");
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(muted.modal.markedKeys.size, 0);
+  muted.modal.close();
+  assert.equal(await muted.pending, null);
+
+  const expandedPlugin = makePlugin();
+  const expanded = await openPicker(expandedPlugin, modelFor(20, { group: "project" }));
+  expanded.modal.selectedIndex = expanded.modal.visibleItems.findIndex(
+    (item) => item.kind === "expand",
+  );
+  event = pressKey(expanded.modal, " ");
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(expanded.modal.markedKeys.size, 0);
+  expanded.modal.close();
+  assert.equal(await expanded.pending, null);
+
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, modelFor(3));
+  modal.inputEl.value = "Offer";
+  modal.inputEl.listeners.input();
+  const before = Array.from(modal.markedKeys);
+  event = pressKey(modal, " ");
+  assert.equal(event.defaultPrevented, false, "non-empty filters receive Space for typing");
+  assert.deepEqual(Array.from(modal.markedKeys), before);
+  modal.inputEl.value = "";
+  modal.inputEl.listeners.input();
+
+  for (const options of [
+    { shiftKey: true },
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+    { isComposing: true },
+    { keyCode: 229 },
+  ]) {
+    event = pressKey(modal, " ", options);
+    assert.equal(event.defaultPrevented, false, `modified or composing Space falls through: ${JSON.stringify(options)}`);
+  }
+  assert.equal(modal.markedKeys.size, 0);
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("filtering expands matches, collapse state survives clearing, and hidden marks still submit", async () => {
   const plugin = makePlugin();
   const model = modelFor(20, { group: "project", keyPrefix: "stable opaque" });

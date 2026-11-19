@@ -172,9 +172,10 @@ test("copy unavailable clipboard reports a useful reason", async () => {
 test("cursor command resolves through chipAt and uses the shared copy path", async () => {
   const plugin = new BobCopyChipsPlugin({});
   await plugin.onload();
-  assert.equal(plugin.commands.length, 1);
-  assert.equal(plugin.commands[0].id, "copy-on-cursor-line");
-  assert.equal(plugin.commands[0].name, "Copy chip on cursor line");
+  const command = plugin.commands.find((item) => item.id === "copy-on-cursor-line");
+  assert.ok(command);
+  assert.equal(command.name, "Copy chip on cursor line");
+  assert.ok(plugin.commands.find((item) => item.id === "make-or-edit"));
   // Command works through editorCallback with no view (Source mode).
   const clip = installClipboardStub();
   try {

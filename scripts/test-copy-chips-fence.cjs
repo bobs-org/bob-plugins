@@ -391,6 +391,67 @@ test("block chips copy through the shared path and flash the fence card", async 
   }
 });
 
+test("inert fence preview is a noninteractive span without a fold toggle", () => {
+  const doc = new FakeDocument();
+  const payload = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9"].join("\n");
+  const live = helpers.copyChipBuildFence(doc, { label: "L", text: payload });
+  assert.equal(live.querySelector(".bob-copy-fence-copy").tagName, "BUTTON");
+  assert.ok(live.querySelector(".bob-copy-fence-toggle"));
+  const inert = helpers.copyChipBuildFence(doc, { label: "L", text: payload }, { interactive: false });
+  const copy = inert.querySelector(".bob-copy-fence-copy");
+  assert.equal(copy.tagName, "SPAN");
+  assert.equal(copy.getAttribute("type"), null);
+  assert.equal(copy.getAttribute("aria-hidden"), "true");
+  assert.equal(inert.querySelector(".bob-copy-fence-toggle"), null);
+  assert.equal(inert.querySelector("button"), null);
+  assert.equal(inert.querySelector(".bob-copy-fence-body").textContent, payload);
+});
+
+test("payload-unique fence labels win over a stale section info", () => {
+  const markdown = [
+    "```bob-copy Weekly status",
+    "Hi team —",
+    "```",
+    "",
+    "```bob-copy Trailing",
+    "hello",
+    "",
+    "```",
+    "",
+    "- item",
+    "  ```bob-copy Nested",
+    "  nested body",
+    "  ```",
+    "",
+  ].join("\n");
+  assert.equal(helpers.copyChipFenceLabelForPayload(markdown, "Hi team —"), "Weekly status");
+  assert.equal(helpers.copyChipFenceLabelForPayload(markdown, "hello\n"), "Trailing");
+  assert.equal(helpers.copyChipFenceLabelForPayload(markdown, "nested body"), "Nested");
+  assert.equal(helpers.copyChipFenceLabelForPayload(markdown, "  nested body"), "Nested");
+  const withCallout = markdown + "> [!note] Callout card\n> ```bob-copy\n> callout body\n> ```\n";
+  const plugin = {
+    app: {
+      workspace: {
+        activeLeaf: {
+          view: {
+            file: { path: "note.md" },
+            editor: { getValue: () => withCallout },
+          },
+        },
+      },
+    },
+  };
+  const ctx = {
+    sourcePath: "note.md",
+    getSectionInfo() {
+      return { text: "```bob-copy Weekly status\nHi team —\n```" };
+    },
+  };
+  assert.equal(helpers.copyChipFenceLabelForRender(plugin, ctx, {}, "hello\n"), "Trailing");
+  assert.equal(helpers.copyChipFenceLabelForRender(plugin, ctx, {}, "Hi team —"), "Weekly status");
+  assert.equal(helpers.copyChipFenceLabelForRender(plugin, ctx, {}, "callout body"), null);
+});
+
 test("api exposes the fence source helper and block resolution", async () => {
   const { BobCopyChipsPlugin } = require("./copy-chips-test-helpers.cjs");
   const plugin = new BobCopyChipsPlugin({});

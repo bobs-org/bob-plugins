@@ -9,6 +9,36 @@ let CopyChipsMarkdownRenderChild = null;
 let CopyChipsSetIcon = null;
 let CopyChipsEditorLivePreviewField = null;
 let CopyChipsEditorInfoField = null;
+let CopyChipsModal = class {
+  constructor(app) {
+    this.app = app;
+    this.containerEl = null;
+    this.modalEl = null;
+    this.contentEl = null;
+    this.scope = {
+      register() {
+        return {};
+      },
+      unregister() {},
+    };
+  }
+  open() {
+    try {
+      this.onOpen();
+    } catch (error) {
+      // Fake modal open never throws.
+    }
+  }
+  close() {
+    try {
+      this.onClose();
+    } catch (error) {
+      // Fake modal close never throws.
+    }
+  }
+  onOpen() {}
+  onClose() {}
+};
 
 try {
   const obsidian = require("obsidian");
@@ -29,6 +59,9 @@ try {
   }
   if (obsidian && obsidian.editorInfoField) {
     CopyChipsEditorInfoField = obsidian.editorInfoField;
+  }
+  if (obsidian && typeof obsidian.Modal === "function") {
+    CopyChipsModal = obsidian.Modal;
   }
 } catch (error) {
   CopyChipsPluginBase = class {};
@@ -60,17 +93,36 @@ let CopyChipsStateEffect = null;
 let CopyChipsStateField = null;
 let CopyChipsRangeSetBuilder = null;
 let CopyChipsPrec = null;
+let CopyChipsTransaction = null;
 try {
   const stateMod = require("@codemirror/state");
   CopyChipsStateEffect = (stateMod && stateMod.StateEffect) || null;
   CopyChipsStateField = (stateMod && stateMod.StateField) || null;
   CopyChipsRangeSetBuilder = (stateMod && stateMod.RangeSetBuilder) || null;
   CopyChipsPrec = (stateMod && stateMod.Prec) || null;
+  CopyChipsTransaction = (stateMod && stateMod.Transaction) || null;
 } catch (error) {
   CopyChipsStateEffect = null;
   CopyChipsStateField = null;
   CopyChipsRangeSetBuilder = null;
   CopyChipsPrec = null;
+  CopyChipsTransaction = null;
+}
+
+let CopyChipsIsolateHistory = null;
+try {
+  const commandsMod = require("@codemirror/commands");
+  CopyChipsIsolateHistory = (commandsMod && commandsMod.isolateHistory) || null;
+} catch (error) {
+  CopyChipsIsolateHistory = null;
+}
+if (!CopyChipsIsolateHistory) {
+  try {
+    const historyMod = require("@codemirror/history");
+    CopyChipsIsolateHistory = (historyMod && historyMod.isolateHistory) || null;
+  } catch (error) {
+    CopyChipsIsolateHistory = null;
+  }
 }
 
 let CopyChipsSyntaxTree = null;
@@ -769,8 +821,9 @@ function copyChipDisposeFeedback(doc) {
   }
 }
 // ---- src/040-chip-dom.js ----
-// Shared inline chip face for Live Preview, Reading view, and the future
-// inert author preview. Payloads live in a WeakMap and DOM text only.
+// Shared inline chip face for Live Preview, Reading view, and the inert
+// author preview. Payloads live in a WeakMap and DOM text only.
+const COPY_CHIP_AUTHOR_EDIT_HINT = " · Alt+Click to edit";
 const copyChipPayloads = new WeakMap();
 let copyChipDomSeq = 0;
 
@@ -900,9 +953,11 @@ function copyChipBuildInline(doc, chip, options) {
       const tip = doc.createElement("span");
       tip.setAttribute("class", "bob-copy-chip-tip");
       try {
-        tip.textContent = labeled
+        let tipText = labeled
           ? "Copy: " + copyChipPreviewText(text)
           : "Click to copy";
+        if (opts.editHint === true) tipText += COPY_CHIP_AUTHOR_EDIT_HINT;
+        tip.textContent = tipText;
       } catch (error) {
         // Tooltip text is best-effort.
       }
@@ -992,6 +1047,7 @@ function copyChipLiveShouldReveal(spanFrom, spanTo, selections) {
 function copyChipLiveGestureShouldCopy(start, end, options) {
   try {
     const opts = options && typeof options === "object" ? options : {};
+    if (opts.alt === true) return false;
     if (opts.cancelled === true) return false;
     if (opts.releasedInside !== true) return false;
     if (Number(opts.button) !== 0 && opts.button !== undefined && opts.button !== null) {
@@ -1009,6 +1065,21 @@ function copyChipLiveGestureShouldCopy(start, end, options) {
     const dx = ex - sx;
     const dy = ey - sy;
     return dx * dx + dy * dy < 16;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipLiveGestureShouldEdit(start, end, options) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    if (opts.alt !== true) return false;
+    const copyOpts = {};
+    for (const key in opts) {
+      if (Object.prototype.hasOwnProperty.call(opts, key) && key !== "alt") copyOpts[key] = opts[key];
+    }
+    copyOpts.alt = false;
+    return copyChipLiveGestureShouldCopy(start, end, copyOpts);
   } catch (error) {
     return false;
   }
@@ -1138,6 +1209,7 @@ function copyChipEnsureLiveWidget() {
         this.text = String(this.model.text || "");
         this.spanFrom = Number(this.model.from);
         this.spanTo = Number(this.model.to);
+        this.plugin = this.model.plugin || null;
         this.gesture = null;
       }
 
@@ -1168,7 +1240,7 @@ function copyChipEnsureLiveWidget() {
           const host = copyChipBuildInline(
             ownerDoc,
             { label: this.label, text: this.text },
-            { interactive: false },
+            { interactive: false, editHint: true },
           );
           if (!host) {
             const fallback = ownerDoc ? ownerDoc.createElement("span") : null;
@@ -1220,7 +1292,12 @@ function copyChipEnsureLiveWidget() {
                   } catch (error) {
                     // Caret suppression is best-effort.
                   }
-                  widget.gesture = { start: getPos(event), button: event.button, pointerType: "mouse" };
+                  widget.gesture = {
+                    start: getPos(event),
+                    button: event.button,
+                    pointerType: "mouse",
+                    alt: Boolean(event && event.altKey),
+                  };
                 } catch (error) {
                   widget.gesture = null;
                 }
@@ -1228,12 +1305,35 @@ function copyChipEnsureLiveWidget() {
               host.addEventListener("mouseup", (event) => {
                 try {
                   const start = widget.gesture && widget.gesture.start;
-                  const should = copyChipLiveGestureShouldCopy(start, getPos(event), {
+                  const alt = Boolean((widget.gesture && widget.gesture.alt) || (event && event.altKey));
+                  const gestureOpts = {
                     button: event ? event.button : 0,
                     releasedInside: true,
                     pointerType: "mouse",
-                  });
+                    alt,
+                  };
+                  const shouldEdit = copyChipLiveGestureShouldEdit(start, getPos(event), gestureOpts);
+                  const should = copyChipLiveGestureShouldCopy(start, getPos(event), gestureOpts);
                   widget.gesture = null;
+                  if (shouldEdit) {
+                    try {
+                      event.preventDefault();
+                    } catch (error) {
+                      // Default suppression is best-effort.
+                    }
+                    try {
+                      copyChipAuthorOpenFromWidget(
+                        widget.plugin,
+                        view,
+                        widget.spanFrom,
+                        widget.spanTo,
+                        { label: widget.label, text: widget.text },
+                      );
+                    } catch (error) {
+                      // Author open is best-effort.
+                    }
+                    return;
+                  }
                   if (!should) return;
                   try {
                     event.preventDefault();
@@ -1337,7 +1437,7 @@ function copyChipEnsureLiveWidget() {
   }
 }
 
-function copyChipBuildLiveDecorations(view) {
+function copyChipBuildLiveDecorations(view, plugin) {
   try {
     if (
       !view ||
@@ -1447,7 +1547,13 @@ function copyChipBuildLiveDecorations(view) {
     const builder = new CopyChipsRangeSetBuilder();
     for (const chip of found) {
       try {
-        const widget = new WidgetClass({ label: chip.label, text: chip.text, from: chip.from, to: chip.to });
+        const widget = new WidgetClass({
+          label: chip.label,
+          text: chip.text,
+          from: chip.from,
+          to: chip.to,
+          plugin: plugin || null,
+        });
         builder.add(chip.from, chip.to, CopyChipsDecoration.replace({ widget }));
       } catch (error) {
         continue;
@@ -1528,7 +1634,7 @@ function copyChipCreateLiveExtension(plugin) {
           // View tracking is best-effort.
         }
         try {
-          this.decorations = copyChipBuildLiveDecorations(view);
+          this.decorations = copyChipBuildLiveDecorations(view, host);
         } catch (error) {
           this.decorations = CopyChipsDecoration.none;
         }
@@ -1537,7 +1643,7 @@ function copyChipCreateLiveExtension(plugin) {
       update(update) {
         try {
           if (copyChipLiveShouldRebuild(update)) {
-            this.decorations = copyChipBuildLiveDecorations(update.view);
+            this.decorations = copyChipBuildLiveDecorations(update.view, host);
           }
         } catch (error) {
           // Keep the previous valid decorations on failure.
@@ -2763,6 +2869,138 @@ function copyChipFenceLabelFromContext(ctx, el) {
   }
 }
 
+function copyChipFencePayloadEquals(actual, expected) {
+  try {
+    const left = copyChipFencePayloadFromSource(actual == null ? "" : String(actual));
+    const right = copyChipFencePayloadFromSource(expected == null ? "" : String(expected));
+    if (left === right) return true;
+    const strip = (text) => String(text).replace(/^[ \t]+/gm, "");
+    return strip(left) === strip(right);
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipFenceCollectLabeledPayloads(markdown) {
+  const out = [];
+  try {
+    const lines = String(markdown == null ? "" : markdown).split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      let opening = null;
+      try {
+        const raw = String(lines[index] == null ? "" : lines[index]);
+        const stripped = raw.replace(/^[ \t]*>[ \t]?/, "");
+        opening = copyChipFenceOpeningFromLine(stripped) || copyChipFenceOpeningFromLine(raw);
+      } catch (error) {
+        opening = null;
+      }
+      if (!opening) continue;
+      let parsed = null;
+      try {
+        parsed = copyChipParseFenceInfo(opening.info);
+      } catch (error) {
+        parsed = null;
+      }
+      if (!parsed) continue;
+      let closeAt = -1;
+      try {
+        closeAt = copyChipScanFenceClose(lines, index, opening);
+      } catch (error) {
+        closeAt = -1;
+      }
+      const end = closeAt < 0 ? lines.length : closeAt;
+      const body = [];
+      for (let cursor = index + 1; cursor < end; cursor += 1) {
+        body.push(String(lines[cursor] == null ? "" : lines[cursor]));
+      }
+      let text = "";
+      try {
+        text = copyChipFencePayloadFromSource(copyChipFencePayload(body));
+      } catch (error) {
+        text = body.join("\n");
+      }
+      out.push({ label: parsed.label, text, openIndex: index });
+      index = end;
+    }
+  } catch (error) {
+    return [];
+  }
+  return out;
+}
+
+function copyChipFenceLabelForPayload(markdown, payload) {
+  try {
+    const matches = copyChipFenceCollectLabeledPayloads(markdown).filter((entry) =>
+      copyChipFencePayloadEquals(entry.text, payload),
+    );
+    if (matches.length === 1) return matches[0].label;
+    return undefined;
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function copyChipFenceMarkdownFromPlugin(plugin, ctx) {
+  try {
+    const path = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : null;
+    const app = plugin && plugin.app;
+    if (!path || !app || !app.workspace) return null;
+    const leaf = app.workspace.activeLeaf;
+    const view = leaf && leaf.view;
+    if (view && view.file && view.file.path === path) {
+      if (view.editor && typeof view.editor.getValue === "function") {
+        return String(view.editor.getValue());
+      }
+      if (typeof view.data === "string") return view.data;
+    }
+    if (app.workspace.getLeavesOfType) {
+      const leaves = app.workspace.getLeavesOfType("markdown") || [];
+      for (let index = 0; index < leaves.length; index += 1) {
+        try {
+          const candidate = leaves[index] && leaves[index].view;
+          if (!candidate || !candidate.file || candidate.file.path !== path) continue;
+          if (candidate.editor && typeof candidate.editor.getValue === "function") {
+            return String(candidate.editor.getValue());
+          }
+          if (typeof candidate.data === "string") return candidate.data;
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function copyChipFenceLabelForRender(plugin, ctx, el, payload) {
+  try {
+    if (ctx && typeof ctx.getSectionInfo === "function") {
+      let section = null;
+      try {
+        section = ctx.getSectionInfo(el);
+      } catch (error) {
+        section = null;
+      }
+      if (section && typeof section.text === "string") {
+        const matches = copyChipFenceCollectLabeledPayloads(section.text).filter((entry) =>
+          copyChipFencePayloadEquals(entry.text, payload),
+        );
+        if (matches.length === 1) return matches[0].label;
+      }
+    }
+    const markdown = copyChipFenceMarkdownFromPlugin(plugin, ctx);
+    if (typeof markdown === "string") {
+      const matched = copyChipFenceLabelForPayload(markdown, payload);
+      if (matched !== undefined) return matched;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function copyChipFenceMakeEl(doc, tag, className) {
   try {
     if (!doc || typeof doc.createElement !== "function") return null;
@@ -2836,15 +3074,18 @@ function copyChipFenceFlashButton(button, face, dwellMs) {
 
 // Builds the card. `chip` is {label, text}. Payload travels through
 // textContent and the payload WeakMap only — never attributes, innerHTML,
-// or the accessible name. Interactive children are real <button> elements.
-// Never registers clipboard gestures by itself; returns the card or null.
-function copyChipBuildFence(doc, chip) {
+// or the accessible name. Interactive children are real <button> elements
+// unless `options.interactive === false` (inert author preview). Never
+// registers clipboard gestures by itself; returns the card or null.
+function copyChipBuildFence(doc, chip, options) {
   try {
     if (!doc || typeof doc.createElement !== "function") return null;
     if (!chip || typeof chip !== "object") return null;
     if (typeof chip.text !== "string") return null;
     const label = chip.label === undefined ? null : chip.label;
     if (label !== null && label !== undefined && typeof label !== "string") return null;
+    const opts = options && typeof options === "object" ? options : {};
+    const interactive = opts.interactive !== false;
     const text = chip.text;
     const counts = copyChipFenceCounts(text);
 
@@ -2878,12 +3119,23 @@ function copyChipBuildFence(doc, chip) {
       // Meta text is best-effort.
     }
     header.appendChild(meta);
-    const button = copyChipFenceMakeEl(doc, "button", "bob-copy-fence-copy");
+    const button = copyChipFenceMakeEl(
+      doc,
+      interactive ? "button" : "span",
+      "bob-copy-fence-copy",
+    );
     if (!button) return null;
     try {
-      if (typeof button.setAttribute === "function") button.setAttribute("type", "button");
+      if (interactive && typeof button.setAttribute === "function") button.setAttribute("type", "button");
     } catch (error) {
       // Type setup is best-effort.
+    }
+    try {
+      if (!interactive && typeof button.setAttribute === "function") {
+        button.setAttribute("aria-hidden", "true");
+      }
+    } catch (error) {
+      // Preview inertness is best-effort.
     }
     try {
       button.textContent = "Copy";
@@ -2900,7 +3152,7 @@ function copyChipBuildFence(doc, chip) {
     } catch (error) {
       // Body text is best-effort.
     }
-    const folded = counts.lines > COPY_CHIP_FENCE_FOLD_AFTER;
+    const folded = interactive && counts.lines > COPY_CHIP_FENCE_FOLD_AFTER;
     if (folded) {
       try {
         body.classList.add("is-folded");
@@ -3048,7 +3300,7 @@ function copyChipRenderFence(plugin, source, el, ctx) {
       (typeof document !== "undefined" ? document : null);
     if (!ownerDoc || typeof ownerDoc.createElement !== "function") return;
     const payload = copyChipFencePayloadFromSource(source);
-    const label = copyChipFenceLabelFromContext(ctx, el);
+    const label = copyChipFenceLabelForRender(plugin, ctx, el, payload);
     const card = copyChipBuildFence(ownerDoc, { label, text: payload });
     if (!card) return;
     try {
@@ -3154,6 +3406,1662 @@ function copyChipSetupFence(plugin) {
     return false;
   }
 }
+// ---- src/081-author-model.js ----
+// Pure make-or-edit target resolution and replacement planning.
+// Never throws. Never reads the DOM, clipboard, or editor APIs.
+const COPY_CHIP_AUTHOR_ONE_SELECTION = "One selection at a time";
+const COPY_CHIP_AUTHOR_STALE = "The note changed — reopen the card";
+const COPY_CHIP_AUTHOR_TABLE_BLOCK = "can't put a block card in a table cell";
+const COPY_CHIP_AUTHOR_WHITESPACE = "whitespace only — nothing to copy";
+
+function copyChipAuthorAmbiguousReason(count) {
+  try {
+    return String(Number.isInteger(count) ? count : 0) + " chips on this line · move onto one";
+  } catch (error) {
+    return "chips on this line · move onto one";
+  }
+}
+
+function copyChipAuthorRefuse(reason) {
+  return copyChipFreeze({ ok: false, reason: String(reason || "unavailable") });
+}
+
+function copyChipAuthorSplitLines(source) {
+  try {
+    return String(source === undefined || source === null ? "" : source).split("\n");
+  } catch (error) {
+    return [""];
+  }
+}
+
+function copyChipAuthorLineStart(lines, lineIndex) {
+  try {
+    let offset = 0;
+    const limit = Number.isInteger(lineIndex) ? lineIndex : 0;
+    for (let index = 0; index < limit && index < lines.length; index += 1) {
+      offset += String(lines[index] || "").length + 1;
+    }
+    return offset;
+  } catch (error) {
+    return 0;
+  }
+}
+
+function copyChipAuthorPosAt(lines, offset) {
+  try {
+    let remaining = Number(offset);
+    if (!Number.isFinite(remaining) || remaining < 0) remaining = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      const length = String(lines[index] || "").length;
+      if (remaining <= length) return { line: index, ch: remaining };
+      remaining -= length + 1;
+    }
+    const last = Math.max(0, lines.length - 1);
+    return { line: last, ch: String(lines[last] || "").length };
+  } catch (error) {
+    return { line: 0, ch: 0 };
+  }
+}
+
+function copyChipAuthorNormalizeRange(range) {
+  try {
+    if (!range || typeof range !== "object") return null;
+    const from = Number(range.from);
+    const to = Number(range.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    return { from: lo, to: hi, reversed: from > to, empty: lo === hi };
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipAuthorListMarker(line) {
+  try {
+    const text = String(line === undefined || line === null ? "" : line);
+    const match = /^([ \t]*)(?:[-*+]|\d+[.)])( {1,4}\[[ xX]\])?( +|$)/.exec(text);
+    if (!match) return null;
+    return {
+      leading: match[1],
+      prefix: match[0],
+      contentColumn: match[0].length,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// Indent string for a fence nested in the line's list item (content column),
+// reusing the line's own leading whitespace characters. Continuation lines
+// keep their existing indent. Never throws.
+function copyChipAuthorListContentIndent(line) {
+  try {
+    const marker = copyChipAuthorListMarker(line);
+    if (marker) return marker.leading + " ".repeat(Math.max(0, marker.contentColumn - marker.leading.length));
+    const cont = /^([ \t]+)/.exec(String(line === undefined || line === null ? "" : line));
+    return cont ? cont[1] : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function copyChipAuthorLineIsTable(line) {
+  try {
+    return String(line === undefined || line === null ? "" : line).indexOf("|") !== -1;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorSpanIsInsideMath(line, from, to) {
+  try {
+    const text = String(line === undefined || line === null ? "" : line);
+    const before = text.slice(0, from);
+    const after = text.slice(to);
+    const dollars = (before.match(/\$+/g) || []).join("");
+    let odd = false;
+    let index = 0;
+    while (index < dollars.length) {
+      if (dollars[index] === "$") {
+        odd = !odd;
+        index += 1;
+      } else {
+        index += 1;
+      }
+    }
+    if (!odd) return false;
+    return after.indexOf("$") >= 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorSpanIsInsideComment(line, from, to) {
+  try {
+    const text = String(line === undefined || line === null ? "" : line);
+    const before = text.slice(0, from);
+    const open = before.lastIndexOf("<!--");
+    const close = before.lastIndexOf("-->");
+    if (open < 0 || open < close) return false;
+    return text.slice(to).indexOf("-->") >= 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorPlainSpanAt(lines, lineIndex, ch) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) {
+      return null;
+    }
+    if (!Number.isInteger(ch) || ch < 0) return null;
+    try {
+      if (copyChipCursorInFrontmatter(lines, lineIndex)) return null;
+    } catch (error) {
+      return null;
+    }
+    try {
+      if (copyChipCursorLineIsFenced(lines, lineIndex)) return null;
+    } catch (error) {
+      return null;
+    }
+    const line = String(lines[lineIndex] === undefined || lines[lineIndex] === null ? "" : lines[lineIndex]);
+    try {
+      if (copyChipLiveLineIsIndentedCode(line)) return null;
+    } catch (error) {
+      return null;
+    }
+    let spans = [];
+    try {
+      spans = copyChipFindCodeSpans(line);
+    } catch (error) {
+      return null;
+    }
+    for (const span of spans) {
+      try {
+        if (ch < span.from || ch >= span.to) continue;
+        if (copyChipSpanIsInsideWikilink(line, span.from, span.to)) continue;
+        if (copyChipSpanIsInsideLinkLabel(line, span.from, span.to)) continue;
+        if (copyChipAuthorSpanIsInsideMath(line, span.from, span.to)) continue;
+        if (copyChipAuthorSpanIsInsideComment(line, span.from, span.to)) continue;
+        const content = copyChipNormalizeSpan(span.raw, { table: copyChipAuthorLineIsTable(line) });
+        if (content == null) continue;
+        if (copyChipParseContent(content)) continue;
+        return copyChipFreeze({
+          from: span.from,
+          to: span.to,
+          raw: span.raw,
+          text: content,
+          table: copyChipAuthorLineIsTable(line),
+        });
+      } catch (error) {
+        continue;
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipAuthorFenceRange(source, lines, block) {
+  try {
+    if (!block || !Number.isInteger(block.openIndex)) return null;
+    const from = copyChipAuthorLineStart(lines, block.openIndex);
+    if (block.closeIndex == null) {
+      return { from, to: String(source).length };
+    }
+    const closeStart = copyChipAuthorLineStart(lines, block.closeIndex);
+    const closeLine = String(lines[block.closeIndex] || "");
+    return { from, to: closeStart + closeLine.length };
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipAuthorSnapshot(fields) {
+  try {
+    const src = fields && typeof fields === "object" ? fields : {};
+    return copyChipFreeze({
+      originalSource: String(src.originalSource == null ? "" : src.originalSource),
+      from: Number(src.from) || 0,
+      to: Number(src.to) || 0,
+      sourceSlice: String(src.sourceSlice == null ? "" : src.sourceSlice),
+      label: src.label == null ? "" : String(src.label),
+      text: src.text == null ? "" : String(src.text),
+      title: src.title || "Make copy chip",
+      mode: src.mode || "insert",
+      form: src.form || null,
+      table: Boolean(src.table),
+      indent: src.indent == null ? "" : String(src.indent),
+      focus: src.focus === "text" ? "text" : "label",
+      selectText: Boolean(src.selectText),
+      openingIndent: src.openingIndent == null ? "" : String(src.openingIndent),
+    });
+  } catch (error) {
+    return copyChipFreeze({
+      originalSource: "",
+      from: 0,
+      to: 0,
+      sourceSlice: "",
+      label: "",
+      text: "",
+      title: "Make copy chip",
+      mode: "insert",
+      form: null,
+      table: false,
+      indent: "",
+      focus: "text",
+      selectText: false,
+      openingIndent: "",
+    });
+  }
+}
+
+function copyChipAuthorReady(snapshot) {
+  return copyChipFreeze({ ok: true, snapshot });
+}
+
+// Resolve the make-or-edit target from source bytes and selections.
+// `selections` are document-offset {from, to} ranges, possibly reversed.
+function copyChipAuthorResolve(request) {
+  try {
+    const req = request && typeof request === "object" ? request : {};
+    const source = String(req.source == null ? "" : req.source);
+    const lines = copyChipAuthorSplitLines(source);
+    const rawSelections = Array.isArray(req.selections) ? req.selections : [];
+    if (rawSelections.length > 1) return copyChipAuthorRefuse(COPY_CHIP_AUTHOR_ONE_SELECTION);
+    const range = copyChipAuthorNormalizeRange(rawSelections[0] || { from: 0, to: 0 });
+    if (!range) return copyChipAuthorRefuse(COPY_CHIP_AUTHOR_ONE_SELECTION);
+    const from = Math.max(0, Math.min(range.from, source.length));
+    const to = Math.max(0, Math.min(range.to, source.length));
+    if (!range.empty) {
+      const selected = source.slice(from, to);
+      const startPos = copyChipAuthorPosAt(lines, from);
+      const startLine = String(lines[startPos.line] || "");
+      const indent = copyChipAuthorListContentIndent(startLine);
+      return copyChipAuthorReady(copyChipAuthorSnapshot({
+        originalSource: source,
+        from,
+        to,
+        sourceSlice: selected,
+        label: "",
+        text: selected,
+        title: "Make copy chip",
+        mode: "select",
+        form: selected.indexOf("\n") >= 0 ? "block" : "inline",
+        table: copyChipAuthorLineIsTable(startLine) && selected.indexOf("\n") < 0,
+        indent,
+        focus: "label",
+        selectText: false,
+        openingIndent: "",
+      }));
+    }
+    const pos = copyChipAuthorPosAt(lines, from);
+    let resolved = null;
+    try {
+      resolved = copyChipAt({ lines, line: pos.line, ch: pos.ch });
+    } catch (error) {
+      resolved = copyChipFreeze({ state: "none", count: 0 });
+    }
+    if (resolved && resolved.state === "ambiguous") {
+      return copyChipAuthorRefuse(copyChipAuthorAmbiguousReason(resolved.count));
+    }
+    if (resolved && resolved.state === "ready" && resolved.chip) {
+      const chip = resolved.chip;
+      if (chip.form === "block") {
+        let block = null;
+        try {
+          block = copyChipFindFenceBlock(lines, pos.line);
+        } catch (error) {
+          block = null;
+        }
+        const fenceRange = copyChipAuthorFenceRange(source, lines, block);
+        const openLine = block ? String(lines[block.openIndex] || "") : String(lines[pos.line] || "");
+        const opening = copyChipAuthorListMarker(openLine);
+        const openingIndent = opening ? opening.leading : (/^([ \t]*)/.exec(openLine) || ["", ""])[1];
+        const indent = openingIndent;
+        const rangeFrom = fenceRange ? fenceRange.from : copyChipAuthorLineStart(lines, pos.line);
+        const rangeTo = fenceRange ? fenceRange.to : rangeFrom + String(lines[pos.line] || "").length;
+        return copyChipAuthorReady(copyChipAuthorSnapshot({
+          originalSource: source,
+          from: rangeFrom,
+          to: rangeTo,
+          sourceSlice: source.slice(rangeFrom, rangeTo),
+          label: chip.label == null ? "" : String(chip.label),
+          text: String(chip.text == null ? "" : chip.text),
+          title: "Edit copy chip",
+          mode: "edit",
+          form: "block",
+          table: false,
+          indent,
+          focus: "label",
+          selectText: false,
+          openingIndent,
+        }));
+      }
+      const lineStart = copyChipAuthorLineStart(lines, chip.line);
+      const lineText = String(lines[chip.line] || "");
+      return copyChipAuthorReady(copyChipAuthorSnapshot({
+        originalSource: source,
+        from: lineStart + chip.from,
+        to: lineStart + chip.to,
+        sourceSlice: source.slice(lineStart + chip.from, lineStart + chip.to),
+        label: chip.label == null ? "" : String(chip.label),
+        text: String(chip.text == null ? "" : chip.text),
+        title: "Edit copy chip",
+        mode: "edit",
+        form: "inline",
+        table: copyChipAuthorLineIsTable(lineText),
+        indent: copyChipAuthorListContentIndent(lineText),
+        focus: "label",
+        selectText: false,
+        openingIndent: "",
+      }));
+    }
+    const span = copyChipAuthorPlainSpanAt(lines, pos.line, pos.ch);
+    if (span) {
+      const lineStart = copyChipAuthorLineStart(lines, pos.line);
+      const lineText = String(lines[pos.line] || "");
+      return copyChipAuthorReady(copyChipAuthorSnapshot({
+        originalSource: source,
+        from: lineStart + span.from,
+        to: lineStart + span.to,
+        sourceSlice: source.slice(lineStart + span.from, lineStart + span.to),
+        label: "",
+        text: String(span.text),
+        title: "Make copy chip",
+        mode: "convert",
+        form: "inline",
+        table: Boolean(span.table),
+        indent: copyChipAuthorListContentIndent(lineText),
+        focus: "label",
+        selectText: false,
+        openingIndent: "",
+      }));
+    }
+    const startLine = String(lines[pos.line] || "");
+    const clipboard = req.clipboardText == null ? "" : String(req.clipboardText);
+    return copyChipAuthorReady(copyChipAuthorSnapshot({
+      originalSource: source,
+      from,
+      to,
+      sourceSlice: "",
+      label: "",
+      text: clipboard,
+      title: "Make copy chip",
+      mode: "insert",
+      form: clipboard.indexOf("\n") >= 0 ? "block" : "inline",
+      table: copyChipAuthorLineIsTable(startLine),
+      indent: copyChipAuthorListContentIndent(startLine),
+      focus: "text",
+      selectText: clipboard !== "",
+      openingIndent: "",
+    }));
+  } catch (error) {
+    return copyChipAuthorRefuse("unavailable");
+  }
+}
+
+function copyChipAuthorValidation(label, text) {
+  try {
+    const rawLabel = label == null ? "" : String(label);
+    const rawText = text == null ? "" : String(text);
+    if (rawLabel.indexOf("\n") >= 0 || rawLabel.indexOf("\r") >= 0) {
+      return copyChipFreeze({ ok: false, reason: COPY_CHIP_LABELS_ARE_ONE_LINE });
+    }
+    if (!copyChipHasNonWhitespace(rawText)) {
+      if (rawText !== "" && /[ \t\n\r]/.test(rawText)) {
+        return copyChipFreeze({ ok: false, reason: COPY_CHIP_AUTHOR_WHITESPACE });
+      }
+      return copyChipFreeze({ ok: false, reason: COPY_CHIP_NOTHING_TO_COPY });
+    }
+    return copyChipFreeze({ ok: true, reason: null });
+  } catch (error) {
+    return copyChipFreeze({ ok: false, reason: COPY_CHIP_NOTHING_TO_COPY });
+  }
+}
+
+function copyChipAuthorFenceLineCount(text) {
+  try {
+    const body = copyChipNormalizeNewlines(String(text == null ? "" : text));
+    if (body === "") return 0;
+    const parts = body.split("\n");
+    return body.charAt(body.length - 1) === "\n" ? parts.length - 1 : parts.length;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// Plan the exact replacement bytes for a snapshot plus draft fields.
+function copyChipAuthorPlan(snapshot, draft) {
+  try {
+    const snap = snapshot && typeof snapshot === "object" ? snapshot : null;
+    if (!snap) return copyChipAuthorRefuse("unavailable");
+    const input = draft && typeof draft === "object" ? draft : {};
+    const label = input.label == null ? "" : String(input.label);
+    const text = copyChipNormalizeNewlines(input.text == null ? "" : String(input.text));
+    const validation = copyChipAuthorValidation(label, text);
+    if (!validation.ok) return copyChipAuthorRefuse(validation.reason);
+    const table = Boolean(snap.table);
+    if (table && text.indexOf("\n") >= 0) {
+      return copyChipAuthorRefuse(COPY_CHIP_AUTHOR_TABLE_BLOCK);
+    }
+    let serialized = null;
+    try {
+      serialized = copyChipSerialize(
+        { label, text },
+        { table, indent: text.indexOf("\n") >= 0 ? String(snap.indent || "") : "" },
+      );
+    } catch (error) {
+      return copyChipAuthorRefuse("serialize failed");
+    }
+    if (!serialized || serialized.ok !== true) {
+      return copyChipAuthorRefuse((serialized && serialized.reason) || COPY_CHIP_NOTHING_TO_COPY);
+    }
+    let markdown = String(serialized.markdown || "");
+    const source = String(snap.originalSource || "");
+    const from = Number(snap.from) || 0;
+    const to = Number(snap.to) || 0;
+    const lineStartBefore = source.lastIndexOf("\n", Math.max(0, from - 1));
+    const startOfLine = lineStartBefore < 0 ? 0 : lineStartBefore + 1;
+    const afterNl = source.indexOf("\n", to);
+    const endOfLine = afterNl < 0 ? source.length : afterNl;
+    const startsMidLine = from > startOfLine;
+    const endsMidLine = to < endOfLine;
+    if (serialized.form === "block") {
+      if (startsMidLine) markdown = "\n" + markdown;
+      if (endsMidLine) markdown = markdown + "\n";
+    } else if (snap.form === "block" && snap.openingIndent) {
+      markdown = String(snap.openingIndent) + markdown;
+    }
+    const cursorAfter = from + markdown.length;
+    const lines = serialized.form === "block" ? copyChipAuthorFenceLineCount(text) : 1;
+    return copyChipFreeze({
+      ok: true,
+      form: serialized.form,
+      markdown,
+      serialized: serialized.markdown,
+      from,
+      to,
+      cursorAfter,
+      previewKind: serialized.form === "block" ? "block" : "inline",
+      previewLines: lines,
+      caption: serialized.form === "block"
+        ? "block card · " + String(lines) + (lines === 1 ? " line" : " lines")
+        : "inline chip",
+    });
+  } catch (error) {
+    return copyChipAuthorRefuse("unavailable");
+  }
+}
+
+function copyChipAuthorIsStale(snapshot, currentSource) {
+  try {
+    if (!snapshot || typeof snapshot !== "object") return true;
+    return String(snapshot.originalSource == null ? "" : snapshot.originalSource) !==
+      String(currentSource == null ? "" : currentSource);
+  } catch (error) {
+    return true;
+  }
+}
+
+function copyChipAuthorDraftState(snapshot, label, text) {
+  try {
+    const plan = copyChipAuthorPlan(snapshot, { label, text });
+    const validation = copyChipAuthorValidation(label, text);
+    return copyChipFreeze({
+      label: label == null ? "" : String(label),
+      text: text == null ? "" : String(text),
+      valid: Boolean(plan && plan.ok),
+      reason: plan && plan.ok ? null : (plan && plan.reason) || (validation && validation.reason),
+      form: plan && plan.ok ? plan.form : (String(text || "").indexOf("\n") >= 0 ? "block" : "inline"),
+      markdown: plan && plan.ok ? plan.markdown : "",
+      serialized: plan && plan.ok ? plan.serialized : "",
+      caption: plan && plan.ok ? plan.caption : "",
+      previewKind: plan && plan.ok ? plan.previewKind : null,
+      previewLines: plan && plan.ok ? plan.previewLines : 0,
+      cursorAfter: plan && plan.ok ? plan.cursorAfter : null,
+    });
+  } catch (error) {
+    return copyChipFreeze({
+      label: "",
+      text: "",
+      valid: false,
+      reason: COPY_CHIP_NOTHING_TO_COPY,
+      form: "inline",
+      markdown: "",
+      serialized: "",
+      caption: "",
+      previewKind: null,
+      previewLines: 0,
+      cursorAfter: null,
+    });
+  }
+}
+
+function copyChipAuthorCloseKey(event) {
+  try {
+    if (!event || event.isComposing === true || event.keyCode === 229) return null;
+    const hasCtrl = event.ctrlKey === true;
+    const hasAlt = event.altKey === true;
+    const hasMeta = event.metaKey === true;
+    const hasShift = event.shiftKey === true;
+    if (hasCtrl && !hasAlt && !hasMeta && !hasShift &&
+        (event.code === "BracketLeft" || event.key === "[")) {
+      return "ctrl-bracket";
+    }
+    if (event.key === "Escape") return "escape";
+    if ((event.key === "q" || event.key === "Q") && !hasCtrl && !hasMeta && !hasAlt) return "q";
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipAuthorTargetIsField(target) {
+  try {
+    if (!target) return false;
+    const tag = String((target.tagName || target.nodeName || "")).toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    if (target.isContentEditable === true) return true;
+    try {
+      const editable = typeof target.getAttribute === "function"
+        ? target.getAttribute("contenteditable")
+        : null;
+      if (editable && String(editable).toLowerCase() !== "false") return true;
+    } catch (error) {
+      // Attribute probe is best-effort.
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorIsSaveHotkey(event) {
+  try {
+    if (!event || event.isComposing === true || event.keyCode === 229) return false;
+    const key = String(event.key || "");
+    if (key !== "y" && key !== "Y") return false;
+    const mod = event.metaKey === true || event.ctrlKey === true;
+    return mod && event.shiftKey === true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Pure key decision for the author card. Never mutates.
+function copyChipAuthorKeyAction(event, options) {
+  try {
+    if (!event) return copyChipFreeze({ type: "ignore" });
+    if (event.isComposing === true || event.keyCode === 229) return copyChipFreeze({ type: "ignore" });
+    const opts = options && typeof options === "object" ? options : {};
+    const inField = opts.inField === true;
+    const inText = opts.inText === true;
+    if (copyChipAuthorIsSaveHotkey(event)) return copyChipFreeze({ type: "save" });
+    const close = copyChipAuthorCloseKey(event);
+    if (close === "escape" || close === "ctrl-bracket") return copyChipFreeze({ type: "cancel", key: close });
+    if (close === "q") {
+      if (inField) return copyChipFreeze({ type: "type" });
+      return copyChipFreeze({ type: "cancel", key: "q" });
+    }
+    if (event.key === "Tab") {
+      return copyChipFreeze({ type: event.shiftKey === true ? "prev-field" : "next-field" });
+    }
+    if (event.key === "Enter") {
+      if (event.shiftKey === true) {
+        if (inText) return copyChipFreeze({ type: "newline" });
+        return copyChipFreeze({ type: "ignore" });
+      }
+      return copyChipFreeze({ type: "save" });
+    }
+    return copyChipFreeze({ type: inField ? "type" : "ignore" });
+  } catch (error) {
+    return copyChipFreeze({ type: "ignore" });
+  }
+}
+// ---- src/082-author-modal.js ----
+// Make-or-edit copy chip modal. Theme-variable card; payloads are never
+// assigned to HTML strings or DOM attributes.
+const COPY_CHIP_AUTHOR_FOOTER = "⏎ save · ⇧⏎ newline · Tab next field · Esc cancel";
+const COPY_CHIP_AUTHOR_LABEL_PLACEHOLDER = "optional — shown instead of the text";
+
+function copyChipAuthorOwnerDoc(modal) {
+  try {
+    if (modal && modal.contentEl && modal.contentEl.ownerDocument) return modal.contentEl.ownerDocument;
+    if (modal && modal.modalEl && modal.modalEl.ownerDocument) return modal.modalEl.ownerDocument;
+    if (modal && modal.app && modal.app.workspace && modal.app.workspace.containerEl) {
+      const host = modal.app.workspace.containerEl;
+      if (host && host.ownerDocument) return host.ownerDocument;
+    }
+    if (typeof document !== "undefined") return document;
+  } catch (error) {
+    // Fall through.
+  }
+  return null;
+}
+
+function copyChipAuthorMakeEl(doc, tag, className) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    const el = doc.createElement(tag);
+    try {
+      if (className) el.setAttribute("class", className);
+    } catch (error) {
+      // Class setup is best-effort.
+    }
+    return el;
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipAuthorSetText(el, text) {
+  try {
+    if (el) el.textContent = text == null ? "" : String(text);
+  } catch (error) {
+    // Text assignment is best-effort.
+  }
+}
+
+function copyChipAuthorGrowTextarea(el) {
+  try {
+    if (!el) return;
+    el.style.height = "auto";
+    const scroll = Number(el.scrollHeight) || 0;
+    if (scroll > 0) el.style.height = String(scroll) + "px";
+  } catch (error) {
+    // Auto-grow is best-effort.
+  }
+}
+
+class CopyChipAuthorModal extends CopyChipsModal {
+  constructor(app, options) {
+    super(app);
+    const opts = options && typeof options === "object" ? options : {};
+    this.copyChipPlugin = opts.plugin || null;
+    this.copyChipSnapshot = opts.snapshot || null;
+    this.copyChipIdentity = opts.identity || null;
+    this.copyChipClipboardPromise = opts.clipboardPromise || null;
+    this.copyChipOnSave = typeof opts.onSave === "function" ? opts.onSave : null;
+    this.copyChipClosed = false;
+    this.copyChipSaving = false;
+    this.copyChipTypedText = false;
+    this.copyChipClipboardGen = 0;
+    this.copyChipScopeRefs = [];
+    this.copyChipKeyHandler = null;
+    this.labelEl = null;
+    this.textEl = null;
+    this.previewHost = null;
+    this.captionEl = null;
+    this.markdownEl = null;
+    this.statusEl = null;
+    this.previewChip = null;
+  }
+
+  onOpen() {
+    try {
+      this.copyChipClosed = false;
+      this.copyChipSaving = false;
+      const doc = copyChipAuthorOwnerDoc(this);
+      const content = this.contentEl;
+      if (content && typeof content.empty === "function") {
+        try {
+          content.empty();
+        } catch (error) {
+          try {
+            content.textContent = "";
+          } catch (ignore) {
+            // Emptying is best-effort.
+          }
+        }
+      }
+      try {
+        if (this.modalEl && typeof this.modalEl.addClass === "function") {
+          this.modalEl.addClass("bob-copy-author-modal");
+        } else if (this.modalEl && this.modalEl.classList) {
+          this.modalEl.classList.add("bob-copy-author-modal");
+        }
+      } catch (error) {
+        // Class setup is best-effort.
+      }
+      try {
+        if (this.modalEl && typeof this.modalEl.setAttribute === "function") {
+          this.modalEl.setAttribute("role", "dialog");
+          this.modalEl.setAttribute("aria-modal", "true");
+          const title = this.copyChipSnapshot && this.copyChipSnapshot.title
+            ? this.copyChipSnapshot.title
+            : "Make copy chip";
+          this.modalEl.setAttribute("aria-label", title);
+        }
+      } catch (error) {
+        // Accessibility is best-effort.
+      }
+      if (content && content.classList) {
+        try {
+          content.classList.add("bob-copy-author");
+        } catch (error) {
+          // Class setup is best-effort.
+        }
+      }
+      this.copyChipRender(doc, content);
+      this.copyChipWireKeys();
+      this.copyChipStartClipboard();
+      this.copyChipFocusInitial();
+    } catch (error) {
+      // Opening never throws.
+    }
+  }
+
+  copyChipRender(doc, content) {
+    try {
+      if (!doc || !content) return;
+      const snap = this.copyChipSnapshot || copyChipAuthorSnapshot({});
+      const header = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-header");
+      const icon = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-icon");
+      if (icon) {
+        try {
+          copyChipPaintGlyph(icon, "copy");
+        } catch (error) {
+          // Glyph is best-effort.
+        }
+        if (header) header.appendChild(icon);
+      }
+      const headerText = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-header-text");
+      const title = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-title");
+      copyChipAuthorSetText(title, snap.title || "Make copy chip");
+      if (headerText && title) headerText.appendChild(title);
+      if (header && headerText) header.appendChild(headerText);
+      if (header) content.appendChild(header);
+
+      const fields = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-fields");
+      const labelRow = copyChipAuthorMakeEl(doc, "label", "bob-copy-author-row");
+      const labelName = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
+      copyChipAuthorSetText(labelName, "Label");
+      this.labelEl = copyChipAuthorMakeEl(doc, "input", "bob-copy-author-label");
+      try {
+        if (this.labelEl) {
+          this.labelEl.setAttribute("type", "text");
+          this.labelEl.setAttribute("spellcheck", "false");
+          this.labelEl.setAttribute("placeholder", COPY_CHIP_AUTHOR_LABEL_PLACEHOLDER);
+          this.labelEl.value = snap.label || "";
+        }
+      } catch (error) {
+        // Input setup is best-effort.
+      }
+      if (labelRow && labelName) labelRow.appendChild(labelName);
+      if (labelRow && this.labelEl) labelRow.appendChild(this.labelEl);
+      if (fields && labelRow) fields.appendChild(labelRow);
+
+      const textRow = copyChipAuthorMakeEl(doc, "label", "bob-copy-author-row bob-copy-author-row-text");
+      const textName = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
+      copyChipAuthorSetText(textName, "Text");
+      this.textEl = copyChipAuthorMakeEl(doc, "textarea", "bob-copy-author-text");
+      try {
+        if (this.textEl) {
+          this.textEl.setAttribute("spellcheck", "false");
+          this.textEl.setAttribute("wrap", "off");
+          this.textEl.value = snap.text || "";
+        }
+      } catch (error) {
+        // Textarea setup is best-effort.
+      }
+      if (textRow && textName) textRow.appendChild(textName);
+      if (textRow && this.textEl) textRow.appendChild(this.textEl);
+      if (fields && textRow) fields.appendChild(textRow);
+      if (fields) content.appendChild(fields);
+
+      const previewRow = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-preview-row");
+      const previewLabel = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
+      copyChipAuthorSetText(previewLabel, "Preview");
+      this.previewHost = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-preview");
+      this.captionEl = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-caption");
+      if (previewRow && previewLabel) previewRow.appendChild(previewLabel);
+      if (previewRow && this.previewHost) previewRow.appendChild(this.previewHost);
+      if (previewRow && this.captionEl) previewRow.appendChild(this.captionEl);
+      if (previewRow) content.appendChild(previewRow);
+
+      const mdRow = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-markdown-row");
+      const mdLabel = copyChipAuthorMakeEl(doc, "span", "bob-copy-author-field-name");
+      copyChipAuthorSetText(mdLabel, "Markdown");
+      this.markdownEl = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-markdown");
+      if (mdRow && mdLabel) mdRow.appendChild(mdLabel);
+      if (mdRow && this.markdownEl) mdRow.appendChild(this.markdownEl);
+      if (mdRow) content.appendChild(mdRow);
+
+      this.statusEl = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-status");
+      if (this.statusEl) content.appendChild(this.statusEl);
+
+      const footer = copyChipAuthorMakeEl(doc, "div", "bob-copy-author-footer");
+      copyChipAuthorSetText(footer, COPY_CHIP_AUTHOR_FOOTER);
+      if (footer) content.appendChild(footer);
+
+      const self = this;
+      const onInput = (kind) => () => {
+        try {
+          if (kind === "text") self.copyChipTypedText = true;
+          self.copyChipRefresh();
+        } catch (error) {
+          // Input handling never throws.
+        }
+      };
+      try {
+        if (this.labelEl && typeof this.labelEl.addEventListener === "function") {
+          this.labelEl.addEventListener("input", onInput("label"));
+        }
+        if (this.textEl && typeof this.textEl.addEventListener === "function") {
+          this.textEl.addEventListener("input", onInput("text"));
+        }
+      } catch (error) {
+        // Listener setup is best-effort.
+      }
+      this.copyChipRefresh();
+    } catch (error) {
+      // Rendering never throws.
+    }
+  }
+
+  copyChipDraft() {
+    try {
+      const label = this.labelEl ? String(this.labelEl.value || "") : "";
+      const text = this.textEl ? String(this.textEl.value || "") : "";
+      return copyChipAuthorDraftState(this.copyChipSnapshot, label, text);
+    } catch (error) {
+      return copyChipAuthorDraftState(this.copyChipSnapshot, "", "");
+    }
+  }
+
+  copyChipRefresh() {
+    try {
+      const draft = this.copyChipDraft();
+      copyChipAuthorGrowTextarea(this.textEl);
+      copyChipAuthorSetText(this.captionEl, draft.caption || "");
+      copyChipAuthorSetText(this.markdownEl, draft.markdown || "");
+      copyChipAuthorSetText(this.statusEl, draft.valid ? "" : (draft.reason || ""));
+      try {
+        if (this.statusEl && this.statusEl.classList) {
+          if (draft.valid) this.statusEl.classList.remove("is-invalid");
+          else this.statusEl.classList.add("is-invalid");
+        }
+      } catch (error) {
+        // Status class is best-effort.
+      }
+      this.copyChipPaintPreview(draft);
+    } catch (error) {
+      // Refresh never throws.
+    }
+  }
+
+  copyChipPaintPreview(draft) {
+    try {
+      const host = this.previewHost;
+      if (!host) return;
+      try {
+        host.textContent = "";
+      } catch (error) {
+        // Clearing is best-effort.
+      }
+      this.previewChip = null;
+      const doc = copyChipAuthorOwnerDoc(this);
+      if (!doc || !draft || !draft.valid) return;
+      const chip = {
+        label: draft.label && String(draft.label).trim() !== "" ? String(draft.label).trim() : null,
+        text: draft.text,
+      };
+      let el = null;
+      try {
+        if (draft.previewKind === "block") {
+          el = copyChipBuildFence(doc, chip, { interactive: false });
+        } else {
+          el = copyChipBuildInline(doc, chip, { interactive: false });
+        }
+      } catch (error) {
+        el = null;
+      }
+      if (el) {
+        try {
+          host.appendChild(el);
+        } catch (error) {
+          // Preview mount is best-effort.
+        }
+        this.previewChip = el;
+      }
+    } catch (error) {
+      // Preview painting never throws.
+    }
+  }
+
+  copyChipWireKeys() {
+    try {
+      const modal = this;
+      if (!modal.scope || typeof modal.scope.register !== "function") return;
+      const handler = (event) => modal.copyChipOnKey(event);
+      this.copyChipKeyHandler = handler;
+      try {
+        const ref = modal.scope.register(null, null, handler);
+        this.copyChipScopeRefs.push(ref);
+      } catch (error) {
+        // Catch-all scope is best-effort.
+      }
+    } catch (error) {
+      // Key wiring never throws.
+    }
+  }
+
+  copyChipUnwireKeys() {
+    try {
+      if (this.scope && typeof this.scope.unregister === "function") {
+        for (const ref of this.copyChipScopeRefs) {
+          try {
+            this.scope.unregister(ref);
+          } catch (error) {
+            // Unregister is best-effort.
+          }
+        }
+      }
+      this.copyChipScopeRefs = [];
+      this.copyChipKeyHandler = null;
+    } catch (error) {
+      // Unwiring never throws.
+    }
+  }
+
+  copyChipOnKey(event) {
+    try {
+      if (!event) return true;
+      const target = event.target || null;
+      const inField = copyChipAuthorTargetIsField(target);
+      const inText = Boolean(this.textEl && (target === this.textEl));
+      const action = copyChipAuthorKeyAction(event, { inField, inText });
+      if (!action || action.type === "ignore" || action.type === "type") return true;
+      try {
+        if (typeof event.preventDefault === "function") event.preventDefault();
+      } catch (error) {
+        // Consumption is best-effort.
+      }
+      try {
+        if (typeof event.stopPropagation === "function") event.stopPropagation();
+      } catch (error) {
+        // Consumption is best-effort.
+      }
+      if (action.type === "save") {
+        this.copyChipSave();
+        return false;
+      }
+      if (action.type === "cancel") {
+        this.copyChipCancel();
+        return false;
+      }
+      if (action.type === "newline") {
+        this.copyChipInsertNewline();
+        return false;
+      }
+      if (action.type === "next-field" || action.type === "prev-field") {
+        this.copyChipCycleField(action.type === "prev-field");
+        return false;
+      }
+      return false;
+    } catch (error) {
+      return true;
+    }
+  }
+
+  copyChipInsertNewline() {
+    try {
+      const el = this.textEl;
+      if (!el) return;
+      const value = String(el.value || "");
+      let start = 0;
+      let end = 0;
+      try {
+        start = Number.isInteger(el.selectionStart) ? el.selectionStart : value.length;
+        end = Number.isInteger(el.selectionEnd) ? el.selectionEnd : start;
+      } catch (error) {
+        start = value.length;
+        end = start;
+      }
+      el.value = value.slice(0, start) + "\n" + value.slice(end);
+      try {
+        const pos = start + 1;
+        if (typeof el.setSelectionRange === "function") el.setSelectionRange(pos, pos);
+      } catch (error) {
+        // Caret restore is best-effort.
+      }
+      this.copyChipTypedText = true;
+      this.copyChipRefresh();
+    } catch (error) {
+      // Newline insertion never throws.
+    }
+  }
+
+  copyChipCycleField(backward) {
+    try {
+      const doc = copyChipAuthorOwnerDoc(this);
+      const active = doc && doc.activeElement;
+      const target = backward
+        ? (active === this.textEl ? this.labelEl : this.textEl)
+        : (active === this.labelEl ? this.textEl : this.labelEl);
+      if (target && typeof target.focus === "function") target.focus();
+    } catch (error) {
+      // Field cycling never throws.
+    }
+  }
+
+  copyChipFocusInitial() {
+    try {
+      const snap = this.copyChipSnapshot || {};
+      const target = snap.focus === "text" ? this.textEl : this.labelEl;
+      const select = snap.selectText === true && target === this.textEl;
+      const apply = () => {
+        try {
+          if (target && typeof target.focus === "function") target.focus();
+          if (select && target && typeof target.select === "function") target.select();
+        } catch (error) {
+          // Focus is best-effort.
+        }
+      };
+      apply();
+      try {
+        const doc = copyChipAuthorOwnerDoc(this);
+        const view = (doc && doc.defaultView) || (typeof window !== "undefined" ? window : null);
+        if (view && typeof view.setTimeout === "function") view.setTimeout(apply, 0);
+      } catch (error) {
+        // Deferred focus is best-effort.
+      }
+    } catch (error) {
+      // Initial focus never throws.
+    }
+  }
+
+  copyChipStartClipboard() {
+    try {
+      const snap = this.copyChipSnapshot;
+      if (!snap || snap.mode !== "insert") return;
+      if (snap.text) return;
+      const promise = this.copyChipClipboardPromise;
+      if (!promise || typeof promise.then !== "function") return;
+      this.copyChipClipboardGen += 1;
+      const gen = this.copyChipClipboardGen;
+      const modal = this;
+      promise.then((text) => {
+        try {
+          if (modal.copyChipClosed) return;
+          if (modal.copyChipClipboardGen !== gen) return;
+          if (modal.copyChipTypedText) return;
+          const current = modal.textEl ? String(modal.textEl.value || "") : "";
+          if (current !== "") return;
+          const next = text == null ? "" : String(text);
+          if (next === "") return;
+          if (modal.textEl) modal.textEl.value = next;
+          try {
+            if (modal.textEl && typeof modal.textEl.select === "function") modal.textEl.select();
+          } catch (error) {
+            // Selection is best-effort.
+          }
+          modal.copyChipRefresh();
+        } catch (error) {
+          // Late clipboard application never throws.
+        }
+      }, () => {
+        // Unavailable clipboard reads leave the field empty.
+      });
+    } catch (error) {
+      // Clipboard start never throws.
+    }
+  }
+
+  copyChipSave() {
+    try {
+      if (this.copyChipSaving || this.copyChipClosed) return false;
+      const draft = this.copyChipDraft();
+      if (!draft || !draft.valid) return false;
+      this.copyChipSaving = true;
+      let ok = false;
+      try {
+        if (typeof this.copyChipOnSave === "function") {
+          ok = this.copyChipOnSave(draft, this.copyChipSnapshot, this.copyChipIdentity) === true;
+        }
+      } catch (error) {
+        ok = false;
+      }
+      this.copyChipSaving = false;
+      if (ok) {
+        this.copyChipClosed = true;
+        try {
+          this.close();
+        } catch (error) {
+          // Close is best-effort.
+        }
+      }
+      return ok;
+    } catch (error) {
+      this.copyChipSaving = false;
+      return false;
+    }
+  }
+
+  copyChipCancel() {
+    try {
+      this.copyChipClosed = true;
+      this.copyChipClipboardGen += 1;
+      try {
+        this.close();
+      } catch (error) {
+        // Close is best-effort.
+      }
+    } catch (error) {
+      // Cancel never throws.
+    }
+  }
+
+  onClose() {
+    try {
+      this.copyChipClosed = true;
+      this.copyChipClipboardGen += 1;
+      this.copyChipUnwireKeys();
+      this.labelEl = null;
+      this.textEl = null;
+      this.previewHost = null;
+      this.captionEl = null;
+      this.markdownEl = null;
+      this.statusEl = null;
+      this.previewChip = null;
+      try {
+        if (this.copyChipPlugin && this.copyChipPlugin.copyChipAuthorModal === this) {
+          this.copyChipPlugin.copyChipAuthorModal = null;
+        }
+      } catch (error) {
+        // Plugin bookkeeping is best-effort.
+      }
+    } catch (error) {
+      // Close cleanup never throws.
+    }
+  }
+}
+// ---- src/083-author-command.js ----
+// Make-or-edit command, clipboard prefill, and one-transaction writes.
+function copyChipAuthorCmView(editor, view) {
+  try {
+    if (editor && editor.cm && typeof editor.cm.dispatch === "function") return editor.cm;
+    if (view && view.editor && view.editor.cm && typeof view.editor.cm.dispatch === "function") {
+      return view.editor.cm;
+    }
+    if (view && view.cm && typeof view.cm.dispatch === "function") return view.cm;
+    if (view && typeof view.dispatch === "function" && view.state) return view;
+  } catch (error) {
+    // View lookup is best-effort.
+  }
+  return null;
+}
+
+function copyChipAuthorMarkdownView(editor, view) {
+  try {
+    if (view && view.file) return view;
+    if (view && view.editor && view.file) return view;
+    if (editor && editor.editorComponent && editor.editorComponent.view) {
+      return editor.editorComponent.view;
+    }
+  } catch (error) {
+    // Markdown view lookup is best-effort.
+  }
+  return view || null;
+}
+
+function copyChipAuthorFilePath(editor, view) {
+  try {
+    const md = copyChipAuthorMarkdownView(editor, view);
+    if (md && md.file && typeof md.file.path === "string") return md.file.path;
+    if (view && view.file && typeof view.file.path === "string") return view.file.path;
+  } catch (error) {
+    // Path lookup is best-effort.
+  }
+  return null;
+}
+
+function copyChipAuthorPosToOffset(editor, pos) {
+  try {
+    if (!pos || typeof pos !== "object") return null;
+    if (editor && typeof editor.posToOffset === "function") {
+      const offset = editor.posToOffset(pos);
+      if (Number.isFinite(offset)) return offset;
+    }
+    if (Number.isInteger(pos.line) && Number.isInteger(pos.ch) && editor && typeof editor.getValue === "function") {
+      const lines = String(editor.getValue()).split("\n");
+      return copyChipAuthorLineStart(lines, pos.line) + pos.ch;
+    }
+  } catch (error) {
+    // Offset mapping is best-effort.
+  }
+  return null;
+}
+
+function copyChipAuthorOffsetToPos(editor, offset, source) {
+  try {
+    if (editor && typeof editor.offsetToPos === "function") {
+      const pos = editor.offsetToPos(offset);
+      if (pos && typeof pos === "object") return pos;
+    }
+    const text = source != null
+      ? String(source)
+      : (editor && typeof editor.getValue === "function" ? String(editor.getValue()) : "");
+    return copyChipAuthorPosAt(copyChipAuthorSplitLines(text), offset);
+  } catch (error) {
+    return { line: 0, ch: 0 };
+  }
+}
+
+function copyChipAuthorReadSelections(editor, view) {
+  try {
+    const cm = copyChipAuthorCmView(editor, view);
+    if (cm && cm.state && cm.state.selection && Array.isArray(cm.state.selection.ranges)) {
+      return cm.state.selection.ranges.map((range) => {
+        const from = Number.isFinite(range.from) ? range.from : Number(range.anchor);
+        const to = Number.isFinite(range.to) ? range.to : Number(range.head);
+        return { from, to };
+      }).filter((range) => Number.isFinite(range.from) && Number.isFinite(range.to));
+    }
+    if (editor && typeof editor.listSelections === "function") {
+      const list = editor.listSelections() || [];
+      return list.map((sel) => {
+        const anchor = copyChipAuthorPosToOffset(editor, sel.anchor);
+        const head = copyChipAuthorPosToOffset(editor, sel.head);
+        if (!Number.isFinite(anchor) || !Number.isFinite(head)) return null;
+        return { from: anchor, to: head };
+      }).filter(Boolean);
+    }
+    if (editor && typeof editor.getCursor === "function") {
+      const cursor = editor.getCursor();
+      const offset = copyChipAuthorPosToOffset(editor, cursor);
+      if (Number.isFinite(offset)) return [{ from: offset, to: offset }];
+    }
+  } catch (error) {
+    // Selection reading is best-effort.
+  }
+  return [];
+}
+
+function copyChipAuthorReadSource(editor, view) {
+  try {
+    if (editor && typeof editor.getValue === "function") return String(editor.getValue());
+    const cm = copyChipAuthorCmView(editor, view);
+    if (cm && cm.state && cm.state.doc && typeof cm.state.doc.toString === "function") {
+      return String(cm.state.doc.toString());
+    }
+  } catch (error) {
+    // Source reading is best-effort.
+  }
+  return "";
+}
+
+function copyChipAuthorIdentity(editor, view) {
+  try {
+    return copyChipFreeze({
+      editor,
+      view: copyChipAuthorMarkdownView(editor, view),
+      path: copyChipAuthorFilePath(editor, view),
+    });
+  } catch (error) {
+    return copyChipFreeze({ editor: null, view: null, path: null });
+  }
+}
+
+function copyChipAuthorIdentityMatches(expected, editor, view) {
+  try {
+    if (!expected) return false;
+    const current = copyChipAuthorIdentity(editor, view);
+    if (expected.editor && current.editor && expected.editor !== current.editor) return false;
+    if (expected.view && current.view && expected.view !== current.view) return false;
+    if (expected.path && current.path && expected.path !== current.path) return false;
+    if (expected.editor && !current.editor) return false;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorEditorDetached(editor, view) {
+  try {
+    if (!editor && !view) return true;
+    const md = copyChipAuthorMarkdownView(editor, view);
+    if (md && md._loaded === false) return true;
+    if (md && md.containerEl && md.containerEl.isConnected === false) return true;
+  } catch (error) {
+    // Detach probe is best-effort.
+  }
+  return false;
+}
+
+async function copyChipAuthorReadClipboard() {
+  try {
+    const clipboard = copyChipClipboard();
+    if (clipboard && typeof clipboard.readText === "function") {
+      try {
+        const text = await clipboard.readText();
+        return text == null ? "" : String(text);
+      } catch (error) {
+        return "";
+      }
+    }
+  } catch (error) {
+    return "";
+  }
+  return "";
+}
+
+function copyChipAuthorExitVisual(editor, view) {
+  try {
+    const cmView = copyChipAuthorCmView(editor, view);
+    const cm =
+      (editor && editor.cm && editor.cm.cm) ||
+      (cmView && cmView.cm) ||
+      null;
+    const vim = cm && cm.state && cm.state.vim;
+    if (!vim || vim.visualMode !== true) return false;
+    try {
+      const adapter =
+        (typeof window !== "undefined" && window.CodeMirrorAdapter && window.CodeMirrorAdapter.Vim) ||
+        (typeof CodeMirrorAdapter !== "undefined" && CodeMirrorAdapter.Vim) ||
+        null;
+      if (adapter && typeof adapter.handleKey === "function" && cm) {
+        adapter.handleKey(cm, "<Esc>", "mapping");
+        return true;
+      }
+    } catch (error) {
+      // Adapter path is best-effort.
+    }
+    try {
+      vim.visualMode = false;
+      vim.sel = null;
+    } catch (error) {
+      // Direct state clear is best-effort.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorApplyWrite(editor, view, from, to, markdown, wasVisual) {
+  try {
+    const cmView = copyChipAuthorCmView(editor, view);
+    const insert = String(markdown == null ? "" : markdown);
+    const start = Number(from) || 0;
+    const end = Number(to) || 0;
+    const cursor = start + insert.length;
+    if (cmView && typeof cmView.dispatch === "function") {
+      const spec = {
+        changes: { from: start, to: end, insert },
+        selection: { anchor: cursor, head: cursor },
+        userEvent: "bob.copy-chip",
+      };
+      try {
+        const annotations = [];
+        if (CopyChipsIsolateHistory && typeof CopyChipsIsolateHistory.of === "function") {
+          annotations.push(CopyChipsIsolateHistory.of("full"));
+        }
+        if (CopyChipsTransaction && CopyChipsTransaction.userEvent &&
+            typeof CopyChipsTransaction.userEvent.of === "function") {
+          annotations.push(CopyChipsTransaction.userEvent.of("bob.copy-chip"));
+        }
+        if (annotations.length) spec.annotations = annotations;
+      } catch (error) {
+        // History annotations are best-effort.
+      }
+      cmView.dispatch(spec);
+      if (wasVisual) copyChipAuthorExitVisual(editor, view);
+      return true;
+    }
+    if (editor && typeof editor.replaceRange === "function") {
+      const source = copyChipAuthorReadSource(editor, view);
+      const fromPos = copyChipAuthorOffsetToPos(editor, start, source);
+      const toPos = copyChipAuthorOffsetToPos(editor, end, source);
+      editor.replaceRange(insert, fromPos, toPos);
+      try {
+        if (typeof editor.setCursor === "function") {
+          editor.setCursor(copyChipAuthorOffsetToPos(editor, cursor, source.slice(0, start) + insert + source.slice(end)));
+        }
+      } catch (error) {
+        // Cursor restore is best-effort.
+      }
+      if (wasVisual) copyChipAuthorExitVisual(editor, view);
+      return true;
+    }
+  } catch (error) {
+    return false;
+  }
+  return false;
+}
+
+function copyChipAuthorCommit(plugin, draft, snapshot, identity) {
+  try {
+    if (!draft || !draft.valid) return false;
+    const editor = identity && identity.editor;
+    const view = identity && identity.view;
+    if (copyChipAuthorEditorDetached(editor, view)) {
+      copyChipNotify(COPY_CHIP_AUTHOR_STALE);
+      return false;
+    }
+    if (!copyChipAuthorIdentityMatches(identity, editor, view)) {
+      copyChipNotify(COPY_CHIP_AUTHOR_STALE);
+      return false;
+    }
+    const current = copyChipAuthorReadSource(editor, view);
+    if (copyChipAuthorIsStale(snapshot, current)) {
+      copyChipNotify(COPY_CHIP_AUTHOR_STALE);
+      return false;
+    }
+    const plan = copyChipAuthorPlan(snapshot, { label: draft.label, text: draft.text });
+    if (!plan || !plan.ok) {
+      copyChipNotify((plan && plan.reason) || COPY_CHIP_NOTHING_TO_COPY);
+      return false;
+    }
+    const wasVisual = (() => {
+      try {
+        const cm = editor && editor.cm && editor.cm.cm;
+        return Boolean(cm && cm.state && cm.state.vim && cm.state.vim.visualMode === true);
+      } catch (error) {
+        return false;
+      }
+    })();
+    return copyChipAuthorApplyWrite(editor, view, plan.from, plan.to, plan.markdown, wasVisual);
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorOpenModal(plugin, options) {
+  try {
+    if (!plugin) return false;
+    if (plugin.copyChipAuthorModal) {
+      try {
+        plugin.copyChipAuthorModal.copyChipSave();
+      } catch (error) {
+        // Repeat-hotkey save is best-effort.
+      }
+      return true;
+    }
+    if (typeof CopyChipAuthorModal !== "function") return false;
+    const app = plugin.app || (options && options.app) || null;
+    const modal = new CopyChipAuthorModal(app, {
+      plugin,
+      snapshot: options && options.snapshot,
+      identity: options && options.identity,
+      clipboardPromise: options && options.clipboardPromise,
+      onSave: (draft, snapshot, identity) => copyChipAuthorCommit(plugin, draft, snapshot, identity),
+    });
+    plugin.copyChipAuthorModal = modal;
+    try {
+      modal.open();
+    } catch (error) {
+      plugin.copyChipAuthorModal = null;
+      return false;
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorRun(plugin, editor, view, extra) {
+  try {
+    if (plugin && plugin.copyChipAuthorModal) {
+      try {
+        plugin.copyChipAuthorModal.copyChipSave();
+      } catch (error) {
+        // Repeat save is best-effort.
+      }
+      return true;
+    }
+    const source = copyChipAuthorReadSource(editor, view);
+    const selections = copyChipAuthorReadSelections(editor, view);
+    const extraSelections = extra && Array.isArray(extra.selections) ? extra.selections : null;
+    const resolved = copyChipAuthorResolve({
+      source,
+      selections: extraSelections || selections,
+      clipboardText: extra && extra.clipboardText != null ? extra.clipboardText : "",
+    });
+    if (!resolved || resolved.ok !== true) {
+      copyChipNotify((resolved && resolved.reason) || COPY_CHIP_AUTHOR_ONE_SELECTION);
+      return false;
+    }
+    const identity = copyChipAuthorIdentity(editor, view);
+    let clipboardPromise = null;
+    if (resolved.snapshot.mode === "insert" && !resolved.snapshot.text) {
+      clipboardPromise = extra && extra.clipboardPromise
+        ? extra.clipboardPromise
+        : copyChipAuthorReadClipboard();
+    }
+    return copyChipAuthorOpenModal(plugin, {
+      snapshot: resolved.snapshot,
+      identity,
+      clipboardPromise,
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
+  try {
+    if (!plugin || !cmView || !cmView.state) return false;
+    let info = null;
+    try {
+      if (CopyChipsEditorInfoField && typeof cmView.state.field === "function") {
+        info = cmView.state.field(CopyChipsEditorInfoField);
+      }
+    } catch (error) {
+      info = null;
+    }
+    const editor = (info && info.editor) || (info && info.editMode && info.editMode.editor) || null;
+    const mdView = info || null;
+    const source = copyChipAuthorReadSource(editor, cmView);
+    const start = Number(from);
+    const end = Number(to);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > source.length) {
+      return false;
+    }
+    const slice = source.slice(start, end);
+    let stillChip = false;
+    try {
+      const lines = copyChipAuthorSplitLines(source);
+      const pos = copyChipAuthorPosAt(lines, start);
+      const lineText = String(lines[pos.line] || "");
+      const table = copyChipAuthorLineIsTable(lineText);
+      const found = copyChipScanLine(lineText, { table });
+      const lineStart = copyChipAuthorLineStart(lines, pos.line);
+      for (const hit of found) {
+        if (lineStart + hit.from === start && lineStart + hit.to === end) {
+          if (chip && chip.text != null && hit.text !== chip.text) continue;
+          stillChip = true;
+          break;
+        }
+      }
+    } catch (error) {
+      stillChip = false;
+    }
+    if (!stillChip) return false;
+    const resolved = copyChipAuthorResolve({
+      source,
+      selections: [{ from: start, to: start }],
+    });
+    if (!resolved || resolved.ok !== true || !resolved.snapshot) return false;
+    if (resolved.snapshot.from !== start || resolved.snapshot.to !== end) {
+      const snap = resolved.snapshot;
+      const forced = copyChipAuthorSnapshot({
+        originalSource: source,
+        from: start,
+        to: end,
+        sourceSlice: slice,
+        label: (chip && chip.label) || snap.label || "",
+        text: (chip && chip.text) || snap.text || "",
+        title: "Edit copy chip",
+        mode: "edit",
+        form: "inline",
+        table: snap.table,
+        indent: snap.indent,
+        focus: "label",
+        selectText: false,
+        openingIndent: "",
+      });
+      return copyChipAuthorOpenModal(plugin, {
+        snapshot: forced,
+        identity: copyChipAuthorIdentity(editor, mdView),
+      });
+    }
+    return copyChipAuthorOpenModal(plugin, {
+      snapshot: resolved.snapshot,
+      identity: copyChipAuthorIdentity(editor, mdView),
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipRegisterAuthorCommand(plugin) {
+  try {
+    if (!plugin || typeof plugin.addCommand !== "function") return false;
+    if (plugin.copyChipAuthorCommandRegistered === true) return true;
+    plugin.copyChipAuthorCommandRegistered = true;
+    try {
+      plugin.addCommand({
+        id: "make-or-edit",
+        name: "Make or edit copy chip",
+        hotkeys: [{ modifiers: ["Mod", "Shift"], key: "y" }],
+        editorCallback: (editor, view) => {
+          try {
+            copyChipAuthorRun(plugin, editor, view);
+          } catch (error) {
+            // Command callback never throws.
+          }
+        },
+      });
+    } catch (error) {
+      return false;
+    }
+    try {
+      if (typeof plugin.register === "function") {
+        plugin.register(() => {
+          try {
+            if (plugin.copyChipAuthorModal) {
+              plugin.copyChipAuthorModal.copyChipCancel();
+            }
+          } catch (error) {
+            // Unload close is best-effort.
+          }
+          plugin.copyChipAuthorModal = null;
+          plugin.copyChipAuthorCommandRegistered = false;
+        });
+      }
+    } catch (error) {
+      // Unload cleanup is best-effort.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 // ---- src/090-plugin.js ----
 class BobCopyChipsPlugin extends CopyChipsPluginBase {
   async onload() {
@@ -3234,6 +5142,13 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Command registration is best-effort.
     }
     try {
+      if (typeof copyChipRegisterAuthorCommand === "function") {
+        copyChipRegisterAuthorCommand(this);
+      }
+    } catch (error) {
+      // Author command registration is best-effort.
+    }
+    try {
       if (typeof this.register === "function") {
         this.register(() => {
           try {
@@ -3246,6 +5161,15 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
           this.copyChipReadingSetupDone = false;
           this.copyChipFenceSetupDone = false;
           this.copyChipCursorCommandRegistered = false;
+          this.copyChipAuthorCommandRegistered = false;
+          try {
+            if (this.copyChipAuthorModal && typeof this.copyChipAuthorModal.copyChipCancel === "function") {
+              this.copyChipAuthorModal.copyChipCancel();
+            }
+          } catch (error) {
+            // Author modal cleanup is best-effort.
+          }
+          this.copyChipAuthorModal = null;
         });
       }
     } catch (error) {
@@ -3264,6 +5188,15 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
     this.copyChipReadingSetupDone = false;
     this.copyChipFenceSetupDone = false;
     this.copyChipCursorCommandRegistered = false;
+    this.copyChipAuthorCommandRegistered = false;
+    try {
+      if (this.copyChipAuthorModal && typeof this.copyChipAuthorModal.copyChipCancel === "function") {
+        this.copyChipAuthorModal.copyChipCancel();
+      }
+    } catch (error) {
+      // Author modal cleanup is best-effort.
+    }
+    this.copyChipAuthorModal = null;
   }
 
   copyChipsBuildApi() {
@@ -3385,6 +5318,8 @@ module.exports.helpers = {
   copyChipFenceMetaText,
   copyChipFenceTitleText,
   copyChipFenceLabelFromContext,
+  copyChipFenceLabelForPayload,
+  copyChipFenceLabelForRender,
   copyChipBuildFence,
   copyChipFencePayloadOf,
   copyChipFindFenceInView,
@@ -3402,4 +5337,32 @@ module.exports.helpers = {
   copyChipReadingInTable,
   copyChipReadingChipForCode,
   copyChipReadingRender,
+  COPY_CHIP_AUTHOR_ONE_SELECTION,
+  COPY_CHIP_AUTHOR_STALE,
+  COPY_CHIP_AUTHOR_TABLE_BLOCK,
+  COPY_CHIP_AUTHOR_WHITESPACE,
+  COPY_CHIP_AUTHOR_EDIT_HINT,
+  COPY_CHIP_AUTHOR_FOOTER,
+  COPY_CHIP_AUTHOR_LABEL_PLACEHOLDER,
+  copyChipAuthorAmbiguousReason,
+  copyChipAuthorSnapshot,
+  copyChipAuthorListContentIndent,
+  copyChipAuthorListMarker,
+  copyChipAuthorResolve,
+  copyChipAuthorPlan,
+  copyChipAuthorIsStale,
+  copyChipAuthorDraftState,
+  copyChipAuthorValidation,
+  copyChipAuthorKeyAction,
+  copyChipAuthorCloseKey,
+  copyChipAuthorTargetIsField,
+  copyChipAuthorReadSelections,
+  copyChipAuthorApplyWrite,
+  copyChipAuthorCommit,
+  copyChipAuthorRun,
+  copyChipAuthorOpenFromWidget,
+  copyChipAuthorOpenModal,
+  copyChipRegisterAuthorCommand,
+  copyChipLiveGestureShouldEdit,
+  CopyChipAuthorModal,
 };

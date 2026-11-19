@@ -5,6 +5,7 @@ const fs = require("node:fs");
 
 const NOTE = "Copy chips e2e.md";
 const EMBED_NOTE = "Copy chips embed.md";
+const AUTHOR_NOTE = "Copy chips authoring e2e.md";
 
 function notePath() {
   return NOTE;
@@ -88,6 +89,51 @@ function embedNote() {
   return ["# Copy chips embed", "", "Embedded chip: `copy: embedded-payload`.", ""].join("\n");
 }
 
+function authorNotePath() {
+  return AUTHOR_NOTE;
+}
+
+function authorSeedNote() {
+  return [
+    "# Copy chips authoring e2e",
+    "",
+    "WRAP_ONE wrap this phrase here",
+    "",
+    "LIST_WRAP",
+    "- item first line",
+    "  second line",
+    "",
+    "EDIT_INLINE `copy: old-inline`",
+    "",
+    "EDIT_BLOCK",
+    "```bob-copy Old fence",
+    "old body",
+    "```",
+    "",
+    "CONVERT_SPAN `plain span here`",
+    "",
+    "INSERT_HERE",
+    "",
+    "TABLE_CELL",
+    "| a | b |",
+    "| --- | --- |",
+    "| keep | cell |",
+    "",
+    "BACKTICKS see inner ticks here",
+    "",
+    "UNDO_LINE type-before SELECT_ME",
+    "",
+    "ALT_CLICK `copy: alt-target`",
+    "",
+    "IDENTICAL `copy: twin` and `copy: twin`",
+    "",
+    "PALETTE_HERE",
+    "",
+    "VISUAL wrap visual phrase now",
+    "",
+  ].join("\n");
+}
+
 function baseConfigYaml() {
   return ["copy:", "  templates:", "    - label: Note link", '      template: "[[{note_name}]]"', ""].join("\n");
 }
@@ -126,9 +172,12 @@ function expectedFencePayloads() {
 module.exports = {
   NOTE,
   EMBED_NOTE,
+  AUTHOR_NOTE,
   notePath,
   seedNote,
   embedNote,
+  authorNotePath,
+  authorSeedNote,
   baseConfigYaml,
   expectedChipPayloads,
   expectedFencePayloads,

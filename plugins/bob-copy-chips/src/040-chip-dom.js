@@ -1,5 +1,6 @@
-// Shared inline chip face for Live Preview, Reading view, and the future
-// inert author preview. Payloads live in a WeakMap and DOM text only.
+// Shared inline chip face for Live Preview, Reading view, and the inert
+// author preview. Payloads live in a WeakMap and DOM text only.
+const COPY_CHIP_AUTHOR_EDIT_HINT = " · Alt+Click to edit";
 const copyChipPayloads = new WeakMap();
 let copyChipDomSeq = 0;
 
@@ -129,9 +130,11 @@ function copyChipBuildInline(doc, chip, options) {
       const tip = doc.createElement("span");
       tip.setAttribute("class", "bob-copy-chip-tip");
       try {
-        tip.textContent = labeled
+        let tipText = labeled
           ? "Copy: " + copyChipPreviewText(text)
           : "Click to copy";
+        if (opts.editHint === true) tipText += COPY_CHIP_AUTHOR_EDIT_HINT;
+        tip.textContent = tipText;
       } catch (error) {
         // Tooltip text is best-effort.
       }

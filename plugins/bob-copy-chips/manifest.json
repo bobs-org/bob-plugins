@@ -1,7 +1,7 @@
 {
   "id": "bob-copy-chips",
   "name": "Bob Copy Chips",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.8.7",
   "description": "Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences.",
   "author": "Bryan",

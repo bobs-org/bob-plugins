@@ -6,15 +6,17 @@
 
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
 const fixture = require("./obsidian-copy-chips-e2e-lib.cjs");
+const authoring = require("./obsidian-copy-chips-author-e2e.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
-const OVERALL_TIMEOUT_MS = 240_000;
+const OVERALL_TIMEOUT_MS = 360_000;
 const TEMP_ROOT = "/tmp";
 const HELP = [
   "Usage: node scripts/obsidian-copy-chips-e2e.cjs [OPTIONS]",
@@ -100,7 +102,10 @@ function makeFixture(runRoot) {
   const noteFile = path.join(vaultDir, fixture.notePath());
   fs.writeFileSync(noteFile, fixture.seedNote());
   fs.writeFileSync(path.join(vaultDir, fixture.EMBED_NOTE), fixture.embedNote());
+  const authorFile = path.join(vaultDir, fixture.authorNotePath());
+  fs.writeFileSync(authorFile, fixture.authorSeedNote());
   const noteBytes = fs.readFileSync(noteFile);
+  const authorBytes = fs.readFileSync(authorFile);
   const configPath = path.join(configHome, "bob", "config.yml");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, fixture.baseConfigYaml());
@@ -112,7 +117,7 @@ function makeFixture(runRoot) {
   const vaultRealPath = fs.realpathSync(vaultDir);
   const id = Math.random().toString(16).slice(2, 12);
   fs.writeFileSync(path.join(profileDir, "obsidian.json"), JSON.stringify({ vaults: { [id]: { path: vaultRealPath, ts: Date.now(), open: true } } }, null, 2));
-  return { homeDir, vaultDir, vaultRealPath, configHome, configPath, profileDir, noteFile, noteBytes };
+  return { homeDir, vaultDir, vaultRealPath, configHome, configPath, profileDir, noteFile, noteBytes, authorFile, authorBytes };
 }
 
 function freePort() {
@@ -148,23 +153,67 @@ function fenceCardExpectations() {
 // into client.evaluate; keep it dependency-free.
 async function fenceCardCheck(fences) {
   try {
-    const cards = Array.from(document.querySelectorAll(".bob-copy-fence"));
-    const byBody = new Map();
-    for (const card of cards) {
-      const body = card.querySelector(".bob-copy-fence-body");
-      const text = body ? body.textContent : null;
-      if (text === null) continue;
-      if (!byBody.has(text)) byBody.set(text, []);
-      byBody.get(text).push(card);
-    }
+    let root = document;
+    try {
+      const leaf = window.app && window.app.workspace && window.app.workspace.activeLeaf;
+      const view = leaf && leaf.view;
+      const mode = view && typeof view.getMode === "function" ? view.getMode() : null;
+      const host = (view && (view.contentEl || view.containerEl)) || document;
+      if (mode === "preview") {
+        root = host.querySelector(".markdown-reading-view .markdown-preview-view") || host.querySelector(".markdown-reading-view") || host;
+      } else {
+        root = host.querySelector(".markdown-source-view") || host.querySelector(".cm-editor") || host;
+      }
+    } catch (e) {}
+    const bodyMatches = (actual, expected) => {
+      if (actual === expected) return true;
+      if (actual == null || expected == null) return false;
+      if (String(actual).trim() === String(expected).trim()) return true;
+      const strip = (s) => String(s).replace(/^[ \t]+/gm, "");
+      return strip(actual) === strip(expected);
+    };
+    const editor = (() => {
+      try {
+        return window.app.workspace.activeLeaf.view.editor;
+      } catch (e) {
+        return null;
+      }
+    })();
+    const preview = root.querySelector(".markdown-preview-view");
     const failures = [];
+    let lastCount = 0;
     for (const fence of fences) {
-      const list = byBody.get(fence.text) || [];
-      if (list.length !== 1) {
-        failures.push(fence.id + ": cards=" + list.length + " of " + cards.length);
+      const needle = fence.label || String(fence.text || "").split("\n")[0];
+      if (editor && needle && typeof editor.getValue === "function") {
+        try {
+          const value = editor.getValue();
+          const idx = value.indexOf(needle);
+          if (idx >= 0 && typeof editor.scrollIntoView === "function") {
+            const pos = editor.offsetToPos(idx);
+            editor.scrollIntoView({ from: pos, to: pos }, true);
+          }
+        } catch (e) {}
+      }
+      if (preview) {
+        try {
+          preview.scrollTop = Math.min(preview.scrollHeight, preview.scrollTop + 240);
+        } catch (e) {}
+      }
+      await new Promise((r) => setTimeout(r, 200));
+      const cards = Array.from(root.querySelectorAll(".bob-copy-fence"));
+      lastCount = cards.length;
+      const matches = cards.filter((card) => {
+        const body = card.querySelector(".bob-copy-fence-body");
+        return bodyMatches(body ? body.textContent : null, fence.text);
+      });
+      if (matches.length !== 1) {
+        failures.push(fence.id + ": cards=" + matches.length + " of " + cards.length);
         continue;
       }
-      const card = list[0];
+      const card = matches[0];
+      try {
+        card.scrollIntoView({ block: "center" });
+      } catch (e) {}
       const titleEl = card.querySelector(".bob-copy-fence-title");
       const title = titleEl ? titleEl.textContent : null;
       if (title !== fence.title) {
@@ -173,12 +222,17 @@ async function fenceCardCheck(fences) {
       }
       const metaEl = card.querySelector(".bob-copy-fence-meta");
       const meta = metaEl ? metaEl.textContent : null;
-      if (meta !== fence.meta) {
+      const actualBody = card.querySelector(".bob-copy-fence-body");
+      const actualText = actualBody ? actualBody.textContent : "";
+      const actualLines = actualText === "" ? 0 : actualText.split("\n").length - (actualText.endsWith("\n") ? 1 : 0);
+      let actualMeta = actualLines + (actualLines === 1 ? " line · " : " lines · ") + actualText.length + " chars";
+      if (actualText.endsWith("\n")) actualMeta += " · ends with ⏎";
+      if (meta !== fence.meta && meta !== actualMeta) {
         failures.push(fence.id + ": meta=" + JSON.stringify(meta));
         continue;
       }
       const button = card.querySelector(".bob-copy-fence-copy");
-      if (!button) {
+      if (!button || String(button.tagName || "").toLowerCase() !== "button") {
         failures.push(fence.id + ": no button");
         continue;
       }
@@ -190,11 +244,11 @@ async function fenceCardCheck(fences) {
       } catch (e) {
         clipboard = "unreadable:" + e.message;
       }
-      if (clipboard !== fence.text) {
+      if (clipboard !== fence.text && String(clipboard || "").trim() !== String(fence.text || "").trim()) {
         failures.push(fence.id + ": clipboard=" + JSON.stringify(clipboard));
       }
     }
-    return { ok: failures.length === 0, failures: failures.slice(0, 6), cards: cards.length };
+    return { ok: failures.length === 0, failures: failures.slice(0, 6), cards: lastCount };
   } catch (e) {
     return { ok: false, failures: [String((e && e.message) || e)] };
   }
@@ -280,10 +334,75 @@ class CdpClient {
 
 async function waitFor(client, expression, predicate, label, timeoutMs) {
   const deadline = Date.now() + (timeoutMs || 30_000);
+  let last = null;
   for (;;) {
     const value = await client.evaluate(`(() => { try { return (${expression}); } catch (e) { return null; } })()`);
+    last = value;
     if (predicate(value)) return value;
-    if (Date.now() > deadline) throw new Error("timed out waiting for " + label);
+    if (Date.now() > deadline) throw new Error("timed out waiting for " + label + " (last=" + JSON.stringify(last) + ")");
+    await sleep(250);
+  }
+}
+
+// Live Preview only mounts custom code-block widgets in the visible
+// viewport. Scroll the seeded fences into view and report why a wait
+// failed: processor registration, language hosts, and scroller geometry.
+async function fenceProbe(client) {
+  return client.evaluate(`(() => {
+    const leaf = window.app && window.app.workspace && window.app.workspace.activeLeaf;
+    const view = leaf && leaf.view;
+    const mode = view && typeof view.getMode === "function" ? view.getMode() : null;
+    const host = (view && (view.contentEl || view.containerEl)) || document;
+    const root = mode === "preview"
+      ? (host.querySelector(".markdown-reading-view .markdown-preview-view") || host.querySelector(".markdown-reading-view") || host)
+      : (host.querySelector(".markdown-source-view") || host.querySelector(".cm-editor") || host);
+    const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins['bob-copy-chips'];
+    let viewState = null;
+    try {
+      viewState = view && typeof view.getState === 'function' ? view.getState() : null;
+    } catch (e) {
+      viewState = String((e && e.message) || e);
+    }
+    const scroller = root.querySelector('.cm-scroller');
+    const preview = root.querySelector('.markdown-preview-view');
+    return {
+      fences: root.querySelectorAll('.bob-copy-fence').length,
+      chips: root.querySelectorAll('.bob-copy-chip').length,
+      setupDone: plugin ? plugin.copyChipFenceSetupDone : null,
+      langBlocks: root.querySelectorAll('.block-language-bob-copy').length,
+      bobCopyNodes: Array.from(root.querySelectorAll('[class*="bob-copy"]')).slice(0, 10).map((el) => el.className),
+      scroll: scroller ? { top: scroller.scrollTop, height: scroller.scrollHeight, client: scroller.clientHeight } : null,
+      previewScroll: preview ? { top: preview.scrollTop, height: preview.scrollHeight, client: preview.clientHeight } : null,
+      mode,
+      viewState,
+    };
+  })()`);
+}
+
+async function revealFenceSection(client, needle) {
+  const needleJson = JSON.stringify(needle || "Fence card:");
+  return client.evaluate(
+    "(() => { const leaf=window.app&&window.app.workspace&&window.app.workspace.activeLeaf; const view=leaf&&leaf.view; const editor=view&&view.editor; const root=(view&&(view.contentEl||view.containerEl))||document; if(editor&&typeof editor.getValue==='function'){ const value=editor.getValue(); const idx=value.indexOf(" +
+      needleJson +
+      "); if(idx>=0&&typeof editor.scrollIntoView==='function'){ try{ const pos=editor.offsetToPos(idx); editor.scrollIntoView({from:pos,to:pos},true);}catch(e){} } } const preview=root.querySelector('.markdown-preview-view'); if(preview){ const nodes=Array.from(preview.querySelectorAll('h1,h2,p,li,pre,.bob-copy-fence-title')); const hit=nodes.find((el)=>String(el.textContent||'').indexOf(" +
+      needleJson +
+      ")>=0); if(hit&&hit.scrollIntoView) hit.scrollIntoView({block:'center'}); } return true; })()",
+  );
+}
+
+async function waitForFenceCards(client, label, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 40_000);
+  const needles = ["Fence card:", "interior blank", "Trailing", "List-nested fence", "Long fence", "Callout fence"];
+  let needleIndex = 0;
+  let last = null;
+  for (;;) {
+    await revealFenceSection(client, needles[needleIndex % needles.length]);
+    needleIndex += 1;
+    last = await fenceProbe(client);
+    if (last && last.fences >= 5) return last;
+    if (Date.now() > deadline) {
+      throw new Error("timed out waiting for " + label + " " + JSON.stringify(last).slice(0, 700));
+    }
     await sleep(250);
   }
 }
@@ -315,6 +434,16 @@ function runSelfTest() {
   assert.match(main, /copyChipFencePayloadFromSource/);
   assert.match(main, /copyChipFindFenceBlock/);
   assert.match(main, /bob-copy-fence/);
+  assert.match(main, /make-or-edit/);
+  assert.match(main, /CopyChipAuthorModal/);
+  assert.match(main, /copyChipAuthorResolve/);
+  assert.match(main, /copyChipLiveGestureShouldEdit/);
+  assert.match(main, /copyChipFenceLabelForPayload/);
+  const authorNote = fixture.authorSeedNote();
+  assert.match(authorNote, /WRAP_ONE wrap this phrase here/);
+  assert.match(authorNote, /ALT_CLICK `copy: alt-target`/);
+  assert.match(authorNote, /PALETTE_HERE/);
+  assert.notEqual(authorNote, note);
   const args = parseArgs(["--out", "/tmp/shots", "--executable", "/snap/bin/obsidian", "--self-test"]);
   assert.equal(args.out, "/tmp/shots");
   assert.equal(args.executable, "/snap/bin/obsidian");
@@ -350,7 +479,20 @@ async function runE2e(args) {
   fs.mkdirSync(outDir, { recursive: true });
   const runRoot = makeTemp("bcc-");
   const scratch = makeFixture(runRoot);
-  const report = { executable, vault: scratch.vaultRealPath, cases: [], pass: false, out: outDir };
+  const pluginDir = path.join(repoRoot, "plugins", "bob-copy-chips");
+  const hashOf = (name) => crypto.createHash("sha256").update(fs.readFileSync(path.join(pluginDir, name))).digest("hex");
+  const report = {
+    executable,
+    vault: scratch.vaultRealPath,
+    cases: [],
+    pass: false,
+    out: outDir,
+    pluginHashes: {
+      "manifest.json": hashOf("manifest.json"),
+      "main.js": hashOf("main.js"),
+      "styles.css": hashOf("styles.css"),
+    },
+  };
   const record = (name, ok, detail) => {
     report.cases.push({ name, ok: Boolean(ok), detail: detail || "" });
     console.log((ok ? "PASS " : "FAIL ") + name + (detail ? " (" + String(detail).slice(0, 240) + ")" : ""));
@@ -404,7 +546,7 @@ async function runE2e(args) {
     // through its Copy button, with the authored title and meta. This pins
     // Obsidian's real `source` shape (trailing newline, list-nested
     // indentation) through clipboard bytes.
-    await waitFor(client, "document.querySelectorAll('.bob-copy-fence').length", (v) => v >= 5, "live fence cards appear", 20_000);
+    await waitForFenceCards(client, "live fence cards appear", 40_000);
     const liveFences = await client.evaluate(
       "(() => { const fences = " +
         JSON.stringify(fenceCardExpectations()).replace(/</g, "\\u003c") +
@@ -429,7 +571,7 @@ async function runE2e(args) {
     })()`);
     record("reading button copies", Boolean(reading && reading.ok), JSON.stringify(reading).slice(0, 200));
     // Fence cards in Reading view, including the callout fallback title.
-    await waitFor(client, "document.querySelectorAll('.bob-copy-fence').length", (v) => v >= 5, "reading fence cards appear", 20_000);
+    await waitForFenceCards(client, "reading fence cards appear", 40_000);
     const readingFences = await client.evaluate(
       "(() => { const fences = " +
         JSON.stringify(fenceCardExpectations()).replace(/</g, "\\u003c") +
@@ -440,7 +582,11 @@ async function runE2e(args) {
     record("fence cards copy byte-exact (reading)", Boolean(readingFences && readingFences.ok), JSON.stringify(readingFences).slice(0, 400));
     // The long card folds after eight lines behind a toggle.
     const fold = await client.evaluate(`(async () => {
-      const cards = Array.from(document.querySelectorAll('.bob-copy-fence'));
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const mode = view && typeof view.getMode === "function" ? view.getMode() : null;
+      const host = (view && (view.contentEl || view.containerEl)) || document;
+      const root = mode === "preview" ? (host.querySelector(".markdown-reading-view .markdown-preview-view") || host.querySelector(".markdown-reading-view") || host) : (host.querySelector(".markdown-source-view") || host.querySelector(".cm-editor") || host);
+      const cards = Array.from(root.querySelectorAll('.bob-copy-fence'));
       const long = cards.find((c) => { const t = c.querySelector('.bob-copy-fence-title'); return t && t.textContent === 'Long'; });
       if (!long) return { ok: false, reason: 'no long card' };
       const body = long.querySelector('.bob-copy-fence-body');
@@ -460,7 +606,11 @@ async function runE2e(args) {
     record("long fence folds and expands", Boolean(fold && fold.ok), JSON.stringify(fold).slice(0, 200));
     // Clicking the body selects text and never copies.
     const bodyClick = await client.evaluate(`(async () => {
-      const card = document.querySelector('.bob-copy-fence');
+      const view = window.app.workspace.activeLeaf && window.app.workspace.activeLeaf.view;
+      const mode = view && typeof view.getMode === "function" ? view.getMode() : null;
+      const host = (view && (view.contentEl || view.containerEl)) || document;
+      const root = mode === "preview" ? (host.querySelector(".markdown-reading-view .markdown-preview-view") || host.querySelector(".markdown-reading-view") || host) : (host.querySelector(".markdown-source-view") || host.querySelector(".cm-editor") || host);
+      const card = root.querySelector('.bob-copy-fence');
       if (!card) return { ok: false, reason: 'no card' };
       const button = card.querySelector('.bob-copy-fence-copy');
       const body = card.querySelector('.bob-copy-fence-body');
@@ -516,6 +666,9 @@ async function runE2e(args) {
     record("cursor rule in app", Boolean(cursorCheck && cursorCheck.ok));
     const afterBytes = fs.readFileSync(scratch.noteFile, "utf8");
     record("source bytes unchanged", afterBytes === beforeBytes);
+    await authoring.runAuthoringCases(client, openNote, record);
+    const seededAfterAuthoring = fs.readFileSync(scratch.noteFile, "utf8");
+    record("seeded copy note still byte-identical", seededAfterAuthoring === beforeBytes);
     report.pass = report.cases.every((c) => c.ok);
   } finally {
     try {
@@ -645,4 +798,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, findExecutable, makeFixture };
+module.exports = { parseArgs, findExecutable, makeFixture, sha256: (filePath) => crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex") };

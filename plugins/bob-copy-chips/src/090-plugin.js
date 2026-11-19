@@ -77,6 +77,13 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Command registration is best-effort.
     }
     try {
+      if (typeof copyChipRegisterAuthorCommand === "function") {
+        copyChipRegisterAuthorCommand(this);
+      }
+    } catch (error) {
+      // Author command registration is best-effort.
+    }
+    try {
       if (typeof this.register === "function") {
         this.register(() => {
           try {
@@ -89,6 +96,15 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
           this.copyChipReadingSetupDone = false;
           this.copyChipFenceSetupDone = false;
           this.copyChipCursorCommandRegistered = false;
+          this.copyChipAuthorCommandRegistered = false;
+          try {
+            if (this.copyChipAuthorModal && typeof this.copyChipAuthorModal.copyChipCancel === "function") {
+              this.copyChipAuthorModal.copyChipCancel();
+            }
+          } catch (error) {
+            // Author modal cleanup is best-effort.
+          }
+          this.copyChipAuthorModal = null;
         });
       }
     } catch (error) {
@@ -107,6 +123,15 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
     this.copyChipReadingSetupDone = false;
     this.copyChipFenceSetupDone = false;
     this.copyChipCursorCommandRegistered = false;
+    this.copyChipAuthorCommandRegistered = false;
+    try {
+      if (this.copyChipAuthorModal && typeof this.copyChipAuthorModal.copyChipCancel === "function") {
+        this.copyChipAuthorModal.copyChipCancel();
+      }
+    } catch (error) {
+      // Author modal cleanup is best-effort.
+    }
+    this.copyChipAuthorModal = null;
   }
 
   copyChipsBuildApi() {

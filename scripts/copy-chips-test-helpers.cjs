@@ -39,6 +39,44 @@ class FakeNotice {
 }
 FakeNotice.messages = [];
 
+class FakeModal {
+  constructor(app) {
+    this.app = app;
+    this.opened = false;
+    this.closed = false;
+    this.scopeRefs = [];
+    const doc = new FakeDocument();
+    this._doc = doc;
+    this.containerEl = doc.createElement("div");
+    this.modalEl = doc.createElement("div");
+    this.contentEl = doc.createElement("div");
+    this.modalEl.appendChild(this.contentEl);
+    this.containerEl.appendChild(this.modalEl);
+    this.scope = {
+      register: (_modifiers, _key, fn) => {
+        const ref = { fn };
+        this.scopeRefs.push(ref);
+        return ref;
+      },
+      unregister: (ref) => {
+        const index = this.scopeRefs.indexOf(ref);
+        if (index >= 0) this.scopeRefs.splice(index, 1);
+      },
+    };
+  }
+
+  open() {
+    this.opened = true;
+    this.closed = false;
+    if (typeof this.onOpen === "function") this.onOpen();
+  }
+
+  close() {
+    this.closed = true;
+    if (typeof this.onClose === "function") this.onClose();
+  }
+}
+
 class FakeMarkdownRenderChild {
   constructor(containerEl) {
     this.containerEl = containerEl;
@@ -110,6 +148,7 @@ function installCopyChipsStubs() {
         Plugin: FakePluginBase,
         Notice: FakeNotice,
         MarkdownRenderChild: FakeMarkdownRenderChild,
+        Modal: FakeModal,
         setIcon: fakeSetIcon,
         editorLivePreviewField,
         editorInfoField,
@@ -129,6 +168,22 @@ function installCopyChipsStubs() {
         StateEffect: StubStateEffect,
         StateField: StubStateField,
         RangeSetBuilder: StubRangeSetBuilder,
+        Transaction: {
+          userEvent: {
+            of(value) {
+              return { _userEvent: true, value };
+            },
+          },
+        },
+      };
+    }
+    if (request === "@codemirror/commands") {
+      return {
+        isolateHistory: {
+          of(value) {
+            return { _isolateHistory: true, value };
+          },
+        },
       };
     }
     if (request === "@codemirror/language") {
@@ -166,8 +221,13 @@ class FakeElement {
     this.attrs = new Map();
     this.listeners = new Map();
     this._text = "";
+    this._value = "";
     this._classSet = new Set();
     this.isConnected = true;
+    this.style = {};
+    this.selectionStart = 0;
+    this.selectionEnd = 0;
+    this.focused = false;
     const self = this;
     this.classList = {
       add(name) {
@@ -184,6 +244,14 @@ class FakeElement {
     };
   }
 
+  addClass(name) {
+    this.classList.add(name);
+  }
+
+  removeClass(name) {
+    this.classList.remove(name);
+  }
+
   _syncClass() {
     if (this._classSet.size) this.attrs.set("class", Array.from(this._classSet).join(" "));
     else this.attrs.delete("class");
@@ -197,6 +265,18 @@ class FakeElement {
   set textContent(value) {
     this._text = String(value === undefined || value === null ? "" : value);
     this.children = [];
+  }
+
+  get value() {
+    return this._value;
+  }
+
+  set value(next) {
+    this._value = String(next === undefined || next === null ? "" : next);
+  }
+
+  get scrollHeight() {
+    return String(this._value || "").split("\n").length * 16;
   }
 
   get innerHTML() {
@@ -292,6 +372,60 @@ class FakeElement {
     this.parentNode = null;
     this.parentElement = null;
   }
+
+  focus() {
+    this.focused = true;
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+  }
+
+  select() {
+    this.selectionStart = 0;
+    this.selectionEnd = String(this._value || "").length;
+  }
+
+  setSelectionRange(start, end) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  }
+
+  contains(node) {
+    let cursor = node;
+    while (cursor) {
+      if (cursor === this) return true;
+      cursor = cursor.parentElement;
+    }
+    return false;
+  }
+
+  closest(selector) {
+    let node = this;
+    while (node) {
+      if (fakeMatchesSelector(node, selector)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  empty() {
+    this.children = [];
+    this._text = "";
+  }
+}
+
+function fakeMatchesSelector(node, selector) {
+  const parts = String(selector || "").split(",").map((part) => part.trim()).filter(Boolean);
+  for (const part of parts) {
+    if (part.startsWith(".")) {
+      const cls = node.getAttribute && node.getAttribute("class") || "";
+      if ((" " + cls + " ").indexOf(" " + part.slice(1) + " ") !== -1) return true;
+    } else if (part.startsWith("[")) {
+      const name = part.slice(1, part.endsWith("]") ? -1 : part.length).split("=")[0];
+      if (node.getAttribute && node.getAttribute(name) != null) return true;
+    } else if (String(node.tagName || "").toUpperCase() === part.toUpperCase()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 class FakeDocument {
@@ -300,6 +434,7 @@ class FakeDocument {
     this.nextTimerId = 1;
     const doc = this;
     this.body = new FakeElement("div", this);
+    this.activeElement = this.body;
     this.defaultView = {
       setTimeout(fn, ms) {
         const id = doc.nextTimerId++;
@@ -333,6 +468,12 @@ class FakeDocument {
 function installClipboardStub(textOrError) {
   const original = globalThis.navigator;
   const writes = [];
+  const reads = [];
+  const readValue = textOrError && typeof textOrError === "object" && !Array.isArray(textOrError) &&
+    !(textOrError instanceof Error) && textOrError.readText !== undefined
+    ? textOrError.readText
+    : "";
+  const rejectRead = textOrError && typeof textOrError === "object" && textOrError.readReject;
   const stub =
     textOrError instanceof Error || (typeof textOrError === "object" && textOrError && textOrError.reject)
       ? {
@@ -340,11 +481,21 @@ function installClipboardStub(textOrError) {
             writes.push(String(text));
             throw textOrError.reject || textOrError;
           },
+          readText: async () => {
+            reads.push(true);
+            if (rejectRead) throw rejectRead;
+            return readValue;
+          },
         }
       : {
           writeText: async (text) => {
             writes.push(String(text));
             return undefined;
+          },
+          readText: async () => {
+            reads.push(true);
+            if (rejectRead) throw rejectRead;
+            return typeof textOrError === "string" ? textOrError : readValue;
           },
         };
   try {
@@ -358,6 +509,7 @@ function installClipboardStub(textOrError) {
   }
   return {
     writes,
+    reads,
     restore() {
       try {
         if (original === undefined) {
@@ -382,6 +534,7 @@ module.exports = {
   FakeElement,
   FakeDocument,
   FakeNotice,
+  FakeModal,
   FakePluginBase,
   editorLivePreviewField,
   editorInfoField,

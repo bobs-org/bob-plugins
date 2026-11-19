@@ -105,6 +105,19 @@ test("gesture rule copies only on short primary releases inside", () => {
     helpers.copyChipLiveGestureShouldCopy({ x: 10, y: 10 }, { x: 10, y: 10 }, { releasedInside: true, button: 0, pointerType: "touch" }),
     true,
   );
+  // Alt+Click is an edit gesture, never a copy.
+  assert.equal(
+    helpers.copyChipLiveGestureShouldCopy({ x: 0, y: 0 }, { x: 0, y: 0 }, { releasedInside: true, button: 0, alt: true }),
+    false,
+  );
+  assert.equal(
+    helpers.copyChipLiveGestureShouldEdit({ x: 0, y: 0 }, { x: 0, y: 0 }, { releasedInside: true, button: 0, alt: true }),
+    true,
+  );
+  assert.equal(
+    helpers.copyChipLiveGestureShouldEdit({ x: 0, y: 0 }, { x: 4, y: 0 }, { releasedInside: true, button: 0, alt: true }),
+    false,
+  );
 });
 
 test("widget equality compares label, text, and position", () => {

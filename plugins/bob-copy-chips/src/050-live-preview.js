@@ -56,6 +56,7 @@ function copyChipLiveShouldReveal(spanFrom, spanTo, selections) {
 function copyChipLiveGestureShouldCopy(start, end, options) {
   try {
     const opts = options && typeof options === "object" ? options : {};
+    if (opts.alt === true) return false;
     if (opts.cancelled === true) return false;
     if (opts.releasedInside !== true) return false;
     if (Number(opts.button) !== 0 && opts.button !== undefined && opts.button !== null) {
@@ -73,6 +74,21 @@ function copyChipLiveGestureShouldCopy(start, end, options) {
     const dx = ex - sx;
     const dy = ey - sy;
     return dx * dx + dy * dy < 16;
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipLiveGestureShouldEdit(start, end, options) {
+  try {
+    const opts = options && typeof options === "object" ? options : {};
+    if (opts.alt !== true) return false;
+    const copyOpts = {};
+    for (const key in opts) {
+      if (Object.prototype.hasOwnProperty.call(opts, key) && key !== "alt") copyOpts[key] = opts[key];
+    }
+    copyOpts.alt = false;
+    return copyChipLiveGestureShouldCopy(start, end, copyOpts);
   } catch (error) {
     return false;
   }
@@ -202,6 +218,7 @@ function copyChipEnsureLiveWidget() {
         this.text = String(this.model.text || "");
         this.spanFrom = Number(this.model.from);
         this.spanTo = Number(this.model.to);
+        this.plugin = this.model.plugin || null;
         this.gesture = null;
       }
 
@@ -232,7 +249,7 @@ function copyChipEnsureLiveWidget() {
           const host = copyChipBuildInline(
             ownerDoc,
             { label: this.label, text: this.text },
-            { interactive: false },
+            { interactive: false, editHint: true },
           );
           if (!host) {
             const fallback = ownerDoc ? ownerDoc.createElement("span") : null;
@@ -284,7 +301,12 @@ function copyChipEnsureLiveWidget() {
                   } catch (error) {
                     // Caret suppression is best-effort.
                   }
-                  widget.gesture = { start: getPos(event), button: event.button, pointerType: "mouse" };
+                  widget.gesture = {
+                    start: getPos(event),
+                    button: event.button,
+                    pointerType: "mouse",
+                    alt: Boolean(event && event.altKey),
+                  };
                 } catch (error) {
                   widget.gesture = null;
                 }
@@ -292,12 +314,35 @@ function copyChipEnsureLiveWidget() {
               host.addEventListener("mouseup", (event) => {
                 try {
                   const start = widget.gesture && widget.gesture.start;
-                  const should = copyChipLiveGestureShouldCopy(start, getPos(event), {
+                  const alt = Boolean((widget.gesture && widget.gesture.alt) || (event && event.altKey));
+                  const gestureOpts = {
                     button: event ? event.button : 0,
                     releasedInside: true,
                     pointerType: "mouse",
-                  });
+                    alt,
+                  };
+                  const shouldEdit = copyChipLiveGestureShouldEdit(start, getPos(event), gestureOpts);
+                  const should = copyChipLiveGestureShouldCopy(start, getPos(event), gestureOpts);
                   widget.gesture = null;
+                  if (shouldEdit) {
+                    try {
+                      event.preventDefault();
+                    } catch (error) {
+                      // Default suppression is best-effort.
+                    }
+                    try {
+                      copyChipAuthorOpenFromWidget(
+                        widget.plugin,
+                        view,
+                        widget.spanFrom,
+                        widget.spanTo,
+                        { label: widget.label, text: widget.text },
+                      );
+                    } catch (error) {
+                      // Author open is best-effort.
+                    }
+                    return;
+                  }
                   if (!should) return;
                   try {
                     event.preventDefault();
@@ -401,7 +446,7 @@ function copyChipEnsureLiveWidget() {
   }
 }
 
-function copyChipBuildLiveDecorations(view) {
+function copyChipBuildLiveDecorations(view, plugin) {
   try {
     if (
       !view ||
@@ -511,7 +556,13 @@ function copyChipBuildLiveDecorations(view) {
     const builder = new CopyChipsRangeSetBuilder();
     for (const chip of found) {
       try {
-        const widget = new WidgetClass({ label: chip.label, text: chip.text, from: chip.from, to: chip.to });
+        const widget = new WidgetClass({
+          label: chip.label,
+          text: chip.text,
+          from: chip.from,
+          to: chip.to,
+          plugin: plugin || null,
+        });
         builder.add(chip.from, chip.to, CopyChipsDecoration.replace({ widget }));
       } catch (error) {
         continue;
@@ -592,7 +643,7 @@ function copyChipCreateLiveExtension(plugin) {
           // View tracking is best-effort.
         }
         try {
-          this.decorations = copyChipBuildLiveDecorations(view);
+          this.decorations = copyChipBuildLiveDecorations(view, host);
         } catch (error) {
           this.decorations = CopyChipsDecoration.none;
         }
@@ -601,7 +652,7 @@ function copyChipCreateLiveExtension(plugin) {
       update(update) {
         try {
           if (copyChipLiveShouldRebuild(update)) {
-            this.decorations = copyChipBuildLiveDecorations(update.view);
+            this.decorations = copyChipBuildLiveDecorations(update.view, host);
           }
         } catch (error) {
           // Keep the previous valid decorations on failure.

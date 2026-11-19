@@ -89,6 +89,138 @@ function copyChipFenceLabelFromContext(ctx, el) {
   }
 }
 
+function copyChipFencePayloadEquals(actual, expected) {
+  try {
+    const left = copyChipFencePayloadFromSource(actual == null ? "" : String(actual));
+    const right = copyChipFencePayloadFromSource(expected == null ? "" : String(expected));
+    if (left === right) return true;
+    const strip = (text) => String(text).replace(/^[ \t]+/gm, "");
+    return strip(left) === strip(right);
+  } catch (error) {
+    return false;
+  }
+}
+
+function copyChipFenceCollectLabeledPayloads(markdown) {
+  const out = [];
+  try {
+    const lines = String(markdown == null ? "" : markdown).split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      let opening = null;
+      try {
+        const raw = String(lines[index] == null ? "" : lines[index]);
+        const stripped = raw.replace(/^[ \t]*>[ \t]?/, "");
+        opening = copyChipFenceOpeningFromLine(stripped) || copyChipFenceOpeningFromLine(raw);
+      } catch (error) {
+        opening = null;
+      }
+      if (!opening) continue;
+      let parsed = null;
+      try {
+        parsed = copyChipParseFenceInfo(opening.info);
+      } catch (error) {
+        parsed = null;
+      }
+      if (!parsed) continue;
+      let closeAt = -1;
+      try {
+        closeAt = copyChipScanFenceClose(lines, index, opening);
+      } catch (error) {
+        closeAt = -1;
+      }
+      const end = closeAt < 0 ? lines.length : closeAt;
+      const body = [];
+      for (let cursor = index + 1; cursor < end; cursor += 1) {
+        body.push(String(lines[cursor] == null ? "" : lines[cursor]));
+      }
+      let text = "";
+      try {
+        text = copyChipFencePayloadFromSource(copyChipFencePayload(body));
+      } catch (error) {
+        text = body.join("\n");
+      }
+      out.push({ label: parsed.label, text, openIndex: index });
+      index = end;
+    }
+  } catch (error) {
+    return [];
+  }
+  return out;
+}
+
+function copyChipFenceLabelForPayload(markdown, payload) {
+  try {
+    const matches = copyChipFenceCollectLabeledPayloads(markdown).filter((entry) =>
+      copyChipFencePayloadEquals(entry.text, payload),
+    );
+    if (matches.length === 1) return matches[0].label;
+    return undefined;
+  } catch (error) {
+    return undefined;
+  }
+}
+
+function copyChipFenceMarkdownFromPlugin(plugin, ctx) {
+  try {
+    const path = ctx && typeof ctx.sourcePath === "string" ? ctx.sourcePath : null;
+    const app = plugin && plugin.app;
+    if (!path || !app || !app.workspace) return null;
+    const leaf = app.workspace.activeLeaf;
+    const view = leaf && leaf.view;
+    if (view && view.file && view.file.path === path) {
+      if (view.editor && typeof view.editor.getValue === "function") {
+        return String(view.editor.getValue());
+      }
+      if (typeof view.data === "string") return view.data;
+    }
+    if (app.workspace.getLeavesOfType) {
+      const leaves = app.workspace.getLeavesOfType("markdown") || [];
+      for (let index = 0; index < leaves.length; index += 1) {
+        try {
+          const candidate = leaves[index] && leaves[index].view;
+          if (!candidate || !candidate.file || candidate.file.path !== path) continue;
+          if (candidate.editor && typeof candidate.editor.getValue === "function") {
+            return String(candidate.editor.getValue());
+          }
+          if (typeof candidate.data === "string") return candidate.data;
+        } catch (error) {
+          continue;
+        }
+      }
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function copyChipFenceLabelForRender(plugin, ctx, el, payload) {
+  try {
+    if (ctx && typeof ctx.getSectionInfo === "function") {
+      let section = null;
+      try {
+        section = ctx.getSectionInfo(el);
+      } catch (error) {
+        section = null;
+      }
+      if (section && typeof section.text === "string") {
+        const matches = copyChipFenceCollectLabeledPayloads(section.text).filter((entry) =>
+          copyChipFencePayloadEquals(entry.text, payload),
+        );
+        if (matches.length === 1) return matches[0].label;
+      }
+    }
+    const markdown = copyChipFenceMarkdownFromPlugin(plugin, ctx);
+    if (typeof markdown === "string") {
+      const matched = copyChipFenceLabelForPayload(markdown, payload);
+      if (matched !== undefined) return matched;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function copyChipFenceMakeEl(doc, tag, className) {
   try {
     if (!doc || typeof doc.createElement !== "function") return null;
@@ -162,15 +294,18 @@ function copyChipFenceFlashButton(button, face, dwellMs) {
 
 // Builds the card. `chip` is {label, text}. Payload travels through
 // textContent and the payload WeakMap only — never attributes, innerHTML,
-// or the accessible name. Interactive children are real <button> elements.
-// Never registers clipboard gestures by itself; returns the card or null.
-function copyChipBuildFence(doc, chip) {
+// or the accessible name. Interactive children are real <button> elements
+// unless `options.interactive === false` (inert author preview). Never
+// registers clipboard gestures by itself; returns the card or null.
+function copyChipBuildFence(doc, chip, options) {
   try {
     if (!doc || typeof doc.createElement !== "function") return null;
     if (!chip || typeof chip !== "object") return null;
     if (typeof chip.text !== "string") return null;
     const label = chip.label === undefined ? null : chip.label;
     if (label !== null && label !== undefined && typeof label !== "string") return null;
+    const opts = options && typeof options === "object" ? options : {};
+    const interactive = opts.interactive !== false;
     const text = chip.text;
     const counts = copyChipFenceCounts(text);
 
@@ -204,12 +339,23 @@ function copyChipBuildFence(doc, chip) {
       // Meta text is best-effort.
     }
     header.appendChild(meta);
-    const button = copyChipFenceMakeEl(doc, "button", "bob-copy-fence-copy");
+    const button = copyChipFenceMakeEl(
+      doc,
+      interactive ? "button" : "span",
+      "bob-copy-fence-copy",
+    );
     if (!button) return null;
     try {
-      if (typeof button.setAttribute === "function") button.setAttribute("type", "button");
+      if (interactive && typeof button.setAttribute === "function") button.setAttribute("type", "button");
     } catch (error) {
       // Type setup is best-effort.
+    }
+    try {
+      if (!interactive && typeof button.setAttribute === "function") {
+        button.setAttribute("aria-hidden", "true");
+      }
+    } catch (error) {
+      // Preview inertness is best-effort.
     }
     try {
       button.textContent = "Copy";
@@ -226,7 +372,7 @@ function copyChipBuildFence(doc, chip) {
     } catch (error) {
       // Body text is best-effort.
     }
-    const folded = counts.lines > COPY_CHIP_FENCE_FOLD_AFTER;
+    const folded = interactive && counts.lines > COPY_CHIP_FENCE_FOLD_AFTER;
     if (folded) {
       try {
         body.classList.add("is-folded");
@@ -374,7 +520,7 @@ function copyChipRenderFence(plugin, source, el, ctx) {
       (typeof document !== "undefined" ? document : null);
     if (!ownerDoc || typeof ownerDoc.createElement !== "function") return;
     const payload = copyChipFencePayloadFromSource(source);
-    const label = copyChipFenceLabelFromContext(ctx, el);
+    const label = copyChipFenceLabelForRender(plugin, ctx, el, payload);
     const card = copyChipBuildFence(ownerDoc, { label, text: payload });
     if (!card) return;
     try {

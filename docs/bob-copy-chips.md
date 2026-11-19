@@ -13,7 +13,7 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Copy Chips |
 | ID | `bob-copy-chips` |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |
@@ -25,6 +25,7 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
 | Copy chip on cursor line | `copy-on-cursor-line` | — |
+| Make or edit copy chip | `make-or-edit` | Mod+Shift+y |
 <!-- END GENERATED: commands -->
 
 ## Syntax
@@ -85,6 +86,8 @@ body selects text and never copies. Only the button copies, flipping to
 | Click / tap a chip | Live Preview, Reading view, embeds, hover previews, Tasks query results | Copy the payload |
 | Copy button on a `bob-copy` card | Live Preview, Reading view, embeds | Copy the fence payload, byte-exact |
 | Palette "Copy chip on cursor line" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor and flash it like a yank |
+| Palette "Make or edit copy chip" (`make-or-edit`), default Mod+Shift+Y | Editor, Source mode and Live Preview | Open the authoring card for the selection, chip, or cursor |
+| Alt+Click a chip | Live Preview | Open the authoring card for that chip |
 | Move the cursor into the span | Live Preview | Reveal the Markdown source, like a link |
 | Enter / Space on a focused chip | Live Preview (span) and Reading view (button) | Copy the payload |
 
@@ -168,11 +171,52 @@ clipboard never disagree. Copy is awaited inside the gesture and confirmed
 only after fulfillment; failures report their reason. Nothing is trimmed,
 interpolated, HTML-decoded, or otherwise changed.
 
+## Authoring
+
+Mod+Shift+Y (command **Make or edit copy chip**) opens a card that writes
+the chip Markdown in one undoable editor transaction. Alt+Click on a Live
+Preview chip opens the same card for that occurrence. Payloads always come
+from the note source, never from rendered text.
+
+Context, in this order:
+
+1. More than one selection: **One selection at a time**, no card.
+2. A nonempty selection: wrap that exact text. Reversed and Vim visual
+   ranges count. Label starts focused.
+3. An empty selection on a copy chip: **Edit copy chip**, filled from the
+   chip under the cursor — the same cursor rule as Copy on cursor line. Two
+   chips on the line with the cursor on neither is **N chips on this line ·
+   move onto one**.
+4. An empty selection inside a plain code span: convert that span's
+   CommonMark-normalized text. Spans inside fences, links, wikilinks,
+   frontmatter, math, or comments are left alone.
+5. Otherwise insert at the cursor. A best-effort clipboard read prefills
+   Text and selects it; an unavailable clipboard leaves Text empty. A late
+   read never overwrites typing or a closed card.
+
+The card has a one-line Label (placeholder **optional — shown instead of
+the text**) and a monospace Text field. Preview is a live, noninteractive
+chip or fence card — **inline chip** or **block card · N lines** — plus a
+scrollable Markdown row of the exact replacement bytes. Invalid drafts
+cannot save: **nothing to copy**, **whitespace only — nothing to copy**,
+**labels are one line**, and **can't put a block card in a table cell**.
+
+Keys: Enter saves, Shift+Enter inserts a newline in Text, Tab / Shift+Tab
+cycle the fields, and Mod+Shift+Y saves. Esc, Ctrl+[ (Ctrl alone), and q
+outside the fields cancel; q inside Label or Text types a q. A second
+Mod+Shift+Y while the card is open saves it.
+
+Save writes one editor transaction, isolated from the typing that came
+before it, and parks the cursor after the chip. A fence nested in a list
+item indents to the item's content column using the line's own whitespace.
+If the note, editor, or captured source changed, save refuses with **The
+note changed — reopen the card** and writes nothing.
+
+Authored payloads live on copy chips; live context lives on the Copy card
+`C` row.
+
 ## Non-goals
 
 Not a secret store: payloads are plain text in git. No variables, no snippet
 expansion, no `obsidian://copy` protocol handler, and no masked previews.
-The Copy card `C` row, make-or-edit card, Alt+Click editing, vimrc
-mappings, and vault adoption land in later phases.
-
-Authored payloads live on copy chips; live context lives on the Copy card.
+Vimrc mappings and vault adoption land in later phases.

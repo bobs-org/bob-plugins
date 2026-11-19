@@ -7,6 +7,36 @@ let CopyChipsMarkdownRenderChild = null;
 let CopyChipsSetIcon = null;
 let CopyChipsEditorLivePreviewField = null;
 let CopyChipsEditorInfoField = null;
+let CopyChipsModal = class {
+  constructor(app) {
+    this.app = app;
+    this.containerEl = null;
+    this.modalEl = null;
+    this.contentEl = null;
+    this.scope = {
+      register() {
+        return {};
+      },
+      unregister() {},
+    };
+  }
+  open() {
+    try {
+      this.onOpen();
+    } catch (error) {
+      // Fake modal open never throws.
+    }
+  }
+  close() {
+    try {
+      this.onClose();
+    } catch (error) {
+      // Fake modal close never throws.
+    }
+  }
+  onOpen() {}
+  onClose() {}
+};
 
 try {
   const obsidian = require("obsidian");
@@ -27,6 +57,9 @@ try {
   }
   if (obsidian && obsidian.editorInfoField) {
     CopyChipsEditorInfoField = obsidian.editorInfoField;
+  }
+  if (obsidian && typeof obsidian.Modal === "function") {
+    CopyChipsModal = obsidian.Modal;
   }
 } catch (error) {
   CopyChipsPluginBase = class {};
@@ -58,17 +91,36 @@ let CopyChipsStateEffect = null;
 let CopyChipsStateField = null;
 let CopyChipsRangeSetBuilder = null;
 let CopyChipsPrec = null;
+let CopyChipsTransaction = null;
 try {
   const stateMod = require("@codemirror/state");
   CopyChipsStateEffect = (stateMod && stateMod.StateEffect) || null;
   CopyChipsStateField = (stateMod && stateMod.StateField) || null;
   CopyChipsRangeSetBuilder = (stateMod && stateMod.RangeSetBuilder) || null;
   CopyChipsPrec = (stateMod && stateMod.Prec) || null;
+  CopyChipsTransaction = (stateMod && stateMod.Transaction) || null;
 } catch (error) {
   CopyChipsStateEffect = null;
   CopyChipsStateField = null;
   CopyChipsRangeSetBuilder = null;
   CopyChipsPrec = null;
+  CopyChipsTransaction = null;
+}
+
+let CopyChipsIsolateHistory = null;
+try {
+  const commandsMod = require("@codemirror/commands");
+  CopyChipsIsolateHistory = (commandsMod && commandsMod.isolateHistory) || null;
+} catch (error) {
+  CopyChipsIsolateHistory = null;
+}
+if (!CopyChipsIsolateHistory) {
+  try {
+    const historyMod = require("@codemirror/history");
+    CopyChipsIsolateHistory = (historyMod && historyMod.isolateHistory) || null;
+  } catch (error) {
+    CopyChipsIsolateHistory = null;
+  }
 }
 
 let CopyChipsSyntaxTree = null;

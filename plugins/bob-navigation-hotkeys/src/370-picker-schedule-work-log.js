@@ -97,7 +97,13 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       );
     }
 
+    try {
+      setupScheduleReviewLogRecall(this);
+    } catch (_error) {}
     this.renderResults();
+    try {
+      refreshScheduleReviewPinnedSlots(this);
+    } catch (_error) {}
     const focusEl =
       pending.focusField === "summary" && this.scheduleReviewSummaryEl
         ? this.scheduleReviewSummaryEl
@@ -123,6 +129,23 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
     if (next && typeof next.focus === "function") {
       next.focus();
     }
+    try {
+      if (next === this.scheduleReviewSummaryEl && this.scheduleReviewSummaryEl) {
+        if (typeof this.switchScheduleReviewLogRecall === "function") {
+          this.switchScheduleReviewLogRecall("work", this.scheduleReviewSummaryEl);
+        }
+        refreshScheduleReviewPinnedSlots(this);
+      } else if (next === this.scheduleReviewReasonEl && this.scheduleReviewReasonEl) {
+        if (typeof this.switchScheduleReviewLogRecall === "function") {
+          this.switchScheduleReviewLogRecall("schedule", this.scheduleReviewReasonEl);
+        }
+        refreshScheduleReviewPinnedSlots(this);
+      } else {
+        try {
+          detachPickerLogRecall(this);
+        } catch (_error) {}
+      }
+    } catch (_error) {}
   }
 
   renderScheduleReviewPreview(item, rowEl, query) {
@@ -208,6 +231,11 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       applied = false;
     }
     if (applied === true) {
+      try {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (!reason.empty && recall) recall.noteUsed("schedule", reason.reason);
+        if (summary && recall) recall.noteUsed("work", summary);
+      } catch (_error) {}
       return true;
     }
     this.pendingScheduleReview = null;
@@ -226,6 +254,9 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
     if (!pending || typeof pending.resume !== "function") {
       return;
     }
+    try {
+      detachPickerLogRecall(this, { removeHost: true });
+    } catch (_error) {}
     this.revealQuickRollCard();
     this.ensureTaskCardStageChrome();
     this.stage = "schedule-work-log";
@@ -250,6 +281,9 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
+      try {
+        setupSingleFieldPickerLogRecall(this, "work");
+      } catch (_error) {}
     }
   }
 
@@ -342,6 +376,10 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       applied = false;
     }
     if (applied === true) {
+      try {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (summary && recall) recall.noteUsed("work", summary);
+      } catch (_error) {}
       return true;
     }
     // Refusals must not carry a stale summary forward: drop the frozen action

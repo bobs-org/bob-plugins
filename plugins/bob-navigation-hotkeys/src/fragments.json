@@ -42,6 +42,7 @@
   "182-reload-history.js",
   "183-log-recall-model.js",
   "184-log-recall-band.js",
+  "185-log-recall-picker.js",
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",

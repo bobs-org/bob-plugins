@@ -732,3 +732,143 @@ for (const sameFile of [false, true]) {
     });
   }
 }
+
+function makeLanePhrases(texts) {
+  return texts.map((text, index) => ({
+    text,
+    key: String(text).toLowerCase(),
+    uses: texts.length - index,
+    last_used: "2026-11-19 10:00",
+    score: texts.length - index,
+    recency_rank: index,
+    match: null,
+  }));
+}
+
+function makeLaneLogsApi(phrasesByKind, noted) {
+  const logs = Object.entries(phrasesByKind).map(([kind, texts]) => ({ kind, phrases: makeLanePhrases(texts) }));
+  const snapshot = { schema_version: 1, ok: true, overlay: {}, logs };
+  return {
+    snapshot: () => snapshot,
+    fetch: async () => ({ status: "ok", catalog: snapshot, fetchedAt: Date.now() }),
+    onChange: () => () => {},
+    noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+  };
+}
+
+function laneKey(target, key, modifiers = {}) {
+  return {
+    key,
+    target,
+    isComposing: false,
+    ...modifiers,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+
+function fireLaneInput(inputEl) {
+  for (const handler of [...((inputEl && inputEl._listeners && inputEl._listeners.input) || [])]) {
+    handler.call(inputEl, {});
+  }
+}
+
+test("lane-release recall fills, previews, and writes the exact text", async () => {
+  const { createBulletPropertyPickerHarness } = require("./navigation-hotkeys-harness.cjs");
+  const noted = [];
+  const logsApi = makeLaneLogsApi({ work: ["parked for later", "waiting on review"] }, noted);
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+  const harness = createBulletPropertyPickerHarness({
+    config: helpers.validateBulletPropertyConfig({ properties: [{ name: "scheduled", values: "date" }] }),
+    content: "- [/] #task Working ^a1",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+    app,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await runCardAction(picker, "lane");
+  assert.equal(picker.stage, "lane-release-reason");
+  assert.ok(picker.logRecallHandle, "recall attached");
+  picker.handleKeydown(laneKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "parked for later");
+  picker.renderResults();
+  assert.equal(picker.visibleItems[0].reason, "parked for later");
+  await picker.openItemAtIndex(0);
+  assert.deepEqual(noted, [["work", "parked for later"]]);
+  picker.close();
+});
+
+test("lane-release Esc restores the draft and without bob Ctrl+N stays inert", async () => {
+  const { createBulletPropertyPickerHarness } = require("./navigation-hotkeys-harness.cjs");
+  const noted = [];
+  const logsApi = makeLaneLogsApi({ work: ["parked for later"] }, noted);
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+  const harness = createBulletPropertyPickerHarness({
+    config: helpers.validateBulletPropertyConfig({ properties: [{ name: "scheduled", values: "date" }] }),
+    content: "- [/] #task Working ^a1",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+    app,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await runCardAction(picker, "lane");
+  picker.inputEl.value = "par";
+  fireLaneInput(picker.inputEl);
+  picker.handleKeydown(laneKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "parked for later");
+  picker.handleKeydown(laneKey(picker.inputEl, "Escape"));
+  assert.equal(picker.inputEl.value, "par");
+  picker.close();
+
+  const plain = createBulletPropertyPickerHarness({
+    config: helpers.validateBulletPropertyConfig({ properties: [{ name: "scheduled", values: "date" }] }),
+    content: "- [/] #task Working ^a1",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+  });
+  assert.equal(plain.open(), true);
+  const plainPicker = plain.plugin.activeBulletPropertyPicker;
+  await runCardAction(plainPicker, "lane");
+  assert.equal(plainPicker.logRecallHandle, null);
+  plainPicker.inputEl.value = "par";
+  fireLaneInput(plainPicker.inputEl);
+  plainPicker.handleKeydown(laneKey(plainPicker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(plainPicker.inputEl.value, "par");
+  plainPicker.close();
+});

@@ -717,6 +717,7 @@ class BulletPropertyPickerTaskCardMixin extends FilteredPickerModal {
       }
       event.preventDefault();
       event.stopPropagation();
+      try { if (typeof pickerLogRecallBackOut === "function" && pickerLogRecallBackOut(this)) return; } catch (_error) {}
       this.close();
     });
   }

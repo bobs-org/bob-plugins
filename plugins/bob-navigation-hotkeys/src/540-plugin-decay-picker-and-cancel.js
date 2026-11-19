@@ -522,6 +522,10 @@ class BobNavigationHotkeysDecayCancelMixin {
           laneBudgets,
         }),
       );
+      try {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (summary && mode === "release" && recall) recall.noteUsed("work", summary);
+      } catch (_error) {}
       return true;
     }
     const editor = picker.editor;
@@ -697,6 +701,10 @@ class BobNavigationHotkeysDecayCancelMixin {
         laneBudgets,
       }),
     );
+    try {
+      const recall = getNavigationLogRecallApi(this.app);
+      if (summary && plan.mode === "release" && recall) recall.noteUsed("work", summary);
+    } catch (_error) {}
     return true;
   }
 
@@ -725,15 +733,24 @@ class BobNavigationHotkeysDecayCancelMixin {
       dateText,
       rottenLogBody: String(options.rottenLogBody || "").trim(),
     };
+    let applied = false;
     if (
       picker.linkSession &&
       picker.linkSession.kind === "task-link" &&
       Array.isArray(picker.linkSession.targets) &&
       picker.linkSession.targets.length > 0
     ) {
-      return await this.applyTaskCancelFromLinkPicker(picker, cancel);
+      applied = await this.applyTaskCancelFromLinkPicker(picker, cancel);
+    } else {
+      applied = await this.applyTaskCancelFromEditor(picker, cancel);
     }
-    return await this.applyTaskCancelFromEditor(picker, cancel);
+    if (applied === true) {
+      try {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (reason && recall) recall.noteUsed("cancel", reason);
+      } catch (_error) {}
+    }
+    return applied;
   }
 
   // Single and counted cancel sessions write through the open editor in one

@@ -369,7 +369,7 @@ its Work Log prompt first. The route picker offers `commit to Next` / `release
 to Ready` (`N tasks · then …` for counted runs). `↵` applies and moves there,
 `⇧↵` applies in place and stays, and `Esc` cancels without writing.
 
-Work Log prompts provide `USED BEFORE` phrase recall; see the [Log Recall contract](https://bobs-org.github.io/log-recall/).
+Work Log prompts provide `USED BEFORE` phrase recall; see the [Log Recall contract](https://bobs-org.github.io/log-recall/). The picker reuses it in schedule-review (`Tab`), schedule-work-log, lane-release, and cancel with `Ctrl+N`/`Ctrl+P`; `Esc` restores first.
 
 ## Review walk
 

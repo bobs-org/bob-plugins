@@ -221,3 +221,171 @@ test("closing the picker during the review clears pending schedule state and wri
   assert.equal(picker.pendingScheduleReview, null);
   assert.equal(editor.content, lineText);
 });
+
+function makeReviewPhrases(texts, minute) {
+  return texts.map((text, index) => ({
+    text,
+    key: String(text).toLowerCase(),
+    uses: texts.length - index,
+    last_used: minute ? "2026-11-19 10:00" : "2026-11-19",
+    score: texts.length - index,
+    recency_rank: index,
+    match: null,
+  }));
+}
+
+function makeReviewLogsApi(phrasesByKind, noted) {
+  const logs = Object.entries(phrasesByKind).map(([kind, texts]) => ({
+    kind,
+    phrases: makeReviewPhrases(texts, kind === "work" || kind === "schedule"),
+  }));
+  const snapshot = { schema_version: 1, ok: true, overlay: {}, logs };
+  return {
+    snapshot: () => snapshot,
+    fetch: async () => ({ status: "ok", catalog: snapshot, fetchedAt: Date.now() }),
+    onChange: () => () => {},
+    noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+  };
+}
+
+function appWithReviewRecall(phrasesByKind, noted) {
+  const logsApi = makeReviewLogsApi(phrasesByKind, noted);
+  return {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+}
+
+function fireReviewInput(inputEl) {
+  for (const handler of [...((inputEl && inputEl._listeners && inputEl._listeners.input) || [])]) {
+    handler.call(inputEl, {});
+  }
+}
+
+function reviewKey(target, key, modifiers = {}) {
+  return {
+    key,
+    target,
+    isComposing: false,
+    ...modifiers,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+
+async function openReviewWithRecall(content, phrasesByKind, noted) {
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content,
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+    app: appWithReviewRecall(phrasesByKind, noted),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await openBulletPropertyValueStage(harness, "scheduled").catch(() => {});
+  return { harness, picker };
+}
+
+test("schedule-review recall shares one band and Tab swaps the kind", async () => {
+  const noted = [];
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+    app: appWithReviewRecall({ schedule: ["replan soon", "defer a day"], work: ["athena agent", "apollo research"] }, noted),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const { runCardAction: runAction } = require("./navigation-hotkeys-harness.cjs");
+  await runAction(picker, "schedule");
+  assert.equal(picker.stage, "value");
+  const dateItem = picker.visibleItems.find((item) => item.kind === "value" && item.value);
+  assert.ok(dateItem, "date item");
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "schedule-review");
+  assert.ok(picker.logRecallHandle, "recall attached");
+  assert.ok(picker.scheduleReviewReasonEl, "reason field");
+  assert.ok(picker.scheduleReviewSummaryEl, "summary field");
+  picker.handleKeydown(reviewKey(picker.scheduleReviewReasonEl, "n", { ctrlKey: true }));
+  assert.equal(picker.scheduleReviewReasonEl.value, "replan soon");
+  picker.renderResults();
+  assert.equal(picker.visibleItems[0].reason, "replan soon");
+  picker.cycleScheduleReviewFocus({ target: picker.scheduleReviewReasonEl }, false);
+  assert.equal(picker.scheduleReviewSummaryEl.value, "");
+  picker.handleKeydown(reviewKey(picker.scheduleReviewSummaryEl, "n", { ctrlKey: true }));
+  assert.equal(picker.scheduleReviewSummaryEl.value, "athena agent");
+  picker.renderResults();
+  assert.equal(picker.visibleItems[0].summary, "athena agent");
+  const applied = await picker.confirmScheduleReview();
+  assert.equal(applied, true);
+  assert.deepEqual(noted, [["schedule", "replan soon"], ["work", "athena agent"]]);
+  picker.close();
+});
+
+test("schedule-review Esc restores the draft and the typed-date stage keeps Ctrl+N", async () => {
+  const noted = [];
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+    app: appWithReviewRecall({ schedule: ["replan soon"], work: ["athena agent"] }, noted),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const { runCardAction: runAction } = require("./navigation-hotkeys-harness.cjs");
+  await runAction(picker, "schedule");
+  const dateItem = picker.visibleItems.find((item) => item.kind === "value" && item.value);
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "schedule-review");
+  picker.scheduleReviewReasonEl.value = "rep";
+  fireReviewInput(picker.scheduleReviewReasonEl);
+  picker.handleKeydown(reviewKey(picker.scheduleReviewReasonEl, "n", { ctrlKey: true }));
+  assert.equal(picker.scheduleReviewReasonEl.value, "replan soon");
+  picker.handleKeydown(reviewKey(picker.scheduleReviewReasonEl, "Escape"));
+  assert.equal(picker.scheduleReviewReasonEl.value, "rep");
+  picker.handleKeydown(reviewKey(picker.scheduleReviewReasonEl, "Escape"));
+  assert.equal(picker.scheduleReviewReasonEl.value, "rep");
+  picker.close();
+});
+
+test("schedule-review without bob keeps Ctrl+N inert", async () => {
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    now: new Date(2026, 9, 2, 14, 32),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  const { runCardAction: runAction } = require("./navigation-hotkeys-harness.cjs");
+  await runAction(picker, "schedule");
+  const dateItem = picker.visibleItems.find((item) => item.kind === "value" && item.value);
+  await picker.openItem(dateItem);
+  assert.equal(picker.stage, "schedule-review");
+  assert.equal(picker.logRecallHandle, null);
+  picker.scheduleReviewReasonEl.value = "rep";
+  fireReviewInput(picker.scheduleReviewReasonEl);
+  picker.handleKeydown(reviewKey(picker.scheduleReviewReasonEl, "n", { ctrlKey: true }));
+  assert.equal(picker.scheduleReviewReasonEl.value, "rep");
+  picker.close();
+});

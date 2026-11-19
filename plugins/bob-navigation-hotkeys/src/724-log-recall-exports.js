@@ -12,6 +12,19 @@ try {
       LaneReleaseSummaryModal,
       getNavigationLogHistoryApi,
       getNavigationLogRecallApi,
+      pickerLogRecallKindForStage,
+      isPickerLogRecallStage,
+      ensurePickerLogRecallHost,
+      detachPickerLogRecall,
+      attachPickerLogRecall,
+      getPickerActiveLogRecall,
+      pickerLogRecallBackOut,
+      offerPickerLogRecallKey,
+      computeScheduleReviewPinnedSlots,
+      setupScheduleReviewLogRecall,
+      setupSingleFieldPickerLogRecall,
+      installPickerLogRecallCleanup,
+      refreshScheduleReviewPinnedSlots,
     });
   }
 } catch (_error) {}

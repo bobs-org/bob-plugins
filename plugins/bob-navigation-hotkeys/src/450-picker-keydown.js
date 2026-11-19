@@ -20,6 +20,52 @@ class BulletPropertyPickerKeydownMixin extends FilteredPickerModal {
       }
       return;
     }
+    if (
+      this.stage === "schedule-review"
+      || this.stage === "schedule-work-log"
+      || this.stage === "lane-release-reason"
+      || this.stage === "cancel-reason"
+    ) {
+      if (
+        event
+        && event.key === "Escape"
+        && event.isComposing !== true
+        && event.keyCode !== 229
+        && event.ctrlKey !== true
+        && event.metaKey !== true
+        && event.altKey !== true
+      ) {
+        try {
+          if (pickerLogRecallBackOut(this)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        } catch (_error) {}
+      }
+      if (
+        event
+        && event.isComposing !== true
+        && event.keyCode !== 229
+        && isCtrlLeftBracketKeydown(event)
+      ) {
+        try {
+          if (pickerLogRecallBackOut(this)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        } catch (_error) {}
+      }
+      try {
+        if (typeof offerPickerLogRecallKey === "function" && offerPickerLogRecallKey(this, event)) {
+          try {
+            refreshScheduleReviewPinnedSlots(this);
+          } catch (_error) {}
+          return;
+        }
+      } catch (_error) {}
+    }
     // The relation field (⌃↵ from the Links stage): Escape and an empty
     // Backspace return to the list and write nothing (LG3); ↵ commits
     // through the list's openItem path.

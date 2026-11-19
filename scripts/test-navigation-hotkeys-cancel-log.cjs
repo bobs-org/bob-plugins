@@ -521,3 +521,16 @@ test("cancel project conversion carries the log and reports it", () => {
 
 // cancel-picker: pinned Cancel row, reason stage, guarded writes, notice.
 // ---------------------------------------------------------------------------
+
+test("log recall picker stages map input to kind", () => {
+  assert.equal(helpers.pickerLogRecallKindForStage("schedule-work-log"), "work");
+  assert.equal(helpers.pickerLogRecallKindForStage("lane-release-reason"), "work");
+  assert.equal(helpers.pickerLogRecallKindForStage("cancel-reason"), "cancel");
+  assert.equal(helpers.pickerLogRecallKindForStage("value"), null);
+  assert.equal(helpers.isPickerLogRecallStage("schedule-review"), true);
+  assert.equal(helpers.isPickerLogRecallStage("schedule-work-log"), true);
+  assert.equal(helpers.isPickerLogRecallStage("lane-release-reason"), true);
+  assert.equal(helpers.isPickerLogRecallStage("cancel-reason"), true);
+  assert.equal(helpers.isPickerLogRecallStage("value"), false);
+  assert.equal(helpers.isPickerLogRecallStage("relation-label"), false);
+});

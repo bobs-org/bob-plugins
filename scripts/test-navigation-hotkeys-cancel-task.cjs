@@ -702,3 +702,139 @@ test("renderCancelNoticeFragment builds the is-cancel card", () => {
   assert.equal(chips.length, 1);
   assert.match(chips[0].text, /removed 1 Pomodoro link/);
 });
+
+function makeCancelPhrases(texts) {
+  return texts.map((text, index) => ({
+    text,
+    key: String(text).toLowerCase(),
+    uses: texts.length - index,
+    last_used: "2026-11-19",
+    score: texts.length - index,
+    recency_rank: index,
+    match: null,
+  }));
+}
+
+function makeCancelLogsApi(phrasesByKind, noted) {
+  const logs = Object.entries(phrasesByKind).map(([kind, texts]) => ({ kind, phrases: makeCancelPhrases(texts) }));
+  const snapshot = { schema_version: 1, ok: true, overlay: {}, logs };
+  return {
+    snapshot: () => snapshot,
+    fetch: async () => ({ status: "ok", catalog: snapshot, fetchedAt: Date.now() }),
+    onChange: () => () => {},
+    noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+  };
+}
+
+function cancelKey(target, key, modifiers = {}) {
+  return {
+    key,
+    target,
+    isComposing: false,
+    ...modifiers,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+
+function fireCancelInput(inputEl) {
+  for (const handler of [...((inputEl && inputEl._listeners && inputEl._listeners.input) || [])]) {
+    handler.call(inputEl, {});
+  }
+}
+
+test("cancel-reason recall fills, previews, and writes the exact text", async () => {
+  const noted = [];
+  const logsApi = makeCancelLogsApi({ cancel: ["duplicate task", "no longer needed"] }, noted);
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [ ] #task One ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    app,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await runCardAction(picker, "cancel");
+  assert.equal(picker.stage, "cancel-reason");
+  assert.ok(picker.logRecallHandle, "recall attached");
+  picker.handleKeydown(cancelKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "duplicate task");
+  picker.renderResults();
+  assert.equal(picker.visibleItems[0].reason, "duplicate task");
+  await picker.openItemAtIndex(0);
+  assert.deepEqual(noted, [["cancel", "duplicate task"]]);
+  picker.close();
+});
+
+test("cancel-reason Esc restores the draft and without bob Ctrl+N stays inert", async () => {
+  const noted = [];
+  const logsApi = makeCancelLogsApi({ cancel: ["duplicate task"] }, noted);
+  const app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+  const harness = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [ ] #task One ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+    app,
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  await runCardAction(picker, "cancel");
+  picker.inputEl.value = "dup";
+  fireCancelInput(picker.inputEl);
+  picker.handleKeydown(cancelKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "duplicate task");
+  picker.handleKeydown(cancelKey(picker.inputEl, "Escape"));
+  assert.equal(picker.inputEl.value, "dup");
+  picker.close();
+
+  const plain = createBulletPropertyPickerHarness({
+    config: buildScheduleReasonConfig(),
+    content: "- [ ] #task One ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 7, 3),
+  });
+  assert.equal(plain.open(), true);
+  const plainPicker = plain.plugin.activeBulletPropertyPicker;
+  await runCardAction(plainPicker, "cancel");
+  assert.equal(plainPicker.logRecallHandle, null);
+  plainPicker.inputEl.value = "dup";
+  fireCancelInput(plainPicker.inputEl);
+  plainPicker.handleKeydown(cancelKey(plainPicker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(plainPicker.inputEl.value, "dup");
+  plainPicker.close();
+});

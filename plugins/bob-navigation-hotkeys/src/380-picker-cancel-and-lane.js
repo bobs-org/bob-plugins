@@ -1,5 +1,8 @@
 class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
   showCancelReasonStage(cancelItem) {
+    try {
+      detachPickerLogRecall(this, { removeHost: true });
+    } catch (_error) {}
     this.stage = "cancel-reason";
     this.valueBaseDate =
       this.fixedValueBaseDate || getLocalDateStart(new Date());
@@ -39,6 +42,9 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
+      try {
+        setupSingleFieldPickerLogRecall(this, "cancel");
+      } catch (_error) {}
     }
   }
 
@@ -221,6 +227,9 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
   }
 
   showLaneReleaseReasonStage(laneItem) {
+    try {
+      detachPickerLogRecall(this, { removeHost: true });
+    } catch (_error) {}
     this.stage = "lane-release-reason";
     this.valueBaseDate =
       this.fixedValueBaseDate || getLocalDateStart(new Date());
@@ -257,6 +266,9 @@ class BulletPropertyPickerCancelLaneMixin extends FilteredPickerModal {
 
     if (this.resultsEl) {
       this.renderAll({ clearQuery: true });
+      try {
+        setupSingleFieldPickerLogRecall(this, "work");
+      } catch (_error) {}
     }
   }
 

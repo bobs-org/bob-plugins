@@ -81,6 +81,7 @@ function attachLogRecall(options = {}) {
   const logsApi = opts.logsApi || getNavigationLogHistoryApi(app);
   const density = opts.density === "dense" ? "dense" : "roomy";
   const maxRows = Number.isInteger(opts.maxRows) ? Math.max(0, opts.maxRows) : null;
+  let pinnedSlots = Number.isInteger(opts.pinnedSlots) && opts.pinnedSlots >= 0 ? Math.floor(opts.pinnedSlots) : null;
   let kind = LOG_RECALL_KIND_META[opts.kind] ? opts.kind : "work";
   let catalog = null;
   let pendingCatalog = null;
@@ -164,7 +165,8 @@ function attachLogRecall(options = {}) {
       return;
     }
     const cap = maxRows == null ? (density === "dense" ? 3 : 5) : maxRows;
-    const slots = Math.min(cap, Math.max(1, totalForKind));
+    const autoSlots = Math.min(cap, Math.max(1, totalForKind));
+    const slots = pinnedSlots == null ? autoSlots : Math.min(cap, Math.max(1, pinnedSlots));
     try { bandHost.style.setProperty("--bob-log-recall-slots", String(slots)); } catch (_error) {}
     const root = logRecallCreateElement(bandHost, "div", "bob-log-recall-inner");
     const meta = LOG_RECALL_KIND_META[kind];
@@ -338,6 +340,11 @@ function attachLogRecall(options = {}) {
     handleKeydown,
     backOut,
     isRecalling: () => state.mode === "recalling",
+    setPinnedSlots(next) {
+      pinnedSlots = Number.isInteger(next) && next >= 0 ? Math.floor(next) : null;
+      render();
+      return true;
+    },
     setKind(nextKind) {
       if (!LOG_RECALL_KIND_META[nextKind]) return false;
       kind = nextKind;

@@ -362,3 +362,152 @@ test("nav-stamp: prompt opened at 23:59 commits at 00:01 with the new date", asy
   await confirmScheduleReasonStage(picker, "replan", "Late work");
   assert.match(harness.editor.content, /\*2026-10-03 00:01\* — Late work/);
 });
+function makeWorkLogPhrases(texts) {
+  return texts.map((text, index) => ({
+    text,
+    key: String(text).toLowerCase(),
+    uses: texts.length - index,
+    last_used: "2026-11-19 10:00",
+    score: texts.length - index,
+    recency_rank: index,
+    match: null,
+  }));
+}
+
+function makePickerLogsApi(phrasesByKind, noted) {
+  const logs = Object.entries(phrasesByKind).map(([kind, texts]) => ({ kind, phrases: makeWorkLogPhrases(texts) }));
+  const snapshot = { schema_version: 1, ok: true, overlay: {}, logs };
+  return {
+    snapshot: () => snapshot,
+    fetch: async () => ({ status: "ok", catalog: snapshot, fetchedAt: Date.now() }),
+    onChange: () => () => {},
+    noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+  };
+}
+
+function appWithPickerRecall(phrasesByKind, noted) {
+  const logsApi = makePickerLogsApi(phrasesByKind, noted);
+  return {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: (opts) => helpers.attachLogRecall({ ...opts, logsApi }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+        "bob-ledger-tools": { api: { logs: logsApi } },
+      },
+    },
+  };
+}
+
+function firePickerInput(inputEl) {
+  for (const handler of [...((inputEl && inputEl._listeners && inputEl._listeners.input) || [])]) {
+    handler.call(inputEl, {});
+  }
+}
+
+function pickerKey(target, key, modifiers = {}) {
+  return {
+    key,
+    target,
+    isComposing: false,
+    ...modifiers,
+    preventDefault() { this.defaultPrevented = true; },
+    stopPropagation() { this.stopped = true; },
+  };
+}
+
+test("schedule-work-log recall fills, previews, and writes the exact text", async () => {
+  const noted = [];
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 9, 2),
+    now: new Date(2026, 9, 2, 14, 32),
+    app: appWithPickerRecall({ work: ["athena agent", "apollo research"] }, noted),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  let captured = null;
+  picker.showSchedulingWorkLogStage({
+    title: "Schedule task",
+    resume: async (summary) => { captured = summary; return true; },
+    eligibleCount: 1,
+    totalCount: 1,
+    scheduleSummary: "scheduled \u2192 2026-10-05",
+  });
+  assert.equal(picker.stage, "schedule-work-log");
+  assert.ok(picker.logRecallHandle, "recall attached");
+  assert.equal(picker.inputEl.value, "");
+  picker.handleKeydown(pickerKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "athena agent");
+  picker.renderResults();
+  assert.equal(picker.visibleItems[0].reason, "athena agent");
+  await picker.openItemAtIndex(0);
+  assert.equal(captured, "athena agent");
+  assert.deepEqual(noted, [["work", "athena agent"]]);
+});
+
+test("schedule-work-log Esc restores the draft and Ctrl+[ mirrors Esc", async () => {
+  const noted = [];
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 9, 2),
+    now: new Date(2026, 9, 2, 14, 32),
+    app: appWithPickerRecall({ work: ["athena agent", "apollo research"] }, noted),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  picker.showSchedulingWorkLogStage({
+    title: "Schedule task",
+    resume: async () => true,
+    eligibleCount: 1,
+    totalCount: 1,
+    scheduleSummary: "scheduled",
+  });
+  picker.inputEl.value = "ath";
+  firePickerInput(picker.inputEl);
+  picker.handleKeydown(pickerKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "athena agent");
+  picker.handleKeydown(pickerKey(picker.inputEl, "Escape"));
+  assert.equal(picker.inputEl.value, "ath");
+  picker.handleKeydown(pickerKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "athena agent");
+  picker.handleKeydown(pickerKey(picker.inputEl, "[", { ctrlKey: true, code: "BracketLeft" }));
+  assert.equal(picker.inputEl.value, "ath");
+  picker.close();
+});
+
+test("schedule-work-log without bob keeps Ctrl+N inert", async () => {
+  const harness = createBulletPropertyPickerHarness({
+    config: schedulingWorkLogConfig(),
+    content: "- [/] #task Pending work ^a",
+    cursor: { line: 0, ch: 0 },
+    baseDate: new Date(2026, 9, 2),
+    now: new Date(2026, 9, 2, 14, 32),
+  });
+  assert.equal(harness.open(), true);
+  const picker = harness.plugin.activeBulletPropertyPicker;
+  picker.showSchedulingWorkLogStage({
+    title: "Schedule task",
+    resume: async () => true,
+    eligibleCount: 1,
+    totalCount: 1,
+    scheduleSummary: "scheduled",
+  });
+  assert.equal(picker.logRecallHandle, null);
+  picker.inputEl.value = "ath";
+  firePickerInput(picker.inputEl);
+  picker.handleKeydown(pickerKey(picker.inputEl, "n", { ctrlKey: true }));
+  assert.equal(picker.inputEl.value, "ath");
+  picker.close();
+});

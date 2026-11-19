@@ -1,49 +1,66 @@
 // Report-driven album headers in Reading view and Live Preview. The only
 // editor decorations are widgets; no Markdown or frontmatter is rewritten.
-let albumHeaderRefreshEffect = null;
-function ensureAlbumHeaderRefresh() {
-  if (!albumHeaderRefreshEffect && StateEffect?.define) albumHeaderRefreshEffect = StateEffect.define();
-  return albumHeaderRefreshEffect;
-}
-
 class BobLedgerToolsAlbumHeaderMixin {
+  albumPropertyCardHost() {
+    if (this._albumPropertyCardHost) return this._albumPropertyCardHost;
+    const plugin = this;
+    this._albumPropertyCardHost = createPropertyCardHost({
+      plugin,
+      kind: "album",
+      readingPriority: 49,
+      allowEmbedDisplay: true,
+      fields: {
+        active: "albumHeaderActive",
+        reading: "albumHeaderReading",
+        readingPending: "albumHeaderReadingPending",
+        readingTimers: "albumHeaderReadingTimers",
+        editors: "albumHeaderEditors",
+        editorScopes: "albumHeaderEditorScopes",
+        refreshTimer: "albumHeaderRefreshTimer",
+        keySlots: "albumHeaderKeySlots",
+      },
+      setTimeout: (fn, ms) => plugin.albumSetTimeout?.(fn, ms),
+      clearTimeout: (id) => plugin.albumClearTimeout?.(id),
+      pathOf: albumHeaderPath,
+      readingRoot: (el) => plugin.albumHeaderReadingRoot(el),
+      readingScope: (root) => plugin.albumHeaderReadingScope(root),
+      acceptReading: (el, ctx) => Boolean(el && ctx?.sourcePath && !notebookInsideCode(el)),
+      paintReading: (el, path) => plugin.paintAlbumHeaderReading(el, path),
+      removeReading: (root, scope, path) => plugin.albumHeaderRemoveReading(root, scope, path),
+      onResolveSurface: (widget, root) => {
+        if (!root) plugin.albumHeaderRemoveStrays(widget.el, widget.path);
+      },
+      livePath: (view) => plugin.albumHeaderLivePath(view),
+      buildDecorations: (view) => plugin.buildAlbumHeaderDecorations(view),
+      cleanEditor: (view) => plugin.albumHeaderCleanEditor(view),
+      ownKeys: (scope, path) => plugin.albumHeaderOwnKeys(scope, path),
+      releaseKeys: (scope, path) => plugin.albumHeaderReleaseKeys(scope, path),
+      onSetup: () => {
+        if (!(plugin.albumHeaderExpanded instanceof Map)) plugin.albumHeaderExpanded = new Map();
+        plugin.albumHeaderUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
+          plugin.albumHeaderLastState = state;
+          plugin.scheduleAlbumHeaderRefresh();
+        }) || null;
+      },
+      onDisposeStart: () => {
+        plugin.albumHeaderUnsubscribe?.();
+        plugin.albumHeaderUnsubscribe = null;
+        try { plugin.albumSchemaCardModal?.close?.(); } catch (_) {}
+        plugin.albumSchemaCardModal = null;
+      },
+      onDisposeEnd: () => {
+        plugin.albumHeaderExpanded?.clear?.();
+      },
+    });
+    return this._albumPropertyCardHost;
+  }
+
   setupAlbumHeader() {
-    this.albumHeaderActive = true;
-    this.albumHeaderReading = new Set();
-    this.albumHeaderReadingPending = new Map();
-    this.albumHeaderReadingTimers = new Map();
-    this.albumHeaderEditors = new Set();
-    this.albumHeaderEditorScopes = new Map();
-    this.albumHeaderExpanded = new Map();
-    this.albumHeaderRefreshTimer = null;
-    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderAlbumHeaderInReading(el, ctx), 49);
-    const extension = this.createAlbumHeaderExtension();
-    if (extension) this.registerEditorExtension?.(extension);
-    this.albumHeaderUnsubscribe = this.apiAlbumSubscribe?.((state) => {
-      this.albumHeaderLastState = state;
-      this.scheduleAlbumHeaderRefresh();
-    }) || null;
+    this.albumPropertyCardHost().setup();
   }
 
   teardownAlbumHeader() {
-    this.albumHeaderActive = false;
-    this.albumHeaderUnsubscribe?.();
-    this.albumHeaderUnsubscribe = null;
-    this.albumClearTimeout?.(this.albumHeaderRefreshTimer);
-    this.albumHeaderRefreshTimer = null;
-    for (const timer of this.albumHeaderReadingTimers?.values?.() || []) this.albumClearTimeout?.(timer);
-    this.albumHeaderReadingTimers?.clear();
-    this.albumHeaderReadingPending?.clear();
-    try { this.albumSchemaCardModal?.close?.(); } catch (_) {}
-    this.albumSchemaCardModal = null;
-    for (const widget of this.albumHeaderReading || []) {
-      this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    for (const view of this.albumHeaderEditors || []) this.albumHeaderCleanEditor(view);
-    propertyCardSlotReleaseAll(this.albumHeaderKeySlots);
-    this.albumHeaderReading?.clear();
-    this.albumHeaderEditors?.clear();
-    this.albumHeaderExpanded?.clear?.();
+    this.albumPropertyCardHost().dispose();
   }
 
   albumHeaderDesktop() {
@@ -215,46 +232,15 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderReadingRoot(el) {
-    try {
-      if (!el || el.closest?.(".cm-editor")) return null;
-      const attached = el.closest?.(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed");
-      if (!attached) return null;
-      const root = typeof notebookHeaderReadingSurface === "function"
-        ? notebookHeaderReadingSurface(el)
-        : attached;
-      // Calls on the preview and its sizer must share the same identity.
-      if (root.matches?.(".markdown-preview-view")) {
-        const sizer = root.querySelector?.(".markdown-preview-sizer");
-        if (sizer?.closest?.(".markdown-preview-view") === root
-          && sizer.closest?.(".markdown-embed, .internal-embed") === root.closest?.(".markdown-embed, .internal-embed")) return sizer;
-      }
-      return root;
-    } catch (_) {
-      return null;
-    }
+    return propertyCardReadingRoot(el);
   }
 
   albumHeaderReadingScope(root) {
-    try {
-      const embed = root?.closest?.(".markdown-embed, .internal-embed");
-      if (embed) return embed;
-      return root?.closest?.(".markdown-preview-view") || root;
-    } catch (_) {
-      return root;
-    }
+    return propertyCardReadingScope(root);
   }
 
   albumHeaderNodeBelongs(node, root) {
-    if (!node || !root) return false;
-    try {
-      if (node.getAttribute?.("data-cm-widget") === "true" || node.closest?.(".cm-widgetBuffer, .cm-content")) return false;
-      const nested = node.closest?.(".markdown-embed, .internal-embed");
-      const ownedEmbed = root.closest?.(".markdown-embed, .internal-embed");
-      if (nested && nested !== root && nested !== ownedEmbed) return false;
-      return typeof root.contains === "function" ? root.contains(node) : true;
-    } catch (_) {
-      return false;
-    }
+    return propertyCardNodeBelongs(node, root);
   }
 
   // A sourcePath releases only that path's mount: a pane reuses its scope, so
@@ -435,80 +421,15 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   renderAlbumHeaderInReading(el, ctx) {
-    if (!this.albumHeaderActive || !el || !ctx?.sourcePath || notebookInsideCode(el)) return;
-    if (el.closest?.(".cm-editor")) return;
-    if (!(this.albumHeaderReadingPending instanceof Map)) this.albumHeaderReadingPending = new Map();
-    if (!(this.albumHeaderReadingTimers instanceof Map)) this.albumHeaderReadingTimers = new Map();
-    const path = ctx.sourcePath;
-    const batch = this.albumHeaderReadingPending.get(path) || [];
-    batch.push({ el, ctx });
-    this.albumHeaderReadingPending.set(path, batch);
-    this.albumClearTimeout(this.albumHeaderReadingTimers.get(path));
-    this.albumHeaderReadingTimers.set(path, this.albumSetTimeout(() => {
-      this.albumHeaderReadingTimers.delete(path);
-      const pending = this.albumHeaderReadingPending.get(path) || [];
-      this.albumHeaderReadingPending.delete(path);
-      if (!this.albumHeaderActive) return;
-      const surfaces = new Set();
-      for (const item of pending) {
-        const root = this.albumHeaderReadingRoot(item.el);
-        // Keep detached elements registered for late attachment, but never
-        // paint into them. Separate panes/embeds each own one surface.
-        const key = root || item.el;
-        if (surfaces.has(key)) continue;
-        surfaces.add(key);
-        this.albumHeaderBindReading(item.el, item.ctx, root);
-      }
-      this.refreshAlbumHeaderReading();
-    }, 0));
+    this.albumPropertyCardHost().renderInReading(el, ctx);
   }
 
   albumHeaderBindReading(el, ctx, root) {
-    let widget = Array.from(this.albumHeaderReading || []).find((item) =>
-      item.el === el || (root && item.surface === root));
-    if (!widget) {
-      widget = { el, path: ctx.sourcePath, surface: root, scope: this.albumHeaderReadingScope(root) };
-      this.albumHeaderReading.add(widget);
-    } else if (widget.path !== ctx.sourcePath) {
-      this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    widget.el = el;
-    widget.path = ctx.sourcePath;
-    // Rebinding makes an earlier chunk's unload harmless after rerender.
-    const binding = {};
-    widget.binding = binding;
-    const child = typeof MarkdownRenderChild === "function"
-      ? new MarkdownRenderChild(el) : {};
-    child.onunload = () => {
-      if (widget.binding !== binding) return;
-      this.albumHeaderReading?.delete(widget);
-      const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
-        item.surface === widget.surface && item.path === widget.path);
-      if (!anotherOwner) this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
-    };
-    try { ctx.addChild?.(child); } catch (_) {}
+    return this.albumPropertyCardHost().bindReading(el, ctx, root);
   }
 
   refreshAlbumHeaderReading() {
-    // Re-resolve every binding before painting: a later detached binding
-    // must not erase a surface already repainted by an earlier one.
-    for (const widget of this.albumHeaderReading || []) {
-      try {
-        const root = this.albumHeaderReadingRoot(widget.el);
-        if (widget.surface && widget.surface !== root) {
-          this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
-        }
-        widget.surface = root;
-        widget.scope = this.albumHeaderReadingScope(root);
-        if (!root) this.albumHeaderRemoveStrays(widget.el, widget.path);
-      } catch (_) {}
-    }
-    const painted = new Set();
-    for (const widget of this.albumHeaderReading || []) {
-      if (!widget.surface || painted.has(widget.surface)) continue;
-      painted.add(widget.surface);
-      try { this.paintAlbumHeaderReading(widget.el, widget.path); } catch (_) {}
-    }
+    this.albumPropertyCardHost().refreshReading();
   }
 
   albumHeaderLivePath(view) {
@@ -584,82 +505,34 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderSetEditorScope(view, enabled) {
-    const root = view?.dom;
-    if (!root) return;
-    if (!(this.albumHeaderEditorScopes instanceof Map)) this.albumHeaderEditorScopes = new Map();
-    let scope = root;
-    try {
-      scope = root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
-    } catch (_) {}
-    const previous = this.albumHeaderEditorScopes?.get(view);
-    if (previous && previous !== scope) previous.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-    if (enabled) scope.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    else scope.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-    if (enabled) this.albumHeaderEditorScopes?.set(view, scope);
-    else this.albumHeaderEditorScopes?.delete(view);
-    if (enabled) this.albumHeaderEditors?.add(view);
-    else this.albumHeaderEditors?.delete(view);
+    this.albumPropertyCardHost().setEditorScope(view, enabled, {
+      scopeOf: (root) => {
+        try {
+          return root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
+        } catch (_) {
+          return root;
+        }
+      },
+      mark: (scope) => { scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS); },
+      unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },
+    });
   }
 
   albumHeaderCleanEditor(view) {
-    try {
-      const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-      this.albumHeaderReleaseKeys(view?.dom);
-      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-      this.albumHeaderEditorScopes?.delete(view);
-    } catch (_) {}
-    this.albumHeaderEditors?.delete(view);
+    this.albumPropertyCardHost().cleanEditor(view, {
+      unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },
+    });
   }
 
   createAlbumHeaderExtension() {
-    try {
-      if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
-      if (!editorInfoField || !editorLivePreviewField) return null;
-      const plugin = this;
-      const HeaderPlugin = class {
-        constructor(view) {
-          this.view = view;
-          this.path = plugin.albumHeaderLivePath(view);
-          this.decorations = plugin.buildAlbumHeaderDecorations(view);
-          plugin.albumHeaderEditors?.add(view);
-        }
-        update(update) {
-          const path = plugin.albumHeaderLivePath(update.view);
-          const rebuild = path !== this.path || update.docChanged || update.viewportChanged
-            || (update.transactions || []).some((tx) => (tx.effects || []).some((effect) =>
-              effect.is?.(ensureAlbumHeaderRefresh())));
-          this.path = path;
-          if (rebuild) this.decorations = plugin.buildAlbumHeaderDecorations(update.view);
-        }
-        destroy() { plugin.albumHeaderCleanEditor(this.view); }
-      };
-      return Prec?.highest ? Prec.highest(ViewPlugin.fromClass(HeaderPlugin, {
-        decorations: (value) => value.decorations,
-      })) : ViewPlugin.fromClass(HeaderPlugin, { decorations: (value) => value.decorations });
-    } catch (_) {
-      return null;
-    }
+    return this.albumPropertyCardHost().createExtension();
   }
 
   refreshAlbumHeaderEditors() {
-    try {
-      const effect = ensureAlbumHeaderRefresh();
-      for (const leaf of this.app?.workspace?.getLeavesOfType?.("markdown") || []) {
-        const view = leaf?.view?.editor?.cm;
-        if (!view) continue;
-        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
-        else this.buildAlbumHeaderDecorations(view);
-      }
-    } catch (_) {}
+    this.albumPropertyCardHost().refreshEditors();
   }
 
   scheduleAlbumHeaderRefresh() {
-    if (!this.albumHeaderActive || this.albumHeaderRefreshTimer != null) return;
-    this.albumHeaderRefreshTimer = this.albumSetTimeout(() => {
-      this.albumHeaderRefreshTimer = null;
-      if (!this.albumHeaderActive) return;
-      this.refreshAlbumHeaderReading();
-      this.refreshAlbumHeaderEditors();
-    }, 100);
+    this.albumPropertyCardHost().scheduleRefresh();
   }
 }

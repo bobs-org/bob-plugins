@@ -156,6 +156,8 @@
   "241p-plugin-bank-marks.js",
   "241q-plugin-bank-marks-reading.js",
   "240b-plugin-property-card-ownership.js",
+  "240c-plugin-property-card-host.js",
+  "240d-plugin-property-card-host-editor.js",
   "245-plugin-bank-category-card-model.js",
   "246-plugin-bank-category-card-write.js",
   "247-plugin-bank-category-card-ui.js",

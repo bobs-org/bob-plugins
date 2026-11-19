@@ -1,98 +1,125 @@
 // Record sheet chrome in Reading view and Live Preview. Widgets never
 // rewrite Markdown; Source mode keeps native YAML.
-let recordSheetRefreshEffect = null;
-function ensureRecordSheetRefresh() {
-  if (!recordSheetRefreshEffect && StateEffect?.define) recordSheetRefreshEffect = StateEffect.define();
-  return recordSheetRefreshEffect;
-}
 
 // Embedded record sheets (hover popovers, embeds) always fail open: the
 // hide class never applies inside an embed scope, so embedded notes keep
 // their own Properties.
 function recordSheetScopeIsEmbed(scope) {
-  try {
-    return Boolean(scope && typeof scope.closest === "function"
-      && scope.closest(".markdown-embed, .internal-embed, .hover-popover"));
-  } catch (_) {
-    return false;
-  }
+  return propertyCardScopeIsEmbed(scope);
 }
 
 class BobLedgerToolsRecordSheetMixin {
-  setupRecordSheet() {
-    this.recordSheetActive = true;
-    this.recordSheetReading = new Set();
-    this.recordSheetReadingPending = new Map();
-    this.recordSheetReadingTimers = new Map();
-    this.recordSheetEditors = new Set();
-    this.recordSheetEditorScopes = new Map();
-    this.recordSheetEditorCache = new WeakMap();
-    this.recordSheetCollapsed = new Map();
-    this.recordSheetFolds = new Map();
-    this.recordSheetOverlays = new Map();
-    this.recordSheetOverlayTimers = new Map();
-    this.recordSheetSourceCache = new Map();
-    this.recordSheetSourceFlights = new Map();
-    this.recordSheetOwnedKey = "";
-    this.recordSheetDomBuilds = 0;
-    this.recordSheetRefreshTimer = null;
-    this.recordSheetReadingViewMountTimer = null;
-    this.recordSheetDay = this.recordSheetToday();
-    this.registerMarkdownPostProcessor?.((el, ctx) => this.renderRecordSheetInReading(el, ctx), 49);
-    const extension = this.createRecordSheetExtension();
-    if (extension) this.registerEditorExtension?.(extension);
-    this.recordSheetUnsubscribe = this.apiAlbumSubscribe?.((state) => {
-      this.recordSheetLastState = state;
-      const today = state && typeof state.today === "string" ? state.today : "";
-      if (today) this.recordSheetDay = today;
-      this.scheduleRecordSheetRefresh();
-    }) || null;
-    try {
-      const cache = this.app?.metadataCache;
-      if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
-        this.registerEvent(cache.on("changed", (file) => {
-          this.recordSheetOnMetadata(file);
-          this.scheduleRecordSheetReadingViewMount();
-        }));
-      }
-    } catch (_) {}
-    try {
-      const workspace = this.app?.workspace;
-      if (workspace && typeof workspace.on === "function" && typeof this.registerEvent === "function") {
-        for (const event of ["layout-change", "file-open"]) {
-          this.registerEvent(workspace.on(event, () => this.scheduleRecordSheetReadingViewMount()));
+  recordPropertyCardHost() {
+    if (this._recordPropertyCardHost) return this._recordPropertyCardHost;
+    const plugin = this;
+    this._recordPropertyCardHost = createPropertyCardHost({
+      plugin,
+      kind: "record",
+      readingPriority: 49,
+      allowEmbedDisplay: true,
+      fields: {
+        active: "recordSheetActive",
+        reading: "recordSheetReading",
+        readingPending: "recordSheetReadingPending",
+        readingTimers: "recordSheetReadingTimers",
+        editors: "recordSheetEditors",
+        editorScopes: "recordSheetEditorScopes",
+        refreshTimer: "recordSheetRefreshTimer",
+      },
+      setTimeout: (fn, ms) => plugin.albumSetTimeout?.(fn, ms),
+      clearTimeout: (id) => plugin.albumClearTimeout?.(id),
+      pathOf: recordSheetPath,
+      readingRoot: (el) => plugin.recordSheetReadingRoot(el),
+      readingScope: (root) => plugin.recordSheetReadingScope(root),
+      acceptReading: (el, ctx) => Boolean(el && ctx?.sourcePath && !notebookInsideCode(el)),
+      paintReading: (el, path) => plugin.paintRecordSheetReading(el, path),
+      removeReading: (root, scope, path) => plugin.recordSheetRemoveReading(root, scope, path),
+      onBind: (widget, el, ctx) => {
+        widget.viewFallback = false;
+        widget.albumPath = plugin.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
+        plugin.recordSheetEnsureWalkSource(ctx.sourcePath);
+      },
+      onUnbind: () => { plugin.recordSheetNotifyOwnership(); },
+      onResolveSurface: (widget, root) => {
+        if (!root) plugin.recordSheetRemoveStrays(widget.el, widget.path);
+      },
+      livePath: (view) => plugin.recordSheetLivePath(view),
+      buildDecorations: (view) => plugin.buildRecordSheetDecorations(view),
+      shouldRebuild: (update) => {
+        const liveChanged = editorLivePreviewField && update.startState && update.state
+          ? (() => {
+            try {
+              return update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField);
+            } catch (_) {
+              return false;
+            }
+          })()
+          : false;
+        return liveChanged || update.selectionSet === true;
+      },
+      editorAttributes: (view) => plugin.recordSheetEditorAttributes(view),
+      cleanEditor: (view) => plugin.recordSheetCleanEditor(view),
+      workspaceEvents: ["layout-change", "file-open"],
+      onWorkspaceEvent: () => plugin.scheduleRecordSheetReadingViewMount(),
+      onSetup: () => {
+        if (!(plugin.recordSheetEditorCache instanceof WeakMap)) plugin.recordSheetEditorCache = new WeakMap();
+        if (!(plugin.recordSheetCollapsed instanceof Map)) plugin.recordSheetCollapsed = new Map();
+        if (!(plugin.recordSheetFolds instanceof Map)) plugin.recordSheetFolds = new Map();
+        if (!(plugin.recordSheetOverlays instanceof Map)) plugin.recordSheetOverlays = new Map();
+        if (!(plugin.recordSheetOverlayTimers instanceof Map)) plugin.recordSheetOverlayTimers = new Map();
+        if (!(plugin.recordSheetSourceCache instanceof Map)) plugin.recordSheetSourceCache = new Map();
+        if (!(plugin.recordSheetSourceFlights instanceof Map)) plugin.recordSheetSourceFlights = new Map();
+        plugin.recordSheetOwnedKey = plugin.recordSheetOwnedKey || "";
+        plugin.recordSheetDomBuilds = plugin.recordSheetDomBuilds || 0;
+        plugin.recordSheetDay = plugin.recordSheetToday();
+        plugin.recordSheetUnsubscribe = plugin.apiAlbumSubscribe?.((state) => {
+          plugin.recordSheetLastState = state;
+          const today = state && typeof state.today === "string" ? state.today : "";
+          if (today) plugin.recordSheetDay = today;
+          plugin.scheduleRecordSheetRefresh();
+        }) || null;
+        try {
+          const cache = plugin.app?.metadataCache;
+          if (cache && typeof cache.on === "function" && typeof plugin.registerEvent === "function") {
+            plugin.registerEvent(cache.on("changed", (file) => {
+              plugin.recordSheetOnMetadata(file);
+              plugin.scheduleRecordSheetReadingViewMount();
+            }));
+          }
+        } catch (_) {}
+      },
+      onDisposeStart: () => {
+        plugin.recordSheetUnsubscribe?.();
+        plugin.recordSheetUnsubscribe = null;
+        plugin.albumClearTimeout?.(plugin.recordSheetReadingViewMountTimer);
+        plugin.recordSheetReadingViewMountTimer = null;
+        for (const scope of plugin.recordSheetNativePropertiesScopes?.keys() || []) {
+          plugin.recordSheetClearNativeProperties(scope);
         }
-      }
-    } catch (_) {}
+        for (const timer of plugin.recordSheetOverlayTimers?.values?.() || []) {
+          plugin.albumClearTimeout?.(timer);
+        }
+      },
+      onDisposeEnd: () => {
+        plugin.recordSheetCollapsed?.clear?.();
+        plugin.recordSheetFolds?.clear?.();
+        plugin.recordSheetOverlayTimers?.clear?.();
+        plugin.recordSheetOverlays?.clear?.();
+        plugin.recordSheetSourceCache?.clear?.();
+        plugin.recordSheetSourceFlights?.clear?.();
+        plugin.recordSheetOwnedKey = "";
+      },
+      onRefresh: () => { plugin.recordSheetNotifyOwnership(); },
+    });
+    return this._recordPropertyCardHost;
+  }
+
+  setupRecordSheet() {
+    this.recordPropertyCardHost().setup();
   }
 
   teardownRecordSheet() {
-    this.recordSheetActive = false;
-    this.recordSheetUnsubscribe?.();
-    this.recordSheetUnsubscribe = null;
-    this.albumClearTimeout?.(this.recordSheetRefreshTimer);
-    this.recordSheetRefreshTimer = null;
-    this.albumClearTimeout?.(this.recordSheetReadingViewMountTimer);
-    this.recordSheetReadingViewMountTimer = null;
-    for (const timer of this.recordSheetReadingTimers?.values?.() || []) this.albumClearTimeout?.(timer);
-    this.recordSheetReadingTimers?.clear();
-    this.recordSheetReadingPending?.clear();
-    for (const widget of this.recordSheetReading || []) {
-      this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    for (const view of this.recordSheetEditors || []) this.recordSheetCleanEditor(view);
-    for (const scope of this.recordSheetNativePropertiesScopes?.keys() || []) this.recordSheetClearNativeProperties(scope);
-    this.recordSheetReading?.clear();
-    this.recordSheetEditors?.clear();
-    this.recordSheetEditorScopes?.clear?.();
-    this.recordSheetCollapsed?.clear?.();
-    this.recordSheetFolds?.clear?.();
-    for (const timer of this.recordSheetOverlayTimers?.values?.() || []) this.albumClearTimeout?.(timer);
-    this.recordSheetOverlayTimers?.clear?.();
-    this.recordSheetOverlays?.clear?.();
-    this.recordSheetSourceCache?.clear?.();
-    this.recordSheetSourceFlights?.clear?.();
-    this.recordSheetOwnedKey = "";
+    this.recordPropertyCardHost().dispose();
   }
 
   refreshRecordSheetForRollover(now = new Date()) {
@@ -515,24 +542,15 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetReadingRoot(el) {
-    return this.albumHeaderReadingRoot?.(el) || null;
+    return propertyCardReadingRoot(el);
   }
 
   recordSheetReadingScope(root) {
-    return this.albumHeaderReadingScope?.(root) || root;
+    return propertyCardReadingScope(root);
   }
 
   recordSheetNodeBelongs(node, root) {
-    if (!node || !root) return false;
-    try {
-      if (node.getAttribute?.("data-cm-widget") === "true" || node.closest?.(".cm-widgetBuffer, .cm-content")) return false;
-      const nested = node.closest?.(".markdown-embed, .internal-embed");
-      const ownedEmbed = root.closest?.(".markdown-embed, .internal-embed");
-      if (nested && nested !== root && nested !== ownedEmbed) return false;
-      return typeof root.contains === "function" ? root.contains(node) : true;
-    } catch (_) {
-      return false;
-    }
+    return propertyCardNodeBelongs(node, root);
   }
 
   recordSheetRemoveReading(root, scope = root, sourcePath = "") {
@@ -695,81 +713,15 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   renderRecordSheetInReading(el, ctx) {
-    if (!this.recordSheetActive || !el || !ctx?.sourcePath || notebookInsideCode(el)) return;
-    if (el.closest?.(".cm-editor")) return;
-    if (!(this.recordSheetReadingPending instanceof Map)) this.recordSheetReadingPending = new Map();
-    if (!(this.recordSheetReadingTimers instanceof Map)) this.recordSheetReadingTimers = new Map();
-    const path = ctx.sourcePath;
-    const batch = this.recordSheetReadingPending.get(path) || [];
-    batch.push({ el, ctx });
-    this.recordSheetReadingPending.set(path, batch);
-    this.albumClearTimeout(this.recordSheetReadingTimers.get(path));
-    this.recordSheetReadingTimers.set(path, this.albumSetTimeout(() => {
-      this.recordSheetReadingTimers.delete(path);
-      const pending = this.recordSheetReadingPending.get(path) || [];
-      this.recordSheetReadingPending.delete(path);
-      if (!this.recordSheetActive) return;
-      const surfaces = new Set();
-      for (const item of pending) {
-        const root = this.recordSheetReadingRoot(item.el);
-        const key = root || item.el;
-        if (surfaces.has(key)) continue;
-        surfaces.add(key);
-        this.recordSheetBindReading(item.el, item.ctx, root);
-      }
-      this.refreshRecordSheetReading();
-    }, 0));
+    this.recordPropertyCardHost().renderInReading(el, ctx);
   }
 
   recordSheetBindReading(el, ctx, root) {
-    let widget = Array.from(this.recordSheetReading || []).find((item) =>
-      item.el === el || (root && item.surface === root));
-    if (!widget) {
-      widget = { el, path: ctx.sourcePath, surface: root, scope: this.recordSheetReadingScope(root) };
-      this.recordSheetReading.add(widget);
-    } else if (widget.path !== ctx.sourcePath) {
-      this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    widget.el = el;
-    widget.path = ctx.sourcePath;
-    widget.viewFallback = false;
-    widget.albumPath = this.recordSheetGateFor(ctx.sourcePath)?.albumPath || "";
-    this.recordSheetEnsureWalkSource(ctx.sourcePath);
-    const binding = {};
-    widget.binding = binding;
-    const child = typeof MarkdownRenderChild === "function"
-      ? new MarkdownRenderChild(el) : {};
-    child.onunload = () => {
-      if (!this.recordSheetActive) return;
-      if (widget.binding !== binding) return;
-      this.recordSheetReading?.delete(widget);
-      const anotherOwner = Array.from(this.recordSheetReading || []).some((item) =>
-        item.surface === widget.surface && item.path === widget.path);
-      if (!anotherOwner) this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
-      this.recordSheetNotifyOwnership();
-    };
-    try { ctx.addChild?.(child); } catch (_) {}
+    return this.recordPropertyCardHost().bindReading(el, ctx, root);
   }
 
   refreshRecordSheetReading() {
-    if (!this.recordSheetActive) return;
-    for (const widget of this.recordSheetReading || []) {
-      try {
-        const root = this.recordSheetReadingRoot(widget.el);
-        if (widget.surface && widget.surface !== root) {
-          this.recordSheetRemoveReading(widget.surface, widget.scope, widget.path);
-        }
-        widget.surface = root;
-        widget.scope = this.recordSheetReadingScope(root);
-        if (!root) this.recordSheetRemoveStrays(widget.el, widget.path);
-      } catch (_) {}
-    }
-    const painted = new Set();
-    for (const widget of this.recordSheetReading || []) {
-      if (!widget.surface || painted.has(widget.surface)) continue;
-      painted.add(widget.surface);
-      try { this.paintRecordSheetReading(widget.el, widget.path); } catch (_) {}
-    }
+    this.recordPropertyCardHost().refreshReading();
   }
 
   recordSheetLivePath(view) {
@@ -805,88 +757,36 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   recordSheetSetEditorScope(view, enabled) {
-    const root = view?.dom;
-    if (!root) return;
-    if (!(this.recordSheetEditorScopes instanceof Map)) this.recordSheetEditorScopes = new Map();
-    let scope = root;
-    try {
-      // Live Preview's native Properties and inline title are nested below the
-      // CodeMirror editor, not direct children of .markdown-source-view. Own
-      // the exact editor node so the CSS can follow that observed path without
-      // reaching into sibling editors or embedded notes.
-      if (!root.matches?.(".cm-editor")) scope = root.closest?.(".cm-editor") || root;
-    } catch (_) {}
-    const previous = this.recordSheetEditorScopes?.get(view);
-    if (previous && previous !== scope) {
-      this.recordSheetClearNativeProperties(previous);
-      previous.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-      previous.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    }
-    if (enabled) scope.classList?.add?.(RECORD_SHEET_SURFACE_CLASS);
-    else {
-      this.recordSheetClearNativeProperties(scope);
-      scope.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-      scope.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-    }
-    if (enabled) this.recordSheetEditorScopes?.set(view, scope);
-    else this.recordSheetEditorScopes?.delete(view);
-    if (enabled) this.recordSheetEditors?.add(view);
-    else this.recordSheetEditors?.delete(view);
+    this.recordPropertyCardHost().setEditorScope(view, enabled, {
+      scopeOf: (root) => {
+        try {
+          if (!root.matches?.(".cm-editor")) return root.closest?.(".cm-editor") || root;
+        } catch (_) {}
+        return root;
+      },
+      mark: (scope) => { scope?.classList?.add?.(RECORD_SHEET_SURFACE_CLASS); },
+      unmark: (scope) => {
+        this.recordSheetClearNativeProperties(scope);
+        scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
+        scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+      },
+    });
   }
 
   recordSheetCleanEditor(view) {
-    try {
-      const scope = this.recordSheetEditorScopes?.get(view) || view?.dom;
-      this.recordSheetClearNativeProperties(scope);
-      scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
-      scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
-      this.recordSheetEditorScopes?.delete(view);
-      this.recordSheetEditorCache?.delete?.(view);
-    } catch (_) {}
-    this.recordSheetEditors?.delete(view);
+    this.recordPropertyCardHost().cleanEditor(view, {
+      unmark: (scope) => {
+        this.recordSheetClearNativeProperties(scope);
+        scope?.classList?.remove?.(RECORD_SHEET_SURFACE_CLASS);
+        scope?.classList?.remove?.(RECORD_SHEET_HIDES_CLASS);
+      },
+    });
+    try { this.recordSheetEditorCache?.delete?.(view); } catch (_) {}
     this.recordSheetNotifyOwnership();
   }
 
   createRecordSheetExtension() {
-    try {
-      if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) return null;
-      if (!editorInfoField || !editorLivePreviewField) return null;
-      const plugin = this;
-      const SheetPlugin = class {
-        constructor(view) {
-          this.view = view;
-          this.path = plugin.recordSheetLivePath(view);
-          this.decorations = plugin.buildRecordSheetDecorations(view);
-          plugin.recordSheetEditors?.add(view);
-        }
-        update(update) {
-          const path = plugin.recordSheetLivePath(update.view);
-          const notified = (update.transactions || []).some((tx) => (
-            (tx.effects || []).some((effect) => effect.is?.(ensureRecordSheetRefresh()))
-          ));
-          const liveChanged = editorLivePreviewField && update.startState && update.state
-            ? (() => {
-              try {
-                return update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField);
-              } catch (_) {
-                return false;
-              }
-            })()
-            : false;
-          const rebuild = path !== this.path || notified || liveChanged || update.docChanged || update.viewportChanged || update.selectionSet;
-          this.path = path;
-          if (rebuild) this.decorations = plugin.buildRecordSheetDecorations(update.view);
-        }
-        destroy() { plugin.recordSheetCleanEditor(this.view); }
-      };
-      const extension = ViewPlugin.fromClass(SheetPlugin, {
-        decorations: (value) => value.decorations,
-        provide: () => EditorView?.editorAttributes?.of((view) => plugin.recordSheetEditorAttributes(view)) || [],
-      });
-      return Prec?.highest ? Prec.highest(extension) : extension;
-    } catch (_) {
-      return null;
-    }
+    return this.recordPropertyCardHost().createExtension();
   }
 
   recordSheetEditorAttributes(view) {
@@ -901,28 +801,10 @@ class BobLedgerToolsRecordSheetMixin {
   }
 
   refreshRecordSheetEditors() {
-    try {
-      const effect = ensureRecordSheetRefresh();
-      const views = new Set(this.recordSheetEditors || []);
-      for (const leaf of this.app?.workspace?.getLeavesOfType?.("markdown") || []) {
-        const view = leaf?.view?.editor?.cm || null;
-        if (view?.dispatch) views.add(view);
-      }
-      for (const view of views) {
-        if (effect && view.dispatch) view.dispatch({ effects: effect.of(null) });
-        else this.buildRecordSheetDecorations(view);
-      }
-    } catch (_) {}
+    this.recordPropertyCardHost().refreshEditors();
   }
 
   scheduleRecordSheetRefresh() {
-    if (!this.recordSheetActive || this.recordSheetRefreshTimer != null) return;
-    this.recordSheetRefreshTimer = this.albumSetTimeout(() => {
-      this.recordSheetRefreshTimer = null;
-      if (!this.recordSheetActive) return;
-      this.refreshRecordSheetReading();
-      this.refreshRecordSheetEditors();
-      this.recordSheetNotifyOwnership();
-    }, 100);
+    this.recordPropertyCardHost().scheduleRefresh();
   }
 }

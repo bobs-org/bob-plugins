@@ -3,18 +3,6 @@
 // Markdown or frontmatter is rewritten. One header per hub surface, mounted
 // after the first H1 exactly where the album header mounts.
 
-let bankSetupRefreshEffect = null;
-function ensureBankSetupRefresh() {
-  try {
-    if (!bankSetupRefreshEffect && StateEffect && typeof StateEffect.define === "function") {
-      bankSetupRefreshEffect = StateEffect.define({});
-    }
-    return bankSetupRefreshEffect;
-  } catch (error) {
-    return null;
-  }
-}
-
 function bankSetupClockLabel(timestamp) {
   try {
     if (!Number.isFinite(timestamp)) {
@@ -38,81 +26,91 @@ function bankSetupClockLabel(timestamp) {
 }
 
 class BobLedgerToolsBankSetupMixin {
+  bankPropertyCardHost() {
+    if (this._bankPropertyCardHost) return this._bankPropertyCardHost;
+    const plugin = this;
+    this._bankPropertyCardHost = createPropertyCardHost({
+      plugin,
+      kind: "bank",
+      readingPriority: 47,
+      allowEmbedDisplay: true,
+      fields: {
+        active: "bankSetupActive",
+        reading: "bankSetupReading",
+        readingPending: "bankSetupReadingPending",
+        readingTimers: "bankSetupReadingTimers",
+        editors: "bankSetupEditors",
+        editorScopes: "bankSetupEditorScopes",
+        refreshTimer: "bankSetupRefreshTimer",
+        keySlots: "bankSetupKeySlots",
+      },
+      setTimeout: (fn, ms) => (typeof plugin.bankSetTimeout === "function"
+        ? plugin.bankSetTimeout(fn, ms)
+        : setTimeout(fn, ms)),
+      clearTimeout: (id) => {
+        if (typeof plugin.bankClearTimeout === "function") plugin.bankClearTimeout(id);
+      },
+      pathOf: bankSetupHubPath,
+      readingRoot: (el) => plugin.bankSetupReadingRoot(el),
+      readingScope: (root) => plugin.bankSetupReadingScope(root),
+      acceptReading: (el, ctx) => Boolean(
+        el && ctx?.sourcePath && !notebookInsideCode?.(el) && bankSetupIsHubPath(ctx.sourcePath),
+      ),
+      paintReading: (el, path) => plugin.paintBankSetupReading(el, path),
+      removeReading: (root, scope, path) => plugin.bankSetupRemoveReading(root, scope, path),
+      afterRefreshReading: () => plugin.bankSetupSyncSurfaces(),
+      livePath: (view) => plugin.bankSetupLivePath(view),
+      sourcePath: (view) => plugin.bankSetupSourcePath(view),
+      viewPath: (view) => plugin.bankSetupLivePath(view) || plugin.bankSetupSourcePath(view),
+      buildDecorations: (view) => plugin.buildBankSetupDecorations(view),
+      cleanEditor: (view) => plugin.bankSetupCleanEditor(view),
+      ownKeys: (scope, path) => plugin.bankSetupOwnKeys(scope, path),
+      releaseKeys: (scope, path) => plugin.bankSetupReleaseKeys(scope, path),
+      onSetup: () => {
+        if (!(plugin.bankSetupExpanded instanceof Map)) plugin.bankSetupExpanded = new Map();
+        if (!(plugin.bankSetupSurfaces instanceof Set)) plugin.bankSetupSurfaces = new Set();
+        if (!(plugin.bankSetupLintCache instanceof Map)) plugin.bankSetupLintCache = new Map();
+        if (plugin.bankSetupDesktop()) {
+          try {
+            plugin.bankSetupUnsubscribe = plugin.apiBankSubscribe
+              ? plugin.apiBankSubscribe({ command: "config" }, (state) => {
+                plugin.bankSetupLastState = state;
+                plugin.bankSetupNoteReport(state);
+                plugin.scheduleBankSetupRefresh();
+              })
+              : null;
+          } catch (error) {
+            plugin.bankSetupUnsubscribe = null;
+          }
+        } else {
+          plugin.bankSetupUnsubscribe = null;
+        }
+      },
+      onDisposeStart: () => {
+        try {
+          if (typeof plugin.bankSetupUnsubscribe === "function") plugin.bankSetupUnsubscribe();
+        } catch (error) {}
+        plugin.bankSetupUnsubscribe = null;
+      },
+      onDisposeEnd: () => {
+        for (const scope of plugin.bankSetupSurfaces || []) {
+          try { scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS); } catch (error) {}
+        }
+        plugin.bankSetupSurfaces?.clear();
+        plugin.bankSetupExpanded?.clear();
+        plugin.bankSetupLintCache?.clear();
+        plugin.bankSetupLastState = null;
+      },
+    });
+    return this._bankPropertyCardHost;
+  }
+
   setupBankSetup() {
-    this.bankSetupActive = true;
-    this.bankSetupReading = new Set();
-    this.bankSetupReadingPending = new Map();
-    this.bankSetupReadingTimers = new Map();
-    this.bankSetupEditors = new Set();
-    this.bankSetupEditorScopes = new Map();
-    this.bankSetupExpanded = new Map();
-    this.bankSetupSurfaces = new Set();
-    this.bankSetupRefreshTimer = null;
-    this.bankSetupLastGoodAt = null;
-    this.bankSetupLastState = null;
-    this.bankSetupLintCache = new Map();
-    if (typeof this.registerMarkdownPostProcessor === "function") {
-      this.registerMarkdownPostProcessor((el, ctx) => this.renderBankSetupInReading(el, ctx), 47);
-    }
-    const extension = this.createBankSetupExtension();
-    if (extension && typeof this.registerEditorExtension === "function") {
-      this.registerEditorExtension(extension);
-    }
-    if (this.bankSetupDesktop()) {
-      try {
-        this.bankSetupUnsubscribe = this.apiBankSubscribe
-          ? this.apiBankSubscribe({ command: "config" }, (state) => {
-            this.bankSetupLastState = state;
-            this.bankSetupNoteReport(state);
-            this.scheduleBankSetupRefresh();
-          })
-          : null;
-      } catch (error) {
-        this.bankSetupUnsubscribe = null;
-      }
-    } else {
-      this.bankSetupUnsubscribe = null;
-    }
+    this.bankPropertyCardHost().setup();
   }
 
   teardownBankSetup() {
-    this.bankSetupActive = false;
-    try {
-      if (typeof this.bankSetupUnsubscribe === "function") {
-        this.bankSetupUnsubscribe();
-      }
-    } catch (error) {}
-    this.bankSetupUnsubscribe = null;
-    this.bankClearTimeout?.(this.bankSetupRefreshTimer);
-    this.bankSetupRefreshTimer = null;
-    for (const timer of this.bankSetupReadingTimers?.values?.() || []) {
-      this.bankClearTimeout?.(timer);
-    }
-    this.bankSetupReadingTimers?.clear();
-    this.bankSetupReadingPending?.clear();
-    for (const widget of this.bankSetupReading || []) {
-      this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    for (const view of this.bankSetupEditors || []) {
-      this.bankSetupCleanEditor(view);
-    }
-    for (const scope of this.bankSetupEditorScopes?.values?.() || []) {
-      try { this.bankSetupReleaseKeys(scope); } catch (error) {}
-    }
-    for (const scope of this.bankSetupSurfaces || []) {
-      try { this.bankSetupReleaseKeys(scope); } catch (error) {}
-      try {
-        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
-      } catch (error) {}
-    }
-    propertyCardSlotReleaseAll(this.bankSetupKeySlots);
-    this.bankSetupSurfaces?.clear();
-    this.bankSetupReading?.clear();
-    this.bankSetupEditors?.clear();
-    this.bankSetupEditorScopes?.clear();
-    this.bankSetupExpanded?.clear();
-    this.bankSetupLintCache?.clear();
-    this.bankSetupLastState = null;
+    this.bankPropertyCardHost().dispose();
   }
 
   bankSetupDesktop() {
@@ -317,59 +315,15 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   bankSetupReadingRoot(el) {
-    try {
-      if (!el || el.closest?.(".cm-editor")) {
-        return null;
-      }
-      const attached = el.closest?.(".markdown-preview-view, .markdown-preview-sizer, .markdown-embed, .internal-embed");
-      if (!attached) {
-        return null;
-      }
-      const root = typeof notebookHeaderReadingSurface === "function"
-        ? notebookHeaderReadingSurface(el)
-        : attached;
-      if (root.matches?.(".markdown-preview-view")) {
-        const sizer = root.querySelector?.(".markdown-preview-sizer");
-        if (sizer?.closest?.(".markdown-preview-view") === root
-          && sizer.closest?.(".markdown-embed, .internal-embed") === root.closest?.(".markdown-embed, .internal-embed")) {
-          return sizer;
-        }
-      }
-      return root;
-    } catch (error) {
-      return null;
-    }
+    return propertyCardReadingRoot(el);
   }
 
   bankSetupReadingScope(root) {
-    try {
-      const embed = root?.closest?.(".markdown-embed, .internal-embed");
-      if (embed) {
-        return embed;
-      }
-      return root?.closest?.(".markdown-preview-view") || root;
-    } catch (error) {
-      return root;
-    }
+    return propertyCardReadingScope(root);
   }
 
   bankSetupNodeBelongs(node, root) {
-    if (!node || !root) {
-      return false;
-    }
-    try {
-      if (node.getAttribute?.("data-cm-widget") === "true" || node.closest?.(".cm-widgetBuffer, .cm-content")) {
-        return false;
-      }
-      const nested = node.closest?.(".markdown-embed, .internal-embed");
-      const ownedEmbed = root.closest?.(".markdown-embed, .internal-embed");
-      if (nested && nested !== root && nested !== ownedEmbed) {
-        return false;
-      }
-      return typeof root.contains === "function" ? root.contains(node) : true;
-    } catch (error) {
-      return false;
-    }
+    return propertyCardNodeBelongs(node, root);
   }
 
   bankSetupReleaseKeys(scope, sourcePath = "") {
@@ -517,106 +471,15 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   renderBankSetupInReading(el, ctx) {
-    if (!this.bankSetupActive || !el || !ctx?.sourcePath || notebookInsideCode?.(el)) {
-      return;
-    }
-    if (el.closest?.(".cm-editor")) {
-      return;
-    }
-    if (!bankSetupIsHubPath(ctx.sourcePath)) {
-      return;
-    }
-    if (!(this.bankSetupReadingPending instanceof Map)) {
-      this.bankSetupReadingPending = new Map();
-    }
-    if (!(this.bankSetupReadingTimers instanceof Map)) {
-      this.bankSetupReadingTimers = new Map();
-    }
-    const path = ctx.sourcePath;
-    const batch = this.bankSetupReadingPending.get(path) || [];
-    batch.push({ el, ctx });
-    this.bankSetupReadingPending.set(path, batch);
-    try {
-      if (typeof this.bankClearTimeout === "function") {
-        this.bankClearTimeout(this.bankSetupReadingTimers.get(path));
-      }
-    } catch (error) {}
-    const schedule = typeof this.bankSetTimeout === "function"
-      ? this.bankSetTimeout.bind(this)
-      : (run) => setTimeout(run, 0);
-    this.bankSetupReadingTimers.set(path, schedule(() => {
-      this.bankSetupReadingTimers.delete(path);
-      const pending = this.bankSetupReadingPending.get(path) || [];
-      this.bankSetupReadingPending.delete(path);
-      if (!this.bankSetupActive) {
-        return;
-      }
-      const surfaces = new Set();
-      for (const item of pending) {
-        const root = this.bankSetupReadingRoot(item.el);
-        const key = root || item.el;
-        if (surfaces.has(key)) {
-          continue;
-        }
-        surfaces.add(key);
-        this.bankSetupBindReading(item.el, item.ctx, root);
-      }
-      this.refreshBankSetupReading();
-    }, 0));
+    this.bankPropertyCardHost().renderInReading(el, ctx);
   }
 
   bankSetupBindReading(el, ctx, root) {
-    let widget = Array.from(this.bankSetupReading || []).find((item) =>
-      item.el === el || (root && item.surface === root));
-    if (!widget) {
-      widget = { el, path: ctx.sourcePath, surface: root, scope: this.bankSetupReadingScope(root) };
-      this.bankSetupReading.add(widget);
-    } else if (widget.path !== ctx.sourcePath) {
-      this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
-    }
-    widget.el = el;
-    widget.path = ctx.sourcePath;
-    const binding = {};
-    widget.binding = binding;
-    const child = typeof MarkdownRenderChild === "function" ? new MarkdownRenderChild(el) : {};
-    child.onunload = () => {
-      if (widget.binding !== binding) {
-        return;
-      }
-      this.bankSetupReading?.delete(widget);
-      const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
-        item.surface === widget.surface && item.path === widget.path);
-      if (!anotherOwner) {
-        this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
-      }
-    };
-    try {
-      ctx.addChild?.(child);
-    } catch (error) {}
+    return this.bankPropertyCardHost().bindReading(el, ctx, root);
   }
 
   refreshBankSetupReading() {
-    for (const widget of this.bankSetupReading || []) {
-      try {
-        const root = this.bankSetupReadingRoot(widget.el);
-        if (widget.surface && widget.surface !== root) {
-          this.bankSetupRemoveReading(widget.surface, widget.scope, widget.path);
-        }
-        widget.surface = root;
-        widget.scope = this.bankSetupReadingScope(root);
-      } catch (error) {}
-    }
-    const painted = new Set();
-    for (const widget of this.bankSetupReading || []) {
-      if (!widget.surface || painted.has(widget.surface)) {
-        continue;
-      }
-      painted.add(widget.surface);
-      try {
-        this.paintBankSetupReading(widget.el, widget.path);
-      } catch (error) {}
-    }
-    this.bankSetupSyncSurfaces();
+    this.bankPropertyCardHost().refreshReading();
   }
 
   bankSetupLivePath(view) {
@@ -811,57 +674,36 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   bankSetupSetEditorScope(view, enabled) {
-    const root = view?.dom;
-    if (!root) {
-      return;
-    }
-    if (!(this.bankSetupEditorScopes instanceof Map)) {
-      this.bankSetupEditorScopes = new Map();
-    }
-    let scope = root;
-    try {
-      scope = root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
-    } catch (error) {}
-    try {
-      const previous = this.bankSetupEditorScopes?.get(view);
-      if (previous && previous !== scope) {
-        previous.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
-        this.bankSetupSurfaces?.delete(previous);
-      }
-      const livePath = this.bankSetupLivePath(view);
-      const sourcePath = livePath || this.bankSetupSourcePath(view);
-      const hub = Boolean(sourcePath && bankSetupIsHubPath(sourcePath));
-      if (enabled && hub) {
-        scope.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
+    const livePath = this.bankSetupLivePath(view);
+    const sourcePath = livePath || this.bankSetupSourcePath(view);
+    const hub = Boolean(sourcePath && bankSetupIsHubPath(sourcePath));
+    const on = enabled && hub;
+    this.bankPropertyCardHost().setEditorScope(view, on, {
+      scopeOf: (root) => {
+        try {
+          return root.closest?.(".markdown-source-view") || root.closest?.(".markdown-preview-view") || root;
+        } catch (error) {
+          return root;
+        }
+      },
+      mark: (scope) => {
+        scope?.classList?.add?.(BANK_SETUP_SURFACE_CLASS);
         this.bankSetupSurfaces?.add?.(scope);
-      } else {
-        scope.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+      },
+      unmark: (scope) => {
+        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
         this.bankSetupSurfaces?.delete(scope);
-      }
-      if (enabled && hub) {
-        this.bankSetupEditorScopes?.set(view, scope);
-      } else {
-        this.bankSetupEditorScopes?.delete(view);
-      }
-      if (enabled && hub) {
-        this.bankSetupEditors?.add(view);
-      } else {
-        this.bankSetupEditors?.delete(view);
-      }
-    } catch (error) {}
+      },
+    });
   }
 
   bankSetupCleanEditor(view) {
-    try {
-      const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-      this.bankSetupReleaseKeys(view?.dom);
-      scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
-      this.bankSetupSurfaces?.delete(scope);
-      this.bankSetupEditorScopes?.delete(view);
-    } catch (error) {}
-    try {
-      this.bankSetupEditors?.delete(view);
-    } catch (error) {}
+    this.bankPropertyCardHost().cleanEditor(view, {
+      unmark: (scope) => {
+        scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
+        this.bankSetupSurfaces?.delete(scope);
+      },
+    });
   }
 
   bankSetupSyncSurfaces() {
@@ -890,80 +732,15 @@ class BobLedgerToolsBankSetupMixin {
   }
 
   createBankSetupExtension() {
-    try {
-      if (!ViewPlugin?.fromClass || !Decoration || !WidgetType || !RangeSetBuilder) {
-        return null;
-      }
-      if (!editorInfoField || !editorLivePreviewField) {
-        return null;
-      }
-      const plugin = this;
-      const SetupPlugin = class {
-        constructor(view) {
-          this.view = view;
-          this.path = plugin.bankSetupLivePath(view) || plugin.bankSetupSourcePath(view);
-          this.decorations = plugin.buildBankSetupDecorations(view);
-          plugin.bankSetupEditors?.add(view);
-        }
-        update(update) {
-          const path = plugin.bankSetupLivePath(update.view) || plugin.bankSetupSourcePath(update.view);
-          const rebuild = path !== this.path || update.docChanged || update.viewportChanged
-            || (update.transactions || []).some((tx) => (tx.effects || []).some((effect) =>
-              effect.is?.(ensureBankSetupRefresh())));
-          this.path = path;
-          if (rebuild) {
-            this.decorations = plugin.buildBankSetupDecorations(update.view);
-          }
-        }
-        destroy() {
-          plugin.bankSetupCleanEditor(this.view);
-        }
-      };
-      return Prec?.highest
-        ? Prec.highest(ViewPlugin.fromClass(SetupPlugin, {
-          decorations: (value) => value.decorations,
-        }))
-        : ViewPlugin.fromClass(SetupPlugin, { decorations: (value) => value.decorations });
-    } catch (error) {
-      return null;
-    }
+    return this.bankPropertyCardHost().createExtension();
   }
 
   refreshBankSetupEditors() {
-    try {
-      const effect = ensureBankSetupRefresh();
-      for (const leaf of this.app?.workspace?.getLeavesOfType?.("markdown") || []) {
-        const view = leaf?.view?.editor?.cm;
-        if (!view) {
-          continue;
-        }
-        if (effect && view.dispatch) {
-          view.dispatch({ effects: effect.of(null) });
-        } else {
-          this.buildBankSetupDecorations(view);
-        }
-      }
-    } catch (error) {}
+    this.bankPropertyCardHost().refreshEditors();
   }
 
   scheduleBankSetupRefresh() {
-    if (!this.bankSetupActive) {
-      return;
-    }
-    if (this.bankSetupRefreshTimer != null) {
-      return;
-    }
-    const schedule = typeof this.bankSetTimeout === "function"
-      ? this.bankSetTimeout.bind(this)
-      : (run, delay) => setTimeout(run, delay);
-    this.bankSetupRefreshTimer = schedule(() => {
-      this.bankSetupRefreshTimer = null;
-      if (!this.bankSetupActive) {
-        return;
-      }
-      this.refreshBankSetupReading();
-      this.refreshBankSetupEditors();
-    }, 100);
+    this.bankPropertyCardHost().scheduleRefresh();
   }
 }
 

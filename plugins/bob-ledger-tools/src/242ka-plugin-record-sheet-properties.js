@@ -16,37 +16,39 @@ function recordSheetNativeProperties(scope) {
 
 class BobLedgerToolsRecordSheetPropertiesMixin {
   recordSheetClearNativeProperties(scope) {
+    try {
+      if (typeof propertyCardReleaseScope === "function") propertyCardReleaseScope(scope);
+    } catch (_) {}
     const state = this.recordSheetNativePropertiesScopes?.get(scope);
     if (!state) return;
-    state.observer?.disconnect();
-    for (const row of state.rows) row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS);
+    try { state.release?.(); } catch (_) {}
+    try { state.observer?.disconnect(); } catch (_) {}
+    for (const row of state.rows || []) {
+      try { row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS); } catch (_) {}
+    }
     this.recordSheetNativePropertiesScopes.delete(scope);
   }
 
   recordSheetSetNativeProperties(scope, model) {
     if (!scope) return;
+    if (!this.recordSheetNativePropertiesScopes) this.recordSheetNativePropertiesScopes = new Map();
     if (model?.hideEligible !== true || recordSheetScopeIsEmbed(scope)) {
       this.recordSheetClearNativeProperties(scope);
       return;
     }
-    if (!this.recordSheetNativePropertiesScopes) this.recordSheetNativePropertiesScopes = new Map();
-    let state = this.recordSheetNativePropertiesScopes.get(scope);
-    if (!state) {
-      state = { rows: new Set(), keys: new Set(), observer: null };
-      this.recordSheetNativePropertiesScopes.set(scope, state);
-      // Obsidian can replace Properties after the sheet paints (notably on tab
-      // return). Observe DOM replacement and key edits, never our class changes.
-      const Observer = scope.ownerDocument?.defaultView?.MutationObserver;
-      if (Observer) {
-        state.observer = new Observer(() => this.recordSheetPaintNativeProperties(scope, state));
-        state.observer.observe(scope, {
-          childList: true, subtree: true, attributes: true, attributeFilter: ["data-property-key"],
-        });
-      }
+    const keys = new Set([...(model.rows || []), ...(model.ghosts || [])].map((row) => row.key));
+    if (model.coverage && model.coverage.title === "sheet") keys.add("title");
+    let release = null;
+    try {
+      if (typeof propertyCardOwnKeys === "function") release = propertyCardOwnKeys(scope, keys);
+    } catch (_) {
+      release = null;
     }
-    state.keys = new Set([...model.rows, ...model.ghosts].map((row) => row.key));
-    if (model.coverage.title === "sheet") state.keys.add("title");
-    this.recordSheetPaintNativeProperties(scope, state);
+    if (release == null) {
+      this.recordSheetClearNativeProperties(scope);
+      return;
+    }
+    this.recordSheetNativePropertiesScopes.set(scope, { rows: new Set(), keys, observer: null, release });
   }
 
   recordSheetPaintNativeProperties(scope, state) {

@@ -155,6 +155,7 @@
   "241o-plugin-bank-marks-model.js",
   "241p-plugin-bank-marks.js",
   "241q-plugin-bank-marks-reading.js",
+  "240b-plugin-property-card-ownership.js",
   "245-plugin-bank-category-card-model.js",
   "246-plugin-bank-category-card-write.js",
   "247-plugin-bank-category-card-ui.js",
@@ -325,5 +326,6 @@
   "370-exports-record-sheet.js",
   "371-exports-record-update.js",
   "372-exports-record-card.js",
-  "373-exports-record-walk.js"
+  "373-exports-record-walk.js",
+  "374-exports-property-card.js"
 ]

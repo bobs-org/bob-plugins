@@ -256,6 +256,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderReleaseKeys(scope) {
+    try { propertyCardReleaseScope(scope); } catch (_) {}
+  }
+
+  albumHeaderOwnKeys(scope) {
+    try { return propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()); } catch (_) { return null; }
+  }
+
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
@@ -264,6 +272,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (sourcePath && ownedPath && ownedPath !== albumHeaderPath(sourcePath)) continue;
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
+    this.albumHeaderReleaseKeys(scope);
     const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
       item.surface === root && item.path !== sourcePath);
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
@@ -364,7 +373,12 @@ class BobLedgerToolsAlbumHeaderMixin {
     // Remove old reading chrome stranded in editor callout chunks, while
     // leaving the legitimate CodeMirror decoration and other sources alone.
     this.albumHeaderRemoveStrays(root, sourcePath);
-    const model = this.albumHeaderModelFor(sourcePath, state);
+    let model = null;
+    try {
+      model = this.albumHeaderModelFor(sourcePath, state);
+    } catch (_) {
+      model = null;
+    }
     const doc = notebookDomDoc(root) || (typeof document !== "undefined" ? document : null);
     const old = Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])
       .find((node) => this.albumHeaderNodeBelongs(node, root));
@@ -375,19 +389,32 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!model) return null;
 
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
+    let header = null;
+    try {
+      header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
+    } catch (_) {
+      header = null;
+    }
     if (!header) {
+      this.albumHeaderReleaseKeys(scope);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       return null;
     }
     const anchor = this.albumHeaderReadingAnchor(root);
-    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-    else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
-    else root.prepend?.(header);
+    try {
+      if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
+      else root.prepend?.(header);
+    } catch (_) {
+      this.albumHeaderReleaseKeys(scope);
+      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
+      return null;
+    }
     if (focusKey) {
       const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
+    this.albumHeaderOwnKeys(scope);
     return header;
   }
 
@@ -491,17 +518,37 @@ class BobLedgerToolsAlbumHeaderMixin {
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
         return Decoration.none;
       }
       const text = view.state.doc.toString();
       const state = this.albumHeaderState();
       const model = this.albumHeaderModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(model));
-      if (!model) return Decoration.none;
+      if (!model) {
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
+        return Decoration.none;
+      }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const options = this.albumHeaderOptions(path, state, model);
       const header = this.albumHeaderBuildEl(model, options, doc);
-      if (!header) return Decoration.none;
+      if (!header) {
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
+        return Decoration.none;
+      }
+      try {
+        const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+        this.albumHeaderOwnKeys(scope);
+      } catch (_) {}
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -560,6 +607,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderCleanEditor(view) {
     try {
       const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+      this.albumHeaderReleaseKeys(scope);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       this.albumHeaderEditorScopes?.delete(view);
     } catch (_) {}

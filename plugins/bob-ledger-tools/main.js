@@ -79505,6 +79505,198 @@ class BobLedgerToolsBankMarksReadingMixin {
     }
   }
 }
+// ---- src/240b-plugin-property-card-ownership.js ----
+// Shared property-card ownership: one card mount owns selected native
+// Properties rows in one native view scope. Desktop-only Reading or Live
+// Preview, restricted to the exact successfully rendered card's native
+// container. Source, embeds, hover popovers, failed mounts, and teardown
+// keep native fields. Generalizes the record sheet observer.
+const PROPERTY_CARD_OWNED_PROPERTY_CLASS = "bob-property-card-owned-property";
+// Record compatibility: existing assertions expect this class on owned rows.
+// The shared painter tags both classes so the generalized owner preserves
+// the proven record selectors while album and bank hide through the shared
+// class with bounded owned-row rules.
+const PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS = "bob-record-sheet-owned-property";
+
+const propertyCardOwnerships = new WeakMap();
+let propertyCardOwnershipGeneration = 0;
+
+function propertyCardScopeIsEmbed(node) {
+  try {
+    return Boolean(node && typeof node.closest === "function"
+      && node.closest(".markdown-embed, .internal-embed, .hover-popover"));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardDesktop() {
+  try {
+    if (typeof Platform !== "undefined" && Platform && Platform.isDesktopApp === false) return false;
+  } catch (_) {}
+  return true;
+}
+
+function propertyCardNativeContainer(scope) {
+  const child = (root, name) => Array.from(root?.children || [])
+    .find((node) => node.classList?.contains(name));
+  try {
+    if (scope?.classList?.contains("cm-editor")) {
+      return child(child(child(scope, "cm-scroller"), "cm-sizer"), "metadata-container");
+    }
+    if (scope?.classList?.contains("markdown-preview-view")) {
+      return child(child(child(scope, "markdown-preview-sizer"), "mod-header"), "metadata-container");
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+function propertyCardDeniedScope(scope) {
+  if (!scope || typeof scope.closest !== "function") return true;
+  if (propertyCardScopeIsEmbed(scope)) return true;
+  try {
+    if (scope.classList?.contains("cm-editor")) return propertyCardDesktop() !== true;
+    if (scope.classList?.contains("markdown-preview-view")) return propertyCardDesktop() !== true;
+  } catch (_) {
+    return true;
+  }
+  return true;
+}
+
+function propertyCardNormalizeKeys(keys) {
+  const out = new Set();
+  try {
+    const list = keys instanceof Set ? Array.from(keys) : Array.from(keys || []);
+    for (const key of list) {
+      if (typeof key === "string" && key.length > 0) out.add(key);
+    }
+  } catch (_) {}
+  return out;
+}
+
+function propertyCardUntag(rows) {
+  for (const row of rows || []) {
+    try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
+    try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
+  }
+}
+
+function propertyCardPaintScope(scope) {
+  const entry = propertyCardOwnerships.get(scope);
+  if (!entry) return;
+  const container = propertyCardNativeContainer(scope);
+  const next = new Set();
+  try {
+    for (const row of container?.querySelectorAll?.(".metadata-property") || []) {
+      try {
+        if (row.closest?.(".metadata-container") !== container) continue;
+        if (propertyCardScopeIsEmbed(row)) continue;
+        const key = row.getAttribute?.("data-property-key");
+        if (!entry.keys.has(key)) continue;
+        next.add(row);
+        if (!row.classList?.contains(PROPERTY_CARD_OWNED_PROPERTY_CLASS)) row.classList?.add(PROPERTY_CARD_OWNED_PROPERTY_CLASS);
+        if (!row.classList?.contains(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS)) row.classList?.add(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS);
+      } catch (_) {}
+    }
+  } catch (_) {}
+  for (const row of entry.rows) {
+    if (!next.has(row)) {
+      try { row.classList?.remove(PROPERTY_CARD_OWNED_PROPERTY_CLASS); } catch (_) {}
+      try { row.classList?.remove(PROPERTY_CARD_LEGACY_RECORD_OWNED_CLASS); } catch (_) {}
+    }
+  }
+  entry.rows = next;
+}
+
+function propertyCardReleaseScope(scope) {
+  const entry = propertyCardOwnerships.get(scope);
+  if (!entry) return;
+  try { entry.observer?.disconnect(); } catch (_) {}
+  propertyCardUntag(entry.rows);
+  entry.rows = new Set();
+  entry.keys = new Set();
+  propertyCardOwnerships.delete(scope);
+}
+
+// Own one card mount's keys in one native view scope. New keys replace the
+// owner's old set. Returns an idempotent release handle bound to this mount
+// generation: an old unload/release cannot clear a newer mount.
+function propertyCardOwnKeys(scope, keys) {
+  const noop = () => {};
+  const normalized = propertyCardNormalizeKeys(keys);
+  if (propertyCardDeniedScope(scope)) {
+    propertyCardReleaseScope(scope);
+    return noop;
+  }
+  if (normalized.size === 0) {
+    propertyCardReleaseScope(scope);
+    return noop;
+  }
+  let entry = propertyCardOwnerships.get(scope);
+  propertyCardOwnershipGeneration += 1;
+  const generation = propertyCardOwnershipGeneration;
+  if (!entry) {
+    entry = { generation, rows: new Set(), keys: normalized, observer: null };
+    propertyCardOwnerships.set(scope, entry);
+    try {
+      const Observer = scope.ownerDocument?.defaultView?.MutationObserver;
+      if (Observer) {
+        const seen = entry;
+        seen.observer = new Observer(() => {
+          const current = propertyCardOwnerships.get(scope);
+          if (current !== seen) return;
+          propertyCardPaintScope(scope);
+        });
+        seen.observer.observe(scope, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ["data-property-key"],
+        });
+      }
+    } catch (_) {
+      entry.observer = null;
+    }
+  } else {
+    entry.generation = generation;
+    entry.keys = normalized;
+  }
+  propertyCardPaintScope(scope);
+  return () => {
+    const current = propertyCardOwnerships.get(scope);
+    if (!current || current.generation !== generation) return;
+    try { current.observer?.disconnect(); } catch (_) {}
+    propertyCardUntag(current.rows);
+    current.rows = new Set();
+    current.keys = new Set();
+    propertyCardOwnerships.delete(scope);
+  };
+}
+
+function propertyCardOwnAlbumKeys(scope, desktop) {
+  try {
+    if (desktop !== true) {
+      try { propertyCardReleaseScope(scope); } catch (_) {}
+      return null;
+    }
+    return propertyCardOwnKeys(scope, ["record"]);
+  } catch (_) {
+    try { propertyCardReleaseScope(scope); } catch (_) {}
+    return null;
+  }
+}
+
+function propertyCardOwnBankKeys(scope, desktop) {
+  try {
+    if (desktop !== true) {
+      try { propertyCardReleaseScope(scope); } catch (_) {}
+      return null;
+    }
+    return propertyCardOwnKeys(scope, ["bank"]);
+  } catch (_) {
+    try { propertyCardReleaseScope(scope); } catch (_) {}
+    return null;
+  }
+}
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
 // (bank_weekly_category_walk card-model). No DOM, no spawns: card-ui renders
@@ -82441,7 +82633,11 @@ class BobLedgerToolsBankSetupMixin {
     for (const view of this.bankSetupEditors || []) {
       this.bankSetupCleanEditor(view);
     }
+    for (const scope of this.bankSetupEditorScopes?.values?.() || []) {
+      try { this.bankSetupReleaseKeys(scope); } catch (error) {}
+    }
     for (const scope of this.bankSetupSurfaces || []) {
+      try { this.bankSetupReleaseKeys(scope); } catch (error) {}
       try {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       } catch (error) {}
@@ -82712,6 +82908,14 @@ class BobLedgerToolsBankSetupMixin {
     }
   }
 
+  bankSetupReleaseKeys(scope) {
+    try { propertyCardReleaseScope(scope); } catch (error) {}
+  }
+
+  bankSetupOwnKeys(scope) {
+    try { return propertyCardOwnBankKeys(scope, this.bankSetupDesktop?.()); } catch (_) { return null; }
+  }
+
   bankSetupRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) {
       return;
@@ -82732,6 +82936,7 @@ class BobLedgerToolsBankSetupMixin {
         } catch (childError) {}
       }
     }
+    this.bankSetupReleaseKeys(scope);
     const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
       item.surface === root && item.scope && item.scope.classList
       && item.surface.querySelector?.(`.${BANK_SETUP_CLASS}`));
@@ -82783,7 +82988,12 @@ class BobLedgerToolsBankSetupMixin {
     if (!root || !bankSetupIsHubPath(sourcePath)) {
       return null;
     }
-    const model = this.bankSetupModelFor(sourcePath);
+    let model = null;
+    try {
+      model = this.bankSetupModelFor(sourcePath);
+    } catch (error) {
+      model = null;
+    }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(root) : null)
       || (typeof document !== "undefined" ? document : null);
     const old = Array.from(root.querySelectorAll?.(`.${BANK_SETUP_CLASS}`) || [])
@@ -82793,6 +83003,7 @@ class BobLedgerToolsBankSetupMixin {
       ? active.getAttribute?.("data-bank-setup-focus") : "";
     if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
       && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
+      this.bankSetupOwnKeys(scope);
       return old;
     }
     this.bankSetupRemoveReading(root, scope, sourcePath);
@@ -82804,20 +83015,31 @@ class BobLedgerToolsBankSetupMixin {
       this.bankSetupSurfaces?.add?.(scope);
     } catch (error) {}
     const options = this.bankSetupOptions(sourcePath, model);
-    const header = this.bankSetupBuildReading(model, options, doc);
+    let header = null;
+    try {
+      header = this.bankSetupBuildReading(model, options, doc);
+    } catch (error) {
+      header = null;
+    }
     if (!header) {
+      this.bankSetupReleaseKeys(scope);
       try {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       } catch (error) {}
       return null;
     }
     const anchor = this.bankSetupReadingAnchor(root);
-    if (anchor?.parentNode?.insertBefore) {
-      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-    } else if (root.insertBefore) {
-      root.insertBefore(header, root.firstChild || null);
-    } else {
-      root.prepend?.(header);
+    try {
+      if (anchor?.parentNode?.insertBefore) {
+        anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      } else if (root.insertBefore) {
+        root.insertBefore(header, root.firstChild || null);
+      } else {
+        root.prepend?.(header);
+      }
+    } catch (error) {
+      this.bankSetupReleaseKeys(scope);
+      return null;
     }
     if (focusKey) {
       try {
@@ -82825,6 +83047,7 @@ class BobLedgerToolsBankSetupMixin {
         next?.focus?.({ preventScroll: true });
       } catch (error) {}
     }
+    this.bankSetupOwnKeys(scope);
     return header;
   }
 
@@ -83025,6 +83248,10 @@ class BobLedgerToolsBankSetupMixin {
     const model = this.bankSetupModelFor(livePath);
     this.bankSetupSetEditorScope(view, Boolean(model));
     if (!model) {
+      try {
+        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
+        this.bankSetupReleaseKeys(scope);
+      } catch (_) {}
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
@@ -83032,8 +83259,16 @@ class BobLedgerToolsBankSetupMixin {
     const options = this.bankSetupOptions(livePath, model);
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
+      try {
+        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
+        this.bankSetupReleaseKeys(scope);
+      } catch (_) {}
       return Decoration.none;
     }
+    try {
+      const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
+      this.bankSetupOwnKeys(scope);
+    } catch (_) {}
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const widget = new class extends WidgetType {
@@ -83161,6 +83396,7 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupCleanEditor(view) {
     try {
       const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
+      this.bankSetupReleaseKeys(scope);
       scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.delete(scope);
       this.bankSetupEditorScopes?.delete(view);
@@ -88898,6 +89134,13 @@ function schemaDoubleEqualsVimSnapshot(cm) {
   };
 }
 
+const PROPERTY_CARD_BUILTIN_KINDS = ["bank", "album", "record"];
+const propertyCardExtraKinds = [];
+
+function propertyCardGateKinds() {
+  return [...PROPERTY_CARD_BUILTIN_KINDS, ...propertyCardExtraKinds];
+}
+
 function schemaDoubleEqualsGate(input) {
   const snap = (input && input.vim) || { readable: false };
   if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
@@ -88918,7 +89161,10 @@ function schemaDoubleEqualsGate(input) {
   }
   if (snap.countPending) return { act: false, reason: "counted" };
   if (snap.registerPending) return { act: false, reason: "register" };
-  if (input.target !== "album" && input.target !== "bank" && input.target !== "record") {
+  const allowed = Array.isArray(input.allowedKinds) && input.allowedKinds.length > 0
+    ? input.allowedKinds
+    : propertyCardGateKinds();
+  if (!allowed.includes(input.target)) {
     return { act: false, reason: "not-schema-note" };
   }
   if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
@@ -89027,10 +89273,121 @@ function schemaDoubleEqualsCanHandleKey() {
   }
 }
 
+function propertyCardBuiltinEntry(plugin, kind) {
+  if (kind === "bank") {
+    return {
+      kind: "bank",
+      match({ path } = {}) {
+        try {
+          return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
+        } catch (_) {
+          return false;
+        }
+      },
+      open({ path } = {}) {
+        void plugin.openBankSetupCard({ sourcePath: path });
+      },
+    };
+  }
+  if (kind === "album") {
+    return {
+      kind: "album",
+      match({ frontmatter } = {}) {
+        try {
+          return typeof albumSchemaEntryKindOf === "function"
+            && albumSchemaEntryKindOf(frontmatter) === "album";
+        } catch (_) {
+          return false;
+        }
+      },
+      open({ path } = {}) {
+        void plugin.openAlbumSchemaEntry({ filePath: path });
+      },
+    };
+  }
+  return {
+    kind: "record",
+    match({ frontmatter } = {}) {
+      try {
+        return typeof recordSheetIsCanonicalRecordType === "function"
+          && recordSheetIsCanonicalRecordType(frontmatter) === true;
+      } catch (_) {
+        return false;
+      }
+    },
+    open({ path } = {}) {
+      void plugin.openRecordCard({ filePath: path });
+    },
+  };
+}
+
 class BobLedgerToolsSchemaDoubleEqualsMixin {
+  propertyCardRegistry() {
+    if (!Array.isArray(this.propertyCardRegistryEntries)) this.propertyCardRegistryEntries = [];
+    return this.propertyCardRegistryEntries;
+  }
+
+  propertyCardKinds() {
+    return this.propertyCardRegistry().map((entry) => entry.kind);
+  }
+
+  registerPropertyCard(entry) {
+    const kind = entry && entry.kind;
+    const match = entry && entry.match;
+    const open = entry && entry.open;
+    if (typeof kind !== "string" || kind.length === 0) return false;
+    if (typeof match !== "function" || typeof open !== "function") return false;
+    const registry = this.propertyCardRegistry();
+    if (registry.some((item) => item.kind === kind)) return false;
+    registry.push({ kind, match, open });
+    if (!PROPERTY_CARD_BUILTIN_KINDS.includes(kind) && !propertyCardExtraKinds.includes(kind)) {
+      propertyCardExtraKinds.push(kind);
+    }
+    return true;
+  }
+
+  unregisterPropertyCard(kind) {
+    const registry = this.propertyCardRegistry();
+    const index = registry.findIndex((item) => item.kind === kind);
+    if (index < 0) return false;
+    registry.splice(index, 1);
+    const extraIndex = propertyCardExtraKinds.indexOf(kind);
+    if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
+    return true;
+  }
+
+  ensurePropertyCardBuiltins() {
+    const registry = this.propertyCardRegistry();
+    for (const kind of PROPERTY_CARD_BUILTIN_KINDS) {
+      if (!registry.some((item) => item.kind === kind)) {
+        registry.push(propertyCardBuiltinEntry(this, kind));
+      }
+    }
+    const order = new Map(PROPERTY_CARD_BUILTIN_KINDS.map((kind, index) => [kind, index]));
+    registry.sort((a, b) => {
+      const ai = order.has(a.kind) ? order.get(a.kind) : PROPERTY_CARD_BUILTIN_KINDS.length;
+      const bi = order.has(b.kind) ? order.get(b.kind) : PROPERTY_CARD_BUILTIN_KINDS.length;
+      return ai - bi;
+    });
+    return registry;
+  }
+
+  resolvePropertyCard({ path, frontmatter } = {}) {
+    const registry = this.propertyCardRegistry();
+    for (const entry of registry) {
+      try {
+        if (entry.match({ path, frontmatter }) === true) return entry;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
   setupSchemaDoubleEquals() {
     if (this.schemaDoubleEqualsActive) return;
     this.schemaDoubleEqualsActive = true;
+    this.ensurePropertyCardBuiltins();
     this.handledSchemaDoubleEqualsEvents = new WeakSet();
     const keydownHandler = (event) => this.handleSchemaDoubleEqualsKeydown(event);
     const windowObject = typeof window === "undefined" ? null : window;
@@ -89053,6 +89410,14 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
 
   teardownSchemaDoubleEquals() {
     this.schemaDoubleEqualsActive = false;
+    try {
+      const registry = this.propertyCardRegistry();
+      for (const entry of [...registry]) {
+        const extraIndex = propertyCardExtraKinds.indexOf(entry.kind);
+        if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
+      }
+    } catch (_) {}
+    this.propertyCardRegistryEntries = [];
   }
 
   handleSchemaDoubleEqualsKeydown(event) {
@@ -89078,7 +89443,32 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
-    const target = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
+    let entry = null;
+    try {
+      if (typeof this.resolvePropertyCard === "function") {
+        entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+      }
+    } catch (_) {
+      entry = null;
+    }
+    if (!entry) {
+      try {
+        const fallback = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
+        if (fallback && typeof this.ensurePropertyCardBuiltins === "function") {
+          this.ensurePropertyCardBuiltins();
+          entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+        }
+      } catch (_) {
+        entry = null;
+      }
+    }
+    const target = entry ? entry.kind : null;
+    let allowedKinds = null;
+    try {
+      allowedKinds = typeof this.propertyCardKinds === "function" ? this.propertyCardKinds() : null;
+    } catch (_) {
+      allowedKinds = null;
+    }
     const gate = schemaDoubleEqualsGate({
       key: event && event.key,
       ctrlKey: Boolean(event && event.ctrlKey),
@@ -89092,6 +89482,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       livePreview: schemaDoubleEqualsLivePreview(view, cm),
       vim: schemaDoubleEqualsVimSnapshot(cm),
       target,
+      allowedKinds,
       canHandleKey: schemaDoubleEqualsCanHandleKey(),
     });
     if (!gate.act) return;
@@ -89109,12 +89500,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
     } catch (_) {}
     try {
-      if (target === "album") {
-        void this.openAlbumSchemaEntry({ filePath });
-      } else if (target === "bank") {
-        void this.openBankSetupCard({ sourcePath: filePath });
-      } else if (target === "record") {
-        void this.openRecordCard({ filePath });
+      if (entry) {
+        void entry.open({ path: filePath, frontmatter });
       }
     } catch (_) {}
   }
@@ -94609,6 +94996,14 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderReleaseKeys(scope) {
+    try { propertyCardReleaseScope(scope); } catch (_) {}
+  }
+
+  albumHeaderOwnKeys(scope) {
+    try { return propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()); } catch (_) { return null; }
+  }
+
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
@@ -94617,6 +95012,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (sourcePath && ownedPath && ownedPath !== albumHeaderPath(sourcePath)) continue;
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
+    this.albumHeaderReleaseKeys(scope);
     const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
       item.surface === root && item.path !== sourcePath);
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
@@ -94717,7 +95113,12 @@ class BobLedgerToolsAlbumHeaderMixin {
     // Remove old reading chrome stranded in editor callout chunks, while
     // leaving the legitimate CodeMirror decoration and other sources alone.
     this.albumHeaderRemoveStrays(root, sourcePath);
-    const model = this.albumHeaderModelFor(sourcePath, state);
+    let model = null;
+    try {
+      model = this.albumHeaderModelFor(sourcePath, state);
+    } catch (_) {
+      model = null;
+    }
     const doc = notebookDomDoc(root) || (typeof document !== "undefined" ? document : null);
     const old = Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])
       .find((node) => this.albumHeaderNodeBelongs(node, root));
@@ -94728,19 +95129,32 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!model) return null;
 
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    const header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
+    let header = null;
+    try {
+      header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
+    } catch (_) {
+      header = null;
+    }
     if (!header) {
+      this.albumHeaderReleaseKeys(scope);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       return null;
     }
     const anchor = this.albumHeaderReadingAnchor(root);
-    if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-    else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
-    else root.prepend?.(header);
+    try {
+      if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
+      else root.prepend?.(header);
+    } catch (_) {
+      this.albumHeaderReleaseKeys(scope);
+      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
+      return null;
+    }
     if (focusKey) {
       const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
+    this.albumHeaderOwnKeys(scope);
     return header;
   }
 
@@ -94844,17 +95258,37 @@ class BobLedgerToolsAlbumHeaderMixin {
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
         return Decoration.none;
       }
       const text = view.state.doc.toString();
       const state = this.albumHeaderState();
       const model = this.albumHeaderModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(model));
-      if (!model) return Decoration.none;
+      if (!model) {
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
+        return Decoration.none;
+      }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const options = this.albumHeaderOptions(path, state, model);
       const header = this.albumHeaderBuildEl(model, options, doc);
-      if (!header) return Decoration.none;
+      if (!header) {
+        try {
+          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+          this.albumHeaderReleaseKeys(scope);
+        } catch (_) {}
+        return Decoration.none;
+      }
+      try {
+        const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+        this.albumHeaderOwnKeys(scope);
+      } catch (_) {}
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -94913,6 +95347,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderCleanEditor(view) {
     try {
       const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
+      this.albumHeaderReleaseKeys(scope);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       this.albumHeaderEditorScopes?.delete(view);
     } catch (_) {}
@@ -102849,37 +103284,39 @@ function recordSheetNativeProperties(scope) {
 
 class BobLedgerToolsRecordSheetPropertiesMixin {
   recordSheetClearNativeProperties(scope) {
+    try {
+      if (typeof propertyCardReleaseScope === "function") propertyCardReleaseScope(scope);
+    } catch (_) {}
     const state = this.recordSheetNativePropertiesScopes?.get(scope);
     if (!state) return;
-    state.observer?.disconnect();
-    for (const row of state.rows) row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS);
+    try { state.release?.(); } catch (_) {}
+    try { state.observer?.disconnect(); } catch (_) {}
+    for (const row of state.rows || []) {
+      try { row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS); } catch (_) {}
+    }
     this.recordSheetNativePropertiesScopes.delete(scope);
   }
 
   recordSheetSetNativeProperties(scope, model) {
     if (!scope) return;
+    if (!this.recordSheetNativePropertiesScopes) this.recordSheetNativePropertiesScopes = new Map();
     if (model?.hideEligible !== true || recordSheetScopeIsEmbed(scope)) {
       this.recordSheetClearNativeProperties(scope);
       return;
     }
-    if (!this.recordSheetNativePropertiesScopes) this.recordSheetNativePropertiesScopes = new Map();
-    let state = this.recordSheetNativePropertiesScopes.get(scope);
-    if (!state) {
-      state = { rows: new Set(), keys: new Set(), observer: null };
-      this.recordSheetNativePropertiesScopes.set(scope, state);
-      // Obsidian can replace Properties after the sheet paints (notably on tab
-      // return). Observe DOM replacement and key edits, never our class changes.
-      const Observer = scope.ownerDocument?.defaultView?.MutationObserver;
-      if (Observer) {
-        state.observer = new Observer(() => this.recordSheetPaintNativeProperties(scope, state));
-        state.observer.observe(scope, {
-          childList: true, subtree: true, attributes: true, attributeFilter: ["data-property-key"],
-        });
-      }
+    const keys = new Set([...(model.rows || []), ...(model.ghosts || [])].map((row) => row.key));
+    if (model.coverage && model.coverage.title === "sheet") keys.add("title");
+    let release = null;
+    try {
+      if (typeof propertyCardOwnKeys === "function") release = propertyCardOwnKeys(scope, keys);
+    } catch (_) {
+      release = null;
     }
-    state.keys = new Set([...model.rows, ...model.ghosts].map((row) => row.key));
-    if (model.coverage.title === "sheet") state.keys.add("title");
-    this.recordSheetPaintNativeProperties(scope, state);
+    if (release == null) {
+      this.recordSheetClearNativeProperties(scope);
+      return;
+    }
+    this.recordSheetNativePropertiesScopes.set(scope, { rows: new Set(), keys, observer: null, release });
   }
 
   recordSheetPaintNativeProperties(scope, state) {
@@ -154022,3 +154459,18 @@ try {
 } catch (_) {
   // Test exports are best-effort.
 }
+// ---- src/374-exports-property-card.js ----
+// Test-facing exports for the shared property-card kit (ownership phase).
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_OWNED_PROPERTY_CLASS,
+      propertyCardScopeIsEmbed,
+      propertyCardNativeContainer,
+      propertyCardOwnKeys,
+      propertyCardReleaseScope,
+      PROPERTY_CARD_BUILTIN_KINDS,
+      propertyCardGateKinds,
+    });
+  }
+} catch (_) {}

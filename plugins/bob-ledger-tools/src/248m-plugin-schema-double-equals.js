@@ -50,6 +50,13 @@ function schemaDoubleEqualsVimSnapshot(cm) {
   };
 }
 
+const PROPERTY_CARD_BUILTIN_KINDS = ["bank", "album", "record"];
+const propertyCardExtraKinds = [];
+
+function propertyCardGateKinds() {
+  return [...PROPERTY_CARD_BUILTIN_KINDS, ...propertyCardExtraKinds];
+}
+
 function schemaDoubleEqualsGate(input) {
   const snap = (input && input.vim) || { readable: false };
   if (!input || input.key !== "=") return { act: false, reason: "not-equals" };
@@ -70,7 +77,10 @@ function schemaDoubleEqualsGate(input) {
   }
   if (snap.countPending) return { act: false, reason: "counted" };
   if (snap.registerPending) return { act: false, reason: "register" };
-  if (input.target !== "album" && input.target !== "bank" && input.target !== "record") {
+  const allowed = Array.isArray(input.allowedKinds) && input.allowedKinds.length > 0
+    ? input.allowedKinds
+    : propertyCardGateKinds();
+  if (!allowed.includes(input.target)) {
     return { act: false, reason: "not-schema-note" };
   }
   if (!input.canHandleKey) return { act: false, reason: "no-handle-key" };
@@ -179,10 +189,121 @@ function schemaDoubleEqualsCanHandleKey() {
   }
 }
 
+function propertyCardBuiltinEntry(plugin, kind) {
+  if (kind === "bank") {
+    return {
+      kind: "bank",
+      match({ path } = {}) {
+        try {
+          return typeof bankSetupIsHubPath === "function" && bankSetupIsHubPath(path) === true;
+        } catch (_) {
+          return false;
+        }
+      },
+      open({ path } = {}) {
+        void plugin.openBankSetupCard({ sourcePath: path });
+      },
+    };
+  }
+  if (kind === "album") {
+    return {
+      kind: "album",
+      match({ frontmatter } = {}) {
+        try {
+          return typeof albumSchemaEntryKindOf === "function"
+            && albumSchemaEntryKindOf(frontmatter) === "album";
+        } catch (_) {
+          return false;
+        }
+      },
+      open({ path } = {}) {
+        void plugin.openAlbumSchemaEntry({ filePath: path });
+      },
+    };
+  }
+  return {
+    kind: "record",
+    match({ frontmatter } = {}) {
+      try {
+        return typeof recordSheetIsCanonicalRecordType === "function"
+          && recordSheetIsCanonicalRecordType(frontmatter) === true;
+      } catch (_) {
+        return false;
+      }
+    },
+    open({ path } = {}) {
+      void plugin.openRecordCard({ filePath: path });
+    },
+  };
+}
+
 class BobLedgerToolsSchemaDoubleEqualsMixin {
+  propertyCardRegistry() {
+    if (!Array.isArray(this.propertyCardRegistryEntries)) this.propertyCardRegistryEntries = [];
+    return this.propertyCardRegistryEntries;
+  }
+
+  propertyCardKinds() {
+    return this.propertyCardRegistry().map((entry) => entry.kind);
+  }
+
+  registerPropertyCard(entry) {
+    const kind = entry && entry.kind;
+    const match = entry && entry.match;
+    const open = entry && entry.open;
+    if (typeof kind !== "string" || kind.length === 0) return false;
+    if (typeof match !== "function" || typeof open !== "function") return false;
+    const registry = this.propertyCardRegistry();
+    if (registry.some((item) => item.kind === kind)) return false;
+    registry.push({ kind, match, open });
+    if (!PROPERTY_CARD_BUILTIN_KINDS.includes(kind) && !propertyCardExtraKinds.includes(kind)) {
+      propertyCardExtraKinds.push(kind);
+    }
+    return true;
+  }
+
+  unregisterPropertyCard(kind) {
+    const registry = this.propertyCardRegistry();
+    const index = registry.findIndex((item) => item.kind === kind);
+    if (index < 0) return false;
+    registry.splice(index, 1);
+    const extraIndex = propertyCardExtraKinds.indexOf(kind);
+    if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
+    return true;
+  }
+
+  ensurePropertyCardBuiltins() {
+    const registry = this.propertyCardRegistry();
+    for (const kind of PROPERTY_CARD_BUILTIN_KINDS) {
+      if (!registry.some((item) => item.kind === kind)) {
+        registry.push(propertyCardBuiltinEntry(this, kind));
+      }
+    }
+    const order = new Map(PROPERTY_CARD_BUILTIN_KINDS.map((kind, index) => [kind, index]));
+    registry.sort((a, b) => {
+      const ai = order.has(a.kind) ? order.get(a.kind) : PROPERTY_CARD_BUILTIN_KINDS.length;
+      const bi = order.has(b.kind) ? order.get(b.kind) : PROPERTY_CARD_BUILTIN_KINDS.length;
+      return ai - bi;
+    });
+    return registry;
+  }
+
+  resolvePropertyCard({ path, frontmatter } = {}) {
+    const registry = this.propertyCardRegistry();
+    for (const entry of registry) {
+      try {
+        if (entry.match({ path, frontmatter }) === true) return entry;
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
   setupSchemaDoubleEquals() {
     if (this.schemaDoubleEqualsActive) return;
     this.schemaDoubleEqualsActive = true;
+    this.ensurePropertyCardBuiltins();
     this.handledSchemaDoubleEqualsEvents = new WeakSet();
     const keydownHandler = (event) => this.handleSchemaDoubleEqualsKeydown(event);
     const windowObject = typeof window === "undefined" ? null : window;
@@ -205,6 +326,14 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
 
   teardownSchemaDoubleEquals() {
     this.schemaDoubleEqualsActive = false;
+    try {
+      const registry = this.propertyCardRegistry();
+      for (const entry of [...registry]) {
+        const extraIndex = propertyCardExtraKinds.indexOf(entry.kind);
+        if (extraIndex >= 0) propertyCardExtraKinds.splice(extraIndex, 1);
+      }
+    } catch (_) {}
+    this.propertyCardRegistryEntries = [];
   }
 
   handleSchemaDoubleEqualsKeydown(event) {
@@ -230,7 +359,32 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
         frontmatter = cache.frontmatter;
       }
     } catch (_) {}
-    const target = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
+    let entry = null;
+    try {
+      if (typeof this.resolvePropertyCard === "function") {
+        entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+      }
+    } catch (_) {
+      entry = null;
+    }
+    if (!entry) {
+      try {
+        const fallback = schemaDoubleEqualsTargetKind({ path: filePath, frontmatter });
+        if (fallback && typeof this.ensurePropertyCardBuiltins === "function") {
+          this.ensurePropertyCardBuiltins();
+          entry = this.resolvePropertyCard({ path: filePath, frontmatter });
+        }
+      } catch (_) {
+        entry = null;
+      }
+    }
+    const target = entry ? entry.kind : null;
+    let allowedKinds = null;
+    try {
+      allowedKinds = typeof this.propertyCardKinds === "function" ? this.propertyCardKinds() : null;
+    } catch (_) {
+      allowedKinds = null;
+    }
     const gate = schemaDoubleEqualsGate({
       key: event && event.key,
       ctrlKey: Boolean(event && event.ctrlKey),
@@ -244,6 +398,7 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       livePreview: schemaDoubleEqualsLivePreview(view, cm),
       vim: schemaDoubleEqualsVimSnapshot(cm),
       target,
+      allowedKinds,
       canHandleKey: schemaDoubleEqualsCanHandleKey(),
     });
     if (!gate.act) return;
@@ -261,12 +416,8 @@ class BobLedgerToolsSchemaDoubleEqualsMixin {
       window.CodeMirrorAdapter.Vim.handleKey(cm, "<Esc>", "mapping");
     } catch (_) {}
     try {
-      if (target === "album") {
-        void this.openAlbumSchemaEntry({ filePath });
-      } else if (target === "bank") {
-        void this.openBankSetupCard({ sourcePath: filePath });
-      } else if (target === "record") {
-        void this.openRecordCard({ filePath });
+      if (entry) {
+        void entry.open({ path: filePath, frontmatter });
       }
     } catch (_) {}
   }

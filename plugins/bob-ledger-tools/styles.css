@@ -8520,8 +8520,11 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 }
 
 /* Album header chrome is report-backed and view-only. The record property
-   stays editable in Source mode and remains scoped to an album surface. */
-.bob-album-header-surface .metadata-property[data-property-key="record"] {
+   stays editable in Source mode and remains scoped to an album surface.
+   Owned rows hide only after a successful card mount tags them; the
+   container, unrelated keys, embeds, and hover previews keep native fields. */
+.cm-editor.bob-album-header-surface > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-property-card-owned-property,
+.markdown-preview-view.bob-album-header-surface > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-property-card-owned-property {
   display: none !important;
 }
 .bob-album-header {
@@ -9847,11 +9850,14 @@ li.bob-bank-mark-waiting[data-root-hue="yellow"] { --bob-bank-accent: var(--bob-
 li.bob-bank-mark-acked { opacity: 0.72; }
 .bob-bank-math-dollar { display: inline; }
 .bob-bank-math-protected { display: inline; font-style: normal; }
-.bob-bank-setup-surface .metadata-property[data-property-key="bank"] { display: none !important; }
+.cm-editor.bob-bank-setup-surface > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-property-card-owned-property,
+.markdown-preview-view.bob-bank-setup-surface > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-property-card-owned-property { display: none !important; }
 
 /* Bank Setup header: report-backed and view-only. The bank property stays
    editable in Source mode and remains scoped to a setup surface: a bank
-   property on any other note is never hidden. */
+   property on any other note is never hidden. Owned rows hide only after a
+   successful card mount tags them; embeds and hover previews keep native
+   fields. */
 .bob-bank-setup {
   --bob-setup-accent: var(--bob-bank-accent, var(--interactive-accent));
   box-sizing: border-box;

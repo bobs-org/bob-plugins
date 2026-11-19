@@ -105,6 +105,7 @@ class BobLedgerToolsBankSetupMixin {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       } catch (error) {}
     }
+    propertyCardSlotReleaseAll(this.bankSetupKeySlots);
     this.bankSetupSurfaces?.clear();
     this.bankSetupReading?.clear();
     this.bankSetupEditors?.clear();
@@ -371,12 +372,13 @@ class BobLedgerToolsBankSetupMixin {
     }
   }
 
-  bankSetupReleaseKeys(scope) {
-    try { propertyCardReleaseScope(scope); } catch (error) {}
+  bankSetupReleaseKeys(scope, sourcePath = "") {
+    try { propertyCardSlotRelease(this.bankSetupKeySlots, scope, bankSetupHubPath(sourcePath)); } catch (error) {}
   }
 
-  bankSetupOwnKeys(scope) {
-    try { return propertyCardOwnBankKeys(scope, this.bankSetupDesktop?.()); } catch (_) { return null; }
+  bankSetupOwnKeys(scope, sourcePath = "") {
+    if (!(this.bankSetupKeySlots instanceof Map)) this.bankSetupKeySlots = new Map();
+    try { return propertyCardSlotOwn(this.bankSetupKeySlots, scope, bankSetupHubPath(sourcePath), propertyCardOwnBankKeys(scope, this.bankSetupDesktop?.())); } catch (_) { return null; }
   }
 
   bankSetupRemoveReading(root, scope = root, sourcePath = "") {
@@ -399,7 +401,7 @@ class BobLedgerToolsBankSetupMixin {
         } catch (childError) {}
       }
     }
-    this.bankSetupReleaseKeys(scope);
+    this.bankSetupReleaseKeys(scope, sourcePath);
     const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
       item.surface === root && item.scope && item.scope.classList
       && item.surface.querySelector?.(`.${BANK_SETUP_CLASS}`));
@@ -466,7 +468,7 @@ class BobLedgerToolsBankSetupMixin {
       ? active.getAttribute?.("data-bank-setup-focus") : "";
     if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
       && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
-      this.bankSetupOwnKeys(scope);
+      this.bankSetupOwnKeys(scope, sourcePath);
       return old;
     }
     this.bankSetupRemoveReading(root, scope, sourcePath);
@@ -510,7 +512,7 @@ class BobLedgerToolsBankSetupMixin {
         next?.focus?.({ preventScroll: true });
       } catch (error) {}
     }
-    this.bankSetupOwnKeys(scope);
+    this.bankSetupOwnKeys(scope, sourcePath);
     return header;
   }
 
@@ -711,10 +713,7 @@ class BobLedgerToolsBankSetupMixin {
     const model = this.bankSetupModelFor(livePath);
     this.bankSetupSetEditorScope(view, Boolean(model));
     if (!model) {
-      try {
-        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-        this.bankSetupReleaseKeys(scope);
-      } catch (_) {}
+      this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
@@ -722,16 +721,12 @@ class BobLedgerToolsBankSetupMixin {
     const options = this.bankSetupOptions(livePath, model);
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
-      try {
-        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-        this.bankSetupReleaseKeys(scope);
-      } catch (_) {}
+      this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
-    try {
-      const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-      this.bankSetupOwnKeys(scope);
-    } catch (_) {}
+    // Native Properties live under the CodeMirror editor (view.dom), not the
+    // .markdown-source-view that carries the surface class.
+    this.bankSetupOwnKeys(view?.dom, livePath);
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const widget = new class extends WidgetType {
@@ -859,7 +854,7 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupCleanEditor(view) {
     try {
       const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-      this.bankSetupReleaseKeys(scope);
+      this.bankSetupReleaseKeys(view?.dom);
       scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.delete(scope);
       this.bankSetupEditorScopes?.delete(view);

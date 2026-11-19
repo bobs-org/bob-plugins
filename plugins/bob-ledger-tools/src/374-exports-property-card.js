@@ -7,6 +7,9 @@ try {
       propertyCardNativeContainer,
       propertyCardOwnKeys,
       propertyCardReleaseScope,
+      propertyCardSlotOwn,
+      propertyCardSlotRelease,
+      propertyCardSlotReleaseAll,
       PROPERTY_CARD_BUILTIN_KINDS,
       propertyCardGateKinds,
     });

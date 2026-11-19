@@ -306,3 +306,124 @@ test("failed mounts roll back and teardown clears every adapter", () => {
   plugin.teardownRecordSheet?.();
   assert.equal(row.classList.contains(LEGACY), false);
 });
+
+test("a pane's stale binding for an earlier note keeps the current card's rows owned", () => {
+  const doc = makeDoc();
+  const plugin = makePlugin();
+  const { scope, container } = readingScope(doc);
+  const row = addRow(doc, container, "record");
+  // One pane shows an earlier album, then a later one: same native view scope.
+  plugin.albumHeaderOwnKeys(scope, "albums/earlier.md");
+  plugin.albumHeaderOwnKeys(scope, "albums/current.md");
+  plugin.albumHeaderReleaseKeys(scope, "albums/earlier.md");
+  assert.equal(row.classList.contains(OWNED), true, "stale path leaves the current mount owned");
+  plugin.albumHeaderReleaseKeys(scope, "albums/current.md");
+  assert.equal(row.classList.contains(OWNED), false);
+
+  const bank = readingScope(doc);
+  const bankRow = addRow(doc, bank.container, "bank");
+  plugin.bankSetupOwnKeys(bank.scope, "bank/setup.md");
+  plugin.bankSetupReleaseKeys(bank.scope, "elsewhere.md");
+  assert.equal(bankRow.classList.contains(OWNED), true);
+  plugin.bankSetupReleaseKeys(bank.scope, "bank/setup.md");
+  assert.equal(bankRow.classList.contains(OWNED), false);
+});
+
+test("one card's teardown never clears another card's newer owner of the scope", () => {
+  const doc = makeDoc();
+  const plugin = makePlugin();
+  const { scope, container } = editorScope(doc);
+  const recordKey = addRow(doc, container, "record");
+  const status = addRow(doc, container, "status");
+  const recordModel = { hideEligible: true, rows: [{ key: "status" }], ghosts: [], coverage: { title: "body" } };
+  // The editor navigates from an album to a record, then the album's plugin
+  // releases its old mount: the record keeps its rows.
+  plugin.albumHeaderOwnKeys(scope, "albums/eat.md");
+  plugin.recordSheetSetNativeProperties(scope, recordModel);
+  assert.equal(status.classList.contains(LEGACY), true);
+  assert.equal(recordKey.classList.contains(OWNED), false, "new owner's keys replace the old set");
+  plugin.albumHeaderReleaseKeys(scope);
+  plugin.bankSetupReleaseKeys(scope);
+  assert.equal(status.classList.contains(LEGACY), true);
+  // And back: the record's clear leaves the album's newer mount alone.
+  plugin.albumHeaderOwnKeys(scope, "albums/eat.md");
+  plugin.recordSheetSetNativeProperties(scope, null);
+  assert.equal(recordKey.classList.contains(OWNED), true);
+  assert.equal(status.classList.contains(OWNED), false);
+  plugin.albumHeaderReleaseKeys(scope);
+  assert.equal(recordKey.classList.contains(OWNED), false);
+});
+
+test("plugin teardown releases every album and bank mount", () => {
+  const doc = makeDoc();
+  const plugin = makePlugin();
+  const album = editorScope(doc);
+  const albumRow = addRow(doc, album.container, "record");
+  const bank = readingScope(doc);
+  const bankRow = addRow(doc, bank.container, "bank");
+  plugin.albumHeaderOwnKeys(album.scope, "albums/eat.md");
+  plugin.bankSetupOwnKeys(bank.scope, "bank/setup.md");
+  plugin.teardownAlbumHeader();
+  plugin.teardownBankSetup();
+  assert.equal(albumRow.classList.contains(OWNED), false);
+  assert.equal(bankRow.classList.contains(OWNED), false);
+  assert.equal(plugin.albumHeaderKeySlots.size, 0);
+  assert.equal(plugin.bankSetupKeySlots.size, 0);
+});
+
+function livePreviewEditor(doc) {
+  // Obsidian nests the CodeMirror editor under the .markdown-source-view that
+  // carries album and bank surface classes; native Properties sit below it.
+  const source = doc.createElement("div");
+  source.setAttribute("class", "markdown-source-view is-live-preview");
+  const { scope, container } = editorScope(doc);
+  source.appendChild(scope);
+  source.ownerDocument = doc;
+  return { source, editor: scope, container, view: { dom: scope, state: { doc: {
+    toString: () => "---\n---\n# Note\n", length: 15, lines: 4,
+    line: (number) => ({ number, from: 0, to: 0, text: "" }),
+  } } } };
+}
+
+test("Live Preview album and bank cards own rows under the CodeMirror editor", () => {
+  const doc = makeDoc();
+  const plugin = makePlugin();
+  const album = livePreviewEditor(doc);
+  const recordRow = addRow(doc, album.container, "record");
+  const albumOther = addRow(doc, album.container, "summary");
+  plugin.albumHeaderLivePath = () => "albums/eat.md";
+  plugin.albumHeaderState = () => null;
+  plugin.albumHeaderModelFor = () => ({ path: "albums/eat.md" });
+  plugin.albumHeaderOptions = () => ({});
+  plugin.albumHeaderBuildEl = () => doc.createElement("div");
+  plugin.buildAlbumHeaderDecorations(album.view);
+  assert.equal(album.source.classList.contains("bob-album-header-surface"), true);
+  assert.equal(recordRow.classList.contains(OWNED), true);
+  assert.equal(albumOther.classList.contains(OWNED), false);
+  plugin.albumHeaderCleanEditor(album.view);
+  assert.equal(recordRow.classList.contains(OWNED), false);
+
+  const bank = livePreviewEditor(doc);
+  const bankRow = addRow(doc, bank.container, "bank");
+  plugin.bankSetupLivePath = () => "bank.md";
+  plugin.bankSetupModelFor = () => ({ signature: "s" });
+  plugin.bankSetupOptions = () => ({ sourcePath: "bank.md" });
+  plugin.bankSetupBuildReading = () => doc.createElement("div");
+  plugin.bankSetupLiveDecorations(bank.view, "bank.md");
+  assert.equal(bankRow.classList.contains(OWNED), true);
+  plugin.bankSetupModelFor = () => null;
+  plugin.bankSetupLiveDecorations(bank.view, "bank.md");
+  assert.equal(bankRow.classList.contains(OWNED), false, "a failed mount restores the native row");
+});
+
+test("one bounded stylesheet rule hides owned rows without a species surface gate", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const css = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const owned = css.split("\n").filter((line) => line.includes(".metadata-property.bob-property-card-owned-property"));
+  assert.deepEqual(owned.map((line) => line.replace(/\s*[,{]\s*$/, "")), [
+    ".cm-editor > .cm-scroller > .cm-sizer > .metadata-container .metadata-property.bob-property-card-owned-property",
+    ".markdown-preview-view > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-property-card-owned-property",
+  ]);
+  assert.equal(/data-property-key="(record|bank)"\]\s*\{\s*display:\s*none/.test(css), false, "no unbounded key hiding");
+});

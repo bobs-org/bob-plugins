@@ -79672,6 +79672,38 @@ function propertyCardOwnKeys(scope, keys) {
   };
 }
 
+// Adapter mount slots: each adapter keeps one Map of scope -> its current
+// mount's release handle and normalized source path. Panes reuse one native
+// view scope across notes, so a stale binding for an earlier path must not
+// release the mount that now owns the scope, and one adapter's teardown must
+// never clear another adapter's newer owner. Releases therefore go through
+// the generation-bound handle, never the scope-wide propertyCardReleaseScope.
+function propertyCardSlotOwn(slots, scope, path, release) {
+  if (!(slots instanceof Map) || !scope) return null;
+  if (typeof release !== "function") {
+    propertyCardSlotRelease(slots, scope);
+    return null;
+  }
+  slots.set(scope, { path: String(path || ""), release });
+  return release;
+}
+
+// Release the adapter's mount on scope. A nonempty path releases only when
+// that path owns the slot; an empty path releases unconditionally.
+function propertyCardSlotRelease(slots, scope, path = "") {
+  const entry = slots instanceof Map ? slots.get(scope) : null;
+  if (!entry) return false;
+  if (path && entry.path && entry.path !== String(path)) return false;
+  slots.delete(scope);
+  try { entry.release(); } catch (_) {}
+  return true;
+}
+
+function propertyCardSlotReleaseAll(slots) {
+  if (!(slots instanceof Map)) return;
+  for (const scope of Array.from(slots.keys())) propertyCardSlotRelease(slots, scope);
+}
+
 function propertyCardOwnAlbumKeys(scope, desktop) {
   try {
     if (desktop !== true) {
@@ -82642,6 +82674,7 @@ class BobLedgerToolsBankSetupMixin {
         scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       } catch (error) {}
     }
+    propertyCardSlotReleaseAll(this.bankSetupKeySlots);
     this.bankSetupSurfaces?.clear();
     this.bankSetupReading?.clear();
     this.bankSetupEditors?.clear();
@@ -82908,12 +82941,13 @@ class BobLedgerToolsBankSetupMixin {
     }
   }
 
-  bankSetupReleaseKeys(scope) {
-    try { propertyCardReleaseScope(scope); } catch (error) {}
+  bankSetupReleaseKeys(scope, sourcePath = "") {
+    try { propertyCardSlotRelease(this.bankSetupKeySlots, scope, bankSetupHubPath(sourcePath)); } catch (error) {}
   }
 
-  bankSetupOwnKeys(scope) {
-    try { return propertyCardOwnBankKeys(scope, this.bankSetupDesktop?.()); } catch (_) { return null; }
+  bankSetupOwnKeys(scope, sourcePath = "") {
+    if (!(this.bankSetupKeySlots instanceof Map)) this.bankSetupKeySlots = new Map();
+    try { return propertyCardSlotOwn(this.bankSetupKeySlots, scope, bankSetupHubPath(sourcePath), propertyCardOwnBankKeys(scope, this.bankSetupDesktop?.())); } catch (_) { return null; }
   }
 
   bankSetupRemoveReading(root, scope = root, sourcePath = "") {
@@ -82936,7 +82970,7 @@ class BobLedgerToolsBankSetupMixin {
         } catch (childError) {}
       }
     }
-    this.bankSetupReleaseKeys(scope);
+    this.bankSetupReleaseKeys(scope, sourcePath);
     const anotherOwner = Array.from(this.bankSetupReading || []).some((item) =>
       item.surface === root && item.scope && item.scope.classList
       && item.surface.querySelector?.(`.${BANK_SETUP_CLASS}`));
@@ -83003,7 +83037,7 @@ class BobLedgerToolsBankSetupMixin {
       ? active.getAttribute?.("data-bank-setup-focus") : "";
     if (old && model && old.getAttribute?.("data-bank-setup-signature") === model.signature
       && old.getAttribute?.("data-bank-setup-source") === bankSetupHubPath(sourcePath)) {
-      this.bankSetupOwnKeys(scope);
+      this.bankSetupOwnKeys(scope, sourcePath);
       return old;
     }
     this.bankSetupRemoveReading(root, scope, sourcePath);
@@ -83047,7 +83081,7 @@ class BobLedgerToolsBankSetupMixin {
         next?.focus?.({ preventScroll: true });
       } catch (error) {}
     }
-    this.bankSetupOwnKeys(scope);
+    this.bankSetupOwnKeys(scope, sourcePath);
     return header;
   }
 
@@ -83248,10 +83282,7 @@ class BobLedgerToolsBankSetupMixin {
     const model = this.bankSetupModelFor(livePath);
     this.bankSetupSetEditorScope(view, Boolean(model));
     if (!model) {
-      try {
-        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-        this.bankSetupReleaseKeys(scope);
-      } catch (_) {}
+      this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
     const doc = (typeof notebookDomDoc === "function" ? notebookDomDoc(view.dom) : null)
@@ -83259,16 +83290,12 @@ class BobLedgerToolsBankSetupMixin {
     const options = this.bankSetupOptions(livePath, model);
     const header = this.bankSetupBuildReading(model, options, doc);
     if (!header) {
-      try {
-        const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-        this.bankSetupReleaseKeys(scope);
-      } catch (_) {}
+      this.bankSetupReleaseKeys(view?.dom);
       return Decoration.none;
     }
-    try {
-      const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-      this.bankSetupOwnKeys(scope);
-    } catch (_) {}
+    // Native Properties live under the CodeMirror editor (view.dom), not the
+    // .markdown-source-view that carries the surface class.
+    this.bankSetupOwnKeys(view?.dom, livePath);
     const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
     const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
     const widget = new class extends WidgetType {
@@ -83396,7 +83423,7 @@ class BobLedgerToolsBankSetupMixin {
   bankSetupCleanEditor(view) {
     try {
       const scope = this.bankSetupEditorScopes?.get(view) || view?.dom;
-      this.bankSetupReleaseKeys(scope);
+      this.bankSetupReleaseKeys(view?.dom);
       scope?.classList?.remove?.(BANK_SETUP_SURFACE_CLASS);
       this.bankSetupSurfaces?.delete(scope);
       this.bankSetupEditorScopes?.delete(view);
@@ -94780,6 +94807,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.albumHeaderEditors || []) this.albumHeaderCleanEditor(view);
+    propertyCardSlotReleaseAll(this.albumHeaderKeySlots);
     this.albumHeaderReading?.clear();
     this.albumHeaderEditors?.clear();
     this.albumHeaderExpanded?.clear?.();
@@ -94996,12 +95024,18 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderReleaseKeys(scope) {
-    try { propertyCardReleaseScope(scope); } catch (_) {}
+  // A sourcePath releases only that path's mount: a pane reuses its scope, so
+  // a stale binding for an earlier note must not unhide the current card.
+  albumHeaderReleaseKeys(scope, sourcePath = "") {
+    try { propertyCardSlotRelease(this.albumHeaderKeySlots, scope, albumHeaderPath(sourcePath)); } catch (_) {}
   }
 
-  albumHeaderOwnKeys(scope) {
-    try { return propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()); } catch (_) { return null; }
+  albumHeaderOwnKeys(scope, sourcePath = "") {
+    try {
+      if (!(this.albumHeaderKeySlots instanceof Map)) this.albumHeaderKeySlots = new Map();
+      return propertyCardSlotOwn(this.albumHeaderKeySlots, scope, albumHeaderPath(sourcePath),
+        propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()));
+    } catch (_) { return null; }
   }
 
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
@@ -95012,7 +95046,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (sourcePath && ownedPath && ownedPath !== albumHeaderPath(sourcePath)) continue;
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
-    this.albumHeaderReleaseKeys(scope);
+    this.albumHeaderReleaseKeys(scope, sourcePath);
     const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
       item.surface === root && item.path !== sourcePath);
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
@@ -95154,7 +95188,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
-    this.albumHeaderOwnKeys(scope);
+    this.albumHeaderOwnKeys(scope, sourcePath);
     return header;
   }
 
@@ -95258,10 +95292,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
       const text = view.state.doc.toString();
@@ -95269,26 +95300,19 @@ class BobLedgerToolsAlbumHeaderMixin {
       const model = this.albumHeaderModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(model));
       if (!model) {
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const options = this.albumHeaderOptions(path, state, model);
       const header = this.albumHeaderBuildEl(model, options, doc);
       if (!header) {
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
-      try {
-        const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-        this.albumHeaderOwnKeys(scope);
-      } catch (_) {}
+      // Native Properties live under the CodeMirror editor, not the
+      // .markdown-source-view that carries the surface class.
+      this.albumHeaderOwnKeys(view?.dom, path);
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -95347,7 +95371,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderCleanEditor(view) {
     try {
       const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-      this.albumHeaderReleaseKeys(scope);
+      this.albumHeaderReleaseKeys(view?.dom);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       this.albumHeaderEditorScopes?.delete(view);
     } catch (_) {}
@@ -103267,34 +103291,15 @@ class BobLedgerToolsRecordSheetMixin {
 }
 // ---- src/242ka-plugin-record-sheet-properties.js ----
 // Native Properties remain usable for metadata outside the album schema.
-// The ownership paths below were captured in the real Obsidian sheet proof.
-const RECORD_SHEET_PROPERTY_CLASS = "bob-record-sheet-owned-property";
-
-function recordSheetNativeProperties(scope) {
-  const child = (root, name) => Array.from(root?.children || [])
-    .find((node) => node.classList?.contains(name));
-  if (scope?.classList?.contains("cm-editor")) {
-    return child(child(child(scope, "cm-scroller"), "cm-sizer"), "metadata-container");
-  }
-  if (scope?.classList?.contains("markdown-preview-view")) {
-    return child(child(child(scope, "markdown-preview-sizer"), "mod-header"), "metadata-container");
-  }
-  return null;
-}
-
+// Shared property-card ownership (240b) paints the owned rows, including the
+// record compatibility class; this adapter keeps one generation-bound release
+// handle per scope, so it never clears another card's newer owner.
 class BobLedgerToolsRecordSheetPropertiesMixin {
   recordSheetClearNativeProperties(scope) {
-    try {
-      if (typeof propertyCardReleaseScope === "function") propertyCardReleaseScope(scope);
-    } catch (_) {}
     const state = this.recordSheetNativePropertiesScopes?.get(scope);
     if (!state) return;
-    try { state.release?.(); } catch (_) {}
-    try { state.observer?.disconnect(); } catch (_) {}
-    for (const row of state.rows || []) {
-      try { row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS); } catch (_) {}
-    }
     this.recordSheetNativePropertiesScopes.delete(scope);
+    try { state.release?.(); } catch (_) {}
   }
 
   recordSheetSetNativeProperties(scope, model) {
@@ -103316,23 +103321,7 @@ class BobLedgerToolsRecordSheetPropertiesMixin {
       this.recordSheetClearNativeProperties(scope);
       return;
     }
-    this.recordSheetNativePropertiesScopes.set(scope, { rows: new Set(), keys, observer: null, release });
-  }
-
-  recordSheetPaintNativeProperties(scope, state) {
-    if (this.recordSheetNativePropertiesScopes?.get(scope) !== state) return;
-    const container = recordSheetNativeProperties(scope);
-    const next = new Set();
-    for (const row of container?.querySelectorAll?.(".metadata-property") || []) {
-      if (row.closest?.(".metadata-container") !== container || recordSheetScopeIsEmbed(row)) continue;
-      if (!state.keys.has(row.getAttribute("data-property-key"))) continue;
-      next.add(row);
-      if (!row.classList.contains(RECORD_SHEET_PROPERTY_CLASS)) row.classList.add(RECORD_SHEET_PROPERTY_CLASS);
-    }
-    for (const row of state.rows) {
-      if (!next.has(row)) row.classList?.remove(RECORD_SHEET_PROPERTY_CLASS);
-    }
-    state.rows = next;
+    this.recordSheetNativePropertiesScopes.set(scope, { keys, release });
   }
 }
 // ---- src/242l-plugin-record-update-service.js ----
@@ -154469,6 +154458,9 @@ try {
       propertyCardNativeContainer,
       propertyCardOwnKeys,
       propertyCardReleaseScope,
+      propertyCardSlotOwn,
+      propertyCardSlotRelease,
+      propertyCardSlotReleaseAll,
       PROPERTY_CARD_BUILTIN_KINDS,
       propertyCardGateKinds,
     });

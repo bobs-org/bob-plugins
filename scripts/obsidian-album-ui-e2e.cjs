@@ -1378,7 +1378,13 @@ async function run(args) {
     })()`).catch((error) => ({ ok: false, error: String(error && error.message || error) }));
     record("broken-copy-disabled", Boolean(brokenCopy && brokenCopy.ok && brokenCopy.disabled), JSON.stringify(brokenCopy).slice(0, 200));
 
-    // Property hiding: record row hidden only on album notes.
+    // Property hiding: record row hidden only on album notes, in Live Preview
+    // (native Properties under the CodeMirror editor) as well as Reading.
+    await openNote(client, "eat.md", "live");
+    await sleep(500);
+    const albumLiveProps = await client.evaluate(properties.propertyProbe());
+    report.probes.albumLiveProps = albumLiveProps;
+    record("record-prop-hidden-on-album-live", properties.propertyVisibility(albumLiveProps, "eat.md", false), JSON.stringify(albumLiveProps));
     await openNote(client, "eat.md", "preview");
     await sleep(500);
     const albumProps = await client.evaluate(properties.propertyProbe());

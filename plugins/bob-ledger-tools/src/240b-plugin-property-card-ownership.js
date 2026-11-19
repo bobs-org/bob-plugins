@@ -164,6 +164,38 @@ function propertyCardOwnKeys(scope, keys) {
   };
 }
 
+// Adapter mount slots: each adapter keeps one Map of scope -> its current
+// mount's release handle and normalized source path. Panes reuse one native
+// view scope across notes, so a stale binding for an earlier path must not
+// release the mount that now owns the scope, and one adapter's teardown must
+// never clear another adapter's newer owner. Releases therefore go through
+// the generation-bound handle, never the scope-wide propertyCardReleaseScope.
+function propertyCardSlotOwn(slots, scope, path, release) {
+  if (!(slots instanceof Map) || !scope) return null;
+  if (typeof release !== "function") {
+    propertyCardSlotRelease(slots, scope);
+    return null;
+  }
+  slots.set(scope, { path: String(path || ""), release });
+  return release;
+}
+
+// Release the adapter's mount on scope. A nonempty path releases only when
+// that path owns the slot; an empty path releases unconditionally.
+function propertyCardSlotRelease(slots, scope, path = "") {
+  const entry = slots instanceof Map ? slots.get(scope) : null;
+  if (!entry) return false;
+  if (path && entry.path && entry.path !== String(path)) return false;
+  slots.delete(scope);
+  try { entry.release(); } catch (_) {}
+  return true;
+}
+
+function propertyCardSlotReleaseAll(slots) {
+  if (!(slots instanceof Map)) return;
+  for (const scope of Array.from(slots.keys())) propertyCardSlotRelease(slots, scope);
+}
+
 function propertyCardOwnAlbumKeys(scope, desktop) {
   try {
     if (desktop !== true) {

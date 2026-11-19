@@ -40,6 +40,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       this.albumHeaderRemoveReading(widget.surface, widget.scope, widget.path);
     }
     for (const view of this.albumHeaderEditors || []) this.albumHeaderCleanEditor(view);
+    propertyCardSlotReleaseAll(this.albumHeaderKeySlots);
     this.albumHeaderReading?.clear();
     this.albumHeaderEditors?.clear();
     this.albumHeaderExpanded?.clear?.();
@@ -256,12 +257,18 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  albumHeaderReleaseKeys(scope) {
-    try { propertyCardReleaseScope(scope); } catch (_) {}
+  // A sourcePath releases only that path's mount: a pane reuses its scope, so
+  // a stale binding for an earlier note must not unhide the current card.
+  albumHeaderReleaseKeys(scope, sourcePath = "") {
+    try { propertyCardSlotRelease(this.albumHeaderKeySlots, scope, albumHeaderPath(sourcePath)); } catch (_) {}
   }
 
-  albumHeaderOwnKeys(scope) {
-    try { return propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()); } catch (_) { return null; }
+  albumHeaderOwnKeys(scope, sourcePath = "") {
+    try {
+      if (!(this.albumHeaderKeySlots instanceof Map)) this.albumHeaderKeySlots = new Map();
+      return propertyCardSlotOwn(this.albumHeaderKeySlots, scope, albumHeaderPath(sourcePath),
+        propertyCardOwnAlbumKeys(scope, this.albumHeaderDesktop?.()));
+    } catch (_) { return null; }
   }
 
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
@@ -272,7 +279,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (sourcePath && ownedPath && ownedPath !== albumHeaderPath(sourcePath)) continue;
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
-    this.albumHeaderReleaseKeys(scope);
+    this.albumHeaderReleaseKeys(scope, sourcePath);
     const anotherOwner = Array.from(this.albumHeaderReading || []).some((item) =>
       item.surface === root && item.path !== sourcePath);
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
@@ -414,7 +421,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
       next?.focus?.({ preventScroll: true });
     }
-    this.albumHeaderOwnKeys(scope);
+    this.albumHeaderOwnKeys(scope, sourcePath);
     return header;
   }
 
@@ -518,10 +525,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       const path = this.albumHeaderLivePath(view);
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
       const text = view.state.doc.toString();
@@ -529,26 +533,19 @@ class BobLedgerToolsAlbumHeaderMixin {
       const model = this.albumHeaderModelFor(path, state, text);
       this.albumHeaderSetEditorScope(view, Boolean(model));
       if (!model) {
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
       const options = this.albumHeaderOptions(path, state, model);
       const header = this.albumHeaderBuildEl(model, options, doc);
       if (!header) {
-        try {
-          const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-          this.albumHeaderReleaseKeys(scope);
-        } catch (_) {}
+        this.albumHeaderReleaseKeys(view?.dom);
         return Decoration.none;
       }
-      try {
-        const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-        this.albumHeaderOwnKeys(scope);
-      } catch (_) {}
+      // Native Properties live under the CodeMirror editor, not the
+      // .markdown-source-view that carries the surface class.
+      this.albumHeaderOwnKeys(view?.dom, path);
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
@@ -607,7 +604,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   albumHeaderCleanEditor(view) {
     try {
       const scope = this.albumHeaderEditorScopes?.get(view) || view?.dom;
-      this.albumHeaderReleaseKeys(scope);
+      this.albumHeaderReleaseKeys(view?.dom);
       scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
       this.albumHeaderEditorScopes?.delete(view);
     } catch (_) {}

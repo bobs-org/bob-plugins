@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   helpers,
+  Plugin,
   WORK_LOG_NOW,
   WORK_LOG_STAMP,
 } = require("./block-id-prompt-harness.cjs");
@@ -105,6 +106,36 @@ test("workSummaryPromptState previews the clock at render time", () => {
   const later = helpers.workSummaryPromptState("Added coverage", { now: new Date(2026, 7, 16, 0, 1, 5) });
   assert.equal(later.stamp, "2026-08-16 00:01");
   assert.equal(later.formattedEntry, "*2026-08-16 00:01* — Added coverage");
+});
+
+test("successful Work Summary writes add the phrase to nav log recall", async () => {
+  const noted = [];
+  const plugin = new Plugin();
+  plugin.app = {
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+              attach: () => null,
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+      },
+    },
+  };
+  plugin.now = () => WORK_LOG_NOW;
+  plugin.applyPomodoroTaskUnlink = async (_source, request) => {
+    assert.equal(request.workSummary, "Added guarded cleanup");
+    return true;
+  };
+  plugin.settleLinkReviewOrigin = () => {};
+  const accepted = await plugin.submitPomodoroWorkSummary({ kind: "pomodoro-unlink" }, "  Added   guarded cleanup  ");
+  assert.equal(accepted, true);
+  assert.deepEqual(noted, [["work", "Added guarded cleanup"]]);
 });
 
 test("planWorkLogInsertion creates tab-indented Work Log children for column-0 tasks without children", () => {

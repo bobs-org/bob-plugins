@@ -14,6 +14,9 @@ class TaskLinkLanePromptModal extends Modal {
     this.previewEl = null;
     this.warningEl = null;
     this.primaryButton = null;
+    this.recallBandEl = null;
+    this.recallFooterEl = null;
+    this.logRecall = null;
   }
 
   taskLinkLaneTasks() {
@@ -131,6 +134,15 @@ class TaskLinkLanePromptModal extends Modal {
     });
     this.inputEl.addEventListener("input", () => this.updatePreview());
     this.inputEl.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && String(event.key || "") === "[") {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const EventClass = this.inputEl.ownerDocument && this.inputEl.ownerDocument.defaultView && this.inputEl.ownerDocument.defaultView.KeyboardEvent || KeyboardEvent;
+          this.inputEl.dispatchEvent(new EventClass("keydown", { key: "Escape", bubbles: true }));
+        } catch (_error) {}
+        return;
+      }
       if (event.key !== "Enter" || event.isComposing) {
         return;
       }
@@ -143,6 +155,21 @@ class TaskLinkLanePromptModal extends Modal {
       cls: "bob-tll-preview",
       attr: { id: "bob-tll-preview", role: "note", "aria-live": "polite" },
     });
+    this.recallBandEl = contentEl.createDiv({ cls: "bob-tll-log-recall-host" });
+    const recallApi = getNavigationLogRecallApi(this.app);
+    if (recallApi) {
+      try {
+        this.logRecall = recallApi.attach({
+          inputEl: this.inputEl,
+          kind: "work",
+          bandHost: this.recallBandEl,
+          density: "roomy",
+          arrowKeys: true,
+          ownKeys: true,
+          scope: this.scope,
+        });
+      } catch (_error) { this.logRecall = null; }
+    }
     this.warningEl = contentEl.createDiv({
       cls: "bob-tll-warning",
       attr: { id: "bob-tll-warning", role: "status" },
@@ -154,6 +181,7 @@ class TaskLinkLanePromptModal extends Modal {
     cancelBtn.addEventListener("click", () => this.close());
     this.primaryButton = row.createEl("button", { text: "Move to Next" });
     this.primaryButton.addEventListener("click", () => this.submit());
+    this.recallFooterEl = contentEl.createDiv({ cls: "bob-tll-recall-footer" });
 
     this.updatePreview();
     window.setTimeout(() => {
@@ -206,6 +234,11 @@ class TaskLinkLanePromptModal extends Modal {
         this.warningEl.classList.toggle("is-hidden", hidden);
       }
     }
+    if (this.recallFooterEl) {
+      this.recallFooterEl.textContent = state.isBlank
+        ? "↵ Move to Next · esc Cancel"
+        : "↵ Log & move to Next · esc Cancel";
+    }
   }
 
   submit() {
@@ -222,6 +255,8 @@ class TaskLinkLanePromptModal extends Modal {
   }
 
   onClose() {
+    if (this.logRecall && typeof this.logRecall.detach === "function") this.logRecall.detach();
+    this.logRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {

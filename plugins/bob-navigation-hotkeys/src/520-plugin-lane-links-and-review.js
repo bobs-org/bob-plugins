@@ -161,12 +161,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     let changedTaskCount = 0;
+    let workLogWrittenCount = 0;
     let blockedSkipped = 0;
     let releasedNextCount = 0;
     let releasedPendingCount = 0;
     let mode = "commit";
     for (const { plan } of planned) {
       changedTaskCount += plan.changedTaskCount;
+      workLogWrittenCount += Number(plan.workLogWrittenCount) || 0;
       blockedSkipped += plan.blockedSkipped;
       if (plan.mode === "release") {
         mode = "release";
@@ -178,6 +180,10 @@ class BobNavigationHotkeysLaneReviewMixin {
           releasedPendingCount += 1;
         }
       }
+    }
+    if (summary && workLogWrittenCount > 0) {
+      const recall = getNavigationLogRecallApi(this.app);
+      if (recall) recall.noteUsed("work", summary);
     }
     const removedPomodoroLinkCount =
       dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed

@@ -742,6 +742,10 @@ class LaneReleaseSummaryModal extends Modal {
     this.onDone = onDone;
     this.completed = false;
     this.inputEl = null;
+    this.previewEl = null;
+    this.recallBandEl = null;
+    this.recallFooterEl = null;
+    this.logRecall = null;
   }
 
   onOpen() {
@@ -758,23 +762,58 @@ class LaneReleaseSummaryModal extends Modal {
         type: "text",
       },
     });
-    const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
-    const cancelBtn = row.createEl("button", { text: "Cancel" });
-    cancelBtn.addEventListener("click", () => this.close());
-    const releaseBtn = row.createEl("button", { text: "Release" });
-    releaseBtn.addEventListener("click", () => this.submit());
+    this.inputEl.addEventListener("input", () => this.updatePreview());
     this.inputEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
+      if (event.ctrlKey && String(event.key || "") === "[") {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const EventClass = this.inputEl.ownerDocument && this.inputEl.ownerDocument.defaultView && this.inputEl.ownerDocument.defaultView.KeyboardEvent || KeyboardEvent;
+          this.inputEl.dispatchEvent(new EventClass("keydown", { key: "Escape", bubbles: true }));
+        } catch (_error) {}
+        return;
+      }
+      if (event.key === "Enter" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
         this.submit();
       }
     });
+    this.previewEl = contentEl.createDiv({ cls: "bob-tll-preview", attr: { role: "note", "aria-live": "polite" } });
+    this.recallBandEl = contentEl.createDiv({ cls: "bob-lane-release-log-recall-host" });
+    const recallApi = getNavigationLogRecallApi(this.app);
+    if (recallApi) {
+      try {
+        this.logRecall = recallApi.attach({ inputEl: this.inputEl, kind: "work", bandHost: this.recallBandEl, density: "roomy", arrowKeys: true, ownKeys: true, scope: this.scope });
+      } catch (_error) { this.logRecall = null; }
+    }
+    const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
+    const cancelBtn = row.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => this.close());
+    const releaseBtn = row.createEl("button", { text: "Release" });
+    releaseBtn.addEventListener("click", () => this.submit());
+    this.recallFooterEl = contentEl.createDiv({ cls: "bob-lane-release-footer" });
+    this.updatePreview();
     window.setTimeout(() => {
       if (this.inputEl) {
         this.inputEl.focus();
       }
     }, 0);
+  }
+
+  updatePreview() {
+    if (!this.previewEl) return;
+    const value = this.inputEl ? String(this.inputEl.value || "") : "";
+    const stampText = formatWorkLogStamp(new Date());
+    const state = taskLinkLanePromptState(value, { stampText });
+    this.previewEl.empty();
+    if (state.isBlank) {
+      this.previewEl.createDiv({ cls: "bob-tll-preview-muted", text: "No work-log entry will be added." });
+    } else {
+      this.previewEl.createDiv({ cls: "bob-tll-preview-marker", text: `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**` });
+      this.previewEl.createDiv({ cls: "bob-tll-preview-entry", text: state.formattedEntry });
+    }
+    if (this.recallFooterEl) this.recallFooterEl.textContent = state.isBlank ? "↵ Release · esc Cancel" : "↵ Release & log summary · esc Cancel";
   }
 
   submit() {
@@ -790,6 +829,8 @@ class LaneReleaseSummaryModal extends Modal {
   }
 
   onClose() {
+    if (this.logRecall && typeof this.logRecall.detach === "function") this.logRecall.detach();
+    this.logRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {

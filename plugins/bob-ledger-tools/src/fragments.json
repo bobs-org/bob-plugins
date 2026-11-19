@@ -266,6 +266,7 @@
   "279-plugin-task-theme-reading.js",
   "279-plugin-task-theme-tasks.js",
   "279-plugin-pomodoro-themes.js",
+  "279-plugin-log-history.js",
   "279-plugin-task-theme-api.js",
   "279-plugin-pomodoro-theme-chips.js",
   "279-plugin-pomodoro-theme-chips-reading.js",
@@ -329,5 +330,6 @@
   "371-exports-record-update.js",
   "372-exports-record-card.js",
   "373-exports-record-walk.js",
-  "374-exports-property-card.js"
+  "374-exports-property-card.js",
+  "375-exports-log-history.js"
 ]

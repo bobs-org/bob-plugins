@@ -95,6 +95,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsPomodoroHomeChipsMixin,
   BobLedgerToolsPomodoroHomeChipsReadingMixin,
   BobLedgerToolsPomodoroThemesMixin,
+  BobLedgerToolsLogHistoryMixin,
   BobLedgerToolsTaskThemeApiMixin,
   BobLedgerToolsTaskThemeEditorMixin,
   BobLedgerToolsTaskRootMarksMixin,

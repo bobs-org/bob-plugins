@@ -58,6 +58,7 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | Namespace | Version | Purpose |
 | --- | ---: | --- |
 | `stats` | 2 | Append validated review events; `host`, `fetch`, and `bobPath` support Stats and consumers. |
+| `logs` | 1 | Read the cached `bob logs list --format json` phrase catalog; `snapshot()` includes the session overlay, `noteUsed(kind, text)` records a successful local write, and `onChange` subscribes to refreshes. |
 | `themes` | 1 | Share the Pomodoro theme catalog; `hueFor`, `componentsOf`, `historyRows`, and `similarTo` are synchronous, `fetch` and `snapshot` serve the cached `bob themes list` report, `hide`/`unhide`/`color`/`rename` spawn bob with `--via`, and `onChange` subscribes to updates. |
 | `workBadges` | 2 | Return count-to-limit badge tones through `tone` and `todayTone`. |
 | `freshness` | 12 | Read or update freshness, refresh intervals, keep counts, review queue, and unblocked metadata. |
@@ -74,6 +75,15 @@ ledger, or `Number.MAX_SAFE_INTEGER` when the task has no rank.
 | `attachments` | 1 | Look up recorded image origins and delegate image imports to bob. |
 | `bank` | 2 | Fetch cached `bob bank list` / `report` JSON, subscribe mounts, and run guarded acknowledgment and Category card actions. |
 | `bankWalk` | 1 | Serve the read-only bank-row walk snapshot, the shared step/day planners, cursor locate, live-buffer identity resolution, the session anchor, and the Category-card busy flag behind `]b` / `[b` and `]B` / `[B`. |
+
+`logs.fetch({ force? })` resolves `{ status, catalog, fetchedAt }`, where
+`status` is `ok`, `stale`, `unavailable`, `unsupported`, or `error`. A cached
+catalog is returned immediately while it revalidates; malformed replies keep
+the last good catalog. `snapshot()` is synchronous and returns `null` before
+the first successful fetch. The session overlay is capped at 50 phrases per
+kind and schedules a fresh bob scan after a write. Mobile returns
+`unavailable`; an older bob without `logs` returns `unsupported` for that bob
+executable until Ledger Tools reloads.
 
 `relationIndex.ready()` reports whether the chunked initial scan is complete;
 `generation` increases whenever a complete pair of forward and reverse maps
@@ -379,6 +389,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
+| `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. |
 | `notice` | 3 | Show the Unblocked card; v2 renders `keep_moving` rows and v3 renders `relation_successors`. |
 | `successors` | 4 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, and v4 resolves verdict closes. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
@@ -405,7 +416,12 @@ with no recommendation. `parts` is additive (`keyLabel`, `verb`, `fromLabel`,
 `{ ok: false, reason: "unavailable" }`; the root api `version` stays 3.
 `taskLinkLane.matches({ content, line, path })` is synchronous;
 `toggle(args)` performs the Next/In Progress change and resolves
-to a result object. `successors.pick(model)` resolves to a result
+to a result object. `logRecall.attach({ inputEl, kind, bandHost, density,
+arrowKeys, ownKeys })` returns `handleKeydown`, `backOut`, `isRecalling`,
+`setKind`, and `detach`; standalone modals set `ownKeys: true`, while picker
+pipelines set it to false and call `handleKeydown` once. `logRecall.noteUsed`
+forwards a successful local write to Ledger Tools `logs.noteUsed`. The root api
+version stays 3. `successors.pick(model)` resolves to a result
 with a `picks` array or `null` when no choice is made. Selectable
 rows may carry additive `task: { path, line, text, displayText, status,
 preimage }` so `Ctrl+Shift+Enter` can retarget through

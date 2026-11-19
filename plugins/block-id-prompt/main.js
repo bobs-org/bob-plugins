@@ -13878,6 +13878,9 @@ class WorkSummaryPromptModal extends Modal {
     this.previewEl = null;
     this.warningEl = null;
     this.primaryButton = null;
+    this.recallBandEl = null;
+    this.recallFooterEl = null;
+    this.logRecall = null;
   }
 
   onOpen() {
@@ -13928,7 +13931,16 @@ class WorkSummaryPromptModal extends Modal {
     });
     this.inputEl.addEventListener("input", () => this.updatePreview());
     this.inputEl.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") {
+      if (event.ctrlKey && String(event.key || "") === "[") {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const EventClass = this.inputEl.ownerDocument && this.inputEl.ownerDocument.defaultView && this.inputEl.ownerDocument.defaultView.KeyboardEvent || KeyboardEvent;
+          this.inputEl.dispatchEvent(new EventClass("keydown", { key: "Escape", bubbles: true }));
+        } catch (_error) {}
+        return;
+      }
+      if (event.key !== "Enter" || event.isComposing) {
         return;
       }
 
@@ -13941,6 +13953,23 @@ class WorkSummaryPromptModal extends Modal {
       cls: "bid-wlp-preview",
       attr: { id: "bid-wlp-preview", role: "note", "aria-live": "polite" },
     });
+    this.recallBandEl = contentEl.createDiv({ cls: "bid-wlp-log-recall-host" });
+    const recallApi = this.plugin && typeof this.plugin.getLogRecallApi === "function"
+      ? this.plugin.getLogRecallApi()
+      : null;
+    if (recallApi && typeof recallApi.attach === "function") {
+      try {
+        this.logRecall = recallApi.attach({
+          inputEl: this.inputEl,
+          kind: "work",
+          bandHost: this.recallBandEl,
+          density: "roomy",
+          arrowKeys: true,
+          ownKeys: true,
+          scope: this.scope,
+        });
+      } catch (_error) { this.logRecall = null; }
+    }
     this.warningEl = contentEl.createDiv({
       cls: "bid-wlp-warning",
       attr: { id: "bid-wlp-warning", role: "status" },
@@ -13960,6 +13989,7 @@ class WorkSummaryPromptModal extends Modal {
           .setCta()
           .onClick(() => this.submit());
       });
+    this.recallFooterEl = contentEl.createDiv({ cls: "bob-log-recall-footer" });
 
     this.updatePreview();
     window.setTimeout(() => {
@@ -14014,6 +14044,11 @@ class WorkSummaryPromptModal extends Modal {
     if (this.warningEl) {
       this.warningEl.toggleClass("is-hidden", !state.hasDataviewWarning);
     }
+    if (this.recallFooterEl) {
+      this.recallFooterEl.textContent = state.isBlank
+        ? "↵ Unlink · esc Cancel"
+        : "↵ Unlink & log · esc Cancel";
+    }
   }
 
   async submit() {
@@ -14039,6 +14074,8 @@ class WorkSummaryPromptModal extends Modal {
   }
 
   onClose() {
+    if (this.logRecall && typeof this.logRecall.detach === "function") this.logRecall.detach();
+    this.logRecall = null;
     this.modalEl.removeClass("bid-wlp-modal");
     this.contentEl.empty();
 
@@ -15644,10 +15681,15 @@ class BlockIdPromptPomodoroLinksMixin {
       : null;
     if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
       try {
-        return await this.applyTaskLinkOpen(source, {
+        const accepted = await this.applyTaskLinkOpen(source, {
           workSummary: normalizedSummary,
           workLogStamp,
         });
+        if (accepted === true && normalizedSummary) {
+          const recall = this.getLogRecallApi();
+          if (recall) recall.noteUsed("work", normalizedSummary);
+        }
+        return accepted;
       } catch (error) {
         return false;
       }
@@ -15658,6 +15700,10 @@ class BlockIdPromptPomodoroLinksMixin {
         workSummary: normalizedSummary,
         workLogStamp,
       });
+      if (result === true && normalizedSummary) {
+        const recall = this.getLogRecallApi();
+        if (recall) recall.noteUsed("work", normalizedSummary);
+      }
       if (result === false && source && source.inboxRouteCancelled === true) {
         source.inboxRouteCancelled = false;
         this.settleLinkReviewOrigin(source, null);
@@ -18387,6 +18433,20 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
       }
       return walk;
     } catch (error) {
+      return null;
+    }
+  }
+
+  getLogRecallApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      const recall = api && Number(api.version) >= 3 ? api.logRecall : null;
+      return recall && Number(recall.version) >= 1 && typeof recall.noteUsed === "function" && typeof recall.attach === "function"
+        ? recall
+        : null;
+    } catch (_error) {
       return null;
     }
   }

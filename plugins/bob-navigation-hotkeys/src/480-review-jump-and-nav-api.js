@@ -909,6 +909,16 @@ function createDependencyNavApi(plugin) {
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
     cancel: createCancelApi(),
+    // USED BEFORE band v1. Phrase data lives in ledger-tools; this API only
+    // attaches a controller to a host-owned input and forwards successful writes.
+    logRecall: Object.freeze({
+      version: 1,
+      attach: (options = {}) => attachLogRecall({ ...options, app: plugin && plugin.app }),
+      noteUsed: (kind, text) => {
+        const logs = getNavigationLogHistoryApi(plugin && plugin.app);
+        return logs && typeof logs.noteUsed === "function" ? logs.noteUsed(kind, text) : false;
+      },
+    }),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),

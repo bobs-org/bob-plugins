@@ -362,14 +362,14 @@ top-down with preimage-checked writes and report
 `· N sub-projects Blocked / Ready again / not updated`.
 
 `Alt+N` commits Ready to Next or releases Next/In Progress to Ready on the
-current task plus the next N tasks (or the linked task plus the next N sibling
-Task Links), unlinking released tasks from today and reporting the NEXT/PENDING
-counts with the weekly-review hint when over the cap. On an inbox task `Alt+N`
-asks where the task goes right before it writes: refusals come first, a Pending
-release keeps its Work Log prompt first, then the route picker opens (`commit
-to Next` / `release to Ready`; `N tasks · then …` for counted runs). `↵` acts
-and then moves the task there, `⇧↵` applies in place and keeps it in the inbox,
-and `Esc` cancels the whole gesture with nothing written.
+current task and next N tasks (or the linked task and N sibling Task Links),
+unlinking released tasks from today and reporting NEXT/PENDING counts and cap
+advice. On inbox tasks it asks for a destination first; a Pending release keeps
+its Work Log prompt first. The route picker offers `commit to Next` / `release
+to Ready` (`N tasks · then …` for counted runs). `↵` applies and moves there,
+`⇧↵` applies in place and stays, and `Esc` cancels without writing.
+
+Work Log prompts provide `USED BEFORE` phrase recall; see the [Log Recall contract](https://bobs-org.github.io/log-recall/).
 
 ## Review walk
 

@@ -3188,6 +3188,171 @@
   gap: var(--size-4-2);
 }
 
+.bob-tll-recall-footer,
+.bob-lane-release-footer,
+.bob-log-recall-footer {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: right;
+}
+
+.bob-tll-recall-footer kbd,
+.bob-lane-release-footer kbd,
+.bob-log-recall-footer kbd {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+/* Log Recall (recall-core): a stable-height, draft-filtered history band.
+   The host keeps its own preview above this shared surface. */
+.bob-log-recall-band {
+  --bob-log-recall-row-height: 24px;
+  min-width: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--background-modifier-border);
+  animation: bob-log-recall-fade-in 120ms ease-out;
+}
+
+.bob-log-recall-band.is-hidden {
+  display: none;
+}
+
+.bob-log-recall-inner {
+  min-width: 0;
+  padding-top: var(--size-4-2);
+}
+
+.bob-log-recall-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  min-height: 18px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bob-log-recall-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-log-recall-hints {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-faint);
+  font-weight: var(--font-normal);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.bob-log-recall-keycap {
+  padding: 0 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.bob-log-recall-rows {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--bob-log-recall-row-height) * var(--bob-log-recall-slots, 1));
+  max-height: calc(var(--bob-log-recall-row-height) * var(--bob-log-recall-slots, 1));
+  overflow-y: auto;
+}
+
+.bob-log-recall-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  min-height: var(--bob-log-recall-row-height);
+  padding: 0 var(--size-4-2);
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.bob-log-recall-row.is-empty {
+  pointer-events: none;
+}
+
+.bob-log-recall-row.is-selected {
+  border-left-color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+}
+
+.bob-log-recall-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-log-recall-row.is-selected .bob-log-recall-text {
+  color: var(--text-normal);
+}
+
+.bob-log-recall-match {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.bob-log-recall-meta {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.is-recalling {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent) !important;
+}
+
+.bob-log-recall-band.is-edge-bump .bob-log-recall-row.is-selected {
+  animation: bob-log-recall-edge-bump 120ms ease-out;
+}
+
+.bob-log-recall-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes bob-log-recall-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bob-log-recall-edge-bump {
+  50% { transform: translateY(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-log-recall-band { animation: bob-log-recall-reduced 120ms linear; }
+  .bob-log-recall-band.is-edge-bump .bob-log-recall-row.is-selected { animation: bob-log-recall-reduced 120ms linear; }
+  @keyframes bob-log-recall-reduced {
+    50% { opacity: 0.65; }
+  }
+}
+
 @media (max-width: 560px) {
   .modal.bob-tll-modal {
     width: calc(100vw - 24px);

@@ -248,6 +248,7 @@ test("toggleTaskLane releases to Ready without the api", async () => {
 
 test("toggleTaskLane release logs the summary on In Progress tasks", async () => {
   notices.length = 0;
+  const noted = [];
   const editor = new TransactionEditor("- [/] #task Working ^a1", {
     line: 0,
     ch: 0,
@@ -257,7 +258,20 @@ test("toggleTaskLane release logs the summary on In Progress tasks", async () =>
   ]);
   const plugin = new NavigationHotkeysPlugin();
   plugin.app = {
-    plugins: { plugins: {} },
+    plugins: {
+      plugins: {
+        "bob-navigation-hotkeys": {
+          api: {
+            version: 3,
+            logRecall: {
+              version: 1,
+            attach: () => ({ detach() {} }),
+              noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+            },
+          },
+        },
+      },
+    },
     vault: { getMarkdownFiles: () => [...files.values()] },
     workspace: { getLeavesOfType: () => [] },
   };
@@ -274,6 +288,7 @@ test("toggleTaskLane release logs the summary on In Progress tasks", async () =>
   assert.match(editor.content, /WORK LOG/);
   assert.match(editor.content, /\*2026-09-30 14:32\* — parked for later/);
   assert.match(notices.at(-1), /→ Ready · 1 task/);
+  assert.deepEqual(noted, [["work", "parked for later"]]);
 });
 
 test("toggleTaskLane skips Blocked targets", async () => {

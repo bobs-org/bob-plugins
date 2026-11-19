@@ -81,7 +81,11 @@ local minute it was written, such as `*2026-08-15 14:32* — Added coverage`,
 under a tab-indented managed `🛠️ **WORK LOG**` child bullet. The prompt's
 preview shows the stamp live, but the written stamp is read once at commit
 (Enter), so a prompt left open across midnight stamps the commit time. Older
-date-only entries are never rewritten. After that prompt settles and the
+date-only entries are never rewritten. When the Bob phrase catalog is
+available, `Ctrl+N` / `Ctrl+P` and `↓` / `↑` fill its `USED BEFORE` band;
+Esc or Ctrl+[ first restores the typed draft, and Enter still writes exactly
+what the field shows. See the [bob-cli Log Recall contract](https://bobs-org.github.io/log-recall/).
+After that prompt settles and the
 unlink write commits, a Pending task with no live Task Link left today
 offers its configured starts-after successors through task-status-cycler
 `api.offerParkedSuccessors` (api v4), passing the removed link's entry and

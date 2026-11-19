@@ -1,5 +1,6 @@
 // Keep the lifecycle entrypoint focused; preserve the existing teardown order.
 BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
+    this.teardownLogHistory();
     this.teardownCalendarEventPainting();
     this.teardownRelationIndex();
     if (

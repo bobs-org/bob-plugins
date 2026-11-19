@@ -896,6 +896,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    if (summary && plan.workLogWrittenCount > 0) {
+      const recall = getNavigationLogRecallApi(this.app);
+      if (recall) recall.noteUsed("work", summary);
+    }
     let removedPomodoroLinkCount = 0;
     let pomodoroPruneFailed = false;
     if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {

@@ -504,10 +504,15 @@ class BlockIdPromptPomodoroLinksMixin {
       : null;
     if (source.kind === TASK_LINK_OPEN_SOURCE_KIND) {
       try {
-        return await this.applyTaskLinkOpen(source, {
+        const accepted = await this.applyTaskLinkOpen(source, {
           workSummary: normalizedSummary,
           workLogStamp,
         });
+        if (accepted === true && normalizedSummary) {
+          const recall = this.getLogRecallApi();
+          if (recall) recall.noteUsed("work", normalizedSummary);
+        }
+        return accepted;
       } catch (error) {
         return false;
       }
@@ -518,6 +523,10 @@ class BlockIdPromptPomodoroLinksMixin {
         workSummary: normalizedSummary,
         workLogStamp,
       });
+      if (result === true && normalizedSummary) {
+        const recall = this.getLogRecallApi();
+        if (recall) recall.noteUsed("work", normalizedSummary);
+      }
       if (result === false && source && source.inboxRouteCancelled === true) {
         source.inboxRouteCancelled = false;
         this.settleLinkReviewOrigin(source, null);

@@ -40,6 +40,8 @@
   "180-editor-transactions.js",
   "181-editor-line-diff.js",
   "182-reload-history.js",
+  "183-log-recall-model.js",
+  "184-log-recall-band.js",
   "190-summary-modals.js",
   "192-freshness-refresh-summary-modal.js",
   "195-rotten-keep.js",
@@ -248,5 +250,6 @@
   "720-window-prefix-exports.js",
   "721-window-prefix-actions-exports.js",
   "722-window-tab-exports.js",
-  "723-video-zoom-exports.js"
+  "723-video-zoom-exports.js",
+  "724-log-recall-exports.js"
 ]

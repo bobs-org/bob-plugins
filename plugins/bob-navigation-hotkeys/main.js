@@ -23505,6 +23505,580 @@ function createReloadHistoryExtension(stateModule) {
     return null;
   }
 }
+// ---- src/183-log-recall-model.js ----
+// Pure client model for bob-cli's log-recall vectors. Bob supplies each
+// phrase's spelling, score, and recency rank; clients only normalize drafts,
+// merge the session overlay, and apply the shared literal match tiers.
+function normalizeLogRecallQuery(value) {
+  try {
+    return String(value == null ? "" : value)
+      .normalize("NFC")
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter(Boolean)
+      .join(" ");
+  } catch (_error) {
+    return "";
+  }
+}
+
+function logRecallPhrasesFromCatalog(kindCatalog) {
+  if (Array.isArray(kindCatalog)) return kindCatalog;
+  if (kindCatalog && Array.isArray(kindCatalog.phrases)) return kindCatalog.phrases;
+  if (kindCatalog && Array.isArray(kindCatalog.logs)) {
+    return kindCatalog.logs.flatMap((log) => Array.isArray(log.phrases) ? log.phrases : []);
+  }
+  return [];
+}
+
+function logRecallOverlayEntries(overlay, kind) {
+  if (Array.isArray(overlay)) return overlay;
+  return overlay && Array.isArray(overlay[kind]) ? overlay[kind] : [];
+}
+
+function logRecallOverlayStamp(entry, kind) {
+  const date = new Date(entry.at);
+  if (!Number.isFinite(date.getTime())) return entry.at;
+  const pad = (value) => String(value).padStart(2, "0");
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return kind === "work" ? `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}` : day;
+}
+
+function logRecallWordPrefix(text, query) {
+  if (!query) return false;
+  let from = 0;
+  while (from <= text.length) {
+    const index = text.indexOf(query, from);
+    if (index < 0) return false;
+    if (index === 0) return true;
+    const before = Array.from(text.slice(0, index)).at(-1) || "";
+    const at = Array.from(text.slice(index))[0] || "";
+    if (!/[\p{L}\p{N}]/u.test(before) && /[\p{L}\p{N}]/u.test(at)) return true;
+    from = index + Math.max(1, query.length);
+  }
+  return false;
+}
+
+function logRecallMergePhrases(kindCatalog, overlay, kind = null) {
+  const phrases = logRecallPhrasesFromCatalog(kindCatalog);
+  const entries = logRecallOverlayEntries(overlay, kind);
+  const newestByKey = new Map();
+  for (const entry of entries) {
+    if (!entry || typeof entry.text !== "string") continue;
+    const key = normalizeLogRecallQuery(entry.key || entry.text);
+    const at = typeof entry.at === "string" ? entry.at : "";
+    if (!key || !at) continue;
+    const old = newestByKey.get(key);
+    if (!old || at > old.at) newestByKey.set(key, { ...entry, key, at });
+  }
+  const recent = [...newestByKey.values()].sort((a, b) => b.at.localeCompare(a.at) || a.key.localeCompare(b.key));
+  const merged = new Map();
+  for (const phrase of phrases) {
+    if (!phrase || typeof phrase !== "object") continue;
+    const key = typeof phrase.key === "string" ? phrase.key : normalizeLogRecallQuery(phrase.text);
+    if (!key) continue;
+    merged.set(key, { ...phrase, key, score: Number(phrase.score) || 0, recency_rank: Number.isFinite(Number(phrase.recency_rank)) ? Number(phrase.recency_rank) : Number.MAX_SAFE_INTEGER });
+  }
+  recent.forEach((entry, index) => {
+    const recencyRank = index - recent.length;
+    const lastUsed = logRecallOverlayStamp(entry, kind);
+    const previous = merged.get(entry.key);
+    if (previous) {
+      merged.set(entry.key, { ...previous, text: entry.text, last_used: lastUsed, recency_rank: recencyRank });
+    } else {
+      merged.set(entry.key, {
+        text: entry.text,
+        key: entry.key,
+        uses: 1,
+        last_used: lastUsed,
+        score: 1,
+        recency_rank: recencyRank,
+        match: null,
+      });
+    }
+  });
+  return [...merged.values()];
+}
+
+function rankLogRecall(kindCatalog, overlay, query, kind = null) {
+  const phrases = logRecallMergePhrases(kindCatalog, overlay, kind);
+  const q = normalizeLogRecallQuery(query);
+  const tiers = { exact: [], prefix: [], word: [], substring: [], none: [] };
+  for (const phrase of phrases) {
+    const key = normalizeLogRecallQuery(phrase.key || phrase.text);
+    let match = "none";
+    if (!q) match = "none";
+    else if (key === q) match = "exact";
+    else if (key.startsWith(q)) match = "prefix";
+    else if (logRecallWordPrefix(key, q)) match = "word";
+    else if (key.includes(q)) match = "substring";
+    else continue;
+    tiers[match].push({ ...phrase, match: match === "none" ? null : match });
+  }
+  const ordered = [];
+  const names = q ? ["exact", "prefix", "word", "substring"] : ["none"];
+  for (const name of names) {
+    const rows = tiers[name];
+    const newest = rows.reduce((best, row) => Math.min(best, Number(row.recency_rank)), Number.POSITIVE_INFINITY);
+    rows.sort((left, right) => {
+      const leftRank = Number(left.recency_rank);
+      const rightRank = Number(right.recency_rank);
+      const leftPinned = leftRank === newest;
+      const rightPinned = rightRank === newest;
+      return Number(rightPinned) - Number(leftPinned)
+        || Number(right.score || 0) - Number(left.score || 0)
+        || leftRank - rightRank
+        || String(left.key).localeCompare(String(right.key));
+    });
+    ordered.push(...rows);
+  }
+  return ordered;
+}
+
+function logRecallInitialState(options = {}) {
+  return {
+    mode: "draft",
+    kind: options.kind || "work",
+    draft: String(options.draft || ""),
+    rows: Array.isArray(options.rows) ? options.rows.slice() : [],
+    selectedKey: null,
+    edge: null,
+  };
+}
+
+function logRecallReduce(state, action = {}) {
+  const current = state && typeof state === "object" ? state : logRecallInitialState();
+  const rows = Array.isArray(action.rows) ? action.rows : current.rows || [];
+  const selectedIndex = rows.findIndex((row) => row && row.key === current.selectedKey);
+  switch (action.type) {
+    case "draft":
+      return { ...current, mode: "draft", draft: String(action.text == null ? "" : action.text), rows, selectedKey: null, edge: null };
+    case "rows":
+      return { ...current, rows, selectedKey: rows.some((row) => row.key === current.selectedKey) ? current.selectedKey : null };
+    case "kind":
+      return { ...current, kind: action.kind || current.kind, mode: "draft", rows, selectedKey: null, edge: null };
+    case "enter":
+      if (!rows.length) return { ...current, rows, edge: "empty" };
+      return { ...current, mode: "recalling", rows, selectedKey: rows[0].key, edge: null };
+    case "click":
+      return action.row && action.row.key ? { ...current, mode: "recalling", selectedKey: action.row.key, edge: null } : current;
+    case "next": {
+      if (!rows.length) return { ...current, rows, edge: "empty" };
+      if (current.mode !== "recalling" || selectedIndex < 0) return { ...current, mode: "recalling", rows, selectedKey: rows[0].key, edge: null };
+      if (selectedIndex >= rows.length - 1) return { ...current, rows, edge: "bottom" };
+      return { ...current, rows, selectedKey: rows[selectedIndex + 1].key, edge: null };
+    }
+    case "previous": {
+      if (!rows.length) return { ...current, rows, edge: "empty" };
+      if (current.mode !== "recalling" || selectedIndex < 0) return { ...current, mode: "recalling", rows, selectedKey: rows[0].key, edge: null };
+      if (selectedIndex === 0) return { ...current, mode: "draft", selectedKey: null, edge: null };
+      return { ...current, rows, selectedKey: rows[selectedIndex - 1].key, edge: null };
+    }
+    case "backOut":
+      return current.mode === "recalling" ? { ...current, mode: "draft", selectedKey: null, edge: null } : current;
+    default:
+      return current;
+  }
+}
+
+function formatLogRecallAge(value, precision = "minute", now = new Date()) {
+  const source = value && typeof value === "object" ? value.last_used : value;
+  if (typeof source !== "string" || !source) return "";
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(source);
+  if (!dayMatch) return "";
+  const at = precision === "day" || /^\d{4}-\d{2}-\d{2}$/.test(source)
+    ? new Date(Number(dayMatch[1]), Number(dayMatch[2]) - 1, Number(dayMatch[3]))
+    : /T\d{2}:\d{2}:\d{2}/.test(source)
+      ? new Date(source)
+      : new Date(`${source.replace(" ", "T")}:00`);
+  if (!Number.isFinite(at.getTime())) return "";
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const date = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+  const days = Math.max(0, Math.floor((today - date) / 86400000));
+  if (precision === "day" || /^\d{4}-\d{2}-\d{2}$/.test(source)) {
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 7) return `${days}d`;
+  } else {
+    const minutes = Math.max(0, Math.floor((now.getTime() - at.getTime()) / 60000));
+    if (minutes < 1) return "now";
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 1440 && days === 0) return `${Math.floor(minutes / 60)}h`;
+    if (days === 1) return "yesterday";
+    if (days < 7) return `${days}d`;
+  }
+  const sameYear = at.getFullYear() === now.getFullYear();
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) }).format(at);
+}
+// ---- src/184-log-recall-band.js ----
+// Shared USED BEFORE band for Obsidian text fields. The host owns its input,
+// preview, submit, and Esc behavior; this controller only fills that input.
+const LOG_RECALL_KIND_META = Object.freeze({
+  schedule: { emoji: "🗓️", label: "Schedule" },
+  work: { emoji: "🛠️", label: "Work" },
+  rotten: { emoji: "🥀", label: "Rotten" },
+  cancel: { emoji: "❌", label: "Cancel" },
+});
+
+function getNavigationLogHistoryApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins["bob-ledger-tools"];
+    const logs = holder && holder.api && holder.api.logs;
+    return logs && Number(logs.version) >= 1 && typeof logs.fetch === "function" && typeof logs.snapshot === "function" ? logs : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getNavigationLogRecallApi(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins["bob-navigation-hotkeys"];
+    const api = holder && holder.api && holder.api.logRecall;
+    return api && Number(api.version) >= 1 && typeof api.attach === "function" ? api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function logRecallCreateElement(parent, tag, cls, text) {
+  if (!parent) return null;
+  let element = null;
+  try {
+    if (tag === "span" && typeof parent.createSpan === "function") element = parent.createSpan({ cls, text });
+    else if (tag === "button" && typeof parent.createEl === "function") element = parent.createEl(tag, { cls, text });
+    else if (typeof parent.createDiv === "function") element = parent.createDiv({ cls, text });
+    else if (typeof parent.createEl === "function") element = parent.createEl(tag, { cls, text });
+  } catch (_error) {
+    return null;
+  }
+  return element;
+}
+
+function logRecallAddClass(element, name, enabled) {
+  try {
+    if (element && element.classList && typeof element.classList.toggle === "function") element.classList.toggle(name, enabled);
+    else if (element && enabled && typeof element.addClass === "function") element.addClass(name);
+    else if (element && !enabled && typeof element.removeClass === "function") element.removeClass(name);
+  } catch (_error) {}
+}
+
+function logRecallSetAttr(element, name, value) {
+  try {
+    if (element && typeof element.setAttribute === "function") element.setAttribute(name, String(value));
+    else if (element && element.attr) element.attr[name] = String(value);
+  } catch (_error) {}
+}
+
+function logRecallHighlight(row, text, query) {
+  const source = String(text || "");
+  const q = normalizeLogRecallQuery(query);
+  const lower = source.normalize("NFC").toLowerCase();
+  const index = q ? lower.indexOf(q) : -1;
+  if (index < 0 || typeof row.createSpan !== "function") {
+    row.textContent = source;
+    return;
+  }
+  if (index > 0 && typeof row.appendText === "function") row.appendText(source.slice(0, index));
+  const match = row.createSpan({ cls: "bob-log-recall-match", text: source.slice(index, index + q.length) });
+  if (index + q.length < source.length && typeof row.appendText === "function") row.appendText(source.slice(index + q.length));
+  if (!match) row.textContent = source;
+}
+
+function attachLogRecall(options = {}) {
+  const opts = options && typeof options === "object" ? options : {};
+  const inputEl = opts.inputEl || null;
+  const bandHost = opts.bandHost || null;
+  const app = opts.app || (inputEl && inputEl.closest && inputEl.closest(".modal") && inputEl.closest(".modal").app) || null;
+  const logsApi = opts.logsApi || getNavigationLogHistoryApi(app);
+  const density = opts.density === "dense" ? "dense" : "roomy";
+  const maxRows = Number.isInteger(opts.maxRows) ? Math.max(0, opts.maxRows) : null;
+  let kind = LOG_RECALL_KIND_META[opts.kind] ? opts.kind : "work";
+  let catalog = null;
+  let pendingCatalog = null;
+  let visibleLatch = false;
+  let ownFill = false;
+  let disposed = false;
+  let fetchGeneration = 0;
+  let unsubscribe = () => {};
+  let scopeHandler = null;
+  let state = logRecallInitialState({ kind, draft: inputEl && inputEl.value || "" });
+  let currentRows = [];
+  let totalForKind = 0;
+  const id = `bob-log-recall-${Math.random().toString(36).slice(2, 10)}`;
+
+  const readSnapshot = () => {
+    try { return logsApi && typeof logsApi.snapshot === "function" ? logsApi.snapshot() : null; }
+    catch (_error) { return null; }
+  };
+  const phraseRows = (source = catalog, query = state.draft) => {
+    const log = source && Array.isArray(source.logs) ? source.logs.find((entry) => entry && entry.kind === kind) : null;
+    if (!log) return [];
+    const overlay = source && source.overlay ? source.overlay : [];
+    return rankLogRecall(log, overlay, query, kind);
+  };
+  const setInputValue = (value) => {
+    if (!inputEl) return;
+    ownFill = true;
+    try {
+      inputEl.value = String(value == null ? "" : value);
+      if (typeof inputEl.setSelectionRange === "function") inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+      if (typeof Event !== "undefined" && typeof inputEl.dispatchEvent === "function") {
+        const EventClass = inputEl.ownerDocument && inputEl.ownerDocument.defaultView && inputEl.ownerDocument.defaultView.Event || Event;
+        inputEl.dispatchEvent(new EventClass("input", { bubbles: true }));
+      }
+    } catch (_error) {
+      try { inputEl.value = String(value == null ? "" : value); } catch (_ignored) {}
+    } finally {
+      ownFill = false;
+    }
+  };
+  const refreshRows = () => {
+    currentRows = phraseRows(catalog, state.draft);
+    state = logRecallReduce(state, { type: "rows", rows: currentRows });
+    const log = catalog && Array.isArray(catalog.logs) ? catalog.logs.find((entry) => entry && entry.kind === kind) : null;
+    totalForKind = log ? logRecallMergePhrases(log, catalog.overlay || [], kind).length : 0;
+  };
+  const bump = (where) => {
+    state = logRecallReduce(state, { type: "rows", rows: currentRows });
+    state = { ...state, edge: where };
+    if (bandHost) {
+      logRecallAddClass(bandHost, "is-edge-bump", true);
+      const schedule = typeof window !== "undefined" && typeof window.setTimeout === "function" ? window.setTimeout.bind(window) : setTimeout;
+      schedule(() => logRecallAddClass(bandHost, "is-edge-bump", false), 120);
+    }
+    render();
+  };
+  const fillSelected = (row) => {
+    if (!row) return;
+    state = logRecallReduce(state, { type: "click", row });
+    setInputValue(row.text);
+    render();
+    try {
+      const live = bandHost && bandHost.querySelector && bandHost.querySelector(".bob-log-recall-live");
+      if (live) live.textContent = `Recalled ${currentRows.findIndex((item) => item.key === row.key) + 1} of ${currentRows.length}: ${row.text}`;
+    } catch (_error) {}
+  };
+  const render = () => {
+    if (!bandHost || disposed) return;
+    refreshRows();
+    const denseReveal = density !== "dense" || visibleLatch || normalizeLogRecallQuery(state.draft).length >= 2;
+    const visible = totalForKind > 0 && denseReveal;
+    try { bandHost.empty(); } catch (_error) {
+      while (bandHost.firstChild) bandHost.removeChild(bandHost.firstChild);
+    }
+    logRecallAddClass(bandHost, "bob-log-recall-band", visible);
+    logRecallAddClass(bandHost, "is-hidden", !visible);
+    if (!visible) {
+      if (inputEl) {
+        try { inputEl.removeAttribute("aria-controls"); inputEl.removeAttribute("aria-activedescendant"); } catch (_error) {}
+      }
+      return;
+    }
+    const cap = maxRows == null ? (density === "dense" ? 3 : 5) : maxRows;
+    const slots = Math.min(cap, Math.max(1, totalForKind));
+    try { bandHost.style.setProperty("--bob-log-recall-slots", String(slots)); } catch (_error) {}
+    const root = logRecallCreateElement(bandHost, "div", "bob-log-recall-inner");
+    const meta = LOG_RECALL_KIND_META[kind];
+    const header = logRecallCreateElement(root, "div", "bob-log-recall-header");
+    let title = `${meta.emoji} USED BEFORE`;
+    const selectedIndex = currentRows.findIndex((row) => row.key === state.selectedKey);
+    if (state.mode === "recalling" && selectedIndex >= 0) {
+      title += ` · ${selectedIndex + 1} of ${currentRows.length}`;
+    } else if (normalizeLogRecallQuery(state.draft)) {
+      title += currentRows.length ? ` · matching “${state.draft}”` : ` · no match for “${state.draft}”`;
+    }
+    logRecallCreateElement(header, "span", "bob-log-recall-title", title);
+    const hints = logRecallCreateElement(header, "span", "bob-log-recall-hints");
+    if (state.mode === "recalling" && selectedIndex >= 0) {
+      const restore = state.draft ? `esc restores “${state.draft}”` : "esc clears";
+      logRecallCreateElement(hints, "span", "bob-log-recall-hint", restore);
+    } else if (currentRows.length) {
+      logRecallCreateElement(hints, "span", "bob-log-recall-keycap", "⌃N");
+      logRecallCreateElement(hints, "span", "bob-log-recall-keycap", "⌃P");
+    }
+    const list = logRecallCreateElement(root, "div", "bob-log-recall-rows");
+    logRecallSetAttr(list, "id", id);
+    logRecallSetAttr(list, "role", "listbox");
+    logRecallSetAttr(list, "aria-label", `${meta.label} phrases used before`);
+    for (let index = 0; index < slots; index += 1) {
+      const row = currentRows[index];
+      if (!row) {
+        logRecallCreateElement(list, "div", "bob-log-recall-row is-empty");
+        continue;
+      }
+      const rowId = `${id}-${index}`;
+      const rowEl = logRecallCreateElement(list, "div", `bob-log-recall-row${state.mode === "recalling" && row.key === state.selectedKey ? " is-selected" : ""}`);
+      logRecallSetAttr(rowEl, "id", rowId);
+      logRecallSetAttr(rowEl, "role", "option");
+      logRecallSetAttr(rowEl, "aria-selected", state.mode === "recalling" && row.key === state.selectedKey ? "true" : "false");
+      const tooltip = `Last used ${row.last_used || "unknown"} · ${Number(row.uses) || 1} ${Number(row.uses) === 1 ? "use" : "uses"}`;
+      logRecallSetAttr(rowEl, "title", tooltip);
+      const textEl = logRecallCreateElement(rowEl, "span", "bob-log-recall-text");
+      logRecallHighlight(textEl, row.text, state.draft);
+      const age = formatLogRecallAge(row, kind === "work" ? "minute" : "day");
+      logRecallCreateElement(rowEl, "span", "bob-log-recall-meta", `${Number(row.uses) || 1}× · ${age}`);
+      if (rowEl && typeof rowEl.addEventListener === "function") {
+        rowEl.addEventListener("mousedown", (event) => event.preventDefault());
+        rowEl.addEventListener("click", () => fillSelected(row));
+      }
+    }
+    const live = logRecallCreateElement(root, "span", "bob-log-recall-live");
+    logRecallSetAttr(live, "aria-live", "polite");
+    logRecallSetAttr(live, "role", "status");
+    logRecallAddClass(live, "bob-log-recall-sr-only", true);
+    if (inputEl) {
+      logRecallSetAttr(inputEl, "aria-controls", id);
+      if (state.mode === "recalling" && selectedIndex >= 0) logRecallSetAttr(inputEl, "aria-activedescendant", `${id}-${selectedIndex}`);
+      else try { inputEl.removeAttribute("aria-activedescendant"); } catch (_error) {}
+      logRecallAddClass(inputEl, "is-recalling", state.mode === "recalling");
+    }
+  };
+  const inputListener = () => {
+    if (ownFill || disposed || !inputEl) return;
+    const text = String(inputEl.value || "");
+    state = logRecallReduce(state, { type: "draft", text, rows: currentRows });
+    if (density === "dense" && normalizeLogRecallQuery(text).length >= 2) visibleLatch = true;
+    if (pendingCatalog && state.mode === "draft") { catalog = pendingCatalog; pendingCatalog = null; }
+    render();
+  };
+  const restoreDraft = () => {
+    const draft = state.draft;
+    state = logRecallReduce(state, { type: "backOut" });
+    if (pendingCatalog) { catalog = pendingCatalog; pendingCatalog = null; }
+    setInputValue(draft);
+    render();
+    return true;
+  };
+  const handleKeydown = (event) => {
+    if (!event || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return false;
+    const key = String(event.key || "").toLowerCase();
+    let direction = 0;
+    if (event.ctrlKey && (key === "n" || key === "p")) direction = key === "n" ? 1 : -1;
+    else if (!event.ctrlKey && opts.arrowKeys !== false && (key === "arrowdown" || key === "arrowup")) direction = key === "arrowdown" ? 1 : -1;
+    if (!direction) return false;
+    const latest = readSnapshot();
+    if (latest) {
+      if (state.mode === "recalling") pendingCatalog = latest;
+      else catalog = latest;
+    }
+    refreshRows();
+    if (!catalog || totalForKind === 0) return false;
+    if (density === "dense") visibleLatch = true;
+    if (!currentRows.length) {
+      bump("empty");
+      return true;
+    }
+    if (direction > 0) {
+      const before = state.selectedKey;
+      state = logRecallReduce(state, { type: "next", rows: currentRows });
+      if (state.edge === "bottom") { bump("bottom"); return true; }
+      const selected = currentRows.find((row) => row.key === state.selectedKey);
+      if (selected && (state.mode !== "recalling" || before !== state.selectedKey)) setInputValue(selected.text);
+    } else {
+      const wasRecalling = state.mode === "recalling";
+      const before = state.selectedKey;
+      state = logRecallReduce(state, { type: "previous", rows: currentRows });
+      if (state.edge === "empty") { bump("empty"); return true; }
+      if (state.mode === "draft" && wasRecalling) {
+        if (pendingCatalog) { catalog = pendingCatalog; pendingCatalog = null; }
+        setInputValue(state.draft);
+      } else if (state.selectedKey !== before) {
+        const selected = currentRows.find((row) => row.key === state.selectedKey);
+        if (selected) setInputValue(selected.text);
+      }
+    }
+    render();
+    const selectedIndex = currentRows.findIndex((row) => row.key === state.selectedKey);
+    const selected = currentRows[selectedIndex];
+    if (selected) {
+      try {
+        const live = bandHost && bandHost.querySelector && bandHost.querySelector(".bob-log-recall-live");
+        if (live) live.textContent = `Recalled ${selectedIndex + 1} of ${currentRows.length}: ${selected.text}`;
+      } catch (_error) {}
+    }
+    return true;
+  };
+  const backOut = () => state.mode === "recalling" ? restoreDraft() : false;
+  const captureKeydown = (event) => {
+    const key = String(event && event.key || "").toLowerCase();
+    const escChord = key === "escape" || (event && event.ctrlKey && key === "[");
+    const consumed = escChord ? backOut() : handleKeydown(event);
+    if (consumed) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+    }
+  };
+  const refreshFromApi = (snapshot) => {
+    if (disposed) return;
+    const next = snapshot || readSnapshot();
+    if (!next) return;
+    if (state.mode === "recalling") pendingCatalog = next;
+    else catalog = next;
+    render();
+  };
+  if (inputEl && typeof inputEl.addEventListener === "function") {
+    inputEl.addEventListener("input", inputListener);
+    if (opts.ownKeys === true) inputEl.addEventListener("keydown", captureKeydown, true);
+  }
+  if (opts.ownKeys === true && opts.scope && typeof opts.scope.register === "function") {
+    try {
+      scopeHandler = opts.scope.register(null, null, (event) => {
+        try {
+          const doc = inputEl && inputEl.ownerDocument;
+          if (doc && doc.activeElement && doc.activeElement !== inputEl) return true;
+          if (typeof document !== "undefined" && document.activeElement && document.activeElement !== inputEl) return true;
+        } catch (_error) {}
+        return captureKeydown(event) ? false : true;
+      });
+    } catch (_error) { scopeHandler = null; }
+  }
+  try {
+    if (logsApi && typeof logsApi.onChange === "function") unsubscribe = logsApi.onChange(refreshFromApi) || (() => {});
+  } catch (_error) { unsubscribe = () => {}; }
+  catalog = readSnapshot();
+  render();
+  if (logsApi && typeof logsApi.fetch === "function") {
+    const generation = ++fetchGeneration;
+    Promise.resolve().then(() => logsApi.fetch()).then((result) => {
+      if (disposed || generation !== fetchGeneration || !result) return;
+      if (result.catalog) refreshFromApi(result.catalog);
+    }).catch(() => {});
+  }
+  return {
+    handleKeydown,
+    backOut,
+    isRecalling: () => state.mode === "recalling",
+    setKind(nextKind) {
+      if (!LOG_RECALL_KIND_META[nextKind]) return false;
+      kind = nextKind;
+      state = logRecallReduce(state, { type: "kind", kind, rows: [] });
+      state.draft = String(inputEl && inputEl.value || "");
+      visibleLatch = density === "dense" && normalizeLogRecallQuery(state.draft).length >= 2;
+      catalog = readSnapshot() || catalog;
+      render();
+      return true;
+    },
+    detach() {
+      if (disposed) return;
+      disposed = true;
+      fetchGeneration += 1;
+      try { unsubscribe(); } catch (_error) {}
+      if (inputEl && typeof inputEl.removeEventListener === "function") {
+        inputEl.removeEventListener("input", inputListener);
+        if (opts.ownKeys === true) inputEl.removeEventListener("keydown", captureKeydown, true);
+      }
+      try { if (scopeHandler && opts.scope && typeof opts.scope.unregister === "function") opts.scope.unregister(scopeHandler); } catch (_error) {}
+      try { bandHost.empty(); } catch (_error) {}
+      logRecallAddClass(inputEl, "is-recalling", false);
+      if (inputEl) {
+        try { inputEl.removeAttribute("aria-controls"); inputEl.removeAttribute("aria-activedescendant"); } catch (_error) {}
+      }
+    },
+  };
+}
 // ---- src/190-summary-modals.js ----
 function isSamePriorityRollTarget(cached, fresh) {
   if (!cached || !fresh || cached.kind !== fresh.kind) {
@@ -24250,6 +24824,10 @@ class LaneReleaseSummaryModal extends Modal {
     this.onDone = onDone;
     this.completed = false;
     this.inputEl = null;
+    this.previewEl = null;
+    this.recallBandEl = null;
+    this.recallFooterEl = null;
+    this.logRecall = null;
   }
 
   onOpen() {
@@ -24266,23 +24844,58 @@ class LaneReleaseSummaryModal extends Modal {
         type: "text",
       },
     });
-    const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
-    const cancelBtn = row.createEl("button", { text: "Cancel" });
-    cancelBtn.addEventListener("click", () => this.close());
-    const releaseBtn = row.createEl("button", { text: "Release" });
-    releaseBtn.addEventListener("click", () => this.submit());
+    this.inputEl.addEventListener("input", () => this.updatePreview());
     this.inputEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
+      if (event.ctrlKey && String(event.key || "") === "[") {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const EventClass = this.inputEl.ownerDocument && this.inputEl.ownerDocument.defaultView && this.inputEl.ownerDocument.defaultView.KeyboardEvent || KeyboardEvent;
+          this.inputEl.dispatchEvent(new EventClass("keydown", { key: "Escape", bubbles: true }));
+        } catch (_error) {}
+        return;
+      }
+      if (event.key === "Enter" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
         this.submit();
       }
     });
+    this.previewEl = contentEl.createDiv({ cls: "bob-tll-preview", attr: { role: "note", "aria-live": "polite" } });
+    this.recallBandEl = contentEl.createDiv({ cls: "bob-lane-release-log-recall-host" });
+    const recallApi = getNavigationLogRecallApi(this.app);
+    if (recallApi) {
+      try {
+        this.logRecall = recallApi.attach({ inputEl: this.inputEl, kind: "work", bandHost: this.recallBandEl, density: "roomy", arrowKeys: true, ownKeys: true, scope: this.scope });
+      } catch (_error) { this.logRecall = null; }
+    }
+    const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
+    const cancelBtn = row.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => this.close());
+    const releaseBtn = row.createEl("button", { text: "Release" });
+    releaseBtn.addEventListener("click", () => this.submit());
+    this.recallFooterEl = contentEl.createDiv({ cls: "bob-lane-release-footer" });
+    this.updatePreview();
     window.setTimeout(() => {
       if (this.inputEl) {
         this.inputEl.focus();
       }
     }, 0);
+  }
+
+  updatePreview() {
+    if (!this.previewEl) return;
+    const value = this.inputEl ? String(this.inputEl.value || "") : "";
+    const stampText = formatWorkLogStamp(new Date());
+    const state = taskLinkLanePromptState(value, { stampText });
+    this.previewEl.empty();
+    if (state.isBlank) {
+      this.previewEl.createDiv({ cls: "bob-tll-preview-muted", text: "No work-log entry will be added." });
+    } else {
+      this.previewEl.createDiv({ cls: "bob-tll-preview-marker", text: `${WORK_LOG_EMOJI} **${WORK_LOG_LABEL}**` });
+      this.previewEl.createDiv({ cls: "bob-tll-preview-entry", text: state.formattedEntry });
+    }
+    if (this.recallFooterEl) this.recallFooterEl.textContent = state.isBlank ? "↵ Release · esc Cancel" : "↵ Release & log summary · esc Cancel";
   }
 
   submit() {
@@ -24298,6 +24911,8 @@ class LaneReleaseSummaryModal extends Modal {
   }
 
   onClose() {
+    if (this.logRecall && typeof this.logRecall.detach === "function") this.logRecall.detach();
+    this.logRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {
@@ -25195,6 +25810,9 @@ class TaskLinkLanePromptModal extends Modal {
     this.previewEl = null;
     this.warningEl = null;
     this.primaryButton = null;
+    this.recallBandEl = null;
+    this.recallFooterEl = null;
+    this.logRecall = null;
   }
 
   taskLinkLaneTasks() {
@@ -25312,6 +25930,15 @@ class TaskLinkLanePromptModal extends Modal {
     });
     this.inputEl.addEventListener("input", () => this.updatePreview());
     this.inputEl.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && String(event.key || "") === "[") {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const EventClass = this.inputEl.ownerDocument && this.inputEl.ownerDocument.defaultView && this.inputEl.ownerDocument.defaultView.KeyboardEvent || KeyboardEvent;
+          this.inputEl.dispatchEvent(new EventClass("keydown", { key: "Escape", bubbles: true }));
+        } catch (_error) {}
+        return;
+      }
       if (event.key !== "Enter" || event.isComposing) {
         return;
       }
@@ -25324,6 +25951,21 @@ class TaskLinkLanePromptModal extends Modal {
       cls: "bob-tll-preview",
       attr: { id: "bob-tll-preview", role: "note", "aria-live": "polite" },
     });
+    this.recallBandEl = contentEl.createDiv({ cls: "bob-tll-log-recall-host" });
+    const recallApi = getNavigationLogRecallApi(this.app);
+    if (recallApi) {
+      try {
+        this.logRecall = recallApi.attach({
+          inputEl: this.inputEl,
+          kind: "work",
+          bandHost: this.recallBandEl,
+          density: "roomy",
+          arrowKeys: true,
+          ownKeys: true,
+          scope: this.scope,
+        });
+      } catch (_error) { this.logRecall = null; }
+    }
     this.warningEl = contentEl.createDiv({
       cls: "bob-tll-warning",
       attr: { id: "bob-tll-warning", role: "status" },
@@ -25335,6 +25977,7 @@ class TaskLinkLanePromptModal extends Modal {
     cancelBtn.addEventListener("click", () => this.close());
     this.primaryButton = row.createEl("button", { text: "Move to Next" });
     this.primaryButton.addEventListener("click", () => this.submit());
+    this.recallFooterEl = contentEl.createDiv({ cls: "bob-tll-recall-footer" });
 
     this.updatePreview();
     window.setTimeout(() => {
@@ -25387,6 +26030,11 @@ class TaskLinkLanePromptModal extends Modal {
         this.warningEl.classList.toggle("is-hidden", hidden);
       }
     }
+    if (this.recallFooterEl) {
+      this.recallFooterEl.textContent = state.isBlank
+        ? "↵ Move to Next · esc Cancel"
+        : "↵ Log & move to Next · esc Cancel";
+    }
   }
 
   submit() {
@@ -25403,6 +26051,8 @@ class TaskLinkLanePromptModal extends Modal {
   }
 
   onClose() {
+    if (this.logRecall && typeof this.logRecall.detach === "function") this.logRecall.detach();
+    this.logRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {
@@ -80498,6 +81148,16 @@ function createDependencyNavApi(plugin) {
     taskLinkLane: createTaskLinkLaneApi(plugin),
     notice: createNoticeApi(plugin),
     cancel: createCancelApi(),
+    // USED BEFORE band v1. Phrase data lives in ledger-tools; this API only
+    // attaches a controller to a host-owned input and forwards successful writes.
+    logRecall: Object.freeze({
+      version: 1,
+      attach: (options = {}) => attachLogRecall({ ...options, app: plugin && plugin.app }),
+      noteUsed: (kind, text) => {
+        const logs = getNavigationLogHistoryApi(plugin && plugin.app);
+        return logs && typeof logs.noteUsed === "function" ? logs.noteUsed(kind, text) : false;
+      },
+    }),
     successors: createSuccessorPickerApi(plugin),
     blocks: createBlocksNavApi(plugin),
     relations: createRelationsNavApi(plugin),
@@ -83775,6 +84435,10 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
       new Notice("Could not update task; no tasks were updated");
       return false;
     }
+    if (summary && plan.workLogWrittenCount > 0) {
+      const recall = getNavigationLogRecallApi(this.app);
+      if (recall) recall.noteUsed("work", summary);
+    }
     let removedPomodoroLinkCount = 0;
     let pomodoroPruneFailed = false;
     if (dailyCleanupPlan && dailyCleanupPlan.changed && pomodoroSnapshot) {
@@ -84213,12 +84877,14 @@ class BobNavigationHotkeysLaneReviewMixin {
       return false;
     }
     let changedTaskCount = 0;
+    let workLogWrittenCount = 0;
     let blockedSkipped = 0;
     let releasedNextCount = 0;
     let releasedPendingCount = 0;
     let mode = "commit";
     for (const { plan } of planned) {
       changedTaskCount += plan.changedTaskCount;
+      workLogWrittenCount += Number(plan.workLogWrittenCount) || 0;
       blockedSkipped += plan.blockedSkipped;
       if (plan.mode === "release") {
         mode = "release";
@@ -84230,6 +84896,10 @@ class BobNavigationHotkeysLaneReviewMixin {
           releasedPendingCount += 1;
         }
       }
+    }
+    if (summary && workLogWrittenCount > 0) {
+      const recall = getNavigationLogRecallApi(this.app);
+      if (recall) recall.noteUsed("work", summary);
     }
     const removedPomodoroLinkCount =
       dailyCleanupPlan && dailyCleanupPlan.changed && !commit.pomodoroPruneFailed
@@ -85111,6 +85781,10 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         }
       }
       this.hintTaskLinkLaneProgressMarks(movedHints);
+      if (summary && workLogWrittenCount > 0) {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (recall) recall.noteUsed("work", summary);
+      }
       new Notice(
         buildTaskLinkLaneNotice({
           mode,
@@ -125543,3 +126217,21 @@ Object.assign(module.exports.helpers, {
   videoZoomEscapeAction,
   videoZoomFooterChipPlan,
 });
+// ---- src/724-log-recall-exports.js ----
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      normalizeLogRecallQuery,
+      rankLogRecall,
+      logRecallReduce,
+      logRecallInitialState,
+      formatLogRecallAge,
+      logRecallMergePhrases,
+      logRecallOverlayStamp,
+      attachLogRecall,
+      LaneReleaseSummaryModal,
+      getNavigationLogHistoryApi,
+      getNavigationLogRecallApi,
+    });
+  }
+} catch (_error) {}

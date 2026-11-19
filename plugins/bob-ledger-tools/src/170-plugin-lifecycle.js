@@ -271,6 +271,9 @@ class BobLedgerToolsPlugin extends Plugin {
       // Themes namespace v1: cached history, sync hue/history/near-duplicate
       // mirrors, journal writers. Unavailable on mobile. Additive: api stays v3.
       themes: this.pomodoroThemesApi(),
+      // Read-only phrase history from bob-cli plus a per-session write overlay.
+      // Additive: the top-level api stays v3.
+      logs: this.logHistoryApi(),
       periodNotes: this.periodNotesApi(), bank: this.bankApi(), bankWalk: this.bankWalkApi(),
       // Work badge tones (workBadges namespace v2 adds the magenta exact-cap
       // tone): shared count-to-limit colors for TODAY, PENDING, NEXT, and READY.
@@ -649,6 +652,7 @@ class BobLedgerToolsPlugin extends Plugin {
         void this.refreshPomodoroThemesJournal("startup");
       } catch (error) {}
       this.schedulePomodoroThemesFetch("startup");
+      this.scheduleLogHistoryPrefetch();
       // Obsidian replays vault create for every existing file before layout-ready, so relation listeners must register after it, and the scan covers the files that exist at startup.
       this.setupRelationIndex();
       this.startRelationIndexScan();

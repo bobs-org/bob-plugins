@@ -410,8 +410,17 @@ test("taskLinkLanePromptState drives the Move to Next prompt", () => {
 
 test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () => {
   const seen = [];
+  const attached = [];
+  let detached = 0;
+  const recallApi = {
+    version: 1,
+    attach(options) {
+      attached.push(options);
+      return { detach() { detached += 1; } };
+    },
+  };
   const modal = new helpers.TaskLinkLanePromptModal(
-    {},
+    { plugins: { plugins: { "bob-navigation-hotkeys": { api: { logRecall: recallApi } } } } },
     {
       tasks: [{ displayText: "Fix the parser crash", path: "Tasks.md" }],
       stampText: "2026-10-07 14:32",
@@ -419,6 +428,8 @@ test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () 
     },
   );
   modal.open();
+  assert.equal(attached[0].kind, "work");
+  assert.equal(attached[0].ownKeys, true);
   assert.deepEqual(modalTexts(modal, "bob-tll-title"), ["Move to Next"]);
   assert.deepEqual(modalTexts(modal, "bob-tll-subtitle"), [
     "Optional: what did you get done? Saved to the Work Log.",
@@ -458,6 +469,7 @@ test("TaskLinkLanePromptModal submits, previews live, and cancels silently", () 
     stopPropagation() {},
   });
   assert.deepEqual(seen, [{ summary: "done bit" }]);
+  assert.equal(detached, 1);
   // A fresh modal cancelled by close reports null once.
   const cancelled = [];
   const second = new helpers.TaskLinkLanePromptModal(
@@ -575,6 +587,7 @@ test("L1: toggle starts a Next link, stamps, hints, and notices", async () => {
 
 test("L2/L3: toggle pauses through the prompt, logging one shared entry", async () => {
   notices.length = 0;
+  const noted = [];
   const harness = laneHarness({
     daily: dailyNote(
       "- [ ] (**0940-1010**)",
@@ -584,6 +597,16 @@ test("L2/L3: toggle pauses through the prompt, logging one shared entry", async 
     cursor: { line: 2, ch: 3 },
   });
   withLedger(harness, budgetsApi());
+  harness.plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
+    api: {
+      version: 3,
+      logRecall: {
+        version: 1,
+        attach: () => ({ detach() {} }),
+        noteUsed: (kind, text) => { noted.push([kind, text]); return true; },
+      },
+    },
+  };
   const pending = harness.plugin.toggleTaskLinkLane({
     editor: harness.linkEditor,
     view: harness.view,
@@ -600,6 +623,7 @@ test("L2/L3: toggle pauses through the prompt, logging one shared entry", async 
   assert.match(harness.notes["Tasks.md"], /WORK LOG/);
   assert.match(harness.notes["Tasks.md"], /— Finished the API review/);
   assert.match(notices.at(-1), /→ Next · Fix the parser crash · logged/);
+  assert.deepEqual(noted, [["work", "Finished the API review"]]);
 });
 
 test("L4: cancelling the prompt writes nothing and shows no Notice", async () => {

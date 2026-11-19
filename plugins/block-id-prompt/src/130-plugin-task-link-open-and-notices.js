@@ -430,6 +430,20 @@ class BlockIdPromptTaskLinkOpenAndNoticesMixin {
     }
   }
 
+  getLogRecallApi() {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const holder = plugins && plugins["bob-navigation-hotkeys"];
+      const api = holder && holder.api;
+      const recall = api && Number(api.version) >= 3 ? api.logRecall : null;
+      return recall && Number(recall.version) >= 1 && typeof recall.noteUsed === "function" && typeof recall.attach === "function"
+        ? recall
+        : null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   // nav `inboxRoute` v1 feature detection (link-toggle-gate,
   // block-id-prompt 1.23.0): the nav version check plus a versioned
   // inboxRoute member with callable isInboxNote, prompt, and commit.

@@ -199,6 +199,10 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
         }
       }
       this.hintTaskLinkLaneProgressMarks(movedHints);
+      if (summary && workLogWrittenCount > 0) {
+        const recall = getNavigationLogRecallApi(this.app);
+        if (recall) recall.noteUsed("work", summary);
+      }
       new Notice(
         buildTaskLinkLaneNotice({
           mode,

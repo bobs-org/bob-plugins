@@ -657,17 +657,19 @@ if (copyChips?.version >= 1) {
 
 Coordinates are zero-based lines and UTF-16 character offsets. `from` / `to`
 in an inline chip are line-relative offsets including the delimiters, with
-`to` exclusive, matching `scanLine`. A ready chip is frozen
-`{ form: "inline", label, text, line, from, to }`; `count` is the number of
-eligible chips on the line. Invalid inputs yield `{ state: "none", count: 0 }`.
-Fenced lines always return `none` in this phase; the block fallback lands
-later.
+`to` exclusive, matching `scanLine`. A ready inline chip is frozen
+`{ form: "inline", label, text, line, from, to }`. A ready block chip from a
+`bob-copy` fence is frozen `{ form: "block", label, text, line, from, to }`
+where `line` is the cursor line and `[from, to]` covers it; `count` is the
+number of eligible chips on the line. Invalid inputs yield
+`{ state: "none", count: 0 }`. Non-`bob-copy` fenced lines stay `none`.
 
 | Member | Contract |
 | --- | --- |
 | `version` | `1` |
 | `parse`, `scanLine`, `serialize` | Existing grammar behavior |
 | `parseFenceInfo`, `fencePayload` | Existing additive helpers |
+| `fencePayloadFromSource(source)` | Processor `source` to payload, verbatim |
 | `chipAt({ lines, line, ch })` | Frozen none/ambiguous/ready result above |
 | `copy(text)` | Promise of `{ ok, reason? }`, never throws/rejects |
 | `copyChip(chip, { view? })` | One clipboard write plus success/failure feedback |

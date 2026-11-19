@@ -33,6 +33,48 @@ function seedNote() {
   lines.push("");
   lines.push("``copy: run `bob plan` first``");
   lines.push("");
+  lines.push("Fence card:");
+  lines.push("");
+  lines.push("```bob-copy Weekly status");
+  lines.push("Hi team —");
+  lines.push("Here is where things stand this week:");
+  lines.push("```");
+  lines.push("");
+  lines.push("Fence with an interior blank line:");
+  lines.push("");
+  lines.push("```bob-copy");
+  lines.push("line one");
+  lines.push("");
+  lines.push("line three");
+  lines.push("```");
+  lines.push("");
+  lines.push("Fence with a trailing blank line:");
+  lines.push("");
+  lines.push("```bob-copy Trailing");
+  lines.push("hello");
+  lines.push("");
+  lines.push("```");
+  lines.push("");
+  lines.push("List-nested fence:");
+  lines.push("");
+  lines.push("- item");
+  lines.push("  ```bob-copy Nested");
+  lines.push("  nested body");
+  lines.push("  ```");
+  lines.push("");
+  lines.push("Long fence (folds):");
+  lines.push("");
+  lines.push("```bob-copy Long");
+  for (let index = 1; index <= 10; index += 1) lines.push("line " + index);
+  lines.push("```");
+  lines.push("");
+  lines.push("Callout fence (generic title):");
+  lines.push("");
+  lines.push("> [!note] Callout card");
+  lines.push("> ```bob-copy");
+  lines.push("> callout body");
+  lines.push("> ```");
+  lines.push("");
   lines.push("Embed below:");
   lines.push("");
   lines.push("![[" + EMBED_NOTE + "]]");
@@ -63,6 +105,24 @@ function expectedChipPayloads() {
   return Object.freeze(out);
 }
 
+// The exact payloads the seeded fences must copy, byte for byte. The e2e
+// pins Obsidian's real `source` shape (trailing newline, list-nested
+// indentation) through these clipboard bytes.
+function expectedFencePayloads() {
+  return Object.freeze([
+    { id: "weekly", label: "Weekly status", text: "Hi team —\nHere is where things stand this week:" },
+    { id: "blank", label: null, text: "line one\n\nline three" },
+    { id: "trailing", label: "Trailing", text: "hello\n" },
+    { id: "nested", label: "Nested", text: "nested body" },
+    {
+      id: "long",
+      label: "Long",
+      text: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10",
+    },
+    { id: "callout", label: null, text: "callout body" },
+  ]);
+}
+
 module.exports = {
   NOTE,
   EMBED_NOTE,
@@ -71,4 +131,5 @@ module.exports = {
   embedNote,
   baseConfigYaml,
   expectedChipPayloads,
+  expectedFencePayloads,
 };

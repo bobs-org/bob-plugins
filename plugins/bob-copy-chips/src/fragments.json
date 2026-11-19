@@ -7,6 +7,7 @@
   "060-reading.js",
   "065-cursor.js",
   "070-commands.js",
+  "080-fence.js",
   "090-plugin.js",
   "099-exports.js"
 ]

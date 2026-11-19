@@ -13,7 +13,7 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Copy Chips |
 | ID | `bob-copy-chips` |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |
@@ -59,18 +59,31 @@ CommonMark code span, after the span's own normalization:
 A longer backtick run holds text that itself contains backticks. Inside a
 table cell, write `\|` for a literal pipe.
 
-A `bob-copy` fence is for multi-line text. The info string's language token
-must be exactly `bob-copy`; the rest is the optional label, with surrounding
-`[ ]` stripped. The body is the payload, joined with LF and never trimmed. An
+A `bob-copy` fence is for multi-line text that should read as a titled
+card: prompts, emails, addresses. Ordinary code listings keep the native
+fence copy button. The info string's language token must be exactly
+`bob-copy`; the rest is the optional label, with surrounding `[ ]`
+stripped. The body is the payload, joined with LF and never trimmed. An
 extra empty body line before the closing fence keeps exactly one trailing
-newline. The fence grammar and `parseFenceInfo` / `fencePayload` API helpers
-ship now; the titled fence card renders in a later phase.
+newline. A fence nested in a list item dedents under its opening, and an
+unclosed fence runs to the end of the note.
+
+The fence renders as a card: a header with the copy glyph, the label, a
+meta line, and a Copy button, above the body in the text font with
+`white-space: pre-wrap`. The meta reads "N lines · M chars" with tabular
+figures, plus "· ends with ⏎" when the payload ends with LF. An unlabeled
+fence — or one whose section info is missing, as in callouts and some
+embeds — is titled "Copy · N lines". The body folds after eight lines
+behind a "Show all N lines" toggle; the fold is session-only. Clicking the
+body selects text and never copies. Only the button copies, flipping to
+"Copied ✓" for about 1.2 s on success.
 
 ## Gestures
 
 | Gesture | Where | Effect |
 | --- | --- | --- |
 | Click / tap a chip | Live Preview, Reading view, embeds, hover previews, Tasks query results | Copy the payload |
+| Copy button on a `bob-copy` card | Live Preview, Reading view, embeds | Copy the fence payload, byte-exact |
 | Palette "Copy chip on cursor line" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor and flash it like a yank |
 | Move the cursor into the span | Live Preview | Reveal the Markdown source, like a link |
 | Enter / Space on a focused chip | Live Preview (span) and Reading view (button) | Copy the payload |
@@ -88,14 +101,21 @@ delimiters, with `to` exclusive, matching `scanLine`:
 
 1. A chip under the cursor wins (`from <= ch < to`).
 2. Otherwise the only chip on the cursor line wins.
-3. Two or more chips on the line with the cursor on none is `ambiguous`:
+3. Otherwise the `bob-copy` fence the cursor is on or inside wins as a
+   block chip (`form: "block"`), with the whole fence payload. Inline chips
+   on the cursor line still win, so example spans inside a fence body never
+   resolve on their own.
+4. Two or more chips on the line with the cursor on none is `ambiguous`:
    "N chips on this line · move onto one". Never guess.
-4. Zero chips, fenced lines, frontmatter, or invalid input is `none`.
+5. Zero chips, non-`bob-copy` fences, frontmatter, or invalid input is
+   `none`.
 
-Fenced lines — including opening, closing, and nested backtick/tilde fences —
-always return `none` in this phase; the block fallback lands later. The cursor
-command works in Source mode and with revealed source as well as rendered Live
-Preview.
+A block chip carries `{ form: "block", label, text, line, from, to }` where
+`line` is the cursor line and `[from, to]` covers it, so a missing card
+still flashes where the user is. Fence detection matches the Copy card's
+list-nested backtick and tilde fence handling. The cursor command works in
+Source mode and with revealed source as well as rendered Live Preview, and
+flashes the card when one is visible.
 
 ## Look and feedback
 
@@ -118,8 +138,11 @@ chip width.
   pulse.
 - Failure: `alert-triangle` in `--text-error` for about two seconds plus
   exactly one `Couldn't copy: <reason>` Notice. Failures are never silent.
+  A fence card failure also flips its button to "Copy failed" for the same
+  dwell.
 - Print and PDF export render the face as inline code with no interactive
-  chrome.
+  chrome. Fence cards print the full body as plain text — the fold opens
+  and the button, toggle, and glyph hide.
 
 Payloads live in `textContent` and JS closures or a `WeakMap`, never in
 `innerHTML`, `innerText`, `dataset`, or payload-bearing attributes. Tooltips
@@ -149,7 +172,7 @@ interpolated, HTML-decoded, or otherwise changed.
 
 Not a secret store: payloads are plain text in git. No variables, no snippet
 expansion, no `obsidian://copy` protocol handler, and no masked previews.
-The fence card, Copy card `C` row, make-or-edit card, Alt+Click editing,
-vimrc mappings, and vault adoption land in later phases.
+The Copy card `C` row, make-or-edit card, Alt+Click editing, vimrc
+mappings, and vault adoption land in later phases.
 
 Authored payloads live on copy chips; live context lives on the Copy card.

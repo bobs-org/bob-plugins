@@ -86,6 +86,15 @@ function copyChipFindWidgetInView(view, chip) {
   try {
     if (!view || !view.dom || typeof view.dom.querySelectorAll !== "function") return null;
     if (!chip || typeof chip.text !== "string") return null;
+    // Block chips answer from the fence card, never from an inline widget
+    // that happens to share the payload.
+    if (chip.form === "block") {
+      try {
+        return copyChipFindFenceInView(view, chip);
+      } catch (error) {
+        return null;
+      }
+    }
     let list = null;
     try {
       list = view.dom.querySelectorAll(".bob-copy-chip");

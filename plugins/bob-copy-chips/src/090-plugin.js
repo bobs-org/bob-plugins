@@ -21,6 +21,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             serialize: () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             parseFenceInfo: () => null,
             fencePayload: () => "",
+            fencePayloadFromSource: () => "",
             chipAt: () => copyChipFreeze({ state: "none", count: 0 }),
             copy: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             copyChip: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
@@ -62,6 +63,13 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Reading view is best-effort.
     }
     try {
+      if (typeof copyChipSetupFence === "function") {
+        copyChipSetupFence(this);
+      }
+    } catch (error) {
+      // Fence cards are best-effort and never break startup.
+    }
+    try {
       if (typeof copyChipRegisterCursorCommand === "function") {
         copyChipRegisterCursorCommand(this);
       }
@@ -79,6 +87,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             // View cleanup is best-effort.
           }
           this.copyChipReadingSetupDone = false;
+          this.copyChipFenceSetupDone = false;
           this.copyChipCursorCommandRegistered = false;
         });
       }
@@ -96,6 +105,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Unload cleanup is best-effort.
     }
     this.copyChipReadingSetupDone = false;
+    this.copyChipFenceSetupDone = false;
     this.copyChipCursorCommandRegistered = false;
   }
 
@@ -133,6 +143,16 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       fencePayload(bodyLines) {
         try {
           return copyChipFencePayload(bodyLines);
+        } catch (error) {
+          return "";
+        }
+      },
+      fencePayloadFromSource(source) {
+        try {
+          if (typeof copyChipFencePayloadFromSource === "function") {
+            return copyChipFencePayloadFromSource(source);
+          }
+          return typeof source === "string" ? source : "";
         } catch (error) {
           return "";
         }

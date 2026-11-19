@@ -250,6 +250,63 @@ function copyChipFencePayload(bodyLines) {
   return lines.join("\n");
 }
 
+// The processor's `source` is the fence body's literal text: no trailing
+// newline in the common case, one trailing LF when a blank line sits before
+// the closing fence. Keep the bytes verbatim (CRLF normalized); never trim,
+// so the clipboard matches the authored body byte for byte.
+function copyChipFencePayloadFromSource(source) {
+  try {
+    if (typeof source !== "string") return "";
+    return source.replace(/\r\n|\r/g, "\n");
+  } catch (error) {
+    return "";
+  }
+}
+
+const COPY_CHIP_FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+
+// An opening fence line (any language) with its info string attached.
+// A backtick marker whose info holds a backtick can never close, so it is
+// not an opening. Never throws.
+function copyChipFenceOpeningFromLine(line) {
+  try {
+    const match = String(line).match(COPY_CHIP_FENCE_OPEN_RE);
+    if (!match) return null;
+    const marker = match[2];
+    const info = match[3] || "";
+    if (marker.charAt(0) === "`" && info.indexOf("`") !== -1) return null;
+    return {
+      indent: match[1].length,
+      markerChar: marker.charAt(0),
+      markerLength: marker.length,
+      info,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// The label of the first `bob-copy` opening in section text (from
+// `ctx.getSectionInfo(el)`), or null when the section is missing, belongs to
+// another fence, or carries no label. Callouts and some embeds never match,
+// so they fall back to the generic card title. Never throws.
+function copyChipFenceLabelFromSectionText(sectionText) {
+  try {
+    if (typeof sectionText !== "string") return null;
+    const lines = sectionText.split("\n");
+    for (const line of lines) {
+      const opening = copyChipFenceOpeningFromLine(line);
+      if (!opening) continue;
+      const parsed = copyChipParseFenceInfo(opening.info);
+      if (!parsed) continue;
+      return parsed.label;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function copyChipSerializeFailure(reason) {
   return copyChipFreeze({ ok: false, reason });
 }

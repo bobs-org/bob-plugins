@@ -348,6 +348,63 @@ function copyChipFencePayload(bodyLines) {
   return lines.join("\n");
 }
 
+// The processor's `source` is the fence body's literal text: no trailing
+// newline in the common case, one trailing LF when a blank line sits before
+// the closing fence. Keep the bytes verbatim (CRLF normalized); never trim,
+// so the clipboard matches the authored body byte for byte.
+function copyChipFencePayloadFromSource(source) {
+  try {
+    if (typeof source !== "string") return "";
+    return source.replace(/\r\n|\r/g, "\n");
+  } catch (error) {
+    return "";
+  }
+}
+
+const COPY_CHIP_FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
+
+// An opening fence line (any language) with its info string attached.
+// A backtick marker whose info holds a backtick can never close, so it is
+// not an opening. Never throws.
+function copyChipFenceOpeningFromLine(line) {
+  try {
+    const match = String(line).match(COPY_CHIP_FENCE_OPEN_RE);
+    if (!match) return null;
+    const marker = match[2];
+    const info = match[3] || "";
+    if (marker.charAt(0) === "`" && info.indexOf("`") !== -1) return null;
+    return {
+      indent: match[1].length,
+      markerChar: marker.charAt(0),
+      markerLength: marker.length,
+      info,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+// The label of the first `bob-copy` opening in section text (from
+// `ctx.getSectionInfo(el)`), or null when the section is missing, belongs to
+// another fence, or carries no label. Callouts and some embeds never match,
+// so they fall back to the generic card title. Never throws.
+function copyChipFenceLabelFromSectionText(sectionText) {
+  try {
+    if (typeof sectionText !== "string") return null;
+    const lines = sectionText.split("\n");
+    for (const line of lines) {
+      const opening = copyChipFenceOpeningFromLine(line);
+      if (!opening) continue;
+      const parsed = copyChipParseFenceInfo(opening.info);
+      if (!parsed) continue;
+      return parsed.label;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function copyChipSerializeFailure(reason) {
   return copyChipFreeze({ ok: false, reason });
 }
@@ -1906,8 +1963,8 @@ function copyChipSetupReading(plugin) {
 // Pure cursor resolver for the copy-on-cursor-line command.
 // Reads live buffer lines only, never the metadata cache. Fence handling
 // mirrors bob-navigation-hotkeys 101-copy-card-model without depending on
-// that plugin. At this phase boundary every fenced position returns none;
-// phase ni.3 adds the block fallback after the inline rule.
+// that plugin: nested backtick/tilde fences, same-char closing with length
+// and indent rules, and an unclosed fence running to the end of the note.
 const COPY_CHIP_CURSOR_FENCE_OPEN_RE = /^(\s*)(`{3,}|~{3,})(.*)$/;
 const COPY_CHIP_CURSOR_FENCE_CLOSE_RE = /^(\s*)(`{3,}|~{3,})\s*$/;
 
@@ -1998,6 +2055,160 @@ function copyChipNone(count) {
   return copyChipFreeze({ state: "none", count: Number.isInteger(count) ? count : 0 });
 }
 
+// Up to `indent` leading spaces come off a fence body line, matching how a
+// list-nested fence dedents under its opening. Lines with less indentation
+// keep what they have; tabs are literal content. Never throws.
+function copyChipFenceDedentLine(line, indent) {
+  try {
+    let rest = String(line === undefined || line === null ? "" : line);
+    let count = 0;
+    const width = Number.isInteger(indent) && indent > 0 ? indent : 0;
+    while (count < width && rest.charAt(0) === " ") {
+      rest = rest.slice(1);
+      count += 1;
+    }
+    return rest;
+  } catch (error) {
+    return "";
+  }
+}
+
+// Forward scan for the closing line of the fence opened at `openIndex`.
+// Returns the closing line index, or -1 when the fence runs to the end of
+// the note. Never throws.
+function copyChipScanFenceClose(lines, openIndex, opening) {
+  try {
+    if (!Array.isArray(lines) || !Number.isInteger(openIndex) || !opening) return -1;
+    for (let index = openIndex + 1; index < lines.length; index += 1) {
+      let text = "";
+      try {
+        text = String(lines[index] === undefined || lines[index] === null ? "" : lines[index]);
+      } catch (error) {
+        text = "";
+      }
+      try {
+        if (copyChipCursorFenceCloses(text, opening)) return index;
+      } catch (error) {
+        continue;
+      }
+    }
+    return -1;
+  } catch (error) {
+    return -1;
+  }
+}
+
+// The fence block enclosing `lineIndex`: its opening line, its closing line
+// (null when unclosed), and the parsed opening. The walk matches
+// copyChipCursorLineIsFenced, including nested different-char fences as
+// content. Returns null when the line is not on or inside a fence. Never
+// throws.
+function copyChipFindFenceBlock(lines, lineIndex) {
+  try {
+    if (!Array.isArray(lines)) return null;
+    if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return null;
+    let open = null;
+    for (let index = 0; index <= lineIndex; index += 1) {
+      let text = "";
+      try {
+        text = String(lines[index] === undefined || lines[index] === null ? "" : lines[index]);
+      } catch (error) {
+        text = "";
+      }
+      if (open) {
+        let closes = false;
+        try {
+          closes = copyChipCursorFenceCloses(text, open.opening);
+        } catch (error) {
+          closes = false;
+        }
+        if (closes) {
+          if (index === lineIndex) {
+            return { openIndex: open.index, opening: open.opening, closeIndex: index };
+          }
+          open = null;
+          continue;
+        }
+        if (index === lineIndex) {
+          const closeAt = copyChipScanFenceClose(lines, open.index, open.opening);
+          return {
+            openIndex: open.index,
+            opening: open.opening,
+            closeIndex: closeAt < 0 ? null : closeAt,
+          };
+        }
+        continue;
+      }
+      let opening = null;
+      try {
+        opening = copyChipFenceOpeningFromLine(text);
+      } catch (error) {
+        opening = null;
+      }
+      if (opening) {
+        if (index === lineIndex) {
+          const closeAt = copyChipScanFenceClose(lines, index, opening);
+          return { openIndex: index, opening, closeIndex: closeAt < 0 ? null : closeAt };
+        }
+        open = { index, opening };
+      }
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// A ready block chip for a `bob-copy` fence block, or null when the block
+// is another language. Body lines dedent under the opening; a final empty
+// body line keeps one trailing LF through copyChipFencePayload. `line` is
+// the cursor line and [from, to] covers it, so a missing card still flashes
+// where the user is. Never throws.
+function copyChipFenceBlockChip(lines, lineIndex, block) {
+  try {
+    if (!block || !block.opening) return null;
+    let parsed = null;
+    try {
+      parsed = copyChipParseFenceInfo(block.opening.info || "");
+    } catch (error) {
+      return null;
+    }
+    if (!parsed) return null;
+    const end = block.closeIndex == null ? lines.length : block.closeIndex;
+    const body = [];
+    for (let index = block.openIndex + 1; index < end; index += 1) {
+      let raw = "";
+      try {
+        raw = lines[index] === undefined || lines[index] === null ? "" : lines[index];
+      } catch (error) {
+        raw = "";
+      }
+      body.push(copyChipFenceDedentLine(raw, block.opening.indent));
+    }
+    const text = copyChipFencePayload(body);
+    let cursorLine = "";
+    try {
+      cursorLine = String(lines[lineIndex] === undefined || lines[lineIndex] === null ? "" : lines[lineIndex]);
+    } catch (error) {
+      cursorLine = "";
+    }
+    return copyChipFreeze({
+      state: "ready",
+      count: 1,
+      chip: copyChipFreeze({
+        form: "block",
+        label: parsed.label,
+        text,
+        line: lineIndex,
+        from: 0,
+        to: cursorLine.length,
+      }),
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
 // Zero-based lines and UTF-16 offsets. `from`/`to` include the delimiters
 // with `to` exclusive, matching scanLine. A cursor in [from, to) wins;
 // otherwise the only eligible chip on the line wins. Never throws.
@@ -2013,11 +2224,22 @@ function copyChipAt(request) {
     if (!Number.isInteger(ch) || ch < 0) {
       return copyChipNone(0);
     }
-    // Phase ni.3 extension point: fenced positions currently return none so
-    // the later block fallback can own them without changing inline rules.
+    // Fences first: a `bob-copy` opening, body, or closing line resolves
+    // the whole fence as a block chip, so example spans inside the body
+    // never win as inline chips. Any other fenced line stays none, which
+    // keeps code samples inert. Frontmatter never resolves.
     try {
-      if (copyChipCursorLineIsFenced(lines, line)) return copyChipNone(0);
       if (copyChipCursorInFrontmatter(lines, line)) return copyChipNone(0);
+    } catch (error) {
+      return copyChipNone(0);
+    }
+    try {
+      const block = copyChipFindFenceBlock(lines, line);
+      if (block) {
+        const blockChip = copyChipFenceBlockChip(lines, line, block);
+        if (blockChip) return blockChip;
+        return copyChipNone(0);
+      }
     } catch (error) {
       return copyChipNone(0);
     }
@@ -2164,6 +2386,15 @@ function copyChipFindWidgetInView(view, chip) {
   try {
     if (!view || !view.dom || typeof view.dom.querySelectorAll !== "function") return null;
     if (!chip || typeof chip.text !== "string") return null;
+    // Block chips answer from the fence card, never from an inline widget
+    // that happens to share the payload.
+    if (chip.form === "block") {
+      try {
+        return copyChipFindFenceInView(view, chip);
+      } catch (error) {
+        return null;
+      }
+    }
     let list = null;
     try {
       list = view.dom.querySelectorAll(".bob-copy-chip");
@@ -2440,6 +2671,489 @@ function copyChipRegisterCursorCommand(plugin) {
     return false;
   }
 }
+// ---- src/080-fence.js ----
+// Titled `bob-copy` fence cards for Live Preview and Reading view.
+// One `registerMarkdownCodeBlockProcessor("bob-copy", …)` covers both: the
+// payload comes from `source`, the label from the section's opening line,
+// and only the header button copies. Body clicks select text.
+const COPY_CHIP_FENCE_FOLD_AFTER = 8;
+
+const copyChipFencePayloads = new WeakMap();
+const copyChipFenceButtonTimers = new WeakMap();
+let copyChipFenceButtonSeq = 0;
+
+function copyChipFenceNotePayload(el, text) {
+  try {
+    if (el) copyChipFencePayloads.set(el, String(text === undefined || text === null ? "" : text));
+  } catch (error) {
+    // Payload retention is best-effort.
+  }
+}
+
+function copyChipFencePayloadOf(el) {
+  try {
+    if (!el) return null;
+    return copyChipFencePayloads.get(el) || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// {lines, chars} for the card meta and fold. "" is 0 lines; a trailing LF
+// ends the last line instead of starting a new one. Never throws.
+function copyChipFenceCounts(text) {
+  try {
+    const body = String(text === undefined || text === null ? "" : text);
+    if (body === "") return copyChipFreeze({ lines: 0, chars: 0 });
+    const parts = body.split("\n");
+    const lines = body.charAt(body.length - 1) === "\n" ? parts.length - 1 : parts.length;
+    return copyChipFreeze({ lines, chars: body.length });
+  } catch (error) {
+    return copyChipFreeze({ lines: 0, chars: 0 });
+  }
+}
+
+function copyChipFenceLineWord(count) {
+  return count === 1 ? "1 line" : String(count) + " lines";
+}
+
+// "4 lines · 212 chars", plus "· ends with ⏎" when the payload ends with
+// LF. Counts are text, never attributes. Never throws.
+function copyChipFenceMetaText(text) {
+  try {
+    const counts = copyChipFenceCounts(text);
+    let meta = copyChipFenceLineWord(counts.lines) + " · " + String(counts.chars) + " chars";
+    if (String(text === undefined || text === null ? "" : text).charAt(String(text || "").length - 1) === "\n") {
+      meta += " · ends with ⏎";
+    }
+    return meta;
+  } catch (error) {
+    return "";
+  }
+}
+
+// The labeled title, or the generic "Copy · N lines" when the section info
+// is missing (callouts, some embeds) or carries no label. Never throws.
+function copyChipFenceTitleText(label, text) {
+  try {
+    if (typeof label === "string" && label.trim() !== "") return label;
+    const counts = copyChipFenceCounts(text);
+    return "Copy · " + copyChipFenceLineWord(counts.lines);
+  } catch (error) {
+    return "Copy";
+  }
+}
+
+// The label for one rendered fence: the section's opening line through the
+// fence grammar. Null section info (callouts, some embeds) means the
+// generic title, with the payload untouched. Never throws.
+function copyChipFenceLabelFromContext(ctx, el) {
+  try {
+    if (!ctx || typeof ctx.getSectionInfo !== "function") return null;
+    let section = null;
+    try {
+      section = ctx.getSectionInfo(el);
+    } catch (error) {
+      return null;
+    }
+    if (!section || typeof section.text !== "string") return null;
+    return copyChipFenceLabelFromSectionText(section.text);
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipFenceMakeEl(doc, tag, className) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    const el = doc.createElement(tag);
+    try {
+      if (className) el.setAttribute("class", className);
+    } catch (error) {
+      // Class setup is best-effort on fake nodes.
+    }
+    return el;
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipFenceClearButtonTimer(button) {
+  try {
+    const record = copyChipFenceButtonTimers.get(button);
+    if (record && record.handle) {
+      try {
+        const doc = (button && button.ownerDocument) || (typeof document !== "undefined" ? document : null);
+        copyChipTimerHost(doc).clear(record.handle);
+      } catch (error) {
+        // Timer cancellation is best-effort.
+      }
+    }
+    copyChipFenceButtonTimers.delete(button);
+  } catch (error) {
+    // Clearing never throws.
+  }
+}
+
+// Swap the button face for one dwell, then restore "Copy". A fixed
+// min-width in CSS keeps the header from reflowing. Never throws.
+function copyChipFenceFlashButton(button, face, dwellMs) {
+  try {
+    if (!button) return;
+    const doc = (button && button.ownerDocument) || (typeof document !== "undefined" ? document : null);
+    copyChipFenceButtonSeq += 1;
+    const token = copyChipFenceButtonSeq;
+    copyChipFenceClearButtonTimer(button);
+    try {
+      button.textContent = face;
+    } catch (error) {
+      // Face swap is best-effort.
+    }
+    let handle = null;
+    try {
+      handle = copyChipTimerHost(doc).set(() => {
+        try {
+          const current = copyChipFenceButtonTimers.get(button);
+          if (!current || current.token !== token) return;
+          copyChipFenceButtonTimers.delete(button);
+          try {
+            button.textContent = "Copy";
+          } catch (error) {
+            // Restore is best-effort.
+          }
+        } catch (error) {
+          // Expiry never throws.
+        }
+      }, dwellMs);
+    } catch (error) {
+      handle = null;
+    }
+    copyChipFenceButtonTimers.set(button, { token, handle });
+  } catch (error) {
+    // Button feedback never throws.
+  }
+}
+
+// Builds the card. `chip` is {label, text}. Payload travels through
+// textContent and the payload WeakMap only — never attributes, innerHTML,
+// or the accessible name. Interactive children are real <button> elements.
+// Never registers clipboard gestures by itself; returns the card or null.
+function copyChipBuildFence(doc, chip) {
+  try {
+    if (!doc || typeof doc.createElement !== "function") return null;
+    if (!chip || typeof chip !== "object") return null;
+    if (typeof chip.text !== "string") return null;
+    const label = chip.label === undefined ? null : chip.label;
+    if (label !== null && label !== undefined && typeof label !== "string") return null;
+    const text = chip.text;
+    const counts = copyChipFenceCounts(text);
+
+    const card = copyChipFenceMakeEl(doc, "div", "bob-copy-fence");
+    if (!card) return null;
+
+    const header = copyChipFenceMakeEl(doc, "div", "bob-copy-fence-header");
+    if (!header) return null;
+    let glyph = null;
+    try {
+      glyph = doc.createElement("span");
+      glyph.setAttribute("class", "bob-copy-chip-glyph");
+      copyChipPaintGlyph(glyph, "copy");
+      header.appendChild(glyph);
+    } catch (error) {
+      glyph = null;
+    }
+    const title = copyChipFenceMakeEl(doc, "span", "bob-copy-fence-title");
+    if (!title) return null;
+    try {
+      title.textContent = copyChipFenceTitleText(label, text);
+    } catch (error) {
+      // Title text is best-effort.
+    }
+    header.appendChild(title);
+    const meta = copyChipFenceMakeEl(doc, "span", "bob-copy-fence-meta");
+    if (!meta) return null;
+    try {
+      meta.textContent = copyChipFenceMetaText(text);
+    } catch (error) {
+      // Meta text is best-effort.
+    }
+    header.appendChild(meta);
+    const button = copyChipFenceMakeEl(doc, "button", "bob-copy-fence-copy");
+    if (!button) return null;
+    try {
+      if (typeof button.setAttribute === "function") button.setAttribute("type", "button");
+    } catch (error) {
+      // Type setup is best-effort.
+    }
+    try {
+      button.textContent = "Copy";
+    } catch (error) {
+      // Face text is best-effort.
+    }
+    header.appendChild(button);
+    card.appendChild(header);
+
+    const body = copyChipFenceMakeEl(doc, "div", "bob-copy-fence-body");
+    if (!body) return null;
+    try {
+      body.textContent = text;
+    } catch (error) {
+      // Body text is best-effort.
+    }
+    const folded = counts.lines > COPY_CHIP_FENCE_FOLD_AFTER;
+    if (folded) {
+      try {
+        body.classList.add("is-folded");
+      } catch (error) {
+        // Fold state is best-effort.
+      }
+    }
+    card.appendChild(body);
+
+    if (folded) {
+      const toggle = copyChipFenceMakeEl(doc, "button", "bob-copy-fence-toggle");
+      if (toggle) {
+        try {
+          if (typeof toggle.setAttribute === "function") toggle.setAttribute("type", "button");
+        } catch (error) {
+          // Type setup is best-effort.
+        }
+        const showAll = "Show all " + copyChipFenceLineWord(counts.lines);
+        try {
+          toggle.textContent = showAll;
+        } catch (error) {
+          // Toggle text is best-effort.
+        }
+        try {
+          if (typeof toggle.addEventListener === "function") {
+            toggle.addEventListener("click", () => {
+              try {
+                let isFolded = false;
+                try {
+                  isFolded = body.classList.contains("is-folded");
+                } catch (error) {
+                  isFolded = false;
+                }
+                if (isFolded) {
+                  try {
+                    body.classList.remove("is-folded");
+                  } catch (error) {
+                    // Unfold is best-effort.
+                  }
+                  try {
+                    toggle.textContent = "Show less";
+                  } catch (error) {
+                    // Toggle text is best-effort.
+                  }
+                } else {
+                  try {
+                    body.classList.add("is-folded");
+                  } catch (error) {
+                    // Fold is best-effort.
+                  }
+                  try {
+                    toggle.textContent = showAll;
+                  } catch (error) {
+                    // Toggle text is best-effort.
+                  }
+                }
+              } catch (error) {
+                // Toggling never throws.
+              }
+            });
+          }
+        } catch (error) {
+          // Toggle wiring is best-effort.
+        }
+        card.appendChild(toggle);
+      }
+    }
+
+    try {
+      copyChipFenceNotePayload(card, text);
+    } catch (error) {
+      // Payload retention is best-effort.
+    }
+    return card;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The fence card matching a block chip's payload. Several cards sharing one
+// payload stay ambiguous: no guessing. Never throws.
+function copyChipFindFenceInView(view, chip) {
+  try {
+    if (!view || !view.dom || typeof view.dom.querySelectorAll !== "function") return null;
+    if (!chip || typeof chip.text !== "string") return null;
+    let list = null;
+    try {
+      list = view.dom.querySelectorAll(".bob-copy-fence");
+    } catch (error) {
+      return null;
+    }
+    if (!list || typeof list.length !== "number") return null;
+    const matches = [];
+    for (let index = 0; index < list.length; index += 1) {
+      try {
+        const el = list[index];
+        if (copyChipFencePayloadOf(el) !== chip.text) continue;
+        matches.push(el);
+      } catch (error) {
+        continue;
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function copyChipFenceWireCopy(plugin, card, button, payload) {
+  try {
+    if (!button || typeof button.addEventListener !== "function") return;
+    button.addEventListener("click", () => {
+      try {
+        copyChipWrite(payload).then((result) => {
+          try {
+            if (result && result.ok) {
+              copyChipShowFeedback(card, "success");
+              copyChipFenceFlashButton(button, "Copied ✓", COPY_CHIP_SUCCESS_MS);
+            } else {
+              copyChipFail(card, (result && result.reason) || "copy failed");
+              copyChipFenceFlashButton(button, "Copy failed", COPY_CHIP_FAILURE_MS);
+            }
+          } catch (error) {
+            // Feedback is best-effort.
+          }
+        });
+      } catch (error) {
+        // Activation never throws.
+      }
+    });
+  } catch (error) {
+    // Wiring is best-effort.
+  }
+}
+
+// One processor render: payload from `source`, label from the section
+// opening, then the card replaces the code block. Body clicks select text;
+// only the button copies. Never throws and never writes the vault.
+function copyChipRenderFence(plugin, source, el, ctx) {
+  try {
+    if (!el) return;
+    const ownerDoc =
+      (el && el.ownerDocument) ||
+      (typeof document !== "undefined" ? document : null);
+    if (!ownerDoc || typeof ownerDoc.createElement !== "function") return;
+    const payload = copyChipFencePayloadFromSource(source);
+    const label = copyChipFenceLabelFromContext(ctx, el);
+    const card = copyChipBuildFence(ownerDoc, { label, text: payload });
+    if (!card) return;
+    try {
+      if (typeof el.empty === "function") el.empty();
+      else el.textContent = "";
+    } catch (error) {
+      try {
+        el.textContent = "";
+      } catch (ignore) {
+        return;
+      }
+    }
+    try {
+      el.appendChild(card);
+    } catch (error) {
+      return;
+    }
+    let button = null;
+    try {
+      if (typeof card.querySelector === "function") {
+        button = card.querySelector(".bob-copy-fence-copy");
+      }
+    } catch (error) {
+      button = null;
+    }
+    copyChipFenceWireCopy(plugin, card, button, payload);
+    // Scope timers to the render child when available so embeds and hover
+    // previews dispose their button faces and feedback.
+    try {
+      const cleanup = () => {
+        try {
+          copyChipFenceClearButtonTimer(button);
+        } catch (error) {
+          // Timer cleanup is best-effort.
+        }
+        try {
+          copyChipClearFeedback(card);
+        } catch (error) {
+          // Feedback cleanup is best-effort.
+        }
+      };
+      if (
+        CopyChipsMarkdownRenderChild &&
+        ctx &&
+        typeof ctx.addChild === "function"
+      ) {
+        const child = new CopyChipsMarkdownRenderChild(el);
+        try {
+          if (typeof child.register === "function") child.register(cleanup);
+          if (typeof child.unload === "function") {
+            const originalUnload = child.unload.bind(child);
+            child.unload = () => {
+              try {
+                cleanup();
+              } catch (error) {
+                // Cleanup is best-effort.
+              }
+              return originalUnload();
+            };
+          }
+        } catch (error) {
+          // Child wiring is best-effort.
+        }
+        try {
+          ctx.addChild(child);
+        } catch (error) {
+          // Render-child registration is best-effort.
+        }
+      } else if (plugin && typeof plugin.register === "function") {
+        plugin.register(cleanup);
+      }
+    } catch (error) {
+      // Lifecycle scoping is best-effort.
+    }
+  } catch (error) {
+    // Fence rendering never throws.
+  }
+}
+
+function copyChipSetupFence(plugin) {
+  try {
+    if (!plugin || typeof plugin.registerMarkdownCodeBlockProcessor !== "function") return false;
+    if (plugin.copyChipFenceSetupDone === true) return true;
+    plugin.copyChipFenceSetupDone = true;
+    try {
+      plugin.registerMarkdownCodeBlockProcessor("bob-copy", (source, el, ctx) =>
+        copyChipRenderFence(plugin, source, el, ctx),
+      );
+    } catch (error) {
+      return false;
+    }
+    try {
+      if (typeof plugin.register === "function") {
+        plugin.register(() => {
+          plugin.copyChipFenceSetupDone = false;
+        });
+      }
+    } catch (error) {
+      // Unload cleanup is best-effort.
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 // ---- src/090-plugin.js ----
 class BobCopyChipsPlugin extends CopyChipsPluginBase {
   async onload() {
@@ -2464,6 +3178,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             serialize: () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             parseFenceInfo: () => null,
             fencePayload: () => "",
+            fencePayloadFromSource: () => "",
             chipAt: () => copyChipFreeze({ state: "none", count: 0 }),
             copy: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             copyChip: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
@@ -2505,6 +3220,13 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Reading view is best-effort.
     }
     try {
+      if (typeof copyChipSetupFence === "function") {
+        copyChipSetupFence(this);
+      }
+    } catch (error) {
+      // Fence cards are best-effort and never break startup.
+    }
+    try {
       if (typeof copyChipRegisterCursorCommand === "function") {
         copyChipRegisterCursorCommand(this);
       }
@@ -2522,6 +3244,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             // View cleanup is best-effort.
           }
           this.copyChipReadingSetupDone = false;
+          this.copyChipFenceSetupDone = false;
           this.copyChipCursorCommandRegistered = false;
         });
       }
@@ -2539,6 +3262,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Unload cleanup is best-effort.
     }
     this.copyChipReadingSetupDone = false;
+    this.copyChipFenceSetupDone = false;
     this.copyChipCursorCommandRegistered = false;
   }
 
@@ -2576,6 +3300,16 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       fencePayload(bodyLines) {
         try {
           return copyChipFencePayload(bodyLines);
+        } catch (error) {
+          return "";
+        }
+      },
+      fencePayloadFromSource(source) {
+        try {
+          if (typeof copyChipFencePayloadFromSource === "function") {
+            return copyChipFencePayloadFromSource(source);
+          }
+          return typeof source === "string" ? source : "";
         } catch (error) {
           return "";
         }
@@ -2628,6 +3362,9 @@ module.exports.helpers = {
   copyChipScanLine,
   copyChipParseFenceInfo,
   copyChipFencePayload,
+  copyChipFencePayloadFromSource,
+  copyChipFenceOpeningFromLine,
+  copyChipFenceLabelFromSectionText,
   copyChipSerialize,
   copyChipWrite,
   copyChipShowFeedback,
@@ -2642,6 +3379,17 @@ module.exports.helpers = {
   copyChipAt,
   copyChipCursorLineIsFenced,
   copyChipCursorInFrontmatter,
+  copyChipFindFenceBlock,
+  copyChipFenceBlockChip,
+  copyChipFenceCounts,
+  copyChipFenceMetaText,
+  copyChipFenceTitleText,
+  copyChipFenceLabelFromContext,
+  copyChipBuildFence,
+  copyChipFencePayloadOf,
+  copyChipFindFenceInView,
+  copyChipRenderFence,
+  copyChipSetupFence,
   copyChipCopyText,
   copyChipCopyChip,
   copyChipFlashChip,

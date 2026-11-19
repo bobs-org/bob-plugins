@@ -130,6 +130,76 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Titles and metas the seeded fence cards must show, derived from the same
+// rules as the card renderer. Injected into the page for the check below.
+function fenceCardExpectations() {
+  return fixture.expectedFencePayloads().map((fence) => {
+    const text = fence.text;
+    const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+    const title = fence.label || "Copy · " + lines + (lines === 1 ? " line" : " lines");
+    let meta = lines + (lines === 1 ? " line · " : " lines · ") + text.length + " chars";
+    if (text.endsWith("\n")) meta += " · ends with ⏎";
+    return { id: fence.id, text, title, meta };
+  });
+}
+
+// Runs in the page: every expected fence card copies byte-exact through its
+// Copy button, with the authored title and meta. Serialized with toString()
+// into client.evaluate; keep it dependency-free.
+async function fenceCardCheck(fences) {
+  try {
+    const cards = Array.from(document.querySelectorAll(".bob-copy-fence"));
+    const byBody = new Map();
+    for (const card of cards) {
+      const body = card.querySelector(".bob-copy-fence-body");
+      const text = body ? body.textContent : null;
+      if (text === null) continue;
+      if (!byBody.has(text)) byBody.set(text, []);
+      byBody.get(text).push(card);
+    }
+    const failures = [];
+    for (const fence of fences) {
+      const list = byBody.get(fence.text) || [];
+      if (list.length !== 1) {
+        failures.push(fence.id + ": cards=" + list.length + " of " + cards.length);
+        continue;
+      }
+      const card = list[0];
+      const titleEl = card.querySelector(".bob-copy-fence-title");
+      const title = titleEl ? titleEl.textContent : null;
+      if (title !== fence.title) {
+        failures.push(fence.id + ": title=" + JSON.stringify(title));
+        continue;
+      }
+      const metaEl = card.querySelector(".bob-copy-fence-meta");
+      const meta = metaEl ? metaEl.textContent : null;
+      if (meta !== fence.meta) {
+        failures.push(fence.id + ": meta=" + JSON.stringify(meta));
+        continue;
+      }
+      const button = card.querySelector(".bob-copy-fence-copy");
+      if (!button) {
+        failures.push(fence.id + ": no button");
+        continue;
+      }
+      button.click();
+      await new Promise((r) => setTimeout(r, 300));
+      let clipboard = null;
+      try {
+        clipboard = await navigator.clipboard.readText();
+      } catch (e) {
+        clipboard = "unreadable:" + e.message;
+      }
+      if (clipboard !== fence.text) {
+        failures.push(fence.id + ": clipboard=" + JSON.stringify(clipboard));
+      }
+    }
+    return { ok: failures.length === 0, failures: failures.slice(0, 6), cards: cards.length };
+  } catch (e) {
+    return { ok: false, failures: [String((e && e.message) || e)] };
+  }
+}
+
 async function openNote(client, notePath, mode) {
   const note = JSON.stringify(notePath);
   const want = JSON.stringify(mode || "live");
@@ -225,12 +295,26 @@ function runSelfTest() {
   assert.match(note, /copy: a\\\|b/);
   const payloads = fixture.expectedChipPayloads();
   assert.ok(payloads.length >= 10, "expected vector payloads");
+  const fences = fixture.expectedFencePayloads();
+  assert.equal(fences.length, 6, "expected fence payloads");
+  assert.match(note, /bob-copy Weekly status/);
+  assert.match(note, /bob-copy Trailing/);
+  assert.match(note, /nested body/);
+  assert.match(note, /callout body/);
+  for (const fence of fences) {
+    assert.equal(typeof fence.id, "string");
+    assert.equal(typeof fence.text, "string");
+  }
   const mainPath = path.join(repoRoot, "plugins", "bob-copy-chips", "main.js");
   assert.ok(fs.existsSync(mainPath), "built main.js exists");
   const main = fs.readFileSync(mainPath, "utf8");
   assert.match(main, /copyChipBuildInline/);
   assert.match(main, /copyChipAt/);
   assert.match(main, /copy-on-cursor-line/);
+  assert.match(main, /copyChipBuildFence/);
+  assert.match(main, /copyChipFencePayloadFromSource/);
+  assert.match(main, /copyChipFindFenceBlock/);
+  assert.match(main, /bob-copy-fence/);
   const args = parseArgs(["--out", "/tmp/shots", "--executable", "/snap/bin/obsidian", "--self-test"]);
   assert.equal(args.out, "/tmp/shots");
   assert.equal(args.executable, "/snap/bin/obsidian");
@@ -316,6 +400,19 @@ async function runE2e(args) {
       return { ok: true, clipboard, before };
     })()`);
     record("live preview click copies", Boolean(lpClick && lpClick.ok), JSON.stringify(lpClick).slice(0, 200));
+    // Fence cards in Live Preview: every seeded fence copies byte-exact
+    // through its Copy button, with the authored title and meta. This pins
+    // Obsidian's real `source` shape (trailing newline, list-nested
+    // indentation) through clipboard bytes.
+    await waitFor(client, "document.querySelectorAll('.bob-copy-fence').length", (v) => v >= 5, "live fence cards appear", 20_000);
+    const liveFences = await client.evaluate(
+      "(() => { const fences = " +
+        JSON.stringify(fenceCardExpectations()).replace(/</g, "\\u003c") +
+        "; return (" +
+        fenceCardCheck.toString() +
+        ")(fences); })()",
+    );
+    record("fence cards copy byte-exact (live)", Boolean(liveFences && liveFences.ok), JSON.stringify(liveFences).slice(0, 400));
     // 2. Reading button + source bytes unchanged.
     const beforeBytes = scratch.noteBytes.toString("utf8");
     const openedReading = await openNote(client, fixture.notePath(), "preview");
@@ -331,6 +428,56 @@ async function runE2e(args) {
       return { ok: true, clipboard };
     })()`);
     record("reading button copies", Boolean(reading && reading.ok), JSON.stringify(reading).slice(0, 200));
+    // Fence cards in Reading view, including the callout fallback title.
+    await waitFor(client, "document.querySelectorAll('.bob-copy-fence').length", (v) => v >= 5, "reading fence cards appear", 20_000);
+    const readingFences = await client.evaluate(
+      "(() => { const fences = " +
+        JSON.stringify(fenceCardExpectations()).replace(/</g, "\\u003c") +
+        "; return (" +
+        fenceCardCheck.toString() +
+        ")(fences); })()",
+    );
+    record("fence cards copy byte-exact (reading)", Boolean(readingFences && readingFences.ok), JSON.stringify(readingFences).slice(0, 400));
+    // The long card folds after eight lines behind a toggle.
+    const fold = await client.evaluate(`(async () => {
+      const cards = Array.from(document.querySelectorAll('.bob-copy-fence'));
+      const long = cards.find((c) => { const t = c.querySelector('.bob-copy-fence-title'); return t && t.textContent === 'Long'; });
+      if (!long) return { ok: false, reason: 'no long card' };
+      const body = long.querySelector('.bob-copy-fence-body');
+      const toggle = long.querySelector('.bob-copy-fence-toggle');
+      if (!toggle) return { ok: false, reason: 'no toggle' };
+      if (!body.classList.contains('is-folded')) return { ok: false, reason: 'not folded' };
+      if (toggle.textContent !== 'Show all 10 lines') return { ok: false, reason: 'toggle=' + toggle.textContent };
+      toggle.click();
+      await new Promise((r) => setTimeout(r, 100));
+      if (body.classList.contains('is-folded')) return { ok: false, reason: 'still folded' };
+      if (toggle.textContent !== 'Show less') return { ok: false, reason: 'toggle2=' + toggle.textContent };
+      toggle.click();
+      await new Promise((r) => setTimeout(r, 100));
+      if (!body.classList.contains('is-folded')) return { ok: false, reason: 'not refolded' };
+      return { ok: true };
+    })()`);
+    record("long fence folds and expands", Boolean(fold && fold.ok), JSON.stringify(fold).slice(0, 200));
+    // Clicking the body selects text and never copies.
+    const bodyClick = await client.evaluate(`(async () => {
+      const card = document.querySelector('.bob-copy-fence');
+      if (!card) return { ok: false, reason: 'no card' };
+      const button = card.querySelector('.bob-copy-fence-copy');
+      const body = card.querySelector('.bob-copy-fence-body');
+      if (!button || !body) return { ok: false, reason: 'no button or body' };
+      button.click();
+      await new Promise((r) => setTimeout(r, 300));
+      let before = null;
+      try { before = await navigator.clipboard.readText(); } catch (e) { return { ok: false, reason: 'unreadable' }; }
+      body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
+      body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: 11, clientY: 10 }));
+      body.click();
+      await new Promise((r) => setTimeout(r, 300));
+      let after = null;
+      try { after = await navigator.clipboard.readText(); } catch (e) { return { ok: false, reason: 'unreadable2' }; }
+      return { ok: after === before, before: String(before).slice(0, 60), after: String(after).slice(0, 60) };
+    })()`);
+    record("fence body click does not copy", Boolean(bodyClick && bodyClick.ok), JSON.stringify(bodyClick).slice(0, 200));
     // Every vector payload agrees in LP and Reading with exact clipboard bytes.
     const vectors = JSON.parse(fs.readFileSync(path.join(repoRoot, "scripts", "fixtures", "copy-chips-vectors.json"), "utf8"));
     const tableCheck = await client.evaluate(`(async () => {
@@ -364,7 +511,7 @@ async function runE2e(args) {
     );
     record("empty and dataview spans stay plain", Boolean(emptyCheck && emptyCheck.ok));
     const cursorCheck = await client.evaluate(
-      "(() => { try { const api = window.app.plugins.plugins['bob-copy-chips'].api.copyChips; const inside = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 6 }); const gap = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 17 }); const fenced = api.chipAt({ lines: ['```', '`copy: ssh`', '```'], line: 1, ch: 2 }); return { ok: inside.state === 'ready' && gap.state === 'ambiguous' && fenced.state === 'none' }; } catch (e) { return { ok: false }; } })()",
+      "(() => { try { const api = window.app.plugins.plugins['bob-copy-chips'].api.copyChips; const inside = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 6 }); const gap = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 17 }); const fenced = api.chipAt({ lines: ['```', '`copy: ssh`', '```'], line: 1, ch: 2 }); const block = api.chipAt({ lines: ['```bob-copy Hi', 'hello', '```'], line: 1, ch: 0 }); const blockOk = block.state === 'ready' && block.chip && block.chip.form === 'block' && block.chip.text === 'hello' && block.chip.label === 'Hi'; const nested = api.chipAt({ lines: ['- item', '  ```bob-copy N', '  body', '  ```'], line: 2, ch: 3 }); const nestedOk = nested.state === 'ready' && nested.chip && nested.chip.form === 'block' && nested.chip.text === 'body'; const bodySpan = api.chipAt({ lines: ['```bob-copy', '`copy: ssh` is an example', '```'], line: 1, ch: 1 }); const bodySpanOk = bodySpan.state === 'ready' && bodySpan.chip && bodySpan.chip.form === 'block'; const jsFence = api.chipAt({ lines: ['```js', '`copy: ssh`', '```'], line: 1, ch: 2 }); return { ok: inside.state === 'ready' && gap.state === 'ambiguous' && fenced.state === 'none' && blockOk && nestedOk && bodySpanOk && jsFence.state === 'none' }; } catch (e) { return { ok: false }; } })()",
     );
     record("cursor rule in app", Boolean(cursorCheck && cursorCheck.ok));
     const afterBytes = fs.readFileSync(scratch.noteFile, "utf8");

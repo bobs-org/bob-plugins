@@ -184,9 +184,9 @@ test("render: rows, keycaps, ARIA, divider, and footer chip", () => {
   assert.ok(modal.rowsEl.attributes["aria-activedescendant"]);
 
   const rows = byClass(modal.contentEl, "bob-copy-card-row");
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 7);
   const keys = byClass(modal.contentEl, "bob-copy-card-key").map((el) => el.textContent);
-  assert.deepEqual(keys, ["P", "A", "F", "N", "I", "T"]);
+  assert.deepEqual(keys, ["P", "A", "F", "N", "C", "I", "T"]);
   for (const row of rows) {
     assert.equal(row.attributes.role, "option");
     assert.ok(row.attributes["aria-selected"] === "true" || row.attributes["aria-selected"] === "false");

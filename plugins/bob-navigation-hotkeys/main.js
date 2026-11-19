@@ -12878,6 +12878,12 @@ const COPY_CARD_BUILTIN_ROWS = Object.freeze([
     variable: "block_id",
     needs: Object.freeze(["block_id"]),
   }),
+  Object.freeze({
+    id: "copy-chip",
+    key: "c",
+    label: "Copy chip",
+    needs: Object.freeze([]),
+  }),
 ]);
 const COPY_CARD_RESERVED_KEYS = Object.freeze(
   COPY_CARD_BUILTIN_ROWS.map((row) => row.key),
@@ -13519,6 +13525,7 @@ function buildCopyCardRow(fields) {
     state: fields.state,
     reason: fields.reason || null,
     isPath: fields.isPath === true,
+    copyChip: fields.copyChip || null,
   });
 }
 
@@ -13712,7 +13719,9 @@ function buildCopyCardModel(input) {
   const fileBuiltins = [];
   const taskBuiltins = [];
   for (const spec of COPY_CARD_BUILTIN_ROWS) {
-    const row = buildCopyCardBuiltinRow(spec, values, taskState);
+    const row = spec.id === "copy-chip"
+      ? buildCopyCardChipRow(spec, options.copyChip)
+      : buildCopyCardBuiltinRow(spec, values, taskState);
     if (!row) {
       continue;
     }
@@ -13978,6 +13987,54 @@ function resolveCopyCardKey(model, event, ui) {
     return copyCardKeyAction("consume");
   }
   return null;
+}
+// ---- src/101b-copy-card-chips.js ----
+// Copy card's optional C row. The API result is a frozen v1 copy-chip
+// selection; keep its literal payload and source coordinates for copying.
+function buildCopyCardChipRow(spec, result) {
+  const resolved = result && typeof result === "object" ? result : null;
+  const chip = resolved && resolved.state === "ready" && resolved.chip &&
+      typeof resolved.chip === "object"
+    ? resolved.chip
+    : null;
+  const text = chip && typeof chip.text === "string" ? chip.text : "";
+  if (chip && /\S/.test(text)) {
+    const label = typeof chip.label === "string" ? chip.label.trim() : "";
+    const payloadPreview = copyCardPreviewText(text);
+    return buildCopyCardRow({
+      id: spec.id,
+      group: "file",
+      key: spec.key,
+      label: spec.label,
+      value: text,
+      preview: label ? `${label} · ${payloadPreview}` : payloadPreview,
+      state: "ready",
+      reason: null,
+      copyChip: chip,
+    });
+  }
+
+  let reason = resolved && typeof resolved.reason === "string"
+    ? resolved.reason
+    : null;
+  if (!reason && resolved && resolved.state === "ambiguous") {
+    const count = Number.isInteger(resolved.count) ? resolved.count : 0;
+    reason = `${count} chips on this line · move onto one`;
+  }
+  if (!reason) {
+    reason = "No copy chip at the cursor";
+  }
+  return buildCopyCardRow({
+    id: spec.id,
+    group: "file",
+    key: spec.key,
+    label: spec.label,
+    value: null,
+    preview: reason,
+    state: "unavailable",
+    reason,
+    isPath: false,
+  });
 }
 // ---- src/102-copy-card-config.js ----
 // Copy card `copy.templates` loader. Reads ~/.config/bob/config.yml through
@@ -107609,6 +107666,56 @@ function copyCardEditorGuardsOk(view, editor) {
   return true;
 }
 
+function getCopyCardCopyChipsApi(app) {
+  try {
+    const plugin = app && app.plugins && app.plugins.plugins
+      ? app.plugins.plugins["bob-copy-chips"]
+      : null;
+    const api = plugin && plugin.api && plugin.api.copyChips;
+    return api && api.version === 1 &&
+        typeof api.chipAt === "function" &&
+        typeof api.copyChip === "function"
+      ? api
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolveCopyCardChip(api, lines, selections) {
+  if (!api) {
+    return { state: "unavailable", reason: "Bob Copy Chips is not enabled" };
+  }
+  const list = Array.isArray(selections) ? selections : [];
+  const selection = list.length === 1 && list[0] && typeof list[0] === "object"
+    ? list[0]
+    : null;
+  const head = selection && (selection.head || selection);
+  if (!head || !Number.isInteger(head.line) || !Number.isFinite(head.ch)) {
+    return { state: "unavailable", reason: "No copy chip at the cursor" };
+  }
+  try {
+    const result = api.chipAt({
+      lines,
+      line: Math.floor(head.line),
+      ch: Math.floor(head.ch),
+    });
+    if (result && result.state === "ready" && result.chip) {
+      return result;
+    }
+    if (result && result.state === "ambiguous") {
+      const count = Number.isInteger(result.count) ? result.count : 0;
+      return {
+        state: "unavailable",
+        reason: `${count} chips on this line · move onto one`,
+      };
+    }
+    return { state: "unavailable", reason: "No copy chip at the cursor" };
+  } catch (_error) {
+    return { state: "unavailable", reason: "No copy chip at the cursor" };
+  }
+}
+
 class BobNavigationHotkeysCopyCardMixin {
   openCopyCard() {
     const file = this.getActiveMarkdownFile();
@@ -107648,6 +107755,8 @@ class BobNavigationHotkeysCopyCardMixin {
     }
 
     const task = resolveCopyCardTask(lines, selections.length === 1 ? selections : []);
+    const copyChipsApi = getCopyCardCopyChipsApi(this.app);
+    const copyChip = resolveCopyCardChip(copyChipsApi, lines, selections);
     const relativePath = getVaultRelativeFilePath(file);
     const basePath = this.getVaultBasePath();
     const homePath = getHomeDirectoryPath();
@@ -107667,19 +107776,43 @@ class BobNavigationHotkeysCopyCardMixin {
       task,
       templates,
       diagnostic,
+      copyChip,
     });
+    const editorView = editor && (editor.cm || editor.cm6)
+      ? (editor.cm || editor.cm6)
+      : null;
 
     const modal = new CopyCardModal(this.app, {
       model,
-      onCopy: (row) => this.copyCardRow(row),
+      onCopy: (row) => this.copyCardRow(row, { copyChipsApi, editorView }),
       onSuccess: (row) => {
-        new Notice(formatCopiedNotice(row.value));
+        if (!row || row.id !== "copy-chip") {
+          new Notice(formatCopiedNotice(row.value));
+        }
       },
     });
     modal.open();
   }
 
-  async copyCardRow(row) {
+  async copyCardRow(row, context) {
+    if (row && row.id === "copy-chip") {
+      const options = context && typeof context === "object" ? context : {};
+      const api = options.copyChipsApi || getCopyCardCopyChipsApi(this.app);
+      if (!api || typeof api.copyChip !== "function") {
+        return { ok: false, reason: "Bob Copy Chips is not enabled" };
+      }
+      if (!row.copyChip) {
+        return { ok: false, reason: row.reason || "No copy chip at the cursor" };
+      }
+      try {
+        return await api.copyChip(row.copyChip, { view: options.editorView || null });
+      } catch (error) {
+        return {
+          ok: false,
+          reason: error && error.message ? error.message : "copy failed",
+        };
+      }
+    }
     if (!row || typeof row.value !== "string" || !row.value) {
       return { ok: false, reason: (row && row.reason) || "nothing to copy" };
     }

@@ -143,9 +143,9 @@ function loadTemplates(parsed, extras = {}) {
 test("builtin row table and reserved keys", () => {
   assert.deepEqual(
     COPY_CARD_BUILTIN_ROWS.map((entry) => entry.id),
-    ["path", "absolute", "file", "note", "block-id"],
+    ["path", "absolute", "file", "note", "block-id", "copy-chip"],
   );
-  assert.deepEqual(COPY_CARD_RESERVED_KEYS, ["p", "a", "f", "n", "i"]);
+  assert.deepEqual(COPY_CARD_RESERVED_KEYS, ["p", "a", "f", "n", "i", "c"]);
   assert.equal(COPY_CARD_BUILTIN_ROWS[0].label, "Path");
   assert.equal(COPY_CARD_BUILTIN_ROWS[4].variable, "block_id");
   assert.ok(Object.isFrozen(COPY_CARD_BUILTIN_ROWS));

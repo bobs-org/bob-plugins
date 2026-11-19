@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Real-Obsidian Record Card sheet and native Properties acceptance.
 // Uses a disposable Git vault/profile and the supplied current bob binary.
-// Never opens the live vault. Interactive Record Card workflows belong to phase two.
+// Never opens the live vault. Full scope also exercises guarded Record Card workflows.
 "use strict";
 
 const { spawn, spawnSync } = require("node:child_process");
@@ -12,6 +12,8 @@ const os = require("node:os");
 const path = require("node:path");
 
 const lib = require("./obsidian-record-card-e2e-lib.cjs");
+const workflows = require("./obsidian-record-card-workflows.cjs");
+const workflowProof = require("./obsidian-record-card-workflow-lib.cjs");
 const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 600_000;
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -47,34 +49,64 @@ function hashSourceTree(root) {
   return crypto.createHash("sha256").update(JSON.stringify(rows)).digest("hex");
 }
 
-function findBobProvenance() {
-  const bob = process.env.BOB_BIN;
-  const cliDir = process.env.BOB_CLI_DIR;
+function findBobProvenance({ env = process.env, execute = spawnSync } = {}) {
+  const bob = env.BOB_BIN;
+  const cliDir = env.BOB_CLI_DIR;
   if (!bob) fail("Set BOB_BIN to the exact bob binary built from this bob-cli checkout.", 2);
   if (!cliDir) fail("Set BOB_CLI_DIR to the checkout that built BOB_BIN.", 2);
   const resolvedBob = fs.realpathSync(bob);
   const resolvedCli = fs.realpathSync(cliDir);
-  const metadata = spawnSync("cargo", [
+  const metadata = execute("cargo", [
     "metadata", "--format-version", "1", "--no-deps", "--manifest-path", path.join(resolvedCli, "Cargo.toml"),
-  ], { encoding: "utf8", timeout: 20_000 });
+  ], { env, encoding: "utf8", timeout: 20_000 });
   if (metadata.status !== 0) fail("Could not inspect bob-cli target directory: " + (metadata.stderr || metadata.stdout));
   let target = "";
   try { target = JSON.parse(metadata.stdout).target_directory || ""; } catch (_) {}
   if (!target) fail("cargo metadata returned no target directory for BOB_CLI_DIR.");
   const expected = fs.realpathSync(path.join(target, "debug", "bob"));
   if (resolvedBob !== expected) fail("BOB_BIN must be the explicit debug binary at " + expected + "; got " + resolvedBob + ".", 2);
-  const sha = spawnSync("git", ["-C", resolvedCli, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 });
+  const sha = execute("git", ["-C", resolvedCli, "rev-parse", "HEAD"], { env, encoding: "utf8", timeout: 10_000 });
   if (sha.status !== 0) fail("Could not read bob-cli source SHA: " + sha.stderr);
-  const dirty = spawnSync("git", ["-C", resolvedCli, "status", "--porcelain"], { encoding: "utf8", timeout: 10_000 });
-  if (dirty.status !== 0 || String(dirty.stdout || "").trim()) fail("BOB_CLI_DIR must be a clean source checkout.");
-  const version = spawnSync(resolvedBob, ["--version"], { encoding: "utf8", timeout: 15_000 });
+  const dirty = execute("git", ["-C", resolvedCli, "status", "--porcelain"], { env, encoding: "utf8", timeout: 10_000 });
+  if (dirty.status !== 0) fail("Could not inspect bob-cli source status.");
+  const sourceSha = String(sha.stdout || "").trim();
+  const binarySha256 = sha256File(resolvedBob);
+  let sourcePatch = null;
+  if (env.BOB_CLI_PROVENANCE) {
+    // A transported patch is admissible only when the build coordinator supplies
+    // a separately pinned manifest binding the base, full diff and exact binary.
+    // No generic allow-dirty switch: every source delta must match those bytes.
+    const manifestBytes = fs.readFileSync(env.BOB_CLI_PROVENANCE);
+    const manifestSha256 = crypto.createHash("sha256").update(manifestBytes).digest("hex");
+    if (manifestSha256 !== env.BOB_CLI_PROVENANCE_SHA256) fail("CLI provenance manifest hash mismatch.");
+    const manifest = JSON.parse(manifestBytes);
+    if (manifest.schema_version !== 1 || !/^[0-9a-f]{40}$/.test(manifest.sourceSha) ||
+        !/^[0-9a-f]{64}$/.test(manifest.sourcePatchSha256) || !/^[0-9a-f]{64}$/.test(manifest.binarySha256)) {
+      fail("Invalid CLI provenance manifest.");
+    }
+    if (manifest.sourceSha !== sourceSha) fail("CLI provenance source SHA mismatch.");
+    if (manifest.binarySha256 !== binarySha256) fail("CLI provenance binary hash mismatch.");
+    const untracked = execute("git", ["-C", resolvedCli, "ls-files", "--others", "--exclude-standard", "-z"],
+      { env, timeout: 10_000 });
+    if (untracked.status !== 0 || untracked.stdout.length) fail("CLI provenance requires no untracked source inputs.");
+    const diff = execute("git", ["-C", resolvedCli, "diff", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD"],
+      { env, timeout: 10_000, maxBuffer: 32 * 1024 * 1024 });
+    if (diff.status !== 0) fail("Could not inspect CLI source patch.");
+    const patchSha256 = crypto.createHash("sha256").update(diff.stdout).digest("hex");
+    if (manifest.sourcePatchSha256 !== patchSha256) fail("CLI provenance source patch hash mismatch.");
+    sourcePatch = { manifestSha256, sha256: patchSha256, bytes: diff.stdout.length };
+  } else if (String(dirty.stdout || "").trim() || env.BOB_CLI_PROVENANCE_SHA256) {
+    fail("BOB_CLI_DIR must be clean or have a pinned BOB_CLI_PROVENANCE manifest.");
+  }
+  const version = execute(resolvedBob, ["--version"], { env, encoding: "utf8", timeout: 15_000 });
   if (version.status !== 0) fail("BOB_BIN --version failed: " + (version.stderr || version.stdout));
   return {
     path: resolvedBob,
-    sha256: sha256File(resolvedBob),
+    sha256: binarySha256,
     version: String(version.stdout || "").trim(),
     checkout: resolvedCli,
-    sourceSha: String(sha.stdout || "").trim(),
+    sourceSha,
+    sourcePatch,
   };
 }
 
@@ -119,11 +151,14 @@ function writeBobShim(shimDir) {
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
-const entry = { at: new Date().toISOString(), args };
+const hasStdin = args.some((arg, i) => (arg === '-i' || arg === '--input') && args[i+1] === '-');
+const input = hasStdin ? fs.readFileSync(0, 'utf8') : undefined;
+const entry = { event: 'start', pid: process.pid, at: new Date().toISOString(), args, input };
 try { fs.appendFileSync(process.env.BOB_RECORD_CARD_E2E_LOG, JSON.stringify(entry) + "\\n"); } catch (_) {}
 const result = spawnSync(process.env.BOB_RECORD_CARD_E2E_REAL, args, {
-  encoding: "utf8", env: process.env, maxBuffer: 32 * 1024 * 1024,
+  encoding: "utf8", env: process.env, input, timeout: 90000, maxBuffer: 32 * 1024 * 1024,
 });
+try { fs.appendFileSync(process.env.BOB_RECORD_CARD_E2E_LOG, JSON.stringify({event:'finish',pid:process.pid,args,exitCode:result.status,stdout:result.stdout,stderr:result.stderr}) + "\\n"); } catch (_) {}
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 process.exit(result.status == null ? 1 : result.status);
@@ -138,17 +173,34 @@ function writeNote(root, relative, content) {
   fs.writeFileSync(file, content);
 }
 
-function copyPlugin(vaultDir) {
+function copyPlugin(vaultDir, scope) {
   const source = path.join(repoRoot, "plugins", "bob-ledger-tools");
   const target = path.join(vaultDir, ".obsidian", "plugins", "bob-ledger-tools");
   fs.mkdirSync(target, { recursive: true });
   for (const name of ["manifest.json", "main.js", "styles.css"]) fs.copyFileSync(path.join(source, name), path.join(target, name));
-  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(["bob-ledger-tools"], null, 2));
+  const ids = ["bob-ledger-tools"];
+  if (scope === "full") {
+    for (const id of ["bob-navigation-hotkeys", "bob-command-mode"]) {
+      const dest = path.join(vaultDir, ".obsidian", "plugins", id);
+      fs.mkdirSync(dest, { recursive: true });
+      for (const name of ["manifest.json", "main.js", "styles.css"]) {
+        const file = path.join(repoRoot, "plugins", id, name);
+        if (fs.existsSync(file)) fs.copyFileSync(file, path.join(dest, name));
+      }
+      ids.push(id);
+    }
+    fs.writeFileSync(path.join(vaultDir, ".obsidian", "hotkeys.json"), JSON.stringify({
+      "bob-navigation-hotkeys:set-bullet-property": [{ modifiers: ["Ctrl", "Shift"], key: "P" }],
+      "command-palette:open": [{ modifiers: ["Ctrl"], key: "P" }],
+    }));
+  }
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(ids, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "app.json"), JSON.stringify({
     livePreview: true,
     showLineNumber: false,
     showInlineTitle: true,
     propertiesInDocument: "visible",
+    vimMode: scope === "full",
   }, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "appearance.json"), JSON.stringify({
     cssTheme: "",
@@ -624,7 +676,9 @@ async function capture(client, outDir, name, width, theme, mode) {
     path: file,
     bytes: bytes.length,
     sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
-    width,
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+    requestedWidth: width,
     theme,
     mode,
     visualVerdict: "pending inspection",
@@ -878,7 +932,7 @@ function appendCapturedCheck(report, name, ok, detail, mandatory = true) {
 async function run(args) {
   const report = {
     pass: false,
-    scope: "sheet",
+    scope: args.scope,
     startedAt: new Date().toISOString(),
     pluginSource: {
       head: process.env.BOB_PLUGIN_SOURCE_SHA || null,
@@ -939,7 +993,7 @@ async function run(args) {
     fs.mkdirSync(vaultDir, { recursive: true });
     const notes = lib.fixtureNotes();
     for (const [name, content] of Object.entries(notes)) writeNote(vaultDir, name, content);
-    copyPlugin(vaultDir);
+    copyPlugin(vaultDir, args.scope);
     writeBobShim(shimDir);
     initScratchGit(vaultDir);
     const vaultReal = fs.realpathSync(vaultDir);
@@ -1358,25 +1412,31 @@ async function run(args) {
         { reason: "Plugin did not disable; re-enable cannot be exercised." });
     }
 
-    const hoverAndSourcePending = [
-      "Record Card modal entry points and guarded edits (phase two)",
-      "Keyboard field saves, Undo, refusal cases and YAML excursion (phase two)",
-    ];
-    report.pendingPhaseTwo = hoverAndSourcePending;
-    for (const item of hoverAndSourcePending) writeAssertion(report, item, "skipped", "Outside the sheet-dom phase scope; owned by bob-cli-ms.8.3.1.2.", false);
-
     const afterUi = markdownFilesHash(vaultDir);
     report.noteSafety.afterUi = afterUi;
     report.noteSafety.passiveMarkdownBytesUnchanged = report.noteSafety.beforeUi === afterUi;
     appendCapturedCheck(report, "render-fold-collapse-and-navigation-are-markdown-neutral",
       report.noteSafety.passiveMarkdownBytesUnchanged, report.noteSafety);
+    if (args.scope === "full") {
+      await waitFor(client, "Boolean(app.plugins.plugins['bob-navigation-hotkeys'] && app.plugins.plugins['bob-command-mode'])", Boolean, "entry-point plugins");
+      await workflows.runWorkflows({ client, report, vaultDir, profileDir, open, waitSheet,
+        waitFor, sleep, capture, outDir, check: appendCapturedCheck,
+        readRecord: (note) => {
+          const [album, filename] = note.split('/');
+          const result = runBob(bob, ['records', 'show', album, filename.replace(/\.md$/, ''), '-f', 'json'], vaultDir, profileDir);
+          report.bobRuns.push(result);
+          return workflowProof.readRecordResult(result, note);
+        },
+      });
+    }
+    workflowProof.requireInventory(report, args.scope);
     appendCapturedCheck(report, "no-console-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
     report.pass = report.assertions.filter((row) => row.mandatory).every((row) => row.status === "pass")
       && report.prerequisites.every((row) => row.status === "pass");
     successful = report.pass;
   } catch (error) {
     report.error = error && error.stack ? error.stack : String(error);
-    if (client && report.screenshots.length === 0) {
+    if (client) {
       try {
         report.screenshots.push(await capture(client, outDir, "record-sheet-runner-failure", 1400, "light", "failure state"));
       } catch (screenshotError) {
@@ -1388,6 +1448,11 @@ async function run(args) {
     }
     report.pass = false;
   } finally {
+    workflowProof.requireInventory(report, args.scope);
+    if (report.assertions.some(row => row.mandatory && row.status !== 'pass')) {
+      report.pass = false;
+      successful = false;
+    }
     if (client) client.close();
     if (child && child.exitCode == null) {
       try { child.kill("SIGTERM"); } catch (_) {}
@@ -1437,4 +1502,4 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { probeSource, markdownFilesHash, parseArgs: lib.parseArgs };
+module.exports = { findBobProvenance, probeSource, markdownFilesHash, writeBobShim, parseArgs: lib.parseArgs };

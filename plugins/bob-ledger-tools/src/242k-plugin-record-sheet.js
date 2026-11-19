@@ -480,17 +480,25 @@ class BobLedgerToolsRecordSheetMixin {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.recordSheetMarkdownLeaf(path);
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
       }
+      // Both Live Preview and raw YAML use mode: "source". Reopening the
+      // same file can retain its current editor, so explicitly switch that view.
+      if (typeof leaf?.view?.setState === "function") {
+        await leaf.view.setState({
+          ...(leaf.view.getState?.() || {}), mode: "source", source: true,
+        }, { history: false });
+      }
+      if (leaf) this.app?.workspace?.setActiveLeaf?.(leaf, { focus: true });
       const editor = leaf?.view?.editor;
       const cursorLine = Number.isInteger(line) && line > 0 ? line - 1 : 0;
       if (editor && typeof editor.setCursor === "function") {
@@ -498,6 +506,7 @@ class BobLedgerToolsRecordSheetMixin {
         if (typeof editor.scrollIntoView === "function") {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
+        editor.focus?.();
       }
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {

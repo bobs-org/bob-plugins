@@ -191,6 +191,45 @@ test("Schema Card shell paints stable regions, pills, and a hidden empty status 
   assert.ok(hiddenUndo, "Undo stays queryable inside the hidden All actions list");
 });
 
+test("record field entry survives the host modal's initial focus and preserves Ctrl+J/K", () => {
+  const { app, plugin, model, modal } = openCard({ fields: [
+    { key: "status", label: "Status", kind: "text" },
+    { key: "claim", label: "Claim", kind: "text" },
+    { key: "section", label: "Section", kind: "text" },
+  ] });
+  const base = Object.getPrototypeOf(Object.getPrototypeOf(modal));
+  const originalOpen = base.open;
+  let beforeHostFocus;
+  base.open = function () {
+    originalOpen.call(this);
+    beforeHostFocus = this.selectedKey;
+    const first = this.contentEl.querySelector('[data-target-key="stats"]');
+    first.focus();
+    // Obsidian focuses its first control after onOpen; focusin updates the model.
+    first.dispatchEvent({ type: "focusin" });
+    assert.equal(this.selectedKey, "stats");
+  };
+  try {
+    const opened = plugin.openAlbumSchemaCard(model, "eat.md", { field: "claim" }).modal;
+    assert.equal(beforeHostFocus, "field:claim");
+    assert.equal(opened.selectedKey, "field:claim");
+    assert.equal(app.document.activeElement.getAttribute("data-target-key"), "field:claim");
+    assert.equal(opened.contentEl.querySelector('[data-target-key="field:claim"]').getAttribute("aria-current"), "true");
+    for (const [key, expected] of [["j", "field:section"], ["k", "field:claim"]]) {
+      opened.schemaOnKeyDown({ key, ctrlKey: true, target: app.document.activeElement, preventDefault() {} });
+      assert.equal(opened.selectedKey, expected);
+      assert.equal(app.document.activeElement.getAttribute("data-target-key"), expected);
+    }
+    opened.close();
+    const invalid = plugin.openAlbumSchemaCard(model, "eat.md", { field: "absent" }).modal;
+    assert.equal(invalid.selectedKey, "stats");
+    invalid.close();
+  } finally {
+    base.open = originalOpen;
+    modal.close();
+  }
+});
+
 test("selection and session paints keep body and stage input nodes", async () => {
   const { modal, plugin } = openCard();
   const field = modal.contentEl.querySelector('[data-target-key="field:status"]');

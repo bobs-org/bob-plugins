@@ -224,6 +224,7 @@ function recordCardEscLadder(state) {
 function recordCardStatusText(state) {
   const kind = state && state.statusKind;
   if (kind === "reading") return RECORD_CARD_READING_TEXT;
+  if (kind === "previewing") return "Checking value…";
   if (kind === "saving") return RECORD_CARD_SAVING_TEXT;
   if (kind === "saved") return RECORD_CARD_SAVED_TEXT;
   if (kind === "stale") return RECORD_CARD_STALE_TEXT;

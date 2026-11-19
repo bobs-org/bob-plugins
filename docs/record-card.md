@@ -173,13 +173,22 @@ from the applied or read state, preserving the optimistic overlay and Undo.
 
 ### Refusals and retry
 
+While a typed value is being previewed, the status reads `Checking value…`;
+`Saving…` is reserved for an apply or Undo in progress.
+Enter, Tab, and Shift+Tab on a refused preview keep the refusal visible and
+retain the draft without writing or advancing. Editing the draft requests a new
+preview; the earlier refused save cannot apply that corrected draft.
 The status rule shows the loading line, the preview consequence, `✓ Saved
 · u undo`, bob's refusal message and hint verbatim, and the stale line
 `This record changed elsewhere — refreshed; your draft is kept · ↵
 retry`. The complete stage draft, chip state, selected candidate, active
 control, caret, and field identity survive record and album refreshes and
 stale refusals. Queued saves are invalidated before rebasing; retry
-schedules a fresh preview of the retained ops. A refreshed schema that
+schedules a fresh preview of the retained ops. An external record change
+also holds a dirty draft at this warning as soon as refresh detects it.
+Background refreshes cannot dismiss the warning; Enter previews the retained
+draft against the refreshed record, then Enter saves the current preview.
+A refreshed schema that
 removes or changes the field, or a lost capability, stops the old write
 intent with a teaching line while keeping the safe read-only and YAML
 route. Focus and selection survive repaints; IME composition nodes are

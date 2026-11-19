@@ -979,7 +979,11 @@ class BobLedgerToolsAlbumSchemaCardMixin {
       } catch (_) {}
     }
     this.albumSchemaCardModal = modal;
+    const initialKey = modal.selectedKey;
     try { modal.open(); } catch (_) {}
+    // Modal.open focuses its first control after onOpen. Its focusin listener
+    // can replace the requested field with Stats; restore selection and focus.
+    try { modal.schemaSelect(initialKey); } catch (_) {}
     return { ok: true, modal };
   }
 }

@@ -11079,7 +11079,10 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   margin: 0.55em 0 0;
 }
 .bob-record-sheet-row {
-  display: contents;
+  /* Each keyboard target needs its own box; display: contents cannot focus. */
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
 }
 .bob-record-sheet-label {
   margin: 0;

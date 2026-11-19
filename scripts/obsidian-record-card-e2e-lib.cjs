@@ -8,19 +8,20 @@ const HELP_TEXT = [
   "Usage: node scripts/obsidian-record-card-e2e.cjs [OPTIONS]",
   "",
   "Prove the Record Card sheet and native Properties lifecycle in an isolated Obsidian vault.",
-  "The default sheet scope proves rendering and hiding only; it never edits record fields.",
+  "The default full scope requires sheet, entry-point, and guarded editing acceptance.",
   "Run the real walkthrough under xvfb-run -a on Linux.",
   "",
   "Options:",
   "  -e, --executable PATH   Obsidian Electron binary",
   "  -o, --out DIRECTORY    Save PNG screenshots here",
   "  -r, --report PATH      Write the structured JSON report here",
+  "      --scope SCOPE      full (default) or sheet (rendering only)",
   "  -s, --self-test        Validate fixtures and probes without launching apps",
   "  -h, --help             Print this help",
 ].join("\n");
 
 function parseArgs(argv) {
-  const args = { executable: null, out: null, report: null, selfTest: false, help: false };
+  const args = { executable: null, out: null, report: null, scope: "full", selfTest: false, help: false };
   const input = Array.isArray(argv) ? argv.slice() : [];
   for (let i = 0; i < input.length; i += 1) {
     const value = input[i];
@@ -36,6 +37,9 @@ function parseArgs(argv) {
       const next = input[++i];
       if (!next || next.startsWith("-")) throw new Error("--report requires a PATH value");
       args.report = next;
+    } else if (value === "--scope") {
+      args.scope = input[++i];
+      if (!["full", "sheet"].includes(args.scope)) throw new Error("--scope requires full or sheet");
     } else if (value === "-s" || value === "--self-test") {
       args.selfTest = true;
     } else if (value === "-h" || value === "--help") {
@@ -91,7 +95,7 @@ function fixtureNotes() {
     }),
     "movies.md": albumNote({
       title: "Movies", parent: "proj", noun: "movie",
-      fields: { status: "{required: true, values: {planned: Planned, watched: Watched}}", verdict: "{values: {loved: Loved, liked: Liked}}", year: "{values: number, min: 1888, max: 2100}", service: "{}", watched_on: "{values: date}", url: "{values: url}" },
+      fields: { status: "{required: true, values: {planned: Planned, watched: Watched}}", verdict: "{values: {loved: Loved, liked: Liked}}", year: "{values: number, min: 1888, max: 2100}", service: "{}", watched_on: "{values: date}", url: "{values: url}", category: "{suggest: true}", reference: "{values: link}", tags: "{list: true}" },
     }),
     "eat.md": albumNote({
       title: "Eat", parent: "body", noun: "restaurant",

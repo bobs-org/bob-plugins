@@ -85,11 +85,11 @@ Review every screenshot and the report's checks, note-byte hashes, and logged
 Bob sync/list calls. The offline self-test is fixture coverage only; it does
 not count as real Obsidian acceptance.
 
-The Record Card sheet wrapper is also part of `npm test`. It checks canonical
-record fixtures, captured-DOM assertions for schema-only hiding, and negative cases
-without Obsidian or a Bob installation. This is fixture coverage only.
+The Record Card wrapper in `npm test` checks fixtures, selective Properties hiding,
+byte boundaries, freshness assertions, and the stdin-forwarding writer recorder
+without Obsidian or Bob. This is offline coverage only.
 
-For real sheet acceptance, use athena's Obsidian Electron binary and a clean copy
+For real acceptance, use athena's Obsidian Electron binary and a clean copy
 of the current bob-cli checkout and bob-plugins source under a disposable
 directory. Build `bob` from that checkout and place the exact binary at its
 `target/debug/bob`. Then run:
@@ -104,7 +104,18 @@ xvfb-run -a node scripts/obsidian-record-card-e2e.cjs \
 
 The runner refuses a missing or incompatible supplied binary; it records the
 bob-cli source SHA, binary SHA256, version, and the real `record_values_v1`
-capability from `bob albums list`. It creates a unique scratch Git vault with a
+capability from `bob albums list`. If a build coordinator transports uncommitted
+CLI changes, it must also provide `BOB_CLI_PROVENANCE` (a JSON file) and
+`BOB_CLI_PROVENANCE_SHA256` (that file's SHA256). The version-1 manifest contains
+`schema_version: 1`, `sourceSha` (base commit), `sourcePatchSha256` (SHA256 of
+`git diff --binary --no-color --no-ext-diff --no-textconv --no-renames HEAD`), and
+`binarySha256`. Freeze the source before building and check it again afterward;
+transport the base, exact patch, manifest and resulting binary together. The runner
+checks all four against the transported checkout, refuses untracked source inputs,
+and records the manifest and patch hashes. Without a manifest the checkout must be
+clean. This provenance check does not replace the build and test gates.
+
+It creates a unique scratch Git vault with a
 local bare remote, an owned Obsidian profile/process/debug port, and explicit
 `BOB_DIR` plus a missing test-config path. The scratch app starts with native
 Properties and the inline title enabled. Per-key probes require title/schema rows
@@ -115,6 +126,32 @@ authored body link, independently of the record walk rail. It preserves a failur
 report and screenshots for diagnosis, records pass/fail/skipped assertions and console
 exceptions, and never opens the live vault. Copy the report and screenshots back
 from athena and inspect every PNG; `--self-test` is not real-Obsidian acceptance.
+
+The default `--scope full` requires every sheet and interaction assertion. It loads
+ledger-tools, navigation-hotkeys and Command Mode, exercises real controls and keyboard
+input, and records writer stdin/results separately from previews. It verifies seven
+typed stages, Undo, refusal drafts, YAML return, Schema Card navigation and Markdown
+byte boundaries. Failed workflows retain keyboard focus and subprocess evidence,
+including each focus target's layout boxes and computed display. The row keyboard
+check captures the focused row before Enter opens its card.
+Within the card, field selection clicks the label, then requires native focus on
+that row and an unchanged active note before typing. A populated value may be a
+navigable link, so clicking the row's centre is not a field-selection gesture.
+The YAML check waits for raw Source mode and the selected field's line, captures
+that view, then verifies Done restores Live Preview and the same Record Card field.
+The Schema Card handoff checks both the selected field and keyboard focus, and
+captures the Claim row before exercising its unchanged Ctrl+J/K navigation.
+The invalid-number check presses Enter, Tab, and Shift+Tab after bob refuses the
+preview, requiring the refusal, draft, field, and native focus to remain intact
+with no writer call before capturing the settled refusal.
+The stale-edit check waits for a current draft preview, changes the record in a
+second real Source pane, and requires a persistent stale warning with no writer
+call and unchanged Markdown after that external edit. It then uses Enter to
+preview the retained draft and a second Enter to save it. The report retains
+both fingerprints, draft operations and the refusal/retry states; screenshots
+capture the refusal and completed retry separately.
+Missing workflows fail the run. `--scope sheet` explicitly skips
+interactions and proves rendering only; its result cannot stand for full acceptance.
 
 ## Focused suites
 

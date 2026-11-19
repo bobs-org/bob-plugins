@@ -644,6 +644,53 @@ test("DOM keeps HTML-looking values as text, rejects dangerous URLs, and exposes
   assert.equal(root.classList.contains(HIDES), true);
 });
 
+test("YAML jumps leave Live Preview and await raw Source before placing the cursor", async () => {
+  const { plugin, app } = fixture();
+  const events = [];
+  let viewState = { mode: "source", source: false, file: "eat/smashburger.md", scroll: 17 };
+  let release;
+  const transition = new Promise(resolve => { release = resolve; });
+  const leaf = {
+    view: {
+      file: { path: "eat/smashburger.md" },
+      getState: () => viewState,
+      async setState(next) { await transition; viewState = next; events.push("source"); },
+      editor: {
+        setCursor(cursor) { assert.equal(viewState.source, true); events.push(cursor); },
+        scrollIntoView() {}, focus() { events.push("focus"); },
+      },
+    },
+    async openFile(file, options) {
+      assert.equal(file.path, "eat/smashburger.md");
+      assert.deepEqual(options.state, { mode: "source", source: true });
+      // Obsidian may keep an already-open file's current view state.
+    },
+  };
+  app.workspace.getLeavesOfType = () => [leaf];
+  app.workspace.setActiveLeaf = selected => { assert.equal(selected, leaf); events.push("active"); };
+  const pending = plugin.recordSheetOpenSource("eat/smashburger.md", 4);
+  await Promise.resolve();
+  assert.deepEqual(events, [], "cursor must wait for the mode transition");
+  release();
+  assert.deepEqual(await pending, { ok: true, line: 4 });
+  assert.equal(viewState.scroll, 17);
+  assert.deepEqual(events, ["source", "active", { line: 3, ch: 0 }, "focus"]);
+});
+
+test("YAML jump fallback explicitly requests raw Source and keeps unrelated view state", async () => {
+  const { plugin, app } = fixture();
+  const current = { type: "markdown", state: { mode: "preview", source: false, file: "eat/smashburger.md", scroll: 9 } };
+  const leaf = {
+    view: { file: { path: "eat/smashburger.md" } },
+    getViewState: () => current,
+    async setViewState(next) { this.next = next; },
+  };
+  app.workspace.getLeavesOfType = () => [leaf];
+  assert.equal((await plugin.recordSheetOpenSource("eat/smashburger.md", 1)).ok, true);
+  assert.deepEqual(leaf.next.state, { mode: "source", source: true, file: "eat/smashburger.md", scroll: 9 });
+  assert.equal(current.state.source, false, "the saved return state is untouched");
+});
+
 test("Live Preview caches decorations across body edits and rebuilds on model changes", () => {
   const { plugin, doc } = fixture();
   const heading = "---\ntype: [[record]]\nparent: [[eat]]\nstatus: to_try\n---\n# Smashburger\nbody\n";
@@ -1135,6 +1182,17 @@ test("row value text and access names describe the card action", () => {
     helpers.recordSheetRowValueText({ state: "set", spans: [{ text: "See " }, { text: "body", kind: "link" }] }),
     "See body",
   );
+});
+
+test("keyboard row targets retain a layout box and the shared field columns", () => {
+  const styles = fs.readFileSync(path.join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const row = styles.match(/^\.bob-record-sheet-row\s*\{([^}]+)\}/m)?.[1];
+  assert.ok(row, "the focusable row needs a layout rule");
+  // A fake DOM accepts focus on display:contents; the real Electron proof rejected it.
+  assert.match(row, /display:\s*grid\s*;/);
+  assert.match(row, /grid-column:\s*1\s*\/\s*-1\s*;/);
+  assert.match(row, /grid-template-columns:\s*subgrid\s*;/);
+  assert.match(styles, /@media\s*\(max-width:\s*375px\)[\s\S]*?\.bob-record-sheet-row\s*\{\s*display:\s*block;/);
 });
 
 test("sheet affordances open the card: Edit, rows, chips, ghosts, missing", () => {

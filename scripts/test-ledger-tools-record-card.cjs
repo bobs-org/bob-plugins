@@ -489,6 +489,106 @@ test("no-op does not manufacture a save; stale keeps the draft for retry", async
   assert.ok(modal.retainedOps);
 });
 
+test("typed external refresh holds the draft and stale warning until an explicit retry", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("text", "notes");
+    modal.stageDraftText = "Keep my draft";
+    modal.recordTypedInput();
+    await modal.session.previewNow();
+    assert.equal(modal.session.getState().canApply, true);
+    const ops = modal.session.getState().draftOps;
+    const changed = showReport();
+    changed.record.fingerprint = "sha256:external";
+    plugin.apiRecordShow = async () => ({ ok: true, report: changed });
+    await modal.recordRefresh({ keepStage: true });
+    assert.equal(modal.statusKind, "stale");
+    assert.equal(modal.stageDraftText, "Keep my draft");
+    assert.deepEqual(modal.retainedOps, ops);
+    assert.equal(modal.session.getState().canApply, false);
+    assert.match(modal.contentEl.textContent, /changed elsewhere/);
+    const previews = plugin._previews;
+    await modal.recordRefresh({ keepStage: true });
+    await pause(300);
+    assert.equal(modal.statusKind, "stale", "report notifications must not erase the warning");
+    assert.equal(plugin._previews, previews, "refresh must not re-preview the retained intent");
+    assert.equal(plugin._applies.length, 0);
+    const input = modal.contentEl.querySelector("[data-record-input='stage-text']");
+    modal.recordOnKeyDown(keyEvent("Enter", { target: input }));
+    await modal.session.previewNow();
+    assert.notEqual(modal.statusKind, "stale");
+    assert.equal(modal.session.getState().canApply, true);
+    assert.equal(plugin._applies.length, 0, "retry previews before the next explicit save");
+    await modal.recordSaveTyped(0);
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(plugin._applies[0].expect, "sha256:external");
+    assert.deepEqual(plugin._applies[0].ops, ops);
+  } finally { modal.close(); }
+});
+
+test("unchanged refresh preserves a current typed preview and one Tab advance", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://changed.test";
+    modal.recordTypedInput();
+    await modal.session.previewNow();
+    const before = modal.session.getState();
+    await modal.recordRefresh({ keepStage: true });
+    assert.equal(modal.session.getState().canApply, true);
+    assert.equal(modal.session.getState().revision, before.revision);
+    assert.notEqual(modal.statusKind, "stale");
+    assert.equal(modal.stageDraftText, "https://changed.test");
+    await modal.recordTab(1);
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(modal.selectedKey, "notes");
+  } finally { modal.close(); }
+});
+
+test("typed writer stale refusal cancels queued Tab and stays visible after refresh", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://changed.test";
+    modal.recordTypedInput();
+    await modal.session.previewNow();
+    const changed = showReport();
+    changed.record.fingerprint = "sha256:external";
+    plugin.apiRecordShow = async () => ({ ok: true, report: changed });
+    plugin.apiRecordUpdateApply = async () => ({ ok: false, kind: "stale", code: "stale_record",
+      report: { error: { code: "stale_record" }, record: { fingerprint: "sha256:external" } } });
+    await modal.recordTab(1);
+    await pause(300);
+    assert.equal(modal.statusKind, "stale");
+    assert.equal(modal.pendingTab, null);
+    assert.equal(modal.selectedKey, "url");
+    assert.equal(modal.stageDraftText, "https://changed.test");
+    assert.ok(modal.retainedOps);
+    assert.equal(modal.session.getState().canApply, false);
+    assert.match(modal.contentEl.textContent, /changed elsewhere/);
+  } finally { modal.close(); }
+});
+
+test("unchanged refresh preserves a queued Tab while its real session previews", async () => {
+  const { plugin, modal } = await openCard();
+  let release;
+  plugin.apiRecordUpdatePreview = () => new Promise(resolve => { release = resolve; });
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://changed.test";
+    modal.recordTypedInput();
+    const preview = modal.session.previewNow();
+    await modal.recordTab(1);
+    await modal.recordRefresh({ keepStage: true });
+    assert.equal(modal.pendingTab?.field, "url");
+    release({ ok: true, report: applyReport({ dry_run: true }) });
+    await preview;
+    await pause(20);
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(modal.selectedKey, "notes");
+  } finally { modal.close(); }
+});
+
 test("double Enter and in-flight apply latch", async () => {
   let resolveApply;
   const { modal } = await openCard();
@@ -578,11 +678,16 @@ test("Esc/q/Ctrl+[ climb menu then stage then card; q types in the filter", asyn
 test("= closes before schema; YAML Done restores and reopens the same field", async () => {
   const { plugin, modal, leaves, files } = await openCard();
   await pause(0);
+  let state = { type: "markdown", state: { mode: "source", source: false } };
   const leaf = {
-    view: { file: files.get("eat/smashburger.md"), editor: { setCursor() {}, scrollIntoView() {} }, save: async () => {} },
-    getViewState: () => ({ type: "markdown", state: { mode: "preview" } }),
-    setViewState: async (state) => { leaf.restored = state; },
-    openFile: async () => {},
+    view: {
+      file: files.get("eat/smashburger.md"), editor: { setCursor() {}, scrollIntoView() {} }, save: async () => {},
+      getState: () => state.state,
+      setState: async (next) => { state = { ...state, state: next }; },
+    },
+    getViewState: () => state,
+    setViewState: async (next) => { state = next; leaf.restored = next; },
+    openFile: async (_file, options) => { state = { ...state, state: { ...state.state, ...options.state } }; },
   };
   leaves.push(leaf);
   plugin.app.workspace.activeLeaf = leaf;
@@ -597,10 +702,12 @@ test("= closes before schema; YAML Done restores and reopens the same field", as
   assert.equal(excursion.kind, "record");
   assert.equal(excursion.recordPath, "eat/smashburger.md");
   assert.equal(helpers.albumYamlExcursionOwnPath(excursion), "eat/smashburger.md");
+  assert.equal(state.state.source, true, "YAML opens raw Source even when starting in Live Preview");
   const done = await plugin.albumYamlDone({ leaf });
   assert.equal(done.ok, true);
   assert.equal(done.reopened, true);
   assert.equal(plugin.recordCardModal.selectedKey, "url");
+  assert.equal(state.state.source, false, "Done restores Live Preview");
 });
 
 test("live region announces selection and save; labels stay text", async () => {
@@ -623,4 +730,193 @@ test("teardown closes the card and ignores late callbacks", async () => {
   plugin.teardownRecordCard();
   assert.equal(modal.closed, true);
   assert.equal(plugin.recordCardModal, null);
+});
+
+test("typed previews and saves waiting for preview never claim a writer is saving", async () => {
+  const { plugin, modal } = await openCard();
+  let releasePreview;
+  plugin.apiRecordUpdatePreview = () => new Promise(resolve => { releasePreview = resolve; });
+  try {
+    modal.recordOpenStage("text", "notes");
+    modal.stageDraftText = "A new note";
+    modal.recordTypedInput();
+    assert.equal(modal.pendingApply, false);
+    assert.equal(modal.statusKind, "previewing");
+    assert.match(modal.contentEl.textContent, /Checking value…/);
+    assert.doesNotMatch(modal.contentEl.textContent, /Saving…/);
+    const result = await modal.recordSaveTyped(0);
+    assert.equal(result.code, "preview-pending");
+    assert.equal(modal.statusKind, "previewing");
+    assert.equal(plugin._applies.length, 0);
+    assert.equal(helpers.recordCardStatusText({statusKind:"saving",pendingApply:true}), "Saving…");
+    modal.stageDraftText = "";
+    modal.recordTypedInput();
+    assert.equal(modal.statusKind, "", "returning to the seed clears the preview label");
+    modal.stageDraftText = "Another note";
+    modal.recordTypedInput();
+    modal.recordCancelStage();
+    assert.equal(modal.statusKind, "", "cancel clears the preview label");
+  } finally {
+    modal.close();
+    releasePreview?.({ok:false,message:"Test closed"});
+  }
+});
+
+async function untilCard(predicate) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (predicate()) return;
+    await pause(5);
+  }
+  assert.ok(predicate(), "Record Card did not settle");
+}
+
+for (const previewReady of [false, true]) {
+  for (const direction of [1, -1]) {
+    test(`typed Tab advances once after ${previewReady ? "ready" : "pending"} preview, direction ${direction}`, async () => {
+      const { plugin, modal } = await openCard();
+      let releasePreview;
+      plugin.apiRecordUpdatePreview = () => new Promise(resolve => { releasePreview = resolve; });
+      const report = applyReport({ changed: ["url"], properties: showReport().record.properties.map(p =>
+        p.key === "url" ? { ...p, value: "https://example.test/new", display: "https://example.test/new" } : p) });
+      plugin.apiRecordUpdateApply = async (_type, _stem, envelope) => {
+        plugin._applies.push(JSON.parse(envelope));
+        return { ok: true, report };
+      };
+      try {
+        modal.recordOpenStage("url", "url");
+        modal.stageDraftText = "https://example.test/new";
+        modal.recordTypedInput();
+        await untilCard(() => Boolean(releasePreview));
+        if (previewReady) {
+          releasePreview({ ok: true, report: { ...report, dry_run: true } });
+          await untilCard(() => modal.sessionState?.canApply);
+        }
+        await modal.recordTab(direction);
+        if (!previewReady) {
+          assert.equal(plugin._applies.length, 0, "pending preview cannot write");
+          releasePreview({ ok: true, report: { ...report, dry_run: true } });
+        }
+        await untilCard(() => plugin._applies.length === 1 && !modal.pendingApply);
+        assert.equal(modal.selectedKey, direction === 1 ? "notes" : "visited");
+        assert.deepEqual(modal.stage, { field: modal.selectedKey, kind: direction === 1 ? "text" : "date" });
+        assert.equal(modal.pendingTab, null);
+        assert.equal(plugin._applies.length, 1);
+        assert.ok(plugin._applies[0].expect);
+        assert.deepEqual(plugin._applies[0].ops, [{ op: "field.set", field: "url", value: "https://example.test/new" }]);
+      } finally { modal.close(); }
+    });
+  }
+}
+
+test("choice Tab advances exactly once after its guarded save", async () => {
+  const { plugin, modal } = await openCard();
+  try {
+    modal.recordOpenStage("choices", "status");
+    modal.selectedChoice = "loved";
+    await modal.recordTab(1);
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(modal.selectedKey, "cuisine");
+    assert.deepEqual(modal.stage, { field: "cuisine", kind: "choices" });
+  } finally { modal.close(); }
+});
+
+test("canceling a pending Tab preview prevents its late save and advance", async () => {
+  const { plugin, modal } = await openCard();
+  let releasePreview;
+  plugin.apiRecordUpdatePreview = () => new Promise(resolve => { releasePreview = resolve; });
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://example.test/new";
+    modal.recordTypedInput();
+    await untilCard(() => Boolean(releasePreview));
+    await modal.recordTab(1);
+    modal.recordCancelStage();
+    releasePreview({ ok: true, report: applyReport({ dry_run: true }) });
+    await pause(20);
+    assert.equal(plugin._applies.length, 0);
+    assert.equal(modal.selectedKey, "url");
+    assert.equal(modal.stage, null);
+    assert.equal(modal.pendingTab, null);
+  } finally { modal.close(); }
+});
+
+for (const direction of [0, 1, -1]) {
+  test(`saving an already refused preview keeps the refusal, direction ${direction}`, async () => {
+    const { plugin, modal } = await openCard();
+    const refusal = { ok: false, code: "invalid_value", message: "This value is not allowed." };
+    plugin.apiRecordUpdatePreview = async () => {
+      plugin._previews += 1;
+      return refusal;
+    };
+    try {
+      modal.recordOpenStage("text", "notes");
+      modal.stageDraftText = "Rejected draft";
+      modal.recordTypedInput();
+      await modal.session.previewNow();
+      assert.equal(modal.sessionState.status, "refused");
+      assert.equal(modal.statusKind, "refusal");
+      const previews = plugin._previews;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await modal.recordSaveTyped(direction);
+        assert.equal(modal.statusKind, "refusal", "a settled refusal is not a pending preview");
+        assert.equal(result.code, refusal.code);
+        assert.match(modal.contentEl.textContent, /This value is not allowed/);
+        assert.doesNotMatch(modal.contentEl.textContent, /Checking value|Saving/);
+        assert.equal(modal.pendingTab, null);
+        assert.equal(modal.stageDraftText, "Rejected draft");
+        assert.deepEqual(modal.stage, { kind: "text", field: "notes" });
+        assert.equal(plugin._applies.length, 0);
+      }
+      assert.equal(plugin._previews, previews, "save must not schedule repeated refused previews");
+      plugin.apiRecordUpdatePreview = async () => ({ ok: true, report: applyReport({ dry_run: true }) });
+      modal.stageDraftText = "Corrected draft";
+      modal.recordTypedInput();
+      await modal.session.previewNow();
+      assert.equal(modal.sessionState.canApply, true);
+      assert.notEqual(modal.statusKind, "refusal", "editing can recover with a fresh valid preview");
+      assert.equal(plugin._applies.length, 0, "the refused Tab must not apply a later corrected draft");
+    } finally { modal.close(); }
+  });
+}
+
+test("refused typed Tab keeps its draft without advancing", async () => {
+  const { plugin, modal } = await openCard({ apply: { ok: false, code: "invalid", message: "Refused" } });
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://example.test/new";
+    modal.recordTypedInput();
+    await untilCard(() => modal.sessionState?.canApply);
+    await modal.recordTab(1);
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(modal.selectedKey, "url");
+    assert.deepEqual(modal.stage, { field: "url", kind: "url" });
+    assert.equal(modal.stageDraftText, "https://example.test/new");
+    assert.equal(modal.statusKind, "refusal");
+    assert.equal(modal.pendingTab, null);
+  } finally { modal.close(); }
+});
+
+test("Escape during a Tab apply respects the write lock and advances once on completion", async () => {
+  const { plugin, modal } = await openCard();
+  let finishApply;
+  plugin.apiRecordUpdateApply = async (_type, _stem, envelope) => {
+    plugin._applies.push(JSON.parse(envelope));
+    return new Promise(resolve => { finishApply = resolve; });
+  };
+  try {
+    modal.recordOpenStage("url", "url");
+    modal.stageDraftText = "https://example.test/new";
+    modal.recordTypedInput();
+    await untilCard(() => modal.sessionState?.canApply);
+    const saving = modal.recordTab(1);
+    await untilCard(() => Boolean(finishApply));
+    modal.recordBackOut(keyEvent("Escape"));
+    assert.deepEqual(modal.stage, { field: "url", kind: "url" }, "Escape is ignored while the writer is in flight");
+    finishApply({ ok: true, report: applyReport({ changed: ["url"] }) });
+    await saving;
+    assert.equal(plugin._applies.length, 1);
+    assert.equal(modal.selectedKey, "notes");
+    assert.deepEqual(modal.stage, { field: "notes", kind: "text" });
+    assert.equal(modal.pendingTab, null);
+  } finally { modal.close(); }
 });

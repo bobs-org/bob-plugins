@@ -97067,7 +97067,11 @@ class BobLedgerToolsAlbumSchemaCardMixin {
       } catch (_) {}
     }
     this.albumSchemaCardModal = modal;
+    const initialKey = modal.selectedKey;
     try { modal.open(); } catch (_) {}
+    // Modal.open focuses its first control after onOpen. Its focusin listener
+    // can replace the requested field with Stats; restore selection and focus.
+    try { modal.schemaSelect(initialKey); } catch (_) {}
     return { ok: true, modal };
   }
 }
@@ -102380,17 +102384,25 @@ class BobLedgerToolsRecordSheetMixin {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.recordSheetMarkdownLeaf(path);
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(path.replace(/\.md$/i, ""), path, false);
       }
+      // Both Live Preview and raw YAML use mode: "source". Reopening the
+      // same file can retain its current editor, so explicitly switch that view.
+      if (typeof leaf?.view?.setState === "function") {
+        await leaf.view.setState({
+          ...(leaf.view.getState?.() || {}), mode: "source", source: true,
+        }, { history: false });
+      }
+      if (leaf) this.app?.workspace?.setActiveLeaf?.(leaf, { focus: true });
       const editor = leaf?.view?.editor;
       const cursorLine = Number.isInteger(line) && line > 0 ? line - 1 : 0;
       if (editor && typeof editor.setCursor === "function") {
@@ -102398,6 +102410,7 @@ class BobLedgerToolsRecordSheetMixin {
         if (typeof editor.scrollIntoView === "function") {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
+        editor.focus?.();
       }
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {
@@ -103649,6 +103662,7 @@ function recordCardEscLadder(state) {
 function recordCardStatusText(state) {
   const kind = state && state.statusKind;
   if (kind === "reading") return RECORD_CARD_READING_TEXT;
+  if (kind === "previewing") return "Checking value…";
   if (kind === "saving") return RECORD_CARD_SAVING_TEXT;
   if (kind === "saved") return RECORD_CARD_SAVED_TEXT;
   if (kind === "stale") return RECORD_CARD_STALE_TEXT;
@@ -105845,7 +105859,7 @@ Object.assign(RecordCardModal.prototype, {
       try { this.session.setDraft([]); } catch (_) {}
       this.sessionState = this.session.getState?.() || this.sessionState;
     }
-    if (this.statusKind === "stale" || this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "saved") {
+    if (this.statusKind === "stale" || this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "saved" || this.statusKind === "previewing") {
       this.statusKind = this.writable ? "" : this.statusKind;
       this.refusalMessage = "";
       this.refusalHint = "";
@@ -105871,7 +105885,7 @@ Object.assign(RecordCardModal.prototype, {
       try { this.session.setDraft([]); } catch (_) {}
       try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
     }
-    if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "stale") {
+    if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "stale" || this.statusKind === "previewing") {
       this.statusKind = this.writable ? "" : this.statusKind;
       this.refusalMessage = "";
       this.refusalHint = "";
@@ -106258,14 +106272,13 @@ Object.assign(RecordCardModal.prototype, {
     return this.recordTypedInput();
   }
 ,
-  async recordSettleApplyResult(result, ops) {
+  async recordSettleApplyResult(result, ops, pending = this.pendingTab) {
     if (this.closed) return result;
     this.sessionState = this.session?.getState?.() || this.sessionState;
     if (result && result.ok === true && result.changed === true) {
       this.ownWriteUntil = Date.now() + 1500;
       this.retainedOps = null;
       this.recordConsumeApplied(result);
-      const pending = this.pendingTab;
       this.recordInvalidatePendingTab();
       if (pending && (pending.direction === 1 || pending.direction === -1)) {
         const nextKey = recordCardNavigate(this.recordTargets(), pending.field, pending.direction);
@@ -106323,7 +106336,6 @@ Object.assign(RecordCardModal.prototype, {
     }
     if (result && result.ok === true) {
       this.retainedOps = null;
-      const pending = this.pendingTab;
       this.recordInvalidatePendingTab();
       if (pending && (pending.direction === 1 || pending.direction === -1)) {
         const nextKey = recordCardNavigate(this.recordTargets(), pending.field, pending.direction);
@@ -106433,11 +106445,16 @@ Object.assign(RecordCardModal.prototype, {
       return null;
     }
     this.recordInvalidatePendingTabOnEdit();
+    if (this.statusKind === "stale") {
+      this.retainedOps = this.recordTypedOpsForRetry();
+      this.paintRecordCard();
+      return null;
+    }
     if (!this.recordTypedChanged(target)) {
       try { this.session.setDraft([]); } catch (_) {}
       this.sessionState = this.session.getState?.() || this.sessionState;
       this.stagePreview = null;
-      if (this.statusKind === "refusal" || this.statusKind === "consequence") {
+      if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "previewing") {
         this.statusKind = "";
         this.refusalMessage = "";
         this.refusalHint = "";
@@ -106482,10 +106499,17 @@ Object.assign(RecordCardModal.prototype, {
       this.paintRecordCard();
       return;
     }
+    // Rebasing cancels the old preview; it does not acknowledge a stale draft.
+    // Keep the warning through session notifications until the user retries.
+    if (this.statusKind === "stale") {
+      this.paintRecordCard();
+      return;
+    }
     const status = String(snapshot.status || "");
     if (status === "preview-pending" || status === "applying" || snapshot.busy === true) {
-      if (this.statusKind !== "saving") {
-        this.statusKind = "saving";
+      const kind = this.pendingApply || status === "applying" ? "saving" : "previewing";
+      if (this.statusKind !== kind) {
+        this.statusKind = kind;
         this.paintRecordCard();
       }
       return;
@@ -106553,6 +106577,7 @@ Object.assign(RecordCardModal.prototype, {
     if (this.closed || this.pendingApply) return null;
     if (!this.stage) return null;
     if (!this.writable || !this.session) return null;
+    if (this.statusKind === "stale") return this.recordRetry();
     if (this.stage.kind === "choices") {
       return this.recordApplyChoice(this.selectedChoice);
     }
@@ -106599,6 +106624,12 @@ Object.assign(RecordCardModal.prototype, {
     }
     try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
     const snapshot = this.sessionState;
+    // Enter/Tab can arrive after validation has already finished. There is no
+    // pending preview to settle then; retain its refusal and cancel navigation.
+    if (snapshot && snapshot.status === "refused" && snapshot.refusal) {
+      this.recordSyncSessionPreview();
+      return snapshot.refusal;
+    }
     if (snapshot && snapshot.canApply && String(snapshot.status || "") === "preview-ready") {
       const draftIdentity = JSON.stringify(this.recordTypedDraftFor(target));
       const previewOps = Array.isArray(snapshot.draftOps) ? snapshot.draftOps : [];
@@ -106618,7 +106649,7 @@ Object.assign(RecordCardModal.prototype, {
         return this.recordApplyTyped(latched);
       }
     }
-    this.statusKind = "saving";
+    this.statusKind = "previewing";
     this.paintRecordCard();
     return { ok: false, code: "preview-pending", message: "Waiting for a current preview before saving." };
   }
@@ -106643,7 +106674,9 @@ Object.assign(RecordCardModal.prototype, {
     }
     this.pendingApply = false;
     const ops = this.recordTypedOpsForRetry();
-    return this.recordSettleApplyResult(result, ops || []);
+    // The preview handoff consumes pendingTab before applying. Carry that
+    // specific save's navigation through settlement instead of reading it back.
+    return this.recordSettleApplyResult(result, ops || [], latched);
   }
 ,
   async recordTab(direction) {
@@ -106656,18 +106689,7 @@ Object.assign(RecordCardModal.prototype, {
       const target = recordCardTargetByKey(this.recordTargets(), this.stage.field);
       if (target && this.selectedChoice && String(this.selectedChoice) !== String(target.value || "")) {
         this.pendingTab = { direction, field: this.stage.field, kind: "choices", draftIdentity: String(this.selectedChoice), enterSeq: this.stageEnterSeq };
-        return this.recordApplyChoice(this.selectedChoice).then((result) => {
-          if (result && result.ok === true) {
-            const nextKey = recordCardNavigate(this.recordTargets(), this.stage ? this.stage.field : this.selectedKey, direction);
-            if (nextKey) {
-              const nextTarget = recordCardTargetByKey(this.recordTargets(), nextKey);
-              if (nextTarget && nextTarget.stageKind) this.recordOpenStage(nextTarget.stageKind, nextKey);
-            }
-          } else {
-            this.recordInvalidatePendingTab();
-          }
-          return result;
-        });
+        return this.recordApplyChoice(this.selectedChoice);
       }
       const nextKey = recordCardNavigate(this.recordTargets(), this.stage.field, direction);
       if (nextKey) {
@@ -106682,10 +106704,12 @@ Object.assign(RecordCardModal.prototype, {
 ,
   async recordRetry() {
     if (this.stage && this.stage.kind !== "choices") {
-      const ops = this.recordTypedOpsForRetry() || this.retainedOps;
+      const ops = this.recordTypedOpsForRetry();
       this.retainedOps = null;
-      if (!ops) return this.recordRefresh({ keepStage: true });
+      this.statusKind = "";
+      if (!ops) return this.recordTypedInput();
       if (this.session && this.writable) {
+        this.statusKind = "previewing";
         try { this.session.setDraft(ops); } catch (_) {}
         try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
         this.recordSyncSessionPreview();
@@ -106751,11 +106775,11 @@ Object.assign(RecordCardModal.prototype, {
   }
 ,
   async recordRefresh(options = {}) {
-    if (this.closed) return;
+    if (this.closed || this.pendingApply) return;
     if (this.session && options.keepStage !== true) {
       try { this.session.setDraft([]); } catch (_) {}
     }
-    this.recordInvalidatePendingTab();
+    if (options.keepStage !== true) this.recordInvalidatePendingTab();
     try {
       this.gate = this.recordPlugin?.recordSheetGateFor?.(this.recordPath) || this.gate;
       this.sheetModel = this.recordPlugin?.recordSheetModelFor?.(this.recordPath) || this.sheetModel;
@@ -106796,6 +106820,7 @@ Object.assign(RecordCardModal.prototype, {
     if (captured && captured.field) {
       const stillThere = targets.some((target) => target.key === captured.field);
       if (!stillThere) {
+        this.recordInvalidatePendingTab();
         this.stage = null;
         this.stageDraftText = "";
         this.stageList = [];
@@ -106808,6 +106833,7 @@ Object.assign(RecordCardModal.prototype, {
       } else {
         const nextTarget = targets.find((target) => target.key === captured.field);
         if (nextTarget && captured.kind && nextTarget.stageKind !== captured.kind) {
+          this.recordInvalidatePendingTab();
           this.stage = null;
           this.stageDraftText = "";
           this.stageList = [];
@@ -106838,14 +106864,26 @@ Object.assign(RecordCardModal.prototype, {
     this.paintRecordCard();
     await this.recordRead();
     if (this.session && this.latestReport && recordCardShowRecord(this.latestReport)) {
-      try { this.session.rebase?.(recordCardShowRecord(this.latestReport).fingerprint); } catch (_) {}
-      try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
-      if (this.stage && this.stage.kind !== "choices" && options.keepStage) {
-        const ops = this.recordTypedOpsForRetry();
-        if (ops && ops.length) {
-          try { this.session.setDraft(ops); } catch (_) {}
-        }
+      const fingerprint = recordCardShowRecord(this.latestReport).fingerprint;
+      const snapshot = this.session.getState?.();
+      const changed = snapshot && snapshot.expect !== fingerprint;
+      // Read against the old targets to detect a draft even when the external
+      // edit changed that very field to the same value as the user's draft.
+      const previousTarget = this.stage && targets.find(target => target.key === this.stage.field);
+      if (changed && options.keepStage && previousTarget && this.recordTypedChanged(previousTarget)) {
+        this.retainedOps = this.recordTypedOpsForRetry();
+        this.statusKind = "stale";
+        this.announce = recordCardLiveAnnouncement("stale");
+        this.stagePreview = null;
+        this.stageEnterSeq += 1;
       }
+      // An unchanged report must not invalidate a ready preview or queue it again.
+      if (changed || this.statusKind === "stale") {
+        this.recordInvalidatePendingTab();
+        try { this.session.rebase?.(fingerprint); } catch (_) {}
+      }
+      try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
+      this.paintRecordCard();
     }
   }
 ,

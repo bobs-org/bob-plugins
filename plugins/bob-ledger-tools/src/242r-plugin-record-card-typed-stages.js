@@ -186,7 +186,7 @@ Object.assign(RecordCardModal.prototype, {
       try { this.session.setDraft([]); } catch (_) {}
       this.sessionState = this.session.getState?.() || this.sessionState;
     }
-    if (this.statusKind === "stale" || this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "saved") {
+    if (this.statusKind === "stale" || this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "saved" || this.statusKind === "previewing") {
       this.statusKind = this.writable ? "" : this.statusKind;
       this.refusalMessage = "";
       this.refusalHint = "";
@@ -212,7 +212,7 @@ Object.assign(RecordCardModal.prototype, {
       try { this.session.setDraft([]); } catch (_) {}
       try { this.sessionState = this.session.getState?.() || this.sessionState; } catch (_) {}
     }
-    if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "stale") {
+    if (this.statusKind === "refusal" || this.statusKind === "consequence" || this.statusKind === "stale" || this.statusKind === "previewing") {
       this.statusKind = this.writable ? "" : this.statusKind;
       this.refusalMessage = "";
       this.refusalHint = "";

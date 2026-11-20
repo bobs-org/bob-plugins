@@ -175,11 +175,39 @@ test("render matches the relation planner in both directions", () => {
       const results = resultsRows(rendered);
       assert.ok(results.every((row) => row.closed !== true && row.archived !== true));
       assert.ok(closed.every((row) => row.closed === true || row.archived === true));
+      // An empty filter ties every score, so the trailing closed rows keep
+      // their CLOSED header.
+      assert.ok(closed.length > 0, "the empty filter lists closed rows");
+      assert.equal(closed[0].headerSection, "closed");
+      assert.equal(closed[0].firstInSection, true);
     } else {
       assert.ok(rendered.every((row) => row.archived !== true));
       assert.ok(rendered.every((row) => !row || row.stageSection !== "closed"));
     }
   }
+});
+
+test("a closed task that matches best leads Links RESULTS without a CLOSED header", () => {
+  const notes = {
+    "Current.md": "- [ ] #task Owner task ^owner",
+    "Other.md": [
+      "- [ ] #task Polish the widget ^polish",
+      "- [x] #task Widget launch ^widget-launch",
+      "- [ ] #task Gadget wiring ^gadget",
+    ].join("\n"),
+  };
+  const stage = buildRelationVaultStage(notes, "Current.md", [0], "to");
+  const picker = makeRenderPicker(stage, "widget", { relationStage: true });
+  const rendered = picker.getFilteredItems();
+  assert.deepEqual(rendered, helpers.planRelationStageItemsFromVault(stage, "widget"));
+  assert.deepEqual(
+    rendered.map((row) => [row.blockId, row.stageSection, row.headerSection]),
+    [
+      ["widget-launch", "closed", "results"],
+      ["polish", "results", null],
+    ],
+  );
+  assert.ok(!rendered.some((row) => row.headerSection === "closed"));
 });
 
 test("other stages still use their own planners", () => {

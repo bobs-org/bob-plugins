@@ -174,6 +174,101 @@ test("RBU1 empty query uses today-first then In Progress, Next, same-note, rest"
   assert.ok(!ids.includes("n"), "RBG1 source excluded");
 });
 
+// Ready rows that match `spike` only as a scattered subsequence (score 0),
+// plus a Blocked task that matches as a field prefix (score 3).
+function spikeNotes(readyCount = 3) {
+  const readyTexts = [
+    "Ship pricing kit email",
+    "Sort photos in kitchen drawer",
+    "Schedule pickup for bike repair",
+  ];
+  const ready = [];
+  for (let index = 0; index < readyCount; index += 1) {
+    const text = readyTexts[index % readyTexts.length];
+    ready.push(`- [ ] #task ${text} ${index} ^r${index}`);
+  }
+  return {
+    "N.md": nContent(),
+    "ready.md": ready.join("\n"),
+    "promise.md": "- [?] #task Spike S0: write the promise sentence ^spike-s0",
+  };
+}
+
+test("Blocks query ranks a better-matching Blocked task first", () => {
+  const { view } = buildStage(spikeNotes(), "N.md", 0, { query: "spike" });
+  assert.equal(view[0].blockId, "spike-s0", "the best match leads");
+  assert.equal(view[0].stageSection, "blocked", "it keeps its status class");
+  assert.match(view[0].blockedBadge, /^\ud83d\udd12/);
+  assert.equal(view[0].headerSection, "results");
+  assert.equal(view[0].firstInSection, true);
+  assert.equal(
+    blocksStageConsequenceStrip(view[0], { sources: [] }),
+    "Also waits on this (1 open)",
+    "the consequence strip reads the status class, not the header",
+  );
+  assert.deepEqual(
+    view.slice(1).map((row) => [row.stageSection, row.headerSection]),
+    [
+      ["results", null],
+      ["results", null],
+      ["results", null],
+    ],
+  );
+  assert.ok(!view.some((row) => row.headerSection === "blocked"));
+});
+
+test("Blocks equal-score ties put open rows first, then Blocked, canonically", () => {
+  const notes = {
+    "N.md": [nContent(), "- [?] #task Task same-note blocked ^sb"].join("\n"),
+    "lanes.md": [
+      "- [ ] #task Task ready ^tr",
+      "- [*] #task Task next ^tn",
+      "- [/] #task Task doing ^td",
+      "- [?] #task Task blocked ^tb",
+    ].join("\n"),
+  };
+  const { view } = buildStage(notes, "N.md", 0, { query: "task" });
+  assert.deepEqual(
+    view.map((row) => [row.blockId, row.stageSection, row.headerSection]),
+    [
+      ["td", "results", "results"],
+      ["tn", "results", null],
+      ["tr", "results", null],
+      ["sb", "blocked", null],
+      ["tb", "blocked", null],
+    ],
+  );
+});
+
+test("Blocks cap counts the merged score order", () => {
+  const { view } = buildStage(spikeNotes(70), "N.md", 0, { query: "spike" });
+  assert.equal(view[0].blockId, "spike-s0", "a strong Blocked match renders");
+  const more = view[view.length - 1];
+  assert.equal(more.kind, "stage-more");
+  assert.equal(more.hiddenCount, 11);
+  assert.equal(more.headerSection, null);
+  assert.equal(view.length, 61);
+});
+
+test("Blocks empty query keeps the trailing BLOCKED header", () => {
+  const notes = {
+    "N.md": [nContent(), "- [?] #task Same blocked ^sb"].join("\n"),
+    "job.md": [
+      "- [ ] #task Other ready ^other",
+      "- [?] #task Elsewhere blocked ^eb",
+    ].join("\n"),
+  };
+  const { view } = buildStage(notes, "N.md", 0);
+  assert.deepEqual(
+    view.map((row) => [row.blockId, row.stageSection, row.headerSection]),
+    [
+      ["other", "results", "results"],
+      ["sb", "blocked", "blocked"],
+      ["eb", "blocked", null],
+    ],
+  );
+});
+
 test("RBU2 today-linked rows carry 🍅 running and strip names the entry", () => {
   const notes = {
     "N.md": nContent(),

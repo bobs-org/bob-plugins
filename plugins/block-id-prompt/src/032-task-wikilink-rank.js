@@ -4,7 +4,9 @@
 // `capture_link_tasks::match_score`, and
 // `capture_dependency_tasks::order_for_picker` (with `group_for` and
 // the canonical key), so a warm vault paints in the same order bob
-// would serve. Pure: no Obsidian imports.
+// would serve: match score leads, and completed history ranks by score
+// too, trailing open rows only at equal score. Pure: no Obsidian
+// imports.
 
 // Raw searchable fields for a parsed task row, in bob's order:
 // `locator:block-id` and the block ID (identified rows only), the
@@ -239,12 +241,12 @@ function compareCanonicalWikilinkKeys(left, right) {
   return left[3] - right[3];
 }
 
-// Order parsed rows for the picker: query matches first (open matches
-// by score, then completed-history matches by score, ties keeping
-// canonical order), or the plain canonical order for an empty query.
-// Completed history always trails open matches so searches still find
-// it without burying actionable rows. The sort is stable, so full ties
-// keep catalog (path/line) order.
+// Order parsed rows for the picker: query matches by score, ties
+// keeping canonical order, or the plain canonical order for an empty
+// query. Completed history ranks by score like any other match, so a
+// closed task that matches best leads; open rows lead only at equal
+// score, through the canonical section (completed history is 4). The
+// sort is stable, so full ties keep catalog (path/line) order.
 function orderForWikilinkPicker(rows, query, ownerPath) {
   // Terms parse once per keystroke, not once per row.
   const terms = splitWikilinkQueryTerms(query);
@@ -272,7 +274,6 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
       scored.push({
         row,
         score,
-        openOrder: row.open ? 0 : 1,
         section,
         hidden: row.hidden ? 1 : 0,
         note: section === 0 ? "" : row.notePath,
@@ -281,9 +282,6 @@ function orderForWikilinkPicker(rows, query, ownerPath) {
     }
   }
   scored.sort((left, right) => {
-    if (left.openOrder !== right.openOrder) {
-      return left.openOrder - right.openOrder;
-    }
     if (right.score !== left.score) {
       return right.score - left.score;
     }

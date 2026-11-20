@@ -520,10 +520,12 @@ function collectRelationStageIncomingFromSnapshots(snapshots, index, target, pre
   return Object.freeze(rows);
 }
 
-// The Links stage list: CURRENT (outgoing, authored order), RESULTS
-// (open), CLOSED (closed, then archived). `prerequisiteIds` marks rows that
-// are also prerequisites; `todayMap` marks rows linked under today's open
-// Pomodoros (🍅, display only).
+// The Links stage list: CURRENT (outgoing, authored order), then one
+// RESULTS list ranked by score, where closed and archived rows sink only on
+// exact-score ties; an empty filter (every score ties) heads the trailing
+// closed rows with CLOSED. `prerequisiteIds` marks rows that are also
+// prerequisites; `todayMap` marks rows linked under today's open Pomodoros
+// (🍅, display only).
 function planRelationStageView(args = {}) {
   const sources = Array.isArray(args.sources) ? args.sources : [];
   const current = Array.isArray(args.current) ? args.current : [];
@@ -548,6 +550,7 @@ function planRelationStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       markKey:
         row.markKey ||
         (row.path
@@ -579,65 +582,36 @@ function planRelationStageView(args = {}) {
     }
     fresh.push({ candidate, key });
   }
-  let ordered;
-  if (!query.trim()) {
-    // Empty query shows only what the design lists: CURRENT is separate,
-    // RESULTS is same-note tasks plus the In Progress and Next lanes, and
-    // CLOSED is closed tasks plus `done/` archives. Ready tasks from other
-    // notes need typing.
-    const emptyPool = fresh.filter(
-      (entry) =>
-        entry.candidate.path === sourcePath ||
-        entry.candidate.status === "/" ||
-        entry.candidate.status === "*" ||
-        entry.candidate.closed === true ||
-        entry.candidate.archived === true,
-    );
-    ordered = emptyPool
-      .slice()
-      .sort((left, right) =>
-        compareRelationStageCanonical(left.candidate, right.candidate, sourcePath),
+  // Empty query shows only what the design lists: CURRENT is separate,
+  // then same-note tasks plus the In Progress and Next lanes, then closed
+  // tasks plus `done/` archives. Ready tasks from other notes need typing.
+  const emptyQuery = !query.trim();
+  const searchable = emptyQuery
+    ? fresh.filter(
+        (entry) =>
+          entry.candidate.path === sourcePath ||
+          entry.candidate.status === "/" ||
+          entry.candidate.status === "*" ||
+          entry.candidate.closed === true ||
+          entry.candidate.archived === true,
       )
-      .map((entry) => entry.candidate);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareRelationStageCanonical(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-        );
-      })
-      .map((entry) => entry.candidate)
-      .filter((candidate) => rankIndex.has(candidate));
-  }
-  const results = [];
-  const closed = [];
-  for (const candidate of ordered) {
-    if (candidate.closed === true || candidate.archived === true) {
-      closed.push(candidate);
-    } else {
-      results.push(candidate);
-    }
-  }
+    : fresh;
+  // Score leads; the canonical comparator breaks exact-score ties, sinking
+  // archived, then closed, rows and keeping Blocked as Ready's peer (LG17).
+  const ordered = orderDependencyStageMatches(
+    searchable.map((entry) => entry.candidate),
+    query,
+    (left, right) => compareRelationStageCanonical(left, right, sourcePath),
+  );
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...closed].slice(0, room);
-  const shape = (candidate, section, first) => {
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((candidate) =>
+    candidate.closed === true || candidate.archived === true
+      ? "closed"
+      : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
+  const shape = (candidate, section, header) => {
     const key =
       candidate.path && candidate.blockId
         ? relationStageRowKey(candidate.path, candidate.blockId)
@@ -653,7 +627,8 @@ function planRelationStageView(args = {}) {
       kind: "local-task",
       relationKind: true,
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -695,26 +670,17 @@ function planRelationStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter(
-    (candidate) => candidate.closed !== true && candidate.archived !== true,
+  picked.forEach((candidate, index) =>
+    out.push(shape(candidate, statusClasses[index], headers[index])),
   );
-  const pickedClosed = picked.filter(
-    (candidate) => candidate.closed === true || candidate.archived === true,
-  );
-  pickedResults.forEach((candidate, index) =>
-    out.push(shape(candidate, "results", index === 0)),
-  );
-  pickedClosed.forEach((candidate, index) =>
-    out.push(shape(candidate, "closed", index === 0)),
-  );
-  const totalOrdered = [...results, ...closed].length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedClosed.length > 0 ? "closed" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,
@@ -749,6 +715,7 @@ function planLinkedFromStageView(args = {}) {
     stageSection: "current",
     alreadyLinked: true,
     firstInSection: index === 0,
+    headerSection: index === 0 ? "current" : null,
     markKey: row.markKey || `${normalizeVaultRelativePath(row.path || "")}#${row.blockId || `line:${row.line}`}`,
   }));
   const seen = new Set(linkedKeys);
@@ -764,19 +731,15 @@ function planLinkedFromStageView(args = {}) {
     if (key) seen.add(key);
     fresh.push(candidate);
   }
-  let ordered = fresh.slice();
-  if (query.trim()) {
-    const ranked = dependencyStageRank(fresh, query);
-    const rank = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = ordered.filter((candidate) => rank.has(candidate)).sort((left, right) =>
-      rank.get(left) - rank.get(right) || compareRelationStageCanonical(left, right, ownerPath),
-    );
-  } else {
-    ordered.sort((left, right) => {
-      const openOrder = Number(right.open === true) - Number(left.open === true);
-      return openOrder || compareRelationStageCanonical(left, right, ownerPath);
-    });
-  }
+  // One RESULTS list: score leads and the canonical comparator breaks
+  // exact-score ties; the empty query keeps its open-first order.
+  const ordered = query.trim()
+    ? orderDependencyStageMatches(fresh, query, (left, right) =>
+        compareRelationStageCanonical(left, right, ownerPath))
+    : fresh.slice().sort((left, right) => {
+        const openOrder = Number(right.open === true) - Number(left.open === true);
+        return openOrder || compareRelationStageCanonical(left, right, ownerPath);
+      });
   const room = Math.max(0, maxRows - out.length);
   const picked = ordered.slice(0, room);
   picked.forEach((candidate, index) => {
@@ -785,6 +748,7 @@ function planLinkedFromStageView(args = {}) {
       relationKind: true,
       stageSection: "results",
       firstInSection: index === 0,
+      headerSection: index === 0 ? "results" : null,
       path: normalizeVaultRelativePath(candidate.path || ""),
       blockId: candidate.blockId || null,
       line: candidate.line,
@@ -816,6 +780,7 @@ function planLinkedFromStageView(args = {}) {
       kind: "stage-more",
       stageSection: "results",
       firstInSection: false,
+      headerSection: null,
       path: null,
       blockId: null,
       displayText: `type to search ${hiddenCount} more`,

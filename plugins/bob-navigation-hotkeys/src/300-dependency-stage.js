@@ -27,6 +27,7 @@ function planDependencyStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       markKey:
         row.markKey ||
         (row.path
@@ -78,65 +79,34 @@ function planDependencyStageView(args = {}) {
     }
     fresh.push({ candidate, key, linkedCount: 0 });
   }
-  let ordered;
-  if (!query.trim()) {
-    // Empty query shows only what the design lists: CURRENT is separate,
-    // RESULTS is same-note tasks plus the In Progress and Next lanes.
-    // Ready tasks from other notes (and Blocked elsewhere) need typing.
-    const emptyPool = fresh.filter(
-      (entry) =>
-        entry.candidate.path === dependentPath ||
-        entry.candidate.status === "/" ||
-        entry.candidate.status === "*",
-    );
-    ordered = emptyPool
-      .slice()
-      .sort((left, right) =>
-        compareDependencyStageCanonical(
-          left.candidate,
-          right.candidate,
-          dependentPath,
-        ),
+  // Empty query shows only what the design lists: CURRENT is separate,
+  // then same-note tasks plus the In Progress and Next lanes. Ready tasks
+  // from other notes (and Blocked elsewhere) need typing.
+  const emptyQuery = !query.trim();
+  const searchable = emptyQuery
+    ? fresh.filter(
+        (entry) =>
+          entry.candidate.path === dependentPath ||
+          entry.candidate.status === "/" ||
+          entry.candidate.status === "*",
       )
-      .map((entry) => entry.candidate);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareDependencyStageCanonical(
-          left.candidate,
-          right.candidate,
-          dependentPath,
-        );
-      })
-      .map((entry) => entry.candidate)
-      .filter((candidate) => rankIndex.has(candidate));
-  }
-  const results = [];
-  const blocked = [];
-  for (const candidate of ordered) {
-    if (candidate.blocked) {
-      blocked.push(candidate);
-    } else {
-      results.push(candidate);
-    }
-  }
+    : fresh;
+  // One RESULTS list ranked by score (§6.3): status only breaks exact-score
+  // ties (open before Blocked, then canonical order), and the cap counts
+  // this merged order so a strong Blocked match is never folded away.
+  const ordered = orderDependencyStageMatches(
+    searchable.map((entry) => entry.candidate),
+    query,
+    (left, right) =>
+      Number(Boolean(left.blocked)) - Number(Boolean(right.blocked)) ||
+      compareDependencyStageCanonical(left, right, dependentPath),
+  );
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...blocked].slice(0, room);
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((candidate) =>
+    candidate.blocked ? "blocked" : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
   const linkedByCandidate = new Map(
     fresh.map((entry) => [entry.candidate, entry.linkedCount || 0]),
   );
@@ -258,7 +228,7 @@ function planDependencyStageView(args = {}) {
     }
     return { disabled: false, reason: null, cycle: null, cycleLabels: null };
   };
-  const shape = (candidate, section, first) => {
+  const shape = (candidate, section, header) => {
     const verdict = guard(candidate);
     const depValue =
       candidate.idField ||
@@ -304,7 +274,8 @@ function planDependencyStageView(args = {}) {
     return Object.freeze({
       kind: "local-task",
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -365,24 +336,19 @@ function planDependencyStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter((candidate) => !candidate.blocked);
-  const pickedBlocked = picked.filter((candidate) => candidate.blocked);
-  pickedResults.forEach((candidate, index) =>
-    out.push(shape(candidate, "results", index === 0)),
-  );
-  pickedBlocked.forEach((candidate, index) =>
-    out.push(shape(candidate, "blocked", index === 0)),
+  picked.forEach((candidate, index) =>
+    out.push(shape(candidate, statusClasses[index], headers[index])),
   );
   // The ~60-row cap truncates: append the "type to search N more" hint row
   // so keyboard filtering reaches the rest (`docs/task-dependencies.md` §6.3).
-  const totalOrdered = [...results, ...blocked].length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,

@@ -270,11 +270,21 @@ test("stage view groups CURRENT, RESULTS, and BLOCKED with guards", () => {
   });
   const sections = view.map((row) => row.stageSection);
   assert.equal(sections[0], "current");
-  assert.ok(sections.includes("results"), "RESULTS section is present");
-  assert.ok(sections.includes("blocked"), "BLOCKED section is present");
+  assert.equal(view[0].headerSection, "current");
+  assert.ok(sections.includes("results"), "open rows carry the results class");
+  assert.ok(sections.includes("blocked"), "Blocked rows carry the blocked class");
+  // Every `cash` row ties on score, so open rows lead and Blocked follows.
   const blockedAt = sections.indexOf("blocked");
   const resultsAt = sections.indexOf("results");
-  assert.ok(resultsAt < blockedAt, "BLOCKED renders beneath RESULTS");
+  assert.ok(resultsAt < blockedAt, "equal-score Blocked rows follow open ones");
+  // A typed query renders one RESULTS list: only its first ranked row
+  // carries a header, and no BLOCKED header appears.
+  assert.deepEqual(
+    view.filter((row) => row.firstInSection).map((row) => row.headerSection),
+    ["current", "results"],
+  );
+  assert.equal(view[resultsAt].headerSection, "results");
+  assert.equal(view[blockedAt].headerSection, null);
   assert.ok(
     view.length <= 60,
     `at most about 60 rows render (got ${view.length})`,
@@ -286,6 +296,144 @@ test("stage view groups CURRENT, RESULTS, and BLOCKED with guards", () => {
   }
   const idRow = view.find((row) => row.needsBlockIdPrompt);
   void idRow;
+});
+
+// Ready rows that match `spike` only as a scattered subsequence (score 0),
+// plus a Blocked task in another note that matches as a field prefix
+// (score 3): the screenshot that motivated score-first ranking.
+function spikeNotes(readyCount = 3) {
+  const readyTexts = [
+    "Ship pricing kit email",
+    "Sort photos in kitchen drawer",
+    "Schedule pickup for bike repair",
+  ];
+  const ready = [];
+  for (let index = 0; index < readyCount; index += 1) {
+    const text = readyTexts[index % readyTexts.length];
+    ready.push(`- [ ] #task ${text} ${index} ^r${index}`);
+  }
+  return [
+    { path: "work.md", content: "- [ ] #task Plan the quarter ^plan\n" },
+    { path: "ready.md", content: ready.join("\n") },
+    {
+      path: "promise.md",
+      content: "- [?] #task Spike S0: write the promise sentence ^spike-s0\n",
+    },
+  ];
+}
+
+function planWorkStage(notes, query, extra = {}) {
+  const pool = collectVaultDependencyCandidates(notes, {
+    dependentPath: "work.md",
+    dependentLines: new Set([0]),
+  });
+  return planDependencyStageView({
+    current: [],
+    candidates: pool,
+    query,
+    dependent: {
+      path: "work.md",
+      line: 0,
+      key: dependencyStageRowKey("work.md", "plan"),
+    },
+    edges: new Map(),
+    linkedKeys: new Set(),
+    ...extra,
+  });
+}
+
+test("stage view ranks a better-matching Blocked task first (screenshot repro)", () => {
+  const view = planWorkStage(spikeNotes(), "spike");
+  assert.equal(view[0].blockId, "spike-s0", "the best match leads");
+  assert.equal(view[0].stageSection, "blocked", "it keeps its status class");
+  assert.match(view[0].blockedBadge, /^🔒/);
+  assert.equal(view[0].headerSection, "results");
+  assert.equal(view[0].firstInSection, true);
+  assert.deepEqual(
+    view.slice(1).map((row) => [row.stageSection, row.headerSection]),
+    [
+      ["results", null],
+      ["results", null],
+      ["results", null],
+    ],
+  );
+  assert.ok(!view.some((row) => row.headerSection === "blocked"));
+});
+
+test("stage view orders equal-score ties open first, then Blocked, canonically", () => {
+  const notes = [
+    {
+      path: "work.md",
+      content: [
+        "- [ ] #task Plan the quarter ^plan",
+        "- [?] #task Task same-note blocked ^sb",
+      ].join("\n"),
+    },
+    {
+      path: "lanes.md",
+      content: [
+        "- [ ] #task Task ready ^tr",
+        "- [*] #task Task next ^tn",
+        "- [/] #task Task doing ^td",
+        "- [?] #task Task blocked ^tb",
+      ].join("\n"),
+    },
+  ];
+  const view = planWorkStage(notes, "task");
+  assert.deepEqual(
+    view.map((row) => [row.blockId, row.stageSection, row.headerSection]),
+    [
+      ["td", "results", "results"],
+      ["tn", "results", null],
+      ["tr", "results", null],
+      ["sb", "blocked", null],
+      ["tb", "blocked", null],
+    ],
+  );
+});
+
+test("stage view cap counts the merged score order", () => {
+  const view = planWorkStage(spikeNotes(70), "spike");
+  assert.equal(view[0].blockId, "spike-s0", "a strong Blocked match renders");
+  const more = view[view.length - 1];
+  assert.equal(more.kind, "stage-more");
+  assert.equal(more.hiddenCount, 11);
+  assert.equal(more.stageSection, "results");
+  assert.equal(more.headerSection, null);
+  assert.equal(view.length, 61);
+});
+
+test("stage view empty query keeps the trailing BLOCKED header", () => {
+  const notes = [
+    {
+      path: "work.md",
+      content: [
+        "- [ ] #task Plan the quarter ^plan",
+        "- [?] #task Same blocked ^sb",
+        "- [ ] #task Same ready ^sr",
+      ].join("\n"),
+    },
+    {
+      path: "lanes.md",
+      content: [
+        "- [/] #task Doing elsewhere ^td",
+        "- [?] #task Blocked elsewhere ^eb",
+      ].join("\n"),
+    },
+  ];
+  const view = planWorkStage(notes, "");
+  assert.deepEqual(
+    view.map((row) => [row.blockId, row.stageSection, row.headerSection]),
+    [
+      ["sr", "results", "results"],
+      ["td", "results", null],
+      ["sb", "blocked", "blocked"],
+    ],
+  );
+  assert.deepEqual(
+    view.map((row) => row.firstInSection),
+    [true, false, true],
+  );
 });
 
 test("stage view disables cycles and unencodable targets, keeps +id rows", () => {

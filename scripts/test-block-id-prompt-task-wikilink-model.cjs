@@ -2,7 +2,7 @@
 //
 // Fixture: scripts/fixtures/task_wikilinks/vectors.json, a verbatim copy
 // of bob-cli's tests/fixtures/task_wikilinks/vectors.json
-// (sha256 c862c4b9ad2bfe238265b0e56275ab47621513476c83a69f96c5a0d903ec7090).
+// (sha256 9a8817eed8a9e0de707820069b3f030c33518a6a7ad748b2812394fac9484420).
 // The hash assertion below fails loudly on local edits: refresh the copy
 // from bob-cli and update EXPECTED_FIXTURE_SHA together, never hand-edit
 // the mirror.
@@ -28,7 +28,7 @@ const FIXTURE_PATH = join(
   "vectors.json",
 );
 const EXPECTED_FIXTURE_SHA =
-  "c862c4b9ad2bfe238265b0e56275ab47621513476c83a69f96c5a0d903ec7090";
+  "9a8817eed8a9e0de707820069b3f030c33518a6a7ad748b2812394fac9484420";
 
 function fixtureSha() {
   return createHash("sha256").update(readFileSync(FIXTURE_PATH)).digest("hex");

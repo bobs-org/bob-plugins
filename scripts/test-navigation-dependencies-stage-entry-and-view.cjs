@@ -237,6 +237,48 @@ test("forward counted mixed row in BLOCKED keeps the waits-on badge (3e359a6 ord
   assert.match(render(base), /1\/2 block/);
 });
 
+test("a first-ranked Blocked row prints RESULTS and keeps its 🔒 badge", () => {
+  const { plugin } = stubPlugin({ "Tasks.md": "- [ ] #task Owner ^owner" });
+  const editor = new TransactionEditor("- [ ] #task Owner ^owner", { line: 0, ch: 0 });
+  const modal = stubStageModal(plugin, editor, "Tasks.md", 0);
+  const render = (item) => {
+    const rowEl = stubRowEl();
+    BulletPropertyPickerModal.prototype.renderTaskValueItem.call(modal, item, rowEl, "spike");
+    const texts = [];
+    const walk = (el) => {
+      if (el.text) texts.push(el.text);
+      el.children.forEach(walk);
+    };
+    walk(rowEl);
+    return texts;
+  };
+  const item = {
+    kind: "local-task",
+    path: "promise.md",
+    line: 0,
+    blockId: "spike-s0",
+    status: "?",
+    displayText: "Spike S0: write the promise sentence",
+    text: "Spike S0: write the promise sentence",
+    stageSection: "blocked",
+    firstInSection: true,
+    headerSection: "results",
+    blockedBadge: "🔒 blocked",
+    waitsOn: null,
+    alreadyLinked: false,
+  };
+  const texts = render(item);
+  assert.equal(texts[0], "RESULTS");
+  assert.ok(!texts.includes("BLOCKED"), texts.join(" | "));
+  assert.ok(texts.includes("🔒 blocked"), texts.join(" | "));
+  // The empty-filter BLOCKED header still renders from `headerSection`.
+  const emptyFilter = render({ ...item, headerSection: "blocked" });
+  assert.equal(emptyFilter[0], "BLOCKED");
+  // Rows without a header print none.
+  const plain = render({ ...item, firstInSection: false, headerSection: null });
+  assert.ok(!plain.includes("RESULTS") && !plain.includes("BLOCKED"));
+});
+
 test("api.blocks opens the stage and removes only a listed dependent", async () => {
   const ownerContent = [
     "- [ ] #task Owner ^owner",

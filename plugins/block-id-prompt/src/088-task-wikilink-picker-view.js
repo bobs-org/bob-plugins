@@ -509,25 +509,6 @@ function buildTaskWikilinkGroupedItems(rows, context) {
   return items;
 }
 
-function buildTaskWikilinkFilteredItems(rowItems) {
-  const items = [];
-  let sawCompleted = false;
-  for (const item of rowItems) {
-    if (item.group === "completed" && !sawCompleted) {
-      sawCompleted = true;
-      items.push({
-        kind: "section",
-        id: "completed",
-        label: TASK_WIKILINK_GROUP_LABELS.completed,
-        sticky: true,
-        variant: "completed",
-      });
-    }
-    items.push(item);
-  }
-  return items;
-}
-
 function buildTaskWikilinkRowItem(row, context) {
   const rowKey = taskWikilinkRowKey(row);
   const pomodoroDetail = context.pomodoroMode && rowKey === context.selectedRowKey
@@ -706,11 +687,12 @@ function buildTaskWikilinkPickerPlan(input) {
     },
   };
   const filtered = Boolean(String(query).trim());
+  // A filtered list is one flat ranking: completed history interleaves
+  // by score (keeping its completed styling), so it gets no divider.
   let ordinaryItems = filtered
-    ? buildTaskWikilinkFilteredItems(
-        ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row)))
-          .map((row) => buildTaskWikilinkRowItem(row, context)),
-      )
+    ? ranked
+        .filter((row) => !raisedKeys.has(taskWikilinkRowKey(row)))
+        .map((row) => buildTaskWikilinkRowItem(row, context))
     : buildTaskWikilinkGroupedItems(
         ranked.filter((row) => !raisedKeys.has(taskWikilinkRowKey(row))),
         context,

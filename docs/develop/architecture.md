@@ -70,7 +70,7 @@ mounting, and CodeMirror extension hooks. An adapter supplies its `plugin`,
 acceptance functions, `paintReading`/`removeReading`, Live Preview path and
 decoration builder, editor cleanup, and `ownKeys`/`releaseKeys`. Optional
 hooks cover binding cleanup, refresh effects, timers, workspace events,
-embed display eligibility, and adapter setup/disposal. `docs/develop/validation.md`
+embed display eligibility, and adapter setup/disposal. [Validation](validation.md)
 describes the acceptance gates; the source comment above
 `createPropertyCardHost` lists the full options and their meanings.
 

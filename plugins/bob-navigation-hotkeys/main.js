@@ -54304,23 +54304,19 @@ function dependencyStageTermTier(candidate, term) {
   return best;
 }
 
-// Rank candidates for a query, ported from `rank` in
-// `src/native/capture_link_tasks.rs`: every whitespace-separated term must
-// match, tasks order by the summed tiers descending, and ties (and the empty
-// query) keep the input order. The sort is stable, so callers pre-sort into
-// canonical order first.
-function dependencyStageRank(candidates, query) {
-  const list = Array.isArray(candidates) ? candidates.slice() : [];
+// Every candidate matching a query, paired with its summed tier score,
+// ported from `match_score` in `src/native/capture_link_tasks.rs`: every
+// whitespace-separated term must match, and the result keeps input order.
+// An empty query matches every candidate with score 0.
+function dependencyStageScoredMatches(candidates, query) {
+  const list = Array.isArray(candidates) ? candidates : [];
   const terms = String(query || "")
     .split(/\s+/)
     .map((term) => term.toLowerCase())
     .filter(Boolean);
-  if (terms.length === 0) {
-    return list;
-  }
   const scored = [];
   for (const candidate of list) {
-    let total = 0;
+    let score = 0;
     let matched = true;
     for (const term of terms) {
       const tier = dependencyStageTermTier(candidate, term);
@@ -54328,14 +54324,54 @@ function dependencyStageRank(candidates, query) {
         matched = false;
         break;
       }
-      total += tier;
+      score += tier;
     }
     if (matched) {
-      scored.push({ candidate, total });
+      scored.push({ candidate, score });
     }
   }
-  scored.sort((left, right) => right.total - left.total);
-  return scored.map((entry) => entry.candidate);
+  return scored;
+}
+
+// Rank candidates for a query, ported from `rank` in
+// `src/native/capture_link_tasks.rs`: tasks order by the summed tiers
+// descending, and ties (and the empty query) keep the input order. The sort
+// is stable, so callers pre-sort into canonical order first.
+function dependencyStageRank(candidates, query) {
+  return dependencyStageScoredMatches(candidates, query)
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.candidate);
+}
+
+// A stage's matches in display order: match score always leads, and
+// `tieCompare` (status, then the stage's canonical order) only orders
+// candidates whose scores are equal, including every row of an empty query.
+function orderDependencyStageMatches(candidates, query, tieCompare) {
+  return dependencyStageScoredMatches(candidates, query)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        tieCompare(left.candidate, right.candidate),
+    )
+    .map((entry) => entry.candidate);
+}
+
+// Section headers for one merged stage list, given each row's status class
+// (`"results"`, `"blocked"`, or `"closed"`): a typed query heads only its
+// first ranked row with RESULTS, whatever that row's status. An empty filter
+// ties every score, so each status class heads its own first row.
+function dependencyStageHeaderSections(statusClasses, emptyQuery) {
+  const seen = new Set();
+  return statusClasses.map((statusClass, index) => {
+    if (!emptyQuery) {
+      return index === 0 ? "results" : null;
+    }
+    if (seen.has(statusClass)) {
+      return null;
+    }
+    seen.add(statusClass);
+    return statusClass;
+  });
 }
 
 function dependencyStageRouteOf(path) {
@@ -54824,8 +54860,9 @@ function compareDependencyStageCanonical(first, second, dependentPath, options =
   return first.line - second.line;
 }
 
-// The staged view: CURRENT, then RESULTS, then BLOCKED
-// (`docs/task-dependencies.md` §6). Guards disable rows with a reason: the
+// The staged view: CURRENT, then one RESULTS list ranked by score, with a
+// BLOCKED header only on an empty filter (`docs/task-dependencies.md` §6).
+// Guards disable rows with a reason: the
 // dependent itself, a cycle (checked on the graph after the whole batch,
 // with the path), an unencodable target, or a stale target/dependent
 // (refused at commit time, then reopened fresh). Removing a link is always
@@ -54861,6 +54898,7 @@ function planDependencyStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       markKey:
         row.markKey ||
         (row.path
@@ -54912,65 +54950,34 @@ function planDependencyStageView(args = {}) {
     }
     fresh.push({ candidate, key, linkedCount: 0 });
   }
-  let ordered;
-  if (!query.trim()) {
-    // Empty query shows only what the design lists: CURRENT is separate,
-    // RESULTS is same-note tasks plus the In Progress and Next lanes.
-    // Ready tasks from other notes (and Blocked elsewhere) need typing.
-    const emptyPool = fresh.filter(
-      (entry) =>
-        entry.candidate.path === dependentPath ||
-        entry.candidate.status === "/" ||
-        entry.candidate.status === "*",
-    );
-    ordered = emptyPool
-      .slice()
-      .sort((left, right) =>
-        compareDependencyStageCanonical(
-          left.candidate,
-          right.candidate,
-          dependentPath,
-        ),
+  // Empty query shows only what the design lists: CURRENT is separate,
+  // then same-note tasks plus the In Progress and Next lanes. Ready tasks
+  // from other notes (and Blocked elsewhere) need typing.
+  const emptyQuery = !query.trim();
+  const searchable = emptyQuery
+    ? fresh.filter(
+        (entry) =>
+          entry.candidate.path === dependentPath ||
+          entry.candidate.status === "/" ||
+          entry.candidate.status === "*",
       )
-      .map((entry) => entry.candidate);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareDependencyStageCanonical(
-          left.candidate,
-          right.candidate,
-          dependentPath,
-        );
-      })
-      .map((entry) => entry.candidate)
-      .filter((candidate) => rankIndex.has(candidate));
-  }
-  const results = [];
-  const blocked = [];
-  for (const candidate of ordered) {
-    if (candidate.blocked) {
-      blocked.push(candidate);
-    } else {
-      results.push(candidate);
-    }
-  }
+    : fresh;
+  // One RESULTS list ranked by score (§6.3): status only breaks exact-score
+  // ties (open before Blocked, then canonical order), and the cap counts
+  // this merged order so a strong Blocked match is never folded away.
+  const ordered = orderDependencyStageMatches(
+    searchable.map((entry) => entry.candidate),
+    query,
+    (left, right) =>
+      Number(Boolean(left.blocked)) - Number(Boolean(right.blocked)) ||
+      compareDependencyStageCanonical(left, right, dependentPath),
+  );
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...blocked].slice(0, room);
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((candidate) =>
+    candidate.blocked ? "blocked" : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
   const linkedByCandidate = new Map(
     fresh.map((entry) => [entry.candidate, entry.linkedCount || 0]),
   );
@@ -55092,7 +55099,7 @@ function planDependencyStageView(args = {}) {
     }
     return { disabled: false, reason: null, cycle: null, cycleLabels: null };
   };
-  const shape = (candidate, section, first) => {
+  const shape = (candidate, section, header) => {
     const verdict = guard(candidate);
     const depValue =
       candidate.idField ||
@@ -55138,7 +55145,8 @@ function planDependencyStageView(args = {}) {
     return Object.freeze({
       kind: "local-task",
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -55199,24 +55207,19 @@ function planDependencyStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter((candidate) => !candidate.blocked);
-  const pickedBlocked = picked.filter((candidate) => candidate.blocked);
-  pickedResults.forEach((candidate, index) =>
-    out.push(shape(candidate, "results", index === 0)),
-  );
-  pickedBlocked.forEach((candidate, index) =>
-    out.push(shape(candidate, "blocked", index === 0)),
+  picked.forEach((candidate, index) =>
+    out.push(shape(candidate, statusClasses[index], headers[index])),
   );
   // The ~60-row cap truncates: append the "type to search N more" hint row
   // so keyboard filtering reaches the rest (`docs/task-dependencies.md` §6.3).
-  const totalOrdered = [...results, ...blocked].length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,
@@ -56438,6 +56441,7 @@ function planBlocksStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       lastReason,
       todayLink,
       linkedSourceCount: sourceCount,
@@ -56498,58 +56502,29 @@ function planBlocksStageView(args = {}) {
     }
     fresh.push({ candidate, key, linkedCount });
   }
-  let ordered;
-  if (!query.trim()) {
-    ordered = fresh
-      .slice()
-      .sort((left, right) =>
-        compareBlocksStageResults(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-          todayMap,
-        ),
-      )
-      .map((entry) => entry);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareBlocksStageResults(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-          todayMap,
-        );
-      })
-      .filter((entry) => rankIndex.has(entry.candidate));
-  }
-  const results = [];
-  const blocked = [];
-  for (const entry of ordered) {
-    if (entry.candidate.blocked || entry.candidate.status === "?") {
-      blocked.push(entry);
-    } else {
-      results.push(entry);
-    }
-  }
+  // One RESULTS list ranked by score (§15.3): status only breaks
+  // exact-score ties (open before Blocked, then the stage's canonical
+  // order), and the cap counts this merged order.
+  const isBlockedRow = (candidate) =>
+    Boolean(candidate.blocked || candidate.status === "?");
+  const emptyQuery = !query.trim();
+  const entryByCandidate = new Map(
+    fresh.map((entry) => [entry.candidate, entry]),
+  );
+  const ordered = orderDependencyStageMatches(
+    fresh.map((entry) => entry.candidate),
+    query,
+    (left, right) =>
+      Number(isBlockedRow(left)) - Number(isBlockedRow(right)) ||
+      compareBlocksStageResults(left, right, sourcePath, todayMap),
+  ).map((candidate) => entryByCandidate.get(candidate));
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...blocked].slice(0, room);
-  const shape = (entry, section, first) => {
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((entry) =>
+    isBlockedRow(entry.candidate) ? "blocked" : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
+  const shape = (entry, section, header) => {
     const candidate = entry.candidate;
     const verdict = blocksStageGuard(
       candidate,
@@ -56624,7 +56599,8 @@ function planBlocksStageView(args = {}) {
     return Object.freeze({
       kind: "local-task",
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -56689,26 +56665,17 @@ function planBlocksStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter(
-    (entry) => !(entry.candidate.blocked || entry.candidate.status === "?"),
+  picked.forEach((entry, index) =>
+    out.push(shape(entry, statusClasses[index], headers[index])),
   );
-  const pickedBlocked = picked.filter(
-    (entry) => entry.candidate.blocked || entry.candidate.status === "?",
-  );
-  pickedResults.forEach((entry, index) =>
-    out.push(shape(entry, "results", index === 0)),
-  );
-  pickedBlocked.forEach((entry, index) =>
-    out.push(shape(entry, "blocked", index === 0)),
-  );
-  const totalOrdered = results.length + blocked.length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,
@@ -57873,10 +57840,12 @@ function collectRelationStageIncomingFromSnapshots(snapshots, index, target, pre
   return Object.freeze(rows);
 }
 
-// The Links stage list: CURRENT (outgoing, authored order), RESULTS
-// (open), CLOSED (closed, then archived). `prerequisiteIds` marks rows that
-// are also prerequisites; `todayMap` marks rows linked under today's open
-// Pomodoros (🍅, display only).
+// The Links stage list: CURRENT (outgoing, authored order), then one
+// RESULTS list ranked by score, where closed and archived rows sink only on
+// exact-score ties; an empty filter (every score ties) heads the trailing
+// closed rows with CLOSED. `prerequisiteIds` marks rows that are also
+// prerequisites; `todayMap` marks rows linked under today's open Pomodoros
+// (🍅, display only).
 function planRelationStageView(args = {}) {
   const sources = Array.isArray(args.sources) ? args.sources : [];
   const current = Array.isArray(args.current) ? args.current : [];
@@ -57901,6 +57870,7 @@ function planRelationStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       markKey:
         row.markKey ||
         (row.path
@@ -57932,65 +57902,36 @@ function planRelationStageView(args = {}) {
     }
     fresh.push({ candidate, key });
   }
-  let ordered;
-  if (!query.trim()) {
-    // Empty query shows only what the design lists: CURRENT is separate,
-    // RESULTS is same-note tasks plus the In Progress and Next lanes, and
-    // CLOSED is closed tasks plus `done/` archives. Ready tasks from other
-    // notes need typing.
-    const emptyPool = fresh.filter(
-      (entry) =>
-        entry.candidate.path === sourcePath ||
-        entry.candidate.status === "/" ||
-        entry.candidate.status === "*" ||
-        entry.candidate.closed === true ||
-        entry.candidate.archived === true,
-    );
-    ordered = emptyPool
-      .slice()
-      .sort((left, right) =>
-        compareRelationStageCanonical(left.candidate, right.candidate, sourcePath),
+  // Empty query shows only what the design lists: CURRENT is separate,
+  // then same-note tasks plus the In Progress and Next lanes, then closed
+  // tasks plus `done/` archives. Ready tasks from other notes need typing.
+  const emptyQuery = !query.trim();
+  const searchable = emptyQuery
+    ? fresh.filter(
+        (entry) =>
+          entry.candidate.path === sourcePath ||
+          entry.candidate.status === "/" ||
+          entry.candidate.status === "*" ||
+          entry.candidate.closed === true ||
+          entry.candidate.archived === true,
       )
-      .map((entry) => entry.candidate);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareRelationStageCanonical(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-        );
-      })
-      .map((entry) => entry.candidate)
-      .filter((candidate) => rankIndex.has(candidate));
-  }
-  const results = [];
-  const closed = [];
-  for (const candidate of ordered) {
-    if (candidate.closed === true || candidate.archived === true) {
-      closed.push(candidate);
-    } else {
-      results.push(candidate);
-    }
-  }
+    : fresh;
+  // Score leads; the canonical comparator breaks exact-score ties, sinking
+  // archived, then closed, rows and keeping Blocked as Ready's peer (LG17).
+  const ordered = orderDependencyStageMatches(
+    searchable.map((entry) => entry.candidate),
+    query,
+    (left, right) => compareRelationStageCanonical(left, right, sourcePath),
+  );
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...closed].slice(0, room);
-  const shape = (candidate, section, first) => {
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((candidate) =>
+    candidate.closed === true || candidate.archived === true
+      ? "closed"
+      : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
+  const shape = (candidate, section, header) => {
     const key =
       candidate.path && candidate.blockId
         ? relationStageRowKey(candidate.path, candidate.blockId)
@@ -58006,7 +57947,8 @@ function planRelationStageView(args = {}) {
       kind: "local-task",
       relationKind: true,
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -58048,26 +57990,17 @@ function planRelationStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter(
-    (candidate) => candidate.closed !== true && candidate.archived !== true,
+  picked.forEach((candidate, index) =>
+    out.push(shape(candidate, statusClasses[index], headers[index])),
   );
-  const pickedClosed = picked.filter(
-    (candidate) => candidate.closed === true || candidate.archived === true,
-  );
-  pickedResults.forEach((candidate, index) =>
-    out.push(shape(candidate, "results", index === 0)),
-  );
-  pickedClosed.forEach((candidate, index) =>
-    out.push(shape(candidate, "closed", index === 0)),
-  );
-  const totalOrdered = [...results, ...closed].length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedClosed.length > 0 ? "closed" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,
@@ -58102,6 +58035,7 @@ function planLinkedFromStageView(args = {}) {
     stageSection: "current",
     alreadyLinked: true,
     firstInSection: index === 0,
+    headerSection: index === 0 ? "current" : null,
     markKey: row.markKey || `${normalizeVaultRelativePath(row.path || "")}#${row.blockId || `line:${row.line}`}`,
   }));
   const seen = new Set(linkedKeys);
@@ -58117,19 +58051,15 @@ function planLinkedFromStageView(args = {}) {
     if (key) seen.add(key);
     fresh.push(candidate);
   }
-  let ordered = fresh.slice();
-  if (query.trim()) {
-    const ranked = dependencyStageRank(fresh, query);
-    const rank = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = ordered.filter((candidate) => rank.has(candidate)).sort((left, right) =>
-      rank.get(left) - rank.get(right) || compareRelationStageCanonical(left, right, ownerPath),
-    );
-  } else {
-    ordered.sort((left, right) => {
-      const openOrder = Number(right.open === true) - Number(left.open === true);
-      return openOrder || compareRelationStageCanonical(left, right, ownerPath);
-    });
-  }
+  // One RESULTS list: score leads and the canonical comparator breaks
+  // exact-score ties; the empty query keeps its open-first order.
+  const ordered = query.trim()
+    ? orderDependencyStageMatches(fresh, query, (left, right) =>
+        compareRelationStageCanonical(left, right, ownerPath))
+    : fresh.slice().sort((left, right) => {
+        const openOrder = Number(right.open === true) - Number(left.open === true);
+        return openOrder || compareRelationStageCanonical(left, right, ownerPath);
+      });
   const room = Math.max(0, maxRows - out.length);
   const picked = ordered.slice(0, room);
   picked.forEach((candidate, index) => {
@@ -58138,6 +58068,7 @@ function planLinkedFromStageView(args = {}) {
       relationKind: true,
       stageSection: "results",
       firstInSection: index === 0,
+      headerSection: index === 0 ? "results" : null,
       path: normalizeVaultRelativePath(candidate.path || ""),
       blockId: candidate.blockId || null,
       line: candidate.line,
@@ -58169,6 +58100,7 @@ function planLinkedFromStageView(args = {}) {
       kind: "stage-more",
       stageSection: "results",
       firstInSection: false,
+      headerSection: null,
       path: null,
       blockId: null,
       displayText: `type to search ${hiddenCount} more`,
@@ -69447,13 +69379,17 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   }
 
   renderTaskValueItem(item, rowEl, query) {
-    // CURRENT / RESULTS / BLOCKED section headers for the vault-wide stage
-    // (`docs/task-dependencies.md` §6).
+    // Section headers for the vault-wide stages (`docs/task-dependencies.md`
+    // §6): CURRENT, then one RESULTS list ranked by score. A BLOCKED or
+    // CLOSED header appears only on an empty filter, where every score ties;
+    // `headerSection` names it, while `stageSection` stays the row's status
+    // class for tints and badges.
     if (item && item.stageSection && item.firstInSection) {
       const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED", closed: "CLOSED" };
+      const header = item.headerSection || item.stageSection;
       rowEl.createDiv({
         cls: "bob-cnp-section-header",
-        text: sectionNames[item.stageSection] || item.stageSection,
+        text: sectionNames[header] || header,
       });
     }
     // The ~60-row cap hint row: muted, non-interactive, styled on its own.

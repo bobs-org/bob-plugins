@@ -264,25 +264,52 @@ test("narrow layout keeps basename plus id and drops the backspace hint", () => 
   );
 });
 
-test("filtered list is flat with a Completed history divider", () => {
+test("filtered list is flat and ranks a better-matching completed row first", () => {
   const rows = [
-    row({ notePath: "a.md", line: 0, displayText: "Open opus", blockId: "o" }),
+    row({ notePath: "a.md", line: 0, displayText: "Polish the widget", blockId: "polish" }),
     row({
       notePath: "b.md",
+      line: 0,
+      displayText: "Widget launch",
+      blockId: "widget-launch",
+      status: "x",
+      open: false,
+    }),
+  ];
+  const built = plan(rows, { ownerPath: "z.md", query: "widget", renderAll: true });
+  assert.ok(
+    !built.items.some((item) => item.kind === "section"),
+    "a filtered list has no section dividers",
+  );
+  const listed = built.items.filter((item) => item.kind === "row");
+  assert.deepEqual(
+    listed.map((item) => [item.key, item.group]),
+    [
+      ["b.md|0", "completed"],
+      ["a.md|0", "open"],
+    ],
+  );
+});
+
+test("filtered list keeps open rows ahead of completed ones at equal score", () => {
+  const rows = [
+    row({
+      notePath: "a.md",
       line: 0,
       displayText: "Done opus",
       blockId: "d",
       status: "x",
       open: false,
     }),
+    row({ notePath: "b.md", line: 0, displayText: "Open opus", blockId: "o" }),
   ];
   const built = plan(rows, { ownerPath: "z.md", query: "opus", renderAll: true });
-  const kinds = built.items.map((item) => item.kind);
-  assert.equal(kinds[0], "row");
-  assert.ok(kinds.includes("section"));
-  const divider = built.items.find((item) => item.kind === "section");
-  assert.equal(divider.id, "completed");
-  assert.equal(built.items[built.items.length - 1].group, "completed");
+  assert.ok(!built.items.some((item) => item.kind === "section"));
+  const listed = built.items.filter((item) => item.kind === "row");
+  assert.deepEqual(
+    listed.map((item) => item.group),
+    ["open", "completed"],
+  );
 });
 
 test("caret-task and unlinkable-path guards disable the row", () => {

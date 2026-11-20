@@ -165,23 +165,19 @@ function dependencyStageTermTier(candidate, term) {
   return best;
 }
 
-// Rank candidates for a query, ported from `rank` in
-// `src/native/capture_link_tasks.rs`: every whitespace-separated term must
-// match, tasks order by the summed tiers descending, and ties (and the empty
-// query) keep the input order. The sort is stable, so callers pre-sort into
-// canonical order first.
-function dependencyStageRank(candidates, query) {
-  const list = Array.isArray(candidates) ? candidates.slice() : [];
+// Every candidate matching a query, paired with its summed tier score,
+// ported from `match_score` in `src/native/capture_link_tasks.rs`: every
+// whitespace-separated term must match, and the result keeps input order.
+// An empty query matches every candidate with score 0.
+function dependencyStageScoredMatches(candidates, query) {
+  const list = Array.isArray(candidates) ? candidates : [];
   const terms = String(query || "")
     .split(/\s+/)
     .map((term) => term.toLowerCase())
     .filter(Boolean);
-  if (terms.length === 0) {
-    return list;
-  }
   const scored = [];
   for (const candidate of list) {
-    let total = 0;
+    let score = 0;
     let matched = true;
     for (const term of terms) {
       const tier = dependencyStageTermTier(candidate, term);
@@ -189,14 +185,54 @@ function dependencyStageRank(candidates, query) {
         matched = false;
         break;
       }
-      total += tier;
+      score += tier;
     }
     if (matched) {
-      scored.push({ candidate, total });
+      scored.push({ candidate, score });
     }
   }
-  scored.sort((left, right) => right.total - left.total);
-  return scored.map((entry) => entry.candidate);
+  return scored;
+}
+
+// Rank candidates for a query, ported from `rank` in
+// `src/native/capture_link_tasks.rs`: tasks order by the summed tiers
+// descending, and ties (and the empty query) keep the input order. The sort
+// is stable, so callers pre-sort into canonical order first.
+function dependencyStageRank(candidates, query) {
+  return dependencyStageScoredMatches(candidates, query)
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.candidate);
+}
+
+// A stage's matches in display order: match score always leads, and
+// `tieCompare` (status, then the stage's canonical order) only orders
+// candidates whose scores are equal, including every row of an empty query.
+function orderDependencyStageMatches(candidates, query, tieCompare) {
+  return dependencyStageScoredMatches(candidates, query)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        tieCompare(left.candidate, right.candidate),
+    )
+    .map((entry) => entry.candidate);
+}
+
+// Section headers for one merged stage list, given each row's status class
+// (`"results"`, `"blocked"`, or `"closed"`): a typed query heads only its
+// first ranked row with RESULTS, whatever that row's status. An empty filter
+// ties every score, so each status class heads its own first row.
+function dependencyStageHeaderSections(statusClasses, emptyQuery) {
+  const seen = new Set();
+  return statusClasses.map((statusClass, index) => {
+    if (!emptyQuery) {
+      return index === 0 ? "results" : null;
+    }
+    if (seen.has(statusClass)) {
+      return null;
+    }
+    seen.add(statusClass);
+    return statusClass;
+  });
 }
 
 function dependencyStageRouteOf(path) {
@@ -685,8 +721,9 @@ function compareDependencyStageCanonical(first, second, dependentPath, options =
   return first.line - second.line;
 }
 
-// The staged view: CURRENT, then RESULTS, then BLOCKED
-// (`docs/task-dependencies.md` §6). Guards disable rows with a reason: the
+// The staged view: CURRENT, then one RESULTS list ranked by score, with a
+// BLOCKED header only on an empty filter (`docs/task-dependencies.md` §6).
+// Guards disable rows with a reason: the
 // dependent itself, a cycle (checked on the graph after the whole batch,
 // with the path), an unencodable target, or a stale target/dependent
 // (refused at commit time, then reopened fresh). Removing a link is always

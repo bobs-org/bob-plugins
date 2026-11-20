@@ -273,13 +273,17 @@ class BulletPropertyPickerFilterRenderMixin extends FilteredPickerModal {
   }
 
   renderTaskValueItem(item, rowEl, query) {
-    // CURRENT / RESULTS / BLOCKED section headers for the vault-wide stage
-    // (`docs/task-dependencies.md` §6).
+    // Section headers for the vault-wide stages (`docs/task-dependencies.md`
+    // §6): CURRENT, then one RESULTS list ranked by score. A BLOCKED or
+    // CLOSED header appears only on an empty filter, where every score ties;
+    // `headerSection` names it, while `stageSection` stays the row's status
+    // class for tints and badges.
     if (item && item.stageSection && item.firstInSection) {
       const sectionNames = { current: "CURRENT", results: "RESULTS", blocked: "BLOCKED", closed: "CLOSED" };
+      const header = item.headerSection || item.stageSection;
       rowEl.createDiv({
         cls: "bob-cnp-section-header",
-        text: sectionNames[item.stageSection] || item.stageSection,
+        text: sectionNames[header] || header,
       });
     }
     // The ~60-row cap hint row: muted, non-interactive, styled on its own.

@@ -637,6 +637,7 @@ function planBlocksStageView(args = {}) {
       stageSection: "current",
       alreadyLinked: true,
       firstInSection: index === 0,
+      headerSection: index === 0 ? "current" : null,
       lastReason,
       todayLink,
       linkedSourceCount: sourceCount,
@@ -697,58 +698,29 @@ function planBlocksStageView(args = {}) {
     }
     fresh.push({ candidate, key, linkedCount });
   }
-  let ordered;
-  if (!query.trim()) {
-    ordered = fresh
-      .slice()
-      .sort((left, right) =>
-        compareBlocksStageResults(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-          todayMap,
-        ),
-      )
-      .map((entry) => entry);
-  } else {
-    const ranked = dependencyStageRank(
-      fresh.map((entry) => entry.candidate),
-      query,
-    );
-    const rankIndex = new Map(ranked.map((candidate, index) => [candidate, index]));
-    ordered = fresh
-      .slice()
-      .sort((left, right) => {
-        const leftRank = rankIndex.has(left.candidate)
-          ? rankIndex.get(left.candidate)
-          : Number.POSITIVE_INFINITY;
-        const rightRank = rankIndex.has(right.candidate)
-          ? rankIndex.get(right.candidate)
-          : Number.POSITIVE_INFINITY;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return compareBlocksStageResults(
-          left.candidate,
-          right.candidate,
-          sourcePath,
-          todayMap,
-        );
-      })
-      .filter((entry) => rankIndex.has(entry.candidate));
-  }
-  const results = [];
-  const blocked = [];
-  for (const entry of ordered) {
-    if (entry.candidate.blocked || entry.candidate.status === "?") {
-      blocked.push(entry);
-    } else {
-      results.push(entry);
-    }
-  }
+  // One RESULTS list ranked by score (§15.3): status only breaks
+  // exact-score ties (open before Blocked, then the stage's canonical
+  // order), and the cap counts this merged order.
+  const isBlockedRow = (candidate) =>
+    Boolean(candidate.blocked || candidate.status === "?");
+  const emptyQuery = !query.trim();
+  const entryByCandidate = new Map(
+    fresh.map((entry) => [entry.candidate, entry]),
+  );
+  const ordered = orderDependencyStageMatches(
+    fresh.map((entry) => entry.candidate),
+    query,
+    (left, right) =>
+      Number(isBlockedRow(left)) - Number(isBlockedRow(right)) ||
+      compareBlocksStageResults(left, right, sourcePath, todayMap),
+  ).map((candidate) => entryByCandidate.get(candidate));
   const room = Math.max(0, maxRows - markedCurrent.length);
-  const picked = [...results, ...blocked].slice(0, room);
-  const shape = (entry, section, first) => {
+  const picked = ordered.slice(0, room);
+  const statusClasses = picked.map((entry) =>
+    isBlockedRow(entry.candidate) ? "blocked" : "results",
+  );
+  const headers = dependencyStageHeaderSections(statusClasses, emptyQuery);
+  const shape = (entry, section, header) => {
     const candidate = entry.candidate;
     const verdict = blocksStageGuard(
       candidate,
@@ -823,7 +795,8 @@ function planBlocksStageView(args = {}) {
     return Object.freeze({
       kind: "local-task",
       stageSection: section,
-      firstInSection: first,
+      firstInSection: header !== null,
+      headerSection: header,
       path: candidate.path,
       blockId: candidate.blockId,
       route: candidate.route,
@@ -888,26 +861,17 @@ function planBlocksStageView(args = {}) {
     });
   };
   const out = [...markedCurrent];
-  const pickedResults = picked.filter(
-    (entry) => !(entry.candidate.blocked || entry.candidate.status === "?"),
+  picked.forEach((entry, index) =>
+    out.push(shape(entry, statusClasses[index], headers[index])),
   );
-  const pickedBlocked = picked.filter(
-    (entry) => entry.candidate.blocked || entry.candidate.status === "?",
-  );
-  pickedResults.forEach((entry, index) =>
-    out.push(shape(entry, "results", index === 0)),
-  );
-  pickedBlocked.forEach((entry, index) =>
-    out.push(shape(entry, "blocked", index === 0)),
-  );
-  const totalOrdered = results.length + blocked.length;
-  const hiddenCount = Math.max(0, totalOrdered - picked.length);
+  const hiddenCount = Math.max(0, ordered.length - picked.length);
   if (hiddenCount > 0) {
     out.push(
       Object.freeze({
         kind: "stage-more",
-        stageSection: pickedBlocked.length > 0 ? "blocked" : "results",
+        stageSection: statusClasses[statusClasses.length - 1] || "results",
         firstInSection: false,
+        headerSection: null,
         path: null,
         blockId: null,
         displayText: `type to search ${hiddenCount} more`,

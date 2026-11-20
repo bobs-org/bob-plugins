@@ -111,11 +111,12 @@ Links to and Linked from rows on a Task Link use the same focus-and-open path.
 
 The Links stage title reads `🪢 Links · <task>` with the subtitle
 `Links to K · searching P tasks · ⇥ to mark several · does not block`.
-CURRENT holds the outgoing links with label pills in authored order,
-RESULTS holds open tasks, and CLOSED holds closed tasks then `done/`
-archives. RESULTS ranks open tasks of every status by match score, so Blocked
-`[?]` tasks are never set apart in their own section; exact-score ties put In
-Progress and Next first, then Ready and Blocked together. `↵` links (or unlinks on CURRENT), `⌃↵` opens the relation field
+CURRENT holds the outgoing links with label pills in authored order. RESULTS
+ranks every match (open, Blocked `[?]`, closed, and `done/` archives) by match
+score, so a better match always ranks higher whatever its status; exact-score
+ties put In Progress and Next first, then Ready and Blocked together, then
+closed tasks, then archives. An empty filter ties every score, so its closed
+tasks and archives trail under a CLOSED header. `↵` links (or unlinks on CURRENT), `⌃↵` opens the relation field
 (or relabels on CURRENT), `⇥` marks several, and id-less targets run the
 block-ID prompt once on apply. Shift+Enter in those stages does nothing.
 Typing `~` anywhere in the Links /

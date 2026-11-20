@@ -107,6 +107,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Fence cards are best-effort and never break startup.
     }
     try {
+      if (typeof commandFenceSetup === "function") commandFenceSetup(this);
+    } catch (error) {
+      // `bob-run` cards are best-effort and never break startup.
+    }
+    try {
       if (typeof copyChipRegisterCursorCommand === "function") {
         copyChipRegisterCursorCommand(this);
       }
@@ -132,6 +137,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
           }
           this.copyChipReadingSetupDone = false;
           this.copyChipFenceSetupDone = false;
+          this.commandChipFenceSetupDone = false;
           this.copyChipCursorCommandRegistered = false;
           this.copyChipAuthorCommandRegistered = false;
           try {
@@ -164,6 +170,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
     }
     this.copyChipReadingSetupDone = false;
     this.copyChipFenceSetupDone = false;
+    this.commandChipFenceSetupDone = false;
     this.copyChipCursorCommandRegistered = false;
     this.copyChipAuthorCommandRegistered = false;
     try {

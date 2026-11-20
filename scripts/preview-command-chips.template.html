@@ -40,6 +40,8 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-force .preview-line { margin-top:128px; }
 .preview-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 .preview-print-note { color:var(--text-faint); font:11px var(--font-interface); }
+.preview-fence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 16px; align-items:start; }
+.preview-fence-name { display:block; margin-top:6px; color:var(--text-muted); font:600 11px var(--font-interface); }
 code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background:var(--code-background); font:.875em var(--font-monospace); }
 @media (max-width:620px) {
   body { padding:12px; }
@@ -47,6 +49,7 @@ code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background
   .preview-table { grid-template-columns:minmax(0,1fr); }
   .preview-table .col-head { display:none; }
   .preview-pair { grid-template-columns:minmax(0,1fr); }
+  .preview-fence-grid { grid-template-columns:minmax(0,1fr); }
 }
 @media print {
   body { background:#fff; padding:0; }
@@ -180,6 +183,66 @@ function previewDrive(plugin, chip, ctx, spec) {
   });
 }
 
+// Drive the real store through a `bob-run` card's run, with per-step
+// durations the way the engine reports them.
+function previewFenceDrive(plugin, chip, ctx, spec) {
+  if (!spec) return;
+  const store = H.commandChipStoreOf(plugin);
+  const model = H.commandChipPaintModel(plugin, chip, ctx);
+  if (spec.armed) {
+    store.setArmed({ ...chip, sourcePath: model.sourcePath, key: model.key });
+    return;
+  }
+  const verdict = model.verdict;
+  const total = verdict && Array.isArray(verdict.steps) && verdict.steps.length ? verdict.steps.length : 1;
+  const kind = total > 1 ? "sequence" : "run";
+  const key = model.key;
+  const seq = store.begin(key, { signature: verdict && verdict.signature, total, kind });
+  const ran = (step) => ({ runId: "run-" + step, durationMs: 2100 + step * 1700 });
+  store.apply(key, seq, { state: "queued", kind, total, runId: "run-1", step: 1 });
+  if (spec.state === "queued") return;
+  store.apply(key, seq, { state: "running", kind, total, runId: "run-1", step: 1 });
+  // A running card settles the steps before `spec.step`; a failed one
+  // halts at `spec.at`; the rest settle every step.
+  const halt = spec.state === "failed" ? spec.at : null;
+  const last = spec.state === "running" ? Math.min(total, spec.step || 1) - 1 : halt || total;
+  for (let step = 1; step <= last; step += 1) {
+    const outcome = step === spec.at ? spec.state : "completed";
+    store.apply(key, seq, { state: "step", step, outcome, reason: step === spec.at ? spec.reason : null, ...ran(step) });
+    if (step < total && step !== halt) store.apply(key, seq, { state: "running", kind, total, runId: "run-" + (step + 1), step: step + 1 });
+  }
+  if (spec.state === "running") return;
+  store.apply(key, seq, {
+    state: "finished",
+    outcome: spec.state,
+    reason: spec.reason || null,
+    runId: "run-" + (halt || total),
+    step: halt || total,
+    stoppedAt: halt || null,
+  });
+}
+
+const previewFences = [];
+
+function renderFence(parent, row) {
+  const plugin = previewPlugin(row.variant);
+  const ctx = previewContext(row.variant);
+  const lines = row.text.split("\n").length;
+  const chip = { form: "block", label: row.label || null, text: row.text, line: 3, from: 0, to: 0, fence: { open: 3, close: 4 + lines } };
+  previewFenceDrive(plugin, chip, ctx, row.drive);
+  const card = H.commandFenceBuild(document, { label: chip.label, text: chip.text });
+  const model = H.commandChipPaintModel(plugin, chip, ctx);
+  H.commandFencePaint(card, model, { plugin, chip });
+  const cell = document.createElement("div");
+  const name = document.createElement("span");
+  name.className = "preview-fence-name";
+  name.textContent = row.name;
+  cell.appendChild(name);
+  cell.appendChild(card);
+  parent.appendChild(cell);
+  previewFences.push({ card, model, row });
+}
+
 function appendText(parent, text) {
   // Scaffolding only: ordinary code spans render as plain inline code.
   const pattern = /`([^`]+)`/g;
@@ -286,6 +349,7 @@ function table(parent, rows) {
 
 function renderAll() {
   previewMounted.length = 0;
+  previewFences.length = 0;
   document.getElementById("sections").replaceChildren();
   const M = window.PREVIEW_MATRIX;
   for (const spec of M.tables) table(section(spec.title), spec.rows);
@@ -313,6 +377,12 @@ function renderAll() {
   forceBox.className = "preview-force";
   for (const row of M.force.rows) renderLine(forceBox, row.line, { ...row, surface: row.surface || "reading" });
   force.appendChild(forceBox);
+  const fences = section(M.fences.title);
+  fences.id = "preview-fences";
+  const grid = document.createElement("div");
+  grid.className = "preview-fence-grid";
+  for (const row of M.fences.rows) renderFence(grid, row);
+  fences.appendChild(grid);
   return previewMounted.length;
 }
 
@@ -380,7 +450,30 @@ function checks() {
     if (item.surface === "reading" && (item.host.tagName !== "BUTTON" || item.host.getAttribute("type") !== "button")) failures.push("Reading face is not a button");
     if (item.surface === "live" && (item.host.getAttribute("role") !== "button" || item.host.getAttribute("tabindex") !== "0")) failures.push("Live Preview face is not a focusable role=button");
   }
-  return { mounted: previewMounted.length, faces: Array.from(faces).sort(), attributesChecked: attributes, geometry, failures };
+  // `bob-run` cards: the payload stays out of attributes, the Run button
+  // keeps one width across Run, Output, and Copy, and it is named.
+  const buttonWidths = [];
+  for (const item of previewFences) {
+    const payloadLines = item.row.text.split("\n");
+    for (const el of [item.card, ...item.card.querySelectorAll("*")]) {
+      for (const name of el.getAttributeNames()) {
+        attributes += 1;
+        const value = el.getAttribute(name) || "";
+        if (payloadLines.some((line) => value.includes(line))) failures.push("fence payload in attribute " + name + " of " + el.className);
+      }
+    }
+    const button = item.card.querySelector(".bob-run-fence-run");
+    buttonWidths.push(button.getBoundingClientRect().width);
+    const ids = (button.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    if (ids.length !== 2 || ids.some((id) => !document.getElementById(id))) failures.push("fence button aria-labelledby does not name the action and title");
+    if (H.commandFencePayloadOf(item.card) !== item.row.text) failures.push("fence payload record mismatch for " + item.row.name);
+  }
+  if (buttonWidths.length) {
+    const dw = Math.max(...buttonWidths) - Math.min(...buttonWidths);
+    geometry.push({ group: "fence-button", faces: previewFences.map((item) => item.model.face), widthDelta: dw, heightDelta: 0 });
+    if (dw > 0.5) failures.push("fence Run button width varies by " + dw.toFixed(2) + " px");
+  }
+  return { mounted: previewMounted.length + previewFences.length, faces: Array.from(faces).sort(), attributesChecked: attributes, geometry, failures };
 }
 
 function motionCheck() {
@@ -405,7 +498,21 @@ function printCheck() {
     if (style.animationName !== "none") failures.push(face + ": animates in print");
     if (host.classList.contains("is-literal") && !/mono/i.test(style.fontFamily)) failures.push(face + ": literal is not monospace");
   }
-  return { chips: chips.length, failures };
+  const fences = Array.from(document.querySelectorAll(".bob-run-fence"));
+  for (const card of fences) {
+    const style = getComputedStyle(card);
+    if (style.borderTopStyle !== "none") failures.push("fence border prints");
+    if (style.animationName !== "none" || getComputedStyle(card.querySelector(".bob-run-fence-header")).animationName !== "none") failures.push("fence animates in print");
+    for (const selector of [".bob-run-fence-glyph", ".bob-run-fence-run", ".bob-run-fence-meta", ".bob-run-fence-mark", ".bob-run-fence-num", ".bob-run-fence-detail", ".bob-run-fence-reason"]) {
+      for (const el of card.querySelectorAll(selector)) {
+        if (getComputedStyle(el).display !== "none") failures.push("fence " + selector + " prints");
+      }
+    }
+    for (const el of card.querySelectorAll(".bob-run-fence-text")) {
+      if (!/mono/i.test(getComputedStyle(el).fontFamily)) failures.push("fence step is not monospace in print");
+    }
+  }
+  return { chips: chips.length, fences: fences.length, failures };
 }
 
 window.commandChipsPreview = {

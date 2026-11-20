@@ -18,6 +18,7 @@ const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 480_000;
 const P = fixture.PAYLOADS;
 const N = fixture.NOTES;
+const F = fixture.FENCES;
 const HELP = [
   "Usage: node scripts/obsidian-command-chips-e2e.cjs [OPTIONS]",
   "",
@@ -281,6 +282,56 @@ const PAGE_HELPERS = `(() => {
     notices() { return Array.from(document.querySelectorAll(".notice")).map((el) => el.textContent); },
     modals() { return Array.from(document.querySelectorAll(".modal-container")).map((el) => ({ pager: Boolean(el.querySelector(".bob-cmd-pager-view")), sheet: Boolean(el.querySelector(".bob-cmd-sheet")), text: (el.textContent || "").slice(0, 160) })); },
   };
+  return true;
+})()`;
+
+// `bob-run` card helpers, by the title the card shows: faces, meta, the
+// Run button's text, per-step marks and reasons, and click points.
+const FENCE_HELPERS = `(() => {
+  const FACES = ["ready","armed","loading","queued","running","completed","attention","failed","unavailable","copy"];
+  const MARKS = ["idle","queued","current","upcoming","done","attention","stopped","unknown","failed","skipped"];
+  const visible = (el) => el.isConnected && el.getClientRects().length > 0;
+  const root = (scope) => {
+    if (scope === "popover") return document.querySelector(".popover.hover-popover") || document.createElement("div");
+    const leaf = app.workspace.activeLeaf;
+    const view = leaf && leaf.view;
+    if (!view || !view.containerEl) return document;
+    const mode = view.getMode && view.getMode();
+    return view.containerEl.querySelector(mode === "preview" ? ".markdown-reading-view" : ".markdown-source-view") || view.containerEl;
+  };
+  const text = (el, selector) => { const node = el.querySelector(selector); return node ? node.textContent : null; };
+  Object.assign(window.__e2e, {
+    fences(title, scope) {
+      return Array.from(root(scope).querySelectorAll(".bob-run-fence")).filter((el) => visible(el) && text(el, ".bob-run-fence-title") === title);
+    },
+    fence(title, scope) {
+      const el = this.fences(title, scope)[0];
+      if (!el) return null;
+      const rows = Array.from(el.querySelectorAll(".bob-run-fence-step"));
+      return {
+        count: this.fences(title, scope).length,
+        face: FACES.find((name) => el.classList.contains("is-" + name)) || null,
+        meta: text(el, ".bob-run-fence-meta"),
+        button: text(el, ".bob-run-fence-run"),
+        reason: text(el, ".bob-run-fence-reason"),
+        steps: rows.map((row) => text(row, ".bob-run-fence-text")),
+        marks: rows.map((row) => MARKS.find((name) => row.classList.contains("is-" + name)) || null),
+        why: rows.map((row) => text(row, ".bob-run-fence-why")),
+        outputs: rows.map((row) => { const b = row.querySelector(".bob-run-fence-output"); return Boolean(b && !b.classList.contains("is-hidden")); }),
+      };
+    },
+    fencePoint(title, selector, index, scope) {
+      const el = this.fences(title, scope)[0];
+      const target = el && el.querySelectorAll(selector)[index || 0];
+      if (!target) return null;
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+      const r = target.getBoundingClientRect();
+      const x = r.left + Math.min(r.width / 2, 24);
+      const y = r.top + r.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, onTarget: Boolean(hit && target.contains(hit)) };
+    },
+  });
   return true;
 })()`;
 
@@ -658,6 +709,110 @@ async function activationPhase(ctx) {
   record("the stub saw exactly the expected invocations", JSON.stringify(Object.entries(actual).sort()) === JSON.stringify(Object.entries(expected).sort()), JSON.stringify(actual));
 }
 
+async function fenceState(client, title, scope) {
+  return client.evaluate(`window.__e2e.fence(${JSON.stringify(title)}, ${JSON.stringify(scope || null)})`);
+}
+
+async function waitFence(client, title, predicate, label, timeoutMs = 20_000) {
+  return waitFor(client, `window.__e2e.fence(${JSON.stringify(title)}, null)`, (state) => Boolean(state) && predicate(state), label, timeoutMs);
+}
+
+// Earlier phases leave persistent failure toasts at the top right, where a
+// card's Run button sits; clear them when they cover the click point.
+async function clickFence(client, title, selector, options = {}) {
+  if (!options.keepModals) await closeModals(client);
+  const expression = `window.__e2e.fencePoint(${JSON.stringify(title)}, ${JSON.stringify(selector)}, ${options.index || 0}, null)`;
+  const point = await client.evaluate(expression);
+  if (!point) throw new Error("no visible " + selector + " in the " + title + " card");
+  await sleep(250);
+  let fresh = (await client.evaluate(expression)) || point;
+  if (!fresh.onTarget) {
+    await client.evaluate("document.querySelectorAll('.notice-container .notice').forEach((el) => el.remove()) || true");
+    await sleep(150);
+    fresh = (await client.evaluate(expression)) || fresh;
+  }
+  await mouseClick(client, fresh, options);
+  return fresh;
+}
+
+// `bob-run` cards: body clicks never run; Run runs the sequence in order
+// with live marks (Live Preview); a failure leaves ✓ ✗ – with bob's error
+// line and an Output link (Reading view); a ref/ card only copies.
+async function fencePhase(ctx) {
+  const { client, scratch, record, outDir } = ctx;
+  const runs = (step) => fixture.countRuns(scratch, step);
+  await client.evaluate(FENCE_HELPERS);
+
+  await openNote(client, N.fence, "live");
+  const rest = await waitFence(client, F.gated.title, (state) => state.face === "ready", "gated card ready (live)");
+  const bodyHit = await clickFence(client, F.gated.title, ".bob-run-fence-text", { index: 1 });
+  await sleep(900);
+  const afterBody = await fenceState(client, F.gated.title);
+  record("a bob-run card renders its steps; a body click never runs", rest.count === 1 && JSON.stringify(rest.steps) === JSON.stringify(F.gated.steps)
+    && rest.meta === "3 steps · reads" && rest.button === "Run" && F.gated.steps.every((step) => runs(step) === 0),
+  JSON.stringify({ rest, bodyHitOnText: bodyHit.onTarget, afterBodyFace: afterBody && afterBody.face, afterBodyCount: afterBody && afterBody.count }));
+
+  // Run: step 1 settles, step 2 holds at its gate; the card shows it live.
+  const runHit = await clickFence(client, F.gated.title, ".bob-run-fence-run");
+  await waitUntil(() => runs(F.gated.steps[1]) === 1, "gated step 2 starts", 30_000);
+  const live = await waitFence(client, F.gated.title, (state) => state.face === "running" && state.marks[1] === "current", "gated card running step 2");
+  ctx.shots.push(await screenshot(client, outDir, "fence-running-live.png"));
+  // The live card's button opens the run's output instead of running again.
+  await clickFence(client, F.gated.title, ".bob-run-fence-run");
+  await sleep(1200);
+  const liveModals = await client.evaluate("window.__e2e.modals()");
+  await closeModals(client);
+  fixture.openGate(scratch, "fseq-2");
+  await waitUntil(() => runs(F.gated.steps[2]) === 1, "gated step 3 runs", 30_000);
+  const done = await waitFence(client, F.gated.title, (state) => ["completed", "ready"].includes(state.face), "gated card settles", 30_000);
+  const order = fixture.runInvocations(scratch).map((item) => "bob " + item.argv.join(" ")).filter((line) => F.gated.steps.includes(line));
+  record("Run runs the card's steps once, in order, with live marks; its button then opens output", runHit.onTarget
+    && JSON.stringify(order) === JSON.stringify(F.gated.steps)
+    && live.meta === "2 of 3" && live.button === "Output" && JSON.stringify(live.marks) === JSON.stringify(["done", "current", "upcoming"])
+    && liveModals.some((item) => item.pager) && ["completed", "ready"].includes(done.face),
+  JSON.stringify({ runHitOnButton: runHit.onTarget, order, live: { meta: live.meta, button: live.button, marks: live.marks }, outputOpened: liveModals.some((item) => item.pager), done: { face: done.face, marks: done.marks } }));
+
+  // Reading view: step 2 fails, step 3 never runs, and the failure stays.
+  await openNote(client, N.fence, "preview");
+  await waitFence(client, F.fail.title, (state) => state.face === "ready", "failing card ready (reading)");
+  await clickFence(client, F.fail.title, ".bob-run-fence-run");
+  const failed = await waitFence(client, F.fail.title, (state) => state.face === "failed", "failing card settles", 30_000);
+  await sleep(2400);
+  const kept = await fenceState(client, F.fail.title);
+  ctx.shots.push(await screenshot(client, outDir, "fence-failed-reading.png"));
+  record("a failing step halts the card: ✓ ✗ – with bob's error line and an Output link, and the ink stays",
+    runs(F.fail.steps[0]) === 1 && runs(F.fail.steps[1]) === 1 && runs(F.fail.steps[2]) === 0
+    && JSON.stringify(failed.marks) === JSON.stringify(["done", "failed", "skipped"]) && failed.meta === "stopped at 2 · failed"
+    && /e2e failure at ffail-2/.test(failed.why[1] || "") && JSON.stringify(failed.outputs) === JSON.stringify([false, true, false])
+    && kept.face === "failed",
+  JSON.stringify({ runs: F.fail.steps.map(runs), failed: { meta: failed.meta, marks: failed.marks, why: failed.why, outputs: failed.outputs }, keptFace: kept.face }));
+  await clickFence(client, F.fail.title, ".bob-run-fence-output", { index: 1 });
+  await sleep(1200);
+  const outputModals = await client.evaluate("window.__e2e.modals()");
+  await closeModals(client);
+  record("the failed step's Output link opens its output without running anything", outputModals.some((item) => item.pager) && runs(F.fail.steps[2]) === 0 && runs(F.fail.steps[1]) === 1,
+    JSON.stringify({ modals: outputModals }));
+
+  // A card in ref/ copies its body byte-exact and never runs.
+  await openNote(client, N.ref, "live");
+  const ref = await waitFence(client, F.ref.title, (state) => state.face === "copy", "ref card copy-only");
+  await client.evaluate("navigator.clipboard.writeText('-') && true");
+  await clickFence(client, F.ref.title, ".bob-run-fence-run");
+  await sleep(600);
+  const refCopy = await clipboard(client);
+  record("a bob-run card in ref/ copies its body and never runs", ref.button === "Copy" && /never run commands/.test(ref.reason || "") && refCopy === F.ref.steps.join("\n") && runs(F.ref.steps[0]) === 0,
+    JSON.stringify({ button: ref.button, reason: ref.reason, clipboard: refCopy }));
+
+  const fenceSteps = [...F.gated.steps, ...F.fail.steps, ...F.ref.steps].map((step) => step.replace(/^bob /, ""));
+  const seen = {};
+  for (const item of fixture.runInvocations(scratch)) {
+    const line = item.argv.join(" ");
+    if (fenceSteps.includes(line)) seen[line] = (seen[line] || 0) + 1;
+  }
+  const want = { "e2e ok fseq-1": 1, "e2e slow fseq-2": 1, "e2e ok fseq-3": 1, "e2e ok ffail-1": 1, "e2e fail ffail-2": 1 };
+  record("the stub saw exactly the expected card invocations", JSON.stringify(Object.entries(seen).sort()) === JSON.stringify(Object.entries(want).sort()), JSON.stringify(seen));
+}
+
 const QUERY_COUNT = fixture.QUERY_PLUGINS.length;
 
 async function runE2e(args) {
@@ -720,6 +875,7 @@ async function runE2e(args) {
     const ctx = { client, scratch, record, outDir, shots: report.shots };
     await inertPhase(ctx);
     await activationPhase(ctx);
+    await fencePhase(ctx);
   } catch (error) {
     record("e2e completed without an exception", false, String((error && error.stack) || error));
   } finally {
@@ -762,6 +918,17 @@ function runSelfTest() {
   }
   for (const payload of Object.values(P)) assert.ok(authored.includes(payload), "a note authors " + payload);
   assert.equal(authored.filter((text) => text === P.twin).length, 2, "the twin chip is mounted twice");
+  for (const fence of Object.values(F)) {
+    const verdict = resolve(fence.steps.join("\n"));
+    assert.equal(verdict.state, "ready", fence.title + ": " + verdict.reason);
+    assert.equal(verdict.steps.length, fence.steps.length, "one step per fence line");
+  }
+  const fenceNote = notes[N.fence].split("\n");
+  const fences = chips.commandFenceCollect(notes[N.fence]);
+  assert.deepEqual(fences.map((item) => item.text), [F.gated.steps.join("\n"), F.fail.steps.join("\n")]);
+  assert.deepEqual(fences.map((item) => item.label), ["Gated fence", null]);
+  assert.ok(fenceNote.includes("GATED_FENCE"));
+  assert.deepEqual(chips.commandFenceCollect(notes[N.ref]).map((item) => item.label), ["Ref fence"]);
 
   const runRoot = fs.mkdtempSync(path.join("/tmp", "bcr-self-"));
   try {

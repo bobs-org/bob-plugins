@@ -42,7 +42,7 @@ function commandChipMountRepaint(mount, announce) {
       if (store) mount.unsubscribeKey = store.subscribe(paint.key, () => commandChipMountRepaint(mount, true));
     }
     mount.paint = paint;
-    commandChipPaint(mount.host, paint, { plugin: mount.plugin, chip: mount.chip });
+    mount.painter(mount.host, paint, { plugin: mount.plugin, chip: mount.chip });
     if (announce) commandChipAnnounceTransition(mount.plugin, paint, mount.chip, mount.host.ownerDocument || null);
     return paint;
   } catch (error) {
@@ -53,7 +53,10 @@ function commandChipMountRepaint(mount, announce) {
 // Mount `host` (from commandChipBuildInline) for `chip` (`{ form, label,
 // text, line, from, to }` in chipAt coordinates). `options.context()`
 // returns the renderer's fresh activation context without plugin/element.
-// Returns the mount, whose `destroy()` is idempotent.
+// `options.paint(host, paint, { plugin, chip })` replaces commandChipPaint
+// for other faces (the `bob-run` card), and `options.gestureHost` takes the
+// gestures instead of `host` (the card's Run button). Returns the mount;
+// commandChipUnmount(host) is idempotent.
 function commandChipMount(plugin, host, chip, options) {
   try {
     if (!host || !chip) return null;
@@ -65,6 +68,7 @@ function commandChipMount(plugin, host, chip, options) {
       host,
       chip: copyChipFreeze({ ...chip }),
       context: typeof opts.context === "function" ? opts.context : null,
+      painter: typeof opts.paint === "function" ? opts.paint : commandChipPaint,
       key: null,
       paint: null,
       unsubscribeKey: null,
@@ -75,7 +79,8 @@ function commandChipMount(plugin, host, chip, options) {
     commandChipMounts.set(host, mount);
     mount.unsubscribeCatalog = commandChipOnCatalogChanged(mount.plugin, () => commandChipMountRepaint(mount, false));
     if (opts.gestures !== false) {
-      mount.detachGestures = commandChipAttachGestures(host, (gesture) => commandChipMountActivate(mount, gesture));
+      const target = opts.gestureHost || host;
+      mount.detachGestures = commandChipAttachGestures(target, (gesture) => commandChipMountActivate(mount, gesture));
     }
     commandChipMountRepaint(mount, false);
     return mount;

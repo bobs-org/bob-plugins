@@ -890,9 +890,10 @@ Bob Chips fragments share this runtime; it is not part of
 - **Face.** `commandChipBuildInline(doc, chip, { interactive })` builds the
   shared `.bob-run-chip`: a `<button type="button">`, or a focusable
   `role="button"` span. `commandChipPaint(host, paint)` repaints it in place.
-  `commandChipMount(plugin, host, chip, { context })` subscribes to the run
-  key and catalog changes and wires gestures. `context()` returns fresh
-  activation evidence without `plugin` or `element`. `commandChipUnmount(host)`
+  `commandChipMount(plugin, host, chip, { context, paint?, gestureHost? })`
+  subscribes to the run key and catalog changes and wires gestures; the
+  `bob-run` card passes its painter and Run button. `context()` returns
+  fresh activation evidence without `plugin` or `element`. `commandChipUnmount(host)`
   never touches the run. Live Preview reads the note from its own
   `editorInfoField`. When set, `plugin.commandChipRunHotkey` adds the key to
   the tooltip.

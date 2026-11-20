@@ -1,12 +1,13 @@
 ---
 title: "Bob Chips"
-description: "Type a copy: span or bob-copy fence to copy text, or a run: span to run a bob command."
+description: "Type a copy: span or bob-copy fence to copy text, or a run: span or bob-run fence to run bob commands."
 ---
 
 Bob Chips turns an inline code span that starts with `copy:` — or a
 `bob-copy` fence — into a quiet chip that copies the authored text exactly.
 A `run:` span becomes a command chip that runs a bob command through Bob
-Command Mode; see [Command chips](#command-chips).
+Command Mode, and a `bob-run` fence becomes a sequence card; see
+[Command chips](#command-chips).
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -15,10 +16,10 @@ Command Mode; see [Command chips](#command-chips).
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.11.0 |
+| Version | 0.12.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips. |
+| Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -238,8 +239,8 @@ Authored payloads live on copy chips; live context lives on the Copy card, whose
 A command chip is a `run:` code span or a `bob-run` fence that holds a bob
 command line. `api.commandChips` exposes the grammar. Live Preview, Reading
 view, embeds, hover previews, and Tasks and Dataview results render and run
-`run:` spans (see [Command chips](#command-chips)); `bob-run` fences still
-show plain code.
+`run:` spans (see [Command chips](#command-chips)); `bob-run` fences render
+as [sequence cards](#the-bob-run-card).
 
 | You type | Parses as |
 | --- | --- |
@@ -402,6 +403,73 @@ region announces "Running …", "… finished", "… needs attention", and
 `aria-labelledby`. Reduced motion drops the spin and pulse. Print and PDF
 show every state as plain inline code; a label prints as its text. Rendering, hovering, scrolling, and catalog
 refreshes never run or copy anything.
+
+### The bob-run card
+
+A `bob-run` fence holds a sequence, one `bob` command per line:
+
+````markdown
+```bob-run Morning sync
+bob gcal sync -n 2
+bob gkeep pull
+bob gmail sync
+```
+````
+
+It renders as a titled card in Live Preview, Reading view, embeds, and
+hover previews:
+
+```text
+╭──────────────────────────────────────────────────────────────╮
+│ ▶  Morning sync                    3 steps · syncs   [ Run ] │
+├──────────────────────────────────────────────────────────────┤
+│  1  bob gcal sync -n 2                                       │
+│  2  bob gkeep pull                                           │
+│  3  bob gmail sync                                           │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+- The header shows the play glyph, the label (or **Run · N steps** without
+  one), a meta line, and a Run button. The meta reads "N steps · EFFECT",
+  where the effect is the strongest step's (reads, then writes, then
+  syncs), plus "· asks first" when a step is a `confirm` command.
+- Steps are numbered and monospace. A line may hold several `&&` steps;
+  blank lines are skipped.
+- Only the Run button runs. Clicking the body selects text. Shift+Click on
+  Run opens Command Mode's guarded path, as on an inline chip.
+- The card runs exactly as an inline chip with the same text: one Command
+  Mode sequence that halts at the first failure, with the same source
+  rules, confirm floor, and run state. An inline chip and a card with the
+  same steps show the same run.
+
+While it runs, each step carries a mark and the header follows along:
+
+| Mark | Meaning |
+| --- | --- |
+| ✓ and a duration | Done |
+| Spinner, accent text | Running now (an hourglass while queued) |
+| ○ | Not run yet |
+| ◐ | Needs attention; the sequence continues |
+| ✗ with bob's first error line and an **Output** link | Failed |
+| ■ or ? | Stopped, or an unknown outcome |
+| – | Skipped after a halt |
+
+The meta reads "2 of 3" while step 2 runs, and the Run button reads
+**Output**, which opens the live output. Afterward the meta reads "done",
+"stopped at 2 · failed", or "finished · needs attention". Completed cards
+return to rest after about 1.6 s; failed and needs-attention marks stay
+until the next run or reload. An **Output** link opens that step's output
+and never runs anything. The button keeps one width, so no state reflows
+the header.
+
+- **Unavailable.** When Command Mode refuses the text, the header shows ⊘
+  and "Can't run: REASON (step K)", and step K is marked ✗ with the reason.
+  Run shows the same reason in a Notice.
+- **Copy only.** In a copy-only note, the header shows the copy glyph and
+  the reason, and the button reads **Copy**. It copies the fence body
+  byte-exact.
+- **Print.** Print and PDF export show the title over a plain code listing
+  of the steps.
 
 ## Non-goals
 

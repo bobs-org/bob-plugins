@@ -71,6 +71,7 @@ const NOTES = Object.freeze({
   tasks: "notes/Allowed tasks.md",
   ref: "ref/Ref chips.md",
   dashboard: "Dashboard e2e.md",
+  fence: "Fence e2e.md",
 });
 
 // Exact payload per case tag, as authored in the notes below.
@@ -93,6 +94,18 @@ const PAYLOADS = Object.freeze({
   refTask: "bob e2e ok ref-task",
   dvField: "bob e2e ok dv-field",
 });
+
+// `bob-run` cards, by the title each card shows. Bodies are authored one
+// step per line; `gated` holds step 2 until its gate opens.
+const FENCES = Object.freeze({
+  gated: Object.freeze({ title: "Gated fence", info: "bob-run Gated fence", steps: Object.freeze(["bob e2e ok fseq-1", "bob e2e slow fseq-2", "bob e2e ok fseq-3"]) }),
+  fail: Object.freeze({ title: "Run · 3 steps", info: "bob-run", steps: Object.freeze(["bob e2e ok ffail-1", "bob e2e fail ffail-2", "bob e2e ok ffail-3"]) }),
+  ref: Object.freeze({ title: "Ref fence", info: "bob-run Ref fence", steps: Object.freeze(["bob e2e ok ref-fence"]) }),
+});
+
+function fenceLines(fence) {
+  return ["```" + fence.info, ...fence.steps, "```"];
+}
 
 function noteText() {
   const p = PAYLOADS;
@@ -148,6 +161,20 @@ function noteText() {
       "REF_CHIP `run: " + p.refDirect + "`",
       "",
       "- [ ] Ref task `run: " + p.refTask + "` #e2e",
+      "",
+      ...fenceLines(FENCES.ref),
+      "",
+    ].join("\n"),
+    [NOTES.fence]: [
+      "# Fence e2e",
+      "",
+      "GATED_FENCE",
+      "",
+      ...fenceLines(FENCES.gated),
+      "",
+      "FAIL_FENCE",
+      "",
+      ...fenceLines(FENCES.fail),
       "",
     ].join("\n"),
     [NOTES.dashboard]: [
@@ -403,6 +430,7 @@ module.exports = {
   CATALOG,
   NOTES,
   PAYLOADS,
+  FENCES,
   NOWHERE_HOST,
   OWN_PLUGINS,
   QUERY_PLUGINS,

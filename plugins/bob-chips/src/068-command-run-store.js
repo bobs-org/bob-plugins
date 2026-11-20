@@ -97,7 +97,10 @@ class CommandChipRunStore {
   // Frozen `{ key, signature, state, kind, intent, runId, sequenceId, step,
   // total, steps, outcome, reason, exitCode, stoppedAt, prior, seq, latched }`.
   // `step` is the 1-based current step; `steps` holds each settled step's
-  // frozen `{ index, outcome, reason, runId }`.
+  // frozen `{ index, outcome, reason, runId, durationMs }` (a single run's
+  // finish settles its one step). `durationMs` is the engine's when it
+  // reports one, else timed here from the step's first queued/running
+  // event (or the previous step's settle); null when unknown.
   snapshot(key) {
     const entry = this.entries.get(key);
     const latched = this.latches.has(key);
@@ -213,6 +216,8 @@ class CommandChipRunStore {
       stoppedAt: null,
       prior,
       timer: null,
+      timingStep: 0,
+      stepStartedAt: null,
     });
     this.notify(key);
     return seq;
@@ -255,6 +260,7 @@ class CommandChipRunStore {
       if (Number(payload.step) > 0) entry.step = Number(payload.step);
       entry.state = state;
       entry.outcome = state;
+      this.startStepClock(entry, entry.step);
     } else if (state === "step") {
       const index = Number(payload.step) > 0 ? Number(payload.step) : entry.step;
       const row = copyChipFreeze({
@@ -262,11 +268,15 @@ class CommandChipRunStore {
         outcome: payload.outcome ? String(payload.outcome) : "failed",
         reason: payload.reason != null ? String(payload.reason) : null,
         runId: payload.runId ? String(payload.runId) : null,
+        durationMs: this.stepDuration(entry, index, payload),
       });
       entry.steps = entry.steps.filter((item) => item.index !== index).concat([row]);
       entry.steps.sort((left, right) => left.index - right.index);
       if (row.runId) entry.runId = row.runId;
       if (index < entry.total) entry.step = index + 1;
+      // The next step starts as this one settles; its own queued/running
+      // event keeps this start.
+      this.startStepClock(entry, index + 1);
       if (entry.state === "pending" || entry.state === "queued") entry.state = "running";
     } else if (state === "finished") {
       this.finish(entry, payload);
@@ -277,8 +287,46 @@ class CommandChipRunStore {
     return true;
   }
 
+  // Start timing step `index` unless it is already being timed.
+  startStepClock(entry, index) {
+    try {
+      if (!entry || !(Number(index) > 0) || entry.timingStep === Number(index)) return;
+      entry.timingStep = Number(index);
+      const now = Number(this.now());
+      entry.stepStartedAt = Number.isFinite(now) ? now : null;
+    } catch (error) {
+      entry.stepStartedAt = null;
+    }
+  }
+
+  // Milliseconds step `index` took: the engine's own figure, else the
+  // store's clock, else null.
+  stepDuration(entry, index, payload) {
+    try {
+      const reported = payload && Number(payload.durationMs);
+      if (payload && payload.durationMs !== null && payload.durationMs !== undefined && Number.isFinite(reported) && reported >= 0) {
+        return reported;
+      }
+      if (entry.timingStep !== index || !Number.isFinite(entry.stepStartedAt)) return null;
+      const now = Number(this.now());
+      return Number.isFinite(now) ? Math.max(0, now - entry.stepStartedAt) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
   finish(entry, result) {
     const outcome = result && result.outcome ? String(result.outcome) : "failed";
+    if (entry.kind === "run" && entry.total <= 1 && !entry.steps.some((item) => item.index === 1)) {
+      // A single run has no `step` event: its finish settles step 1.
+      entry.steps = [copyChipFreeze({
+        index: 1,
+        outcome,
+        reason: result && result.reason != null ? String(result.reason) : null,
+        runId: result && result.runId ? String(result.runId) : entry.runId,
+        durationMs: this.stepDuration(entry, 1, result),
+      })];
+    }
     entry.state = commandChipTerminalState(outcome);
     entry.outcome = outcome;
     if (result && result.runId) entry.runId = String(result.runId);

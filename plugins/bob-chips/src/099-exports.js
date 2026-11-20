@@ -9,6 +9,7 @@ module.exports.helpers = {
   chipParsePrefixedContent,
   chipScanLine,
   chipShieldedRanges,
+  chipBlockShieldState,
   chipLinkSpans,
   chipParseFenceInfoFor,
   chipSerializeWith,

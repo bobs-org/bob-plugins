@@ -80,6 +80,10 @@ function commandChipInline(chip, line) {
 //      which must own the cursor line; a touched `bob-run` fence counts
 //      once): that chip; two or more: `ambiguous`;
 //   7. otherwise `none`.
+// What Live Preview hides stays inert: a run chip inside a `%%`, HTML
+// comment, or `$$` block that spans lines (chipBlockShieldState) never
+// counts in rules 2, 4, or 6, and a `bob-run` fence whose opening line
+// starts inside such a block is `none` in rule 1 and skipped in rule 6.
 // Results are frozen: `{ state: "none", count: 0 }`,
 // `{ state: "ambiguous", count, via: "line" | "task", message }`, or
 // `{ state: "ready", count, via: "fence" | "cursor" | "line" | "task", chip }`.
@@ -96,14 +100,28 @@ function commandChipAt(request) {
     if (!Number.isInteger(ch) || ch < 0) return commandChipNone();
     if (copyChipCursorInFrontmatter(lines, line)) return commandChipNone();
 
+    const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
+    let shield = null;
+    const shieldState = () => {
+      if (!shield) {
+        const lastScope = scopeLines ? scopeLines[scopeLines.length - 1] : line;
+        shield = chipBlockShieldState(lines, Math.max(line, lastScope));
+      }
+      return shield;
+    };
+
     const block = copyChipFindFenceBlock(lines, line);
     if (block) {
       const chip = runChipFenceBlockChip(lines, line, block);
-      return chip ? commandChipReady(1, "fence", chip) : commandChipNone();
+      if (!chip || chipBlockShieldCarries(shieldState(), block.openIndex)) return commandChipNone();
+      return commandChipReady(1, "fence", chip);
     }
 
     const rawLine = commandChipLineText(lines, line);
-    const chips = runChipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    const scanned = runChipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    const chips = scanned.length === 0
+      ? scanned
+      : scanned.filter((chip) => !chipBlockShieldHides(shieldState(), line, chip.from));
     for (const chip of chips) {
       if (ch >= chip.from && ch < chip.to) {
         return commandChipReady(chips.length, "cursor", commandChipInline(chip, line));
@@ -121,9 +139,8 @@ function commandChipAt(request) {
     if (chips.length > 1) return commandChipAmbiguous(chips.length, "line");
     if (links.length > 0) return commandChipNone();
 
-    const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
     if (!scopeLines) return commandChipNone();
-    const taskChips = chipScanTaskScope(lines, scopeLines, "run");
+    const taskChips = chipScanTaskScope(lines, scopeLines, "run", shieldState());
     if (taskChips.length === 1) return commandChipReady(1, "task", taskChips[0]);
     if (taskChips.length > 1) return commandChipAmbiguous(taskChips.length, "task");
     return commandChipNone();

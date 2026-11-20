@@ -568,12 +568,20 @@ async function activationPhase(ctx) {
   await mouseClick(client, copyPoint);
   await sleep(500);
   const spanCopy = await clipboard(client);
+  // Earlier cases leave persistent Command Mode failure toasts at the top
+  // right, over the card's Copy button; clear them when they cover it, as
+  // clickFence does.
   const cardPointIn = async (root) => {
     await client.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(root)} + ' .bob-copy-fence-copy'); b.scrollIntoView({ block: 'center' }); return true; })()`);
     await sleep(400);
-    return client.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(root)} + ' .bob-copy-fence-copy'); const r = b.getBoundingClientRect(); const x = r.left + r.width / 2; const y = r.top + r.height / 2; const hit = document.elementFromPoint(x, y); return { x, y, hit: hit ? hit.className : null, onButton: Boolean(hit && b.contains(hit)) }; })()`);
+    const measure = () => client.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(root)} + ' .bob-copy-fence-copy'); const r = b.getBoundingClientRect(); const x = r.left + r.width / 2; const y = r.top + r.height / 2; const hit = document.elementFromPoint(x, y); return { x, y, hit: hit ? hit.className : null, onButton: Boolean(hit && b.contains(hit)) }; })()`);
+    const point = await measure();
+    if (point.onButton) return point;
+    await client.evaluate("document.querySelectorAll('.notice-container .notice').forEach((el) => el.remove()) || true");
+    await sleep(150);
+    return measure();
   };
-  // Live Preview: a trusted press on the card (diagnostic only; see report).
+  // Live Preview: a trusted press on the card's Copy button.
   const liveCard = await cardPointIn(".markdown-source-view");
   await client.evaluate("navigator.clipboard.writeText('-') && true");
   await mouseClick(client, liveCard);
@@ -585,7 +593,7 @@ async function activationPhase(ctx) {
   await mouseClick(client, readingCard);
   await sleep(500);
   const cardCopy = await clipboard(client);
-  record("copy span and bob-copy card still copy beside run chips", spanCopy === "ssh e2e-host" && cardCopy === "card body",
+  record("copy span and bob-copy card still copy beside run chips", spanCopy === "ssh e2e-host" && cardCopy === "card body" && liveCardCopy === "card body",
     JSON.stringify({ spanCopy, readingCardCopy: cardCopy, readingHit: readingCard.hit, livePreviewCardCopy: liveCardCopy, livePreviewHit: liveCard.hit, livePreviewOnButton: liveCard.onButton }));
 
   // 8. Stale source: the note changes under a rendered Reading button.

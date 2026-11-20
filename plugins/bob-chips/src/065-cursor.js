@@ -307,10 +307,14 @@ function copyChipScanTaskScope(lines, scopeLines) {
 // The task-scope scan for one chip kind (`copy` or `run`): inline chips of
 // that kind on the scope's lines, then each touched fence of that kind's
 // language once. Other kinds and other fences contribute nothing, so kinds
-// never compete. Never throws.
-function chipScanTaskScope(lines, scopeLines, kind) {
+// never compete. For `run` only, `shield` (chipBlockShieldState) drops
+// inline chips inside multi-line comments and math, and `bob-run` fences
+// whose opening line starts inside one; the copy scan ignores it. Never
+// throws.
+function chipScanTaskScope(lines, scopeLines, kind, shield) {
   try {
     const run = kind === "run";
+    const hidden = run ? shield : null;
     const parseInfo = run ? runChipParseFenceInfo : copyChipParseFenceInfo;
     const wanted = new Set(scopeLines);
     const inlineChips = [];
@@ -377,6 +381,7 @@ function chipScanTaskScope(lines, scopeLines, kind) {
       }
       for (const chip of Array.isArray(found) ? found : []) {
         if (chip.kind !== kind) continue;
+        if (hidden && chipBlockShieldHides(hidden, index, chip.from)) continue;
         inlineChips.push({
           form: "inline",
           label: chip.label,
@@ -393,6 +398,7 @@ function chipScanTaskScope(lines, scopeLines, kind) {
       const block = blocks.get(openIndex);
       if (!block) continue;
       if (run) {
+        if (hidden && chipBlockShieldCarries(hidden, openIndex)) continue;
         const chip = runChipFenceBlockChip(lines, openIndex, block);
         if (chip) chips.push(chip);
         continue;

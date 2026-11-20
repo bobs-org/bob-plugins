@@ -3,8 +3,9 @@
 // command-chips scratch fixture plus bob-navigation-hotkeys and a vault
 // Meta+Enter binding. Trusted CDP key events drive the GTD-shaped rows (line
 // chip, task fallback, Bank-shaped row with links), refusals, a no-run
-// note, the running keycap, and Vim normal mode. Never opens the live vault
-// and never runs the real bob.
+// note, the running keycap, Vim normal mode, and a task whose only chip is
+// in a multi-line `%%` comment. Never opens the live vault and never runs
+// the real bob.
 //   xvfb-run -a node scripts/obsidian-command-chips-keymap-e2e.cjs [--out DIR] [-e PATH]
 "use strict";
 
@@ -34,9 +35,10 @@ const K = Object.freeze({
   ref: "bob e2e ok km-ref",
   fence1: "bob e2e ok km-fence1",
   fence2: "bob e2e ok km-fence2",
+  commented: "bob e2e ok km-commented",
 });
 // Zero-based rows of the GTD note, by case.
-const ROW = Object.freeze({ line: 2, task: 3, bank: 5, linked: 6, two: 8, elsewhere: 9, slow: 10, vim: 11, plain: 12, fence: 15 });
+const ROW = Object.freeze({ line: 2, task: 3, bank: 5, linked: 6, two: 8, elsewhere: 9, slow: 10, vim: 11, plain: 12, fence: 15, commented: 18 });
 const HELP = [
   "Usage: node scripts/obsidian-command-chips-keymap-e2e.cjs [OPTIONS]",
   "",
@@ -91,6 +93,10 @@ function gtdText() {
     K.fence1,
     K.fence2,
     "```",
+    "- [ ] #task #gtd **Commented** ^kmcomment",
+    "    %%",
+    "    - `run: " + K.commented + "`",
+    "    %%",
     "",
   ].join("\n");
 }
@@ -445,7 +451,22 @@ async function keymapPhase(ctx) {
   await metaEnter(client);
   record("a ref/ note shows no keycap and ⌘↵ never runs its chip", runs(K.ref) === 0 && refCue.hints.length === 0, JSON.stringify(refCue.hints));
 
-  // 10. Nothing wrote the note, and nothing else ran.
+  // 10. A task whose only chip sits in a multi-line `%%` comment: no
+  //     keycap, and ⌘↵ falls through to the chain without running it.
+  await openNote(client, GTD);
+  await clearNotices(client);
+  await cursorTo(client, ROW.commented, 2);
+  await sleep(400);
+  const commentedCue = await client.evaluate("(" + cueExpression() + ")()");
+  await metaEnter(client);
+  await sleep(800);
+  const commentedAfter = await client.evaluate("(" + cueExpression() + ")()");
+  record("a task whose only chip is in a multi-line comment shows no keycap and ⌘↵ falls through without running it",
+    runs(K.commented) === 0 && commentedCue.hints.length === 0 && commentedCue.armed.length === 0 &&
+      !commentedAfter.notices.some((text) => /command chip/i.test(text)) && commentedAfter.file === GTD,
+    JSON.stringify({ hints: commentedCue.hints, armed: commentedCue.armed, notices: commentedAfter.notices, file: commentedAfter.file }));
+
+  // 11. Nothing wrote the note, and nothing else ran.
   const gtdAfter = fs.readFileSync(path.join(scratch.vaultRealPath, GTD), "utf8");
   const actual = {};
   for (const item of fixture.runInvocations(scratch)) actual[item.argv.join(" ")] = (actual[item.argv.join(" ")] || 0) + 1;
@@ -557,6 +578,9 @@ function runSelfTest() {
   assert.deepEqual(runAt(ROW.plain), []);
   assert.equal(lines[ROW.fence - 1], "```bob-run Fence pair");
   assert.equal(lines[ROW.fence], K.fence1);
+  assert.deepEqual(chips.chipScanLine(lines[ROW.commented + 2]).map((chip) => chip.text), [K.commented]);
+  const commentedScope = { kind: "task", lines: [ROW.commented, ROW.commented + 1, ROW.commented + 2, ROW.commented + 3] };
+  assert.equal(chips.commandChipAt({ lines, line: ROW.commented, ch: 2, scope: commentedScope }).state, "none");
   const runRoot = fs.mkdtempSync(path.join("/tmp", "bck-self-"));
   try {
     const { scratch, isolation } = makeKeymapFixture(runRoot);

@@ -201,6 +201,40 @@ test("shielded ranges skip delimiters inside code spans", () => {
   assert.deepEqual(plain(helpers.chipShieldedRanges(null)), []);
 });
 
+test("block shield state carries comments and display math across lines", () => {
+  const state = helpers.chipBlockShieldState([
+    "a $x$ and %% inline %% b",
+    "%% opens",
+    "c `%%` stays inside",
+    "e %% f <!-- g",
+    "h --> i $$",
+    "j",
+  ]);
+  assert.ok(deepFrozen(state));
+  assert.deepEqual(plain(state.ranges), [
+    [],
+    [{ from: 0, to: 8 }],
+    [{ from: 0, to: 19 }],
+    [{ from: 0, to: 4 }, { from: 7, to: 13 }],
+    [{ from: 0, to: 5 }, { from: 8, to: 10 }],
+    [{ from: 0, to: 1 }],
+  ]);
+  assert.deepEqual(plain(state.carried), [false, false, true, true, true, true]);
+
+  const fenced = helpers.chipBlockShieldState(["---", "a: %%", "---", "```", "<!--", "```", "$$ x $$", "after"]);
+  assert.deepEqual(plain(fenced.ranges), [[], [], [], [], [], [], [], []], "frontmatter, fences, and closed math open nothing");
+  assert.deepEqual(plain(fenced.carried), [false, false, false, false, false, false, false, false]);
+
+  const inside = helpers.chipBlockShieldState(["%%", "```js", "%%", "after"]);
+  assert.deepEqual(plain(inside.carried), [false, true, true, false], "a fence line inside a comment is comment text");
+  assert.deepEqual(plain(inside.ranges[3]), []);
+
+  assert.equal(helpers.chipBlockShieldState(["%%", "a", "b"], 1).ranges.length, 2, "the walk stops at uptoLine");
+  for (const value of [undefined, null, 42, "nope", [null, 7, {}]]) {
+    assert.doesNotThrow(() => helpers.chipBlockShieldState(value, 3));
+  }
+});
+
 test("garbage inputs never throw", () => {
   for (const value of [undefined, null, 42, {}, [], "`", "``run: x", "[[", "[a](", "<", "$"]) {
     assert.doesNotThrow(() => helpers.chipScanLine(value));

@@ -237,6 +237,26 @@ test("targetAt follows the ⌘↵ rule through the real task scope", () => {
   assert.equal(at(0, 0).state, "none");
 });
 
+test("a commented-out task chip is no target and shows no keycap", () => {
+  const h = harness();
+  const visible = [
+    "- [ ] #task #gtd **Retired** ^old",
+    "    - `run: bob task reconcile`",
+  ].join("\n");
+  const control = helpers.commandChipTargetAt(h.plugin, editorAt(visible, 0, 0));
+  assert.deepEqual([control.state, control.via], ["ready", "task"], "the uncommented row runs its child chip");
+
+  const commented = [
+    "- [ ] #task #gtd **Retired** ^old",
+    "    %%",
+    "    - `run: bob task reconcile`",
+    "    %%",
+  ].join("\n");
+  assert.equal(helpers.commandChipTargetAt(h.plugin, editorAt(commented, 0, 0)).state, "none");
+  assert.equal(helpers.commandChipTargetAt(h.plugin, editorAt(commented, 2, 8)).state, "none");
+  assert.equal(helpers.commandChipHintModel(h.plugin, cmAt(commented, 0, 0)).visible, false);
+});
+
 test("no-run contexts skip the whole step so ⌘↵ behaves as today", () => {
   const text = "- [ ] `run: bob plan`";
   const ref = harness();

@@ -761,6 +761,169 @@ function chipShieldedRanges(line, codeSpans) {
   }
 }
 
+// The blocks that can stay open across lines, keyed by opener: Obsidian
+// `%%` comments, HTML comments, and `$$` display math. `unescaped` matches
+// chipShieldedRanges' closer search for each.
+const CHIP_BLOCK_PERCENT = copyChipFreeze({ close: "%%", unescaped: false });
+const CHIP_BLOCK_HTML = copyChipFreeze({ close: "-->", unescaped: false });
+const CHIP_BLOCK_MATH = copyChipFreeze({ close: "$$", unescaped: true });
+const CHIP_BLOCK_NONE = copyChipFreeze([]);
+
+// Scan one line from `from`, outside any block, with chipShieldedRanges'
+// opener rules: skip code spans, skip comments and math that close on the
+// line, and stop at the first `%%`, `<!--`, or `$$` left unclosed. Returns
+// `{ block, at }` for that opener, or null.
+function chipLineOpensBlock(text, from, spans) {
+  const covering = chipCodeSpanCursor(spans);
+  let index = from;
+  while (index < text.length) {
+    const span = covering(index);
+    if (span) {
+      index = span.to;
+      continue;
+    }
+    if (text.startsWith("%%", index)) {
+      const close = chipFindOutsideCode(text, "%%", index + 2, spans, false);
+      if (close < 0) return { block: CHIP_BLOCK_PERCENT, at: index };
+      index = close + 2;
+      continue;
+    }
+    if (text.startsWith("<!--", index)) {
+      const close = chipFindOutsideCode(text, "-->", index + 4, spans, false);
+      if (close < 0) return { block: CHIP_BLOCK_HTML, at: index };
+      index = close + 3;
+      continue;
+    }
+    if (text[index] === "$" && !copyChipIsEscapedAt(text, index)) {
+      if (text[index + 1] === "$") {
+        const close = chipFindOutsideCode(text, "$$", index + 2, spans, true);
+        if (close < 0) return { block: CHIP_BLOCK_MATH, at: index };
+        index = close + 2;
+        continue;
+      }
+      if (!chipIsWhitespace(text[index + 1])) {
+        const close = chipFindInlineMathClose(text, index + 1, spans);
+        if (close >= 0) {
+          index = close + 1;
+          continue;
+        }
+      }
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function chipLineMayOpenBlock(text) {
+  return text.indexOf("%%") !== -1 || text.indexOf("<!--") !== -1 || text.indexOf("$$") !== -1;
+}
+
+// The multi-line half of chipShieldedRanges. It walks lines 0..uptoLine
+// from the top of the note, skipping frontmatter and fenced code the way
+// chipScanTaskScope does, and tracks an open `%%` comment, `<!-- … -->`
+// comment, or `$$` display-math block. Delimiters count only outside code
+// spans and fences; a fence line inside an open block is block text. An
+// unclosed block runs to the end of the note. Returns frozen
+// `{ ranges, carried }`: `ranges[i]` lists line i's `[from, to)` ranges
+// hidden by a block carried in from an earlier line or opened there and
+// left unclosed (blocks that open and close on one line stay
+// chipShieldedRanges' job), and `carried[i]` is true when line i starts
+// inside an open block. Never throws.
+function chipBlockShieldState(lines, uptoLine) {
+  try {
+    const source = Array.isArray(lines) ? lines : [];
+    const last = Number.isInteger(uptoLine) ? Math.min(uptoLine, source.length - 1) : source.length - 1;
+    const ranges = [];
+    const carried = [];
+    const lineText = (index) => {
+      try {
+        const value = source[index];
+        return String(value === undefined || value === null ? "" : value);
+      } catch (error) {
+        return "";
+      }
+    };
+    let inFrontmatter = source.length > 0 && lineText(0).trim() === "---";
+    let fence = null;
+    let block = null;
+    for (let index = 0; index <= last; index += 1) {
+      const text = lineText(index);
+      carried.push(Boolean(block));
+      if (block) {
+        if (text.indexOf(block.close) === -1) {
+          ranges.push(copyChipFreeze([copyChipFreeze({ from: 0, to: text.length })]));
+          continue;
+        }
+        const spans = copyChipFindCodeSpans(text);
+        const close = chipFindOutsideCode(text, block.close, 0, spans, block.unescaped);
+        if (close < 0) {
+          ranges.push(copyChipFreeze([copyChipFreeze({ from: 0, to: text.length })]));
+          continue;
+        }
+        const end = close + block.close.length;
+        const hidden = [copyChipFreeze({ from: 0, to: end })];
+        block = null;
+        const opened = chipLineOpensBlock(text, end, spans);
+        if (opened) {
+          block = opened.block;
+          hidden.push(copyChipFreeze({ from: opened.at, to: text.length }));
+        }
+        ranges.push(copyChipFreeze(hidden));
+        continue;
+      }
+      if (inFrontmatter) {
+        if (index > 0 && (text.trim() === "---" || text.trim() === "...")) inFrontmatter = false;
+        ranges.push(CHIP_BLOCK_NONE);
+        continue;
+      }
+      if (fence) {
+        if (copyChipCursorFenceCloses(text, fence)) fence = null;
+        ranges.push(CHIP_BLOCK_NONE);
+        continue;
+      }
+      const opening = copyChipFenceOpeningFromLine(text);
+      if (opening) {
+        fence = opening;
+        ranges.push(CHIP_BLOCK_NONE);
+        continue;
+      }
+      const opened = chipLineMayOpenBlock(text)
+        ? chipLineOpensBlock(text, 0, copyChipFindCodeSpans(text))
+        : null;
+      if (!opened) {
+        ranges.push(CHIP_BLOCK_NONE);
+        continue;
+      }
+      block = opened.block;
+      ranges.push(copyChipFreeze([copyChipFreeze({ from: opened.at, to: text.length })]));
+    }
+    return copyChipFreeze({ ranges: copyChipFreeze(ranges), carried: copyChipFreeze(carried) });
+  } catch (error) {
+    return copyChipFreeze({ ranges: CHIP_BLOCK_NONE, carried: CHIP_BLOCK_NONE });
+  }
+}
+
+// True when `shield` (from chipBlockShieldState) hides offset `ch` of
+// `line`. Never throws.
+function chipBlockShieldHides(shield, line, ch) {
+  try {
+    if (!shield || !Array.isArray(shield.ranges)) return false;
+    return chipRangesCover(shield.ranges[line], ch);
+  } catch (error) {
+    return false;
+  }
+}
+
+// True when `line` starts inside a block `shield` carries in, as when a
+// fence's opening line sits in a comment. Never throws.
+function chipBlockShieldCarries(shield, line) {
+  try {
+    return Boolean(shield && Array.isArray(shield.carried) && shield.carried[line]);
+  } catch (error) {
+    return false;
+  }
+}
+
 // The matching close of a bracket pair opened at `open`, counting nesting,
 // skipping code spans and escapes, on this line. Returns its index or -1.
 function chipMatchBracket(line, open, opener, closer, spans) {
@@ -4234,10 +4397,14 @@ function copyChipScanTaskScope(lines, scopeLines) {
 // The task-scope scan for one chip kind (`copy` or `run`): inline chips of
 // that kind on the scope's lines, then each touched fence of that kind's
 // language once. Other kinds and other fences contribute nothing, so kinds
-// never compete. Never throws.
-function chipScanTaskScope(lines, scopeLines, kind) {
+// never compete. For `run` only, `shield` (chipBlockShieldState) drops
+// inline chips inside multi-line comments and math, and `bob-run` fences
+// whose opening line starts inside one; the copy scan ignores it. Never
+// throws.
+function chipScanTaskScope(lines, scopeLines, kind, shield) {
   try {
     const run = kind === "run";
+    const hidden = run ? shield : null;
     const parseInfo = run ? runChipParseFenceInfo : copyChipParseFenceInfo;
     const wanted = new Set(scopeLines);
     const inlineChips = [];
@@ -4304,6 +4471,7 @@ function chipScanTaskScope(lines, scopeLines, kind) {
       }
       for (const chip of Array.isArray(found) ? found : []) {
         if (chip.kind !== kind) continue;
+        if (hidden && chipBlockShieldHides(hidden, index, chip.from)) continue;
         inlineChips.push({
           form: "inline",
           label: chip.label,
@@ -4320,6 +4488,7 @@ function chipScanTaskScope(lines, scopeLines, kind) {
       const block = blocks.get(openIndex);
       if (!block) continue;
       if (run) {
+        if (hidden && chipBlockShieldCarries(hidden, openIndex)) continue;
         const chip = runChipFenceBlockChip(lines, openIndex, block);
         if (chip) chips.push(chip);
         continue;
@@ -4528,6 +4697,10 @@ function commandChipInline(chip, line) {
 //      which must own the cursor line; a touched `bob-run` fence counts
 //      once): that chip; two or more: `ambiguous`;
 //   7. otherwise `none`.
+// What Live Preview hides stays inert: a run chip inside a `%%`, HTML
+// comment, or `$$` block that spans lines (chipBlockShieldState) never
+// counts in rules 2, 4, or 6, and a `bob-run` fence whose opening line
+// starts inside such a block is `none` in rule 1 and skipped in rule 6.
 // Results are frozen: `{ state: "none", count: 0 }`,
 // `{ state: "ambiguous", count, via: "line" | "task", message }`, or
 // `{ state: "ready", count, via: "fence" | "cursor" | "line" | "task", chip }`.
@@ -4544,14 +4717,28 @@ function commandChipAt(request) {
     if (!Number.isInteger(ch) || ch < 0) return commandChipNone();
     if (copyChipCursorInFrontmatter(lines, line)) return commandChipNone();
 
+    const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
+    let shield = null;
+    const shieldState = () => {
+      if (!shield) {
+        const lastScope = scopeLines ? scopeLines[scopeLines.length - 1] : line;
+        shield = chipBlockShieldState(lines, Math.max(line, lastScope));
+      }
+      return shield;
+    };
+
     const block = copyChipFindFenceBlock(lines, line);
     if (block) {
       const chip = runChipFenceBlockChip(lines, line, block);
-      return chip ? commandChipReady(1, "fence", chip) : commandChipNone();
+      if (!chip || chipBlockShieldCarries(shieldState(), block.openIndex)) return commandChipNone();
+      return commandChipReady(1, "fence", chip);
     }
 
     const rawLine = commandChipLineText(lines, line);
-    const chips = runChipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    const scanned = runChipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    const chips = scanned.length === 0
+      ? scanned
+      : scanned.filter((chip) => !chipBlockShieldHides(shieldState(), line, chip.from));
     for (const chip of chips) {
       if (ch >= chip.from && ch < chip.to) {
         return commandChipReady(chips.length, "cursor", commandChipInline(chip, line));
@@ -4569,9 +4756,8 @@ function commandChipAt(request) {
     if (chips.length > 1) return commandChipAmbiguous(chips.length, "line");
     if (links.length > 0) return commandChipNone();
 
-    const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
     if (!scopeLines) return commandChipNone();
-    const taskChips = chipScanTaskScope(lines, scopeLines, "run");
+    const taskChips = chipScanTaskScope(lines, scopeLines, "run", shieldState());
     if (taskChips.length === 1) return commandChipReady(1, "task", taskChips[0]);
     if (taskChips.length > 1) return commandChipAmbiguous(taskChips.length, "task");
     return commandChipNone();
@@ -11112,6 +11298,7 @@ module.exports.helpers = {
   chipParsePrefixedContent,
   chipScanLine,
   chipShieldedRanges,
+  chipBlockShieldState,
   chipLinkSpans,
   chipParseFenceInfoFor,
   chipSerializeWith,

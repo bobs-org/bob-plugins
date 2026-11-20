@@ -17,7 +17,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.15.0 |
+| Version | 0.15.1 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding. |
@@ -373,8 +373,10 @@ One scanning pass finds both kinds. Command chips skip every span that
 copy chips skip: link labels, wikilinks, and physical multiline spans. The
 pure scanner also skips command chips inside inline math (`$…$`,
 `$$…$$`), `%%` comments, and HTML comments, because a command chip is a
-button. An unclosed comment opener shields the rest of its line. Dollar
-amounts such as `$5 and $6` stay prose.
+button. An unclosed comment opener shields the rest of its line, and the
+⌘↵ rule also skips chips and `bob-run` fences inside multi-line `%%`,
+HTML-comment, and `$$` blocks. Dollar amounts such as `$5 and $6` stay
+prose.
 
 Serializing writes an inline span for one-line text and a `bob-run` fence
 for multi-line text. The fence marker is longer than any fence run in the

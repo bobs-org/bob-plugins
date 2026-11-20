@@ -1076,6 +1076,249 @@
       }
     },
     {
+      "id": "multi-line-percent-comment-hides-chip",
+      "lines": [
+        "%%",
+        "`run: bob task reconcile`",
+        "%%"
+      ],
+      "line": 1,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "multi-line-html-comment-hides-chip",
+      "lines": [
+        "<!--",
+        "`run: bob task reconcile`",
+        "-->"
+      ],
+      "line": 1,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "multi-line-display-math-hides-chip",
+      "lines": [
+        "$$",
+        "`run: bob task reconcile`",
+        "$$"
+      ],
+      "line": 1,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "task-fallback-skips-commented-out-chip",
+      "lines": [
+        "- [ ] Task",
+        "  %%",
+        "  `run: bob task reconcile`",
+        "  %%"
+      ],
+      "line": 0,
+      "ch": 2,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "one-line-comment-hides-chip",
+      "lines": [
+        "%% `run: bob task reconcile` %%"
+      ],
+      "line": 0,
+      "ch": 5,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "chip-below-closed-comment-resolves",
+      "lines": [
+        "%%",
+        "`run: bob gkeep pull`",
+        "%%",
+        "`run: bob plan`"
+      ],
+      "line": 3,
+      "ch": 2,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 3,
+          "from": 0,
+          "to": 15
+        }
+      }
+    },
+    {
+      "id": "unclosed-comment-hides-the-rest-of-the-note",
+      "lines": [
+        "Intro",
+        "%% draft notes",
+        "more notes",
+        "",
+        "- [ ] #task Later `run: bob plan`"
+      ],
+      "line": 4,
+      "ch": 2,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "bob-run-fence-inside-comment-is-none",
+      "lines": [
+        "%%",
+        "```bob-run",
+        "bob plan",
+        "```",
+        "%%"
+      ],
+      "line": 2,
+      "ch": 0,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "task-scope-skips-commented-out-bob-run-fence",
+      "lines": [
+        "- [ ] #task Example",
+        "  %%",
+        "  ```bob-run",
+        "  bob plan",
+        "  ```",
+        "  %%"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "percent-in-code-span-opens-no-comment",
+      "lines": [
+        "Type `%%` to start a comment",
+        "`run: bob plan`"
+      ],
+      "line": 1,
+      "ch": 2,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 1,
+          "from": 0,
+          "to": 15
+        }
+      }
+    },
+    {
+      "id": "percent-in-fence-opens-no-comment",
+      "lines": [
+        "```",
+        "%%",
+        "```",
+        "`run: bob plan`"
+      ],
+      "line": 3,
+      "ch": 2,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 3,
+          "from": 0,
+          "to": 15
+        }
+      }
+    },
+    {
+      "id": "task-visible-chip-beside-commented-one",
+      "lines": [
+        "- [ ] #task Example",
+        "  - `run: bob plan`",
+        "  %%",
+        "  - `run: bob gkeep pull`",
+        "  %%"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "task",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 1,
+          "from": 4,
+          "to": 19
+        }
+      }
+    },
+    {
       "id": "task-fallback",
       "lines": [
         "- [ ] #task Sync inboxes ^sync",

@@ -86,6 +86,25 @@ class CommandModeRunner {
     }
   }
 
+  fireRunState(record, state) {
+    if (!record || !record.id) return;
+    try {
+      this.deps.fireEvent(CM_RUN_STATE_EVENT, {
+        runId: record.id,
+        argv: Array.isArray(record.argv) ? [...record.argv] : [],
+        entryId: record.entry_id || null,
+        state: String(state || record.outcome || "unknown"),
+        outcome: record.outcome || String(state || "unknown"),
+        effect: record.effect || null,
+        trigger: record.trigger || null,
+        source: cmCopyRunSource(record.source),
+        sequence: record.sequence ? cmCopySequenceStamp(record.sequence) : null,
+      });
+    } catch (error) {
+      // State subscribers must never affect execution.
+    }
+  }
+
   // Full pipeline. Never rejects; settles {ok, runId, outcome, exitCode, reason?}.
   run(argv, opts = {}) {
     return this.runInner(Array.isArray(argv) ? [...argv] : [], opts).catch((error) => ({
@@ -151,6 +170,7 @@ class CommandModeRunner {
       host: this.host,
       nowMs: this.deps.nowMs(),
       sequence: opts.sequence,
+      source: opts.source,
     });
     const isReads = effect === "reads";
     const budgetSecs = Number((entry && entry.budget_secs) || (isReads ? 60 : 180)) || 60;
@@ -175,15 +195,23 @@ class CommandModeRunner {
       budgetSecs,
       settled, settleResolve,
     };
-    if (isReads) {
-      this.pending.push({ kind: "read", spec });
-    } else {
-      record.outcome = "queued";
-      this.persistRecord(record);
-      this.pending.push({ kind: "write", spec });
-    }
+    record.outcome = "queued";
+    this.persistRecord(record);
+    this.pending.push({ kind: isReads ? "read" : "write", spec });
     this.live.set(runId, { record, spec, waiters: [settleResolve] });
     this.lastRunId = runId;
+    const started = {
+      runId,
+      argv: [...record.argv],
+      entryId: record.entry_id,
+      outcome: "queued",
+      trigger: record.trigger,
+      source: cmCopyRunSource(record.source),
+      sequence: record.sequence ? cmCopySequenceStamp(record.sequence) : null,
+    };
+    try { this.deps.fireEvent(CM_RUN_STARTED_EVENT, started); }
+    catch (error) { /* Run start observers never affect execution. */ }
+    this.fireRunState(record, "queued");
     this.pump();
     return settled;
   }
@@ -265,6 +293,7 @@ class CommandModeRunner {
       });
       return;
     }
+    this.fireRunState(record, "running");
     const receiptPath = spec.features.includes(CM_FEATURE_RECEIPT) ? paths.receipt : null;
     const env = cmBuildChildEnv({
       env: this.deps.env,
@@ -543,6 +572,27 @@ class CommandModeRunner {
   }
 
   finishSpawnError(spec, kind, result) {
+    const record = spec && spec.record;
+    if (record) {
+      record.outcome = (result && result.outcome) || "failed";
+      record.summary = (result && result.reason) || "Cannot write run files";
+      record.finished_at = cmIsoNow(this.deps.nowMs());
+      this.fireRunState(record, record.outcome);
+      try {
+        this.deps.fireEvent(CM_RUN_FINISHED_EVENT, {
+          runId: record.id,
+          argv: Array.isArray(record.argv) ? [...record.argv] : [],
+          entryId: record.entry_id || null,
+          outcome: record.outcome,
+          effect: record.effect,
+          trigger: record.trigger || null,
+          source: cmCopyRunSource(record.source),
+          invalidates: this.entryInvalidates(spec.entry),
+        });
+      } catch (error) {
+        // Finish observers must never affect settlement.
+      }
+    }
     const live = this.live.get(spec.record.id);
     if (live) {
       for (const waiter of live.waiters.splice(0)) {
@@ -632,6 +682,7 @@ class CommandModeRunner {
       }
     }
     this.persistRecord(record);
+    this.fireRunState(record, result.outcome);
     try {
       cmRetentionSweep(this.fs(), this.runsDir(), {
         keepRuns: this.deps.keepRuns, keepDays: this.deps.keepDays, nowMs,
@@ -655,6 +706,8 @@ class CommandModeRunner {
       record: { ...record },
       entryId: record.entry_id,
       effect: record.effect,
+      trigger: record.trigger || null,
+      source: cmCopyRunSource(record.source),
       invalidates: this.entryInvalidates(spec.entry),
     };
     if (result.retry) notice.retry = true;
@@ -673,6 +726,8 @@ class CommandModeRunner {
         outcome: result.outcome,
         effect: record.effect,
         invalidates: this.entryInvalidates(spec.entry),
+        trigger: record.trigger || null,
+        source: cmCopyRunSource(record.source),
       });
     } catch (error) {
       // Event delivery must never break finalization.
@@ -838,6 +893,7 @@ class CommandModeRunner {
     }
     if (this.adopted && finished && finished.id) this.adopted.delete(finished.id);
     if (options.silent) return finished;
+    this.fireRunState(finished, classification.outcome);
     const settlement = {
       ok: classification.outcome === "completed",
       runId: finished.id,
@@ -853,6 +909,8 @@ class CommandModeRunner {
           record: { ...finished },
           entryId: finished.entry_id,
           effect: finished.effect,
+          trigger: finished.trigger || null,
+          source: cmCopyRunSource(finished.source),
           invalidates: this.entryInvalidates(entry),
           ...(classification.retry ? { retry: true } : {}),
           ...(classification.carry !== undefined ? { carry: classification.carry } : {}),
@@ -869,6 +927,8 @@ class CommandModeRunner {
         entryId: finished.entry_id,
         outcome: classification.outcome,
         effect: finished.effect,
+        trigger: finished.trigger || null,
+        source: cmCopyRunSource(finished.source),
         invalidates: this.entryInvalidates(entry),
       });
     } catch (error) {

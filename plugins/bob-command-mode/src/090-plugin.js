@@ -52,6 +52,8 @@ class BobCommandModePlugin extends Plugin {
       openOutput: (runId) => this.commandModeOpenOutput(runId),
       openSheet: () => this.commandModeOpenSheet(),
       getSheet: () => this.commandModeSheet,
+      runSequence: (steps, opts) => this.commandModeRunSequence(steps, opts),
+      activeSequences: () => this.commandModeSequenceSnapshots(),
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
     this.addCommand({
@@ -161,11 +163,23 @@ class BobCommandModePlugin extends Plugin {
       this.commandModeSyncRunCommands();
       return { ok: false, state: this.commandModeState, error: result.error };
     }
+    let catalogChanged = false;
+    try {
+      catalogChanged = JSON.stringify(this.commandModeCatalog) !== JSON.stringify(result.catalog);
+    } catch (error) {
+      catalogChanged = true;
+    }
     this.commandModeCatalog = result.catalog;
     this.commandModeFingerprint = fingerprint;
     this.commandModeState = "ready";
     this.commandModeMissingBob = null;
     this.commandModeSyncRunCommands();
+    if (catalogChanged) {
+      this.commandModeFireEvent(CM_CATALOG_CHANGED_EVENT, {
+        catalog: result.catalog,
+        bobVersion: result.catalog.bob_version || null,
+      });
+    }
     void this.commandModePersist();
     return { ok: true, state: "ready" };
   }

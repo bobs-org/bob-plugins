@@ -106,6 +106,7 @@ async function cmRunSequenceInner(runner, steps, options) {
     const runOpts = {
       title: cmSequenceStepTitle(step, catalog),
       trigger: options.trigger || "sequence",
+      source: options.source,
       skipGuards: true,
       sequence: stamp,
     };

@@ -74,6 +74,7 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
       startIndex: opts.startIndex,
       priorResults: opts.priorResults,
       trigger: opts.trigger || "sequence",
+      source: opts.source,
       continues: opts.continues,
       cancelled: () => Boolean(this.commandModeUnloaded) || (typeof opts.cancelled === "function" && opts.cancelled()),
       onStepStart: (index, step) => {

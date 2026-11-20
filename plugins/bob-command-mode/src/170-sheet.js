@@ -492,16 +492,26 @@ class CommandModeSheetModal extends Modal {
     const runTitle = opts.title || row.recordTitle || row.title;
     const trigger = row.kind === "recent" ? "sheet-recent" : "sheet";
     const entryOpts = row.entryId ? { entryId: row.entryId } : {};
-    if (opts.preview || (row.policy === "preview-first" && !opts.force)) {
+    const activationStep = cmSheetSequenceStep(row, this.catalog);
+    const activation = cmPlanActivation([activationStep], this.catalog, {
+      intent: opts.preview ? "preview" : (opts.force ? "force" : "run"),
+    });
+    if (!activation.ok) return { ok: false, reason: activation.reason || "command could not be planned" };
+    if (activation.action === "preview") {
       return this.runPreview({ ...row, title: runTitle }, argv);
     }
-    if (row.policy === "confirm" && !opts.force) {
+    if (activation.action === "review") {
+      if (activation.guards.some((guard) => guard.kind === "preview-first") &&
+          !activation.guards.some((guard) => guard.kind === "confirm")) {
+        cmSheetSequenceShowReview(this, activation.steps, activation.guards, { trigger, source: null });
+        return { ok: true, stage: "confirm" };
+      }
       this.confirmRow = { ...row, title: runTitle };
       this.stage = "confirm";
       this.render();
       return { ok: true, stage: "confirm" };
     }
-    if (row.presentation === "report") {
+    if (activation.action === "report") {
       return this.runReport({ ...row, title: runTitle }, argv, { preview: false, trigger });
     }
     if (row.presentation === "inline") {
@@ -542,7 +552,7 @@ class CommandModeSheetModal extends Modal {
     return this.runReport({ ...row, title: "bob help" }, ["--help"], { preview: false });
   }
 
-  async runPreview(row, argv) {
+  async runPreview(row, argv, runOpts = {}) {
     if (!row.hasPreview) {
       if (row.presentation === "report") return this.runReport(row, argv, { preview: false });
       return this.activateRow(row, { force: false });
@@ -553,7 +563,8 @@ class CommandModeSheetModal extends Modal {
     this.previewResult = null;
     this.previewCarry = [];
     const settled = await this.runWithWaitingLine(row.title || "Preview", () => runner.run(argv, {
-      entryId: row.entryId, title: row.title, trigger: "sheet-preview", preview: true,
+      entryId: row.entryId, title: row.title, trigger: runOpts.trigger || "sheet-preview",
+      source: runOpts.source, preview: true,
     }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Preview failed to start";
@@ -581,6 +592,7 @@ class CommandModeSheetModal extends Modal {
       title: row.title || "Report", trigger: opts.trigger || "sheet",
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
+      ...(opts.source ? { source: opts.source } : {}),
     }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Run failed to start";

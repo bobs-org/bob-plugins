@@ -5,6 +5,7 @@
   "040-catalog.js",
   "050-run-store.js",
   "056-sequence-model.js",
+  "057-activation-planner.js",
   "060-runner.js",
   "065-sequence-runner.js",
   "070-outcomes.js",

@@ -151,12 +151,102 @@ test("api.commandMode settles, never rejects, and fires the workspace event", as
   assert.equal(last.runId, settled.runId);
   assert.equal(last.outcome, "completed");
 
+  const started = [];
+  const states = [];
+  const catalogs = [];
+  const chipFinishes = [];
+  const offStarted = api.onRunStarted((payload) => started.push(payload));
+  const offState = api.onRunState((payload) => states.push(payload));
+  const offCatalog = api.onCatalogChanged((payload) => catalogs.push(payload));
+  const offChipFinish = api.onRunFinished((payload) => chipFinishes.push(payload));
+  const chipRun = await api.runText("bob ref create notes/a.md", {
+    source: { path: "daily.md", line: 8, ignored: "not copied" },
+  });
+  assert.equal(chipRun.ok, true);
+  assert.equal(api.lastRun().trigger, "chip");
+  assert.deepEqual(api.lastRun().source, { path: "daily.md", line: 8 });
+  assert.equal(started.at(-1).trigger, "chip");
+  assert.deepEqual(started.at(-1).source, { path: "daily.md", line: 8 });
+  assert.deepEqual(states.map((payload) => payload.state), ["queued", "running", "completed"]);
+  assert.equal(chipFinishes.at(-1).trigger, "chip");
+  assert.deepEqual(chipFinishes.at(-1).source, { path: "daily.md", line: 8 });
+  base.runner.deps.fireEvent(helpers.CM_CATALOG_CHANGED_EVENT, { bobVersion: "test" });
+  assert.deepEqual(catalogs, [{ bobVersion: "test" }]);
+  offStarted();
+  offState();
+  offCatalog();
+  offChipFinish();
+
   const broken = helpers.cmCreateApi({ run: () => Promise.reject(new Error("nope")), catalog: () => null, newestRecord: () => null, deps: {} });
   const refused = await broken.run(["x"]);
   assert.equal(refused.ok, false);
 
   const noOutput = await api.openOutput("missing-id");
   assert.equal(noOutput.ok, false);
+});
+
+test("runText keeps confirm as a review floor and openText carries source to review", async () => {
+  const catalog = {
+    ...fixtureCatalog(),
+    entries: [
+      ...fixtureCatalog().entries,
+      {
+        id: "task-archive", path: ["task", "archive"], fixed: [], title: "Archive tasks",
+        effect: "writes", presentation: "action", policy: "confirm", confirm: "Archive all done tasks?",
+        args: [], hosts: [],
+      },
+    ],
+  };
+  const base = makeRunner({ catalog });
+  let runCount = 0;
+  base.runner.run = async () => { runCount += 1; return { ok: true, runId: "unexpected" }; };
+  const sheet = {
+    catalog,
+    render() {},
+    refocusInput() {},
+    close() {},
+  };
+  const api = helpers.cmCreateApi(base.runner, {
+    openSheet: () => ({ ok: true }),
+    getSheet: () => sheet,
+  });
+  const result = await api.runText("bob task archive", { source: { path: "daily.md", line: 12 } });
+  assert.equal(result.ok, true);
+  assert.equal(result.stage, "confirm");
+  assert.equal(sheet.stage, "confirm");
+  assert.equal(sheet.confirmSequence.trigger, "chip");
+  assert.deepEqual(sheet.confirmSequence.source, { path: "daily.md", line: 12 });
+  assert.equal(sheet.confirmSequence.guards[0].kind, "confirm");
+  assert.equal(runCount, 0);
+
+  sheet.confirmSequence = null;
+  const opened = await api.openText("bob ref create notes/b.md", { source: { path: "daily.md", line: 13 } });
+  assert.equal(opened.stage, "confirm");
+  assert.deepEqual(sheet.confirmSequence.source, { path: "daily.md", line: 13 });
+  assert.equal(sheet.confirmSequence.guards.length, 0);
+  assert.equal(runCount, 0);
+});
+
+test("activeRun matches live single commands and sequences by resolved payload", () => {
+  const catalog = fixtureCatalog();
+  const record = {
+    id: "live-1", argv: ["bob", "ref", "create", "notes/a.md"], entry_id: "ref-create",
+    outcome: "running", trigger: "chip", source: { path: "daily.md", line: 3 },
+  };
+  const runner = { catalog: () => catalog, activeRecords: () => [record], deps: {} };
+  const api = helpers.cmCreateApi(runner);
+  assert.deepEqual(api.activeRun("bob ref create notes/a.md"), {
+    runId: "live-1",
+    argv: ["bob", "ref", "create", "notes/a.md"],
+    entryId: "ref-create",
+    outcome: "running",
+    trigger: "chip",
+    source: { path: "daily.md", line: 3 },
+    startedAt: null,
+    sequence: null,
+  });
+  assert.equal(api.activeRun("bob ready"), null);
+  assert.equal(api.activeRuns().length, 1);
 });
 
 test("plugin onload registers run-* commands and exposes the frozen api", async () => {

@@ -50,6 +50,15 @@ function cmCopySequenceStamp(raw) {
   };
 }
 
+function cmCopyRunSource(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const path = typeof raw.path === "string" ? raw.path.trim().slice(0, 1024) : "";
+  const lineValue = Number(raw.line);
+  const line = Number.isInteger(lineValue) && lineValue > 0 ? lineValue : null;
+  if (!path) return null;
+  return { path, ...(line ? { line } : {}) };
+}
+
 function cmNewRecord(options = {}) {
   const record = {
     schema: CM_RECORD_SCHEMA,
@@ -61,6 +70,7 @@ function cmNewRecord(options = {}) {
     presentation: cmNormalizePresentation(options.presentation),
     preview: Boolean(options.preview),
     trigger: options.trigger || "sheet",
+    source: cmCopyRunSource(options.source),
     bob_path: options.bobPath || "",
     bob_version: options.bobVersion || null,
     host: options.host || null,

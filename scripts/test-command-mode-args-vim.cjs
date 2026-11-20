@@ -45,6 +45,60 @@ test("typed argv tokenizer handles quotes, escapes, literal shell syntax, and er
   assert.equal(helpers.cmTokenizeBobArgv("ref create tail\\").error, "Unfinished escape");
 });
 
+test("command text resolves catalog-legal bob steps and shares the activation policy", () => {
+  const base = fixtureCatalog();
+  const catalog = {
+    ...base,
+    aliases: [{ from: ["ref", "clip"], to: ["ref", "create"] }],
+    entries: [
+      ...base.entries,
+      {
+        id: "ref-rename", path: ["ref", "rename"], fixed: [], title: "Rename reference",
+        effect: "writes", presentation: "action", policy: "preview-first", preview: ["--dry-run"],
+        args: [{ name: "REF", required: true }, { name: "NAME", required: true }], hosts: [],
+      },
+      {
+        id: "task-archive", path: ["task", "archive"], fixed: [], title: "Archive tasks",
+        effect: "writes", presentation: "action", policy: "confirm", confirm: "Archive all done tasks?",
+        args: [], hosts: [],
+      },
+      {
+        id: "mac-only", path: ["mac-only"], fixed: [], title: "Mac only",
+        effect: "writes", presentation: "action", policy: "run", args: [], hosts: ["mac"],
+      },
+    ],
+  };
+
+  const split = helpers.cmSplitCommandText('bob ref create "a && b.md" && bob ready');
+  assert.deepEqual(split, { ok: true, parts: ['bob ref create "a && b.md"', "bob ready"] });
+  const resolved = helpers.cmResolveCommandText(catalog, 'bob ref clip "notes/a && b.md" && bob task archive');
+  assert.equal(resolved.ok, true);
+  assert.deepEqual(resolved.steps.map((step) => step.argv), [
+    ["ref", "create", "notes/a && b.md"],
+    ["task", "archive"],
+  ]);
+  assert.equal(resolved.steps[0].entry_id, "ref-create");
+
+  assert.match(helpers.cmResolveCommandText(catalog, "ls -la").reason, /only bob/);
+  assert.match(helpers.cmResolveCommandText(catalog, "BOB_ENV=1 bob plan").reason, /only bob/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob capture =").reason, /named capture rows/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob gcal synk").reason, /no command/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob ref create").reason, /missing TARGET/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob plan | less").reason, /not a shell/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob plan && ; bob ready").reason, /not a shell/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob plan &&").reason, /empty command/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob mac-only", { host: "athena" }).reason, /Unavailable here/);
+
+  const rename = [{ argv: ["ref", "rename", "old.md", "New"], entry_id: "ref-rename" }];
+  const archive = [{ argv: ["task", "archive"], entry_id: "task-archive" }];
+  assert.equal(helpers.cmPlanActivation(rename, catalog, { intent: "run" }).action, "preview");
+  assert.equal(helpers.cmPlanActivation(rename, catalog, { intent: "force" }).action, "run");
+  const confirm = helpers.cmPlanActivation(archive, catalog, { intent: "force" });
+  assert.equal(confirm.action, "review");
+  assert.equal(confirm.guards[0].kind, "confirm");
+  assert.equal(helpers.cmPlanActivation(rename, catalog, { intent: "open" }).action, "preview");
+});
+
 test("typed argv resolves aliases to the longest catalog entry and refuses excluded paths", () => {
   const catalog = {
     ...fixtureCatalog(),

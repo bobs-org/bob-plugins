@@ -616,11 +616,21 @@ if (commandMode?.version >= 1) {
 
 `run(argv, opts)` settles to `{ ok, runId, outcome, exitCode, reason? }`
 and does not reject. `openOutput(runId)` opens a run in the pager;
-`onRunFinished(callback)` subscribes to finished runs and returns an
-unsubscribe function; `catalog()` and `lastRun()` read the cached catalog
-and newest record. Each finish also triggers the workspace event
-`bob-command-mode:run-finished` with `{ runId, argv, entryId, outcome,
-effect, invalidates }`.
+`resolve(text)` parses a command-chip payload into catalog-legal steps;
+`runText(text, { source })` runs validated steps with preview-first skipped
+and `confirm` policies reviewed; `openText(text, { source })` follows the
+guarded sheet path. `activeRun(text)` finds a matching live run or returns
+`null`, and `activeRuns()` lists live records. `onRunStarted`, `onRunState`,
+`onRunFinished`, and `onCatalogChanged` subscribe to lifecycle changes and
+return unsubscribe functions. `catalog()` and `lastRun()` read the cached
+catalog and newest record. Feature-detect these additive members before use.
+
+Run records carry `trigger` and optional `{ path, line }` source provenance.
+Each finish also triggers `bob-command-mode:run-finished` with `{ runId,
+argv, entryId, outcome, effect, invalidates, trigger, source }`; start and
+state updates use `bob-command-mode:run-started` and
+`bob-command-mode:run-state`, and catalog changes use
+`bob-command-mode:catalog-changed` with `{ catalog, bobVersion }`.
 
 ## Bob Emoji
 

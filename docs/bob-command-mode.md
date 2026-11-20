@@ -12,10 +12,10 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 | --- | --- |
 | Name | Bob Command Mode |
 | ID | `bob-command-mode` |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
-| Description | Run bob commands from Obsidian with safe-write guards, run history, and an automation API. |
+| Description | Run catalog-validated bob commands from Obsidian chips and Command Mode with safe-write guards and run history. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -238,8 +238,23 @@ into that command's preview stage and settles `{ok, runId, stage}` with `stage`
 `"preview"` (or `"report"` for a report row, which streams in the output
 stage) or `{ok: false, reason}` for excluded, unknown, unavailable, Windows, or
 preview-less action rows; it never applies a write and never rejects, and
-consumers feature-detect `typeof api.commandMode.preview === "function"`,
-`onRunFinished(cb)` subscribes to finishes, and `catalog()` and
-`lastRun()` read the cached catalog and newest record. Every finish also fires
-`bob-command-mode:run-finished` on the workspace with `{runId, argv, entryId,
-outcome, effect, invalidates}`.
+consumers feature-detect `typeof api.commandMode.preview === "function"`.
+`resolve(text)` parses one or more `bob …` commands joined by quote-aware `&&`
+into catalog-legal steps. It rejects shell operators, excluded or unknown
+commands, missing required arguments, and commands unavailable on this host.
+`runText(text, {source})` runs validated steps as a chip gesture: it skips
+preview-first guards and keeps every `confirm` policy behind the review card.
+`openText(text, {source})` opens the guarded path: previews for preview-first
+commands, output for reports, and a review card for writers or sequences.
+`activeRun(text)` returns a matching live run (or `null`), and `activeRuns()`
+lists live records. `onRunStarted(cb)`, `onRunState(cb)`, `onRunFinished(cb)`,
+and `onCatalogChanged(cb)` subscribe to engine changes and return unsubscribe
+functions. `catalog()` and `lastRun()` read the cached catalog and newest
+record. New methods are additive; consumers should feature-detect each one.
+
+The optional `source` is copied as `{path, line?}` into the host-local run
+record. Run lifecycle callbacks include `trigger` and `source`. Every finish
+also fires `bob-command-mode:run-finished` with `{runId, argv, entryId,
+outcome, effect, invalidates, trigger, source}`. Start and state changes fire
+`bob-command-mode:run-started` and `bob-command-mode:run-state`; catalog
+changes fire `bob-command-mode:catalog-changed` with `{catalog, bobVersion}`.

@@ -832,7 +832,10 @@ test("RECENT preview-first and confirm rows honor their guards", async () => {
     assert.equal(confirming.stage, "confirm");
     assert.equal(confirmSheet.stage, "confirm");
     const ran = await confirmSheet.activateRow(archiveAgain, { force: true });
-    assert.ok(ran.ok && ran.runId, ran.reason);
+    assert.equal(ran.stage, "confirm", "Ctrl+Enter keeps the confirm floor");
+    assert.equal(confirmSheet.stage, "confirm");
+    const confirmed = await confirmSheet.confirmRun();
+    assert.equal(confirmed.outcome, "completed");
   } finally {
     restore();
   }

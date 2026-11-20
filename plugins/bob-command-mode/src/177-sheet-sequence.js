@@ -219,8 +219,14 @@ function cmSheetSequenceGroupToggle(sheet, row, catalog) {
   return { ok: true, unmarked: everyMarked };
 }
 
-function cmSheetSequenceShowReview(sheet, steps, guards) {
-  sheet.confirmSequence = { steps: steps.map(cmSequenceStep), guards: Array.isArray(guards) ? guards : [], force: false };
+function cmSheetSequenceShowReview(sheet, steps, guards, options = {}) {
+  sheet.confirmSequence = {
+    steps: steps.map(cmSequenceStep),
+    guards: Array.isArray(guards) ? guards : [],
+    force: false,
+    trigger: options.trigger || "sheet-sequence",
+    source: cmCopyRunSource(options.source),
+  };
   sheet.confirmRow = null;
   sheet.stage = "confirm";
   sheet.render();
@@ -230,35 +236,7 @@ function cmSheetSequenceShowReview(sheet, steps, guards) {
 async function cmSheetSequenceStart(sheet, opts = {}) {
   const marks = cmSheetSequenceMarks(sheet);
   const steps = marks.map((mark) => cmSequenceStep({ argv: mark.argv, entry_id: mark.entry_id, title: mark.title }));
-  const signature = cmSequenceSignature(steps);
-  const plugin = sheet.plugin;
-  if (plugin && typeof plugin.commandModeSequenceIsActive === "function") {
-    let active = false;
-    try {
-      active = plugin.commandModeSequenceIsActive(signature);
-    } catch (error) {
-      active = false;
-    }
-    if (active) {
-      sheet.hint = "That sequence is already running";
-      sheet.render();
-      sheet.refocusInput();
-      return { ok: false, reason: "already running" };
-    }
-  }
-  cmSheetSequenceClear(sheet);
-  sheet.confirmSequence = null;
-  try {
-    sheet.close();
-  } catch (error) {
-    // Headless closes are best effort.
-  }
-  if (plugin && typeof plugin.commandModeRunSequence === "function") {
-    return plugin.commandModeRunSequence(steps, { trigger: "sheet-sequence" });
-  }
-  const runner = typeof sheet.runner === "function" ? sheet.runner() : null;
-  if (!runner) return { ok: false, reason: "no runner" };
-  return cmRunSequence(runner, steps, {});
+  return cmSheetSequenceStartSteps(sheet, steps, { ...opts, trigger: opts.trigger || "sheet-sequence" });
 }
 
 async function cmSheetSequenceStartSteps(sheet, steps, opts = {}) {
@@ -279,18 +257,14 @@ async function cmSheetSequenceStartSteps(sheet, steps, opts = {}) {
       return { ok: false, reason: "already running" };
     }
   }
-  if (!opts.force) {
-    const catalog = sheet.catalog;
-    let guards = [];
-    try {
-      guards = cmSequenceGuards(stored, catalog);
-    } catch (error) {
-      guards = [];
-    }
-    if (guards.length) {
-      cmSheetSequenceShowReview(sheet, stored, guards);
-      return { ok: true, stage: "confirm" };
-    }
+  const plan = cmPlanActivation(stored, sheet.catalog, { intent: opts.force ? "force" : "run" });
+  if (!plan.ok) return { ok: false, reason: plan.reason || "sequence could not be planned" };
+  if (plan.action === "review") {
+    cmSheetSequenceShowReview(sheet, stored, plan.guards, {
+      trigger: opts.trigger || "sheet-sequence",
+      source: opts.source,
+    });
+    return { ok: true, stage: "confirm" };
   }
   cmSheetSequenceClear(sheet);
   sheet.confirmSequence = null;
@@ -300,11 +274,14 @@ async function cmSheetSequenceStartSteps(sheet, steps, opts = {}) {
     // Headless closes are best effort.
   }
   if (plugin && typeof plugin.commandModeRunSequence === "function") {
-    return plugin.commandModeRunSequence(stored, { trigger: "sheet-sequence" });
+    return plugin.commandModeRunSequence(stored, {
+      trigger: opts.trigger || "sheet-sequence",
+      source: opts.source,
+    });
   }
   const runner = typeof sheet.runner === "function" ? sheet.runner() : null;
   if (!runner) return { ok: false, reason: "no runner" };
-  return cmRunSequence(runner, stored, {});
+  return cmRunSequence(runner, stored, { trigger: opts.trigger || "sheet-sequence", source: opts.source });
 }
 
 const cmOriginalSheetRenderHeaderSeq = CommandModeSheetModal.prototype.renderHeader;
@@ -564,11 +541,11 @@ CommandModeSheetModal.prototype.confirmRun = function confirmRunWithSequence() {
     }
     const plugin = this.plugin;
     if (plugin && typeof plugin.commandModeRunSequence === "function") {
-      return plugin.commandModeRunSequence(steps, { trigger: "sheet-sequence" });
+      return plugin.commandModeRunSequence(steps, { trigger: seq.trigger || "sheet-sequence", source: seq.source });
     }
     const runner = typeof this.runner === "function" ? this.runner() : null;
     if (!runner) return { ok: false, reason: "no runner" };
-    return cmRunSequence(runner, steps, {});
+    return cmRunSequence(runner, steps, { trigger: seq.trigger || "sheet-sequence", source: seq.source });
   }
   const result = cmOriginalSheetConfirmRunSeq.call(this);
   return result;

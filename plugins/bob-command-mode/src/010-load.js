@@ -40,6 +40,9 @@ const CM_FEATURE_RECEIPT = "run-receipt";
 const CM_LOCK_PHRASE = "another Bob vault maintenance run is already active";
 // Workspace event fired for every finished run.
 const CM_RUN_FINISHED_EVENT = "bob-command-mode:run-finished";
+const CM_RUN_STARTED_EVENT = "bob-command-mode:run-started";
+const CM_RUN_STATE_EVENT = "bob-command-mode:run-state";
+const CM_CATALOG_CHANGED_EVENT = "bob-command-mode:catalog-changed";
 // Directory (under the state root) holding per-run files.
 const CM_RUNS_DIRNAME = "command-mode/runs";
 // Status-bar run indicator timing.

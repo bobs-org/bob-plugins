@@ -424,11 +424,12 @@ test("Enter with unguarded steps closes and runs", async () => {
   }
 });
 
-test("Enter with guards shows the review card", () => {
+test("Enter and Ctrl+Enter with confirm guards both show the review card", async () => {
   const { restore, plugin } = sheetHarness(sheetCatalog());
   try {
+    let sequenceRuns = 0;
     plugin.commandModeSequenceIsActive = () => false;
-    plugin.commandModeRunSequence = async () => ({ ok: true });
+    plugin.commandModeRunSequence = async () => { sequenceRuns += 1; return { ok: true }; };
     const modal = openSheet(plugin);
     modal.query = "";
     modal.rebuildRows();
@@ -445,7 +446,11 @@ test("Enter with guards shows the review card", () => {
     assert.equal(modal.stage, "list");
     assert.equal(modal.sequenceMarks.length, 2);
     pressKey(modal, "Enter", { ctrlKey: true });
-    assert.equal(modal.sheetOpen, false);
+    assert.equal(modal.stage, "confirm");
+    assert.equal(modal.sheetOpen, true);
+    assert.equal(sequenceRuns, 0);
+    await modal.confirmRun();
+    assert.equal(sequenceRuns, 1);
     modal.close();
   } finally {
     restore();

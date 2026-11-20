@@ -157,6 +157,16 @@ function recordCardHomeEnd(targets, which) {
   return which === "end" ? rows[rows.length - 1].key : rows[0].key;
 }
 
+// Return the navigation delta for the exact Ctrl+N / Ctrl+P chord.
+function recordCardCtrlNavDelta(event) {
+  if (!event || event.isComposing || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return 0;
+  const key = String(event.key || "").toLowerCase();
+  const code = String(event.code || "");
+  if (key === "n" || code === "KeyN") return 1;
+  if (key === "p" || code === "KeyP") return -1;
+  return 0;
+}
+
 function recordCardChoiceList(field, reportField) {
   const source = reportField && Array.isArray(reportField.choices) && reportField.choices.length
     ? reportField.choices

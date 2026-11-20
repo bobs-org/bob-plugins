@@ -141,6 +141,7 @@ const field = (key, kind, extra = {}) => ({
   key, label: extra.label || key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
   kind, required: extra.required === true, list: extra.list === true,
   choices: extra.choices || [], min: extra.min, max: extra.max, suggest: extra.suggest === true,
+  values: extra.values,
 });
 
 function albumEntry(overrides = {}) {
@@ -356,6 +357,104 @@ test("choice digits stay in schema order while filtering", () => {
   assert.equal(helpers.recordCardFilterChoices(all, "nope").length, 0);
   assert.equal(helpers.recordCardTodayValue(CLOCK), "2026-11-17");
   assert.match(helpers.recordCardRequiredClearMessage({ label: "Status", kind: "choices", field }), /Status is required — pick one of 10 choices/);
+});
+
+test("Ctrl+N/P helper accepts only the exact navigation chords", () => {
+  const delta = helpers.recordCardCtrlNavDelta;
+  assert.equal(delta({ key: "n", ctrlKey: true }), 1);
+  assert.equal(delta({ key: "N", ctrlKey: true }), 1);
+  assert.equal(delta({ key: "x", code: "KeyN", ctrlKey: true }), 1);
+  assert.equal(delta({ key: "p", ctrlKey: true }), -1);
+  assert.equal(delta({ key: "P", ctrlKey: true }), -1);
+  assert.equal(delta({ key: "x", code: "KeyP", ctrlKey: true }), -1);
+  for (const event of [
+    { key: "n", ctrlKey: true, shiftKey: true },
+    { key: "n", ctrlKey: true, altKey: true },
+    { key: "n", ctrlKey: true, metaKey: true },
+    { key: "n", metaKey: true },
+    { key: "n" },
+    { key: "n", ctrlKey: true, isComposing: true },
+    null,
+  ]) assert.equal(delta(event), 0);
+});
+
+test("Ctrl+N/P navigate record choices in inputs and browse rows", async () => {
+  const { modal } = await openCard();
+  try {
+    modal.recordOpenStage("choices", "status");
+    const input = modal.contentEl.querySelector("[data-record-input='choice-filter']");
+    const originalFilter = input.value;
+    let event = keyEvent("n", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(event);
+    assert.equal(modal.selectedChoice, "loved");
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(input.value, originalFilter);
+    event = keyEvent("p", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(event);
+    assert.equal(modal.selectedChoice, "to_try");
+    event = keyEvent("p", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(event);
+    assert.equal(modal.selectedChoice, "c10", "choice navigation wraps backward");
+    event = keyEvent("n", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(event);
+    assert.equal(modal.selectedChoice, "to_try", "choice navigation wraps forward");
+
+    input.value = "love";
+    input.dispatchEvent({ type: "input", target: input });
+    modal.recordOnKeyDown(keyEvent("n", { ctrlKey: true, target: input }));
+    assert.equal(modal.selectedChoice, "loved", "filter limits navigation to visible choices");
+
+    for (const event of [
+      keyEvent("N", { ctrlKey: true, shiftKey: true, target: input }),
+      keyEvent("n", { ctrlKey: true, altKey: true, target: input }),
+      keyEvent("n", { metaKey: true, target: input }),
+    ]) {
+      const before = modal.selectedChoice;
+      modal.recordOnKeyDown(event);
+      assert.equal(modal.selectedChoice, before);
+      assert.equal(event.defaultPrevented, undefined);
+    }
+
+    modal.recordOnKeyDown(keyEvent("Escape", { target: input }));
+    let outside = keyEvent("n", { ctrlKey: true, target: modal.contentEl });
+    modal.recordOnKeyDown(outside);
+    assert.equal(modal.selectedKey, "cuisine", "choice-stage navigation also works outside its input");
+    assert.equal(outside.defaultPrevented, true);
+    modal.recordSelect("notes");
+    modal.recordOnKeyDown(keyEvent("n", { ctrlKey: true }));
+    assert.equal(modal.selectedKey, "status", "browse navigation wraps and includes ghost rows");
+    const back = keyEvent("p", { ctrlKey: true });
+    modal.recordOnKeyDown(back);
+    assert.equal(modal.selectedKey, "notes");
+    assert.equal(back.defaultPrevented, true);
+  } finally { modal.close(); }
+});
+
+test("Ctrl+N/P navigate suggestions while typed text keeps its native behavior", async () => {
+  const { modal } = await openCard();
+  try {
+    modal.recordOpenStage("suggest", "notes");
+    const input = modal.contentEl.querySelector("[data-record-input='stage-suggest']");
+    const deltas = [];
+    modal.recordMoveSuggest = (delta) => deltas.push(delta);
+    const next = keyEvent("n", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(next);
+    assert.equal(next.defaultPrevented, true);
+    assert.deepEqual(deltas, [1]);
+    const previous = keyEvent("p", { ctrlKey: true, target: input });
+    modal.recordOnKeyDown(previous);
+    assert.equal(previous.defaultPrevented, true);
+    assert.deepEqual(deltas, [1, -1]);
+    modal.recordOnKeyDown(keyEvent("Escape", { target: input }));
+    modal.recordOpenStage("text", "notes");
+    const text = modal.contentEl.querySelector("[data-record-input='stage-text']");
+    text.value = "draft";
+    modal.stageDraftText = "draft";
+    const native = keyEvent("n", { ctrlKey: true, target: text });
+    modal.recordOnKeyDown(native);
+    assert.equal(native.defaultPrevented, undefined);
+    assert.equal(modal.stageDraftText, "draft");
+  } finally { modal.close(); }
 });
 
 test("Esc ladder and status copy", () => {

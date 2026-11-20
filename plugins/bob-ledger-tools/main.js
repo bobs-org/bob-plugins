@@ -104175,6 +104175,16 @@ function recordCardHomeEnd(targets, which) {
   return which === "end" ? rows[rows.length - 1].key : rows[0].key;
 }
 
+// Return the navigation delta for the exact Ctrl+N / Ctrl+P chord.
+function recordCardCtrlNavDelta(event) {
+  if (!event || event.isComposing || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return 0;
+  const key = String(event.key || "").toLowerCase();
+  const code = String(event.code || "");
+  if (key === "n" || code === "KeyN") return 1;
+  if (key === "p" || code === "KeyP") return -1;
+  return 0;
+}
+
 function recordCardChoiceList(field, reportField) {
   const source = reportField && Array.isArray(reportField.choices) && reportField.choices.length
     ? reportField.choices
@@ -106601,13 +106611,15 @@ Object.assign(RecordCardModal.prototype, {
         return;
       }
       if (String(inputKind) === "choice-filter" || (this.stage && this.stage.kind === "choices")) {
-        if (event.key === "ArrowDown") { event.preventDefault?.(); this.recordMoveChoice(1); return; }
-        if (event.key === "ArrowUp") { event.preventDefault?.(); this.recordMoveChoice(-1); return; }
+        const ctrlDelta = recordCardCtrlNavDelta(event);
+        if (event.key === "ArrowDown" || ctrlDelta > 0) { event.preventDefault?.(); this.recordMoveChoice(1); return; }
+        if (event.key === "ArrowUp" || ctrlDelta < 0) { event.preventDefault?.(); this.recordMoveChoice(-1); return; }
       }
+      const suggestCtrlDelta = recordCardCtrlNavDelta(event);
       if (this.stage && (this.stage.kind === "suggest" || this.stage.kind === "link")
-        && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+        && (event.key === "ArrowDown" || event.key === "ArrowUp" || suggestCtrlDelta)) {
         event.preventDefault?.();
-        this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : -1);
+        this.recordMoveSuggest(event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : suggestCtrlDelta);
         return;
       }
       return;
@@ -106618,12 +106630,13 @@ Object.assign(RecordCardModal.prototype, {
         void this.recordApplyChoice(this.selectedChoice);
         return;
       }
-      if (event.key === "ArrowDown" || (this.recordBare(event) && event.key === "j")) {
+      const ctrlDelta = recordCardCtrlNavDelta(event);
+      if (event.key === "ArrowDown" || (this.recordBare(event) && event.key === "j") || ctrlDelta > 0) {
         event.preventDefault?.();
         this.recordMoveChoice(1);
         return;
       }
-      if (event.key === "ArrowUp" || (this.recordBare(event) && event.key === "k")) {
+      if (event.key === "ArrowUp" || (this.recordBare(event) && event.key === "k") || ctrlDelta < 0) {
         event.preventDefault?.();
         this.recordMoveChoice(-1);
         return;
@@ -106658,6 +106671,8 @@ Object.assign(RecordCardModal.prototype, {
       }
       return;
     }
+    const browseCtrlDelta = recordCardCtrlNavDelta(event);
+    if (browseCtrlDelta) { event.preventDefault?.(); this.recordMove(browseCtrlDelta); return; }
     if (event.key === "Home") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "home")); return; }
     if (event.key === "End") { event.preventDefault?.(); this.recordSelect(recordCardHomeEnd(this.recordTargets(), "end")); return; }
     if (event.key === "ArrowDown" || event.key === "ArrowRight" || (this.recordBare(event) && event.key === "j")) {
@@ -159191,6 +159206,7 @@ try {
       recordCardPreserveSelection,
       recordCardNavigate,
       recordCardHomeEnd,
+      recordCardCtrlNavDelta,
       recordCardShiftStep,
       recordCardShiftAnnouncement,
       recordCardSeedText,

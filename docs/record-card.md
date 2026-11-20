@@ -124,7 +124,7 @@ Digits here pick a choice; on the album card editor they jump to field N.
 
 | Gesture | Outcome |
 | --- | --- |
-| `j` / `k`, arrows, Tab / Shift+Tab | Next or previous field, including ghosts. Tab wraps; Shift+J/K clamps. |
+| `j` / `k`, arrows, Ctrl+N / Ctrl+P, Tab / Shift+Tab | Next or previous field, including ghosts. Tab wraps; Shift+J/K clamps. |
 | Shift+J / Shift+K | Step to the adjacent schema field including ghosts, clamp at the ends with a bump and `No next field` / `No previous field`, and announce `<Label>, field N of M`. Inert in stages, inputs, menus, and IME; never writes. All actions offers Previous/Next field. |
 | Home / End | First or last field. |
 | Enter | Open the selected field's stage. |
@@ -144,11 +144,11 @@ and listbox relationships, visible focus, and text-only user strings.
 | Stage | Behavior |
 | --- | --- |
 | Text | Auto-growing textarea. Pasted newlines are preserved for bob to refuse; Enter saves, never inserts a newline. |
-| Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. |
+| Suggest | Combobox over the full ranked `fields[].values` with rank and counts while filtering. Arrows or Ctrl+N / Ctrl+P step through candidates. Picking an existing suggestion applies it directly; free typing previews, including bob's `record_value_near` warning. Typing never implicitly picks. |
 | Date | Text input accepting `today`, `t`, `yesterday`, and ISO. The parsed echo comes from bob's preview. Browse `t` keeps its direct route. |
 | Number | Text input with numeric inputmode and schema min/max hints. Incomplete tokens are preserved for bob; no `parseFloat`, empty-to-zero, NaN, or clamping. |
 | URL | Text/URL input with bob's validation and hint; no normalization of invalid URLs. |
-| Link | Vault note suggester accepting a bare name or `[[wikilink]]`, resolved relative to the record with Obsidian metadata. Aliases, headings, and block anchors are preserved; picks preview before save. |
+| Link | Vault note suggester accepting a bare name or `[[wikilink]]`, resolved relative to the record with Obsidian metadata. Arrows or Ctrl+N / Ctrl+P step through candidates. Aliases, headings, and block anchors are preserved; picks preview before save. |
 | List | Chip editor with a separate item input. Enter on a nonempty item adds it; Enter on an empty item saves the list. Empty-input Backspace removes the last chip; chips expose edit/remove. Order and literal commas are preserved; values submit as a JSON array. |
 
 For list fields a choice or suggestion pick edits the list draft instead
@@ -201,8 +201,8 @@ intent, and listeners.
 
 The choices stage is inline under its field. Filter by label or value
 without changing stored identity. Digit badges stay in schema order and
-disappear for filtered-out rows. `j`/`k` outside the filter, arrows, and
-Enter pick from the list; digits in the filter stay text. Positions past
+disappear for filtered-out rows. `j`/`k` outside the filter, arrows and Ctrl+N / Ctrl+P
+(also inside the filter), and Enter pick from the list; digits in the filter stay text. Positions past
 nine remain reachable by navigation and click. Empty results and the
 current choice are explicit. Filter text never invents a choice.
 

@@ -23,6 +23,7 @@ try {
       recordCardPreserveSelection,
       recordCardNavigate,
       recordCardHomeEnd,
+      recordCardCtrlNavDelta,
       recordCardShiftStep,
       recordCardShiftAnnouncement,
       recordCardSeedText,

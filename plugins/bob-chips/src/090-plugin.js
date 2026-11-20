@@ -58,6 +58,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             copyChip: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             flash: () => false,
           }),
+          commandChips: commandChipFallbackApi(),
         });
       }
       if (typeof console !== "undefined" && typeof console.warn === "function") {
@@ -246,6 +247,12 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
         }
       },
     });
-    this.api = copyChipFreeze({ copyChips });
+    let commandChips = null;
+    try {
+      commandChips = commandChipBuildApi();
+    } catch (error) {
+      commandChips = commandChipFallbackApi();
+    }
+    this.api = copyChipFreeze({ copyChips, commandChips });
   }
 }

@@ -229,10 +229,13 @@ function copyChipEscapeTablePipes(text) {
   return text.replace(/\|/g, "\\|");
 }
 
-function copyChipParseContent(content) {
-  if (typeof content !== "string") return null;
-  if (!content.startsWith("copy")) return null;
-  let index = 4;
+// One prefix grammar for both kinds: PREFIX [ "[" LABEL "]" ] ":" [ " " ] TEXT
+// over a normalized code-span content. `copy` and `run` differ only in the
+// lowercase prefix, so the label escapes and payload rules can never drift.
+function chipParsePrefixedContent(content, prefix) {
+  if (typeof content !== "string" || typeof prefix !== "string" || prefix === "") return null;
+  if (!content.startsWith(prefix)) return null;
+  let index = prefix.length;
   let label = null;
   if (content[index] === "[") {
     index += 1;
@@ -269,6 +272,10 @@ function copyChipParseContent(content) {
   const text = content.slice(index);
   if (!copyChipHasNonWhitespace(text)) return null;
   return copyChipFreeze({ label, text });
+}
+
+function copyChipParseContent(content) {
+  return chipParsePrefixedContent(content, "copy");
 }
 
 function copyChipNormalizeSpan(raw, options = {}) {
@@ -360,18 +367,37 @@ function copyChipSpanIsInsideLinkLabel(line, from, to) {
   return next === "(" || next === "[";
 }
 
-function copyChipScanLine(line, options = {}) {
+// One scanning pass, two kinds. Every code span on the line is found once
+// and shares the link-label and wikilink exclusions; a span whose content
+// parses as `copy:` is a copy chip and one that parses as `run:` is a
+// command chip. Command chips additionally skip spans inside inline math and
+// comments (chipShieldedRanges): a run chip is a button, so example text
+// there must stay inert, while copy chips keep their v2 scan byte-stable.
+// Physical multiline spans never match because the scan is per line.
+function chipScanLine(line, options = {}) {
   if (typeof line !== "string") return copyChipFreeze([]);
   const table = Boolean(options && options.table);
+  const spans = copyChipFindCodeSpans(line);
   const chips = [];
-  for (const span of copyChipFindCodeSpans(line)) {
+  let shielded = null;
+  for (const span of spans) {
     if (copyChipSpanIsInsideWikilink(line, span.from, span.to)) continue;
     if (copyChipSpanIsInsideLinkLabel(line, span.from, span.to)) continue;
     const content = copyChipNormalizeSpan(span.raw, { table });
     if (content == null) continue;
-    const parsed = copyChipParseContent(content);
+    let kind = "copy";
+    let parsed = copyChipParseContent(content);
+    if (!parsed) {
+      kind = "run";
+      parsed = chipParsePrefixedContent(content, "run");
+    }
     if (!parsed) continue;
+    if (kind === "run") {
+      if (shielded === null) shielded = chipShieldedRanges(line, spans);
+      if (chipRangesCover(shielded, span.from)) continue;
+    }
     chips.push(copyChipFreeze({
+      kind,
       from: span.from,
       to: span.to,
       raw: span.raw,
@@ -382,17 +408,48 @@ function copyChipScanLine(line, options = {}) {
   return copyChipFreeze(chips);
 }
 
-function copyChipParseFenceInfo(info) {
+// The copy-kind filter of chipScanLine, in the v2 `scanLine` shape.
+function copyChipScanLine(line, options = {}) {
+  if (typeof line !== "string") return copyChipFreeze([]);
+  const chips = [];
+  for (const chip of chipScanLine(line, options)) {
+    if (chip.kind !== "copy") continue;
+    chips.push(copyChipFreeze({
+      from: chip.from,
+      to: chip.to,
+      raw: chip.raw,
+      label: chip.label,
+      text: chip.text,
+    }));
+  }
+  return copyChipFreeze(chips);
+}
+
+function chipRangesCover(ranges, index) {
+  if (!Array.isArray(ranges)) return false;
+  for (const range of ranges) {
+    if (index >= range.from && index < range.to) return true;
+  }
+  return false;
+}
+
+// Fence info for either kind: the language token must equal `language`
+// exactly; the rest is the optional label with surrounding `[ ]` stripped.
+function chipParseFenceInfoFor(info, language) {
   if (typeof info !== "string") return null;
   const trimmed = info.trim();
   if (!trimmed) return null;
   const match = /^(\S+)(?:[ \t]+(.*))?$/.exec(trimmed);
-  if (!match || match[1] !== "bob-copy") return null;
+  if (!match || match[1] !== language) return null;
   let label = (match[2] || "").trim();
   if (label.startsWith("[") && label.endsWith("]") && label.length >= 2) {
     label = label.slice(1, -1).trim();
   }
   return copyChipFreeze({ label: copyChipNormalizeLabel(label) });
+}
+
+function copyChipParseFenceInfo(info) {
+  return chipParseFenceInfoFor(info, "bob-copy");
 }
 
 function copyChipFencePayload(bodyLines) {
@@ -461,7 +518,11 @@ function copyChipSerializeFailure(reason) {
   return copyChipFreeze({ ok: false, reason });
 }
 
-function copyChipSerialize(input = {}, options = {}) {
+// Serialize either kind. `spec` names the inline prefix, the fence
+// language, the empty-payload reason, whether a block in a table cell is
+// refused, and whether the fence must outrun indented closer-like body lines
+// (`  ````). Command chips set both; copy chips keep their v2 bytes.
+function chipSerializeWith(input, options, spec) {
   const source = input && typeof input === "object" ? input : {};
   const rawLabel = source.label == null ? "" : String(source.label);
   if (rawLabel.includes("\n") || rawLabel.includes("\r")) {
@@ -469,7 +530,7 @@ function copyChipSerialize(input = {}, options = {}) {
   }
   let text = source.text == null ? "" : copyChipNormalizeNewlines(source.text);
   if (!copyChipHasNonWhitespace(text)) {
-    return copyChipSerializeFailure(COPY_CHIP_NOTHING_TO_COPY);
+    return copyChipSerializeFailure(spec.emptyReason);
   }
   const label = copyChipNormalizeLabel(rawLabel);
   const table = Boolean(options && options.table);
@@ -477,8 +538,8 @@ function copyChipSerialize(input = {}, options = {}) {
 
   if (!text.includes("\n")) {
     let inner = label == null
-      ? "copy: " + text
-      : "copy[" + copyChipEscapeLabel(label) + "]: " + text;
+      ? spec.prefix + ": " + text
+      : spec.prefix + "[" + copyChipEscapeLabel(label) + "]: " + text;
     if (table) inner = copyChipEscapeTablePipes(inner);
     const delimiter = "`".repeat(copyChipLongestRun(inner, "`") + 1);
     const padded = inner.endsWith("`") ? " " + inner + " " : inner;
@@ -489,15 +550,20 @@ function copyChipSerialize(input = {}, options = {}) {
     });
   }
 
+  if (table && spec.tableBlockReason) {
+    return copyChipSerializeFailure(spec.tableBlockReason);
+  }
   const fenceChar = label && label.includes("`") ? "~" : "`";
   const bodyLines = text.split("\n");
   let longestLeading = 0;
   for (const line of bodyLines) {
-    const run = copyChipLeadingRun(line, fenceChar);
+    const run = spec.closerAware
+      ? copyChipLeadingRun(line.replace(/^\s+/, ""), fenceChar)
+      : copyChipLeadingRun(line, fenceChar);
     if (run > longestLeading) longestLeading = run;
   }
   const fence = fenceChar.repeat(Math.max(3, longestLeading + 1));
-  const info = label == null ? "bob-copy" : "bob-copy " + label;
+  const info = label == null ? spec.language : spec.language + " " + label;
   const open = indent + fence + info;
   const close = indent + fence;
   const body = bodyLines.map((line) => indent + line).join("\n");
@@ -506,6 +572,365 @@ function copyChipSerialize(input = {}, options = {}) {
     form: "block",
     markdown: open + "\n" + body + "\n" + close,
   });
+}
+
+const COPY_CHIP_SERIALIZE_SPEC = copyChipFreeze({
+  prefix: "copy",
+  language: "bob-copy",
+  emptyReason: COPY_CHIP_NOTHING_TO_COPY,
+  tableBlockReason: null,
+  closerAware: false,
+});
+
+function copyChipSerialize(input = {}, options = {}) {
+  return chipSerializeWith(input, options, COPY_CHIP_SERIALIZE_SPEC);
+}
+// ---- src/021-run-grammar.js ----
+// Command-chip grammar: `run:` spans and `bob-run` fences. Pure code with
+// no Obsidian imports and no Command Mode calls; whether the payload is a
+// legal bob command line is Command Mode's `resolve`, never this file's.
+const RUN_CHIP_NOTHING_TO_RUN = "nothing to run";
+const RUN_CHIP_TABLE_BLOCK = "can't put a bob-run fence in a table cell";
+
+const RUN_CHIP_SERIALIZE_SPEC = copyChipFreeze({
+  prefix: "run",
+  language: "bob-run",
+  emptyReason: RUN_CHIP_NOTHING_TO_RUN,
+  tableBlockReason: RUN_CHIP_TABLE_BLOCK,
+  closerAware: true,
+});
+
+// `run [ "[" LABEL "]" ] ":" [ " " ] TEXT`, exactly the copy grammar with
+// the lowercase `run` prefix. Returns frozen `{ label, text }` or null.
+function runChipParseContent(content) {
+  return chipParsePrefixedContent(content, "run");
+}
+
+// The run-kind filter of chipScanLine, in the same shape as copy's
+// `scanLine`: frozen `{ from, to, raw, label, text }` per command chip.
+function runChipScanLine(line, options = {}) {
+  if (typeof line !== "string") return copyChipFreeze([]);
+  const chips = [];
+  for (const chip of chipScanLine(line, options)) {
+    if (chip.kind !== "run") continue;
+    chips.push(copyChipFreeze({
+      from: chip.from,
+      to: chip.to,
+      raw: chip.raw,
+      label: chip.label,
+      text: chip.text,
+    }));
+  }
+  return copyChipFreeze(chips);
+}
+
+// `bob-run` plus an optional label, mirroring `bob-copy`.
+function runChipParseFenceInfo(info) {
+  return chipParseFenceInfoFor(info, "bob-run");
+}
+
+// Text with a line break becomes a `bob-run` fence whose marker outruns
+// every body line's fence-character run, even an indented one; otherwise an
+// inline span with the shortest safe backtick run, label escapes, and `\|`
+// in tables. A block in a table cell is refused.
+function runChipSerialize(input = {}, options = {}) {
+  return chipSerializeWith(input, options, RUN_CHIP_SERIALIZE_SPEC);
+}
+
+function chipIsWhitespace(character) {
+  return character === undefined || /\s/.test(character);
+}
+
+// A cursor over sorted code spans that answers "which span covers index?"
+// in amortized constant time for a left-to-right walk.
+function chipCodeSpanCursor(spans) {
+  const sorted = Array.isArray(spans)
+    ? spans.slice().sort((left, right) => left.from - right.from)
+    : [];
+  let at = 0;
+  return (index) => {
+    while (at < sorted.length && sorted[at].to <= index) at += 1;
+    if (at < sorted.length && index >= sorted[at].from && index < sorted[at].to) {
+      return sorted[at];
+    }
+    return null;
+  };
+}
+
+// The first `needle` at or after `from` that sits outside every code span
+// (and, when `unescaped`, is not backslash-escaped), or -1.
+function chipFindOutsideCode(line, needle, from, spans, unescaped) {
+  const covering = chipCodeSpanCursor(spans);
+  let index = from;
+  while (index <= line.length - needle.length) {
+    const span = covering(index);
+    if (span) {
+      index = span.to;
+      continue;
+    }
+    if (line.startsWith(needle, index) && !(unescaped && copyChipIsEscapedAt(line, index))) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+// An inline-math closer: an unescaped `$` outside code, preceded by a
+// non-space, not doubled, and not followed by a digit (so "$5-$10" stays
+// prose). Returns its index or -1.
+function chipFindInlineMathClose(line, from, spans) {
+  const covering = chipCodeSpanCursor(spans);
+  let index = from;
+  while (index < line.length) {
+    const span = covering(index);
+    if (span) {
+      index = span.to;
+      continue;
+    }
+    if (
+      line[index] === "$" &&
+      !copyChipIsEscapedAt(line, index) &&
+      line[index + 1] !== "$" &&
+      !chipIsWhitespace(line[index - 1]) &&
+      !/[0-9]/.test(line[index + 1] || "")
+    ) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+// `[from, to)` ranges of inline math (`$…$`, `$$…$$`), Obsidian comments
+// (`%%…%%`), and HTML comments (`<!-- … -->`) whose delimiters sit outside
+// code spans. An unclosed comment opener runs to the end of the line, since
+// it opens a comment that continues on later lines. Never throws.
+function chipShieldedRanges(line, codeSpans) {
+  try {
+    const text = typeof line === "string" ? line : "";
+    const spans = Array.isArray(codeSpans) ? codeSpans : copyChipFindCodeSpans(text);
+    const covering = chipCodeSpanCursor(spans);
+    const ranges = [];
+    let index = 0;
+    while (index < text.length) {
+      const span = covering(index);
+      if (span) {
+        index = span.to;
+        continue;
+      }
+      if (text.startsWith("%%", index)) {
+        const close = chipFindOutsideCode(text, "%%", index + 2, spans, false);
+        const to = close < 0 ? text.length : close + 2;
+        ranges.push(copyChipFreeze({ from: index, to }));
+        index = to;
+        continue;
+      }
+      if (text.startsWith("<!--", index)) {
+        const close = chipFindOutsideCode(text, "-->", index + 4, spans, false);
+        const to = close < 0 ? text.length : close + 3;
+        ranges.push(copyChipFreeze({ from: index, to }));
+        index = to;
+        continue;
+      }
+      if (text[index] === "$" && !copyChipIsEscapedAt(text, index)) {
+        if (text[index + 1] === "$") {
+          const close = chipFindOutsideCode(text, "$$", index + 2, spans, true);
+          if (close >= 0) {
+            ranges.push(copyChipFreeze({ from: index, to: close + 2 }));
+            index = close + 2;
+            continue;
+          }
+          index += 2;
+          continue;
+        }
+        if (!chipIsWhitespace(text[index + 1])) {
+          const close = chipFindInlineMathClose(text, index + 1, spans);
+          if (close >= 0) {
+            ranges.push(copyChipFreeze({ from: index, to: close + 1 }));
+            index = close + 1;
+            continue;
+          }
+        }
+      }
+      index += 1;
+    }
+    return copyChipFreeze(ranges);
+  } catch (error) {
+    return copyChipFreeze([]);
+  }
+}
+
+// The matching close of a bracket pair opened at `open`, counting nesting,
+// skipping code spans and escapes, on this line. Returns its index or -1.
+function chipMatchBracket(line, open, opener, closer, spans) {
+  const covering = chipCodeSpanCursor(spans);
+  let depth = 0;
+  let index = open;
+  while (index < line.length) {
+    const span = covering(index);
+    if (span) {
+      index = span.to;
+      continue;
+    }
+    const character = line[index];
+    if (!copyChipIsEscapedAt(line, index)) {
+      if (character === opener) depth += 1;
+      else if (character === closer) {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+// The `)` that ends an inline link destination starting at `open` (the
+// `(`), allowing a `<…>` destination and balanced parentheses. -1 if none.
+function chipMatchLinkDestination(line, open) {
+  let index = open + 1;
+  while (line[index] === " " || line[index] === "\t") index += 1;
+  if (line[index] === "<") {
+    let close = index + 1;
+    while (close < line.length && (line[close] !== ">" || copyChipIsEscapedAt(line, close))) {
+      if (line[close] === "<" && !copyChipIsEscapedAt(line, close)) return -1;
+      close += 1;
+    }
+    if (close >= line.length) return -1;
+    index = close + 1;
+  }
+  let depth = 1;
+  while (index < line.length) {
+    const character = line[index];
+    if (!copyChipIsEscapedAt(line, index)) {
+      if (character === "(") depth += 1;
+      else if (character === ")") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    index += 1;
+  }
+  return -1;
+}
+
+function chipRangesOverlap(ranges, from, to) {
+  for (const range of ranges) {
+    if (from < range.to && to > range.from) return true;
+  }
+  return false;
+}
+
+const CHIP_AUTOLINK_RE = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/;
+const CHIP_BARE_URL_RE = /https?:\/\/[^\s<>`]+/g;
+
+// Trim GFM-style trailing punctuation and unbalanced `)` from a bare URL.
+function chipTrimBareUrl(url) {
+  let end = url.length;
+  for (;;) {
+    const last = url[end - 1];
+    if (/[?!.,:;*_~'"]/.test(last || "")) {
+      end -= 1;
+      continue;
+    }
+    if (last === ")") {
+      const body = url.slice(0, end);
+      const opens = (body.match(/\(/g) || []).length;
+      const closes = (body.match(/\)/g) || []).length;
+      if (closes > opens) {
+        end -= 1;
+        continue;
+      }
+    }
+    break;
+  }
+  return url.slice(0, end);
+}
+
+// `[from, to)` ranges of the links on one line, outside code spans:
+// wikilinks and embeds (`[[…]]`, `![[…]]`), inline Markdown links and
+// images (`[…](…)`, `![…](…)`), autolinks (`<scheme:…>`, `<a@b.c>`), and
+// bare `http(s)://` URLs. Reference-style links are not counted, because
+// task rows' `[field:: value]` brackets would otherwise read as links.
+// Returns a frozen, sorted array of frozen `{ kind, from, to }`. Never throws.
+function chipLinkSpans(line) {
+  try {
+    if (typeof line !== "string" || line === "") return copyChipFreeze([]);
+    const spans = copyChipFindCodeSpans(line);
+    const links = [];
+    const take = (kind, from, to) => {
+      links.push(copyChipFreeze({ kind, from, to }));
+    };
+
+    let covering = chipCodeSpanCursor(spans);
+    for (let index = 0; index < line.length; index += 1) {
+      const span = covering(index);
+      if (span) {
+        index = span.to - 1;
+        continue;
+      }
+      if (line[index] !== "[" || line[index + 1] !== "[" || copyChipIsEscapedAt(line, index)) continue;
+      const close = line.indexOf("]]", index + 2);
+      if (close < 0) break;
+      const embed = index > 0 && line[index - 1] === "!" && !copyChipIsEscapedAt(line, index - 1);
+      take(embed ? "embed" : "wikilink", embed ? index - 1 : index, close + 2);
+      index = close + 1;
+    }
+
+    covering = chipCodeSpanCursor(spans);
+    for (let index = 0; index < line.length; index += 1) {
+      const span = covering(index);
+      if (span) {
+        index = span.to - 1;
+        continue;
+      }
+      if (line[index] !== "[" || copyChipIsEscapedAt(line, index)) continue;
+      if (chipRangesOverlap(links, index, index + 1)) continue;
+      const labelClose = chipMatchBracket(line, index, "[", "]", spans);
+      if (labelClose < 0 || line[labelClose + 1] !== "(") continue;
+      const destinationClose = chipMatchLinkDestination(line, labelClose + 1);
+      if (destinationClose < 0) continue;
+      const image = index > 0 && line[index - 1] === "!" && !copyChipIsEscapedAt(line, index - 1);
+      const from = image ? index - 1 : index;
+      if (chipRangesOverlap(links, from, destinationClose + 1)) continue;
+      take(image ? "image" : "link", from, destinationClose + 1);
+      index = destinationClose;
+    }
+
+    covering = chipCodeSpanCursor(spans);
+    for (let index = 0; index < line.length; index += 1) {
+      const span = covering(index);
+      if (span) {
+        index = span.to - 1;
+        continue;
+      }
+      if (line[index] !== "<" || copyChipIsEscapedAt(line, index)) continue;
+      const match = CHIP_AUTOLINK_RE.exec(line.slice(index));
+      if (!match) continue;
+      const to = index + match[0].length;
+      if (chipRangesOverlap(links, index, to)) continue;
+      take("autolink", index, to);
+      index = to - 1;
+    }
+
+    CHIP_BARE_URL_RE.lastIndex = 0;
+    let match = null;
+    while ((match = CHIP_BARE_URL_RE.exec(line)) !== null) {
+      const from = match.index;
+      const url = chipTrimBareUrl(match[0]);
+      const to = from + url.length;
+      if (!/^https?:\/\/[^/]/.test(url)) continue;
+      if (chipRangesOverlap(links, from, to)) continue;
+      if (chipRangesOverlap(spans, from, to)) continue;
+      take("url", from, to);
+    }
+
+    links.sort((left, right) => left.from - right.from || left.to - right.to);
+    return copyChipFreeze(links);
+  } catch (error) {
+    return copyChipFreeze([]);
+  }
 }
 // ---- src/030-feedback.js ----
 // Shared clipboard and feedback path for copy chips.
@@ -2265,18 +2690,18 @@ function copyChipFindFenceBlock(lines, lineIndex) {
   }
 }
 
-// A ready block chip for a `bob-copy` fence block, or null when the block
-// is another language. Body lines dedent under the opening; a final empty
-// body line keeps one trailing LF through copyChipFencePayload. `lineIndex`
-// is the cursor line or, for a task-scope result, the fence opening; [from,
-// to] covers that source line so a missing widget still flashes in place.
-// Never throws.
-function copyChipFenceBlockChip(lines, lineIndex, block) {
+// The `{ label, text }` of a fence block whose info string `parseInfo`
+// accepts (`bob-copy` or `bob-run`), or null for any other language. Body
+// lines dedent under the opening; a final empty body line keeps one
+// trailing LF through copyChipFencePayload. Never throws.
+function chipFenceBlockBody(lines, block, parseInfo) {
   try {
-    if (!block || !block.opening) return null;
+    if (!Array.isArray(lines) || !block || !block.opening || typeof parseInfo !== "function") {
+      return null;
+    }
     let parsed = null;
     try {
-      parsed = copyChipParseFenceInfo(block.opening.info || "");
+      parsed = parseInfo(block.opening.info || "");
     } catch (error) {
       return null;
     }
@@ -2292,7 +2717,22 @@ function copyChipFenceBlockChip(lines, lineIndex, block) {
       }
       body.push(copyChipFenceDedentLine(raw, block.opening.indent));
     }
-    const text = copyChipFencePayload(body);
+    return { label: parsed.label, text: copyChipFencePayload(body) };
+  } catch (error) {
+    return null;
+  }
+}
+
+// A ready block chip for a `bob-copy` fence block (body from
+// chipFenceBlockBody), or null when the block is another language.
+// `lineIndex` is the cursor line or, for a task-scope result, the fence
+// opening; [from, to] covers that source line so a missing widget still
+// flashes in place. Never throws.
+function copyChipFenceBlockChip(lines, lineIndex, block) {
+  try {
+    const parsed = chipFenceBlockBody(lines, block, copyChipParseFenceInfo);
+    if (!parsed) return null;
+    const text = parsed.text;
     let cursorLine = "";
     try {
       cursorLine = String(lines[lineIndex] === undefined || lines[lineIndex] === null ? "" : lines[lineIndex]);
@@ -2354,7 +2794,17 @@ function copyChipNormalizeTaskScope(scope, lines, cursorLine) {
 // determined in one forward pass; each touched bob-copy block is then parsed
 // once using its opening line and real close line. Never throws.
 function copyChipScanTaskScope(lines, scopeLines) {
+  return chipScanTaskScope(lines, scopeLines, "copy");
+}
+
+// The task-scope scan for one chip kind (`copy` or `run`): inline chips of
+// that kind on the scope's lines, then each touched fence of that kind's
+// language once. Other kinds and other fences contribute nothing, so kinds
+// never compete. Never throws.
+function chipScanTaskScope(lines, scopeLines, kind) {
   try {
+    const run = kind === "run";
+    const parseInfo = run ? runChipParseFenceInfo : copyChipParseFenceInfo;
     const wanted = new Set(scopeLines);
     const inlineChips = [];
     const blocks = new Map();
@@ -2382,7 +2832,7 @@ function copyChipScanTaskScope(lines, scopeLines) {
       }
 
       if (activeFence) {
-        if (wanted.has(index) && activeFence.isBobCopy) {
+        if (wanted.has(index) && activeFence.isKind) {
           touchedBlocks.add(activeFence.openIndex);
         }
         if (copyChipCursorFenceCloses(text, activeFence.opening)) {
@@ -2394,16 +2844,16 @@ function copyChipScanTaskScope(lines, scopeLines) {
 
       const opening = copyChipFenceOpeningFromLine(text);
       if (opening) {
-        const parsed = copyChipParseFenceInfo(opening.info || "");
+        const parsed = parseInfo(opening.info || "");
         const block = {
           openIndex: index,
           opening,
           closeIndex: null,
-          isBobCopy: Boolean(parsed),
+          isKind: Boolean(parsed),
         };
         blocks.set(index, block);
         activeFence = block;
-        if (wanted.has(index) && block.isBobCopy) {
+        if (wanted.has(index) && block.isKind) {
           touchedBlocks.add(index);
         }
         continue;
@@ -2412,13 +2862,14 @@ function copyChipScanTaskScope(lines, scopeLines) {
       if (!wanted.has(index)) continue;
       let found = [];
       try {
-        found = copyChipScanLine(text, {
+        found = chipScanLine(text, {
           table: copyChipCursorTableForLine(text),
         });
       } catch (error) {
         found = [];
       }
       for (const chip of Array.isArray(found) ? found : []) {
+        if (chip.kind !== kind) continue;
         inlineChips.push({
           form: "inline",
           label: chip.label,
@@ -2434,6 +2885,11 @@ function copyChipScanTaskScope(lines, scopeLines) {
     for (const openIndex of touchedBlocks) {
       const block = blocks.get(openIndex);
       if (!block) continue;
+      if (run) {
+        const chip = runChipFenceBlockChip(lines, openIndex, block);
+        if (chip) chips.push(chip);
+        continue;
+      }
       const result = copyChipFenceBlockChip(lines, openIndex, block);
       if (result && result.chip) chips.push(result.chip);
     }
@@ -2554,6 +3010,204 @@ function copyChipAt(request) {
   } catch (error) {
     return copyChipFreeze({ state: "none", count: 0 });
   }
+}
+// ---- src/066-command-cursor.js ----
+// Pure command-chip cursor rule: which command chip would ⌘↵ run? It reads
+// live buffer lines only, never the metadata cache, never Command Mode, and
+// never the vault. Copy chips never count here, and copyChipAt never sees
+// command chips: kinds never compete.
+
+function commandChipNone() {
+  return copyChipFreeze({ state: "none", count: 0 });
+}
+
+function commandChipAmbiguous(count, via) {
+  const where = via === "task" ? "in this task" : "on this line";
+  return copyChipFreeze({
+    state: "ambiguous",
+    count,
+    via,
+    message: count + " command chips " + where + " · move onto one",
+  });
+}
+
+function commandChipReady(count, via, chip) {
+  return copyChipFreeze({ state: "ready", count, via, chip: copyChipFreeze(chip) });
+}
+
+function commandChipLineText(lines, index) {
+  try {
+    const value = lines[index];
+    return String(value === undefined || value === null ? "" : value);
+  } catch (error) {
+    return "";
+  }
+}
+
+// A block chip for a `bob-run` fence, or null for any other language.
+// `line` is the cursor line for a fence result or the opening line for a
+// task result, and `[from, to)` covers that source line. `fence` names the
+// opening and closing lines (`close` is null for an unclosed fence that runs
+// to the end of the note) so callers can find the card. Never throws.
+function runChipFenceBlockChip(lines, lineIndex, block) {
+  try {
+    const body = chipFenceBlockBody(lines, block, runChipParseFenceInfo);
+    if (!body) return null;
+    return copyChipFreeze({
+      form: "block",
+      label: body.label,
+      text: body.text,
+      line: lineIndex,
+      from: 0,
+      to: commandChipLineText(lines, lineIndex).length,
+      fence: copyChipFreeze({
+        open: block.openIndex,
+        close: block.closeIndex == null ? null : block.closeIndex,
+      }),
+    });
+  } catch (error) {
+    return null;
+  }
+}
+
+function commandChipInline(chip, line) {
+  return {
+    form: "inline",
+    label: chip.label,
+    text: chip.text,
+    line,
+    from: chip.from,
+    to: chip.to,
+  };
+}
+
+// The ⌘↵ rule over zero-based lines and UTF-16 offsets; `from` / `to`
+// include the delimiters with `to` exclusive, matching scanLine:
+//   1. the cursor is on or inside a `bob-run` fence: that fence (any other
+//      fence, and frontmatter, is `none`, so code samples stay inert);
+//   2. a command chip under the cursor (`from <= ch < to`): that chip;
+//   3. the cursor is on a link (`from <= ch < to` of chipLinkSpans): `none`,
+//      so the existing chain opens the link;
+//   4. one command chip on the line: that chip; two or more: `ambiguous`;
+//   5. the line holds any link: `none`, so the line's own target wins;
+//   6. the only command chip in the task scope (`{ kind: "task", lines }`,
+//      which must own the cursor line; a touched `bob-run` fence counts
+//      once): that chip; two or more: `ambiguous`;
+//   7. otherwise `none`.
+// Results are frozen: `{ state: "none", count: 0 }`,
+// `{ state: "ambiguous", count, via: "line" | "task", message }`, or
+// `{ state: "ready", count, via: "fence" | "cursor" | "line" | "task", chip }`.
+// Never throws.
+function commandChipAt(request) {
+  try {
+    const req = request && typeof request === "object" ? request : {};
+    const lines = Array.isArray(req.lines) ? req.lines : null;
+    const line = req.line;
+    const ch = req.ch;
+    if (!lines || !Number.isInteger(line) || line < 0 || line >= lines.length) {
+      return commandChipNone();
+    }
+    if (!Number.isInteger(ch) || ch < 0) return commandChipNone();
+    if (copyChipCursorInFrontmatter(lines, line)) return commandChipNone();
+
+    const block = copyChipFindFenceBlock(lines, line);
+    if (block) {
+      const chip = runChipFenceBlockChip(lines, line, block);
+      return chip ? commandChipReady(1, "fence", chip) : commandChipNone();
+    }
+
+    const rawLine = commandChipLineText(lines, line);
+    const chips = runChipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    for (const chip of chips) {
+      if (ch >= chip.from && ch < chip.to) {
+        return commandChipReady(chips.length, "cursor", commandChipInline(chip, line));
+      }
+    }
+
+    const links = chipLinkSpans(rawLine);
+    for (const link of links) {
+      if (ch >= link.from && ch < link.to) return commandChipNone();
+    }
+
+    if (chips.length === 1) {
+      return commandChipReady(1, "line", commandChipInline(chips[0], line));
+    }
+    if (chips.length > 1) return commandChipAmbiguous(chips.length, "line");
+    if (links.length > 0) return commandChipNone();
+
+    const scopeLines = copyChipNormalizeTaskScope(req.scope, lines, line);
+    if (!scopeLines) return commandChipNone();
+    const taskChips = chipScanTaskScope(lines, scopeLines, "run");
+    if (taskChips.length === 1) return commandChipReady(1, "task", taskChips[0]);
+    if (taskChips.length > 1) return commandChipAmbiguous(taskChips.length, "task");
+    return commandChipNone();
+  } catch (error) {
+    return commandChipNone();
+  }
+}
+
+// `api.commandChips` v1: the pure members. Frozen, and every member is
+// total: it never throws. Later phases add editor-bound members (keymap's
+// `targetAt` / `runAtCursor`), which callers feature-detect with `typeof`.
+function commandChipBuildApi() {
+  return copyChipFreeze({
+    version: 1,
+    parse(content) {
+      try {
+        return runChipParseContent(content);
+      } catch (error) {
+        return null;
+      }
+    },
+    scanLine(line, options) {
+      try {
+        return runChipScanLine(line, options);
+      } catch (error) {
+        return copyChipFreeze([]);
+      }
+    },
+    parseFenceInfo(info) {
+      try {
+        return runChipParseFenceInfo(info);
+      } catch (error) {
+        return null;
+      }
+    },
+    fencePayload(bodyLines) {
+      try {
+        return copyChipFencePayload(bodyLines);
+      } catch (error) {
+        return "";
+      }
+    },
+    serialize(input, options) {
+      try {
+        return runChipSerialize(input, options);
+      } catch (error) {
+        return copyChipFreeze({ ok: false, reason: "serialize failed" });
+      }
+    },
+    chipAt(request) {
+      try {
+        return commandChipAt(request);
+      } catch (error) {
+        return commandChipNone();
+      }
+    },
+  });
+}
+
+// The inert namespace used when the real one cannot be built.
+function commandChipFallbackApi() {
+  return copyChipFreeze({
+    version: 1,
+    parse: () => null,
+    scanLine: () => copyChipFreeze([]),
+    parseFenceInfo: () => null,
+    fencePayload: () => "",
+    serialize: () => copyChipFreeze({ ok: false, reason: "unavailable" }),
+    chipAt: () => commandChipNone(),
+  });
 }
 // ---- src/070-commands.js ----
 // Cursor command, public copy/flash path, and source-range flashes.
@@ -5300,6 +5954,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             copyChip: async () => copyChipFreeze({ ok: false, reason: "unavailable" }),
             flash: () => false,
           }),
+          commandChips: commandChipFallbackApi(),
         });
       }
       if (typeof console !== "undefined" && typeof console.warn === "function") {
@@ -5488,7 +6143,13 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
         }
       },
     });
-    this.api = copyChipFreeze({ copyChips });
+    let commandChips = null;
+    try {
+      commandChips = commandChipBuildApi();
+    } catch (error) {
+      commandChips = commandChipFallbackApi();
+    }
+    this.api = copyChipFreeze({ copyChips, commandChips });
   }
 }
 // ---- src/099-exports.js ----
@@ -5498,6 +6159,24 @@ module.exports.helpers = {
   COPY_CHIP_LABELS_ARE_ONE_LINE,
   COPY_CHIP_SUCCESS_MS,
   COPY_CHIP_FAILURE_MS,
+  RUN_CHIP_NOTHING_TO_RUN,
+  RUN_CHIP_TABLE_BLOCK,
+  chipParsePrefixedContent,
+  chipScanLine,
+  chipShieldedRanges,
+  chipLinkSpans,
+  chipParseFenceInfoFor,
+  chipSerializeWith,
+  chipFenceBlockBody,
+  chipScanTaskScope,
+  runChipParseContent,
+  runChipScanLine,
+  runChipParseFenceInfo,
+  runChipSerialize,
+  runChipFenceBlockChip,
+  commandChipAt,
+  commandChipBuildApi,
+  commandChipFallbackApi,
   copyChipParseContent,
   copyChipNormalizeSpan,
   copyChipScanLine,

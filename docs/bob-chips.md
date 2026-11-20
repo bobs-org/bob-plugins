@@ -13,7 +13,7 @@ Bob Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |
@@ -230,6 +230,66 @@ If the note, editor, or captured source changed, save refuses with **The
 note changed — reopen the card** and writes nothing.
 
 Authored payloads live on copy chips; live context lives on the Copy card, whose `C` row copies the chip at the cursor.
+
+## Command chip grammar
+
+A command chip is a `run:` code span or a `bob-run` fence that holds a bob
+command line. This version parses command chips and exposes them through
+`api.commandChips`. It does not render or run them yet, so a `run:` span
+still reads as plain inline code.
+
+| You type | Parses as |
+| --- | --- |
+| `` `run: bob task reconcile` `` | Unlabeled chip, text `bob task reconcile` |
+| `` `run[Sync]: bob gcal sync -n 2 && bob gkeep pull` `` | Chip labeled `Sync`, one `&&` sequence |
+| a ` ```bob-run Morning sync ` fence | Block chip: the body, one step per line |
+
+The inline grammar is `run [ "[" LABEL "]" ] ":" [ " " ] TEXT`. It is the
+copy grammar above with a lowercase `run` prefix, so labels, escapes,
+longer backtick runs, and `\|` in table cells work the same way. `TEXT` is
+verbatim. The grammar never judges the command: Bob Command Mode decides
+whether every step starts with the word `bob` and whether the text is free
+of shell syntax. Plain `` `bob …` `` spans never become command chips.
+
+A `bob-run` fence follows the `bob-copy` fence rules. The language token
+is exactly `bob-run`, and the rest of the info string is the optional
+label. The body is LF-joined and verbatim. A fence nested in a list item
+dedents under its opening, and an unclosed fence runs to the end of the
+note.
+
+One scanning pass finds both kinds. Command chips skip every span that
+copy chips skip: link labels, wikilinks, and physical multiline spans. The
+pure scanner also skips command chips inside inline math (`$…$`,
+`$$…$$`), `%%` comments, and HTML comments, because a command chip is a
+button. An unclosed comment opener shields the rest of its line. Dollar
+amounts such as `$5 and $6` stay prose.
+
+Serializing writes an inline span for one-line text and a `bob-run` fence
+for multi-line text. The fence marker is longer than any fence run in the
+body, even an indented one, so a body line never closes the fence early.
+A multi-line payload in a table cell is refused with **can't put a bob-run
+fence in a table cell**, and a blank one with **nothing to run**.
+
+### Which command chip ⌘↵ targets
+
+`api.commandChips.chipAt({ lines, line, ch, scope? })` is the pure rule
+that later decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
+
+1. The cursor is on or inside a `bob-run` fence: that fence. Any other
+   fence, and frontmatter, is `none`.
+2. A command chip under the cursor (`from <= ch < to`): that chip.
+3. The cursor is on a link: `none`, so the existing ⌘↵ chain opens it.
+   Links are Markdown links and images, wikilinks and embeds, autolinks,
+   and bare `http(s)://` URLs outside code spans.
+4. One command chip on the line: that chip. Two or more is `ambiguous`:
+   **N command chips on this line · move onto one**.
+5. The line holds any link: `none`, so the line's own target wins.
+6. The only command chip in the task scope: that chip. A touched `bob-run`
+   fence counts once, and nested subtasks are outside the scope. Two or
+   more is `ambiguous`: **N command chips in this task · move onto one**.
+7. Otherwise `none`.
+
+Copy chips never count here, and `gy` never sees command chips.
 
 ## Non-goals
 

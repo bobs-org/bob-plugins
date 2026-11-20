@@ -197,18 +197,18 @@ function copyChipFindFenceBlock(lines, lineIndex) {
   }
 }
 
-// A ready block chip for a `bob-copy` fence block, or null when the block
-// is another language. Body lines dedent under the opening; a final empty
-// body line keeps one trailing LF through copyChipFencePayload. `lineIndex`
-// is the cursor line or, for a task-scope result, the fence opening; [from,
-// to] covers that source line so a missing widget still flashes in place.
-// Never throws.
-function copyChipFenceBlockChip(lines, lineIndex, block) {
+// The `{ label, text }` of a fence block whose info string `parseInfo`
+// accepts (`bob-copy` or `bob-run`), or null for any other language. Body
+// lines dedent under the opening; a final empty body line keeps one
+// trailing LF through copyChipFencePayload. Never throws.
+function chipFenceBlockBody(lines, block, parseInfo) {
   try {
-    if (!block || !block.opening) return null;
+    if (!Array.isArray(lines) || !block || !block.opening || typeof parseInfo !== "function") {
+      return null;
+    }
     let parsed = null;
     try {
-      parsed = copyChipParseFenceInfo(block.opening.info || "");
+      parsed = parseInfo(block.opening.info || "");
     } catch (error) {
       return null;
     }
@@ -224,7 +224,22 @@ function copyChipFenceBlockChip(lines, lineIndex, block) {
       }
       body.push(copyChipFenceDedentLine(raw, block.opening.indent));
     }
-    const text = copyChipFencePayload(body);
+    return { label: parsed.label, text: copyChipFencePayload(body) };
+  } catch (error) {
+    return null;
+  }
+}
+
+// A ready block chip for a `bob-copy` fence block (body from
+// chipFenceBlockBody), or null when the block is another language.
+// `lineIndex` is the cursor line or, for a task-scope result, the fence
+// opening; [from, to] covers that source line so a missing widget still
+// flashes in place. Never throws.
+function copyChipFenceBlockChip(lines, lineIndex, block) {
+  try {
+    const parsed = chipFenceBlockBody(lines, block, copyChipParseFenceInfo);
+    if (!parsed) return null;
+    const text = parsed.text;
     let cursorLine = "";
     try {
       cursorLine = String(lines[lineIndex] === undefined || lines[lineIndex] === null ? "" : lines[lineIndex]);
@@ -286,7 +301,17 @@ function copyChipNormalizeTaskScope(scope, lines, cursorLine) {
 // determined in one forward pass; each touched bob-copy block is then parsed
 // once using its opening line and real close line. Never throws.
 function copyChipScanTaskScope(lines, scopeLines) {
+  return chipScanTaskScope(lines, scopeLines, "copy");
+}
+
+// The task-scope scan for one chip kind (`copy` or `run`): inline chips of
+// that kind on the scope's lines, then each touched fence of that kind's
+// language once. Other kinds and other fences contribute nothing, so kinds
+// never compete. Never throws.
+function chipScanTaskScope(lines, scopeLines, kind) {
   try {
+    const run = kind === "run";
+    const parseInfo = run ? runChipParseFenceInfo : copyChipParseFenceInfo;
     const wanted = new Set(scopeLines);
     const inlineChips = [];
     const blocks = new Map();
@@ -314,7 +339,7 @@ function copyChipScanTaskScope(lines, scopeLines) {
       }
 
       if (activeFence) {
-        if (wanted.has(index) && activeFence.isBobCopy) {
+        if (wanted.has(index) && activeFence.isKind) {
           touchedBlocks.add(activeFence.openIndex);
         }
         if (copyChipCursorFenceCloses(text, activeFence.opening)) {
@@ -326,16 +351,16 @@ function copyChipScanTaskScope(lines, scopeLines) {
 
       const opening = copyChipFenceOpeningFromLine(text);
       if (opening) {
-        const parsed = copyChipParseFenceInfo(opening.info || "");
+        const parsed = parseInfo(opening.info || "");
         const block = {
           openIndex: index,
           opening,
           closeIndex: null,
-          isBobCopy: Boolean(parsed),
+          isKind: Boolean(parsed),
         };
         blocks.set(index, block);
         activeFence = block;
-        if (wanted.has(index) && block.isBobCopy) {
+        if (wanted.has(index) && block.isKind) {
           touchedBlocks.add(index);
         }
         continue;
@@ -344,13 +369,14 @@ function copyChipScanTaskScope(lines, scopeLines) {
       if (!wanted.has(index)) continue;
       let found = [];
       try {
-        found = copyChipScanLine(text, {
+        found = chipScanLine(text, {
           table: copyChipCursorTableForLine(text),
         });
       } catch (error) {
         found = [];
       }
       for (const chip of Array.isArray(found) ? found : []) {
+        if (chip.kind !== kind) continue;
         inlineChips.push({
           form: "inline",
           label: chip.label,
@@ -366,6 +392,11 @@ function copyChipScanTaskScope(lines, scopeLines) {
     for (const openIndex of touchedBlocks) {
       const block = blocks.get(openIndex);
       if (!block) continue;
+      if (run) {
+        const chip = runChipFenceBlockChip(lines, openIndex, block);
+        if (chip) chips.push(chip);
+        continue;
+      }
       const result = copyChipFenceBlockChip(lines, openIndex, block);
       if (result && result.chip) chips.push(result.chip);
     }

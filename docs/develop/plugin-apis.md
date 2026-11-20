@@ -725,6 +725,57 @@ span uses a short-lived `StateEffect` / mark-decoration flash in
 `--bob-yank-flash-bg`. A failed visual lookup never turns a successful
 clipboard write into a false failure.
 
+### Command chips
+
+`app.plugins.plugins["bob-chips"].api.commandChips` is namespace version 1,
+beside the unchanged `copyChips` v2. It is frozen, pure, and never throws.
+It never calls Bob Command Mode, never spawns bob, and never writes the
+vault. Later members, such as editor-bound targeting, are additive. Detect
+them with `typeof`.
+
+```js
+const commandChips = app.plugins.plugins["bob-chips"]?.api?.commandChips;
+if (commandChips?.version >= 1) {
+  const task = nav?.version >= 3 && nav.taskScope?.version >= 1
+    ? nav.taskScope.at({ lines, line })
+    : null;
+  const hit = commandChips.chipAt({
+    lines,
+    line,
+    ch,
+    ...(task ? { scope: { kind: "task", lines: task.lines } } : {}),
+  });
+  if (hit.state === "ambiguous") new Notice(hit.message);
+}
+```
+
+| Member | Contract |
+| --- | --- |
+| `version` | `1` |
+| `parse(content)` | `run:` grammar over normalized span content: frozen `{ label, text }` or `null` |
+| `scanLine(line, { table? })` | Frozen command chips only, `{ from, to, raw, label, text }`, the copy `scanLine` shape |
+| `parseFenceInfo(info)` | `bob-run` info string: frozen `{ label }` or `null` |
+| `fencePayload(bodyLines)` | Body lines joined with LF, verbatim |
+| `serialize({ label, text }, { table?, indent? })` | Frozen `{ ok: true, form, markdown }` or `{ ok: false, reason }`; a multi-line payload in a table cell is refused |
+| `chipAt({ lines, line, ch, scope? })` | The ⌘↵ target rule in [Bob Chips](https://bobs-org.github.io/reference/plugins/bob-chips/) |
+
+`chipAt` returns one of three frozen shapes:
+
+- `{ state: "none", count: 0 }`;
+- `{ state: "ambiguous", count, via: "line" | "task", message }`;
+- `{ state: "ready", count, via: "fence" | "cursor" | "line" | "task", chip }`.
+
+An inline chip is `{ form: "inline", label, text, line, from, to }`, with
+the copy-chip coordinates. A `bob-run` block chip adds
+`fence: { open, close }`, the zero-based opening and closing lines. `close`
+is `null` for an unclosed fence. `line` is the cursor line for a `fence`
+result and the opening line for a `task` result, and `[from, to)` covers
+that line. `count` is the number of command chips on the line for a
+`cursor` result and `1` for the other ready results. `scope` takes the same
+`{ kind: "task", lines }` as `copyChips.chipAt`. A scope that does not own
+the cursor line is ignored. Whether a chip's text is a runnable bob command
+line is `api.commandMode.resolve`'s call, not this namespace's.
+
 ## Related
 
 - [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)

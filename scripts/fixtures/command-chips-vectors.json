@@ -1,0 +1,1542 @@
+{
+  "chips": [
+    {
+      "id": "unlabeled",
+      "line": "`run: bob task reconcile`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 25,
+          "raw": "`run: bob task reconcile`",
+          "label": null,
+          "text": "bob task reconcile"
+        }
+      ]
+    },
+    {
+      "id": "labeled-sequence",
+      "line": "`run[Sync calendar and inboxes]: bob gcal sync -n 2 && bob gkeep pull && bob gmail sync`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 88,
+          "raw": "`run[Sync calendar and inboxes]: bob gcal sync -n 2 && bob gkeep pull && bob gmail sync`",
+          "label": "Sync calendar and inboxes",
+          "text": "bob gcal sync -n 2 && bob gkeep pull && bob gmail sync"
+        }
+      ]
+    },
+    {
+      "id": "several-on-one-line",
+      "line": "Run `run: bob task reconcile` then `run: bob plan`",
+      "expected": [
+        {
+          "from": 4,
+          "to": 29,
+          "raw": "`run: bob task reconcile`",
+          "label": null,
+          "text": "bob task reconcile"
+        },
+        {
+          "from": 35,
+          "to": 50,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "double-run-with-inner-backticks",
+      "line": "``run: bob task add \"fix `x`\"``",
+      "expected": [
+        {
+          "from": 0,
+          "to": 31,
+          "raw": "``run: bob task add \"fix `x`\"``",
+          "label": null,
+          "text": "bob task add \"fix `x`\""
+        }
+      ]
+    },
+    {
+      "id": "padded-span",
+      "line": "`` run: bob task add a` ``",
+      "expected": [
+        {
+          "from": 0,
+          "to": 26,
+          "raw": "`` run: bob task add a` ``",
+          "label": null,
+          "text": "bob task add a`"
+        }
+      ]
+    },
+    {
+      "id": "table-escaped-pipe",
+      "line": "| sync | `run: bob plan \\| less` |",
+      "table": true,
+      "expected": [
+        {
+          "from": 9,
+          "to": 32,
+          "raw": "`run: bob plan \\| less`",
+          "label": null,
+          "text": "bob plan | less"
+        }
+      ]
+    },
+    {
+      "id": "unicode-text",
+      "line": "`run: bob task add \"café 日本語 🙂\"`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 33,
+          "raw": "`run: bob task add \"café 日本語 🙂\"`",
+          "label": null,
+          "text": "bob task add \"café 日本語 🙂\""
+        }
+      ]
+    },
+    {
+      "id": "trailing-spaces",
+      "line": "`run: bob plan  `",
+      "expected": [
+        {
+          "from": 0,
+          "to": 17,
+          "raw": "`run: bob plan  `",
+          "label": null,
+          "text": "bob plan  "
+        }
+      ]
+    },
+    {
+      "id": "labeled-escaped-bracket",
+      "line": "`run[Sync \\]all\\\\]: bob gcal sync`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 34,
+          "raw": "`run[Sync \\]all\\\\]: bob gcal sync`",
+          "label": "Sync ]all\\",
+          "text": "bob gcal sync"
+        }
+      ]
+    },
+    {
+      "id": "no-space-after-colon",
+      "line": "`run:bob plan`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 14,
+          "raw": "`run:bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "kept-leading-space-after-optional-separator",
+      "line": "`run:  bob plan`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 16,
+          "raw": "`run:  bob plan`",
+          "label": null,
+          "text": " bob plan"
+        }
+      ]
+    },
+    {
+      "id": "non-bob-payload-is-still-a-chip",
+      "line": "`run: ls -la`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 13,
+          "raw": "`run: ls -la`",
+          "label": null,
+          "text": "ls -la"
+        }
+      ]
+    },
+    {
+      "id": "shell-operator-is-still-a-chip",
+      "line": "`run: bob plan | less`",
+      "expected": [
+        {
+          "from": 0,
+          "to": 22,
+          "raw": "`run: bob plan | less`",
+          "label": null,
+          "text": "bob plan | less"
+        }
+      ]
+    },
+    {
+      "id": "gtd-row",
+      "line": "- [ ] #task Run `run: bob task reconcile` [repeat:: every day]",
+      "expected": [
+        {
+          "from": 16,
+          "to": 41,
+          "raw": "`run: bob task reconcile`",
+          "label": null,
+          "text": "bob task reconcile"
+        }
+      ]
+    },
+    {
+      "id": "math-elsewhere-on-the-line",
+      "line": "$x$ then `run: bob plan`",
+      "expected": [
+        {
+          "from": 9,
+          "to": 24,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "dollar-prices-are-prose",
+      "line": "Pay $5 and `run: bob bank import` for $6",
+      "expected": [
+        {
+          "from": 11,
+          "to": 33,
+          "raw": "`run: bob bank import`",
+          "label": null,
+          "text": "bob bank import"
+        }
+      ]
+    },
+    {
+      "id": "dollar-range-is-prose",
+      "line": "$5-$10 `run: bob plan`",
+      "expected": [
+        {
+          "from": 7,
+          "to": 22,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "closed-comment-before",
+      "line": "%%note%% `run: bob plan`",
+      "expected": [
+        {
+          "from": 9,
+          "to": 24,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "link-elsewhere-on-the-line",
+      "line": "[docs](https://example.com) `run: bob plan`",
+      "expected": [
+        {
+          "from": 28,
+          "to": 43,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "dollar-inside-the-span",
+      "line": "`run: bob task add \"$5\"` and $x$",
+      "expected": [
+        {
+          "from": 0,
+          "to": 24,
+          "raw": "`run: bob task add \"$5\"`",
+          "label": null,
+          "text": "bob task add \"$5\""
+        }
+      ]
+    }
+  ],
+  "not_chips": [
+    {
+      "id": "empty-payload",
+      "line": "`run:`"
+    },
+    {
+      "id": "capital-run",
+      "line": "`Run: bob plan`"
+    },
+    {
+      "id": "missing-colon",
+      "line": "`run bob plan`"
+    },
+    {
+      "id": "whitespace-only",
+      "line": "`run:    `"
+    },
+    {
+      "id": "tab-only-payload",
+      "line": "`run: \t `"
+    },
+    {
+      "id": "escaped-backtick",
+      "line": "\\`run: bob plan\\`"
+    },
+    {
+      "id": "inside-markdown-link-label",
+      "line": "[see `run: bob plan`](https://example.com)"
+    },
+    {
+      "id": "inside-wikilink",
+      "line": "[[`run: bob plan`]]"
+    },
+    {
+      "id": "inside-wikilink-alias",
+      "line": "[[note|`run: bob plan`]]"
+    },
+    {
+      "id": "running",
+      "line": "`running: bob plan`"
+    },
+    {
+      "id": "runs",
+      "line": "`runs: bob plan`"
+    },
+    {
+      "id": "space-before-colon",
+      "line": "`run : bob plan`"
+    },
+    {
+      "id": "plain-bob-span",
+      "line": "`bob task reconcile`"
+    },
+    {
+      "id": "copy-chip",
+      "line": "`copy: bob task reconcile`"
+    },
+    {
+      "id": "unclosed-label",
+      "line": "`run[Sync: bob plan`"
+    },
+    {
+      "id": "junk-after-label",
+      "line": "`run[Sync]x: bob plan`"
+    },
+    {
+      "id": "inside-inline-math",
+      "line": "$a `run: bob plan` b$"
+    },
+    {
+      "id": "inside-display-math",
+      "line": "$$ `run: bob plan` $$"
+    },
+    {
+      "id": "inside-obsidian-comment",
+      "line": "%% `run: bob plan` %%"
+    },
+    {
+      "id": "inside-unclosed-obsidian-comment",
+      "line": "%% todo `run: bob plan`"
+    },
+    {
+      "id": "inside-html-comment",
+      "line": "<!-- `run: bob plan` -->"
+    },
+    {
+      "id": "dataview-equals",
+      "line": "`= this.file.name`"
+    }
+  ],
+  "mixed": [
+    {
+      "id": "copy-then-run",
+      "line": "`copy: ssh apollo` and `run: bob plan`",
+      "expected": [
+        {
+          "kind": "copy",
+          "from": 0,
+          "to": 18,
+          "raw": "`copy: ssh apollo`",
+          "label": null,
+          "text": "ssh apollo"
+        },
+        {
+          "kind": "run",
+          "from": 23,
+          "to": 38,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        }
+      ]
+    },
+    {
+      "id": "interleaved",
+      "line": "`run: bob plan` `copy[Zoom]: https://zoom.us/j/1` `run[Sync]: bob gcal sync`",
+      "expected": [
+        {
+          "kind": "run",
+          "from": 0,
+          "to": 15,
+          "raw": "`run: bob plan`",
+          "label": null,
+          "text": "bob plan"
+        },
+        {
+          "kind": "copy",
+          "from": 16,
+          "to": 49,
+          "raw": "`copy[Zoom]: https://zoom.us/j/1`",
+          "label": "Zoom",
+          "text": "https://zoom.us/j/1"
+        },
+        {
+          "kind": "run",
+          "from": 50,
+          "to": 76,
+          "raw": "`run[Sync]: bob gcal sync`",
+          "label": "Sync",
+          "text": "bob gcal sync"
+        }
+      ]
+    },
+    {
+      "id": "math-shields-run-only",
+      "line": "$a `copy: x` `run: bob plan` b$",
+      "expected": [
+        {
+          "kind": "copy",
+          "from": 3,
+          "to": 12,
+          "raw": "`copy: x`",
+          "label": null,
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "link-label-shields-both",
+      "line": "[`copy: x` `run: bob plan`](https://example.com) `run: bob gkeep pull`",
+      "expected": [
+        {
+          "kind": "run",
+          "from": 49,
+          "to": 70,
+          "raw": "`run: bob gkeep pull`",
+          "label": null,
+          "text": "bob gkeep pull"
+        }
+      ]
+    }
+  ],
+  "serialize": [
+    {
+      "id": "unlabeled-inline",
+      "input": {
+        "label": null,
+        "text": "bob task reconcile"
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`run: bob task reconcile`"
+      }
+    },
+    {
+      "id": "labeled-sequence",
+      "input": {
+        "label": "Sync calendar and inboxes",
+        "text": "bob gcal sync -n 2 && bob gkeep pull && bob gmail sync"
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`run[Sync calendar and inboxes]: bob gcal sync -n 2 && bob gkeep pull && bob gmail sync`"
+      }
+    },
+    {
+      "id": "label-escapes",
+      "input": {
+        "label": "Sync ]\\",
+        "text": "bob plan"
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`run[Sync \\]\\\\]: bob plan`"
+      }
+    },
+    {
+      "id": "table-pipe",
+      "input": {
+        "label": null,
+        "text": "bob plan | less"
+      },
+      "opts": {
+        "table": true
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`run: bob plan \\| less`"
+      }
+    },
+    {
+      "id": "inner-backticks",
+      "input": {
+        "label": null,
+        "text": "bob task add \"fix `x`\""
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "``run: bob task add \"fix `x`\"``"
+      }
+    },
+    {
+      "id": "padded-ending-backtick",
+      "input": {
+        "label": null,
+        "text": "bob task add a`"
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`` run: bob task add a` ``"
+      }
+    },
+    {
+      "id": "block-fence",
+      "input": {
+        "label": "Morning sync",
+        "text": "bob gcal sync -n 2\nbob gkeep pull\nbob gmail sync"
+      },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "```bob-run Morning sync\nbob gcal sync -n 2\nbob gkeep pull\nbob gmail sync\n```"
+      }
+    },
+    {
+      "id": "block-unlabeled",
+      "input": {
+        "label": null,
+        "text": "bob gcal sync -n 2\nbob gkeep pull"
+      },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "```bob-run\nbob gcal sync -n 2\nbob gkeep pull\n```"
+      }
+    },
+    {
+      "id": "tilde-when-label-has-backtick",
+      "input": {
+        "label": "see `this`",
+        "text": "bob plan\nbob task reconcile"
+      },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "~~~bob-run see `this`\nbob plan\nbob task reconcile\n~~~"
+      }
+    },
+    {
+      "id": "indented-block",
+      "input": {
+        "label": "Sync",
+        "text": "bob gkeep pull\nbob gmail sync"
+      },
+      "opts": {
+        "indent": "  "
+      },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "  ```bob-run Sync\n  bob gkeep pull\n  bob gmail sync\n  ```"
+      }
+    },
+    {
+      "id": "nothing-to-run",
+      "input": {
+        "label": null,
+        "text": "   "
+      },
+      "expected": {
+        "ok": false,
+        "reason": "nothing to run"
+      }
+    },
+    {
+      "id": "label-newline",
+      "input": {
+        "label": "a\nb",
+        "text": "bob plan"
+      },
+      "expected": {
+        "ok": false,
+        "reason": "labels are one line"
+      }
+    },
+    {
+      "id": "block-in-table-refused",
+      "input": {
+        "label": null,
+        "text": "bob plan\nbob task reconcile"
+      },
+      "opts": {
+        "table": true
+      },
+      "expected": {
+        "ok": false,
+        "reason": "can't put a bob-run fence in a table cell"
+      }
+    },
+    {
+      "id": "crlf-normalizes-to-lf",
+      "input": {
+        "label": null,
+        "text": "bob plan\r\nbob gkeep pull"
+      },
+      "expected": {
+        "ok": true,
+        "form": "block",
+        "markdown": "```bob-run\nbob plan\nbob gkeep pull\n```"
+      }
+    },
+    {
+      "id": "blank-label-is-no-label",
+      "input": {
+        "label": "   ",
+        "text": "bob plan"
+      },
+      "expected": {
+        "ok": true,
+        "form": "inline",
+        "markdown": "`run: bob plan`"
+      }
+    }
+  ],
+  "fence_info": [
+    {
+      "id": "unlabeled",
+      "info": "bob-run",
+      "expected": {
+        "label": null
+      }
+    },
+    {
+      "id": "label",
+      "info": "bob-run Morning sync",
+      "expected": {
+        "label": "Morning sync"
+      }
+    },
+    {
+      "id": "bracket-label",
+      "info": "bob-run [Morning sync]",
+      "expected": {
+        "label": "Morning sync"
+      }
+    },
+    {
+      "id": "padded-brackets",
+      "info": "  bob-run  [ sync ]  ",
+      "expected": {
+        "label": "sync"
+      }
+    },
+    {
+      "id": "blank-bracket-label",
+      "info": "bob-run []",
+      "expected": {
+        "label": null
+      }
+    },
+    {
+      "id": "copy-fence-is-not-run",
+      "info": "bob-copy Morning sync",
+      "expected": null
+    },
+    {
+      "id": "other-language",
+      "info": "bash",
+      "expected": null
+    },
+    {
+      "id": "uppercase",
+      "info": "BOB-RUN x",
+      "expected": null
+    },
+    {
+      "id": "prefixed",
+      "info": "bob-run-extra x",
+      "expected": null
+    },
+    {
+      "id": "empty",
+      "info": "",
+      "expected": null
+    }
+  ],
+  "link_spans": [
+    {
+      "id": "markdown-link-with-parens",
+      "line": "see [docs](https://x.example/a_(b)) now",
+      "expected": [
+        {
+          "kind": "link",
+          "from": 4,
+          "to": 35
+        }
+      ]
+    },
+    {
+      "id": "image",
+      "line": "![alt](img.png) after",
+      "expected": [
+        {
+          "kind": "image",
+          "from": 0,
+          "to": 15
+        }
+      ]
+    },
+    {
+      "id": "wikilink-and-embed",
+      "line": "[[note]] and ![[pic.png]]",
+      "expected": [
+        {
+          "kind": "wikilink",
+          "from": 0,
+          "to": 8
+        },
+        {
+          "kind": "embed",
+          "from": 13,
+          "to": 25
+        }
+      ]
+    },
+    {
+      "id": "wikilink-alias-with-code",
+      "line": "[[note|`x`]] tail",
+      "expected": [
+        {
+          "kind": "wikilink",
+          "from": 0,
+          "to": 12
+        }
+      ]
+    },
+    {
+      "id": "link-label-with-code-span",
+      "line": "[see `run: bob plan`](https://example.com)",
+      "expected": [
+        {
+          "kind": "link",
+          "from": 0,
+          "to": 42
+        }
+      ]
+    },
+    {
+      "id": "autolinks",
+      "line": "<https://x.example/z> or <bryan@example.com>",
+      "expected": [
+        {
+          "kind": "autolink",
+          "from": 0,
+          "to": 21
+        },
+        {
+          "kind": "autolink",
+          "from": 25,
+          "to": 44
+        }
+      ]
+    },
+    {
+      "id": "bare-url-trailing-period",
+      "line": "visit https://example.com/path. now",
+      "expected": [
+        {
+          "kind": "url",
+          "from": 6,
+          "to": 30
+        }
+      ]
+    },
+    {
+      "id": "bare-url-in-parens",
+      "line": "(https://example.com/a) done",
+      "expected": [
+        {
+          "kind": "url",
+          "from": 1,
+          "to": 22
+        }
+      ]
+    },
+    {
+      "id": "bare-url-balanced-paren",
+      "line": "https://en.wikipedia.org/wiki/Foo_(bar)",
+      "expected": [
+        {
+          "kind": "url",
+          "from": 0,
+          "to": 39
+        }
+      ]
+    },
+    {
+      "id": "code-spans-are-not-links",
+      "line": "`https://x.example` and `[a](b)` and `[[c]]`",
+      "expected": []
+    },
+    {
+      "id": "checkbox-and-fields-are-not-links",
+      "line": "- [ ] task [repeat:: every day] (due:: 2026-11-20)",
+      "expected": []
+    },
+    {
+      "id": "escaped-bracket",
+      "line": "\\[not](a link)",
+      "expected": []
+    },
+    {
+      "id": "mail-row",
+      "line": "- [ ] Reply [Re: hi](https://mail.google.com/mail/u/0/#inbox/abc) `run: bob plan`",
+      "expected": [
+        {
+          "kind": "link",
+          "from": 12,
+          "to": 65
+        }
+      ]
+    },
+    {
+      "id": "bank-row",
+      "line": "- [ ] #task Bank [[bank]] [Wells Fargo](https://wellsfargo.com) `run: bob bank import ~/Downloads/*.csv`",
+      "expected": [
+        {
+          "kind": "wikilink",
+          "from": 17,
+          "to": 25
+        },
+        {
+          "kind": "link",
+          "from": 26,
+          "to": 63
+        }
+      ]
+    },
+    {
+      "id": "destination-in-angle-brackets",
+      "line": "[spaced](<my file.md>) x",
+      "expected": [
+        {
+          "kind": "link",
+          "from": 0,
+          "to": 22
+        }
+      ]
+    },
+    {
+      "id": "no-links",
+      "line": "plain `run: bob plan` text",
+      "expected": []
+    }
+  ],
+  "chip_at": [
+    {
+      "id": "cursor-on-second-of-two",
+      "lines": [
+        "`run: bob plan` and `run: bob gkeep pull`"
+      ],
+      "line": 0,
+      "ch": 22,
+      "expected": {
+        "state": "ready",
+        "count": 2,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob gkeep pull",
+          "line": 0,
+          "from": 20,
+          "to": 41
+        }
+      }
+    },
+    {
+      "id": "cursor-between-two-is-ambiguous",
+      "lines": [
+        "`run: bob plan` and `run: bob gkeep pull`"
+      ],
+      "line": 0,
+      "ch": 16,
+      "expected": {
+        "state": "ambiguous",
+        "count": 2,
+        "via": "line",
+        "message": "2 command chips on this line · move onto one"
+      }
+    },
+    {
+      "id": "exclusive-end-belongs-to-the-gap",
+      "lines": [
+        "`run: bob plan` and `run: bob gkeep pull`"
+      ],
+      "line": 0,
+      "ch": 15,
+      "expected": {
+        "state": "ambiguous",
+        "count": 2,
+        "via": "line",
+        "message": "2 command chips on this line · move onto one"
+      }
+    },
+    {
+      "id": "one-chip-anywhere-on-the-line",
+      "lines": [
+        "- [ ] #task Reconcile `run: bob task reconcile`"
+      ],
+      "line": 0,
+      "ch": 3,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "line",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob task reconcile",
+          "line": 0,
+          "from": 22,
+          "to": 47
+        }
+      }
+    },
+    {
+      "id": "cursor-on-link-yields-to-the-chain",
+      "lines": [
+        "[docs](https://example.com) `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 2,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "cursor-on-bare-url-yields",
+      "lines": [
+        "see https://example.com `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 8,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "cursor-on-wikilink-yields",
+      "lines": [
+        "[[bank]] `run: bob bank import`"
+      ],
+      "line": 0,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "line-chip-beats-a-link-elsewhere",
+      "lines": [
+        "[docs](https://example.com) then `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 28,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "line",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 0,
+          "from": 33,
+          "to": 48
+        }
+      }
+    },
+    {
+      "id": "cursor-on-chip-in-a-line-with-a-link",
+      "lines": [
+        "[docs](https://example.com) `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 30,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 0,
+          "from": 28,
+          "to": 43
+        }
+      }
+    },
+    {
+      "id": "copy-chips-never-count",
+      "lines": [
+        "`copy: bob plan`"
+      ],
+      "line": 0,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "cursor-on-copy-chip-picks-the-line-run-chip",
+      "lines": [
+        "`copy: x` `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 2,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "line",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 0,
+          "from": 10,
+          "to": 25
+        }
+      }
+    },
+    {
+      "id": "table-line",
+      "lines": [
+        "| sync | `run: bob plan \\| less` |"
+      ],
+      "line": 0,
+      "ch": 12,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "cursor",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan | less",
+          "line": 0,
+          "from": 9,
+          "to": 32
+        }
+      }
+    },
+    {
+      "id": "math-shielded-span-is-none",
+      "lines": [
+        "$a `run: bob plan` b$"
+      ],
+      "line": 0,
+      "ch": 6,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "task-fallback",
+      "lines": [
+        "- [ ] #task Sync inboxes ^sync",
+        "  - `run[Sync]: bob gcal sync -n 2 && bob gkeep pull`"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1
+        ]
+      },
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "task",
+        "chip": {
+          "form": "inline",
+          "label": "Sync",
+          "text": "bob gcal sync -n 2 && bob gkeep pull",
+          "line": 1,
+          "from": 4,
+          "to": 53
+        }
+      }
+    },
+    {
+      "id": "task-fallback-blocked-by-a-link-on-the-cursor-line",
+      "lines": [
+        "- [ ] #task Bank [[bank]] statements",
+        "  - `run: bob bank import`"
+      ],
+      "line": 0,
+      "ch": 2,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "task-fallback-ignores-links-on-other-task-lines",
+      "lines": [
+        "- [ ] #task Bank statements",
+        "  - [[bank]] `run: bob bank import`"
+      ],
+      "line": 0,
+      "ch": 2,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1
+        ]
+      },
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "task",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob bank import",
+          "line": 1,
+          "from": 13,
+          "to": 35
+        }
+      }
+    },
+    {
+      "id": "task-ambiguous",
+      "lines": [
+        "- [ ] #task Example",
+        "  - `run: bob plan`",
+        "  - `run: bob gkeep pull`"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2
+        ]
+      },
+      "expected": {
+        "state": "ambiguous",
+        "count": 2,
+        "via": "task",
+        "message": "2 command chips in this task · move onto one"
+      }
+    },
+    {
+      "id": "nested-task-chip-is-not-borrowed",
+      "lines": [
+        "- [ ] #task Parent",
+        "  - [ ] #task Child `run: bob plan`",
+        "  - note"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          2
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "nested-task-line-uses-its-own-chip",
+      "lines": [
+        "- [ ] #task Parent",
+        "  - [ ] #task Child `run: bob plan`",
+        "  - note"
+      ],
+      "line": 1,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          1
+        ]
+      },
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "line",
+        "chip": {
+          "form": "inline",
+          "label": null,
+          "text": "bob plan",
+          "line": 1,
+          "from": 20,
+          "to": 35
+        }
+      }
+    },
+    {
+      "id": "cursor-inside-bob-run-fence",
+      "lines": [
+        "- [ ] #task Morning sync ^morning",
+        "  ```bob-run Morning sync",
+        "  bob gcal sync -n 2",
+        "  bob gkeep pull",
+        "  ```",
+        "  - note under the task"
+      ],
+      "line": 2,
+      "ch": 4,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "fence",
+        "chip": {
+          "form": "block",
+          "label": "Morning sync",
+          "text": "bob gcal sync -n 2\nbob gkeep pull",
+          "line": 2,
+          "from": 0,
+          "to": 20,
+          "fence": {
+            "open": 1,
+            "close": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "cursor-on-bob-run-opening",
+      "lines": [
+        "- [ ] #task Morning sync ^morning",
+        "  ```bob-run Morning sync",
+        "  bob gcal sync -n 2",
+        "  bob gkeep pull",
+        "  ```",
+        "  - note under the task"
+      ],
+      "line": 1,
+      "ch": 0,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "fence",
+        "chip": {
+          "form": "block",
+          "label": "Morning sync",
+          "text": "bob gcal sync -n 2\nbob gkeep pull",
+          "line": 1,
+          "from": 0,
+          "to": 25,
+          "fence": {
+            "open": 1,
+            "close": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "task-fallback-counts-a-touched-fence-once",
+      "lines": [
+        "- [ ] #task Morning sync ^morning",
+        "  ```bob-run Morning sync",
+        "  bob gcal sync -n 2",
+        "  bob gkeep pull",
+        "  ```",
+        "  - note under the task"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "task",
+        "chip": {
+          "form": "block",
+          "label": "Morning sync",
+          "text": "bob gcal sync -n 2\nbob gkeep pull",
+          "line": 1,
+          "from": 0,
+          "to": 25,
+          "fence": {
+            "open": 1,
+            "close": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "task-fence-plus-inline-chip-is-ambiguous",
+      "lines": [
+        "- [ ] #task Morning sync ^morning",
+        "  ```bob-run Morning sync",
+        "  bob gcal sync -n 2",
+        "  bob gkeep pull",
+        "  ```",
+        "  - `run: bob task reconcile`"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "expected": {
+        "state": "ambiguous",
+        "count": 2,
+        "via": "task",
+        "message": "2 command chips in this task · move onto one"
+      }
+    },
+    {
+      "id": "unclosed-bob-run-fence",
+      "lines": [
+        "```bob-run",
+        "bob plan",
+        "bob gkeep pull"
+      ],
+      "line": 2,
+      "ch": 0,
+      "expected": {
+        "state": "ready",
+        "count": 1,
+        "via": "fence",
+        "chip": {
+          "form": "block",
+          "label": null,
+          "text": "bob plan\nbob gkeep pull",
+          "line": 2,
+          "from": 0,
+          "to": 14,
+          "fence": {
+            "open": 0,
+            "close": null
+          }
+        }
+      }
+    },
+    {
+      "id": "other-fence-is-inert",
+      "lines": [
+        "```js",
+        "`run: bob plan`",
+        "```"
+      ],
+      "line": 1,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "bob-copy-fence-is-inert",
+      "lines": [
+        "```bob-copy",
+        "`run: bob plan`",
+        "```"
+      ],
+      "line": 1,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "task-scope-skips-other-fences",
+      "lines": [
+        "- [ ] #task Example",
+        "  ```bob-copy",
+        "  bob plan",
+        "  ```",
+        "  ```js",
+        "  `run: bob inert`",
+        "  ```"
+      ],
+      "line": 0,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "frontmatter-is-none",
+      "lines": [
+        "---",
+        "cmd: `run: bob plan`",
+        "---",
+        "text"
+      ],
+      "line": 1,
+      "ch": 7,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "frontmatter-never-joins-a-task",
+      "lines": [
+        "---",
+        "`run: bob hidden`",
+        "---",
+        "- [ ] #task Visible",
+        "  - note"
+      ],
+      "line": 3,
+      "ch": 5,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          1,
+          3,
+          4
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "malformed-scope-is-ignored",
+      "lines": [
+        "- [ ] #task Example",
+        "  - `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 3,
+      "scope": {
+        "kind": "task",
+        "lines": [
+          1
+        ]
+      },
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "no-scope-stays-line-only",
+      "lines": [
+        "- [ ] #task Example",
+        "  - `run: bob plan`"
+      ],
+      "line": 0,
+      "ch": 3,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "line-out-of-range",
+      "lines": [
+        "`run: bob plan`"
+      ],
+      "line": 3,
+      "ch": 0,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    },
+    {
+      "id": "negative-ch",
+      "lines": [
+        "`run: bob plan`"
+      ],
+      "line": 0,
+      "ch": -1,
+      "expected": {
+        "state": "none",
+        "count": 0
+      }
+    }
+  ]
+}

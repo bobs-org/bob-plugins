@@ -496,4 +496,4 @@ if (require.main === module) {
   main().catch((error) => { console.error(error && error.stack || error); process.exitCode = 1; });
 }
 
-module.exports = { MATRIX, parseArgs, computeVerdicts, makeHtml };
+module.exports = { MATRIX, parseArgs, computeVerdicts, makeHtml, findChromium, CdpClient, waitForFile };

@@ -395,7 +395,7 @@ test("unavailable, copy-only, and loading faces explain themselves", () => {
   assert.ok(has(bad, "is-unavailable"));
   assert.equal(iconOf(bad), "ban");
   assert.deepEqual(tipRows(bad)[0], ["state", "Can't run: bob has no command `nope` (step 2)"]);
-  assert.deepEqual(tipRows(bad).at(-1), ["hint", "Click to see why"]);
+  assert.deepEqual(tipRows(bad).at(-1), ["hint", "Click to see why" + helpers.COMMAND_CHIP_EDIT_HINT]);
 
   const copy = mountRun(makeView(["`run: bob plan`"], { path: "ref/paper.md" }), h.plugin).host;
   assert.ok(has(copy, "is-copy"));
@@ -404,7 +404,7 @@ test("unavailable, copy-only, and loading faces explain themselves", () => {
   assert.deepEqual(tipRows(copy), [
     ["state", "Copy only: notes under ref/ never run commands"],
     ["command", "bob plan"],
-    ["hint", "Click to copy"],
+    ["hint", "Click to copy · ⌥Click edits"],
   ]);
   const unknown = mountRun(makeView(["`run: bob plan`"], { path: null }), h.plugin).host;
   assert.deepEqual(tipRows(unknown)[0], ["state", "Copy only: source note unknown"]);
@@ -419,7 +419,7 @@ test("unavailable, copy-only, and loading faces explain themselves", () => {
   h.engine.token = "2:fp";
   h.app.workspace.trigger(helpers.COMMAND_CHIP_CATALOG_EVENT, { token: "2:fp" });
   assert.ok(has(loading, "is-ready"), "a catalog change repaints in place");
-  assert.deepEqual(tipRows(loading), [["command", "bob plan"], ["policy", "Opens its output"], ["hint", "Click to run · ⇧Click opens Command Mode"]]);
+  assert.deepEqual(tipRows(loading), [["command", "bob plan"], ["policy", "Opens its output"], ["hint", "Click to run · ⇧Click opens Command Mode · ⌥Click edits"]]);
 });
 
 test("tooltips name the policy honestly and advertise a key only once one exists", () => {
@@ -441,7 +441,7 @@ test("tooltips name the policy honestly and advertise a key only once one exists
     ["command", "bob gkeep pull"],
     ["command", "bob gmail sync"],
     ["policy", "Runs 3 steps now"],
-    ["hint", "Click to run · ⇧Click opens Command Mode"],
+    ["hint", "Click to run · ⇧Click opens Command Mode · ⌥Click edits"],
   ]);
 });
 

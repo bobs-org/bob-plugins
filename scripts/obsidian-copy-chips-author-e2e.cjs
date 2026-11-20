@@ -69,6 +69,7 @@ async function modalState(client) {
     const markdown = document.querySelector('.bob-copy-author-markdown');
     const status = document.querySelector('.bob-copy-author-status');
     const title = document.querySelector('.bob-copy-author-title');
+    const modal = document.querySelector('.bob-copy-author-modal');
     return {
       open: true,
       label: label ? String(label.value || '') : null,
@@ -76,6 +77,9 @@ async function modalState(client) {
       markdown: markdown ? String(markdown.textContent || '') : null,
       status: status ? String(status.textContent || '') : null,
       title: title ? String(title.textContent || '') : null,
+      // "Edit copy chip", "Make command chip", and so on; the visible title
+      // names only the kind.
+      ariaLabel: modal ? String(modal.getAttribute('aria-label') || '') : null,
     };
   })()`);
 }
@@ -272,7 +276,7 @@ async function runAuthoringCases(client, openNote, record) {
 
   const editInline = await placeCursorOn(client, "`copy: old-inline`");
   const editOpen = await openAuthorCard(client);
-  record("edit inline opens", Boolean(editOpen.state && editOpen.state.open && /Edit/.test(String(editOpen.state.title || ""))), JSON.stringify(editOpen.state).slice(0, 180));
+  record("edit inline opens", Boolean(editOpen.state && editOpen.state.open && editOpen.state.title === "COPY CHIP" && editOpen.state.ariaLabel === "Edit copy chip"), JSON.stringify(editOpen.state).slice(0, 180));
   if (editOpen.state && editOpen.state.open) {
     await setFieldValues(client, "Inline", "new-inline");
     await saveAuthorCard(client);

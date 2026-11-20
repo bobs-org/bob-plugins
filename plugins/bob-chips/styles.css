@@ -982,7 +982,155 @@ button.bob-run-fence-output:hover {
 
 .bob-copy-author-title {
   font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.06em;
   overflow-wrap: anywhere;
+}
+
+.bob-copy-author-subtitle {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.bob-copy-author-modal.is-run .bob-copy-author-icon {
+  background-color: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.bob-copy-author-row-kind {
+  align-items: center;
+}
+
+.bob-copy-author-kind {
+  display: inline-flex;
+  justify-self: start;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+
+.bob-copy-author-kind-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin: 0;
+  padding: 0.2em 0.75em;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background-color: transparent;
+  color: var(--text-muted);
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.bob-copy-author-kind-option + .bob-copy-author-kind-option {
+  border-left: 1px solid var(--background-modifier-border);
+}
+
+.bob-copy-author-kind-option.is-active {
+  background-color: color-mix(in srgb, var(--interactive-accent) 14%, var(--background-primary));
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.bob-copy-author-kind-option:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.bob-copy-author-kind-glyph {
+  display: inline-flex;
+  width: 1em;
+  height: 1em;
+}
+
+.bob-copy-author-kind-glyph svg {
+  width: 1em;
+  height: 1em;
+}
+
+.bob-copy-author-row-steps.is-hidden,
+.bob-copy-author-add-bob.is-hidden {
+  display: none;
+}
+
+.bob-copy-author-steps-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bob-copy-author-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  max-height: 9em;
+  overflow: auto;
+  padding-top: 0.35em;
+}
+
+.bob-copy-author-step {
+  display: grid;
+  grid-template-columns: 1.2em minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: baseline;
+  font-size: 0.9em;
+}
+
+.bob-copy-author-step-mark {
+  text-align: center;
+  color: var(--text-faint, var(--text-muted));
+}
+
+.bob-copy-author-step.is-ok .bob-copy-author-step-mark {
+  color: var(--color-green);
+}
+
+.bob-copy-author-step.is-invalid .bob-copy-author-step-mark {
+  color: var(--text-error);
+}
+
+.bob-copy-author-step.is-warn .bob-copy-author-step-mark {
+  color: var(--color-orange);
+}
+
+.bob-copy-author-step-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-copy-author-step-title.is-command {
+  font-family: var(--font-monospace);
+  font-size: 0.95em;
+}
+
+.bob-copy-author-step-meta {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 24em;
+}
+
+.bob-copy-author-step.is-invalid .bob-copy-author-step-meta {
+  color: var(--text-error);
+  white-space: normal;
+}
+
+.bob-copy-author-step.is-warn .bob-copy-author-step-meta {
+  color: var(--color-orange);
+  white-space: normal;
+}
+
+.bob-copy-author-add-bob {
+  font-size: 0.85em;
+  padding: 0.15em 0.6em;
+  height: auto;
 }
 
 .bob-copy-author-fields {
@@ -1064,6 +1212,10 @@ button.bob-run-fence-output:hover {
   font-size: 0.9em;
 }
 
+.bob-copy-author-status.is-warning {
+  color: var(--color-orange);
+}
+
 .bob-copy-author-footer {
   color: var(--text-faint, var(--text-muted));
   font-size: 0.85em;
@@ -1071,7 +1223,9 @@ button.bob-run-fence-output:hover {
 }
 
 .bob-copy-author .bob-copy-fence-copy,
-.bob-copy-author .bob-copy-fence-toggle {
+.bob-copy-author .bob-copy-fence-toggle,
+.bob-copy-author-preview .bob-run-chip,
+.bob-copy-author-preview .bob-run-fence-run {
   pointer-events: none;
 }
 

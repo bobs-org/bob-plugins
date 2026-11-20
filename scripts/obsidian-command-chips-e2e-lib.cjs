@@ -72,6 +72,14 @@ const NOTES = Object.freeze({
   ref: "ref/Ref chips.md",
   dashboard: "Dashboard e2e.md",
   fence: "Fence e2e.md",
+  author: "Author e2e.md",
+});
+
+// The make-or-edit phase: a plain `bob …` span to convert with Enter, and a
+// command chip to Alt+Click and relabel. Neither may run while authoring.
+const AUTHOR = Object.freeze({
+  convert: "bob e2e ok author-convert",
+  edit: "bob e2e ok author-edit",
 });
 
 // Exact payload per case tag, as authored in the notes below.
@@ -175,6 +183,14 @@ function noteText() {
       "FAIL_FENCE",
       "",
       ...fenceLines(FENCES.fail),
+      "",
+    ].join("\n"),
+    [NOTES.author]: [
+      "# Author e2e",
+      "",
+      "AUTHOR_SPAN Run `" + AUTHOR.convert + "` daily",
+      "",
+      "AUTHOR_EDIT `run: " + AUTHOR.edit + "`",
       "",
     ].join("\n"),
     [NOTES.dashboard]: [
@@ -431,6 +447,7 @@ module.exports = {
   NOTES,
   PAYLOADS,
   FENCES,
+  AUTHOR,
   NOWHERE_HOST,
   OWN_PLUGINS,
   QUERY_PLUGINS,

@@ -95,7 +95,7 @@ test("make-or-edit command registers with Mod+Shift+Y", async () => {
   await plugin.onload();
   const command = plugin.commands.find((item) => item.id === "make-or-edit");
   assert.ok(command);
-  assert.equal(command.name, "Make or edit copy chip");
+  assert.equal(command.name, "Make or edit chip");
   assert.deepEqual(command.hotkeys, [{ modifiers: ["Mod", "Shift"], key: "y" }]);
   assert.equal(typeof command.editorCallback, "function");
 });

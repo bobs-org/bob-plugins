@@ -530,6 +530,18 @@ function commandFenceContext(card, record) {
   ctx.resolveSourcePath = () => commandChipReadingSourcePath(render);
   if (record.place.open !== null) ctx.line = record.place.open;
   ctx.checkSource = () => commandFenceCheckSource(render, record);
+  if (record.place.open !== null) {
+    // Alt+Click on the Run button edits the fence, only in a Live Preview
+    // editor showing this note; elsewhere Alt+Click stays inert.
+    ctx.edit = () => {
+      const view = copyChipAuthorEditorViewOf(record.el);
+      if (!view || commandChipLiveSourcePath(view) !== commandChipReadingSourcePath(render)) return false;
+      return copyChipAuthorOpenFromFence(render.plugin, view, record.place.open, {
+        label: record.place.label,
+        text: record.payload,
+      });
+    };
+  }
   return ctx;
 }
 

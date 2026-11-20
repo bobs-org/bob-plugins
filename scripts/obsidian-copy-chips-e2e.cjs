@@ -525,7 +525,7 @@ async function runE2e(args) {
     );
     record("plugin loads", hasPlugin === true);
     const apiVersion = await client.evaluate("(() => window.app.plugins.plugins['bob-chips'].api.copyChips.version)()");
-    record("api.copyChips v1", apiVersion === 1, "version=" + apiVersion);
+    record("api.copyChips v2", apiVersion === 2, "version=" + apiVersion);
     const openedLive = await openNote(client, fixture.notePath(), "live");
     record("scratch note open (live)", Boolean(openedLive && openedLive.ok), JSON.stringify(openedLive).slice(0, 200));
     await waitFor(client, "document.querySelectorAll('.bob-copy-chip').length", (v) => v > 0, "live chips appear", 20_000);

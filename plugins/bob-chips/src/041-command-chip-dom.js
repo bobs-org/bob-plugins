@@ -21,6 +21,7 @@ const COMMAND_CHIP_GLYPHS = copyChipFreeze({
   copy: ["copy"],
 });
 const COMMAND_CHIP_SHIFT_HINT = "⇧Click opens Command Mode";
+const COMMAND_CHIP_EDIT_HINT = " · ⌥Click edits";
 
 let CommandChipsGetIcon = null;
 try {
@@ -147,7 +148,8 @@ function commandChipStateLine(paint) {
 }
 
 // Tooltip rows: state, the full command line(s), policy, gestures.
-function commandChipTipRows(plugin, chip, paint) {
+// `editable` appends the Alt+Click edit gesture (Live Preview only).
+function commandChipTipRows(plugin, chip, paint, editable) {
   const rows = [];
   const state = commandChipStateLine(paint);
   if (state) rows.push(["state", state]);
@@ -162,7 +164,7 @@ function commandChipTipRows(plugin, chip, paint) {
   }
   const policy = paint && paint.face !== "copy" && paint.face !== "unavailable" ? commandChipPolicyText(verdict) : null;
   if (policy) rows.push(["policy", policy]);
-  rows.push(["hint", commandChipHintText(plugin, paint && paint.face)]);
+  rows.push(["hint", commandChipHintText(plugin, paint && paint.face) + (editable === true ? COMMAND_CHIP_EDIT_HINT : "")]);
   return rows;
 }
 
@@ -396,7 +398,7 @@ function commandChipPaint(host, paint, options) {
     }
     if (face === "queued" || face === "running") commandChipSetAttr(host, "aria-busy", "true");
     else commandChipRemoveAttr(host, "aria-busy");
-    commandChipPaintTip(record, commandChipTipRows(opts.plugin || null, chip, p));
+    commandChipPaintTip(record, commandChipTipRows(opts.plugin || null, chip, p, opts.editable === true));
     return true;
   } catch (error) {
     return false;

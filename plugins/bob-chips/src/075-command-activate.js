@@ -18,7 +18,10 @@
 //   range               Live Preview `{ from, to, raw }` absolute doc slice
 //   readSource(), snapshot  text reader plus `{ line, from, to, raw }`
 //   refresh()           repaint after a stale or changed span
-//   shift, alt          Shift opens the guarded path; Alt is inert for now
+//   shift, alt          Shift opens the guarded path; Alt opens the
+//                       make-or-edit card through `edit()`, else is inert
+//   edit()              open the make-or-edit card for this chip (Live
+//                       Preview only); returns true when the card opened
 //   copyFeedback(result) optional copy feedback override
 // Settles a frozen `{ action, ok, stage, outcome, reason, runId,
 // sequenceId, signature }` and never rejects.
@@ -186,7 +189,17 @@ async function commandChipActivate(chip, ctx) {
   const text = chip && typeof chip.text === "string" ? chip.text : "";
   if (!runtime) return commandChipResult("refused", { reason: "Bob Chips is not loaded" });
   if (!/\S/.test(text)) return commandChipResult("refused", { reason: RUN_CHIP_NOTHING_TO_RUN });
-  if (c.alt === true) return commandChipResult("inert", { ok: true });
+  if (c.alt === true) {
+    // Alt+Click edits, never runs or copies.
+    if (typeof c.edit !== "function") return commandChipResult("inert", { ok: true });
+    let opened = false;
+    try {
+      opened = c.edit() === true;
+    } catch (error) {
+      opened = false;
+    }
+    return commandChipResult("edit", { ok: opened });
+  }
   const app = c.plugin.app;
   const store = runtime.store;
   const intent = c.shift === true ? "open" : "run";

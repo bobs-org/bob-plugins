@@ -42,7 +42,7 @@ function commandChipMountRepaint(mount, announce) {
       if (store) mount.unsubscribeKey = store.subscribe(paint.key, () => commandChipMountRepaint(mount, true));
     }
     mount.paint = paint;
-    mount.painter(mount.host, paint, { plugin: mount.plugin, chip: mount.chip });
+    mount.painter(mount.host, paint, { plugin: mount.plugin, chip: mount.chip, editable: mount.editable });
     if (announce) commandChipAnnounceTransition(mount.plugin, paint, mount.chip, mount.host.ownerDocument || null);
     return paint;
   } catch (error) {
@@ -55,7 +55,9 @@ function commandChipMountRepaint(mount, announce) {
 // returns the renderer's fresh activation context without plugin/element.
 // `options.paint(host, paint, { plugin, chip })` replaces commandChipPaint
 // for other faces (the `bob-run` card), and `options.gestureHost` takes the
-// gestures instead of `host` (the card's Run button). Returns the mount;
+// gestures instead of `host` (the card's Run button). `options.editable`
+// says Alt+Click opens the make-or-edit card here (the context supplies
+// `edit()`), so the tooltip says so. Returns the mount;
 // commandChipUnmount(host) is idempotent.
 function commandChipMount(plugin, host, chip, options) {
   try {
@@ -69,6 +71,7 @@ function commandChipMount(plugin, host, chip, options) {
       chip: copyChipFreeze({ ...chip }),
       context: typeof opts.context === "function" ? opts.context : null,
       painter: typeof opts.paint === "function" ? opts.paint : commandChipPaint,
+      editable: opts.editable === true,
       key: null,
       paint: null,
       unsubscribeKey: null,

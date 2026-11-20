@@ -41,8 +41,9 @@ function commandChipLiveChipOf(widget) {
 }
 
 // Fresh Live Preview activation evidence: the editor's file, the zero-based
-// line, and the exact absolute document slice, delimiters included.
-function commandChipLiveContext(view, target) {
+// line, and the exact absolute document slice, delimiters included. `edit`
+// opens the make-or-edit card for this occurrence (Alt+Click).
+function commandChipLiveContext(view, target, plugin) {
   return () => ({
     origin: "live",
     view,
@@ -50,6 +51,11 @@ function commandChipLiveContext(view, target) {
     line: target.line,
     range: { from: target.spanFrom, to: target.spanTo, raw: target.raw },
     refresh: () => commandChipLiveRefresh(view),
+    edit: () => copyChipAuthorOpenFromWidget(plugin, view, target.spanFrom, target.spanTo, {
+      label: target.label,
+      text: target.text,
+      kind: "run",
+    }),
   });
 }
 
@@ -128,7 +134,8 @@ function commandChipEnsureLiveWidget() {
         };
         commandChipLiveTargets.set(host, target);
         commandChipMount(this.plugin, host, commandChipLiveChipOf(target), {
-          context: commandChipLiveContext(view, target),
+          context: commandChipLiveContext(view, target, this.plugin),
+          editable: true,
         });
         return host;
       }

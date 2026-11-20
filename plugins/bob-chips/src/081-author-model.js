@@ -1,5 +1,7 @@
-// Pure make-or-edit target resolution and replacement planning.
-// Never throws. Never reads the DOM, clipboard, or editor APIs.
+// Pure make-or-edit target resolution and replacement planning for both
+// chip kinds: copy (`copy:` / `bob-copy`) and run (`run:` / `bob-run`).
+// Never throws. Never reads the DOM, clipboard, or editor APIs; Run
+// defaults read only the injected, pure `resolveCommand`.
 const COPY_CHIP_AUTHOR_ONE_SELECTION = "One selection at a time";
 const COPY_CHIP_AUTHOR_STALE = "The note changed — reopen the card";
 const COPY_CHIP_AUTHOR_TABLE_BLOCK = "can't put a block card in a table cell";
@@ -11,6 +13,17 @@ function copyChipAuthorAmbiguousReason(count) {
   } catch (error) {
     return "chips on this line · move onto one";
   }
+}
+
+function copyChipAuthorKind(kind) {
+  return kind === "run" ? "run" : "copy";
+}
+
+// "Make copy chip", "Edit command chip", and so on, for aria labels and
+// the card's subtitle.
+function copyChipAuthorTitle(mode, kind) {
+  const noun = copyChipAuthorKind(kind) === "run" ? "command chip" : "copy chip";
+  return (mode === "edit" ? "Edit " : "Make ") + noun;
 }
 
 function copyChipAuthorRefuse(reason) {
@@ -178,7 +191,7 @@ function copyChipAuthorPlainSpanAt(lines, lineIndex, ch) {
         if (copyChipAuthorSpanIsInsideComment(line, span.from, span.to)) continue;
         const content = copyChipNormalizeSpan(span.raw, { table: copyChipAuthorLineIsTable(line) });
         if (content == null) continue;
-        if (copyChipParseContent(content)) continue;
+        if (copyChipParseContent(content) || runChipParseContent(content)) continue;
         return copyChipFreeze({
           from: span.from,
           to: span.to,
@@ -229,6 +242,8 @@ function copyChipAuthorSnapshot(fields) {
       focus: src.focus === "text" ? "text" : "label",
       selectText: Boolean(src.selectText),
       openingIndent: src.openingIndent == null ? "" : String(src.openingIndent),
+      kind: copyChipAuthorKind(src.kind),
+      addBob: src.addBob === true,
     });
   } catch (error) {
     return copyChipFreeze({
@@ -246,6 +261,8 @@ function copyChipAuthorSnapshot(fields) {
       focus: "text",
       selectText: false,
       openingIndent: "",
+      kind: "copy",
+      addBob: false,
     });
   }
 }
@@ -254,8 +271,59 @@ function copyChipAuthorReady(snapshot) {
   return copyChipFreeze({ ok: true, snapshot });
 }
 
+// The chip either kind the card edits at an empty cursor: a `bob-copy` or
+// `bob-run` fence holding the cursor line, else the chip under the cursor,
+// else the line's only chip. Two or more chips on the line with the cursor
+// on none is ambiguous; the task fallback never applies here. Frozen
+// `{ state: "none" }`, `{ state: "ambiguous", count }`, or
+// `{ state: "ready", kind, chip, block }` (`block` is the fence walk result).
+function copyChipAuthorChipAt(lines, line, ch) {
+  const none = copyChipFreeze({ state: "none", count: 0 });
+  try {
+    if (copyChipCursorInFrontmatter(lines, line)) return none;
+    const block = copyChipFindFenceBlock(lines, line);
+    if (block) {
+      const copyBlock = copyChipFenceBlockChip(lines, line, block);
+      if (copyBlock && copyBlock.chip) {
+        return copyChipFreeze({ state: "ready", kind: "copy", chip: copyBlock.chip, block });
+      }
+      const runBlock = runChipFenceBlockChip(lines, line, block);
+      if (runBlock) return copyChipFreeze({ state: "ready", kind: "run", chip: runBlock, block });
+      return none;
+    }
+    const rawLine = String(lines[line] === undefined || lines[line] === null ? "" : lines[line]);
+    const chips = chipScanLine(rawLine, { table: copyChipCursorTableForLine(rawLine) });
+    const inline = (hit) => copyChipFreeze({
+      state: "ready",
+      kind: hit.kind === "run" ? "run" : "copy",
+      chip: copyChipFreeze({ form: "inline", label: hit.label, text: hit.text, line, from: hit.from, to: hit.to }),
+      block: null,
+    });
+    for (const hit of chips) {
+      if (ch >= hit.from && ch < hit.to) return inline(hit);
+    }
+    if (chips.length === 1) return inline(chips[0]);
+    if (chips.length > 1) return copyChipFreeze({ state: "ambiguous", count: chips.length });
+    return none;
+  } catch (error) {
+    return none;
+  }
+}
+
+// The default kind for new text, from the injected resolver. Never throws.
+function copyChipAuthorDefaultKind(request, text) {
+  try {
+    const resolve = request && typeof request.resolveCommand === "function" ? request.resolveCommand : null;
+    return runChipAuthorDefaultKind(resolve, text);
+  } catch (error) {
+    return copyChipFreeze({ kind: "copy", addBob: false });
+  }
+}
+
 // Resolve the make-or-edit target from source bytes and selections.
 // `selections` are document-offset {from, to} ranges, possibly reversed.
+// `resolveCommand` (optional) is Command Mode's pure resolver: new text
+// that is a bob command line defaults to Run; editing keeps the chip's kind.
 function copyChipAuthorResolve(request) {
   try {
     const req = request && typeof request === "object" ? request : {};
@@ -272,6 +340,7 @@ function copyChipAuthorResolve(request) {
       const startPos = copyChipAuthorPosAt(lines, from);
       const startLine = String(lines[startPos.line] || "");
       const indent = copyChipAuthorListContentIndent(startLine);
+      const kind = copyChipAuthorDefaultKind(req, selected);
       return copyChipAuthorReady(copyChipAuthorSnapshot({
         originalSource: source,
         from,
@@ -279,7 +348,7 @@ function copyChipAuthorResolve(request) {
         sourceSlice: selected,
         label: "",
         text: selected,
-        title: "Make copy chip",
+        title: copyChipAuthorTitle("select", kind.kind),
         mode: "select",
         form: selected.indexOf("\n") >= 0 ? "block" : "inline",
         table: copyChipAuthorLineIsTable(startLine) && selected.indexOf("\n") < 0,
@@ -287,27 +356,20 @@ function copyChipAuthorResolve(request) {
         focus: "label",
         selectText: false,
         openingIndent: "",
+        kind: kind.kind,
+        addBob: kind.addBob,
       }));
     }
     const pos = copyChipAuthorPosAt(lines, from);
-    let resolved = null;
-    try {
-      resolved = copyChipAt({ lines, line: pos.line, ch: pos.ch });
-    } catch (error) {
-      resolved = copyChipFreeze({ state: "none", count: 0 });
-    }
-    if (resolved && resolved.state === "ambiguous") {
+    const resolved = copyChipAuthorChipAt(lines, pos.line, pos.ch);
+    if (resolved.state === "ambiguous") {
       return copyChipAuthorRefuse(copyChipAuthorAmbiguousReason(resolved.count));
     }
-    if (resolved && resolved.state === "ready" && resolved.chip) {
+    if (resolved.state === "ready" && resolved.chip) {
       const chip = resolved.chip;
+      const kind = resolved.kind;
       if (chip.form === "block") {
-        let block = null;
-        try {
-          block = copyChipFindFenceBlock(lines, pos.line);
-        } catch (error) {
-          block = null;
-        }
+        const block = resolved.block;
         const fenceRange = copyChipAuthorFenceRange(source, lines, block);
         const openLine = block ? String(lines[block.openIndex] || "") : String(lines[pos.line] || "");
         const opening = copyChipAuthorListMarker(openLine);
@@ -322,7 +384,7 @@ function copyChipAuthorResolve(request) {
           sourceSlice: source.slice(rangeFrom, rangeTo),
           label: chip.label == null ? "" : String(chip.label),
           text: String(chip.text == null ? "" : chip.text),
-          title: "Edit copy chip",
+          title: copyChipAuthorTitle("edit", kind),
           mode: "edit",
           form: "block",
           table: false,
@@ -330,6 +392,7 @@ function copyChipAuthorResolve(request) {
           focus: "label",
           selectText: false,
           openingIndent,
+          kind,
         }));
       }
       const lineStart = copyChipAuthorLineStart(lines, chip.line);
@@ -341,7 +404,7 @@ function copyChipAuthorResolve(request) {
         sourceSlice: source.slice(lineStart + chip.from, lineStart + chip.to),
         label: chip.label == null ? "" : String(chip.label),
         text: String(chip.text == null ? "" : chip.text),
-        title: "Edit copy chip",
+        title: copyChipAuthorTitle("edit", kind),
         mode: "edit",
         form: "inline",
         table: copyChipAuthorLineIsTable(lineText),
@@ -349,12 +412,14 @@ function copyChipAuthorResolve(request) {
         focus: "label",
         selectText: false,
         openingIndent: "",
+        kind,
       }));
     }
     const span = copyChipAuthorPlainSpanAt(lines, pos.line, pos.ch);
     if (span) {
       const lineStart = copyChipAuthorLineStart(lines, pos.line);
       const lineText = String(lines[pos.line] || "");
+      const kind = copyChipAuthorDefaultKind(req, String(span.text));
       return copyChipAuthorReady(copyChipAuthorSnapshot({
         originalSource: source,
         from: lineStart + span.from,
@@ -362,7 +427,7 @@ function copyChipAuthorResolve(request) {
         sourceSlice: source.slice(lineStart + span.from, lineStart + span.to),
         label: "",
         text: String(span.text),
-        title: "Make copy chip",
+        title: copyChipAuthorTitle("convert", kind.kind),
         mode: "convert",
         form: "inline",
         table: Boolean(span.table),
@@ -370,10 +435,13 @@ function copyChipAuthorResolve(request) {
         focus: "label",
         selectText: false,
         openingIndent: "",
+        kind: kind.kind,
+        addBob: kind.addBob,
       }));
     }
     const startLine = String(lines[pos.line] || "");
     const clipboard = req.clipboardText == null ? "" : String(req.clipboardText);
+    const kind = copyChipAuthorDefaultKind(req, clipboard);
     return copyChipAuthorReady(copyChipAuthorSnapshot({
       originalSource: source,
       from,
@@ -381,7 +449,7 @@ function copyChipAuthorResolve(request) {
       sourceSlice: "",
       label: "",
       text: clipboard,
-      title: "Make copy chip",
+      title: copyChipAuthorTitle("insert", kind.kind),
       mode: "insert",
       form: clipboard.indexOf("\n") >= 0 ? "block" : "inline",
       table: copyChipAuthorLineIsTable(startLine),
@@ -389,13 +457,17 @@ function copyChipAuthorResolve(request) {
       focus: "text",
       selectText: clipboard !== "",
       openingIndent: "",
+      kind: kind.kind,
+      addBob: kind.addBob,
     }));
   } catch (error) {
     return copyChipAuthorRefuse("unavailable");
   }
 }
 
-function copyChipAuthorValidation(label, text) {
+function copyChipAuthorValidation(label, text, kind) {
+  const run = copyChipAuthorKind(kind) === "run";
+  const empty = run ? RUN_CHIP_NOTHING_TO_RUN : COPY_CHIP_NOTHING_TO_COPY;
   try {
     const rawLabel = label == null ? "" : String(label);
     const rawText = text == null ? "" : String(text);
@@ -404,13 +476,13 @@ function copyChipAuthorValidation(label, text) {
     }
     if (!copyChipHasNonWhitespace(rawText)) {
       if (rawText !== "" && /[ \t\n\r]/.test(rawText)) {
-        return copyChipFreeze({ ok: false, reason: COPY_CHIP_AUTHOR_WHITESPACE });
+        return copyChipFreeze({ ok: false, reason: run ? RUN_CHIP_AUTHOR_WHITESPACE : COPY_CHIP_AUTHOR_WHITESPACE });
       }
-      return copyChipFreeze({ ok: false, reason: COPY_CHIP_NOTHING_TO_COPY });
+      return copyChipFreeze({ ok: false, reason: empty });
     }
     return copyChipFreeze({ ok: true, reason: null });
   } catch (error) {
-    return copyChipFreeze({ ok: false, reason: COPY_CHIP_NOTHING_TO_COPY });
+    return copyChipFreeze({ ok: false, reason: empty });
   }
 }
 
@@ -426,22 +498,26 @@ function copyChipAuthorFenceLineCount(text) {
 }
 
 // Plan the exact replacement bytes for a snapshot plus draft fields.
+// `draft.kind` ("copy" | "run") picks the grammar; it defaults to the
+// snapshot's kind, so switching kinds keeps Label and Text untouched.
 function copyChipAuthorPlan(snapshot, draft) {
   try {
     const snap = snapshot && typeof snapshot === "object" ? snapshot : null;
     if (!snap) return copyChipAuthorRefuse("unavailable");
     const input = draft && typeof draft === "object" ? draft : {};
+    const kind = copyChipAuthorKind(input.kind === undefined ? snap.kind : input.kind);
+    const run = kind === "run";
     const label = input.label == null ? "" : String(input.label);
     const text = copyChipNormalizeNewlines(input.text == null ? "" : String(input.text));
-    const validation = copyChipAuthorValidation(label, text);
+    const validation = copyChipAuthorValidation(label, text, kind);
     if (!validation.ok) return copyChipAuthorRefuse(validation.reason);
     const table = Boolean(snap.table);
     if (table && text.indexOf("\n") >= 0) {
-      return copyChipAuthorRefuse(COPY_CHIP_AUTHOR_TABLE_BLOCK);
+      return copyChipAuthorRefuse(run ? RUN_CHIP_TABLE_BLOCK : COPY_CHIP_AUTHOR_TABLE_BLOCK);
     }
     let serialized = null;
     try {
-      serialized = copyChipSerialize(
+      serialized = (run ? runChipSerialize : copyChipSerialize)(
         { label, text },
         { table, indent: text.indexOf("\n") >= 0 ? String(snap.indent || "") : "" },
       );
@@ -449,7 +525,7 @@ function copyChipAuthorPlan(snapshot, draft) {
       return copyChipAuthorRefuse("serialize failed");
     }
     if (!serialized || serialized.ok !== true) {
-      return copyChipAuthorRefuse((serialized && serialized.reason) || COPY_CHIP_NOTHING_TO_COPY);
+      return copyChipAuthorRefuse((serialized && serialized.reason) || (run ? RUN_CHIP_NOTHING_TO_RUN : COPY_CHIP_NOTHING_TO_COPY));
     }
     let markdown = String(serialized.markdown || "");
     const source = String(snap.originalSource || "");
@@ -469,8 +545,18 @@ function copyChipAuthorPlan(snapshot, draft) {
     }
     const cursorAfter = from + markdown.length;
     const lines = serialized.form === "block" ? copyChipAuthorFenceLineCount(text) : 1;
+    let caption = "inline chip";
+    if (serialized.form === "block") {
+      if (run) {
+        const steps = runChipAuthorStepRanges(text).length;
+        caption = "sequence card · " + String(steps) + (steps === 1 ? " step" : " steps");
+      } else {
+        caption = "block card · " + String(lines) + (lines === 1 ? " line" : " lines");
+      }
+    }
     return copyChipFreeze({
       ok: true,
+      kind,
       form: serialized.form,
       markdown,
       serialized: serialized.markdown,
@@ -479,9 +565,7 @@ function copyChipAuthorPlan(snapshot, draft) {
       cursorAfter,
       previewKind: serialized.form === "block" ? "block" : "inline",
       previewLines: lines,
-      caption: serialized.form === "block"
-        ? "block card · " + String(lines) + (lines === 1 ? " line" : " lines")
-        : "inline chip",
+      caption,
     });
   } catch (error) {
     return copyChipAuthorRefuse("unavailable");
@@ -498,29 +582,54 @@ function copyChipAuthorIsStale(snapshot, currentSource) {
   }
 }
 
-function copyChipAuthorDraftState(snapshot, label, text) {
+// The card's whole draft verdict. `options.kind` overrides the snapshot's
+// kind; in Run, `options.resolve` (Command Mode's pure resolver, or null)
+// adds live per-step validation, and `options.uncheckedReason` explains a
+// missing resolver. Invalid Run steps block Save; warnings never do.
+function copyChipAuthorDraftState(snapshot, label, text, options) {
   try {
-    const plan = copyChipAuthorPlan(snapshot, { label, text });
-    const validation = copyChipAuthorValidation(label, text);
+    const opts = options && typeof options === "object" ? options : {};
+    const snapKind = snapshot && typeof snapshot === "object" ? snapshot.kind : undefined;
+    const kind = copyChipAuthorKind(opts.kind === undefined ? snapKind : opts.kind);
+    const plan = copyChipAuthorPlan(snapshot, { label, text, kind });
+    const validation = copyChipAuthorValidation(label, text, kind);
+    const run = kind === "run"
+      ? runChipAuthorValidate(typeof opts.resolve === "function" ? opts.resolve : null, text, {
+        uncheckedReason: opts.uncheckedReason,
+      })
+      : null;
+    const planOk = Boolean(plan && plan.ok);
+    const runOk = !run || run.canSave;
+    let reason = null;
+    if (!planOk) reason = (plan && plan.reason) || (validation && validation.reason);
+    else if (!runOk) reason = run.reason;
     return copyChipFreeze({
+      kind,
       label: label == null ? "" : String(label),
       text: text == null ? "" : String(text),
-      valid: Boolean(plan && plan.ok),
-      reason: plan && plan.ok ? null : (plan && plan.reason) || (validation && validation.reason),
-      form: plan && plan.ok ? plan.form : (String(text || "").indexOf("\n") >= 0 ? "block" : "inline"),
-      markdown: plan && plan.ok ? plan.markdown : "",
-      serialized: plan && plan.ok ? plan.serialized : "",
-      caption: plan && plan.ok ? plan.caption : "",
-      previewKind: plan && plan.ok ? plan.previewKind : null,
-      previewLines: plan && plan.ok ? plan.previewLines : 0,
-      cursorAfter: plan && plan.ok ? plan.cursorAfter : null,
+      valid: planOk && runOk,
+      reason,
+      warning: planOk && run && run.canSave ? run.warning : null,
+      run,
+      addBob: run ? run.addBob : null,
+      form: planOk ? plan.form : (String(text || "").indexOf("\n") >= 0 ? "block" : "inline"),
+      markdown: planOk ? plan.markdown : "",
+      serialized: planOk ? plan.serialized : "",
+      caption: planOk ? plan.caption : "",
+      previewKind: planOk ? plan.previewKind : null,
+      previewLines: planOk ? plan.previewLines : 0,
+      cursorAfter: planOk ? plan.cursorAfter : null,
     });
   } catch (error) {
     return copyChipFreeze({
+      kind: "copy",
       label: "",
       text: "",
       valid: false,
       reason: COPY_CHIP_NOTHING_TO_COPY,
+      warning: null,
+      run: null,
+      addBob: null,
       form: "inline",
       markdown: "",
       serialized: "",
@@ -583,7 +692,10 @@ function copyChipAuthorIsSaveHotkey(event) {
   }
 }
 
-// Pure key decision for the author card. Never mutates.
+// Pure key decision for the author card. Never mutates. `options` says
+// where focus is: `inField` (a text control), `inText` (the Text/Command
+// field), `onKind` (the Kind control: ←/→ switch, Space toggles), and
+// `onButton` (the Add bob button: Enter or Space presses it).
 function copyChipAuthorKeyAction(event, options) {
   try {
     if (!event) return copyChipFreeze({ type: "ignore" });
@@ -591,6 +703,8 @@ function copyChipAuthorKeyAction(event, options) {
     const opts = options && typeof options === "object" ? options : {};
     const inField = opts.inField === true;
     const inText = opts.inText === true;
+    const onKind = opts.onKind === true && !inField;
+    const onButton = opts.onButton === true && !inField;
     if (copyChipAuthorIsSaveHotkey(event)) return copyChipFreeze({ type: "save" });
     const close = copyChipAuthorCloseKey(event);
     if (close === "escape" || close === "ctrl-bracket") return copyChipFreeze({ type: "cancel", key: close });
@@ -600,6 +714,16 @@ function copyChipAuthorKeyAction(event, options) {
     }
     if (event.key === "Tab") {
       return copyChipFreeze({ type: event.shiftKey === true ? "prev-field" : "next-field" });
+    }
+    const plain = event.ctrlKey !== true && event.metaKey !== true && event.altKey !== true;
+    if (onKind && plain && event.shiftKey !== true) {
+      if (event.key === "ArrowLeft" || event.key === "Left") return copyChipFreeze({ type: "kind-prev" });
+      if (event.key === "ArrowRight" || event.key === "Right") return copyChipFreeze({ type: "kind-next" });
+      if (event.key === " " || event.key === "Spacebar") return copyChipFreeze({ type: "kind-toggle" });
+    }
+    if (onButton && plain && event.shiftKey !== true &&
+        (event.key === "Enter" || event.key === " " || event.key === "Spacebar")) {
+      return copyChipFreeze({ type: "press" });
     }
     if (event.key === "Enter") {
       if (event.shiftKey === true) {

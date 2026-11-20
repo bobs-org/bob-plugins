@@ -22,6 +22,7 @@
   "081-author-model.js",
   "082-author-modal.js",
   "083-author-command.js",
+  "084-author-run.js",
   "085-command-fence.js",
   "090-plugin.js",
   "099-exports.js"

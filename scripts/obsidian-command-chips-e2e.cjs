@@ -336,7 +336,7 @@ const FENCE_HELPERS = `(() => {
 })()`;
 
 async function mouseClick(client, point, options = {}) {
-  const modifiers = options.shift ? 8 : 0;
+  const modifiers = (options.shift ? 8 : 0) | (options.alt ? 1 : 0);
   await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y, modifiers });
   const count = options.count || 1;
   for (let n = 1; n <= count; n += 1) {
@@ -813,6 +813,89 @@ async function fencePhase(ctx) {
   record("the stub saw exactly the expected card invocations", JSON.stringify(Object.entries(seen).sort()) === JSON.stringify(Object.entries(want).sort()), JSON.stringify(seen));
 }
 
+// The make-or-edit card as the user sees it: header, active kind, step
+// rows, Markdown, and status.
+const AUTHOR_CARD_STATE = `(() => {
+  const modal = document.querySelector(".bob-copy-author-modal");
+  if (!modal) return { open: false };
+  const text = (selector) => { const el = modal.querySelector(selector); return el ? el.textContent : null; };
+  const active = modal.querySelector(".bob-copy-author-kind-option.is-active");
+  return {
+    open: true,
+    title: text(".bob-copy-author-title"),
+    subtitle: text(".bob-copy-author-subtitle"),
+    kind: active ? (/Run/.test(active.textContent || "") ? "run" : "copy") : null,
+    steps: Array.from(modal.querySelectorAll(".bob-copy-author-step")).map((row) => ({
+      mark: ["ok", "invalid", "warn", "unchecked"].find((name) => row.classList.contains("is-" + name)) || null,
+      title: (row.querySelector(".bob-copy-author-step-title") || {}).textContent || null,
+      meta: (row.querySelector(".bob-copy-author-step-meta") || {}).textContent || null,
+    })),
+    markdown: text(".bob-copy-author-markdown"),
+    status: text(".bob-copy-author-status"),
+  };
+})()`;
+
+const EDITOR_TEXT = "(() => ({ open: Boolean(document.querySelector('.bob-copy-author-modal')), text: app.workspace.activeLeaf.view.editor.getValue() }))()";
+
+async function pressEnter(client) {
+  await client.call("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  await client.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+}
+
+// Mod+Shift+Y converts a plain `bob …` span into a command chip with Enter,
+// and Alt+Click on a command chip opens the card for that chip. Authoring
+// never runs anything; the converted chip then runs once on click.
+async function authorPhase(ctx) {
+  const { client, scratch, record, outDir } = ctx;
+  const A = fixture.AUTHOR;
+  const runs = (payload) => fixture.countRuns(scratch, payload);
+  await closeModals(client);
+  await openNote(client, N.author, "live");
+  await sleep(700);
+  const placed = await client.evaluate(`(() => {
+    const editor = app.workspace.activeLeaf.view.editor;
+    const lines = editor.getValue().split("\\n");
+    const line = lines.findIndex((text) => text.startsWith("AUTHOR_SPAN"));
+    const ch = lines[line].indexOf(${JSON.stringify(A.convert)}) + 2;
+    editor.focus();
+    editor.setCursor({ line, ch });
+    return { line, ch };
+  })()`);
+  await client.evaluate("app.commands.executeCommandById('bob-chips:make-or-edit')");
+  const card = await waitFor(client, AUTHOR_CARD_STATE, (state) => state && state.open && state.steps.length > 0, "Mod+Shift+Y opens the card", 15_000);
+  ctx.shots.push(await screenshot(client, outDir, "author-convert-run.png"));
+  await pressEnter(client);
+  const converted = await waitFor(client, EDITOR_TEXT, (state) => state && !state.open, "Enter saves the card", 15_000);
+  await sleep(600);
+  record("Mod+Shift+Y on a `bob …` span opens the card in Run with live steps; Enter writes a command chip and runs nothing",
+    card.kind === "run" && card.title === "COMMAND CHIP" && card.subtitle === "From the code span"
+      && card.steps.length === 1 && card.steps[0].mark === "ok" && card.steps[0].title === "E2E ok"
+      && card.markdown === "`run: " + A.convert + "`"
+      && converted.text.includes("AUTHOR_SPAN Run `run: " + A.convert + "` daily") && runs(A.convert) === 0,
+    JSON.stringify({ placed, card, line: converted.text.split("\n").find((line) => line.startsWith("AUTHOR_SPAN")), runs: runs(A.convert) }));
+
+  await client.evaluate("app.workspace.activeLeaf.view.editor.setCursor({ line: 0, ch: 0 }) || true");
+  await waitFace(client, A.convert, ["ready"], "converted chip renders ready");
+  await clickChip(client, A.convert);
+  await waitUntil(() => runs(A.convert) === 1, "the converted chip runs", 20_000);
+  await sleep(600);
+  await closeModals(client);
+  record("the converted chip runs exactly once on click", runs(A.convert) === 1, "runs=" + runs(A.convert));
+
+  await waitFace(client, A.edit, ["ready"], "edit chip renders ready");
+  await clickChip(client, A.edit, { alt: true });
+  const editCard = await waitFor(client, AUTHOR_CARD_STATE, (state) => state && state.open, "Alt+Click opens the card", 15_000);
+  await client.evaluate("(() => { const input = document.querySelector('.bob-copy-author-label'); input.value = 'Edited'; input.dispatchEvent(new Event('input')); input.focus(); return true; })()");
+  await sleep(200);
+  await pressEnter(client);
+  const edited = await waitFor(client, EDITOR_TEXT, (state) => state && !state.open, "the edited card saves", 15_000);
+  await sleep(600);
+  record("Alt+Click on a command chip opens its card without running; the edit saves in place",
+    editCard.kind === "run" && editCard.subtitle === "Editing the chip at the cursor"
+      && edited.text.includes("AUTHOR_EDIT `run[Edited]: " + A.edit + "`") && runs(A.edit) === 0,
+    JSON.stringify({ editCard, line: edited.text.split("\n").find((line) => line.startsWith("AUTHOR_EDIT")), runs: runs(A.edit) }));
+}
+
 const QUERY_COUNT = fixture.QUERY_PLUGINS.length;
 
 async function runE2e(args) {
@@ -876,6 +959,7 @@ async function runE2e(args) {
     await inertPhase(ctx);
     await activationPhase(ctx);
     await fencePhase(ctx);
+    await authorPhase(ctx);
   } catch (error) {
     record("e2e completed without an exception", false, String((error && error.stack) || error));
   } finally {
@@ -929,6 +1013,12 @@ function runSelfTest() {
   assert.deepEqual(fences.map((item) => item.label), ["Gated fence", null]);
   assert.ok(fenceNote.includes("GATED_FENCE"));
   assert.deepEqual(chips.commandFenceCollect(notes[N.ref]).map((item) => item.label), ["Ref fence"]);
+  const A = fixture.AUTHOR;
+  for (const payload of Object.values(A)) assert.equal(resolve(payload).state, "ready", payload);
+  const authorLines = notes[N.author].split("\n");
+  assert.deepEqual(chips.chipScanLine(authorLines.find((line) => line.startsWith("AUTHOR_SPAN"))), [], "the convert target is a plain code span");
+  assert.equal(chips.runChipAuthorDefaultKind(resolve, A.convert).kind, "run", "the convert target defaults to Run");
+  assert.deepEqual(chips.chipScanLine(authorLines.find((line) => line.startsWith("AUTHOR_EDIT"))).map((chip) => chip.text), [A.edit]);
 
   const runRoot = fs.mkdtempSync(path.join("/tmp", "bcr-self-"));
   try {

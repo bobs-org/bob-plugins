@@ -16,7 +16,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.13.0 |
+| Version | 0.14.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding. |
@@ -28,7 +28,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | Command | Command ID | Default hotkey |
 | --- | --- | --- |
 | Copy chip at cursor | `copy-on-cursor-line` | — |
-| Make or edit copy chip | `make-or-edit` | Mod+Shift+y |
+| Make or edit chip | `make-or-edit` | Mod+Shift+y |
 | Run command chip at cursor | `run-at-cursor` | — |
 <!-- END GENERATED: commands -->
 
@@ -92,8 +92,8 @@ body selects text and never copies. Only the button copies, flipping to
 | Palette "Copy chip at cursor" (`copy-on-cursor-line`) | Editor, Source mode and Live Preview | Copy the chip at the cursor, or the only chip in the cursor's task, and flash it like a yank |
 | `gy` (normal mode; mapped in the vault vimrc to `copy-on-cursor-line`) | Editor, normal mode | Copy the chip at the cursor, or the only chip in the cursor's task, and flash it |
 | `Mod+Y` then `C` (Copy card) | Copy card | Copy the chip at the cursor, or the only chip in the cursor's task, previewed first |
-| Palette "Make or edit copy chip" (`make-or-edit`), default Mod+Shift+Y | Editor, Source mode and Live Preview | Open the authoring card for the selection, chip, or cursor |
-| Alt+Click a chip | Live Preview | Open the authoring card for that chip |
+| Palette "Make or edit chip" (`make-or-edit`), default Mod+Shift+Y | Editor, Source mode and Live Preview | Open the authoring card for the selection, chip, or cursor; it makes and edits both kinds |
+| Alt+Click a chip | Live Preview | Open the authoring card for that chip (copy or command) |
 | Move the cursor into the span | Live Preview | Reveal the Markdown source, like a link |
 | Enter / Space on a focused chip | Live Preview (span) and Reading view (button) | Copy the payload |
 
@@ -194,20 +194,23 @@ interpolated, HTML-decoded, or otherwise changed.
 
 ## Authoring
 
-Mod+Shift+Y (command **Make or edit copy chip**) opens a card that writes
-the chip Markdown in one undoable editor transaction. Alt+Click on a Live
-Preview chip opens the same card for that occurrence. Payloads always come
-from the note source, never from rendered text.
+Mod+Shift+Y (command **Make or edit chip**) opens one card that makes,
+converts, and edits both kinds and writes the chip Markdown in one
+undoable editor transaction. Alt+Click on a Live Preview chip of either
+kind opens the same card for that occurrence, and Alt+Click on a Live
+Preview `bob-run` card's Run button opens it for that fence. Payloads
+always come from the note source, never from rendered text.
 
 Context, in this order:
 
 1. More than one selection: **One selection at a time**, no card.
 2. A nonempty selection: wrap that exact text. Reversed and Vim visual
    ranges count. Label starts focused.
-3. An empty selection on a copy chip: **Edit copy chip**, filled from the
-   chip under the cursor or the only chip on that line. `Mod+Shift+Y` never
-   uses the task fallback. Two chips on the line with the cursor on neither
-   is **N chips on this line · move onto one**.
+3. An empty selection on a chip of either kind: edit it, filled from the
+   `bob-copy` or `bob-run` fence holding the cursor, the chip under the
+   cursor, or the only chip on that line. `Mod+Shift+Y` never uses the
+   task fallback. Two chips on the line with the cursor on neither, of
+   any kinds, is **N chips on this line · move onto one**.
 4. An empty selection inside a plain code span: convert that span's
    CommonMark-normalized text. Spans inside fences, links, wikilinks,
    frontmatter, math, or comments are left alone.
@@ -215,23 +218,81 @@ Context, in this order:
    Text and selects it; an unavailable clipboard leaves Text empty. A late
    read never overwrites typing or a closed card.
 
-The card has a one-line Label (placeholder **optional — shown instead of
-the text**) and a monospace Text field. Preview is a live, noninteractive
-chip or fence card — **inline chip** or **block card · N lines** — plus a
-scrollable Markdown row of the exact replacement bytes. Invalid drafts
-cannot save: **nothing to copy**, **whitespace only — nothing to copy**,
-**labels are one line**, and **can't put a block card in a table cell**.
+### Kind
+
+The **Kind** row is a two-button Copy | Run control in the Tab cycle; ←/→
+pick a kind and Space toggles it. The header reads **COPY CHIP** or
+**COMMAND CHIP** with the matching glyph, and Text is named **Command** in
+Run. Switching kinds keeps Label and Text exactly and only changes the
+grammar the card writes (`copy:` / `bob-copy` or `run:` / `bob-run`).
+
+The starting kind is predictable and never switches on its own:
+
+- Editing a chip keeps its kind, so a copy chip that holds a bob command
+  stays a copy chip until you pick Run.
+- A selection, a plain code span, or a clipboard prefill starts in Run when
+  Command Mode resolves its text as a bob command line, including one
+  only another host can run. Text that would resolve once `bob` is added
+  (`task reconcile`) also starts in Run and offers **Add bob**.
+- Everything else starts in Copy, and so does all new text without Command
+  Mode. A late clipboard prefill picks the kind once, unless you already
+  picked one.
+
+### Run validation
+
+In Run, a **Steps** row checks each `&&` step or fence line live against
+Command Mode's catalog, without running anything:
+
+```text
+╭─ ▶ COMMAND CHIP ──────────────────────────────────────────────────╮
+│ Kind      [ Copy | ▶ Run ]                                        │
+│ Label     [ Sync calendar and inboxes                           ] │
+│ Command   [ bob gcal sync -n 2 && bob gkeep pull && bob gmail…  ] │
+│ Steps     ✓ Sync Calendar events         writes · preview skipped │
+│           ✓ Drain Keep inbox             writes · preview skipped │
+│           ✓ Sync Gmail label             writes · preview skipped │
+│ Preview   ▶ Sync calendar and inboxes · 3            inline chip  │
+│ Markdown  `run[Sync calendar and inboxes]: bob gcal sync -n 2 …`  │
+╰─ ⏎ save · ⇧⏎ new step · Tab next field · Esc cancel ──────────────╯
+```
+
+| Step mark | Meaning | Save |
+| --- | --- | --- |
+| ✓ title, effect, note | A catalog command. The note says what a click will do: **runs now**, **preview skipped**, **asks first**, or **opens its output** | Allowed |
+| ✗ step and reason | Command Mode refuses it: no `bob`, shell syntax, an unknown or excluded command, or a missing argument | Blocked, with bob's reason |
+| ⚠ step and reason | Only another host can run it | Allowed, with a warning: a Mac-only chip may be written on athena |
+| · step | Command Mode is missing, disabled, or still loading its catalog | Allowed: the card says the commands can't be checked here |
+
+A trailing or doubled `&&` and other syntax faults also block Save. When a
+step lacks its leading `bob` and adding it would make a command, the
+**Add bob** button (in the Tab cycle after Command; Enter or Space presses
+it) inserts `bob ` before each such step and keeps every other byte. The
+card rechecks when Command Mode's catalog changes.
+
+### Preview, keys, and save
+
+Preview is a live, noninteractive chip or card in the chosen kind:
+**inline chip**, **block card · N lines** (Copy), or **sequence card · N
+steps** (Run), plus a scrollable Markdown row of the exact replacement
+bytes. A Run preview wears the face the chip would get on this host,
+including ⊘ for a refused command. Invalid drafts cannot save: **nothing
+to copy** or **nothing to run**, **whitespace only**, **labels are one
+line**, **can't put a block card in a table cell**, **can't put a bob-run
+fence in a table cell**, and, in Run, any ✗ step. A one-line draft writes
+an inline span; Shift+Enter starts another line, which makes a fence (a
+new step, in Run).
 
 Keys: Enter saves, Shift+Enter inserts a newline in Text, Tab / Shift+Tab
-cycle the fields, and Mod+Shift+Y saves. Esc, Ctrl+[ (Ctrl alone), and q
-outside the fields cancel; q inside Label or Text types a q. A second
-Mod+Shift+Y while the card is open saves it.
+cycle Kind, Label, Text, and Add bob, and Mod+Shift+Y saves. Esc, Ctrl+[
+(Ctrl alone), and q outside the fields cancel; q inside Label or Text
+types a q. A second Mod+Shift+Y while the card is open saves it.
 
 Save writes one editor transaction, isolated from the typing that came
 before it, and parks the cursor after the chip. A fence nested in a list
 item indents to the item's content column using the line's own whitespace.
 If the note, editor, or captured source changed, save refuses with **The
-note changed — reopen the card** and writes nothing.
+note changed — reopen the card** and writes nothing. Saving never runs a
+command chip.
 
 Authored payloads live on copy chips; live context lives on the Copy card, whose `C` row copies the chip at the cursor.
 
@@ -348,7 +409,7 @@ first.
 | Click, tap, Enter, or Space | Run it, or copy it in a copy-only note |
 | Shift+Click or Shift+Enter | Open it in Command Mode's guarded path |
 | ⌘↵ in the editor | Run the chip the cursor targets; see [⌘↵ and the hint](#and-the-hint) |
-| Alt+Click | Nothing yet |
+| Alt+Click | Open the make-or-edit card for this chip (Live Preview); never runs or copies |
 | Move the cursor into the span | Reveal the Markdown source (Live Preview) |
 
 A click runs now. A `run` or `preview-first` writer skips its preview, a
@@ -437,7 +498,8 @@ The hover tooltip is DOM text with these lines:
 3. One policy line: "Runs now · skips its preview", "Asks first: …", or
    "Opens its output".
 4. "Click to run · ⇧Click opens Command Mode", which becomes "Click or ⌘↵
-   to run · …" once the ⌘↵ binding is live.
+   to run · …" once the ⌘↵ binding is live, plus "· ⌥Click edits" in Live
+   Preview.
 
 A failed chip's tooltip carries the first error line. A shared polite live
 region announces "Running …", "… finished", "… needs attention", and
@@ -478,7 +540,9 @@ hover previews:
 - Steps are numbered and monospace. A line may hold several `&&` steps;
   blank lines are skipped.
 - Only the Run button runs. Clicking the body selects text. Shift+Click on
-  Run opens Command Mode's guarded path, as on an inline chip.
+  Run opens Command Mode's guarded path, as on an inline chip, and
+  Alt+Click on Run in Live Preview opens the make-or-edit card for the
+  fence.
 - The card runs exactly as an inline chip with the same text: one Command
   Mode sequence that halts at the first failure, with the same source
   rules, confirm floor, and run state. An inline chip and a card with the

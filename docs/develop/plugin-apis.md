@@ -877,23 +877,23 @@ Bob Chips fragments share this runtime; it is not part of
 - **Activation.** `commandChipActivate(chip, ctx)` settles frozen
   `{ action, ok, stage, outcome, reason, runId, sequenceId, signature }`.
   `ctx` carries `plugin`, the source path, zero-based `line`, `origin`,
-  `view`/`element`, `shift`, `alt`, `refresh()`, and stale evidence:
+  `view`/`element`, `shift`, `alt`, `edit()`, `refresh()`, and stale evidence:
   `checkSource()`, a Live Preview `range: { from, to, raw }`, or
   `readSource()` plus a line-relative `snapshot`. Copy contexts copy byte-exact.
-  Otherwise it resolves afresh and takes a per-key latch (at least 400 ms,
+  Otherwise it resolves afresh and takes a per-key latch (≥ 400 ms,
   through acceptance) before any await. Then it rechecks the source, policy,
   and verdict, and calls `runText` or (Shift) `openText` with only
   `{ source, onState }`. A live key opens its output once per latch window;
   a pending one swallows the gesture. Invalid, unavailable, and refused
   activations show one Notice. Cards and previews restore the prior ink;
-  failures never retry. Alt is inert. Nothing calls task or walk APIs.
+  failures never retry. Alt calls `edit()`. Nothing calls task or walk APIs.
 - **Face.** `commandChipBuildInline(doc, chip, { interactive })` builds the
   shared `.bob-run-chip`: a `<button type="button">`, or a focusable
   `role="button"` span. `commandChipPaint(host, paint)` repaints it in place.
-  `commandChipMount(plugin, host, chip, { context, paint?, gestureHost? })`
+  `commandChipMount(plugin, host, chip, { context, paint?, gestureHost?, editable? })`
   subscribes to the run key and catalog changes and wires gestures; the
   `bob-run` card passes its painter and Run button. `context()` returns
-  fresh activation evidence without `plugin` or `element`. `commandChipUnmount(host)`
+  fresh evidence without `plugin` or `element`. `commandChipUnmount(host)`
   never touches the run. Live Preview reads the note from its own
   `editorInfoField`. When set, `plugin.commandChipRunHotkey` adds the key to
   the tooltip.

@@ -1,4 +1,5 @@
-// Make-or-edit command, clipboard prefill, and one-transaction writes.
+// Make-or-edit command (both chip kinds), clipboard prefill, Alt+Click
+// entry from Live Preview chips, and one-transaction writes.
 function copyChipAuthorCmView(editor, view) {
   try {
     if (editor && editor.cm && typeof editor.cm.dispatch === "function") return editor.cm;
@@ -269,7 +270,7 @@ function copyChipAuthorCommit(plugin, draft, snapshot, identity) {
       copyChipNotify(COPY_CHIP_AUTHOR_STALE);
       return false;
     }
-    const plan = copyChipAuthorPlan(snapshot, { label: draft.label, text: draft.text });
+    const plan = copyChipAuthorPlan(snapshot, { label: draft.label, text: draft.text, kind: draft.kind });
     if (!plan || !plan.ok) {
       copyChipNotify((plan && plan.reason) || COPY_CHIP_NOTHING_TO_COPY);
       return false;
@@ -338,6 +339,7 @@ function copyChipAuthorRun(plugin, editor, view, extra) {
       source,
       selections: extraSelections || selections,
       clipboardText: extra && extra.clipboardText != null ? extra.clipboardText : "",
+      resolveCommand: runChipAuthorEngine(plugin).resolve,
     });
     if (!resolved || resolved.ok !== true) {
       copyChipNotify((resolved && resolved.reason) || COPY_CHIP_AUTHOR_ONE_SELECTION);
@@ -360,9 +362,14 @@ function copyChipAuthorRun(plugin, editor, view, extra) {
   }
 }
 
+// Alt+Click on a Live Preview chip of either kind: open the card for that
+// exact occurrence, after checking the document still holds that chip at
+// `[from, to)`. `chip` is `{ label, text, kind? }` (kind defaults to copy).
+// A stale span opens nothing. Returns true when the card opened.
 function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
   try {
     if (!plugin || !cmView || !cmView.state) return false;
+    const kind = copyChipAuthorKind(chip && chip.kind);
     let info = null;
     try {
       if (CopyChipsEditorInfoField && typeof cmView.state.field === "function") {
@@ -386,9 +393,10 @@ function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
       const pos = copyChipAuthorPosAt(lines, start);
       const lineText = String(lines[pos.line] || "");
       const table = copyChipAuthorLineIsTable(lineText);
-      const found = copyChipScanLine(lineText, { table });
+      const found = chipScanLine(lineText, { table });
       const lineStart = copyChipAuthorLineStart(lines, pos.line);
       for (const hit of found) {
+        if (copyChipAuthorKind(hit.kind) !== kind) continue;
         if (lineStart + hit.from === start && lineStart + hit.to === end) {
           if (chip && chip.text != null && hit.text !== chip.text) continue;
           stillChip = true;
@@ -404,16 +412,16 @@ function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
       selections: [{ from: start, to: start }],
     });
     if (!resolved || resolved.ok !== true || !resolved.snapshot) return false;
-    if (resolved.snapshot.from !== start || resolved.snapshot.to !== end) {
+    if (resolved.snapshot.from !== start || resolved.snapshot.to !== end || resolved.snapshot.kind !== kind) {
       const snap = resolved.snapshot;
       const forced = copyChipAuthorSnapshot({
         originalSource: source,
         from: start,
         to: end,
         sourceSlice: slice,
-        label: (chip && chip.label) || snap.label || "",
-        text: (chip && chip.text) || snap.text || "",
-        title: "Edit copy chip",
+        label: (chip && chip.label) || "",
+        text: (chip && chip.text) || "",
+        title: copyChipAuthorTitle("edit", kind),
         mode: "edit",
         form: "inline",
         table: snap.table,
@@ -421,6 +429,7 @@ function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
         focus: "label",
         selectText: false,
         openingIndent: "",
+        kind,
       });
       return copyChipAuthorOpenModal(plugin, {
         snapshot: forced,
@@ -436,6 +445,53 @@ function copyChipAuthorOpenFromWidget(plugin, cmView, from, to, chip) {
   }
 }
 
+// The Live Preview editor a rendered element sits in, or null (Reading
+// view, embeds, hover previews). Never throws.
+function copyChipAuthorEditorViewOf(el) {
+  try {
+    if (!el || !CopyChipsEditorView || typeof CopyChipsEditorView.findFromDOM !== "function") return null;
+    const root = typeof el.closest === "function" ? el.closest(".cm-editor") : null;
+    if (!root) return null;
+    const view = CopyChipsEditorView.findFromDOM(root);
+    return view && view.state ? view : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Alt+Click on a Live Preview `bob-run` card: open the card for the fence
+// whose opening is zero-based line `openLine`, only while that fence still
+// holds `chip.text`. Returns true when the card opened.
+function copyChipAuthorOpenFromFence(plugin, cmView, openLine, chip) {
+  try {
+    if (!plugin || !cmView || !cmView.state || !Number.isInteger(openLine) || openLine < 0) return false;
+    let info = null;
+    try {
+      if (CopyChipsEditorInfoField && typeof cmView.state.field === "function") {
+        info = cmView.state.field(CopyChipsEditorInfoField);
+      }
+    } catch (error) {
+      info = null;
+    }
+    const editor = (info && info.editor) || (info && info.editMode && info.editMode.editor) || null;
+    const source = copyChipAuthorReadSource(editor, cmView);
+    const lines = copyChipAuthorSplitLines(source);
+    if (openLine >= lines.length) return false;
+    const at = copyChipAuthorLineStart(lines, openLine);
+    const resolved = copyChipAuthorResolve({ source, selections: [{ from: at, to: at }] });
+    if (!resolved || resolved.ok !== true || !resolved.snapshot) return false;
+    const snap = resolved.snapshot;
+    if (snap.kind !== "run" || snap.form !== "block") return false;
+    if (!copyChipFencePayloadEquals(snap.text, chip && chip.text)) return false;
+    return copyChipAuthorOpenModal(plugin, {
+      snapshot: snap,
+      identity: copyChipAuthorIdentity(editor, info || null),
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
 function copyChipRegisterAuthorCommand(plugin) {
   try {
     if (!plugin || typeof plugin.addCommand !== "function") return false;
@@ -444,7 +500,7 @@ function copyChipRegisterAuthorCommand(plugin) {
     try {
       plugin.addCommand({
         id: "make-or-edit",
-        name: "Make or edit copy chip",
+        name: "Make or edit chip",
         hotkeys: [{ modifiers: ["Mod", "Shift"], key: "y" }],
         editorCallback: (editor, view) => {
           try {

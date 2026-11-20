@@ -220,6 +220,7 @@ function fixturePlan(today) {
   const stamped = shiftDays(today, -2);
   const empty = shiftDays(today, -3);
   const malformed = shiftDays(today, -4);
+  const landing = shiftDays(today, -5);
   const tomorrow = shiftDays(today, 1);
   const week = weekId(today);
   const weekMonday = isoWeek(today).monday;
@@ -227,13 +228,13 @@ function fixturePlan(today) {
   const year = yearId(today);
   const stampedSummary = "Shipped the card display and the guarded editor.";
   const plan = {
-    today, yesterday, stamped, empty, malformed, tomorrow, week, weekMonday, quarter, year,
+    today, yesterday, stamped, empty, malformed, landing, tomorrow, week, weekMonday, quarter, year,
     stampedSummary,
     stampedDigest: summaryDigest(stampedSummary),
     stampedDrafted: shiftDays(today, -1),
     paths: {
       today: dayPath(today), yesterday: dayPath(yesterday), stamped: dayPath(stamped),
-      empty: dayPath(empty), malformed: dayPath(malformed), tomorrow: dayPath(tomorrow),
+      empty: dayPath(empty), malformed: dayPath(malformed), landing: dayPath(landing), tomorrow: dayPath(tomorrow),
       week: weekPathOf(week), quarter: year === quarter.slice(0, 4) ? quarter.slice(0, 4) + "/" + quarter + ".md" : quarter.slice(0, 4) + "/" + quarter + ".md",
       year: year + ".md", embed: "embeds-today.md", ordinary: "ordinary.md",
       boundaryDay: "2026/20260101.md", boundaryPrevDay: "2025/20251231.md",
@@ -264,6 +265,8 @@ function fixturePlan(today) {
     }),
     [plan.paths.empty]: dayNote(empty, {}),
     [plan.paths.malformed]: dayNote(malformed, { malformed: "intentions: 7" }),
+    // The landing proof's own empty day: first add, overlay, last remove.
+    [plan.paths.landing]: dayNote(landing, {}),
     [plan.paths.week]: weekNote(week, weekMonday, { intentions: plan.intentions.week }),
     [plan.paths.quarter]: quarterNote(quarter, { intentions: plan.intentions.quarter }),
     [plan.paths.embed]: "---\ntype: \"[[note]]\"\n---\n\n# Embeds today\n\n![[" + plan.paths.today.replace(/\.md$/, "") + "]]\n",
@@ -274,7 +277,7 @@ function fixturePlan(today) {
     [plan.paths.boundaryQuarter]: quarterNote("2025-Q4", { intentions: ["Close the year"] }),
   };
   const fixed = [plan.paths.boundaryDay, plan.paths.boundaryWeek, plan.paths.boundaryPrevWeek, plan.paths.boundaryQuarter];
-  const relative = [plan.paths.today, plan.paths.yesterday, plan.paths.stamped, plan.paths.empty, plan.paths.malformed, plan.paths.week, plan.paths.quarter];
+  const relative = [plan.paths.today, plan.paths.yesterday, plan.paths.stamped, plan.paths.empty, plan.paths.malformed, plan.paths.landing, plan.paths.week, plan.paths.quarter];
   for (const name of relative) {
     if (fixed.includes(name)) throw new Error("today-relative fixture collides with a boundary fixture: " + name);
   }

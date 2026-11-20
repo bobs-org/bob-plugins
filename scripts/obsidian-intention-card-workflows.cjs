@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const lib = require("./obsidian-intention-card-e2e-lib.cjs");
 const proof = require("./obsidian-record-card-workflow-lib.cjs");
+const landing = require("./obsidian-intention-card-landing-workflows.cjs");
 
 // One authored intention line, quoted or bare, as the writer may serialize it.
 const WALK_LINE = String.raw`^(\s*-\s*)(["']?)Walk after lunch\2[ \t]*$`;
@@ -24,7 +25,7 @@ const MODAL = `(() => {
     stage: m.stage ? m.stage.kind : null, stageField: m.stage ? m.stage.field : null, stageIndex: m.stage ? m.stage.index : null,
     draft: m.stageDraft, note: m.stageNote, status: m.statusKind, writable: m.writable,
     missing: m.missing, malformed: m.malformed, pending: m.pendingApply,
-    refusal: m.refusalMessage, hint: m.refusalHint, fields: m.fields, fingerprint: m.fingerprint, retained: m.retainedOps,
+    refusal: m.refusalMessage, hint: m.refusalHint, fields: m.fields, fingerprint: m.fingerprint, retained: m.retained,
     text: m.contentEl.textContent,
     hint4: m.contentEl.querySelector('.bob-intention-editor-hint')?.textContent || '',
     focus: active ? { tag: active.tagName, key: active.getAttribute('data-intention-key'), input: active.getAttribute('data-intention-input'),
@@ -379,7 +380,8 @@ async function runWorkflows(ctx) {
     await key("Enter");
     state = await ready((value) => value.stage === "summary", "summary stage");
     assert.match(state.note || state.text, /agent drafted this; your edit makes it yours/);
-    assert.match(state.text, new RegExp("Current: " + plan.stampedSummary.replace(/[.]/g, "\\.")));
+    // The current summary shows read-only above the stage, with provenance.
+    assert.match(state.text, new RegExp("Summary · ✦ agent · [A-Z][a-z]{2} \\d{1,2}" + plan.stampedSummary.replace(/[.]/g, "\\.")));
     await shot("intention-editor-summary-explainer", "Card editor");
     return { note: state.note };
   });
@@ -772,6 +774,11 @@ async function runWorkflows(ctx) {
     } finally {
       fs.rmSync(ctx.oldBobFlag, { force: true });
     }
+  });
+
+  await landing.runLandingWorkflows(ctx, {
+    evidence, step, ensureModal, modal, ready, closed, closeAll, normal, liveReady, doubleEquals,
+    typeText, selectAll, disk, sameVault, onlyChanged, writeStep,
   });
 }
 

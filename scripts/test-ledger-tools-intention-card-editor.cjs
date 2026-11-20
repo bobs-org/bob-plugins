@@ -210,7 +210,11 @@ function readReport(after, fingerprint = "sha256:aaa") {
 
 test("modal preview/apply round trip retains drafts on stale refusal", async () => {
   const plugin = fakePlugin({
-    preview: [readReport({ intentions: ["One"] }), { ok: false, code: "stale_note", report: { ok: false, schema_version: 1, error: { code: "stale_note", message: "changed", hint: "retry" } } }],
+    preview: [
+      readReport({ intentions: ["One"] }),
+      { ok: true, report: { ok: false, schema_version: 1, error: { code: "stale_note", message: "changed", hint: "retry" } } },
+      readReport({ intentions: ["One"] }, "sha256:fresh"),
+    ],
     apply: [],
   });
   const modal = new H.IntentionCardModal({ document: null }, {
@@ -229,7 +233,9 @@ test("modal preview/apply round trip retains drafts on stale refusal", async () 
   assert.equal(modal.statusKind, "stale");
   assert.equal(modal.selectedKey, "intention:0");
   assert.equal(modal.stageDraft, "One edited");
-  assert.ok(Array.isArray(modal.retainedOps));
+  assert.equal(modal.stage.index, 0, "the stage stays on its target with the exact draft");
+  assert.equal(modal.fingerprint, "sha256:fresh");
+  assert.match(modal.stageNote, /Enter saves your draft as Intention 1/);
   modal.close();
 });
 
@@ -280,11 +286,13 @@ test("overlay settles on matching metadata and expires on a bound", () => {
   const overlay = { fields: { intentions: ["Ship it"] }, fingerprint: "sha256:bbb", changed: true };
   plugin.intentionCardPushOverlay("2026/20261119.md", overlay, { ttlMs: 50 });
   assert.equal(plugin.intentionCardOverlays.get("2026/20261119.md"), overlay);
-  assert.equal(plugin.intentionCardSettleOverlay("2026/20261119.md", { intentions: ["Ship it"] }), true);
+  assert.equal(plugin.intentionCardSettleOverlay("2026/20261119.md", { intentions: ["Ship it"] }), "settled");
   assert.equal(plugin.intentionCardOverlays.has("2026/20261119.md"), false);
 
-  plugin.intentionCardPushOverlay("2026/20261119.md", overlay, { ttlMs: 50 });
-  assert.equal(plugin.intentionCardSettleOverlay("2026/20261119.md", { intentions: ["Other"] }), false);
+  plugin.intentionCardPushOverlay("2026/20261119.md", { ...overlay, priors: [H.intentionOverlayComparable({ intentions: ["Before"] })] }, { ttlMs: 50 });
+  assert.equal(plugin.intentionCardSettleOverlay("2026/20261119.md", { intentions: ["Before"] }), "pending");
+  assert.equal(plugin.intentionCardOverlays.has("2026/20261119.md"), true, "still-prior metadata keeps the overlay");
+  assert.equal(plugin.intentionCardSettleOverlay("2026/20261119.md", { intentions: ["Other"] }), "discarded");
   assert.equal(plugin.intentionCardOverlays.has("2026/20261119.md"), false);
 
   plugin.intentionCardPushOverlay("2026/20261119.md", overlay, { ttlMs: 50 });

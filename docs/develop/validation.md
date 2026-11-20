@@ -171,7 +171,12 @@ hashes, every writer call with stdin, and screenshots. The run proves Reading
 and Live Preview placement and seven-key ownership, fail-open cases, `==`,
 `[n==r`, `==[r`, guarded edits with Undo, navigation, entry points, the YAML
 excursion, a two-pane stale draft, body-edit survival, and an emulated old bob.
-Any unrun check fails the run. Inspect every PNG before claiming acceptance.
+Its landing checks hold metadataCache back to prove the applied-write overlay
+(first add, Reading, settlement, last remove), retry a stale remove by its
+target, slow the writer to race keys and clicks against Undo, and capture the
+Reflection summary context, auto-growth, and Alt+J animation in light, dark,
+and narrow views. Any unrun check fails the run. Inspect every PNG before
+claiming acceptance.
 
 The live-vault coverage audit requires Python 3 with PyYAML (also used by the docs
 tooling). It is independent of the scratch UI walkthrough and never repairs the vault:

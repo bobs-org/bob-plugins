@@ -302,6 +302,8 @@
   "297b-plugin-intention-update-session.js",
   "297c-plugin-intention-card-editor.js",
   "297ca-plugin-intention-card-editor-input.js",
+  "297cb-plugin-intention-card-editor-writes.js",
+  "297cc-plugin-intention-card-editor-paint.js",
   "297d-plugin-intention-card-entrypoints.js",
   "297e-plugin-intention-card-navigation.js",
   "293-keep-inbox-render.js",

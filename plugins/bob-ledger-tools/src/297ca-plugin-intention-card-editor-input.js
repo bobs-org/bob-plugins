@@ -1,5 +1,5 @@
 // Intention card editor input behavior: stage focus and caret, one-line paste
-// normalization, and the stale-refusal refresh. Browse mode keeps focus on its
+// normalization, and the generation-only retry. Browse mode keeps focus on its
 // row buttons; an explicitly opened stage owns focus with the caret at the end.
 // Repaints rebuild the stage input, so a focused caret is carried across them.
 const INTENTION_CARD_EDITOR_PASTE_NOTE = "Line breaks became spaces — an intention is one line.";
@@ -71,44 +71,6 @@ function intentionCardEditorPaste(modal, event) {
   } catch (_) {
     return false;
   }
-}
-
-function intentionCardEditorFieldsFromReport(modal, report) {
-  const after = report && report.after ? report.after : {};
-  const state = typeof after.summary_state === "string" ? after.summary_state : "";
-  return {
-    intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
-    summary: typeof after.summary === "string" ? after.summary : "",
-    reflection: typeof after.reflection === "string" ? after.reflection : "",
-    summaryState: state === "drafted" ? "agent" : state === "edited" ? "edited" : (modal.fields?.summaryState || ""),
-    summaryDrafted: modal.fields?.summaryDrafted || "",
-  };
-}
-
-// A stale refusal carries no fresh fingerprint: read one with an empty-op dry
-// run, rebase, and show the current list while the exact draft and selection
-// stay put. The retry stays explicit; nothing is applied here.
-async function intentionCardEditorRefreshAfterStale(modal) {
-  const plugin = modal && modal.intentionPlugin;
-  if (!plugin || typeof plugin.apiIntentionUpdatePreview !== "function") return null;
-  const seq = modal.readSeq;
-  const subjectPath = modal.subjectPath;
-  let result = null;
-  try {
-    result = await plugin.apiIntentionUpdatePreview(modal.subject, intentionUpdateEnvelopeText("", []));
-  } catch (_) {
-    return null;
-  }
-  if (modal.closed || modal.readSeq !== seq || modal.subjectPath !== subjectPath || modal.statusKind !== "stale") return null;
-  if (!result || result.ok !== true || !result.report || result.report.ok !== true) return null;
-  const fresh = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : "";
-  if (!fresh) return null;
-  modal.fingerprint = fresh;
-  modal.latestReport = result.report;
-  try { modal.session?.rebase?.(fresh); } catch (_) {}
-  modal.fields = intentionCardEditorFieldsFromReport(modal, result.report);
-  modal.paintIntentionCard();
-  return result.report;
 }
 
 // An empty-op dry run reads malformed frontmatter as `ok` with warnings and

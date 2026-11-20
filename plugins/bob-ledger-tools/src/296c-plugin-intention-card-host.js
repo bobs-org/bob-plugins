@@ -108,7 +108,24 @@ class BobLedgerToolsIntentionCardMixin {
   intentionCardEnsureMaps() {
     if (!(this.intentionCardSourceCache instanceof Map)) this.intentionCardSourceCache = new Map();
     if (!(this.intentionCardSourceFlights instanceof Map)) this.intentionCardSourceFlights = new Map();
+    if (!(this.intentionCardSourceEpochs instanceof Map)) this.intentionCardSourceEpochs = new Map();
+    if (!(this.intentionCardUnconfirmedSource instanceof Map)) this.intentionCardUnconfirmedSource = new Map();
     if (!(this.intentionCardKeySlots instanceof Map)) this.intentionCardKeySlots = new Map();
+    if (!Number.isInteger(this.intentionCardSourceGeneration)) this.intentionCardSourceGeneration = 0;
+  }
+
+  // Every invalidation (metadata change, unload) advances the path epoch, so
+  // a read that started earlier can never write its old source back.
+  intentionCardSourceEpoch(path) {
+    return `${this.intentionCardSourceGeneration || 0}:${this.intentionCardSourceEpochs?.get?.(path) || 0}`;
+  }
+
+  intentionCardInvalidateSource(path) {
+    this.intentionCardEnsureMaps();
+    this.intentionCardSourceEpochs.set(path, (this.intentionCardSourceEpochs.get(path) || 0) + 1);
+    this.intentionCardSourceCache.delete(path);
+    this.intentionCardUnconfirmedSource.delete(path);
+    this.intentionCardSourceFlights.delete(path);
   }
 
   intentionCardOnDisposeStart() {
@@ -117,11 +134,14 @@ class BobLedgerToolsIntentionCardMixin {
       else clearTimeout(this.intentionCardMidnightTimer);
     }
     this.intentionCardMidnightTimer = null;
+    this.intentionCardSourceGeneration = (this.intentionCardSourceGeneration || 0) + 1;
     this.intentionCardSourceFlights?.clear?.();
   }
 
   intentionCardOnDisposeEnd() {
     this.intentionCardSourceCache?.clear?.();
+    this.intentionCardUnconfirmedSource?.clear?.();
+    this.intentionCardSourceEpochs?.clear?.();
     this.intentionCardKeySlots?.clear?.();
     this.intentionCardDay = "";
   }
@@ -149,12 +169,21 @@ class BobLedgerToolsIntentionCardMixin {
     this.intentionCardMidnightTimer?.unref?.();
   }
 
+  // Metadata settles the path's applied overlay (match, still-prior, or
+  // conflict), invalidates its source epoch, and re-reads at once so the next
+  // paint finds confirmed source instead of flashing native Properties.
   intentionCardOnMetadata(file) {
     if (!this.intentionCardActive) return;
     const path = intentionCardFilePath(file?.path);
     if (!path || !intentionCardSubjectForPath(path, this.intentionCardToday())) return;
-    this.intentionCardSourceCache?.delete?.(path);
-    this.intentionCardSourceFlights?.delete?.(path);
+    try {
+      if (typeof this.intentionCardSettleOverlay === "function") {
+        this.intentionCardSettleOverlay(path, this.intentionCardCache(path)?.cache?.frontmatter || {});
+      }
+    } catch (_) {}
+    try { this.intentionCardEditorModal?.intentionOnMetadata?.(path); } catch (_) {}
+    this.intentionCardInvalidateSource(path);
+    void this.intentionCardEnsureSource(path);
     this.intentionCardHost().scheduleRefresh();
   }
 
@@ -173,20 +202,55 @@ class BobLedgerToolsIntentionCardMixin {
     if (cached) return cached;
     const flight = this.intentionCardSourceFlights?.get?.(key);
     if (flight) return flight;
-    const promise = (async () => {
+    const epoch = this.intentionCardSourceEpoch(key);
+    const current = () => this.intentionCardActive !== false && this.intentionCardSourceEpoch(key) === epoch;
+    let promise = null;
+    promise = (async () => {
       const fileInfo = this.intentionCardCache(key);
       if (!fileInfo?.file || !fileInfo.cache || typeof this.app?.vault?.read !== "function") return null;
       let source = "";
       try { source = await this.app.vault.read(fileInfo.file); } catch (_) { return null; }
-      const evidence = intentionCardFrontmatterEvidence(source, fileInfo.cache.frontmatter || {});
-      if (!evidence.ok) return null;
+      // Pinned to the path epoch: a read that outlived a metadata change or
+      // unload never resurrects its old content.
+      if (!current()) return null;
+      const latest = this.intentionCardCache(key)?.cache || fileInfo.cache;
+      const evidence = intentionCardFrontmatterEvidence(source, latest.frontmatter || {});
+      if (!evidence.ok) {
+        // Metadata lags a write: keep the parsed source only as the base an
+        // applied overlay may paint over. It never paints on its own.
+        const parsed = evidence.reason === "stale-metadata-cache" ? intentionCardParseFrontmatter(source) : null;
+        if (parsed?.ok) {
+          this.intentionCardUnconfirmedSource.set(key, { path: key, source, frontmatter: parsed.frontmatter });
+          if (this.intentionCardOverlayFor?.(key)) this.intentionCardHost().scheduleRefresh();
+        }
+        return null;
+      }
       const entry = { path: key, source, frontmatter: evidence.frontmatter };
       this.intentionCardSourceCache.set(key, entry);
+      this.intentionCardUnconfirmedSource.delete(key);
       this.intentionCardHost().scheduleRefresh();
       return entry;
-    })().finally(() => this.intentionCardSourceFlights?.delete?.(key));
+    })().finally(() => {
+      if (this.intentionCardSourceFlights?.get?.(key) === promise) this.intentionCardSourceFlights.delete(key);
+    });
     this.intentionCardSourceFlights.set(key, promise);
     return promise;
+  }
+
+  // Source an applied overlay may paint over when metadata has not caught up
+  // with the write. Malformed source stays a fail-open refusal.
+  intentionCardOverlaySource(path, sourceText) {
+    if (typeof sourceText === "string") {
+      const parsed = intentionCardParseFrontmatter(sourceText);
+      return parsed.ok ? { path, source: sourceText, frontmatter: parsed.frontmatter } : null;
+    }
+    return this.intentionCardSourceCache?.get?.(path) || this.intentionCardUnconfirmedSource?.get?.(path) || null;
+  }
+
+  intentionCardOverlayFrontmatterFor(path, frontmatter) {
+    const overlay = typeof this.intentionCardOverlayFor === "function" ? this.intentionCardOverlayFor(path) : null;
+    if (!overlay || typeof intentionCardOverlayFrontmatter !== "function") return { overlay: null, frontmatter };
+    return { overlay, frontmatter: intentionCardOverlayFrontmatter(frontmatter, overlay) };
   }
 
   intentionCardConfirmedSource(path, sourceText) {
@@ -205,10 +269,17 @@ class BobLedgerToolsIntentionCardMixin {
     return entry;
   }
 
+  // The display model reads metadata-confirmed source; an applied overlay
+  // (never a pending preview) bridges metadata that lags its write, including
+  // the first field on an empty note and removing the last one. Gates stay:
+  // malformed source, Source mode, embeds, and mobile never reach here.
   intentionCardModelFor(path, sourceText) {
     this.intentionCardEnsureMaps();
     const today = this.intentionCardToday();
-    const current = this.intentionCardConfirmedSource(path, sourceText);
+    const key = intentionCardFilePath(path);
+    let current = this.intentionCardConfirmedSource(path, sourceText);
+    const hasOverlay = Boolean(typeof this.intentionCardOverlayFor === "function" && this.intentionCardOverlayFor(key));
+    if (!current && hasOverlay) current = this.intentionCardOverlaySource(key, sourceText);
     if (!current) {
       void this.intentionCardEnsureSource(path);
       return null;
@@ -216,12 +287,19 @@ class BobLedgerToolsIntentionCardMixin {
     const subject = intentionCardSubjectForPath(path, today);
     const placement = intentionCardPlacement(current.source, subject, today);
     if (!subject || !placement) return null;
-    let parent = null;
+    let parentFrontmatter = null;
     if (subject.parent) {
-      parent = this.intentionCardSourceCache?.get?.(subject.parent.path) || null;
-      if (!parent) void this.intentionCardEnsureSource(subject.parent.path);
+      const parentPath = subject.parent.path;
+      const parent = this.intentionCardSourceCache?.get?.(parentPath)
+        || (this.intentionCardOverlayFor?.(parentPath) ? this.intentionCardUnconfirmedSource?.get?.(parentPath) : null)
+        || null;
+      if (!parent) void this.intentionCardEnsureSource(parentPath);
+      const merged = this.intentionCardOverlayFrontmatterFor(parentPath, parent?.frontmatter || null);
+      parentFrontmatter = parent || merged.overlay ? merged.frontmatter : null;
     }
-    const model = intentionCardModelFor(path, current.frontmatter, today, parent?.frontmatter || null);
+    const own = this.intentionCardOverlayFrontmatterFor(key, current.frontmatter);
+    let model = intentionCardModelFor(path, own.frontmatter, today, parentFrontmatter);
+    if (model && own.overlay) model = intentionCardOverlayModel(model, own.overlay, own.frontmatter);
     return model ? { model, source: current.source, placement, subject } : null;
   }
 

@@ -13,6 +13,7 @@ const path = require("node:path");
 const lib = require("./obsidian-intention-card-e2e-lib.cjs");
 const shared = require("./obsidian-record-card-e2e.cjs");
 const workflows = require("./obsidian-intention-card-workflows.cjs");
+const workflowsLanding = require("./obsidian-intention-card-landing-workflows.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ELECTRON_FALLBACK = "/snap/obsidian/current/app/obsidian";
@@ -42,6 +43,7 @@ const REQUIRED_CHECKS = [
   "entry-command-mode-rows", "entry-ctrl-shift-p-fallback", "entry-ctrl-shift-p-task-priority",
   "yaml-done-returns", "yaml-invalid-stays-recoverable", "stale-refusal-keeps-draft",
   "stale-explicit-retry-saves", "body-edit-survives-save", "old-bob-keeps-card-and-recovery",
+  ...workflowsLanding.LANDING_CHECKS,
   "screenshots-captured", "no-console-exceptions",
 ];
 
@@ -63,6 +65,11 @@ const hasStdin = args.some((arg, i) => (arg === "-i" || arg === "--input") && ar
 const input = hasStdin ? fs.readFileSync(0, "utf8") : undefined;
 const append = (entry) => { try { fs.appendFileSync(log, JSON.stringify(entry) + "\\n"); } catch (_) {} };
 append({ event: "start", pid: process.pid, at: new Date().toISOString(), args, input });
+// The landing proof holds writer applies open to race keys and clicks.
+if (args[0] === "periods" && args[1] === "update" && !args.includes("-n") && fs.existsSync(process.env.BOB_INTENTION_E2E_DELAY_FLAG || "")) {
+  const ms = Number(fs.readFileSync(process.env.BOB_INTENTION_E2E_DELAY_FLAG, "utf8")) || 1500;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 if (args[0] === "periods" && args[1] === "update" && fs.existsSync(process.env.BOB_INTENTION_E2E_OLD_FLAG)) {
   const stderr = ${JSON.stringify(lib.OLD_BOB_STDERR)};
   append({ event: "finish", pid: process.pid, args, exitCode: 2, stdout: "", stderr, emulatedOldBob: true });
@@ -90,6 +97,7 @@ function bobEnv(ctx) {
     BOB_CONFIG_FILE: path.join(ctx.profileDir, "missing-test-config.yml"),
     BOB_INTENTION_E2E_LOG: ctx.logPath,
     BOB_INTENTION_E2E_OLD_FLAG: ctx.oldBobFlag,
+    BOB_INTENTION_E2E_DELAY_FLAG: ctx.delayFlag,
     BOB_INTENTION_E2E_REAL: ctx.bob.path,
     PATH: ctx.shimDir + path.delimiter + (process.env.PATH || ""),
     NO_COLOR: "1",
@@ -301,12 +309,13 @@ async function run(args) {
     const ctx = {
       report, bob, plan, notes, vaultDir: vaultReal, profileDir, shimDir, outDir,
       logPath: path.join(profileDir, "bob-invocations.jsonl"), oldBobFlag: path.join(profileDir, "old-bob-mode"),
+      delayFlag: path.join(profileDir, "writer-delay-ms"),
     };
     report.scratch = { root: scratch, vault: vaultReal, profile: profileDir, fixturePaths: Object.keys(notes).sort(), plan };
 
     // Real bob reads every seeded subject before the UI starts.
     const seeded = {};
-    for (const key of ["today", "yesterday", "stamped", "empty", "week", "quarter", "boundaryDay"]) {
+    for (const key of ["today", "yesterday", "stamped", "empty", "landing", "week", "quarter", "boundaryDay"]) {
       const fields = readFields(ctx, plan.paths[key]);
       seeded[key] = { id: fields.subject.id, path: fields.subject.path, fingerprint: fields.fingerprint_before, after: fields.after };
     }
@@ -717,6 +726,7 @@ async function main(argv) {
     try {
       lib.selfTest();
       workflows.selfTest();
+      workflowsLanding.selfTest();
       const missing = REQUIRED_CHECKS.filter((name, index) => REQUIRED_CHECKS.indexOf(name) !== index);
       if (missing.length) throw new Error("duplicate required checks: " + missing.join(", "));
       const source = displayProbeSource("2026/20261120.md");

@@ -36,7 +36,10 @@ test("fixtures are relative to the run date and keep boundary notes missing", ()
 test("every mandatory check is listed once and the runner fails on an unrun check", () => {
   assert.equal(new Set(runner.REQUIRED_CHECKS).size, runner.REQUIRED_CHECKS.length);
   for (const name of ["yesterday-prev-note-double-equals-r", "yesterday-double-equals-bracket-r", "stale-refusal-keeps-draft",
-    "body-edit-survives-save", "old-bob-keeps-card-and-recovery", "display-seven-owned-keys-reading", "yaml-invalid-stays-recoverable"]) {
+    "body-edit-survives-save", "old-bob-keeps-card-and-recovery", "display-seven-owned-keys-reading", "yaml-invalid-stays-recoverable",
+    "landing-overlay-reading-delayed-metadata", "landing-overlay-first-add-live", "landing-overlay-last-remove-live",
+    "landing-stale-remove-retargets", "landing-cancel-leaves-no-retry", "landing-undo-busy-guard",
+    "landing-reflection-summary-context", "landing-reflection-autogrow", "landing-reorder-arrange-animation"]) {
     assert.ok(runner.REQUIRED_CHECKS.includes(name), name);
   }
 });

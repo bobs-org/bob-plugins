@@ -32,7 +32,11 @@ class BobLedgerToolsIntentionCardEditorMixin {
   }
 
   teardownIntentionCardEditor() {
-    try { this.intentionCardEditorModal?.close?.(); } catch (_) {}
+    try {
+      const modal = this.intentionCardEditorModal;
+      if (modal) modal.intentionForceClose = true;
+      modal?.close?.();
+    } catch (_) {}
     this.intentionCardEditorModal = null;
     try {
       if (typeof this.unregisterPropertyCard === "function") this.unregisterPropertyCard("intentions");
@@ -107,6 +111,11 @@ class BobLedgerToolsIntentionCardEditorMixin {
   // the navigation phase. Never invents a global keystroke queue here.
   async openIntentionCard(options = {}) {
     if (this.intentionCardEditorModal) {
+      // A new open never supersedes an in-flight write in the current card.
+      if (this.intentionCardEditorModal.pendingApply && !this.intentionCardEditorModal.closed) {
+        try { new Notice("Wait for the intention save to finish."); } catch (_) {}
+        return { ok: false, reason: "busy" };
+      }
       try { this.intentionCardEditorModal.close(); } catch (_) {}
       this.intentionCardEditorModal = null;
     }
@@ -186,6 +195,25 @@ class BobLedgerToolsIntentionCardEditorMixin {
     return { ok: true, modal, readOnly: modal.writable !== true };
   }
 
+  intentionCardOverlayFor(path) {
+    const key = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
+    if (!key || !(this.intentionCardOverlays instanceof Map)) return null;
+    return this.intentionCardOverlays.get(key) || null;
+  }
+
+  // Owned fields as metadataCache describes them right now, comparable with
+  // overlay snapshots; null when the note or a field is unreadable.
+  intentionCardOverlayMetadataFields(path) {
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path);
+      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      const frontmatter = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : {};
+      return file ? intentionOverlayComparable(frontmatter) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   intentionCardPushOverlay(path, overlay, options = {}) {
     const key = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
     if (!key) return null;
@@ -198,8 +226,26 @@ class BobLedgerToolsIntentionCardEditorMixin {
       } catch (_) {}
     }
     timers.delete(key);
-    if (overlay) this.intentionCardOverlayStore().set(key, overlay);
-    else this.intentionCardOverlayStore().delete(key);
+    const previous = this.intentionCardOverlayStore().get(key) || null;
+    if (overlay) {
+      // Metadata can lag more than one write: any earlier snapshot still on
+      // its way (the prior overlay, its priors, the metadata seen now) keeps
+      // this overlay pending instead of reading as a conflicting update.
+      const priors = [];
+      const add = (fields) => {
+        if (fields && !priors.some((known) => intentionOverlaySame(known, fields))) priors.push(fields);
+      };
+      for (const prior of Array.isArray(overlay.priors) ? overlay.priors : []) add(prior);
+      if (previous) {
+        add(intentionOverlayComparable(previous.fields));
+        for (const prior of Array.isArray(previous.priors) ? previous.priors : []) add(prior);
+      }
+      add(this.intentionCardOverlayMetadataFields(key));
+      overlay.priors = priors.slice(0, INTENTION_CARD_EDITOR_OVERLAY_PRIORS);
+      this.intentionCardOverlayStore().set(key, overlay);
+    } else {
+      this.intentionCardOverlayStore().delete(key);
+    }
     try { this.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
     if (!overlay) return null;
     const ttl = Number.isFinite(options.ttlMs) && options.ttlMs >= 0
@@ -222,25 +268,91 @@ class BobLedgerToolsIntentionCardEditorMixin {
     return this.intentionCardPushOverlay(path, null);
   }
 
-  // An overlay settles when the vault reports matching metadata (the write
-  // landed) or conflicting metadata (a later write superseded it); the TTL
-  // bounds every other case. No optimistic success before apply succeeds.
+  // Metadata settles an overlay three ways: matching owned fields mean the
+  // write landed ("settled"); fields that still describe an earlier snapshot
+  // keep it ("pending"); anything else is a later conflicting owned-field
+  // update ("discarded"). The TTL bounds the pending case. No optimistic
+  // success before apply succeeds: only applied writes push overlays.
   intentionCardSettleOverlay(path, frontmatter) {
     const key = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
     const overlay = key ? this.intentionCardOverlayStore().get(key) : null;
-    if (!overlay || !overlay.fields || typeof overlay.fields !== "object") return false;
-    const fm = frontmatter && typeof frontmatter === "object" ? frontmatter : {};
-    const same = (name) => {
-      if (!Object.prototype.hasOwnProperty.call(overlay.fields, name)) return true;
-      const want = overlay.fields[name] === undefined ? null : overlay.fields[name];
-      const have = Object.prototype.hasOwnProperty.call(fm, name) ? fm[name] : null;
-      return JSON.stringify(want === undefined ? null : want) === JSON.stringify(have === undefined ? null : have);
-    };
-    if (same("intentions") && same("summary") && same("reflection")) {
+    if (!overlay || !overlay.fields || typeof overlay.fields !== "object") return "none";
+    const have = intentionOverlayComparable(frontmatter && typeof frontmatter === "object" ? frontmatter : {});
+    const want = intentionOverlayComparable(intentionCardOverlayExpected(have, overlay.fields));
+    if (intentionOverlaySame(have, want)) {
       this.intentionCardClearOverlay(key);
-      return true;
+      return "settled";
     }
+    const priors = Array.isArray(overlay.priors) ? overlay.priors : [];
+    if (have && priors.some((prior) => intentionOverlaySame(have, prior))) return "pending";
     this.intentionCardClearOverlay(key);
-    return false;
+    return "discarded";
   }
+}
+
+const INTENTION_CARD_EDITOR_OVERLAY_PRIORS = 8;
+
+// Overlay fields over the current comparable snapshot: fields the report did
+// not carry keep their current value.
+function intentionCardOverlayExpected(current, fields) {
+  const base = current && typeof current === "object" ? { ...current } : {};
+  for (const name of ["intentions", "summary", "reflection"]) {
+    if (fields && Object.prototype.hasOwnProperty.call(fields, name)) base[name] = fields[name];
+  }
+  return base;
+}
+
+function intentionCardOverlayText(value) {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+// Display frontmatter with an applied overlay's owned fields laid over the
+// note's own frontmatter. A changed summary never keeps the old stamps: the
+// old digest does not belong to the new text. Unowned keys stay as they are.
+function intentionCardOverlayFrontmatter(frontmatter, overlay) {
+  const base = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? { ...frontmatter } : {};
+  const fields = overlay && overlay.fields && typeof overlay.fields === "object" ? overlay.fields : null;
+  if (!fields) return base;
+  const has = (name) => Object.prototype.hasOwnProperty.call(fields, name);
+  if (has("intentions")) {
+    const list = Array.isArray(fields.intentions) ? fields.intentions.map(String) : [];
+    if (list.length) base.intentions = list;
+    else delete base.intentions;
+  }
+  if (has("reflection")) {
+    const reflection = intentionCardOverlayText(fields.reflection);
+    if (reflection) base.reflection = reflection;
+    else delete base.reflection;
+  }
+  if (has("summary")) {
+    const summary = intentionCardOverlayText(fields.summary);
+    const sameText = typeof base.summary === "string" && base.summary.trim() === summary.trim();
+    if (!summary) {
+      delete base.summary;
+      delete base.summary_digest;
+      delete base.summary_drafted;
+    } else {
+      base.summary = summary;
+      if (!sameText || overlay.summaryState !== "agent") {
+        delete base.summary_digest;
+        delete base.summary_drafted;
+      }
+      if (overlay.summaryState === "agent" && overlay.summaryDrafted) base.summary_drafted = overlay.summaryDrafted;
+    }
+  }
+  return base;
+}
+
+// The writer's reported summary provenance wins over the digest recomputed
+// from overlay frontmatter (an Undo can restore agent text the old metadata
+// never held). A date comes only from the applied op or matching metadata.
+function intentionCardOverlayModel(model, overlay, frontmatter) {
+  if (!model || !overlay || !model.summary) return model;
+  if (overlay.summaryState === "agent") {
+    const drafted = overlay.summaryDrafted
+      || (frontmatter && typeof intentionCardDateStamp === "function" ? intentionCardDateStamp(frontmatter.summary_drafted) || "" : "");
+    return { ...model, summaryState: "agent", summaryDrafted: drafted };
+  }
+  if (overlay.summaryState === "edited") return { ...model, summaryState: "edited", summaryDrafted: "" };
+  return model;
 }

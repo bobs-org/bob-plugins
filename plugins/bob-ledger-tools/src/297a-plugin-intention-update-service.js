@@ -170,12 +170,67 @@ function intentionOverlayFields(report) {
   return fields;
 }
 
-function intentionOverlayFromReport(report) {
+// Comparable owned-field snapshot shared by overlay settlement: list items and
+// text trimmed (the writer trims), absent values empty. Null means a value
+// that is not a valid field shape, so it can never match.
+function intentionOverlayComparable(fields) {
+  const source = intentionJsonObject(fields) ? fields : {};
+  const text = (value) => (typeof value === "string" ? value.trim()
+    : value === null || value === undefined ? "" : null);
+  let list = source.intentions;
+  if (list === null || list === undefined || list === "") list = [];
+  if (!Array.isArray(list)) return null;
+  const intentions = [];
+  for (const value of list) {
+    if (typeof value !== "string") return null;
+    intentions.push(value.trim());
+  }
+  const summary = text(source.summary);
+  const reflection = text(source.reflection);
+  if (summary === null || reflection === null) return null;
+  return { intentions, summary, reflection };
+}
+
+function intentionOverlaySame(left, right) {
+  return Boolean(left && right) && JSON.stringify(left) === JSON.stringify(right);
+}
+
+// The writer reports `drafted`; the card and editor call that state `agent`.
+function intentionSummaryStateFromReport(value) {
+  if (value === "drafted") return "agent";
+  if (value === "edited" || value === "empty") return value;
+  return "";
+}
+
+// A stamp-restoring Undo carries its drafted date in the applied
+// `summary.restore` op; no other report field carries the date.
+function intentionRestoredSummaryDrafted(ops) {
+  for (const op of Array.isArray(ops) ? ops : []) {
+    if (intentionJsonObject(op) && op.op === "summary.restore" && typeof op.drafted === "string") {
+      return op.drafted;
+    }
+  }
+  return "";
+}
+
+// The display overlay for one applied write: the reported `after` fields, the
+// writer's own summary provenance, and the `before` snapshot so metadata that
+// still describes the prior state keeps the overlay instead of discarding it.
+function intentionOverlayFromReport(report, ops = []) {
   if (!report || report.ok !== true) return null;
   const fields = intentionOverlayFields(report);
   if (!fields) return null;
   const fingerprint = typeof report.fingerprint_after === "string" ? report.fingerprint_after : "";
-  return { fields, fingerprint, changed: report.changed === true };
+  const summaryState = intentionSummaryStateFromReport(report.after && report.after.summary_state);
+  const before = intentionJsonObject(report.before) ? intentionOverlayComparable(report.before) : null;
+  return {
+    fields,
+    summaryState,
+    summaryDrafted: summaryState === "agent" ? intentionRestoredSummaryDrafted(ops) : "",
+    priors: before ? [before] : [],
+    fingerprint,
+    changed: report.changed === true,
+  };
 }
 
 class BobLedgerToolsIntentionUpdateMixin {

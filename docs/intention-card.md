@@ -41,7 +41,9 @@ over UTF-8, first 16 lowercase hex characters prefixed `sha256:`. A matching
 stamp renders `✦ agent · Nov 19`; any other nonempty summary renders
 `✎ edited`. The writer — never YAML text edits — stamps provenance; summary
 edits remove both stamps. Undo of a stamped summary restores its stamps via
-the opaque `summary.restore` inverse op.
+the opaque `summary.restore` inverse op. The card and the card editor follow
+the writer's reported `summary_state`, so that Undo shows `✦ agent` with its
+restored date at once, and edited text never borrows an old digest.
 
 All field writes preview then apply through `bob periods update <SUBJECT>`
 with the server's field fingerprint in every envelope. Empty strings use
@@ -64,10 +66,10 @@ when empty); closed subjects land on Reflection.
 | o/O | Insert below/above selected intention |
 | r | Open reflection textarea with caret at end |
 | s | Select Summary; Enter explains ownership before opening its edit stage |
-| Alt+J/K | Reorder the selected intention |
+| Alt+J/K | Reorder the selected intention with the shared arrange animation |
 | Ctrl+D | Remove selected intention, undoable |
 | u | Apply guarded inverse-operation Undo |
-| Esc/q/Ctrl+[ | Shared one-layer back/close behavior |
+| Esc/q/Ctrl+[ | One layer back: cancel a stage, discard a retained retry, then close |
 | [ / ] | Previous/next sibling subject inside the same modal |
 | = | Climb day → week → quarter → year |
 | y | Open Source on the selected field (YAML excursion) |
@@ -80,16 +82,25 @@ Stage keys stay text while a stage is open; only explicit cancel or save
 leaves the stage. Summary editing explains "agent drafted this; your edit
 makes it yours" before the intentional edit. At four or more intentions the
 card shows "Three is plenty — what can go?" without refusing. Pasted
-newlines collapse to spaces with a quiet note; reflection auto-grows with
-Enter to save, Shift+Enter for a newline, and Ctrl/Cmd+Enter to save and
-close.
+newlines collapse to spaces with a quiet note. The Summary and Reflection
+stages show the current summary read-only above the field; the reflection
+textarea grows with its content, with Enter to save, Shift+Enter for a
+newline, and Ctrl/Cmd+Enter to save and close. Clearing an existing intention
+removes it, clearing summary or reflection unsets it, and a blank Add writes
+nothing.
 
-Every write awaits open Source panes for the pinned path first, carries the
-server fingerprint, and retains the exact draft and selection on stale
-refusals for an explicit reviewed retry — never a silent re-apply.
-Superseded replies after close or target change are ignored. Undo and
-overlays stay path-scoped; an overlay clears when matching metadata arrives,
-on conflicting metadata, or on bounded expiry.
+Every write awaits open Source panes for the pinned path first and carries
+the server fingerprint. Writes, Undo, and retries share one busy window:
+while one runs, keys, clicks, travel, and a second open wait, and the close
+button closes the card only after the write settles. Superseded replies
+after close or target change are ignored.
+
+After an applied write, the card shows the written values at once, before
+metadataCache catches up: a first intention mounts the card and removing the
+last one removes it. This path-scoped overlay never shows a preview or
+overrides a fail-open gate. It clears when matching metadata arrives,
+survives metadata that still shows the prior state, is dropped by a later
+conflicting edit, and expires on a bound.
 
 ## Missing notes, old bob, and stale writes
 
@@ -97,9 +108,14 @@ Missing dailies show "no note for Fri Nov 20 yet" with edits disabled; the
 modal never creates notes implicitly. Missing periods point at
 `bob periods ensure` to create the note, then reopen. An unsupported update
 command shows "Update bob to edit intentions" while painting continues;
-real validation failures surface as refusals. A stale refusal keeps the
-draft intact, refreshes the list, and asks for Enter to retry the reviewed
-write.
+real validation failures surface as refusals and keep any draft.
+
+A stale or save-blocked write keeps its operation and refreshes the list. An
+open stage keeps the exact draft and follows its target. A remove or reorder
+becomes a retry that names its target, found by text rather than old index
+(`Enter removes “Read” (#3)`). Enter runs the reviewed retry; Esc, q, or
+Ctrl+[ discards it. A target that disappeared or became ambiguous is refused,
+and a timed-out write is reconciled the same way, never blindly retried.
 
 ## Yesterday
 

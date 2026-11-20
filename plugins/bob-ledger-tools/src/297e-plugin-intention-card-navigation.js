@@ -258,6 +258,7 @@ class BobLedgerToolsIntentionCardNavigationMixin {
   // view. Daily and period paths share this path.
   async intentionCardStartYamlExcursion(options = {}) {
     const modal = this.intentionCardEditorModal || options.modal || null;
+    if (modal && modal.pendingApply) return { ok: false, reason: "busy" };
     const subjectPath = typeof intentionCardPath === "function"
       ? intentionCardPath(options.subjectPath || modal?.subjectPath || "")
       : String(options.subjectPath || modal?.subjectPath || "");
@@ -391,7 +392,7 @@ class BobLedgerToolsIntentionCardNavigationMixin {
 if (typeof IntentionCardModal !== "undefined" && IntentionCardModal && !IntentionCardModal.prototype.intentionNavigateTo) {
   IntentionCardModal.prototype.intentionNavigateTo = async function (subject) {
     if (!subject || !subject.path || this.closed) return null;
-    if (this.stage) return null;
+    if (this.stage || this.pendingApply) return null;
     if (subject.path === this.subjectPath) return null;
     const plugin = this.intentionPlugin;
     const targetPath = typeof intentionCardPath === "function" ? intentionCardPath(subject.path) : String(subject.path);
@@ -405,8 +406,10 @@ if (typeof IntentionCardModal !== "undefined" && IntentionCardModal && !Intentio
     this.stageDraft = "";
     this.stageNote = "";
     this.stagePreview = null;
-    this.retainedOps = null;
-    this.retainedSelection = "";
+    this.retained = null;
+    this.refusalMessage = "";
+    this.refusalHint = "";
+    this.announce = "";
     this.fields = { intentions: [], summary: "", summaryState: "", summaryDrafted: "", reflection: "" };
     const exists = (() => {
       try {
@@ -530,6 +533,7 @@ if (typeof IntentionCardModal !== "undefined" && IntentionCardModal && !Intentio
         const navAction = typeof intentionCardNavKeyAction === "function"
           ? intentionCardNavKeyAction(event, { stage: null, inInput: this.intentionInInput(event) })
           : null;
+        if (navAction && this.retained) this.intentionDiscardRetained(false);
         if (navAction === "navigate-prev") {
           event.preventDefault?.();
           this.intentionNavigateSibling(-1);
@@ -557,6 +561,7 @@ if (typeof IntentionCardModal !== "undefined" && IntentionCardModal && !Intentio
 
   const intentionCardEditorHandleAction = IntentionCardModal.prototype.intentionHandleAction;
   IntentionCardModal.prototype.intentionHandleAction = function (action, payload) {
+    if (this.pendingApply || this.closed) return null;
     if (action === "navigate-prev") { this.intentionNavigateSibling(-1); return null; }
     if (action === "navigate-next") { this.intentionNavigateSibling(1); return null; }
     if (action === "navigate-parent") { this.intentionNavigateParent(); return null; }

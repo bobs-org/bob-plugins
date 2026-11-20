@@ -144,12 +144,13 @@ test("pasted line breaks collapse to spaces in the intention input with a quiet 
 
 test("a stale refusal refreshes the fingerprint and list while keeping the exact draft", async () => {
   const plugin = {
+    app: { workspace: { getLeavesOfType: () => [] } },
     calls: 0,
-    async apiIntentionUpdatePreview() {
+    async apiIntentionUpdatePreview(_subject, text) {
       plugin.calls += 1;
-      return plugin.calls === 1
-        ? { ok: true, report: report({ intentions: ["One"] }) }
-        : { ok: true, report: report({ intentions: ["One (edited elsewhere)", "Two"], summary_state: "empty" }, { fingerprint_before: "sha256:fresh" }) };
+      if (plugin.calls === 1) return { ok: true, report: report({ intentions: ["One"] }) };
+      if (JSON.parse(text).ops.length) return { ok: true, report: { ok: false, schema_version: 1, error: { code: "stale_note", message: "changed" } } };
+      return { ok: true, report: report({ intentions: ["One (edited elsewhere)", "Two"], summary_state: "empty" }, { fingerprint_before: "sha256:fresh" }) };
     },
     async apiIntentionUpdateApply() { return { ok: false, code: "failed" }; },
     intentionUpdateLastUndo: () => null,
@@ -158,15 +159,14 @@ test("a stale refusal refreshes the fingerprint and list while keeping the exact
   await modal.intentionInitialRead();
   modal.intentionOpenStage("intention", "intention:0");
   modal.stageDraft = "Held draft";
-  modal.intentionRetainAfterRefusal({ ok: false, code: "stale_note", report: { ok: false, error: { code: "stale_note" } } }, [{ op: "intentions.replace", index: 0, value: "Held draft" }]);
+  await modal.intentionSaveStage();
   assert.equal(modal.statusKind, "stale");
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(modal.fingerprint, "sha256:fresh");
   assert.deepEqual(modal.fields.intentions, ["One (edited elsewhere)", "Two"]);
   assert.equal(modal.stageDraft, "Held draft");
   assert.equal(modal.stage.kind, "intention");
   assert.equal(modal.selectedKey, "intention:0");
+  assert.match(modal.stageNote, /Intention 1 now reads “One \(edited elsewhere\)” — Enter replaces it with your draft/);
   modal.close();
 });
 

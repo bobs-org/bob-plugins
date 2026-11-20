@@ -50,6 +50,10 @@ function createIntentionUpdateSession(init = {}, deps = {}) {
     return "";
   }
 
+  // The ops behind the current apply, so the overlay can read a restored
+  // summary's drafted date from the exact op the writer applied.
+  let appliedOps = [];
+
   async function settle(result) {
     if (!result) return result;
     const stale = result.ok === false && (
@@ -63,20 +67,33 @@ function createIntentionUpdateSession(init = {}, deps = {}) {
       return result;
     }
     if (result.ok === true && result.changed === true && result.report && typeof deps.onApplied === "function") {
-      try { deps.onApplied(result); } catch (_) {}
+      try { deps.onApplied(result, appliedOps.slice()); } catch (_) {}
     }
     return result;
   }
 
   return {
-    setDraft: inner.setDraft,
+    setDraft: (ops) => {
+      appliedOps = Array.isArray(ops) ? ops.slice() : [];
+      return inner.setDraft(ops);
+    },
     previewNow: inner.previewNow,
     apply: async () => settle(await inner.apply()),
-    applyOps: async (ops) => settle(await inner.applyOps(ops)),
+    applyOps: async (ops) => {
+      appliedOps = Array.isArray(ops) ? ops.slice() : [];
+      return settle(await inner.applyOps(ops));
+    },
+    // Undo stages the inverse ops (which arms a debounced preview), then
+    // applies them directly. Rebasing onto the staged expect cancels that
+    // timer, so no stray dry run races the guarded apply.
     undo: async () => {
       const staged = inner.stageUndo();
       if (!staged || staged.ok !== true) return staged;
-      return settle(await inner.applyOps(inner.getState().draftOps));
+      const state = inner.getState();
+      const ops = state.draftOps;
+      inner.rebase(state.expect);
+      appliedOps = ops.slice();
+      return settle(await inner.applyOps(ops));
     },
     stopWaiting: inner.stopWaiting,
     stageUndo: inner.stageUndo,
@@ -120,7 +137,7 @@ function intentionUpdateServiceDeps(plugin, options = {}) {
     },
     timers: options.timers,
     onChange: options.onChange,
-    onApplied: (result) => {
+    onApplied: (result, ops) => {
       const report = result && result.report;
       if (!report) return;
       plugin.intentionUpdateRememberUndo(
@@ -129,7 +146,7 @@ function intentionUpdateServiceDeps(plugin, options = {}) {
         report.fingerprint_after,
       );
       if (typeof plugin.intentionCardPushOverlay === "function") {
-        plugin.intentionCardPushOverlay(subjectPath, intentionOverlayFromReport(report));
+        plugin.intentionCardPushOverlay(subjectPath, intentionOverlayFromReport(report, ops));
       }
     },
   };

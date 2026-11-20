@@ -16,22 +16,32 @@ const INTENTION_CARD_EDITOR_SAVED_TEXT = "✓ Saved · u undo";
 const INTENTION_CARD_EDITOR_SAVING_TEXT = "Saving…";
 const INTENTION_CARD_EDITOR_READING_TEXT = "Reading intentions…";
 
+// Rows carry a stable arrange identity (text plus occurrence), so the shared
+// arrange animation follows a moved intention rather than its index.
 function intentionCardEditorTargets(fields) {
   const list = fields && Array.isArray(fields.intentions) ? fields.intentions : [];
-  const targets = list.map((value, index) => ({
-    key: `intention:${index}`, kind: "intention", index,
-    label: `Intention ${index + 1}`, value: String(value),
-  }));
+  const seen = new Map();
+  const targets = list.map((value, index) => {
+    const text = String(value);
+    const occurrence = (seen.get(text) || 0) + 1;
+    seen.set(text, occurrence);
+    return {
+      key: `intention:${index}`, kind: "intention", index,
+      label: `Intention ${index + 1}`, value: text, arrangeId: `intention:${occurrence}:${text}`,
+    };
+  });
   targets.push({
-    key: "reflection", kind: "reflection",
+    key: "reflection", kind: "reflection", arrangeId: "reflection",
     label: "Reflection", value: fields && typeof fields.reflection === "string" ? fields.reflection : "",
   });
   targets.push({
-    key: "summary", kind: "summary",
+    key: "summary", kind: "summary", arrangeId: "summary",
     label: "Summary", value: fields && typeof fields.summary === "string" ? fields.summary : "",
+    summaryState: fields && fields.summaryState ? fields.summaryState : "",
+    summaryDrafted: fields && fields.summaryDrafted ? fields.summaryDrafted : "",
   });
   if (!list.length) {
-    targets.unshift({ key: "add", kind: "add", label: "Add intention", value: "" });
+    targets.unshift({ key: "add", kind: "add", label: "Add intention", value: "", arrangeId: "add" });
   }
   return targets;
 }
@@ -108,9 +118,12 @@ function intentionCardEditorKeyAction(event, context = {}) {
   return null;
 }
 
-function intentionCardEditorEscLadder({ stage, pendingApply } = {}) {
+// One layer per Esc (and its q / Ctrl+[ aliases): a pending write ignores
+// it, a stage cancels, a retained retry is discarded, then the card closes.
+function intentionCardEditorEscLadder({ stage, pendingApply, retained } = {}) {
   if (pendingApply === true) return "ignore";
   if (stage) return "cancel-stage";
+  if (retained) return "discard-retry";
   return "close";
 }
 
@@ -216,9 +229,11 @@ class IntentionCardModal extends IntentionCardModalBase {
     this.readSeq = 0;
     this.closeToken = 0;
     this.pendingApply = false;
+    this.closeRequested = false;
     this.closed = false;
-    this.retainedOps = null;
-    this.retainedSelection = "";
+    // A stale or save-blocked browse write (remove, move) waiting for an
+    // explicit reviewed Enter: { intent, ops, reason, note }.
+    this.retained = null;
     this.refusalMessage = this.malformed ? "The intention fields on this note are malformed." : "";
     this.refusalHint = this.malformed ? "Open the note in Source mode to repair the frontmatter, then reopen." : "";
     this.consequence = "";
@@ -286,38 +301,67 @@ class IntentionCardModal extends IntentionCardModalBase {
     if (next) this.intentionSelect(next);
   }
 
+  // Opening a stage records the target's identity: the text an existing
+  // intention held, or an Add's neighbours, so a stale retry can rebase.
   intentionOpenStage(kind, fieldKey) {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
-    if (!target || !kind || !this.writable) return false;
+    if (!target || !kind || !this.writable || this.pendingApply) return false;
     if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
       this.stageExplained = true;
       this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
     }
+    this.retained = null;
     this.selectedKey = target.key;
     this.stage = { kind, field: target.key, index: target.index };
-    this.stageDraft = target.kind === "intention" ? target.value
-      : target.kind === "reflection" ? target.value
-      : target.kind === "summary" ? target.value : "";
-    if (target.kind === "add") {
-      this.stage = { kind: "intention", field: "add", index: this.fields ? this.fields.intentions.length : 0 };
-      this.stageDraft = "";
-    }
+    if (target.kind === "intention") this.stage.original = target.value;
+    this.stageDraft = target.kind === "add" ? "" : target.value;
+    if (target.kind === "add") this.intentionStageAdd(this.fields ? this.fields.intentions.length : 0);
     this.stagePreview = null;
     this.paintIntentionCard();
     return true;
   }
 
+  intentionStageAdd(index) {
+    const list = this.fields ? this.fields.intentions : [];
+    const at = Math.max(0, Math.min(list.length, index));
+    this.stage = {
+      kind: "intention", field: "add", index: at,
+      after: at > 0 ? list[at - 1] : null, before: at < list.length ? list[at] : null,
+    };
+    this.stageDraft = "";
+  }
+
+  // Cancel leaves nothing behind: no hidden retained write a later Enter
+  // could run, and no stale or blocked status describing a discarded draft.
   intentionCancelStage() {
     this.stage = null;
     this.stageDraft = "";
     this.stageNote = "";
     this.stagePreview = null;
     this.stageExplained = false;
+    this.intentionClearRetry();
     this.paintIntentionCard();
   }
 
+  intentionClearRetry() {
+    this.retained = null;
+    if (["stale", "save-blocked", "refusal"].includes(this.statusKind) && this.writable && !this.malformed && !this.missing) {
+      this.statusKind = "browsing";
+      this.refusalMessage = "";
+      this.refusalHint = "";
+    }
+  }
+
+  intentionDiscardRetained(announce = true) {
+    if (!this.retained) return false;
+    this.intentionClearRetry();
+    if (announce) this.announce = "Retry discarded · nothing was written";
+    this.paintIntentionCard();
+    return true;
+  }
+
   intentionHandleEscape() {
-    return intentionCardEditorEscLadder({ stage: this.stage, pendingApply: this.pendingApply });
+    return intentionCardEditorEscLadder({ stage: this.stage, pendingApply: this.pendingApply, retained: this.retained });
   }
 
   intentionBackOut(event) {
@@ -326,8 +370,21 @@ class IntentionCardModal extends IntentionCardModalBase {
     try { event?.stopPropagation?.(); } catch (_) {}
     try { event.__schemaEscapeHandled = true; } catch (_) {}
     if (action === "cancel-stage") this.intentionCancelStage();
+    else if (action === "discard-retry") this.intentionDiscardRetained();
     else if (action === "close") this.close();
     return action;
+  }
+
+  // A pointer close (the X button, the backdrop) during a write waits for it
+  // instead of superseding it; the write closes the card when it settles.
+  close() {
+    if (this.pendingApply && !this.intentionForceClose && !this.closed) {
+      this.closeRequested = true;
+      this.announce = INTENTION_CARD_EDITOR_CLOSE_DEFERRED;
+      this.paintIntentionCard();
+      return;
+    }
+    super.close();
   }
 
   intentionCloseKind(event) {
@@ -368,7 +425,7 @@ class IntentionCardModal extends IntentionCardModalBase {
     return {
       statusKind: this.statusKind, refusalMessage: this.refusalMessage, refusalHint: this.refusalHint,
       consequence: this.consequence, writable: this.writable, pendingApply: this.pendingApply,
-      stage: this.stage, undoAvailable, announce: this.announce,
+      stage: this.stage, undoAvailable, announce: this.announce, retained: this.retained,
     };
   }
 
@@ -397,10 +454,10 @@ class IntentionCardModal extends IntentionCardModalBase {
       if (card) {
         try { this.contentEl?.appendChild?.(card); } catch (_) {}
       }
-      this.intentionRestoreFocus(caret);
-      return;
+    } else {
+      try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
     }
-    try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
+    try { intentionCardEditorAutogrow(card?.querySelector?.("[data-intention-input]")); } catch (_) {}
     this.intentionRestoreFocus(caret);
   }
 
@@ -422,11 +479,17 @@ class IntentionCardModal extends IntentionCardModalBase {
   onClose() {
     this.closed = true;
     this.closeToken += 1;
+    this.closeRequested = false;
     try {
       if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
     } catch (_) {}
     try { this.session?.close?.(); } catch (_) {}
     this.session = null;
+    try {
+      if (this.intentionPlugin && this.intentionPlugin.intentionCardEditorModal === this) {
+        this.intentionPlugin.intentionCardEditorModal = null;
+      }
+    } catch (_) {}
   }
 
   async intentionInitialRead() {
@@ -463,14 +526,10 @@ class IntentionCardModal extends IntentionCardModalBase {
       this.latestReport = result.report;
       this.fingerprint = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : this.fingerprint;
       try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
-      const after = result.report.after || {};
-      this.fields = {
-        intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : (this.fields?.intentions || []),
-        summary: typeof after.summary === "string" ? after.summary : (this.fields?.summary || ""),
-        reflection: typeof after.reflection === "string" ? after.reflection : (this.fields?.reflection || ""),
-        summaryState: this.fields?.summaryState || "",
-        summaryDrafted: this.fields?.summaryDrafted || "",
-      };
+      this.fields = intentionCardEditorReconcileFields(this, result.report);
+      if (!intentionCardEditorTargetByKey(this.intentionTargets(), this.selectedKey)) {
+        this.selectedKey = intentionCardEditorOpeningSelection(this.intentionTargets(), this.subjectState, "");
+      }
       if (this.statusKind === "reading") this.statusKind = this.writable ? "browsing" : "read-only";
       this.paintIntentionCard();
       return;
@@ -478,6 +537,8 @@ class IntentionCardModal extends IntentionCardModalBase {
     this.intentionConsumeFailure(result);
   }
 
+  // Real validation refusals stay distinct from an old bob without the
+  // update command; neither discards an open stage's draft.
   intentionConsumeFailure(result) {
     const code = result && (result.code || (result.report && result.report.error && result.report.error.code)) || "failed";
     const model = typeof intentionUpdateErrorModel === "function"
@@ -492,269 +553,72 @@ class IntentionCardModal extends IntentionCardModalBase {
       this.statusKind = "refusal";
       this.refusalMessage = (result.report?.error?.message) || result.message || "The intention preview was refused.";
       this.refusalHint = (result.report?.error?.hint) || model.hint || "";
+      if (this.stage) this.refusalHint = [this.refusalHint, "Your draft is kept."].filter(Boolean).join(" ");
     }
     this.sessionState = this.session?.getState?.() || this.sessionState;
     this.paintIntentionCard();
-  }
-
-  intentionOpsForStage(draft) {
-    if (!this.stage) return null;
-    const text = String(draft === undefined ? this.stageDraft : draft);
-    if (this.stage.kind === "intention") {
-      const { value } = intentionCardNormalizeIntentionLine(text);
-      if (!value) return null;
-      if (this.stage.field === "add") {
-        const count = this.fields ? this.fields.intentions.length : 0;
-        return intentionOpsInsert(this.stage.index != null ? this.stage.index : count, value);
-      }
-      return intentionOpsReplace(this.stage.index, value);
-    }
-    if (this.stage.kind === "reflection") return intentionOpsReflection(text);
-    if (this.stage.kind === "summary") return intentionOpsSummary(text);
-    return null;
   }
 
   async intentionSaveStage(options = {}) {
     if (!this.stage || this.pendingApply || !this.writable) return null;
-    const ops = this.intentionOpsForStage();
-    if (!ops) {
-      if (this.stage.kind === "intention") {
-        this.stageNote = "An intention needs one line of text.";
-        this.paintIntentionCard();
-      }
+    const intent = intentionCardEditorIntentFromStage(this.stage, this.stageDraft, this.fields);
+    if (!intent) {
+      this.stageNote = "An intention needs one line of text.";
+      this.paintIntentionCard();
       return null;
     }
-    const seq = this.intentionReadSeq();
-    this.pendingApply = true;
-    this.statusKind = "saving";
-    this.stageNote = options.note || this.stageNote;
-    this.paintIntentionCard();
-    const plugin = this.intentionPlugin;
-    try {
-      if (typeof albumSchemaSaveOpenEditors === "function" && plugin) {
-        const saved = await albumSchemaSaveOpenEditors(plugin, [this.subjectPath]);
-        if (!this.intentionLive(seq)) return null;
-        if (!saved || saved.ok !== true) {
-          this.pendingApply = false;
-          this.retainedOps = ops;
-          this.retainedSelection = this.selectedKey;
-          this.statusKind = "save-blocked";
-          this.refusalMessage = saved?.message || "Open editors could not confirm they are saved.";
-          this.refusalHint = "Save every pane showing the note in Source mode, then press Enter to retry. Nothing was written.";
-          this.paintIntentionCard();
-          return null;
-        }
-      }
-    } catch (_) {}
-    if (!this.intentionLive(seq)) return null;
-    const session = this.ensureIntentionSession();
-    try { session.rebase?.(this.fingerprint); } catch (_) {}
-    session.setDraft(ops);
-    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
-    if (superseded) return null;
-    if (!applied) {
-      this.pendingApply = false;
-      return this.intentionRetainAfterRefusal(preview, ops);
-    }
-    this.pendingApply = false;
-    this.sessionState = session.getState();
-    if (!applied || applied.ok !== true) {
-      return this.intentionRetainAfterRefusal(applied, ops);
-    }
-    if (applied.changed === true && applied.report) {
-      this.intentionConsumeApplied(applied.report, options);
-      return applied;
-    }
-    this.stage = null;
-    this.stageDraft = "";
-    this.stageNote = "";
-    this.statusKind = "saved";
-    this.announce = INTENTION_CARD_EDITOR_SAVED_TEXT;
-    this.paintIntentionCard();
-    return applied;
-  }
-
-  intentionRetainAfterRefusal(result, ops) {
-    const code = result && (result.code || (result.report?.error?.code)) || "";
-    if (code === "stale_note" || (result && result.kind === "stale")) {
-      this.retainedOps = Array.isArray(ops) ? ops : null;
-      this.retainedSelection = this.selectedKey;
-      this.statusKind = "stale";
-      this.refusalMessage = INTENTION_CARD_EDITOR_STALE_TEXT;
-      this.refusalHint = "Review the refreshed list, then press Enter to retry. Nothing was silently applied.";
-      const fresh = result && result.report && typeof result.report.fingerprint_before === "string"
-        ? result.report.fingerprint_before : "";
-      if (fresh) {
-        this.fingerprint = fresh;
-        try { this.session?.rebase?.(fresh); } catch (_) {}
-      }
-      if (result && result.report && result.report.ok === true && result.report.after) {
-        const after = result.report.after;
-        this.fields = {
-          intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
-          summary: typeof after.summary === "string" ? after.summary : "",
-          reflection: typeof after.reflection === "string" ? after.reflection : "",
-          summaryState: this.fields?.summaryState || "",
-          summaryDrafted: this.fields?.summaryDrafted || "",
-        };
-      }
-      this.sessionState = this.session?.getState?.() || this.sessionState;
-      this.paintIntentionCard();
-      if (!fresh) void intentionCardEditorRefreshAfterStale(this);
-      return result;
-    }
-    this.retainedOps = Array.isArray(ops) ? ops : this.retainedOps;
-    this.retainedSelection = this.selectedKey;
-    this.sessionState = this.session?.getState?.() || this.sessionState;
-    this.intentionConsumeFailure(result || { ok: false, code: "failed", message: "The intention write failed." });
-    return result;
+    return intentionCardEditorWrite(this, intent, options);
   }
 
   intentionConsumeApplied(report, options = {}) {
-    this.latestReport = report;
-    this.fingerprint = typeof report.fingerprint_after === "string" ? report.fingerprint_after : this.fingerprint;
-    try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
-    const after = report.after || {};
-    this.fields = {
-      intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
-      summary: typeof after.summary === "string" ? after.summary : "",
-      reflection: typeof after.reflection === "string" ? after.reflection : "",
-      summaryState: this.fields?.summaryState || "",
-      summaryDrafted: this.fields?.summaryDrafted || "",
-    };
-    this.retainedOps = null;
-    const wasSummary = this.stage && this.stage.kind === "summary";
-    if (wasSummary && this.fields.summary) {
-      this.fields.summaryState = "edited";
-      this.fields.summaryDrafted = "";
-    }
-    const nextKey = this.stage && this.stage.kind === "intention" && this.stage.field !== "add"
-      ? this.stage.field : this.selectedKey;
-    this.stage = null;
-    this.stageDraft = "";
-    this.stageNote = "";
-    this.stagePreview = null;
-    this.selectedKey = intentionCardEditorTargetByKey(this.intentionTargets(), nextKey) ? nextKey : this.intentionTargets()[0]?.key || "";
-    this.statusKind = "saved";
-    this.announce = INTENTION_CARD_EDITOR_SAVED_TEXT;
-    this.consequence = "";
-    if (options.close === true) {
-      this.paintIntentionCard();
-      this.close();
-      return;
-    }
-    this.paintIntentionCard();
+    return intentionCardEditorConsumeApplied(this, report, options);
   }
 
+  // Enter after a stale or save-blocked browse write: the retained intent,
+  // rebased onto the refreshed fields and shown, runs once.
   async intentionRetry() {
-    if (this.statusKind !== "stale" && this.statusKind !== "save-blocked") return null;
-    if (!this.retainedOps) return null;
-    const ops = this.retainedOps;
-    this.retainedOps = null;
-    if (this.retainedSelection && intentionCardEditorTargetByKey(this.intentionTargets(), this.retainedSelection)) {
-      this.selectedKey = this.retainedSelection;
-    }
-    const stage = this.stage;
-    if (!stage) {
-      const target = this.intentionSelected();
-      const kind = intentionCardEditorStageFor(target);
-      if (kind) this.intentionOpenStage(kind, target.key);
-    }
-    return this.intentionSaveStage({ retried: true });
+    if (!this.retained || this.pendingApply || this.stage) return null;
+    const intent = this.retained.intent;
+    return intentionCardEditorWrite(this, intent, { retried: true });
   }
 
   async intentionUndo() {
-    if (this.pendingApply) return null;
-    const seq = this.intentionReadSeq();
-    this.statusKind = "saving";
-    this.paintIntentionCard();
-    const session = this.ensureIntentionSession();
-    const result = await session.undo();
-    if (!this.intentionLive(seq)) return null;
-    this.sessionState = session.getState();
-    if (!result || result.ok !== true) {
-      this.statusKind = "refusal";
-      this.refusalMessage = (result && (result.message || result.report?.error?.message)) || "There is no edit to undo.";
-      this.refusalHint = "";
-      this.paintIntentionCard();
-      return result;
-    }
-    if (result.changed === true && result.report) {
-      this.intentionConsumeApplied(result.report);
-      return result;
-    }
-    this.statusKind = "browsing";
-    this.announce = "Nothing to undo.";
-    this.paintIntentionCard();
-    return result;
+    return intentionCardEditorUndo(this);
   }
 
   async intentionReorder(delta) {
     const target = this.intentionSelected();
-    if (!target || target.kind !== "intention" || !this.writable) return null;
-    const list = this.fields ? this.fields.intentions.slice() : [];
+    if (!target || target.kind !== "intention" || !this.writable || this.pendingApply) return null;
+    const count = this.fields ? this.fields.intentions.length : 0;
     const to = target.index + delta;
-    if (to < 0 || to >= list.length) return null;
-    const reordered = intentionCardReorderedList(list, target.index, to);
-    const ops = intentionOpsMove(target.index, to);
-    void reordered;
-    const seq = this.intentionReadSeq();
-    this.pendingApply = true;
-    this.statusKind = "saving";
-    this.paintIntentionCard();
-    const session = this.ensureIntentionSession();
-    try { session.rebase?.(this.fingerprint); } catch (_) {}
-    session.setDraft(ops);
-    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
-    if (superseded) return null;
-    if (!applied) {
-      this.pendingApply = false;
-      return this.intentionRetainAfterRefusal(preview, ops);
-    }
-    this.pendingApply = false;
-    this.sessionState = session.getState();
-    if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
-    if (applied.changed === true && applied.report) {
-      this.intentionConsumeApplied(applied.report);
-      this.selectedKey = `intention:${to}`;
-      this.paintIntentionCard();
-    }
-    return applied;
+    if (to < 0 || to >= count) return null;
+    return intentionCardEditorWrite(this, { kind: "move", from: target.index, to, delta, original: target.value });
   }
 
   async intentionRemove() {
     const target = this.intentionSelected();
     if (!target || target.kind !== "intention" || !this.writable || this.pendingApply) return null;
-    const ops = intentionOpsRemove(target.index);
-    const seq = this.intentionReadSeq();
-    this.pendingApply = true;
-    this.statusKind = "saving";
+    return intentionCardEditorWrite(this, { kind: "remove", index: target.index, original: target.value });
+  }
+
+  // Later stamps from metadataCache (an Undo restores the drafted date only
+  // through its op) show without a close/reopen when the text still matches.
+  intentionOnMetadata(path) {
+    if (this.closed || this.pendingApply || !this.fields || path !== this.subjectPath) return false;
+    if (!this.fields.summary || this.fields.summaryState !== "agent") return false;
+    const drafted = intentionCardEditorMetadataDrafted(this, this.fields.summary);
+    if (!drafted || drafted === this.fields.summaryDrafted) return false;
+    this.fields = { ...this.fields, summaryDrafted: drafted };
     this.paintIntentionCard();
-    const session = this.ensureIntentionSession();
-    try { session.rebase?.(this.fingerprint); } catch (_) {}
-    session.setDraft(ops);
-    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
-    if (superseded) return null;
-    if (!applied) {
-      this.pendingApply = false;
-      return this.intentionRetainAfterRefusal(preview, ops);
-    }
-    this.pendingApply = false;
-    this.sessionState = session.getState();
-    if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
-    if (applied.changed === true && applied.report) {
-      this.intentionConsumeApplied(applied.report);
-      const count = this.fields ? this.fields.intentions.length : 0;
-      this.selectedKey = count ? `intention:${Math.min(target.index, count - 1)}` : "add";
-      this.paintIntentionCard();
-    }
-    return applied;
+    return true;
   }
 
   intentionHandleAction(action, payload = {}) {
-    if (!action || this.closed) return null;
+    if (!action || this.closed || this.pendingApply) return null;
     if (action === "close") { this.close(); return null; }
     if (action === "cancel-stage") { this.intentionCancelStage(); return null; }
+    if (action === "retry") { void this.intentionRetry(); return null; }
+    if (this.retained) this.intentionDiscardRetained(false);
     if (action.startsWith("select-digit:")) {
       const digit = Number(action.slice("select-digit:".length));
       const key = `intention:${digit - 1}`;
@@ -782,8 +646,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       const at = target && target.kind === "intention"
         ? target.index + (action === "insert-below" ? 1 : 0)
         : (action === "insert-below" ? count : 0);
-      this.stage = { kind: "intention", field: "add", index: Math.max(0, Math.min(count, at)) };
-      this.stageDraft = "";
+      this.intentionStageAdd(at);
       this.stagePreview = null;
       this.stageNote = "";
       this.paintIntentionCard();
@@ -803,14 +666,17 @@ class IntentionCardModal extends IntentionCardModalBase {
     if (action === "undo") { void this.intentionUndo(); return null; }
     if (action === "save-stage") { void this.intentionSaveStage(); return null; }
     if (action === "save-and-close") { void this.intentionSaveStage({ close: true }); return null; }
-    if (action === "retry") { void this.intentionRetry(); return null; }
     return null;
   }
 
   intentionOnKeyDown(event) {
     if (!event || event.isComposing || event.keyCode === 229) return;
     if (event.defaultPrevented || event.__schemaEscapeHandled) return;
-    if (this.pendingApply) return;
+    if (this.pendingApply) {
+      // Every key waits for the write; none may supersede it.
+      try { event.preventDefault?.(); } catch (_) {}
+      return;
+    }
     const closeKind = this.intentionCloseKind(event);
     if (closeKind && this.intentionShouldBackOut(closeKind, event)) {
       this.intentionBackOut(event);
@@ -835,25 +701,21 @@ class IntentionCardModal extends IntentionCardModalBase {
           return;
         }
       }
-      if (event.key === "Enter" && (event.ctrlKey === true || event.metaKey === true)) {
-        event.preventDefault?.();
-        void this.intentionSaveStage({ close: true });
-      }
+      return;
+    }
+    const plain = event.ctrlKey !== true && event.metaKey !== true && event.altKey !== true && event.shiftKey !== true;
+    if (this.retained && event.key === "Enter" && plain && !this.intentionInInput(event)) {
+      event.preventDefault?.();
+      void this.intentionRetry();
       return;
     }
     const action = intentionCardEditorKeyAction(event, {
       inInput: this.intentionInInput(event), stage: null, selected: this.intentionSelected(),
     });
     if (!action) return;
-    if (action === "retry" || this.statusKind === "stale" || this.statusKind === "save-blocked") {
-      if (event.key === "Enter" && !this.intentionInInput(event)) {
-        event.preventDefault?.();
-        void this.intentionRetry();
-        return;
-      }
-    }
     if (action === "edit-selected" && this.selectedKey === "summary") {
       event.preventDefault?.();
+      if (this.retained) this.intentionDiscardRetained(false);
       this.intentionOpenStage("summary", "summary");
       return;
     }
@@ -864,6 +726,10 @@ class IntentionCardModal extends IntentionCardModalBase {
   intentionOnClick(event) {
     const button = event?.target?.closest?.("button[data-intention-action], button[data-intention-key]");
     if (!button) return;
+    if (this.pendingApply || this.closed) {
+      event.preventDefault?.();
+      return;
+    }
     const action = button.getAttribute("data-intention-action");
     if (action === "save-stage") {
       const input = this.contentEl?.querySelector?.("[data-intention-input]");
@@ -878,100 +744,14 @@ class IntentionCardModal extends IntentionCardModalBase {
       return;
     }
     const key = button.getAttribute("data-intention-key");
-    if (key) this.intentionSelect(key);
+    if (key && !this.stage) {
+      if (this.retained) this.intentionDiscardRetained(false);
+      this.intentionSelect(key);
+    }
   }
 
   intentionOnStageInput(event) {
     if (this.stage) this.stageDraft = String(event?.target?.value || "");
+    intentionCardEditorAutogrow(event?.target);
   }
-}
-
-function intentionCardEditorBuildEl(options, doc, modal) {
-  const host = intentionCardEditorCreateEl(doc, "div", "bob-intention-card-editor");
-  if (!host) return null;
-  host.setAttribute("role", "dialog");
-  host.setAttribute("aria-label", `Edit intentions · ${options.subject || options.subjectPath}`);
-  intentionCardEditorPaintAll(host, options, doc, modal);
-  try {
-    host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
-    host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
-    host.addEventListener?.("paste", (event) => intentionCardEditorPaste(modal, event));
-    host.addEventListener?.("input", (event) => {
-      if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
-    });
-  } catch (_) {}
-  return host;
-}
-
-function intentionCardEditorRowButton(doc, host, target, selected) {
-  const button = intentionCardEditorCreateEl(doc, "button", "bob-intention-row");
-  if (!button) return null;
-  button.setAttribute("type", "button");
-  button.setAttribute("data-intention-key", target.key);
-  if (selected) button.setAttribute("aria-current", "true");
-  const keycap = target.kind === "intention" && target.index < 9
-    ? `${target.index + 1} ` : target.kind === "add" ? "+ " : "";
-  intentionCardEditorSetText(button, `${keycap}${target.label}${target.value ? ` — ${target.value.slice(0, 80)}` : ""}`);
-  host.appendChild(button);
-  return button;
-}
-
-function intentionCardEditorPaintAll(host, options, doc, modal) {
-  while (host.firstChild) host.removeChild(host.firstChild);
-  const title = intentionCardEditorCreateEl(doc, "h2", "bob-intention-editor-title");
-  intentionCardEditorSetText(title, `Edit intentions · ${options.subject || options.subjectPath}`);
-  host.appendChild(title);
-
-  const list = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-list");
-  list.setAttribute("role", "listbox");
-  list.setAttribute("aria-label", "Intention fields");
-  for (const target of options.targets) {
-    intentionCardEditorRowButton(doc, list, target, target.key === options.selectedKey);
-  }
-  host.appendChild(list);
-
-  if (options.softCapHint) {
-    const hint = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-hint");
-    intentionCardEditorSetText(hint, options.softCapHint);
-    host.appendChild(hint);
-  }
-
-  if (options.stage) {
-    const stageHost = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-stage");
-    const label = intentionCardEditorCreateEl(doc, "label", "bob-intention-stage-label");
-    const target = intentionCardEditorTargetByKey(options.targets, options.stage.field);
-    const stageName = options.stage.field === "add" ? "New intention" : target ? target.label : "Edit";
-    intentionCardEditorSetText(label, `${stageName} · Enter saves · Esc cancels`);
-    stageHost.appendChild(label);
-    if (options.stage.kind === "summary" && options.fields) {
-      const current = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-current");
-      intentionCardEditorSetText(current, `Current: ${options.fields.summary || "(empty)"}`);
-      stageHost.appendChild(current);
-    }
-    const input = options.stage.kind === "reflection"
-      ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input")
-      : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");
-    if (input) {
-      input.setAttribute("data-intention-input", options.stage.kind);
-      input.value = String(options.stageDraft || "");
-      stageHost.appendChild(input);
-    }
-    if (options.stageNote) {
-      const note = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-note");
-      intentionCardEditorSetText(note, options.stageNote);
-      stageHost.appendChild(note);
-    }
-    const save = intentionCardEditorCreateEl(doc, "button", "bob-intention-stage-save");
-    save.setAttribute("type", "button");
-    save.setAttribute("data-intention-action", "save-stage");
-    intentionCardEditorSetText(save, "Save");
-    stageHost.appendChild(save);
-    host.appendChild(stageHost);
-  }
-
-  const status = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-status");
-  const model = options.status;
-  intentionCardEditorSetText(status, [model.announce, model.refusalMessage, model.refusalHint]
-    .filter(Boolean).join(" · ") || intentionCardEditorStatusFallback(model));
-  host.appendChild(status);
 }

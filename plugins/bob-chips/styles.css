@@ -1,28 +1,66 @@
-.bob-copy-chip {
+/* Copy chips: a solid well in the copy hue holds the white copy glyph,
+   beside a lightly tinted body that holds the face. Every color derives
+   from --bob-copy-chip-ink, so a state changes only the ink. A snippet may
+   set --bob-copy-chip-hue (on body) to recolor every chip and card.
+
+   Live Preview renders a span; Reading view, embeds, hover previews, and
+   Tasks/Dataview results render a <button>. Every rule names both tags, so
+   `:is(span, button).bob-copy-chip` (0,1,1) ties Obsidian's
+   `button:not(.clickable-icon)` and wins on source order, and the two
+   compute one look. Theme variables only. */
+:is(span, button).bob-copy-chip {
+  --bob-copy-chip-ink: var(--bob-copy-chip-hue, var(--color-blue));
+  position: relative;
   display: inline;
-  padding: 0 0.45em;
-  border: 1px solid var(--background-modifier-border);
+  height: auto;
+  margin: 0;
+  padding: 0.1em 0.5em 0.12em;
+  border: 1px solid color-mix(in srgb, var(--bob-copy-chip-ink) 50%, var(--background-primary));
   border-radius: var(--radius-s);
-  background-color: var(--background-secondary, var(--background-primary));
-  color: var(--text-normal);
+  outline: none;
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 10%, var(--background-primary));
+  box-shadow: none;
+  color: color-mix(in srgb, var(--bob-copy-chip-ink) 30%, var(--text-normal));
+  font: inherit;
   font-size: 0.92em;
   line-height: inherit;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  text-align: inherit;
+  /* The host never breaks between the well and the face; the face wraps
+     inside itself (see .bob-copy-chip-face). */
+  white-space: nowrap;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   cursor: copy;
   vertical-align: baseline;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.bob-copy-chip.is-literal {
+/* A <button> lays out as one atomic inline box, so its line height is the
+   font's own (as an inline span's background is), and the well fills the
+   body top to bottom in both. */
+button.bob-copy-chip {
+  line-height: normal;
+}
+
+:is(span, button).bob-copy-chip.is-literal {
   font-family: var(--font-monospace);
 }
 
-.bob-copy-chip.is-labeled {
+:is(span, button).bob-copy-chip.is-labeled {
   font-family: inherit;
 }
 
+.bob-copy-chip.is-labeled > .bob-copy-chip-face {
+  font-weight: 500;
+}
+
+.bob-copy-chip-face {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The well. Scoped under `.bob-copy-chip >`: command-chip and bob-run
+   glyphs share the `bob-copy-chip-glyph` class and keep the base rule. */
 .bob-copy-chip-glyph {
   display: inline-flex;
   width: 1.1em;
@@ -39,58 +77,100 @@
   height: 1em;
 }
 
-.bob-copy-chip-face {
-  overflow-wrap: anywhere;
+.bob-copy-chip > .bob-copy-chip-glyph {
+  --icon-stroke: 2.25px;
+  display: inline;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  /* Bleeds into the chip's start padding, up to the border. */
+  margin-inline: -0.5em 0.42em;
+  /* The chip's own vertical padding, so the well's box is the body's. */
+  padding: 0.1em 0.3em 0.12em;
+  border-start-start-radius: calc(var(--radius-s) - 1px);
+  border-end-start-radius: calc(var(--radius-s) - 1px);
+  background-color: var(--bob-copy-chip-ink);
+  color: var(--text-on-accent);
+  vertical-align: baseline;
+  transition: background-color 120ms ease;
 }
 
+/* A fixed-size glyph: copy → check → alert swaps never reflow the well. */
+.bob-copy-chip > .bob-copy-chip-glyph svg {
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.13em;
+}
+
+/* The hidden "Copy" that, with the face, names a Reading button through
+   aria-labelledby. It stays in the inline flow at zero size: an
+   out-of-flow placeholder after the face would let Chromium wrap the
+   chip's end cap alone onto the next line, and the hover tooltip (itself
+   out of flow) would then shift it. */
 .bob-copy-chip-copy-prefix {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+  font-size: 0;
   white-space: nowrap;
+  user-select: none;
 }
 
+/* States change colors and the glyph only: never border width, padding,
+   weight, or the well's size. */
+:is(span, button).bob-copy-chip:hover,
+button.bob-copy-chip.mobile-tap {
+  border-color: var(--bob-copy-chip-ink);
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 17%, var(--background-primary));
+  box-shadow: none;
+}
+
+:is(span, button).bob-copy-chip:active {
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 24%, var(--background-primary));
+}
+
+:is(span, button).bob-copy-chip:focus-visible {
+  outline: 2px solid var(--bob-copy-chip-ink);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+:is(span, button).bob-copy-chip.is-copied {
+  --bob-copy-chip-ink: var(--color-green);
+  animation: bob-copy-chip-pulse 1.2s ease-out 1;
+}
+
+:is(span, button).bob-copy-chip.is-failed {
+  --bob-copy-chip-ink: var(--text-error);
+}
+
+/* Hover or keyboard focus says what a click copies, after a short delay. */
 .bob-copy-chip-tip {
   display: none;
 }
 
-button.bob-copy-chip {
-  font: inherit;
-}
-
-.bob-copy-chip:hover {
-  border-color: var(--interactive-accent);
-}
-
-.bob-copy-chip:hover .bob-copy-chip-glyph {
-  color: var(--interactive-accent);
-}
-
-.bob-copy-chip:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: 2px;
-}
-
-.bob-copy-chip.is-copied {
-  border-color: var(--interactive-accent);
-  animation: bob-copy-chip-pulse 1.2s ease-out 1;
-}
-
-.bob-copy-chip.is-copied .bob-copy-chip-glyph {
-  color: var(--color-green, #4caf50);
-}
-
-.bob-copy-chip.is-failed {
-  border-color: var(--text-error);
-}
-
-.bob-copy-chip.is-failed .bob-copy-chip-glyph {
-  color: var(--text-error);
+.bob-copy-chip:hover > .bob-copy-chip-tip,
+.bob-copy-chip:focus-visible > .bob-copy-chip-tip {
+  display: block;
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: var(--layer-tooltip);
+  width: max-content;
+  max-width: min(36em, 80vw);
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  background-color: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  font-weight: normal;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: default;
+  pointer-events: none;
+  animation: bob-copy-chip-tip-in 0s linear 0.4s both;
 }
 
 .bob-copy-chip-live {
@@ -109,32 +189,55 @@ button.bob-copy-chip {
   background-color: var(--bob-yank-flash-bg, rgba(80, 200, 120, 0.35));
 }
 
+/* From-only: the pulse eases back to whatever the element's own fill is. */
 @keyframes bob-copy-chip-pulse {
-  0% {
+  from {
     background-color: var(--bob-yank-flash-bg, rgba(80, 200, 120, 0.35));
   }
-  100% {
-    background-color: var(--background-secondary, var(--background-primary));
+}
+
+@keyframes bob-copy-chip-tip-in {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
   }
 }
 
+/* Reduced motion: no pulse, no transitions, and no timed tooltip reveal
+   (the tooltip shows at once). The glyph swap and state colors stay.
+   `[class]` outranks every state rule above. */
 @media (prefers-reduced-motion: reduce) {
-  .bob-copy-chip.is-copied {
+  :is(span, button).bob-copy-chip[class],
+  .bob-copy-chip[class] > .bob-copy-chip-glyph,
+  .bob-copy-chip[class] > .bob-copy-chip-tip {
     animation: none;
+    transition: none;
   }
 }
 
+/* Print is plain inline code: no border, fill, padding, well, tooltip, or
+   weight, whatever the state. `[class]` outranks every state rule above. */
 @media print {
-  .bob-copy-chip {
-    border: none;
+  :is(span, button).bob-copy-chip[class] {
     padding: 0;
+    border: none;
+    outline: none;
     background: none;
+    box-shadow: none;
+    color: inherit;
     cursor: auto;
-    font-family: var(--font-monospace);
+    animation: none;
+    transition: none;
   }
 
-  .bob-copy-chip-glyph,
-  .bob-copy-chip-tip,
+  .bob-copy-chip[class] > .bob-copy-chip-face {
+    font-weight: inherit;
+  }
+
+  .bob-copy-chip[class] > .bob-copy-chip-glyph,
+  .bob-copy-chip[class] > .bob-copy-chip-tip,
   .bob-copy-chip-copy-prefix {
     display: none;
   }
@@ -462,31 +565,60 @@ button.bob-run-chip.is-unavailable:hover {
 }
 
 .bob-copy-fence {
+  /* `bob-copy` cards: the inline chip's identity at card scale. The frame
+     and header carry the copy ink, the header glyph is the same solid
+     well, and the Copy button takes the chip body's recipe. The body reads
+     like paper. `is-copied` / `is-failed` swap the card's ink. */
+  --bob-copy-chip-ink: var(--bob-copy-chip-hue, var(--color-blue));
   margin: 0.5em 0;
-  border: 1px solid var(--background-modifier-border);
+  border: 1px solid color-mix(in srgb, var(--bob-copy-chip-ink) 35%, var(--background-modifier-border));
   border-radius: var(--radius-s);
-  background-color: var(--background-secondary, var(--background-primary));
+  background-color: var(--background-primary);
   color: var(--text-normal);
   overflow: hidden;
 }
 
+/* The title fills the first row. On a narrow card the Copy button (and
+   the meta, when it no longer fits) wraps to a right-aligned second row
+   instead of squeezing the title. */
 .bob-copy-fence-header {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 0.5em;
+  gap: 0.4em 0.5em;
   padding: 0.4em 0.6em;
-  border-bottom: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--bob-copy-chip-ink) 25%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 8%, var(--background-primary));
 }
 
 .bob-copy-fence-header .bob-copy-chip-glyph {
-  margin-right: 0;
+  --icon-stroke: 2.25px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  min-width: 1.5em;
+  height: 1.5em;
+  margin: 0;
+  border-radius: var(--radius-s);
+  background-color: var(--bob-copy-chip-ink);
+  color: var(--text-on-accent);
   vertical-align: baseline;
 }
 
+.bob-copy-fence-header .bob-copy-chip-glyph svg {
+  width: 0.95em;
+  height: 0.95em;
+}
+
 .bob-copy-fence-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: color-mix(in srgb, var(--bob-copy-chip-ink) 30%, var(--text-normal));
   font-weight: 600;
   overflow-wrap: anywhere;
-  min-width: 0;
 }
 
 .bob-copy-fence-meta {
@@ -497,27 +629,50 @@ button.bob-run-chip.is-unavailable:hover {
   white-space: nowrap;
 }
 
-.bob-copy-fence-copy {
-  min-width: 5.5em;
+/* The Copy button is a span in the inert author preview and a <button>
+   elsewhere; `:is(span, button)` outranks Obsidian's button fill and
+   shadow. The fixed min-width fits "Copied ✓" and "Copy failed", so the
+   feedback never reflows the header. */
+:is(span, button).bob-copy-fence-copy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: auto;
+  min-width: 7.5em;
+  margin: 0;
   padding: 0.15em 0.8em;
-  border: 1px solid var(--background-modifier-border);
+  border: 1px solid color-mix(in srgb, var(--bob-copy-chip-ink) 50%, var(--background-primary));
   border-radius: var(--radius-s);
-  background-color: var(--background-primary);
-  color: var(--text-normal);
+  outline: none;
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 12%, var(--background-primary));
+  box-shadow: none;
+  color: color-mix(in srgb, var(--bob-copy-chip-ink) 30%, var(--text-normal));
   font: inherit;
   font-size: 0.92em;
-  cursor: copy;
+  font-weight: 500;
+  line-height: 1.5;
   white-space: nowrap;
+  cursor: copy;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.bob-copy-fence-copy:hover {
-  border-color: var(--interactive-accent);
-  color: var(--interactive-accent);
+:is(span, button).bob-copy-fence-copy:hover,
+button.bob-copy-fence-copy.mobile-tap {
+  border-color: var(--bob-copy-chip-ink);
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 17%, var(--background-primary));
+  box-shadow: none;
 }
 
-.bob-copy-fence-copy:focus-visible {
-  outline: 2px solid var(--interactive-accent);
+:is(span, button).bob-copy-fence-copy:active {
+  background-color: color-mix(in srgb, var(--bob-copy-chip-ink) 24%, var(--background-primary));
+}
+
+:is(span, button).bob-copy-fence-copy:focus-visible {
+  outline: 2px solid var(--bob-copy-chip-ink);
   outline-offset: 2px;
+  box-shadow: none;
 }
 
 .bob-copy-fence-body {
@@ -535,13 +690,18 @@ button.bob-run-chip.is-unavailable:hover {
   overflow: hidden;
 }
 
-.bob-copy-fence-toggle {
+/* The show-all toggle stays muted until hovered. */
+button.bob-copy-fence-toggle {
   display: block;
   width: 100%;
+  height: auto;
+  margin: 0;
   padding: 0.3em 0.7em;
   border: none;
   border-top: 1px solid var(--background-modifier-border);
+  border-radius: 0;
   background: none;
+  box-shadow: none;
   color: var(--text-muted);
   font: inherit;
   font-size: 0.85em;
@@ -549,35 +709,35 @@ button.bob-run-chip.is-unavailable:hover {
   cursor: pointer;
 }
 
-.bob-copy-fence-toggle:hover {
-  color: var(--interactive-accent);
+button.bob-copy-fence-toggle:hover {
+  background: none;
+  box-shadow: none;
+  color: var(--bob-copy-chip-ink);
 }
 
-.bob-copy-fence-toggle:focus-visible {
-  outline: 2px solid var(--interactive-accent);
+button.bob-copy-fence-toggle:focus-visible {
+  outline: 2px solid var(--bob-copy-chip-ink);
   outline-offset: -2px;
+  box-shadow: none;
 }
 
 .bob-copy-fence.is-copied {
-  border-color: var(--interactive-accent);
+  --bob-copy-chip-ink: var(--color-green);
+}
+
+.bob-copy-fence.is-copied .bob-copy-fence-header {
   animation: bob-copy-chip-pulse 1.2s ease-out 1;
 }
 
-.bob-copy-fence.is-copied .bob-copy-chip-glyph {
-  color: var(--color-green, #4caf50);
-}
-
 .bob-copy-fence.is-failed {
-  border-color: var(--text-error);
-}
-
-.bob-copy-fence.is-failed .bob-copy-chip-glyph {
-  color: var(--text-error);
+  --bob-copy-chip-ink: var(--text-error);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bob-copy-fence.is-copied {
+  .bob-copy-fence[class] .bob-copy-fence-header,
+  :is(span, button).bob-copy-fence-copy[class] {
     animation: none;
+    transition: none;
   }
 }
 
@@ -963,7 +1123,10 @@ button.bob-run-fence-output:hover {
   flex: 0 0 auto;
 }
 
+/* The authoring card's icon is the copy well: ink fill, white glyph. */
 .bob-copy-author-icon {
+  --bob-copy-chip-ink: var(--bob-copy-chip-hue, var(--color-blue));
+  --icon-stroke: 2.25px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -971,8 +1134,8 @@ button.bob-run-fence-output:hover {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  color: var(--interactive-accent);
-  background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  background-color: var(--bob-copy-chip-ink);
+  color: var(--text-on-accent);
 }
 
 .bob-copy-author-icon svg {
@@ -992,8 +1155,10 @@ button.bob-run-fence-output:hover {
   font-size: 0.85em;
 }
 
+/* A command chip keeps the accent identity, not the copy well. */
 .bob-copy-author-modal.is-run .bob-copy-author-icon {
   background-color: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  color: var(--interactive-accent);
 }
 
 .bob-copy-author-row-kind {
@@ -1229,10 +1394,22 @@ button.bob-run-fence-output:hover {
   pointer-events: none;
 }
 
+/* Print shows the full body with no chrome: the fold opens, and the
+   button, toggle, glyph, and header fill drop. `[class]` outranks the
+   button and state rules above. */
 @media print {
-  .bob-copy-fence {
+  .bob-copy-fence[class] {
     border: none;
     background: none;
+  }
+
+  .bob-copy-fence[class] .bob-copy-fence-header {
+    background: none;
+    animation: none;
+  }
+
+  .bob-copy-fence[class] .bob-copy-fence-title {
+    color: inherit;
   }
 
   .bob-copy-fence-body.is-folded {
@@ -1240,9 +1417,9 @@ button.bob-run-fence-output:hover {
     overflow: visible;
   }
 
-  .bob-copy-fence-copy,
-  .bob-copy-fence-toggle,
-  .bob-copy-fence-header .bob-copy-chip-glyph {
+  .bob-copy-fence[class] .bob-copy-fence-copy,
+  .bob-copy-fence[class] .bob-copy-fence-toggle,
+  .bob-copy-fence[class] .bob-copy-fence-header .bob-copy-chip-glyph {
     display: none;
   }
 }

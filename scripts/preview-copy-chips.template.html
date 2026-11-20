@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bob copy chips preview</title>
+<style>
+__OBSIDIAN_BASELINE_CSS__
+/* Obsidian's default palette (light and dark), accent hsl(258 88% 66%). */
+body[data-theme="light"] {
+  --background-primary:#ffffff; --background-secondary:#f6f6f6; --background-modifier-border:#e0e0e0;
+  --background-modifier-border-focus:#bdbdbd; --background-modifier-hover:rgba(0,0,0,.067);
+  --text-normal:#222222; --text-muted:#5c5c5c; --text-faint:#ababab; --text-on-accent:#ffffff;
+  --text-error:#e93147; --text-accent:hsl(258 88% 66%); --interactive-accent:hsl(258 88% 66%);
+  --interactive-normal:#ffffff; --interactive-hover:#fafafa;
+  --color-red:#e93147; --color-orange:#ec7500; --color-yellow:#e0ac00; --color-green:#08b94e;
+  --color-cyan:#00bfbc; --color-blue:#086ddd; --color-purple:#7852ee;
+  --input-shadow:inset 0 0 0 1px rgba(0,0,0,.12), 0 2px 3px 0 rgba(0,0,0,.05), 0 1px 1.5px 0 rgba(0,0,0,.03), 0 1px 2px 0 rgba(0,0,0,.04), 0 0 0 0 transparent;
+  --input-shadow-hover:inset 0 0 0 1px rgba(0,0,0,.17), 0 2px 3px 0 rgba(0,0,0,.1), 0 1px 1.5px 0 rgba(0,0,0,.03), 0 1px 2px 0 rgba(0,0,0,.04), 0 0 0 0 transparent;
+  --shadow-s:0 1px 2px rgba(0,0,0,.028), 0 3.4px 6.7px rgba(0,0,0,.042), 0 15px 30px rgba(0,0,0,.07);
+  --shadow-l:0 12px 32px #20263a22;
+  color-scheme:light;
+}
+body[data-theme="dark"] {
+  --background-primary:#1e1e1e; --background-secondary:#262626; --background-modifier-border:#363636;
+  --background-modifier-border-focus:#555555; --background-modifier-hover:rgba(255,255,255,.075);
+  --text-normal:#dadada; --text-muted:#b3b3b3; --text-faint:#666666; --text-on-accent:#ffffff;
+  --text-error:#fb464c; --text-accent:hsl(258 88% 66%); --interactive-accent:hsl(258 88% 66%);
+  --interactive-normal:#363636; --interactive-hover:#3f3f3f;
+  --color-red:#fb464c; --color-orange:#e9973f; --color-yellow:#e0de71; --color-green:#44cf6e;
+  --color-cyan:#53dfdd; --color-blue:#027aff; --color-purple:#a882ff;
+  --input-shadow:inset 0 .5px .5px .5px rgba(255,255,255,.09), 0 2px 4px 0 rgba(0,0,0,.15), 0 1px 1.5px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.2), 0 0 0 0 transparent;
+  --input-shadow-hover:inset 0 .5px 1px .5px rgba(255,255,255,.16), 0 2px 3px 0 rgba(0,0,0,.3), 0 1px 1.5px 0 rgba(0,0,0,.2), 0 1px 2px 0 rgba(0,0,0,.4), 0 0 0 0 transparent;
+  --shadow-s:0 1px 2px rgba(0,0,0,.121), 0 3.4px 6.7px rgba(0,0,0,.179), 0 15px 30px rgba(0,0,0,.3);
+  --shadow-l:0 12px 32px #0008;
+  color-scheme:dark;
+}
+body { margin:0; padding:28px; background:var(--background-secondary); color:var(--text-normal); font:16px/1.5 var(--font-text); }
+.preview-shell { max-width:980px; margin:0 auto; padding:22px; border:1px solid var(--background-modifier-border); border-radius:14px; background:var(--background-primary); box-shadow:var(--shadow-l); }
+.preview-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px; font-family:var(--font-interface); }
+.preview-heading h1 { margin:0; font-size:18px; font-weight:650; }
+.preview-heading span { color:var(--text-muted); font-size:12px; }
+.preview-section { margin-top:18px; }
+.preview-section > h2 { margin:0 0 8px; color:var(--text-muted); font:650 10px var(--font-interface); letter-spacing:.08em; text-transform:uppercase; }
+.preview-surface-name { display:block; margin:6px 0 2px; color:var(--text-faint); font:600 11px var(--font-interface); }
+.preview-line { margin:0; padding:2px 6px; }
+/* The vault's task-status row washes (Blocked, Next, WIP). */
+.preview-row { border-radius:4px; }
+.preview-row.is-blocked { --row:var(--color-red); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 13%, transparent) 2px 100%); }
+.preview-row.is-next { --row:var(--color-green); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 14%, transparent) 2px 100%); }
+.preview-row.is-wip { --row:var(--color-yellow); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 14%, transparent) 2px 100%); }
+.preview-row-tag { display:inline-block; min-width:4.6em; color:var(--text-faint); font:600 11px var(--font-interface); }
+/* The vault's inline-code snippet: cyan wash, 42% cyan border, cyan ink. */
+code.preview-inline-code {
+  --hue:var(--color-cyan);
+  display:inline; margin:0 .04em; padding:.12em .4em .14em; border:1px solid color-mix(in srgb, var(--hue) 42%, var(--background-modifier-border));
+  border-radius:.35em; background:color-mix(in srgb, var(--hue) 12%, var(--background-primary)); color:color-mix(in srgb, var(--hue) 32%, var(--text-normal));
+  font-family:var(--font-monospace); font-size:.875em; line-height:1.35; box-decoration-break:clone; -webkit-box-decoration-break:clone;
+}
+a.preview-link { color:var(--text-accent); text-decoration:underline; text-decoration-color:color-mix(in srgb, var(--text-accent) 45%, transparent); }
+.preview-states { display:grid; grid-template-columns:120px repeat(4, minmax(0,1fr)); gap:6px 14px; align-items:end; }
+.preview-states .col-head { color:var(--text-muted); font:600 11px var(--font-interface); }
+.preview-states .row-name { color:var(--text-muted); font:600 12px var(--font-interface); }
+/* Tooltips show in their own section; here they would cover the next column. */
+.preview-states .bob-copy-chip-tip { display:none !important; }
+.preview-cell { min-width:0; margin:0; }
+.preview-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.preview-narrow { width:240px; padding:8px 10px; border:1px dashed var(--background-modifier-border); border-radius:8px; }
+.preview-tips .preview-line { margin-top:86px; }
+.preview-fence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 16px; align-items:start; }
+.preview-fence-name { display:block; margin-top:6px; color:var(--text-muted); font:600 11px var(--font-interface); }
+.preview-author { display:flex; align-items:center; gap:12px; margin-top:8px; font:600 14px var(--font-interface); }
+.preview-sweep-box { position:absolute; left:0; top:0; visibility:hidden; font:16px/1.5 var(--font-text); }
+@media (max-width:620px) {
+  body { padding:12px; }
+  .preview-shell { padding:14px; }
+  .preview-states { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  .preview-states .col-head, .preview-states .row-name { display:none; }
+  .preview-pair, .preview-fence-grid { grid-template-columns:minmax(0,1fr); }
+}
+@media print {
+  body { background:#fff; padding:0; }
+  .preview-shell { box-shadow:none; border:none; }
+}
+__PRODUCTION_CSS__
+</style>
+</head>
+<body data-theme="light">
+<main class="preview-shell">
+  <header class="preview-heading"><h1>Bob copy chips</h1><span id="subtitle">Production builders, feedback, and styles.css</span></header>
+  <div id="sections"></div>
+</main>
+<script>
+// Obsidian's setIcon/getIcon for the Lucide glyphs copy chips use. Real
+// paths from Lucide; the preview owns only this icon shim.
+const PREVIEW_ICONS = {
+  copy: ["M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"],
+  check: ["M20 6 9 17l-5-5"],
+  "alert-triangle": ["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3", "M12 9v4", "M12 17h.01"],
+};
+function previewIconSvg(name) {
+  const paths = PREVIEW_ICONS[name];
+  if (!paths) return null;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of [["viewBox", "0 0 24 24"], ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "2"], ["stroke-linecap", "round"], ["stroke-linejoin", "round"], ["class", "svg-icon lucide-" + name]]) svg.setAttribute(key, value);
+  for (const d of paths) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    node.setAttribute("d", d);
+    svg.appendChild(node);
+  }
+  return svg;
+}
+const PREVIEW_OBSIDIAN = {
+  setIcon(el, name) { el.replaceChildren(); const svg = previewIconSvg(name); if (svg) el.appendChild(svg); },
+  getIcon(name) { return previewIconSvg(name); },
+  Platform: { isMobile: false, isMobileApp: false },
+};
+window.BobChipsModule = (function loadBuiltPlugin() {
+  const module = { exports: {} };
+  const exports = module.exports;
+  const require = (name) => {
+    if (name === "obsidian") return PREVIEW_OBSIDIAN;
+    throw new Error("not available in the preview: " + name);
+  };
+  (function () {
+__BOB_CHIPS_MAIN__
+  })();
+  return module.exports;
+})();
+window.PREVIEW_MATRIX = __MATRIX__;
+</script>
+<script>
+// Everything below is scaffolding around production calls: copyChipScanLine
+// finds the chips, copyChipBuildInline / copyChipBuildFence build them, and
+// copyChipShowFeedback paints the copied and failed states (with the page's
+// timers frozen so the state holds for the capture).
+const H = window.BobChipsModule.helpers;
+const M = window.PREVIEW_MATRIX;
+const mounted = [];
+const fences = [];
+
+function withFrozenTimers(fn) {
+  const real = window.setTimeout;
+  window.setTimeout = () => 0;
+  try { return fn(); } finally { window.setTimeout = real; }
+}
+
+// A Live Preview span (as the editor widget builds it) or a Reading button.
+function buildChip(chip, surface) {
+  const live = surface === "live";
+  return H.copyChipBuildInline(document, { label: chip.label, text: chip.text }, live ? { interactive: false, editHint: true } : { interactive: true });
+}
+
+function applyState(host, state) {
+  if (state === "copied") withFrozenTimers(() => H.copyChipShowFeedback(host, "success"));
+  if (state === "failed") withFrozenTimers(() => H.copyChipShowFeedback(host, "failure"));
+}
+
+// Ordinary code spans render as the vault's cyan inline code, and
+// `[text](#)` as an accent link. Scaffolding only.
+function appendText(parent, text) {
+  const pattern = /`([^`]+)`|\[([^\]]+)\]\(#\)/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+    if (match[1] !== undefined) {
+      const code = document.createElement("code");
+      code.className = "preview-inline-code";
+      code.textContent = match[1];
+      parent.appendChild(code);
+    } else {
+      const link = document.createElement("a");
+      link.className = "preview-link";
+      link.href = "#";
+      link.textContent = match[2];
+      parent.appendChild(link);
+    }
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
+
+// One Markdown line rendered the way a renderer would: one scan, every
+// copy chip built by the production builder.
+function renderLine(parent, line, options) {
+  const opts = options || {};
+  const surface = opts.surface || "live";
+  const p = document.createElement(surface === "reading" ? "p" : "div");
+  p.className = "preview-line " + (surface === "reading" ? "markdown-preview-view" : "cm-line") + (opts.row ? " preview-row is-" + opts.row : "");
+  if (opts.row) {
+    const tag = document.createElement("span");
+    tag.className = "preview-row-tag";
+    tag.textContent = opts.row === "wip" ? "WIP" : opts.row[0].toUpperCase() + opts.row.slice(1);
+    p.appendChild(tag);
+  }
+  let at = 0;
+  for (const found of H.copyChipScanLine(line)) {
+    appendText(p, line.slice(at, found.from));
+    at = found.to;
+    const host = buildChip(found, surface);
+    if (!host) continue;
+    let mount = host;
+    if (opts.force) {
+      mount = document.createElement("span");
+      mount.className = "preview-force-" + opts.force;
+      mount.appendChild(host);
+    }
+    p.appendChild(mount);
+    applyState(host, opts.state);
+    mounted.push({ host, chip: { label: found.label, text: found.text }, surface, state: opts.state || "rest", force: opts.force || null, group: opts.group || null, kind: found.label == null ? "literal" : "labeled" });
+  }
+  appendText(p, line.slice(at));
+  parent.appendChild(p);
+  return p;
+}
+
+function section(title, id) {
+  const el = document.createElement("section");
+  el.className = "preview-section";
+  if (id) el.id = id;
+  const h2 = document.createElement("h2");
+  h2.textContent = title;
+  el.appendChild(h2);
+  document.getElementById("sections").appendChild(el);
+  return el;
+}
+
+function renderStates(parent) {
+  const grid = document.createElement("div");
+  grid.className = "preview-states";
+  const columns = [];
+  for (const kind of ["labeled", "literal"]) for (const surface of ["live", "reading"]) columns.push({ kind, surface });
+  for (const head of ["", "Labeled · Live Preview", "Labeled · Reading", "Literal · Live Preview", "Literal · Reading"]) {
+    const el = document.createElement("div");
+    el.className = "col-head";
+    el.textContent = head;
+    grid.appendChild(el);
+  }
+  for (const row of M.states) {
+    const name = document.createElement("div");
+    name.className = "row-name";
+    name.textContent = row.name;
+    grid.appendChild(name);
+    for (const column of columns) {
+      const cell = document.createElement("div");
+      cell.className = "preview-cell";
+      const line = column.kind === "labeled" ? M.stateLines.labeled : M.stateLines.literal;
+      renderLine(cell, line, { surface: column.surface, state: row.state, force: row.force, group: "states|" + column.kind + "|" + column.surface });
+      grid.appendChild(cell);
+    }
+  }
+  parent.appendChild(grid);
+}
+
+function renderFence(parent, row) {
+  const card = H.copyChipBuildFence(document, { label: row.label || null, text: row.text }, { interactive: row.interactive !== false });
+  if (row.state === "copied" || row.state === "failed") {
+    applyState(card, row.state);
+    const button = card.querySelector(".bob-copy-fence-copy");
+    if (button) button.textContent = row.state === "copied" ? M.fenceFaces.copied : M.fenceFaces.failed;
+  }
+  let mount = card;
+  if (row.force) {
+    const button = card.querySelector(".bob-copy-fence-copy");
+    if (button) button.classList.add("preview-force-card-" + row.force);
+  }
+  const cell = document.createElement("div");
+  const name = document.createElement("span");
+  name.className = "preview-fence-name";
+  name.textContent = row.name;
+  cell.appendChild(name);
+  cell.appendChild(mount);
+  parent.appendChild(cell);
+  fences.push({ card, row });
+}
+
+function renderAll() {
+  mounted.length = 0;
+  fences.length = 0;
+  document.getElementById("sections").replaceChildren();
+  const context = section(M.context.title, "preview-context");
+  const pair = document.createElement("div");
+  pair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    const name = document.createElement("span");
+    name.className = "preview-surface-name";
+    name.textContent = surface === "live" ? "Live Preview (span)" : "Reading view (button)";
+    box.appendChild(name);
+    for (const row of M.context.rows) renderLine(box, row.line, { ...row, surface });
+    pair.appendChild(box);
+  }
+  context.appendChild(pair);
+  renderStates(section(M.statesTitle, "preview-states"));
+  const tips = section(M.tips.title, "preview-tips");
+  tips.classList.add("preview-tips");
+  for (const row of M.tips.rows) renderLine(tips, row.line, row);
+  const wrap = section(M.wrap.title, "preview-wrap");
+  const wrapPair = document.createElement("div");
+  wrapPair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    box.className = "preview-narrow";
+    for (const row of M.wrap.rows) renderLine(box, row.line, { ...row, surface });
+    wrapPair.appendChild(box);
+  }
+  wrap.appendChild(wrapPair);
+  const cards = section(M.fences.title, "preview-fences");
+  const grid = document.createElement("div");
+  grid.className = "preview-fence-grid";
+  for (const row of M.fences.rows) renderFence(grid, row);
+  cards.appendChild(grid);
+  // The authoring card's header icon (Mod+Shift+Y): the same well.
+  const author = document.createElement("div");
+  author.className = "preview-author";
+  const icon = document.createElement("div");
+  icon.className = "bob-copy-author-icon";
+  PREVIEW_OBSIDIAN.setIcon(icon, "copy");
+  author.appendChild(icon);
+  author.appendChild(document.createTextNode("Make copy chip (authoring card icon)"));
+  cards.appendChild(author);
+  return { chips: mounted.length, fences: fences.length };
+}
+
+// Finish every transition and animation (the pulse settles on the chip's
+// own fill; tooltips are past their delay).
+function settleAnimations() {
+  let settled = 0;
+  for (const animation of document.getAnimations()) {
+    try { animation.finish(); settled += 1; } catch (error) { animation.cancel(); }
+  }
+  return settled;
+}
+
+window.copyChipsPreview = { render(theme) { document.body.dataset.theme = theme; return renderAll(); }, settleAnimations, mounted, fences };
+window.copyChipsPreviewReady = true;
+</script>
+<script>
+__CHECKS__
+</script>
+</body>
+</html>

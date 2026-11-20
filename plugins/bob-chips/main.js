@@ -1374,21 +1374,28 @@ function copyChipBuildInline(doc, chip, options) {
     } catch (error) {
       prefixEl = null;
     }
+    let tipEl = null;
     try {
-      const tip = doc.createElement("span");
-      tip.setAttribute("class", "bob-copy-chip-tip");
+      tipEl = doc.createElement("span");
+      tipEl.setAttribute("class", "bob-copy-chip-tip");
       try {
         let tipText = labeled
           ? "Copy: " + copyChipPreviewText(text)
           : "Click to copy";
         if (opts.editHint === true) tipText += COPY_CHIP_AUTHOR_EDIT_HINT;
-        tip.textContent = tipText;
+        tipEl.textContent = tipText;
       } catch (error) {
         // Tooltip text is best-effort.
       }
-      host.appendChild(tip);
+      try {
+        tipEl.setAttribute("id", "bob-copy-chip-tip-" + seq);
+        tipEl.setAttribute("role", "tooltip");
+      } catch (error) {
+        // Tooltip identity is best-effort.
+      }
+      host.appendChild(tipEl);
     } catch (error) {
-      // Tooltip is best-effort.
+      tipEl = null;
     }
 
     // Accessible name is Copy + face via labelledby, never a payload
@@ -1401,6 +1408,14 @@ function copyChipBuildInline(doc, chip, options) {
       }
     } catch (error) {
       // Labelling is best-effort.
+    }
+    // The hover/focus tooltip describes the chip; an id, never a payload.
+    try {
+      if (host.setAttribute && tipEl) {
+        host.setAttribute("aria-describedby", "bob-copy-chip-tip-" + seq);
+      }
+    } catch (error) {
+      // Description is best-effort.
     }
 
     try {

@@ -4,7 +4,8 @@ description: "Type a copy: span or bob-copy fence to copy text, or a run: span o
 ---
 
 Bob Chips turns an inline code span that starts with `copy:` — or a
-`bob-copy` fence — into a quiet chip that copies the authored text exactly.
+`bob-copy` fence — into a chip with a solid blue copy well that copies the
+authored text exactly.
 A `run:` span becomes a command chip that runs a bob command through Bob
 Command Mode, and a `bob-run` fence becomes a sequence card; see
 [Command chips](#command-chips).
@@ -16,7 +17,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding. |
@@ -73,9 +74,12 @@ extra empty body line before the closing fence keeps exactly one trailing
 newline. A fence nested in a list item dedents under its opening, and an
 unclosed fence runs to the end of the note.
 
-The fence renders as a card: a header with the copy glyph, the label, a
-meta line, and a Copy button, above the body in the text font with
-`white-space: pre-wrap`. The meta reads "N lines · M chars" with tabular
+The fence renders as a card in the same copy blue: a lightly tinted
+header with the copy glyph in a solid blue well, the label, a meta line,
+and a Copy button styled like a chip body, above a plain body in the text
+font with `white-space: pre-wrap`. On a narrow card the Copy button (and
+the meta, when it no longer fits) wraps to a right-aligned second header
+row instead of squeezing the title. The meta reads "N lines · M chars" with tabular
 figures, plus "· ends with ⏎" when the payload ends with LF. An unlabeled
 fence — or one whose section info is missing, as in callouts and some
 embeds — is titled "Copy · N lines". The body folds after eight lines
@@ -143,30 +147,72 @@ flashes the card when one is visible.
 
 ## Look and feedback
 
-Quiet and theme-native: hairline border, padding `0 .45em`, font size `.92em`,
-inherited line height, faint copy glyph, accent hover/focus, `cursor: copy`,
-and a visible keyboard focus outline. Unlabeled faces use the monospace font;
-labeled faces use the text font. Long faces wrap like inline code with
-`box-decoration-break: clone` and never truncate; feedback never changes the
-chip width.
+Every copy chip is a two-part capsule: a solid **well** in the copy hue
+holding a white Lucide `copy` glyph, beside a lightly tinted **body**
+holding the face in hue-tinted ink. The well is the beacon that says "this
+copies"; the body stays calm and readable. Unlabeled faces use the
+monospace font; labeled faces use the text font at weight 500.
 
-- Rest: pill with a fixed-width `bob-copy-chip-glyph` slot (Lucide `copy` via
-  `setIcon`) so success never reflows.
-- Tooltip: unlabeled chips say "Click to copy"; labeled chips say "Copy: "
-  plus a 120-character preview with newlines as `⏎`. The preview truncates;
-  the clipboard never does.
-- Success: the glyph swaps in place to a green `check` for about 1.2 s, the
-  chip pulses once in `--bob-yank-flash-bg` (fallback
-  `rgba(80, 200, 120, .35)`), and a shared polite live region announces
-  "Copied". No toast. Reduced motion keeps the glyph change and drops the
-  pulse.
-- Failure: `alert-triangle` in `--text-error` for about two seconds plus
-  exactly one `Couldn't copy: <reason>` Notice. Failures are never silent.
-  A fence card failure also flips its button to "Copy failed" for the same
-  dwell.
-- Print and PDF export render the face as inline code with no interactive
-  chrome. Fence cards print the full body as plain text — the fold opens
-  and the button, toggle, and glyph hide.
+- **Hue.** One identity hue, `var(--color-blue)` by default. It is free on
+  a daily note: links and command chips use the theme accent, inline code
+  is cyan, and task lanes are red, green, and yellow. A CSS snippet can
+  recolor every chip and `bob-copy` card by setting
+  `--bob-copy-chip-hue` (for example on `body`); there is no plugin
+  setting. All colors are theme variables mixed from that one ink: body
+  fill 10%, border 50%, face ink 30% over `--text-normal`, glyph in
+  `--text-on-accent`.
+- **Geometry.** Padding `0.1em 0.5em 0.12em`, font size `.92em`, inherited
+  line height, baseline-aligned, `box-decoration-break: clone`, and
+  `cursor: copy`. The vertical padding never grows the line, and the
+  well's box is exactly the body's.
+- **One look in every view.** Live Preview spans and the buttons in
+  Reading view, embeds, hover previews, and Tasks and Dataview results
+  compute the same fill, border, shadow, ink, padding, font, and outline in
+  every state; no chip picks up Obsidian's form-button fill or shadow.
+- **Wrapping.** Long faces wrap like inline code and never truncate, but
+  the glyph never sits alone at a line end: the chip never breaks between
+  the well and the face's first character, and its end cap never wraps
+  alone. Where a chip wraps, its cloned end cap may overhang the text
+  column by its own padding (about half an em), as clone-decorated inline
+  code does in Chromium.
+- **Tooltip.** Hovering or keyboard-focusing a chip shows what a click
+  copies after about 0.4 s: unlabeled chips say "Click to copy"; labeled
+  chips say "Copy: " plus a 120-character preview with newlines as `⏎`.
+  Live Preview adds " · Alt+Click to edit". The preview truncates; the
+  clipboard never does. The tooltip describes the chip for assistive
+  technology (`role="tooltip"`, `aria-describedby`). Like command-chip
+  tooltips, it may clip at the top edge of the editor on the first visible
+  line.
+
+| State | Look |
+| --- | --- |
+| Rest | Blue well, 10% body, 50% border |
+| Hover | Body at 17%, border at full ink; a 120 ms color transition |
+| Pressed | Body at 24% |
+| Keyboard focus | A 2 px outline in the ink, offset 2 px |
+| Copied (about 1.2 s) | Green well with a white `check`, green-tinted body and border, one pulse in `--bob-yank-flash-bg` (fallback `rgba(80, 200, 120, .35)`), and a polite "Copied" announcement. No toast. |
+| Failed (about 2 s) | Red (`--text-error`) well with a white `alert-triangle`, plus exactly one `Couldn't copy: <reason>` Notice. Failures are never silent. |
+
+No state changes the border width, padding, weight, or the well's size; the
+glyph swaps in a fixed-size slot, so feedback never reflows the line.
+
+The `bob-copy` card wears the same identity: a blue-tinted frame, a header
+at 8% ink with the glyph in a solid rounded well, the title in the face
+ink, and a Copy button with the chip body's recipe (12% fill, 50% border,
+full-ink border on hover). The button keeps a fixed `7.5em` minimum width so
+"Copied ✓" and "Copy failed" never reflow the header, and a card copy or
+failure swaps the whole card to green or red for the same dwell. The
+show-all toggle stays muted until hovered. In the **Make or edit chip**
+card, the **COPY CHIP** header icon is the same solid well; the **COMMAND
+CHIP** header keeps the accent play glyph.
+
+Reduced motion drops the pulse, the color transitions, and the tooltip's
+timed reveal (the tooltip shows at once); the glyph swap and state colors
+stay. Print and PDF export render every chip, in every state, as plain
+inline code: no border, fill, padding, well, tooltip, or weight, with the
+monospace face for unlabeled chips. Fence cards print the full body as
+plain text — the fold opens and the header fill, button, toggle, and glyph
+hide.
 
 Payloads live in `textContent` and JS closures or a `WeakMap`, never in
 `innerHTML`, `innerText`, `dataset`, or payload-bearing attributes. Tooltips
@@ -486,8 +532,9 @@ in copy-only notes, an unlabeled chip shows its payload verbatim.
 | Unavailable | Ban glyph, muted text, dashed border |
 | Copy only | Copy glyph |
 
-Command chips share the copy chip's geometry, with a faint accent wash. No
-state changes the line's width or height. Run state outlives editor
+Command chips keep their own quiet geometry: padding `0 .45em`, a hairline
+accent border, and a 7% accent wash. No state changes the line's width or
+height. Run state outlives editor
 rebuilds and Reading re-renders, so a note rewritten mid-run keeps its live
 chip, and every copy of one command on screen shows the same run.
 

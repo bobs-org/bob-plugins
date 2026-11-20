@@ -119,6 +119,40 @@ test("accessible name is Copy plus the face", () => {
   assert.equal(prefix.textContent, "Copy");
 });
 
+test("the tooltip has an id and role, and the chip is described by it", () => {
+  const doc = new FakeDocument();
+  const payload = "https://zoom.us/j/123 :: a|b";
+  const ids = new Set();
+  const cases = [
+    { options: { interactive: true }, label: "Zoom", tip: "Copy: " + payload },
+    { options: { interactive: false, editHint: true }, label: "Zoom", tip: "Copy: " + payload + " · Alt+Click to edit" },
+    { options: { interactive: true }, label: null, tip: "Click to copy" },
+    { options: { interactive: false, editHint: true }, label: null, tip: "Click to copy · Alt+Click to edit" },
+  ];
+  for (const item of cases) {
+    const host = helpers.copyChipBuildInline(doc, { label: item.label, text: payload }, item.options);
+    const tip = host.children.find((child) => (child.getAttribute("class") || "").indexOf("bob-copy-chip-tip") !== -1);
+    assert.ok(tip);
+    assert.equal(tip.textContent, item.tip, "tooltip text is unchanged");
+    const id = tip.getAttribute("id");
+    assert.match(id || "", /^bob-copy-chip-tip-\d+$/);
+    assert.equal(ids.has(id), false, "tooltip ids are unique");
+    ids.add(id);
+    assert.equal(tip.getAttribute("role"), "tooltip");
+    assert.equal(host.getAttribute("aria-describedby"), id);
+    // Ids, roles, and descriptions never carry the payload.
+    for (const el of [host, ...host.children]) {
+      for (const [name, value] of el.attrs) {
+        assert.equal(String(value).indexOf(payload) === -1, true, "payload leaked into " + name);
+        assert.equal(String(value).indexOf("::") === -1, true, "payload text leaked into " + name);
+      }
+    }
+    // The accessible name is still Copy + face on Reading buttons only.
+    if (item.options.interactive) assert.match(host.getAttribute("aria-labelledby") || "", /^bob-copy-chip-copy-\d+ bob-copy-chip-face-\d+$/);
+    else assert.equal(host.getAttribute("aria-labelledby"), null);
+  }
+});
+
 test("inert preview never registers gestures or writes", async () => {
   const doc = new FakeDocument();
   const inert = helpers.copyChipBuildInline(doc, { label: null, text: "ssh" }, { interactive: false });

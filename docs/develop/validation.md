@@ -252,6 +252,51 @@ xvfb-run -a node --experimental-websocket scripts/obsidian-command-chips-e2e.cjs
 Its `report.json` records each case, the stub's full invocation log,
 and the Tasks, Dataview, Bob Chips, and Command Mode versions.
 
+## Copy chip preview and e2e
+
+`scripts/preview-copy-chips.cjs` renders copy chips and `bob-copy` cards
+from the built `plugins/bob-chips/main.js` and `styles.css` in headless
+Chromium, using the real scanner, builders, and feedback under Obsidian
+2.1.2's own button rules and default light and dark palettes. The page
+puts chips on plain, Blocked, Next, and WIP rows beside cyan inline code
+and accent links, and captures light, dark, a 390 px viewport, dark with
+reduced motion, print, and the cards in light and dark. It fails when a
+Live Preview span and a Reading button compute a different fill, border,
+shadow, ink, padding, font, or outline in any state (rest, hover, pressed,
+keyboard focus, copied, failed); when a state changes the chip's or the
+well's size; when a sweep of 3,636 layouts per surface (widths 120–420 px,
+0–11 lead words, three faces) strands the glyph, wraps an end cap alone,
+overshoots by more than the end padding, or shifts when the tooltip shows;
+when face ink falls under 4.5:1 or the glyph under 3:1 on its fill; when
+the tooltip is not hidden at rest, not delayed 0.4 s, or not shown above
+the chip with the builder's text; when any state prints as more than plain
+inline code or a card prints chrome; when reduced motion still animates;
+when a payload appears in an attribute or the ARIA names and descriptions
+are wrong; or when a card's Copy button takes Obsidian's button look or
+changes width between Copy, Copied ✓, and Copy failed. Set `CHROMIUM_PATH`
+when no Chrome is on `PATH`:
+
+```bash
+node scripts/preview-copy-chips.cjs --out /tmp/copy-chips-preview
+```
+
+`scripts/obsidian-copy-chips-e2e.cjs` checks one labeled chip in a real
+Obsidian scratch vault: the Live Preview span and the Reading button
+compute one look at rest and under a trusted CDP mouse hover, the tooltip
+shows about 0.4 s after the hover, and a trusted click turns the well
+green and copies byte-exact. It saves `copy-chip-{live,reading}-{rest,hover,copied}.png`
+to `--out`. A clipped screenshot drops a trusted hover in Electron, so the
+hover captures force `:hover` through DevTools. `scripts/test-copy-chips-look.cjs`
+statically checks the copy styles, and `scripts/test-copy-chips-preview.cjs`
+and `scripts/test-obsidian-copy-chips-e2e.cjs` run the offline self-tests
+in `npm test`; they are not acceptance. Run the real check on athena from a
+fresh `/tmp` copy of the working tree, never from `~/bob`:
+
+```bash
+xvfb-run -a node --experimental-websocket scripts/obsidian-copy-chips-e2e.cjs \
+  --out /tmp/copy-chips-e2e
+```
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

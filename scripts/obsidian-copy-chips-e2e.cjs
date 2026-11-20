@@ -14,6 +14,7 @@ const path = require("node:path");
 const lib = require("./obsidian-startup-smoke-lib.cjs");
 const fixture = require("./obsidian-copy-chips-e2e-lib.cjs");
 const authoring = require("./obsidian-copy-chips-author-e2e.cjs");
+const look = require("./obsidian-copy-chips-look-e2e.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 360_000;
@@ -22,6 +23,7 @@ const HELP = [
   "Usage: node scripts/obsidian-copy-chips-e2e.cjs [OPTIONS]",
   "",
   "Drive copy-chip clicks in an isolated scratch vault over CDP; never opens the live vault.",
+  "Look cases save copy-chip-{live,reading}-{rest,hover,copied}.png to --out.",
   "Run under xvfb-run -a on Linux.",
   "",
   "Options:",
@@ -444,6 +446,7 @@ function runSelfTest() {
   assert.match(authorNote, /ALT_CLICK `copy: alt-target`/);
   assert.match(authorNote, /PALETTE_HERE/);
   assert.notEqual(authorNote, note);
+  assert.equal(look.selfTest(), true, "look cases assemble");
   const args = parseArgs(["--out", "/tmp/shots", "--executable", "/snap/bin/obsidian", "--self-test"]);
   assert.equal(args.out, "/tmp/shots");
   assert.equal(args.executable, "/snap/bin/obsidian");
@@ -666,6 +669,10 @@ async function runE2e(args) {
     record("cursor rule in app", Boolean(cursorCheck && cursorCheck.ok));
     const afterBytes = fs.readFileSync(scratch.noteFile, "utf8");
     record("source bytes unchanged", afterBytes === beforeBytes);
+    // The blue copy well: span/button parity at rest and under a trusted
+    // hover, the tooltip delay, and the green well on a trusted click.
+    await look.runLookCases(client, openNote, record, outDir);
+    record("source bytes unchanged after the look cases", fs.readFileSync(scratch.noteFile, "utf8") === beforeBytes);
     await authoring.runAuthoringCases(client, openNote, record);
     const seededAfterAuthoring = fs.readFileSync(scratch.noteFile, "utf8");
     record("seeded copy note still byte-identical", seededAfterAuthoring === beforeBytes);

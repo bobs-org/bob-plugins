@@ -34,6 +34,8 @@
   path: albums.md
 - title: Record Card
   path: record-card.md
+- title: Intention Card
+  path: intention-card.md
 - title: BLOCKS dependency mirrors
   path: blocks-mirrors.md
 - title: Task relations

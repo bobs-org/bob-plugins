@@ -96307,7 +96307,8 @@ class BobNavigationHotkeysCancelPropertyMixin {
 // ---- src/551-plugin-album-schema-fallback.js ----
 // Task Card chord fallback (schema-entrypoints). Ctrl+Shift+P opens the
 // Schema Card on album notes and the Record Card on record notes where the
-// Task Card has no target. Actual tasks and existing property routes retain
+// Task Card has no target, and the intention card editor on canonical daily
+// and period notes. Actual tasks and existing property routes retain
 // priority: this fallback never swallows a recognized Task Card target
 // merely because its own operation refuses. No second unconditional
 // Ctrl+Shift+P registration; the existing `set-bullet-property` command
@@ -96419,7 +96420,17 @@ class BobNavigationHotkeysAlbumSchemaFallbackMixin {
     } catch (_) {
       target = null;
     }
-    if (!target || target.ok !== true) return { handled: false, reason: target?.reason || "not-album" };
+    if (!target || target.ok !== true) {
+      try {
+        if (typeof ledger.openIntentionCard === "function"
+          && typeof ledger.intentionCardEditorMatch === "function"
+          && ledger.intentionCardEditorMatch({ path: filePath }) === true) {
+          void ledger.openIntentionCard({ filePath });
+          return { handled: true, reason: "intention-fallback", albumPath: filePath };
+        }
+      } catch (_) {}
+      return { handled: false, reason: target?.reason || "not-album" };
+    }
     if (target.kind === "record-parent") {
       if (typeof ledger.openRecordCard !== "function") {
         return { handled: false, reason: "not-direct-album" };
@@ -96429,7 +96440,17 @@ class BobNavigationHotkeysAlbumSchemaFallbackMixin {
       } catch (_) {}
       return { handled: true, reason: "record-fallback", albumPath: target.albumPath };
     }
-    if (target.kind !== "album") return { handled: false, reason: "not-direct-album" };
+    if (target.kind !== "album") {
+      try {
+        if (typeof ledger.openIntentionCard === "function"
+          && typeof ledger.intentionCardEditorMatch === "function"
+          && ledger.intentionCardEditorMatch({ path: filePath }) === true) {
+          void ledger.openIntentionCard({ filePath });
+          return { handled: true, reason: "intention-fallback", albumPath: filePath };
+        }
+      } catch (_) {}
+      return { handled: false, reason: "not-direct-album" };
+    }
     try {
       void ledger.openAlbumSchemaEntry({ filePath });
     } catch (_) {}

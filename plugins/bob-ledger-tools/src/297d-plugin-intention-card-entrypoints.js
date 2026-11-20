@@ -138,7 +138,15 @@ class BobLedgerToolsIntentionCardEditorMixin {
       try { new Notice("Open a daily or period note to edit its intentions."); } catch (_) {}
       return { ok: false, reason: "non-intention-note" };
     }
-    const read = this.intentionCardEditorReadFields(filePath);
+    let vaultHas = null;
+    try {
+      vaultHas = typeof this.intentionCardVaultHas === "function"
+        ? this.intentionCardVaultHas(filePath)
+        : (this.app?.vault && typeof this.app.vault.getAbstractFileByPath === "function"
+          ? Boolean(this.app.vault.getAbstractFileByPath(filePath))
+          : null);
+    } catch (_) { vaultHas = null; }
+    const read = vaultHas === false ? { ok: false, reason: "missing-note", fields: null } : this.intentionCardEditorReadFields(filePath);
     const modal = new IntentionCardModal(this.app, {
       plugin: this,
       subject: subject.id,
@@ -151,7 +159,8 @@ class BobLedgerToolsIntentionCardEditorMixin {
         summaryDrafted: read.fields.summaryDrafted,
         reflection: read.fields.reflection,
       } : null,
-      malformed: !read.ok,
+      malformed: !read.ok && read.reason !== "missing-note",
+      missing: read.reason === "missing-note",
       fingerprint: "",
       report: null,
       field: options.field || "",
@@ -159,6 +168,19 @@ class BobLedgerToolsIntentionCardEditorMixin {
       initialStage: options.initialStage || "",
       returnSelection: options.returnSelection || "",
     });
+    if (read.reason === "missing-note") {
+      modal.missing = true;
+      modal.writable = false;
+      try {
+        modal.refusalMessage = typeof intentionCardMissingMessage === "function"
+          ? intentionCardMissingMessage(subject)
+          : "That note is missing.";
+        modal.refusalHint = typeof intentionCardMissingHint === "function"
+          ? intentionCardMissingHint(subject)
+          : "";
+        modal.statusKind = "missing";
+      } catch (_) {}
+    }
     this.intentionCardEditorModal = modal;
     try { modal.open(); } catch (_) {}
     return { ok: true, modal, readOnly: modal.writable !== true };

@@ -6,7 +6,7 @@ description: "Inspect task lanes, Pomodoros, freshness, planning marks, and cale
 Renders task, Pomodoro, freshness, and planning information from Bob notes.
 
 Album cards and sync: [Album cards](albums.md); record cards and their editor:
-[Record Card](record-card.md).
+[Record Card](record-card.md); intentions: [Intention Card](intention-card.md).
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -34,6 +34,7 @@ Album cards and sync: [Album cards](albums.md); record cards and their editor:
 | Cycle period stats charts | `cycle-period-stats-charts` | — |
 | Edit album schema | `edit-album-schema` | — |
 | Edit bank setup | `edit-bank-setup` | — |
+| Edit intentions | `edit-intentions` | — |
 | Edit record | `edit-record` | — |
 | Expand Bob snippet | `expand-ledger-time-range-snippet` | — |
 | Go to today's Task Link | `go-to-today-task-link` | — |
@@ -42,6 +43,7 @@ Album cards and sync: [Album cards](albums.md); record cards and their editor:
 | Open Stats | `open-stats` | — |
 | Open this week's note | `open-this-weeks-note` | — |
 | Open today's daily note | `open-today-daily-note` | — |
+| Reflect on yesterday | `reflect-on-yesterday` | — |
 | Toggle Day stats | `toggle-day-stats` | — |
 | Toggle Gmail sync on daily-note creation | `toggle-gmail-sync-on-create` | — |
 | Toggle Google Calendar sync on daily-note creation | `toggle-gcal-sync-on-create` | — |
@@ -76,7 +78,7 @@ Album cards and sync: [Album cards](albums.md); record cards and their editor:
 
 🔁 chips on bank rows (Live Preview, Reading, queue): `🔁`/`🔁 Cloudbox` (`ok`), `🔁 +$1.00` (`drift`; amber with `price_change`), `🔁 usage`, amber `🔁 ✂️ still charging` (click Manage `url`; modifier-click record), warning `🔁 🚫 after cancel`. Ghost 🔁 inserts `[[subscriptions/<stem>|🔁]]` in one transaction; `⟳ subscription?` opens that row's Category picker. Tooltips use the latest charge; older output says `charged <row date>`. Focus ring; plugin-off still shows 🔁.
 
-The **bank card** (formerly the Setup panel) under `# 🏦 Bank` draws `bob bank config` categories, accounts, rules, and findings. It is expanded by default; `▾ Setup` collapses it per session. **⊞ Edit**, **Edit bank setup**, Vim `==` on `bank.md`, or Command Mode opens the bank card editor. Categories: Enter edits; `+` adds; Ctrl+J/K jump between groups; Alt+J/K rearrange (Shift+Alt to edge); ⌥M hints; Ctrl+H hides; Ctrl+D removes; hotkeys match lowercase only. Accounts: Enter relabels; `+` adds; Ctrl+D removes unused; stale-after edits. Rules: Enter edits; `+` adds; Alt+J/K reorders (loud); Ctrl+D removes. Quiet ⏎ saves; loud ⏎ confirms `G→H`. Lock-busy ⏎ retries ≤10m; `Esc`/`q`/`Ctrl+[` backs out (stop waiting, close Emoji, leave hints, revert moves, cancel stage) then closes with editor focus. Checks lists findings. Ctrl+Z steps back; close-during-save writes. ↗ YAML / Ctrl+E uses the excursion; Done needs a valid report. Painting writes nothing. Mobile stays read-only.
+The **bank card** (formerly the Setup panel) under `# 🏦 Bank` draws `bob bank config` categories, accounts, rules, and findings. Expanded by default; `▾ Setup` collapses it per session. **⊞ Edit**, **Edit bank setup**, Vim `==` on `bank.md`, or Command Mode opens the bank card editor. Categories: Enter edits; `+` adds; Ctrl+J/K jump between groups; Alt+J/K rearrange (Shift+Alt to edge); ⌥M hints; Ctrl+H hides; Ctrl+D removes; hotkeys match lowercase only. Accounts: Enter relabels; `+` adds; Ctrl+D removes unused; stale-after edits. Rules: Enter edits; `+` adds; Alt+J/K reorders (loud); Ctrl+D removes. Quiet ⏎ saves; loud ⏎ confirms `G→H`. Lock-busy ⏎ retries ≤10m; `Esc`/`q`/`Ctrl+[` backs out (stop waiting, close Emoji, leave hints, revert moves, cancel stage) then closes with editor focus. Checks lists findings. Ctrl+Z steps back; close-during-save writes. ↗ YAML / Ctrl+E uses the excursion; Done needs a valid report. Painting writes nothing. Mobile stays read-only.
 
 On a waiting bank row, Task Status Cycler hands Ctrl+Enter to `api.bank` v2 `claimRowClose` for the Category card. Enter or a second Ctrl+Enter accepts, a hotkey picks another, Space files without one, `+` adds via Emoji Slot, and Escape cancels the stage then the card. `/` opens the subscription picker; search matches titles and needles, arrows or Ctrl+N/P move, Enter links, Escape returns to category tiles. The resolver ranks record, needle match, amount proximity, live status. The context strip shows status, amount, and price difference. Picking a record adds its 🔁 link and fills `[cat::]` on uncategorized rows in one undo. **+ New subscription…** pre-fills from row and candidate proposal, creates a 🤔 record through `bob records new subscription`, then links it. Keys work with editor focus; unbound keys never reach the note; a held key never files twice. Filing ticks and categorizes in one undo, advances, and records a `recordJump` for Ctrl+O. **Bank: set category** corrects rows in place. Hidden categories stay on rows, out of the bank card and suggestions. Older APIs keep the `[ ]`↔`[x]` flip.
 
@@ -508,8 +510,8 @@ default hotkey.
 or restore today's `🔑 N` and `⏭ N` ledger echoes without writing the vault.
 
 `Toggle Task Link off-clock chips` hides or restores the dashed `off` chip after
-ledger Task Links whose task resolves off-clock. It is independent of calendar
-event painting and marks closed rows and past daily notes too.
+ledger Task Links whose task resolves off-clock. Independent of calendar
+event painting, it marks closed rows and past daily notes too.
 
 `Toggle Task Link event times` hides or restores the Event time pill beside
 ledger Task Links that point at one of the note's Event Tasks, in Live

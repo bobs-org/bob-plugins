@@ -198,10 +198,14 @@ class IntentionCardModal extends IntentionCardModalBase {
     this.subjectPath = intentionCardPath(options.subjectPath || options.subject || "");
     this.subjectState = options.state === "closed" ? "closed" : "open";
     this.fields = options.fields && typeof options.fields === "object" ? options.fields : null;
-    this.malformed = options.malformed === true || this.fields === null;
+    this.missing = options.missing === true;
+    this.malformed = options.malformed === true || (this.fields === null && !this.missing);
+    if (this.missing && this.fields === null) {
+      this.fields = { intentions: [], summary: "", summaryState: "", summaryDrafted: "", reflection: "" };
+    }
     this.fingerprint = typeof options.fingerprint === "string" ? options.fingerprint : "";
     this.latestReport = options.report || null;
-    this.writable = options.writable !== false && !this.malformed;
+    this.writable = options.writable !== false && !this.malformed && !this.missing;
     this.selectedKey = "";
     this.stage = null;
     this.stageDraft = "";
@@ -429,7 +433,7 @@ class IntentionCardModal extends IntentionCardModalBase {
   }
 
   async intentionInitialRead() {
-    if (this.closed || this.malformed) return;
+    if (this.closed || this.malformed || this.missing) return;
     const seq = this.intentionReadSeq();
     this.statusKind = "reading";
     this.paintIntentionCard();

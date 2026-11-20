@@ -81,7 +81,8 @@ function albumYamlBuildDoneEl(doc, albumPath, kind = "album") {
     "aria-label",
     kind === "bank" ? "Done editing bank setup"
       : kind === "record" ? "Done editing record"
-        : "Done editing album schema",
+        : kind === "intentions" ? "Done editing intentions"
+          : "Done editing album schema",
   );
   try {
     button.textContent = "Done";
@@ -166,7 +167,7 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     const albumPath = typeof albumHeaderPath === "function" ? albumHeaderPath(details.albumPath || "") : String(details.albumPath || "");
     if (!albumPath) return null;
     try { this.albumYamlExcursionClear(leaf); } catch (_) {}
-    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : "album";
+    const kind = details.kind === "bank" ? "bank" : details.kind === "record" ? "record" : details.kind === "intentions" ? "intentions" : "album";
     const recordPath = kind === "record"
       ? (typeof albumHeaderPath === "function" ? albumHeaderPath(details.recordPath || "") : String(details.recordPath || ""))
       : "";
@@ -318,6 +319,9 @@ class BobLedgerToolsAlbumYamlExcursionMixin {
     }
     if (record?.kind === "record" && typeof this.recordCardYamlDoneAttempt === "function") {
       return this.recordCardYamlDoneAttempt(leaf, record);
+    }
+    if (record?.kind === "intentions" && typeof this.intentionCardYamlDoneAttempt === "function") {
+      return this.intentionCardYamlDoneAttempt(leaf, record);
     }
     if (!this.albumYamlExcursionStillCurrent(leaf, record)) return { ok: false, reason: "stale-excursion" };
     let save = { ok: true };

@@ -298,6 +298,10 @@
   "296a-plugin-intention-card-model.js",
   "296b-plugin-intention-card-dom.js",
   "296c-plugin-intention-card-host.js",
+  "297a-plugin-intention-update-service.js",
+  "297b-plugin-intention-update-session.js",
+  "297c-plugin-intention-card-editor.js",
+  "297d-plugin-intention-card-entrypoints.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",
@@ -335,5 +339,6 @@
   "373-exports-record-walk.js",
   "374-exports-property-card.js",
   "375-exports-intention-card.js",
-  "375-exports-log-history.js"
+  "375-exports-log-history.js",
+  "376-exports-intention-card-editor.js"
 ]

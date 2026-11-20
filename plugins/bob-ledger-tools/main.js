@@ -34669,7 +34669,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupIntentionUpdate?.(); this.setupIntentionCardEditor?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34795,7 +34795,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -149887,6 +149887,1685 @@ class BobLedgerToolsIntentionCardMixin {
     this.intentionCardRelease(view?.dom);
   }
 }
+// ---- src/297a-plugin-intention-update-service.js ----
+// Intention (periods) update service. `bob periods update <SUBJECT>` is the
+// only writer of the owned intention fields; this file builds its argv and
+// envelope and decodes its typed result without validating writer semantics.
+// Decoders stay additive: unknown future keys are preserved by wire-shape
+// validation, never reinterpreted here. Inverse ops are opaque JSON: Undo can
+// carry `summary.restore`, which restores the earlier stamps in one op.
+const INTENTION_UPDATE_SCHEMA_VERSION = 1;
+const INTENTION_UPDATE_TIMEOUT_MS = BOB_SPAWN_TIMEOUT_MS;
+const INTENTION_UPDATE_MAX_BUFFER = BOB_SPAWN_MAX_BUFFER;
+const INTENTION_UPDATE_PREVIEW_DEBOUNCE_MS = 250;
+const INTENTION_UPDATE_OVERLAY_TTL_MS = 8000;
+
+function intentionJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function intentionUpdateNullableString(value) {
+  return value === null || value === undefined || typeof value === "string";
+}
+
+// Periods uses `-n` for the dry run, never the record writer's `-d` flag.
+function intentionUpdateArgs(subject, options = {}) {
+  const opts = intentionJsonObject(options) ? options : {};
+  const args = ["periods", "update", String(subject), "-i", "-", "-f", "json"];
+  if (opts.dryRun === true) args.push("-n");
+  return args;
+}
+
+// The initial read is a dry run with only `{schema_version, ops}`: mutations
+// always carry the current field fingerprint as `expect`.
+function intentionUpdateEnvelope(expect, ops) {
+  const body = { schema_version: INTENTION_UPDATE_SCHEMA_VERSION, ops: Array.isArray(ops) ? ops : [] };
+  if (typeof expect === "string" && expect) body.expect = expect;
+  return body;
+}
+
+function intentionUpdateEnvelopeText(expect, ops) {
+  return JSON.stringify(intentionUpdateEnvelope(expect, ops));
+}
+
+function intentionIsStaleUpdateCode(code) {
+  return code === "stale_note";
+}
+
+function intentionUpdateSubjectShape(subject) {
+  if (!intentionJsonObject(subject)) return false;
+  return typeof subject.id === "string" && typeof subject.kind === "string"
+    && typeof subject.label === "string" && typeof subject.path === "string";
+}
+
+function intentionUpdateErrorShape(error) {
+  if (error === null || error === undefined) return true;
+  if (!intentionJsonObject(error)) return false;
+  if (typeof error.code !== "string" || !error.code) return false;
+  if (typeof error.message !== "string") return false;
+  return intentionUpdateNullableString(error.hint)
+    && (error.op_index === undefined || error.op_index === null || Number.isInteger(error.op_index));
+}
+
+function intentionUpdateFieldsShape(fields) {
+  return fields === null || fields === undefined || intentionJsonObject(fields);
+}
+
+function intentionUpdateReportShape(body) {
+  if (!intentionJsonObject(body) || body.schema_version !== INTENTION_UPDATE_SCHEMA_VERSION) return false;
+  if (typeof body.ok !== "boolean") return false;
+  if (body.ok === true) {
+    if (!intentionUpdateSubjectShape(body.subject)) return false;
+    if (typeof body.dry_run !== "boolean") return false;
+    if (typeof body.fingerprint_before !== "string" || typeof body.fingerprint_after !== "string") return false;
+    if (!intentionUpdateFieldsShape(body.before) || !intentionUpdateFieldsShape(body.after)) return false;
+    if (typeof body.changed !== "boolean") return false;
+    if (!Array.isArray(body.inverse_ops)) return false;
+    if (body.warnings !== undefined && !Array.isArray(body.warnings)) return false;
+  }
+  return intentionUpdateErrorShape(body.error);
+}
+
+// Only an exit-2 usage error whose own text disowns the subcommand counts as
+// an old bob. Real validation failures also exit 2 and must surface as
+// refusals, never as an upgrade hint.
+function intentionUpdateIsUnsupportedOutput(stdout, stderr, exitCode) {
+  if (exitCode !== 2) return false;
+  const text = `${String(stdout || "")}\n${String(stderr || "")}`;
+  if (!/periods/i.test(text)) return false;
+  return /unknown (subcommand|command)|unrecognized|no such (subcommand|command)|invalid subcommand|cannot.*update|update.*not (found|recognized|supported)/i.test(text);
+}
+
+function intentionDecodeUpdateReport(stdout, stderr = "", exitCode = null) {
+  if (intentionUpdateIsUnsupportedOutput(stdout, stderr, exitCode)) {
+    return {
+      ok: false, code: "needs-update",
+      message: "This bob does not support `bob periods update`.",
+      detail: statsFirstLine(stderr) || statsFirstLine(stdout),
+      exitCode,
+    };
+  }
+  let body;
+  try {
+    body = JSON.parse(String(stdout === undefined ? "" : stdout));
+  } catch (error) {
+    return {
+      ok: false, code: "bad-json",
+      message: "bob periods update returned invalid JSON.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (!intentionUpdateReportShape(body)) {
+    if (intentionJsonObject(body) && body.schema_version !== INTENTION_UPDATE_SCHEMA_VERSION) {
+      return {
+        ok: false, code: "schema-mismatch",
+        message: "bob periods update uses a different schema.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return {
+      ok: false, code: "bad-shape",
+      message: "bob periods update returned an incomplete report.",
+      detail: statsFirstLine(stderr),
+      exitCode,
+    };
+  }
+  if (body.ok === false || (intentionJsonObject(body.error) && body.error.code)) {
+    if (body.ok !== false && !(intentionJsonObject(body.error) && body.error.code)) {
+      return {
+        ok: false, code: "bad-shape",
+        message: "bob periods update returned an incomplete report.",
+        detail: statsFirstLine(stderr),
+        exitCode,
+      };
+    }
+    return { ok: true, report: { ...body, ok: false }, exitCode };
+  }
+  return { ok: true, report: body, exitCode };
+}
+
+function intentionUpdateErrorModel(result) {
+  const source = intentionJsonObject(result) ? result : { code: "failed" };
+  const code = typeof source.code === "string" ? source.code : "failed";
+  if (code === "bob-not-found" && /needs the desktop app/i.test(String(source.message || ""))) {
+    return { code: "desktop-only", hint: "Intention editing needs desktop Obsidian, where bob can run." };
+  }
+  if (code === "bob-not-found" || code === "needs-bob" || code === "needs-update") {
+    return { code, hint: "Update bob to edit intentions." };
+  }
+  if (code === "timeout") {
+    return { code, hint: "bob periods update timed out. Refresh and retry; never blind-retry." };
+  }
+  if (code === "stdin-failed") {
+    return { code, hint: "The update envelope never reached bob. Nothing was written; preview again." };
+  }
+  if (code === "schema-mismatch" || code === "bad-json" || code === "bad-shape") {
+    return { code, hint: "Update bob-cli and Bob Ledger Tools together, then retry." };
+  }
+  return {
+    code,
+    hint: source.detail || source.hint || source.message || "The intention update failed. Refresh before retrying.",
+  };
+}
+
+function intentionOverlayFields(report) {
+  const after = report && intentionJsonObject(report.after) ? report.after : null;
+  if (!after) return null;
+  const fields = {};
+  if (Object.prototype.hasOwnProperty.call(after, "intentions")) fields.intentions = after.intentions;
+  if (Object.prototype.hasOwnProperty.call(after, "summary")) fields.summary = after.summary;
+  if (Object.prototype.hasOwnProperty.call(after, "reflection")) fields.reflection = after.reflection;
+  return fields;
+}
+
+function intentionOverlayFromReport(report) {
+  if (!report || report.ok !== true) return null;
+  const fields = intentionOverlayFields(report);
+  if (!fields) return null;
+  const fingerprint = typeof report.fingerprint_after === "string" ? report.fingerprint_after : "";
+  return { fields, fingerprint, changed: report.changed === true };
+}
+
+class BobLedgerToolsIntentionUpdateMixin {
+  intentionUpdateUndoStore() {
+    if (!(this.intentionUpdateUndoByPath instanceof Map)) {
+      this.intentionUpdateUndoByPath = new Map();
+    }
+    return this.intentionUpdateUndoByPath;
+  }
+
+  setupIntentionUpdate() {
+    this.intentionUpdateUndoByPath = new Map();
+    this.intentionUpdateFlight = null;
+    this.intentionUpdateBusy = false;
+    this.intentionUpdateEpoch = this.intentionUpdateEpoch || 0;
+  }
+
+  teardownIntentionUpdate() {
+    this.intentionUpdateBusy = false;
+    this.intentionUpdateFlight = null;
+    this.intentionUpdateEpoch = (this.intentionUpdateEpoch || 0) + 1;
+    if (this.intentionUpdateUndoByPath instanceof Map) this.intentionUpdateUndoByPath.clear();
+  }
+
+  intentionUpdateRememberUndo(path, inverseOps, afterFingerprint) {
+    try {
+      const key = typeof intentionCardPath === "function" ? intentionCardPath(path) : String(path || "");
+      if (!key || !Array.isArray(inverseOps) || !inverseOps.length) return null;
+      const record = {
+        inverseOps: inverseOps.map((op) => (op && typeof op === "object" ? { ...op } : op)),
+        afterFingerprint: typeof afterFingerprint === "string" ? afterFingerprint : "",
+      };
+      this.intentionUpdateUndoStore().set(key, record);
+      return record;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  intentionUpdateLastUndo(path) {
+    try {
+      const key = typeof intentionCardPath === "function" ? intentionCardPath(path) : String(path || "");
+      return this.intentionUpdateUndoStore().get(key) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  intentionSpawnJson(args, decode, options = {}) {
+    const opts = intentionJsonObject(options) ? options : {};
+    return bobSpawnJson(args, decode, {
+      ...opts,
+      resolveBobPath: () =>
+        typeof this.apiStatsBobPath === "function"
+          ? this.apiStatsBobPath()
+          : { path: "bob", source: "path" },
+      getVaultPath: () =>
+        typeof this.statsVaultBasePath === "function" ? this.statsVaultBasePath() : null,
+      timeout: INTENTION_UPDATE_TIMEOUT_MS,
+      maxBuffer: INTENTION_UPDATE_MAX_BUFFER,
+      firstLine: statsFirstLine,
+    });
+  }
+
+  intentionSpawnUpdate(subject, envelopeText, options = {}) {
+    const opts = intentionJsonObject(options) ? options : {};
+    const dryRun = opts.dryRun === true;
+    return this.intentionSpawnJson(
+      intentionUpdateArgs(subject, { dryRun }),
+      intentionDecodeUpdateReport,
+      {
+        ...opts,
+        stdin: typeof envelopeText === "string" ? envelopeText : "",
+        commandLabel: dryRun ? "bob periods update -n" : "bob periods update",
+      },
+    );
+  }
+
+  apiIntentionUpdatePreview(subject, envelopeText, options = {}) {
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Ledger data has unloaded." });
+    }
+    return this.intentionSpawnUpdate(subject, envelopeText, { ...options, dryRun: true });
+  }
+
+  apiIntentionUpdateApply(subject, envelopeText, options = {}) {
+    const opts = intentionJsonObject(options) ? options : {};
+    if (this.albumDataActive === false) {
+      return Promise.resolve({ ok: false, code: "unloaded", message: "Ledger data has unloaded." });
+    }
+    if (this.intentionUpdateFlight) {
+      return Promise.resolve({
+        ok: false, code: "apply-busy",
+        message: "Another intention apply is already running.",
+        hint: "Wait for it to settle, then preview again.",
+      });
+    }
+    const epoch = this.albumDataEpoch || 0;
+    const ownPaths = (Array.isArray(opts.ownPaths) ? opts.ownPaths : [opts.ownPath])
+      .map((path) => (typeof albumReportPath === "function" ? albumReportPath(path) : String(path || "")))
+      .filter(Boolean);
+    const waitForSync = this.albumSyncFlight && typeof this.albumSyncFlight.then === "function"
+      ? this.albumSyncFlight.catch(() => null)
+      : null;
+    const run = async () => {
+      if (waitForSync) {
+        try { await waitForSync; } catch (_) {}
+      }
+      if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+        return { ok: false, code: "unloaded", message: "Ledger data has unloaded." };
+      }
+      if (this.intentionUpdateFlight && this.intentionUpdateFlight !== applyPromise) {
+        return {
+          ok: false, code: "apply-busy",
+          message: "Another intention apply is already running.",
+          hint: "Wait for it to settle, then preview again.",
+        };
+      }
+      this.intentionUpdateBusy = true;
+      for (const ownPath of ownPaths) {
+        try { this.albumUpdateOwnPathsStore().add(ownPath); } catch (_) {}
+      }
+      let outcome;
+      try {
+        try {
+          outcome = await this.intentionSpawnUpdate(subject, envelopeText, { ...opts, dryRun: false });
+        } catch (error) {
+          outcome = {
+            ok: false, code: "failed",
+            message: error && error.message ? String(error.message) : "bob periods update failed.",
+          };
+        }
+        const wrote = Boolean(
+          outcome && outcome.ok && outcome.report && outcome.report.ok === true
+          && outcome.report.dry_run === false && outcome.report.changed === true,
+        );
+        const unknown = Boolean(outcome && !outcome.ok && (outcome.code === "timeout" || outcome.code === "failed"));
+        if (this.albumDataActive === false || (this.albumDataEpoch || 0) !== epoch) {
+          return { ...outcome, refreshed: this.albumReportState?.() || null, wrote, unknown };
+        }
+        let refreshed = this.albumReportState?.() || null;
+        if (wrote || unknown) {
+          try { refreshed = this.apiAlbumInvalidate("intention-update"); } catch (_) {}
+        }
+        return { ...outcome, refreshed, wrote, unknown };
+      } finally {
+        this.intentionUpdateBusy = false;
+        if (this.intentionUpdateFlight === applyPromise) this.intentionUpdateFlight = null;
+        for (const ownPath of ownPaths) {
+          try { this.albumUpdateOwnPathsStore().delete(ownPath); } catch (_) {}
+        }
+      }
+    };
+    const applyPromise = Promise.resolve().then(run);
+    this.intentionUpdateFlight = applyPromise;
+    return applyPromise;
+  }
+}
+// ---- src/297b-plugin-intention-update-session.js ----
+// Intention update session: a thin wrapper over the shared guarded
+// session with periods preview/apply, inverse-op Undo, pane saves, and the
+// per-path optimistic overlay. The server fingerprint rides every envelope;
+// whole-file hashes are never used as expect values.
+function createIntentionUpdateSession(init = {}, deps = {}) {
+  const subjectPath = typeof albumReportPath === "function"
+    ? albumReportPath(init.subjectPath || init.ownPath || "")
+    : String(init.subjectPath || init.ownPath || "");
+  const subject = String(init.subject || subjectPath);
+  const inner = createGuardedUpdateSession({
+    identity: subjectPath || subject,
+    ownPath: subjectPath,
+    savePaths: [subjectPath].filter(Boolean),
+    allowDirectApply: true,
+    expect: init.expect,
+    undo: init.undo,
+    debounceMs: INTENTION_UPDATE_PREVIEW_DEBOUNCE_MS,
+    lockRetryMs: init.lockRetryMs,
+    lockWaitBudgetMs: init.lockWaitBudgetMs,
+    buildEnvelope: intentionUpdateEnvelopeText,
+    isStaleCode: intentionIsStaleUpdateCode,
+    failureFromReport: (report) => (intentionJsonObject(report) && intentionJsonObject(report.error) ? report.error : {}),
+    snapshotExtras: { subjectPath, subject },
+    copy: {
+      previewEmpty: "There is nothing to preview.",
+      previewFailed: "The intention preview failed.",
+      previewRefused: "The intention preview was refused.",
+      applyFailed: "The intention apply failed.",
+      applyRefused: "The intention apply was refused.",
+      stalePreview: "The vault changed while this preview was running.",
+      stalePreviewHint: "Refresh the card and preview the retained draft against the current fingerprint.",
+      staleGeneration: "The vault changed under this preview.",
+      staleGenerationHint: "Preview again before applying; nothing was written.",
+      saveUnsupported: "Open editors could not confirm the note is saved.",
+      saveUnsupportedHint: "Save every pane showing the note in Source mode, then preview again. Nothing was written.",
+      saveFailedHint: "Apply is refused until every pane showing the note saves. Nothing was written.",
+      supersededDuringSave: "The draft changed while panes were saving; preview the current draft before applying.",
+      saveInvalidated: "Saving changed the vault; preview again before applying.",
+      nothingToUndo: "There is no intention edit to undo.",
+      syncWarningHint: "The intention edit is saved and Undo is available. Retry sync with `bob vault-sync` only.",
+      retryHint: "Retry `bob vault-sync` later. The saved edit and Undo are kept.",
+    },
+  }, deps);
+
+  function staleFingerprint(result) {
+    const report = result && result.report;
+    if (report && typeof report.fingerprint_before === "string" && report.fingerprint_before) {
+      return report.fingerprint_before;
+    }
+    return "";
+  }
+
+  async function settle(result) {
+    if (!result) return result;
+    const stale = result.ok === false && (
+      result.kind === "stale"
+      || result.code === "stale_note"
+      || (result.report && result.report.error && result.report.error.code === "stale_note")
+    );
+    if (stale) {
+      const fingerprint = staleFingerprint(result);
+      if (fingerprint) inner.rebase(fingerprint);
+      return result;
+    }
+    if (result.ok === true && result.changed === true && result.report && typeof deps.onApplied === "function") {
+      try { deps.onApplied(result); } catch (_) {}
+    }
+    return result;
+  }
+
+  return {
+    setDraft: inner.setDraft,
+    previewNow: inner.previewNow,
+    apply: async () => settle(await inner.apply()),
+    applyOps: async (ops) => settle(await inner.applyOps(ops)),
+    undo: async () => {
+      const staged = inner.stageUndo();
+      if (!staged || staged.ok !== true) return staged;
+      return settle(await inner.applyOps(inner.getState().draftOps));
+    },
+    stopWaiting: inner.stopWaiting,
+    stageUndo: inner.stageUndo,
+    retrySync: inner.retrySync,
+    noteGenerationChanged: inner.noteGenerationChanged,
+    rebase: inner.rebase,
+    close: inner.close,
+    getState: inner.getState,
+  };
+}
+
+function intentionUpdateServiceDeps(plugin, options = {}) {
+  const subject = String(options.subject || "");
+  const subjectPath = typeof albumReportPath === "function"
+    ? albumReportPath(options.subjectPath || "")
+    : String(options.subjectPath || "");
+  const saveEditors = options.saveEditors || ((paths) =>
+    typeof albumSchemaSaveOpenEditors === "function"
+      ? albumSchemaSaveOpenEditors(plugin, paths)
+      : Promise.resolve({
+        ok: false, code: "save-unsupported",
+        message: "Open editors could not confirm they are saved.",
+      }));
+  return {
+    spawnPreview: (_identity, envelopeText) => plugin.apiIntentionUpdatePreview(subject, envelopeText),
+    spawnApply: (_identity, envelopeText, applyOptions) =>
+      plugin.apiIntentionUpdateApply(subject, envelopeText, {
+        ...applyOptions,
+        ownPaths: [subjectPath].filter(Boolean),
+      }),
+    spawnVaultSync: () =>
+      typeof plugin.apiAlbumVaultSyncRetry === "function"
+        ? plugin.apiAlbumVaultSyncRetry()
+        : Promise.resolve({ ok: false, code: "sync-unsupported", message: "Sync retry is unavailable here." }),
+    saveEditors,
+    getGeneration: () => {
+      try {
+        if (plugin && Number.isInteger(plugin.albumVaultGeneration)) return plugin.albumVaultGeneration;
+      } catch (_) {}
+      return 0;
+    },
+    timers: options.timers,
+    onChange: options.onChange,
+    onApplied: (result) => {
+      const report = result && result.report;
+      if (!report) return;
+      plugin.intentionUpdateRememberUndo(
+        subjectPath,
+        report.inverse_ops,
+        report.fingerprint_after,
+      );
+      if (typeof plugin.intentionCardPushOverlay === "function") {
+        plugin.intentionCardPushOverlay(subjectPath, intentionOverlayFromReport(report));
+      }
+    },
+  };
+}
+// ---- src/297c-plugin-intention-card-editor.js ----
+// Intention card editor modal: browse selection, intention/reflection/
+// summary field stages, and the guarded periods session. All writes preview
+// then apply through `createIntentionUpdateSession`; the server fingerprint
+// rides every envelope. Drafts survive stale refusals; a reviewed retry is
+// always explicit, never automatic.
+const IntentionCardModalBase = typeof albumSchemaCardModalBase === "function"
+  ? albumSchemaCardModalBase()
+  : class IntentionCardFallback { constructor(app) { this.app = app; } open() { this.onOpen?.(); } close() { this.onClose?.(); } };
+
+const INTENTION_CARD_EDITOR_SOFT_CAP = 4;
+const INTENTION_CARD_EDITOR_SOFT_CAP_HINT = "Three is plenty — what can go?";
+const INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER = "agent drafted this; your edit makes it yours";
+const INTENTION_CARD_EDITOR_NEEDS_UPDATE = "Update bob to edit intentions";
+const INTENTION_CARD_EDITOR_STALE_TEXT = "The note changed elsewhere — refreshed; your draft is kept · Enter retries the reviewed write";
+const INTENTION_CARD_EDITOR_SAVED_TEXT = "✓ Saved · u undo";
+const INTENTION_CARD_EDITOR_SAVING_TEXT = "Saving…";
+const INTENTION_CARD_EDITOR_READING_TEXT = "Reading intentions…";
+
+function intentionCardEditorTargets(fields) {
+  const list = fields && Array.isArray(fields.intentions) ? fields.intentions : [];
+  const targets = list.map((value, index) => ({
+    key: `intention:${index}`, kind: "intention", index,
+    label: `Intention ${index + 1}`, value: String(value),
+  }));
+  targets.push({
+    key: "reflection", kind: "reflection",
+    label: "Reflection", value: fields && typeof fields.reflection === "string" ? fields.reflection : "",
+  });
+  targets.push({
+    key: "summary", kind: "summary",
+    label: "Summary", value: fields && typeof fields.summary === "string" ? fields.summary : "",
+  });
+  if (!list.length) {
+    targets.unshift({ key: "add", kind: "add", label: "Add intention", value: "" });
+  }
+  return targets;
+}
+
+function intentionCardEditorTargetByKey(targets, key) {
+  return (Array.isArray(targets) ? targets : []).find((target) => target && target.key === key) || null;
+}
+
+// Open subjects land on the first intention (or Add when empty); closed
+// subjects land on Reflection. An explicit requested field wins when valid.
+function intentionCardEditorOpeningSelection(targets, state, requested = "") {
+  const list = Array.isArray(targets) ? targets : [];
+  if (requested && intentionCardEditorTargetByKey(list, requested)) return requested;
+  if (state === "closed") return "reflection";
+  const first = list.find((target) => target && target.kind === "intention");
+  if (first) return first.key;
+  if (intentionCardEditorTargetByKey(list, "add")) return "add";
+  return list.length ? list[0].key : "";
+}
+
+function intentionCardEditorNavigate(targets, currentKey, delta) {
+  const list = Array.isArray(targets) ? targets : [];
+  if (!list.length) return "";
+  const index = Math.max(0, list.findIndex((target) => target && target.key === currentKey));
+  const next = (((index + (delta || 0)) % list.length) + list.length) % list.length;
+  return list[next] ? list[next].key : "";
+}
+
+function intentionCardEditorStageFor(target) {
+  if (!target) return null;
+  if (target.kind === "intention" || target.kind === "add") return "intention";
+  if (target.kind === "reflection") return "reflection";
+  if (target.kind === "summary") return "summary";
+  return null;
+}
+
+// Pure key dispatch for browse mode and the three field stages. Returns an
+// action name; the modal maps it to behavior. `inInput` marks text controls.
+function intentionCardEditorKeyAction(event, context = {}) {
+  const key = event && event.key;
+  const ctrl = event && (event.ctrlKey === true || event.metaKey === true);
+  const alt = event && event.altKey === true;
+  const shift = event && event.shiftKey === true;
+  const rawStage = context.stage || null;
+  const stage = typeof rawStage === "string" ? rawStage : (rawStage && rawStage.kind) || null;
+  const inInput = context.inInput === true;
+  const selected = context.selected || null;
+
+  if (stage) {
+    if (key === "Escape") return "cancel-stage";
+    if (stage === "reflection") {
+      if (key === "Enter" && !shift && ctrl) return "save-and-close";
+      if (key === "Enter" && !shift) return "save-stage";
+      return null;
+    }
+    if (key === "Enter") return "save-stage";
+    return null;
+  }
+
+  if (alt && (key === "j" || key === "J" || key === "ArrowDown")) return "reorder-down";
+  if (alt && (key === "K" || key === "k" || key === "ArrowUp")) return "reorder-up";
+  if ((ctrl && (key === "d" || key === "D")) && !alt) return "remove";
+  if (!ctrl && !alt && key === "u") return "undo";
+  if (!ctrl && !alt && !shift && key === "i") return "edit-first-or-add";
+  if (!ctrl && !alt && (key === "o" || key === "O")) return key === "o" ? "insert-below" : "insert-above";
+  if (!ctrl && !alt && !shift && key === "r") return "open-reflection";
+  if (!ctrl && !alt && !shift && key === "s") return "select-summary";
+  if (!ctrl && !alt && key === "Enter" && !inInput) return "edit-selected";
+  if (!ctrl && !alt && /^[1-9]$/.test(String(key || ""))) return `select-digit:${key}`;
+  if (!ctrl && !alt && (key === "j" || key === "ArrowDown" || key === "Tab") && !shift) return "move-next";
+  if (!ctrl && !alt && (key === "k" || key === "ArrowUp")) return "move-prev";
+  if (!ctrl && !alt && key === "Tab" && shift) return "move-prev";
+  if (selected && selected.kind === "intention" && !inInput) return null;
+  return null;
+}
+
+function intentionCardEditorEscLadder({ stage, pendingApply } = {}) {
+  if (pendingApply === true) return "ignore";
+  if (stage) return "cancel-stage";
+  return "close";
+}
+
+// Pasted newlines collapse to spaces with a quiet note; the stored value is
+// always one line.
+function intentionCardNormalizeIntentionLine(text) {
+  const raw = String(text === null || text === undefined ? "" : text);
+  const collapsed = raw.replace(/\r\n?|\u2028|\u2029/g, " ").replace(/\n+/g, " ");
+  const value = collapsed.split(" ").filter((part) => part !== "").join(" ") || collapsed.trim();
+  return { value: value.trim(), collapsed: /[\r\n\u2028\u2029]/.test(raw) };
+}
+
+function intentionCardReorderedList(list, from, to) {
+  const rows = Array.isArray(list) ? list.slice() : [];
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return rows;
+  if (from < 0 || from >= rows.length || to < 0 || to >= rows.length) return rows;
+  const [moved] = rows.splice(from, 1);
+  rows.splice(to, 0, moved);
+  return rows;
+}
+
+function intentionCardEditorSoftCapHint(count) {
+  return Number.isInteger(count) && count >= INTENTION_CARD_EDITOR_SOFT_CAP
+    ? INTENTION_CARD_EDITOR_SOFT_CAP_HINT
+    : "";
+}
+
+function intentionOpsSetIntentions(values) {
+  return [{ op: "intentions.set", values: (Array.isArray(values) ? values : []).map(String) }];
+}
+
+function intentionOpsInsert(index, value) {
+  return [{ op: "intentions.insert", index, value: String(value) }];
+}
+
+function intentionOpsReplace(index, value) {
+  return [{ op: "intentions.replace", index, value: String(value) }];
+}
+
+function intentionOpsMove(from, to) {
+  return [{ op: "intentions.move", from, to }];
+}
+
+function intentionOpsRemove(index) {
+  return [{ op: "intentions.remove", index }];
+}
+
+function intentionOpsReflection(value) {
+  return String(value || "").trim()
+    ? [{ op: "reflection.set", value: String(value) }]
+    : [{ op: "reflection.unset" }];
+}
+
+function intentionOpsSummary(value) {
+  // Empty summaries unset (and drop both stamps); never an invalid `.set`.
+  // A set carries the edited text; the writer stamps provenance itself.
+  return String(value || "").trim()
+    ? [{ op: "summary.set", value: String(value) }]
+    : [{ op: "summary.unset" }];
+}
+
+function intentionCardEditorCreateEl(doc, tag, className) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  if (typeof notebookCreateEl === "function") {
+    try { return notebookCreateEl(doc, tag, className); } catch (_) {}
+  }
+  const el = doc.createElement(tag);
+  if (className) el.className = className;
+  return el;
+}
+
+function intentionCardEditorSetText(el, value) {
+  if (!el) return;
+  if (typeof notebookSetText === "function") {
+    try { notebookSetText(el, value); return; } catch (_) {}
+  }
+  el.textContent = String(value === null || value === undefined ? "" : value);
+}
+
+class IntentionCardModal extends IntentionCardModalBase {
+  constructor(app, options = {}) {
+    super(app);
+    this.intentionPlugin = options.plugin || null;
+    this.subject = String(options.subject || "");
+    this.subjectPath = intentionCardPath(options.subjectPath || options.subject || "");
+    this.subjectState = options.state === "closed" ? "closed" : "open";
+    this.fields = options.fields && typeof options.fields === "object" ? options.fields : null;
+    this.malformed = options.malformed === true || this.fields === null;
+    this.fingerprint = typeof options.fingerprint === "string" ? options.fingerprint : "";
+    this.latestReport = options.report || null;
+    this.writable = options.writable !== false && !this.malformed;
+    this.selectedKey = "";
+    this.stage = null;
+    this.stageDraft = "";
+    this.stageNote = "";
+    this.stagePreview = null;
+    this.session = null;
+    this.sessionState = null;
+    this.readSeq = 0;
+    this.closeToken = 0;
+    this.pendingApply = false;
+    this.closed = false;
+    this.retainedOps = null;
+    this.retainedSelection = "";
+    this.refusalMessage = this.malformed ? "The intention fields on this note are malformed." : "";
+    this.refusalHint = this.malformed ? "Open the note in Source mode to repair the frontmatter, then reopen." : "";
+    this.consequence = "";
+    this.announce = "";
+    this.statusKind = this.malformed ? "refusal" : "reading";
+    this.returnSelection = typeof options.returnSelection === "string" ? options.returnSelection : "";
+    const targets = this.intentionTargets();
+    this.selectedKey = intentionCardEditorOpeningSelection(targets, this.subjectState, options.field || options.initialStage || "");
+    if (options.stage && intentionCardEditorStageFor(intentionCardEditorTargetByKey(targets, options.stage))) {
+      this.intentionOpenStage(intentionCardEditorStageFor(intentionCardEditorTargetByKey(targets, options.stage)), options.stage);
+    } else if (typeof options.initialStage === "string" && options.initialStage) {
+      const target = intentionCardEditorTargetByKey(targets, options.initialStage);
+      if (target) this.intentionOpenStage(intentionCardEditorStageFor(target), target.key);
+    }
+  }
+
+  intentionTargets() {
+    return intentionCardEditorTargets(this.fields || { intentions: [], summary: "", reflection: "" });
+  }
+
+  intentionSelected() {
+    return intentionCardEditorTargetByKey(this.intentionTargets(), this.selectedKey);
+  }
+
+  intentionReadSeq() {
+    this.readSeq += 1;
+    return this.readSeq;
+  }
+
+  intentionLive(seq) {
+    return !this.closed && seq === this.readSeq;
+  }
+
+  intentionDoc() {
+    return this.contentEl?.ownerDocument || this.app?.document || (typeof document !== "undefined" ? document : null);
+  }
+
+  ensureIntentionSession() {
+    if (this.session) return this.session;
+    const plugin = this.intentionPlugin;
+    const deps = typeof intentionUpdateServiceDeps === "function" && plugin
+      ? intentionUpdateServiceDeps(plugin, {
+        subject: this.subject, subjectPath: this.subjectPath,
+        onChange: () => { if (!this.closed) this.paintIntentionCard(); },
+      })
+      : { spawnPreview: () => Promise.resolve({ ok: false, code: "unavailable" }), spawnApply: () => Promise.resolve({ ok: false, code: "unavailable" }), saveEditors: () => Promise.resolve({ ok: true }), getGeneration: () => 0 };
+    this.session = createIntentionUpdateSession(
+      { subject: this.subject, subjectPath: this.subjectPath, expect: this.fingerprint },
+      deps,
+    );
+    return this.session;
+  }
+
+  intentionSelect(key) {
+    const target = intentionCardEditorTargetByKey(this.intentionTargets(), key);
+    if (!target) return;
+    this.selectedKey = key;
+    this.announce = target.label;
+    this.paintIntentionCard();
+  }
+
+  intentionMove(delta) {
+    const next = intentionCardEditorNavigate(this.intentionTargets(), this.selectedKey, delta);
+    if (next) this.intentionSelect(next);
+  }
+
+  intentionOpenStage(kind, fieldKey) {
+    const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
+    if (!target || !kind) return false;
+    if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
+      this.stageExplained = true;
+      this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
+    }
+    this.selectedKey = target.key;
+    this.stage = { kind, field: target.key, index: target.index };
+    this.stageDraft = target.kind === "intention" ? target.value
+      : target.kind === "reflection" ? target.value
+      : target.kind === "summary" ? target.value : "";
+    if (target.kind === "add") {
+      this.stage = { kind: "intention", field: "add", index: this.fields ? this.fields.intentions.length : 0 };
+      this.stageDraft = "";
+    }
+    this.stagePreview = null;
+    this.paintIntentionCard();
+    return true;
+  }
+
+  intentionCancelStage() {
+    this.stage = null;
+    this.stageDraft = "";
+    this.stageNote = "";
+    this.stagePreview = null;
+    this.stageExplained = false;
+    this.paintIntentionCard();
+  }
+
+  intentionHandleEscape() {
+    return intentionCardEditorEscLadder({ stage: this.stage, pendingApply: this.pendingApply });
+  }
+
+  intentionBackOut(event) {
+    const action = this.intentionHandleEscape();
+    try { event?.preventDefault?.(); } catch (_) {}
+    try { event?.stopPropagation?.(); } catch (_) {}
+    try { event.__schemaEscapeHandled = true; } catch (_) {}
+    if (action === "cancel-stage") this.intentionCancelStage();
+    else if (action === "close") this.close();
+    return action;
+  }
+
+  intentionCloseKind(event) {
+    try {
+      if (typeof bobCardCloseKey === "function") return bobCardCloseKey(event);
+    } catch (_) {}
+    return event && event.key === "Escape" ? "escape" : null;
+  }
+
+  intentionShouldBackOut(kind, event) {
+    if (kind !== "q" && kind !== "ctrl-bracket" && kind !== "escape") return false;
+    if (kind === "q") {
+      try {
+        if (typeof bobCardTypesText === "function"
+          && bobCardTypesText(event, this.modalEl || this.contentEl)) return false;
+      } catch (_) {}
+      return true;
+    }
+    return true;
+  }
+
+  onEscapeKey(event) {
+    this.intentionBackOut(event);
+    return false;
+  }
+
+  intentionInInput(event) {
+    const target = event && event.target;
+    return Boolean(target && target.closest && target.closest("input,select,textarea,[contenteditable]"));
+  }
+
+  intentionStatusModel() {
+    const undo = this.sessionState && this.sessionState.undoAvailable;
+    let undoAvailable = Boolean(undo);
+    try {
+      if (!undoAvailable && this.intentionPlugin?.intentionUpdateLastUndo?.(this.subjectPath)) undoAvailable = true;
+    } catch (_) {}
+    return {
+      statusKind: this.statusKind, refusalMessage: this.refusalMessage, refusalHint: this.refusalHint,
+      consequence: this.consequence, writable: this.writable, pendingApply: this.pendingApply,
+      stage: this.stage, undoAvailable, announce: this.announce,
+    };
+  }
+
+  intentionPaintOptions() {
+    return {
+      subject: this.subject, subjectPath: this.subjectPath, state: this.subjectState,
+      selectedKey: this.selectedKey, targets: this.intentionTargets(),
+      stage: this.stage, stageDraft: this.stageDraft, stageNote: this.stageNote,
+      stagePreview: this.stagePreview, fields: this.fields,
+      softCapHint: intentionCardEditorSoftCapHint(this.fields ? this.fields.intentions.length : 0),
+      status: this.intentionStatusModel(),
+    };
+  }
+
+  paintIntentionCard() {
+    if (this.closed) return;
+    const doc = this.intentionDoc();
+    if (!doc) return;
+    const options = this.intentionPaintOptions();
+    let card = null;
+    try { card = this.contentEl?.querySelector?.(".bob-intention-card-editor"); } catch (_) {}
+    if (!card) {
+      try { this.contentEl?.empty?.(); } catch (_) {}
+      card = intentionCardEditorBuildEl(options, doc, this);
+      if (card) {
+        try { this.contentEl?.appendChild?.(card); } catch (_) {}
+      }
+      this.intentionRestoreFocus();
+      return;
+    }
+    try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
+    this.intentionRestoreFocus();
+  }
+
+  // Browse controls keep focus: the modal never auto-focuses a stage input.
+  intentionRestoreFocus() {
+    try {
+      const card = this.contentEl?.querySelector?.(".bob-intention-card-editor");
+      if (!card || this.stage) return;
+      const row = card.querySelector?.(`[data-intention-key="${this.selectedKey}"]`);
+      if (row && typeof row.focus === "function") row.focus();
+    } catch (_) {}
+  }
+
+  onOpen() {
+    this.paintIntentionCard();
+    try {
+      if (typeof bobCardWireCloseKeys === "function") {
+        bobCardWireCloseKeys(this, { backOut: (event) => this.intentionBackOut(event) });
+      }
+    } catch (_) {}
+    void this.intentionInitialRead();
+  }
+
+  onClose() {
+    this.closed = true;
+    this.closeToken += 1;
+    try {
+      if (typeof bobCardUnwireCloseKeys === "function") bobCardUnwireCloseKeys(this);
+    } catch (_) {}
+    try { this.session?.close?.(); } catch (_) {}
+    this.session = null;
+  }
+
+  async intentionInitialRead() {
+    if (this.closed || this.malformed) return;
+    const seq = this.intentionReadSeq();
+    this.statusKind = "reading";
+    this.paintIntentionCard();
+    const plugin = this.intentionPlugin;
+    let result = null;
+    try {
+      // The initial read is a dry run with an empty op list and no expect;
+      // the guarded session never previews an empty draft, so read directly.
+      const envelope = typeof intentionUpdateEnvelopeText === "function"
+        ? intentionUpdateEnvelopeText("", [])
+        : JSON.stringify({ schema_version: 1, ops: [] });
+      result = plugin && typeof plugin.apiIntentionUpdatePreview === "function"
+        ? await plugin.apiIntentionUpdatePreview(this.subject, envelope)
+        : { ok: false, code: "unavailable", message: "The intention service is unavailable." };
+    } catch (error) {
+      result = { ok: false, code: "failed", message: error && error.message ? String(error.message) : "The intention read failed." };
+    }
+    if (!this.intentionLive(seq)) return;
+    try {
+      const session = this.ensureIntentionSession();
+      this.sessionState = session.getState();
+    } catch (_) {}
+    this.intentionConsumePreview(result);
+  }
+
+  intentionConsumePreview(result) {
+    if (!result) return;
+    if (result.ok === true && result.report && result.report.ok === true) {
+      this.latestReport = result.report;
+      this.fingerprint = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : this.fingerprint;
+      try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
+      const after = result.report.after || {};
+      this.fields = {
+        intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : (this.fields?.intentions || []),
+        summary: typeof after.summary === "string" ? after.summary : (this.fields?.summary || ""),
+        reflection: typeof after.reflection === "string" ? after.reflection : (this.fields?.reflection || ""),
+        summaryState: this.fields?.summaryState || "",
+        summaryDrafted: this.fields?.summaryDrafted || "",
+      };
+      if (this.statusKind === "reading") this.statusKind = this.writable ? "browsing" : "read-only";
+      this.paintIntentionCard();
+      return;
+    }
+    this.intentionConsumeFailure(result);
+  }
+
+  intentionConsumeFailure(result) {
+    const code = result && (result.code || (result.report && result.report.error && result.report.error.code)) || "failed";
+    const model = typeof intentionUpdateErrorModel === "function"
+      ? intentionUpdateErrorModel(result.report?.error || result)
+      : { code, hint: "" };
+    if (model.code === "needs-update" || code === "needs-update") {
+      this.statusKind = "needs-update";
+      this.writable = false;
+      this.refusalMessage = INTENTION_CARD_EDITOR_NEEDS_UPDATE;
+      this.refusalHint = "Painting continues normally; native Properties remains available.";
+    } else {
+      this.statusKind = "refusal";
+      this.refusalMessage = (result.report?.error?.message) || result.message || "The intention preview was refused.";
+      this.refusalHint = (result.report?.error?.hint) || model.hint || "";
+    }
+    this.sessionState = this.session?.getState?.() || this.sessionState;
+    this.paintIntentionCard();
+  }
+
+  intentionOpsForStage(draft) {
+    if (!this.stage) return null;
+    const text = String(draft === undefined ? this.stageDraft : draft);
+    if (this.stage.kind === "intention") {
+      const { value } = intentionCardNormalizeIntentionLine(text);
+      if (!value) return null;
+      if (this.stage.field === "add") {
+        const count = this.fields ? this.fields.intentions.length : 0;
+        return intentionOpsInsert(this.stage.index != null ? this.stage.index : count, value);
+      }
+      return intentionOpsReplace(this.stage.index, value);
+    }
+    if (this.stage.kind === "reflection") return intentionOpsReflection(text);
+    if (this.stage.kind === "summary") return intentionOpsSummary(text);
+    return null;
+  }
+
+  async intentionSaveStage(options = {}) {
+    if (!this.stage || this.pendingApply || !this.writable) return null;
+    const ops = this.intentionOpsForStage();
+    if (!ops) {
+      if (this.stage.kind === "intention") {
+        this.stageNote = "An intention needs one line of text.";
+        this.paintIntentionCard();
+      }
+      return null;
+    }
+    const seq = this.intentionReadSeq();
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.stageNote = options.note || this.stageNote;
+    this.paintIntentionCard();
+    const plugin = this.intentionPlugin;
+    try {
+      if (typeof albumSchemaSaveOpenEditors === "function" && plugin) {
+        const saved = await albumSchemaSaveOpenEditors(plugin, [this.subjectPath]);
+        if (!this.intentionLive(seq)) return null;
+        if (!saved || saved.ok !== true) {
+          this.pendingApply = false;
+          this.retainedOps = ops;
+          this.retainedSelection = this.selectedKey;
+          this.statusKind = "save-blocked";
+          this.refusalMessage = saved?.message || "Open editors could not confirm they are saved.";
+          this.refusalHint = "Save every pane showing the note in Source mode, then press Enter to retry. Nothing was written.";
+          this.paintIntentionCard();
+          return null;
+        }
+      }
+    } catch (_) {}
+    if (!this.intentionLive(seq)) return null;
+    const session = this.ensureIntentionSession();
+    try { session.rebase?.(this.fingerprint); } catch (_) {}
+    session.setDraft(ops);
+    const preview = await session.previewNow();
+    if (!this.intentionLive(seq)) return null;
+    if (!preview || preview.ok !== true || !preview.report || preview.report.ok !== true) {
+      this.pendingApply = false;
+      return this.intentionRetainAfterRefusal(preview, ops);
+    }
+    const applied = await session.apply();
+    if (!this.intentionLive(seq)) return null;
+    this.pendingApply = false;
+    this.sessionState = session.getState();
+    if (!applied || applied.ok !== true) {
+      return this.intentionRetainAfterRefusal(applied, ops);
+    }
+    if (applied.changed === true && applied.report) {
+      this.intentionConsumeApplied(applied.report, options);
+      return applied;
+    }
+    this.stage = null;
+    this.stageDraft = "";
+    this.stageNote = "";
+    this.statusKind = "saved";
+    this.announce = INTENTION_CARD_EDITOR_SAVED_TEXT;
+    this.paintIntentionCard();
+    return applied;
+  }
+
+  intentionRetainAfterRefusal(result, ops) {
+    const code = result && (result.code || (result.report?.error?.code)) || "";
+    if (code === "stale_note" || (result && result.kind === "stale")) {
+      this.retainedOps = Array.isArray(ops) ? ops : null;
+      this.retainedSelection = this.selectedKey;
+      this.statusKind = "stale";
+      this.refusalMessage = INTENTION_CARD_EDITOR_STALE_TEXT;
+      this.refusalHint = "Review the refreshed list, then press Enter to retry. Nothing was silently applied.";
+      const fresh = result && result.report && typeof result.report.fingerprint_before === "string"
+        ? result.report.fingerprint_before : "";
+      if (fresh) {
+        this.fingerprint = fresh;
+        try { this.session?.rebase?.(fresh); } catch (_) {}
+      }
+      if (result && result.report && result.report.ok === true && result.report.after) {
+        const after = result.report.after;
+        this.fields = {
+          intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
+          summary: typeof after.summary === "string" ? after.summary : "",
+          reflection: typeof after.reflection === "string" ? after.reflection : "",
+          summaryState: this.fields?.summaryState || "",
+          summaryDrafted: this.fields?.summaryDrafted || "",
+        };
+      }
+      this.sessionState = this.session?.getState?.() || this.sessionState;
+      this.paintIntentionCard();
+      return result;
+    }
+    this.retainedOps = Array.isArray(ops) ? ops : this.retainedOps;
+    this.retainedSelection = this.selectedKey;
+    this.sessionState = this.session?.getState?.() || this.sessionState;
+    this.intentionConsumeFailure(result || { ok: false, code: "failed", message: "The intention write failed." });
+    return result;
+  }
+
+  intentionConsumeApplied(report, options = {}) {
+    this.latestReport = report;
+    this.fingerprint = typeof report.fingerprint_after === "string" ? report.fingerprint_after : this.fingerprint;
+    try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
+    const after = report.after || {};
+    this.fields = {
+      intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
+      summary: typeof after.summary === "string" ? after.summary : "",
+      reflection: typeof after.reflection === "string" ? after.reflection : "",
+      summaryState: this.fields?.summaryState || "",
+      summaryDrafted: this.fields?.summaryDrafted || "",
+    };
+    this.retainedOps = null;
+    const wasSummary = this.stage && this.stage.kind === "summary";
+    if (wasSummary && this.fields.summary) {
+      this.fields.summaryState = "edited";
+      this.fields.summaryDrafted = "";
+    }
+    const nextKey = this.stage && this.stage.kind === "intention" && this.stage.field !== "add"
+      ? this.stage.field : this.selectedKey;
+    this.stage = null;
+    this.stageDraft = "";
+    this.stageNote = "";
+    this.stagePreview = null;
+    this.selectedKey = intentionCardEditorTargetByKey(this.intentionTargets(), nextKey) ? nextKey : this.intentionTargets()[0]?.key || "";
+    this.statusKind = "saved";
+    this.announce = INTENTION_CARD_EDITOR_SAVED_TEXT;
+    this.consequence = "";
+    if (options.close === true) {
+      this.paintIntentionCard();
+      this.close();
+      return;
+    }
+    this.paintIntentionCard();
+  }
+
+  async intentionRetry() {
+    if (this.statusKind !== "stale" && this.statusKind !== "save-blocked") return null;
+    if (!this.retainedOps) return null;
+    const ops = this.retainedOps;
+    this.retainedOps = null;
+    if (this.retainedSelection && intentionCardEditorTargetByKey(this.intentionTargets(), this.retainedSelection)) {
+      this.selectedKey = this.retainedSelection;
+    }
+    const stage = this.stage;
+    if (!stage) {
+      const target = this.intentionSelected();
+      const kind = intentionCardEditorStageFor(target);
+      if (kind) this.intentionOpenStage(kind, target.key);
+    }
+    return this.intentionSaveStage({ retried: true });
+  }
+
+  async intentionUndo() {
+    if (this.pendingApply) return null;
+    const seq = this.intentionReadSeq();
+    this.statusKind = "saving";
+    this.paintIntentionCard();
+    const session = this.ensureIntentionSession();
+    const result = await session.undo();
+    if (!this.intentionLive(seq)) return null;
+    this.sessionState = session.getState();
+    if (!result || result.ok !== true) {
+      this.statusKind = "refusal";
+      this.refusalMessage = (result && (result.message || result.report?.error?.message)) || "There is no edit to undo.";
+      this.refusalHint = "";
+      this.paintIntentionCard();
+      return result;
+    }
+    if (result.changed === true && result.report) {
+      this.intentionConsumeApplied(result.report);
+      return result;
+    }
+    this.statusKind = "browsing";
+    this.announce = "Nothing to undo.";
+    this.paintIntentionCard();
+    return result;
+  }
+
+  async intentionReorder(delta) {
+    const target = this.intentionSelected();
+    if (!target || target.kind !== "intention" || !this.writable) return null;
+    const list = this.fields ? this.fields.intentions.slice() : [];
+    const to = target.index + delta;
+    if (to < 0 || to >= list.length) return null;
+    const reordered = intentionCardReorderedList(list, target.index, to);
+    const ops = intentionOpsMove(target.index, to);
+    void reordered;
+    const seq = this.intentionReadSeq();
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintIntentionCard();
+    const session = this.ensureIntentionSession();
+    try { session.rebase?.(this.fingerprint); } catch (_) {}
+    session.setDraft(ops);
+    const preview = await session.previewNow();
+    if (!this.intentionLive(seq)) return null;
+    if (!preview || preview.ok !== true) {
+      this.pendingApply = false;
+      return this.intentionRetainAfterRefusal(preview, ops);
+    }
+    const applied = await session.apply();
+    if (!this.intentionLive(seq)) return null;
+    this.pendingApply = false;
+    this.sessionState = session.getState();
+    if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
+    if (applied.changed === true && applied.report) {
+      this.intentionConsumeApplied(applied.report);
+      this.selectedKey = `intention:${to}`;
+      this.paintIntentionCard();
+    }
+    return applied;
+  }
+
+  async intentionRemove() {
+    const target = this.intentionSelected();
+    if (!target || target.kind !== "intention" || !this.writable || this.pendingApply) return null;
+    const ops = intentionOpsRemove(target.index);
+    const seq = this.intentionReadSeq();
+    this.pendingApply = true;
+    this.statusKind = "saving";
+    this.paintIntentionCard();
+    const session = this.ensureIntentionSession();
+    try { session.rebase?.(this.fingerprint); } catch (_) {}
+    session.setDraft(ops);
+    const preview = await session.previewNow();
+    if (!this.intentionLive(seq)) return null;
+    if (!preview || preview.ok !== true) {
+      this.pendingApply = false;
+      return this.intentionRetainAfterRefusal(preview, ops);
+    }
+    const applied = await session.apply();
+    if (!this.intentionLive(seq)) return null;
+    this.pendingApply = false;
+    this.sessionState = session.getState();
+    if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
+    if (applied.changed === true && applied.report) {
+      this.intentionConsumeApplied(applied.report);
+      const count = this.fields ? this.fields.intentions.length : 0;
+      this.selectedKey = count ? `intention:${Math.min(target.index, count - 1)}` : "add";
+      this.paintIntentionCard();
+    }
+    return applied;
+  }
+
+  intentionHandleAction(action, payload = {}) {
+    if (!action || this.closed) return null;
+    if (action === "close") { this.close(); return null; }
+    if (action === "cancel-stage") { this.intentionCancelStage(); return null; }
+    if (action.startsWith("select-digit:")) {
+      const digit = Number(action.slice("select-digit:".length));
+      const key = `intention:${digit - 1}`;
+      if (intentionCardEditorTargetByKey(this.intentionTargets(), key)) this.intentionSelect(key);
+      return null;
+    }
+    if (action === "move-next") { this.intentionMove(1); return null; }
+    if (action === "move-prev") { this.intentionMove(-1); return null; }
+    if (action === "edit-selected") {
+      const target = this.intentionSelected();
+      if (!target || !this.writable) return null;
+      this.intentionOpenStage(intentionCardEditorStageFor(target), target.key);
+      return null;
+    }
+    if (action === "edit-first-or-add") {
+      const first = this.intentionTargets().find((target) => target.kind === "intention");
+      if (first) this.intentionOpenStage("intention", first.key);
+      else this.intentionOpenStage("intention", "add");
+      return null;
+    }
+    if (action === "insert-below" || action === "insert-above") {
+      const target = this.intentionSelected();
+      const count = this.fields ? this.fields.intentions.length : 0;
+      const at = target && target.kind === "intention"
+        ? target.index + (action === "insert-below" ? 1 : 0)
+        : (action === "insert-below" ? count : 0);
+      this.stage = { kind: "intention", field: "add", index: Math.max(0, Math.min(count, at)) };
+      this.stageDraft = "";
+      this.stagePreview = null;
+      this.stageNote = "";
+      this.paintIntentionCard();
+      return null;
+    }
+    if (action === "open-reflection") { this.intentionOpenStage("reflection", "reflection"); return null; }
+    if (action === "select-summary") {
+      this.intentionSelect("summary");
+      const target = intentionCardEditorTargetByKey(this.intentionTargets(), "summary");
+      if (target) this.announce = "Summary selected · Enter explains ownership before opening its edit stage.";
+      this.paintIntentionCard();
+      return null;
+    }
+    if (action === "reorder-down") { void this.intentionReorder(1); return null; }
+    if (action === "reorder-up") { void this.intentionReorder(-1); return null; }
+    if (action === "remove") { void this.intentionRemove(); return null; }
+    if (action === "undo") { void this.intentionUndo(); return null; }
+    if (action === "save-stage") { void this.intentionSaveStage(); return null; }
+    if (action === "save-and-close") { void this.intentionSaveStage({ close: true }); return null; }
+    if (action === "retry") { void this.intentionRetry(); return null; }
+    return null;
+  }
+
+  intentionOnKeyDown(event) {
+    if (!event || event.isComposing || event.keyCode === 229) return;
+    if (event.defaultPrevented || event.__schemaEscapeHandled) return;
+    if (this.pendingApply) return;
+    const closeKind = this.intentionCloseKind(event);
+    if (closeKind && this.intentionShouldBackOut(closeKind, event)) {
+      this.intentionBackOut(event);
+      return;
+    }
+    if (this.stage) {
+      if (event.key === "Enter" || event.key === "Escape") {
+        const inInput = this.intentionInInput(event);
+        const stage = this.stage.kind;
+        if (stage === "reflection" && event.key === "Enter") {
+          const ctrl = event.ctrlKey === true || event.metaKey === true;
+          const shift = event.shiftKey === true;
+          if (shift && !ctrl) return;
+          event.preventDefault?.();
+          void this.intentionSaveStage({ close: ctrl });
+          return;
+        }
+        if (event.key === "Enter" && !inInput) return;
+        if (event.key === "Enter") {
+          event.preventDefault?.();
+          void this.intentionSaveStage();
+          return;
+        }
+      }
+      if (event.key === "Enter" && (event.ctrlKey === true || event.metaKey === true)) {
+        event.preventDefault?.();
+        void this.intentionSaveStage({ close: true });
+      }
+      return;
+    }
+    const action = intentionCardEditorKeyAction(event, {
+      inInput: this.intentionInInput(event), stage: null, selected: this.intentionSelected(),
+    });
+    if (!action) return;
+    if (action === "retry" || this.statusKind === "stale" || this.statusKind === "save-blocked") {
+      if (event.key === "Enter" && !this.intentionInInput(event)) {
+        event.preventDefault?.();
+        void this.intentionRetry();
+        return;
+      }
+    }
+    if (action === "edit-selected" && this.selectedKey === "summary") {
+      event.preventDefault?.();
+      this.intentionOpenStage("summary", "summary");
+      return;
+    }
+    event.preventDefault?.();
+    this.intentionHandleAction(action);
+  }
+
+  intentionOnClick(event) {
+    const button = event?.target?.closest?.("button[data-intention-action], button[data-intention-key]");
+    if (!button) return;
+    const action = button.getAttribute("data-intention-action");
+    if (action === "save-stage") {
+      const input = this.contentEl?.querySelector?.("[data-intention-input]");
+      if (input) this.stageDraft = String(input.value || "");
+      event.preventDefault?.();
+      void this.intentionSaveStage();
+      return;
+    }
+    if (action) {
+      event.preventDefault?.();
+      this.intentionHandleAction(action);
+      return;
+    }
+    const key = button.getAttribute("data-intention-key");
+    if (key) this.intentionSelect(key);
+  }
+
+  intentionOnStageInput(event) {
+    if (this.stage) this.stageDraft = String(event?.target?.value || "");
+  }
+}
+
+function intentionCardEditorBuildEl(options, doc, modal) {
+  const host = intentionCardEditorCreateEl(doc, "div", "bob-intention-card-editor");
+  if (!host) return null;
+  host.setAttribute("role", "dialog");
+  host.setAttribute("aria-label", `Edit intentions · ${options.subject || options.subjectPath}`);
+  intentionCardEditorPaintAll(host, options, doc, modal);
+  try {
+    host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
+    host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
+    host.addEventListener?.("input", (event) => {
+      if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
+    });
+  } catch (_) {}
+  return host;
+}
+
+function intentionCardEditorRowButton(doc, host, target, selected) {
+  const button = intentionCardEditorCreateEl(doc, "button", "bob-intention-row");
+  if (!button) return null;
+  button.setAttribute("type", "button");
+  button.setAttribute("data-intention-key", target.key);
+  if (selected) button.setAttribute("aria-current", "true");
+  const keycap = target.kind === "intention" && target.index < 9
+    ? `${target.index + 1} ` : target.kind === "add" ? "+ " : "";
+  intentionCardEditorSetText(button, `${keycap}${target.label}${target.value ? ` — ${target.value.slice(0, 80)}` : ""}`);
+  host.appendChild(button);
+  return button;
+}
+
+function intentionCardEditorPaintAll(host, options, doc, modal) {
+  while (host.firstChild) host.removeChild(host.firstChild);
+  const title = intentionCardEditorCreateEl(doc, "h2", "bob-intention-editor-title");
+  intentionCardEditorSetText(title, `Edit intentions · ${options.subject || options.subjectPath}`);
+  host.appendChild(title);
+
+  const list = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-list");
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", "Intention fields");
+  for (const target of options.targets) {
+    intentionCardEditorRowButton(doc, list, target, target.key === options.selectedKey);
+  }
+  host.appendChild(list);
+
+  if (options.softCapHint) {
+    const hint = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-hint");
+    intentionCardEditorSetText(hint, options.softCapHint);
+    host.appendChild(hint);
+  }
+
+  if (options.stage) {
+    const stageHost = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-stage");
+    const label = intentionCardEditorCreateEl(doc, "label", "bob-intention-stage-label");
+    const target = intentionCardEditorTargetByKey(options.targets, options.stage.field);
+    intentionCardEditorSetText(label, target ? `${target.label} · Enter saves · Esc cancels` : "Edit");
+    stageHost.appendChild(label);
+    if (options.stage.kind === "summary" && options.fields) {
+      const current = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-current");
+      intentionCardEditorSetText(current, `Current: ${options.fields.summary || "(empty)"}`);
+      stageHost.appendChild(current);
+    }
+    const input = options.stage.kind === "reflection"
+      ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input")
+      : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");
+    if (input) {
+      input.setAttribute("data-intention-input", options.stage.kind);
+      input.value = String(options.stageDraft || "");
+      stageHost.appendChild(input);
+    }
+    if (options.stageNote) {
+      const note = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-note");
+      intentionCardEditorSetText(note, options.stageNote);
+      stageHost.appendChild(note);
+    }
+    const save = intentionCardEditorCreateEl(doc, "button", "bob-intention-stage-save");
+    save.setAttribute("type", "button");
+    save.setAttribute("data-intention-action", "save-stage");
+    intentionCardEditorSetText(save, "Save");
+    stageHost.appendChild(save);
+    host.appendChild(stageHost);
+  }
+
+  const status = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-status");
+  const model = options.status;
+  intentionCardEditorSetText(status, [
+    model.announce, model.refusalMessage, model.refusalHint,
+    model.statusKind === "stale" ? INTENTION_CARD_EDITOR_STALE_TEXT : "",
+  ].filter(Boolean).join(" · ") || model.statusKind);
+  host.appendChild(status);
+}
+// ---- src/297d-plugin-intention-card-entrypoints.js ----
+// Intention card editor entry points: the `intentions` registry kind, the
+// `==` open path for every canonical subject (including empty or malformed
+// ones), and the per-path optimistic overlay store. A malformed field opens
+// the modal with a refusal and YAML recovery; it never paints a display card.
+const INTENTION_CARD_EDITOR_OVERLAY_TTL_MS = 8000;
+
+class BobLedgerToolsIntentionCardEditorMixin {
+  intentionCardOverlayStore() {
+    if (!(this.intentionCardOverlays instanceof Map)) this.intentionCardOverlays = new Map();
+    return this.intentionCardOverlays;
+  }
+
+  intentionCardOverlayTimers() {
+    if (!(this.intentionCardOverlayTimersMap instanceof Map)) this.intentionCardOverlayTimersMap = new Map();
+    return this.intentionCardOverlayTimersMap;
+  }
+
+  setupIntentionCardEditor() {
+    this.intentionCardEditorModal = null;
+    this.intentionCardOverlays = new Map();
+    this.intentionCardOverlayTimersMap = new Map();
+    try { this.ensurePropertyCardBuiltins?.(); } catch (_) {}
+    try {
+      if (typeof this.registerPropertyCard === "function") {
+        this.registerPropertyCard({
+          kind: "intentions",
+          match: ({ path } = {}) => this.intentionCardEditorMatch({ path }),
+          open: ({ path } = {}) => { void this.openIntentionCard({ filePath: path }); },
+        });
+      }
+    } catch (_) {}
+  }
+
+  teardownIntentionCardEditor() {
+    try { this.intentionCardEditorModal?.close?.(); } catch (_) {}
+    this.intentionCardEditorModal = null;
+    try {
+      if (typeof this.unregisterPropertyCard === "function") this.unregisterPropertyCard("intentions");
+    } catch (_) {}
+    for (const timer of this.intentionCardOverlayTimersMap?.values?.() || []) {
+      try {
+        if (this.albumClearTimeout) this.albumClearTimeout(timer);
+        else clearTimeout(timer);
+      } catch (_) {}
+    }
+    this.intentionCardOverlayTimersMap?.clear?.();
+    if (this.intentionCardOverlays instanceof Map) this.intentionCardOverlays.clear();
+  }
+
+  intentionCardEditorToday() {
+    try {
+      if (typeof this.intentionCardToday === "function") return this.intentionCardToday();
+    } catch (_) {}
+    try {
+      if (typeof dayStripLocalToday === "function") return dayStripLocalToday(new Date());
+    } catch (_) {}
+    return "";
+  }
+
+  intentionCardEditorMatch({ path } = {}) {
+    try {
+      const filePath = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
+      if (!filePath) return false;
+      if (typeof intentionCardSubjectForPath !== "function") return false;
+      return intentionCardSubjectForPath(filePath, this.intentionCardEditorToday()) !== null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  intentionCardEditorActivePath(overridePath = "") {
+    if (overridePath) {
+      return typeof intentionCardPath === "function" ? intentionCardPath(overridePath) : String(overridePath);
+    }
+    try {
+      const view = typeof this.getActiveMarkdownView === "function"
+        ? this.getActiveMarkdownView()
+        : this.app?.workspace?.getActiveViewOfType?.(MarkdownView);
+      if (view && view.file && view.file.path) {
+        return typeof intentionCardPath === "function" ? intentionCardPath(view.file.path) : String(view.file.path);
+      }
+    } catch (_) {}
+    try {
+      const file = this.app?.workspace?.activeLeaf?.view?.file;
+      if (file && file.path) {
+        return typeof intentionCardPath === "function" ? intentionCardPath(file.path) : String(file.path);
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  intentionCardEditorReadFields(path) {
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path);
+      const cache = file ? this.app?.metadataCache?.getFileCache?.(file) : null;
+      const frontmatter = cache && cache.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : {};
+      if (typeof intentionCardReadFields !== "function") return { ok: false, reason: "unavailable" };
+      const fields = intentionCardReadFields(frontmatter);
+      if (!fields.ok) return { ok: false, reason: fields.reason || fields.key || "invalid", fields: null };
+      return { ok: true, fields };
+    } catch (_) {
+      return { ok: false, reason: "unavailable", fields: null };
+    }
+  }
+
+  // One path-pinned open method with initial-stage and return-selection for
+  // the navigation phase. Never invents a global keystroke queue here.
+  async openIntentionCard(options = {}) {
+    if (this.intentionCardEditorModal) {
+      try { this.intentionCardEditorModal.close(); } catch (_) {}
+      this.intentionCardEditorModal = null;
+    }
+    const desktop = (() => {
+      try {
+        if (typeof this.intentionCardDesktop === "function") return this.intentionCardDesktop();
+      } catch (_) {}
+      try {
+        if (typeof propertyCardDesktop === "function") return propertyCardDesktop();
+      } catch (_) {}
+      return true;
+    })();
+    if (desktop !== true) {
+      try { new Notice("Intention editing needs desktop Obsidian."); } catch (_) {}
+      return { ok: false, reason: "mobile" };
+    }
+    const filePath = this.intentionCardEditorActivePath(options.filePath || "");
+    if (!filePath) {
+      try { new Notice("Open a daily or period note to edit its intentions."); } catch (_) {}
+      return { ok: false, reason: "missing-path" };
+    }
+    let subject = null;
+    try {
+      subject = typeof intentionCardSubjectForPath === "function"
+        ? intentionCardSubjectForPath(filePath, this.intentionCardEditorToday())
+        : null;
+    } catch (_) { subject = null; }
+    if (!subject) {
+      try { new Notice("Open a daily or period note to edit its intentions."); } catch (_) {}
+      return { ok: false, reason: "non-intention-note" };
+    }
+    const read = this.intentionCardEditorReadFields(filePath);
+    const modal = new IntentionCardModal(this.app, {
+      plugin: this,
+      subject: subject.id,
+      subjectPath: subject.path,
+      state: subject.state === "closed" ? "closed" : "open",
+      fields: read.ok ? {
+        intentions: read.fields.intentions,
+        summary: read.fields.summary,
+        summaryState: read.fields.summaryState,
+        summaryDrafted: read.fields.summaryDrafted,
+        reflection: read.fields.reflection,
+      } : null,
+      malformed: !read.ok,
+      fingerprint: "",
+      report: null,
+      field: options.field || "",
+      stage: options.stage || null,
+      initialStage: options.initialStage || "",
+      returnSelection: options.returnSelection || "",
+    });
+    this.intentionCardEditorModal = modal;
+    try { modal.open(); } catch (_) {}
+    return { ok: true, modal, readOnly: modal.writable !== true };
+  }
+
+  intentionCardPushOverlay(path, overlay, options = {}) {
+    const key = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
+    if (!key) return null;
+    const timers = this.intentionCardOverlayTimers();
+    const old = timers.get(key);
+    if (old !== undefined && old !== null) {
+      try {
+        if (this.albumClearTimeout) this.albumClearTimeout(old);
+        else clearTimeout(old);
+      } catch (_) {}
+    }
+    timers.delete(key);
+    if (overlay) this.intentionCardOverlayStore().set(key, overlay);
+    else this.intentionCardOverlayStore().delete(key);
+    try { this.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+    if (!overlay) return null;
+    const ttl = Number.isFinite(options.ttlMs) && options.ttlMs >= 0
+      ? options.ttlMs
+      : INTENTION_CARD_EDITOR_OVERLAY_TTL_MS;
+    if (ttl === 0) return overlay;
+    const token = overlay;
+    const timer = (typeof this.albumSetTimeout === "function" ? this.albumSetTimeout : setTimeout)((() => {
+      try { timers.delete(key); } catch (_) {}
+      try {
+        if (this.intentionCardOverlayStore().get(key) === token) this.intentionCardOverlayStore().delete(key);
+      } catch (_) {}
+      try { this.intentionCardHost?.().scheduleRefresh?.(); } catch (_) {}
+    }), ttl);
+    if (timer !== undefined && timer !== null) timers.set(key, timer);
+    return overlay;
+  }
+
+  intentionCardClearOverlay(path) {
+    return this.intentionCardPushOverlay(path, null);
+  }
+
+  // An overlay settles when the vault reports matching metadata (the write
+  // landed) or conflicting metadata (a later write superseded it); the TTL
+  // bounds every other case. No optimistic success before apply succeeds.
+  intentionCardSettleOverlay(path, frontmatter) {
+    const key = typeof intentionCardPath === "function" ? intentionCardPath(path || "") : String(path || "");
+    const overlay = key ? this.intentionCardOverlayStore().get(key) : null;
+    if (!overlay || !overlay.fields || typeof overlay.fields !== "object") return false;
+    const fm = frontmatter && typeof frontmatter === "object" ? frontmatter : {};
+    const same = (name) => {
+      if (!Object.prototype.hasOwnProperty.call(overlay.fields, name)) return true;
+      const want = overlay.fields[name] === undefined ? null : overlay.fields[name];
+      const have = Object.prototype.hasOwnProperty.call(fm, name) ? fm[name] : null;
+      return JSON.stringify(want === undefined ? null : want) === JSON.stringify(have === undefined ? null : have);
+    };
+    if (same("intentions") && same("summary") && same("reflection")) {
+      this.intentionCardClearOverlay(key);
+      return true;
+    }
+    this.intentionCardClearOverlay(key);
+    return false;
+  }
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -152066,6 +153745,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsIntentionCardMixin,
+  BobLedgerToolsIntentionUpdateMixin,
+  BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,
@@ -156177,3 +157858,50 @@ try {
     });
   }
 } catch (_error) {}
+// ---- src/376-exports-intention-card-editor.js ----
+// Test-facing exports for the intention update service, session, editor,
+// and entry points.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      INTENTION_UPDATE_SCHEMA_VERSION,
+      INTENTION_UPDATE_TIMEOUT_MS,
+      INTENTION_UPDATE_MAX_BUFFER,
+      INTENTION_UPDATE_PREVIEW_DEBOUNCE_MS,
+      INTENTION_UPDATE_OVERLAY_TTL_MS,
+      intentionUpdateArgs,
+      intentionUpdateEnvelope,
+      intentionUpdateEnvelopeText,
+      intentionIsStaleUpdateCode,
+      intentionDecodeUpdateReport,
+      intentionUpdateErrorModel,
+      intentionOverlayFromReport,
+      createIntentionUpdateSession,
+      intentionUpdateServiceDeps,
+      INTENTION_CARD_EDITOR_SOFT_CAP_HINT,
+      INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER,
+      INTENTION_CARD_EDITOR_NEEDS_UPDATE,
+      INTENTION_CARD_EDITOR_STALE_TEXT,
+      intentionCardEditorTargets,
+      intentionCardEditorTargetByKey,
+      intentionCardEditorOpeningSelection,
+      intentionCardEditorNavigate,
+      intentionCardEditorStageFor,
+      intentionCardEditorKeyAction,
+      intentionCardEditorEscLadder,
+      intentionCardNormalizeIntentionLine,
+      intentionCardReorderedList,
+      intentionCardEditorSoftCapHint,
+      intentionOpsSetIntentions,
+      intentionOpsInsert,
+      intentionOpsReplace,
+      intentionOpsMove,
+      intentionOpsRemove,
+      intentionOpsReflection,
+      intentionOpsSummary,
+      IntentionCardModal,
+      BobLedgerToolsIntentionUpdateMixin,
+      BobLedgerToolsIntentionCardEditorMixin,
+    });
+  }
+} catch (_) {}

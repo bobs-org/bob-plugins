@@ -144,6 +144,8 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
   BobLedgerToolsIntentionCardMixin,
+  BobLedgerToolsIntentionUpdateMixin,
+  BobLedgerToolsIntentionCardEditorMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,

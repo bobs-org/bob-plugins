@@ -1,6 +1,11 @@
 // Reading view, embeds, hover previews, and Tasks/Dataview containers.
-// One Markdown post-processor; no document-wide MutationObserver.
+// One Markdown post-processor for both chip kinds; no document-wide
+// MutationObserver. Command chips mount through 061-reading-command.js.
+// `data-bob-copy-processed` is the copy-only marker older builds (and the
+// legacy bob-copy-chips plugin) also set on `run:` spans they could not
+// parse, so only the kind-aware `data-bob-chip-processed` skips a span.
 const COPY_CHIP_READING_PROCESSED = "data-bob-copy-processed";
+const COMMAND_CHIP_READING_PROCESSED = "data-bob-chip-processed";
 
 function copyChipReadingTagName(el) {
   try {
@@ -29,7 +34,7 @@ function copyChipReadingShouldSkip(codeEl, root) {
   try {
     if (!codeEl) return true;
     try {
-      if (codeEl.getAttribute && codeEl.getAttribute(COPY_CHIP_READING_PROCESSED) === "1") {
+      if (codeEl.getAttribute && codeEl.getAttribute(COMMAND_CHIP_READING_PROCESSED) === "1") {
         return true;
       }
     } catch (error) {
@@ -42,6 +47,7 @@ function copyChipReadingShouldSkip(codeEl, root) {
       const tag = copyChipReadingTagName(node);
       if (tag === "PRE" || tag === "A" || tag === "BUTTON") return true;
       if (copyChipReadingHasClass(node, "bob-copy-chip")) return true;
+      if (copyChipReadingHasClass(node, "bob-run-chip")) return true;
       if (copyChipReadingHasClass(node, "internal-link")) return true;
       // Code inside these hosts is rendered by another widget.
       if (
@@ -66,6 +72,7 @@ function copyChipReadingMarkProcessed(el) {
   try {
     if (el && typeof el.setAttribute === "function") {
       el.setAttribute(COPY_CHIP_READING_PROCESSED, "1");
+      el.setAttribute(COMMAND_CHIP_READING_PROCESSED, "1");
     }
   } catch (error) {
     // Marker is best-effort.
@@ -123,6 +130,28 @@ function copyChipReadingChipForCode(codeEl) {
   }
 }
 
+// Both kinds from one code element, copy first like chipScanLine: frozen
+// `{ kind, label, text, table }` or null.
+function chipReadingChipForCode(codeEl) {
+  try {
+    if (!codeEl) return null;
+    let text = codeEl.textContent;
+    if (typeof text !== "string") return null;
+    const table = copyChipReadingInTable(codeEl);
+    if (table) text = text.replace(/\\\|/g, "|");
+    let kind = "copy";
+    let parsed = copyChipParseContent(text);
+    if (!parsed) {
+      kind = "run";
+      parsed = runChipParseContent(text);
+    }
+    if (!parsed) return null;
+    return copyChipFreeze({ kind, label: parsed.label, text: parsed.text, table });
+  } catch (error) {
+    return null;
+  }
+}
+
 function copyChipReadingAttachCopy(button, payload) {
   try {
     if (!button || typeof button.addEventListener !== "function") return;
@@ -147,13 +176,13 @@ function copyChipReadingAttachCopy(button, payload) {
   }
 }
 
-function copyChipReadingReplaceCode(plugin, codeEl, root, ctx) {
+function copyChipReadingReplaceCode(plugin, codeEl, root, ctx, known) {
   try {
-    if (copyChipReadingShouldSkip(codeEl, root)) {
+    if (!known && copyChipReadingShouldSkip(codeEl, root)) {
       copyChipReadingMarkProcessed(codeEl);
       return false;
     }
-    const parsed = copyChipReadingChipForCode(codeEl);
+    const parsed = known || copyChipReadingChipForCode(codeEl);
     if (!parsed) {
       copyChipReadingMarkProcessed(codeEl);
       return false;
@@ -257,16 +286,43 @@ function copyChipReadingRender(plugin, el, ctx) {
     } catch (error) {
       return;
     }
-    // Snapshot the list: replacement mutates the live DOM during iteration.
-    const snapshot = codes.slice();
-    for (const codeEl of snapshot) {
+    // Parse the whole snapshot first (replacement mutates the live DOM), so
+    // command chips know how many equal spans this pass rendered. Repeat
+    // processing is idempotent: processed nodes skip.
+    const items = [];
+    let render = null;
+    for (const codeEl of codes.slice()) {
       try {
-        // Repeat processing is idempotent: processed nodes skip.
-        copyChipReadingReplaceCode(plugin, codeEl, el, ctx);
+        if (copyChipReadingShouldSkip(codeEl, el)) {
+          copyChipReadingMarkProcessed(codeEl);
+          continue;
+        }
+        const parsed = chipReadingChipForCode(codeEl);
+        if (!parsed) {
+          copyChipReadingMarkProcessed(codeEl);
+          continue;
+        }
+        if (parsed.kind === "run") {
+          // An embed, hover preview, or query block below `el` is another
+          // render with its own source; its own pass owns the span.
+          if (commandChipReadingInNestedRender(codeEl, el)) continue;
+          render = render || commandChipReadingRenderState(plugin, el, ctx);
+          commandChipReadingCount(render, parsed);
+        }
+        items.push([codeEl, parsed]);
       } catch (error) {
         continue;
       }
     }
+    for (const [codeEl, parsed] of items) {
+      try {
+        if (parsed.kind === "run") commandChipReadingReplaceCode(plugin, codeEl, el, parsed, render);
+        else copyChipReadingReplaceCode(plugin, codeEl, el, ctx, parsed);
+      } catch (error) {
+        continue;
+      }
+    }
+    if (render) commandChipReadingFinish(render);
   } catch (error) {
     // Reading rendering never throws.
   }

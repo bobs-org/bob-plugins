@@ -896,6 +896,15 @@ Bob Chips fragments share this runtime; it is not part of
   never touches the run. Live Preview reads the note from its own
   `editorInfoField`. When set, `plugin.commandChipRunHotkey` adds the key to
   the tooltip.
+- **Reading.** The one post-processor mounts `run:` buttons with one
+  `MarkdownRenderChild` per pass. `context()` reads the button's ancestors
+  each call: `li.plugin-tasks-list-item` with `.task-description`, or
+  `li.dataview.task-list-item`/`task-list-basic-item`, is a verified `query`
+  row whose render `sourcePath` is the owner; other `block-language-*` or
+  `.dataview` output is unverified. Embeds and popovers keep their render
+  path. Detached buttons without section info stay copy-only until
+  `onNodeInserted`. Section info yields `snapshot`; otherwise `checkSource()`
+  needs the span somewhere in the note.
 
 ## Related
 

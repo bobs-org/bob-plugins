@@ -13,7 +13,7 @@ Bob Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.9.0 |
+| Version | 0.10.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips. |
@@ -234,10 +234,10 @@ Authored payloads live on copy chips; live context lives on the Copy card, whose
 ## Command chip grammar
 
 A command chip is a `run:` code span or a `bob-run` fence that holds a bob
-command line. `api.commandChips` exposes the grammar. Live Preview renders
-and runs `run:` spans (see [Command chips in Live Preview](#command-chips-in-live-preview));
-Reading view, embeds, hover previews, query results, and `bob-run` fences
-still show plain code.
+command line. `api.commandChips` exposes the grammar. Live Preview, Reading
+view, embeds, hover previews, and Tasks and Dataview results render and run
+`run:` spans (see [Command chips](#command-chips)); `bob-run` fences still
+show plain code.
 
 | You type | Parses as |
 | --- | --- |
@@ -292,18 +292,20 @@ that later decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
 
 Copy chips never count here, and `gy` never sees command chips.
 
-## Command chips in Live Preview
+## Command chips
 
-A `run:` span becomes a quiet play pill. Only Bob Command Mode tokenizes the
-text, checks it against bob's catalog, and runs it. There is no shell, and
-`confirm` commands always ask first.
+A `run:` span becomes a quiet play pill in Live Preview and a real
+`<button type="button">` in Reading view, embeds, hover previews, and query
+results. Only Bob Command Mode tokenizes the text, checks it against bob's
+catalog, and runs it. There is no shell, and `confirm` commands always ask
+first.
 
 | Gesture | Effect |
 | --- | --- |
 | Click, tap, Enter, or Space | Run it, or copy it in a copy-only note |
 | Shift+Click or Shift+Enter | Open it in Command Mode's guarded path |
 | Alt+Click | Nothing yet |
-| Move the cursor into the span | Reveal the Markdown source |
+| Move the cursor into the span | Reveal the Markdown source (Live Preview) |
 
 A click runs now. A `run` or `preview-first` writer skips its preview, a
 `report` opens its output, and a `confirm` command opens its confirm card.
@@ -314,15 +316,31 @@ more, secondary buttons, and releases outside do nothing, and a click never
 moves the caret. A span that changed since it rendered refreshes and runs
 nothing.
 
-The note's own path decides whether a chip may run. These chips are
-copy-only: they show a copy glyph and copy the payload byte-exact with the
-copy-chip feedback.
+The note the chip's text comes from decides whether it may run, never the
+note on screen. These chips are copy-only: they show a copy glyph and copy
+the payload byte-exact with the copy-chip feedback.
 
 - Notes under `mail/`, `ref/`, `ref_history/`, `.bob/`, or `_conflicts/`
-  (any case).
-- An editor without a note.
+  (any case), including a note renamed there after it rendered.
+- An editor without a note, and query output whose note is unknown.
 - Mobile.
 - A missing or disabled Command Mode.
+
+### Where a command chip may run
+
+| Chip shown in | Its note is | Click |
+| --- | --- | --- |
+| Live Preview or Reading view | The open note | Runs, unless that note is copy-only |
+| An embed or hover preview | The embedded note, even inside a dashboard | Runs, unless the embedded note is copy-only |
+| A Tasks query row's description | The task's note (Tasks 8.6) | Runs, unless the task's note is copy-only |
+| A Dataview `TASK` or list item | The item's note (Dataview 0.5.68) | Runs, unless the item's note is copy-only |
+| A Tasks group heading, a Dataview table, `LIST`, group header, inline query, or inline field, `dataviewjs` output, or another plugin's block | Unknown: these render with the dashboard's path | Copies: **source note unknown** |
+| An embed whose source differs from its link | Unknown | Copies: **source note unknown** |
+| Anything Command Mode refuses | — | One Notice with the reason; nothing runs or copies |
+
+A dashboard's own path never lets a result from `ref/` run. Each click
+re-reads the note: a span that changed or vanished since it rendered
+refreshes and runs nothing.
 
 A command that Command Mode refuses shows ⊘. Refusals cover non-bob steps,
 shell syntax, unknown or excluded commands, missing arguments, and other
@@ -347,7 +365,8 @@ in copy-only notes, an unlabeled chip shows its payload verbatim.
 
 Command chips share the copy chip's geometry, with a faint accent wash. No
 state changes the line's width or height. Run state outlives editor
-rebuilds, so a note rewritten mid-run keeps its live chip.
+rebuilds and Reading re-renders, so a note rewritten mid-run keeps its live
+chip, and every copy of one command on screen shows the same run.
 
 The hover tooltip is DOM text with these lines:
 

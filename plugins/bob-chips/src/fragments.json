@@ -9,6 +9,7 @@
   "050-live-preview.js",
   "051-live-command-widget.js",
   "060-reading.js",
+  "061-reading-command.js",
   "065-cursor.js",
   "066-command-cursor.js",
   "067-command-policy.js",

@@ -81852,7 +81852,7 @@ function createDependencyNavApi(plugin) {
   });
 }
 // ---- src/480a-task-scope-api.js ----
-// Copy card and Bob Copy Chips share this synchronous, pure task resolver.
+// Copy card and Bob Chips share this synchronous, pure task resolver.
 function createCopyCardTaskScopeApi() {
   return Object.freeze({
     version: 1,
@@ -109054,8 +109054,9 @@ function copyCardEditorGuardsOk(view, editor) {
 
 function getCopyCardCopyChipsApi(app) {
   try {
-    const plugin = app && app.plugins && app.plugins.plugins
-      ? app.plugins.plugins["bob-copy-chips"]
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const plugin = plugins
+      ? plugins["bob-chips"] ?? plugins["bob-copy-chips"]
       : null;
     const api = plugin && plugin.api && plugin.api.copyChips;
     return api && Number(api.version) >= 1 &&

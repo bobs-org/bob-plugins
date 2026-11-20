@@ -658,14 +658,18 @@ tier (0–6) or `null` for browse, info, and recents rows.
 - `remember(glyphOrRow)` maps a glyph to its primary alias, shares the
   editor's persisted recents, and returns `true` when remembered.
 
-## Bob Copy Chips
+## Bob Chips
 
-`app.plugins.plugins["bob-copy-chips"].api.copyChips` is namespace version 2.
+`app.plugins.plugins["bob-chips"].api.copyChips` is namespace version 2.
 It is frozen and never throws. Feature-detect the plugin and the namespace
-before calling it; an unloaded plugin is not a usable dependency.
+before calling it; an unloaded plugin is not a usable dependency. During the
+transition, Bob Navigation Hotkeys checks `bob-chips` first and then the retired
+`bob-copy-chips` id. When both are enabled, Bob Chips disables the old plugin
+after layout ready without changing the enabled-plugin list.
 
 ```js
-const copyChips = app.plugins.plugins["bob-copy-chips"]?.api?.copyChips;
+const plugins = app.plugins.plugins;
+const copyChips = (plugins["bob-chips"] ?? plugins["bob-copy-chips"])?.api?.copyChips;
 const nav = app.plugins.plugins["bob-navigation-hotkeys"]?.api;
 if (copyChips?.version >= 2) {
   const task = nav?.version >= 3 && nav.taskScope?.version >= 1

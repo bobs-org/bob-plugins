@@ -1,6 +1,37 @@
 class BobCopyChipsPlugin extends CopyChipsPluginBase {
   async onload() {
     try {
+      const app = this.app;
+      if (
+        app &&
+        app.workspace &&
+        typeof app.workspace.onLayoutReady === "function"
+      ) {
+        app.workspace.onLayoutReady(async () => {
+          try {
+            const plugins = app.plugins && app.plugins.plugins;
+            if (
+              !plugins ||
+              !plugins["bob-copy-chips"] ||
+              typeof app.plugins.disablePlugin !== "function"
+            ) {
+              return;
+            }
+            await app.plugins.disablePlugin("bob-copy-chips");
+            if (typeof console !== "undefined" && typeof console.info === "function") {
+              console.info("Bob Chips disabled the legacy bob-copy-chips plugin");
+            }
+          } catch (error) {
+            if (typeof console !== "undefined" && typeof console.warn === "function") {
+              console.warn("Bob Chips could not disable the legacy bob-copy-chips plugin", error);
+            }
+          }
+        });
+      }
+    } catch (error) {
+      // The transition guard must never interfere with copy chips.
+    }
+    try {
       if (!(this.copyChipEditorViews instanceof Set)) {
         this.copyChipEditorViews = new Set();
       }
@@ -30,7 +61,7 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
         });
       }
       if (typeof console !== "undefined" && typeof console.warn === "function") {
-        console.warn("Bob Copy Chips could not initialize its API", error);
+        console.warn("Bob Chips could not initialize its API", error);
       }
     }
     try {

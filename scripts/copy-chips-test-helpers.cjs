@@ -194,7 +194,7 @@ function installCopyChipsStubs() {
   return originalLoad;
 }
 
-const pluginPath = path.join(__dirname, "..", "plugins", "bob-copy-chips", "main.js");
+const pluginPath = path.join(__dirname, "..", "plugins", "bob-chips", "main.js");
 
 function loadCopyChips() {
   const originalLoad = installCopyChipsStubs();

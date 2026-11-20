@@ -1,9 +1,9 @@
 ---
-title: "Bob Copy Chips"
+title: "Bob Chips"
 description: "Type a copy: code span or a bob-copy fence to author click-to-copy text."
 ---
 
-Bob Copy Chips turns an inline code span that starts with `copy:` — or a
+Bob Chips turns an inline code span that starts with `copy:` — or a
 `bob-copy` fence — into a quiet chip that copies the authored text exactly.
 
 <!-- BEGIN GENERATED: facts -->
@@ -11,9 +11,9 @@ Bob Copy Chips turns an inline code span that starts with `copy:` — or a
 
 | Fact | Value |
 | --- | --- |
-| Name | Bob Copy Chips |
-| ID | `bob-copy-chips` |
-| Version | 0.5.0 |
+| Name | Bob Chips |
+| ID | `bob-chips` |
+| Version | 0.6.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |

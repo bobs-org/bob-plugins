@@ -156,7 +156,7 @@ async function openAuthorCard(client) {
   if (state && state.open) return { via: "hotkey", state };
   await client.evaluate(`(() => {
     try {
-      window.app.commands.executeCommandById('bob-copy-chips:make-or-edit');
+      window.app.commands.executeCommandById('bob-chips:make-or-edit');
       return true;
     } catch (e) { return false; }
   })()`);
@@ -166,7 +166,7 @@ async function openAuthorCard(client) {
 
 async function saveAuthorCard(client) {
   const via = await client.evaluate(`(() => {
-    const plugin = window.app.plugins.plugins['bob-copy-chips'];
+    const plugin = window.app.plugins.plugins['bob-chips'];
     const modal = plugin && plugin.copyChipAuthorModal;
     if (!modal) return { ok: false, reason: 'no modal' };
     const event = {
@@ -355,7 +355,7 @@ async function runAuthoringCases(client, openNote, record) {
     await client.evaluate(`(() => { const root=document.querySelector('.bob-copy-author'); if(root) root.click(); return true; })()`);
     await dispatchKey(client, "q");
     await client.evaluate(`(() => {
-      const plugin = window.app.plugins.plugins['bob-copy-chips'];
+      const plugin = window.app.plugins.plugins['bob-chips'];
       const modal = plugin && plugin.copyChipAuthorModal;
       if (!modal) return false;
       const root = document.querySelector('.bob-copy-author');
@@ -372,7 +372,7 @@ async function runAuthoringCases(client, openNote, record) {
     if (afterQ && afterQ.open) {
       await dispatchKey(client, "[", { ctrl: true, code: "BracketLeft", vk: 219 });
       await client.evaluate(`(() => {
-        const plugin = window.app.plugins.plugins['bob-copy-chips'];
+        const plugin = window.app.plugins.plugins['bob-chips'];
         const modal = plugin && plugin.copyChipAuthorModal;
         if (!modal) return false;
         modal.copyChipOnKey({
@@ -429,7 +429,7 @@ async function runAuthoringCases(client, openNote, record) {
     await setFieldValues(client, "Alt", "alt-target");
     await dispatchModShiftY(client);
     await client.evaluate(`(() => {
-      const plugin = window.app.plugins.plugins['bob-copy-chips'];
+      const plugin = window.app.plugins.plugins['bob-chips'];
       const modal = plugin && plugin.copyChipAuthorModal;
       if (!modal) return false;
       modal.copyChipOnKey({
@@ -457,7 +457,7 @@ async function runAuthoringCases(client, openNote, record) {
   record("reversed visual selection wraps", Boolean(note && note.indexOf("`copy: visual phrase`") >= 0), visualSel && visualSel.ok ? "reversed" : JSON.stringify(visualSel));
 
   await placeCursorOn(client, "PALETTE_HERE");
-  const palette = await client.evaluate(`(() => { try { return window.app.commands.executeCommandById('bob-copy-chips:make-or-edit'); } catch (e) { return String(e && e.message || e); } })()`);
+  const palette = await client.evaluate(`(() => { try { return window.app.commands.executeCommandById('bob-chips:make-or-edit'); } catch (e) { return String(e && e.message || e); } })()`);
   const paletteState = await waitForModal(client, true, 4000);
   record("command palette id opens the card", Boolean(paletteState && paletteState.open), JSON.stringify({ palette, open: paletteState && paletteState.open }).slice(0, 180));
   if (paletteState && paletteState.open) {

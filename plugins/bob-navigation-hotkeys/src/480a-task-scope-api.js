@@ -1,4 +1,4 @@
-// Copy card and Bob Copy Chips share this synchronous, pure task resolver.
+// Copy card and Bob Chips share this synchronous, pure task resolver.
 function createCopyCardTaskScopeApi() {
   return Object.freeze({
     version: 1,

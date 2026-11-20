@@ -79,6 +79,38 @@ test("fence payload joins with LF and keeps a trailing empty line", () => {
   assert.equal(helpers.copyChipFencePayload([]), "");
 });
 
+test("Bob Chips disables the loaded legacy id after layout ready without saving it", async () => {
+  const ready = [];
+  const disabled = [];
+  const enabled = ["bob-copy-chips", "bob-chips"];
+  const info = [];
+  const previousInfo = console.info;
+  const app = {
+    workspace: { onLayoutReady: (callback) => ready.push(callback) },
+    plugins: {
+      plugins: { "bob-copy-chips": { id: "bob-copy-chips" }, "bob-chips": { id: "bob-chips" } },
+      enabledPlugins: enabled,
+      disablePlugin: async (id) => disabled.push(id),
+      disablePluginAndSave: () => assert.fail("must not persist the transition"),
+    },
+  };
+
+  console.info = (...args) => info.push(args);
+  try {
+    const plugin = new BobCopyChipsPlugin(app);
+    await plugin.onload();
+    assert.deepEqual(disabled, []);
+    assert.equal(ready.length, 1);
+    await ready[0]();
+    assert.deepEqual(disabled, ["bob-copy-chips"]);
+    assert.deepEqual(enabled, ["bob-copy-chips", "bob-chips"]);
+    assert.equal(info.length, 1);
+    assert.match(info[0][0], /disabled the legacy bob-copy-chips plugin/);
+  } finally {
+    console.info = previousInfo;
+  }
+});
+
 test("the frozen api never throws and exposes grammar helpers", async () => {
   const plugin = new BobCopyChipsPlugin({});
   await plugin.onload();

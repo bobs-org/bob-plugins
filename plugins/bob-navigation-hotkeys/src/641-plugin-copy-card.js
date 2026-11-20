@@ -33,8 +33,9 @@ function copyCardEditorGuardsOk(view, editor) {
 
 function getCopyCardCopyChipsApi(app) {
   try {
-    const plugin = app && app.plugins && app.plugins.plugins
-      ? app.plugins.plugins["bob-copy-chips"]
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const plugin = plugins
+      ? plugins["bob-chips"] ?? plugins["bob-copy-chips"]
       : null;
     const api = plugin && plugin.api && plugin.api.copyChips;
     return api && Number(api.version) >= 1 &&

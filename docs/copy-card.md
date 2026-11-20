@@ -21,7 +21,7 @@ clipboard never disagree, and copying never writes the vault.
 | `F` | File name | `bob.md` |
 | `N` | Note name | `bob` |
 | `I` | Block ID (task group) | `bank-records` |
-| `C` | Chip (CHIP group; needs Bob Copy Chips) | the payload of the copy chip at the cursor, or the only chip in the cursor's task |
+| `C` | Chip (CHIP group; needs Bob Chips) | the payload of the copy chip at the cursor, or the only chip in the cursor's task |
 | `key:` or `1`–`9` | Each `copy.templates` entry | `the ^bank-records task in the ~/bob/bob.md file` |
 
 A template like `^{block_id}` copies the caret form for anyone who wants it.
@@ -70,7 +70,7 @@ The result has three states: `none` (no group), `no-id` (dimmed group with
 `none yet · Ctrl+6 on the task line names one`), and `ready` (live group).
 
 An optional `C` chip row copies the copy chip at the cursor, or the only chip
-in the cursor's task, when Bob Copy Chips is enabled. It appears only when
+in the cursor's task, when Bob Chips is enabled. It appears only when
 the resolver returns one chip; an ambiguous result is dimmed, and no result
 or a missing plugin adds no group. The copy shows the card's Notice and
 flashes the chip.

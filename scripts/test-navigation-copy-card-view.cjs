@@ -666,7 +666,7 @@ test("openCopyCard: task scope follows the task, excludes nested tasks, and degr
     },
     flash() { return true; },
   };
-  const copyPlugins = { "bob-copy-chips": { api: { copyChips: chipApi } } };
+  const copyPlugins = { "bob-chips": { api: { copyChips: chipApi } } };
   const selections = [{ anchor: { line: 0, ch: 5 }, head: { line: 0, ch: 5 } }];
   openedModals.length = 0;
   const { plugin } = makePluginForGuards({
@@ -686,6 +686,18 @@ test("openCopyCard: task scope follows the task, excludes nested tasks, and degr
   const taskScopeApi = helpers.createDependencyNavApi(null).taskScope;
   assert.deepEqual(taskScopeApi.at({ lines: content.split("\n"), line: 0 }).lines, cardScope);
   modal.close();
+
+  openedModals.length = 0;
+  const legacy = makePluginForGuards({
+    activeFile: { path: "deploy.md", extension: "md" },
+    editor: singleCursorEditor(content, selections),
+    plugins: { "bob-copy-chips": { api: { copyChips: chipApi } } },
+  }).plugin;
+  legacy.openCopyCard();
+  chip = openedModals[0].copyCardModel.rows.find((entry) => entry.id === "chip");
+  assert.equal(chip.state, "ready");
+  assert.equal(chip.value, "just `docs` | deploy  ");
+  openedModals[0].close();
 
   const parentOnlyNestedChip = [
     "- [ ] #task Parent ^parent",
@@ -788,7 +800,7 @@ test("openCopyCard: task scope follows the task, excludes nested tasks, and degr
   openedModals[0].close();
 
   const v1Plugins = {
-    "bob-copy-chips": {
+    "bob-chips": {
       api: {
         copyChips: {
           version: 1,

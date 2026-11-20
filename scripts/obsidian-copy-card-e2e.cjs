@@ -118,12 +118,12 @@ function makeFixture(runRoot) {
   const configPath = writeConfig(configHome, fixture.baseConfigYaml());
   copyPlugin(path.join(repoRoot, "plugins", "bob-navigation-hotkeys"), pluginDir);
   copyPlugin(
-    path.join(repoRoot, "plugins", "bob-copy-chips"),
-    path.join(vaultDir, ".obsidian", "plugins", "bob-copy-chips"),
+    path.join(repoRoot, "plugins", "bob-chips"),
+    path.join(vaultDir, ".obsidian", "plugins", "bob-chips"),
   );
   fs.writeFileSync(
     path.join(vaultDir, ".obsidian", "community-plugins.json"),
-    JSON.stringify(["bob-navigation-hotkeys", "bob-copy-chips"], null, 2),
+    JSON.stringify(["bob-navigation-hotkeys", "bob-chips"], null, 2),
   );
   fs.writeFileSync(
     path.join(vaultDir, ".obsidian", "app.json"),
@@ -892,7 +892,7 @@ async function runE2e(args) {
     // `gy` uses the same task scope when Navigation Hotkeys is present.
     const gySeed = await seedClipboard("gy-task-chip");
     await setCursor(client, fixture.CHIP.taskSingleNeedle);
-    const gyCommand = await executeCommandById(client, "bob-copy-chips:copy-on-cursor-line");
+    const gyCommand = await executeCommandById(client, "bob-chips:copy-on-cursor-line");
     const gyCopied = await waitForClipboard(client, fixture.CHIP.taskSinglePayload);
     record("gy-task-scope-copy", Boolean(gyCommand && gyCommand.ok && gyCopied && gyCopied.ok && gyCopied.value === fixture.CHIP.taskSinglePayload && gyCopied.value !== gySeed.sentinel), JSON.stringify(gyCopied));
 
@@ -906,7 +906,7 @@ async function runE2e(args) {
       15000,
     );
     await setCursor(client, fixture.CHIP.taskSingleNeedle);
-    const gyFallbackCommand = await executeCommandById(client, "bob-copy-chips:copy-on-cursor-line");
+    const gyFallbackCommand = await executeCommandById(client, "bob-chips:copy-on-cursor-line");
     const gyFallbackNotice = await waitFor(
       client,
       cardProbeExpression(),
@@ -958,7 +958,7 @@ async function runE2e(args) {
     }
 
     // Copy-chip C row: with the plugin disabled there is no C row and no divider.
-    await client.evaluate("(() => (async () => { try { await window.app.plugins.disablePlugin(\"bob-copy-chips\"); return true; } catch (e) { return false; } })())()");
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.disablePlugin(\"bob-chips\"); return true; } catch (e) { return false; } })())()");
     await sleep(400);
     card = await openCardAt(client, fixture.CHIP.singleNeedle, true);
     {
@@ -970,8 +970,8 @@ async function runE2e(args) {
       );
       await closeCard(client);
     }
-    await client.evaluate("(() => (async () => { try { await window.app.plugins.enablePlugin(\"bob-copy-chips\"); return true; } catch (e) { return false; } })())()");
-    await waitFor(client, "Boolean(window.app&&window.app.plugins&&window.app.plugins.plugins&&window.app.plugins.plugins['bob-copy-chips'])", (value) => value === true, "bob-copy-chips re-enabled", 15000);
+    await client.evaluate("(() => (async () => { try { await window.app.plugins.enablePlugin(\"bob-chips\"); return true; } catch (e) { return false; } })())()");
+    await waitFor(client, "Boolean(window.app&&window.app.plugins&&window.app.plugins.plugins&&window.app.plugins.plugins['bob-chips'])", (value) => value === true, "bob-chips re-enabled", 15000);
 
     fs.writeFileSync(scratch.configPath, fixture.overflowConfigYaml());
     await sleep(30);

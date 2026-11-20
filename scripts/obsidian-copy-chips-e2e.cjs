@@ -109,8 +109,8 @@ function makeFixture(runRoot) {
   const configPath = path.join(configHome, "bob", "config.yml");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, fixture.baseConfigYaml());
-  copyPlugin(path.join(repoRoot, "plugins", "bob-copy-chips"), path.join(vaultDir, ".obsidian", "plugins", "bob-copy-chips"));
-  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(["bob-copy-chips"], null, 2));
+  copyPlugin(path.join(repoRoot, "plugins", "bob-chips"), path.join(vaultDir, ".obsidian", "plugins", "bob-chips"));
+  fs.writeFileSync(path.join(vaultDir, ".obsidian", "community-plugins.json"), JSON.stringify(["bob-chips"], null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "app.json"), JSON.stringify({ livePreview: true }, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "appearance.json"), JSON.stringify({ cssTheme: "", theme: "moonstone" }, null, 2));
   fs.writeFileSync(path.join(vaultDir, ".obsidian", "core-plugins.json"), JSON.stringify(["file-explorer", "command-palette", "editor-status"], null, 2));
@@ -356,7 +356,7 @@ async function fenceProbe(client) {
     const root = mode === "preview"
       ? (host.querySelector(".markdown-reading-view .markdown-preview-view") || host.querySelector(".markdown-reading-view") || host)
       : (host.querySelector(".markdown-source-view") || host.querySelector(".cm-editor") || host);
-    const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins['bob-copy-chips'];
+    const plugin = window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins['bob-chips'];
     let viewState = null;
     try {
       viewState = view && typeof view.getState === 'function' ? view.getState() : null;
@@ -424,7 +424,7 @@ function runSelfTest() {
     assert.equal(typeof fence.id, "string");
     assert.equal(typeof fence.text, "string");
   }
-  const mainPath = path.join(repoRoot, "plugins", "bob-copy-chips", "main.js");
+  const mainPath = path.join(repoRoot, "plugins", "bob-chips", "main.js");
   assert.ok(fs.existsSync(mainPath), "built main.js exists");
   const main = fs.readFileSync(mainPath, "utf8");
   assert.match(main, /copyChipBuildInline/);
@@ -470,7 +470,7 @@ async function runE2e(args) {
   if (!process.env.DISPLAY && !process.env.XVFB_RUN_TMPDIR) {
     fail("no X display; rerun under xvfb-run -a node scripts/obsidian-copy-chips-e2e.cjs", 2);
   }
-  const outDir = path.resolve(args.out || path.join(TEMP_ROOT, "bob-copy-chips-e2e-" + Date.now()));
+  const outDir = path.resolve(args.out || path.join(TEMP_ROOT, "bob-chips-e2e-" + Date.now()));
   const insideRepo = (candidate) => {
     const rel = path.relative(repoRoot, candidate);
     return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
@@ -479,7 +479,7 @@ async function runE2e(args) {
   fs.mkdirSync(outDir, { recursive: true });
   const runRoot = makeTemp("bcc-");
   const scratch = makeFixture(runRoot);
-  const pluginDir = path.join(repoRoot, "plugins", "bob-copy-chips");
+  const pluginDir = path.join(repoRoot, "plugins", "bob-chips");
   const hashOf = (name) => crypto.createHash("sha256").update(fs.readFileSync(path.join(pluginDir, name))).digest("hex");
   const report = {
     executable,
@@ -518,13 +518,13 @@ async function runE2e(args) {
     await client.evaluate("(() => (async () => { const p = window.app && window.app.plugins; if (p && typeof p.isEnabled === 'function' && !p.isEnabled()) await p.setEnable(true); return true; })())()");
     const hasPlugin = await waitFor(
       client,
-      "Boolean(window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins['bob-copy-chips'])",
+      "Boolean(window.app && window.app.plugins && window.app.plugins.plugins && window.app.plugins.plugins['bob-chips'])",
       (v) => v === true,
       "copy-chips plugin",
       30_000,
     );
     record("plugin loads", hasPlugin === true);
-    const apiVersion = await client.evaluate("(() => window.app.plugins.plugins['bob-copy-chips'].api.copyChips.version)()");
+    const apiVersion = await client.evaluate("(() => window.app.plugins.plugins['bob-chips'].api.copyChips.version)()");
     record("api.copyChips v1", apiVersion === 1, "version=" + apiVersion);
     const openedLive = await openNote(client, fixture.notePath(), "live");
     record("scratch note open (live)", Boolean(openedLive && openedLive.ok), JSON.stringify(openedLive).slice(0, 200));
@@ -649,7 +649,7 @@ async function runE2e(args) {
     })()`);
     record("table pipe copies exact bytes", Boolean(tableCheck && tableCheck.ok), JSON.stringify(tableCheck).slice(0, 200));
     const vectorAgreement = await client.evaluate(
-      "(() => { try { const api = window.app.plugins.plugins['bob-copy-chips'].api.copyChips; const vectors = " +
+      "(() => { try { const api = window.app.plugins.plugins['bob-chips'].api.copyChips; const vectors = " +
         JSON.stringify(vectors.chips.map((v) => ({ line: v.line, table: Boolean(v.table), expected: v.expected }))).replace(/</g, "\\u003c") +
         "; const failures = []; for (const v of vectors) { const found = api.scanLine(v.line, { table: v.table }); if (found.length !== v.expected.length) { failures.push(v.line.slice(0, 30) + ': count ' + found.length); continue; } for (let i = 0; i < found.length; i += 1) { if (found[i].text !== v.expected[i].text || found[i].label !== v.expected[i].label) failures.push(v.line.slice(0, 30) + ': payload mismatch'); } } for (const line of " +
         JSON.stringify(vectors.not_chips.map((v) => v.line)).replace(/</g, "\\u003c") +
@@ -657,11 +657,11 @@ async function runE2e(args) {
     );
     record("every vector agrees in app", Boolean(vectorAgreement && vectorAgreement.ok), JSON.stringify(vectorAgreement).slice(0, 300));
     const emptyCheck = await client.evaluate(
-      "(() => { try { const api = window.app.plugins.plugins['bob-copy-chips'].api.copyChips; const empty = api.scanLine('`copy:`'); const ws = api.scanLine('`copy:    `'); const dv = api.scanLine('`= dataview`'); return { ok: empty.length === 0 && ws.length === 0 && dv.length === 0 }; } catch (e) { return { ok: false }; } })()",
+      "(() => { try { const api = window.app.plugins.plugins['bob-chips'].api.copyChips; const empty = api.scanLine('`copy:`'); const ws = api.scanLine('`copy:    `'); const dv = api.scanLine('`= dataview`'); return { ok: empty.length === 0 && ws.length === 0 && dv.length === 0 }; } catch (e) { return { ok: false }; } })()",
     );
     record("empty and dataview spans stay plain", Boolean(emptyCheck && emptyCheck.ok));
     const cursorCheck = await client.evaluate(
-      "(() => { try { const api = window.app.plugins.plugins['bob-copy-chips'].api.copyChips; const inside = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 6 }); const gap = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 17 }); const fenced = api.chipAt({ lines: ['```', '`copy: ssh`', '```'], line: 1, ch: 2 }); const block = api.chipAt({ lines: ['```bob-copy Hi', 'hello', '```'], line: 1, ch: 0 }); const blockOk = block.state === 'ready' && block.chip && block.chip.form === 'block' && block.chip.text === 'hello' && block.chip.label === 'Hi'; const nested = api.chipAt({ lines: ['- item', '  ```bob-copy N', '  body', '  ```'], line: 2, ch: 3 }); const nestedOk = nested.state === 'ready' && nested.chip && nested.chip.form === 'block' && nested.chip.text === 'body'; const bodySpan = api.chipAt({ lines: ['```bob-copy', '`copy: ssh` is an example', '```'], line: 1, ch: 1 }); const bodySpanOk = bodySpan.state === 'ready' && bodySpan.chip && bodySpan.chip.form === 'block'; const jsFence = api.chipAt({ lines: ['```js', '`copy: ssh`', '```'], line: 1, ch: 2 }); return { ok: inside.state === 'ready' && gap.state === 'ambiguous' && fenced.state === 'none' && blockOk && nestedOk && bodySpanOk && jsFence.state === 'none' }; } catch (e) { return { ok: false }; } })()",
+      "(() => { try { const api = window.app.plugins.plugins['bob-chips'].api.copyChips; const inside = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 6 }); const gap = api.chipAt({ lines: ['see `copy: ssh` and `copy: pwd`'], line: 0, ch: 17 }); const fenced = api.chipAt({ lines: ['```', '`copy: ssh`', '```'], line: 1, ch: 2 }); const block = api.chipAt({ lines: ['```bob-copy Hi', 'hello', '```'], line: 1, ch: 0 }); const blockOk = block.state === 'ready' && block.chip && block.chip.form === 'block' && block.chip.text === 'hello' && block.chip.label === 'Hi'; const nested = api.chipAt({ lines: ['- item', '  ```bob-copy N', '  body', '  ```'], line: 2, ch: 3 }); const nestedOk = nested.state === 'ready' && nested.chip && nested.chip.form === 'block' && nested.chip.text === 'body'; const bodySpan = api.chipAt({ lines: ['```bob-copy', '`copy: ssh` is an example', '```'], line: 1, ch: 1 }); const bodySpanOk = bodySpan.state === 'ready' && bodySpan.chip && bodySpan.chip.form === 'block'; const jsFence = api.chipAt({ lines: ['```js', '`copy: ssh`', '```'], line: 1, ch: 2 }); return { ok: inside.state === 'ready' && gap.state === 'ambiguous' && fenced.state === 'none' && blockOk && nestedOk && bodySpanOk && jsFence.state === 'none' }; } catch (e) { return { ok: false }; } })()",
     );
     record("cursor rule in app", Boolean(cursorCheck && cursorCheck.ok));
     const afterBytes = fs.readFileSync(scratch.noteFile, "utf8");

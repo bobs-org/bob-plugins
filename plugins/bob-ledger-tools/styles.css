@@ -8615,6 +8615,13 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .bob-intention-card-intention-body,
 .bob-intention-card-summary-body,
 .bob-intention-card-quote { min-width: 0; overflow-wrap: anywhere; }
+/* Rendered Markdown wraps text in <p>; its default margins would push the
+   text below its chip and pad the bands. Paragraph breaks stay visible. */
+.bob-intention-card-intention-body > p,
+.bob-intention-card-summary-body > p { margin: 0; }
+.bob-intention-card-quote > p { margin: 0 0 0.55em; }
+.bob-intention-card-quote > p:last-child { margin-bottom: 0; }
+.bob-intention-card-intention-body { padding-top: 0.05em; }
 .bob-intention-card.is-single-intention .bob-intention-card-intention-body {
   font-size: 1.16em;
   font-weight: 600;
@@ -8622,10 +8629,14 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 }
 .bob-intention-card-band { min-width: 0; }
 .bob-intention-card-band-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35em 0.8em; }
-.bob-intention-card-band-title {
+/* Two classes outrank Reading view's `.markdown-rendered h2` sizing. */
+.bob-intention-card .bob-intention-card-band-title {
   margin: 0;
+  padding: 0;
+  border: 0;
   color: var(--text-muted);
   font: 650 0.74em/1.4 var(--font-interface);
+  font-variant: normal;
   letter-spacing: 0.09em;
 }
 .bob-intention-card-provenance { color: var(--text-faint); font-size: 0.75em; }

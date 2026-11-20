@@ -215,29 +215,37 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     }
   }
 
+  // Raw Source on the field's line, as the Record Card excursion does: both
+  // Live Preview and raw YAML use mode "source", so `source: true` is explicit.
   async intentionCardJumpSource(path, line) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.intentionCardMarkdownLeaf(path);
       const cursorLine = Number.isInteger(line) && line > 0 ? line - 1 : 0;
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(String(path || "").replace(/\.md$/i, ""), path, false);
       }
+      // Reopening the same file can keep its editor; switch that view too.
+      if (typeof leaf?.view?.setState === "function") {
+        await leaf.view.setState({ ...(leaf.view.getState?.() || {}), mode: "source", source: true }, { history: false });
+      }
+      if (leaf) this.app?.workspace?.setActiveLeaf?.(leaf, { focus: true });
       const editor = leaf?.view?.editor;
       if (editor && typeof editor.setCursor === "function") {
         editor.setCursor({ line: cursorLine, ch: 0 });
         if (typeof editor.scrollIntoView === "function") {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
+        editor.focus?.();
       }
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {
@@ -336,6 +344,12 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     if (typeof this.albumYamlExcursionStillCurrent === "function"
       && !this.albumYamlExcursionStillCurrent(leaf, record)) {
       return { ok: false, reason: "stale-excursion" };
+    }
+    const blocking = result && result.ok === true && result.report && result.report.ok === true
+      ? intentionCardEditorBlockingWarning(result.report) : null;
+    if (blocking) {
+      try { new Notice(`${blocking.message} — fix it before Done.`); } catch (_) {}
+      return { ok: false, reason: String(blocking.code || "frontmatter_invalid") };
     }
     if (!result || result.ok !== true || !result.report || result.report.ok !== true) {
       const code = result && (result.code || (result.report && result.report.error && result.report.error.code)) || "failed";

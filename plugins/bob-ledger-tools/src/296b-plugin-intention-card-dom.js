@@ -94,12 +94,43 @@ function intentionCardDomDecorateLinks(plugin, root, sourcePath) {
   }
 }
 
-function intentionCardDomRender(plugin, parent, markdown, sourcePath) {
+// Marks the card's own Markdown containers: MarkdownRenderer runs every
+// Reading post-processor on them with the note's sourcePath, and the card's
+// host must not mistake them for a new Reading mount (a repaint loop).
+const INTENTION_CARD_RENDER_ATTR = "data-bob-intention-render";
+
+// Each card owns one render component that unloads with the card, so a
+// repaint never leaks rendered children onto the plugin.
+function intentionCardDomComponent(card, plugin) {
+  if (!card) return plugin;
+  if (card.bobIntentionRender) return card.bobIntentionRender;
+  let component = plugin;
+  try {
+    if (typeof MarkdownRenderChild === "function") {
+      component = new MarkdownRenderChild(card);
+      component.load?.();
+    }
+  } catch (_) { component = plugin; }
+  card.bobIntentionRender = component;
+  return component;
+}
+
+function intentionCardDomRelease(card) {
+  const component = card && card.bobIntentionRender;
+  if (!component) return;
+  card.bobIntentionRender = null;
+  try {
+    if (typeof MarkdownRenderChild === "function" && component instanceof MarkdownRenderChild) component.unload?.();
+  } catch (_) {}
+}
+
+function intentionCardDomRender(plugin, parent, markdown, sourcePath, component = plugin) {
   if (!parent) return;
   const value = String(markdown === null || markdown === undefined ? "" : markdown);
+  try { parent.setAttribute?.(INTENTION_CARD_RENDER_ATTR, "true"); } catch (_) {}
   if (typeof MarkdownRenderer !== "undefined" && typeof MarkdownRenderer?.render === "function") {
     try {
-      const rendered = MarkdownRenderer.render(plugin.app, value, parent, sourcePath, plugin);
+      const rendered = MarkdownRenderer.render(plugin.app, value, parent, sourcePath, component || plugin);
       Promise.resolve(rendered).then(() => intentionCardDomDecorateLinks(plugin, parent, sourcePath)).catch(() => {});
       return;
     } catch (_) {}
@@ -135,6 +166,7 @@ function intentionCardBuildDom(model, plugin, doc) {
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `${model.kind} intention card`);
   if (model.intentions.length === 1) card.classList.add("is-single-intention");
+  const component = intentionCardDomComponent(card, plugin);
 
   const kicker = intentionCardDomEl(doc, "div", "bob-intention-card-kicker");
   intentionCardDomText(kicker, `${model.kind.toUpperCase()} · ${model.label}`);
@@ -145,7 +177,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     const href = model.subject.parent.path.replace(/\.md$/i, "");
     parent.appendChild(intentionCardDomLink(doc, plugin, href, `↑ ${model.subject.parent.label}`, model.path, "bob-intention-card-parent-link"));
     const summary = intentionCardDomEl(doc, "div", "bob-intention-card-parent-intentions");
-    intentionCardDomRender(plugin, summary, model.parentIntentions.join(" · "), model.path);
+    intentionCardDomRender(plugin, summary, model.parentIntentions.join(" · "), model.path, component);
     parent.appendChild(summary);
     card.appendChild(parent);
   }
@@ -158,7 +190,7 @@ function intentionCardBuildDom(model, plugin, doc) {
       chip.setAttribute("aria-hidden", "true");
       intentionCardDomText(chip, INTENTION_CARD_CHIPS[index]);
       const body = intentionCardDomEl(doc, "div", "bob-intention-card-intention-body");
-      intentionCardDomRender(plugin, body, text, model.path);
+      intentionCardDomRender(plugin, body, text, model.path, component);
       row.appendChild(chip);
       row.appendChild(body);
       intentionSection.appendChild(row);
@@ -178,7 +210,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     header.appendChild(title);
     header.appendChild(provenance);
     const body = intentionCardDomEl(doc, "div", "bob-intention-card-summary-body");
-    intentionCardDomRender(plugin, body, model.summary, model.path);
+    intentionCardDomRender(plugin, body, model.summary, model.path, component);
     section.appendChild(header);
     section.appendChild(body);
     card.appendChild(section);
@@ -189,7 +221,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
     intentionCardDomText(title, "REFLECTION");
     const quote = intentionCardDomEl(doc, "div", "bob-intention-card-quote");
-    intentionCardDomRender(plugin, quote, model.reflection, model.path);
+    intentionCardDomRender(plugin, quote, model.reflection, model.path, component);
     section.appendChild(title);
     section.appendChild(quote);
     card.appendChild(section);
@@ -219,8 +251,13 @@ function intentionCardDomAnchor(root, subject, today) {
     }
   } catch (_) {}
   if (!heading) return null;
-  let sibling = heading.nextElementSibling;
+  // Reading view wraps each block in a section div under the sizer; walk the
+  // section siblings so the card lands after the H1 and navigation blocks.
   let last = heading;
+  try {
+    while (last.parentElement && last.parentElement !== root && root.contains?.(last.parentElement)) last = last.parentElement;
+  } catch (_) { last = heading; }
+  let sibling = last.nextElementSibling;
   while (sibling) {
     const links = Array.from(sibling.querySelectorAll?.("a.internal-link, a[data-href]") || []);
     if (!links.length) break;

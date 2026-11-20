@@ -149397,12 +149397,43 @@ function intentionCardDomDecorateLinks(plugin, root, sourcePath) {
   }
 }
 
-function intentionCardDomRender(plugin, parent, markdown, sourcePath) {
+// Marks the card's own Markdown containers: MarkdownRenderer runs every
+// Reading post-processor on them with the note's sourcePath, and the card's
+// host must not mistake them for a new Reading mount (a repaint loop).
+const INTENTION_CARD_RENDER_ATTR = "data-bob-intention-render";
+
+// Each card owns one render component that unloads with the card, so a
+// repaint never leaks rendered children onto the plugin.
+function intentionCardDomComponent(card, plugin) {
+  if (!card) return plugin;
+  if (card.bobIntentionRender) return card.bobIntentionRender;
+  let component = plugin;
+  try {
+    if (typeof MarkdownRenderChild === "function") {
+      component = new MarkdownRenderChild(card);
+      component.load?.();
+    }
+  } catch (_) { component = plugin; }
+  card.bobIntentionRender = component;
+  return component;
+}
+
+function intentionCardDomRelease(card) {
+  const component = card && card.bobIntentionRender;
+  if (!component) return;
+  card.bobIntentionRender = null;
+  try {
+    if (typeof MarkdownRenderChild === "function" && component instanceof MarkdownRenderChild) component.unload?.();
+  } catch (_) {}
+}
+
+function intentionCardDomRender(plugin, parent, markdown, sourcePath, component = plugin) {
   if (!parent) return;
   const value = String(markdown === null || markdown === undefined ? "" : markdown);
+  try { parent.setAttribute?.(INTENTION_CARD_RENDER_ATTR, "true"); } catch (_) {}
   if (typeof MarkdownRenderer !== "undefined" && typeof MarkdownRenderer?.render === "function") {
     try {
-      const rendered = MarkdownRenderer.render(plugin.app, value, parent, sourcePath, plugin);
+      const rendered = MarkdownRenderer.render(plugin.app, value, parent, sourcePath, component || plugin);
       Promise.resolve(rendered).then(() => intentionCardDomDecorateLinks(plugin, parent, sourcePath)).catch(() => {});
       return;
     } catch (_) {}
@@ -149438,6 +149469,7 @@ function intentionCardBuildDom(model, plugin, doc) {
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `${model.kind} intention card`);
   if (model.intentions.length === 1) card.classList.add("is-single-intention");
+  const component = intentionCardDomComponent(card, plugin);
 
   const kicker = intentionCardDomEl(doc, "div", "bob-intention-card-kicker");
   intentionCardDomText(kicker, `${model.kind.toUpperCase()} · ${model.label}`);
@@ -149448,7 +149480,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     const href = model.subject.parent.path.replace(/\.md$/i, "");
     parent.appendChild(intentionCardDomLink(doc, plugin, href, `↑ ${model.subject.parent.label}`, model.path, "bob-intention-card-parent-link"));
     const summary = intentionCardDomEl(doc, "div", "bob-intention-card-parent-intentions");
-    intentionCardDomRender(plugin, summary, model.parentIntentions.join(" · "), model.path);
+    intentionCardDomRender(plugin, summary, model.parentIntentions.join(" · "), model.path, component);
     parent.appendChild(summary);
     card.appendChild(parent);
   }
@@ -149461,7 +149493,7 @@ function intentionCardBuildDom(model, plugin, doc) {
       chip.setAttribute("aria-hidden", "true");
       intentionCardDomText(chip, INTENTION_CARD_CHIPS[index]);
       const body = intentionCardDomEl(doc, "div", "bob-intention-card-intention-body");
-      intentionCardDomRender(plugin, body, text, model.path);
+      intentionCardDomRender(plugin, body, text, model.path, component);
       row.appendChild(chip);
       row.appendChild(body);
       intentionSection.appendChild(row);
@@ -149481,7 +149513,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     header.appendChild(title);
     header.appendChild(provenance);
     const body = intentionCardDomEl(doc, "div", "bob-intention-card-summary-body");
-    intentionCardDomRender(plugin, body, model.summary, model.path);
+    intentionCardDomRender(plugin, body, model.summary, model.path, component);
     section.appendChild(header);
     section.appendChild(body);
     card.appendChild(section);
@@ -149492,7 +149524,7 @@ function intentionCardBuildDom(model, plugin, doc) {
     const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
     intentionCardDomText(title, "REFLECTION");
     const quote = intentionCardDomEl(doc, "div", "bob-intention-card-quote");
-    intentionCardDomRender(plugin, quote, model.reflection, model.path);
+    intentionCardDomRender(plugin, quote, model.reflection, model.path, component);
     section.appendChild(title);
     section.appendChild(quote);
     card.appendChild(section);
@@ -149522,8 +149554,13 @@ function intentionCardDomAnchor(root, subject, today) {
     }
   } catch (_) {}
   if (!heading) return null;
-  let sibling = heading.nextElementSibling;
+  // Reading view wraps each block in a section div under the sizer; walk the
+  // section siblings so the card lands after the H1 and navigation blocks.
   let last = heading;
+  try {
+    while (last.parentElement && last.parentElement !== root && root.contains?.(last.parentElement)) last = last.parentElement;
+  } catch (_) { last = heading; }
+  let sibling = last.nextElementSibling;
   while (sibling) {
     const links = Array.from(sibling.querySelectorAll?.("a.internal-link, a[data-href]") || []);
     if (!links.length) break;
@@ -149553,6 +149590,10 @@ function intentionCardDomAnchor(root, subject, today) {
 // Intention-card display adapter for the shared property-card host.
 const INTENTION_CARD_CLASS = "bob-intention-card";
 const INTENTION_CARD_REFRESH_MS = 100;
+// Reading view can bind a note before its H1 and navigation sections attach
+// (an LP → Reading switch re-renders only changed sections). A surface with no
+// anchor yet retries through the host refresh, bounded per surface.
+const INTENTION_CARD_READING_RETRIES = 30;
 
 function intentionCardFilePath(value) {
   return intentionCardPath(value);
@@ -149620,6 +149661,7 @@ class BobLedgerToolsIntentionCardMixin {
     if (!this.intentionCardActive || !this.intentionCardDesktop()) return false;
     if (!intentionCardSubjectForPath(path, this.intentionCardToday())) return false;
     if (surface?.closest?.(".cm-editor, .markdown-embed, .internal-embed, .hover-popover, pre, code")) return false;
+    if (surface?.closest?.(`[${INTENTION_CARD_RENDER_ATTR}], .bob-property-card`)) return false;
     return true;
   }
 
@@ -149787,6 +149829,7 @@ class BobLedgerToolsIntentionCardMixin {
     for (const node of Array.from(root?.querySelectorAll?.(`.${INTENTION_CARD_CLASS}`) || [])) {
       const owned = intentionCardFilePath(node.getAttribute?.("data-intention-source") || "");
       if (path && owned && owned !== intentionCardFilePath(path)) continue;
+      intentionCardDomRelease(node);
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
   }
@@ -149808,11 +149851,19 @@ class BobLedgerToolsIntentionCardMixin {
     const prepared = this.intentionCardModelFor(sourcePath);
     if (!prepared) return null;
     const anchor = intentionCardDomAnchor(root, prepared.subject, this.intentionCardToday());
-    if (!anchor) return null;
+    if (!anchor) {
+      this.intentionCardRetryReading(root);
+      return null;
+    }
+    this.intentionCardReadingRetries?.delete?.(root);
     const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
     const card = intentionCardBuildDom(prepared.model, this, doc);
     if (!card) return null;
-    if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
+    // Obsidian's preview renderer owns the sizer's direct children and prunes
+    // foreign ones, so a section-level anchor hosts the card inside itself,
+    // after its own content (as the notebook header does inside the H1 section).
+    if (anchor.parentNode === root && typeof anchor.appendChild === "function") anchor.appendChild(card);
+    else if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
     else if (root.insertBefore) root.insertBefore(card, anchor.nextElementSibling || null);
     else root.appendChild?.(card);
     if (!card.parentNode) return null;
@@ -149820,22 +149871,37 @@ class BobLedgerToolsIntentionCardMixin {
     return card;
   }
 
+  intentionCardRetryReading(root) {
+    if (!root) return;
+    if (!(this.intentionCardReadingRetries instanceof WeakMap)) this.intentionCardReadingRetries = new WeakMap();
+    const count = this.intentionCardReadingRetries.get(root) || 0;
+    if (count >= INTENTION_CARD_READING_RETRIES) return;
+    this.intentionCardReadingRetries.set(root, count + 1);
+    this.intentionCardHost().scheduleRefresh();
+  }
+
   intentionCardScheduleReadingViewMount() {
     this.intentionCardHost().scheduleRefresh();
   }
 
+  // CodeMirror refuses block decorations from a ViewPlugin, so the card is an
+  // inline widget at the end of the line just before the first unrelated
+  // block (side 1), like the album and bank headers; CSS makes it a block.
   intentionCardLiveAnchor(text, subject) {
     const placement = intentionCardPlacement(text, subject, this.intentionCardToday());
     if (!placement) return null;
     const lines = String(text || "").split(/\r\n|\r|\n/);
+    const lineIndex = Math.max(placement.headingLine, placement.insertBeforeLine - 1);
     let offset = 0;
-    for (let index = 0; index < placement.insertBeforeLine; index += 1) {
+    for (let index = 0; index < lineIndex; index += 1) {
       offset += (lines[index] || "").length + 1;
     }
-    return { placement, offset: Math.min(offset, String(text || "").length) };
+    offset += (lines[lineIndex] || "").length;
+    return { placement, lineIndex, offset: Math.min(offset, String(text || "").length) };
   }
 
   buildIntentionCardDecorations(view) {
+    const plugin = this;
     try {
       if (!Decoration || !RangeSetBuilder || !WidgetType || !view?.state?.doc) return Decoration?.none || null;
       const path = this.intentionCardLivePath(view);
@@ -149859,25 +149925,28 @@ class BobLedgerToolsIntentionCardMixin {
       }
       this.intentionCardHost().setEditorScope(view, true);
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
-      const element = intentionCardBuildDom(prepared.model, this, doc);
-      if (!element) {
+      if (!doc) {
         this.intentionCardRelease(view?.dom);
         return Decoration.none;
       }
-      element.setAttribute("data-cm-widget", "true");
-      const signature = JSON.stringify([path, anchor.offset, prepared.model]);
+      const model = prepared.model;
+      const signature = JSON.stringify([path, anchor.offset, model]);
+      // Built lazily: CodeMirror discards an equal widget without toDOM, and
+      // destroy() unloads the card's render component with its DOM.
       const Widget = class extends WidgetType {
         constructor() { super(); this.signature = signature; this.path = path; }
         eq(other) { return other?.signature === signature && other?.path === path; }
         toDOM() {
-          this.element.setAttribute("data-cm-widget", "true");
+          const element = intentionCardBuildDom(model, plugin, doc) || doc.createElement("span");
+          element.setAttribute("data-cm-widget", "true");
           plugin.intentionCardHost().commitMount(view.dom, path, true);
-          return this.element;
+          return element;
         }
+        destroy(dom) { intentionCardDomRelease(dom); }
+        ignoreEvent() { return true; }
       };
       const widget = new Widget();
-      widget.element = element;
-      const decoration = Decoration.widget({ widget, side: -1, block: true });
+      const decoration = Decoration.widget({ widget, side: 1 });
       const builder = new RangeSetBuilder();
       builder.add(anchor.offset, anchor.offset, decoration);
       return builder.finish();
@@ -150634,7 +150703,8 @@ class IntentionCardModal extends IntentionCardModalBase {
       })
       : { spawnPreview: () => Promise.resolve({ ok: false, code: "unavailable" }), spawnApply: () => Promise.resolve({ ok: false, code: "unavailable" }), saveEditors: () => Promise.resolve({ ok: true }), getGeneration: () => 0 };
     this.session = createIntentionUpdateSession(
-      { subject: this.subject, subjectPath: this.subjectPath, expect: this.fingerprint },
+      // Undo is path-scoped: a reopened card can still undo the last write.
+      { subject: this.subject, subjectPath: this.subjectPath, expect: this.fingerprint, undo: plugin?.intentionUpdateLastUndo?.(this.subjectPath) || null },
       deps,
     );
     return this.session;
@@ -150655,7 +150725,7 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionOpenStage(kind, fieldKey) {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
-    if (!target || !kind) return false;
+    if (!target || !kind || !this.writable) return false;
     if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
       this.stageExplained = true;
       this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
@@ -150755,6 +150825,7 @@ class IntentionCardModal extends IntentionCardModalBase {
     const doc = this.intentionDoc();
     if (!doc) return;
     const options = this.intentionPaintOptions();
+    const caret = intentionCardEditorCaptureCaret(this, doc);
     let card = null;
     try { card = this.contentEl?.querySelector?.(".bob-intention-card-editor"); } catch (_) {}
     if (!card) {
@@ -150763,21 +150834,16 @@ class IntentionCardModal extends IntentionCardModalBase {
       if (card) {
         try { this.contentEl?.appendChild?.(card); } catch (_) {}
       }
-      this.intentionRestoreFocus();
+      this.intentionRestoreFocus(caret);
       return;
     }
     try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
-    this.intentionRestoreFocus();
+    this.intentionRestoreFocus(caret);
   }
 
-  // Browse controls keep focus: the modal never auto-focuses a stage input.
-  intentionRestoreFocus() {
-    try {
-      const card = this.contentEl?.querySelector?.(".bob-intention-card-editor");
-      if (!card || this.stage) return;
-      const row = card.querySelector?.(`[data-intention-key="${this.selectedKey}"]`);
-      if (row && typeof row.focus === "function") row.focus();
-    } catch (_) {}
+  // Browse mode focuses its row; only an explicitly opened stage owns focus.
+  intentionRestoreFocus(caret = null) {
+    intentionCardEditorFocus(this, caret);
   }
 
   onOpen() {
@@ -150830,6 +150896,7 @@ class IntentionCardModal extends IntentionCardModalBase {
   intentionConsumePreview(result) {
     if (!result) return;
     if (result.ok === true && result.report && result.report.ok === true) {
+      if (intentionCardEditorApplyBlockingWarning(this, result.report)) return;
       this.latestReport = result.report;
       this.fingerprint = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : this.fingerprint;
       try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
@@ -150920,14 +150987,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true || !preview.report || preview.report.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) {
@@ -150972,6 +151037,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       }
       this.sessionState = this.session?.getState?.() || this.sessionState;
       this.paintIntentionCard();
+      if (!fresh) void intentionCardEditorRefreshAfterStale(this);
       return result;
     }
     this.retainedOps = Array.isArray(ops) ? ops : this.retainedOps;
@@ -151076,14 +151142,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
@@ -151106,14 +151170,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
@@ -151151,6 +151213,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       return null;
     }
     if (action === "insert-below" || action === "insert-above") {
+      if (!this.writable) return null;
       const target = this.intentionSelected();
       const count = this.fields ? this.fields.intentions.length : 0;
       const at = target && target.kind === "intention"
@@ -151269,6 +151332,7 @@ function intentionCardEditorBuildEl(options, doc, modal) {
   try {
     host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
     host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
+    host.addEventListener?.("paste", (event) => intentionCardEditorPaste(modal, event));
     host.addEventListener?.("input", (event) => {
       if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
     });
@@ -151313,7 +151377,8 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
     const stageHost = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-stage");
     const label = intentionCardEditorCreateEl(doc, "label", "bob-intention-stage-label");
     const target = intentionCardEditorTargetByKey(options.targets, options.stage.field);
-    intentionCardEditorSetText(label, target ? `${target.label} · Enter saves · Esc cancels` : "Edit");
+    const stageName = options.stage.field === "add" ? "New intention" : target ? target.label : "Edit";
+    intentionCardEditorSetText(label, `${stageName} · Enter saves · Esc cancels`);
     stageHost.appendChild(label);
     if (options.stage.kind === "summary" && options.fields) {
       const current = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-current");
@@ -151343,11 +151408,187 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
 
   const status = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-status");
   const model = options.status;
-  intentionCardEditorSetText(status, [
-    model.announce, model.refusalMessage, model.refusalHint,
-    model.statusKind === "stale" ? INTENTION_CARD_EDITOR_STALE_TEXT : "",
-  ].filter(Boolean).join(" · ") || model.statusKind);
+  intentionCardEditorSetText(status, [model.announce, model.refusalMessage, model.refusalHint]
+    .filter(Boolean).join(" · ") || intentionCardEditorStatusFallback(model));
   host.appendChild(status);
+}
+// ---- src/297ca-plugin-intention-card-editor-input.js ----
+// Intention card editor input behavior: stage focus and caret, one-line paste
+// normalization, and the stale-refusal refresh. Browse mode keeps focus on its
+// row buttons; an explicitly opened stage owns focus with the caret at the end.
+// Repaints rebuild the stage input, so a focused caret is carried across them.
+const INTENTION_CARD_EDITOR_PASTE_NOTE = "Line breaks became spaces — an intention is one line.";
+
+// Caret of the focused stage input before a repaint, or null.
+function intentionCardEditorCaptureCaret(modal, doc) {
+  try {
+    const input = modal?.contentEl?.querySelector?.("[data-intention-input]");
+    if (!input || !doc || doc.activeElement !== input) return null;
+    return {
+      kind: input.getAttribute?.("data-intention-input") || "",
+      start: Number.isInteger(input.selectionStart) ? input.selectionStart : null,
+      end: Number.isInteger(input.selectionEnd) ? input.selectionEnd : null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// Focus after a paint: the stage input when a stage is open (caret restored,
+// else at the end), otherwise the selected browse row.
+function intentionCardEditorFocus(modal, caret = null) {
+  try {
+    const card = modal?.contentEl?.querySelector?.(".bob-intention-card-editor");
+    if (!card) return false;
+    if (modal.stage) {
+      const input = card.querySelector?.("[data-intention-input]");
+      if (!input || typeof input.focus !== "function") return false;
+      input.focus();
+      const length = String(input.value || "").length;
+      const same = caret && caret.kind === modal.stage.kind;
+      const start = same && Number.isInteger(caret.start) ? Math.min(caret.start, length) : length;
+      const end = same && Number.isInteger(caret.end) ? Math.min(caret.end, length) : length;
+      if (typeof input.setSelectionRange === "function") input.setSelectionRange(start, end);
+      return true;
+    }
+    const row = card.querySelector?.(`[data-intention-key="${modal.selectedKey}"]`);
+    if (row && typeof row.focus === "function") {
+      row.focus();
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// Pasted line breaks collapse to spaces in the one-line intention input, with
+// a quiet note. Reflection and summary paste natively.
+function intentionCardEditorPaste(modal, event) {
+  try {
+    const target = event && event.target;
+    if (!modal || !modal.stage || modal.stage.kind !== "intention") return false;
+    if (!target || target.getAttribute?.("data-intention-input") !== "intention") return false;
+    let text = "";
+    try { text = event.clipboardData?.getData?.("text/plain") || event.clipboardData?.getData?.("text") || ""; } catch (_) {}
+    if (!/[\r\n\u2028\u2029]/.test(text)) return false;
+    event.preventDefault?.();
+    const { value } = intentionCardNormalizeIntentionLine(text);
+    const current = String(target.value || "");
+    const start = Number.isInteger(target.selectionStart) ? target.selectionStart : current.length;
+    const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : current.length;
+    const next = current.slice(0, start) + value + current.slice(end);
+    target.value = next;
+    const caret = start + value.length;
+    if (typeof target.setSelectionRange === "function") target.setSelectionRange(caret, caret);
+    modal.stageDraft = next;
+    modal.stageNote = INTENTION_CARD_EDITOR_PASTE_NOTE;
+    modal.paintIntentionCard();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function intentionCardEditorFieldsFromReport(modal, report) {
+  const after = report && report.after ? report.after : {};
+  const state = typeof after.summary_state === "string" ? after.summary_state : "";
+  return {
+    intentions: Array.isArray(after.intentions) ? after.intentions.map(String) : [],
+    summary: typeof after.summary === "string" ? after.summary : "",
+    reflection: typeof after.reflection === "string" ? after.reflection : "",
+    summaryState: state === "drafted" ? "agent" : state === "edited" ? "edited" : (modal.fields?.summaryState || ""),
+    summaryDrafted: modal.fields?.summaryDrafted || "",
+  };
+}
+
+// A stale refusal carries no fresh fingerprint: read one with an empty-op dry
+// run, rebase, and show the current list while the exact draft and selection
+// stay put. The retry stays explicit; nothing is applied here.
+async function intentionCardEditorRefreshAfterStale(modal) {
+  const plugin = modal && modal.intentionPlugin;
+  if (!plugin || typeof plugin.apiIntentionUpdatePreview !== "function") return null;
+  const seq = modal.readSeq;
+  const subjectPath = modal.subjectPath;
+  let result = null;
+  try {
+    result = await plugin.apiIntentionUpdatePreview(modal.subject, intentionUpdateEnvelopeText("", []));
+  } catch (_) {
+    return null;
+  }
+  if (modal.closed || modal.readSeq !== seq || modal.subjectPath !== subjectPath || modal.statusKind !== "stale") return null;
+  if (!result || result.ok !== true || !result.report || result.report.ok !== true) return null;
+  const fresh = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : "";
+  if (!fresh) return null;
+  modal.fingerprint = fresh;
+  modal.latestReport = result.report;
+  try { modal.session?.rebase?.(fresh); } catch (_) {}
+  modal.fields = intentionCardEditorFieldsFromReport(modal, result.report);
+  modal.paintIntentionCard();
+  return result.report;
+}
+
+// An empty-op dry run reads malformed frontmatter as `ok` with warnings and
+// empty fields. Invalid YAML and malformed stored intentions are refusals for
+// the editor and for YAML Done; the four-intention soft cap stays advisory.
+function intentionCardEditorBlockingWarning(report) {
+  const warnings = report && Array.isArray(report.warnings) ? report.warnings : [];
+  return warnings.find((warning) => {
+    const code = String(warning && warning.code || "");
+    return code === "frontmatter_invalid" || (code.startsWith("intentions_") && code !== "intentions_over_soft_cap");
+  }) || null;
+}
+
+function intentionCardEditorApplyBlockingWarning(modal, report) {
+  const warning = intentionCardEditorBlockingWarning(report);
+  if (!modal || !warning) return false;
+  modal.malformed = true;
+  modal.writable = false;
+  modal.stage = null;
+  modal.statusKind = "refusal";
+  modal.refusalMessage = String(warning.message || "The intention fields on this note are malformed.");
+  modal.refusalHint = "Press y to repair the frontmatter in Source, then Done.";
+  modal.paintIntentionCard();
+  return true;
+}
+
+// The guarded session also refuses when the vault generation moves between
+// preview and apply — including the event from the card's own pane save, as
+// when a body-only edit in another pane is flushed first. Bob's field
+// fingerprint is the conflict guard, so a generation-only refusal re-previews
+// and applies again (bounded); a real field change still returns stale_note.
+const INTENTION_CARD_EDITOR_GENERATION_RETRIES = 3;
+const INTENTION_CARD_EDITOR_GENERATION_CODES = new Set(["stale_generation", "save-invalidated", "superseded-during-save"]);
+
+function intentionCardEditorGenerationOnly(result) {
+  return Boolean(result && result.ok !== true && INTENTION_CARD_EDITOR_GENERATION_CODES.has(String(result.code || "")));
+}
+
+// Returns { preview, applied } (applied absent when the preview refused), or
+// { superseded: true } once the caller's request is no longer live.
+async function intentionCardEditorPreviewApply(session, live) {
+  let preview = null;
+  let applied = null;
+  for (let attempt = 0; attempt < INTENTION_CARD_EDITOR_GENERATION_RETRIES; attempt += 1) {
+    preview = await session.previewNow();
+    if (!live()) return { superseded: true };
+    if (intentionCardEditorGenerationOnly(preview)) continue;
+    if (!preview || preview.ok !== true || !preview.report || preview.report.ok !== true) return { preview };
+    applied = await session.apply();
+    if (!live()) return { superseded: true };
+    if (!intentionCardEditorGenerationOnly(applied)) return { preview, applied };
+  }
+  return applied ? { preview, applied } : { preview };
+}
+
+// Status line when nothing is announced or refused: progress words and the
+// browse keys, never a raw internal state name.
+const INTENTION_CARD_EDITOR_BROWSE_KEYS = "j/k move · Enter edit · o add · r reflect · Alt+J/K reorder · Ctrl+D remove · u undo · [ ] = travel · y YAML";
+
+function intentionCardEditorStatusFallback(model) {
+  const kind = model && model.statusKind;
+  if (kind === "reading") return INTENTION_CARD_EDITOR_READING_TEXT;
+  if (kind === "saving") return INTENTION_CARD_EDITOR_SAVING_TEXT;
+  if (model && model.stage) return "";
+  return model && model.writable === false ? "Read-only · [ ] = travel · y YAML" : INTENTION_CARD_EDITOR_BROWSE_KEYS;
 }
 // ---- src/297d-plugin-intention-card-entrypoints.js ----
 // Intention card editor entry points: the `intentions` registry kind, the
@@ -151814,29 +152055,37 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     }
   }
 
+  // Raw Source on the field's line, as the Record Card excursion does: both
+  // Live Preview and raw YAML use mode "source", so `source: true` is explicit.
   async intentionCardJumpSource(path, line) {
     try {
       const file = this.app?.vault?.getAbstractFileByPath?.(path) || { path };
       const leaf = this.intentionCardMarkdownLeaf(path);
       const cursorLine = Number.isInteger(line) && line > 0 ? line - 1 : 0;
       if (leaf && typeof leaf.openFile === "function") {
-        await leaf.openFile(file, { state: { mode: "source" } });
+        await leaf.openFile(file, { state: { mode: "source", source: true } });
       } else if (leaf && typeof leaf.setViewState === "function") {
         const current = typeof leaf.getViewState === "function" ? leaf.getViewState() : { type: "markdown", state: {} };
         await leaf.setViewState({
           ...(current || {}),
           type: "markdown",
-          state: { ...((current && current.state) || {}), mode: "source", file: path },
+          state: { ...((current && current.state) || {}), mode: "source", source: true, file: path },
         });
       } else if (this.app?.workspace?.openLinkText) {
         await this.app.workspace.openLinkText(String(path || "").replace(/\.md$/i, ""), path, false);
       }
+      // Reopening the same file can keep its editor; switch that view too.
+      if (typeof leaf?.view?.setState === "function") {
+        await leaf.view.setState({ ...(leaf.view.getState?.() || {}), mode: "source", source: true }, { history: false });
+      }
+      if (leaf) this.app?.workspace?.setActiveLeaf?.(leaf, { focus: true });
       const editor = leaf?.view?.editor;
       if (editor && typeof editor.setCursor === "function") {
         editor.setCursor({ line: cursorLine, ch: 0 });
         if (typeof editor.scrollIntoView === "function") {
           editor.scrollIntoView({ from: { line: cursorLine, ch: 0 }, to: { line: cursorLine, ch: 0 } }, true);
         }
+        editor.focus?.();
       }
       return { ok: true, line: cursorLine + 1 };
     } catch (_) {
@@ -151935,6 +152184,12 @@ class BobLedgerToolsIntentionCardNavigationMixin {
     if (typeof this.albumYamlExcursionStillCurrent === "function"
       && !this.albumYamlExcursionStillCurrent(leaf, record)) {
       return { ok: false, reason: "stale-excursion" };
+    }
+    const blocking = result && result.ok === true && result.report && result.report.ok === true
+      ? intentionCardEditorBlockingWarning(result.report) : null;
+    if (blocking) {
+      try { new Notice(`${blocking.message} — fix it before Done.`); } catch (_) {}
+      return { ok: false, reason: String(blocking.code || "frontmatter_invalid") };
     }
     if (!result || result.ok !== true || !result.report || result.report.ok !== true) {
       const code = result && (result.code || (result.report && result.report.error && result.report.error.code)) || "failed";
@@ -158427,6 +158682,9 @@ try {
       intentionCardModelFor,
       intentionCardBuildDom,
       intentionCardDomAnchor,
+      INTENTION_CARD_RENDER_ATTR,
+      INTENTION_CARD_READING_RETRIES,
+      intentionCardDomRelease,
       intentionCardDomTargetExists,
       BobLedgerToolsIntentionCardMixin,
     });
@@ -158487,6 +158745,16 @@ try {
       intentionOpsReflection,
       intentionOpsSummary,
       IntentionCardModal,
+      INTENTION_CARD_EDITOR_PASTE_NOTE,
+      intentionCardEditorCaptureCaret,
+      intentionCardEditorFocus,
+      intentionCardEditorPaste,
+      intentionCardEditorRefreshAfterStale,
+      intentionCardEditorBlockingWarning,
+      intentionCardEditorApplyBlockingWarning,
+      intentionCardEditorGenerationOnly,
+      intentionCardEditorPreviewApply,
+      intentionCardEditorStatusFallback,
       BobLedgerToolsIntentionUpdateMixin,
       BobLedgerToolsIntentionCardEditorMixin,
     });

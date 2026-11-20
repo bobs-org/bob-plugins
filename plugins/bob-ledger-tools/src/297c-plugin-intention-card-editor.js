@@ -266,7 +266,8 @@ class IntentionCardModal extends IntentionCardModalBase {
       })
       : { spawnPreview: () => Promise.resolve({ ok: false, code: "unavailable" }), spawnApply: () => Promise.resolve({ ok: false, code: "unavailable" }), saveEditors: () => Promise.resolve({ ok: true }), getGeneration: () => 0 };
     this.session = createIntentionUpdateSession(
-      { subject: this.subject, subjectPath: this.subjectPath, expect: this.fingerprint },
+      // Undo is path-scoped: a reopened card can still undo the last write.
+      { subject: this.subject, subjectPath: this.subjectPath, expect: this.fingerprint, undo: plugin?.intentionUpdateLastUndo?.(this.subjectPath) || null },
       deps,
     );
     return this.session;
@@ -287,7 +288,7 @@ class IntentionCardModal extends IntentionCardModalBase {
 
   intentionOpenStage(kind, fieldKey) {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), fieldKey || this.selectedKey);
-    if (!target || !kind) return false;
+    if (!target || !kind || !this.writable) return false;
     if (kind === "summary" && this.fields && this.fields.summaryState === "agent" && !this.stageExplained) {
       this.stageExplained = true;
       this.stageNote = INTENTION_CARD_EDITOR_SUMMARY_EXPLAINER;
@@ -387,6 +388,7 @@ class IntentionCardModal extends IntentionCardModalBase {
     const doc = this.intentionDoc();
     if (!doc) return;
     const options = this.intentionPaintOptions();
+    const caret = intentionCardEditorCaptureCaret(this, doc);
     let card = null;
     try { card = this.contentEl?.querySelector?.(".bob-intention-card-editor"); } catch (_) {}
     if (!card) {
@@ -395,21 +397,16 @@ class IntentionCardModal extends IntentionCardModalBase {
       if (card) {
         try { this.contentEl?.appendChild?.(card); } catch (_) {}
       }
-      this.intentionRestoreFocus();
+      this.intentionRestoreFocus(caret);
       return;
     }
     try { intentionCardEditorPaintAll(card, options, doc, this); } catch (_) {}
-    this.intentionRestoreFocus();
+    this.intentionRestoreFocus(caret);
   }
 
-  // Browse controls keep focus: the modal never auto-focuses a stage input.
-  intentionRestoreFocus() {
-    try {
-      const card = this.contentEl?.querySelector?.(".bob-intention-card-editor");
-      if (!card || this.stage) return;
-      const row = card.querySelector?.(`[data-intention-key="${this.selectedKey}"]`);
-      if (row && typeof row.focus === "function") row.focus();
-    } catch (_) {}
+  // Browse mode focuses its row; only an explicitly opened stage owns focus.
+  intentionRestoreFocus(caret = null) {
+    intentionCardEditorFocus(this, caret);
   }
 
   onOpen() {
@@ -462,6 +459,7 @@ class IntentionCardModal extends IntentionCardModalBase {
   intentionConsumePreview(result) {
     if (!result) return;
     if (result.ok === true && result.report && result.report.ok === true) {
+      if (intentionCardEditorApplyBlockingWarning(this, result.report)) return;
       this.latestReport = result.report;
       this.fingerprint = typeof result.report.fingerprint_before === "string" ? result.report.fingerprint_before : this.fingerprint;
       try { this.session?.rebase?.(this.fingerprint); } catch (_) {}
@@ -552,14 +550,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true || !preview.report || preview.report.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) {
@@ -604,6 +600,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       }
       this.sessionState = this.session?.getState?.() || this.sessionState;
       this.paintIntentionCard();
+      if (!fresh) void intentionCardEditorRefreshAfterStale(this);
       return result;
     }
     this.retainedOps = Array.isArray(ops) ? ops : this.retainedOps;
@@ -708,14 +705,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
@@ -738,14 +733,12 @@ class IntentionCardModal extends IntentionCardModalBase {
     const session = this.ensureIntentionSession();
     try { session.rebase?.(this.fingerprint); } catch (_) {}
     session.setDraft(ops);
-    const preview = await session.previewNow();
-    if (!this.intentionLive(seq)) return null;
-    if (!preview || preview.ok !== true) {
+    const { preview, applied, superseded } = await intentionCardEditorPreviewApply(session, () => this.intentionLive(seq));
+    if (superseded) return null;
+    if (!applied) {
       this.pendingApply = false;
       return this.intentionRetainAfterRefusal(preview, ops);
     }
-    const applied = await session.apply();
-    if (!this.intentionLive(seq)) return null;
     this.pendingApply = false;
     this.sessionState = session.getState();
     if (!applied || applied.ok !== true) return this.intentionRetainAfterRefusal(applied, ops);
@@ -783,6 +776,7 @@ class IntentionCardModal extends IntentionCardModalBase {
       return null;
     }
     if (action === "insert-below" || action === "insert-above") {
+      if (!this.writable) return null;
       const target = this.intentionSelected();
       const count = this.fields ? this.fields.intentions.length : 0;
       const at = target && target.kind === "intention"
@@ -901,6 +895,7 @@ function intentionCardEditorBuildEl(options, doc, modal) {
   try {
     host.addEventListener?.("click", (event) => modal?.intentionOnClick?.(event));
     host.addEventListener?.("keydown", (event) => modal?.intentionOnKeyDown?.(event));
+    host.addEventListener?.("paste", (event) => intentionCardEditorPaste(modal, event));
     host.addEventListener?.("input", (event) => {
       if (event?.target?.hasAttribute?.("data-intention-input")) modal?.intentionOnStageInput?.(event);
     });
@@ -945,7 +940,8 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
     const stageHost = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-stage");
     const label = intentionCardEditorCreateEl(doc, "label", "bob-intention-stage-label");
     const target = intentionCardEditorTargetByKey(options.targets, options.stage.field);
-    intentionCardEditorSetText(label, target ? `${target.label} · Enter saves · Esc cancels` : "Edit");
+    const stageName = options.stage.field === "add" ? "New intention" : target ? target.label : "Edit";
+    intentionCardEditorSetText(label, `${stageName} · Enter saves · Esc cancels`);
     stageHost.appendChild(label);
     if (options.stage.kind === "summary" && options.fields) {
       const current = intentionCardEditorCreateEl(doc, "p", "bob-intention-stage-current");
@@ -975,9 +971,7 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
 
   const status = intentionCardEditorCreateEl(doc, "p", "bob-intention-editor-status");
   const model = options.status;
-  intentionCardEditorSetText(status, [
-    model.announce, model.refusalMessage, model.refusalHint,
-    model.statusKind === "stale" ? INTENTION_CARD_EDITOR_STALE_TEXT : "",
-  ].filter(Boolean).join(" · ") || model.statusKind);
+  intentionCardEditorSetText(status, [model.announce, model.refusalMessage, model.refusalHint]
+    .filter(Boolean).join(" · ") || intentionCardEditorStatusFallback(model));
   host.appendChild(status);
 }

@@ -303,19 +303,11 @@ test("registry matches canonical subjects and refuses non-intention notes", () =
   assert.equal(plugin.intentionCardEditorMatch({ path: "" }), false);
 });
 
+// Real-bob checks run only against an explicit current binary (the shared
+// convention for real-writer tests): auto-discovered `target/debug/bob`
+// builds can predate `periods update` and fail instead of skipping.
 function resolveBobBin() {
-  if (process.env.BOB_BIN && fs.existsSync(process.env.BOB_BIN)) return process.env.BOB_BIN;
-  const roots = [process.env.BOB_CLI_DIR].filter(Boolean);
-  let parent = path.resolve(__dirname, "..", "..");
-  for (let depth = 0; depth < 6; depth += 1) {
-    roots.push(parent);
-    parent = path.dirname(parent);
-  }
-  for (const root of roots) {
-    const candidate = path.join(root, "target", "debug", "bob");
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return "";
+  return process.env.BOB_BIN && fs.existsSync(process.env.BOB_BIN) ? process.env.BOB_BIN : "";
 }
 
 const BOB_BIN = resolveBobBin();

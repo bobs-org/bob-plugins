@@ -1,6 +1,10 @@
 // Intention-card display adapter for the shared property-card host.
 const INTENTION_CARD_CLASS = "bob-intention-card";
 const INTENTION_CARD_REFRESH_MS = 100;
+// Reading view can bind a note before its H1 and navigation sections attach
+// (an LP → Reading switch re-renders only changed sections). A surface with no
+// anchor yet retries through the host refresh, bounded per surface.
+const INTENTION_CARD_READING_RETRIES = 30;
 
 function intentionCardFilePath(value) {
   return intentionCardPath(value);
@@ -68,6 +72,7 @@ class BobLedgerToolsIntentionCardMixin {
     if (!this.intentionCardActive || !this.intentionCardDesktop()) return false;
     if (!intentionCardSubjectForPath(path, this.intentionCardToday())) return false;
     if (surface?.closest?.(".cm-editor, .markdown-embed, .internal-embed, .hover-popover, pre, code")) return false;
+    if (surface?.closest?.(`[${INTENTION_CARD_RENDER_ATTR}], .bob-property-card`)) return false;
     return true;
   }
 
@@ -235,6 +240,7 @@ class BobLedgerToolsIntentionCardMixin {
     for (const node of Array.from(root?.querySelectorAll?.(`.${INTENTION_CARD_CLASS}`) || [])) {
       const owned = intentionCardFilePath(node.getAttribute?.("data-intention-source") || "");
       if (path && owned && owned !== intentionCardFilePath(path)) continue;
+      intentionCardDomRelease(node);
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
   }
@@ -256,11 +262,19 @@ class BobLedgerToolsIntentionCardMixin {
     const prepared = this.intentionCardModelFor(sourcePath);
     if (!prepared) return null;
     const anchor = intentionCardDomAnchor(root, prepared.subject, this.intentionCardToday());
-    if (!anchor) return null;
+    if (!anchor) {
+      this.intentionCardRetryReading(root);
+      return null;
+    }
+    this.intentionCardReadingRetries?.delete?.(root);
     const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
     const card = intentionCardBuildDom(prepared.model, this, doc);
     if (!card) return null;
-    if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
+    // Obsidian's preview renderer owns the sizer's direct children and prunes
+    // foreign ones, so a section-level anchor hosts the card inside itself,
+    // after its own content (as the notebook header does inside the H1 section).
+    if (anchor.parentNode === root && typeof anchor.appendChild === "function") anchor.appendChild(card);
+    else if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
     else if (root.insertBefore) root.insertBefore(card, anchor.nextElementSibling || null);
     else root.appendChild?.(card);
     if (!card.parentNode) return null;
@@ -268,22 +282,37 @@ class BobLedgerToolsIntentionCardMixin {
     return card;
   }
 
+  intentionCardRetryReading(root) {
+    if (!root) return;
+    if (!(this.intentionCardReadingRetries instanceof WeakMap)) this.intentionCardReadingRetries = new WeakMap();
+    const count = this.intentionCardReadingRetries.get(root) || 0;
+    if (count >= INTENTION_CARD_READING_RETRIES) return;
+    this.intentionCardReadingRetries.set(root, count + 1);
+    this.intentionCardHost().scheduleRefresh();
+  }
+
   intentionCardScheduleReadingViewMount() {
     this.intentionCardHost().scheduleRefresh();
   }
 
+  // CodeMirror refuses block decorations from a ViewPlugin, so the card is an
+  // inline widget at the end of the line just before the first unrelated
+  // block (side 1), like the album and bank headers; CSS makes it a block.
   intentionCardLiveAnchor(text, subject) {
     const placement = intentionCardPlacement(text, subject, this.intentionCardToday());
     if (!placement) return null;
     const lines = String(text || "").split(/\r\n|\r|\n/);
+    const lineIndex = Math.max(placement.headingLine, placement.insertBeforeLine - 1);
     let offset = 0;
-    for (let index = 0; index < placement.insertBeforeLine; index += 1) {
+    for (let index = 0; index < lineIndex; index += 1) {
       offset += (lines[index] || "").length + 1;
     }
-    return { placement, offset: Math.min(offset, String(text || "").length) };
+    offset += (lines[lineIndex] || "").length;
+    return { placement, lineIndex, offset: Math.min(offset, String(text || "").length) };
   }
 
   buildIntentionCardDecorations(view) {
+    const plugin = this;
     try {
       if (!Decoration || !RangeSetBuilder || !WidgetType || !view?.state?.doc) return Decoration?.none || null;
       const path = this.intentionCardLivePath(view);
@@ -307,25 +336,28 @@ class BobLedgerToolsIntentionCardMixin {
       }
       this.intentionCardHost().setEditorScope(view, true);
       const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
-      const element = intentionCardBuildDom(prepared.model, this, doc);
-      if (!element) {
+      if (!doc) {
         this.intentionCardRelease(view?.dom);
         return Decoration.none;
       }
-      element.setAttribute("data-cm-widget", "true");
-      const signature = JSON.stringify([path, anchor.offset, prepared.model]);
+      const model = prepared.model;
+      const signature = JSON.stringify([path, anchor.offset, model]);
+      // Built lazily: CodeMirror discards an equal widget without toDOM, and
+      // destroy() unloads the card's render component with its DOM.
       const Widget = class extends WidgetType {
         constructor() { super(); this.signature = signature; this.path = path; }
         eq(other) { return other?.signature === signature && other?.path === path; }
         toDOM() {
-          this.element.setAttribute("data-cm-widget", "true");
+          const element = intentionCardBuildDom(model, plugin, doc) || doc.createElement("span");
+          element.setAttribute("data-cm-widget", "true");
           plugin.intentionCardHost().commitMount(view.dom, path, true);
-          return this.element;
+          return element;
         }
+        destroy(dom) { intentionCardDomRelease(dom); }
+        ignoreEvent() { return true; }
       };
       const widget = new Widget();
-      widget.element = element;
-      const decoration = Decoration.widget({ widget, side: -1, block: true });
+      const decoration = Decoration.widget({ widget, side: 1 });
       const builder = new RangeSetBuilder();
       builder.add(anchor.offset, anchor.offset, decoration);
       return builder.finish();

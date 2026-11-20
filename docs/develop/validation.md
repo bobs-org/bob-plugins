@@ -153,6 +153,26 @@ capture the refusal and completed retry separately.
 Missing workflows fail the run. `--scope sheet` explicitly skips
 interactions and proves rendering only; its result cannot stand for full acceptance.
 
+The intention card wrapper in `npm test` checks fixtures, clocks, byte
+boundaries, keys, and probe syntax only. For real acceptance, build Bob from the
+current bob-cli checkout and run the isolated walkthrough under Xvfb:
+
+```bash
+BOB_BIN=<bob-cli-cargo-target>/debug/bob \
+BOB_CLI_DIR=<bob-cli-checkout> \
+xvfb-run -a node scripts/obsidian-intention-card-e2e.cjs \
+  -e /snap/obsidian/current/app/obsidian \
+  -r /tmp/intention-card-e2e.json -o /tmp/intention-card-e2e-shots
+```
+
+It seeds day, week, and quarter notes relative to the run's local date (plus
+fixed ISO year-boundary notes), records the test clock, bob provenance, plugin
+hashes, every writer call with stdin, and screenshots. The run proves Reading
+and Live Preview placement and seven-key ownership, fail-open cases, `==`,
+`[n==r`, `==[r`, guarded edits with Undo, navigation, entry points, the YAML
+excursion, a two-pane stale draft, body-edit survival, and an emulated old bob.
+Any unrun check fails the run. Inspect every PNG before claiming acceptance.
+
 The live-vault coverage audit requires Python 3 with PyYAML (also used by the docs
 tooling). It is independent of the scratch UI walkthrough and never repairs the vault:
 

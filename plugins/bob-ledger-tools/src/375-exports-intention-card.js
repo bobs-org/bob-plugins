@@ -23,6 +23,9 @@ try {
       intentionCardModelFor,
       intentionCardBuildDom,
       intentionCardDomAnchor,
+      INTENTION_CARD_RENDER_ATTR,
+      INTENTION_CARD_READING_RETRIES,
+      intentionCardDomRelease,
       intentionCardDomTargetExists,
       BobLedgerToolsIntentionCardMixin,
     });

@@ -1502,4 +1502,10 @@ async function main(argv) {
 }
 
 if (require.main === module) void main(process.argv.slice(2));
-module.exports = { findBobProvenance, probeSource, markdownFilesHash, writeBobShim, parseArgs: lib.parseArgs };
+module.exports = {
+  findBobProvenance, probeSource, markdownFilesHash, writeBobShim, parseArgs: lib.parseArgs,
+  // Shared isolated-vault and CDP helpers reused by other real-Obsidian runners.
+  CdpClient, capture, collapseSidebars, freePort, hashSourceTree, initScratchGit, openNote,
+  seedProfile, selectTarget, setTheme, setViewport, sha256File, sleep, trustCommunityPlugins,
+  waitFor, withTimeout, writeNote,
+};

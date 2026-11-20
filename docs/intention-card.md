@@ -72,6 +72,10 @@ when empty); closed subjects land on Reflection.
 | = | Climb day → week → quarter → year |
 | y | Open Source on the selected field (YAML excursion) |
 
+Done on a YAML excursion validates with a fresh dry run. Invalid YAML or
+malformed intentions keep Source open with a notice; a valid note returns to
+the prior view and reopens the card editor on the same field.
+
 Stage keys stay text while a stage is open; only explicit cancel or save
 leaves the stage. Summary editing explains "agent drafted this; your edit
 makes it yours" before the intentional edit. At four or more intentions the

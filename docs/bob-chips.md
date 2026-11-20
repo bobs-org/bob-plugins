@@ -17,7 +17,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.15.1 |
+| Version | 0.16.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding. |
@@ -268,9 +268,10 @@ Context, in this order:
 
 The **Kind** row is a two-button Copy | Run control in the Tab cycle; ←/→
 pick a kind and Space toggles it. The header reads **COPY CHIP** or
-**COMMAND CHIP** with the matching glyph, and Text is named **Command** in
-Run. Switching kinds keeps Label and Text exactly and only changes the
-grammar the card writes (`copy:` / `bob-copy` or `run:` / `bob-run`).
+**COMMAND CHIP** with the matching glyph — the COMMAND CHIP header is the
+solid run well — and Text is named **Command** in Run. Switching kinds
+keeps Label and Text exactly and only changes the grammar the card writes
+(`copy:` / `bob-copy` or `run:` / `bob-run`).
 
 The starting kind is predictable and never switches on its own:
 
@@ -427,7 +428,7 @@ qualifies.
 
 When ⌘↵ would run a chip, the focused editor shows two cues:
 
-- The target chip is **armed**: an accent border and an accent ▶, with no
+- The target chip is **armed**: a full-ink border and a soft halo, with no
   size change.
 - A muted keycap capsule sits at the end of the cursor line. It reads
   **⌘↵ Run**, or **⌘↵ Run · LABEL** when the target sits on another line
@@ -446,11 +447,11 @@ tooltips say "Click or ⌘↵ to run".
 
 ## Command chips
 
-A `run:` span becomes a quiet play pill in Live Preview and a real
-`<button type="button">` in Reading view, embeds, hover previews, and query
-results. Only Bob Command Mode tokenizes the text, checks it against bob's
-catalog, and runs it. There is no shell, and `confirm` commands always ask
-first.
+A `run:` span becomes a pill with a solid accent ▶ run well in Live Preview
+and a real `<button type="button">` in Reading view, embeds, hover
+previews, and query results. Only Bob Command Mode tokenizes the text,
+checks it against bob's catalog, and runs it. There is no shell, and
+`confirm` commands always ask first.
 
 | Gesture | Effect |
 | --- | --- |
@@ -470,8 +471,9 @@ moves the caret. A span that changed since it rendered refreshes and runs
 nothing.
 
 The note the chip's text comes from decides whether it may run, never the
-note on screen. These chips are copy-only: they show a copy glyph and copy
-the payload byte-exact with the copy-chip feedback.
+note on screen. These chips are copy-only: they wear the copy chip's blue
+well, copy glyph, and `cursor: copy`, and copy the payload byte-exact with
+the copy-chip feedback.
 
 - Notes under `mail/`, `ref/`, `ref_history/`, `.bob/`, or `_conflicts/`
   (any case), including a note renamed there after it rendered.
@@ -522,23 +524,28 @@ step's leading `bob` drawn as a faint `›`. A labeled chip shows its label in
 the text font, plus a faint `· N` for N steps. While the catalog loads, and
 in copy-only notes, an unlabeled chip shows its payload verbatim.
 
-| State | Glyph and ink |
+| State | Well and ink |
 | --- | --- |
-| Ready | Faint ▶, accent on hover |
-| Loading | Faint ▶ |
-| Queued | Hourglass, dashed accent border |
-| Running | Spinning loader; sequences add a 2 px segmented underline (done green, current accent, upcoming faint) and tint the current step |
-| Completed | Green check for about 1.6 s plus one pulse, then Ready |
-| Needs attention | Orange ▶, kept until the next run or reload |
-| Failed | Error ▶, kept until the next run or reload |
-| Unavailable | Ban glyph, muted text, dashed border |
-| Copy only | Copy glyph |
+| Ready | Accent well, white solid ▶, tinted body |
+| Loading | Ready look; glyph at 60% opacity |
+| Queued | Hourglass in the well; dashed ink border |
+| Running | Spinner in the well; sequences add a 2 px segmented bar on the face (done green, current ink, upcoming faint) |
+| Completed | Green well and white check for about 1.6 s plus one pulse, then Ready |
+| Needs attention | Orange well, black ▶ (`--text-on-accent-inverted`), kept until the next run or reload |
+| Failed | Red well, white ▶, kept until the next run or reload |
+| Unavailable | Pale well, muted ⊘, dashed border |
+| Copy only | Blue copy well, copy glyph, `cursor: copy` |
 
-Command chips keep their own quiet geometry: padding `0 .45em`, a hairline
-accent border, and a 7% accent wash. No state changes the line's width or
-height. Run state outlives editor
-rebuilds and Reading re-renders, so a note rewritten mid-run keeps its live
-chip, and every copy of one command on screen shows the same run.
+Every command chip is a two-part capsule like a copy chip: a solid **well**
+holding the glyph, beside a lightly tinted **body**. Padding is
+`0.1em 0.5em 0.12em`. A CSS snippet may set `--bob-run-chip-hue` (for
+example on `body`); `styles.css` never sets it. Live Preview spans and the
+buttons in Reading view, embeds, hover previews, and Tasks and Dataview
+results compute one look. The host does not wrap between the well and the
+face; long faces still wrap. No state changes the line's width or height.
+Run state outlives editor rebuilds and Reading re-renders, so a note
+rewritten mid-run keeps its live chip, and every copy of one command on
+screen shows the same run.
 
 The hover tooltip is DOM text with these lines:
 
@@ -582,10 +589,13 @@ hover previews:
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
-- The header shows the play glyph, the label (or **Run · N steps** without
-  one), a meta line, and a Run button. The meta reads "N steps · EFFECT",
-  where the effect is the strongest step's (reads, then writes, then
-  syncs), plus "· asks first" when a step is a `confirm` command.
+- The header is a tinted bar with a solid run well, the label (or **Run · N
+  steps** without one), a meta line, and a Run button (`min-width: 5.5em`;
+  copy-only cards use `7.5em` so Copy / Copied ✓ / Copy failed stay one
+  width). On a narrow card the header wraps instead of squeezing the
+  title. The meta reads "N steps · EFFECT", where the effect is the
+  strongest step's (reads, then writes, then syncs), plus "· asks first"
+  when a step is a `confirm` command.
 - Steps are numbered and monospace. A line may hold several `&&` steps;
   blank lines are skipped.
 - Only the Run button runs. Clicking the body selects text. Shift+Click on
@@ -620,8 +630,8 @@ the header.
 - **Unavailable.** When Command Mode refuses the text, the header shows ⊘
   and "Can't run: REASON (step K)", and step K is marked ✗ with the reason.
   Run shows the same reason in a Notice.
-- **Copy only.** In a copy-only note, the header shows the copy glyph and
-  the reason, and the button reads **Copy**. It copies the fence body
+- **Copy only.** In a copy-only note, the header wears the blue copy well
+  and copy glyph, and the button reads **Copy**. It copies the fence body
   byte-exact.
 - **Print.** Print and PDF export show the title over a plain code listing
   of the steps.

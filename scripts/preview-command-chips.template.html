@@ -6,27 +6,12 @@
 <title>Bob command chips preview</title>
 <style>
 __OBSIDIAN_BASELINE_CSS__
-body[data-theme="light"] {
-  --background-primary:#fcfcfd; --background-secondary:#f0f1f4; --background-modifier-border:#d7d9df;
-  --background-modifier-hover:#e5e7ec; --text-normal:#252832; --text-muted:#727783; --text-faint:#a1a5ae;
-  --text-accent:#624bb8; --text-error:#c44950; --text-highlight-bg:#fff3a3; --interactive-accent:#7457ce;
-  --interactive-normal:#f4f4f6; --color-green:#27865e; --color-orange:#b87918; --color-red:#c44950;
-  --code-background:#f0f1f4; --shadow-s:0 2px 8px #20263a22; --shadow-l:0 12px 32px #20263a22;
-  color-scheme:light;
-}
-body[data-theme="dark"] {
-  --background-primary:#202226; --background-secondary:#292c32; --background-modifier-border:#41454d;
-  --background-modifier-hover:#383c44; --text-normal:#e4e5e9; --text-muted:#a3a7b0; --text-faint:#70747d;
-  --text-accent:#b6a0ff; --text-error:#ee797e; --text-highlight-bg:#6b5b1a; --interactive-accent:#a78bf2;
-  --interactive-normal:#30333a; --color-green:#73c99d; --color-orange:#e8b55e; --color-red:#ee797e;
-  --code-background:#292c32; --shadow-s:0 2px 8px #0008; --shadow-l:0 12px 32px #0008;
-  color-scheme:dark;
-}
 body { margin:0; padding:28px; background:var(--background-secondary); color:var(--text-normal); font:16px/1.6 var(--font-text); }
 .preview-shell { max-width:980px; margin:0 auto; padding:22px; border:1px solid var(--background-modifier-border); border-radius:14px; background:var(--background-primary); box-shadow:var(--shadow-l); }
 .preview-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px; font-family:var(--font-interface); }
 .preview-heading h1 { margin:0; font-size:18px; font-weight:650; }
 .preview-heading span { color:var(--text-muted); font-size:12px; }
+.preview-surface-name { display:block; margin:6px 0 2px; color:var(--text-faint); font:600 11px var(--font-interface); }
 .preview-section { margin-top:18px; }
 .preview-section > h2 { margin:0 0 8px; color:var(--text-muted); font:650 10px var(--font-interface); letter-spacing:.08em; text-transform:uppercase; }
 .preview-table { display:grid; grid-template-columns:120px minmax(0,1fr) minmax(0,1fr); gap:6px 14px; align-items:baseline; }
@@ -35,7 +20,23 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-cell { min-width:0; margin:0; }
 .preview-cell .preview-caption { display:block; color:var(--text-faint); font:11px/1.35 var(--font-interface); }
 .preview-lines { display:grid; gap:4px; }
-.preview-line { margin:0; }
+.preview-line { margin:0; padding:2px 6px; }
+.preview-row { border-radius:4px; }
+.preview-row.is-blocked { --row:var(--color-red); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 13%, transparent) 2px 100%); }
+.preview-row.is-next { --row:var(--color-green); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 14%, transparent) 2px 100%); }
+.preview-row.is-wip { --row:var(--color-yellow); background:linear-gradient(to right, var(--row) 0 2px, color-mix(in srgb, var(--row) 14%, transparent) 2px 100%); }
+.preview-row-tag { display:inline-block; min-width:4.6em; color:var(--text-faint); font:600 11px var(--font-interface); }
+code.preview-inline-code {
+  --hue:var(--color-cyan);
+  display:inline; margin:0 .04em; padding:.12em .4em .14em; border:1px solid color-mix(in srgb, var(--hue) 42%, var(--background-modifier-border));
+  border-radius:.35em; background:color-mix(in srgb, var(--hue) 12%, var(--background-primary)); color:color-mix(in srgb, var(--hue) 32%, var(--text-normal));
+  font-family:var(--font-monospace); font-size:.875em; line-height:1.35; box-decoration-break:clone; -webkit-box-decoration-break:clone;
+}
+a.preview-link { color:var(--text-accent); text-decoration:underline; text-decoration-color:color-mix(in srgb, var(--text-accent) 45%, transparent); }
+.preview-states { display:grid; grid-template-columns:120px repeat(4, minmax(0,1fr)); gap:6px 14px; align-items:end; }
+.preview-states .col-head { color:var(--text-muted); font:600 11px var(--font-interface); }
+.preview-states .row-name { color:var(--text-muted); font:600 12px var(--font-interface); }
+.preview-states .bob-run-chip-tip { display:none !important; }
 .preview-narrow { width:240px; padding:8px 10px; border:1px dashed var(--background-modifier-border); border-radius:8px; }
 .preview-force .preview-line { margin-top:128px; }
 .preview-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
@@ -45,12 +46,15 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-keymap { display:grid; grid-template-columns:150px minmax(0,1fr); gap:2px 14px; align-items:baseline; }
 .preview-keymap .row-name { color:var(--text-muted); font:600 12px var(--font-interface); }
 .preview-keymap .preview-child { grid-column:2; padding-left:2em; }
-code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background:var(--code-background); font:.875em var(--font-monospace); }
+.preview-sweep-box { position:absolute; left:0; top:0; visibility:hidden; font:16px/1.5 var(--font-text); }
+code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background:var(--background-secondary); font:.875em var(--font-monospace); }
 @media (max-width:620px) {
   body { padding:12px; }
   .preview-shell { padding:14px; }
   .preview-table { grid-template-columns:minmax(0,1fr); }
   .preview-table .col-head { display:none; }
+  .preview-states { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  .preview-states .col-head, .preview-states .row-name { display:none; }
   .preview-pair { grid-template-columns:minmax(0,1fr); }
   .preview-fence-grid { grid-template-columns:minmax(0,1fr); }
 }
@@ -118,6 +122,7 @@ window.PREVIEW_MATRIX = __MATRIX__;
 // commandChipPaint paint them. Verdicts come from Command Mode's own
 // resolver, computed in Node against the shared fixture catalog.
 const H = window.BobChipsModule.helpers;
+const M = window.PREVIEW_MATRIX;
 const FROZEN_TIMERS = { set: () => 0, clear: () => {} };
 
 function previewEngine(catalog) {
@@ -227,6 +232,12 @@ function previewFenceDrive(plugin, chip, ctx, spec) {
 
 const previewFences = [];
 
+function withFrozenTimers(fn) {
+  const real = window.setTimeout;
+  window.setTimeout = () => 0;
+  try { return fn(); } finally { window.setTimeout = real; }
+}
+
 function renderFence(parent, row) {
   const plugin = previewPlugin(row.variant);
   const ctx = previewContext(row.variant);
@@ -236,27 +247,45 @@ function renderFence(parent, row) {
   const card = H.commandFenceBuild(document, { label: chip.label, text: chip.text });
   const model = H.commandChipPaintModel(plugin, chip, ctx);
   H.commandFencePaint(card, model, { plugin, chip });
+  if (row.state === "copied" || row.state === "failed") {
+    withFrozenTimers(() => H.copyChipShowFeedback(card, row.state === "copied" ? "success" : "failure"));
+    const button = card.querySelector(".bob-run-fence-run");
+    if (button) button.textContent = row.state === "copied" ? M.fenceFaces.copied : M.fenceFaces.failed;
+  }
+  let mount = card;
+  if (row.force) {
+    mount = document.createElement("span");
+    mount.className = "preview-force-" + row.force + (row.force === "hover" ? " preview-force-card-hover" : "");
+    mount.appendChild(card);
+  }
   const cell = document.createElement("div");
   const name = document.createElement("span");
   name.className = "preview-fence-name";
   name.textContent = row.name;
   cell.appendChild(name);
-  cell.appendChild(card);
+  cell.appendChild(mount);
   parent.appendChild(cell);
   previewFences.push({ card, model, row });
 }
 
 function appendText(parent, text) {
-  // Scaffolding only: ordinary code spans render as plain inline code.
-  const pattern = /`([^`]+)`/g;
+  const pattern = /`([^`]+)`|\[([^\]]+)\]\(#\)/g;
   let last = 0;
   let match;
   while ((match = pattern.exec(text))) {
     if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
-    const code = document.createElement("code");
-    code.className = "preview-code";
-    code.textContent = match[1];
-    parent.appendChild(code);
+    if (match[1] !== undefined) {
+      const code = document.createElement("code");
+      code.className = "preview-inline-code";
+      code.textContent = match[1];
+      parent.appendChild(code);
+    } else {
+      const link = document.createElement("a");
+      link.className = "preview-link";
+      link.href = "#";
+      link.textContent = match[2];
+      parent.appendChild(link);
+    }
     last = match.index + match[0].length;
   }
   if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
@@ -271,7 +300,13 @@ function renderLine(parent, line, options) {
   const interactive = opts.surface === "reading";
   const chips = H.chipScanLine(line);
   const p = document.createElement(interactive ? "p" : "div");
-  p.className = "preview-line " + (interactive ? "markdown-preview-view" : "cm-line");
+  p.className = "preview-line " + (interactive ? "markdown-preview-view" : "cm-line") + (opts.row ? " preview-row is-" + opts.row : "");
+  if (opts.row) {
+    const tag = document.createElement("span");
+    tag.className = "preview-row-tag";
+    tag.textContent = opts.row === "wip" ? "WIP" : opts.row[0].toUpperCase() + opts.row.slice(1);
+    p.appendChild(tag);
+  }
   let at = 0;
   for (const found of chips) {
     appendText(p, line.slice(at, found.from));
@@ -288,11 +323,22 @@ function renderLine(parent, line, options) {
     const host = H.commandChipBuildInline(document, { label: found.label, text: found.text }, { interactive });
     const model = H.commandChipPaintModel(plugin, chip, ctx);
     H.commandChipPaint(host, model, { plugin, chip });
+    if (opts.state === "copied") withFrozenTimers(() => H.copyChipShowFeedback(host, "success"));
+    if (opts.state === "failed" && model.face === "copy") withFrozenTimers(() => H.copyChipShowFeedback(host, "failure"));
     const wrap = document.createElement("span");
     if (opts.force) wrap.className = "preview-force-" + opts.force;
     wrap.appendChild(host);
     p.appendChild(wrap);
-    previewMounted.push({ host, model, chip, group: opts.group || null, surface: opts.surface || "live" });
+    previewMounted.push({
+      host,
+      model,
+      chip,
+      group: opts.group || null,
+      surface: opts.surface || "live",
+      state: opts.state || (opts.drive && opts.drive.state) || "rest",
+      force: opts.force || null,
+      kind: opts.kind || (found.label == null ? "literal" : "labeled"),
+    });
   }
   appendText(p, line.slice(at));
   parent.appendChild(p);
@@ -350,21 +396,77 @@ function table(parent, rows) {
   parent.appendChild(grid);
 }
 
+function renderLook(parent) {
+  const grid = document.createElement("div");
+  grid.className = "preview-states";
+  for (const head of ["", "Labeled · Live Preview", "Labeled · Reading", "Literal · Live Preview", "Literal · Reading"]) {
+    const el = document.createElement("div");
+    el.className = "col-head";
+    el.textContent = head;
+    grid.appendChild(el);
+  }
+  for (const row of M.look.states) {
+    const name = document.createElement("div");
+    name.className = "row-name";
+    name.textContent = row.name;
+    grid.appendChild(name);
+    for (const kind of ["labeled", "literal"]) {
+      for (const surface of ["live", "reading"]) {
+        const cell = document.createElement("div");
+        cell.className = "preview-cell";
+        renderLine(cell, M.look.stateLines[kind], {
+          ...row,
+          surface,
+          group: "look|" + kind + "|" + surface,
+        });
+        grid.appendChild(cell);
+      }
+    }
+  }
+  parent.appendChild(grid);
+  const copyPair = document.createElement("div");
+  copyPair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    const caption = document.createElement("span");
+    caption.className = "preview-surface-name";
+    caption.textContent = "Copy only · " + (surface === "live" ? "Live Preview" : "Reading");
+    box.appendChild(caption);
+    renderLine(box, M.look.copy.line, { ...M.look.copy, surface, kind: "copy", group: "look|copy|" + surface });
+    copyPair.appendChild(box);
+  }
+  parent.appendChild(copyPair);
+}
+
 function renderAll() {
   previewMounted.length = 0;
   previewFences.length = 0;
   document.getElementById("sections").replaceChildren();
-  const M = window.PREVIEW_MATRIX;
-  for (const spec of M.tables) table(section(spec.title), spec.rows);
-  const mixed = section(M.mixed.title);
+  const context = section(M.context.title);
+  context.id = "preview-context";
   const pair = document.createElement("div");
   pair.className = "preview-pair";
   for (const surface of ["live", "reading"]) {
     const box = document.createElement("div");
-    for (const row of M.mixed.rows) renderLine(box, row.line, { ...row, surface });
+    const name = document.createElement("span");
+    name.className = "preview-surface-name";
+    name.textContent = surface === "live" ? "Live Preview (span)" : "Reading view (button)";
+    box.appendChild(name);
+    for (const row of M.context.rows) renderLine(box, row.line, { ...row, surface });
     pair.appendChild(box);
   }
-  mixed.appendChild(pair);
+  context.appendChild(pair);
+  renderLook(section(M.look.title));
+  for (const spec of M.tables) table(section(spec.title), spec.rows);
+  const mixed = section(M.mixed.title);
+  const mixedPair = document.createElement("div");
+  mixedPair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    for (const row of M.mixed.rows) renderLine(box, row.line, { ...row, surface });
+    mixedPair.appendChild(box);
+  }
+  mixed.appendChild(mixedPair);
   const wrap = section(M.wrap.title);
   const wrapPair = document.createElement("div");
   wrapPair.className = "preview-pair";
@@ -482,7 +584,7 @@ function checks() {
   }
   // `bob-run` cards: the payload stays out of attributes, the Run button
   // keeps one width across Run, Output, and Copy, and it is named.
-  const buttonWidths = [];
+  const buttonWidths = new Map();
   for (const item of previewFences) {
     const payloadLines = item.row.text.split("\n");
     for (const el of [item.card, ...item.card.querySelectorAll("*")]) {
@@ -493,15 +595,17 @@ function checks() {
       }
     }
     const button = item.card.querySelector(".bob-run-fence-run");
-    buttonWidths.push(button.getBoundingClientRect().width);
+    const group = item.row.group || "run-button";
+    if (!buttonWidths.has(group)) buttonWidths.set(group, []);
+    buttonWidths.get(group).push(button.getBoundingClientRect().width);
     const ids = (button.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
     if (ids.length !== 2 || ids.some((id) => !document.getElementById(id))) failures.push("fence button aria-labelledby does not name the action and title");
     if (H.commandFencePayloadOf(item.card) !== item.row.text) failures.push("fence payload record mismatch for " + item.row.name);
   }
-  if (buttonWidths.length) {
-    const dw = Math.max(...buttonWidths) - Math.min(...buttonWidths);
-    geometry.push({ group: "fence-button", faces: previewFences.map((item) => item.model.face), widthDelta: dw, heightDelta: 0 });
-    if (dw > 0.5) failures.push("fence Run button width varies by " + dw.toFixed(2) + " px");
+  for (const [group, widths] of buttonWidths) {
+    const dw = Math.max(...widths) - Math.min(...widths);
+    geometry.push({ group: "fence-" + group, faces: previewFences.filter((item) => (item.row.group || "run-button") === group).map((item) => item.model.face), widthDelta: dw, heightDelta: 0 });
+    if (dw > 0.5) failures.push("fence " + group + " width varies by " + dw.toFixed(2) + " px");
   }
   return { mounted: previewMounted.length + previewFences.length, faces: Array.from(faces).sort(), attributesChecked: attributes, geometry, failures };
 }
@@ -545,6 +649,16 @@ function printCheck() {
   return { chips: chips.length, fences: fences.length, failures };
 }
 
+function paintSweepChip(host, found, spec) {
+  const plugin = previewPlugin(spec && spec.variant);
+  const ctx = previewContext(spec && spec.variant);
+  const chip = { label: found.label, text: found.text, form: "inline", line: 0, from: found.from || 0, to: found.to || 0 };
+  previewDrive(plugin, chip, ctx, spec && spec.drive);
+  const model = H.commandChipPaintModel(plugin, chip, ctx);
+  H.commandChipPaint(host, model, { plugin, chip });
+  return model.face;
+}
+
 window.commandChipsPreview = {
   render(theme) {
     document.body.dataset.theme = theme;
@@ -554,8 +668,14 @@ window.commandChipsPreview = {
   checks,
   motionCheck,
   printCheck,
+  paintSweepChip,
+  mounted: previewMounted,
+  fences: previewFences,
 };
 window.commandChipsPreviewReady = true;
+</script>
+<script>
+__CHECKS__
 </script>
 </body>
 </html>

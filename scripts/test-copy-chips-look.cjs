@@ -12,7 +12,7 @@ const test = require("node:test");
 const { helpers } = require("./copy-chips-test-helpers.cjs");
 
 const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-chips", "styles.css"), "utf8");
-const runStart = css.indexOf(".bob-run-chip {");
+const runStart = css.indexOf("/* Command chips:");
 const fenceStart = css.indexOf(".bob-copy-fence {");
 const runFenceStart = css.indexOf("/* `bob-run` sequence cards");
 const authorStart = css.indexOf(".modal.bob-copy-author-modal {");
@@ -81,19 +81,10 @@ const decl = (rule, property) => {
 
 test("the sections exist in order and the command-chip slice is untouched", () => {
   assert.ok(runStart > 0 && fenceStart > runStart && runFenceStart > fenceStart && authorStart > runFenceStart);
-  // The expectations of test-command-chips-live-preview.cjs, which slices
-  // exactly `.bob-run-chip {` .. `.bob-copy-fence {`.
   const run = css.slice(runStart, fenceStart);
   assert.doesNotMatch(run, /#[0-9a-f]{3,6}\b|rgba?\(/i, "no fixed colors");
-  assert.match(run, /padding: 0 0\.45em;[\s\S]*font-size: 0\.92em;[\s\S]*line-height: inherit;/);
-  assert.match(run, /color-mix\(in srgb, var\(--interactive-accent\) 7%, var\(--background-secondary\)\)/);
-  assert.match(run, /color-mix\(in srgb, var\(--interactive-accent\) 25%, var\(--background-modifier-border\)\)/);
-  assert.match(run, /box-decoration-break: clone/);
-  assert.match(run, /@media \(prefers-reduced-motion: reduce\) \{\s*\.bob-run-chip\.is-running \.bob-run-chip-glyph svg,/);
-  assert.match(run, /@media print \{[\s\S]*\.bob-run-chip-glyph,\s*\.bob-run-chip-tip,\s*\.bob-run-chip-action \{\s*display: none;/);
-  for (const face of helpers.COMMAND_CHIP_FACES.filter((f) => f !== "ready")) assert.ok(run.includes(".bob-run-chip.is-" + face), face);
-  assert.doesNotMatch(run, /border-width|border: [2-9]px/);
-  assert.doesNotMatch(run, /bob-copy-chip(?!-glyph)/, "no copy-chip rule hides in the command-chip slice");
+  assert.match(run, /:is\(span, button\)\.bob-run-chip \{/);
+  assert.doesNotMatch(run, /bob-copy-chip(?!-glyph|-hue)/, "no copy-chip rule hides in the command-chip slice");
 });
 
 test("copy styles use theme variables only", () => {
@@ -241,7 +232,7 @@ test("the card and the authoring icon wear the same well", () => {
   assert.equal(decl(icon, "background-color"), "var(--bob-copy-chip-ink)");
   assert.equal(decl(icon, "color"), "var(--text-on-accent)");
   const runIcon = ruleFor(".bob-copy-author-modal.is-run .bob-copy-author-icon");
-  assert.equal(decl(runIcon, "color"), "var(--interactive-accent)", "a command chip keeps the accent glyph, never white on a pale wash");
+  assert.equal(decl(runIcon, "--bob-copy-chip-ink"), "var(--bob-run-chip-hue, var(--interactive-accent))", "a command chip's authoring icon is the run well");
   const inert = copyRules.find((r) => r.selectors.includes(".bob-copy-author .bob-copy-fence-copy"));
   assert.ok(inert && inert.selectors.includes(".bob-copy-author .bob-copy-fence-toggle"));
   assert.equal(decl(inert, "pointer-events"), "none");

@@ -13,6 +13,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const fixture = require("./obsidian-command-chips-e2e-lib.cjs");
+const look = require("./obsidian-command-chips-look-e2e.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const OVERALL_TIMEOUT_MS = 480_000;
@@ -968,6 +969,9 @@ async function runE2e(args) {
     await activationPhase(ctx);
     await fencePhase(ctx);
     await authorPhase(ctx);
+    // Look cases click a labeled ready chip (which runs the stub) and a
+    // copy-only ref/ chip. They run after the activation counts settle.
+    await look.runLookCases(client, openNote, record, outDir);
   } catch (error) {
     record("e2e completed without an exception", false, String((error && error.stack) || error));
   } finally {
@@ -991,6 +995,7 @@ function runSelfTest() {
   const { spawnSync } = require("node:child_process");
   const cm = require("./command-mode-harness.cjs").helpers;
   const chips = require("./copy-chips-test-helpers.cjs").helpers;
+  look.selfTest();
   assert.equal(cm.cmValidateCatalog(JSON.parse(JSON.stringify(fixture.CATALOG))).ok, true, "fixture catalog validates");
   const resolve = (text) => cm.cmResolveCommandText(fixture.CATALOG, text, { host: "e2e-self-test", catalogStatus: "ready" });
   for (const [name, payload] of Object.entries(P)) {

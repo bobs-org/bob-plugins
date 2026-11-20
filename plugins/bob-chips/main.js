@@ -1858,8 +1858,8 @@ function commandChipBuildInline(doc, chip, options) {
     commandChipSetAttr(tip, "id", ids.tip);
     commandChipSetAttr(tip, "role", "tooltip");
     host.appendChild(glyph);
-    host.appendChild(action);
     host.appendChild(face);
+    host.appendChild(action);
     host.appendChild(tip);
     commandChipSetAttr(host, "aria-labelledby", ids.action + " " + ids.face);
     commandChipSetAttr(host, "aria-describedby", ids.tip);
@@ -1928,7 +1928,7 @@ function commandChipPaintTip(record, rows) {
 }
 
 // The 2 px segmented underline: one segment per step, done in green, the
-// current step in accent, upcoming faint. Theme variables only.
+// current step in the run ink, upcoming faint. Theme variables only.
 function commandChipProgressGradient(step, total) {
   const n = Math.max(1, Math.floor(Number(total) || 1));
   const current = Math.min(n, Math.max(1, Math.floor(Number(step) || 1)));
@@ -1937,7 +1937,7 @@ function commandChipProgressGradient(step, total) {
   for (let index = 0; index < n; index += 1) {
     const color = index + 1 < current
       ? "var(--color-green)"
-      : index + 1 === current ? "var(--interactive-accent)" : "var(--text-faint)";
+      : index + 1 === current ? "var(--bob-run-chip-ink, var(--interactive-accent))" : "var(--text-faint)";
     const from = (index * 100) / n;
     const to = ((index + 1) * 100) / n - (index + 1 < n ? gap : 0);
     stops.push(color + " " + from.toFixed(2) + "% " + to.toFixed(2) + "%");

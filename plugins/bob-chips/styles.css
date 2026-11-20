@@ -243,116 +243,147 @@ button.bob-copy-chip.mobile-tap {
   }
 }
 
-.bob-run-chip {
+/* Command chips: the copy chip's capsule in the run hue. A solid well
+   holds the white ▶; a lightly tinted body holds the face. Every color
+   derives from --bob-run-chip-ink, so a state changes only the ink and
+   the glyph. A snippet may set --bob-run-chip-hue (on body) to recolor
+   every command chip and card. A copy-only chip wears the copy hue and
+   glyph, because a click copies. Every rule names both tags, so Live
+   Preview spans and Reading buttons compute one look. Theme variables
+   only. */
+:is(span, button).bob-run-chip {
+  --bob-run-chip-ink: var(--bob-run-chip-hue, var(--interactive-accent));
   position: relative;
   display: inline;
-  margin: 0;
-  padding: 0 0.45em;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 25%, var(--background-modifier-border));
-  border-radius: var(--radius-s);
-  background-color: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-secondary));
-  color: var(--text-normal);
-  font-size: 0.92em;
-  line-height: inherit;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-  cursor: pointer;
-  vertical-align: baseline;
-}
-
-button.bob-run-chip {
-  display: inline;
   height: auto;
-  padding: 0 0.45em;
+  margin: 0;
+  padding: 0.1em 0.5em 0.12em;
+  border: 1px solid color-mix(in srgb, var(--bob-run-chip-ink) 50%, var(--background-primary));
+  border-radius: var(--radius-s);
+  outline: none;
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 10%, var(--background-primary));
   box-shadow: none;
+  color: color-mix(in srgb, var(--bob-run-chip-ink) 30%, var(--text-normal));
   font: inherit;
   font-size: 0.92em;
   line-height: inherit;
   text-align: inherit;
+  white-space: nowrap;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  cursor: pointer;
+  vertical-align: baseline;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-button.bob-run-chip:hover {
-  background-color: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-secondary));
-  box-shadow: none;
+button.bob-run-chip {
+  line-height: normal;
 }
 
-button.bob-run-chip.is-unavailable:hover {
-  background-color: var(--background-secondary);
-}
-
-.bob-run-chip.is-literal {
+:is(span, button).bob-run-chip.is-literal {
   font-family: var(--font-monospace);
 }
 
-.bob-run-chip.is-labeled {
+:is(span, button).bob-run-chip.is-labeled {
   font-family: inherit;
 }
 
+.bob-run-chip.is-labeled .bob-run-chip-label {
+  font-weight: 500;
+}
+
+/* The hidden "Run"/"Copy" that, with the face, names a Reading button
+   through aria-labelledby. It stays in the inline flow at zero size: an
+   out-of-flow placeholder after the face would let Chromium wrap the
+   chip's end cap alone onto the next line, and the hover tooltip (itself
+   out of flow) would then shift it. */
 .bob-run-chip-action {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+  font-size: 0;
   white-space: nowrap;
+  user-select: none;
 }
 
 .bob-run-chip-face {
+  white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.bob-run-chip > .bob-run-chip-glyph {
+  --icon-stroke: 2.25px;
+  display: inline;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  margin-inline: -0.5em 0.42em;
+  padding: 0.1em 0.3em 0.12em;
+  border-start-start-radius: calc(var(--radius-s) - 1px);
+  border-end-start-radius: calc(var(--radius-s) - 1px);
+  background-color: var(--bob-run-chip-ink);
+  color: var(--bob-run-chip-on-ink, var(--text-on-accent));
+  vertical-align: baseline;
+  transition: background-color 120ms ease;
+}
+
+.bob-run-chip > .bob-run-chip-glyph svg {
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.13em;
+}
+
+/* A solid ▶ reads as "play" at a glance; every other glyph stays stroked. */
+.bob-run-chip > .bob-run-chip-glyph svg.lucide-play {
+  fill: currentColor;
 }
 
 .bob-run-chip-sep,
 .bob-run-chip-count {
-  color: var(--text-faint);
+  color: color-mix(in srgb, var(--bob-run-chip-ink) 40%, var(--text-muted));
 }
 
 .bob-run-chip-count {
   font-variant-numeric: tabular-nums;
 }
 
-.bob-run-chip:hover {
-  border-color: var(--interactive-accent);
+:is(span, button).bob-run-chip:hover,
+button.bob-run-chip.mobile-tap {
+  border-color: var(--bob-run-chip-ink);
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 17%, var(--background-primary));
+  box-shadow: none;
 }
 
-.bob-run-chip:hover .bob-run-chip-glyph {
-  color: var(--interactive-accent);
+:is(span, button).bob-run-chip:active {
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 24%, var(--background-primary));
 }
 
-.bob-run-chip:focus-visible {
-  outline: 2px solid var(--interactive-accent);
+:is(span, button).bob-run-chip:focus-visible {
+  outline: 2px solid var(--bob-run-chip-ink);
   outline-offset: 2px;
+  box-shadow: none;
 }
 
-.bob-run-chip.is-armed {
-  border-color: var(--interactive-accent);
+/* ⌘↵ target: a full-ink border and a soft halo, no size change. */
+:is(span, button).bob-run-chip.is-armed {
+  border-color: var(--bob-run-chip-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bob-run-chip-ink) 30%, transparent);
 }
 
-.bob-run-chip.is-armed .bob-run-chip-glyph,
-.bob-run-chip.is-queued .bob-run-chip-glyph,
-.bob-run-chip.is-running .bob-run-chip-glyph {
-  color: var(--interactive-accent);
-}
-
-.bob-run-chip.is-loading .bob-run-chip-glyph {
-  color: var(--text-faint);
+.bob-run-chip.is-loading > .bob-run-chip-glyph svg {
   opacity: 0.6;
 }
 
-.bob-run-chip.is-queued {
+:is(span, button).bob-run-chip.is-queued {
   border-style: dashed;
-  border-color: var(--interactive-accent);
+  border-color: var(--bob-run-chip-ink);
 }
 
-.bob-run-chip.is-running .bob-run-chip-glyph svg {
+.bob-run-chip.is-running > .bob-run-chip-glyph svg {
   animation: bob-run-chip-spin 1s linear infinite;
 }
 
-.bob-run-chip.has-progress {
+/* The segmented progress underline rides the face, so the well never
+   hides a segment and a wrapped face carries one continuous bar. */
+.bob-run-chip.has-progress > .bob-run-chip-face {
+  padding-block: 0.1em 0.12em;
   background-image: var(--bob-run-progress);
   background-position: 0 100%;
   background-repeat: no-repeat;
@@ -360,56 +391,52 @@ button.bob-run-chip.is-unavailable:hover {
 }
 
 .bob-run-chip-step.is-current {
-  color: var(--interactive-accent);
+  color: var(--bob-run-chip-ink);
 }
 
-.bob-run-chip.is-completed {
-  border-color: var(--color-green);
+:is(span, button).bob-run-chip.is-completed {
+  --bob-run-chip-ink: var(--color-green);
   animation: bob-run-chip-pulse 1.2s ease-out 1;
 }
 
-.bob-run-chip.is-completed .bob-run-chip-glyph {
-  color: var(--color-green);
+:is(span, button).bob-run-chip.is-attention {
+  --bob-run-chip-ink: var(--color-orange);
+  /* White fails 3:1 on orange in both themes; Obsidian's inverted
+     on-accent ink is a hazard-sign black. */
+  --bob-run-chip-on-ink: var(--text-on-accent-inverted);
 }
 
-.bob-run-chip.is-attention {
-  border-color: var(--color-orange);
+:is(span, button).bob-run-chip.is-failed {
+  --bob-run-chip-ink: var(--text-error);
 }
 
-.bob-run-chip.is-attention .bob-run-chip-glyph {
-  color: var(--color-orange);
-}
-
-.bob-run-chip.is-failed {
-  border-color: var(--text-error);
-}
-
-.bob-run-chip.is-failed .bob-run-chip-glyph {
-  color: var(--text-error);
-}
-
-.bob-run-chip.is-unavailable {
+/* Unavailable is muted: a pale well, the ban glyph, a dashed hairline. */
+:is(span, button).bob-run-chip.is-unavailable {
+  --bob-run-chip-ink: var(--text-muted);
   border-style: dashed;
   border-color: var(--background-modifier-border);
   background-color: var(--background-secondary);
   color: var(--text-muted);
 }
 
-.bob-run-chip.is-unavailable .bob-run-chip-glyph {
+.bob-run-chip.is-unavailable > .bob-run-chip-glyph {
+  background-color: color-mix(in srgb, var(--text-muted) 20%, var(--background-primary));
   color: var(--text-muted);
 }
 
-.bob-run-chip.is-copy {
+:is(span, button).bob-run-chip.is-copy {
+  --bob-run-chip-ink: var(--bob-copy-chip-hue, var(--color-blue));
   cursor: copy;
 }
 
-.bob-run-chip.is-copied {
-  border-color: var(--interactive-accent);
+:is(span, button).bob-run-chip.is-copied {
+  --bob-run-chip-ink: var(--color-green);
   animation: bob-run-chip-pulse 1.2s ease-out 1;
 }
 
-.bob-run-chip.is-copied .bob-run-chip-glyph {
-  color: var(--color-green);
+/* A copy failure borrows is-failed for its dwell. */
+:is(span, button).bob-run-chip.is-copy.is-failed {
+  --bob-run-chip-ink: var(--text-error);
 }
 
 .bob-run-chip-tip {
@@ -460,18 +487,18 @@ button.bob-run-chip.is-unavailable:hover {
   color: var(--text-muted);
 }
 
-/* ⌘↵ fired: one brief accent pulse on the chip or card the key just ran. */
-.bob-run-chip.is-fired {
-  border-color: var(--interactive-accent);
-  animation: bob-run-chip-pulse 0.6s ease-out 1;
+/* ⌘↵ fired: one brief press in the ink on the chip or card it ran. */
+:is(span, button).bob-run-chip.is-fired {
+  border-color: var(--bob-run-chip-ink);
+  animation: bob-run-chip-fire 0.6s ease-out 1;
 }
 
 .bob-run-fence.is-fired {
-  border-color: var(--interactive-accent);
+  border-color: var(--bob-run-chip-ink);
 }
 
 .bob-run-fence.is-fired .bob-run-fence-header {
-  animation: bob-run-chip-pulse 0.6s ease-out 1;
+  animation: bob-run-chip-fire 0.6s ease-out 1;
 }
 
 /* ⌘↵ hint: a muted keycap capsule at the end of the cursor's line, shown
@@ -500,12 +527,16 @@ button.bob-run-chip.is-unavailable:hover {
   }
 }
 
+/* From-only: each pulse eases back to whatever the element's own fill is. */
 @keyframes bob-run-chip-pulse {
-  0% {
+  from {
     background-color: var(--bob-yank-flash-bg, var(--text-highlight-bg));
   }
-  100% {
-    background-color: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-secondary));
+}
+
+@keyframes bob-run-chip-fire {
+  from {
+    background-color: color-mix(in srgb, var(--bob-run-chip-ink) 35%, var(--background-primary));
   }
 }
 
@@ -518,37 +549,44 @@ button.bob-run-chip.is-unavailable:hover {
   }
 }
 
+/* Reduced motion: no spin, pulse, transitions, or timed tooltip reveal.
+   The glyphs and state colors stay. `[class]` outranks every state rule. */
 @media (prefers-reduced-motion: reduce) {
-  .bob-run-chip.is-running .bob-run-chip-glyph svg,
-  .bob-run-chip.is-completed,
-  .bob-run-chip.is-copied,
-  .bob-run-chip.is-fired,
-  .bob-run-fence.is-fired .bob-run-fence-header {
+  :is(span, button).bob-run-chip[class],
+  .bob-run-chip[class] > .bob-run-chip-glyph,
+  .bob-run-chip[class] > .bob-run-chip-glyph svg,
+  .bob-run-chip[class] > .bob-run-chip-tip,
+  .bob-run-fence[class] {
     animation: none;
+    transition: none;
   }
 }
 
 @media print {
-  .bob-run-chip,
-  button.bob-run-chip {
+  :is(span, button).bob-run-chip[class] {
+    padding: 0;
+    border: none;
+    outline: none;
+    background: none;
+    box-shadow: none;
+    color: inherit;
     cursor: auto;
     font-family: var(--font-monospace);
+    animation: none;
+    transition: none;
   }
 
-  /* `[class]` outranks the two-class state rules above (queued and
-     unavailable dashes, the progress underline, the completed pulse), so
-     every state prints as plain inline code. */
-  .bob-run-chip[class],
-  button.bob-run-chip[class] {
-    border: none;
+  .bob-run-chip[class] > .bob-run-chip-face {
     padding: 0;
     background: none;
-    color: inherit;
-    animation: none;
   }
 
-  .bob-run-chip-glyph,
-  .bob-run-chip-tip,
+  .bob-run-chip[class] .bob-run-chip-label {
+    font-weight: inherit;
+  }
+
+  .bob-run-chip[class] > .bob-run-chip-glyph,
+  .bob-run-chip[class] > .bob-run-chip-tip,
   .bob-run-chip-action {
     display: none;
   }
@@ -741,37 +779,66 @@ button.bob-copy-fence-toggle:focus-visible {
   }
 }
 
-/* `bob-run` sequence cards: the copy card's frame with the command
-   chip's faint accent wash, numbered monospace steps, and per-step marks.
-   Theme variables only; the Run button keeps one width for Run, Output,
-   and Copy. The completed and copied pulses flash the header, whose wash
-   is the pulse's end color. */
+/* `bob-run` sequence cards: the inline chip's identity at card scale, as
+   the bob-copy card is for copy chips. The frame and header carry the run
+   ink, the header glyph is the same solid well, and the Run button takes
+   the chip body's recipe. The body reads like paper; steps stay numbered
+   monospace with per-step marks. A state swaps the card's ink; the Run
+   button keeps one width: Run and Output share 5.5em, and a copy-only
+   card's Copy, Copied ✓, and Copy failed share the copy card's 7.5em. */
 .bob-run-fence {
+  --bob-run-chip-ink: var(--bob-run-chip-hue, var(--interactive-accent));
   margin: 0.5em 0;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 25%, var(--background-modifier-border));
+  border: 1px solid color-mix(in srgb, var(--bob-run-chip-ink) 35%, var(--background-modifier-border));
   border-radius: var(--radius-s);
-  background-color: var(--background-secondary, var(--background-primary));
+  background-color: var(--background-primary);
   color: var(--text-normal);
   overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+/* The title fills the first row; on a narrow card the meta and Run
+   button wrap to a right-aligned second row instead of squeezing it. */
 .bob-run-fence-header {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 0.5em;
+  gap: 0.4em 0.5em;
   padding: 0.4em 0.6em;
-  border-bottom: 1px solid var(--background-modifier-border);
-  background-color: color-mix(in srgb, var(--interactive-accent) 7%, var(--background-secondary));
+  border-bottom: 1px solid color-mix(in srgb, var(--bob-run-chip-ink) 25%, var(--background-modifier-border));
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 8%, var(--background-primary));
 }
 
 .bob-run-fence-header .bob-run-fence-glyph {
-  margin-right: 0;
-  color: var(--text-faint);
+  --icon-stroke: 2.25px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  min-width: 1.5em;
+  height: 1.5em;
+  margin: 0;
+  border-radius: var(--radius-s);
+  background-color: var(--bob-run-chip-ink);
+  color: var(--bob-run-chip-on-ink, var(--text-on-accent));
   vertical-align: baseline;
 }
 
+.bob-run-fence-header .bob-run-fence-glyph svg {
+  width: 0.95em;
+  height: 0.95em;
+}
+
+.bob-run-fence-header .bob-run-fence-glyph svg.lucide-play {
+  fill: currentColor;
+}
+
 .bob-run-fence-title {
+  flex: 1 1 auto;
   min-width: 0;
+  color: color-mix(in srgb, var(--bob-run-chip-ink) 30%, var(--text-normal));
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -784,31 +851,47 @@ button.bob-copy-fence-toggle:focus-visible {
   white-space: nowrap;
 }
 
-.bob-run-fence-run {
-  min-width: 5.5em;
+:is(span, button).bob-run-fence-run {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   height: auto;
+  min-width: 5.5em;
+  margin: 0;
   padding: 0.15em 0.8em;
-  border: 1px solid color-mix(in srgb, var(--interactive-accent) 25%, var(--background-modifier-border));
+  border: 1px solid color-mix(in srgb, var(--bob-run-chip-ink) 50%, var(--background-primary));
   border-radius: var(--radius-s);
-  background-color: var(--background-primary);
+  outline: none;
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 12%, var(--background-primary));
   box-shadow: none;
-  color: var(--text-normal);
+  color: color-mix(in srgb, var(--bob-run-chip-ink) 30%, var(--text-normal));
   font: inherit;
   font-size: 0.92em;
-  cursor: pointer;
+  font-weight: 500;
+  line-height: 1.5;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
 
-.bob-run-fence-run:hover {
-  border-color: var(--interactive-accent);
-  background-color: var(--background-primary);
-  color: var(--interactive-accent);
+:is(span, button).bob-run-fence-run:hover,
+button.bob-run-fence-run.mobile-tap {
+  border-color: var(--bob-run-chip-ink);
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 17%, var(--background-primary));
+  box-shadow: none;
 }
 
-.bob-run-fence-run:focus-visible,
-.bob-run-fence-output:focus-visible {
-  outline: 2px solid var(--interactive-accent);
+:is(span, button).bob-run-fence-run:active {
+  background-color: color-mix(in srgb, var(--bob-run-chip-ink) 24%, var(--background-primary));
+}
+
+:is(span, button).bob-run-fence-run:focus-visible,
+:is(span, button).bob-run-fence-output:focus-visible {
+  outline: 2px solid var(--bob-run-chip-ink);
   outline-offset: 2px;
+  box-shadow: none;
 }
 
 .bob-run-fence-reason {
@@ -906,8 +989,7 @@ button.bob-copy-fence-toggle:focus-visible {
   overflow-wrap: anywhere;
 }
 
-button.bob-run-fence-output,
-.bob-run-fence-output {
+:is(span, button).bob-run-fence-output {
   display: inline;
   height: auto;
   padding: 0;
@@ -920,8 +1002,9 @@ button.bob-run-fence-output,
   cursor: pointer;
 }
 
-button.bob-run-fence-output:hover {
+:is(span, button).bob-run-fence-output:hover {
   background: none;
+  box-shadow: none;
   color: var(--interactive-accent);
 }
 
@@ -932,7 +1015,7 @@ button.bob-run-fence-output:hover {
 .bob-run-fence-step.is-queued .bob-run-fence-mark,
 .bob-run-fence-step.is-current .bob-run-fence-mark,
 .bob-run-fence-step.is-current .bob-run-fence-text {
-  color: var(--interactive-accent);
+  color: var(--bob-run-chip-ink);
 }
 
 .bob-run-fence-step.is-current .bob-run-fence-mark svg {
@@ -959,27 +1042,17 @@ button.bob-run-fence-output:hover {
 }
 
 .bob-run-fence.is-armed {
-  border-color: var(--interactive-accent);
+  border-color: var(--bob-run-chip-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bob-run-chip-ink) 30%, transparent);
 }
 
-.bob-run-fence.is-armed .bob-run-fence-header {
-  border-bottom-color: var(--interactive-accent);
-}
-
-.bob-run-fence.is-armed .bob-run-fence-glyph,
-.bob-run-fence.is-queued .bob-run-fence-glyph,
-.bob-run-fence.is-running .bob-run-fence-glyph,
-.bob-run-fence:hover .bob-run-fence-glyph {
-  color: var(--interactive-accent);
-}
-
-.bob-run-fence.is-loading .bob-run-fence-glyph {
+.bob-run-fence.is-loading .bob-run-fence-glyph svg {
   opacity: 0.6;
 }
 
 .bob-run-fence.is-queued {
   border-style: dashed;
-  border-color: var(--interactive-accent);
+  border-color: var(--bob-run-chip-ink);
 }
 
 .bob-run-fence.is-running .bob-run-fence-glyph svg {
@@ -987,7 +1060,7 @@ button.bob-run-fence-output:hover {
 }
 
 .bob-run-fence.is-completed {
-  border-color: var(--color-green);
+  --bob-run-chip-ink: var(--color-green);
 }
 
 .bob-run-fence.is-completed .bob-run-fence-header,
@@ -995,58 +1068,61 @@ button.bob-run-fence-output:hover {
   animation: bob-run-chip-pulse 1.2s ease-out 1;
 }
 
-.bob-run-fence.is-completed .bob-run-fence-glyph {
-  color: var(--color-green);
-}
-
 .bob-run-fence.is-attention {
-  border-color: var(--color-orange);
-}
-
-.bob-run-fence.is-attention .bob-run-fence-glyph {
-  color: var(--color-orange);
+  --bob-run-chip-ink: var(--color-orange);
+  --bob-run-chip-on-ink: var(--text-on-accent-inverted);
 }
 
 .bob-run-fence.is-failed {
-  border-color: var(--text-error);
-}
-
-.bob-run-fence.is-failed .bob-run-fence-glyph {
-  color: var(--text-error);
+  --bob-run-chip-ink: var(--text-error);
 }
 
 .bob-run-fence.is-unavailable {
+  --bob-run-chip-ink: var(--text-muted);
   border-style: dashed;
   border-color: var(--background-modifier-border);
 }
 
 .bob-run-fence.is-unavailable .bob-run-fence-header {
+  border-bottom-color: var(--background-modifier-border);
   background-color: var(--background-secondary);
 }
 
-.bob-run-fence.is-unavailable .bob-run-fence-glyph,
+.bob-run-fence.is-unavailable .bob-run-fence-glyph {
+  background-color: color-mix(in srgb, var(--text-muted) 20%, var(--background-primary));
+  color: var(--text-muted);
+}
+
 .bob-run-fence.is-unavailable .bob-run-fence-title {
   color: var(--text-muted);
 }
 
+.bob-run-fence.is-copy {
+  --bob-run-chip-ink: var(--bob-copy-chip-hue, var(--color-blue));
+}
+
 .bob-run-fence.is-copy .bob-run-fence-run {
+  min-width: 7.5em;
   cursor: copy;
 }
 
 .bob-run-fence.is-copied {
-  border-color: var(--interactive-accent);
+  --bob-run-chip-ink: var(--color-green);
 }
 
-.bob-run-fence.is-copied .bob-run-fence-glyph {
-  color: var(--color-green);
+.bob-run-fence.is-copy.is-failed {
+  --bob-run-chip-ink: var(--text-error);
 }
 
+/* Reduced motion: no spin, pulse, or transitions on cards. */
 @media (prefers-reduced-motion: reduce) {
-  .bob-run-fence.is-running .bob-run-fence-glyph svg,
-  .bob-run-fence-step.is-current .bob-run-fence-mark svg,
-  .bob-run-fence.is-completed .bob-run-fence-header,
-  .bob-run-fence.is-copied .bob-run-fence-header {
+  .bob-run-fence[class],
+  .bob-run-fence[class] .bob-run-fence-header,
+  .bob-run-fence[class] .bob-run-fence-glyph svg,
+  .bob-run-fence-step[class] .bob-run-fence-mark svg,
+  :is(span, button).bob-run-fence-run[class] {
     animation: none;
+    transition: none;
   }
 }
 
@@ -1055,6 +1131,7 @@ button.bob-run-fence-output:hover {
   .bob-run-fence[class] {
     border: none;
     background: none;
+    box-shadow: none;
     animation: none;
   }
 
@@ -1065,9 +1142,9 @@ button.bob-run-fence-output:hover {
     animation: none;
   }
 
-  .bob-run-fence-glyph,
+  .bob-run-fence[class] .bob-run-fence-glyph,
   .bob-run-fence-meta,
-  .bob-run-fence-run,
+  .bob-run-fence[class] .bob-run-fence-run,
   .bob-run-fence-reason,
   .bob-run-fence-num,
   .bob-run-fence-mark,
@@ -1155,10 +1232,13 @@ button.bob-run-fence-output:hover {
   font-size: 0.85em;
 }
 
-/* A command chip keeps the accent identity, not the copy well. */
+/* A command chip's authoring icon is the run well. */
 .bob-copy-author-modal.is-run .bob-copy-author-icon {
-  background-color: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
-  color: var(--interactive-accent);
+  --bob-copy-chip-ink: var(--bob-run-chip-hue, var(--interactive-accent));
+}
+
+.bob-copy-author-modal.is-run .bob-copy-author-icon svg.lucide-play {
+  fill: currentColor;
 }
 
 .bob-copy-author-row-kind {

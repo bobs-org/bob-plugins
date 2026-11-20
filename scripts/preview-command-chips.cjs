@@ -18,12 +18,9 @@ const repoRoot = path.resolve(__dirname, "..");
 const chipsRoot = path.join(repoRoot, "plugins", "bob-chips");
 const TEMPLATE = path.join(__dirname, "preview-command-chips.template.html");
 const RESOLVE_HOST = "athena";
-const BASELINE = [
-  ":root { --input-height: 30px; --radius-s: 4px; --layer-tooltip: 40; --font-ui-smaller: 12px;",
-  "  --font-interface: Inter, ui-sans-serif, sans-serif; --font-text: Inter, ui-sans-serif, sans-serif; --font-monospace: ui-monospace, 'DejaVu Sans Mono', monospace; }",
-  // Obsidian's own button rule, which button.bob-run-chip must override.
-  "button { display:inline-flex; align-items:center; justify-content:center; height:var(--input-height); padding:4px 12px; border:1px solid var(--background-modifier-border); border-radius:5px; background:var(--interactive-normal); color:var(--text-normal); font:500 13px var(--font-interface); white-space:nowrap; cursor:var(--cursor); }",
-].join("\n");
+const baseline = require("./preview-obsidian-baseline.cjs");
+const pageChecks = require("./preview-command-chips-look-checks.cjs");
+const BASELINE = baseline.css();
 
 const HELP = [
   "Usage: node scripts/preview-command-chips.cjs [--out DIRECTORY] [--self-test]",
@@ -96,23 +93,67 @@ const MATRIX = Object.freeze({
       { line: "Or the labeled `run[Weekly review upkeep before the planning session]: " + LONG_SEQUENCE + "` chip.", expect: "ready" },
     ],
   },
+  context: {
+    title: "In context: plain and Blocked / Next / WIP rows, beside inline code and links",
+    rows: [
+      { line: "Weekly review: run `run[Morning upkeep]: bob task reconcile && bob plan` beside `bob plan` and [Weekly review](#).", expect: "ready" },
+      { row: "blocked", line: "Draft the period note with `run: bob task reconcile` after `bob periods show` · [Last week](#)", expect: "ready" },
+      { row: "next", line: "Log in with `copy: ssh apollo`, then run `run: bob task reconcile` · [Apollo](#)", expect: "ready" },
+      { row: "wip", line: "Join `run[Plan]: bob plan` and note `bob gcal sync` in [Standup](#)", expect: "ready" },
+    ],
+  },
+  look: {
+    title: "Look: Live Preview span vs Reading button",
+    stateLines: {
+      labeled: "`run[Morning upkeep]: bob task reconcile`",
+      literal: "`run: bob task reconcile`",
+    },
+    states: [
+      { name: "Rest", state: "rest" },
+      { name: "Hover", state: "rest", force: "hover" },
+      { name: "Pressed", state: "rest", force: "active" },
+      { name: "Keyboard focus", state: "rest", force: "focus" },
+      { name: "Completed", drive: { state: "completed" } },
+      { name: "Failed", drive: { state: "failed", reason: "error: the vault is locked" } },
+    ],
+    copy: { line: "`run: bob task reconcile`", variant: { sourcePath: "ref/Paper notes.md" }, expect: "copy" },
+  },
+  // 101 widths × 12 lead-word counts × 3 faces = 3,636 layouts per surface.
+  sweep: {
+    widths: { from: 120, to: 420, step: 3 },
+    leads: 12,
+    words: ["Before", "review", "run", "the", "morning", "upkeep", "chip", "and", "then", "continue", "the", "note"],
+    variants: [
+      { name: "label", line: "`run[Morning upkeep]: bob task reconcile`" },
+      { name: "short literal", line: "`run: bob plan`" },
+      { name: "long literal", line: "`run: " + LONG_SEQUENCE + "`", long: true },
+      { name: "running sequence", line: "`run: " + LONG_SEQUENCE + "`", drive: { state: "running", step: 2 }, long: true },
+      { name: "unavailable", line: "`run: bob mac-only`" },
+      { name: "copy-only", line: "`run: bob task reconcile`", variant: { sourcePath: "ref/Paper notes.md" } },
+    ],
+  },
+  contrast: { face: 4.5, glyph: 3 },
+  fenceFaces: { copied: "Copied ✓", failed: "Copy failed" },
   // `bob-run` cards, one per state. Drives add per-step durations the way
   // the engine reports them.
   fences: {
     title: "bob-run sequence cards",
     rows: [
-      { name: "Ready", label: "Morning upkeep", text: FENCE_SYNC, expect: "ready" },
-      { name: "Unlabeled", text: FENCE_SYNC, expect: "ready" },
-      { name: "Armed (⌘↵ target)", label: "Morning upkeep", text: FENCE_SYNC, drive: { armed: true }, expect: "armed" },
-      { name: "Queued", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "queued" }, expect: "queued" },
-      { name: "Running, step 2 of 3", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "running", step: 2 }, expect: "running" },
-      { name: "Completed", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "completed" }, expect: "completed" },
-      { name: "Needs attention", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "attention", at: 2, reason: "2 tasks need a decision" }, expect: "attention" },
-      { name: "Failed at step 2", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "failed", at: 2, reason: "error: ref create needs a unique title\nsee bob ref list" }, expect: "failed" },
-      { name: "Asks first", label: "Weekly archive", text: FENCE_ASKS, expect: "ready" },
-      { name: "Unavailable here", label: "Mac upkeep", text: FENCE_HOST, expect: "unavailable" },
-      { name: "Copy only (ref/)", label: "Morning upkeep", text: FENCE_SYNC, variant: { sourcePath: "ref/Paper notes.md" }, expect: "copy" },
-      { name: "Catalog loading", label: "Morning upkeep", text: FENCE_SYNC, variant: { catalog: "loading" }, expect: "loading" },
+      { name: "Ready", label: "Morning upkeep", text: FENCE_SYNC, expect: "ready", group: "run-button" },
+      { name: "Unlabeled", text: FENCE_SYNC, expect: "ready", group: "run-button" },
+      { name: "Armed (⌘↵ target)", label: "Morning upkeep", text: FENCE_SYNC, drive: { armed: true }, expect: "armed", group: "run-button" },
+      { name: "Queued", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "queued" }, expect: "queued", group: "run-button" },
+      { name: "Running, step 2 of 3", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "running", step: 2 }, expect: "running", group: "run-button" },
+      { name: "Completed", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "completed" }, expect: "completed", group: "run-button" },
+      { name: "Needs attention", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "attention", at: 2, reason: "2 tasks need a decision" }, expect: "attention", group: "run-button" },
+      { name: "Failed at step 2", label: "Morning upkeep", text: FENCE_SYNC, drive: { state: "failed", at: 2, reason: "error: ref create needs a unique title\nsee bob ref list" }, expect: "failed", group: "run-button" },
+      { name: "Asks first", label: "Weekly archive", text: FENCE_ASKS, expect: "ready", group: "run-button" },
+      { name: "Unavailable here", label: "Mac upkeep", text: FENCE_HOST, expect: "unavailable", group: "run-button" },
+      { name: "Copy only (ref/)", label: "Morning upkeep", text: FENCE_SYNC, variant: { sourcePath: "ref/Paper notes.md" }, expect: "copy", group: "copy-button" },
+      { name: "Hover on Copy", label: "Morning upkeep", text: FENCE_SYNC, variant: { sourcePath: "ref/Paper notes.md" }, force: "hover", expect: "copy", group: "copy-button" },
+      { name: "Copied", label: "Morning upkeep", text: FENCE_SYNC, variant: { sourcePath: "ref/Paper notes.md" }, state: "copied", expect: "copy", group: "copy-button" },
+      { name: "Copy failed", label: "Morning upkeep", text: FENCE_SYNC, variant: { sourcePath: "ref/Paper notes.md" }, state: "failed", expect: "copy", group: "copy-button" },
+      { name: "Catalog loading", label: "Morning upkeep", text: FENCE_SYNC, variant: { catalog: "loading" }, expect: "loading", group: "run-button" },
     ],
   },
   // ⌘↵ cues in Live Preview with the cursor on each row's first line: the
@@ -155,8 +196,10 @@ function parseArgs(argv) {
 function matrixRows() {
   const rows = [];
   for (const spec of MATRIX.tables) rows.push(...spec.rows);
-  rows.push(...MATRIX.mixed.rows, ...MATRIX.wrap.rows, ...MATRIX.force.rows, ...MATRIX.keymap.rows);
+  rows.push(...MATRIX.context.rows, ...MATRIX.mixed.rows, ...MATRIX.wrap.rows, ...MATRIX.force.rows, ...MATRIX.keymap.rows);
   for (const row of MATRIX.keymap.rows) if (row.child) rows.push({ line: row.child, expect: row.expect });
+  rows.push({ line: MATRIX.look.stateLines.labeled }, { line: MATRIX.look.stateLines.literal }, { line: MATRIX.look.copy.line });
+  for (const variant of MATRIX.sweep.variants) rows.push(variant);
   return rows;
 }
 
@@ -198,7 +241,13 @@ function makeHtml() {
     .replace("__PRODUCTION_CSS__", () => fs.readFileSync(path.join(chipsRoot, "styles.css"), "utf8"))
     .replace("__BOB_CHIPS_MAIN__", () => main)
     .replace("__VERDICTS__", () => safeJson(computeVerdicts()))
-    .replace("__MATRIX__", () => safeJson(MATRIX));
+    .replace("__MATRIX__", () => safeJson(MATRIX))
+    .replace("__CHECKS__", () => "(" + pageChecks.toString() + ")();");
+}
+
+function sweepLayouts() {
+  const w = MATRIX.sweep.widths;
+  return (Math.floor((w.to - w.from) / w.step) + 1) * MATRIX.sweep.leads * MATRIX.sweep.variants.length;
 }
 
 function findChromium() {
@@ -275,25 +324,42 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Hover the hover cases and keyboard-focus the focus case, through
 // DevTools' forced pseudo-classes, then freeze every animation.
-async function forceStates(client) {
+async function forceSelectors(client, pairs) {
   const { root } = await client.call("DOM.getDocument", { depth: -1 });
-  for (const [selector, classes] of [
-    [".preview-force-hover > .bob-run-chip", ["hover"]],
-    [".preview-force-focus > .bob-run-chip", ["focus", "focus-visible"]],
-  ]) {
+  let forced = 0;
+  for (const [selector, classes] of pairs) {
     const { nodeIds } = await client.call("DOM.querySelectorAll", { nodeId: root.nodeId, selector });
-    for (const nodeId of nodeIds) await client.call("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: classes });
+    for (const nodeId of nodeIds) {
+      await client.call("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: classes });
+      forced += 1;
+    }
   }
-  await sleep(60);
-  return client.evaluate("window.commandChipsPreview.settleAnimations()");
+  return forced;
+}
+
+function forceStates(client) {
+  return forceSelectors(client, [
+    [".preview-force-hover > .bob-run-chip", ["hover"]],
+    [".preview-force-active > .bob-run-chip", ["hover", "active"]],
+    [".preview-force-focus > .bob-run-chip", ["focus", "focus-visible"]],
+    [".preview-force-card-hover .bob-run-fence-run", ["hover"]],
+  ]);
 }
 
 async function render(client, theme, options = {}) {
   const mounted = await client.evaluate("window.commandChipsPreview.render(" + safeJson(theme) + ")");
   await client.evaluate("document.fonts && document.fonts.ready");
   await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
-  if (options.force !== false) await forceStates(client);
-  return mounted;
+  let forced = 0;
+  if (options.force !== false) forced = await forceStates(client);
+  await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  if (options.before) await options.before();
+  if (options.settle !== false) {
+    await sleep(600);
+    await client.evaluate("window.commandChipsPreview.settleAnimations()");
+    await client.evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+  }
+  return { mounted, forced };
 }
 
 // The whole page, or only `selector`'s box (plus a small margin).
@@ -315,13 +381,20 @@ async function capture(client, output, selector) {
 }
 
 function expectationFailures(mounted) {
-  // The page reports faces in render order; rows render a Live Preview and
-  // a Reading copy in tables and in the mixed/wrap pairs.
+  // Faces are reported in renderAll order: context, look, tables, mixed,
+  // wrap, force, keymap. Tables and mixed/wrap pairs render Live Preview
+  // then Reading.
   const expected = [];
   const runCount = (line) => chipsHelpers().chipScanLine(line).filter((chip) => chip.kind === "run").length;
   const push = (row, times) => {
     for (let n = 0; n < times; n += 1) for (let k = 0; k < runCount(row.line); k += 1) expected.push(row);
   };
+  for (let pass = 0; pass < 2; pass += 1) for (const row of MATRIX.context.rows) push(row, 1);
+  for (const row of MATRIX.look.states) {
+    push({ line: MATRIX.look.stateLines.labeled, expect: row.drive && row.drive.state ? row.drive.state : "ready" }, 2);
+    push({ line: MATRIX.look.stateLines.literal, expect: row.drive && row.drive.state ? row.drive.state : "ready" }, 2);
+  }
+  push({ line: MATRIX.look.copy.line, expect: "copy" }, 2);
   for (const spec of MATRIX.tables) for (const row of spec.rows) push(row, 2);
   for (let pass = 0; pass < 2; pass += 1) for (const row of MATRIX.mixed.rows) push(row, 1);
   for (let pass = 0; pass < 2; pass += 1) for (const row of MATRIX.wrap.rows) push(row, 1);
@@ -380,6 +453,23 @@ function selfTest() {
   assert.match(html, /commandChipBuildInline/);
   assert.match(html, /\.bob-run-chip\.is-running/);
   assert.match(html, /\.bob-run-chip-hint \{/, "the keycap style ships in styles.css");
+  assert.match(html, /:is\(span, button\)\.bob-run-chip \{/, "the production chip rules ship in the page");
+  assert.ok(html.indexOf("button:not(.clickable-icon) {") < html.indexOf(":is(span, button).bob-run-chip {"), "Obsidian's button rules load before the plugin's");
+  for (const rule of ["button {", "button:not(.clickable-icon) {", "button:hover {", "button:focus-visible {", "button:not(.clickable-icon).mobile-tap {"]) {
+    assert.ok(BASELINE.includes(rule), "baseline has " + rule);
+  }
+  assert.match(html, /window\.commandChipsChecks = /);
+  const scan = helpers.chipScanLine;
+  for (const row of MATRIX.context.rows) assert.ok(scan(row.line).some((chip) => chip.kind === "run"), row.line);
+  for (const line of Object.values(MATRIX.look.stateLines)) assert.equal(scan(line).filter((chip) => chip.kind === "run").length, 1, line);
+  for (const variant of MATRIX.sweep.variants) assert.equal(scan(variant.line).filter((chip) => chip.kind === "run").length, 1, variant.line);
+  assert.deepEqual(MATRIX.look.states.map((s) => s.force || (s.drive && s.drive.state) || s.state), ["rest", "hover", "active", "focus", "completed", "failed"]);
+  assert.ok(MATRIX.context.rows.some((r) => r.row === "blocked") && MATRIX.context.rows.some((r) => r.row === "next") && MATRIX.context.rows.some((r) => r.row === "wip"));
+  assert.equal(sweepLayouts(), 7272, "7,272 sweep layouts per surface");
+  assert.equal(MATRIX.fences.rows.filter((r) => r.group === "run-button").length > 0, true);
+  assert.equal(MATRIX.fences.rows.filter((r) => r.group === "copy-button").length, 4);
+  const mainJs = fs.readFileSync(path.join(chipsRoot, "main.js"), "utf8");
+  for (const faceText of Object.values(MATRIX.fenceFaces)) assert.ok(mainJs.includes(JSON.stringify(faceText)), "main.js flashes " + faceText);
   assert.ok(MATRIX.keymap.rows.some((row) => row.hint && row.hint.label) && MATRIX.keymap.rows.some((row) => !row.hint), "keymap rows cover a named fallback and a refused line");
   assert.deepEqual(parseArgs(["--out", "/tmp/x", "--self-test"]), { out: "/tmp/x", selfTest: true, help: false });
   assert.throws(() => parseArgs(["--out"]));
@@ -425,55 +515,97 @@ async function main() {
     await client.call("Page.navigate", { url: pathToFileURL(htmlFile).href });
     const start = Date.now();
     while (Date.now() - start < 15000) {
-      if (await client.evaluate("Boolean(window.commandChipsPreviewReady)")) break;
+      if (await client.evaluate("Boolean(window.commandChipsPreviewReady && window.commandChipsChecks)")) break;
       await sleep(50);
     }
     const screenshots = [];
-    const report = { checks: null, motion: null, reducedMotion: null, print: null, expectations: [] };
-    for (const theme of ["light", "dark"]) {
-      await render(client, theme);
-      if (theme === "light") report.checks = await client.evaluate("window.commandChipsPreview.checks()");
-      screenshots.push(await capture(client, path.join(args.out, "command-chips-" + theme + ".png")));
-      screenshots.push(await capture(client, path.join(args.out, "command-fences-" + theme + ".png"), "#preview-fences"));
-    }
+    const report = {};
+    const failures = [];
+    const take = (name, result) => {
+      report[name] = result;
+      for (const failure of (result && result.failures) || []) failures.push(name + ": " + failure);
+    };
+    const check = (name, arg) => client.evaluate("window.commandChipsChecks." + name + "(" + (arg === undefined ? "" : safeJson(arg)) + ")");
+
+    report.counts = await render(client, "light", {
+      before: async () => {
+        report.motion = await check("motion");
+        take("tipsDelay", await check("tips", "delay"));
+      },
+    });
+    take("tips", await check("tips", "shown"));
+    take("parity", await check("parity"));
+    take("geometry", await check("geometry"));
+    take("attributes", await check("attributes"));
+    take("cardButton", await check("cardButton"));
+    take("progress", await check("progress"));
+    take("contrastLight", await check("contrast"));
+    report.checks = await client.evaluate("window.commandChipsPreview.checks()");
+    for (const failure of (report.checks && report.checks.failures) || ["checks did not run"]) failures.push("legacy: " + failure);
     const mountedFaces = await client.evaluate("Array.from(document.querySelectorAll('.bob-run-chip')).map((el) => ({ face: ['ready','armed','loading','queued','running','completed','attention','failed','unavailable','copy'].find((name) => el.classList.contains('is-' + name)) || null }))");
     report.expectations = expectationFailures(mountedFaces);
     const fenceFaces = await client.evaluate("Array.from(document.querySelectorAll('.bob-run-fence')).map((el) => ['ready','armed','loading','queued','running','completed','attention','failed','unavailable','copy'].find((name) => el.classList.contains('is-' + name)) || null)");
     if (fenceFaces.length !== MATRIX.fences.rows.length) report.expectations.push("rendered " + fenceFaces.length + " fence cards, expected " + MATRIX.fences.rows.length);
     MATRIX.fences.rows.forEach((row, index) => {
-      if (fenceFaces[index] !== row.expect) report.expectations.push("fence " + row.name + ": face " + fenceFaces[index] + ", expected " + row.expect);
+      const got = fenceFaces[index];
+      const copyFailed = row.state === "failed" && row.expect === "copy" && got === "failed";
+      if (got !== row.expect && !copyFailed) report.expectations.push("fence " + row.name + ": face " + got + ", expected " + row.expect);
     });
-    report.motion = await client.evaluate("window.commandChipsPreview.motionCheck()");
+    failures.push(...report.expectations);
+    screenshots.push(await capture(client, path.join(args.out, "command-chips-light.png")));
+    screenshots.push(await capture(client, path.join(args.out, "command-fences-light.png"), "#preview-fences"));
+    await check("sweepSetup");
+    take("sweep", await check("sweep", "rest"));
+    await forceSelectors(client, [[".preview-sweep-box > .bob-run-chip", ["hover", "focus", "focus-visible"]]]);
+    take("sweepHover", await check("sweep", "hover"));
+    if (!(report.motion && (report.motion.spin > 0 || report.motion.pulse > 0))) failures.push("motion: normal motion shows no spinner or pulse " + JSON.stringify(report.motion));
+
+    await render(client, "dark");
+    take("contrastDark", await check("contrast"));
+    take("parityDark", await check("parity"));
+    screenshots.push(await capture(client, path.join(args.out, "command-chips-dark.png")));
+    screenshots.push(await capture(client, path.join(args.out, "command-fences-dark.png"), "#preview-fences"));
+
     await client.call("Emulation.setDeviceMetricsOverride", { ...wide, width: 390 });
     await render(client, "light");
     screenshots.push(await capture(client, path.join(args.out, "command-chips-narrow-light.png")));
     await client.call("Emulation.setDeviceMetricsOverride", wide);
+
     await client.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-    await render(client, "dark");
-    report.reducedMotion = await client.evaluate("window.commandChipsPreview.motionCheck()");
+    await render(client, "dark", {
+      before: async () => {
+        report.reducedMotion = await check("motion");
+        take("tipsReducedMotion", await check("tips", "now"));
+      },
+    });
+    const rm = report.reducedMotion;
+    if (!(rm && rm.spin === 0 && rm.pulse === 0 && rm.fire === 0 && rm.tipReveal === 0 && rm.timedElements === 0)) {
+      failures.push("reducedMotion: still animates " + JSON.stringify(rm));
+    }
     screenshots.push(await capture(client, path.join(args.out, "command-chips-reduced-motion-dark.png")));
+
     await client.call("Emulation.setEmulatedMedia", { media: "print", features: [] });
     await render(client, "light", { force: false });
-    report.print = await client.evaluate("window.commandChipsPreview.printCheck()");
+    take("print", await check("print"));
+    report.printLegacy = await client.evaluate("window.commandChipsPreview.printCheck()");
+    if (report.printLegacy) for (const failure of report.printLegacy.failures || []) failures.push("printLegacy: " + failure);
     screenshots.push(await capture(client, path.join(args.out, "command-chips-print.png")));
     await client.call("Emulation.setEmulatedMedia", { media: "", features: [] });
 
-    const failures = [...(report.checks ? report.checks.failures : ["checks did not run"]), ...report.expectations];
-    if (!(report.motion && report.motion.spin > 0 && report.motion.pulse > 0)) failures.push("normal motion shows no spinner or pulse");
-    if (!(report.reducedMotion && report.reducedMotion.spin === 0 && report.reducedMotion.pulse === 0)) failures.push("reduced motion still animates: " + JSON.stringify(report.reducedMotion));
-    if (!report.print || !report.print.chips) failures.push("print check found no chips");
-    if (!report.print || !report.print.fences) failures.push("print check found no fence cards");
-    else for (const failure of report.print.failures) failures.push("print: " + failure);
-    const geometry = report.checks ? report.checks.geometry : [];
+    for (const pass of [report.sweep, report.sweepHover]) {
+      if (pass && pass.layouts !== 2 * sweepLayouts()) failures.push("sweep: " + pass.phase + " ran " + pass.layouts + " layouts, expected " + 2 * sweepLayouts());
+    }
+    if (!report.sweepHover || report.sweepHover.phase !== "hover") failures.push("sweep: the hover pass did not run");
+    const geometry = report.geometry ? report.geometry.groups : [];
     fs.writeFileSync(path.join(args.out, "checks.json"), JSON.stringify({ ...report, failures }, null, 2));
     fs.writeFileSync(path.join(args.out, "matrix-report.md"), [
       "# Bob command chips preview",
       "",
-      "Rendered from the built `plugins/bob-chips/main.js` (chipScanLine, copyChipBuildInline, commandChipBuildInline, commandFenceBuild, CommandChipRunStore, commandChipPaintModel, commandChipPaint, commandFencePaint) and `styles.css` under an Obsidian baseline stylesheet. Verdicts come from Command Mode's resolver against `scripts/fixtures/command-mode-resolve-vectors.json`.",
+      "Rendered from the built `plugins/bob-chips/main.js` (chipScanLine, copyChipBuildInline, commandChipBuildInline, commandFenceBuild, CommandChipRunStore, commandChipPaintModel, commandChipPaint, commandFencePaint) and `styles.css` under the shared Obsidian 2.1.2 baseline (button rules and default light/dark palettes). Verdicts come from Command Mode's resolver against `scripts/fixtures/command-mode-resolve-vectors.json`.",
       "",
-      "Cases: every face (ready, armed, loading, queued, running, completed, attention, failed, unavailable, copy) as a Live Preview span and a Reading button, and as a `bob-run` sequence card (labeled and unlabeled, running at step 2 of 3, failed at step 2 with ✓/✗/– marks and an Output link, needs attention, asks first, unavailable on this host, copy-only in ref/, loading); labeled and literal three-step sequences at rest, at step 2 of 3, and failed at step 2; alias, skipped-preview, confirm, and report policy lines; copy-only for ref/, mail/, unknown query source, mobile, and Command Mode off; host, excluded, and shell refusals; mixed copy/run lines; wrapping in a 240px column and a 390px viewport; hover tooltips and keyboard focus; the ⌘↵ armed chip and end-of-line keycap (line chip, task fallback naming its label, Output while running, none on an ambiguous line); reduced motion; print.",
+      "Cases: every face as a Live Preview span and a Reading button, and as a `bob-run` sequence card; labeled and literal chips at rest, hover, pressed, keyboard focus, completed, and failed; copy-only chips in the copy-chip blue well; vault-style Blocked / Next / WIP rows beside cyan inline code and accent links; wrapping in a 240 px column and a 390 px viewport; hover tooltips and keyboard focus; the ⌘↵ armed chip and keycap; reduced motion; print.",
       "",
-      "Checks: " + (failures.length ? "FAILED" : "passed") + " — " + (report.checks ? report.checks.mounted : 0) + " faces, " + (report.checks ? report.checks.attributesChecked : 0) + " attributes free of payload text, ARIA names, run-state geometry " + geometry.map((entry) => entry.group + " Δw " + entry.widthDelta.toFixed(2) + " Δh " + entry.heightDelta.toFixed(2)).join("; ") + ", reduced motion " + JSON.stringify(report.reducedMotion) + ", print " + (report.print ? report.print.chips + " faces, " + report.print.failures.length + " failures" : "not run") + ".",
+      "Checks: " + (failures.length ? "FAILED" : "passed") + " — parity " + (report.parity ? report.parity.compared : 0) + " properties over " + (report.parity ? report.parity.pairs : 0) + " span/button pairs; geometry " + geometry.map((g) => g.group + " Δ " + [g.chipDw, g.chipDh, g.wellDw, g.wellDh].map((d) => d.toFixed(2)).join("/")).join("; ") + "; sweep " + [report.sweep, report.sweepHover].filter(Boolean).map((p) => p.phase + " " + p.layouts + " layouts, " + p.splits + " glyph splits, " + p.empty + " lone end caps, " + p.shifts + " shifts, max end-cap overshoot " + p.maxOvershoot + " px").join("; ") + "; contrast light " + (report.contrastLight ? report.contrastLight.rows.map((r) => r.name + " " + r.ratio).join(", ") : "") + "; contrast dark " + (report.contrastDark ? report.contrastDark.rows.map((r) => r.name + " " + r.ratio).join(", ") : "") + "; " + (report.attributes ? report.attributes.checked : 0) + " attributes; card button widths " + (report.cardButton ? JSON.stringify(Object.keys(report.cardButton.widths || {})) : "") + "; reduced motion " + JSON.stringify(report.reducedMotion) + ".",
       ...failures.map((failure) => "- FAIL " + failure),
       "",
       ...screenshots.map((file) => "- " + path.basename(file)),
@@ -496,4 +628,4 @@ if (require.main === module) {
   main().catch((error) => { console.error(error && error.stack || error); process.exitCode = 1; });
 }
 
-module.exports = { MATRIX, parseArgs, computeVerdicts, makeHtml, findChromium, CdpClient, waitForFile };
+module.exports = { MATRIX, BASELINE, parseArgs, computeVerdicts, makeHtml, findChromium, CdpClient, waitForFile, sweepLayouts, pageChecks };

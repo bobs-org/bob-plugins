@@ -341,6 +341,11 @@ test("every state paints in place from the store, without recreating the glyph",
   assert.ok(has(host, "is-ready"));
   assert.equal(iconOf(host), "play");
   assert.equal(host.querySelector(".bob-run-chip-action").textContent, "Run");
+  assert.deepEqual(
+    [...host.children].map((el) => (cls(el).split(/\s+/)[0])),
+    ["bob-run-chip-glyph", "bob-run-chip-face", "bob-run-chip-action", "bob-run-chip-tip"],
+    "in-flow child order is glyph, face, action, tip",
+  );
 
   helpers.commandChipStoreOf(h.plugin).setArmed({ key: "sync", sourcePath: "notes/walk.md", form: "inline", line: 0, from: 0, to: view.state.doc.length });
   assert.ok(has(host, "is-armed"));
@@ -360,7 +365,7 @@ test("every state paints in place from the store, without recreating the glyph",
   const writesWhileRunning = iconWrites;
   const steps = host.querySelectorAll(".bob-run-chip-step");
   assert.ok(has(steps[0], "is-current"));
-  assert.match(host.style["--bob-run-progress"], /var\(--interactive-accent\) 0\.00%/);
+  assert.match(host.style["--bob-run-progress"], /var\(--bob-run-chip-ink, var\(--interactive-accent\)\) 0\.00%/);
   h.store.apply("sync", seq, { state: "step", runId: "a", step: 1, outcome: "completed" });
   h.store.apply("sync", seq, { state: "running", runId: "b", step: 2 });
   assert.ok(has(steps[0], "is-done") && has(steps[1], "is-current") && !has(steps[0], "is-current"));
@@ -666,17 +671,18 @@ test("announcements fire once per run transition however many faces show it", ()
 
 test("styles use theme variables, keep geometry, and honor reduced motion and print", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "plugins", "bob-chips", "styles.css"), "utf8");
-  const start = css.indexOf(".bob-run-chip {");
+  const start = css.indexOf("/* Command chips:");
   const end = css.indexOf(".bob-copy-fence {");
   const run = css.slice(start, end);
   assert.ok(start > 0 && end > start);
   assert.doesNotMatch(run, /#[0-9a-f]{3,6}\b|rgba?\(/i, "no fixed colors");
-  assert.match(run, /padding: 0 0\.45em;[\s\S]*font-size: 0\.92em;[\s\S]*line-height: inherit;/);
-  assert.match(run, /color-mix\(in srgb, var\(--interactive-accent\) 7%, var\(--background-secondary\)\)/);
-  assert.match(run, /color-mix\(in srgb, var\(--interactive-accent\) 25%, var\(--background-modifier-border\)\)/);
+  assert.match(run, /:is\(span, button\)\.bob-run-chip \{/);
+  assert.match(run, /padding: 0\.1em 0\.5em 0\.12em;[\s\S]*font-size: 0\.92em;[\s\S]*line-height: inherit;/);
+  assert.match(run, /color-mix\(in srgb, var\(--bob-run-chip-ink\) 10%, var\(--background-primary\)\)/);
+  assert.match(run, /color-mix\(in srgb, var\(--bob-run-chip-ink\) 50%, var\(--background-primary\)\)/);
   assert.match(run, /box-decoration-break: clone/);
-  assert.match(run, /@media \(prefers-reduced-motion: reduce\) \{\s*\.bob-run-chip\.is-running \.bob-run-chip-glyph svg,/);
-  assert.match(run, /@media print \{[\s\S]*\.bob-run-chip-glyph,\s*\.bob-run-chip-tip,\s*\.bob-run-chip-action \{\s*display: none;/);
+  assert.match(run, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(run, /@media print \{[\s\S]*\.bob-run-chip\[class\] > \.bob-run-chip-glyph/);
   for (const face of helpers.COMMAND_CHIP_FACES.filter((f) => f !== "ready")) {
     assert.ok(run.includes(".bob-run-chip.is-" + face), face);
   }

@@ -85,6 +85,7 @@ const AUTHOR = Object.freeze({
 // Exact payload per case tag, as authored in the notes below.
 const PAYLOADS = Object.freeze({
   click: "bob e2e ok click",
+  look: "bob e2e ok look",
   double: "bob e2e slow double",
   twin: "bob e2e slow twin",
   task: "bob e2e ok task",
@@ -122,6 +123,8 @@ function noteText() {
       "# Command chips e2e",
       "",
       "CLICK `run: " + p.click + "`",
+      "",
+      "LOOK `run[Look]: " + p.look + "`",
       "",
       "DOUBLE `run: " + p.double + "`",
       "",

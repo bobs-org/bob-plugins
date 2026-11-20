@@ -17,6 +17,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const chipsPreview = require("./preview-command-chips.cjs");
+const baseline = require("./preview-obsidian-baseline.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const chipsRoot = path.join(repoRoot, "plugins", "bob-chips");
@@ -166,19 +167,16 @@ function safeJson(value) {
 // chips preview so both pages paint the same palette and glyphs.
 function sharedScaffolding() {
   const template = fs.readFileSync(CHIPS_TEMPLATE, "utf8");
-  const light = /body\[data-theme="light"\] \{[^}]*\}/.exec(template);
-  const dark = /body\[data-theme="dark"\] \{[^}]*\}/.exec(template);
   const shimStart = template.indexOf("const PREVIEW_ICONS = {");
   const shimEnd = template.indexOf("window.BobChipsModule");
-  if (!light || !dark || shimStart < 0 || shimEnd < shimStart) throw new Error("preview-command-chips.template.html changed shape");
+  if (shimStart < 0 || shimEnd < shimStart) throw new Error("preview-command-chips.template.html changed shape");
   const icons = template.slice(shimStart, shimEnd).replace(/const PREVIEW_OBSIDIAN = \{[\s\S]*$/, "");
-  return { themes: light[0] + "\n" + dark[0], icons };
+  return { themes: baseline.paletteCss(), icons };
 }
 
 const PAGE_CSS = [
-  ":root { --input-height: 30px; --radius-s: 4px; --radius-m: 8px; --font-ui-smaller: 12px;",
-  "  --font-interface: Inter, ui-sans-serif, sans-serif; --font-text: Inter, ui-sans-serif, sans-serif; --font-monospace: ui-monospace, 'DejaVu Sans Mono', monospace; }",
-  "button { display:inline-flex; align-items:center; justify-content:center; height:var(--input-height); padding:4px 12px; border:1px solid var(--background-modifier-border); border-radius:5px; background:var(--interactive-normal); color:var(--text-normal); font:500 13px var(--font-interface); white-space:nowrap; cursor:pointer; }",
+  baseline.baselineCss(),
+  ":root { --radius-m: 8px; }",
   "input, textarea { font:14px var(--font-text); }",
   // Obsidian's modal frame, minimally.
   ".modal { position:relative; box-sizing:border-box; background:var(--background-primary); border:1px solid var(--background-modifier-border); border-radius:12px; box-shadow:var(--shadow-l); color:var(--text-normal); font:14px/1.5 var(--font-interface); }",

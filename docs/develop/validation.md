@@ -216,15 +216,28 @@ coverage and deliberate omissions, duplicates, read failures and concurrent chan
 
 `scripts/preview-command-chips.cjs` renders every command-chip face from
 the built `plugins/bob-chips/main.js` and `styles.css` in headless Chromium.
-It uses the real scanner, builders, run store, paint model, and painter.
-Command Mode's own resolver produces the verdicts from
-`scripts/fixtures/command-mode-resolve-vectors.json`. The page captures
-light, dark, a 390 px viewport, dark with reduced motion, and print. It
-fails when a face differs from its matrix row, when a payload appears in
-an attribute, when ARIA names are wrong, when a run state changes chip
-geometry, when reduced motion still animates, or when any state prints
-as more than plain inline code. Set `CHROMIUM_PATH` when no Chrome is on
-`PATH`:
+It uses the real scanner, builders, run store, paint model, and painter
+under the shared Obsidian baseline in
+`scripts/preview-obsidian-baseline.cjs` (the same 2.1.2 button rules and
+default light/dark palettes as the copy-chip preview, including
+`--color-blue` and `--text-on-accent`). Command Mode's own resolver
+produces the verdicts from
+`scripts/fixtures/command-mode-resolve-vectors.json`. The page puts chips
+on plain, Blocked, Next, and WIP rows beside cyan inline code and accent
+links, and captures light, dark, a 390 px viewport, dark with reduced
+motion, print, and the cards in light and dark. It fails when a Live
+Preview span and a Reading button compute a different fill, border,
+shadow, ink, padding, font, or outline in any state; when a state changes
+the chip's or the well's size; when a sweep of 7,272 layouts per surface
+(widths 120–420 px, 0–11 lead words, six faces) strands the well, wraps
+an end cap alone, overshoots by more than the end padding, or shifts when
+the tooltip shows; when face ink falls under 4.5:1 or the glyph under 3:1
+on its fill; when the progress bar is not on the face; when a payload
+appears in an attribute or the ARIA names are wrong; when a card's Run
+button changes width between Run and Output, or a copy-only card's Copy
+button changes width between Copy, Copied ✓, and Copy failed; when reduced
+motion still animates; or when any state prints as more than plain inline
+code. Set `CHROMIUM_PATH` when no Chrome is on `PATH`:
 
 ```bash
 node scripts/preview-command-chips.cjs --out /tmp/command-chips-preview
@@ -251,6 +264,12 @@ xvfb-run -a node --experimental-websocket scripts/obsidian-command-chips-e2e.cjs
 
 Its `report.json` records each case, the stub's full invocation log,
 and the Tasks, Dataview, Bob Chips, and Command Mode versions.
+`scripts/obsidian-command-chips-look-e2e.cjs` adds the look cases: a labeled
+ready chip as a Live Preview span and a Reading button computes one look
+at rest and under a trusted CDP hover, the tooltip shows about 0.4 s after
+the hover, a trusted click turns the well green, and a `ref/` chip wears
+the copy well. Hover captures force `:hover` through DevTools.
+`scripts/test-command-chips-look.cjs` statically checks the run styles.
 
 ## Copy chip preview and e2e
 

@@ -16,56 +16,8 @@ const { pathToFileURL } = require("node:url");
 const repoRoot = path.resolve(__dirname, "..");
 const chipsRoot = path.join(repoRoot, "plugins", "bob-chips");
 const TEMPLATE = path.join(__dirname, "preview-copy-chips.template.html");
-
-// Obsidian 2.1.2's button rules, verbatim. Every copy-chip rule must beat
-// them, so a Reading button and a Live Preview span compute one look.
-const OBSIDIAN_BUTTON_RULES = `button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-color);
-  font-size: var(--font-ui-small);
-  border-radius: var(--button-radius);
-  border: 0;
-  padding: var(--size-4-1) var(--size-4-3);
-  height: var(--input-height);
-  font-weight: var(--input-font-weight);
-  cursor: var(--cursor);
-  font-family: inherit;
-  outline: none;
-  user-select: none;
-  white-space: nowrap;
-  transition: var(--button-transition);
-}
-button:not(.clickable-icon) {
-  color: var(--text-color);
-  background-color: var(--interactive-normal);
-  box-shadow: var(--input-shadow);
-}
-@media (hover: hover) {
-  button:hover {
-    background-color: var(--interactive-hover);
-    box-shadow: var(--input-shadow-hover);
-  }
-}
-button:focus-visible {
-  box-shadow: 0 0 0 3px var(--background-modifier-border-focus);
-}
-button:not(.clickable-icon).mobile-tap {
-  background-color: var(--interactive-hover);
-  box-shadow: var(--input-shadow-hover);
-}`;
-
-const BASELINE = [
-  "*, *::before, *::after { box-sizing: border-box; }",
-  ":root { --radius-s: 4px; --layer-tooltip: 40; --font-ui-small: 13px; --font-ui-smaller: 12px; --input-height: 30px;",
-  "  --button-radius: 5px; --size-4-1: 4px; --size-4-3: 12px; --input-font-weight: 500; --cursor: default;",
-  "  --button-transition: background-color 140ms ease, box-shadow 140ms ease; --icon-size: 18px; --icon-stroke: 1.75px;",
-  "  --font-interface: Inter, ui-sans-serif, sans-serif; --font-text: Inter, ui-sans-serif, sans-serif; --font-monospace: ui-monospace, 'DejaVu Sans Mono', monospace; }",
-  "body { --text-color: var(--text-normal); }",
-  ".svg-icon { width: var(--icon-size); height: var(--icon-size); stroke-width: var(--icon-stroke); }",
-  OBSIDIAN_BUTTON_RULES,
-].join("\n");
+const baseline = require("./preview-obsidian-baseline.cjs");
+const BASELINE = baseline.css();
 
 const HELP = [
   "Usage: node scripts/preview-copy-chips.cjs [--out DIRECTORY] [--self-test]",

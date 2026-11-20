@@ -593,6 +593,7 @@ class CommandModeSheetModal extends Modal {
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
       ...(opts.source ? { source: opts.source } : {}),
+      ...(typeof opts.onState === "function" ? { onState: opts.onState } : {}),
     }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Run failed to start";

@@ -1,0 +1,656 @@
+{
+  "_comment": "Command-chip resolve vectors for api.commandMode.resolve. host defaults to athena; catalog null means no catalog yet.",
+  "catalog": {
+    "schema_version": 1,
+    "ok": true,
+    "protocol": 1,
+    "bob_version": "0.3.1-test",
+    "features": [
+      "clicolor-force",
+      "progress-env",
+      "run-receipt"
+    ],
+    "sections": [
+      {
+        "id": "daily",
+        "title": "Daily workflow"
+      }
+    ],
+    "roots": [
+      "plan",
+      "ref",
+      "task",
+      "capture",
+      "mac-only"
+    ],
+    "aliases": [
+      {
+        "from": [
+          "task-status-hooks"
+        ],
+        "to": [
+          "task",
+          "reconcile"
+        ]
+      }
+    ],
+    "entries": [
+      {
+        "id": "plan",
+        "path": [
+          "plan"
+        ],
+        "fixed": [],
+        "title": "Today's plan",
+        "about": "Today's plan",
+        "section": "daily",
+        "keywords": [],
+        "effect": "reads",
+        "network": false,
+        "presentation": "report",
+        "policy": "run",
+        "preview": null,
+        "confirm": null,
+        "budget_secs": 60,
+        "args": [],
+        "exit_codes": [],
+        "adapter": null,
+        "hosts": [],
+        "invalidates": []
+      },
+      {
+        "id": "ref-create",
+        "path": [
+          "ref",
+          "create"
+        ],
+        "fixed": [],
+        "title": "Create reference",
+        "about": "Create reference",
+        "section": "daily",
+        "keywords": [],
+        "effect": "writes",
+        "network": false,
+        "presentation": "action",
+        "policy": "run",
+        "preview": [
+          "--dry-run"
+        ],
+        "confirm": null,
+        "budget_secs": 60,
+        "args": [
+          {
+            "name": "TARGET",
+            "slot": "text",
+            "required": true,
+            "repeat": false
+          }
+        ],
+        "exit_codes": [],
+        "adapter": null,
+        "hosts": [],
+        "invalidates": []
+      },
+      {
+        "id": "ref-rename",
+        "path": [
+          "ref",
+          "rename"
+        ],
+        "fixed": [],
+        "title": "Rename a reference",
+        "about": "Rename a reference",
+        "section": "daily",
+        "keywords": [],
+        "effect": "syncs",
+        "network": false,
+        "presentation": "action",
+        "policy": "preview-first",
+        "preview": [
+          "--dry-run"
+        ],
+        "confirm": null,
+        "budget_secs": 60,
+        "args": [
+          {
+            "name": "REF",
+            "slot": "text",
+            "required": true,
+            "repeat": false
+          },
+          {
+            "name": "NAME",
+            "slot": "text",
+            "required": true,
+            "repeat": false
+          }
+        ],
+        "exit_codes": [],
+        "adapter": null,
+        "hosts": [],
+        "invalidates": []
+      },
+      {
+        "id": "task-archive",
+        "path": [
+          "task",
+          "archive"
+        ],
+        "fixed": [],
+        "title": "Archive done tasks",
+        "about": "Archive done tasks",
+        "section": "daily",
+        "keywords": [],
+        "effect": "writes",
+        "network": false,
+        "presentation": "action",
+        "policy": "confirm",
+        "preview": null,
+        "confirm": "Archive every done task?",
+        "budget_secs": 60,
+        "args": [],
+        "exit_codes": [],
+        "adapter": null,
+        "hosts": [],
+        "invalidates": []
+      },
+      {
+        "id": "task-reconcile",
+        "path": [
+          "task",
+          "reconcile"
+        ],
+        "fixed": [],
+        "title": "Reconcile task statuses",
+        "about": "Reconcile task statuses",
+        "section": "daily",
+        "keywords": [],
+        "effect": "writes",
+        "network": false,
+        "presentation": "action",
+        "policy": "run",
+        "preview": null,
+        "confirm": null,
+        "budget_secs": 60,
+        "args": [],
+        "exit_codes": [
+          {
+            "code": 3,
+            "outcome": "attention",
+            "meaning": "Needs a look"
+          }
+        ],
+        "adapter": null,
+        "hosts": [],
+        "invalidates": []
+      },
+      {
+        "id": "mac-only",
+        "path": [
+          "mac-only"
+        ],
+        "fixed": [],
+        "title": "Mac only",
+        "about": "Mac only",
+        "section": "daily",
+        "keywords": [],
+        "effect": "writes",
+        "network": false,
+        "presentation": "action",
+        "policy": "run",
+        "preview": null,
+        "confirm": null,
+        "budget_secs": 60,
+        "args": [],
+        "exit_codes": [],
+        "adapter": null,
+        "hosts": [
+          "mac"
+        ],
+        "invalidates": []
+      }
+    ],
+    "excluded": [
+      {
+        "path": [
+          "capture"
+        ],
+        "reason": "Use the named capture rows"
+      }
+    ]
+  },
+  "vectors": [
+    {
+      "text": "bob task reconcile",
+      "state": "ready",
+      "argv": [
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "entryIds": [
+        "task-reconcile"
+      ],
+      "note": "exact catalog path with no arguments"
+    },
+    {
+      "text": "bob task-status-hooks",
+      "state": "ready",
+      "argv": [
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "texts": [
+        "bob task-status-hooks"
+      ],
+      "note": "catalog alias; face keeps the authored text"
+    },
+    {
+      "text": "  bob task reconcile  ",
+      "state": "ready",
+      "argv": [
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "texts": [
+        "bob task reconcile"
+      ],
+      "note": "step text is trimmed"
+    },
+    {
+      "text": "bob ref create \"a && b.md\"",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a && b.md"
+        ]
+      ],
+      "texts": [
+        "bob ref create \"a && b.md\""
+      ],
+      "note": "quoted && is text, and the face keeps the quotes"
+    },
+    {
+      "text": "bob ref create 'semi;colon|pipe' \"x > y\"",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "semi;colon|pipe",
+          "x > y"
+        ]
+      ],
+      "note": "quoted shell syntax is literal"
+    },
+    {
+      "text": "bob ref create a\\;b a\\|b a\\&b",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a;b",
+          "a|b",
+          "a&b"
+        ]
+      ],
+      "note": "escaped shell syntax is literal"
+    },
+    {
+      "text": "bob ref create ~/papers/*.pdf",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "~/papers/*.pdf"
+        ]
+      ],
+      "note": "tilde and globs are never expanded"
+    },
+    {
+      "text": "bob ref create \"$HOME\"",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "$HOME"
+        ]
+      ],
+      "note": "quoted $ is literal and never expanded"
+    },
+    {
+      "text": "bob ref create \"line one\nline two\"",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "line one\nline two"
+        ]
+      ],
+      "note": "a line break inside quotes stays in its argument"
+    },
+    {
+      "text": "bob ref create a.md && bob task reconcile",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a.md"
+        ],
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "texts": [
+        "bob ref create a.md",
+        "bob task reconcile"
+      ]
+    },
+    {
+      "text": "bob ref create a.md\nbob task reconcile",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a.md"
+        ],
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "note": "line breaks split steps"
+    },
+    {
+      "text": "bob ref create a.md\r\n\r\n   \nbob task reconcile\n",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a.md"
+        ],
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "texts": [
+        "bob ref create a.md",
+        "bob task reconcile"
+      ],
+      "note": "blank lines are skipped"
+    },
+    {
+      "text": "bob ref create a.md &&\n  bob task reconcile",
+      "state": "ready",
+      "argv": [
+        [
+          "ref",
+          "create",
+          "a.md"
+        ],
+        [
+          "task",
+          "reconcile"
+        ]
+      ],
+      "note": "a line break after && continues the chain"
+    },
+    {
+      "text": "",
+      "state": "invalid",
+      "reason": "no command given"
+    },
+    {
+      "text": "   \n  ",
+      "state": "invalid",
+      "reason": "no command given"
+    },
+    {
+      "text": "bob",
+      "state": "invalid",
+      "reason": "no command given",
+      "step": 1
+    },
+    {
+      "text": "bob plan; bob ready",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `;`",
+      "step": 1
+    },
+    {
+      "text": "bob plan | less",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `|`",
+      "step": 1
+    },
+    {
+      "text": "bob plan || bob ready",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `||`",
+      "step": 1
+    },
+    {
+      "text": "bob plan & bob ready",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `&`",
+      "step": 1
+    },
+    {
+      "text": "bob plan > out.txt",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `>`",
+      "step": 1
+    },
+    {
+      "text": "bob plan >> out.txt",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `>>`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create < in.txt",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `<`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create `date`",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove the backtick",
+      "step": 1
+    },
+    {
+      "text": "bob ref create $(date)",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `$(`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create ${HOME}",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `${`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create $HOME/a.md",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `$HOME`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create $1",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `$1`",
+      "step": 1
+    },
+    {
+      "text": "bob plan && bob ref create a.md | tee",
+      "state": "invalid",
+      "reason": "command chips run bob, not a shell — remove `|`",
+      "step": 2
+    },
+    {
+      "text": "&& bob plan",
+      "state": "invalid",
+      "reason": "empty step before `&&`",
+      "step": 1
+    },
+    {
+      "text": "bob plan &&",
+      "state": "invalid",
+      "reason": "empty step after `&&`",
+      "step": 2
+    },
+    {
+      "text": "bob plan && && bob task reconcile",
+      "state": "invalid",
+      "reason": "empty step after `&&`",
+      "step": 2
+    },
+    {
+      "text": "bob plan &&\n\n",
+      "state": "invalid",
+      "reason": "empty step after `&&`",
+      "step": 2
+    },
+    {
+      "text": "bob plan \\\nbob task reconcile",
+      "state": "invalid",
+      "reason": "command chips do not join lines with `\\`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create \"open",
+      "state": "invalid",
+      "reason": "Unbalanced quote",
+      "step": 1
+    },
+    {
+      "text": "bob ref create a\\",
+      "state": "invalid",
+      "reason": "Unfinished escape",
+      "step": 1
+    },
+    {
+      "text": "/usr/bin/bob plan",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 1
+    },
+    {
+      "text": "./bob plan",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 1
+    },
+    {
+      "text": "sudo bob plan",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 1
+    },
+    {
+      "text": "X=1 bob plan",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 1
+    },
+    {
+      "text": "ls -la",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 1
+    },
+    {
+      "text": "bob plan && ls",
+      "state": "invalid",
+      "reason": "command chips run only bob",
+      "step": 2
+    },
+    {
+      "text": "bob capture buy milk",
+      "state": "invalid",
+      "reason": "Use the named capture rows",
+      "step": 1
+    },
+    {
+      "text": "bob gcal synk",
+      "state": "invalid",
+      "reason": "bob has no command `gcal synk`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create",
+      "state": "invalid",
+      "reason": "needs `TARGET`",
+      "step": 1
+    },
+    {
+      "text": "bob ref create a.md && bob ref rename old.md",
+      "state": "invalid",
+      "reason": "needs `NAME`",
+      "step": 2
+    },
+    {
+      "text": "bob mac-only",
+      "state": "unavailable",
+      "host": "athena",
+      "reason": "not available on this host: runs only on mac",
+      "step": 1
+    },
+    {
+      "text": "bob mac-only",
+      "state": "ready",
+      "host": "mac",
+      "argv": [
+        [
+          "mac-only"
+        ]
+      ]
+    },
+    {
+      "text": "bob plan",
+      "state": "loading",
+      "catalog": null,
+      "reason": "Command Mode is still loading bob's catalog"
+    },
+    {
+      "text": "bob plan | less",
+      "state": "invalid",
+      "catalog": null,
+      "reason": "command chips run bob, not a shell — remove `|`",
+      "step": 1,
+      "note": "syntax faults are known while loading"
+    },
+    {
+      "text": "bob plan",
+      "state": "unavailable",
+      "catalog": null,
+      "catalogStatus": "missing-bob",
+      "reason": "Command Mode cannot find bob"
+    },
+    {
+      "text": "bob plan",
+      "state": "unavailable",
+      "catalog": null,
+      "catalogStatus": "old-bob",
+      "reason": "Command Mode cannot read bob's command catalog"
+    }
+  ]
+}

@@ -24,6 +24,13 @@ function cmFingerprintsEqual(left, right) {
   return left.path === right.path && left.mtimeMs === right.mtimeMs && left.size === right.size;
 }
 
+// Stable string form of a fingerprint for invalidation tokens; null when the
+// binary could not be stat'd (a bare `bob` resolved through PATH).
+function cmCatalogFingerprintKey(fingerprint) {
+  if (!fingerprint) return null;
+  return [String(fingerprint.path || ""), Number(fingerprint.mtimeMs) || 0, Number(fingerprint.size) || 0].join("|");
+}
+
 const CM_KNOWN_EFFECTS = new Set(["reads", "writes", "syncs"]);
 const CM_KNOWN_PRESENTATIONS = new Set(["report", "action", "inline"]);
 const CM_KNOWN_POLICIES = new Set(["run", "preview-first", "confirm"]);

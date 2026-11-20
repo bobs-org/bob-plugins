@@ -50,13 +50,17 @@ function cmCopySequenceStamp(raw) {
   };
 }
 
+// Chip provenance {path, line}: path only when vault-relative (no leading
+// slash, drive, or `..` segment) and at most 512 characters; line only when a
+// non-negative integer. Anything else is dropped, never repaired.
 function cmCopyRunSource(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const path = typeof raw.path === "string" ? raw.path.trim().slice(0, 1024) : "";
-  const lineValue = Number(raw.line);
-  const line = Number.isInteger(lineValue) && lineValue > 0 ? lineValue : null;
-  if (!path) return null;
-  return { path, ...(line ? { line } : {}) };
+  const path = typeof raw.path === "string" ? raw.path.trim() : "";
+  if (!path || path.length > 512 || /^[\\/]|^[A-Za-z]:/.test(path)) return null;
+  if (path.split(/[\\/]/).some((part) => part === "..")) return null;
+  const lineValue = raw.line;
+  const line = Number.isInteger(lineValue) && lineValue >= 0 ? lineValue : null;
+  return { path, ...(line !== null ? { line } : {}) };
 }
 
 function cmNewRecord(options = {}) {

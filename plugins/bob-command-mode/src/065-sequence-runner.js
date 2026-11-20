@@ -111,6 +111,8 @@ async function cmRunSequenceInner(runner, steps, options) {
       sequence: stamp,
     };
     if (entry) runOpts.entryId = entry.id;
+    // Per-run state (queued, running, finished) for this step's run only.
+    if (typeof options.onRunState === "function") runOpts.onState = options.onRunState;
     const t0 = cmSequenceNowMs(runner);
     let settled;
     try {

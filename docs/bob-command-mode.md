@@ -12,7 +12,7 @@ Bob Command Mode runs bob commands from Obsidian with safe-write guards and run 
 | --- | --- |
 | Name | Bob Command Mode |
 | ID | `bob-command-mode` |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
 | Description | Run catalog-validated bob commands from Obsidian chips and Command Mode with safe-write guards and run history. |
@@ -239,22 +239,33 @@ into that command's preview stage and settles `{ok, runId, stage}` with `stage`
 stage) or `{ok: false, reason}` for excluded, unknown, unavailable, Windows, or
 preview-less action rows; it never applies a write and never rejects, and
 consumers feature-detect `typeof api.commandMode.preview === "function"`.
-`resolve(text)` parses one or more `bob …` commands joined by quote-aware `&&`
-into catalog-legal steps. It rejects shell operators, excluded or unknown
-commands, missing required arguments, and commands unavailable on this host.
-`runText(text, {source})` runs validated steps as a chip gesture: it skips
-preview-first guards and keeps every `confirm` policy behind the review card.
+`resolve(text)` parses one or more `bob …` commands, joined by quote-aware
+`&&` or written on separate lines, into catalog-legal steps with a `state` of
+ready, invalid, unavailable, or loading. It rejects shell syntax, excluded or
+unknown commands, missing required arguments, and commands unavailable on
+this host, and it never runs bob or loads the catalog.
+`runText(text, {source, onState})` runs validated steps as a chip gesture: it
+skips preview-first guards, keeps every `confirm` policy behind the review
+card, and reports queued, running, step, and finished states to `onState`.
 `openText(text, {source})` opens the guarded path: previews for preview-first
 commands, output for reports, and a review card for writers or sequences.
-`activeRun(text)` returns a matching live run (or `null`), and `activeRuns()`
-lists live records. `onRunStarted(cb)`, `onRunState(cb)`, `onRunFinished(cb)`,
-and `onCatalogChanged(cb)` subscribe to engine changes and return unsubscribe
-functions. `catalog()` and `lastRun()` read the cached catalog and newest
-record. New methods are additive; consumers should feature-detect each one.
+`activeRun(signature)` returns the live run or sequence for a resolved
+signature, even between sequence steps (or `null`); `activeRun(text)` still
+accepts command text. `activeRuns()` lists live records.
+`onRunStarted(cb)`, `onRunState(cb)`, `onRunFinished(cb)`, and
+`onCatalogChanged(cb)` subscribe to engine changes and return unsubscribe
+functions. `catalog()`, `catalogInfo()`, and `lastRun()` read the cached
+catalog, its invalidation token, and the newest record. New methods are
+additive; consumers should feature-detect each one. [Cross-plugin
+APIs](https://bobs-org.github.io/develop/plugins/plugin-apis/#command-chip-members)
+lists the exact shapes.
 
 The optional `source` is copied as `{path, line?}` into the host-local run
-record. Run lifecycle callbacks include `trigger` and `source`. Every finish
+record when the path is vault-relative and the line is a non-negative
+integer. Run lifecycle callbacks include `trigger` and `source`. Every finish
 also fires `bob-command-mode:run-finished` with `{runId, argv, entryId,
 outcome, effect, invalidates, trigger, source}`. Start and state changes fire
 `bob-command-mode:run-started` and `bob-command-mode:run-state`; catalog
-changes fire `bob-command-mode:catalog-changed` with `{catalog, bobVersion}`.
+changes fire `bob-command-mode:catalog-changed` with `{catalog, bobVersion,
+fingerprint, generation, token, reason}`, on the first usable catalog and on
+every catalog or binary change.

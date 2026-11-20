@@ -358,6 +358,13 @@ function cmFingerprintsEqual(left, right) {
   return left.path === right.path && left.mtimeMs === right.mtimeMs && left.size === right.size;
 }
 
+// Stable string form of a fingerprint for invalidation tokens; null when the
+// binary could not be stat'd (a bare `bob` resolved through PATH).
+function cmCatalogFingerprintKey(fingerprint) {
+  if (!fingerprint) return null;
+  return [String(fingerprint.path || ""), Number(fingerprint.mtimeMs) || 0, Number(fingerprint.size) || 0].join("|");
+}
+
 const CM_KNOWN_EFFECTS = new Set(["reads", "writes", "syncs"]);
 const CM_KNOWN_PRESENTATIONS = new Set(["report", "action", "inline"]);
 const CM_KNOWN_POLICIES = new Set(["run", "preview-first", "confirm"]);
@@ -569,13 +576,17 @@ function cmCopySequenceStamp(raw) {
   };
 }
 
+// Chip provenance {path, line}: path only when vault-relative (no leading
+// slash, drive, or `..` segment) and at most 512 characters; line only when a
+// non-negative integer. Anything else is dropped, never repaired.
 function cmCopyRunSource(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const path = typeof raw.path === "string" ? raw.path.trim().slice(0, 1024) : "";
-  const lineValue = Number(raw.line);
-  const line = Number.isInteger(lineValue) && lineValue > 0 ? lineValue : null;
-  if (!path) return null;
-  return { path, ...(line ? { line } : {}) };
+  const path = typeof raw.path === "string" ? raw.path.trim() : "";
+  if (!path || path.length > 512 || /^[\\/]|^[A-Za-z]:/.test(path)) return null;
+  if (path.split(/[\\/]/).some((part) => part === "..")) return null;
+  const lineValue = raw.line;
+  const line = Number.isInteger(lineValue) && lineValue >= 0 ? lineValue : null;
+  return { path, ...(line !== null ? { line } : {}) };
 }
 
 function cmNewRecord(options = {}) {
@@ -831,13 +842,15 @@ function cmSequenceGuards(steps, catalog) {
   for (let i = 0; i < list.length; i += 1) {
     const entry = cmSequenceLookupEntry(list[i], catalog);
     if (!entry) continue;
-    if (entry.policy === "confirm") {
+    // The runner treats unknown policies as confirm, so the guard does too.
+    const policy = cmNormalizePolicy(entry.policy);
+    if (policy === "confirm") {
       guards.push({
         index: i + 1,
         kind: "confirm",
         text: entry.confirm || "This command needs confirmation.",
       });
-    } else if (entry.policy === "preview-first") {
+    } else if (policy === "preview-first") {
       guards.push({
         index: i + 1,
         kind: "preview-first",
@@ -1024,13 +1037,39 @@ function cmSequenceFocusRunId(summaryOrGroup, catalog) {
 // Bob Command Mode: command text parsing and shared activation policy.
 
 const CM_SHELL_REFUSAL = "command chips run bob, not a shell";
+const CM_CATALOG_LOADING_REASON = "Command Mode is still loading bob's catalog";
 
+function cmShellRefusal(op) {
+  return CM_SHELL_REFUSAL + " — remove " + (op === "`" ? "the backtick" : "`" + op + "`");
+}
+
+// The unquoted shell operator starting at index, or null. `~` and globs stay
+// literal: bob expands them itself where it chooses to.
+function cmShellOperatorAt(source, index) {
+  const char = source[index];
+  const next = source[index + 1];
+  if (char === ";" || char === "<" || char === "`") return char;
+  if (char === "|") return next === "|" ? "||" : "|";
+  if (char === ">") return next === ">" ? ">>" : ">";
+  if (char !== "$") return null;
+  if (next === "(" || next === "{") return "$" + next;
+  const name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(index + 1));
+  if (name) return "$" + name[0];
+  if (next && /[0-9?$@*#!-]/.test(next)) return "$" + next;
+  return null;
+}
+
+// Split chip text into trimmed step texts at unquoted `&&` and line breaks.
+// Quotes and escapes follow cmTokenizeBobArgv; blank lines are skipped, and a
+// line break right after `&&` continues the same chain.
 function cmSplitCommandText(text) {
   if (typeof text !== "string") return { ok: false, reason: "command text must be a string" };
-  const source = text.trim();
-  if (!source) return { ok: false, reason: "no command given" };
+  const source = text;
+  if (!source.trim()) return { ok: false, reason: "no command given" };
 
-  const parts = [];
+  const segments = [];
+  const stepNumber = () => segments.filter((segment) => segment.text.trim()).length + 1;
+  const refuse = (reason) => ({ ok: false, reason, step: stepNumber() });
   let start = 0;
   let quote = null;
   let escaped = false;
@@ -1047,6 +1086,7 @@ function cmSplitCommandText(text) {
     }
     if (escaped) {
       escaped = false;
+      if (char === "\n" || char === "\r") return refuse("command chips do not join lines with `\\`");
       continue;
     }
     if (char === "\\") {
@@ -1057,57 +1097,126 @@ function cmSplitCommandText(text) {
       quote = char;
       continue;
     }
+    if (char === "\n") {
+      segments.push({ text: source.slice(start, index), after: "\n" });
+      start = index + 1;
+      continue;
+    }
     if (char === "&") {
-      if (source[index + 1] === "&") {
-        parts.push(source.slice(start, index).trim());
-        index += 1;
-        start = index + 1;
-      } else {
-        return { ok: false, reason: CM_SHELL_REFUSAL };
+      if (source[index + 1] !== "&") return refuse(cmShellRefusal("&"));
+      segments.push({ text: source.slice(start, index), after: "&&" });
+      index += 1;
+      start = index + 1;
+      continue;
+    }
+    const op = cmShellOperatorAt(source, index);
+    if (op) return refuse(cmShellRefusal(op));
+  }
+  if (escaped) return refuse("Unfinished escape");
+  if (quote) return refuse("Unbalanced quote");
+  segments.push({ text: source.slice(start), after: "end" });
+
+  const parts = [];
+  let afterAnd = false;
+  for (const segment of segments) {
+    const trimmed = segment.text.trim();
+    if (!trimmed) {
+      if (segment.after === "&&") {
+        return { ok: false, reason: afterAnd ? "empty step after `&&`" : "empty step before `&&`", step: parts.length + 1 };
       }
       continue;
     }
-    if (char === ";" || char === "|" || char === "<" || char === ">" || char === "`" || (char === "$" && source[index + 1] === "(")) {
-      return { ok: false, reason: CM_SHELL_REFUSAL };
-    }
+    parts.push(trimmed);
+    afterAnd = segment.after === "&&";
   }
-  if (escaped) return { ok: false, reason: "Unfinished escape" };
-  if (quote) return { ok: false, reason: "Unbalanced quote" };
-  parts.push(source.slice(start).trim());
-  if (parts.some((part) => !part)) return { ok: false, reason: "empty command between `&&`" };
+  if (afterAnd) return { ok: false, reason: "empty step after `&&`", step: parts.length + 1 };
+  if (!parts.length) return { ok: false, reason: "no command given" };
   return { ok: true, parts };
 }
 
+function cmResolveFailure(state, reason, step) {
+  return Object.freeze({
+    ok: false,
+    state,
+    signature: null,
+    steps: Object.freeze([]),
+    reason: String(reason || "command could not be resolved"),
+    step: Number.isInteger(step) && step > 0 ? step : null,
+  });
+}
+
+function cmCatalogUnavailableReason(status) {
+  if (status === "missing-bob") return "Command Mode cannot find bob";
+  if (status === "old-bob" || status === "protocol-skew") return "Command Mode cannot read bob's command catalog";
+  return null;
+}
+
+function cmResolvedStep(index, text, argv, entry) {
+  const policy = cmNormalizePolicy(entry.policy);
+  return Object.freeze({
+    index,
+    text,
+    argv: Object.freeze([...argv]),
+    entryId: entry.id,
+    entry_id: entry.id,
+    title: entry.title || entry.id,
+    effect: cmNormalizeEffect(entry.effect),
+    policy,
+    presentation: cmNormalizePresentation(entry.presentation),
+    hasPreview: Boolean(Array.isArray(entry.preview) && entry.preview.length),
+    confirm: policy === "confirm" ? String(entry.confirm || "This command needs confirmation.") : null,
+  });
+}
+
+// Pure and synchronous over the cached catalog. Returns a frozen
+// {ok, state, signature, steps, reason, step}; state is ready, invalid,
+// unavailable (this host or bob), or loading (no catalog yet). Syntax faults
+// win over catalog faults, so a malformed chip is invalid even while loading.
 function cmResolveCommandText(catalog, text, options = {}) {
-  if (!catalog) return { ok: false, reason: "catalog unavailable" };
   const split = cmSplitCommandText(text);
-  if (!split.ok) return split;
+  if (!split.ok) return cmResolveFailure("invalid", split.reason, split.step);
+  const words = [];
+  for (let index = 0; index < split.parts.length; index += 1) {
+    const parsed = cmTokenizeBobArgv(split.parts[index]);
+    if (parsed.error) return cmResolveFailure("invalid", parsed.error, index + 1);
+    const stepWords = cmTokenizedWords(parsed);
+    if (!stepWords.length) return cmResolveFailure("invalid", "no command given", index + 1);
+    if (stepWords[0] !== "bob") return cmResolveFailure("invalid", "command chips run only bob", index + 1);
+    if (stepWords.length < 2) return cmResolveFailure("invalid", "no command given", index + 1);
+    words.push(stepWords.slice(1));
+  }
+  if (!catalog) {
+    const unavailable = cmCatalogUnavailableReason(options.catalogStatus);
+    if (unavailable) return cmResolveFailure("unavailable", unavailable, null);
+    return cmResolveFailure("loading", CM_CATALOG_LOADING_REASON, null);
+  }
   const host = options.host || null;
   const steps = [];
-  for (const part of split.parts) {
-    const parsed = cmTokenizeBobArgv(part);
-    if (parsed.error) return { ok: false, reason: parsed.error };
-    const words = cmTokenizedWords(parsed);
-    if (!words.length || words[0] !== "bob") {
-      return { ok: false, reason: words.length ? "command chips run only bob" : "no command given" };
-    }
-    const argv = cmApplyCatalogAliases(catalog, words.slice(1));
-    if (!argv.length) return { ok: false, reason: "no command given" };
+  for (let index = 0; index < words.length; index += 1) {
+    const step = index + 1;
+    const argv = cmApplyCatalogAliases(catalog, words[index]);
+    if (!argv.length) return cmResolveFailure("invalid", "no command given", step);
     const excluded = cmExcludedReason(catalog, argv);
-    if (excluded) return { ok: false, reason: excluded };
+    if (excluded) return cmResolveFailure("invalid", excluded, step);
     const entry = cmFindEntryForArgv(catalog, argv);
-    if (!entry) {
-      return { ok: false, reason: "bob has no command `" + cmFormatArgv(argv) + "`" };
+    if (!entry) return cmResolveFailure("invalid", "bob has no command `" + cmFormatArgv(argv) + "`", step);
+    if (cmSheetEntryUnavailable(entry, host)) {
+      const hosts = (Array.isArray(entry.hosts) ? entry.hosts : []).filter(Boolean).map(String);
+      return cmResolveFailure("unavailable", "not available on this host: runs only on " + hosts.join(", "), step);
     }
-    const unavailable = cmSheetEntryUnavailable(entry, host);
-    if (unavailable) return { ok: false, reason: unavailable };
-    const userArgs = argv.slice(entry.path.length);
-    const missing = cmArgPositionals(entry, userArgs).missing;
-    if (missing) return { ok: false, reason: "missing " + String(missing.name || missing.slot || "value") };
-    steps.push({ argv: [...argv], entry_id: entry.id, title: entry.title || entry.id });
+    const missing = cmArgPositionals(entry, argv.slice(entry.path.length)).missing;
+    if (missing) return cmResolveFailure("invalid", "needs `" + String(missing.name || missing.slot || "value") + "`", step);
+    steps.push(cmResolvedStep(step, split.parts[index], argv, entry));
   }
-  if (!steps.length) return { ok: false, reason: "no command given" };
-  return { ok: true, steps, signature: cmSequenceSignature(steps) };
+  const frozen = Object.freeze(steps);
+  return Object.freeze({
+    ok: true,
+    state: "ready",
+    signature: cmSequenceSignature(frozen),
+    steps: frozen,
+    reason: null,
+    step: null,
+  });
 }
 
 // Shared by sheet activation and api.commandMode text activation. A forced
@@ -1148,6 +1257,62 @@ function cmPlanActivation(steps, catalog, options = {}) {
   }
 
   return { ok: true, action, steps: stored, guards, signature: cmSequenceSignature(stored) };
+}
+// ---- src/058-run-state-hooks.js ----
+// Bob Command Mode: per-run state hooks. A caller's onState rides the live
+// record in memory (never the persisted JSON), so adopted runs from an older
+// instance never call back. Hooks are guarded and never affect execution.
+
+const cmRunStateHooks = new WeakMap(); // live record -> [onState]
+
+function cmIsLiveRunState(state) {
+  return state === "queued" || state === "running";
+}
+
+// Call a subscriber without letting a throw or a rejected promise escape.
+function cmCallGuarded(callback, payload) {
+  if (typeof callback !== "function") return;
+  try {
+    const result = callback(payload);
+    if (result && typeof result.then === "function") result.then(undefined, () => {});
+  } catch (error) {
+    // Subscribers never affect execution.
+  }
+}
+
+// The payload shared by the run-state workspace event and per-run hooks.
+function cmRunStatePayload(record, state) {
+  return {
+    runId: record.id,
+    argv: Array.isArray(record.argv) ? [...record.argv] : [],
+    entryId: record.entry_id || null,
+    state: String(state || record.outcome || "unknown"),
+    outcome: record.outcome || String(state || "unknown"),
+    effect: record.effect || null,
+    trigger: record.trigger || null,
+    source: cmCopyRunSource(record.source),
+    sequence: record.sequence ? cmCopySequenceStamp(record.sequence) : null,
+  };
+}
+
+// Attach onState to a live record. With replay, a caller that joined an
+// already queued or running run (engine dedup) hears its current state now.
+function cmAddRunStateHook(record, hook, options = {}) {
+  if (!record || typeof hook !== "function") return;
+  const hooks = cmRunStateHooks.get(record) || [];
+  hooks.push(hook);
+  cmRunStateHooks.set(record, hooks);
+  if (options.replay && record.id && cmIsLiveRunState(record.outcome)) {
+    cmCallGuarded(hook, Object.freeze(cmRunStatePayload(record, record.outcome)));
+  }
+}
+
+function cmFireRunStateHooks(record, payload) {
+  const hooks = record ? cmRunStateHooks.get(record) : null;
+  if (!hooks || !hooks.length) return;
+  if (!cmIsLiveRunState(payload && payload.state)) cmRunStateHooks.delete(record);
+  const frozen = Object.freeze({ ...payload });
+  for (const hook of [...hooks]) cmCallGuarded(hook, frozen);
 }
 // ---- src/060-runner.js ----
 // Bob Command Mode: detached file-backed run engine (spawn, tail, queue,
@@ -1240,21 +1405,13 @@ class CommandModeRunner {
 
   fireRunState(record, state) {
     if (!record || !record.id) return;
+    const payload = cmRunStatePayload(record, state);
     try {
-      this.deps.fireEvent(CM_RUN_STATE_EVENT, {
-        runId: record.id,
-        argv: Array.isArray(record.argv) ? [...record.argv] : [],
-        entryId: record.entry_id || null,
-        state: String(state || record.outcome || "unknown"),
-        outcome: record.outcome || String(state || "unknown"),
-        effect: record.effect || null,
-        trigger: record.trigger || null,
-        source: cmCopyRunSource(record.source),
-        sequence: record.sequence ? cmCopySequenceStamp(record.sequence) : null,
-      });
+      this.deps.fireEvent(CM_RUN_STATE_EVENT, payload);
     } catch (error) {
       // State subscribers must never affect execution.
     }
+    cmFireRunStateHooks(record, payload);
   }
 
   // Full pipeline. Never rejects; settles {ok, runId, outcome, exitCode, reason?}.
@@ -1300,10 +1457,7 @@ class CommandModeRunner {
     }
     const finalArgv = entry ? cmAssembleArgv(entry, argv.slice(entry.path.length), { preview: usePreview }) : [...argv];
     const duplicate = this.findDuplicate(finalArgv, usePreview);
-    if (duplicate) {
-      const settled = await duplicate.settled;
-      return { ...settled, duplicate: true };
-    }
+    if (duplicate) return this.joinDuplicate(duplicate, opts);
     const resolution = this.deps.resolveBob();
     const features = catalog && Array.isArray(catalog.features) ? catalog.features : [];
     const bobVersion = catalog && typeof catalog.bob_version === "string" ? catalog.bob_version : null;
@@ -1338,6 +1492,9 @@ class CommandModeRunner {
           reason: "Could not save `" + (saved && saved.path ? saved.path : "note") + "`; run refused",
         };
       }
+      // A same-argv caller may have queued while this one awaited the save.
+      const raced = this.findDuplicate(finalArgv, usePreview);
+      if (raced) return this.joinDuplicate(raced, opts);
     }
     let settleResolve;
     const settled = new Promise((resolve) => { settleResolve = resolve; });
@@ -1352,6 +1509,7 @@ class CommandModeRunner {
     this.pending.push({ kind: isReads ? "read" : "write", spec });
     this.live.set(runId, { record, spec, waiters: [settleResolve] });
     this.lastRunId = runId;
+    cmAddRunStateHook(record, opts.onState);
     const started = {
       runId,
       argv: [...record.argv],
@@ -1366,6 +1524,11 @@ class CommandModeRunner {
     this.fireRunState(record, "queued");
     this.pump();
     return settled;
+  }
+
+  async joinDuplicate(spec, opts) {
+    cmAddRunStateHook(spec.record, opts && opts.onState, { replay: true });
+    return { ...(await spec.settled), duplicate: true };
   }
 
   findDuplicate(argv, preview) {
@@ -2243,6 +2406,8 @@ async function cmRunSequenceInner(runner, steps, options) {
       sequence: stamp,
     };
     if (entry) runOpts.entryId = entry.id;
+    // Per-run state (queued, running, finished) for this step's run only.
+    if (typeof options.onRunState === "function") runOpts.onState = options.onRunState;
     const t0 = cmSequenceNowMs(runner);
     let settled;
     try {
@@ -2428,6 +2593,333 @@ function cmClassifyRun(input = {}) {
   if (firstErr) return { outcome: "failed", summary: firstErr, ...adapterExtras };
   return { outcome: "failed", summary: cmLastMeaningfulLine(stdoutText) || "Failed", ...adapterExtras };
 }
+// ---- src/078-api-chip-contract.js ----
+// Bob Command Mode: api.commandMode chip contract helpers. Activation-time
+// resolution with a bounded catalog wait, guarded per-activation onState
+// delivery, and active-run lookup by the engine's canonical signature.
+
+// runText waits this long, and only for a catalog load already in flight.
+const CM_API_CATALOG_WAIT_MS = 5000;
+
+function cmApiErrorReason(error, fallback) {
+  return String((error && error.message) || error || fallback);
+}
+
+function cmApiDeepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const key of Object.keys(value)) cmApiDeepFreeze(value[key]);
+  return Object.freeze(value);
+}
+
+// A resolve result that is not ready never reaches execution.
+function cmApiRefusal(resolved) {
+  return {
+    ok: false,
+    outcome: "refused",
+    stage: "refused",
+    state: (resolved && resolved.state) || "invalid",
+    step: (resolved && resolved.step) || null,
+    runId: null,
+    sequenceId: null,
+    reason: String((resolved && resolved.reason) || "command could not be resolved"),
+  };
+}
+
+// Re-resolve at activation. A loading verdict waits (bounded) only for a
+// catalog load that is already in flight; this never starts a load itself.
+async function cmApiResolveForActivation(api, hooks, text) {
+  const resolved = api.resolve(text);
+  if (resolved.state !== "loading" || typeof hooks.catalogLoad !== "function") return resolved;
+  let flight = null;
+  try { flight = hooks.catalogLoad(); }
+  catch (error) { flight = null; }
+  if (!flight || typeof flight.then !== "function") return resolved;
+  const waitMs = Number.isFinite(hooks.catalogWaitMs) ? Math.max(0, hooks.catalogWaitMs) : CM_API_CATALOG_WAIT_MS;
+  let timer = null;
+  await Promise.race([
+    Promise.resolve(flight).then(() => null, () => null),
+    new Promise((resolve) => { timer = setTimeout(resolve, waitMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return api.resolve(text);
+}
+
+// One activation's onState channel. Every payload is a fresh frozen object
+// carrying {state, kind, signature, runId, sequenceId, step, total, outcome,
+// reason, exitCode, stoppedAt}; a throwing or rejecting callback is ignored.
+function cmApiStateEmitter(onState, base) {
+  if (typeof onState !== "function") return null;
+  return (payload) => cmCallGuarded(onState, Object.freeze({
+    state: null,
+    kind: base.kind,
+    signature: base.signature,
+    runId: null,
+    sequenceId: base.sequenceId || null,
+    step: 1,
+    total: base.total,
+    outcome: null,
+    reason: null,
+    exitCode: null,
+    stoppedAt: null,
+    ...payload,
+  }));
+}
+
+// Runner hook -> queued/running only. Terminal states are reported once per
+// step (`step`) or per activation (`finished`) from the settled results.
+function cmApiRunStateForwarder(emit) {
+  if (!emit) return undefined;
+  return (payload) => {
+    const state = payload && payload.state;
+    if (state !== "queued" && state !== "running") return;
+    const stamp = payload.sequence;
+    emit({
+      state,
+      runId: payload.runId ? String(payload.runId) : null,
+      ...(stamp && stamp.id ? { sequenceId: String(stamp.id) } : {}),
+      ...(stamp && Number(stamp.index) > 0 ? { step: Number(stamp.index) } : {}),
+      outcome: state,
+    });
+  };
+}
+
+function cmApiFinishedPayload(settled, fallbackStep) {
+  const result = settled || {};
+  return {
+    state: "finished",
+    runId: result.runId ? String(result.runId) : null,
+    step: Number(result.stoppedAt) || fallbackStep || 1,
+    outcome: result.outcome || "failed",
+    reason: result.reason != null ? String(result.reason) : null,
+    exitCode: typeof result.exitCode === "number" ? result.exitCode : null,
+    stoppedAt: Number(result.stoppedAt) || null,
+  };
+}
+
+function cmApiIsSignature(value) {
+  if (typeof value !== "string" || value[0] !== "[") return false;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every((item) => typeof item === "string");
+  } catch (error) {
+    return false;
+  }
+}
+
+function cmApiSignatureLength(signature) {
+  try {
+    const parsed = JSON.parse(signature);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch (error) {
+    return 0;
+  }
+}
+
+function cmApiLiveRecords(runner) {
+  let records = [];
+  try {
+    records = runner && typeof runner.activeRecords === "function" ? runner.activeRecords() : [];
+  } catch (error) {
+    records = [];
+  }
+  return (Array.isArray(records) ? records : []).filter((record) => record && cmIsLiveRunState(record.outcome));
+}
+
+// Find the live run or sequence for a canonical signature. Sequences match on
+// their immutable steps (stamps or the plugin's live signature), so a lookup
+// between two steps still finds the sequence. Returns null or
+// {kind, record, stamp, sequence}.
+function cmApiFindActive(runner, wanted, hooks = {}) {
+  if (!wanted) return null;
+  const active = cmApiLiveRecords(runner);
+  for (const record of active) {
+    const stamp = record.sequence;
+    if (stamp && Array.isArray(stamp.steps) && cmSequenceSignature(stamp.steps) === wanted) {
+      return { kind: "sequence", record, stamp, sequence: null };
+    }
+  }
+  if (typeof hooks.activeSequences === "function") {
+    try {
+      const sequences = hooks.activeSequences();
+      const sequence = (Array.isArray(sequences) ? sequences : []).find((item) => (
+        item && String(item.signature || "") === wanted
+      ));
+      if (sequence) {
+        const current = active.find((record) => record.sequence && record.sequence.id === sequence.id) || null;
+        return { kind: "sequence", record: current, stamp: null, sequence };
+      }
+    } catch (error) {
+      // The sequence map is an optional plugin integration.
+    }
+  }
+  if (cmApiSignatureLength(wanted) !== 1) return null;
+  let catalog = null;
+  try { catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null; }
+  catch (error) { catalog = null; }
+  for (const record of active) {
+    // A dry-run preview is not the command itself running.
+    if (record.sequence || record.preview) continue;
+    const replay = cmReplayRun(record, catalog);
+    const recorded = cmSequenceStep({ argv: replay.argv, entry_id: replay.entryId || record.entry_id });
+    if (cmSequenceSignature([recorded]) === wanted) return { kind: "run", record, stamp: null, sequence: null };
+  }
+  return null;
+}
+
+// The shipped activeRun(text) shape, kept byte-compatible.
+function cmApiActiveLegacy(found) {
+  if (!found) return null;
+  if (found.stamp) {
+    return {
+      ...cmApiActiveRunRecord(found.record),
+      sequenceId: found.stamp.id || null,
+      step: Number(found.stamp.index) || null,
+      total: Number(found.stamp.total) || found.stamp.steps.length,
+    };
+  }
+  if (found.sequence) {
+    const sequence = found.sequence;
+    const current = found.record;
+    return {
+      ...(cmApiActiveRunRecord(current) || {}),
+      runId: current ? String(current.id) : null,
+      outcome: "running",
+      sequenceId: String(sequence.id || "") || null,
+      step: Number(sequence.index) || null,
+      total: Number(sequence.total) || (Array.isArray(sequence.steps) ? sequence.steps.length : 0),
+    };
+  }
+  return cmApiActiveRunRecord(found.record);
+}
+
+function cmApiLastStepRunId(sequence) {
+  const results = sequence && Array.isArray(sequence.results) ? sequence.results : [];
+  for (let index = results.length - 1; index >= 0; index -= 1) {
+    if (results[index] && results[index].runId) return String(results[index].runId);
+  }
+  return null;
+}
+
+// activeRun(signature): frozen {kind, state, runId, sequenceId, step, total}
+// plus the legacy record fields. Between sequence steps runId names the last
+// finished step's run so a repeated activation can still open live output.
+function cmApiActiveView(found) {
+  const legacy = cmApiActiveLegacy(found);
+  if (!legacy) return null;
+  const isSequence = found.kind === "sequence";
+  return cmApiDeepFreeze({
+    ...legacy,
+    kind: isSequence ? "sequence" : "run",
+    state: found.record ? String(found.record.outcome) : "running",
+    runId: legacy.runId || (found.sequence ? cmApiLastStepRunId(found.sequence) : null),
+    sequenceId: isSequence ? legacy.sequenceId || null : null,
+    step: Number(legacy.step) || 1,
+    total: Number(legacy.total) || 1,
+  });
+}
+
+// A repeated activation of a live signature opens its output and never
+// starts another run: {ok, active, duplicate, stage: "output", kind, state,
+// runId, sequenceId, step, total, ...legacy record fields}.
+async function cmApiOpenActive(found, hooks) {
+  const view = cmApiActiveView(found);
+  if (view.runId && typeof hooks.openOutput === "function") {
+    try { await Promise.resolve(hooks.openOutput(view.runId)); }
+    catch (error) { /* Opening output never starts another run. */ }
+  }
+  return { ...view, ok: true, active: true, duplicate: true, stage: "output" };
+}
+
+// One run-now step with the sheet's Ctrl+Enter options plus chip provenance.
+async function cmApiRunResolvedStep(runner, resolved, catalog, options) {
+  const step = resolved.steps[0];
+  const entry = cmSequenceLookupEntry(step, catalog);
+  const emit = cmApiStateEmitter(options.onState, {
+    kind: "run", signature: resolved.signature, sequenceId: null, total: 1,
+  });
+  const runOpts = {
+    entryId: entry && entry.id,
+    title: (entry && entry.title) || step.title,
+    trigger: "chip",
+    source: options.source,
+    skipGuards: true,
+  };
+  const forward = cmApiRunStateForwarder(emit);
+  if (forward) runOpts.onState = forward;
+  let settled;
+  try {
+    settled = await runner.run([...step.argv], runOpts);
+  } catch (error) {
+    settled = { ok: false, runId: null, outcome: "failed", exitCode: null, reason: cmApiErrorReason(error, "run failed") };
+  }
+  const result = { ...(settled || { ok: false, runId: null, outcome: "failed", reason: "run failed" }) };
+  if (!result.outcome) result.outcome = result.ok ? "completed" : "failed";
+  if (emit) emit(cmApiFinishedPayload(result, 1));
+  return { ...result, stage: "run", sequenceId: null };
+}
+
+// A multi-step chip through the plugin's sequence driver. Each step's run
+// reports queued/running, each settled step reports `step`, and the whole
+// sequence reports one `finished` (distinct from its steps' finishes).
+async function cmApiRunResolvedSequence(runner, hooks, resolved, catalog, options) {
+  const random = runner && runner.deps && typeof runner.deps.random === "function" ? runner.deps.random : Math.random;
+  const sequenceId = "seq-" + cmRunId(cmSequenceNowMs(runner), random);
+  const total = resolved.steps.length;
+  const emit = cmApiStateEmitter(options.onState, {
+    kind: "sequence", signature: resolved.signature, sequenceId, total,
+  });
+  const runOptions = { id: sequenceId, trigger: "chip", source: options.source };
+  if (emit) {
+    runOptions.onRunState = cmApiRunStateForwarder(emit);
+    runOptions.onStepFinish = (index, row) => emit({
+      state: "step",
+      runId: row && row.runId ? String(row.runId) : null,
+      step: index + 1,
+      outcome: (row && row.outcome) || "failed",
+      reason: row && row.reason != null ? String(row.reason) : null,
+    });
+  }
+  let summary;
+  try {
+    summary = typeof hooks.runSequence === "function"
+      ? await hooks.runSequence(resolved.steps, runOptions)
+      : await cmRunSequence(runner, resolved.steps, runOptions);
+  } catch (error) {
+    summary = { outcome: "failed", reason: cmApiErrorReason(error, "sequence failed") };
+  }
+  if (!summary || !Array.isArray(summary.results)) {
+    // The driver refused before any step (for example, already running).
+    return {
+      ...(summary || {}),
+      ok: false,
+      outcome: "refused",
+      stage: "refused",
+      runId: null,
+      sequenceId: null,
+      reason: String((summary && summary.reason) || "sequence failed"),
+    };
+  }
+  const halted = summary.stoppedAt
+    ? summary.results.find((row) => row && Number(row.index) === Number(summary.stoppedAt))
+    : null;
+  const result = {
+    ...summary,
+    ok: summary.outcome === "completed" || summary.outcome === "attention",
+    stage: "sequence",
+    sequenceId: String(summary.id || sequenceId),
+    runId: cmSequenceFocusRunId(summary, catalog) || null,
+  };
+  const reason = summary.reason || (halted && halted.reason) || null;
+  if (reason) result.reason = String(reason);
+  if (emit) {
+    emit({
+      ...cmApiFinishedPayload(result, total),
+      sequenceId: result.sequenceId,
+      step: Number(summary.stoppedAt) || total,
+    });
+  }
+  return result;
+}
 // ---- src/080-api.js ----
 // Bob Command Mode: api.commandMode v1 for other plugins.
 
@@ -2456,57 +2948,9 @@ function cmApiActiveRunRecord(record) {
   };
 }
 
+// Legacy text-form lookup, kept for the shipped activeRun(text) shape.
 function cmApiActiveRunForSteps(runner, steps, options = {}) {
-  const wanted = cmSequenceSignature(steps);
-  if (!wanted) return null;
-  let records = [];
-  try {
-    records = runner && typeof runner.activeRecords === "function" ? runner.activeRecords() : [];
-  } catch (error) {
-    records = [];
-  }
-  const active = (Array.isArray(records) ? records : []).filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
-  for (const record of active) {
-    const stamp = record.sequence;
-    if (stamp && Array.isArray(stamp.steps) && cmSequenceSignature(stamp.steps) === wanted) {
-      return {
-        ...cmApiActiveRunRecord(record),
-        sequenceId: stamp.id || null,
-        step: Number(stamp.index) || null,
-        total: Number(stamp.total) || stamp.steps.length,
-      };
-    }
-  }
-  if (typeof options.activeSequences === "function") {
-    try {
-      const sequences = options.activeSequences();
-      const sequence = (Array.isArray(sequences) ? sequences : []).find((item) => (
-        item && Array.isArray(item.steps) && cmSequenceSignature(item.steps) === wanted
-      ));
-      if (sequence) {
-        const current = active.find((record) => record.sequence && record.sequence.id === sequence.id) || null;
-        return {
-          ...(cmApiActiveRunRecord(current) || {}),
-          runId: current ? String(current.id) : null,
-          outcome: "running",
-          sequenceId: String(sequence.id || "") || null,
-          step: Number(sequence.index) || null,
-          total: Number(sequence.total) || sequence.steps.length,
-        };
-      }
-    } catch (error) {
-      // The sequence map is an optional plugin integration.
-    }
-  }
-  if (!Array.isArray(steps) || steps.length !== 1) return null;
-  const catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null;
-  for (const record of active) {
-    if (record.sequence) continue;
-    const replay = cmReplayRun(record, catalog);
-    const recorded = cmSequenceStep({ argv: replay.argv, entry_id: replay.entryId || record.entry_id });
-    if (cmSequenceSignature([recorded]) === wanted) return cmApiActiveRunRecord(record);
-  }
-  return null;
+  return cmApiActiveLegacy(cmApiFindActive(runner, cmSequenceSignature(steps), options));
 }
 
 function cmApiTextStepRow(step, catalog) {
@@ -2529,45 +2973,69 @@ function cmApiTextStepRow(step, catalog) {
   };
 }
 
+// Open the guarded path for resolved steps. Card stages settle
+// {ok, stage: "confirm" | "review", outcome: "opened", runId: null} without
+// any run; a report runs for real (stage "output") and reports through
+// onState; a preview settles the dry run's own result with stage "preview".
 async function cmApiOpenResolvedText(runner, hooks, resolved, options = {}) {
   let catalog = null;
   try { catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null; }
   catch (error) { catalog = null; }
-  const plan = cmPlanActivation(resolved.steps, catalog, { intent: "open" });
-  if (!plan.ok) return { ok: false, reason: plan.reason || "could not plan command" };
-  if (typeof hooks.openSheet !== "function") return { ok: false, reason: "no command sheet" };
+  const plan = options.plan || cmPlanActivation(resolved.steps, catalog, { intent: "open" });
+  if (!plan.ok) return { ok: false, outcome: "refused", stage: "refused", reason: plan.reason || "could not plan command" };
+  const refuse = (reason) => ({ ok: false, outcome: "refused", stage: "refused", runId: null, reason: String(reason) });
+  if (typeof hooks.openSheet !== "function") return refuse("no command sheet");
   let opened;
   try {
     opened = await Promise.resolve(hooks.openSheet());
   } catch (error) {
-    return { ok: false, reason: String((error && error.message) || error || "sheet failed to open") };
+    return refuse(cmApiErrorReason(error, "sheet failed to open"));
   }
-  if (!opened || opened.ok === false) return { ok: false, reason: (opened && opened.reason) || "sheet failed to open" };
+  if (!opened || opened.ok === false) return refuse((opened && opened.reason) || "sheet failed to open");
   let sheet = null;
   try { sheet = typeof hooks.getSheet === "function" ? hooks.getSheet() : null; }
   catch (error) { sheet = null; }
-  if (!sheet) return { ok: false, reason: "no command sheet" };
+  if (!sheet) return refuse("no command sheet");
   const source = cmCopyRunSource(options.source);
   if (plan.action === "review") {
     cmSheetSequenceShowReview(sheet, plan.steps, plan.guards, { trigger: "chip", source });
-    return { ok: true, stage: "confirm", steps: plan.steps, guards: plan.guards };
+    return {
+      ok: true,
+      stage: plan.steps.length > 1 ? "review" : "confirm",
+      outcome: "opened",
+      runId: null,
+      sequenceId: null,
+      steps: plan.steps,
+      guards: plan.guards,
+    };
   }
   const step = plan.steps[0];
   const row = cmApiTextStepRow(step, catalog);
-  if (!row) return { ok: false, reason: "unknown command" };
+  if (!row) return refuse("unknown command");
   if (plan.action === "preview") {
-    if (!sheet || typeof sheet.runPreview !== "function") return { ok: false, reason: "no command sheet" };
-    return sheet.runPreview(row, step.argv, { trigger: "chip", source });
+    if (typeof sheet.runPreview !== "function") return refuse("no command sheet");
+    const previewed = await sheet.runPreview(row, step.argv, { trigger: "chip", source });
+    return { ...(previewed || { ok: false, reason: "preview failed to start" }), stage: "preview" };
   }
   if (plan.action === "report") {
-    if (!sheet || typeof sheet.runReport !== "function") return { ok: false, reason: "no command sheet" };
-    return sheet.runReport(row, step.argv, { trigger: "chip", source });
+    if (typeof sheet.runReport !== "function") return refuse("no command sheet");
+    const emit = cmApiStateEmitter(options.onState, {
+      kind: "run", signature: resolved.signature, sequenceId: null, total: 1,
+    });
+    let settled;
+    try {
+      settled = await sheet.runReport(row, step.argv, {
+        trigger: "chip", source, onState: cmApiRunStateForwarder(emit),
+      });
+    } catch (error) {
+      settled = { ok: false, runId: null, outcome: "failed", reason: cmApiErrorReason(error, "report failed") };
+    }
+    const result = { ...(settled || { ok: false, runId: null, outcome: "failed", reason: "report failed to start" }) };
+    if (!result.outcome) result.outcome = result.ok ? "completed" : "failed";
+    if (emit) emit(cmApiFinishedPayload(result, 1));
+    return { ...result, stage: "output", sequenceId: null };
   }
-  return { ok: false, reason: "command could not be opened" };
-}
-
-function cmApiCreateResult(ok, reason) {
-  return { ok: Boolean(ok), ...(reason ? { reason: String(reason) } : {}) };
+  return refuse("command could not be opened");
 }
 
 function cmCreateApi(runner, options = {}) {
@@ -2580,6 +3048,13 @@ function cmCreateApi(runner, options = {}) {
     getSheet,
     runSequence: options.runSequence || null,
     activeSequences: options.activeSequences || null,
+    catalogLoad: options.catalogLoad || null,
+    catalogInfo: options.catalogInfo || null,
+    catalogWaitMs: options.catalogWaitMs,
+  };
+  const catalogStatus = () => {
+    try { return typeof hooks.catalogInfo === "function" ? (hooks.catalogInfo() || {}).status : null; }
+    catch (error) { return null; }
   };
   const api = {
     version: CM_API_VERSION,
@@ -2601,84 +3076,93 @@ function cmCreateApi(runner, options = {}) {
       }
       return Promise.resolve(pending).catch(refused);
     },
-    // Parse one chip payload into catalog-legal bob steps without throwing.
+    // Parse one chip payload into catalog-legal bob steps. Pure, synchronous,
+    // and frozen: {ok, state, signature, steps, reason, step}. Never spawns
+    // and never starts a catalog load.
     resolve(text) {
       try {
         return cmResolveCommandText(runner && typeof runner.catalog === "function" ? runner.catalog() : null, text, {
           host: runner && runner.host,
+          catalogStatus: catalogStatus(),
         });
       } catch (error) {
-        return { ok: false, reason: String((error && error.message) || error || "command could not be resolved") };
+        return cmResolveFailure("invalid", cmApiErrorReason(error, "command could not be resolved"), null);
       }
     },
-    // Run a validated command chip now. Preview-first is skipped; confirm is
-    // always reviewed. Source is optional {path, line} provenance only.
+    // Run a validated command chip now. Only {source, onState} are read; the
+    // trigger is always "chip", preview-first is skipped, and confirm is
+    // always reviewed. Settles {ok, stage, outcome, runId, sequenceId, reason?}.
     async runText(text, runOpts = {}) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return cmApiCreateResult(false, resolved.reason);
-      const source = cmCopyRunSource(runOpts && runOpts.source);
-      const plan = cmPlanActivation(resolved.steps, api.catalog(), { intent: "chip" });
-      if (!plan.ok) return cmApiCreateResult(false, plan.reason);
-      let active = null;
-      try { active = cmApiActiveRunForSteps(runner, resolved.steps, hooks); }
-      catch (error) { active = null; }
-      if (active) {
-        if (active.runId && typeof hooks.openOutput === "function") {
-          try { await Promise.resolve(hooks.openOutput(active.runId)); }
-          catch (error) { /* Opening output never starts another run. */ }
-        }
-        return { ok: true, active: true, ...active };
-      }
-      if (plan.action === "review" || plan.action === "report") {
-        try { return await cmApiOpenResolvedText(runner, hooks, resolved, { source }); }
-        catch (error) { return { ok: false, reason: String((error && error.message) || error || "command could not be opened") }; }
-      }
-      if (resolved.steps.length === 1) {
-        const step = resolved.steps[0];
-        const entry = cmSequenceLookupEntry(step, api.catalog());
-        try {
-          return await runner.run(step.argv, {
-            entryId: entry && entry.id,
-            title: (entry && entry.title) || step.title,
-            trigger: "chip",
-            source,
-            skipGuards: true,
-          });
-        } catch (error) {
-          return { ok: false, runId: null, outcome: "failed", reason: String((error && error.message) || error || "run failed") };
-        }
-      }
+      const opts = runOpts && typeof runOpts === "object" ? runOpts : {};
+      const source = cmCopyRunSource(opts.source);
+      const onState = typeof opts.onState === "function" ? opts.onState : null;
       try {
-        const runOptions = { trigger: "chip", source };
-        const summary = typeof hooks.runSequence === "function"
-          ? await hooks.runSequence(resolved.steps, runOptions)
-          : await cmRunSequence(runner, resolved.steps, runOptions);
-        if (!summary) return { ok: false, outcome: "failed", reason: "sequence failed" };
-        return {
-          ...summary,
-          ok: summary.outcome === "completed" || summary.outcome === "attention",
-        };
+        const resolved = await cmApiResolveForActivation(api, hooks, text);
+        if (!resolved.ok) return cmApiRefusal(resolved);
+        const catalog = api.catalog();
+        const plan = cmPlanActivation(resolved.steps, catalog, { intent: "chip" });
+        if (!plan.ok) return cmApiRefusal({ state: "invalid", reason: plan.reason });
+        let found = null;
+        try { found = cmApiFindActive(runner, resolved.signature, hooks); }
+        catch (error) { found = null; }
+        if (found) return await cmApiOpenActive(found, hooks);
+        if (plan.action === "review" || plan.action === "report") {
+          return await cmApiOpenResolvedText(runner, hooks, resolved, { source, onState, plan });
+        }
+        if (resolved.steps.length === 1) return await cmApiRunResolvedStep(runner, resolved, catalog, { source, onState });
+        return await cmApiRunResolvedSequence(runner, hooks, resolved, catalog, { source, onState });
       } catch (error) {
-        return { ok: false, outcome: "failed", reason: String((error && error.message) || error || "sequence failed") };
+        return { ok: false, outcome: "failed", stage: "refused", runId: null, sequenceId: null, reason: cmApiErrorReason(error, "command could not run") };
       }
     },
     // Open the guarded sheet path for a text payload. Single reports open
     // output, preview-first commands show their preview, and writers review.
     async openText(text, openOpts = {}) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return cmApiCreateResult(false, resolved.reason);
+      const opts = openOpts && typeof openOpts === "object" ? openOpts : {};
       try {
-        return await cmApiOpenResolvedText(runner, hooks, resolved, { source: openOpts && openOpts.source });
+        const resolved = await cmApiResolveForActivation(api, hooks, text);
+        if (!resolved.ok) return cmApiRefusal(resolved);
+        return await cmApiOpenResolvedText(runner, hooks, resolved, {
+          source: opts.source,
+          onState: typeof opts.onState === "function" ? opts.onState : null,
+        });
       } catch (error) {
-        return { ok: false, reason: String((error && error.message) || error || "command could not be opened") };
+        return { ok: false, outcome: "refused", stage: "refused", runId: null, reason: cmApiErrorReason(error, "command could not be opened") };
       }
     },
-    // Find the live run (or active sequence step) for this payload.
-    activeRun(text) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return null;
-      try { return cmApiActiveRunForSteps(runner, resolved.steps, hooks); }
-      catch (error) { return null; }
+    // activeRun(signature) -> frozen {kind, state, runId, sequenceId, step,
+    // total, ...} or null. activeRun(text) keeps the shipped record shape.
+    activeRun(signatureOrText) {
+      try {
+        if (cmApiIsSignature(signatureOrText)) {
+          return cmApiActiveView(cmApiFindActive(runner, signatureOrText, hooks));
+        }
+        const resolved = api.resolve(signatureOrText);
+        if (!resolved.ok) return null;
+        return cmApiActiveLegacy(cmApiFindActive(runner, resolved.signature, hooks));
+      } catch (error) {
+        return null;
+      }
+    },
+    // Frozen {state, status, ready, loading, fingerprint, generation, token};
+    // token changes whenever cached chip verdicts must be dropped.
+    catalogInfo() {
+      let info = {};
+      try { info = (typeof hooks.catalogInfo === "function" ? hooks.catalogInfo() : null) || {}; }
+      catch (error) { info = {}; }
+      const ready = Boolean(api.catalog());
+      const status = info.status ? String(info.status) : (ready ? "ready" : "empty");
+      const generation = Number(info.generation) || (ready ? 1 : 0);
+      const fingerprint = info.fingerprint ? String(info.fingerprint) : null;
+      return Object.freeze({
+        state: ready ? "ready" : (cmCatalogUnavailableReason(status) ? "unavailable" : "loading"),
+        status,
+        ready,
+        loading: Boolean(info.loading),
+        fingerprint,
+        generation,
+        token: info.token ? String(info.token) : generation + ":" + (fingerprint || ""),
+      });
     },
     activeRuns() {
       try {
@@ -2716,6 +3200,9 @@ function cmCreateApi(runner, options = {}) {
     onRunFinished(callback) {
       return cmApiSubscribe(runner, CM_RUN_FINISHED_EVENT, callback);
     },
+    // Fires on the first usable catalog and on every content or binary
+    // fingerprint change: {catalog, bobVersion, fingerprint, generation,
+    // token, reason}. Returns an unsubscribe function.
     onCatalogChanged(callback) {
       return cmApiSubscribe(runner, CM_CATALOG_CHANGED_EVENT, callback);
     },
@@ -2819,6 +3306,11 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeCatalog = (stored.catalogCache && stored.catalogCache.catalog) || null;
     this.commandModeFingerprint = (stored.catalogCache && stored.catalogCache.fingerprint) || null;
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
+    // A cached catalog is usable at once; generation bumps on every content or
+    // binary fingerprint change, and the first usable catalog is announced.
+    this.commandModeCatalogGeneration = this.commandModeCatalog ? 1 : 0;
+    this.commandModeCatalogAnnounced = false;
+    this.commandModeCatalogFlight = null;
     this.commandModeMissingBob = null;
     this.commandModeStickyNotices = new Map();
     this.commandModePager = null;
@@ -2841,6 +3333,8 @@ class BobCommandModePlugin extends Plugin {
       getSheet: () => this.commandModeSheet,
       runSequence: (steps, opts) => this.commandModeRunSequence(steps, opts),
       activeSequences: () => this.commandModeSequenceSnapshots(),
+      catalogLoad: () => this.commandModeCatalogFlight,
+      catalogInfo: () => this.commandModeCatalogInfo(),
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
     this.addCommand({
@@ -2917,7 +3411,45 @@ class BobCommandModePlugin extends Plugin {
     return resolution;
   }
 
-  async commandModeRefreshCatalog(reason) {
+  // Tracks the in-flight load so chip activation can wait for it briefly.
+  commandModeRefreshCatalog(reason) {
+    const flight = this.commandModeRefreshCatalogNow(reason);
+    this.commandModeCatalogFlight = flight;
+    const clear = () => {
+      if (this.commandModeCatalogFlight === flight) this.commandModeCatalogFlight = null;
+    };
+    flight.then(clear, clear);
+    return flight;
+  }
+
+  commandModeCatalogInfo() {
+    const fingerprint = cmCatalogFingerprintKey(this.commandModeFingerprint);
+    const generation = Number(this.commandModeCatalogGeneration) || 0;
+    return {
+      status: String(this.commandModeState || "empty"),
+      ready: Boolean(this.commandModeCatalog),
+      loading: Boolean(this.commandModeCatalogFlight),
+      fingerprint,
+      generation,
+      token: generation + ":" + (fingerprint || ""),
+    };
+  }
+
+  commandModeAnnounceCatalog(reason) {
+    if (!this.commandModeCatalog) return;
+    this.commandModeCatalogAnnounced = true;
+    const info = this.commandModeCatalogInfo();
+    this.commandModeFireEvent(CM_CATALOG_CHANGED_EVENT, {
+      catalog: this.commandModeCatalog,
+      bobVersion: this.commandModeCatalog.bob_version || null,
+      fingerprint: info.fingerprint,
+      generation: info.generation,
+      token: info.token,
+      reason: String(reason || "refresh"),
+    });
+  }
+
+  async commandModeRefreshCatalogNow(reason) {
     const resolution = this.commandModeResolveBob();
     const fsModule = cmFs();
     let binaryMissing = false;
@@ -2937,6 +3469,7 @@ class BobCommandModePlugin extends Plugin {
     const fingerprint = cmStatBobPath(fsModule, resolution.path);
     if (reason !== "force" && fingerprint && cmFingerprintsEqual(fingerprint, this.commandModeFingerprint) && this.commandModeCatalog) {
       this.commandModeState = "ready";
+      if (!this.commandModeCatalogAnnounced) this.commandModeAnnounceCatalog(reason);
       return { ok: true, state: "ready", cached: true };
     }
     let result;
@@ -2956,16 +3489,19 @@ class BobCommandModePlugin extends Plugin {
     } catch (error) {
       catalogChanged = true;
     }
+    // A rebuilt binary can serve identical catalog JSON; its new fingerprint
+    // still invalidates every cached chip verdict.
+    const fingerprintChanged = cmCatalogFingerprintKey(fingerprint) !== cmCatalogFingerprintKey(this.commandModeFingerprint);
     this.commandModeCatalog = result.catalog;
     this.commandModeFingerprint = fingerprint;
     this.commandModeState = "ready";
     this.commandModeMissingBob = null;
+    if (catalogChanged || fingerprintChanged) {
+      this.commandModeCatalogGeneration = (Number(this.commandModeCatalogGeneration) || 0) + 1;
+    }
     this.commandModeSyncRunCommands();
-    if (catalogChanged) {
-      this.commandModeFireEvent(CM_CATALOG_CHANGED_EVENT, {
-        catalog: result.catalog,
-        bobVersion: result.catalog.bob_version || null,
-      });
+    if (catalogChanged || fingerprintChanged || !this.commandModeCatalogAnnounced) {
+      this.commandModeAnnounceCatalog(reason);
     }
     void this.commandModePersist();
     return { ok: true, state: "ready" };
@@ -3528,6 +4064,8 @@ BobCommandModePlugin.prototype.commandModeSequenceSnapshots = function commandMo
     const steps = Array.isArray(live.steps) ? live.steps : [];
     out.push({
       id: live.id,
+      // The immutable step signature; `steps` below is display-only.
+      signature: String(live.signature || cmSequenceSignature(steps)),
       total: steps.length,
       index: live.index || 1,
       steps: steps.map((step) => ({
@@ -3576,6 +4114,7 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
       trigger: opts.trigger || "sequence",
       source: opts.source,
       continues: opts.continues,
+      onRunState: opts.onRunState,
       cancelled: () => Boolean(this.commandModeUnloaded) || (typeof opts.cancelled === "function" && opts.cancelled()),
       onStepStart: (index, step) => {
         live.index = index + 1;
@@ -7161,6 +7700,7 @@ class CommandModeSheetModal extends Modal {
       ...(opts.preview ? { preview: true } : {}),
       ...(opts.skipGuards ? { skipGuards: true } : {}),
       ...(opts.source ? { source: opts.source } : {}),
+      ...(typeof opts.onState === "function" ? { onState: opts.onState } : {}),
     }));
     if (!settled || !settled.runId) {
       this.hint = (settled && settled.reason) || "Run failed to start";
@@ -9756,6 +10296,22 @@ module.exports.helpers = {
   cmSequenceGuards,
   cmSplitCommandText,
   cmResolveCommandText,
+  cmResolveFailure,
+  cmShellOperatorAt,
+  cmCatalogUnavailableReason,
+  CM_CATALOG_LOADING_REASON,
+  CM_API_CATALOG_WAIT_MS,
+  cmRunStatePayload,
+  cmAddRunStateHook,
+  cmFireRunStateHooks,
+  cmCallGuarded,
+  cmCatalogFingerprintKey,
+  cmApiFindActive,
+  cmApiActiveView,
+  cmApiActiveLegacy,
+  cmApiIsSignature,
+  cmApiResolveForActivation,
+  cmApiStateEmitter,
   cmPlanActivation,
   cmSequenceHistory,
   cmSequenceFocusRunId,

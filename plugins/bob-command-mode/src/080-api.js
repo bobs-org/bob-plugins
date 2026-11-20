@@ -25,57 +25,9 @@ function cmApiActiveRunRecord(record) {
   };
 }
 
+// Legacy text-form lookup, kept for the shipped activeRun(text) shape.
 function cmApiActiveRunForSteps(runner, steps, options = {}) {
-  const wanted = cmSequenceSignature(steps);
-  if (!wanted) return null;
-  let records = [];
-  try {
-    records = runner && typeof runner.activeRecords === "function" ? runner.activeRecords() : [];
-  } catch (error) {
-    records = [];
-  }
-  const active = (Array.isArray(records) ? records : []).filter((record) => record && (record.outcome === "queued" || record.outcome === "running"));
-  for (const record of active) {
-    const stamp = record.sequence;
-    if (stamp && Array.isArray(stamp.steps) && cmSequenceSignature(stamp.steps) === wanted) {
-      return {
-        ...cmApiActiveRunRecord(record),
-        sequenceId: stamp.id || null,
-        step: Number(stamp.index) || null,
-        total: Number(stamp.total) || stamp.steps.length,
-      };
-    }
-  }
-  if (typeof options.activeSequences === "function") {
-    try {
-      const sequences = options.activeSequences();
-      const sequence = (Array.isArray(sequences) ? sequences : []).find((item) => (
-        item && Array.isArray(item.steps) && cmSequenceSignature(item.steps) === wanted
-      ));
-      if (sequence) {
-        const current = active.find((record) => record.sequence && record.sequence.id === sequence.id) || null;
-        return {
-          ...(cmApiActiveRunRecord(current) || {}),
-          runId: current ? String(current.id) : null,
-          outcome: "running",
-          sequenceId: String(sequence.id || "") || null,
-          step: Number(sequence.index) || null,
-          total: Number(sequence.total) || sequence.steps.length,
-        };
-      }
-    } catch (error) {
-      // The sequence map is an optional plugin integration.
-    }
-  }
-  if (!Array.isArray(steps) || steps.length !== 1) return null;
-  const catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null;
-  for (const record of active) {
-    if (record.sequence) continue;
-    const replay = cmReplayRun(record, catalog);
-    const recorded = cmSequenceStep({ argv: replay.argv, entry_id: replay.entryId || record.entry_id });
-    if (cmSequenceSignature([recorded]) === wanted) return cmApiActiveRunRecord(record);
-  }
-  return null;
+  return cmApiActiveLegacy(cmApiFindActive(runner, cmSequenceSignature(steps), options));
 }
 
 function cmApiTextStepRow(step, catalog) {
@@ -98,45 +50,69 @@ function cmApiTextStepRow(step, catalog) {
   };
 }
 
+// Open the guarded path for resolved steps. Card stages settle
+// {ok, stage: "confirm" | "review", outcome: "opened", runId: null} without
+// any run; a report runs for real (stage "output") and reports through
+// onState; a preview settles the dry run's own result with stage "preview".
 async function cmApiOpenResolvedText(runner, hooks, resolved, options = {}) {
   let catalog = null;
   try { catalog = runner && typeof runner.catalog === "function" ? runner.catalog() : null; }
   catch (error) { catalog = null; }
-  const plan = cmPlanActivation(resolved.steps, catalog, { intent: "open" });
-  if (!plan.ok) return { ok: false, reason: plan.reason || "could not plan command" };
-  if (typeof hooks.openSheet !== "function") return { ok: false, reason: "no command sheet" };
+  const plan = options.plan || cmPlanActivation(resolved.steps, catalog, { intent: "open" });
+  if (!plan.ok) return { ok: false, outcome: "refused", stage: "refused", reason: plan.reason || "could not plan command" };
+  const refuse = (reason) => ({ ok: false, outcome: "refused", stage: "refused", runId: null, reason: String(reason) });
+  if (typeof hooks.openSheet !== "function") return refuse("no command sheet");
   let opened;
   try {
     opened = await Promise.resolve(hooks.openSheet());
   } catch (error) {
-    return { ok: false, reason: String((error && error.message) || error || "sheet failed to open") };
+    return refuse(cmApiErrorReason(error, "sheet failed to open"));
   }
-  if (!opened || opened.ok === false) return { ok: false, reason: (opened && opened.reason) || "sheet failed to open" };
+  if (!opened || opened.ok === false) return refuse((opened && opened.reason) || "sheet failed to open");
   let sheet = null;
   try { sheet = typeof hooks.getSheet === "function" ? hooks.getSheet() : null; }
   catch (error) { sheet = null; }
-  if (!sheet) return { ok: false, reason: "no command sheet" };
+  if (!sheet) return refuse("no command sheet");
   const source = cmCopyRunSource(options.source);
   if (plan.action === "review") {
     cmSheetSequenceShowReview(sheet, plan.steps, plan.guards, { trigger: "chip", source });
-    return { ok: true, stage: "confirm", steps: plan.steps, guards: plan.guards };
+    return {
+      ok: true,
+      stage: plan.steps.length > 1 ? "review" : "confirm",
+      outcome: "opened",
+      runId: null,
+      sequenceId: null,
+      steps: plan.steps,
+      guards: plan.guards,
+    };
   }
   const step = plan.steps[0];
   const row = cmApiTextStepRow(step, catalog);
-  if (!row) return { ok: false, reason: "unknown command" };
+  if (!row) return refuse("unknown command");
   if (plan.action === "preview") {
-    if (!sheet || typeof sheet.runPreview !== "function") return { ok: false, reason: "no command sheet" };
-    return sheet.runPreview(row, step.argv, { trigger: "chip", source });
+    if (typeof sheet.runPreview !== "function") return refuse("no command sheet");
+    const previewed = await sheet.runPreview(row, step.argv, { trigger: "chip", source });
+    return { ...(previewed || { ok: false, reason: "preview failed to start" }), stage: "preview" };
   }
   if (plan.action === "report") {
-    if (!sheet || typeof sheet.runReport !== "function") return { ok: false, reason: "no command sheet" };
-    return sheet.runReport(row, step.argv, { trigger: "chip", source });
+    if (typeof sheet.runReport !== "function") return refuse("no command sheet");
+    const emit = cmApiStateEmitter(options.onState, {
+      kind: "run", signature: resolved.signature, sequenceId: null, total: 1,
+    });
+    let settled;
+    try {
+      settled = await sheet.runReport(row, step.argv, {
+        trigger: "chip", source, onState: cmApiRunStateForwarder(emit),
+      });
+    } catch (error) {
+      settled = { ok: false, runId: null, outcome: "failed", reason: cmApiErrorReason(error, "report failed") };
+    }
+    const result = { ...(settled || { ok: false, runId: null, outcome: "failed", reason: "report failed to start" }) };
+    if (!result.outcome) result.outcome = result.ok ? "completed" : "failed";
+    if (emit) emit(cmApiFinishedPayload(result, 1));
+    return { ...result, stage: "output", sequenceId: null };
   }
-  return { ok: false, reason: "command could not be opened" };
-}
-
-function cmApiCreateResult(ok, reason) {
-  return { ok: Boolean(ok), ...(reason ? { reason: String(reason) } : {}) };
+  return refuse("command could not be opened");
 }
 
 function cmCreateApi(runner, options = {}) {
@@ -149,6 +125,13 @@ function cmCreateApi(runner, options = {}) {
     getSheet,
     runSequence: options.runSequence || null,
     activeSequences: options.activeSequences || null,
+    catalogLoad: options.catalogLoad || null,
+    catalogInfo: options.catalogInfo || null,
+    catalogWaitMs: options.catalogWaitMs,
+  };
+  const catalogStatus = () => {
+    try { return typeof hooks.catalogInfo === "function" ? (hooks.catalogInfo() || {}).status : null; }
+    catch (error) { return null; }
   };
   const api = {
     version: CM_API_VERSION,
@@ -170,84 +153,93 @@ function cmCreateApi(runner, options = {}) {
       }
       return Promise.resolve(pending).catch(refused);
     },
-    // Parse one chip payload into catalog-legal bob steps without throwing.
+    // Parse one chip payload into catalog-legal bob steps. Pure, synchronous,
+    // and frozen: {ok, state, signature, steps, reason, step}. Never spawns
+    // and never starts a catalog load.
     resolve(text) {
       try {
         return cmResolveCommandText(runner && typeof runner.catalog === "function" ? runner.catalog() : null, text, {
           host: runner && runner.host,
+          catalogStatus: catalogStatus(),
         });
       } catch (error) {
-        return { ok: false, reason: String((error && error.message) || error || "command could not be resolved") };
+        return cmResolveFailure("invalid", cmApiErrorReason(error, "command could not be resolved"), null);
       }
     },
-    // Run a validated command chip now. Preview-first is skipped; confirm is
-    // always reviewed. Source is optional {path, line} provenance only.
+    // Run a validated command chip now. Only {source, onState} are read; the
+    // trigger is always "chip", preview-first is skipped, and confirm is
+    // always reviewed. Settles {ok, stage, outcome, runId, sequenceId, reason?}.
     async runText(text, runOpts = {}) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return cmApiCreateResult(false, resolved.reason);
-      const source = cmCopyRunSource(runOpts && runOpts.source);
-      const plan = cmPlanActivation(resolved.steps, api.catalog(), { intent: "chip" });
-      if (!plan.ok) return cmApiCreateResult(false, plan.reason);
-      let active = null;
-      try { active = cmApiActiveRunForSteps(runner, resolved.steps, hooks); }
-      catch (error) { active = null; }
-      if (active) {
-        if (active.runId && typeof hooks.openOutput === "function") {
-          try { await Promise.resolve(hooks.openOutput(active.runId)); }
-          catch (error) { /* Opening output never starts another run. */ }
-        }
-        return { ok: true, active: true, ...active };
-      }
-      if (plan.action === "review" || plan.action === "report") {
-        try { return await cmApiOpenResolvedText(runner, hooks, resolved, { source }); }
-        catch (error) { return { ok: false, reason: String((error && error.message) || error || "command could not be opened") }; }
-      }
-      if (resolved.steps.length === 1) {
-        const step = resolved.steps[0];
-        const entry = cmSequenceLookupEntry(step, api.catalog());
-        try {
-          return await runner.run(step.argv, {
-            entryId: entry && entry.id,
-            title: (entry && entry.title) || step.title,
-            trigger: "chip",
-            source,
-            skipGuards: true,
-          });
-        } catch (error) {
-          return { ok: false, runId: null, outcome: "failed", reason: String((error && error.message) || error || "run failed") };
-        }
-      }
+      const opts = runOpts && typeof runOpts === "object" ? runOpts : {};
+      const source = cmCopyRunSource(opts.source);
+      const onState = typeof opts.onState === "function" ? opts.onState : null;
       try {
-        const runOptions = { trigger: "chip", source };
-        const summary = typeof hooks.runSequence === "function"
-          ? await hooks.runSequence(resolved.steps, runOptions)
-          : await cmRunSequence(runner, resolved.steps, runOptions);
-        if (!summary) return { ok: false, outcome: "failed", reason: "sequence failed" };
-        return {
-          ...summary,
-          ok: summary.outcome === "completed" || summary.outcome === "attention",
-        };
+        const resolved = await cmApiResolveForActivation(api, hooks, text);
+        if (!resolved.ok) return cmApiRefusal(resolved);
+        const catalog = api.catalog();
+        const plan = cmPlanActivation(resolved.steps, catalog, { intent: "chip" });
+        if (!plan.ok) return cmApiRefusal({ state: "invalid", reason: plan.reason });
+        let found = null;
+        try { found = cmApiFindActive(runner, resolved.signature, hooks); }
+        catch (error) { found = null; }
+        if (found) return await cmApiOpenActive(found, hooks);
+        if (plan.action === "review" || plan.action === "report") {
+          return await cmApiOpenResolvedText(runner, hooks, resolved, { source, onState, plan });
+        }
+        if (resolved.steps.length === 1) return await cmApiRunResolvedStep(runner, resolved, catalog, { source, onState });
+        return await cmApiRunResolvedSequence(runner, hooks, resolved, catalog, { source, onState });
       } catch (error) {
-        return { ok: false, outcome: "failed", reason: String((error && error.message) || error || "sequence failed") };
+        return { ok: false, outcome: "failed", stage: "refused", runId: null, sequenceId: null, reason: cmApiErrorReason(error, "command could not run") };
       }
     },
     // Open the guarded sheet path for a text payload. Single reports open
     // output, preview-first commands show their preview, and writers review.
     async openText(text, openOpts = {}) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return cmApiCreateResult(false, resolved.reason);
+      const opts = openOpts && typeof openOpts === "object" ? openOpts : {};
       try {
-        return await cmApiOpenResolvedText(runner, hooks, resolved, { source: openOpts && openOpts.source });
+        const resolved = await cmApiResolveForActivation(api, hooks, text);
+        if (!resolved.ok) return cmApiRefusal(resolved);
+        return await cmApiOpenResolvedText(runner, hooks, resolved, {
+          source: opts.source,
+          onState: typeof opts.onState === "function" ? opts.onState : null,
+        });
       } catch (error) {
-        return { ok: false, reason: String((error && error.message) || error || "command could not be opened") };
+        return { ok: false, outcome: "refused", stage: "refused", runId: null, reason: cmApiErrorReason(error, "command could not be opened") };
       }
     },
-    // Find the live run (or active sequence step) for this payload.
-    activeRun(text) {
-      const resolved = api.resolve(text);
-      if (!resolved.ok) return null;
-      try { return cmApiActiveRunForSteps(runner, resolved.steps, hooks); }
-      catch (error) { return null; }
+    // activeRun(signature) -> frozen {kind, state, runId, sequenceId, step,
+    // total, ...} or null. activeRun(text) keeps the shipped record shape.
+    activeRun(signatureOrText) {
+      try {
+        if (cmApiIsSignature(signatureOrText)) {
+          return cmApiActiveView(cmApiFindActive(runner, signatureOrText, hooks));
+        }
+        const resolved = api.resolve(signatureOrText);
+        if (!resolved.ok) return null;
+        return cmApiActiveLegacy(cmApiFindActive(runner, resolved.signature, hooks));
+      } catch (error) {
+        return null;
+      }
+    },
+    // Frozen {state, status, ready, loading, fingerprint, generation, token};
+    // token changes whenever cached chip verdicts must be dropped.
+    catalogInfo() {
+      let info = {};
+      try { info = (typeof hooks.catalogInfo === "function" ? hooks.catalogInfo() : null) || {}; }
+      catch (error) { info = {}; }
+      const ready = Boolean(api.catalog());
+      const status = info.status ? String(info.status) : (ready ? "ready" : "empty");
+      const generation = Number(info.generation) || (ready ? 1 : 0);
+      const fingerprint = info.fingerprint ? String(info.fingerprint) : null;
+      return Object.freeze({
+        state: ready ? "ready" : (cmCatalogUnavailableReason(status) ? "unavailable" : "loading"),
+        status,
+        ready,
+        loading: Boolean(info.loading),
+        fingerprint,
+        generation,
+        token: info.token ? String(info.token) : generation + ":" + (fingerprint || ""),
+      });
     },
     activeRuns() {
       try {
@@ -285,6 +277,9 @@ function cmCreateApi(runner, options = {}) {
     onRunFinished(callback) {
       return cmApiSubscribe(runner, CM_RUN_FINISHED_EVENT, callback);
     },
+    // Fires on the first usable catalog and on every content or binary
+    // fingerprint change: {catalog, bobVersion, fingerprint, generation,
+    // token, reason}. Returns an unsubscribe function.
     onCatalogChanged(callback) {
       return cmApiSubscribe(runner, CM_CATALOG_CHANGED_EVENT, callback);
     },

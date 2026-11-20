@@ -616,21 +616,89 @@ if (commandMode?.version >= 1) {
 
 `run(argv, opts)` settles to `{ ok, runId, outcome, exitCode, reason? }`
 and does not reject. `openOutput(runId)` opens a run in the pager;
-`resolve(text)` parses a command-chip payload into catalog-legal steps;
-`runText(text, { source })` runs validated steps with preview-first skipped
-and `confirm` policies reviewed; `openText(text, { source })` follows the
-guarded sheet path. `activeRun(text)` finds a matching live run or returns
-`null`, and `activeRuns()` lists live records. `onRunStarted`, `onRunState`,
+`activeRuns()` lists live records; `catalog()` and `lastRun()` read the
+cached catalog and newest record. `onRunStarted`, `onRunState`,
 `onRunFinished`, and `onCatalogChanged` subscribe to lifecycle changes and
-return unsubscribe functions. `catalog()` and `lastRun()` read the cached
-catalog and newest record. Feature-detect these additive members before use.
+return unsubscribe functions. Feature-detect each additive member before use.
 
-Run records carry `trigger` and optional `{ path, line }` source provenance.
-Each finish also triggers `bob-command-mode:run-finished` with `{ runId,
-argv, entryId, outcome, effect, invalidates, trigger, source }`; start and
-state updates use `bob-command-mode:run-started` and
-`bob-command-mode:run-state`, and catalog changes use
-`bob-command-mode:catalog-changed` with `{ catalog, bobVersion }`.
+### Command-chip members
+
+These members serve command chips. None of them throws or rejects.
+
+`resolve(text)` is pure and synchronous over the cached catalog: it never
+spawns bob and never starts a catalog load. Steps split at unquoted `&&`
+and at line breaks; blank lines are skipped, and a line break right after
+`&&` continues the chain. Quotes and escapes follow the sheet's typed-argv
+tokenizer; `~` and globs stay literal. It returns a frozen
+`{ ok, state, signature, steps, reason, step }`:
+
+- `state` is `ready`, `invalid` (syntax, unquoted shell syntax such as `;`,
+  `|`, `||`, a lone `&`, `>`, `>>`, `<`, a backtick, `$(`, `${`, or
+  `$NAME`, an empty step, a first word other than exactly `bob`, an excluded
+  or unknown command, or a missing argument), `unavailable` (host-restricted
+  command, or bob missing or unreadable), or `loading` (no catalog yet).
+  Syntax faults win, so a malformed chip is `invalid` even while loading.
+- `steps` (ready only) holds frozen `{ index, text, argv, entryId, entry_id,
+  title, effect, policy, presentation, hasPreview, confirm }`. `index` is
+  1-based, `text` is the trimmed authored step (quotes kept, for faces),
+  `argv` is alias-resolved without the leading `bob`, and `confirm` is the
+  confirm prompt or `null`.
+- `signature` is the engine's canonical sequence signature (the same one
+  the sheet's sequences use), or `null` when not ready.
+- `reason` and the 1-based `step` name the first failure, or are `null`.
+
+`runText(text, { source, onState })` reads only those two options; the
+trigger is always `chip`. It re-resolves at activation. A `loading` verdict
+waits up to 5 s for a catalog load already in flight, never starting one.
+A verdict that is not ready settles `{ ok: false, outcome: "refused", stage:
+"refused", state, step, reason }` without spawning. Otherwise it settles
+`{ ok, stage, outcome, runId, sequenceId, reason? }` plus the runner's or
+sequence driver's existing fields, where `stage` is:
+
+| `stage` | When | `outcome` |
+| --- | --- | --- |
+| `run` | One step, run now with preview-first skipped | the run's outcome |
+| `sequence` | Several steps through the sequence driver | the summary outcome; `runId` is the focus run and `stoppedAt` the halting step |
+| `output` | A report runs into the sheet's output stage, or the signature is already live (`duplicate: true`, its output opens) | the run's outcome, or the live state |
+| `confirm`, `review` | A `confirm` policy opens its card for one step or several | `opened`; `runId` is `null` and nothing ran |
+
+`onState` receives frozen `{ state, kind, signature, runId, sequenceId,
+step, total, outcome, reason, exitCode, stoppedAt }`, with `kind` `run` or
+`sequence`. `queued` and `running` come from the runner for each run that
+really queues and spawns; `step` reports each settled sequence step with its
+outcome and first error line; one `finished` closes every activation that
+reached execution, carrying the outcome, `reason`, and `exitCode` for failed
+ink. A sequence's `finished` is separate from its steps' `step` events.
+Refusals and card stages send no events, and a throwing or rejecting
+callback never affects the run.
+
+`openText(text, { source, onState })` is the guarded path: a preview-first
+command opens its preview (`stage: "preview"`, whose fields describe the
+dry run and send no `onState`), a report runs into output as in `runText`,
+and anything else opens the review card (`confirm` or `review`).
+
+`activeRun(signature)` returns a frozen `{ kind, state, runId, sequenceId,
+step, total, … }` or `null`. Sequences match on their immutable steps, so
+the lookup still succeeds between two steps; there `state` is `running` and
+`runId` names the last finished step's run. `activeRun(text)` keeps the
+shipped record shape. A dry-run preview never counts as the command running.
+
+`catalogInfo()` returns a frozen `{ state, status, ready, loading,
+fingerprint, generation, token }`. A cached startup catalog is ready at once.
+`onCatalogChanged` fires on the first usable catalog of a session and on
+every catalog-content or binary-fingerprint change, even when the catalog
+JSON is identical. Its payload is `{ catalog, bobVersion, fingerprint,
+generation, token, reason }`. Drop cached chip verdicts when `token` changes.
+
+Run records carry `trigger` and optional `{ path, line }` source
+provenance: `path` survives only as a vault-relative string of at most 512
+characters (no leading slash, drive, or `..`), and `line` only as a
+non-negative integer. Each finish also triggers
+`bob-command-mode:run-finished` with `{ runId, argv, entryId, outcome,
+effect, invalidates, trigger, source }`; start and state updates use
+`bob-command-mode:run-started` and `bob-command-mode:run-state`, and catalog
+changes use `bob-command-mode:catalog-changed` with the `onCatalogChanged`
+payload.
 
 ## Bob Emoji
 

@@ -83,11 +83,11 @@ test("command text resolves catalog-legal bob steps and shares the activation po
   assert.match(helpers.cmResolveCommandText(catalog, "BOB_ENV=1 bob plan").reason, /only bob/);
   assert.match(helpers.cmResolveCommandText(catalog, "bob capture =").reason, /named capture rows/);
   assert.match(helpers.cmResolveCommandText(catalog, "bob gcal synk").reason, /no command/);
-  assert.match(helpers.cmResolveCommandText(catalog, "bob ref create").reason, /missing TARGET/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob ref create").reason, /needs `TARGET`/);
   assert.match(helpers.cmResolveCommandText(catalog, "bob plan | less").reason, /not a shell/);
   assert.match(helpers.cmResolveCommandText(catalog, "bob plan && ; bob ready").reason, /not a shell/);
-  assert.match(helpers.cmResolveCommandText(catalog, "bob plan &&").reason, /empty command/);
-  assert.match(helpers.cmResolveCommandText(catalog, "bob mac-only", { host: "athena" }).reason, /Unavailable here/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob plan &&").reason, /empty step after `&&`/);
+  assert.match(helpers.cmResolveCommandText(catalog, "bob mac-only", { host: "athena" }).reason, /not available on this host: runs only on mac/);
 
   const rename = [{ argv: ["ref", "rename", "old.md", "New"], entry_id: "ref-rename" }];
   const archive = [{ argv: ["task", "archive"], entry_id: "task-archive" }];

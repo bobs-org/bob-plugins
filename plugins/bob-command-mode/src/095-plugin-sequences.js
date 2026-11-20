@@ -28,6 +28,8 @@ BobCommandModePlugin.prototype.commandModeSequenceSnapshots = function commandMo
     const steps = Array.isArray(live.steps) ? live.steps : [];
     out.push({
       id: live.id,
+      // The immutable step signature; `steps` below is display-only.
+      signature: String(live.signature || cmSequenceSignature(steps)),
       total: steps.length,
       index: live.index || 1,
       steps: steps.map((step) => ({
@@ -76,6 +78,7 @@ BobCommandModePlugin.prototype.commandModeRunSequence = async function commandMo
       trigger: opts.trigger || "sequence",
       source: opts.source,
       continues: opts.continues,
+      onRunState: opts.onRunState,
       cancelled: () => Boolean(this.commandModeUnloaded) || (typeof opts.cancelled === "function" && opts.cancelled()),
       onStepStart: (index, step) => {
         live.index = index + 1;

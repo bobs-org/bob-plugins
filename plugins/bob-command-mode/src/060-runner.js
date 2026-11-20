@@ -88,21 +88,13 @@ class CommandModeRunner {
 
   fireRunState(record, state) {
     if (!record || !record.id) return;
+    const payload = cmRunStatePayload(record, state);
     try {
-      this.deps.fireEvent(CM_RUN_STATE_EVENT, {
-        runId: record.id,
-        argv: Array.isArray(record.argv) ? [...record.argv] : [],
-        entryId: record.entry_id || null,
-        state: String(state || record.outcome || "unknown"),
-        outcome: record.outcome || String(state || "unknown"),
-        effect: record.effect || null,
-        trigger: record.trigger || null,
-        source: cmCopyRunSource(record.source),
-        sequence: record.sequence ? cmCopySequenceStamp(record.sequence) : null,
-      });
+      this.deps.fireEvent(CM_RUN_STATE_EVENT, payload);
     } catch (error) {
       // State subscribers must never affect execution.
     }
+    cmFireRunStateHooks(record, payload);
   }
 
   // Full pipeline. Never rejects; settles {ok, runId, outcome, exitCode, reason?}.
@@ -148,10 +140,7 @@ class CommandModeRunner {
     }
     const finalArgv = entry ? cmAssembleArgv(entry, argv.slice(entry.path.length), { preview: usePreview }) : [...argv];
     const duplicate = this.findDuplicate(finalArgv, usePreview);
-    if (duplicate) {
-      const settled = await duplicate.settled;
-      return { ...settled, duplicate: true };
-    }
+    if (duplicate) return this.joinDuplicate(duplicate, opts);
     const resolution = this.deps.resolveBob();
     const features = catalog && Array.isArray(catalog.features) ? catalog.features : [];
     const bobVersion = catalog && typeof catalog.bob_version === "string" ? catalog.bob_version : null;
@@ -186,6 +175,9 @@ class CommandModeRunner {
           reason: "Could not save `" + (saved && saved.path ? saved.path : "note") + "`; run refused",
         };
       }
+      // A same-argv caller may have queued while this one awaited the save.
+      const raced = this.findDuplicate(finalArgv, usePreview);
+      if (raced) return this.joinDuplicate(raced, opts);
     }
     let settleResolve;
     const settled = new Promise((resolve) => { settleResolve = resolve; });
@@ -200,6 +192,7 @@ class CommandModeRunner {
     this.pending.push({ kind: isReads ? "read" : "write", spec });
     this.live.set(runId, { record, spec, waiters: [settleResolve] });
     this.lastRunId = runId;
+    cmAddRunStateHook(record, opts.onState);
     const started = {
       runId,
       argv: [...record.argv],
@@ -214,6 +207,11 @@ class CommandModeRunner {
     this.fireRunState(record, "queued");
     this.pump();
     return settled;
+  }
+
+  async joinDuplicate(spec, opts) {
+    cmAddRunStateHook(spec.record, opts && opts.onState, { replay: true });
+    return { ...(await spec.settled), duplicate: true };
   }
 
   findDuplicate(argv, preview) {

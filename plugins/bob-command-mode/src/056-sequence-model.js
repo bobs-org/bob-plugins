@@ -82,13 +82,15 @@ function cmSequenceGuards(steps, catalog) {
   for (let i = 0; i < list.length; i += 1) {
     const entry = cmSequenceLookupEntry(list[i], catalog);
     if (!entry) continue;
-    if (entry.policy === "confirm") {
+    // The runner treats unknown policies as confirm, so the guard does too.
+    const policy = cmNormalizePolicy(entry.policy);
+    if (policy === "confirm") {
       guards.push({
         index: i + 1,
         kind: "confirm",
         text: entry.confirm || "This command needs confirmation.",
       });
-    } else if (entry.policy === "preview-first") {
+    } else if (policy === "preview-first") {
       guards.push({
         index: i + 1,
         kind: "preview-first",

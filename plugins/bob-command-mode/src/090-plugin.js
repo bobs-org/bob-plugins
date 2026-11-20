@@ -32,6 +32,11 @@ class BobCommandModePlugin extends Plugin {
     this.commandModeCatalog = (stored.catalogCache && stored.catalogCache.catalog) || null;
     this.commandModeFingerprint = (stored.catalogCache && stored.catalogCache.fingerprint) || null;
     this.commandModeState = this.commandModeCatalog ? "ready" : "empty";
+    // A cached catalog is usable at once; generation bumps on every content or
+    // binary fingerprint change, and the first usable catalog is announced.
+    this.commandModeCatalogGeneration = this.commandModeCatalog ? 1 : 0;
+    this.commandModeCatalogAnnounced = false;
+    this.commandModeCatalogFlight = null;
     this.commandModeMissingBob = null;
     this.commandModeStickyNotices = new Map();
     this.commandModePager = null;
@@ -54,6 +59,8 @@ class BobCommandModePlugin extends Plugin {
       getSheet: () => this.commandModeSheet,
       runSequence: (steps, opts) => this.commandModeRunSequence(steps, opts),
       activeSequences: () => this.commandModeSequenceSnapshots(),
+      catalogLoad: () => this.commandModeCatalogFlight,
+      catalogInfo: () => this.commandModeCatalogInfo(),
     }));
     this.addSettingTab(new BobCommandModeSettingTab(this.app, this));
     this.addCommand({
@@ -130,7 +137,45 @@ class BobCommandModePlugin extends Plugin {
     return resolution;
   }
 
-  async commandModeRefreshCatalog(reason) {
+  // Tracks the in-flight load so chip activation can wait for it briefly.
+  commandModeRefreshCatalog(reason) {
+    const flight = this.commandModeRefreshCatalogNow(reason);
+    this.commandModeCatalogFlight = flight;
+    const clear = () => {
+      if (this.commandModeCatalogFlight === flight) this.commandModeCatalogFlight = null;
+    };
+    flight.then(clear, clear);
+    return flight;
+  }
+
+  commandModeCatalogInfo() {
+    const fingerprint = cmCatalogFingerprintKey(this.commandModeFingerprint);
+    const generation = Number(this.commandModeCatalogGeneration) || 0;
+    return {
+      status: String(this.commandModeState || "empty"),
+      ready: Boolean(this.commandModeCatalog),
+      loading: Boolean(this.commandModeCatalogFlight),
+      fingerprint,
+      generation,
+      token: generation + ":" + (fingerprint || ""),
+    };
+  }
+
+  commandModeAnnounceCatalog(reason) {
+    if (!this.commandModeCatalog) return;
+    this.commandModeCatalogAnnounced = true;
+    const info = this.commandModeCatalogInfo();
+    this.commandModeFireEvent(CM_CATALOG_CHANGED_EVENT, {
+      catalog: this.commandModeCatalog,
+      bobVersion: this.commandModeCatalog.bob_version || null,
+      fingerprint: info.fingerprint,
+      generation: info.generation,
+      token: info.token,
+      reason: String(reason || "refresh"),
+    });
+  }
+
+  async commandModeRefreshCatalogNow(reason) {
     const resolution = this.commandModeResolveBob();
     const fsModule = cmFs();
     let binaryMissing = false;
@@ -150,6 +195,7 @@ class BobCommandModePlugin extends Plugin {
     const fingerprint = cmStatBobPath(fsModule, resolution.path);
     if (reason !== "force" && fingerprint && cmFingerprintsEqual(fingerprint, this.commandModeFingerprint) && this.commandModeCatalog) {
       this.commandModeState = "ready";
+      if (!this.commandModeCatalogAnnounced) this.commandModeAnnounceCatalog(reason);
       return { ok: true, state: "ready", cached: true };
     }
     let result;
@@ -169,16 +215,19 @@ class BobCommandModePlugin extends Plugin {
     } catch (error) {
       catalogChanged = true;
     }
+    // A rebuilt binary can serve identical catalog JSON; its new fingerprint
+    // still invalidates every cached chip verdict.
+    const fingerprintChanged = cmCatalogFingerprintKey(fingerprint) !== cmCatalogFingerprintKey(this.commandModeFingerprint);
     this.commandModeCatalog = result.catalog;
     this.commandModeFingerprint = fingerprint;
     this.commandModeState = "ready";
     this.commandModeMissingBob = null;
+    if (catalogChanged || fingerprintChanged) {
+      this.commandModeCatalogGeneration = (Number(this.commandModeCatalogGeneration) || 0) + 1;
+    }
     this.commandModeSyncRunCommands();
-    if (catalogChanged) {
-      this.commandModeFireEvent(CM_CATALOG_CHANGED_EVENT, {
-        catalog: result.catalog,
-        bobVersion: result.catalog.bob_version || null,
-      });
+    if (catalogChanged || fingerprintChanged || !this.commandModeCatalogAnnounced) {
+      this.commandModeAnnounceCatalog(reason);
     }
     void this.commandModePersist();
     return { ok: true, state: "ready" };

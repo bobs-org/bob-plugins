@@ -20,6 +20,7 @@ function isDoneArchivePath(path) {
 // ---- src/010-load-and-constants.js ----
 const {
   MarkdownRenderChild,
+  MarkdownRenderer,
   MarkdownView,
   Modal,
   Notice,
@@ -34668,7 +34669,7 @@ class BobLedgerToolsPlugin extends Plugin {
     this.setupWorkspaceScrollGuard();
     this.setupNotebookData(); this.setupAlbumData(); this.setupProjectsData(); this.setupAreasData(); this.setupBankData(); this.setupBankActions(); this.setupBankWalk();
     this.setupBankCards(); this.setupBankBadge(); this.setupBankMarks(); this.setupBankSetup(); this.setupBankSetupCard(); this.setupSchemaDoubleEquals?.();
-    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
+    this.setupNotebookCatalog(); this.setupAlbumCatalog(); this.setupProjectsCatalog(); this.setupAreasCatalog(); this.setupAlbumRecords(); this.setupNotebookHeader(); this.setupAlbumHeader(); this.setupRecordSheet?.(); this.setupIntentionCard?.(); this.setupRecordUpdate?.(); this.setupRecordCard?.(); this.setupSubscriptionSurfaces(); this.setupAlbumSchemaEntrypoints?.(); this.setupAlbumYamlExcursion?.();
     this.setupReadingBoardBlock();
   }
 
@@ -34794,7 +34795,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
     } catch (error) {
       // Reading Board data teardown is best-effort.
     }
-    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
     } catch (error) {
@@ -148691,6 +148692,1201 @@ class BobLedgerToolsPeriodNotesMixin {
     }
   }
 }
+// ---- src/296a-plugin-intention-card-model.js ----
+// Pure intention-card subject, metadata, digest, and source-placement models.
+// Paths accepted here mirror bob-cli src/native/intentions/subject.rs.
+const INTENTION_CARD_OWNED_KEYS = Object.freeze([
+  "intentions",
+  "summary",
+  "summary_digest",
+  "summary_drafted",
+  "reflection",
+  "review_digest",
+  "review_drafted",
+]);
+const INTENTION_CARD_CHIPS = Object.freeze(["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"]);
+const INTENTION_CARD_RECENT_CLOSED_DAYS = 7;
+const INTENTION_CARD_LINK_HINT = "Unresolved link · run bob periods list -p";
+let intentionCardCrypto = null;
+try { intentionCardCrypto = require("crypto"); } catch (_) {}
+
+function intentionCardDateParts(value) {
+  const text = String(value || "");
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = intentionCardLocalDate(year, month, day);
+  if (!date || date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return null;
+  return { year, month, day, text };
+}
+
+function intentionCardLocalDate(year, month, day) {
+  if (![year, month, day].every(Number.isInteger)) return null;
+  const date = new Date(0);
+  date.setHours(12, 0, 0, 0);
+  date.setFullYear(year, month - 1, day);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function intentionCardDateText(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return "";
+  return String(date.getFullYear()).padStart(4, "0") + "-"
+    + String(date.getMonth() + 1).padStart(2, "0") + "-"
+    + String(date.getDate()).padStart(2, "0");
+}
+
+function intentionCardShiftDate(value, days) {
+  const parts = intentionCardDateParts(value);
+  if (!parts || !Number.isInteger(days)) return "";
+  const date = intentionCardLocalDate(parts.year, parts.month, parts.day);
+  date.setDate(date.getDate() + days);
+  return intentionCardDateText(date);
+}
+
+// Gregorian ordinal arithmetic makes age checks independent of DST offsets.
+function intentionCardDateOrdinal(value) {
+  const parts = intentionCardDateParts(value);
+  if (!parts) return null;
+  let year = parts.year;
+  let month = parts.month;
+  if (month <= 2) {
+    year -= 1;
+    month += 12;
+  }
+  const era = Math.floor(year / 400);
+  const yearOfEra = year - era * 400;
+  const dayOfYear = Math.floor((153 * (month - 3) + 2) / 5) + parts.day - 1;
+  const dayOfEra = yearOfEra * 365 + Math.floor(yearOfEra / 4)
+    - Math.floor(yearOfEra / 100) + dayOfYear;
+  return era * 146097 + dayOfEra;
+}
+
+function intentionCardIsoParts(day) {
+  const parts = intentionCardDateParts(day);
+  if (!parts || typeof periodNotesIsoWeekYear !== "function") return null;
+  return periodNotesIsoWeekYear(intentionCardLocalDate(parts.year, parts.month, parts.day));
+}
+
+function intentionCardWeeksInIsoYear(year) {
+  if (!Number.isInteger(year) || year < 1970 || year > 2999) return 0;
+  const parts = periodNotesIsoWeekYear(intentionCardLocalDate(year, 12, 28));
+  return parts && parts.isoYear === year ? parts.week : 0;
+}
+
+function intentionCardWeekMonday(year, week) {
+  if (typeof periodNotesIsoWeekMonday !== "function") return "";
+  return periodNotesIsoWeekMonday(year, week) || "";
+}
+
+function intentionCardPeriodState(start, end, today) {
+  const startOrdinal = intentionCardDateOrdinal(start);
+  const endOrdinal = intentionCardDateOrdinal(end);
+  const todayOrdinal = intentionCardDateOrdinal(today);
+  if (startOrdinal === null || endOrdinal === null || todayOrdinal === null) return "unknown";
+  if (endOrdinal < todayOrdinal) return "closed";
+  if (startOrdinal > todayOrdinal) return "future";
+  return "current";
+}
+
+function intentionCardDayLabel(value, withWeekday = true) {
+  const parts = intentionCardDateParts(value);
+  if (!parts) return "";
+  const date = intentionCardLocalDate(parts.year, parts.month, parts.day);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const label = months[parts.month - 1] + " " + parts.day;
+  return withWeekday ? weekdays[date.getDay()] + " " + label + ", " + parts.year : label;
+}
+
+function intentionCardDateRange(start, end) {
+  const first = intentionCardDateParts(start);
+  const last = intentionCardDateParts(end);
+  if (!first || !last) return "";
+  if (first.year === last.year && first.month === last.month) {
+    return intentionCardDayLabel(start, false) + "–" + last.day;
+  }
+  if (first.year === last.year) {
+    return intentionCardDayLabel(start, false) + " – " + intentionCardDayLabel(end, false);
+  }
+  return intentionCardDayLabel(start, false) + ", " + first.year + " – "
+    + intentionCardDayLabel(end, false) + ", " + last.year;
+}
+
+function intentionCardDayInfo(day, today, full) {
+  const parts = intentionCardDateParts(day);
+  if (!parts) return null;
+  const week = intentionCardIsoParts(day);
+  if (!week) return null;
+  const yearText = String(parts.year).padStart(4, "0");
+  const info = {
+    kind: "day",
+    id: day,
+    path: yearText + "/" + yearText + String(parts.month).padStart(2, "0")
+      + String(parts.day).padStart(2, "0") + ".md",
+    label: intentionCardDayLabel(day, true),
+    shortLabel: intentionCardDayLabel(day, false),
+    start: day,
+    end: day,
+    state: intentionCardPeriodState(day, day, today),
+  };
+  if (full) {
+    info.today = today;
+    info.parent = intentionCardWeekInfo(week.isoYear, week.week, today, false);
+    info.previous = intentionCardDayInfo(intentionCardShiftDate(day, -1), today, false);
+    info.next = intentionCardDayInfo(intentionCardShiftDate(day, 1), today, false);
+  }
+  return info;
+}
+
+function intentionCardWeekInfo(year, week, today, full) {
+  if (!Number.isInteger(year) || year < 1970 || year > 2999) return null;
+  if (!Number.isInteger(week) || week < 1 || week > intentionCardWeeksInIsoYear(year)) return null;
+  const start = intentionCardWeekMonday(year, week);
+  if (!start) return null;
+  const end = intentionCardShiftDate(start, 6);
+  const yearText = String(year).padStart(4, "0");
+  const id = yearText + "-W" + String(week).padStart(2, "0");
+  const info = {
+    kind: "week",
+    id,
+    path: yearText + "/" + id + ".md",
+    label: id + " · " + intentionCardDateRange(start, end),
+    shortLabel: "W" + String(week).padStart(2, "0"),
+    start,
+    end,
+    state: intentionCardPeriodState(start, end, today),
+  };
+  if (full) {
+    info.today = today;
+    const quarter = Math.min(4, Math.floor((week - 1) / 13) + 1);
+    info.parent = intentionCardQuarterInfo(year, quarter, today, false);
+    info.previous = week > 1
+      ? intentionCardWeekInfo(year, week - 1, today, false)
+      : intentionCardWeekInfo(year - 1, intentionCardWeeksInIsoYear(year - 1), today, false);
+    info.next = week < intentionCardWeeksInIsoYear(year)
+      ? intentionCardWeekInfo(year, week + 1, today, false)
+      : intentionCardWeekInfo(year + 1, 1, today, false);
+  }
+  return info;
+}
+
+function intentionCardQuarterInfo(year, quarter, today, full) {
+  if (!Number.isInteger(year) || year < 1970 || year > 2999) return null;
+  if (!Number.isInteger(quarter) || quarter < 1 || quarter > 4) return null;
+  const firstWeek = (quarter - 1) * 13 + 1;
+  const lastWeek = quarter === 4 ? intentionCardWeeksInIsoYear(year) : quarter * 13;
+  const start = intentionCardWeekMonday(year, firstWeek);
+  const endMonday = intentionCardWeekMonday(year, lastWeek);
+  if (!start || !endMonday) return null;
+  const end = intentionCardShiftDate(endMonday, 6);
+  const yearText = String(year).padStart(4, "0");
+  const id = yearText + "-Q" + quarter;
+  const info = {
+    kind: "quarter",
+    id,
+    path: yearText + "/" + id + ".md",
+    label: id + " · W" + firstWeek + "–W" + lastWeek + " · " + intentionCardDateRange(start, end),
+    shortLabel: "Q" + quarter,
+    start,
+    end,
+    state: intentionCardPeriodState(start, end, today),
+  };
+  if (full) {
+    info.today = today;
+    info.parent = intentionCardYearInfo(year, today, false);
+    info.previous = quarter > 1
+      ? intentionCardQuarterInfo(year, quarter - 1, today, false)
+      : intentionCardQuarterInfo(year - 1, 4, today, false);
+    info.next = quarter < 4
+      ? intentionCardQuarterInfo(year, quarter + 1, today, false)
+      : intentionCardQuarterInfo(year + 1, 1, today, false);
+  }
+  return info;
+}
+
+function intentionCardYearInfo(year, today, full) {
+  if (!Number.isInteger(year) || year < 1970 || year > 2999) return null;
+  const weeks = intentionCardWeeksInIsoYear(year);
+  const start = intentionCardWeekMonday(year, 1);
+  const lastMonday = intentionCardWeekMonday(year, weeks);
+  if (!weeks || !start || !lastMonday) return null;
+  const end = intentionCardShiftDate(lastMonday, 6);
+  const yearText = String(year).padStart(4, "0");
+  const info = {
+    kind: "year",
+    id: yearText,
+    path: yearText + ".md",
+    label: yearText + " · " + intentionCardDateRange(start, end) + " · " + weeks + " weeks",
+    shortLabel: yearText,
+    start,
+    end,
+    state: intentionCardPeriodState(start, end, today),
+    parent: null,
+  };
+  if (full) {
+    info.today = today;
+    info.previous = intentionCardYearInfo(year - 1, today, false);
+    info.next = intentionCardYearInfo(year + 1, today, false);
+  }
+  return info;
+}
+
+function intentionCardPath(value) {
+  return String(value || "").replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+}
+
+function intentionCardSubjectForPath(value, todayValue) {
+  const path = intentionCardPath(value);
+  const today = intentionCardDateParts(todayValue) ? todayValue : dayStripLocalToday(new Date());
+  if (!path || path.startsWith("/") || path.split("/").length > 2) return null;
+  const withoutExtension = path.replace(/\.md$/i, "");
+  const dayMatch = /^(\d{4})\/(\d{8})$/.exec(withoutExtension);
+  if (dayMatch && dayMatch[1] === dayMatch[2].slice(0, 4)) {
+    const date = dayMatch[2].slice(0, 4) + "-" + dayMatch[2].slice(4, 6) + "-" + dayMatch[2].slice(6, 8);
+    if (intentionCardDateParts(date)) return intentionCardDayInfo(date, today, true);
+    return null;
+  }
+  const periodPath = /\.md$/i.test(path) ? path : path + ".md";
+  const parsed = typeof periodNotesPeriodForPath === "function"
+    ? periodNotesPeriodForPath(periodPath) : null;
+  if (!parsed || parsed.kind === "all") return null;
+  if (parsed.kind === "week") {
+    const match = /^(\d{4})-W(\d{2})$/.exec(parsed.id);
+    return match ? intentionCardWeekInfo(Number(match[1]), Number(match[2]), today, true) : null;
+  }
+  if (parsed.kind === "quarter") {
+    const match = /^(\d{4})-Q([1-4])$/.exec(parsed.id);
+    return match ? intentionCardQuarterInfo(Number(match[1]), Number(match[2]), today, true) : null;
+  }
+  if (parsed.kind === "year" && /^\d{4}$/.test(parsed.id)) {
+    return intentionCardYearInfo(Number(parsed.id), today, true);
+  }
+  return null;
+}
+
+function intentionCardDigest(value) {
+  const text = String(value === null || value === undefined ? "" : value);
+  const normalized = text.replace(/\r\n?/g, "\n").split("\n")
+    .map((line) => line.replace(/\s+$/u, "")).join("\n").trim();
+  if (!intentionCardCrypto || typeof intentionCardCrypto.createHash !== "function") return "";
+  return "sha256:" + intentionCardCrypto.createHash("sha256").update(normalized, "utf8").digest("hex").slice(0, 16);
+}
+
+function intentionCardDateStamp(value) {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return null;
+    return String(value.getUTCFullYear()).padStart(4, "0") + "-"
+      + String(value.getUTCMonth() + 1).padStart(2, "0") + "-"
+      + String(value.getUTCDate()).padStart(2, "0");
+  }
+  const text = String(value || "");
+  return intentionCardDateParts(text) ? text : null;
+}
+
+function intentionCardEmpty(value) {
+  return value === undefined || value === null || value === "";
+}
+
+function intentionCardReadFields(frontmatter) {
+  const fm = frontmatter && typeof frontmatter === "object" && !Array.isArray(frontmatter) ? frontmatter : {};
+  const own = (key) => Object.prototype.hasOwnProperty.call(fm, key);
+  const invalid = (key, reason) => ({ ok: false, key, reason });
+  let intentions = [];
+  if (own("intentions") && !intentionCardEmpty(fm.intentions)) {
+    if (!Array.isArray(fm.intentions)) return invalid("intentions", "expected-list");
+    for (const value of fm.intentions) {
+      if (typeof value !== "string" || !value.trim()
+        || value !== value.trim() || /[\r\n\u2028\u2029]/u.test(value)) {
+        return invalid("intentions", "expected-nonempty-trimmed-lines");
+      }
+    }
+    intentions = fm.intentions.slice();
+  }
+
+  let summary = "";
+  if (own("summary") && !intentionCardEmpty(fm.summary)) {
+    if (typeof fm.summary !== "string" || /[\r\n\u2028\u2029]/u.test(fm.summary)) {
+      return invalid("summary", "expected-one-line-string");
+    }
+    summary = fm.summary.trim() ? fm.summary : "";
+  }
+
+  let reflection = "";
+  if (own("reflection") && !intentionCardEmpty(fm.reflection)) {
+    if (typeof fm.reflection !== "string") return invalid("reflection", "expected-string");
+    reflection = fm.reflection.trim() ? fm.reflection : "";
+  }
+
+  const readDigest = (key) => {
+    if (!own(key) || intentionCardEmpty(fm[key])) return { ok: true, value: "" };
+    return typeof fm[key] === "string" && /^sha256:[0-9a-f]{16}$/.test(fm[key])
+      ? { ok: true, value: fm[key] }
+      : { ok: false, value: "" };
+  };
+  const readDate = (key) => {
+    if (!own(key) || intentionCardEmpty(fm[key])) return { ok: true, value: "" };
+    const value = intentionCardDateStamp(fm[key]);
+    return value ? { ok: true, value } : { ok: false, value: "" };
+  };
+  const summaryDigest = readDigest("summary_digest");
+  if (!summaryDigest.ok) return invalid("summary_digest", "invalid-stamp");
+  const summaryDrafted = readDate("summary_drafted");
+  if (!summaryDrafted.ok) return invalid("summary_drafted", "invalid-stamp");
+  const reviewDigest = readDigest("review_digest");
+  if (!reviewDigest.ok) return invalid("review_digest", "invalid-stamp");
+  const reviewDrafted = readDate("review_drafted");
+  if (!reviewDrafted.ok) return invalid("review_drafted", "invalid-stamp");
+
+  return {
+    ok: true,
+    intentions,
+    summary,
+    summaryDigest: summaryDigest.value,
+    summaryDrafted: summaryDrafted.value,
+    reflection,
+    reviewDigest: reviewDigest.value,
+    reviewDrafted: reviewDrafted.value,
+    summaryState: !summary ? "empty"
+      : summaryDigest.value && summaryDigest.value === intentionCardDigest(summary) ? "agent" : "edited",
+  };
+}
+
+function intentionCardParseFrontmatter(source) {
+  const text = String(source === null || source === undefined ? "" : source).replace(/^\uFEFF/, "");
+  const lines = text.split(/\r\n|\r|\n/);
+  if (!lines.length || lines[0].trim() !== "---") {
+    return { ok: true, hasFrontmatter: false, frontmatter: {} };
+  }
+  let end = -1;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === "---" || lines[index].trim() === "...") {
+      end = index;
+      break;
+    }
+  }
+  if (end < 0) return { ok: false, reason: "unclosed-frontmatter" };
+  const yaml = lines.slice(1, end).join("\n");
+  const owned = new Set(INTENTION_CARD_OWNED_KEYS);
+  const seen = new Set();
+  const keyPattern = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))\s*:/;
+  for (const line of lines.slice(1, end)) {
+    const match = keyPattern.exec(line);
+    const key = match ? match[1] || match[2] || match[3] : "";
+    if (!owned.has(key)) continue;
+    if (seen.has(key)) return { ok: false, reason: "duplicate-owned-key" };
+    seen.add(key);
+  }
+  if (typeof parseYaml !== "function") return { ok: false, reason: "yaml-parser-unavailable" };
+  let parsed = null;
+  try { parsed = parseYaml(yaml); } catch (_) { return { ok: false, reason: "malformed-yaml" }; }
+  if (parsed === null || parsed === undefined) parsed = {};
+  if (typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: "frontmatter-not-mapping" };
+  return { ok: true, hasFrontmatter: true, frontmatter: parsed };
+}
+
+function intentionCardStableValue(value) {
+  if (value instanceof Date) return { date: intentionCardDateStamp(value) };
+  if (Array.isArray(value)) return value.map(intentionCardStableValue);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = intentionCardStableValue(value[key]);
+    return out;
+  }
+  return value;
+}
+
+function intentionCardFrontmatterEvidence(source, cachedFrontmatter) {
+  const parsed = intentionCardParseFrontmatter(source);
+  if (!parsed.ok) return parsed;
+  const cached = cachedFrontmatter && typeof cachedFrontmatter === "object" && !Array.isArray(cachedFrontmatter)
+    ? cachedFrontmatter : {};
+  for (const key of INTENTION_CARD_OWNED_KEYS) {
+    const sourceHas = Object.prototype.hasOwnProperty.call(parsed.frontmatter, key);
+    const cacheHas = Object.prototype.hasOwnProperty.call(cached, key);
+    if (sourceHas !== cacheHas) return { ok: false, reason: "stale-metadata-cache", key };
+    if (sourceHas && JSON.stringify(intentionCardStableValue(parsed.frontmatter[key]))
+      !== JSON.stringify(intentionCardStableValue(cached[key]))) {
+      return { ok: false, reason: "stale-metadata-cache", key };
+    }
+  }
+  return { ok: true, hasFrontmatter: parsed.hasFrontmatter, frontmatter: parsed.frontmatter };
+}
+
+function intentionCardLinkPath(target) {
+  const text = String(target || "").trim();
+  const inner = text.startsWith("[[") && text.endsWith("]]") ? text.slice(2, -2) : text;
+  const path = inner.split("|")[0].split("#")[0].trim().replace(/\\/g, "/");
+  if (!path) return "";
+  const period = /^(\d{4})-W(\d{2})$/i.exec(path);
+  if (period) return period[1] + "/" + period[1] + "-W" + period[2] + ".md";
+  const quarter = /^(\d{4})-Q([1-4])$/i.exec(path);
+  if (quarter) return quarter[1] + "/" + quarter[1] + "-Q" + quarter[2] + ".md";
+  if (/^\d{4}$/.test(path)) return path + ".md";
+  return /\.md$/i.test(path) ? path : path + ".md";
+}
+
+function intentionCardLineLinks(line) {
+  const text = String(line || "");
+  const links = [];
+  const regex = /\[\[([^\]]+)\]\]/g;
+  let match = null;
+  while ((match = regex.exec(text))) {
+    const body = match[1];
+    const parts = body.split("|");
+    links.push({
+      raw: match[0],
+      target: (parts[0] || "").trim(),
+      label: (parts.length > 1 ? parts.slice(1).join("|") : parts[0] || "").trim(),
+    });
+  }
+  return links;
+}
+
+function intentionCardLineIsOnlyLinks(line, links) {
+  if (!links.length) return false;
+  const remainder = String(line || "").replace(/\[\[[^\]]+\]\]/g, "");
+  return /^[\s·|,;]*$/.test(remainder);
+}
+
+function intentionCardLinkSubject(target, today) {
+  const link = String(target || "").trim().replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0].split("#")[0].trim();
+  if (link === "all_time" || link === "all_time.md") return { kind: "all", path: "all_time.md" };
+  return intentionCardSubjectForPath(intentionCardLinkPath(target), today);
+}
+
+function intentionCardIsNavigationLine(line, subject, today) {
+  if (!subject) return false;
+  const links = intentionCardLineLinks(line);
+  if (!intentionCardLineIsOnlyLinks(line, links)) return false;
+  const resolved = links.map((link) => intentionCardLinkSubject(link.target, today));
+  if (subject.kind === "day") {
+    if (links.length === 2) {
+      return resolved[0]?.path === subject.previous?.path
+        && resolved[1]?.path === subject.next?.path
+        && links[0].label.toLowerCase() === "prev"
+        && links[1].label.toLowerCase() === "next";
+    }
+    return links.length === 3
+      && resolved[0]?.path === subject.previous?.path
+      && resolved[1]?.path === subject.parent?.path
+      && resolved[2]?.path === subject.next?.path;
+  }
+  if (subject.kind === "year") {
+    return links.length === 3
+      && resolved[0]?.path === subject.previous?.path
+      && resolved[1]?.kind === "all"
+      && resolved[2]?.path === subject.next?.path;
+  }
+  return links.length === 3
+    && resolved[0]?.path === subject.previous?.path
+    && resolved[1]?.path === subject.parent?.path
+    && resolved[2]?.path === subject.next?.path;
+}
+
+function intentionCardIsDirectChild(child, subject) {
+  if (!child || !subject) return false;
+  if (subject.kind === "week" && child.kind === "day") {
+    const ordinal = intentionCardDateOrdinal(child.start);
+    return ordinal >= intentionCardDateOrdinal(subject.start) && ordinal <= intentionCardDateOrdinal(subject.end);
+  }
+  if (subject.kind === "quarter" && child.kind === "week") return child.parent?.id === subject.id;
+  if (subject.kind === "year" && child.kind === "quarter") return child.parent?.id === subject.id;
+  return false;
+}
+
+function intentionCardIsChildLinksLine(line, subject, today) {
+  if (!subject || !["week", "quarter", "year"].includes(subject.kind)) return false;
+  const links = intentionCardLineLinks(line);
+  if (!intentionCardLineIsOnlyLinks(line, links)) return false;
+  return links.every((link) => intentionCardIsDirectChild(intentionCardLinkSubject(link.target, today), subject));
+}
+
+function intentionCardPlacement(source, subject, todayValue) {
+  const today = intentionCardDateParts(todayValue) ? todayValue
+    : subject && subject.today ? subject.today : dayStripLocalToday(new Date());
+  const text = String(source === null || source === undefined ? "" : source).replace(/^\uFEFF/, "");
+  const lines = text.split(/\r\n|\r|\n/);
+  let index = lines[0]?.trim() === "---" ? -1 : 0;
+  if (index < 0) {
+    for (let cursor = 1; cursor < lines.length; cursor += 1) {
+      if (lines[cursor].trim() === "---" || lines[cursor].trim() === "...") {
+        index = cursor + 1;
+        break;
+      }
+    }
+    if (index < 0) return null;
+  }
+  let fence = "";
+  let headingLine = -1;
+  const fenceMatch = (line) => /^\s{0,3}(\x60{3,}|~{3,})/.exec(line);
+  for (let cursor = index; cursor < lines.length; cursor += 1) {
+    const opening = fenceMatch(lines[cursor]);
+    if (opening) {
+      const mark = opening[1][0];
+      if (!fence) fence = mark;
+      else if (fence === mark) fence = "";
+      continue;
+    }
+    if (!fence && /^#\s+\S/.test(lines[cursor].trim())) {
+      headingLine = cursor;
+      break;
+    }
+  }
+  if (headingLine < 0) return null;
+  let cursor = headingLine + 1;
+  while (cursor < lines.length) {
+    if (!lines[cursor].trim()) {
+      cursor += 1;
+      continue;
+    }
+    if (intentionCardIsNavigationLine(lines[cursor].trim(), subject, today)) {
+      cursor += 1;
+      continue;
+    }
+    if (intentionCardIsChildLinksLine(lines[cursor].trim(), subject, today)) {
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+  return {
+    headingLine,
+    insertBeforeLine: cursor < lines.length ? cursor : lines.length,
+    skippedLines: Math.max(0, cursor - headingLine - 1),
+  };
+}
+
+function intentionCardMissingBands(subject, fields, today) {
+  if (!subject || subject.state !== "closed" || !fields || fields.intentions.length === 0) return null;
+  const todayOrdinal = intentionCardDateOrdinal(today);
+  const endOrdinal = intentionCardDateOrdinal(subject.end);
+  if (todayOrdinal === null || endOrdinal === null) return null;
+  const age = todayOrdinal - endOrdinal;
+  if (age < 1 || age > INTENTION_CARD_RECENT_CLOSED_DAYS) return null;
+  return { summary: !fields.summary, reflection: !fields.reflection };
+}
+
+function intentionCardModelFor(path, frontmatter, todayValue, parentFrontmatter) {
+  const today = intentionCardDateParts(todayValue) ? todayValue : dayStripLocalToday(new Date());
+  const subject = intentionCardSubjectForPath(path, today);
+  if (!subject) return null;
+  const fields = intentionCardReadFields(frontmatter);
+  if (!fields.ok) return null;
+  if (!fields.intentions.length && !fields.summary && !fields.reflection) return null;
+  let parentIntentions = [];
+  if (subject.parent && parentFrontmatter) {
+    const parentFields = intentionCardReadFields(parentFrontmatter);
+    if (parentFields.ok) parentIntentions = parentFields.intentions;
+  }
+  const missingBands = intentionCardMissingBands(subject, fields, today);
+  return {
+    subject,
+    path: subject.path,
+    kind: subject.kind,
+    label: subject.label,
+    intentions: fields.intentions,
+    summary: fields.summary,
+    summaryState: fields.summaryState,
+    summaryDrafted: fields.summaryDrafted,
+    reflection: fields.reflection,
+    parentIntentions,
+    missingBands,
+    hasContent: true,
+  };
+}
+// ---- src/296b-plugin-intention-card-dom.js ----
+// Read-only intention card DOM. Markdown remains the only stored source.
+function intentionCardDomEl(doc, tag, className) {
+  if (!doc || typeof doc.createElement !== "function") return null;
+  const el = doc.createElement(tag);
+  if (className) el.className = className;
+  return el;
+}
+
+function intentionCardDomText(el, value) {
+  if (el) el.textContent = String(value === null || value === undefined ? "" : value);
+}
+
+function intentionCardDateShort(value) {
+  const parts = intentionCardDateParts(value);
+  return parts ? intentionCardDayLabel(value, false) : "";
+}
+
+function intentionCardDomHover(plugin, node, target, sourcePath) {
+  node.addEventListener?.("mouseover", (event) => {
+    try {
+      plugin.app?.workspace?.trigger?.("hover-link", {
+        event,
+        source: "bob-intention-card",
+        hoverParent: node,
+        targetEl: node,
+        linktext: String(target || ""),
+        sourcePath: String(sourcePath || ""),
+      });
+    } catch (_) {}
+  });
+}
+
+function intentionCardDomOpen(plugin, target, sourcePath, event) {
+  try {
+    const path = String(target || "").replace(/\.md$/i, "");
+    if (!path) return;
+    plugin.app?.workspace?.openLinkText?.(path, sourcePath || "", Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey));
+  } catch (_) {}
+}
+
+function intentionCardDomTargetExists(plugin, target, sourcePath) {
+  const text = String(target || "").trim();
+  const targetWithoutAlias = text.split("|")[0].trim();
+  const [linkPath, fragment = ""] = targetWithoutAlias.split("#", 2);
+  let file = null;
+  try {
+    if (typeof notebookResolveLinkFile === "function") {
+      file = notebookResolveLinkFile(linkPath, sourcePath, plugin.app?.metadataCache, plugin.app?.vault);
+    }
+  } catch (_) {}
+  try {
+    const actual = plugin.app?.metadataCache?.getFirstLinkpathDest?.(linkPath, sourcePath);
+    if (actual?.path) file = actual;
+  } catch (_) {}
+  if (!file?.path) return { ok: false, reason: "missing-file" };
+  let actualFile = null;
+  try { actualFile = plugin.app?.vault?.getAbstractFileByPath?.(file.path); } catch (_) {}
+  if (!actualFile) return { ok: false, reason: "missing-file" };
+  if (!fragment) return { ok: true, file: actualFile };
+  let cache = null;
+  try { cache = plugin.app?.metadataCache?.getFileCache?.(actualFile); } catch (_) {}
+  if (!cache) return { ok: true, file: actualFile };
+  if (fragment.startsWith("^")) {
+    const block = fragment.slice(1);
+    if (!cache.blocks || !Object.prototype.hasOwnProperty.call(cache.blocks, block)) {
+      return { ok: false, reason: "missing-block" };
+    }
+  } else if (Array.isArray(cache.headings)) {
+    const found = cache.headings.some((heading) =>
+      String(heading?.heading || "").trim().toLowerCase() === fragment.trim().toLowerCase());
+    if (!found) return { ok: false, reason: "missing-heading" };
+  } else {
+    return { ok: false, reason: "missing-heading" };
+  }
+  return { ok: true, file: actualFile };
+}
+
+function intentionCardDomDecorateLinks(plugin, root, sourcePath) {
+  for (const anchor of Array.from(root?.querySelectorAll?.("a.internal-link, a[data-href]") || [])) {
+    const target = anchor.getAttribute?.("data-href") || anchor.getAttribute?.("href") || "";
+    const resolution = intentionCardDomTargetExists(plugin, target, sourcePath);
+    if (!resolution.ok) {
+      anchor.classList?.add?.("is-unresolved");
+      anchor.setAttribute?.("title", INTENTION_CARD_LINK_HINT);
+      anchor.setAttribute?.("aria-label", `${anchor.textContent || target}. ${INTENTION_CARD_LINK_HINT}`);
+      continue;
+    }
+    anchor.classList?.add?.("internal-link", "bob-intention-card-link");
+    anchor.addEventListener?.("click", (event) => {
+      event.preventDefault?.();
+      intentionCardDomOpen(plugin, target, sourcePath, event);
+    });
+    intentionCardDomHover(plugin, anchor, target, sourcePath);
+  }
+}
+
+function intentionCardDomRender(plugin, parent, markdown, sourcePath) {
+  if (!parent) return;
+  const value = String(markdown === null || markdown === undefined ? "" : markdown);
+  if (typeof MarkdownRenderer !== "undefined" && typeof MarkdownRenderer?.render === "function") {
+    try {
+      const rendered = MarkdownRenderer.render(plugin.app, value, parent, sourcePath, plugin);
+      Promise.resolve(rendered).then(() => intentionCardDomDecorateLinks(plugin, parent, sourcePath)).catch(() => {});
+      return;
+    } catch (_) {}
+  }
+  intentionCardDomText(parent, value);
+}
+
+function intentionCardDomLink(doc, plugin, target, label, sourcePath, className) {
+  const anchor = intentionCardDomEl(doc, "a", `internal-link ${className || ""}`.trim());
+  if (!anchor) return null;
+  const path = String(target || "");
+  anchor.setAttribute("href", path);
+  anchor.setAttribute("data-href", path);
+  intentionCardDomText(anchor, label || path);
+  anchor.addEventListener?.("click", (event) => {
+    event.preventDefault?.();
+    intentionCardDomOpen(plugin, path, sourcePath, event);
+  });
+  intentionCardDomHover(plugin, anchor, path, sourcePath);
+  const resolution = intentionCardDomTargetExists(plugin, path, sourcePath);
+  if (!resolution.ok) {
+    anchor.classList?.add?.("is-unresolved");
+    anchor.setAttribute?.("title", INTENTION_CARD_LINK_HINT);
+  }
+  return anchor;
+}
+
+function intentionCardBuildDom(model, plugin, doc) {
+  if (!model || !doc) return null;
+  const card = intentionCardDomEl(doc, "section", "bob-property-card bob-intention-card");
+  if (!card) return null;
+  card.setAttribute("data-intention-source", model.path);
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", `${model.kind} intention card`);
+  if (model.intentions.length === 1) card.classList.add("is-single-intention");
+
+  const kicker = intentionCardDomEl(doc, "div", "bob-intention-card-kicker");
+  intentionCardDomText(kicker, `${model.kind.toUpperCase()} · ${model.label}`);
+  card.appendChild(kicker);
+
+  if (model.parentIntentions.length && model.subject.parent) {
+    const parent = intentionCardDomEl(doc, "div", "bob-intention-card-parent");
+    const href = model.subject.parent.path.replace(/\.md$/i, "");
+    parent.appendChild(intentionCardDomLink(doc, plugin, href, `↑ ${model.subject.parent.label}`, model.path, "bob-intention-card-parent-link"));
+    const summary = intentionCardDomEl(doc, "div", "bob-intention-card-parent-intentions");
+    intentionCardDomRender(plugin, summary, model.parentIntentions.join(" · "), model.path);
+    parent.appendChild(summary);
+    card.appendChild(parent);
+  }
+
+  if (model.intentions.length) {
+    const intentionSection = intentionCardDomEl(doc, "div", "bob-intention-card-intentions");
+    for (const [index, text] of model.intentions.entries()) {
+      const row = intentionCardDomEl(doc, "div", "bob-intention-card-intention");
+      const chip = intentionCardDomEl(doc, "span", "bob-intention-card-chip");
+      chip.setAttribute("aria-hidden", "true");
+      intentionCardDomText(chip, INTENTION_CARD_CHIPS[index]);
+      const body = intentionCardDomEl(doc, "div", "bob-intention-card-intention-body");
+      intentionCardDomRender(plugin, body, text, model.path);
+      row.appendChild(chip);
+      row.appendChild(body);
+      intentionSection.appendChild(row);
+    }
+    card.appendChild(intentionSection);
+  }
+
+  if (model.summary) {
+    const section = intentionCardDomEl(doc, "section", "bob-intention-card-band bob-intention-card-summary");
+    const header = intentionCardDomEl(doc, "div", "bob-intention-card-band-heading");
+    const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
+    intentionCardDomText(title, "SUMMARY");
+    const provenance = intentionCardDomEl(doc, "span", `bob-intention-card-provenance is-${model.summaryState}`);
+    intentionCardDomText(provenance, model.summaryState === "agent"
+      ? `✦ agent${model.summaryDrafted ? ` · ${intentionCardDateShort(model.summaryDrafted)}` : ""}`
+      : "✎ edited");
+    header.appendChild(title);
+    header.appendChild(provenance);
+    const body = intentionCardDomEl(doc, "div", "bob-intention-card-summary-body");
+    intentionCardDomRender(plugin, body, model.summary, model.path);
+    section.appendChild(header);
+    section.appendChild(body);
+    card.appendChild(section);
+  }
+
+  if (model.reflection) {
+    const section = intentionCardDomEl(doc, "section", "bob-intention-card-band bob-intention-card-reflection");
+    const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
+    intentionCardDomText(title, "REFLECTION");
+    const quote = intentionCardDomEl(doc, "div", "bob-intention-card-quote");
+    intentionCardDomRender(plugin, quote, model.reflection, model.path);
+    section.appendChild(title);
+    section.appendChild(quote);
+    card.appendChild(section);
+  }
+
+  if (model.missingBands) {
+    const missing = intentionCardDomEl(doc, "div", "bob-intention-card-missing");
+    const labels = [];
+    if (model.missingBands.summary) labels.push("✦ summary pending");
+    if (model.missingBands.reflection) labels.push("＋ reflection r");
+    intentionCardDomText(missing, labels.join(" · "));
+    card.appendChild(missing);
+  }
+  return card;
+}
+
+function intentionCardDomAnchor(root, subject, today) {
+  if (!root || !subject) return null;
+  let heading = null;
+  try {
+    if (typeof root.querySelectorAll === "function") {
+      const headings = Array.from(root.querySelectorAll("h1") || []);
+      heading = headings.find((node) => !node.closest?.(".markdown-embed, .internal-embed, .hover-popover")
+        && (typeof propertyCardNodeBelongs !== "function" || propertyCardNodeBelongs(node, root))) || null;
+    } else {
+      heading = root.querySelector?.("h1") || null;
+    }
+  } catch (_) {}
+  if (!heading) return null;
+  let sibling = heading.nextElementSibling;
+  let last = heading;
+  while (sibling) {
+    const links = Array.from(sibling.querySelectorAll?.("a.internal-link, a[data-href]") || []);
+    if (!links.length) break;
+    let remainder = String(sibling.textContent || "");
+    for (const link of links) {
+      const label = String(link.textContent || "");
+      const at = remainder.indexOf(label);
+      if (at >= 0) remainder = remainder.slice(0, at) + remainder.slice(at + label.length);
+    }
+    if (!/^[\s·|,;]*$/.test(remainder)) break;
+    const targets = links.map((link) => link.getAttribute?.("data-href") || link.getAttribute?.("href") || "");
+    const subjects = targets.map((target) => intentionCardLinkSubject(target, today));
+    const resolvedAsNav = subject.kind === "day"
+      ? (targets.length === 2 && subjects[0]?.path === subject.previous?.path && subjects[1]?.path === subject.next?.path)
+        || (targets.length === 3 && subjects[0]?.path === subject.previous?.path && subjects[1]?.path === subject.parent?.path && subjects[2]?.path === subject.next?.path)
+      : subject.kind === "year"
+        ? targets.length === 3 && subjects[0]?.path === subject.previous?.path && subjects[1]?.kind === "all" && subjects[2]?.path === subject.next?.path
+        : targets.length === 3 && subjects[0]?.path === subject.previous?.path && subjects[1]?.path === subject.parent?.path && subjects[2]?.path === subject.next?.path;
+    const resolvedAsChildren = intentionCardIsChildLinksLine(targets.map((target) => `[[${target}]]`).join(" · "), subject, today);
+    if (!resolvedAsNav && !resolvedAsChildren) break;
+    last = sibling;
+    sibling = sibling.nextElementSibling;
+  }
+  return last;
+}
+// ---- src/296c-plugin-intention-card-host.js ----
+// Intention-card display adapter for the shared property-card host.
+const INTENTION_CARD_CLASS = "bob-intention-card";
+const INTENTION_CARD_REFRESH_MS = 100;
+
+function intentionCardFilePath(value) {
+  return intentionCardPath(value);
+}
+
+class BobLedgerToolsIntentionCardMixin {
+  intentionCardHost() {
+    if (this._intentionCardHost) return this._intentionCardHost;
+    const plugin = this;
+    this._intentionCardHost = createPropertyCardHost({
+      plugin,
+      kind: "intentions",
+      readingPriority: 48,
+      allowEmbedDisplay: false,
+      fields: {
+        active: "intentionCardActive",
+        reading: "intentionCardReading",
+        readingPending: "intentionCardReadingPending",
+        readingTimers: "intentionCardReadingTimers",
+        editors: "intentionCardEditors",
+        editorScopes: "intentionCardEditorScopes",
+        refreshTimer: "intentionCardRefreshTimer",
+        keySlots: "intentionCardKeySlots",
+      },
+      setTimeout: (fn, ms) => plugin.albumSetTimeout ? plugin.albumSetTimeout(fn, ms) : setTimeout(fn, ms),
+      clearTimeout: (id) => plugin.albumClearTimeout ? plugin.albumClearTimeout(id) : clearTimeout(id),
+      pathOf: intentionCardFilePath,
+      readingRoot: (el) => propertyCardReadingRoot(el),
+      readingScope: (root) => propertyCardReadingScope(root),
+      acceptReading: (el, ctx) => plugin.intentionCardCanDisplay(ctx?.sourcePath, el),
+      paintReading: (el, path) => plugin.paintIntentionCardReading(el, path),
+      removeReading: (root, scope, path) => plugin.removeIntentionCardReading(root, scope, path),
+      ownKeys: (scope, path) => plugin.intentionCardOwn(scope, path),
+      releaseKeys: (scope, path) => plugin.intentionCardRelease(scope, path),
+      livePath: (view) => plugin.intentionCardLivePath(view),
+      buildDecorations: (view) => plugin.buildIntentionCardDecorations(view),
+      shouldRebuild: (update) => {
+        if (!editorLivePreviewField || !update?.startState || !update?.state) return false;
+        try { return update.startState.field(editorLivePreviewField) !== update.state.field(editorLivePreviewField); }
+        catch (_) { return false; }
+      },
+      cleanEditor: (view) => plugin.intentionCardCleanEditor(view),
+      workspaceEvents: ["layout-change", "file-open"],
+      onWorkspaceEvent: () => plugin.intentionCardScheduleReadingViewMount(),
+      onSetup: () => plugin.intentionCardOnSetup(),
+      onDisposeStart: () => plugin.intentionCardOnDisposeStart(),
+      onDisposeEnd: () => plugin.intentionCardOnDisposeEnd(),
+    });
+    return this._intentionCardHost;
+  }
+
+  setupIntentionCard() {
+    this.intentionCardHost().setup();
+  }
+
+  teardownIntentionCard() {
+    this.intentionCardHost().dispose();
+  }
+
+  intentionCardDesktop() {
+    return typeof propertyCardDesktop === "function" ? propertyCardDesktop() : true;
+  }
+
+  intentionCardCanDisplay(path, surface) {
+    if (!this.intentionCardActive || !this.intentionCardDesktop()) return false;
+    if (!intentionCardSubjectForPath(path, this.intentionCardToday())) return false;
+    if (surface?.closest?.(".cm-editor, .markdown-embed, .internal-embed, .hover-popover, pre, code")) return false;
+    return true;
+  }
+
+  intentionCardToday(now = new Date()) {
+    return typeof dayStripLocalToday === "function" ? dayStripLocalToday(now) : intentionCardDateText(now);
+  }
+
+  intentionCardLivePath(view) {
+    if (!this.intentionCardActive || !this.intentionCardDesktop() || !this.intentionCardLivePreview(view)) return null;
+    try {
+      if (view?.dom?.closest?.(".markdown-embed, .internal-embed, .hover-popover")) return null;
+      return this.notebookCatalogLivePath?.(view) || null;
+    } catch (_) { return null; }
+  }
+
+  intentionCardLivePreview(view) {
+    try { return Boolean(editorLivePreviewField && view?.state?.field?.(editorLivePreviewField) === true); }
+    catch (_) { return false; }
+  }
+
+  intentionCardOnSetup() {
+    this.intentionCardEnsureMaps();
+    this.intentionCardDay = this.intentionCardToday();
+    try {
+      const cache = this.app?.metadataCache;
+      if (cache && typeof cache.on === "function" && typeof this.registerEvent === "function") {
+        this.registerEvent(cache.on("changed", (file) => this.intentionCardOnMetadata(file)));
+      }
+    } catch (_) {}
+    this.intentionCardScheduleMidnight();
+  }
+
+  intentionCardEnsureMaps() {
+    if (!(this.intentionCardSourceCache instanceof Map)) this.intentionCardSourceCache = new Map();
+    if (!(this.intentionCardSourceFlights instanceof Map)) this.intentionCardSourceFlights = new Map();
+    if (!(this.intentionCardKeySlots instanceof Map)) this.intentionCardKeySlots = new Map();
+  }
+
+  intentionCardOnDisposeStart() {
+    if (this.intentionCardMidnightTimer != null) {
+      if (this.albumClearTimeout) this.albumClearTimeout(this.intentionCardMidnightTimer);
+      else clearTimeout(this.intentionCardMidnightTimer);
+    }
+    this.intentionCardMidnightTimer = null;
+    this.intentionCardSourceFlights?.clear?.();
+  }
+
+  intentionCardOnDisposeEnd() {
+    this.intentionCardSourceCache?.clear?.();
+    this.intentionCardKeySlots?.clear?.();
+    this.intentionCardDay = "";
+  }
+
+  intentionCardScheduleMidnight(now = new Date()) {
+    if (this.intentionCardMidnightTimer != null) {
+      if (this.albumClearTimeout) this.albumClearTimeout(this.intentionCardMidnightTimer);
+      else clearTimeout(this.intentionCardMidnightTimer);
+    }
+    const next = new Date(now.getTime());
+    next.setHours(24, 0, 100, 0);
+    const delay = Math.max(50, next.getTime() - now.getTime());
+    const tick = () => {
+      this.intentionCardMidnightTimer = null;
+      const today = this.intentionCardToday();
+      if (today !== this.intentionCardDay) {
+        this.intentionCardDay = today;
+        this.intentionCardHost().scheduleRefresh();
+      }
+      this.intentionCardScheduleMidnight();
+    };
+    this.intentionCardMidnightTimer = this.albumSetTimeout
+      ? this.albumSetTimeout(tick, delay)
+      : setTimeout(tick, delay);
+    this.intentionCardMidnightTimer?.unref?.();
+  }
+
+  intentionCardOnMetadata(file) {
+    if (!this.intentionCardActive) return;
+    const path = intentionCardFilePath(file?.path);
+    if (!path || !intentionCardSubjectForPath(path, this.intentionCardToday())) return;
+    this.intentionCardSourceCache?.delete?.(path);
+    this.intentionCardSourceFlights?.delete?.(path);
+    this.intentionCardHost().scheduleRefresh();
+  }
+
+  intentionCardCache(path) {
+    try {
+      const file = this.app?.vault?.getAbstractFileByPath?.(path);
+      return file ? { file, cache: this.app?.metadataCache?.getFileCache?.(file) || null } : null;
+    } catch (_) { return null; }
+  }
+
+  async intentionCardEnsureSource(path) {
+    this.intentionCardEnsureMaps();
+    const key = intentionCardFilePath(path);
+    if (!key) return null;
+    const cached = this.intentionCardSourceCache?.get?.(key);
+    if (cached) return cached;
+    const flight = this.intentionCardSourceFlights?.get?.(key);
+    if (flight) return flight;
+    const promise = (async () => {
+      const fileInfo = this.intentionCardCache(key);
+      if (!fileInfo?.file || !fileInfo.cache || typeof this.app?.vault?.read !== "function") return null;
+      let source = "";
+      try { source = await this.app.vault.read(fileInfo.file); } catch (_) { return null; }
+      const evidence = intentionCardFrontmatterEvidence(source, fileInfo.cache.frontmatter || {});
+      if (!evidence.ok) return null;
+      const entry = { path: key, source, frontmatter: evidence.frontmatter };
+      this.intentionCardSourceCache.set(key, entry);
+      this.intentionCardHost().scheduleRefresh();
+      return entry;
+    })().finally(() => this.intentionCardSourceFlights?.delete?.(key));
+    this.intentionCardSourceFlights.set(key, promise);
+    return promise;
+  }
+
+  intentionCardConfirmedSource(path, sourceText) {
+    this.intentionCardEnsureMaps();
+    const key = intentionCardFilePath(path);
+    if (typeof sourceText !== "string") return this.intentionCardSourceCache?.get?.(key) || null;
+    const info = this.intentionCardCache(key);
+    if (!info?.file || !info.cache) return null;
+    const evidence = intentionCardFrontmatterEvidence(sourceText, info.cache.frontmatter || {});
+    if (!evidence.ok) {
+      void this.intentionCardEnsureSource(key);
+      return null;
+    }
+    const entry = { path: key, source: sourceText, frontmatter: evidence.frontmatter };
+    this.intentionCardSourceCache.set(key, entry);
+    return entry;
+  }
+
+  intentionCardModelFor(path, sourceText) {
+    this.intentionCardEnsureMaps();
+    const today = this.intentionCardToday();
+    const current = this.intentionCardConfirmedSource(path, sourceText);
+    if (!current) {
+      void this.intentionCardEnsureSource(path);
+      return null;
+    }
+    const subject = intentionCardSubjectForPath(path, today);
+    const placement = intentionCardPlacement(current.source, subject, today);
+    if (!subject || !placement) return null;
+    let parent = null;
+    if (subject.parent) {
+      parent = this.intentionCardSourceCache?.get?.(subject.parent.path) || null;
+      if (!parent) void this.intentionCardEnsureSource(subject.parent.path);
+    }
+    const model = intentionCardModelFor(path, current.frontmatter, today, parent?.frontmatter || null);
+    return model ? { model, source: current.source, placement, subject } : null;
+  }
+
+  intentionCardOwn(scope, path) {
+    if (!scope || !path) return null;
+    let release = null;
+    try { release = propertyCardOwnKeys(scope, INTENTION_CARD_OWNED_KEYS); } catch (_) {}
+    return propertyCardSlotOwn(this.intentionCardKeySlots, scope, path, release);
+  }
+
+  intentionCardRelease(scope, path = "") {
+    return propertyCardSlotRelease(this.intentionCardKeySlots, scope, path);
+  }
+
+  intentionCardRemoveNodes(root, path = "") {
+    for (const node of Array.from(root?.querySelectorAll?.(`.${INTENTION_CARD_CLASS}`) || [])) {
+      const owned = intentionCardFilePath(node.getAttribute?.("data-intention-source") || "");
+      if (path && owned && owned !== intentionCardFilePath(path)) continue;
+      try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
+    }
+  }
+
+  removeIntentionCardReading(root, scope = root, sourcePath = "") {
+    this.intentionCardRemoveNodes(root, sourcePath);
+    this.intentionCardRelease(scope, sourcePath);
+  }
+
+  paintIntentionCardReading(el, sourcePath) {
+    const root = propertyCardReadingRoot(el);
+    const scope = propertyCardReadingScope(root);
+    if (!root || !sourcePath || !this.intentionCardCanDisplay(sourcePath, el)) {
+      this.removeIntentionCardReading(root, scope, sourcePath);
+      return null;
+    }
+    this.intentionCardRemoveNodes(root, sourcePath);
+    this.intentionCardRelease(scope, sourcePath);
+    const prepared = this.intentionCardModelFor(sourcePath);
+    if (!prepared) return null;
+    const anchor = intentionCardDomAnchor(root, prepared.subject, this.intentionCardToday());
+    if (!anchor) return null;
+    const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
+    const card = intentionCardBuildDom(prepared.model, this, doc);
+    if (!card) return null;
+    if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
+    else if (root.insertBefore) root.insertBefore(card, anchor.nextElementSibling || null);
+    else root.appendChild?.(card);
+    if (!card.parentNode) return null;
+    this.intentionCardHost().commitMount(scope, sourcePath, true);
+    return card;
+  }
+
+  intentionCardScheduleReadingViewMount() {
+    this.intentionCardHost().scheduleRefresh();
+  }
+
+  intentionCardLiveAnchor(text, subject) {
+    const placement = intentionCardPlacement(text, subject, this.intentionCardToday());
+    if (!placement) return null;
+    const lines = String(text || "").split(/\r\n|\r|\n/);
+    let offset = 0;
+    for (let index = 0; index < placement.insertBeforeLine; index += 1) {
+      offset += (lines[index] || "").length + 1;
+    }
+    return { placement, offset: Math.min(offset, String(text || "").length) };
+  }
+
+  buildIntentionCardDecorations(view) {
+    try {
+      if (!Decoration || !RangeSetBuilder || !WidgetType || !view?.state?.doc) return Decoration?.none || null;
+      const path = this.intentionCardLivePath(view);
+      if (!path) {
+        this.intentionCardHost().setEditorScope(view, false);
+        this.intentionCardRelease(view?.dom);
+        return Decoration.none;
+      }
+      const source = view.state.doc.toString();
+      const prepared = this.intentionCardModelFor(path, source);
+      if (!prepared) {
+        this.intentionCardHost().setEditorScope(view, false);
+        this.intentionCardRelease(view?.dom);
+        return Decoration.none;
+      }
+      const anchor = this.intentionCardLiveAnchor(source, prepared.subject);
+      if (!anchor) {
+        this.intentionCardHost().setEditorScope(view, false);
+        this.intentionCardRelease(view?.dom);
+        return Decoration.none;
+      }
+      this.intentionCardHost().setEditorScope(view, true);
+      const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
+      const element = intentionCardBuildDom(prepared.model, this, doc);
+      if (!element) {
+        this.intentionCardRelease(view?.dom);
+        return Decoration.none;
+      }
+      element.setAttribute("data-cm-widget", "true");
+      const signature = JSON.stringify([path, anchor.offset, prepared.model]);
+      const Widget = class extends WidgetType {
+        constructor() { super(); this.signature = signature; this.path = path; }
+        eq(other) { return other?.signature === signature && other?.path === path; }
+        toDOM() {
+          this.element.setAttribute("data-cm-widget", "true");
+          plugin.intentionCardHost().commitMount(view.dom, path, true);
+          return this.element;
+        }
+      };
+      const widget = new Widget();
+      widget.element = element;
+      const decoration = Decoration.widget({ widget, side: -1, block: true });
+      const builder = new RangeSetBuilder();
+      builder.add(anchor.offset, anchor.offset, decoration);
+      return builder.finish();
+    } catch (_) {
+      return Decoration?.none || null;
+    }
+  }
+
+  intentionCardCleanEditor(view) {
+    this.intentionCardHost().cleanEditor(view);
+    this.intentionCardRelease(view?.dom);
+  }
+}
 // ---- src/293-keep-inbox-render.js ----
 // Keep inbox render (keep-indicator-view): DOM for the `bob-keep-inbox`
 // status-bar item. Pure DOM helpers plus one paint entry point; no spawn,
@@ -150869,6 +152065,7 @@ installBobLedgerToolsMixins(BobLedgerToolsPlugin, [
   BobLedgerToolsGcalEventsMixin,
   BobLedgerToolsGmailSyncMixin,
   BobLedgerToolsPeriodNotesMixin,
+  BobLedgerToolsIntentionCardMixin,
   BobLedgerToolsEventLinkTimesMixin,
   BobLedgerToolsEventLinkTimesReadingMixin,
   BobLedgerToolsVimSnippetsMixin,
@@ -154933,6 +156130,37 @@ try {
       createPropertyCardHost,
       PROPERTY_CARD_BUILTIN_KINDS,
       propertyCardGateKinds,
+    });
+  }
+} catch (_) {}
+// ---- src/375-exports-intention-card.js ----
+// Test-facing exports for canonical intention-card models and display helpers.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      INTENTION_CARD_OWNED_KEYS,
+      INTENTION_CARD_CHIPS,
+      INTENTION_CARD_RECENT_CLOSED_DAYS,
+      INTENTION_CARD_LINK_HINT,
+      intentionCardDateParts,
+      intentionCardDateOrdinal,
+      intentionCardShiftDate,
+      intentionCardWeeksInIsoYear,
+      intentionCardSubjectForPath,
+      intentionCardDigest,
+      intentionCardReadFields,
+      intentionCardParseFrontmatter,
+      intentionCardFrontmatterEvidence,
+      intentionCardLinkSubject,
+      intentionCardIsNavigationLine,
+      intentionCardIsChildLinksLine,
+      intentionCardPlacement,
+      intentionCardMissingBands,
+      intentionCardModelFor,
+      intentionCardBuildDom,
+      intentionCardDomAnchor,
+      intentionCardDomTargetExists,
+      BobLedgerToolsIntentionCardMixin,
     });
   }
 } catch (_) {}

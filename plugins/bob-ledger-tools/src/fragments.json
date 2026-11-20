@@ -295,6 +295,9 @@
   "292-keep-inbox-model.js",
   "292a-keep-inbox-tree.js",
   "292b-plugin-period-notes.js",
+  "296a-plugin-intention-card-model.js",
+  "296b-plugin-intention-card-dom.js",
+  "296c-plugin-intention-card-host.js",
   "293-keep-inbox-render.js",
   "294-keep-inbox-indicator.js",
   "295-keep-inbox-actions.js",
@@ -331,5 +334,6 @@
   "372-exports-record-card.js",
   "373-exports-record-walk.js",
   "374-exports-property-card.js",
+  "375-exports-intention-card.js",
   "375-exports-log-history.js"
 ]

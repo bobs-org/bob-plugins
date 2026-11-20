@@ -8,7 +8,7 @@ const Module = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { beforeEach } = require("node:test");
+const { afterEach, beforeEach } = require("node:test");
 
 class TestMarkdownView {}
 
@@ -107,11 +107,23 @@ const {
 // Isolate every test from the real ~/.config/bob/config.yml.
 const MISSING_XDG = "/definitely/missing/note-ready-test";
 process.env.XDG_CONFIG_HOME = MISSING_XDG;
+const loadedPlugins = new Set();
 
 beforeEach(() => {
   resetPlanCapsCache();
   process.env.XDG_CONFIG_HOME = MISSING_XDG;
 });
+
+afterEach(() => {
+  for (const plugin of loadedPlugins) plugin.onunload();
+  loadedPlugins.clear();
+});
+
+function trackLoadedPlugin(plugin) {
+  loadedPlugins.add(plugin);
+  plugin.onload();
+  return plugin;
+}
 
 function withXdg(dir, run) {
   const saved = process.env.XDG_CONFIG_HOME;
@@ -260,7 +272,7 @@ function makeNoteReadyApp({
 
 function loadPlugin(options = {}) {
   const plugin = new LedgerToolsPlugin(makeNoteReadyApp(options), {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   return plugin;
 }
 
@@ -980,7 +992,7 @@ test("snapshot reuses the memo without reparsing or re-walking", () => {
   });
   const walks = countMarkdownWalks(app);
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   const first = plugin.api.noteReady.snapshot();
   const gen = plugin.noteReadyFrontGen;
   assert.equal(walks.scans, 1);
@@ -1004,7 +1016,7 @@ test("a task edit rebuilds through the cache-update handler", () => {
     handlers,
   });
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   assert.equal(plugin.api.noteReady.forNote("sase.md").count, 2);
   tasks.push(
     laneTask({ path: "sase.md", lineNumber: 2, description: "Third" }),
@@ -1025,7 +1037,7 @@ test("a ready_cap edit rebuilds and fires the query-refresh trigger", () => {
     triggers,
   });
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   assert.equal(plugin.api.noteReady.forNote("sase.md").state, "room");
   const before = triggers.length;
   files["sase.md"] = { type: "[[project]]", ready_cap: 2 };
@@ -1049,7 +1061,7 @@ test("rename and delete move the eligibility entry", () => {
     files,
   });
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   assert.equal(plugin.api.noteReady.forNote("sase.md").count, 2);
   delete files["sase.md"];
   files["renamed.md"] = { type: "[[project]]" };
@@ -1104,7 +1116,7 @@ test("untyped and non-markdown vault events are no-ops", () => {
     triggers,
   });
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   plugin.api.noteReady.snapshot();
   const gen = plugin.noteReadyFrontGen;
   const before = triggers.length;
@@ -1137,7 +1149,7 @@ test("memo hits never re-walk the vault", () => {
   });
   const walks = countMarkdownWalks(app);
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   plugin.api.noteReady.snapshot();
   assert.equal(walks.scans, 1);
   const task = tasks[0];
@@ -1172,7 +1184,7 @@ test("the startup storm is linear", () => {
   app.workspace.layoutReady = false;
   const walks = countMarkdownWalks(app);
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   const gen = plugin.noteReadyFrontGen;
   for (const path of Object.keys(files)) {
     assert.equal(
@@ -1196,7 +1208,6 @@ test("the startup storm is linear", () => {
     assert.ok(plugin.api.noteReady.forNote(path), path);
   }
   assert.equal(plugin.api.noteReady.forNote("note-0001.md"), null);
-  plugin.onunload();
 });
 
 test("the first resolved event forces one rebuild and later ones do not", () => {
@@ -1208,7 +1219,7 @@ test("the first resolved event forces one rebuild and later ones do not", () => 
   });
   const walks = countMarkdownWalks(app);
   const plugin = new LedgerToolsPlugin(app, {});
-  plugin.onload();
+  trackLoadedPlugin(plugin);
   plugin.api.noteReady.snapshot();
   assert.equal(walks.scans, 1);
   assert.equal(typeof handlers["metadata:resolved"], "function");

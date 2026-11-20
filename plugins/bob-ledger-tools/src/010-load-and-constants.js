@@ -1,5 +1,6 @@
 const {
   MarkdownRenderChild,
+  MarkdownRenderer,
   MarkdownView,
   Modal,
   Notice,

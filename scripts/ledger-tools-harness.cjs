@@ -48,10 +48,47 @@ class TestNotice {
 TestNotice.messages = [];
 
 const originalLoad = Module._load;
+const PreviewMarkdownRenderer = {
+  render(_app, source, target) {
+    const doc = target?.ownerDocument;
+    if (!doc || typeof target.appendChild !== "function") return Promise.resolve();
+    const inline = (parent, line) => {
+      const token = /(\[\[[^\]]+\]\]|\*\*[^*]+\*\*|`[^`]+`)/g;
+      let cursor = 0;
+      for (const match of String(line).matchAll(token)) {
+        if (match.index > cursor) parent.appendChild(doc.createTextNode(String(line).slice(cursor, match.index)));
+        const value = match[0];
+        if (value.startsWith("[[")) {
+          const body = value.slice(2, -2);
+          const [targetPath, label] = body.split("|");
+          const anchor = doc.createElement("a");
+          anchor.setAttribute("class", "internal-link");
+          anchor.setAttribute("href", targetPath.split("#")[0]);
+          anchor.setAttribute("data-href", targetPath);
+          anchor.appendChild(doc.createTextNode(label || targetPath));
+          parent.appendChild(anchor);
+        } else {
+          const node = doc.createElement(value.startsWith("**") ? "strong" : "code");
+          node.appendChild(doc.createTextNode(value.slice(value.startsWith("**") ? 2 : 1, value.startsWith("**") ? -2 : -1)));
+          parent.appendChild(node);
+        }
+        cursor = match.index + value.length;
+      }
+      if (cursor < String(line).length) parent.appendChild(doc.createTextNode(String(line).slice(cursor)));
+    };
+    for (const paragraph of String(source || "").split(/\n\s*\n/).filter(Boolean)) {
+      const block = doc.createElement("p");
+      paragraph.split("\n").forEach((line, index) => { if (index) block.appendChild(doc.createElement("br")); inline(block, line); });
+      target.appendChild(block);
+    }
+    return Promise.resolve();
+  },
+};
 Module._load = function loadWithObsidianStubs(request, parent, isMain) {
   if (request === "obsidian") {
     return {
       MarkdownView: TestMarkdownView,
+      MarkdownRenderer: PreviewMarkdownRenderer,
       Notice: TestNotice,
       Platform: { isDesktopApp: true },
       Plugin: TestPlugin,

@@ -8566,6 +8566,89 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   .bob-property-card .bob-record-sheet-row.is-changed .bob-record-sheet-value { animation: none; }
 }
 
+.bob-intention-card {
+  --bob-property-card-fallback-accent: var(--interactive-accent);
+  --bob-property-card-tint: 6%;
+  --bob-property-card-padding: clamp(0.75em, 2vw, 1.1em);
+  --bob-property-card-font-size: var(--font-text-size, var(--font-ui-small));
+  display: grid;
+  gap: 0.8em;
+  width: fit-content;
+  max-width: 100%;
+}
+.bob-intention-card-kicker {
+  color: var(--text-muted);
+  font: 650 0.76em/1.35 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.bob-intention-card-parent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em;
+  color: var(--text-faint);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+.bob-intention-card-parent-link { color: var(--text-muted); text-decoration: none; }
+.bob-intention-card-parent-intentions { min-width: 0; overflow-wrap: anywhere; }
+.bob-intention-card-parent-intentions > p { margin: 0; }
+.bob-intention-card-intentions { display: grid; gap: 0.55em; min-width: 0; }
+.bob-intention-card-intention {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.65em;
+  min-width: 0;
+}
+.bob-intention-card-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.65em;
+  height: 1.65em;
+  border-radius: 50%;
+  color: var(--bob-property-card-accent);
+  background: color-mix(in srgb, var(--bob-property-card-accent) 15%, var(--background-primary));
+  font: 650 0.8em/1 var(--font-interface);
+}
+.bob-intention-card-intention-body,
+.bob-intention-card-summary-body,
+.bob-intention-card-quote { min-width: 0; overflow-wrap: anywhere; }
+.bob-intention-card.is-single-intention .bob-intention-card-intention-body {
+  font-size: 1.16em;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.bob-intention-card-band { min-width: 0; }
+.bob-intention-card-band-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35em 0.8em; }
+.bob-intention-card-band-title {
+  margin: 0;
+  color: var(--text-muted);
+  font: 650 0.74em/1.4 var(--font-interface);
+  letter-spacing: 0.09em;
+}
+.bob-intention-card-provenance { color: var(--text-faint); font-size: 0.75em; }
+.bob-intention-card-provenance.is-agent { color: var(--text-muted); }
+.bob-intention-card-summary-body { margin-top: 0.2em; }
+.bob-intention-card-quote {
+  margin-top: 0.25em;
+  padding-inline-start: 0.8em;
+  border-inline-start: 2px solid color-mix(in srgb, var(--bob-property-card-accent) 55%, var(--background-modifier-border));
+  color: var(--text-muted);
+}
+.bob-intention-card-missing { color: var(--text-faint); font-size: 0.78em; }
+.bob-intention-card .is-unresolved {
+  color: var(--text-error) !important;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+@media (max-width: 420px) {
+  .bob-intention-card { width: 100%; }
+  .bob-intention-card-parent { display: grid; }
+  .bob-intention-card-parent-intentions { padding-inline-start: 0.2em; }
+}
+
 .bob-album-header {
   --bob-property-card-fallback-accent: var(--bob-area-ink, var(--interactive-accent));
   --bob-album-accent: var(--bob-property-card-accent);

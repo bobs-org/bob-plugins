@@ -267,11 +267,17 @@ class TaskStatusCyclerVimMixin {
         // card is shown, keeping the gesture's single walk toast.
         const closing = isTranscludedCompletionClosableStatus(taskStatus);
         const successorNoticeBox = {};
+        const successorJumpBox = {};
         void this.toggleActiveCheckboxOpenDoneAndPropagate(
           view.editor,
           activeFile,
           taskStatus,
-          { successorNoticeTarget: "return", successorNoticeBox },
+          {
+            successorNoticeTarget: "return",
+            successorNoticeBox,
+            successorJumpTarget: "return",
+            successorJumpBox,
+          },
         ).then(
           (wrote) =>
             settleReviewOrigin(
@@ -280,6 +286,9 @@ class TaskStatusCyclerVimMixin {
                   kind: "complete",
                   ...(successorNoticeBox.text
                     ? { notice: successorNoticeBox.text }
+                    : {}),
+                  ...(successorJumpBox.jump
+                    ? { follow: successorJumpBox.jump }
                     : {}),
                   ...(Array.isArray(successorNoticeBox.excludeRefs) && successorNoticeBox.excludeRefs.length > 0
                     ? { excludeRefs: successorNoticeBox.excludeRefs }

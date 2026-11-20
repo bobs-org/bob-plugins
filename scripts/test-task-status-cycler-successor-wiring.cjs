@@ -2265,3 +2265,126 @@ test("review walk holds the pending picker lock and advances once after relation
   assert.match(harness.getSource("source.md"), /^- \[\*\] #task Write follow-up/m);
   assert.match(harness.getSource(DAILY_PATH), /\[\[source#\^followup\]\]/);
 });
+
+test("jump-only keeps recovery and lands after retirement and the notice", async () => {
+  notices.length = 0;
+  const predecessor = "- [x] #task Pred [id:: p] ^p";
+  const dependent = "- [?] #task Dep [dependsOn:: p] [id:: d] ^d";
+  const day = [`# ${TODAY}`, "", "## Pomodoros", "- [ ] () — FIX", "\t- [[p#^p]]"].join("\n");
+  const harness = createInMemoryObsidianApp({
+    "p.md": predecessor,
+    "a/d.md": dependent,
+    [DAILY_PATH]: day,
+  });
+  const editor = createTextEditor(day, { line: 4, ch: 5 });
+  const plugin = makePlugin(harness, editor, DAILY_PATH);
+  installTasksStub(plugin, [
+    {
+      path: "p.md", lineNumber: 0, status: "x", originalMarkdown: predecessor,
+      description: "Pred", blockId: "p", id: "p", dependsOn: [],
+    },
+    {
+      path: "a/d.md", lineNumber: 0, status: "?", originalMarkdown: dependent,
+      description: "Dep", blockId: "d", id: "d", dependsOn: ["p"],
+    },
+  ]);
+  const events = [];
+  const noticeModels = [];
+  const landings = [];
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
+    api: {
+      version: 3,
+      reviewWalk: { version: 2 },
+      landOnTask: async (target) => {
+        events.push("land");
+        landings.push(target);
+        return { ok: true };
+      },
+      notice: {
+        version: 5,
+        showUnblocked(model) {
+          events.push("notice");
+          noticeModels.push(model);
+          return true;
+        },
+      },
+      successors: {
+        version: 5,
+        async pick(model) {
+          assert.deepEqual(model.jump, { supported: true });
+          const row = model.groups.flatMap((group) => group.rows || [])
+            .find((candidate) => candidate && candidate.selectable);
+          assert.ok(row, JSON.stringify(model));
+          return { picks: [], jump: { key: row.key } };
+        },
+      },
+    },
+  };
+  plugin.retireClosedTaskReferencesNow = async () => {
+    events.push("retire");
+    return { retired: 0, failures: [] };
+  };
+
+  const result = await plugin.finalizeClosedTasks(
+    [{ path: "p.md", blockId: "p", taskId: "p", text: "Pred" }],
+    { editor, activePath: DAILY_PATH, dailyPath: DAILY_PATH },
+  );
+
+  const postWrite = harness.getSource("a/d.md").split("\n")[0];
+  assert.match(postWrite, /^- \[ \] #task Dep \[unblocked::/);
+  assert.deepEqual(result.jump, {
+    key: "a/d.md#^d",
+    outcome: "left",
+    label: "Dep",
+    path: "a/d.md",
+    blockId: "d",
+    text: postWrite,
+    line: 0,
+    description: "Dep",
+  });
+  assert.deepEqual(landings, [result.jump]);
+  assert.deepEqual(events, ["retire", "notice", "land"]);
+  assert.deepEqual(noticeModels[0].jump, { label: "Dep" });
+});
+
+test("walk-owned jump returns to follow without self-landing", async () => {
+  const harness = createInMemoryObsidianApp({ "Tasks.md": "- [x] #task Closed ^closed" });
+  const editor = createTextEditor("- [x] #task Closed ^closed", { line: 0, ch: 4 });
+  const plugin = makePlugin(harness, editor, "Tasks.md");
+  const events = [];
+  const target = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next task" };
+  let selfLandCalls = 0;
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = {
+    api: {
+      version: 3,
+      landOnTask: async () => { selfLandCalls += 1; },
+    },
+  };
+  plugin.planAndApplySuccessorsNow = async () => ({
+    jump: target,
+    unblocked: [],
+    keep_moving: [],
+    still_blocked: [],
+  });
+  plugin.retireClosedTaskReferencesNow = async () => {
+    events.push("retire");
+    return { retired: 0, failures: [] };
+  };
+  plugin.successorNoticeForModel = () => {
+    events.push("notice");
+    return "Recovery notice";
+  };
+  const box = {};
+
+  const result = await plugin.finalizeClosedTasks([{ path: "Tasks.md", blockId: "closed" }], {
+    successorNoticeTarget: "return",
+    successorJumpTarget: "return",
+    successorJumpBox: box,
+  });
+
+  assert.deepEqual(result.jump, target);
+  assert.deepEqual(box.jump, target);
+  assert.equal(result.successorNotice, "Recovery notice");
+  assert.deepEqual(events, ["retire", "notice"]);
+  assert.equal(selfLandCalls, 0);
+});

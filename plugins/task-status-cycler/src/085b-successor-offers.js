@@ -522,6 +522,9 @@ function buildSuccessorPickerModel(options = {}) {
     })),
     groups,
   };
+  if (options.jumpSupported === true) {
+    model.jump = { supported: true };
+  }
   if (options.budget && typeof options.budget === "object" &&
       Number.isFinite(options.budget.links) && Number.isFinite(options.budget.max)) {
     model.budget = { links: options.budget.links, max: options.budget.max };

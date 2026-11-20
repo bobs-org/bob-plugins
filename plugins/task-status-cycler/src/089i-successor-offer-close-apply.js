@@ -961,6 +961,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         raw: typeof offeredTask.cardRawLine === "string" && offeredTask.cardRawLine
           ? offeredTask.cardRawLine
           : String(row.beforeLine || ""),
+        ...(typeof row.afterLine === "string" ? { afterLine: row.afterLine } : {}),
         ...(blockId ? { blockId: String(blockId) } : {}),
         ...(taskId ? { taskId: String(taskId) } : {}),
         text: String(row.display || ""),

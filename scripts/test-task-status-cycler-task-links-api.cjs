@@ -332,6 +332,28 @@ test("completeTaskAtCursor closes each open symbol through the Tasks command", a
   }
 });
 
+test("completeTaskAtCursor returns an opted-in successor jump to its walk caller", async () => {
+  const editor = createTextEditor("- [ ] #task Brush teeth ^chore", { line: 0, ch: 4 });
+  const plugin = createCompleteAtCursorPlugin(editor);
+  installTasksCloseCommand(plugin, editor);
+  const jump = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next task" };
+  let seenContext = null;
+  plugin.finalizeClosedTasks = async (_identities, context) => {
+    seenContext = context;
+    return { successorNotice: "Recovered tasks", jump };
+  };
+
+  const result = await plugin.completeTaskAtCursor(editor, { successorJumpTarget: "return" });
+  assert.equal(seenContext.successorNoticeTarget, "return");
+  assert.equal(seenContext.successorJumpTarget, "return");
+  assert.deepEqual(result, {
+    ok: true,
+    lineDelta: 0,
+    successorNotice: "Recovered tasks",
+    jump,
+  });
+});
+
 test("completeTaskAtCursor insert-above reports lineDelta 1 and never stamps", async () => {
   const editor = createTextEditor(
     "- [ ] #task Brush teeth [repeat:: every day when done] ^chore",
@@ -457,7 +479,7 @@ test("recovery api is frozen at version 3 and recovers without striking referenc
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 5);
+  assert.equal(plugin.api.version, 6);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.recoverBlockedDependents, "function");
   assert.equal(typeof plugin.api.completeTaskAtCursor, "function");

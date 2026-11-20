@@ -30,7 +30,13 @@ function makePlugin(harness, editor, path) {
   return plugin;
 }
 
-function installNavStub(plugin, seen, pickOverride = null, successorsVersion = 3) {
+function installNavStub(
+  plugin,
+  seen,
+  pickOverride = null,
+  successorsVersion = 3,
+  { landOnTask = null, noticeVersion = 3, events = [] } = {},
+) {
   const previous = plugin.app.plugins && plugin.app.plugins.plugins
     ? plugin.app.plugins.plugins
     : {};
@@ -40,9 +46,11 @@ function installNavStub(plugin, seen, pickOverride = null, successorsVersion = 3
       "bob-navigation-hotkeys": {
         api: {
           version: 3,
+          ...(typeof landOnTask === "function" ? { landOnTask } : {}),
           notice: {
-            version: 3,
+            version: noticeVersion,
             showUnblocked(model) {
+              events.push("notice");
               seen.push(model);
               return true;
             },
@@ -120,6 +128,8 @@ function makeParkedFixture({
   day = null,
   pickOverride = null,
   successorsVersion = 3,
+  landOnTask = null,
+  noticeVersion = 3,
 } = {}) {
   const parked = `- [${targetStatus}] #task Send implementation prompt [id:: agents__implement] ^implement`;
   const source = [
@@ -141,7 +151,12 @@ function makeParkedFixture({
   const editor = createTextEditor(daily, { line: 3, ch: 5 });
   const plugin = makePlugin(harness, editor, DAILY_PATH);
   const seen = [];
-  installNavStub(plugin, seen, pickOverride, successorsVersion);
+  const events = [];
+  installNavStub(plugin, seen, pickOverride, successorsVersion, {
+    landOnTask,
+    noticeVersion,
+    events,
+  });
   installTasksStub(plugin, tasksFromSources(sources));
   const relationIndex = helpers.buildFakeRelationIndex(sources);
   plugin.app.plugins.plugins["bob-ledger-tools"].api.relationIndex = {
@@ -158,6 +173,7 @@ function makeParkedFixture({
     config: relationConfig(),
     daily,
     editor,
+    events,
     harness,
     plugin,
     seen,
@@ -165,7 +181,7 @@ function makeParkedFixture({
   };
 }
 
-test("cycler api v5 offerParkedSuccessors is frozen and never throws", () => {
+test("cycler api v6 offerParkedSuccessors is frozen and never throws", () => {
   const plugin = new TaskStatusCyclerPlugin();
   plugin.addCommand = () => {};
   plugin.registerEvent = () => {};
@@ -178,7 +194,7 @@ test("cycler api v5 offerParkedSuccessors is frozen and never throws", () => {
   };
   plugin.onload();
 
-  assert.equal(plugin.api.version, 5);
+  assert.equal(plugin.api.version, 6);
   assert.equal(Object.isFrozen(plugin.api), true);
   assert.equal(typeof plugin.api.offerParkedSuccessors, "function");
 });
@@ -202,6 +218,39 @@ test("offerParkedSuccessors offers a starts-after source at the parked slot", as
   const row = fixture.seen[0].relation_successors[0];
   assert.equal(row.relation.event, "parked");
   assert.ok(row.link);
+});
+
+test("offerParkedSuccessors lands on the pinned row after its notice", async () => {
+  notices.length = 0;
+  const landings = [];
+  const fixture = makeParkedFixture({
+    successorsVersion: 5,
+    noticeVersion: 5,
+    landOnTask: async (target) => {
+      fixture.events.push("land");
+      landings.push(target);
+      return { ok: true };
+    },
+    pickOverride: async (model) => {
+      assert.deepEqual(model.jump, { supported: true });
+      const row = model.groups.flatMap((group) => group.rows || [])
+        .find((candidate) => candidate && candidate.selectable);
+      assert.ok(row, JSON.stringify(model));
+      return { picks: [{ key: row.key }], jump: { key: row.key } };
+    },
+  });
+  const result = await fixture.plugin.offerParkedSuccessors([fixture.identity], {
+    dailyPath: DAILY_PATH,
+    relationConfig: fixture.config,
+    slot: fixture.slot,
+  });
+
+  assert.equal(result.offered, 1);
+  assert.equal(result.picked, 1);
+  assert.deepEqual(fixture.events, ["notice", "land"]);
+  assert.equal(landings.length, 1);
+  assert.equal(landings[0].outcome, "picked");
+  assert.deepEqual(fixture.seen[0].jump, { label: "Prepare evaluation prompt" });
 });
 
 test("parked relation offer combines one pull-in, Done, and reasoned Cancel", async () => {

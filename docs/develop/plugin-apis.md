@@ -558,7 +558,7 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
 
 ## Task Status Cycler
 
-`task-status-cycler.api` is version 5:
+`task-status-cycler.api` is version 6:
 
 - `recoverBlockedDependents(identities, context?)` runs the same
   dependent recovery as task completion without retiring references. It
@@ -567,11 +567,13 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   Each identity has `path` and at least one of
   `blockId` or `taskId`. The method never throws; failures are returned in
   the result.
-- `completeTaskAtCursor(editor)` completes the cursor task through
+- `completeTaskAtCursor(editor, options?)` completes the cursor task through
   Tasks' `set-status-symbol-to-x` command so recurrence can run; it never
   writes `[x]` directly. It returns
   `{ ok: true, lineDelta, successorNotice }` or
-  `{ ok: false, reason }` and does not stamp the task.
+  `{ ok: false, reason }` and does not stamp the task. With
+  `options.successorJumpTarget === "return"`, a compatible pinned successor is
+  returned as `jump` for the walk owner to follow.
 - `completeTaskLineText(lineText, { date }?)` returns a frozen result.
   Completable open tasks return `{ ok: true, unchanged: false, lineText }`
   with the exact local-fallback bytes (`[x]` plus `[completion:: date]`,
@@ -584,7 +586,10 @@ Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
   Ctrl+Enter runs after its write: dependent recovery, embed retirement,
   the Unblocked notice, and the successor picker. It resolves to
   `{ reopened, retired, recoveryFailures, retirementFailures, successors,
-  successorNotice }` and never throws.
+  successorNotice, jump? }` and never throws. A normal caller's pinned offer
+  lands after retirement and its notice; a walk owner opts into
+  `context.successorJumpTarget: "return"` and receives the jump to park and
+  follow.
 - `offerParkedSuccessors(identities, { slot }?)` plans relation-only
   successor offers for Pending (`[/]`) tasks that have no live Task Link
   left on today's daily note. It presents the nav picker with

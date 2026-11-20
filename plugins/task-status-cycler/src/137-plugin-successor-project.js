@@ -436,6 +436,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let jumpKey = null;
       let closeRevalidatedKeys = new Set();
       let pickerOpened = false;
       let originalOfferByKey = new Map();
@@ -449,6 +450,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           offers: selectableOffers,
           identities,
           pickerApi,
+          context: active,
           noteTexts: noteTextsObject,
           tasks,
           today,
@@ -463,6 +465,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           ? picked.originalOfferByKey
           : new Map();
         const choices = picked.choices;
+        jumpKey = choices && choices.jump && typeof choices.jump.key === "string" ? choices.jump.key : null;
         const closeSupported = isSuccessorOfferCloseSupported(
           this.successorOfferCloseCapabilities(pickerApi),
         );
@@ -947,6 +950,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dailyContent = null;
         }
       }
+      const jump = jumpKey
+        ? buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult)
+        : null;
       return {
         version: 1,
         predecessors,
@@ -976,6 +982,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         ...(closeResult && Array.isArray(closeResult.failures) && closeResult.failures.length > 0
           ? { failures: closeResult.failures }
           : {}),
+        ...(jump ? { jump } : {}),
         relation_picker_opened: pickerOpened,
         daily_path: dailyPath || "",
         daily_content: dailyContent,

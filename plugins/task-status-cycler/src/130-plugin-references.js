@@ -134,6 +134,12 @@ class TaskStatusCyclerReferencesMixin {
       } catch (error) {
         successorNotice = null;
       }
+      let jump = null;
+      try {
+        jump = await this.landSuccessorJump(successors, context || {});
+      } catch (_error) {
+        jump = null;
+      }
       return {
         reopened,
         retired: retirement.retired,
@@ -141,6 +147,7 @@ class TaskStatusCyclerReferencesMixin {
         retirementFailures: retirement.failures,
         successors,
         successorNotice,
+        ...(jump ? { jump } : {}),
       };
     });
   }

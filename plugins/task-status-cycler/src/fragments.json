@@ -44,6 +44,7 @@
   "137-plugin-successor-project.js",
   "137a-successor-offer-close-integration.js",
   "137b-successor-offer-close-api.js",
+  "137c-successor-jump.js",
   "138-plugin-successor-relations.js",
   "139-plugin-successor-parked.js",
   "140-plugin-vim.js",

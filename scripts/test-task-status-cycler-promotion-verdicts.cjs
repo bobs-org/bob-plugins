@@ -91,7 +91,7 @@ function promoRows() {
 
 test("cycler api is version 5 with the promotion methods", () => {
   const { plugin } = makePlugin({ [PROJECT]: SOURCE }, navApi());
-  assert.equal(plugin.api.version, 5);
+  assert.equal(plugin.api.version, 6);
   assert.equal(typeof plugin.api.describeOfferCloses, "function");
   assert.equal(typeof plugin.api.applyOfferCloses, "function");
 });

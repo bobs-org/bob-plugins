@@ -124,6 +124,11 @@ class TaskStatusCyclerSuccessorParkedMixin {
     } catch (_error) {
       // Best effort: the unlink already landed.
     }
+    try {
+      await this.landSuccessorJump(model, active);
+    } catch (_error) {
+      // The unlink and notice already landed; navigation is best-effort.
+    }
     return parkedSuccessorCounts(model);
   }
 }

@@ -273,6 +273,9 @@ test("all five offer groups receive pure descriptors only with compatible APIs a
     offerFor(context, { line: 4, group: "relation", after: "Projects/Alpha.md#^prj", afterText: "Project Alpha", label: "starts after" }),
   ];
   const baseline = helpers.buildSuccessorPickerModel({ offers });
+  const jumpSupported = helpers.buildSuccessorPickerModel({ offers, jumpSupported: true });
+  assert.equal(baseline.jump, undefined);
+  assert.deepEqual(jumpSupported.jump, { supported: true });
   const oldNav = helpers.buildSuccessorPickerModel({
     offers,
     offerCloseContext: context,
@@ -326,4 +329,101 @@ test("choices keep the picks array contract, normalize cancel reasons, and remov
     { picks: [], closes: [{ key: "only-close", outcome: "done" }] },
   );
   assert.deepEqual(helpers.normalizeSuccessorPicks({ picks: [], closes: [{ key: "only-close", outcome: "done" }] }), []);
+});
+
+test("a jump pin is normalized on its own and stays independent of row verdicts", () => {
+  assert.deepEqual(
+    helpers.normalizeSuccessorChoices({ picks: [], closes: [], jump: { key: " Tasks.md#^a " } }),
+    { picks: [], closes: [], jump: { key: "Tasks.md#^a" } },
+  );
+  assert.deepEqual(
+    helpers.normalizeSuccessorChoices({
+      picks: [{ key: "Tasks.md#^b" }],
+      closes: [{ key: "Tasks.md#^c", outcome: "cancelled" }],
+      jump: { key: "Tasks.md#^a" },
+    }),
+    {
+      picks: [{ key: "Tasks.md#^b" }],
+      closes: [{ key: "Tasks.md#^c", outcome: "cancelled" }],
+      jump: { key: "Tasks.md#^a" },
+    },
+  );
+  assert.equal(helpers.normalizeSuccessorChoices({ picks: [], closes: [], jump: { key: "  " } }), null);
+  assert.equal(helpers.normalizeSuccessorChoices({ picks: [], closes: [], jump: { key: 42 } }), null);
+});
+
+test("jump picker capability requires nav v5 and a caller that can own the landing", () => {
+  const navApi = { landOnTask() {}, reviewWalk: { version: 2 } };
+  const plugin = { app: { plugins: { plugins: {
+    "bob-navigation-hotkeys": { api: navApi },
+  } } } };
+  assert.equal(helpers.successorJumpPickerSupported(plugin, { version: 5 }, {}), true);
+  assert.equal(helpers.successorJumpPickerSupported(
+    plugin,
+    { version: 5 },
+    { successorNoticeTarget: "return" },
+  ), false);
+  assert.equal(helpers.successorJumpPickerSupported(
+    plugin,
+    { version: 5 },
+    { successorNoticeTarget: "return", successorJumpTarget: "return" },
+  ), true);
+  assert.equal(helpers.successorJumpPickerSupported(plugin, { version: 4 }, {}), false);
+  assert.equal(helpers.successorJumpPickerSupported(
+    { app: { plugins: { plugins: { "bob-navigation-hotkeys": { api: { reviewWalk: { version: 2 } } } } } } },
+    { version: 5 },
+    {},
+  ), false);
+  assert.equal(helpers.successorJumpPickerSupported(
+    { app: { plugins: { plugins: { "bob-navigation-hotkeys": { api: { ...navApi, reviewWalk: { version: 1 } } } } } } },
+    { version: 5 },
+    { successorNoticeTarget: "return", successorJumpTarget: "return" },
+  ), false);
+});
+
+test("jump identity uses each verdict's post-write task identity", () => {
+  const key = "Tasks.md#^a";
+  const offer = {
+    key,
+    text: "Task A",
+    notePath: "Tasks.md",
+    line: 3,
+    task: { path: "Tasks.md", line: 3, blockId: "a", rawLine: "- [?] #task Task A ^a" },
+  };
+  const original = new Map([[key, offer]]);
+  const leftText = "- [ ] #task Task A [unblocked:: 2026-11-05] ^a";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, {
+      edits: [{ path: "Tasks.md", line: 3, before: offer.task.rawLine, after: leftText }],
+      rows: [],
+    }, null),
+    {
+      key, outcome: "left", label: "Task A", path: "Tasks.md", blockId: "a",
+      text: leftText, line: 3, description: "Task A",
+    },
+  );
+
+  const pickedText = "- [*] #task Task A [fresh:: 2026-11-05] ^minted";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, {
+      edits: [{ path: "Tasks.md", line: 3, before: offer.task.rawLine, after: pickedText }],
+      rows: [{ offer: { key, selected: true }, note_path: "Tasks.md", block_id: "minted", line: 3 }],
+    }, null),
+    {
+      key, outcome: "picked", label: "Task A", path: "Tasks.md", blockId: "minted",
+      text: pickedText, line: 3, description: "Task A",
+    },
+  );
+
+  const closedText = "- [x] #task Task A [completion:: 2026-11-05] ^a";
+  assert.deepEqual(
+    helpers.buildSuccessorJumpIdentity(key, original, { edits: [], rows: [] }, {
+      offer_closes: [{ key, outcome: "done" }],
+      resolved: [{ key, path: "Tasks.md", line: 3, blockId: "a", afterLine: closedText }],
+    }),
+    {
+      key, outcome: "done", label: "Task A", path: "Tasks.md", blockId: "a",
+      text: closedText, line: 3, description: "Task A",
+    },
+  );
 });

@@ -35,6 +35,22 @@ function successorOfferCloseLiveLinkCheck(dailyLines, dailyPath) {
   );
 }
 
+function successorJumpPickerSupported(plugin, successors, context) {
+  try {
+    if (!successors || Number(successors.version) < 5) return false;
+    const plugins = plugin && plugin.app && plugin.app.plugins && plugin.app.plugins.plugins;
+    const nav = plugins && plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    if (!api || typeof api.landOnTask !== "function") return false;
+    const active = context && typeof context === "object" ? context : {};
+    if (active.successorNoticeTarget !== "return") return true;
+    return active.successorJumpTarget === "return" &&
+      api.reviewWalk && Number(api.reviewWalk.version) >= 2;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function successorOfferClosePostPickNotes(notes, plan) {
   const out = successorOfferCloseCoerceNoteMap(notes);
   const rows = successorPlanRows(plan);
@@ -269,6 +285,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
         headers: plan.projectHeaders instanceof Map ? plan.projectHeaders : new Map(),
         relationHeld: Array.isArray(plan.relation_held) ? plan.relation_held : [],
         offerCloseCapabilities: capabilities,
+        jumpSupported: successorJumpPickerSupported(this, successors, options.context),
         offerCloseContext: {
           noteTexts: options.noteTexts || {},
           plannedRecoveryEdits: Array.isArray(plan.edits) ? plan.edits : [],

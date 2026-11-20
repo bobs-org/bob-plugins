@@ -709,6 +709,11 @@ class TaskStatusCyclerSuccessorsMixin {
         if (model.relation_picker_opened === true) delete noticeModel.relation_held;
         delete noticeModel.relation_picker_opened;
       }
+      const jumpLabel = model && model.jump &&
+        String(model.jump.label || model.jump.description || "").trim();
+      if (jumpLabel) {
+        noticeModel = { ...noticeModel, jump: { label: jumpLabel } };
+      }
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
       const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
@@ -733,5 +738,30 @@ class TaskStatusCyclerSuccessorsMixin {
     } catch (error) {
       return null;
     }
+  }
+
+  async landSuccessorJump(model, context) {
+    const jump = model && model.jump && typeof model.jump === "object"
+      ? model.jump
+      : null;
+    if (!jump) return null;
+    const active = context && typeof context === "object" ? context : {};
+    if (active.successorJumpTarget === "return") {
+      if (active.successorJumpBox && typeof active.successorJumpBox === "object") {
+        active.successorJumpBox.jump = jump;
+      }
+      return jump;
+    }
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins && plugins["bob-navigation-hotkeys"];
+      const api = nav && nav.api;
+      if (api && typeof api.landOnTask === "function") {
+        await api.landOnTask(jump);
+      }
+    } catch (_error) {
+      // The close and its notice already landed; navigation is best-effort.
+    }
+    return jump;
   }
 }

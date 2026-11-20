@@ -296,7 +296,7 @@ class TaskStatusCyclerCompletionMixin {
   // Cross-plugin close for checklist rows (API v2). Always goes through the
   // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
   // and never falls back to writing `[x]` raw. Callers await the result.
-  async completeTaskAtCursor(editor) {
+  async completeTaskAtCursor(editor, options = {}) {
     const taskStatus =
       editor && typeof editor.getCursor === "function"
         ? this.getActiveTaskStatus(editor)
@@ -348,10 +348,16 @@ class TaskStatusCyclerCompletionMixin {
     // Successor notice is returned, never shown here: nav's walk caller
     // appends it to the walk toast it already shows.
     if (identity) {
+      const active = options && typeof options === "object" ? options : {};
+      const finalizeContext = { editor, activePath, successorNoticeTarget: "return" };
+      if (active.successorJumpTarget === "return") {
+        finalizeContext.successorJumpTarget = "return";
+        if (active.successorJumpBox && typeof active.successorJumpBox === "object") {
+          finalizeContext.successorJumpBox = active.successorJumpBox;
+        }
+      }
       const finalized = await this.finalizeClosedTasks([identity], {
-        editor,
-        activePath,
-        successorNoticeTarget: "return",
+        ...finalizeContext,
       });
       return {
         ok: true,
@@ -359,6 +365,7 @@ class TaskStatusCyclerCompletionMixin {
         successorNotice: finalized && finalized.successorNotice
           ? String(finalized.successorNotice)
           : null,
+        ...(finalized && finalized.jump ? { jump: finalized.jump } : {}),
       };
     }
     return { ok: true, lineDelta, successorNotice: null };
@@ -480,6 +487,12 @@ class TaskStatusCyclerCompletionMixin {
         context.successorNoticeTarget = "return";
         if (options.successorNoticeBox && typeof options.successorNoticeBox === "object") {
           context.successorNoticeBox = options.successorNoticeBox;
+        }
+      }
+      if (options && options.successorJumpTarget === "return") {
+        context.successorJumpTarget = "return";
+        if (options.successorJumpBox && typeof options.successorJumpBox === "object") {
+          context.successorJumpBox = options.successorJumpBox;
         }
       }
       if (closing) {

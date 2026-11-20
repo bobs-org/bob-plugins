@@ -8319,6 +8319,9 @@ function buildSuccessorPickerModel(options = {}) {
     })),
     groups,
   };
+  if (options.jumpSupported === true) {
+    model.jump = { supported: true };
+  }
   if (options.budget && typeof options.budget === "object" &&
       Number.isFinite(options.budget.links) && Number.isFinite(options.budget.max)) {
     model.budget = { links: options.budget.links, max: options.budget.max };
@@ -15495,8 +15498,17 @@ function normalizeSuccessorChoices(result) {
     const disjointPicks = picks.filter((pick) =>
       !closedKeys.has(pick.key) && !invalidKeys.has(pick.key),
     );
-    if (disjointPicks.length === 0 && closes.length === 0) return null;
-    return { picks: disjointPicks, closes };
+    const jumpKey = result.jump && typeof result.jump === "object" &&
+      typeof result.jump.key === "string"
+      ? result.jump.key.trim()
+      : "";
+    const jump = jumpKey ? { key: jumpKey } : null;
+    if (disjointPicks.length === 0 && closes.length === 0 && !jump) return null;
+    return {
+      picks: disjointPicks,
+      closes,
+      ...(jump ? { jump } : {}),
+    };
   } catch (_error) {
     return null;
   }
@@ -16948,6 +16960,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         raw: typeof offeredTask.cardRawLine === "string" && offeredTask.cardRawLine
           ? offeredTask.cardRawLine
           : String(row.beforeLine || ""),
+        ...(typeof row.afterLine === "string" ? { afterLine: row.afterLine } : {}),
         ...(blockId ? { blockId: String(blockId) } : {}),
         ...(taskId ? { taskId: String(taskId) } : {}),
         text: String(row.display || ""),
@@ -18327,10 +18340,10 @@ class TaskStatusCyclerPlugin extends Plugin {
     // Cross-plugin surface (plugins never import one another's `main.js`).
     // Keep the shape additive: bump `version` whenever a method is added.
     this.api = Object.freeze({
-      version: 5,
+      version: 6,
       recoverBlockedDependents: (closedIdentities, context) =>
         this.recoverBlockedDependents(closedIdentities, context),
-      completeTaskAtCursor: (editor) => this.completeTaskAtCursor(editor),
+      completeTaskAtCursor: (editor, options) => this.completeTaskAtCursor(editor, options),
       completeTaskLineText: (lineText, options) =>
         this.completeTaskLineText(lineText, options),
       finalizeClosedTasks: (closedIdentities, context) =>
@@ -19180,6 +19193,12 @@ class TaskStatusCyclerReferencesMixin {
       } catch (error) {
         successorNotice = null;
       }
+      let jump = null;
+      try {
+        jump = await this.landSuccessorJump(successors, context || {});
+      } catch (_error) {
+        jump = null;
+      }
       return {
         reopened,
         retired: retirement.retired,
@@ -19187,6 +19206,7 @@ class TaskStatusCyclerReferencesMixin {
         retirementFailures: retirement.failures,
         successors,
         successorNotice,
+        ...(jump ? { jump } : {}),
       };
     });
   }
@@ -20686,6 +20706,11 @@ class TaskStatusCyclerSuccessorsMixin {
         if (model.relation_picker_opened === true) delete noticeModel.relation_held;
         delete noticeModel.relation_picker_opened;
       }
+      const jumpLabel = model && model.jump &&
+        String(model.jump.label || model.jump.description || "").trim();
+      if (jumpLabel) {
+        noticeModel = { ...noticeModel, jump: { label: jumpLabel } };
+      }
       const api = this.getNavNoticeApi();
       const hasKeepMoving = Array.isArray(model.keep_moving) && model.keep_moving.length > 0;
       const relationNoticeCompatible = !relationBearing || Number(api && api.version) >= 3;
@@ -20710,6 +20735,31 @@ class TaskStatusCyclerSuccessorsMixin {
     } catch (error) {
       return null;
     }
+  }
+
+  async landSuccessorJump(model, context) {
+    const jump = model && model.jump && typeof model.jump === "object"
+      ? model.jump
+      : null;
+    if (!jump) return null;
+    const active = context && typeof context === "object" ? context : {};
+    if (active.successorJumpTarget === "return") {
+      if (active.successorJumpBox && typeof active.successorJumpBox === "object") {
+        active.successorJumpBox.jump = jump;
+      }
+      return jump;
+    }
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins && plugins["bob-navigation-hotkeys"];
+      const api = nav && nav.api;
+      if (api && typeof api.landOnTask === "function") {
+        await api.landOnTask(jump);
+      }
+    } catch (_error) {
+      // The close and its notice already landed; navigation is best-effort.
+    }
+    return jump;
   }
 }
 // ---- src/136-plugin-successor-receipt.js ----
@@ -21842,6 +21892,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
       const selectableOffers = Array.isArray(plan.offers) ? plan.offers : [];
       let selectedKeys = [];
       let closeChoices = [];
+      let jumpKey = null;
       let closeRevalidatedKeys = new Set();
       let pickerOpened = false;
       let originalOfferByKey = new Map();
@@ -21855,6 +21906,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           offers: selectableOffers,
           identities,
           pickerApi,
+          context: active,
           noteTexts: noteTextsObject,
           tasks,
           today,
@@ -21869,6 +21921,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
           ? picked.originalOfferByKey
           : new Map();
         const choices = picked.choices;
+        jumpKey = choices && choices.jump && typeof choices.jump.key === "string" ? choices.jump.key : null;
         const closeSupported = isSuccessorOfferCloseSupported(
           this.successorOfferCloseCapabilities(pickerApi),
         );
@@ -22353,6 +22406,9 @@ class TaskStatusCyclerSuccessorProjectMixin {
           dailyContent = null;
         }
       }
+      const jump = jumpKey
+        ? buildSuccessorJumpIdentity(jumpKey, originalOfferByKey, plan, closeResult)
+        : null;
       return {
         version: 1,
         predecessors,
@@ -22382,6 +22438,7 @@ class TaskStatusCyclerSuccessorProjectMixin {
         ...(closeResult && Array.isArray(closeResult.failures) && closeResult.failures.length > 0
           ? { failures: closeResult.failures }
           : {}),
+        ...(jump ? { jump } : {}),
         relation_picker_opened: pickerOpened,
         daily_path: dailyPath || "",
         daily_content: dailyContent,
@@ -22433,6 +22490,22 @@ function successorOfferCloseLiveLinkCheck(dailyLines, dailyPath) {
       dailyPath,
     )),
   );
+}
+
+function successorJumpPickerSupported(plugin, successors, context) {
+  try {
+    if (!successors || Number(successors.version) < 5) return false;
+    const plugins = plugin && plugin.app && plugin.app.plugins && plugin.app.plugins.plugins;
+    const nav = plugins && plugins["bob-navigation-hotkeys"];
+    const api = nav && nav.api;
+    if (!api || typeof api.landOnTask !== "function") return false;
+    const active = context && typeof context === "object" ? context : {};
+    if (active.successorNoticeTarget !== "return") return true;
+    return active.successorJumpTarget === "return" &&
+      api.reviewWalk && Number(api.reviewWalk.version) >= 2;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function successorOfferClosePostPickNotes(notes, plan) {
@@ -22669,6 +22742,7 @@ class TaskStatusCyclerSuccessorOfferCloseIntegrationMixin {
         headers: plan.projectHeaders instanceof Map ? plan.projectHeaders : new Map(),
         relationHeld: Array.isArray(plan.relation_held) ? plan.relation_held : [],
         offerCloseCapabilities: capabilities,
+        jumpSupported: successorJumpPickerSupported(this, successors, options.context),
         offerCloseContext: {
           noteTexts: options.noteTexts || {},
           plannedRecoveryEdits: Array.isArray(plan.edits) ? plan.edits : [],
@@ -23308,6 +23382,86 @@ function successorOfferCloseApiTranslateKeys(rows, noteTexts) {
     if (!reverse.has(candidate.engineKey)) reverse.set(candidate.engineKey, candidate.promoKey);
   }
   return { forward, reverse };
+}
+// ---- src/137c-successor-jump.js ----
+// Resolve a staged successor-card pin to its post-write task identity. A
+// closed row uses the close writer's postimage; a picked or left row uses the
+// successor plan's staged recovery text when it changed the task line.
+function buildSuccessorJumpIdentity(key, originalOfferByKey, plan, closeResult) {
+  try {
+    const wanted = typeof key === "string" ? key.trim() : "";
+    const offers = originalOfferByKey instanceof Map ? originalOfferByKey : new Map();
+    const offer = wanted ? offers.get(wanted) : null;
+    if (!offer) return null;
+
+    const task = offer.task && typeof offer.task === "object" ? offer.task : {};
+    const originalPath = String(offer.notePath || task.path || "");
+    const originalLine = Number.isInteger(task.line)
+      ? task.line
+      : Number.isInteger(offer.line) ? offer.line : null;
+    const originalText = typeof task.rawLine === "string"
+      ? task.rawLine
+      : typeof task.lineText === "string" ? task.lineText : null;
+    const description = String(offer.text || task.description || "task").trim() || "task";
+    const edits = Array.isArray(plan && plan.edits) ? plan.edits : [];
+    const editAt = (path, line) => Number.isInteger(line) && edits.find((edit) => edit &&
+      String(edit.path || "") === String(path || "") &&
+      Number(edit.line) === Number(line) && typeof edit.after === "string");
+
+    const closeReceipt = (closeResult && Array.isArray(closeResult.offer_closes)
+      ? closeResult.offer_closes
+      : []).find((entry) => entry && String(entry.key || "") === wanted);
+    let target = null;
+    if (closeReceipt) {
+      const resolved = (Array.isArray(closeResult.resolved) ? closeResult.resolved : [])
+        .find((entry) => entry && String(entry.key || "") === wanted) || {};
+      target = {
+        outcome: closeReceipt.outcome === "cancelled" ? "cancelled" : "done",
+        path: String(resolved.path || originalPath),
+        line: Number.isInteger(resolved.line) ? resolved.line : originalLine,
+        blockId: String(resolved.blockId || task.blockId || ""),
+        text: typeof resolved.afterLine === "string" ? resolved.afterLine : null,
+      };
+    } else {
+      const rows = typeof successorPlanRows === "function" ? successorPlanRows(plan) : [];
+      const picked = rows.find((row) => row && row.offer &&
+        String(row.offer.key || "") === wanted && row.offer.selected === true);
+      if (picked) {
+        const path = String(picked.note_path || originalPath);
+        const edit = editAt(path, picked.line);
+        target = {
+          outcome: "picked",
+          path,
+          line: originalLine,
+          blockId: String(picked.block_id || task.blockId || ""),
+          text: edit ? edit.after : originalText,
+        };
+      } else {
+        const edit = editAt(originalPath, originalLine);
+        target = {
+          outcome: "left",
+          path: originalPath,
+          line: originalLine,
+          blockId: String(task.blockId || ""),
+          text: edit ? edit.after : originalText,
+        };
+      }
+    }
+
+    if (!target.path) return null;
+    return {
+      key: wanted,
+      outcome: target.outcome,
+      label: description,
+      path: target.path,
+      ...(target.blockId ? { blockId: target.blockId } : {}),
+      ...(typeof target.text === "string" ? { text: target.text } : {}),
+      ...(Number.isInteger(target.line) ? { line: target.line } : {}),
+      description,
+    };
+  } catch (_error) {
+    return null;
+  }
 }
 // ---- src/138-plugin-successor-relations.js ----
 // Managed-Done relation-index adapter for the successor planner. The index
@@ -23989,6 +24143,11 @@ class TaskStatusCyclerSuccessorParkedMixin {
     } catch (_error) {
       // Best effort: the unlink already landed.
     }
+    try {
+      await this.landSuccessorJump(model, active);
+    } catch (_error) {
+      // The unlink and notice already landed; navigation is best-effort.
+    }
     return parkedSuccessorCounts(model);
   }
 }
@@ -24262,11 +24421,17 @@ class TaskStatusCyclerVimMixin {
         // card is shown, keeping the gesture's single walk toast.
         const closing = isTranscludedCompletionClosableStatus(taskStatus);
         const successorNoticeBox = {};
+        const successorJumpBox = {};
         void this.toggleActiveCheckboxOpenDoneAndPropagate(
           view.editor,
           activeFile,
           taskStatus,
-          { successorNoticeTarget: "return", successorNoticeBox },
+          {
+            successorNoticeTarget: "return",
+            successorNoticeBox,
+            successorJumpTarget: "return",
+            successorJumpBox,
+          },
         ).then(
           (wrote) =>
             settleReviewOrigin(
@@ -24275,6 +24440,9 @@ class TaskStatusCyclerVimMixin {
                   kind: "complete",
                   ...(successorNoticeBox.text
                     ? { notice: successorNoticeBox.text }
+                    : {}),
+                  ...(successorJumpBox.jump
+                    ? { follow: successorJumpBox.jump }
                     : {}),
                   ...(Array.isArray(successorNoticeBox.excludeRefs) && successorNoticeBox.excludeRefs.length > 0
                     ? { excludeRefs: successorNoticeBox.excludeRefs }
@@ -26109,7 +26277,7 @@ class TaskStatusCyclerCompletionMixin {
   // Cross-plugin close for checklist rows (API v2). Always goes through the
   // Tasks `set-status-symbol-to-x` command so recurrence fires; never stamps
   // and never falls back to writing `[x]` raw. Callers await the result.
-  async completeTaskAtCursor(editor) {
+  async completeTaskAtCursor(editor, options = {}) {
     const taskStatus =
       editor && typeof editor.getCursor === "function"
         ? this.getActiveTaskStatus(editor)
@@ -26161,10 +26329,16 @@ class TaskStatusCyclerCompletionMixin {
     // Successor notice is returned, never shown here: nav's walk caller
     // appends it to the walk toast it already shows.
     if (identity) {
+      const active = options && typeof options === "object" ? options : {};
+      const finalizeContext = { editor, activePath, successorNoticeTarget: "return" };
+      if (active.successorJumpTarget === "return") {
+        finalizeContext.successorJumpTarget = "return";
+        if (active.successorJumpBox && typeof active.successorJumpBox === "object") {
+          finalizeContext.successorJumpBox = active.successorJumpBox;
+        }
+      }
       const finalized = await this.finalizeClosedTasks([identity], {
-        editor,
-        activePath,
-        successorNoticeTarget: "return",
+        ...finalizeContext,
       });
       return {
         ok: true,
@@ -26172,6 +26346,7 @@ class TaskStatusCyclerCompletionMixin {
         successorNotice: finalized && finalized.successorNotice
           ? String(finalized.successorNotice)
           : null,
+        ...(finalized && finalized.jump ? { jump: finalized.jump } : {}),
       };
     }
     return { ok: true, lineDelta, successorNotice: null };
@@ -26293,6 +26468,12 @@ class TaskStatusCyclerCompletionMixin {
         context.successorNoticeTarget = "return";
         if (options.successorNoticeBox && typeof options.successorNoticeBox === "object") {
           context.successorNoticeBox = options.successorNoticeBox;
+        }
+      }
+      if (options && options.successorJumpTarget === "return") {
+        context.successorJumpTarget = "return";
+        if (options.successorJumpBox && typeof options.successorJumpBox === "object") {
+          context.successorJumpBox = options.successorJumpBox;
         }
       }
       if (closing) {
@@ -30501,6 +30682,8 @@ module.exports.helpers = {
   resolveSuccessorImplicitDestination,
   successorDestinationLabel,
   buildSuccessorPickerModel,
+  buildSuccessorJumpIdentity,
+  successorJumpPickerSupported,
   buildSuccessorPickerTaskContext,
   buildSuccessorOfferCloseDescriptors,
   createSuccessorOfferCloseContext,

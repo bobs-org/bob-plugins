@@ -98,8 +98,17 @@ function normalizeSuccessorChoices(result) {
     const disjointPicks = picks.filter((pick) =>
       !closedKeys.has(pick.key) && !invalidKeys.has(pick.key),
     );
-    if (disjointPicks.length === 0 && closes.length === 0) return null;
-    return { picks: disjointPicks, closes };
+    const jumpKey = result.jump && typeof result.jump === "object" &&
+      typeof result.jump.key === "string"
+      ? result.jump.key.trim()
+      : "";
+    const jump = jumpKey ? { key: jumpKey } : null;
+    if (disjointPicks.length === 0 && closes.length === 0 && !jump) return null;
+    return {
+      picks: disjointPicks,
+      closes,
+      ...(jump ? { jump } : {}),
+    };
   } catch (_error) {
     return null;
   }

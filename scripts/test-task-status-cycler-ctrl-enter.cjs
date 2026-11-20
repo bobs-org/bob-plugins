@@ -910,7 +910,7 @@ test("Ctrl+Enter on a task line inside a fenced code block does not propagate to
   assert.equal(harness.getSource("Source.md"), sourceBefore);
 });
 
-function installReviewWalkV3(plugin, { origin = { seq: 7 }, onContinue } = {}) {
+function installReviewWalkV3(plugin, { origin = { seq: 7 }, onContinue, reviewWalkVersion = 1 } = {}) {
   const calls = { capture: 0, continued: [] };
   let captureEditor = null;
   plugin.app.plugins = {
@@ -920,7 +920,7 @@ function installReviewWalkV3(plugin, { origin = { seq: 7 }, onContinue } = {}) {
           version: 3,
           claimReviewWalkCompletion: () => null,
           reviewWalk: {
-            version: 1,
+            version: reviewWalkVersion,
             capture(candidate) {
               calls.capture += 1;
               captureEditor = candidate;
@@ -1100,6 +1100,42 @@ test("Ctrl+Enter close continues the walk with complete after finalize ran", asy
   assert.deepEqual(tasks.executed, [tasks.doneCommand]);
   assert.equal(walk.captureEditor(), editor);
   assert.deepEqual(order, ["finalize", "continue"]);
+  assert.equal(walk.calls.continued.length, 1);
+});
+
+test("Ctrl+Enter walk returns a pinned successor as follow after finalize", async () => {
+  const source = "- [ ] #task Ship the walk ^ship";
+  const harness = createInMemoryObsidianApp({ "Daily.md": source });
+  const editor = createTextEditor(source, { line: 0, ch: 4 });
+  const plugin = new TaskStatusCyclerPlugin();
+  attachActiveMarkdownView(plugin, harness, editor, "Daily.md");
+  installTasksCloseCommand(plugin, editor);
+  const target = { key: "Tasks.md#^next", path: "Tasks.md", blockId: "next", label: "Next task" };
+  const origin = { seq: 8 };
+  const walk = installReviewWalkV3(plugin, {
+    origin,
+    reviewWalkVersion: 2,
+    onContinue(captured, outcome) {
+      assert.equal(captured, origin);
+      assert.deepEqual(outcome, {
+        kind: "complete",
+        notice: "Recovery notice",
+        follow: target,
+      });
+      return Promise.resolve({ ok: true, advanced: false, parked: true, landed: true });
+    },
+  });
+  plugin.finalizeClosedTasks = async (_identities, context) => {
+    assert.equal(context.successorJumpTarget, "return");
+    context.successorJumpBox.jump = target;
+    return { successorNotice: "Recovery notice" };
+  };
+  const action = registerTaskToggleVimAction(plugin);
+
+  action({});
+  await settleWalkChains(plugin);
+
+  assert.match(editor.getValue(), /^- \[x\] #task Ship the walk \^ship/);
   assert.equal(walk.calls.continued.length, 1);
 });
 

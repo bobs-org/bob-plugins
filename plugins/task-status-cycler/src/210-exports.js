@@ -145,6 +145,8 @@ module.exports.helpers = {
   resolveSuccessorImplicitDestination,
   successorDestinationLabel,
   buildSuccessorPickerModel,
+  buildSuccessorJumpIdentity,
+  successorJumpPickerSupported,
   buildSuccessorPickerTaskContext,
   buildSuccessorOfferCloseDescriptors,
   createSuccessorOfferCloseContext,

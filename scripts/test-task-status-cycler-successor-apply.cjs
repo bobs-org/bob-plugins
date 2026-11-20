@@ -113,6 +113,8 @@ test("mixed Done and Cancel in one note writes both roots with exact bytes", asy
   const final = harness.getSource("Tasks.md");
   assert.match(final, /\[x\].*\[completion:: 2026-11-05\].*\^a/);
   assert.match(final, /\[-].*\[cancelled:: 2026-11-05\].*\^b/);
+  assert.equal(res.resolved.find((entry) => entry.key === "Tasks.md#^a").afterLine, final.split("\n")[0]);
+  assert.equal(res.resolved.find((entry) => entry.key === "Tasks.md#^b").afterLine, final.split("\n")[1]);
   assert.match(final, /CANCEL LOG/);
   assert.equal(res.undo.restores.length, 1);
   assert.equal(res.undo.restores[0].before, source);

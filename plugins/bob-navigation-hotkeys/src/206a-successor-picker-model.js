@@ -414,6 +414,7 @@ function normalizeSuccessorPickerModel(model) {
       : [];
     const keepMovingOnly = successorPickerAllKeepMoving(groups);
     const relationOnly = successorPickerAllRelation(groups);
+    const jumpSupported = Boolean(model.jump && typeof model.jump === "object" && model.jump.supported === true);
     return Object.freeze({
       title: successorPickerText(model.title) ||
         (keepMovingOnly ? successorPickerKeepMovingTitle(groups) :
@@ -427,6 +428,7 @@ function normalizeSuccessorPickerModel(model) {
       selectableCount,
       taskRowCount,
       ...(closeSupported ? { close: Object.freeze({ supported: true }) } : {}),
+      ...(jumpSupported ? { jump: Object.freeze({ supported: true }) } : {}),
     });
   } catch (_error) {
     return null;

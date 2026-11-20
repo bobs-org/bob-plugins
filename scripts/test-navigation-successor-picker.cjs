@@ -989,7 +989,7 @@ function keepMovingModel(groups = [keepMovingGroup()], extra = {}) {
 
 test("picker API v2 renders a keep_moving group: title, caption, tag, lanes, fold line, and the skip-forward icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 4);
+  assert.equal(plugin.api.successors.version, 5);
   const { pending, modal } = await openPicker(plugin, keepMovingModel());
   assert.equal(modal.title, "Keep ‹sase_badges› moving", "only-keep_moving models derive the picker title");
   assert.equal(modal.headerIcon, "skip-forward");
@@ -1305,7 +1305,7 @@ function relationModel(groups = [relationGroup()], extra = {}) {
 
 test("picker API v3 renders a relation group: header, caption, tag, fold, title, and link-2 icon", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 4);
+  assert.equal(plugin.api.successors.version, 5);
   const { pending, modal } = await openPicker(plugin, relationModel());
   assert.equal(modal.title, REL_HEADER);
   assert.equal(modal.headerIcon, "link-2");
@@ -1431,3 +1431,214 @@ test("relation successor copy vectors drive every copy-table string", () => {
   }
 });
 
+
+// Successor jump pin (`api.successors` v5, docs/task-dependencies.md §12.22
+// successor jump): the Ctrl+J pin on the nav card.
+
+function jumpModel(count, options = {}) {
+  const model = modelFor(count, options);
+  return { ...model, jump: { supported: true } };
+}
+
+function pressJump(modal, keyOptions = {}) {
+  return pressKey(modal, "j", { ctrlKey: true, ...keyOptions });
+}
+
+test("api.successors is v5 and the jump model normalizes support", () => {
+  const plugin = makePlugin();
+  assert.equal(plugin.api.successors.version, 5);
+  const supported = helpers.normalizeSuccessorPickerModel(jumpModel(1));
+  assert.deepEqual(supported.jump, { supported: true });
+  const unsupported = helpers.normalizeSuccessorPickerModel(modelFor(1));
+  assert.equal(unsupported.jump, undefined);
+  const malformed = helpers.normalizeSuccessorPickerModel({ ...modelFor(1), jump: { supported: "yes" } });
+  assert.equal(malformed.jump, undefined);
+});
+
+test("Ctrl+J toggles, moves, and clears the pin without moving the highlight", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(3));
+  assert.equal(modal.jumpKey, null);
+  const firstKey = jumpModel(3).groups[0].rows[0].key;
+
+  pressJump(modal);
+  assert.equal(modal.jumpKey, firstKey);
+  assert.equal(modal.selectedIndex, 0, "pinning never moves the highlight");
+  assert.match(allText(modal.footerEl), /Jumps to/);
+  assert.match(allText(modal.footerEl), /after the close/);
+  assert.equal(findAll(modal.resultsEl, "is-jump-pin").length, 1);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin").length, 1);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin")[0].textContent, "Jump");
+  const labelled = findAll(modal.resultsEl, "bob-successor-row").filter(
+    (el) => el.getAttribute("aria-label") && el.getAttribute("aria-label").includes("jump target"),
+  );
+  assert.equal(labelled.length, 1, "the pinned row carries the jump target suffix");
+
+  pressKey(modal, "n", { ctrlKey: true });
+  assert.equal(modal.selectedIndex, 1);
+  pressJump(modal);
+  assert.equal(modal.jumpKey, jumpModel(3).groups[0].rows[1].key, "Ctrl+J on another row moves the pin");
+  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin").length, 1);
+
+  pressJump(modal);
+  assert.equal(modal.jumpKey, null, "Ctrl+J on the pinned row clears the pin");
+  assert.match(allText(modal.footerEl), /Jump cleared/);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin").length, 0);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("the pin survives marks and filtering, and the footer names the hidden target", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(3));
+  pressJump(modal);
+  const pinnedKey = modal.jumpKey;
+  pressKey(modal, "Tab");
+  assert.ok(modal.markedKeys.size > 0);
+  assert.equal(modal.jumpKey, pinnedKey, "a pull-in mark never moves the pin");
+  modal.inputEl.value = "Offer task 3";
+  modal.inputEl.listeners.input();
+  assert.equal(modal.jumpKey, pinnedKey, "filtering never moves the pin");
+  assert.match(allText(modal.footerEl), /↗ “Offer task 1”/, "a filtered-out pin is never a surprise");
+  modal.inputEl.value = "";
+  modal.inputEl.listeners.input();
+  assert.equal(modal.jumpKey, pinnedKey);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("pin-only Enter resolves picks [] with jump while plain Enter still pulls in", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, jumpModel(3));
+  pressJump(modal);
+  assert.deepEqual(modal.prospectiveKeys(), [], "no phantom pull-in while the pin is staged alone");
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, { picks: [], jump: { key: jumpModel(3).groups[0].rows[0].key } });
+
+  const plainPlugin = makePlugin({ now: 5000 });
+  const plain = await openPicker(plainPlugin, jumpModel(3));
+  plainPlugin.setNow(6000);
+  pressKey(plain.modal, "Enter");
+  assert.deepEqual(await plain.pending, { picks: [{ key: jumpModel(3).groups[0].rows[0].key }] });
+});
+
+test("the Enter chip follows the copy table and the Ctrl+J chip sits before Esc", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(3));
+  const labels = () => modal.footerHints.map((hint) => hint.label);
+  assert.ok(labels().includes("jump"), "the Ctrl+J hint chip shows on jump-enabled cards");
+  assert.ok(
+    labels().indexOf("jump") < labels().indexOf("none"),
+    "the jump chip sits last before Esc",
+  );
+  const enterLabel = () => modal.footerHints.find((hint) => hint.keys.length === 1 && hint.keys[0] === "↵").label;
+
+  pressJump(modal);
+  assert.equal(enterLabel(), "leave open & jump");
+  pressKey(modal, "Tab");
+  assert.equal(enterLabel(), "pull in & jump");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("Ctrl+J is refused on muted rows, folds, and empty lists, and inert without support", async () => {
+  const plugin = makePlugin();
+  const model = jumpModel(3, {
+    rowOptions: (index) => index === 2 ? { selectable: false, mutedReason: "blocked" } : {},
+  });
+  const { pending, modal } = await openPicker(plugin, model);
+  modal.selectedIndex = 2;
+  modal.renderResults();
+  pressJump(modal);
+  assert.equal(modal.jumpKey, null);
+  assert.match(allText(modal.footerEl), /Jump works on offer rows only/);
+  assert.equal(findAll(modal.resultsEl, "bob-successor-jump-pin").length, 0);
+
+  modal.selectedIndex = 0;
+  modal.renderResults();
+  modal.inputEl.value = "no such task";
+  modal.inputEl.listeners.input();
+  pressJump(modal);
+  assert.equal(modal.jumpKey, null, "an empty list refuses the pin");
+  modal.inputEl.value = "";
+  modal.inputEl.listeners.input();
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+
+  const plainPlugin = makePlugin();
+  const plain = await openPicker(plainPlugin, modelFor(2));
+  assert.ok(!plain.modal.footerHints.some((hint) => hint.label === "jump"), "no chip without jump support");
+  const event = pressJump(plain.modal);
+  assert.equal(event.defaultPrevented, false, "Ctrl+J falls through without support");
+  assert.equal(plain.modal.jumpKey, null);
+  plain.modal.allowCloseWithoutArm = true;
+  plain.modal.close();
+  assert.equal(await plain.pending, null);
+});
+
+test("repeat and IME Ctrl+J are ignored and the KeyJ code is a layout fallback", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(2));
+  pressJump(modal, { repeat: true });
+  assert.equal(modal.jumpKey, null, "held Ctrl+J pins one row, not a sweep");
+  pressKey(modal, "j", { ctrlKey: true, isComposing: true });
+  assert.equal(modal.jumpKey, null);
+  pressKey(modal, "j", { ctrlKey: true, keyCode: 229 });
+  assert.equal(modal.jumpKey, null);
+  for (const options of [{ shiftKey: true }, { metaKey: true }, { altKey: true }]) {
+    pressKey(modal, "j", { ctrlKey: true, ...options });
+    assert.equal(modal.jumpKey, null, `modified Ctrl+J falls through: ${JSON.stringify(options)}`);
+  }
+  const fallback = pressKey(modal, "?", { ctrlKey: true, code: "KeyJ" });
+  assert.equal(fallback.defaultPrevented, true);
+  assert.ok(modal.jumpKey, "the layout fallback pins the row");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("the hover button mirrors Ctrl+J for its row", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpModel(3));
+  assert.ok(findAll(modal.resultsEl, "is-jump").length >= 1, "jump-enabled cards render the hover button");
+  const button = findAll(modal.resultsEl, "is-jump")[0];
+  assert.match(button.getAttribute("aria-label") || "", /Jump to .* after the close/);
+  click(button);
+  assert.equal(modal.jumpKey, jumpModel(3).groups[0].rows[0].key, "the button pins its row");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("the footer summary truncates long jump targets to 40 characters", async () => {
+  const plugin = makePlugin();
+  const longText = `Task with a very long description that runs past forty characters surely`;
+  assert.ok(Array.from(longText).length > 40);
+  const model = jumpModel(1, { rowOptions: () => ({ text: longText }) });
+  const { pending, modal } = await openPicker(plugin, model);
+  pressJump(modal);
+  const summary = findAll(modal.footerEl, "bob-successor-jump-summary");
+  assert.equal(summary.length, 1);
+  assert.match(summary[0].textContent, /…/, "the summary ellipsizes");
+  assert.ok(!summary[0].textContent.includes(longText), "the summary truncates the target");
+  assert.match(allText(modal.footerEl), /↗ “/, "the summary keeps the receipt shape");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("v5 pick() passes jump-only results and still drops empty commits", async () => {
+  assert.deepEqual(
+    await helpers.createSuccessorPickerApi({ pickSuccessorOffers: async () => ({ picks: [], jump: { key: "k" } }) }).pick({}),
+    { picks: [], jump: { key: "k" } },
+  );
+  assert.equal(
+    await helpers.createSuccessorPickerApi({ pickSuccessorOffers: async () => ({ picks: [] }) }).pick({}),
+    null,
+  );
+});

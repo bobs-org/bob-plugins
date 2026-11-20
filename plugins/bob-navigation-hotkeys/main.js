@@ -29956,6 +29956,7 @@ function normalizeSuccessorPickerModel(model) {
       : [];
     const keepMovingOnly = successorPickerAllKeepMoving(groups);
     const relationOnly = successorPickerAllRelation(groups);
+    const jumpSupported = Boolean(model.jump && typeof model.jump === "object" && model.jump.supported === true);
     return Object.freeze({
       title: successorPickerText(model.title) ||
         (keepMovingOnly ? successorPickerKeepMovingTitle(groups) :
@@ -29969,6 +29970,7 @@ function normalizeSuccessorPickerModel(model) {
       selectableCount,
       taskRowCount,
       ...(closeSupported ? { close: Object.freeze({ supported: true }) } : {}),
+      ...(jumpSupported ? { jump: Object.freeze({ supported: true }) } : {}),
     });
   } catch (_error) {
     return null;
@@ -30730,6 +30732,8 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     // Per-row verdicts (`api.successors` v4): key → {outcome, reason?}.
     // One verdict per row, staged never written, exclusive with marks.
     this.verdicts = new Map();
+    // Jump pin (`api.successors` v5): the pinned offer key, or null.
+    this.jumpKey = null;
     this.reasonEditKey = null;
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
@@ -30777,6 +30781,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       try {
         if (typeof successorInstallVerdictModalPatches === "function") {
           successorInstallVerdictModalPatches();
+        }
+        if (typeof successorInstallJumpModalPatches === "function") {
+          successorInstallJumpModalPatches();
         }
       } catch (_error) {
         // The card renders without verdict keys rather than throwing.
@@ -30925,6 +30932,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         return;
       }
     }
+    if (typeof this.handleJumpKey === "function" && this.handleJumpKey(event)) {
+      return;
+    }
     if (this.handleVerdictKey(event)) {
       return;
     }
@@ -30946,7 +30956,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         return;
       }
       const active = this.visibleItems[this.selectedIndex];
-      if (this.markedKeys.size > 0 || successorModalHasVerdicts(this)) {
+      if (this.markedKeys.size > 0 || successorModalHasVerdicts(this) || this.jumpKey != null) {
         this.applySelection();
         return;
       }
@@ -31100,7 +31110,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         .map((row) => row.key);
     }
     try {
-      if (successorModalHasVerdicts(this)) {
+      if (successorModalHasVerdicts(this) || this.jumpKey != null) {
         return [];
       }
     } catch (_error) {
@@ -31114,7 +31124,9 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
 
   renderFooter() {
     try {
-      this.footerHints = successorVerdictFooterHints(this);
+      this.footerHints = typeof successorJumpFooterHints === "function"
+        ? successorJumpFooterHints(this)
+        : successorVerdictFooterHints(this);
     } catch (_error) {
       // The static hints stay when the verdict hints cannot build.
     }
@@ -31130,6 +31142,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       cls: "bob-successor-pull-count",
       text: successorFooterSummaryText(prospective, counts.done, counts.cancel),
     });
+    try {
+      if (typeof successorRenderJumpSummary === "function") {
+        successorRenderJumpSummary(this, summary);
+      }
+    } catch (_error) {
+      // The pull count stands without the jump summary.
+    }
     if (this.model.budget) {
       const current = this.model.budget.links;
       const maximum = this.model.budget.max;
@@ -31188,7 +31207,22 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         if (verdict && verdict.outcome === SUCCESSOR_VERDICT_DONE) classes.push("is-verdict-done");
         if (verdict && verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) classes.push("is-verdict-cancel");
         if (!row.selectable) classes.push("is-muted");
-        const ariaSuffix = successorVerdictRowAriaSuffix(row, verdict);
+        try {
+          if (typeof successorJumpRowClass === "function" && successorJumpRowClass(this, row)) {
+            classes.push("is-jump-pin");
+          }
+        } catch (_error) {
+          // Rows render without the pin class rather than throwing.
+        }
+        let successorJumpSuffix = "";
+        try {
+          successorJumpSuffix = typeof successorJumpRowAriaSuffix === "function"
+            ? successorJumpRowAriaSuffix(this, row)
+            : "";
+        } catch (_error) {
+          successorJumpSuffix = "";
+        }
+        const ariaSuffix = [successorVerdictRowAriaSuffix(row, verdict), successorJumpSuffix].filter(Boolean).join(" — ");
         const rowEl = groupEl.createDiv({
           cls: classes.join(" "),
           attr: {
@@ -31209,6 +31243,13 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         }
         if (successorModalVerdictsActive(this) && (selected || verdict)) {
           successorRenderVerdictActions(this, rowEl, row, verdict, navIndex);
+        }
+        try {
+          if (typeof successorRenderJumpRowAdornments === "function") {
+            successorRenderJumpRowAdornments(this, rowEl, row, navIndex);
+          }
+        } catch (_error) {
+          // Rows render without jump adornments rather than throwing.
         }
         const content = rowEl.createDiv({ cls: "bob-successor-row-content" });
         const titleCls = verdict ? "bob-successor-row-text is-verdict" : "bob-successor-row-text";
@@ -31378,228 +31419,6 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
         // A settled picker never re-opens or rejects its caller.
       }
     }
-  }
-}
-
-function createSuccessorPickerApi(plugin) {
-  return Object.freeze({
-    version: 4,
-    pick(model) {
-      try {
-        if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
-          return Promise.resolve(null);
-        }
-        return Promise.resolve()
-          .then(() => plugin.pickSuccessorOffers(model))
-          .then((result) => {
-            try {
-              if (!result || !Array.isArray(result.picks)) {
-                return null;
-              }
-              if (result.picks.length === 0 && !(Array.isArray(result.closes) && result.closes.length > 0)) {
-                return null;
-              }
-              return result;
-            } catch (_error) {
-              return null;
-            }
-          })
-          .catch(() => null);
-      } catch (_error) {
-        return Promise.resolve(null);
-      }
-    },
-  });
-}
-
-class BobNavigationHotkeysSuccessorPickerMixin {
-  successorPickerNow() {
-    return Date.now();
-  }
-
-  beginReviewSuccessorGestureOwner(origin, kind = "capture") {
-    try {
-      if (!origin || !Number.isInteger(origin.seq) || !Number.isInteger(origin.epoch)) {
-        return null;
-      }
-      const owner = {
-        seq: origin.seq,
-        epoch: origin.epoch,
-        key: successorPickerText(origin.key),
-        kind,
-        held: false,
-      };
-      this.reviewSuccessorGestureOwner = owner;
-      return owner;
-    } catch (_error) {
-      return null;
-    }
-  }
-
-  holdReviewWalkForSuccessorPicker() {
-    try {
-      const owner = this.reviewSuccessorGestureOwner;
-      const landing = this.reviewLanding;
-      if (
-        !owner ||
-        owner.seq !== this.reviewGestureSeq ||
-        owner.epoch !== this.reviewLandingEpoch ||
-        (owner.key && (!landing || landing.key !== owner.key))
-      ) {
-        return null;
-      }
-      owner.held = true;
-      this.reviewSuccessorWalkHold = owner;
-      return owner;
-    } catch (_error) {
-      return null;
-    }
-  }
-
-  isReviewSuccessorWalkHeld() {
-    return Boolean(
-      this.reviewSuccessorWalkHold &&
-      this.reviewSuccessorWalkHold.held === true,
-    );
-  }
-
-  releaseReviewSuccessorGestureOwner(originOrOwner) {
-    try {
-      if (!originOrOwner) return false;
-      const owner = originOrOwner && originOrOwner.held !== undefined
-        ? originOrOwner
-        : this.reviewSuccessorGestureOwner;
-      if (!owner) return false;
-      if (
-        originOrOwner && originOrOwner.seq !== undefined &&
-        (owner.seq !== originOrOwner.seq || owner.epoch !== originOrOwner.epoch)
-      ) {
-        return false;
-      }
-      owner.held = false;
-      if (this.reviewSuccessorWalkHold === owner) {
-        this.reviewSuccessorWalkHold = null;
-      }
-      if (this.reviewSuccessorGestureOwner === owner) {
-        this.reviewSuccessorGestureOwner = null;
-      }
-      return true;
-    } catch (_error) {
-      return false;
-    }
-  }
-
-  pickSuccessorOffers(model, options = {}) {
-    try {
-      if (
-        this.successorPickerUnavailable === true ||
-        this.activeSuccessorPicker ||
-        !normalizeSuccessorPickerModel(model)
-      ) {
-        return Promise.resolve(null);
-      }
-      this.holdReviewWalkForSuccessorPicker();
-      const retargetEnabled =
-        !options || typeof options !== "object" || options.retarget !== false;
-      return new Promise((resolve) => {
-        let modal = null;
-        let settled = false;
-        const settle = (result) => {
-          if (settled) return;
-          settled = true;
-          if (this.activeSuccessorPicker === modal) {
-            this.activeSuccessorPicker = null;
-          }
-          try {
-            if (result && Array.isArray(result.picks)) {
-              const normalized = normalizeSuccessorPickerModel(model);
-              if (!normalized) {
-                resolve(null);
-                return;
-              }
-              const byKey = new Map();
-              for (const group of normalized.groups) {
-                for (const row of group.rows) {
-                  if (row && typeof row.key === "string" && !byKey.has(row.key)) {
-                    byKey.set(row.key, row);
-                  }
-                }
-              }
-              const allowed = new Set([...byKey].filter(([, row]) => row.selectable).map(([key]) => key));
-              const picks = [];
-              const pickedKeys = new Set();
-              for (const pick of result.picks) {
-                const key = pick && typeof pick.key === "string" ? pick.key : "";
-                if (!allowed.has(key) || pickedKeys.has(key)) continue;
-                pickedKeys.add(key);
-                const item = { key };
-                if (retargetEnabled) {
-                  const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
-                  if (destination) {
-                    item.destination = destination;
-                  }
-                }
-                picks.push(item);
-              }
-              const closes = normalizeSuccessorClosesForResult({ model: normalized }, result.closes);
-              const kept = closes.filter((close) => !pickedKeys.has(close.key));
-              if (picks.length === 0 && kept.length === 0) {
-                resolve(null);
-                return;
-              }
-              resolve(kept.length > 0 ? { picks, closes: kept } : { picks });
-            } else {
-              resolve(null);
-            }
-          } catch (_error) {
-            resolve(null);
-          }
-        };
-        try {
-          modal = new SuccessorOfferPickerModal(
-            this.app,
-            model,
-            settle,
-            { now: () => this.successorPickerNow(), retarget: retargetEnabled },
-          );
-          this.activeSuccessorPicker = modal;
-          modal.open();
-          if (!modal.pickerOpen) settle(null);
-        } catch (_error) {
-          if (modal) {
-            try {
-              modal.settle(null);
-            } catch (_settleError) {
-              settle(null);
-            }
-          } else {
-            settle(null);
-          }
-        }
-      });
-    } catch (_error) {
-      return Promise.resolve(null);
-    }
-  }
-
-  closeSuccessorPickerForUnload() {
-    const modal = this.activeSuccessorPicker;
-    if (modal) {
-      try {
-        modal.allowCloseWithoutArm = true;
-        modal.close();
-      } catch (_error) {
-        try {
-          modal.settle(null);
-        } catch (_settleError) {
-          this.activeSuccessorPicker = null;
-        }
-      }
-    }
-    this.activeSuccessorPicker = null;
-    this.releaseReviewSuccessorGestureOwner(this.reviewSuccessorGestureOwner);
-    this.reviewSuccessorWalkHold = null;
-    this.reviewSuccessorGestureOwner = null;
   }
 }
 // ---- src/206c-successor-picker-verdicts.js ----
@@ -32670,6 +32489,701 @@ try {
   }
 } catch (_error) {
   // The modal keeps its 206 behavior without verdict keys.
+}
+// ---- src/206e-successor-picker-jump.js ----
+// Successor picker jump pin (`api.successors` v5,
+// docs/task-dependencies.md §12.22 successor jump). State, keys, commit,
+// and render helpers for the Ctrl+J pin. Follows the 206c prototype-patch
+// pattern: `successorInstallJumpModalPatches` runs from 206's onOpen next
+// to the verdict patches (plus a load-time install below, as in 206d), and
+// 206 itself keeps only one-line hooks. Shared scope with 206 and 206a-206d.
+const SUCCESSOR_JUMP_STATUS_SET_PREFIX = "↗ Jumps to ";
+const SUCCESSOR_JUMP_STATUS_SET_SUFFIX = " after the close";
+const SUCCESSOR_JUMP_STATUS_CLEARED = "Jump cleared";
+const SUCCESSOR_JUMP_STATUS_NOT_PINNABLE = "Jump works on offer rows only";
+const SUCCESSOR_JUMP_STATUS_LOST_KEY = "Jump target is no longer offered — cleared";
+const SUCCESSOR_JUMP_ROW_SUFFIX = "jump target";
+const SUCCESSOR_JUMP_BUTTON_LABEL = "↗";
+const SUCCESSOR_JUMP_SUMMARY_MAX = 40;
+
+// The card opts in through the normalized model: `jump: {supported: true}`.
+// Callers that do not opt in see no chip, and Ctrl+J falls through to
+// today's behavior.
+function successorJumpSupported(modal) {
+  try {
+    return Boolean(modal && modal.model && modal.model.jump && modal.model.jump.supported === true);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function successorJumpHasStaged(modal) {
+  try {
+    return Boolean(modal && modal.jumpKey != null && successorJumpSupported(modal));
+  } catch (_error) {
+    return false;
+  }
+}
+
+// v1 pins keyed, selectable offer rows only. Muted rows, headers, `+N more`
+// folds, and the empty list refuse with a status line.
+function successorJumpIsPinnableRow(row) {
+  try {
+    return Boolean(row && typeof row === "object" && row.selectable === true &&
+      typeof row.key === "string" && row.key);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function successorJumpTruncate(text) {
+  try {
+    const value = String(text === null || text === undefined ? "" : text);
+    const chars = Array.from(value);
+    if (chars.length <= SUCCESSOR_JUMP_SUMMARY_MAX) {
+      return value;
+    }
+    return `${chars.slice(0, SUCCESSOR_JUMP_SUMMARY_MAX).join("").trimEnd()}…`;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function successorJumpSetStatus(modal, row) {
+  try {
+    modal.statusLine = {
+      text: `${SUCCESSOR_JUMP_STATUS_SET_PREFIX}${successorQuoteTitle(row.text)}${SUCCESSOR_JUMP_STATUS_SET_SUFFIX}`,
+      kind: "consequence",
+    };
+  } catch (_error) {
+    modal.statusLine = { text: SUCCESSOR_JUMP_STATUS_CLEARED, kind: "consequence" };
+  }
+}
+
+// Fail closed: a pin whose key left the model is dropped with a visible
+// status line, never committed.
+function successorJumpValidate(modal) {
+  try {
+    if (!modal || modal.jumpKey == null) {
+      return false;
+    }
+    const row = typeof successorFindRowByKey === "function"
+      ? successorFindRowByKey(modal, modal.jumpKey)
+      : null;
+    if (!row || !successorJumpIsPinnableRow(row)) {
+      modal.jumpKey = null;
+      modal.statusLine = { text: SUCCESSOR_JUMP_STATUS_LOST_KEY, kind: "refusal" };
+      return false;
+    }
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function successorJumpRowClass(modal, row) {
+  try {
+    return Boolean(successorJumpSupported(modal) && modal.jumpKey != null &&
+      row && row.key === modal.jumpKey);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function successorJumpRowAriaSuffix(modal, row) {
+  try {
+    if (successorJumpSupported(modal) && modal.jumpKey != null &&
+      row && row.key === modal.jumpKey) {
+      return SUCCESSOR_JUMP_ROW_SUFFIX;
+    }
+    return "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+// Footer hints: the Ctrl+J chip sits last before Esc, and the Enter chip
+// follows the copy table while a pin is staged.
+function successorJumpFooterHints(modal) {
+  const fallback = typeof successorVerdictFooterHints === "function"
+    ? successorVerdictFooterHints(modal)
+    : [];
+  try {
+    if (!successorJumpSupported(modal)) {
+      return fallback;
+    }
+    const staged = modal && modal.jumpKey != null;
+    const out = [];
+    for (const hint of fallback) {
+      if (hint && Array.isArray(hint.keys) && hint.keys.length === 1 && hint.keys[0] === "↵" && staged) {
+        const hasVerdicts = typeof successorModalHasVerdicts === "function" && successorModalHasVerdicts(modal);
+        const hasMarks = modal.markedKeys instanceof Set && modal.markedKeys.size > 0;
+        out.push({
+          keys: ["↵"],
+          label: hasVerdicts ? "apply & jump" : hasMarks ? "pull in & jump" : "leave open & jump",
+        });
+      } else {
+        out.push(hint);
+      }
+    }
+    const jumpHint = { keys: ["Ctrl+J"], label: "jump" };
+    const escAt = out.findIndex((hint) => hint && Array.isArray(hint.keys) && hint.keys.includes("Esc"));
+    if (escAt >= 0) {
+      out.splice(escAt, 0, jumpHint);
+    } else {
+      out.push(jumpHint);
+    }
+    return out;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+// Footer summary: ` · ↗ “S”`, with S truncated to 40 characters plus `…`.
+function successorRenderJumpSummary(modal, summaryEl) {
+  try {
+    if (!modal || !summaryEl || typeof summaryEl.createSpan !== "function") {
+      return;
+    }
+    if (!successorJumpSupported(modal) || modal.jumpKey == null) {
+      return;
+    }
+    const row = typeof successorFindRowByKey === "function"
+      ? successorFindRowByKey(modal, modal.jumpKey)
+      : null;
+    if (!row) {
+      return;
+    }
+    summaryEl.createSpan({
+      cls: "bob-successor-jump-summary",
+      text: ` · ↗ “${successorJumpTruncate(row.text)}”`,
+    });
+  } catch (_error) {
+    // The pull count stands without the jump summary.
+  }
+}
+
+// Row adornments: the solid accent capsule on the pinned row, plus the ↗
+// hover button on pinnable rows. The actions container renders on
+// jump-enabled cards even when verdicts are not active.
+function successorRenderJumpRowAdornments(modal, rowEl, row, navIndex) {
+  try {
+    if (!modal || !rowEl || !row) {
+      return;
+    }
+    if (!successorJumpSupported(modal)) {
+      return;
+    }
+    if (!successorJumpIsPinnableRow(row)) {
+      return;
+    }
+    const pinned = modal.jumpKey != null && row.key === modal.jumpKey;
+    if (pinned) {
+      const capsule = rowEl.createSpan({ cls: "bob-successor-jump-pin", text: "Jump" });
+      try {
+        if (typeof applyIcon === "function") {
+          applyIcon(capsule, "arrow-up-forward");
+        }
+      } catch (_iconError) {
+        // The text carries the pin without the icon.
+      }
+    }
+    const selected = modal.selectedIndex === navIndex;
+    if (!selected && !pinned) {
+      return;
+    }
+    let actions = null;
+    try {
+      const children = rowEl.children || [];
+      for (const child of children) {
+        const classes = child && child.classes
+          ? child.classes
+          : String((child && child.className) || "").split(/\s+/).filter(Boolean);
+        if (classes.includes("bob-successor-verdict-actions")) {
+          actions = child;
+          break;
+        }
+      }
+    } catch (_findError) {
+      actions = null;
+    }
+    if (!actions) {
+      actions = rowEl.createDiv({ cls: "bob-successor-verdict-actions" });
+    }
+    const button = actions.createEl("button", {
+      cls: "bob-successor-verdict-btn is-jump",
+      text: SUCCESSOR_JUMP_BUTTON_LABEL,
+      attr: {
+        type: "button",
+        "aria-label": `Jump to ${row.text} after the close`,
+      },
+    });
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      modal.selectedIndex = navIndex;
+      modal.handleJumpKey({
+        key: "j", code: "KeyJ", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false,
+        preventDefault() {}, stopPropagation() {},
+      });
+    });
+  } catch (_error) {
+    // Rows render without jump adornments rather than throwing.
+  }
+}
+
+// Full replacement for applySelection once the jump patches install: the
+// 206 logic plus the staged pin. A staged pin commits with no highlight
+// fallback, and settles `{picks, closes?, jump: {key}}`.
+function successorJumpApplySelection(modal) {
+  const keys = modal.model.groups.flatMap((group) => group.rows)
+    .filter((row) => {
+      if (!row.selectable || !modal.markedKeys.has(row.key)) {
+        return false;
+      }
+      if (modal.verdicts instanceof Map && modal.verdicts.has(row.key)) {
+        return false;
+      }
+      return true;
+    })
+    .map((row) => row.key);
+  const closes = [];
+  try {
+    if (modal.verdicts instanceof Map) {
+      for (const [key, verdict] of modal.verdicts) {
+        if (!verdict || !key) {
+          continue;
+        }
+        const row = successorFindRowByKey(modal, key);
+        if (!row || !successorRowVerdictEligible(row, verdict.outcome)) {
+          continue;
+        }
+        if (modal.markedKeys instanceof Set && modal.markedKeys.has(key)) {
+          continue;
+        }
+        if (verdict.outcome === SUCCESSOR_VERDICT_CANCELLED) {
+          const reason = normalizeSuccessorCancelReason(verdict.reason);
+          closes.push(reason ? { key, outcome: "cancelled", reason } : { key, outcome: "cancelled" });
+        } else {
+          closes.push({ key, outcome: "done" });
+        }
+      }
+    }
+  } catch (_error) {
+    // Picks still apply without closes rather than refusing the gesture.
+  }
+  let jump = null;
+  if (modal.jumpKey != null) {
+    const row = successorFindRowByKey(modal, modal.jumpKey);
+    if (row && successorJumpIsPinnableRow(row)) {
+      jump = { key: modal.jumpKey };
+    } else {
+      modal.jumpKey = null;
+      modal.statusLine = { text: SUCCESSOR_JUMP_STATUS_LOST_KEY, kind: "refusal" };
+    }
+  }
+  let selected = keys;
+  if (selected.length === 0 && closes.length === 0 && jump == null) {
+    const active = modal.visibleItems[modal.selectedIndex];
+    if (!active || active.kind !== "offer" || !active.row.selectable) {
+      return false;
+    }
+    selected = [active.row.key];
+  }
+  modal.settle({
+    picks: selected.map((key) => {
+      const item = { key };
+      try {
+        const override = modal.destinationOverrides && modal.destinationOverrides.get(key);
+        if (override && typeof override === "object") {
+          item.destination = override;
+        }
+      } catch (_overrideError) {
+        // A pick without an override still links at its planned spot.
+      }
+      return item;
+    }),
+    ...(closes.length > 0 ? { closes } : {}),
+    ...(jump ? { jump } : {}),
+  });
+  return true;
+}
+
+// Prototype patches for SuccessorOfferPickerModal (defined in 206). They
+// live here so 206 stays under the 1000-line fragment cap. They run after
+// 206 loads; every call site resolves them at gesture time.
+function successorInstallJumpModalPatches() {
+  try {
+    const proto = typeof SuccessorOfferPickerModal !== "undefined"
+      ? SuccessorOfferPickerModal.prototype
+      : null;
+    if (!proto || proto.successorJumpPatched === true) {
+      return;
+    }
+    proto.successorJumpPatched = true;
+
+    proto.handleJumpKey = function successorHandleJumpKey(event) {
+      try {
+        if (!event || typeof event !== "object") {
+          return false;
+        }
+        const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+        const code = typeof event.code === "string" ? event.code : "";
+        if (key !== "j" && code !== "KeyJ") {
+          return false;
+        }
+        if (event.ctrlKey !== true || event.metaKey === true ||
+          event.altKey === true || event.shiftKey === true) {
+          return false;
+        }
+        if (typeof successorVerdictShouldIgnoreEvent === "function" &&
+          successorVerdictShouldIgnoreEvent(event)) {
+          return false;
+        }
+        // The reason editor consumes the key and does nothing.
+        if (this.reasonEditKey != null) {
+          event.preventDefault();
+          event.stopPropagation();
+          return true;
+        }
+        if (!successorJumpSupported(this)) {
+          return false;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const active = this.visibleItems && this.visibleItems[this.selectedIndex];
+        const row = active && active.kind === "offer" ? active.row : null;
+        if (!row || !successorJumpIsPinnableRow(row)) {
+          this.statusLine = { text: SUCCESSOR_JUMP_STATUS_NOT_PINNABLE, kind: "refusal" };
+          if (typeof successorModalHasVerdicts === "function" && successorModalHasVerdicts(this)) {
+            this.escArmed = false;
+          }
+          try {
+            if (row && row.key && typeof successorShakeRow === "function") {
+              successorShakeRow(this, row.key);
+            }
+          } catch (_shakeError) {
+            // The refusal line stands without the shake.
+          }
+          this.renderAll();
+          return true;
+        }
+        if (this.jumpKey === row.key) {
+          this.jumpKey = null;
+          this.statusLine = { text: SUCCESSOR_JUMP_STATUS_CLEARED, kind: "consequence" };
+        } else {
+          this.jumpKey = row.key;
+          successorJumpSetStatus(this, row);
+        }
+        if (typeof successorModalHasVerdicts === "function" && successorModalHasVerdicts(this)) {
+          this.escArmed = false;
+        }
+        this.renderAll();
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    };
+
+    const originalApplySelection = proto.applySelection;
+    proto.applySelection = function successorJumpApplySelectionPatched() {
+      try {
+        return successorJumpApplySelection(this);
+      } catch (_error) {
+        return originalApplySelection.call(this);
+      }
+    };
+
+    const originalSettle = proto.settle;
+    proto.settle = function successorJumpSettlePatched(result) {
+      if (this.didSettle) return;
+      this.didSettle = true;
+      const picks = result && Array.isArray(result.picks) ? result.picks : null;
+      const closes = result && Array.isArray(result.closes) ? result.closes : null;
+      const jump = result && result.jump && typeof result.jump === "object" &&
+        typeof result.jump.key === "string" && result.jump.key
+        ? { key: result.jump.key }
+        : null;
+      if (picks) {
+        this.result = {
+          picks,
+          ...(closes ? { closes } : {}),
+          ...(jump ? { jump } : {}),
+        };
+      } else {
+        this.result = null;
+      }
+      try {
+        this.close();
+      } catch (_error) {
+        // Cleanup is delivered below even when Obsidian's modal teardown fails.
+      }
+      if (!this.onCloseSettled) {
+        this.onCloseSettled = true;
+        try {
+          this.onSettle(this.result);
+        } catch (_settleError) {
+          // A settled picker never re-opens or rejects its caller.
+        }
+      }
+      void originalSettle;
+    };
+  } catch (_error) {
+    // The modal keeps its 206 behavior without jump keys.
+  }
+}
+
+// Install the 206e prototype patches now that 206 has loaded. The call
+// is idempotent; onOpen also retries for harnesses that load fragments
+// out of order.
+try {
+  if (typeof successorInstallJumpModalPatches === "function") {
+    successorInstallJumpModalPatches();
+  }
+} catch (_error) {
+  // The modal keeps its 206 behavior without jump keys.
+}
+// ---- src/206f-successor-picker-api.js ----
+// Successor picker API and mixin (`api.successors` v4,
+// docs/task-dependencies.md §12.13/§12.22). Extracted from 206 with no
+// behavior change so 206 stays at or below the 1000-line fragment cap.
+// Shared scope with 206, 206a-206d, and 206e.
+function createSuccessorPickerApi(plugin) {
+  return Object.freeze({
+    version: 5,
+    pick(model) {
+      try {
+        if (!plugin || plugin.successorPickerUnavailable === true || typeof plugin.pickSuccessorOffers !== "function") {
+          return Promise.resolve(null);
+        }
+        return Promise.resolve()
+          .then(() => plugin.pickSuccessorOffers(model))
+          .then((result) => {
+            try {
+              if (!result || !Array.isArray(result.picks)) {
+                return null;
+              }
+              if (result.picks.length === 0 && !(Array.isArray(result.closes) && result.closes.length > 0) &&
+                !(result.jump && typeof result.jump === "object" && typeof result.jump.key === "string" && result.jump.key)) {
+                return null;
+              }
+              return result;
+            } catch (_error) {
+              return null;
+            }
+          })
+          .catch(() => null);
+      } catch (_error) {
+        return Promise.resolve(null);
+      }
+    },
+  });
+}
+
+class BobNavigationHotkeysSuccessorPickerMixin {
+  successorPickerNow() {
+    return Date.now();
+  }
+
+  beginReviewSuccessorGestureOwner(origin, kind = "capture") {
+    try {
+      if (!origin || !Number.isInteger(origin.seq) || !Number.isInteger(origin.epoch)) {
+        return null;
+      }
+      const owner = {
+        seq: origin.seq,
+        epoch: origin.epoch,
+        key: successorPickerText(origin.key),
+        kind,
+        held: false,
+      };
+      this.reviewSuccessorGestureOwner = owner;
+      return owner;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  holdReviewWalkForSuccessorPicker() {
+    try {
+      const owner = this.reviewSuccessorGestureOwner;
+      const landing = this.reviewLanding;
+      if (
+        !owner ||
+        owner.seq !== this.reviewGestureSeq ||
+        owner.epoch !== this.reviewLandingEpoch ||
+        (owner.key && (!landing || landing.key !== owner.key))
+      ) {
+        return null;
+      }
+      owner.held = true;
+      this.reviewSuccessorWalkHold = owner;
+      return owner;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  isReviewSuccessorWalkHeld() {
+    return Boolean(
+      this.reviewSuccessorWalkHold &&
+      this.reviewSuccessorWalkHold.held === true,
+    );
+  }
+
+  releaseReviewSuccessorGestureOwner(originOrOwner) {
+    try {
+      if (!originOrOwner) return false;
+      const owner = originOrOwner && originOrOwner.held !== undefined
+        ? originOrOwner
+        : this.reviewSuccessorGestureOwner;
+      if (!owner) return false;
+      if (
+        originOrOwner && originOrOwner.seq !== undefined &&
+        (owner.seq !== originOrOwner.seq || owner.epoch !== originOrOwner.epoch)
+      ) {
+        return false;
+      }
+      owner.held = false;
+      if (this.reviewSuccessorWalkHold === owner) {
+        this.reviewSuccessorWalkHold = null;
+      }
+      if (this.reviewSuccessorGestureOwner === owner) {
+        this.reviewSuccessorGestureOwner = null;
+      }
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  pickSuccessorOffers(model, options = {}) {
+    try {
+      if (
+        this.successorPickerUnavailable === true ||
+        this.activeSuccessorPicker ||
+        !normalizeSuccessorPickerModel(model)
+      ) {
+        return Promise.resolve(null);
+      }
+      this.holdReviewWalkForSuccessorPicker();
+      const retargetEnabled =
+        !options || typeof options !== "object" || options.retarget !== false;
+      return new Promise((resolve) => {
+        let modal = null;
+        let settled = false;
+        const settle = (result) => {
+          if (settled) return;
+          settled = true;
+          if (this.activeSuccessorPicker === modal) {
+            this.activeSuccessorPicker = null;
+          }
+          try {
+            if (result && Array.isArray(result.picks)) {
+              const normalized = normalizeSuccessorPickerModel(model);
+              if (!normalized) {
+                resolve(null);
+                return;
+              }
+              const byKey = new Map();
+              for (const group of normalized.groups) {
+                for (const row of group.rows) {
+                  if (row && typeof row.key === "string" && !byKey.has(row.key)) {
+                    byKey.set(row.key, row);
+                  }
+                }
+              }
+              const allowed = new Set([...byKey].filter(([, row]) => row.selectable).map(([key]) => key));
+              const picks = [];
+              const pickedKeys = new Set();
+              for (const pick of result.picks) {
+                const key = pick && typeof pick.key === "string" ? pick.key : "";
+                if (!allowed.has(key) || pickedKeys.has(key)) continue;
+                pickedKeys.add(key);
+                const item = { key };
+                if (retargetEnabled) {
+                  const destination = normalizeSuccessorDestinationOverride(pick && pick.destination);
+                  if (destination) {
+                    item.destination = destination;
+                  }
+                }
+                picks.push(item);
+              }
+              const closes = normalizeSuccessorClosesForResult({ model: normalized }, result.closes);
+              const kept = closes.filter((close) => !pickedKeys.has(close.key));
+              let jump = null;
+              try {
+                const jumpKey = result.jump && typeof result.jump === "object" &&
+                  typeof result.jump.key === "string" ? result.jump.key : "";
+                if (jumpKey && allowed.has(jumpKey)) {
+                  jump = { key: jumpKey };
+                }
+              } catch (_jumpError) {
+                jump = null;
+              }
+              if (picks.length === 0 && kept.length === 0 && !jump) {
+                resolve(null);
+                return;
+              }
+              resolve({
+                picks,
+                ...(kept.length > 0 ? { closes: kept } : {}),
+                ...(jump ? { jump } : {}),
+              });
+            } else {
+              resolve(null);
+            }
+          } catch (_error) {
+            resolve(null);
+          }
+        };
+        try {
+          modal = new SuccessorOfferPickerModal(
+            this.app,
+            model,
+            settle,
+            { now: () => this.successorPickerNow(), retarget: retargetEnabled },
+          );
+          this.activeSuccessorPicker = modal;
+          modal.open();
+          if (!modal.pickerOpen) settle(null);
+        } catch (_error) {
+          if (modal) {
+            try {
+              modal.settle(null);
+            } catch (_settleError) {
+              settle(null);
+            }
+          } else {
+            settle(null);
+          }
+        }
+      });
+    } catch (_error) {
+      return Promise.resolve(null);
+    }
+  }
+
+  closeSuccessorPickerForUnload() {
+    const modal = this.activeSuccessorPicker;
+    if (modal) {
+      try {
+        modal.allowCloseWithoutArm = true;
+        modal.close();
+      } catch (_error) {
+        try {
+          modal.settle(null);
+        } catch (_settleError) {
+          this.activeSuccessorPicker = null;
+        }
+      }
+    }
+    this.activeSuccessorPicker = null;
+    this.releaseReviewSuccessorGestureOwner(this.reviewSuccessorGestureOwner);
+    this.reviewSuccessorWalkHold = null;
+    this.reviewSuccessorGestureOwner = null;
+  }
 }
 // ---- src/207-image-zoom-modal.js ----
 const IMAGE_ZOOM_STEP = 1.2;

@@ -156,9 +156,9 @@ function pressVerdict(modal, shift = false, keyOptions = {}) {
   });
 }
 
-test("api.successors is v4 and the close descriptor normalizes both cases", () => {
+test("api.successors is v5 and the close descriptor normalizes both cases", () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 4);
+  assert.equal(plugin.api.successors.version, 5);
   const snake = helpers.normalizeSuccessorPickerModel({
     title: "Choose",
     predecessors: [],
@@ -481,7 +481,7 @@ test("retarget ignores verdict rows with a soft refusal", async () => {
 
 test("v3-shaped models render exactly as before with no chords", async () => {
   const plugin = makePlugin();
-  assert.equal(plugin.api.successors.version, 4);
+  assert.equal(plugin.api.successors.version, 5);
   const { pending, modal } = await openPicker(plugin, plainModel(2));
   assert.equal(findAll(modal.resultsEl, "bob-successor-verdict-actions").length, 0);
   assert.ok(!allText(modal.footerEl).includes("✓"));
@@ -566,4 +566,77 @@ test("closes re-filter to eligible outcomes and never overlap picks", async () =
   real.close();
   assert.equal(await pending, null);
   assert.ok(normalized.groups[0].rows[0].close.complete, "descriptors survive normalization");
+});
+
+// Successor jump pin with verdicts (`api.successors` v5,
+// docs/task-dependencies.md §12.22 successor jump).
+
+function jumpVerdictModel(count, options = {}) {
+  return { ...verdictModel(count, options), jump: { supported: true } };
+}
+
+function pressJump(modal, keyOptions = {}) {
+  return pressKey(modal, "j", { ctrlKey: true, ...keyOptions });
+}
+
+test("the pin survives verdicts and Esc discard, and stages the apply & jump chip", async () => {
+  const plugin = makePlugin();
+  const { pending, modal } = await openPicker(plugin, jumpVerdictModel(3));
+  pressJump(modal);
+  const pinnedKey = modal.jumpKey;
+  assert.ok(pinnedKey, "the pin stages on a jump-enabled verdict card");
+  pressVerdict(modal, false);
+  assert.equal(modal.jumpKey, pinnedKey, "a Done verdict never moves the pin");
+  assert.match(allText(modal.footerEl), /apply & jump/);
+  assert.match(allText(modal.footerEl), /↗ “Offer task 1”/);
+  pressKey(modal, "Escape");
+  pressKey(modal, "Escape");
+  assert.equal(modal.verdicts.size, 0, "the second Esc discards the verdicts");
+  assert.equal(modal.jumpKey, pinnedKey, "the pin stays like a mark does");
+  assert.equal(modal.pickerOpen, true);
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
+test("pin plus closes commits picks, closes, and jump together", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, jumpVerdictModel(3));
+  pressVerdict(modal, false);
+  modal.selectedIndex = 1;
+  modal.renderResults();
+  pressJump(modal);
+  assert.equal(modal.jumpKey, "verdict:key/1");
+  plugin.setNow(6000);
+  pressKey(modal, "Enter");
+  assert.deepEqual(await pending, {
+    picks: [],
+    closes: [{ key: "verdict:key/0", outcome: "done" }],
+    jump: { key: "verdict:key/1" },
+  });
+});
+
+test("Ctrl+J is inert in the reason editor and Esc closes a pin-only card to null", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const { pending, modal } = await openPicker(plugin, jumpVerdictModel(2));
+  pressVerdict(modal, true);
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  const unfocused = pressJump(modal);
+  assert.equal(unfocused.defaultPrevented, false, "keys from the reason field never reach the card");
+  assert.equal(modal.jumpKey, null, "no pin stages from the reason field");
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  modal.inputEl.focus();
+  const consumed = pressJump(modal);
+  assert.equal(consumed.defaultPrevented, true, "the reason editor consumes the key");
+  assert.equal(modal.jumpKey, null, "no pin stages while the reason editor is open");
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  findAll(modal.resultsEl, "bob-successor-reason-input")[0].focus();
+  pressKey(modal, "Escape");
+  assert.equal(modal.reasonEditKey, null);
+
+  pressJump(modal);
+  assert.ok(modal.jumpKey, "the pin stages after the editor closes");
+  pressKey(modal, "Escape");
+  assert.equal(modal.pickerOpen, false, "a pin alone never arms Esc");
+  assert.equal(await pending, null, "the Esc that closes the card discards the pin");
 });

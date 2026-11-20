@@ -391,8 +391,8 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
 | `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. |
-| `notice` | 3 | Show the Unblocked card; v2 renders `keep_moving` rows and v3 renders `relation_successors`. |
-| `successors` | 4 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, and v4 resolves verdict closes. |
+| `notice` | 4 | Show the Unblocked card; v2 renders `keep_moving` rows, v3 renders `relation_successors`, and v4 renders the `offer_closes` receipt. |
+| `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
 | `openReferencePdf(path)` | Additive member | Open a vault-relative PDF in Highlights; resolves `{ ok, reason? }`. |
@@ -491,6 +491,18 @@ two-step Esc, hover buttons, and the `pull in {a} · ✓ {b} done · ⊘ {c}
 cancel` footer; the task-merge card never receives `close` and stays
 pull-in-only. Callers attach `close` descriptors only when
 `api.successors?.version >= 4`.
+`successors` v5 (jump pin, `docs/task-dependencies.md` §12.22 successor
+jump in bob-cli) keeps every v4 row and verdict and adds an opt-in jump
+pin. A model may carry `jump: { supported: true }`; the normalizer keeps
+it only then. `Ctrl+J` toggles the pin on the highlighted keyed, selectable
+offer row without moving the highlight; muted rows, folds, and empty lists
+refuse with a status line. A staged pin commits like a staged verdict with
+no highlight fallback, settling `{ picks, closes?, jump: { key } }`; the
+mixin drops a non-selectable `jump.key` and resolves non-null when picks,
+closes, or jump exist. The row renders a solid accent `Jump` capsule, a `↗`
+hover button, a `jump target` suffix, a `Ctrl+J jump` chip, and a
+`· ↗ “S”` summary (S truncated to 40 characters). Callers opt in only when
+`api.successors?.version >= 5`.
 `blocks.openStage(ref)` and
 `blocks.removeDependent(ownerRef, target)` resolve to result
 objects. `relations.removeLink(sourceRef, targetRef)` removes the

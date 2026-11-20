@@ -59,6 +59,8 @@
   "206-successor-picker-modal.js",
   "206c-successor-picker-verdicts.js",
   "206d-successor-picker-verdict-render.js",
+  "206e-successor-picker-jump.js",
+  "206f-successor-picker-api.js",
   "207-image-zoom-modal.js",
   "207a-image-zoom-origin.js",
   "207b-video-zoom-model.js",

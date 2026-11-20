@@ -3674,6 +3674,46 @@
   75% { transform: translateX(3px); }
 }
 
+/* Jump pin capsule (picker API v5, §12.22 successor jump): the solid filled
+   accent treatment. Highlight is an outline, a mark is a tint, and the pin
+   is a solid capsule, so all three stay distinct in the same hue. */
+.bob-successor-jump-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  white-space: nowrap;
+  animation: bob-successor-jump-in 120ms ease;
+}
+
+@keyframes bob-successor-jump-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bob-successor-jump-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.bob-successor-jump-summary {
+  color: var(--text-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bob-successor-verdict-btn.is-jump {
+  color: var(--text-accent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bob-successor-row .bob-successor-mark,
   .bob-successor-row .bob-successor-row-text,
@@ -3683,6 +3723,10 @@
 
   .bob-successor-row.is-shake {
     animation: none;
+  }
+
+  .bob-successor-jump-pin {
+    animation: bob-successor-jump-fade 120ms ease;
   }
 }
 

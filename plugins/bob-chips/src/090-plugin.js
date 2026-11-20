@@ -71,6 +71,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Command chips fall back to copy-only faces without a runtime.
     }
     try {
+      if (typeof commandChipSetupKeymap === "function") commandChipSetupKeymap(this);
+    } catch (error) {
+      // The ⌘↵ cue and palette command are best-effort.
+    }
+    try {
       const liveExtension =
         typeof copyChipCreateLiveExtension === "function"
           ? copyChipCreateLiveExtension(this)
@@ -274,6 +279,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       commandChips = commandChipBuildApi();
     } catch (error) {
       commandChips = commandChipFallbackApi();
+    }
+    try {
+      if (typeof commandChipBindKeymapApi === "function") commandChips = commandChipBindKeymapApi(this, commandChips);
+    } catch (error) {
+      // The pure members still work without the editor-bound ones.
     }
     this.api = copyChipFreeze({ copyChips, commandChips });
   }

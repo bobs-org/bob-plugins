@@ -42,6 +42,9 @@ body { margin:0; padding:28px; background:var(--background-secondary); color:var
 .preview-print-note { color:var(--text-faint); font:11px var(--font-interface); }
 .preview-fence-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 16px; align-items:start; }
 .preview-fence-name { display:block; margin-top:6px; color:var(--text-muted); font:600 11px var(--font-interface); }
+.preview-keymap { display:grid; grid-template-columns:150px minmax(0,1fr); gap:2px 14px; align-items:baseline; }
+.preview-keymap .row-name { color:var(--text-muted); font:600 12px var(--font-interface); }
+.preview-keymap .preview-child { grid-column:2; padding-left:2em; }
 code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background:var(--code-background); font:.875em var(--font-monospace); }
 @media (max-width:620px) {
   body { padding:12px; }
@@ -383,6 +386,33 @@ function renderAll() {
   grid.className = "preview-fence-grid";
   for (const row of M.fences.rows) renderFence(grid, row);
   fences.appendChild(grid);
+  // ⌘↵: the keycap text comes from the production binding formatter and
+  // element builder; the line/label wording mirrors commandChipHintModel.
+  const keymap = section(M.keymap.title);
+  const keymapBox = document.createElement("div");
+  keymapBox.className = "preview-keymap";
+  const binding = { modifiers: ["Meta"], key: "Enter" };
+  const keycap = H.commandChipFormatHotkey(binding, true);
+  const spoken = H.commandChipSpellHotkey(binding, true);
+  for (const row of M.keymap.rows) {
+    const name = document.createElement("div");
+    name.className = "row-name";
+    name.textContent = row.name;
+    keymapBox.appendChild(name);
+    const cursorLine = renderLine(keymapBox, row.line, { ...row, drive: row.child ? null : row.drive, surface: "live" });
+    if (row.child) {
+      const spacer = document.createElement("div");
+      keymapBox.appendChild(spacer);
+      renderLine(keymapBox, row.child, { ...row, surface: "live" }).classList.add("preview-child");
+    }
+    if (row.hint) {
+      const running = row.hint.verb === "Output";
+      const text = keycap + " " + row.hint.verb + (row.hint.label ? " · " + row.hint.label : "");
+      const hint = H.buildCommandChipHintElement(document, { text, ariaLabel: spoken + (running ? " opens the output" : " runs"), running });
+      if (hint) cursorLine.appendChild(hint);
+    }
+  }
+  keymap.appendChild(keymapBox);
   return previewMounted.length;
 }
 

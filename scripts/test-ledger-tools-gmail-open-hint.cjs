@@ -359,3 +359,29 @@ test("GO16 hop-then-child-hop target shows the chip", () => {
   );
   assert.equal(h.gmailOpenHintCanOpen(dailyLine, [dailyLine], 0, "2026/20261113.md", resolvers), true);
 });
+
+test("GO17 the chip yields when ⌘↵ would act on a command chip instead", () => {
+  const line = `- [ ] #task ${LINK} \`run: bob plan\``;
+  const withChips = (flag, targetAt) => {
+    const plugin = pluginWithHint();
+    plugin.app.plugins.plugins["bob-navigation-hotkeys"] = { commandChipDispatch: flag };
+    plugin.app.plugins.plugins["bob-chips"] = { api: { commandChips: { version: 1, targetAt } } };
+    return plugin;
+  };
+  const seen = [];
+  const ready = withChips(1, (view) => {
+    seen.push(view);
+    return { state: "ready" };
+  });
+  const view = makeView(line, 0);
+  assert.equal(ready.buildGmailOpenHintDecorations(view), StubDecoration.none, "a chip to run");
+  assert.equal(seen[0], view, "bob-chips reads the same editor");
+  for (const state of ["ambiguous", "blocked"]) {
+    assert.equal(withChips(1, () => ({ state })).buildGmailOpenHintDecorations(makeView(line, 0)), StubDecoration.none, state);
+  }
+  assert.equal(addsLength(withChips(1, () => ({ state: "none" })).buildGmailOpenHintDecorations(makeView(line, 0))), 1);
+  assert.equal(addsLength(withChips(0, () => ({ state: "ready" })).buildGmailOpenHintDecorations(makeView(line, 0))), 1,
+    "an older dispatcher still opens Gmail, so the chip stays");
+  assert.equal(addsLength(withChips(1, () => { throw new Error("boom"); }).buildGmailOpenHintDecorations(makeView(line, 0))), 1);
+  assert.equal(addsLength(pluginWithHint().buildGmailOpenHintDecorations(makeView(line, 0))), 1, "no bob-chips at all");
+});

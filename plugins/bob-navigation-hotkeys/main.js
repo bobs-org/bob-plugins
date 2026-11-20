@@ -82467,7 +82467,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // The vault hotkeys.json binds Meta+Enter; a default loses to Obsidian's built-in Mod+Enter.
     this.addCommand({
       id: "open-reference-pdf-in-highlights",
-      name: "Open in Highlights (reading task, highlight page, Gmail thread, or link in new tab)",
+      name: "Run command chip, or open in Highlights (reading task, highlight page, Gmail thread, or link in new tab)",
       callback: () => void this.openReferencePdfInHighlightsOrLink(),
     });
 
@@ -82896,6 +82896,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
       // The footer never blocks startup.
     }
 
+    // Capability flag: this dispatcher runs bob-chips command chips first.
+    this.commandChipDispatch = 1;
+
     try {
       if (typeof this.setupHighlightsHints === "function") {
         this.setupHighlightsHints();
@@ -83080,6 +83083,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   onunload() {
+    this.commandChipDispatch = 0;
     this.taskCardPluginUnloading = true;
     try {
       if (this.bankWalkNotice && typeof this.bankWalkNotice.hide === "function") {
@@ -118066,6 +118070,18 @@ function errorDetail(error, stderr) {
 
 class BobNavigationHotkeysRefPdfOpenMixin {
   async openReferencePdfInHighlightsOrLink() {
+    // A command chip the cursor targets wins first (bob-chips decides; a
+    // refusal is handled too, so it never falls through to a link).
+    const chipContext = this.getRefPdfEditorContext();
+    if (
+      chipContext &&
+      typeof this.runCommandChipAtCursor === "function" &&
+      typeof this.commandChipsApi === "function" &&
+      this.commandChipsApi() &&
+      (await this.runCommandChipAtCursor(chipContext))
+    ) {
+      return;
+    }
     const now = Date.now();
     if (this._highlightsLaunchActive === true) {
       return;
@@ -120920,7 +120936,12 @@ class BobNavigationHotkeysHighlightsHintsMixin {
     return resolved;
   }
 
-  _paintHighlightsHints(target, context) {
+  _paintHighlightsHints(rawTarget, context) {
+    // One ⌘↵ cue at a time: a command chip the key would act on wins.
+    const target =
+      rawTarget && rawTarget.kind !== "none" && this.commandChipClaimsCursor && this.commandChipClaimsCursor(context)
+        ? null
+        : rawTarget;
     const keycap = formatHighlightsHotkey(
       getHighlightsCommandHotkey(this.app),
     );
@@ -121088,6 +121109,64 @@ class BobNavigationHotkeysHighlightsHintsMixin {
     this.highlightsChipParts = null;
     this._highlightsHintLocalCache = null;
     this._highlightsHintHopCache = null;
+  }
+}
+// ---- src/677e-command-chip-dispatch.js ----
+// ⌘↵ command-chip step. bob-chips owns the target rule (its
+// `api.commandChips.targetAt` / `runAtCursor`); this dispatcher only asks it
+// first and stops when it handled the key. Without bob-chips, or with an
+// older one, every call falls through to the Highlights → Gmail → new-tab
+// chain unchanged. The capability flag `commandChipDispatch` (set in
+// onload) tells bob-chips that this dispatcher really runs chips, so its
+// keycap never advertises a key that would do something else.
+const COMMAND_CHIPS_PLUGIN_ID = "bob-chips";
+
+function commandChipDispatchInput(context) {
+  return Object.freeze({
+    editor: (context && context.editor) || null,
+    file: (context && context.file) || null,
+  });
+}
+
+class BobNavigationHotkeysCommandChipDispatchMixin {
+  commandChipsApi() {
+    try {
+      const holder = this.app && this.app.plugins && this.app.plugins.plugins;
+      const chips = holder && holder[COMMAND_CHIPS_PLUGIN_ID];
+      const api = chips && chips.api && chips.api.commandChips;
+      if (!api || !(Number(api.version) >= 1)) return null;
+      return api;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  // True when the command-chip rule claims the cursor (ready, ambiguous, or
+  // blocked): the Highlights hint and rail yield so one ⌘↵ cue shows.
+  commandChipClaimsCursor(context) {
+    try {
+      if (!context || !context.editor) return false;
+      const api = this.commandChipsApi();
+      if (!api || typeof api.targetAt !== "function") return false;
+      const target = api.targetAt(commandChipDispatchInput(context));
+      return Boolean(target && target.state && target.state !== "none");
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  // The dispatcher's first step. Resolves true when bob-chips handled the
+  // key (it ran, opened, or refused a chip), so the chain must stop.
+  async runCommandChipAtCursor(context) {
+    try {
+      if (!context || !context.editor) return false;
+      const api = this.commandChipsApi();
+      if (!api || typeof api.runAtCursor !== "function") return false;
+      const result = await api.runAtCursor(commandChipDispatchInput(context));
+      return Boolean(result && result.handled === true);
+    } catch (_error) {
+      return false;
+    }
   }
 }
 // ---- src/678-plugin-templater-trigger.js ----
@@ -125279,6 +125358,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysRefPdfOpenMixin,
   BobNavigationHotkeysRefPdfTargetResolverMixin,
   BobNavigationHotkeysHighlightsHintsMixin,
+  BobNavigationHotkeysCommandChipDispatchMixin,
   BobNavigationHotkeysTemplaterTriggerMixin,
   BobNavigationHotkeysImageZoomMixin,
   BobNavigationHotkeysLinkParseMixin,

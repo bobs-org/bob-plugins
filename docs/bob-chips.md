@@ -16,10 +16,10 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.12.0 |
+| Version | 0.13.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards. |
+| Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -29,6 +29,7 @@ Command Mode, and a `bob-run` fence becomes a sequence card; see
 | --- | --- | --- |
 | Copy chip at cursor | `copy-on-cursor-line` | — |
 | Make or edit copy chip | `make-or-edit` | Mod+Shift+y |
+| Run command chip at cursor | `run-at-cursor` | — |
 <!-- END GENERATED: commands -->
 
 ## Syntax
@@ -277,7 +278,7 @@ fence in a table cell**, and a blank one with **nothing to run**.
 ### Which command chip ⌘↵ targets
 
 `api.commandChips.chipAt({ lines, line, ch, scope? })` is the pure rule
-that later decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
+that decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
 
 1. The cursor is on or inside a `bob-run` fence: that fence. Any other
    fence, and frontmatter, is `none`.
@@ -295,6 +296,45 @@ that later decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
 
 Copy chips never count here, and `gy` never sees command chips.
 
+### ⌘↵ and the hint
+
+⌘↵ (Meta+Enter) is the vault's binding for Bob Navigation Hotkeys'
+Highlights dispatcher. It works in Live Preview and Source mode, in any Vim
+mode. The dispatcher asks Bob Chips first, which applies the rule above:
+
+| The rule finds | ⌘↵ does |
+| --- | --- |
+| One ready chip | Runs it exactly as a click would, with a brief accent pulse. A chip that is already running opens its live output. |
+| Two or more chips | Shows one Notice, **N command chips on this line · move onto one**, and nothing else |
+| A chip that bob refuses | Shows one Notice with bob's reason, and nothing else |
+| No chip | Runs the existing chain: Highlights, then Gmail, then the link in a new tab |
+
+A refusal never falls through to a link. In a copy-only note, on mobile, or
+without Command Mode, the chip step is skipped, so ⌘↵ behaves exactly as
+before. The palette command **Run command chip at cursor**
+(`run-at-cursor`) has no default hotkey. It uses the same rule, for hosts
+where the window manager takes Super+Enter, and it says so when nothing
+qualifies.
+
+When ⌘↵ would run a chip, the focused editor shows two cues:
+
+- The target chip is **armed**: an accent border and an accent ▶, with no
+  size change.
+- A muted keycap capsule sits at the end of the cursor line. It reads
+  **⌘↵ Run**, or **⌘↵ Run · LABEL** when the target sits on another line
+  of the task, or **⌘↵ Output** while the target runs.
+
+The keycap reads the live binding of
+`bob-navigation-hotkeys:open-reference-pdf-in-highlights`. It uses macOS
+glyphs on a Mac and Emacs-style `M-↵` elsewhere, like the `⌘↵ Gmail` hint.
+It shows only when Bob Navigation Hotkeys reports that its dispatcher runs
+chips. A rebound key shows the new keycap, and no binding shows nothing. An
+ambiguous, refused, loading, or copy-only target never shows a keycap, and
+neither does a selection or an unfocused editor. While the rule claims the
+cursor, the `⌘↵ Gmail` capsule and the Highlights status chip and rail step
+aside, so only one ⌘↵ cue shows at a time. Once the binding is live, chip
+tooltips say "Click or ⌘↵ to run".
+
 ## Command chips
 
 A `run:` span becomes a quiet play pill in Live Preview and a real
@@ -307,6 +347,7 @@ first.
 | --- | --- |
 | Click, tap, Enter, or Space | Run it, or copy it in a copy-only note |
 | Shift+Click or Shift+Enter | Open it in Command Mode's guarded path |
+| ⌘↵ in the editor | Run the chip the cursor targets; see [⌘↵ and the hint](#and-the-hint) |
 | Alt+Click | Nothing yet |
 | Move the cursor into the span | Reveal the Markdown source (Live Preview) |
 
@@ -395,7 +436,8 @@ The hover tooltip is DOM text with these lines:
 2. The full command lines.
 3. One policy line: "Runs now · skips its preview", "Asks first: …", or
    "Opens its output".
-4. "Click to run · ⇧Click opens Command Mode".
+4. "Click to run · ⇧Click opens Command Mode", which becomes "Click or ⌘↵
+   to run · …" once the ⌘↵ binding is live.
 
 A failed chip's tooltip carries the first error line. A shared polite live
 region announces "Running …", "… finished", "… needs attention", and

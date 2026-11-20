@@ -604,8 +604,8 @@ gate; older nav hides that attention as before.
 
 ## Bob Command Mode
 
-`bob-command-mode.api.commandMode` is namespace version 1. Consumers should
-feature-detect both the plugin and namespace before calling it:
+`bob-command-mode.api.commandMode` is namespace version 1. Feature-detect
+the plugin and namespace first:
 
 ```js
 const commandMode = app.plugins.plugins["bob-command-mode"]?.api?.commandMode;
@@ -623,10 +623,10 @@ return unsubscribe functions. Feature-detect each additive member before use.
 
 ### Command-chip members
 
-These members serve command chips. None of them throws or rejects.
+These command-chip members never throw or reject.
 
-`resolve(text)` is pure and synchronous over the cached catalog: it never
-spawns bob and never starts a catalog load. Steps split at unquoted `&&`
+`resolve(text)` is pure and synchronous over the cached catalog; it never
+spawns bob or starts a catalog load. Steps split at unquoted `&&`
 and at line breaks; blank lines are skipped, and a line break right after
 `&&` continues the chain. Quotes and escapes follow the sheet's typed-argv
 tokenizer; `~` and globs stay literal. It returns a frozen
@@ -739,11 +739,10 @@ tier (0–6) or `null` for browse, info, and recents rows.
 ## Bob Chips
 
 `app.plugins.plugins["bob-chips"].api.copyChips` is namespace version 2.
-It is frozen and never throws. Feature-detect the plugin and the namespace
-before calling it; an unloaded plugin is not a usable dependency. During the
-transition, Bob Navigation Hotkeys checks `bob-chips` first and then the retired
-`bob-copy-chips` id. When both are enabled, Bob Chips disables the old plugin
-after layout ready without changing the enabled-plugin list.
+It is frozen and never throws. Feature-detect the plugin and namespace
+before calling it. During the transition, Bob Navigation Hotkeys checks
+`bob-chips`, then the retired `bob-copy-chips` id; Bob Chips disables a
+loaded old plugin after layout ready without changing the enabled list.
 
 ```js
 const plugins = app.plugins.plugins;
@@ -763,17 +762,16 @@ if (copyChips?.version >= 2) {
 }
 ```
 
-Coordinates are zero-based lines and UTF-16 character offsets. `from` / `to`
-in an inline chip are line-relative offsets including the delimiters, with
-`to` exclusive, matching `scanLine`. A ready inline chip is frozen
+Coordinates are zero-based lines and UTF-16 offsets. An inline chip's
+`from` / `to` are line-relative, include the delimiters, and end exclusive,
+matching `scanLine`. A ready inline chip is frozen
 `{ form: "inline", label, text, line, from, to }`. A ready block chip from a
 `bob-copy` fence is frozen `{ form: "block", label, text, line, from, to }`
 where `line` is the cursor line for cursor results or the opening line for a
 task-scope fence; `count` is the number of eligible chips on the resolving
 line or in the task. Ready and ambiguous results add `scope: "cursor"` or
-`scope: "task"`; `none` keeps its exact shape. A v1 provider ignores the
-optional task `scope`, which is why callers feature-detect version 2 before
-passing it. Invalid inputs yield
+`scope: "task"`; `none` keeps its exact shape. A v1 provider ignores
+`scope`, so feature-detect version 2 before passing it. Invalid inputs yield
 `{ state: "none", count: 0 }`. Non-`bob-copy` fenced lines stay `none`.
 
 | Member | Contract |
@@ -782,7 +780,7 @@ passing it. Invalid inputs yield
 | `parse`, `scanLine`, `serialize` | Existing grammar behavior |
 | `parseFenceInfo`, `fencePayload` | Existing additive helpers |
 | `fencePayloadFromSource(source)` | Processor `source` to payload, verbatim |
-| `chipAt({ lines, line, ch, scope? })` | Frozen none/ambiguous/ready result above; v1 providers ignore `scope` |
+| `chipAt({ lines, line, ch, scope? })` | Frozen none/ambiguous/ready result above |
 | `copy(text)` | Promise of `{ ok, reason? }`, never throws/rejects |
 | `copyChip(chip, { view? })` | One clipboard write plus success/failure feedback |
 | `flash(chip, { view? })` | Boolean success feedback shown; no write |
@@ -796,10 +794,9 @@ clipboard write into a false failure.
 ### Command chips
 
 `app.plugins.plugins["bob-chips"].api.commandChips` is namespace version 1,
-beside the unchanged `copyChips` v2. It is frozen, pure, and never throws.
-It never calls Bob Command Mode, never spawns bob, and never writes the
-vault. Later members, such as editor-bound targeting, are additive. Detect
-them with `typeof`.
+beside the unchanged `copyChips` v2. It is frozen and never throws. The
+grammar members are pure. The editor-bound `targetAt` and `runAtCursor`
+are additive; detect them with `typeof`.
 
 ```js
 const commandChips = app.plugins.plugins["bob-chips"]?.api?.commandChips;
@@ -826,6 +823,8 @@ if (commandChips?.version >= 1) {
 | `fencePayload(bodyLines)` | Body lines joined with LF, verbatim |
 | `serialize({ label, text }, { table?, indent? })` | Frozen `{ ok: true, form, markdown }` or `{ ok: false, reason }`; a multi-line payload in a table cell is refused |
 | `chipAt({ lines, line, ch, scope? })` | The ⌘↵ target rule in [Bob Chips](https://bobs-org.github.io/reference/plugins/bob-chips/) |
+| `targetAt(view)` | ⌘↵'s target in a CM6 view, `Editor`, or `{ editor, file }`, from cached verdicts: frozen `none` (`skipped` names a copy-only context), `ambiguous`, `blocked` with `reason`, or `ready` with `chip`, `via`, `running`, `loading`, `key` |
+| `runAtCursor(view)` | Promise of frozen `{ handled, outcome, stage, reason }`: `none` is unhandled, a refusal shows one Notice, and `ready` activates the chip, settling after the run |
 
 `chipAt` returns one of three frozen shapes:
 
@@ -838,11 +837,12 @@ the copy-chip coordinates. A `bob-run` block chip adds
 `fence: { open, close }`, the zero-based opening and closing lines. `close`
 is `null` for an unclosed fence. `line` is the cursor line for a `fence`
 result and the opening line for a `task` result, and `[from, to)` covers
-that line. `count` is the number of command chips on the line for a
-`cursor` result and `1` for the other ready results. `scope` takes the same
-`{ kind: "task", lines }` as `copyChips.chipAt`. A scope that does not own
-the cursor line is ignored. Whether a chip's text is a runnable bob command
-line is `api.commandMode.resolve`'s call, not this namespace's.
+that line. `count` is the line's command-chip count for `cursor` and `1`
+for other ready results. `scope` is `copyChips.chipAt`'s
+`{ kind: "task", lines }`; one that does not own the cursor line is
+ignored. Bob Navigation Hotkeys' ⌘↵ dispatcher calls `runAtCursor` first
+and stops on `handled`; its `commandChipDispatch = 1` flag gates the keycap
+and the `⌘↵ Gmail` yield.
 
 ### Command-chip runtime (internal)
 

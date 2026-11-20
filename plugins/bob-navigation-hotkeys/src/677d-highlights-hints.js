@@ -797,7 +797,12 @@ class BobNavigationHotkeysHighlightsHintsMixin {
     return resolved;
   }
 
-  _paintHighlightsHints(target, context) {
+  _paintHighlightsHints(rawTarget, context) {
+    // One ⌘↵ cue at a time: a command chip the key would act on wins.
+    const target =
+      rawTarget && rawTarget.kind !== "none" && this.commandChipClaimsCursor && this.commandChipClaimsCursor(context)
+        ? null
+        : rawTarget;
     const keycap = formatHighlightsHotkey(
       getHighlightsCommandHotkey(this.app),
     );

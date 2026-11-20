@@ -227,10 +227,12 @@ test("api.commandChips v1 is frozen, pure, and never throws", async () => {
     "fencePayload",
     "parse",
     "parseFenceInfo",
+    "runAtCursor",
     "scanLine",
     "serialize",
+    "targetAt",
     "version",
-  ]);
+  ], "keymap adds the editor-bound targetAt and runAtCursor");
   assert.equal(api.version, 1);
   assert.deepEqual(plain(api.parse("run: bob plan")), { label: null, text: "bob plan" });
   assert.equal(api.parse("copy: bob plan"), null);

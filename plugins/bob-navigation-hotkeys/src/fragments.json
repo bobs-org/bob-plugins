@@ -216,6 +216,7 @@
   "677b-ref-pdf-target-resolver.js",
   "677c-highlights-notice.js",
   "677d-highlights-hints.js",
+  "677e-command-chip-dispatch.js",
   "678-plugin-templater-trigger.js",
   "679-plugin-image-zoom.js",
   "679a-image-zoom-path.js",

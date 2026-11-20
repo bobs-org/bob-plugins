@@ -81,6 +81,24 @@ class BobLedgerToolsGmailOpenHintMixin {
     }
   }
 
+  // One ⌘↵ cue at a time: when bob-navigation-hotkeys runs command chips
+  // first and the bob-chips rule claims this cursor (a chip to run, or an
+  // ambiguous or refused one), ⌘↵ will not open Gmail here.
+  gmailOpenHintYieldsToCommandChip(view) {
+    try {
+      const plugins = this.app && this.app.plugins && this.app.plugins.plugins;
+      const nav = plugins && plugins["bob-navigation-hotkeys"];
+      if (!nav || nav.commandChipDispatch !== 1) return false;
+      const chips = plugins["bob-chips"];
+      const api = chips && chips.api && chips.api.commandChips;
+      if (!api || typeof api.targetAt !== "function") return false;
+      const target = api.targetAt(view);
+      return Boolean(target && target.state && target.state !== "none");
+    } catch (error) {
+      return false;
+    }
+  }
+
   setupGmailOpenHintListeners() {
     try {
       if (typeof this.registerEvent !== "function") return;
@@ -294,6 +312,7 @@ class BobLedgerToolsGmailOpenHintMixin {
         }
         return Decoration.none;
       }
+      if (this.gmailOpenHintYieldsToCommandChip(view)) return Decoration.none;
       let tree = null;
       try {
         if (syntaxTree && typeof syntaxTree === "function" && view.state) tree = syntaxTree(view.state);

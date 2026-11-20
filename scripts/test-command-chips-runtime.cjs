@@ -833,14 +833,14 @@ test("dispose stops timers, listeners, and late engine callbacks", async () => {
   helpers.commandChipRuntimeDispose(h.plugin);
 });
 
-test("plugin load creates the runtime, unload disposes it, and commandChips v1 is unchanged", async () => {
+test("plugin load creates the runtime, unload disposes it, and commandChips v1 only grows", async () => {
   const workspace = makeWorkspace();
   const plugin = new BobCopyChipsPlugin({ workspace, plugins: { plugins: {} } });
   await plugin.onload();
   const runtime = helpers.commandChipRuntimeOf(plugin);
   assert.ok(runtime && runtime.store instanceof helpers.CommandChipRunStore);
   assert.deepEqual(Object.keys(plugin.api.commandChips).sort(), [
-    "chipAt", "fencePayload", "parse", "parseFenceInfo", "scanLine", "serialize", "version",
+    "chipAt", "fencePayload", "parse", "parseFenceInfo", "runAtCursor", "scanLine", "serialize", "targetAt", "version",
   ]);
   assert.equal(plugin.api.commandChips.version, 1);
   assert.equal(plugin.api.copyChips.version, 2);

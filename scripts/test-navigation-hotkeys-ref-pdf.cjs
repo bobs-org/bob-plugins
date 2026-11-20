@@ -379,7 +379,7 @@ test("command registration is custom-hotkey only", () => {
   const start = source.indexOf('id: "open-reference-pdf-in-highlights"');
   assert.notEqual(start, -1);
   const command = source.slice(start, source.indexOf("    });", start));
-  assert.match(command, /name: "Open in Highlights \(reading task, highlight page, Gmail thread, or link in new tab\)"/);
+  assert.match(command, /name: "Run command chip, or open in Highlights \(reading task, highlight page, Gmail thread, or link in new tab\)"/);
   assert.match(command, /callback: \(\) => void this\.openReferencePdfInHighlightsOrLink\(\)/);
   assert.doesNotMatch(command, /hotkeys:/);
 });

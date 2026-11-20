@@ -1,9 +1,9 @@
 {
   "id": "bob-chips",
   "name": "Bob Chips",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "minAppVersion": "1.8.7",
-  "description": "Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards.",
+  "description": "Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips and `bob-run` sequence cards; ⌘↵ runs the command chip at the cursor, with an armed chip and a keycap hint from the live binding.",
   "author": "Bryan",
   "isDesktopOnly": false
 }

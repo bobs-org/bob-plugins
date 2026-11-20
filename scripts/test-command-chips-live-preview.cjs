@@ -687,7 +687,10 @@ test("plugin load wires one live extension that emits both kinds", async () => {
   const workspace = makeWorkspace();
   const plugin = new BobCopyChipsPlugin({ workspace, plugins: { plugins: {} } });
   await plugin.onload();
-  const live = plugin.extensions.filter((extension) => extension && extension._viewPlugin);
+  const isHint = (extension) => typeof extension.cls.prototype.recompute === "function";
+  const live = plugin.extensions.filter((extension) => extension && extension._viewPlugin && !isHint(extension));
   assert.equal(live.length, 1, "no second scanner or decoration pass");
+  const hints = plugin.extensions.filter((extension) => extension && extension._viewPlugin && isHint(extension));
+  assert.equal(hints.length, 1, "the ⌘↵ hint paints from its own debounced painter");
   for (const fn of plugin.registers) fn();
 });

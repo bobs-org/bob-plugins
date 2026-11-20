@@ -80,6 +80,18 @@ function errorDetail(error, stderr) {
 
 class BobNavigationHotkeysRefPdfOpenMixin {
   async openReferencePdfInHighlightsOrLink() {
+    // A command chip the cursor targets wins first (bob-chips decides; a
+    // refusal is handled too, so it never falls through to a link).
+    const chipContext = this.getRefPdfEditorContext();
+    if (
+      chipContext &&
+      typeof this.runCommandChipAtCursor === "function" &&
+      typeof this.commandChipsApi === "function" &&
+      this.commandChipsApi() &&
+      (await this.runCommandChipAtCursor(chipContext))
+    ) {
+      return;
+    }
     const now = Date.now();
     if (this._highlightsLaunchActive === true) {
       return;

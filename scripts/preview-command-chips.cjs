@@ -115,6 +115,18 @@ const MATRIX = Object.freeze({
       { name: "Catalog loading", label: "Morning upkeep", text: FENCE_SYNC, variant: { catalog: "loading" }, expect: "loading" },
     ],
   },
+  // ⌘↵ cues in Live Preview with the cursor on each row's first line: the
+  // armed chip from the real store, and the keycap from the production
+  // element builder and binding formatter (Meta+Enter on macOS).
+  keymap: {
+    title: "⌘↵ target and keycap (cursor on the first line)",
+    rows: [
+      { name: "Armed line chip", line: "- [ ] Reconcile tasks `run: bob task reconcile` ^rec", drive: { armed: true }, hint: { verb: "Run" }, expect: "armed" },
+      { name: "Task fallback", line: "- [ ] Morning upkeep ^up", child: "`run[Morning upkeep]: " + LONG_SEQUENCE + "`", drive: { armed: true }, hint: { verb: "Run", label: "Morning upkeep" }, expect: "armed" },
+      { name: "Target running", line: "- [ ] Reconcile tasks `run: bob task reconcile` ^rec", drive: { state: "running" }, hint: { verb: "Output" }, expect: "running" },
+      { name: "Two chips: no keycap", line: "- [ ] Both `run: bob task reconcile` and `run[Plan]: bob plan`", expect: "ready" },
+    ],
+  },
   force: {
     title: "Tooltip on hover, keyboard focus",
     rows: [
@@ -143,7 +155,8 @@ function parseArgs(argv) {
 function matrixRows() {
   const rows = [];
   for (const spec of MATRIX.tables) rows.push(...spec.rows);
-  rows.push(...MATRIX.mixed.rows, ...MATRIX.wrap.rows, ...MATRIX.force.rows);
+  rows.push(...MATRIX.mixed.rows, ...MATRIX.wrap.rows, ...MATRIX.force.rows, ...MATRIX.keymap.rows);
+  for (const row of MATRIX.keymap.rows) if (row.child) rows.push({ line: row.child, expect: row.expect });
   return rows;
 }
 
@@ -313,6 +326,10 @@ function expectationFailures(mounted) {
   for (let pass = 0; pass < 2; pass += 1) for (const row of MATRIX.mixed.rows) push(row, 1);
   for (let pass = 0; pass < 2; pass += 1) for (const row of MATRIX.wrap.rows) push(row, 1);
   for (const row of MATRIX.force.rows) push(row, 1);
+  for (const row of MATRIX.keymap.rows) {
+    push(row, 1);
+    if (row.child) push({ ...row, line: row.child }, 1);
+  }
   const failures = [];
   if (expected.length !== mounted.length) failures.push("rendered " + mounted.length + " run chips, expected " + expected.length);
   for (let index = 0; index < Math.min(expected.length, mounted.length); index += 1) {
@@ -362,6 +379,8 @@ function selfTest() {
   assert.match(html, /\.bob-run-fence\.is-running/);
   assert.match(html, /commandChipBuildInline/);
   assert.match(html, /\.bob-run-chip\.is-running/);
+  assert.match(html, /\.bob-run-chip-hint \{/, "the keycap style ships in styles.css");
+  assert.ok(MATRIX.keymap.rows.some((row) => row.hint && row.hint.label) && MATRIX.keymap.rows.some((row) => !row.hint), "keymap rows cover a named fallback and a refused line");
   assert.deepEqual(parseArgs(["--out", "/tmp/x", "--self-test"]), { out: "/tmp/x", selfTest: true, help: false });
   assert.throws(() => parseArgs(["--out"]));
   assert.throws(() => parseArgs(["--wat"]));
@@ -452,7 +471,7 @@ async function main() {
       "",
       "Rendered from the built `plugins/bob-chips/main.js` (chipScanLine, copyChipBuildInline, commandChipBuildInline, commandFenceBuild, CommandChipRunStore, commandChipPaintModel, commandChipPaint, commandFencePaint) and `styles.css` under an Obsidian baseline stylesheet. Verdicts come from Command Mode's resolver against `scripts/fixtures/command-mode-resolve-vectors.json`.",
       "",
-      "Cases: every face (ready, armed, loading, queued, running, completed, attention, failed, unavailable, copy) as a Live Preview span and a Reading button, and as a `bob-run` sequence card (labeled and unlabeled, running at step 2 of 3, failed at step 2 with ✓/✗/– marks and an Output link, needs attention, asks first, unavailable on this host, copy-only in ref/, loading); labeled and literal three-step sequences at rest, at step 2 of 3, and failed at step 2; alias, skipped-preview, confirm, and report policy lines; copy-only for ref/, mail/, unknown query source, mobile, and Command Mode off; host, excluded, and shell refusals; mixed copy/run lines; wrapping in a 240px column and a 390px viewport; hover tooltips and keyboard focus; reduced motion; print.",
+      "Cases: every face (ready, armed, loading, queued, running, completed, attention, failed, unavailable, copy) as a Live Preview span and a Reading button, and as a `bob-run` sequence card (labeled and unlabeled, running at step 2 of 3, failed at step 2 with ✓/✗/– marks and an Output link, needs attention, asks first, unavailable on this host, copy-only in ref/, loading); labeled and literal three-step sequences at rest, at step 2 of 3, and failed at step 2; alias, skipped-preview, confirm, and report policy lines; copy-only for ref/, mail/, unknown query source, mobile, and Command Mode off; host, excluded, and shell refusals; mixed copy/run lines; wrapping in a 240px column and a 390px viewport; hover tooltips and keyboard focus; the ⌘↵ armed chip and end-of-line keycap (line chip, task fallback naming its label, Output while running, none on an ambiguous line); reduced motion; print.",
       "",
       "Checks: " + (failures.length ? "FAILED" : "passed") + " — " + (report.checks ? report.checks.mounted : 0) + " faces, " + (report.checks ? report.checks.attributesChecked : 0) + " attributes free of payload text, ARIA names, run-state geometry " + geometry.map((entry) => entry.group + " Δw " + entry.widthDelta.toFixed(2) + " Δh " + entry.heightDelta.toFixed(2)).join("; ") + ", reduced motion " + JSON.stringify(report.reducedMotion) + ", print " + (report.print ? report.print.chips + " faces, " + report.print.failures.length + " failures" : "not run") + ".",
       ...failures.map((failure) => "- FAIL " + failure),

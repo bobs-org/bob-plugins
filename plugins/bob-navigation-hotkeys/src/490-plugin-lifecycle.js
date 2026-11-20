@@ -102,7 +102,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
     // The vault hotkeys.json binds Meta+Enter; a default loses to Obsidian's built-in Mod+Enter.
     this.addCommand({
       id: "open-reference-pdf-in-highlights",
-      name: "Open in Highlights (reading task, highlight page, Gmail thread, or link in new tab)",
+      name: "Run command chip, or open in Highlights (reading task, highlight page, Gmail thread, or link in new tab)",
       callback: () => void this.openReferencePdfInHighlightsOrLink(),
     });
 
@@ -531,6 +531,9 @@ class BobNavigationHotkeysPlugin extends Plugin {
       // The footer never blocks startup.
     }
 
+    // Capability flag: this dispatcher runs bob-chips command chips first.
+    this.commandChipDispatch = 1;
+
     try {
       if (typeof this.setupHighlightsHints === "function") {
         this.setupHighlightsHints();
@@ -715,6 +718,7 @@ class BobNavigationHotkeysPlugin extends Plugin {
   }
 
   onunload() {
+    this.commandChipDispatch = 0;
     this.taskCardPluginUnloading = true;
     try {
       if (this.bankWalkNotice && typeof this.bankWalkNotice.hide === "function") {

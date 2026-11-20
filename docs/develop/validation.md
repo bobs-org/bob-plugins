@@ -212,6 +212,46 @@ The report must live outside the vault. Symlinks are reported without following 
 The registered offline test exercises positive
 coverage and deliberate omissions, duplicates, read failures and concurrent changes.
 
+## Command chip preview and e2e
+
+`scripts/preview-command-chips.cjs` renders every command-chip face from
+the built `plugins/bob-chips/main.js` and `styles.css` in headless Chromium.
+It uses the real scanner, builders, run store, paint model, and painter.
+Command Mode's own resolver produces the verdicts from
+`scripts/fixtures/command-mode-resolve-vectors.json`. The page captures
+light, dark, a 390 px viewport, dark with reduced motion, and print. It
+fails when a face differs from its matrix row, when a payload appears in
+an attribute, when ARIA names are wrong, when a run state changes chip
+geometry, when reduced motion still animates, or when any state prints
+as more than plain inline code. Set `CHROMIUM_PATH` when no Chrome is on
+`PATH`:
+
+```bash
+node scripts/preview-command-chips.cjs --out /tmp/command-chips-preview
+```
+
+`scripts/obsidian-command-chips-e2e.cjs` drives chips in a real Obsidian
+with trusted CDP mouse input. The profile, home, XDG tree, and vault live
+under one `/tmp` run root. Command Mode's `bobPath` names a stub `bob`
+that serves a fixture catalog, logs every invocation, and writes only its
+own scratch note. The stub is also first on `PATH`, and no other `bob`
+candidate exists. The runner refuses to launch if any of that isolation
+fails. Tasks and Dataview are copied from `--query-plugins DIR` (default
+`~/bob/.obsidian/plugins`), and the cases need them. The wrappers
+`scripts/test-obsidian-command-chips-e2e.cjs` and
+`scripts/test-command-chips-preview.cjs` run in `npm test`. They check the
+fixture, the stub, the isolation boundaries, and the preview matrix
+offline; they are not acceptance. Run the real check on athena, whose
+Node 20 needs `--experimental-websocket`:
+
+```bash
+xvfb-run -a node --experimental-websocket scripts/obsidian-command-chips-e2e.cjs \
+  --out /tmp/command-chips-e2e
+```
+
+Its `report.json` records each case, the stub's full invocation log,
+and the Tasks, Dataview, Bob Chips, and Command Mode versions.
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

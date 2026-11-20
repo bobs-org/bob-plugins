@@ -392,11 +392,19 @@ button.bob-run-chip.is-unavailable:hover {
 @media print {
   .bob-run-chip,
   button.bob-run-chip {
+    cursor: auto;
+    font-family: var(--font-monospace);
+  }
+
+  /* `[class]` outranks the two-class state rules above (queued and
+     unavailable dashes, the progress underline, the completed pulse), so
+     every state prints as plain inline code. */
+  .bob-run-chip[class],
+  button.bob-run-chip[class] {
     border: none;
     padding: 0;
     background: none;
-    cursor: auto;
-    font-family: var(--font-monospace);
+    color: inherit;
     animation: none;
   }
 

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bob command chips preview</title>
+<style>
+__OBSIDIAN_BASELINE_CSS__
+body[data-theme="light"] {
+  --background-primary:#fcfcfd; --background-secondary:#f0f1f4; --background-modifier-border:#d7d9df;
+  --background-modifier-hover:#e5e7ec; --text-normal:#252832; --text-muted:#727783; --text-faint:#a1a5ae;
+  --text-accent:#624bb8; --text-error:#c44950; --text-highlight-bg:#fff3a3; --interactive-accent:#7457ce;
+  --interactive-normal:#f4f4f6; --color-green:#27865e; --color-orange:#b87918; --color-red:#c44950;
+  --code-background:#f0f1f4; --shadow-s:0 2px 8px #20263a22; --shadow-l:0 12px 32px #20263a22;
+  color-scheme:light;
+}
+body[data-theme="dark"] {
+  --background-primary:#202226; --background-secondary:#292c32; --background-modifier-border:#41454d;
+  --background-modifier-hover:#383c44; --text-normal:#e4e5e9; --text-muted:#a3a7b0; --text-faint:#70747d;
+  --text-accent:#b6a0ff; --text-error:#ee797e; --text-highlight-bg:#6b5b1a; --interactive-accent:#a78bf2;
+  --interactive-normal:#30333a; --color-green:#73c99d; --color-orange:#e8b55e; --color-red:#ee797e;
+  --code-background:#292c32; --shadow-s:0 2px 8px #0008; --shadow-l:0 12px 32px #0008;
+  color-scheme:dark;
+}
+body { margin:0; padding:28px; background:var(--background-secondary); color:var(--text-normal); font:16px/1.6 var(--font-text); }
+.preview-shell { max-width:980px; margin:0 auto; padding:22px; border:1px solid var(--background-modifier-border); border-radius:14px; background:var(--background-primary); box-shadow:var(--shadow-l); }
+.preview-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:6px; font-family:var(--font-interface); }
+.preview-heading h1 { margin:0; font-size:18px; font-weight:650; }
+.preview-heading span { color:var(--text-muted); font-size:12px; }
+.preview-section { margin-top:18px; }
+.preview-section > h2 { margin:0 0 8px; color:var(--text-muted); font:650 10px var(--font-interface); letter-spacing:.08em; text-transform:uppercase; }
+.preview-table { display:grid; grid-template-columns:120px minmax(0,1fr) minmax(0,1fr); gap:6px 14px; align-items:baseline; }
+.preview-table .col-head { color:var(--text-muted); font:600 11px var(--font-interface); }
+.preview-table .row-name { color:var(--text-muted); font:600 12px var(--font-interface); }
+.preview-cell { min-width:0; margin:0; }
+.preview-cell .preview-caption { display:block; color:var(--text-faint); font:11px/1.35 var(--font-interface); }
+.preview-lines { display:grid; gap:4px; }
+.preview-line { margin:0; }
+.preview-narrow { width:240px; padding:8px 10px; border:1px dashed var(--background-modifier-border); border-radius:8px; }
+.preview-force .preview-line { margin-top:128px; }
+.preview-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.preview-print-note { color:var(--text-faint); font:11px var(--font-interface); }
+code.preview-code { padding:.1em .3em; border-radius:var(--radius-s); background:var(--code-background); font:.875em var(--font-monospace); }
+@media (max-width:620px) {
+  body { padding:12px; }
+  .preview-shell { padding:14px; }
+  .preview-table { grid-template-columns:minmax(0,1fr); }
+  .preview-table .col-head { display:none; }
+  .preview-pair { grid-template-columns:minmax(0,1fr); }
+}
+@media print {
+  body { background:#fff; padding:0; }
+  .preview-shell { box-shadow:none; border:none; }
+}
+__PRODUCTION_CSS__
+</style>
+</head>
+<body data-theme="light">
+<main class="preview-shell">
+  <header class="preview-heading"><h1>Bob command chips</h1><span id="subtitle">Production builder, painter, run store, and styles.css</span></header>
+  <div id="sections"></div>
+</main>
+<script>
+// Obsidian's setIcon/getIcon for the Lucide glyphs the faces use. Real
+// paths from Lucide; the preview owns only this icon shim.
+const PREVIEW_ICONS = {
+  play: ["M6 3 20 12 6 21Z"],
+  hourglass: ["M5 22h14", "M5 2h14", "M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22", "M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"],
+  "loader-circle": ["M21 12a9 9 0 1 1-6.219-8.56"],
+  check: ["M20 6 9 17l-5-5"],
+  ban: ["M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20Z", "m4.9 4.9 14.2 14.2"],
+  copy: ["M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"],
+  "check-check": ["M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"],
+  x: ["M18 6 6 18", "m6 6 12 12"],
+};
+function previewIconSvg(name) {
+  const paths = PREVIEW_ICONS[name];
+  if (!paths) return null;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of [["viewBox", "0 0 24 24"], ["fill", "none"], ["stroke", "currentColor"], ["stroke-width", "2"], ["stroke-linecap", "round"], ["stroke-linejoin", "round"], ["class", "svg-icon lucide-" + name]]) svg.setAttribute(key, value);
+  for (const d of paths) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    node.setAttribute("d", d);
+    svg.appendChild(node);
+  }
+  return svg;
+}
+const PREVIEW_OBSIDIAN = {
+  setIcon(el, name) { el.replaceChildren(); const svg = previewIconSvg(name); if (svg) el.appendChild(svg); },
+  getIcon(name) { return previewIconSvg(name); },
+  Platform: { isMobile: false, isMobileApp: false },
+};
+window.BobChipsModule = (function loadBuiltPlugin() {
+  const module = { exports: {} };
+  const exports = module.exports;
+  const require = (name) => {
+    if (name === "obsidian") return PREVIEW_OBSIDIAN;
+    throw new Error("not available in the preview: " + name);
+  };
+  (function () {
+__BOB_CHIPS_MAIN__
+  })();
+  return module.exports;
+})();
+window.PREVIEW_VERDICTS = __VERDICTS__;
+window.PREVIEW_MATRIX = __MATRIX__;
+</script>
+<script>
+// Everything below is scaffolding around production calls: chipScanLine
+// finds the chips, copyChipBuildInline / commandChipBuildInline build them,
+// a real CommandChipRunStore records the run, and commandChipPaintModel +
+// commandChipPaint paint them. Verdicts come from Command Mode's own
+// resolver, computed in Node against the shared fixture catalog.
+const H = window.BobChipsModule.helpers;
+const FROZEN_TIMERS = { set: () => 0, clear: () => {} };
+
+function previewEngine(catalog) {
+  const verdicts = window.PREVIEW_VERDICTS[catalog] || {};
+  return {
+    version: 1,
+    resolve: (text) => verdicts[text] || null,
+    runText: async () => ({ ok: false, outcome: "refused", stage: "refused", reason: "preview" }),
+    openText: async () => ({ ok: false, outcome: "refused", stage: "refused", reason: "preview" }),
+    catalogInfo: () => ({ token: "preview:" + catalog }),
+  };
+}
+
+// One plugin (and so one runtime and one store) per rendered case, so equal
+// commands in two cases never share run ink.
+function previewPlugin(variant) {
+  const v = variant || {};
+  const engine = v.engine === false ? null : previewEngine(v.catalog || "ready");
+  const plugins = engine ? { "bob-command-mode": { api: { commandMode: engine } } } : {};
+  const app = {
+    isMobile: Boolean(v.mobile),
+    plugins: { enabledPlugins: new Set(engine ? ["bob-command-mode"] : []), plugins },
+    vault: { getAbstractFileByPath: (path) => ({ path }) },
+    workspace: { on: () => ({}), offref: () => {} },
+  };
+  const plugin = { app, commandChipRunHotkey: null };
+  H.commandChipRuntimeSetup(plugin, { store: { timers: FROZEN_TIMERS } });
+  return plugin;
+}
+
+function previewContext(variant) {
+  const v = variant || {};
+  const ctx = { sourcePath: v.sourcePath || "notes/Command chips.md", origin: v.origin || "reading" };
+  if (v.origin === "query") ctx.sourceVerified = false;
+  return ctx;
+}
+
+// Drive the real store through the engine's onState shapes.
+function previewDrive(plugin, chip, ctx, spec) {
+  if (!spec) return;
+  const store = H.commandChipStoreOf(plugin);
+  const model = H.commandChipPaintModel(plugin, chip, ctx);
+  if (spec.armed) {
+    store.setArmed({ ...chip, sourcePath: model.sourcePath, key: model.key });
+    return;
+  }
+  const verdict = model.verdict;
+  const total = verdict && Array.isArray(verdict.steps) && verdict.steps.length ? verdict.steps.length : 1;
+  const kind = total > 1 ? "sequence" : "run";
+  const key = model.key;
+  const seq = store.begin(key, { signature: verdict && verdict.signature, total, kind });
+  store.apply(key, seq, { state: "queued", kind, total, runId: "run-1", sequenceId: total > 1 ? "seq-1" : null, step: 1 });
+  if (spec.state === "queued") return;
+  store.apply(key, seq, { state: "running", kind, total, runId: "run-1", step: 1 });
+  const upto = Math.min(total, spec.step || 1);
+  for (let step = 1; step < upto; step += 1) {
+    store.apply(key, seq, { state: "step", step, outcome: "completed", runId: "run-" + step });
+  }
+  if (spec.state === "running") return;
+  store.settle(key, seq, {
+    outcome: spec.state,
+    reason: spec.reason || null,
+    step: upto,
+    stoppedAt: spec.state !== "completed" && total > 1 ? upto : undefined,
+    exitCode: spec.state === "failed" ? 1 : 0,
+  });
+}
+
+function appendText(parent, text) {
+  // Scaffolding only: ordinary code spans render as plain inline code.
+  const pattern = /`([^`]+)`/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)));
+    const code = document.createElement("code");
+    code.className = "preview-code";
+    code.textContent = match[1];
+    parent.appendChild(code);
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
+
+const previewMounted = [];
+
+// Render one Markdown line the way a renderer would: one chipScanLine pass,
+// both kinds dispatched to their production builders.
+function renderLine(parent, line, options) {
+  const opts = options || {};
+  const interactive = opts.surface === "reading";
+  const chips = H.chipScanLine(line);
+  const p = document.createElement(interactive ? "p" : "div");
+  p.className = "preview-line " + (interactive ? "markdown-preview-view" : "cm-line");
+  let at = 0;
+  for (const found of chips) {
+    appendText(p, line.slice(at, found.from));
+    at = found.to;
+    if (found.kind === "copy") {
+      const host = H.copyChipBuildInline(document, { label: found.label, text: found.text }, { interactive });
+      if (host) p.appendChild(host);
+      continue;
+    }
+    const plugin = previewPlugin(opts.variant);
+    const ctx = previewContext(opts.variant);
+    const chip = { label: found.label, text: found.text, form: "inline", line: 0, from: found.from, to: found.to };
+    previewDrive(plugin, chip, ctx, opts.drive);
+    const host = H.commandChipBuildInline(document, { label: found.label, text: found.text }, { interactive });
+    const model = H.commandChipPaintModel(plugin, chip, ctx);
+    H.commandChipPaint(host, model, { plugin, chip });
+    const wrap = document.createElement("span");
+    if (opts.force) wrap.className = "preview-force-" + opts.force;
+    wrap.appendChild(host);
+    p.appendChild(wrap);
+    previewMounted.push({ host, model, chip, group: opts.group || null, surface: opts.surface || "live" });
+  }
+  appendText(p, line.slice(at));
+  parent.appendChild(p);
+  return p;
+}
+
+function tipCaption(p) {
+  const host = p.querySelector(".bob-run-chip");
+  if (!host) return "";
+  const rows = Array.from(host.querySelectorAll(".bob-run-chip-tip-row"))
+    .filter((row) => !row.classList.contains("is-command"))
+    .map((row) => row.textContent);
+  return rows.join(" · ");
+}
+
+function section(title) {
+  const el = document.createElement("section");
+  el.className = "preview-section";
+  const h2 = document.createElement("h2");
+  h2.textContent = title;
+  el.appendChild(h2);
+  document.getElementById("sections").appendChild(el);
+  return el;
+}
+
+// A table of rows, each rendered as a Live Preview span and a Reading
+// button, captioned with the production tooltip's state/policy/hint rows.
+function table(parent, rows) {
+  const grid = document.createElement("div");
+  grid.className = "preview-table";
+  for (const head of ["", "Live Preview", "Reading view"]) {
+    const el = document.createElement("div");
+    el.className = "col-head";
+    el.textContent = head;
+    grid.appendChild(el);
+  }
+  for (const row of rows) {
+    const name = document.createElement("div");
+    name.className = "row-name";
+    name.textContent = row.name;
+    grid.appendChild(name);
+    for (const surface of ["live", "reading"]) {
+      const cell = document.createElement("div");
+      cell.className = "preview-cell";
+      const p = renderLine(cell, row.line, { ...row, surface });
+      if (row.caption !== false) {
+        const caption = document.createElement("span");
+        caption.className = "preview-caption";
+        caption.textContent = tipCaption(p);
+        cell.appendChild(caption);
+      }
+      grid.appendChild(cell);
+    }
+  }
+  parent.appendChild(grid);
+}
+
+function renderAll() {
+  previewMounted.length = 0;
+  document.getElementById("sections").replaceChildren();
+  const M = window.PREVIEW_MATRIX;
+  for (const spec of M.tables) table(section(spec.title), spec.rows);
+  const mixed = section(M.mixed.title);
+  const pair = document.createElement("div");
+  pair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    for (const row of M.mixed.rows) renderLine(box, row.line, { ...row, surface });
+    pair.appendChild(box);
+  }
+  mixed.appendChild(pair);
+  const wrap = section(M.wrap.title);
+  const wrapPair = document.createElement("div");
+  wrapPair.className = "preview-pair";
+  for (const surface of ["live", "reading"]) {
+    const box = document.createElement("div");
+    box.className = "preview-narrow";
+    for (const row of M.wrap.rows) renderLine(box, row.line, { ...row, surface });
+    wrapPair.appendChild(box);
+  }
+  wrap.appendChild(wrapPair);
+  const force = section(M.force.title);
+  const forceBox = document.createElement("div");
+  forceBox.className = "preview-force";
+  for (const row of M.force.rows) renderLine(forceBox, row.line, { ...row, surface: row.surface || "reading" });
+  force.appendChild(forceBox);
+  return previewMounted.length;
+}
+
+// Freeze animations on a deterministic frame: the completed/copied pulse
+// mid-flash, the spinner at 45 degrees, and tooltips past their delay.
+function settleAnimations() {
+  let paused = 0;
+  for (const animation of document.getAnimations()) {
+    const name = animation.animationName || "";
+    try {
+      if (name === "bob-run-chip-pulse") { animation.pause(); animation.currentTime = 180; }
+      else if (name === "bob-run-chip-spin") { animation.pause(); animation.currentTime = 125; }
+      else { animation.finish(); }
+      paused += 1;
+    } catch (error) {
+      animation.pause();
+    }
+  }
+  return paused;
+}
+
+function rect(el) {
+  const r = el.getBoundingClientRect();
+  return { width: r.width, height: r.height };
+}
+
+// Production-rendering checks reported next to the screenshots.
+function checks() {
+  const failures = [];
+  const groups = new Map();
+  for (const item of previewMounted) {
+    if (!item.group) continue;
+    const id = item.group + "|" + item.surface;
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push({ face: item.model.face, ...rect(item.host) });
+  }
+  const geometry = [];
+  for (const [id, list] of groups) {
+    const widths = list.map((entry) => entry.width);
+    const heights = list.map((entry) => entry.height);
+    const dw = Math.max(...widths) - Math.min(...widths);
+    const dh = Math.max(...heights) - Math.min(...heights);
+    geometry.push({ group: id, faces: list.map((entry) => entry.face), widthDelta: dw, heightDelta: dh });
+    if (dw > 0.5 || dh > 0.5) failures.push("geometry " + id + ": width delta " + dw.toFixed(2) + ", height delta " + dh.toFixed(2));
+  }
+  const faces = new Set();
+  let attributes = 0;
+  for (const item of previewMounted) {
+    faces.add(item.model.face);
+    const payload = H.commandChipPayloadOf(item.host);
+    if (payload !== item.chip.text) failures.push("payload record mismatch for " + item.chip.text);
+    for (const el of [item.host, ...item.host.querySelectorAll("*")]) {
+      for (const name of el.getAttributeNames()) {
+        attributes += 1;
+        const value = el.getAttribute(name) || "";
+        if (payload && value.includes(payload)) failures.push("payload in attribute " + name + " of " + el.className);
+      }
+    }
+    const ids = (item.host.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    const named = ids.map((id) => document.getElementById(id));
+    if (ids.length !== 2 || named.some((el) => !el || !item.host.contains(el))) failures.push("aria-labelledby does not name the action and face");
+    const action = named[0] && named[0].textContent;
+    const want = item.model.face === "copy" ? "Copy" : "Run";
+    if (action !== want) failures.push("action text " + action + " for face " + item.model.face);
+    if (item.surface === "reading" && (item.host.tagName !== "BUTTON" || item.host.getAttribute("type") !== "button")) failures.push("Reading face is not a button");
+    if (item.surface === "live" && (item.host.getAttribute("role") !== "button" || item.host.getAttribute("tabindex") !== "0")) failures.push("Live Preview face is not a focusable role=button");
+  }
+  return { mounted: previewMounted.length, faces: Array.from(faces).sort(), attributesChecked: attributes, geometry, failures };
+}
+
+function motionCheck() {
+  const names = document.getAnimations().map((animation) => animation.animationName || "");
+  return { spin: names.filter((name) => name === "bob-run-chip-spin").length, pulse: names.filter((name) => name === "bob-run-chip-pulse").length };
+}
+
+// Print must turn every face, whatever its state, into plain inline code:
+// no glyph, border, fill, progress underline, or animation. Labels keep
+// the text font, as copy-chip labels do.
+function printCheck() {
+  const failures = [];
+  const chips = Array.from(document.querySelectorAll(".bob-run-chip"));
+  for (const host of chips) {
+    const face = Array.from(host.classList).filter((name) => name.startsWith("is-")).join(" ");
+    const style = getComputedStyle(host);
+    const glyph = host.querySelector(".bob-run-chip-glyph");
+    if (!glyph || getComputedStyle(glyph).display !== "none") failures.push(face + ": glyph prints");
+    if (style.borderTopStyle !== "none" || style.borderBottomStyle !== "none") failures.push(face + ": border prints");
+    if (style.backgroundImage !== "none") failures.push(face + ": progress underline prints");
+    if (style.backgroundColor !== "rgba(0, 0, 0, 0)") failures.push(face + ": fill prints");
+    if (style.animationName !== "none") failures.push(face + ": animates in print");
+    if (host.classList.contains("is-literal") && !/mono/i.test(style.fontFamily)) failures.push(face + ": literal is not monospace");
+  }
+  return { chips: chips.length, failures };
+}
+
+window.commandChipsPreview = {
+  render(theme) {
+    document.body.dataset.theme = theme;
+    return renderAll();
+  },
+  settleAnimations,
+  checks,
+  motionCheck,
+  printCheck,
+};
+window.commandChipsPreviewReady = true;
+</script>
+</body>
+</html>

@@ -1,10 +1,12 @@
 ---
 title: "Bob Chips"
-description: "Type a copy: code span or a bob-copy fence to author click-to-copy text."
+description: "Type a copy: span or bob-copy fence to copy text, or a run: span to run a bob command."
 ---
 
 Bob Chips turns an inline code span that starts with `copy:` — or a
 `bob-copy` fence — into a quiet chip that copies the authored text exactly.
+A `run:` span becomes a command chip that runs a bob command through Bob
+Command Mode; see [Command chips](#command-chips).
 
 <!-- BEGIN GENERATED: facts -->
 ## Plugin facts
@@ -13,7 +15,7 @@ Bob Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.10.0 |
+| Version | 0.11.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips. |
@@ -342,6 +344,24 @@ A dashboard's own path never lets a result from `ref/` run. Each click
 re-reads the note: a span that changed or vanished since it rendered
 refreshes and runs nothing.
 
+### What a command chip can never do
+
+The text of a note can only name a bob command that the user could already
+run from Command Mode:
+
+- Every `&&` step must start with the literal word `bob`, and Command Mode
+  checks every step before the first one starts.
+- Only commands in bob's catalog run. Unknown and excluded commands, and
+  commands for another host, refuse.
+- There is no shell: unquoted pipes, redirects, `;`, backticks, `$(…)`,
+  and variables refuse. Quoted text, `~`, and globs stay literal words.
+- Note text cannot choose the program, the run options, the policy, or the
+  catalog entry. A `confirm` command always asks first, even from a chip.
+- Notes in the protected folders above, unknown query sources, mobile, and
+  a missing Command Mode only copy. Commands run only on desktop.
+- Rendering, hovering, scrolling, export, and catalog refreshes never run or
+  copy. Only a deliberate click, tap, or key does.
+
 A command that Command Mode refuses shows ⊘. Refusals cover non-bob steps,
 shell syntax, unknown or excluded commands, missing arguments, and other
 hosts. A click on ⊘ shows one Notice with the reason.
@@ -380,7 +400,7 @@ A failed chip's tooltip carries the first error line. A shared polite live
 region announces "Running …", "… finished", "… needs attention", and
 "… failed". The accessible name is "Run" (or "Copy") plus the face, via
 `aria-labelledby`. Reduced motion drops the spin and pulse. Print and PDF
-show plain inline code. Rendering, hovering, scrolling, and catalog
+show every state as plain inline code; a label prints as its text. Rendering, hovering, scrolling, and catalog
 refreshes never run or copy anything.
 
 ## Non-goals

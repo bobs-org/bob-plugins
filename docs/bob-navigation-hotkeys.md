@@ -362,26 +362,24 @@ top-down with preimage-checked writes and report
 `· N sub-projects Blocked / Ready again / not updated`.
 
 `Alt+N` commits Ready to Next or releases Next/In Progress to Ready on the
-current task and next N tasks (or the linked task and N sibling Task Links),
-unlinking released tasks from today and reporting NEXT/PENDING counts and cap
-advice. On inbox tasks it asks for a destination first; a Pending release keeps
-its Work Log prompt first. The route picker offers `commit to Next` / `release
-to Ready` (`N tasks · then …` for counted runs). `↵` applies and moves there,
-`⇧↵` applies in place and stays, and `Esc` cancels without writing.
+current task and next N (or the linked task and N siblings), unlinking released
+tasks from today and reporting NEXT/PENDING counts and cap advice. Inbox tasks
+ask for a destination first; a Pending release keeps its Work Log prompt first.
+The picker offers `commit to Next` / `release to Ready` (`N tasks · then …`
+for counted runs). `↵` applies and moves, `⇧↵` applies in place, `Esc` cancels
+without writing.
 
-Work Log prompts provide `USED BEFORE` phrase recall; see the [Log Recall contract](https://bobs-org.github.io/log-recall/). The picker reuses it in schedule-review (`Tab`), schedule-work-log, lane-release, and cancel with `Ctrl+N`/`Ctrl+P`; `Esc` restores first.
-
-The Rotten keep prompts (single keep, decay-card Stay, and batch keep) recall Rotten Log reasons, and the successor picker's inline cancel field recalls Cancel Log reasons. In each field, `Ctrl+N`/`Ctrl+P` fill a history row; `Esc` restores the typed draft before backing out.
+Log Recall (`USED BEFORE`, see the [contract](https://bobs-org.github.io/log-recall/)) covers Work prompts (schedule-review via `Tab`, schedule-work-log, lane-release, cancel), Rotten keeps (single, decay-card Stay, batch), and the successor inline cancel field; `Ctrl+N` / `Ctrl+P` fill a history row and `Esc` restores the typed draft first.
 
 ## Review walk
 
 `Ctrl+Alt+J/K` walks the tiered freshness review queue PRE → NEW → PROJECTS →
 PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST vault-wide, wrapping with
-a notice. `N]s` / `N[s` jump N review-queue entries in one landing. `]s` /
+notice. `N]s` / `N[s` jump N entries in one landing. `]s` /
 `[s` (and `Ctrl+Alt+J/K`) away from the current review task first return to it
 with a `Back to current review task` toast; `<C-o>` goes back, and the next
 press steps from the task. `[S` / `]S` jump to the first due task of the
-previous / next occupied review group, cycling. Both always land on the
+previous / next occupied review group, cycling. Both land on the
 destination group's first remaining row. Empty groups are skipped. With no
 origin, `]S` enters the first nonempty group and `[S` enters the last.
 `N]S` / `N[S` move N occupied groups in one landing and wrap at the occupied

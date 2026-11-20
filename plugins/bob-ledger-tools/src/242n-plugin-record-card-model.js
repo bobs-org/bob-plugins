@@ -374,6 +374,13 @@ function recordCardTitle(sheetModel) {
   return emoji ? `${emoji} ${title}` : title;
 }
 
+// The modal header's h2 text when the identity badge's sheet tile carries
+// the album emoji: the title alone. recordCardTitle keeps its emoji prefix
+// for every other reader and for the badge-less fallback.
+function recordCardHeadingText(sheetModel) {
+  return (sheetModel && sheetModel.title) || "Record";
+}
+
 function recordCardSubtitle(sheetModel) {
   const album = (sheetModel && sheetModel.albumTitle) || "Album";
   const noun = String((sheetModel && sheetModel.noun) || "record");

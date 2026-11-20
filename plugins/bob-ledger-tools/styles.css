@@ -12064,3 +12064,56 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
 }
 /* Property-card identity kit (bob-cli-o6 identity-kit): end. */
+
+/* Property-card identity badge (bob-cli-o6 collection-cards): start.
+   The species tile and word on surfaces that name their species without
+   owning the note title: the bank card's head row and the card editors'
+   modal headers. Inside a card the badge takes the card's accent and ink.
+   Outside one (modal headers) there is no area hue, and a species never gets
+   a hue of its own, so the badge falls back to neutral ink. The tile reads
+   the badge's tokens, so its kit rules work in both places. */
+.bob-property-card-identity {
+  --bob-property-card-identity-accent: var(--bob-property-card-accent, var(--text-muted));
+  --bob-property-card-identity-ink: var(--bob-property-card-ink, color-mix(in srgb, var(--bob-property-card-identity-accent) 70%, var(--text-normal)));
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--font-ui-small);
+  line-height: 1.2;
+}
+.bob-property-card-identity > .bob-property-card-tile {
+  --bob-property-card-accent: var(--bob-property-card-identity-accent);
+  --bob-property-card-ink: var(--bob-property-card-identity-ink);
+  --bob-property-card-tile-size: 1.85em;
+  --bob-property-card-tile-fold: 0.5em;
+  flex: none;
+  border-radius: 5px;
+}
+.bob-property-card-identity > .bob-property-card-tile > .bob-property-card-tile-glyph { font-size: 1.05em; }
+/* A small stack keeps its two sheet edges inside the badge's box. */
+.bob-property-card-identity > .bob-property-card-tile[data-tile-form="stack"] { margin-inline-end: 4px; margin-block-end: 4px; }
+.bob-property-card-identity > .bob-property-card-tile[data-tile-form="stack"]::before { transform: translate(2px, 2px); }
+.bob-property-card-identity > .bob-property-card-tile[data-tile-form="stack"]::after { transform: translate(4px, 4px); }
+.bob-property-card-identity-word {
+  color: var(--bob-property-card-identity-ink);
+  font: 650 0.85em/1.2 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Bank card: the badge leads the head row. The row centres its items so the
+   tile sits on the row's midline beside the Setup toggle. */
+.bob-bank-setup[data-card-kind="bank"] > .bob-bank-setup-head { align-items: center; }
+/* Card editors: the badge sits above the modal title like a kicker. */
+.bob-record-card-header > .bob-property-card-identity,
+.bob-album-schema-dialog-header > .bob-property-card-identity {
+  align-self: flex-start;
+  margin-block-end: 0.3em;
+}
+@media (forced-colors: active) {
+  .bob-property-card-identity-word { color: CanvasText; }
+}
+/* Property-card identity badge (bob-cli-o6 collection-cards): end. */

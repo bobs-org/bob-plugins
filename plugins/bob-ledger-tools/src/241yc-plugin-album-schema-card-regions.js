@@ -195,8 +195,10 @@ function albumSchemaCardPaintHeader(card, model, options, doc) {
   const host = albumSchemaCardRegion(card, "header");
   if (!host || !doc) return;
   albumSchemaRegionEmpty(host);
+  const badge = albumSchemaCardIdentityBadge(model, doc);
+  if (badge) host.appendChild(badge);
   const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
-  notebookSetText(title, albumSchemaCardTitle(model));
+  notebookSetText(title, badge ? albumSchemaCardHeadingText(model) : albumSchemaCardTitle(model));
   host.appendChild(title);
   const trail = albumSchemaCardTrail(model);
   if (trail) {

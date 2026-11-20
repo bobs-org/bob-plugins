@@ -508,7 +508,14 @@ test("opens cached rows, reads once, and waits for a fingerprint before writes",
   const opened = await world.plugin.openRecordCard({ filePath: "eat/smashburger.md" });
   const modal = opened.modal;
   assert.ok(modal);
-  assert.match(modal.contentEl.textContent, /🍽️ Smashburger/);
+  // The species badge (sheet tile with the album emoji, word Record) leads
+  // the header, so the h2 shows the title without the emoji.
+  const badge = modal.contentEl.querySelector(".bob-property-card-identity");
+  assert.equal(badge.getAttribute("data-card-kind"), "record");
+  assert.equal(badge.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "sheet");
+  assert.equal(badge.querySelector(".bob-property-card-tile").textContent, "🍽️");
+  assert.equal(badge.querySelector(".bob-property-card-identity-word").textContent, "Record");
+  assert.equal(modal.contentEl.querySelector(".bob-record-card-title").textContent, "Smashburger");
   assert.match(modal.contentEl.textContent, /Restaurants › Restaurant · eat\/smashburger.md/);
   assert.match(modal.contentEl.textContent, /Reading record/);
   assert.equal(modal.writable, true);

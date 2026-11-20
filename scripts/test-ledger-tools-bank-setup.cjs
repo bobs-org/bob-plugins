@@ -617,6 +617,45 @@ test("valid header paints collapsed and expanded states with jumps and accessibl
   assert.equal(rule.getAttribute("data-bank-setup-line"), "30");
 });
 
+// The bank card wears its species: data-card-kind="bank" and a badge (the
+// bank mark in a plain tile, then the word Bank) leading the head row. The
+// aria-label stays exactly "Bank setup", which already leads with the word.
+function assertBankIdentity(el, label) {
+  assert.equal(el.getAttribute("data-card-kind"), "bank", `${label}: data-card-kind`);
+  assert.equal(el.getAttribute("aria-label"), "Bank setup", `${label}: aria-label`);
+  assert.equal(el.getAttribute("role"), null, `${label}: no role is added`);
+  assert.equal(el.querySelectorAll("[aria-level]").length, 0, `${label}: never a heading`);
+  const head = el.querySelector(".bob-bank-setup-head");
+  const [badge, toggle] = head.childNodes.filter((node) => node.nodeType === 1);
+  assert.equal(badge.getAttribute("class"), "bob-property-card-identity", `${label}: badge leads the head row`);
+  assert.equal(badge.getAttribute("data-card-kind"), "bank");
+  const [tile, word] = badge.childNodes.filter((node) => node.nodeType === 1);
+  assert.equal(tile.getAttribute("data-tile-form"), "plain");
+  assert.equal(tile.getAttribute("aria-hidden"), "true");
+  assert.equal(tile.textContent, "🏦");
+  assert.equal(word.getAttribute("class"), "bob-property-card-identity-word");
+  assert.equal(word.textContent, "Bank");
+  assert.equal(toggle.getAttribute("class"), "bob-bank-setup-toggle", `${label}: the Setup toggle follows the badge`);
+  assert.match(toggle.textContent, /^[▾▸] Setup$/);
+}
+
+test("every Setup state wears the bank species badge without changing the toggle or label", () => {
+  const states = {
+    collapsed: paintModel(decodedReport(), { expanded: false }),
+    expanded: paintModel(decodedReport(), { expanded: true }),
+    loading: paintModel(null, {}),
+    failed: paintModel(null, { error: { code: "timeout", message: "slow" } }),
+    unsupported: paintModel(decodedReport(), { error: { code: "unsupported", message: "old bob" } }),
+    mobile: paintModel(decodedReport(), { desktop: false }),
+    missing: paintModel(decodedReport({ ok: false, state: "missing", categories: [], accounts: [], rules: [], starter: "bank:\n  accounts: {}" }), {}),
+  };
+  for (const [label, painted] of Object.entries(states)) assertBankIdentity(painted.el, label);
+  // The collapsed line keeps its own bank mark; the body never gains a badge.
+  assert.match(states.collapsed.el.querySelector(".bob-bank-setup-collapsed").textContent, /^🏦 WF Checking/);
+  assert.equal(states.expanded.el.querySelector(".bob-bank-setup-body").querySelectorAll(".bob-property-card-identity").length, 0);
+  assert.equal(states.expanded.el.querySelectorAll(".bob-property-card-identity").length, 1);
+});
+
 test("invalid header auto-expands with a live-region banner and a last-good note", () => {
   const report = decodedReport({
     ok: false,

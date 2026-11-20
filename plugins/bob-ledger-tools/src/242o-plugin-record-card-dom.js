@@ -106,8 +106,16 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
   const host = recordCardRegion(card, "header");
   if (!host || !doc) return;
   recordCardRegionEmpty(host);
+  // Species identity: the sheet tile (album emoji, else file-text) and the
+  // word Record lead the header, so the = climb to the album card editor
+  // visibly changes species. The tile carries the emoji, so the h2 drops it;
+  // without a badge the h2 keeps today's emoji-prefixed title.
+  const badge = typeof propertyCardBuildIdentityBadge === "function"
+    ? propertyCardBuildIdentityBadge(doc, { kind: "record", emoji: String((sheetModel && sheetModel.emoji) || "").trim() })
+    : null;
+  if (badge) host.appendChild(badge);
   const title = recordCardEl(doc, "h2", "bob-record-card-title bob-key-card-title");
-  recordCardText(title, recordCardTitle(sheetModel));
+  recordCardText(title, badge ? recordCardHeadingText(sheetModel) : recordCardTitle(sheetModel));
   host.appendChild(title);
   const subtitle = recordCardEl(doc, "p", "bob-record-card-subtitle bob-key-card-subtitle");
   recordCardText(subtitle, recordCardSubtitle(sheetModel));

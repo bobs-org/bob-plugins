@@ -141,6 +141,8 @@ try {
       albumHeaderDefaultExpanded,
       albumHeaderIsDesktopPlatform,
       albumSchemaCardTitle,
+      albumSchemaCardHeadingText,
+      albumSchemaCardIdentityBadge,
       albumSchemaCardBuildEl,
       albumSchemaCardTrail,
       albumSchemaCardRegion,

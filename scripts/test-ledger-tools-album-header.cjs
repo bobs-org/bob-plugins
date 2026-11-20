@@ -589,7 +589,14 @@ test("read-only Schema Card paints counts, lint, and a navigation/y/esc footer",
     issues: [{ severity: "warning", code: "album_index_stale", message: "index is stale", line: 4, suggestions: ["bob albums sync"] }],
   })), "eat.md", { sourcePath: "eat.md", metadataCache: app.metadataCache, vault: app.vault });
   const card = helpers.albumSchemaCardBuildEl(model, { selectedIndex: 0, desktop: true, handlers: {} }, doc);
-  assert.match(card.textContent, /🍽️ Restaurant/);
+  // The species badge (stack tile with the album emoji, word Album) leads the
+  // header, so the h2 drops the emoji.
+  const badge = card.querySelector(".bob-property-card-identity");
+  assert.equal(badge.getAttribute("data-card-kind"), "album");
+  assert.equal(badge.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "stack");
+  assert.equal(badge.querySelector(".bob-property-card-tile").textContent, "🍽️");
+  assert.equal(badge.querySelector(".bob-property-card-identity-word").textContent, "Album");
+  assert.equal(card.querySelector(".bob-album-schema-dialog-title").textContent, "Restaurant");
   assert.match(card.textContent, /104 restaurants · dated notes · grouped by Status/);
   assert.match(card.textContent, /🔖 To try 11/);
   assert.match(card.textContent, /set on 2 of 104/);

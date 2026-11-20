@@ -18,7 +18,8 @@ const HELP = [
   "",
   "Render the three real property-card DOM builders in Obsidian and compare",
   "the original shared-card CSS with the current CSS across themes and widths.",
-  "Run under xvfb-run -a on Linux.",
+  "Kinds that adopted the identity kit get structural assertions instead of",
+  "the pixel-identity gate. Run under xvfb-run -a on Linux.",
   "",
   "Options:",
   "  -e, --executable PATH   Obsidian Electron binary",
@@ -231,6 +232,68 @@ function bankModel(H, expanded) {
   return H.bankSetupModel(report, { desktop: true, expanded });
 }
 
+// Kinds that adopted the identity kit leave the baseline pixel-identity gate
+// and get structural assertions instead: data-card-kind, the species word,
+// the tile form, and the aria-level=1 count. A card that owns its note title
+// carries exactly one heading; the bank card never owns the title, so it
+// carries none. Keep every phase's kinds when merging.
+const ADOPTED_KINDS = Object.freeze({
+  bank: Object.freeze({ word: "Bank", tile: "plain", headings: 0, glyph: "🏦" }),
+});
+
+function adoptedSpec(kind) {
+  return Object.prototype.hasOwnProperty.call(ADOPTED_KINDS, kind) ? ADOPTED_KINDS[kind] : null;
+}
+
+// In-page probe for an adopted kind. Returns { ok, failures, facts }.
+function structuralExpression(kind, spec) {
+  return `(() => {
+    const kind = ${JSON.stringify(kind)};
+    const spec = ${JSON.stringify(spec)};
+    const failures = [];
+    const visible = (el) => {
+      if (!el) return false;
+      const box = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const card = document.querySelector(".bob-property-card");
+    if (!card) return { ok: false, failures: ["card missing"], facts: {} };
+    const cardKind = card.getAttribute("data-card-kind");
+    if (cardKind !== kind) failures.push("data-card-kind " + cardKind);
+    const headings = card.querySelectorAll('[aria-level="1"]').length;
+    if (headings !== spec.headings) failures.push("aria-level=1 count " + headings);
+    const words = Array.from(card.querySelectorAll(".bob-property-card-kicker-species, .bob-property-card-identity-word"));
+    const word = words.find((el) => el.textContent.trim() === spec.word && visible(el));
+    if (!word) failures.push("species word " + spec.word + " not visible");
+    const transform = word ? getComputedStyle(word).textTransform : "";
+    if (word && transform !== "uppercase") failures.push("species word text-transform " + transform);
+    const tile = card.querySelector('.bob-property-card-tile[data-tile-form="' + spec.tile + '"]');
+    if (!visible(tile)) failures.push("tile form " + spec.tile + " not visible");
+    if (tile && tile.getAttribute("aria-hidden") !== "true") failures.push("tile is not aria-hidden");
+    const glyph = tile ? tile.textContent.trim() : "";
+    if (spec.glyph && glyph !== spec.glyph) failures.push("tile glyph " + JSON.stringify(glyph));
+    const tileBox = tile ? tile.getBoundingClientRect() : null;
+    const wordBox = word ? word.getBoundingClientRect() : null;
+    if (tileBox && wordBox && !(tileBox.right <= wordBox.left + 0.5)) failures.push("tile overlaps the species word");
+    return {
+      ok: failures.length === 0,
+      failures,
+      facts: {
+        cardKind, headings, word: word ? word.textContent.trim() : "", transform, glyph,
+        ariaLabel: card.getAttribute("aria-label") || "",
+        tileSize: tileBox ? [Math.round(tileBox.width), Math.round(tileBox.height)] : null,
+      },
+    };
+  })()`;
+}
+
+async function structuralCheck(client, kind, spec) {
+  const result = await client.call("Runtime.evaluate", { expression: structuralExpression(kind, spec), returnByValue: true });
+  if (result.exceptionDetails) return { ok: false, failures: [result.exceptionDetails.text || "probe threw"], facts: {} };
+  return result.result?.value || { ok: false, failures: ["probe returned nothing"], facts: {} };
+}
+
 function buildCard(kind, H, Plugin, doc, expanded, app) {
   if (kind === "album") {
     const model = albumModel(H, app);
@@ -352,7 +415,9 @@ class CdpClient {
 async function installPage(client, html) {
   const encoded = Buffer.from(html).toString("base64");
   const result = await client.call("Runtime.evaluate", {
-    expression: `(() => { document.open(); document.write(atob("${encoded}")); document.close(); return true; })()`,
+    // Decode the base64 bytes as UTF-8; a bare atob() string is Latin-1 and
+    // turns every emoji (the bank mark, album emoji) into mojibake.
+    expression: `(() => { const html = new TextDecoder("utf-8").decode(Uint8Array.from(atob("${encoded}"), (c) => c.charCodeAt(0))); document.open(); document.write(html); document.close(); return true; })()`,
     returnByValue: true,
   });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "Could not install preview page");
@@ -475,9 +540,16 @@ async function main() {
             const baseline = await renderOne(client, baselineCss, markup, theme, width, height, baselinePath, caseName);
             const current = await renderOne(client, currentCss, markup, theme, width, height, currentPath, caseName);
             const pixelIdentical = baseline.sha256 === current.sha256 && baseline.bytes === current.bytes;
-            const row = { case: caseName, kind, theme, width, expanded, baseline, current, pixelIdentical };
+            const adopted = adoptedSpec(kind);
+            const row = { case: caseName, kind, theme, width, expanded, baseline, current, pixelIdentical, adopted: Boolean(adopted) };
+            if (adopted) {
+              // The current page is still installed, so probe it in place.
+              row.structural = await structuralCheck(client, kind, adopted);
+              if (!row.structural.ok) errors.push(`${caseName} (${row.structural.failures.join("; ")})`);
+            } else if (!pixelIdentical) {
+              errors.push(caseName);
+            }
             cases.push(row);
-            if (!pixelIdentical) errors.push(caseName);
           }
         }
       }
@@ -490,12 +562,17 @@ async function main() {
       currentCssSha256: sha256(Buffer.from(currentCss)),
       screenshotCount: cases.length * 2,
       pixelIdenticalCount: cases.filter((item) => item.pixelIdentical).length,
+      gatedCount: cases.filter((item) => !item.adopted).length,
+      gatedPixelIdenticalCount: cases.filter((item) => !item.adopted && item.pixelIdentical).length,
+      adoptedKinds: Object.keys(ADOPTED_KINDS),
+      structuralPassCount: cases.filter((item) => item.adopted && item.structural?.ok).length,
+      adoptedCount: cases.filter((item) => item.adopted).length,
       cases,
       errors,
       outcome: errors.length === 0 ? "pass" : "fail",
     };
     fs.writeFileSync(path.join(outDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
-    process.stdout.write(`Property-card visual comparison: ${report.pixelIdenticalCount}/${cases.length} paired screenshots pixel-identical\n`);
+    process.stdout.write(`Property-card visual comparison: ${report.gatedPixelIdenticalCount}/${report.gatedCount} gated paired screenshots pixel-identical; adopted kinds (${report.adoptedKinds.join(", ") || "none"}) structural ${report.structuralPassCount}/${report.adoptedCount}\n`);
     if (errors.length) throw new Error(`Visual changes in: ${errors.join(", ")}`);
   } finally {
     client?.close();
@@ -518,7 +595,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseArgs, buildCard, htmlPage, serialize,
+  parseArgs, buildCard, htmlPage, serialize, ADOPTED_KINDS, adoptedSpec, structuralExpression,
   // Shared with scripts/preview-title-block.cjs.
   PAGE_CHROME, PreviewElement, PreviewTextNode, previewDocument, escapeHtml,
   CdpClient, freePort, cdpTarget, sleep, sha256,

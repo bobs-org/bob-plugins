@@ -106,8 +106,10 @@ path.
 ## Record Card editor
 
 **Edit record** (`edit-record`) opens the editor on the active canonical
-record. Title is `<album emoji> <record title>`; subtitle is
-`<Album> › <Noun> · <path>`. One selectable row exists for every schema
+record. The header leads with a species badge: the album emoji (else a page
+icon) in a folded-sheet tile, then **RECORD**. Title is `<record title>`;
+subtitle is `<Album> › <Noun> · <path>`. Climbing with `=` to the album card
+editor swaps the badge for the stacked **ALBUM** one. One selectable row exists for every schema
 field, including a ghost row for each empty optional. Identity and leftover
 keys stay read-only. The editor opens on a requested field, else the first
 missing required field, else the first field, and stays open after saves.

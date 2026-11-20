@@ -1221,6 +1221,16 @@ function SETUP_UI_PROBE() {
     const h1 = viewRoot.querySelector(".markdown-preview-view h1, .markdown-source-view h1, .inline-title, .view-header-title")
       || document.querySelector(".markdown-preview-view h1, .markdown-source-view h1, .inline-title, .view-header-title");
     const headerAfterH1 = Boolean(header && header.previousElementSibling && /bank/i.test(textOf(header.previousElementSibling)));
+    // Live Preview keeps its (hidden) widget in the view while Reading paints
+    // its own card, so identity checks read the card that is on screen.
+    const boxed = (el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
+    const shownHeader = Array.from(viewRoot.querySelectorAll(".bob-bank-setup")).find(boxed) || header;
+    const shownAfterH1 = Boolean(shownHeader && shownHeader.previousElementSibling && /bank/i.test(textOf(shownHeader.previousElementSibling)));
+    const head = shownHeader && shownHeader.querySelector(".bob-bank-setup-head");
+    const badge = head && head.querySelector(".bob-property-card-identity");
+    const badgeTile = badge && badge.querySelector(".bob-property-card-tile");
+    const badgeWord = badge && badge.querySelector(".bob-property-card-identity-word");
+    const badgeBox = badge ? badge.getBoundingClientRect() : null;
     const modal = plugin && plugin.bankSetupCardModal;
     const sessionState = modal && modal.session && typeof modal.session.getState === "function" ? modal.session.getState() : null;
     return {
@@ -1234,6 +1244,20 @@ function SETUP_UI_PROBE() {
       }).length,
       headerState: header && header.getAttribute("data-bank-setup-state") || "",
       headerAria: header && header.getAttribute("aria-label") || "",
+      cardKind: shownHeader && shownHeader.getAttribute("data-card-kind") || "",
+      shownAria: shownHeader && shownHeader.getAttribute("aria-label") || "",
+      shownAfterH1,
+      headerHeadings: shownHeader ? shownHeader.querySelectorAll('[aria-level="1"]').length : 0,
+      badge: badge ? {
+        first: Boolean(head && head.firstElementChild === badge),
+        kind: badge.getAttribute("data-card-kind") || "",
+        word: textOf(badgeWord),
+        wordShown: Boolean(badgeWord && window.getComputedStyle(badgeWord).textTransform === "uppercase"),
+        tileForm: badgeTile && badgeTile.getAttribute("data-tile-form") || "",
+        tileHidden: Boolean(badgeTile && badgeTile.getAttribute("aria-hidden") === "true"),
+        glyph: textOf(badgeTile),
+        visible: Boolean(badgeBox && badgeBox.width > 0 && badgeBox.height > 0),
+      } : null,
       surface: Boolean(surface),
       hubNote: Boolean(hubNote),
       expanded: toggle ? toggle.getAttribute("aria-expanded") : null,
@@ -1276,10 +1300,32 @@ function SETUP_UI_PROBE() {
   } })()`;
 }
 
+// The bank card wears its species: data-card-kind="bank", no heading, and a
+// visible badge (the bank mark in a plain tile, then the uppercased word Bank)
+// leading the head row. The aria-label stays "Bank setup" (checked by callers).
+function assertBankIdentity(probe) {
+  if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
+  if (probe.cardKind !== "bank") return { ok: false, reason: `data-card-kind ${probe.cardKind}` };
+  if (probe.headerHeadings) return { ok: false, reason: `aria-level=1 count ${probe.headerHeadings}` };
+  const badge = probe.badge;
+  if (!badge) return { ok: false, reason: "species badge missing" };
+  if (!badge.first) return { ok: false, reason: "badge does not lead the head row" };
+  if (badge.kind !== "bank" || badge.word !== "Bank" || !badge.wordShown) {
+    return { ok: false, reason: `badge word ${badge.kind}/${badge.word}/${badge.wordShown}` };
+  }
+  if (badge.tileForm !== "plain" || !badge.tileHidden || badge.glyph !== "🏦") {
+    return { ok: false, reason: `badge tile ${badge.tileForm}/${badge.tileHidden}/${badge.glyph}` };
+  }
+  if (!badge.visible) return { ok: false, reason: "badge has no visible box" };
+  return { ok: true, reason: "bank badge leads the head row" };
+}
+
 function assertLiveDefault(probe) {
   if (!probe || !probe.header) return { ok: false, reason: "setup header missing" };
   if (probe.headerCount !== 1) return { ok: false, reason: `header count ${probe.headerCount}` };
   if (probe.headerAria !== "Bank setup") return { ok: false, reason: `aria-label ${probe.headerAria}` };
+  const identity = assertBankIdentity(probe);
+  if (!identity.ok) return identity;
   if (probe.expanded !== "true") return { ok: false, reason: `aria-expanded ${probe.expanded}` };
   const line = String(probe.collapsed || "");
   if (!/🏦/.test(line) || !/categor/.test(line) || !/no rules/.test(line)) {
@@ -1370,6 +1416,7 @@ module.exports = {
   assertNoMath,
   assertHasMath,
   assertLiveDefault,
+  assertBankIdentity,
   assertMissingMapping,
   assertInvalidHeader,
   assertScopedHide,

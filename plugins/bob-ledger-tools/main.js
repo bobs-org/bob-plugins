@@ -81882,6 +81882,41 @@ function propertyCardHostRegisterTitleOwnership(plugin) {
     return false;
   }
 }
+// ---- src/240j-plugin-property-card-identity-badge.js ----
+// Property-card identity kit (bob-cli-o6 collection-cards): identity badge.
+// Additive and backward compatible. Surfaces that name their species without
+// owning the note title (the bank card's head row, and the Record Card and
+// album card editor modal headers) show the species glyph tile and the
+// species word. CSS uppercases the word like the kicker, so screen readers
+// still read a word. The badge is never a heading and adds no role, so it
+// never doubles a visible H1. The tile stays aria-hidden. Kit CSS gives the
+// badge its own accent and ink fallbacks, so it also renders outside a
+// .bob-property-card (modal headers). Returns null instead of throwing.
+const PROPERTY_CARD_IDENTITY_CLASS = "bob-property-card-identity";
+const PROPERTY_CARD_IDENTITY_WORD_CLASS = "bob-property-card-identity-word";
+
+// span.bob-property-card-identity[data-card-kind] holding the glyph tile and
+// span.bob-property-card-identity-word, or null for an unknown kind or a
+// document without createElement/createTextNode.
+// spec: { kind, emoji?, icon?, band?, value? }. The tile options are the
+// ones propertyCardBuildGlyphTile takes: stack, sheet, and plain tiles show
+// the emoji, else the given or species icon.
+function propertyCardBuildIdentityBadge(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const options = spec && typeof spec === "object" ? spec : {};
+    const species = propertyCardSpecies(options.kind);
+    if (!species) return null;
+    const badge = propertyCardKitEl(doc, "span", PROPERTY_CARD_IDENTITY_CLASS);
+    badge.setAttribute(PROPERTY_CARD_KIND_ATTR, species.kind);
+    const tile = propertyCardBuildGlyphTile(doc, { ...options, kind: species.kind });
+    if (tile) badge.appendChild(tile);
+    badge.appendChild(propertyCardKitSpan(doc, PROPERTY_CARD_IDENTITY_WORD_CLASS, species.word));
+    return badge;
+  } catch (_) {
+    return null;
+  }
+}
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
 // (bank_weekly_category_walk card-model). No DOM, no spawns: card-ui renders
@@ -84582,6 +84617,14 @@ function bankSetupPaintFindings(body, model, doc, handlers) {
   }
 }
 
+// The bank card's species badge: the bank mark in a plain tile and the word
+// Bank. The card keeps its exact "Bank setup" aria-label, which already
+// leads with the species word, so it never calls propertyCardApplyIdentity.
+function bankSetupIdentityBadge(doc) {
+  if (typeof propertyCardBuildIdentityBadge !== "function") return null;
+  return propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
+}
+
 // `bankSetupBuildEl(model, handlers, doc)`: the whole Setup header. `model`
 // is a `bankSetupModel`; `handlers` carries onToggle, onYaml,
 // onJump(line), onCopyStarter, onRetry. All report strings enter as text.
@@ -84592,6 +84635,7 @@ function bankSetupBuildEl(model, handlers, doc) {
   const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
+    "data-card-kind": "bank",
     "aria-label": "Bank setup",
   });
   if (!root) {
@@ -84602,6 +84646,10 @@ function bankSetupBuildEl(model, handlers, doc) {
     return root;
   }
   root.appendChild(head);
+  const badge = bankSetupIdentityBadge(doc);
+  if (badge) {
+    head.appendChild(badge);
+  }
   const disclosure = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
     type: "button",
     "data-bank-setup-focus": "toggle",
@@ -97308,6 +97356,20 @@ function albumSchemaCardTitle(model) {
   return emoji ? `${emoji} ${label}` : label;
 }
 
+// The editor header's h2 text when the identity badge's stack tile carries
+// the album emoji: the label alone. albumSchemaCardTitle keeps the emoji for
+// the badge-less fallback.
+function albumSchemaCardHeadingText(model) {
+  return model?.schemaLabel || model?.title || "Album";
+}
+
+// The album card editor's species badge: the stack tile (album emoji, else
+// the library icon) and the word Album. Null when the kit is unavailable.
+function albumSchemaCardIdentityBadge(model, doc) {
+  if (typeof propertyCardBuildIdentityBadge !== "function") return null;
+  return propertyCardBuildIdentityBadge(doc, { kind: "album", emoji: String(model?.emoji || "").trim() });
+}
+
 function albumSchemaCardButton(doc, host, text, options = {}) {
   const baseClass = options.action ? "bob-album-schema-action" : "bob-album-schema-target";
   const button = notebookCreateEl(doc, "button", `${baseClass} ${options.className || ""}`.trim());
@@ -97593,8 +97655,10 @@ function albumSchemaCardPaintHeader(card, model, options, doc) {
   const host = albumSchemaCardRegion(card, "header");
   if (!host || !doc) return;
   albumSchemaRegionEmpty(host);
+  const badge = albumSchemaCardIdentityBadge(model, doc);
+  if (badge) host.appendChild(badge);
   const title = notebookCreateEl(doc, "h2", "bob-album-schema-dialog-title bob-key-card-title");
-  notebookSetText(title, albumSchemaCardTitle(model));
+  notebookSetText(title, badge ? albumSchemaCardHeadingText(model) : albumSchemaCardTitle(model));
   host.appendChild(title);
   const trail = albumSchemaCardTrail(model);
   if (trail) {
@@ -105930,6 +105994,13 @@ function recordCardTitle(sheetModel) {
   return emoji ? `${emoji} ${title}` : title;
 }
 
+// The modal header's h2 text when the identity badge's sheet tile carries
+// the album emoji: the title alone. recordCardTitle keeps its emoji prefix
+// for every other reader and for the badge-less fallback.
+function recordCardHeadingText(sheetModel) {
+  return (sheetModel && sheetModel.title) || "Record";
+}
+
 function recordCardSubtitle(sheetModel) {
   const album = (sheetModel && sheetModel.albumTitle) || "Album";
   const noun = String((sheetModel && sheetModel.noun) || "record");
@@ -106206,8 +106277,16 @@ function recordCardPaintHeader(card, sheetModel, options, doc) {
   const host = recordCardRegion(card, "header");
   if (!host || !doc) return;
   recordCardRegionEmpty(host);
+  // Species identity: the sheet tile (album emoji, else file-text) and the
+  // word Record lead the header, so the = climb to the album card editor
+  // visibly changes species. The tile carries the emoji, so the h2 drops it;
+  // without a badge the h2 keeps today's emoji-prefixed title.
+  const badge = typeof propertyCardBuildIdentityBadge === "function"
+    ? propertyCardBuildIdentityBadge(doc, { kind: "record", emoji: String((sheetModel && sheetModel.emoji) || "").trim() })
+    : null;
+  if (badge) host.appendChild(badge);
   const title = recordCardEl(doc, "h2", "bob-record-card-title bob-key-card-title");
-  recordCardText(title, recordCardTitle(sheetModel));
+  recordCardText(title, badge ? recordCardHeadingText(sheetModel) : recordCardTitle(sheetModel));
   host.appendChild(title);
   const subtitle = recordCardEl(doc, "p", "bob-record-card-subtitle bob-key-card-subtitle");
   recordCardText(subtitle, recordCardSubtitle(sheetModel));
@@ -160003,6 +160082,8 @@ try {
       albumHeaderDefaultExpanded,
       albumHeaderIsDesktopPlatform,
       albumSchemaCardTitle,
+      albumSchemaCardHeadingText,
+      albumSchemaCardIdentityBadge,
       albumSchemaCardBuildEl,
       albumSchemaCardTrail,
       albumSchemaCardRegion,
@@ -160783,6 +160864,7 @@ try {
       recordCardAllActions,
       recordCardYamlLine,
       recordCardTitle,
+      recordCardHeadingText,
       recordCardSubtitle,
       recordCardCaptureStage,
       recordCardRestoreStage,
@@ -160904,6 +160986,17 @@ try {
       propertyCardTitleSlotStats,
       propertyCardTitleSlotEditorExtension,
       propertyCardTitleSlotOnEditorUpdate,
+    });
+  }
+} catch (_) {}
+// ---- src/374b-exports-property-card-identity-badge.js ----
+// Test-facing exports for the property-card identity badge.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_IDENTITY_CLASS,
+      PROPERTY_CARD_IDENTITY_WORD_CLASS,
+      propertyCardBuildIdentityBadge,
     });
   }
 } catch (_) {}

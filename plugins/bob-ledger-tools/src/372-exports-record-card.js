@@ -43,6 +43,7 @@ try {
       recordCardAllActions,
       recordCardYamlLine,
       recordCardTitle,
+      recordCardHeadingText,
       recordCardSubtitle,
       recordCardCaptureStage,
       recordCardRestoreStage,

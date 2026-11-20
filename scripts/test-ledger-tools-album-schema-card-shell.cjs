@@ -171,8 +171,29 @@ test("Schema Card shell paints stable regions, pills, and a hidden empty status 
   assert.deepEqual(names.filter((name) => ["header", "lint", "body", "stage", "status", "hints"].includes(name)).slice(0, 6),
     ["header", "lint", "body", "stage", "status", "hints"]);
   assert.match(helpers.albumSchemaCardTrail(model), /Body/);
-  assert.match(region(card, "header").textContent, /🍽️ Restaurant/);
-  assert.match(region(card, "header").textContent, /4 restaurants/);
+  // The header leads with the species badge (stack tile carrying the album
+  // emoji, then the word Album); the h2 shows the label without the emoji.
+  const header = region(card, "header");
+  const badge = header.children[0];
+  assert.equal(badge.getAttribute("class"), "bob-property-card-identity");
+  assert.equal(badge.getAttribute("data-card-kind"), "album");
+  assert.equal(badge.getAttribute("role"), null);
+  const [tile, word] = badge.children;
+  assert.equal(tile.getAttribute("data-tile-form"), "stack");
+  assert.equal(tile.getAttribute("aria-hidden"), "true");
+  assert.equal(tile.textContent, "🍽️");
+  assert.equal(word.textContent, "Album");
+  const title = header.children[1];
+  assert.equal(title.tagName, "H2");
+  assert.equal(title.textContent, "Restaurant");
+  assert.equal(helpers.albumSchemaCardHeadingText(model), "Restaurant");
+  assert.equal(helpers.albumSchemaCardTitle(model), "🍽️ Restaurant", "the emoji-prefixed title is unchanged");
+  assert.match(header.textContent, /4 restaurants/);
+  // Without the kit badge the h2 keeps the emoji-prefixed title.
+  const noEmoji = helpers.albumSchemaCardBuildEl({ ...model, emoji: "" }, { editable: true, selectedKey: "stats", handlers: {} }, makeDoc());
+  const noEmojiTile = region(noEmoji, "header").children[0].children[0];
+  assert.equal(noEmojiTile.children[0].getAttribute("data-icon"), "library");
+  assert.equal(region(noEmoji, "header").children[1].textContent, "Restaurant");
   assert.equal((region(card, "body").querySelectorAll("[data-target-key]") || [])
     .some((node) => node.getAttribute("data-target-key") === "stats"), false);
   const pills = card.querySelectorAll(".bob-album-schema-pill").map((node) => node.textContent);

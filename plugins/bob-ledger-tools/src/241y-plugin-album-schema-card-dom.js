@@ -65,6 +65,20 @@ function albumSchemaCardTitle(model) {
   return emoji ? `${emoji} ${label}` : label;
 }
 
+// The editor header's h2 text when the identity badge's stack tile carries
+// the album emoji: the label alone. albumSchemaCardTitle keeps the emoji for
+// the badge-less fallback.
+function albumSchemaCardHeadingText(model) {
+  return model?.schemaLabel || model?.title || "Album";
+}
+
+// The album card editor's species badge: the stack tile (album emoji, else
+// the library icon) and the word Album. Null when the kit is unavailable.
+function albumSchemaCardIdentityBadge(model, doc) {
+  if (typeof propertyCardBuildIdentityBadge !== "function") return null;
+  return propertyCardBuildIdentityBadge(doc, { kind: "album", emoji: String(model?.emoji || "").trim() });
+}
+
 function albumSchemaCardButton(doc, host, text, options = {}) {
   const baseClass = options.action ? "bob-album-schema-action" : "bob-album-schema-target";
   const button = notebookCreateEl(doc, "button", `${baseClass} ${options.className || ""}`.trim());

@@ -403,6 +403,14 @@ function bankSetupPaintFindings(body, model, doc, handlers) {
   }
 }
 
+// The bank card's species badge: the bank mark in a plain tile and the word
+// Bank. The card keeps its exact "Bank setup" aria-label, which already
+// leads with the species word, so it never calls propertyCardApplyIdentity.
+function bankSetupIdentityBadge(doc) {
+  if (typeof propertyCardBuildIdentityBadge !== "function") return null;
+  return propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
+}
+
 // `bankSetupBuildEl(model, handlers, doc)`: the whole Setup header. `model`
 // is a `bankSetupModel`; `handlers` carries onToggle, onYaml,
 // onJump(line), onCopyStarter, onRetry. All report strings enter as text.
@@ -413,6 +421,7 @@ function bankSetupBuildEl(model, handlers, doc) {
   const root = bankSetupEl(doc, "section", `${BANK_SETUP_CLASS} bob-property-card is-${model.state}`, null, {
     "data-bank-setup": "true",
     "data-bank-setup-state": model.state,
+    "data-card-kind": "bank",
     "aria-label": "Bank setup",
   });
   if (!root) {
@@ -423,6 +432,10 @@ function bankSetupBuildEl(model, handlers, doc) {
     return root;
   }
   root.appendChild(head);
+  const badge = bankSetupIdentityBadge(doc);
+  if (badge) {
+    head.appendChild(badge);
+  }
   const disclosure = bankSetupEl(doc, "button", "bob-bank-setup-toggle", model.expanded ? "▾ Setup" : "▸ Setup", {
     type: "button",
     "data-bank-setup-focus": "toggle",

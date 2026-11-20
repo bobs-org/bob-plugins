@@ -84,9 +84,10 @@ empty schema teaches how to add fields so `Name @stem/` can collect facts.
 The two states never impersonate each other.
 
 **⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
-Card idiom: one title
-line (`🍽️ Restaurant`), a truncated breadcrumb, and the album details row as
-the header subtitle and selectable **Album details** target. Field rows are
+Card idiom: a species badge (the album emoji, else a library icon, in a
+stacked tile, then **ALBUM**), one title line (`Restaurant`), a truncated
+breadcrumb, and the album details row as the header subtitle and selectable
+**Album details** target. Field rows are
 transparent headings: a numbered keycap hangs in the gutter beside the name
 (1–9 in painted order, with an empty placeholder from 10 up so the column
 holds), pills mark `required`, kind, and grouping, and the current group's

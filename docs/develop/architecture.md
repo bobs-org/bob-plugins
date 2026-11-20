@@ -114,7 +114,11 @@ or `null`. Links call the injected `onLink` or `onNavigate`, so adapters
 keep modifier keys and jump history. Kit CSS applies only under
 `data-card-kind`. Cards that opt in must be block-width, because the card is
 the narrow-width container. Days and periods use `--bob-day-accent`, never
-an area hue.
+an area hue. `propertyCardBuildIdentityBadge(doc, { kind, emoji, icon })`
+returns the glyph tile plus the species word for surfaces that name a species
+without owning the title: the bank card's head row and the card editors'
+modal headers. It is never a heading, and outside a card it falls back to
+neutral ink.
 
 `propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
 inline title and the recognized source title range. In Live Preview, one

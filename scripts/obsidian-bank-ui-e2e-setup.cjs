@@ -779,12 +779,27 @@ function runSelfTest() {
     if (/\nbank:/.test(missingFm)) throw new Error("missing hub still has bank:");
     if (!bank.unrelatedBankNote().includes("bank: leftover-string")) throw new Error("unrelated note missing bank property");
     if (!bank.waitingMonthNote().includes("$6.45 Corner Cafe")) throw new Error("waiting month missing row");
+    const bankBadge = { first: true, kind: "bank", word: "Bank", wordShown: true, tileForm: "plain", tileHidden: true, glyph: "🏦", visible: true };
     const expandedDefault = bank.assertLiveDefault({
       header: true, headerCount: 1, headerAria: "Bank setup", expanded: "true",
+      cardKind: "bank", headerHeadings: 0, badge: bankBadge,
       collapsed: "🏦 WF Checking · 9 categories · 1 hidden · no rules",
     });
     if (!expandedDefault.ok) throw new Error(`collapsed helper failed: ${expandedDefault.reason}`);
     if (bank.assertLiveDefault({ header: false }).ok) throw new Error("missing header must fail");
+    const identityProbe = { header: true, cardKind: "bank", headerHeadings: 0, badge: bankBadge };
+    if (!bank.assertBankIdentity(identityProbe).ok) throw new Error("bank identity helper rejected a good probe");
+    for (const [label, broken] of [
+      ["no kind", { ...identityProbe, cardKind: "" }],
+      ["heading", { ...identityProbe, headerHeadings: 1 }],
+      ["no badge", { ...identityProbe, badge: null }],
+      ["badge not first", { ...identityProbe, badge: { ...bankBadge, first: false } }],
+      ["wrong word", { ...identityProbe, badge: { ...bankBadge, word: "Album" } }],
+      ["wrong tile", { ...identityProbe, badge: { ...bankBadge, tileForm: "stack" } }],
+      ["hidden badge", { ...identityProbe, badge: { ...bankBadge, visible: false } }],
+    ]) {
+      if (bank.assertBankIdentity(broken).ok) throw new Error(`bank identity helper accepted ${label}`);
+    }
     const missing = bank.assertMissingMapping({ header: true, collapsed: "Setup · no bank: mapping yet" });
     if (!missing.ok) throw new Error(`missing helper failed: ${missing.reason}`);
     const invalidProbe = bank.assertInvalidHeader({
@@ -1054,6 +1069,8 @@ async function runE2e(parsed) {
     })()`);
     live = await waitFor(client, probe(), (value) => value && value.expanded === "false", "collapsed header", 8000).catch((error) => ({ error: error.message }));
     record("live-header-collapses", Boolean(live && live.expanded === "false"), jsonDetail(live));
+    const collapsedIdentity = bank.assertBankIdentity(live);
+    record("live-collapsed-bank-badge", collapsedIdentity.ok && live.shownAria === "Bank setup", collapsedIdentity.reason || jsonDetail(live));
     const collapsedLight = path.join(outDir, "setup-collapsed-375-light.png");
     await capturePage(client, collapsedLight, { scroll: ".bob-bank-setup" });
     report.screenshots.push(collapsedLight);
@@ -1074,6 +1091,9 @@ async function runE2e(parsed) {
     await openNote(client, "bank.md", "preview");
     const reading = await waitFor(client, probe(), (value) => value && value.header, "reading setup header", 15000).catch((error) => ({ error: error.message }));
     record("reading-header-once", Boolean(reading && reading.headerCount === 1), jsonDetail(reading));
+    const readingIdentity = bank.assertBankIdentity(reading);
+    record("reading-bank-badge", readingIdentity.ok && reading.shownAria === "Bank setup", readingIdentity.reason || jsonDetail(reading));
+    record("reading-header-follows-h1", Boolean(reading && reading.shownAfterH1), jsonDetail(reading && { shownAfterH1: reading.shownAfterH1, h1: reading.h1 }));
 
     await rewriteHub(client, vaultDir, bank.invalidHubNote());
     await openNote(client, "bank.md", "live");

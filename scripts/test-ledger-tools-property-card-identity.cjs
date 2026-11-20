@@ -402,3 +402,102 @@ test("preview fixtures build offline with the real kit builders", () => {
   const icon = cases.find((item) => item.name === "album-icon").card;
   assert.equal(icon.querySelector(".bob-property-card-tile-glyph").getAttribute("data-icon"), "library");
 });
+
+// Identity badge (bob-cli-o6 collection-cards): the species tile and word for
+// surfaces that name their species without owning the note title.
+test("identity badge: tile plus species word, never a heading, fails closed", () => {
+  const doc = makeDoc();
+  assert.equal(H.PROPERTY_CARD_IDENTITY_CLASS, "bob-property-card-identity");
+  assert.equal(H.PROPERTY_CARD_IDENTITY_WORD_CLASS, "bob-property-card-identity-word");
+  const forms = { album: "stack", record: "sheet", day: "leaf", week: "leaf", quarter: "leaf", year: "leaf", bank: "plain" };
+  for (const kind of H.PROPERTY_CARD_KINDS) {
+    const badge = H.propertyCardBuildIdentityBadge(doc, { kind, emoji: "🍽️", band: "FRI", value: "20" });
+    assert.ok(badge, kind);
+    assert.equal(badge.tagName, "SPAN");
+    assert.deepEqual(classes(badge), ["bob-property-card-identity"]);
+    assert.equal(badge.getAttribute("data-card-kind"), kind);
+    // Never a heading or a landmark: the badge adds no role, level, or label.
+    for (const attr of ["role", "aria-level", "aria-label"]) assert.equal(badge.getAttribute(attr), null, `${kind} ${attr}`);
+    const [tile, word] = badge.children;
+    assert.equal(badge.children.length, 2, kind);
+    assert.deepEqual(classes(tile), ["bob-property-card-tile"]);
+    assert.equal(tile.getAttribute("data-tile-form"), forms[kind]);
+    assert.equal(tile.getAttribute("aria-hidden"), "true");
+    assert.deepEqual(classes(word), ["bob-property-card-identity-word"]);
+    // Title case in the DOM; CSS uppercases it like the kicker.
+    assert.equal(word.textContent, H.propertyCardSpecies(kind).word);
+    assert.equal(word.getAttribute("aria-hidden"), null);
+  }
+  const bank = H.propertyCardBuildIdentityBadge(doc, { kind: "bank", emoji: "🏦" });
+  assert.equal(bank.textContent, "🏦Bank");
+  assert.equal(bank.querySelector(".bob-property-card-tile-glyph").getAttribute("data-glyph"), "emoji");
+  // No emoji: the species icon, or the given icon.
+  const album = H.propertyCardBuildIdentityBadge(doc, { kind: "album", emoji: "  " });
+  assert.equal(album.querySelector(".bob-property-card-tile-glyph").getAttribute("data-icon"), "library");
+  const record = H.propertyCardBuildIdentityBadge(doc, { kind: "record" });
+  assert.equal(record.querySelector(".bob-property-card-tile-glyph").getAttribute("data-icon"), "file-text");
+  assert.equal(H.propertyCardBuildIdentityBadge(doc, { kind: "bank", icon: "piggy-bank" })
+    .querySelector(".bob-property-card-tile-glyph").getAttribute("data-icon"), "piggy-bank");
+  // A day badge keeps its weekday band and date value.
+  const day = H.propertyCardBuildIdentityBadge(doc, { kind: "day", band: "FRI", value: "20" });
+  assert.equal(day.querySelector(".bob-property-card-tile-band").textContent, "FRI");
+  assert.equal(day.querySelector(".bob-property-card-tile-value").textContent, "20");
+  // Emoji text stays literal.
+  assert.equal(H.propertyCardBuildIdentityBadge(doc, { kind: "record", emoji: "<b>x</b>" }).children[0].textContent, "<b>x</b>");
+  // Fails closed: unknown kinds, bad specs, and documents without text nodes.
+  for (const spec of [{ kind: "notebook" }, {}, null, "album", 3]) assert.equal(H.propertyCardBuildIdentityBadge(doc, spec), null, String(spec));
+  assert.equal(H.propertyCardBuildIdentityBadge(null, { kind: "bank" }), null);
+  assert.equal(H.propertyCardBuildIdentityBadge({ createElement: () => { throw new Error("boom"); }, createTextNode: () => null }, { kind: "bank" }), null);
+  assert.equal(H.propertyCardBuildIdentityBadge({ createElement: (tag) => new FakeNode(tag, null) }, { kind: "bank" }), null);
+});
+
+test("identity badge CSS: own accent and ink fallbacks, kicker type, and forced colors", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "../plugins/bob-ledger-tools/styles.css"), "utf8");
+  const start = css.indexOf("/* Property-card identity badge (bob-cli-o6 collection-cards): start.");
+  const end = css.indexOf("/* Property-card identity badge (bob-cli-o6 collection-cards): end. */");
+  assert.ok(start >= 0 && end > start, "badge section is delimited");
+  const section = css.slice(start, end);
+  const rule = (selector) => {
+    const at = section.indexOf(`${selector} {`);
+    assert.ok(at >= 0, `rule ${selector}`);
+    return section.slice(at, section.indexOf("}", at));
+  };
+  // Outside a card (modal headers) the tokens fall back to neutral ink; inside
+  // one they read the card's accent and ink.
+  const badge = rule(".bob-property-card-identity");
+  assert.match(badge, /--bob-property-card-identity-accent: var\(--bob-property-card-accent, var\(--text-muted\)\);/);
+  assert.match(badge, /--bob-property-card-identity-ink: var\(--bob-property-card-ink, color-mix\(in srgb, var\(--bob-property-card-identity-accent\) 70%, var\(--text-normal\)\)\);/);
+  // The tile reads the badge's tokens on its own element, so no custom
+  // property references itself.
+  const tile = rule(".bob-property-card-identity > .bob-property-card-tile");
+  assert.match(tile, /--bob-property-card-accent: var\(--bob-property-card-identity-accent\);/);
+  assert.match(tile, /--bob-property-card-ink: var\(--bob-property-card-identity-ink\);/);
+  assert.doesNotMatch(badge, /--bob-property-card-accent:/);
+  const word = rule(".bob-property-card-identity-word");
+  assert.match(word, /text-transform: uppercase;/);
+  assert.match(word, /letter-spacing: 0\.08em;/);
+  assert.match(word, /color: var\(--bob-property-card-identity-ink\);/);
+  assert.match(section, /@media \(forced-colors: active\) \{\s*\.bob-property-card-identity-word \{ color: CanvasText; \}/);
+  // The bank head row centres its items; the editors' badges sit above the title.
+  assert.match(section, /\.bob-bank-setup\[data-card-kind="bank"\] > \.bob-bank-setup-head \{ align-items: center; \}/);
+  assert.match(section, /\.bob-record-card-header > \.bob-property-card-identity,\s*\.bob-album-schema-dialog-header > \.bob-property-card-identity \{/);
+  // No hex colours in the trailing kit sections (stylesheet contract tests).
+  assert.doesNotMatch(section, /#[0-9a-f]{3,8}\b/i);
+});
+
+test("preview adopted kinds: the bank card leaves the pixel gate for structural checks", () => {
+  const preview = require("./preview-property-cards.cjs");
+  assert.deepEqual({ ...preview.adoptedSpec("bank") }, { word: "Bank", tile: "plain", headings: 0, glyph: "🏦" });
+  assert.equal(preview.adoptedSpec("toString"), null);
+  const expression = preview.structuralExpression("bank", preview.adoptedSpec("bank"));
+  assert.match(expression, /data-card-kind/);
+  assert.match(expression, /bob-property-card-identity-word/);
+  // The real bank builder satisfies the structure offline.
+  const doc = previewDocument();
+  const card = preview.buildCard("bank", H, LedgerToolsPlugin, doc, true, null);
+  assert.equal(card.getAttribute("data-card-kind"), "bank");
+  assert.equal(card.getAttribute("aria-label"), "Bank setup");
+  assert.equal(card.querySelectorAll(".bob-property-card-identity").length, 1);
+  assert.equal(card.querySelector(".bob-property-card-identity-word").textContent, "Bank");
+  assert.equal(card.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "plain");
+});

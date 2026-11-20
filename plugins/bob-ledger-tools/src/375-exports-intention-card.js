@@ -27,7 +27,21 @@ try {
       INTENTION_CARD_READING_RETRIES,
       intentionCardDomRelease,
       intentionCardDomTargetExists,
+      intentionCardDomFirstSection,
+      intentionCardIdentity,
+      intentionCardStatePill,
+      intentionCardTitleRecognizer,
+      intentionCardTitleAlias,
+      intentionCardRailModel,
+      intentionCardShowsGhost,
+      intentionCardDayTitle,
+      intentionCardRangeSubtitle,
+      intentionCardLinkPaneType,
+      intentionCardLeafMode,
+      intentionCardLeafReadingScope,
+      INTENTION_CARD_SLOT_FALLBACK_REASONS,
       BobLedgerToolsIntentionCardMixin,
+      BobLedgerToolsIntentionCardTitleSlotMixin,
     });
   }
 } catch (_) {}

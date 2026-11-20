@@ -539,7 +539,13 @@ function intentionCardPlacement(source, subject, todayValue) {
       break;
     }
   }
-  if (headingLine < 0) return null;
+  // No unfenced H1 (the H1-less 2024 and 2025 dailies, a legacy year note):
+  // the card goes before the first non-blank body line, and nothing is skipped.
+  if (headingLine < 0) {
+    let first = index;
+    while (first < lines.length && !lines[first].trim()) first += 1;
+    return { headingLine: -1, insertBeforeLine: first < lines.length ? first : lines.length, skippedLines: 0 };
+  }
   let cursor = headingLine + 1;
   while (cursor < lines.length) {
     if (!lines[cursor].trim()) {
@@ -578,8 +584,9 @@ function intentionCardModelFor(path, frontmatter, todayValue, parentFrontmatter)
   const subject = intentionCardSubjectForPath(path, today);
   if (!subject) return null;
   const fields = intentionCardReadFields(frontmatter);
+  // Malformed owned fields fail open to native rendering. Empty fields still
+  // get a model: the day or period card always mounts with its identity.
   if (!fields.ok) return null;
-  if (!fields.intentions.length && !fields.summary && !fields.reflection) return null;
   let parentIntentions = [];
   if (subject.parent && parentFrontmatter) {
     const parentFields = intentionCardReadFields(parentFrontmatter);
@@ -598,6 +605,6 @@ function intentionCardModelFor(path, frontmatter, todayValue, parentFrontmatter)
     reflection: fields.reflection,
     parentIntentions,
     missingBands,
-    hasContent: true,
+    hasContent: Boolean(fields.intentions.length || fields.summary || fields.reflection),
   };
 }

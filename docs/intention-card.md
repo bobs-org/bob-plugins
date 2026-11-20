@@ -1,11 +1,13 @@
 ---
-title: "Intention Card"
-description: "Reference for the intention card and its editor on daily and period notes."
+title: "Day and Period Cards"
+description: "Reference for the day and period cards, formerly the intention card, and the card editor on daily and period notes."
 ---
 
-Bob Ledger Tools paints an **intention card** at the top of canonical daily
-and period notes in Reading view and Live Preview. The **card editor** is the
-keyboard-first editor for those values.
+The day and period cards were formerly called the intention card. Bob Ledger
+Tools mounts a **day card** on canonical daily notes and a **period card** on
+week, quarter, and year notes as the note's title block, in Reading view and
+Live Preview. The **card editor** is the keyboard-first editor for their
+intentions, summary, and reflection.
 
 ## Where the card appears
 
@@ -14,24 +16,99 @@ The card appears only on canonical subjects: `YYYY/YYYYMMDD.md` daily notes,
 with Bob's ISO-week quarters and ISO week-year. `all_time` and non-canonical
 notes never qualify. Year has no editable parent.
 
-The card needs at least one nonempty intention, summary, or reflection, valid
-values (intentions is an array of nonempty one-line strings; summary is a
-one-line string; reflection is a string), desktop Obsidian, and Reading or
-Live Preview. Empty notes, Source mode, embeds, popovers, and mobile keep
-native Properties visible.
+The card always mounts on a canonical subject with valid values (intentions
+is an array of nonempty one-line strings; summary is a one-line string;
+reflection is a string) in desktop Obsidian, Reading or Live Preview. A note
+with none of those fields gets an identity-only card. Malformed values,
+Source mode, embeds, hover popovers, canvas nodes, and mobile keep native
+rendering.
 
-Placement skips the H1, navigation lines, and direct-child link lines, then
-inserts before the first unrelated block: above the daily `^gtd` line and
-above period strip fences. The mount owns exactly seven keys —
-`intentions`, `summary`, `summary_digest`, `summary_drafted`, `reflection`,
-`review_digest`, `review_drafted` — and releases them on failure, mode
-change, file change, and unload. Unrelated Properties stay visible, and the
-card never spawns `bob`: painting reads metadataCache plus confirmed source
-bytes and fails open.
+## Title block
 
-A closed subject with intentions, closed within the last seven days, shows a
-quiet missing band (`✦ summary pending · ＋ reflection r`), omitting parts
-already present. Open, future, or older subjects never show it.
+The card mounts in Obsidian's title slot, after the hidden inline title and
+before native Properties. Its title block holds:
+
+- a leaf tile: the weekday over the date (`FRI` over `20`), or `WEEK` over
+  `47`, `QTR` over `Q4`, and `YEAR` over `2026`;
+- a kicker: `DAY · W47 · 2026`, `WEEK · 2026-Q4`, `QUARTER · 2026`, or
+  `YEAR · All time`, whose parent parts link to the parent note;
+- the title, computed from the path and never parsed from the H1:
+  `Fri, Nov 20, 2026`, `2026-W47`, `2026-Q4`, or `2026`;
+- a period subtitle: `Nov 16 – 22, 2026`,
+  `W40–W53 · Sep 28, 2026 – Jan 3, 2027`, or
+  `Dec 29, 2025 – Jan 3, 2027 · 53 weeks`;
+- a state pill: `TODAY`, `YESTERDAY`, or `TOMORROW` on days, and
+  `THIS WEEK`, `THIS QUARTER`, or `THIS YEAR` on the current period. The
+  midnight rollover repaints it.
+
+Days and periods use the temporal cyan accent, never an area hue. The card's
+accessible name leads with the species word (`Day: Fri, Nov 20, 2026`), and
+the pane shows exactly one level-1 title: the card's.
+
+### Docked rail
+
+When the note's recognized title block holds its nav line, the card docks a
+rail: `‹ Thu 19 · ↑ W47 · Sat 21 ›` on days and `‹ W46 · ↑ 2026-Q4 · W48 ›`
+on periods. Narrow panes compact it to `‹ Thu · ↑ W47 · Sat ›`. Week,
+quarter, and year cards add a strip of children chips from the child-links
+line, and the chip that contains today is marked current. Targets always come
+from the nav line's own links, and unresolved targets look unresolved.
+
+Kicker, rail, and chip links open like the Markdown links they mirror: Mod
+opens a tab or split, and a middle click opens a tab. With Bob Navigation
+Hotkeys enabled, an unmodified rail prev or next runs its `open-prev-link` or
+`open-next-link` command in the card's pane, so jump history matches `[n` and
+`]n`.
+
+### Hidden title lines
+
+While the card owns the title, the inline title is hidden, and so is the
+recognized source title block, at render time only. That block is the first
+body H1 when it matches the date's shapes (`YYYY-MM-DD ddd`,
+`Day: YYYY-MM-DD ddd`, `day = YYYY-MM-DD.ddd`), the first alias, or bob's
+period title, plus the nav and child-link lines that follow it. In Live
+Preview, placing the cursor on the hidden lines, or selecting into them,
+reveals the raw Markdown for editing; moving away hides it again. Note bytes
+never change, so heading links, the Outline, search, and `[n`/`]n` keep
+working.
+
+A note whose H1 is not recognized, such as the H1-less 2024 and 2025 dailies
+and legacy year notes, keeps every body line visible and gets no rail. An
+unrecognized H1 or nav line stays visible as authored content, and a nav line
+the card does not recognize (such as `prev | day | next`) means no rail.
+
+### Set intentions
+
+On current and future subjects with no intentions, one quiet dashed row
+reads `＋ Set intentions` with a `==` keycap hint. A click or Enter opens the
+card editor on the intention stage, and `==` opens it with Add selected. Past
+subjects never show it, and it owns no Properties rows.
+
+### Bands and owned rows
+
+Below the title block, the parent intentions line and the intention,
+summary, and reflection bands keep their content gates. A closed subject
+with intentions, closed within the last seven days, shows a quiet missing
+band (`✦ summary pending · ＋ reflection r`), omitting parts already present.
+Open, future, or older subjects never show it.
+
+The card owns exactly seven keys — `intentions`, `summary`,
+`summary_digest`, `summary_drafted`, `reflection`, `review_digest`,
+`review_drafted` — and only while intentions, summary, or reflection is
+nonempty. An identity-only card leaves every native Properties row visible.
+Ownership releases on failure, mode change, file change, and unload.
+Unrelated Properties stay visible, and the card never spawns `bob`: painting
+reads metadataCache plus confirmed source bytes and fails open.
+
+### Fallback and fail-open
+
+When the title slot is unavailable, or another writer keeps re-rendering it,
+the card falls back to the body: after the H1 and nav lines, or before the
+first body line of a note without an H1. A fallback card never owns the
+title, so the note keeps its native title, H1, and nav lines plus the card.
+Fallback clears on a file or mode change. Malformed values, Source mode,
+embeds, hover popovers, mobile, plugin disable, and unload restore native
+rendering: inline title, H1, nav line, and Properties.
 
 ## Provenance and ownership
 
@@ -52,8 +129,9 @@ with the server's field fingerprint in every envelope. Empty strings use
 ## Card editor
 
 `==` on any canonical subject opens the card editor, including empty or
-malformed notes. A malformed field opens a refusal with YAML recovery; it
-never paints a display card. Browse controls keep focus: the modal never
+malformed notes. Its header shows the card's leaf tile and species word. A
+malformed field opens a refusal with YAML recovery; it never paints a display
+card. Browse controls keep focus: the modal never
 auto-focuses an input. Open subjects land on the first intention (or Add
 when empty); closed subjects land on Reflection.
 
@@ -96,8 +174,8 @@ button closes the card only after the write settles. Superseded replies
 after close or target change are ignored.
 
 After an applied write, the card shows the written values at once, before
-metadataCache catches up: a first intention mounts the card and removing the
-last one removes it. This path-scoped overlay never shows a preview or
+metadataCache catches up: a first intention adds its band, and removing the
+last one removes the band while the card stays. This path-scoped overlay never shows a preview or
 overrides a fail-open gate. It clears when matching metadata arrives,
 survives metadata that still shows the prior state, is dropped by a later
 conflicting edit, and expires on a bound.

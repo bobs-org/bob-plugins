@@ -39,8 +39,10 @@ function readingModel(plugin, path = DAY) {
   return plugin.intentionCardModelFor(path)?.model || null;
 }
 
-// What Live Preview paints: the decoration widget built from editor text.
-function liveModel(plugin, vault, path = DAY) {
+// What Live Preview paints from editor text. This fake editor has no title
+// slot, so the first build schedules a slot mount that falls back, and the
+// rebuild paints the body widget whose signature carries the model.
+async function liveModel(plugin, vault, path = DAY) {
   const view = {
     dom: { closest: () => null, ownerDocument: vault.app.document },
     state: {
@@ -49,11 +51,13 @@ function liveModel(plugin, vault, path = DAY) {
     },
   };
   plugin.notebookCatalogLivePath = () => path;
+  plugin.buildIntentionCardDecorations(view);
+  await flush();
   const built = plugin.buildIntentionCardDecorations(view);
   const range = built?.ranges?.[0];
   if (!range) return null;
   const signature = JSON.parse(range.value.spec.widget.signature);
-  return signature[2];
+  return JSON.parse(signature[3]);
 }
 
 async function saveIntention(modal, key, value) {
@@ -77,7 +81,7 @@ test("an applied write paints at once while metadata lags, survives still-prior 
   assert.deepEqual(vault.caches.get(DAY).frontmatter.intentions, ["Old"], "metadata is still the prior snapshot");
   assert.ok(plugin.intentionCardOverlayFor(DAY), "the applied write pushed an overlay");
   assert.deepEqual(readingModel(plugin).intentions, ["Saved"], "Reading paints the applied value, not the stale cache");
-  assert.deepEqual(liveModel(plugin, vault).intentions, ["Saved"], "Live Preview paints it from the rewritten editor text");
+  assert.deepEqual((await liveModel(plugin, vault)).intentions, ["Saved"], "Live Preview paints it from the rewritten editor text");
 
   // A metadata event that still describes the prior snapshot (the pane flush
   // before the write, say) keeps the overlay; the display never regresses.
@@ -134,20 +138,25 @@ test("an overlay expires on its bounded timer when metadata never arrives", asyn
   plugin.teardownIntentionCard();
 });
 
-test("the first field on an empty note mounts the card; removing the last one unmounts it", async () => {
+test("the first field on an empty note adds its band; removing the last one leaves the identity-only card", async () => {
   const vault = fakeVault();
   vault.seed(DAY, {});
   const { plugin } = hostPlugin(vault);
   installBobSimulator(plugin, vault, SUBJECTS);
   await plugin.intentionCardEnsureSource(DAY);
-  assert.equal(readingModel(plugin), null, "an empty note shows no card");
+  const empty = readingModel(plugin);
+  assert.equal(empty.hasContent, false, "an empty note gets an identity-only card");
+  assert.deepEqual(empty.intentions, []);
+  assert.equal(empty.ghost, true, "today with no intentions shows the ghost");
 
   const modal = modalFor(plugin, vault);
   await modal.intentionInitialRead();
   assert.equal(modal.selectedKey, "add");
   await saveIntention(modal, "add", "First");
   assert.deepEqual(readingModel(plugin).intentions, ["First"], "the first add paints before metadata catches up");
-  assert.deepEqual(liveModel(plugin, vault).intentions, ["First"]);
+  assert.equal(readingModel(plugin).hasContent, true, "the first add flips hasContent");
+  assert.equal(readingModel(plugin).ghost, false, "the ghost leaves once an intention exists");
+  assert.deepEqual((await liveModel(plugin, vault)).intentions, ["First"]);
   vault.index(DAY);
   await flush();
   assert.equal(plugin.intentionCardOverlayFor(DAY), null);
@@ -155,8 +164,13 @@ test("the first field on an empty note mounts the card; removing the last one un
   modal.intentionSelect("intention:0");
   await modal.intentionRemove();
   assert.deepEqual(vault.caches.get(DAY).frontmatter.intentions, ["First"], "metadata still lists the removed intention");
-  assert.equal(readingModel(plugin), null, "removing the last visible field removes the card at once");
-  assert.equal(liveModel(plugin, vault), null);
+  const after = readingModel(plugin);
+  assert.deepEqual(after.intentions, [], "removing the last visible field removes its band at once");
+  assert.equal(after.hasContent, false, "the last remove flips hasContent; the identity-only card stays");
+  assert.equal(after.ghost, true);
+  const live = await liveModel(plugin, vault);
+  assert.deepEqual(live.intentions, []);
+  assert.equal(live.hasContent, false);
   modal.close();
   plugin.teardownIntentionCard();
 });

@@ -34,6 +34,11 @@ function intentionCardDomOpen(plugin, target, sourcePath, event) {
   try {
     const path = String(target || "").replace(/\.md$/i, "");
     if (!path) return;
+    // One link helper for every card link (modifiers pick tab or split).
+    if (typeof plugin?.intentionCardOpenLink === "function") {
+      plugin.intentionCardOpenLink(path, sourcePath || "", event);
+      return;
+    }
     plugin.app?.workspace?.openLinkText?.(path, sourcePath || "", Boolean(event?.ctrlKey || event?.metaKey || event?.shiftKey));
   } catch (_) {}
 }
@@ -158,19 +163,109 @@ function intentionCardDomLink(doc, plugin, target, label, sourcePath, className)
   return anchor;
 }
 
+function intentionCardDomUnresolved(plugin, target, sourcePath) {
+  try { return intentionCardDomTargetExists(plugin, target, sourcePath).ok !== true; } catch (_) { return true; }
+}
+
+function intentionCardDomOpenLink(plugin, target, sourcePath, event) {
+  if (typeof plugin?.intentionCardOpenLink === "function") return plugin.intentionCardOpenLink(target, sourcePath, event);
+  return intentionCardDomOpen(plugin, target, sourcePath, event);
+}
+
+// The kit title block (tile, kicker, title, pill, subtitle). A missing kit
+// falls back to the old `DAY · <label>` kicker so a card is never titleless.
+function intentionCardDomTitleBlock(model, plugin, doc, identity) {
+  if (identity && typeof propertyCardBuildTitleBlock === "function") {
+    const kicker = identity.kicker.map((part) => (part.target
+      ? { ...part, unresolved: intentionCardDomUnresolved(plugin, part.target, model.path) }
+      : part));
+    const block = propertyCardBuildTitleBlock(doc, {
+      kind: identity.kind, title: identity.title, kicker, pill: identity.pill, subtitle: identity.subtitle,
+      tile: { band: identity.tile.band, value: identity.tile.value },
+      onLink: (target, event) => intentionCardDomOpenLink(plugin, target, model.path, event),
+    });
+    if (block?.element) {
+      for (const link of Array.from(block.kicker?.querySelectorAll?.("a[data-href]") || [])) {
+        intentionCardDomHover(plugin, link, link.getAttribute?.("data-href") || "", model.path);
+      }
+      return block.element;
+    }
+  }
+  const kicker = intentionCardDomEl(doc, "div", "bob-intention-card-kicker");
+  intentionCardDomText(kicker, `${model.kind.toUpperCase()} · ${model.label}`);
+  return kicker;
+}
+
+// One quiet dashed row on current and future subjects with no intentions. A
+// native button, so Enter and Space work; it owns no Properties rows.
+function intentionCardDomGhost(model, plugin, doc) {
+  const ghost = intentionCardDomEl(doc, "button", "bob-intention-card-ghost");
+  if (!ghost) return null;
+  ghost.setAttribute("type", "button");
+  ghost.setAttribute("aria-label", "Set intentions");
+  const label = intentionCardDomEl(doc, "span", "bob-intention-card-ghost-label");
+  intentionCardDomText(label, "＋ Set intentions");
+  const keys = intentionCardDomEl(doc, "kbd", "bob-intention-card-ghost-keys");
+  keys.setAttribute("aria-hidden", "true");
+  intentionCardDomText(keys, "==");
+  ghost.appendChild(label);
+  ghost.appendChild(keys);
+  // CodeMirror must never take the click (or the caret) from the button.
+  ghost.addEventListener?.("mousedown", (event) => { event?.preventDefault?.(); });
+  ghost.addEventListener?.("click", (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    try {
+      if (typeof plugin?.intentionCardOpenGhost === "function") void plugin.intentionCardOpenGhost(model.path);
+      else if (typeof plugin?.openIntentionCard === "function") void plugin.openIntentionCard({ filePath: model.path, initialStage: "add" });
+    } catch (_) {}
+  });
+  return ghost;
+}
+
+function intentionCardDomRail(model, plugin, doc) {
+  const rail = model.rail;
+  if (!rail || typeof propertyCardBuildRail !== "function") return null;
+  const mark = (item) => (item ? { ...item, unresolved: intentionCardDomUnresolved(plugin, item.target, model.path) } : null);
+  const word = typeof propertyCardSpecies === "function" ? propertyCardSpecies(model.kind)?.word : "";
+  const built = propertyCardBuildRail(doc, {
+    prev: mark(rail.prev), parent: mark(rail.parent), next: mark(rail.next),
+    children: (rail.children || []).map(mark),
+    label: `${word || "Note"} navigation`,
+    onNavigate: (direction, item, event) => {
+      if (typeof plugin?.intentionCardRailNavigate === "function") {
+        void plugin.intentionCardRailNavigate(direction, item, model.path, event);
+      } else intentionCardDomOpenLink(plugin, item?.target, model.path, event);
+    },
+  });
+  if (!built?.element) return null;
+  for (const link of [built.items?.prev, built.items?.parent, built.items?.next, ...(built.children || [])]) {
+    if (link) intentionCardDomHover(plugin, link, link.getAttribute?.("data-href") || "", model.path);
+  }
+  return built.element;
+}
+
+// The day or period card: kit title block, then the content bands (each
+// behind its existing gate), the set-intentions ghost, and the docked rail.
 function intentionCardBuildDom(model, plugin, doc) {
   if (!model || !doc) return null;
   const card = intentionCardDomEl(doc, "section", "bob-property-card bob-intention-card");
   if (!card) return null;
   card.setAttribute("data-intention-source", model.path);
-  card.setAttribute("role", "group");
-  card.setAttribute("aria-label", `${model.kind} intention card`);
+  card.setAttribute("data-intention-state", model.subject?.state || "unknown");
+  const identity = model.identity || (typeof intentionCardIdentity === "function" ? intentionCardIdentity(model.subject) : null);
+  const applied = identity && typeof propertyCardApplyIdentity === "function"
+    && propertyCardApplyIdentity(card, { kind: identity.kind, title: identity.title });
+  if (!applied) {
+    card.setAttribute("role", "group");
+    const word = String(model.kind || "").charAt(0).toUpperCase() + String(model.kind || "").slice(1);
+    card.setAttribute("aria-label", `${word}: ${identity?.title || model.label}`);
+  }
   if (model.intentions.length === 1) card.classList.add("is-single-intention");
   const component = intentionCardDomComponent(card, plugin);
 
-  const kicker = intentionCardDomEl(doc, "div", "bob-intention-card-kicker");
-  intentionCardDomText(kicker, `${model.kind.toUpperCase()} · ${model.label}`);
-  card.appendChild(kicker);
+  const title = intentionCardDomTitleBlock(model, plugin, doc, identity);
+  if (title) card.appendChild(title);
 
   if (model.parentIntentions.length && model.subject.parent) {
     const parent = intentionCardDomEl(doc, "div", "bob-intention-card-parent");
@@ -201,13 +296,13 @@ function intentionCardBuildDom(model, plugin, doc) {
   if (model.summary) {
     const section = intentionCardDomEl(doc, "section", "bob-intention-card-band bob-intention-card-summary");
     const header = intentionCardDomEl(doc, "div", "bob-intention-card-band-heading");
-    const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
-    intentionCardDomText(title, "SUMMARY");
+    const heading = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
+    intentionCardDomText(heading, "SUMMARY");
     const provenance = intentionCardDomEl(doc, "span", `bob-intention-card-provenance is-${model.summaryState}`);
     intentionCardDomText(provenance, model.summaryState === "agent"
       ? `✦ agent${model.summaryDrafted ? ` · ${intentionCardDateShort(model.summaryDrafted)}` : ""}`
       : "✎ edited");
-    header.appendChild(title);
+    header.appendChild(heading);
     header.appendChild(provenance);
     const body = intentionCardDomEl(doc, "div", "bob-intention-card-summary-body");
     intentionCardDomRender(plugin, body, model.summary, model.path, component);
@@ -218,11 +313,11 @@ function intentionCardBuildDom(model, plugin, doc) {
 
   if (model.reflection) {
     const section = intentionCardDomEl(doc, "section", "bob-intention-card-band bob-intention-card-reflection");
-    const title = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
-    intentionCardDomText(title, "REFLECTION");
+    const heading = intentionCardDomEl(doc, "h2", "bob-intention-card-band-title");
+    intentionCardDomText(heading, "REFLECTION");
     const quote = intentionCardDomEl(doc, "div", "bob-intention-card-quote");
     intentionCardDomRender(plugin, quote, model.reflection, model.path, component);
-    section.appendChild(title);
+    section.appendChild(heading);
     section.appendChild(quote);
     card.appendChild(section);
   }
@@ -235,7 +330,30 @@ function intentionCardBuildDom(model, plugin, doc) {
     intentionCardDomText(missing, labels.join(" · "));
     card.appendChild(missing);
   }
+
+  const ghost = (model.ghost === undefined ? intentionCardShowsGhost(model) : model.ghost)
+    ? intentionCardDomGhost(model, plugin, doc) : null;
+  if (ghost) card.appendChild(ghost);
+
+  const rail = intentionCardDomRail(model, plugin, doc);
+  if (rail) card.appendChild(rail);
   return card;
+}
+
+// Body fallback for a note without an H1: the first rendered content section
+// of the Reading sizer (the card is prepended inside it, since Obsidian's
+// renderer owns the sizer's direct children). Header, frontmatter, pusher,
+// footer, and empty sections never host it.
+function intentionCardDomFirstSection(root) {
+  const skip = ["mod-header", "mod-frontmatter", "markdown-preview-pusher", "mod-footer", "bob-property-card"];
+  for (const child of Array.from(root?.children || [])) {
+    if (!child || child.nodeType === 3) continue;
+    if (skip.some((name) => child.classList?.contains?.(name))) continue;
+    const kids = Array.from(child.children || []).filter((node) => node && node.nodeType !== 3);
+    if (!kids.length && !String(child.textContent || "").trim()) continue;
+    return child;
+  }
+  return null;
 }
 
 function intentionCardDomAnchor(root, subject, today) {

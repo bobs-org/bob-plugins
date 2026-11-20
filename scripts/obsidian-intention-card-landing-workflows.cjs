@@ -109,7 +109,11 @@ async function runLandingWorkflows(ctx, h) {
   // ---- Applied-write overlay with metadata held back ----
   await step("landing-overlay-first-add-live", async () => {
     await liveReady(landingPath);
-    await waitNoCard(landingPath, "the empty landing day has no card");
+    // The empty landing day shows the identity-only day card: no bands, no
+    // owned rows, and (a past day) no set-intentions ghost.
+    const identity = await waitCard(landingPath, (value) => value?.cardCount === 1 && value.card?.intentions?.length === 0
+      && value.ownedAnywhere === 0 && value.card?.ghost === false, "the empty landing day has an identity-only card");
+    assert.equal(identity.card.kind, "day");
     const held = await client.evaluate(holdMetadata(landingPath));
     assert.ok(held.ok, JSON.stringify(held));
     const before = vault();
@@ -175,9 +179,12 @@ async function runLandingWorkflows(ctx, h) {
       await ready((value) => value.status === "saved" && value.fields?.intentions?.length === 0, "last remove saved");
       await closeAll();
       assert.equal(await metadataIntentions(landingPath), JSON.stringify(["Second landing value"]), "metadata still lists the removed intention");
-      const none = await waitNoCard(landingPath, "removing the last field unmounts the card before metadata");
+      // The card stays as the title block; the intention bands disappear
+      // (and the rows are released) before metadata catches up.
+      const bare = await waitCard(landingPath, (value) => value?.cardCount === 1 && value.card?.intentions?.length === 0
+        && !value.rows.some((row) => row.owned), "removing the last field drops the bands before metadata");
       await shot("intention-landing-last-remove-overlay", "Live Preview");
-      return none;
+      return { cardCount: bare.cardCount, intentions: bare.card.intentions, title: bare.card.title };
     } finally {
       await release();
       await waitFor(client, overlayFor(landingPath), (value) => value === false, "overlay settles after the remove", 15_000).catch(() => null);

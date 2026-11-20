@@ -146,7 +146,17 @@ test("placement skips only canonical navigation and direct-child link lines", ()
   const prosePlacement = H.intentionCardPlacement(prose, subject, today);
   assert.equal(prosePlacement.insertBeforeLine, 2);
   assert.equal(prosePlacement.skippedLines, 1);
-  assert.equal(H.intentionCardPlacement("```md\n# fake\n```\nordinary text", subject, today), null);
+  // A fenced-only H1 is no heading: the card goes before the first body line.
+  assert.deepEqual(H.intentionCardPlacement("```md\n# fake\n```\nordinary text", subject, today),
+    { headingLine: -1, insertBeforeLine: 0, skippedLines: 0 });
+  // H1-less dailies place at the first non-blank body line after frontmatter;
+  // an empty body places at the end; unterminated frontmatter still refuses.
+  const day = H.intentionCardSubjectForPath("2025/20250301.md", today);
+  assert.deepEqual(H.intentionCardPlacement("---\n{}\n---\n\nday::2025-03-01 Sat\n\nRelated notes:\n", day, today),
+    { headingLine: -1, insertBeforeLine: 4, skippedLines: 0 });
+  assert.deepEqual(H.intentionCardPlacement("---\n{}\n---\n\n", day, today),
+    { headingLine: -1, insertBeforeLine: 5, skippedLines: 0 });
+  assert.equal(H.intentionCardPlacement("---\n{}\n", day, today), null);
 });
 
 test("Reading anchor follows canonical nav and child DOM rows, then stops at unrelated links", () => {

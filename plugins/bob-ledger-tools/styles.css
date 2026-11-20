@@ -8660,7 +8660,9 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   color: var(--text-muted);
 }
 .bob-intention-card-missing { color: var(--text-faint); font-size: 0.78em; }
-.bob-intention-card .is-unresolved {
+/* Body links only: the title block's kicker, rail, and chips keep the kit's
+   quiet unresolved style (a missing next day is normal, not an error). */
+.bob-intention-card .internal-link.is-unresolved {
   color: var(--text-error) !important;
   text-decoration: line-through;
   text-decoration-thickness: 1px;
@@ -8752,6 +8754,93 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 }
 @media (prefers-reduced-motion: reduce) {
   .bob-intention-card-editor * { animation: none !important; transition: none !important; }
+}
+
+/* Day and period cards (bob-cli-o6 day-period-cards) */
+/* The day or period card is the note's title block. It stays block-width
+   (the kit's container queries need an inline size), and two classes plus
+   the kind attribute outrank the title slot's display: block. */
+.bob-property-card.bob-intention-card[data-card-kind] {
+  display: grid;
+  width: auto;
+}
+/* The card grid's gap already spaces the docked rail. */
+.bob-intention-card > .bob-property-card-rail { margin-block-start: 0; }
+/* Set-intentions ghost: one quiet dashed row on current and future subjects
+   with no intentions. Scoped under the card so it outranks Obsidian's
+   button chrome (fill, shadow, fixed height). */
+.bob-intention-card button.bob-intention-card-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 32px;
+  margin: 0;
+  padding: 0.35em 0.75em;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font: 500 var(--font-ui-small)/1.35 var(--font-interface);
+  text-align: start;
+  white-space: normal;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.bob-intention-card button.bob-intention-card-ghost:hover {
+  border-color: var(--background-modifier-border-hover, var(--background-modifier-border));
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+}
+.bob-intention-card button.bob-intention-card-ghost:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.bob-intention-card-ghost-label { min-width: 0; overflow-wrap: anywhere; }
+/* The keycap hint in Obsidian's kbd style. */
+.bob-intention-card-ghost-keys {
+  flex: none;
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background-color: var(--code-background, var(--background-secondary));
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
+  line-height: 1.3;
+}
+/* Card editor header: the card's leaf tile and species word, without card
+   chrome. The temporal accent is defined locally (same formula as the kit). */
+.bob-intention-editor-identity {
+  --bob-day-accent: color-mix(in srgb, var(--color-cyan, rgb(0 191 188)) 50%, var(--text-normal));
+  --bob-property-card-accent: var(--bob-day-accent);
+  --bob-property-card-ink: color-mix(in srgb, var(--bob-property-card-accent) 70%, var(--text-normal));
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6em;
+  justify-self: start;
+  min-width: 0;
+  font-size: var(--font-text-size, 16px);
+  line-height: 1.3;
+}
+.bob-intention-editor-identity .bob-property-card-kicker-species {
+  color: var(--bob-property-card-ink);
+  font: 650 0.74em/1.35 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+@media (forced-colors: active) {
+  .bob-intention-card button.bob-intention-card-ghost { border-color: CanvasText; color: CanvasText; }
+  .bob-intention-card-ghost-keys { border-color: CanvasText; }
+  .bob-intention-editor-identity .bob-property-card-kicker-species { color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob-intention-card button.bob-intention-card-ghost { transition: none; }
 }
 
 .bob-album-header {

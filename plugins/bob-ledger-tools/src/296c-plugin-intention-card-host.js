@@ -47,8 +47,12 @@ class BobLedgerToolsIntentionCardMixin {
         catch (_) { return false; }
       },
       cleanEditor: (view) => plugin.intentionCardCleanEditor(view),
-      workspaceEvents: ["layout-change", "file-open"],
+      // Day and period cards own the note title in the title slot; the host
+      // registers the kit field once and releases every title on dispose.
+      titleOwnership: true,
+      workspaceEvents: ["layout-change", "file-open", "active-leaf-change"],
       onWorkspaceEvent: () => plugin.intentionCardScheduleReadingViewMount(),
+      onRefresh: () => plugin.intentionCardSweepTitleSlots(),
       onSetup: () => plugin.intentionCardOnSetup(),
       onDisposeStart: () => plugin.intentionCardOnDisposeStart(),
       onDisposeEnd: () => plugin.intentionCardOnDisposeEnd(),
@@ -129,6 +133,7 @@ class BobLedgerToolsIntentionCardMixin {
   }
 
   intentionCardOnDisposeStart() {
+    try { this.intentionCardSlotReleaseAll?.(); } catch (_) {}
     if (this.intentionCardMidnightTimer != null) {
       if (this.albumClearTimeout) this.albumClearTimeout(this.intentionCardMidnightTimer);
       else clearTimeout(this.intentionCardMidnightTimer);
@@ -300,7 +305,52 @@ class BobLedgerToolsIntentionCardMixin {
     const own = this.intentionCardOverlayFrontmatterFor(key, current.frontmatter);
     let model = intentionCardModelFor(path, own.frontmatter, today, parentFrontmatter);
     if (model && own.overlay) model = intentionCardOverlayModel(model, own.overlay, own.frontmatter);
-    return model ? { model, source: current.source, placement, subject } : null;
+    if (!model) return null;
+    model = { ...model };
+    // The title recognizer reads the alias from metadataCache (the overlay
+    // never changes aliases); the rail reads the same source text.
+    const aliasSource = this.intentionCardCache(key)?.cache?.frontmatter || own.frontmatter;
+    const recognizer = typeof intentionCardTitleRecognizer === "function"
+      ? intentionCardTitleRecognizer(model.subject, aliasSource, today) : null;
+    model.today = today;
+    model.identity = typeof intentionCardIdentity === "function" ? intentionCardIdentity(model.subject) : null;
+    model.rail = recognizer && typeof intentionCardRailModel === "function"
+      ? intentionCardRailModel(current.source, model.subject, recognizer, today) : null;
+    model.ghost = typeof intentionCardShowsGhost === "function" ? intentionCardShowsGhost(model) : false;
+    model.recognizerKey = recognizer?.key || "";
+    model.signature = this.intentionCardModelSignature(model);
+    return { model, source: current.source, placement, subject, recognizer };
+  }
+
+  // Repaint dedupe: everything the card DOM shows, including which link
+  // targets resolve (a new daily note un-strikes its rail item).
+  intentionCardModelSignature(model) {
+    const rail = model.rail || null;
+    const targets = [
+      ...(model.identity?.kicker || []).map((part) => part.target),
+      rail?.prev?.target, rail?.parent?.target, rail?.next?.target,
+      ...(rail?.children || []).map((child) => child.target),
+      model.subject?.parent && model.parentIntentions?.length ? intentionCardLinkTarget(model.subject.parent.path) : "",
+    ].filter(Boolean);
+    let links = "";
+    for (const target of targets) {
+      let ok = false;
+      try { ok = intentionCardDomTargetExists(this, target, model.path).ok === true; } catch (_) { ok = false; }
+      links += ok ? "1" : "0";
+    }
+    try {
+      return JSON.stringify({
+        path: model.path, today: model.today, kind: model.kind, label: model.label, state: model.subject?.state,
+        intentions: model.intentions, summary: model.summary, summaryState: model.summaryState,
+        summaryDrafted: model.summaryDrafted, reflection: model.reflection,
+        parentIntentions: model.parentIntentions, missingBands: model.missingBands,
+        identity: model.identity, ghost: model.ghost, hasContent: model.hasContent,
+        rail: rail ? { prev: rail.prev, parent: rail.parent, next: rail.next, children: rail.children } : null,
+        recognizer: model.recognizerKey, links,
+      });
+    } catch (_) {
+      return `${model.path}:${Date.now()}`;
+    }
   }
 
   intentionCardOwn(scope, path) {
@@ -314,50 +364,15 @@ class BobLedgerToolsIntentionCardMixin {
     return propertyCardSlotRelease(this.intentionCardKeySlots, scope, path);
   }
 
-  intentionCardRemoveNodes(root, path = "") {
+  // Remove the path's cards under root, except keep (the mounted slot card).
+  intentionCardRemoveNodes(root, path = "", keep = null) {
     for (const node of Array.from(root?.querySelectorAll?.(`.${INTENTION_CARD_CLASS}`) || [])) {
+      if (keep && node === keep) continue;
       const owned = intentionCardFilePath(node.getAttribute?.("data-intention-source") || "");
       if (path && owned && owned !== intentionCardFilePath(path)) continue;
       intentionCardDomRelease(node);
       try { node.remove?.(); } catch (_) { node.parentNode?.removeChild?.(node); }
     }
-  }
-
-  removeIntentionCardReading(root, scope = root, sourcePath = "") {
-    this.intentionCardRemoveNodes(root, sourcePath);
-    this.intentionCardRelease(scope, sourcePath);
-  }
-
-  paintIntentionCardReading(el, sourcePath) {
-    const root = propertyCardReadingRoot(el);
-    const scope = propertyCardReadingScope(root);
-    if (!root || !sourcePath || !this.intentionCardCanDisplay(sourcePath, el)) {
-      this.removeIntentionCardReading(root, scope, sourcePath);
-      return null;
-    }
-    this.intentionCardRemoveNodes(root, sourcePath);
-    this.intentionCardRelease(scope, sourcePath);
-    const prepared = this.intentionCardModelFor(sourcePath);
-    if (!prepared) return null;
-    const anchor = intentionCardDomAnchor(root, prepared.subject, this.intentionCardToday());
-    if (!anchor) {
-      this.intentionCardRetryReading(root);
-      return null;
-    }
-    this.intentionCardReadingRetries?.delete?.(root);
-    const doc = root.ownerDocument || (typeof document !== "undefined" ? document : null);
-    const card = intentionCardBuildDom(prepared.model, this, doc);
-    if (!card) return null;
-    // Obsidian's preview renderer owns the sizer's direct children and prunes
-    // foreign ones, so a section-level anchor hosts the card inside itself,
-    // after its own content (as the notebook header does inside the H1 section).
-    if (anchor.parentNode === root && typeof anchor.appendChild === "function") anchor.appendChild(card);
-    else if (anchor.parentNode?.insertBefore) anchor.parentNode.insertBefore(card, anchor.nextElementSibling || null);
-    else if (root.insertBefore) root.insertBefore(card, anchor.nextElementSibling || null);
-    else root.appendChild?.(card);
-    if (!card.parentNode) return null;
-    this.intentionCardHost().commitMount(scope, sourcePath, true);
-    return card;
   }
 
   intentionCardRetryReading(root) {
@@ -373,79 +388,31 @@ class BobLedgerToolsIntentionCardMixin {
     this.intentionCardHost().scheduleRefresh();
   }
 
-  // CodeMirror refuses block decorations from a ViewPlugin, so the card is an
-  // inline widget at the end of the line just before the first unrelated
-  // block (side 1), like the album and bank headers; CSS makes it a block.
+  // Body fallback in Live Preview. CodeMirror refuses block decorations from
+  // a ViewPlugin, so the card is an inline widget at the end of the line just
+  // before the first unrelated block (side 1), like the album and bank
+  // headers; CSS makes it a block. A note without an H1 puts it at the start
+  // of its first body line (side -1), or at the end of the document (side 1)
+  // when there is no body line.
   intentionCardLiveAnchor(text, subject) {
     const placement = intentionCardPlacement(text, subject, this.intentionCardToday());
     if (!placement) return null;
-    const lines = String(text || "").split(/\r\n|\r|\n/);
+    const source = String(text || "");
+    const lines = source.split(/\r\n|\r|\n/);
+    if (placement.headingLine < 0) {
+      if (placement.insertBeforeLine >= lines.length) {
+        return { placement, lineIndex: lines.length - 1, offset: source.length, side: 1 };
+      }
+      let start = 0;
+      for (let index = 0; index < placement.insertBeforeLine; index += 1) start += (lines[index] || "").length + 1;
+      return { placement, lineIndex: placement.insertBeforeLine, offset: Math.min(start, source.length), side: -1 };
+    }
     const lineIndex = Math.max(placement.headingLine, placement.insertBeforeLine - 1);
     let offset = 0;
     for (let index = 0; index < lineIndex; index += 1) {
       offset += (lines[index] || "").length + 1;
     }
     offset += (lines[lineIndex] || "").length;
-    return { placement, lineIndex, offset: Math.min(offset, String(text || "").length) };
-  }
-
-  buildIntentionCardDecorations(view) {
-    const plugin = this;
-    try {
-      if (!Decoration || !RangeSetBuilder || !WidgetType || !view?.state?.doc) return Decoration?.none || null;
-      const path = this.intentionCardLivePath(view);
-      if (!path) {
-        this.intentionCardHost().setEditorScope(view, false);
-        this.intentionCardRelease(view?.dom);
-        return Decoration.none;
-      }
-      const source = view.state.doc.toString();
-      const prepared = this.intentionCardModelFor(path, source);
-      if (!prepared) {
-        this.intentionCardHost().setEditorScope(view, false);
-        this.intentionCardRelease(view?.dom);
-        return Decoration.none;
-      }
-      const anchor = this.intentionCardLiveAnchor(source, prepared.subject);
-      if (!anchor) {
-        this.intentionCardHost().setEditorScope(view, false);
-        this.intentionCardRelease(view?.dom);
-        return Decoration.none;
-      }
-      this.intentionCardHost().setEditorScope(view, true);
-      const doc = view.dom?.ownerDocument || (typeof document !== "undefined" ? document : null);
-      if (!doc) {
-        this.intentionCardRelease(view?.dom);
-        return Decoration.none;
-      }
-      const model = prepared.model;
-      const signature = JSON.stringify([path, anchor.offset, model]);
-      // Built lazily: CodeMirror discards an equal widget without toDOM, and
-      // destroy() unloads the card's render component with its DOM.
-      const Widget = class extends WidgetType {
-        constructor() { super(); this.signature = signature; this.path = path; }
-        eq(other) { return other?.signature === signature && other?.path === path; }
-        toDOM() {
-          const element = intentionCardBuildDom(model, plugin, doc) || doc.createElement("span");
-          element.setAttribute("data-cm-widget", "true");
-          plugin.intentionCardHost().commitMount(view.dom, path, true);
-          return element;
-        }
-        destroy(dom) { intentionCardDomRelease(dom); }
-        ignoreEvent() { return true; }
-      };
-      const widget = new Widget();
-      const decoration = Decoration.widget({ widget, side: 1 });
-      const builder = new RangeSetBuilder();
-      builder.add(anchor.offset, anchor.offset, decoration);
-      return builder.finish();
-    } catch (_) {
-      return Decoration?.none || null;
-    }
-  }
-
-  intentionCardCleanEditor(view) {
-    this.intentionCardHost().cleanEditor(view);
-    this.intentionCardRelease(view?.dom);
+    return { placement, lineIndex, offset: Math.min(offset, source.length), side: 1 };
   }
 }

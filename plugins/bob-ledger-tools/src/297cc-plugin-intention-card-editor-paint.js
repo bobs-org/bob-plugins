@@ -65,8 +65,35 @@ function intentionCardEditorSummaryContext(doc, fields) {
   return context;
 }
 
+// The card editor mirrors the card's identity: the same leaf tile and
+// species word as the day or period card. Omitted when the kit is missing.
+function intentionCardEditorIdentityRow(doc, options) {
+  try {
+    if (typeof propertyCardBuildGlyphTile !== "function" || typeof propertyCardSpecies !== "function"
+      || typeof intentionCardIdentity !== "function" || typeof intentionCardSubjectForPath !== "function") return null;
+    const subject = intentionCardSubjectForPath(options.subjectPath || "");
+    const identity = intentionCardIdentity(subject);
+    const species = identity ? propertyCardSpecies(identity.kind) : null;
+    if (!species) return null;
+    const tile = propertyCardBuildGlyphTile(doc, { kind: identity.kind, band: identity.tile.band, value: identity.tile.value });
+    if (!tile) return null;
+    const row = intentionCardEditorCreateEl(doc, "div", "bob-intention-editor-identity");
+    if (!row) return null;
+    row.setAttribute("data-card-kind", identity.kind);
+    row.appendChild(tile);
+    const word = intentionCardEditorCreateEl(doc, "span", "bob-property-card-kicker-species");
+    intentionCardEditorSetText(word, species.word);
+    row.appendChild(word);
+    return row;
+  } catch (_) {
+    return null;
+  }
+}
+
 function intentionCardEditorPaintAll(host, options, doc, modal) {
   while (host.firstChild) host.removeChild(host.firstChild);
+  const identity = intentionCardEditorIdentityRow(doc, options);
+  if (identity) host.appendChild(identity);
   const title = intentionCardEditorCreateEl(doc, "h2", "bob-intention-editor-title");
   intentionCardEditorSetText(title, `Edit intentions · ${options.subject || options.subjectPath}`);
   host.appendChild(title);

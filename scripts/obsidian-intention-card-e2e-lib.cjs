@@ -122,6 +122,22 @@ function shortDayLabel(text) {
   return WEEKDAYS[date.getUTCDay()] + " " + MONTHS[date.getUTCMonth()] + " " + date.getUTCDate();
 }
 
+// bob's period range label (bob-cli periods/labels.rs): `Nov 16 – 22`,
+// `Oct 26 – Nov 1`, or `Dec 28, 2026 – Jan 3, 2027`.
+function periodRangeLabel(start, end) {
+  const a = parseDate(start);
+  const b = parseDate(end);
+  if (a.y !== b.y) return MONTHS[a.m - 1] + " " + a.d + ", " + a.y + " – " + MONTHS[b.m - 1] + " " + b.d + ", " + b.y;
+  if (a.m !== b.m) return MONTHS[a.m - 1] + " " + a.d + " – " + MONTHS[b.m - 1] + " " + b.d;
+  return MONTHS[a.m - 1] + " " + a.d + " – " + b.d;
+}
+
+// The day card's path-computed title: `Fri, Nov 20, 2026`.
+function dayCardTitle(text) {
+  const date = new Date(utcOf(text));
+  return WEEKDAYS[date.getUTCDay()] + ", " + MONTHS[date.getUTCMonth()] + " " + date.getUTCDate() + ", " + date.getUTCFullYear();
+}
+
 function monthDayLabel(text) {
   const date = new Date(utcOf(text));
   return MONTHS[date.getUTCMonth()] + " " + date.getUTCDate();
@@ -185,12 +201,15 @@ function weekNote(id, monday, { intentions } = {}) {
   const prevId = weekId(prevMonday);
   const nextId = weekId(nextMonday);
   const quarter = year + "-Q" + quarterOfWeek(number);
-  const lines = ["---", "parent: \"[[" + year + "/" + quarter + "]]\"", 'type: "[[day]]"', "id: " + id, "date: " + monday, "end: " + shiftDays(monday, 6), "tags:", "  - weekly"];
+  const title = id + " · " + periodRangeLabel(monday, shiftDays(monday, 6));
+  const lines = ["---", "parent: \"[[" + year + "/" + quarter + "]]\"", 'type: "[[day]]"', "id: " + id, "date: " + monday, "end: " + shiftDays(monday, 6),
+    "aliases:", "  - " + yamlString(title), "tags:", "  - weekly"];
   if (Array.isArray(intentions)) {
     lines.push("intentions:");
     for (const item of intentions) lines.push("  - " + yamlString(item));
   }
-  lines.push("---", "", "# " + id, "");
+  // bob's scaffold H1 (also the first alias), which the period card hides.
+  lines.push("---", "", "# " + title, "");
   lines.push("[[" + weekPathOf(prevId).replace(/\.md$/, "") + "|‹ " + prevId.slice(5) + "]] · [[" + year + "/" + quarter + "|↑ " + quarter + "]] · [[" + weekPathOf(nextId).replace(/\.md$/, "") + "|" + nextId.slice(5) + " ›]]", "");
   const days = [];
   for (let i = 0; i < 7; i += 1) {
@@ -199,6 +218,27 @@ function weekNote(id, monday, { intentions } = {}) {
   }
   lines.push(days.join(" · "), "", "```bob-stats-strip", "", "```", "", "## Notes", "", "- Week body sentinel " + id + ".");
   return lines.join("\n") + "\n";
+}
+
+// The H1-less 2025 daily shape: a `day::` body line, no H1, no nav line. The
+// day card mounts with its path-computed title and hides nothing.
+function legacyDayNote(date) {
+  const week = weekId(date);
+  return [
+    "---",
+    "parent: '[[" + weekPathOf(week).replace(/\.md$/, "") + "]]'",
+    'type: "[[day]]"',
+    "date: " + date,
+    "tags:",
+    "  - daily",
+    "---",
+    "day::" + date + " " + shortDayLabel(date).slice(0, 3),
+    "",
+    "Related notes:",
+    "- [[" + dayPath(shiftDays(date, -1)).replace(/\.md$/, "") + "]]",
+    "- [[" + dayPath(shiftDays(date, 1)).replace(/\.md$/, "") + "]]",
+    "- Body sentinel for the legacy daily " + date + ".",
+  ].join("\n") + "\n";
 }
 
 function quarterNote(id, { intentions } = {}) {
@@ -222,19 +262,24 @@ function fixturePlan(today) {
   const malformed = shiftDays(today, -4);
   const landing = shiftDays(today, -5);
   const tomorrow = shiftDays(today, 1);
+  // An empty future day for the set-intentions ghost (tomorrow stays missing).
+  const future = shiftDays(today, 3);
+  // A fixed, unused past date in the H1-less legacy shape.
+  const legacy = "2025-03-01";
   const week = weekId(today);
   const weekMonday = isoWeek(today).monday;
   const quarter = quarterId(today);
   const year = yearId(today);
   const stampedSummary = "Shipped the card display and the guarded editor.";
   const plan = {
-    today, yesterday, stamped, empty, malformed, landing, tomorrow, week, weekMonday, quarter, year,
+    today, yesterday, stamped, empty, malformed, landing, tomorrow, future, legacy, week, weekMonday, quarter, year,
     stampedSummary,
     stampedDigest: summaryDigest(stampedSummary),
     stampedDrafted: shiftDays(today, -1),
     paths: {
       today: dayPath(today), yesterday: dayPath(yesterday), stamped: dayPath(stamped),
       empty: dayPath(empty), malformed: dayPath(malformed), landing: dayPath(landing), tomorrow: dayPath(tomorrow),
+      future: dayPath(future), legacy: dayPath(legacy),
       week: weekPathOf(week), quarter: year === quarter.slice(0, 4) ? quarter.slice(0, 4) + "/" + quarter + ".md" : quarter.slice(0, 4) + "/" + quarter + ".md",
       year: year + ".md", embed: "embeds-today.md", ordinary: "ordinary.md",
       boundaryDay: "2026/20260101.md", boundaryPrevDay: "2025/20251231.md",
@@ -267,6 +312,8 @@ function fixturePlan(today) {
     [plan.paths.malformed]: dayNote(malformed, { malformed: "intentions: 7" }),
     // The landing proof's own empty day: first add, overlay, last remove.
     [plan.paths.landing]: dayNote(landing, {}),
+    [plan.paths.future]: dayNote(future, {}),
+    [plan.paths.legacy]: legacyDayNote(legacy),
     [plan.paths.week]: weekNote(week, weekMonday, { intentions: plan.intentions.week }),
     [plan.paths.quarter]: quarterNote(quarter, { intentions: plan.intentions.quarter }),
     [plan.paths.embed]: "---\ntype: \"[[note]]\"\n---\n\n# Embeds today\n\n![[" + plan.paths.today.replace(/\.md$/, "") + "]]\n",
@@ -276,8 +323,9 @@ function fixturePlan(today) {
     [plan.paths.boundaryPrevWeek]: weekNote("2025-W52", "2025-12-22", {}),
     [plan.paths.boundaryQuarter]: quarterNote("2025-Q4", { intentions: ["Close the year"] }),
   };
-  const fixed = [plan.paths.boundaryDay, plan.paths.boundaryWeek, plan.paths.boundaryPrevWeek, plan.paths.boundaryQuarter];
-  const relative = [plan.paths.today, plan.paths.yesterday, plan.paths.stamped, plan.paths.empty, plan.paths.malformed, plan.paths.landing, plan.paths.week, plan.paths.quarter];
+  const fixed = [plan.paths.boundaryDay, plan.paths.boundaryWeek, plan.paths.boundaryPrevWeek, plan.paths.boundaryQuarter, plan.paths.legacy];
+  const relative = [plan.paths.today, plan.paths.yesterday, plan.paths.stamped, plan.paths.empty, plan.paths.malformed, plan.paths.landing,
+    plan.paths.future, plan.paths.week, plan.paths.quarter];
   for (const name of relative) {
     if (fixed.includes(name)) throw new Error("today-relative fixture collides with a boundary fixture: " + name);
   }
@@ -407,6 +455,20 @@ function selfTest() {
   assert.ok(notes[plan.paths.malformed].includes("\nintentions: 7\n"));
   assert.ok(!/\nintentions:/.test(notes[plan.paths.empty]));
   assert.ok(!notes[plan.paths.tomorrow] && !notes[plan.paths.year] && !notes[plan.paths.boundaryPrevDay]);
+  // Day and period cards: the week carries bob's scaffold H1 and alias, the
+  // future day is empty, and the legacy daily has no H1 or nav line.
+  assert.equal(periodRangeLabel("2026-11-16", "2026-11-22"), "Nov 16 – 22");
+  assert.equal(periodRangeLabel("2026-10-26", "2026-11-01"), "Oct 26 – Nov 1");
+  assert.equal(periodRangeLabel("2026-12-28", "2027-01-03"), "Dec 28, 2026 – Jan 3, 2027");
+  assert.equal(dayCardTitle("2026-11-20"), "Fri, Nov 20, 2026");
+  assert.ok(notes[plan.paths.week].includes("\n# 2026-W47 · Nov 16 – 22\n"));
+  assert.ok(notes[plan.paths.week].includes('  - "2026-W47 · Nov 16 – 22"'));
+  assert.equal(plan.paths.future, "2026/20261123.md");
+  assert.ok(!/\nintentions:/.test(notes[plan.paths.future]));
+  assert.equal(plan.paths.legacy, "2025/20250301.md");
+  assert.ok(notes[plan.paths.legacy].includes("\nday::2025-03-01 Sat\n"));
+  assert.ok(!/\n# /.test(notes[plan.paths.legacy]), "the legacy daily has no H1");
+  assert.throws(() => fixturePlan("2025-03-06"), /collides/, "a relative fixture on the legacy date collides");
   assert.ok(notes[plan.paths.embed].includes("![[2026/20261120]]"));
   fixturePlan("2026-06-15");
   assert.throws(() => fixturePlan("2026-01-05"), /collides/);
@@ -442,6 +504,6 @@ function selfTest() {
 module.exports = {
   HELP_TEXT, OWNED_KEYS, OLD_BOB_STDERR,
   assertOwnedRows, assertUnownedBytesKept, dayPath, fixturePlan, frontmatterBlocks, isoWeek, keyEvents,
-  localToday, monthDayLabel, parseArgs, quarterId, rowHidden, selfTest, shiftDays, shortDayLabel,
+  dayCardTitle, legacyDayNote, localToday, monthDayLabel, parseArgs, periodRangeLabel, quarterId, rowHidden, selfTest, shiftDays, shortDayLabel,
   splitNote, summaryDigest, weekId, yearId,
 };

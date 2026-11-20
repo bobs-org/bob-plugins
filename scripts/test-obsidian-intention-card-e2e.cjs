@@ -31,15 +31,26 @@ test("fixtures are relative to the run date and keep boundary notes missing", ()
   for (const missing of [plan.paths.tomorrow, plan.paths.year, plan.paths.boundaryPrevDay, plan.paths.boundaryNextQuarter]) {
     assert.equal(notes[missing], undefined, missing + " must stay missing");
   }
+  // Day and period card fixtures: an empty future day for the ghost and an
+  // H1-less legacy daily, both seeded; the week carries bob's scaffold H1.
+  assert.equal(plan.paths.future, "2027/20270107.md");
+  assert.ok(notes[plan.paths.future] && !/\nintentions:/.test(notes[plan.paths.future]));
+  assert.ok(/\nday::2025-03-01 Sat\n/.test(notes[plan.paths.legacy]));
+  assert.ok(notes[plan.paths.week].includes("\n# 2027-W01 · Jan 4 – 10, 2027\n") === false, "the scaffold title has no trailing year");
+  assert.ok(notes[plan.paths.week].includes("\n# 2027-W01 · Jan 4 – 10\n"));
 });
 
 test("every mandatory check is listed once and the runner fails on an unrun check", () => {
   assert.equal(new Set(runner.REQUIRED_CHECKS).size, runner.REQUIRED_CHECKS.length);
+  assert.ok(!runner.REQUIRED_CHECKS.includes("display-empty-fails-open"), "an empty note now gets the identity-only card");
   for (const name of ["yesterday-prev-note-double-equals-r", "yesterday-double-equals-bracket-r", "stale-refusal-keeps-draft",
     "body-edit-survives-save", "old-bob-keeps-card-and-recovery", "display-seven-owned-keys-reading", "yaml-invalid-stays-recoverable",
     "landing-overlay-reading-delayed-metadata", "landing-overlay-first-add-live", "landing-overlay-last-remove-live",
     "landing-stale-remove-retargets", "landing-cancel-leaves-no-retry", "landing-undo-busy-guard",
-    "landing-reflection-summary-context", "landing-reflection-autogrow", "landing-reorder-arrange-animation"]) {
+    "landing-reflection-summary-context", "landing-reflection-autogrow", "landing-reorder-arrange-animation",
+    "display-live-today-placement", "display-reading-today-placement", "display-empty-identity-card",
+    "display-reveal-on-cursor", "display-ghost-opens-editor", "display-rail-navigates", "display-period-children",
+    "display-legacy-daily", "display-bytes-neutral", "display-malformed-fails-open", "display-plugin-disable-restores"]) {
     assert.ok(runner.REQUIRED_CHECKS.includes(name), name);
   }
 });

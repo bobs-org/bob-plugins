@@ -62,20 +62,67 @@ function previewDocument() {
   return { createElement(tag) { return new PreviewElement(tag, this); }, createTextNode(text) { return new PreviewTextNode(text, this); } };
 }
 
+// Note bodies in the shapes bob writes: the H1 and nav line (and, for
+// periods, the child-links line) that the day or period card hides and
+// docks as its rail.
+const DAY_BODY = (date, weekday, prev, next, week) => `# ${date} ${weekday}\n\n[[${prev}|prev]] · [[${week}|${week.slice(-3)}]] · [[${next}|next]]\n\n- [ ] #task [[gtd_daily]] ^gtd\n`;
+const WEEK_BODY = "# 2026-W47 · Nov 16 – 22\n\n[[2026/2026-W46|‹ W46]] · [[2026/2026-Q4|↑ 2026-Q4]] · [[2026/2026-W48|W48 ›]]\n\n"
+  + "[[2026/20261116|Mon Nov 16]] · [[2026/20261117|Tue 17]] · [[2026/20261118|Wed 18]] · [[2026/20261119|Thu 19]] · [[2026/20261120|Fri 20]] · [[2026/20261121|Sat 21]] · [[2026/20261122|Sun 22]]\n";
+const QUARTER_BODY = "# 2026-Q4 · W40–W53 · Sep 28, 2026 – Jan 3, 2027\n\n[[2026/2026-Q3|‹ Q3]] · [[2026|↑ 2026]] · [[2027/2027-Q1|2027-Q1 ›]]\n\n"
+  + Array.from({ length: 14 }, (_, i) => `[[2026/2026-W${40 + i}|W${40 + i}]]`).join(" · ") + "\n";
+const YEAR_BODY = "# 2026 · Dec 29, 2025 – Jan 3, 2027 · 53 weeks\n\n[[2025|‹ 2025]] · [[all_time|↑ All time]] · [[2027|2027 ›]]\n\n"
+  + "[[2026/2026-Q1|Q1]] · [[2026/2026-Q2|Q2]] · [[2026/2026-Q3|Q3]] · [[2026/2026-Q4|Q4]]\n";
+// Notes that do not exist yet in the preview vault (their links look unresolved).
+const PREVIEW_MISSING = ["2026/20261121", "2026/20261122", "2026/20261124", "2026/20261125", "2026/2026-W48", "2027/2027-Q1", "2027",
+  ...Array.from({ length: 6 }, (_, i) => `2026/2026-W${48 + i}`)];
+
 function previewCases(H) {
+  const day = (date, weekday, prev, next) => DAY_BODY(date, weekday, prev, next, "2026/2026-W47");
   const cases = [
-    { name: "recent-closed-ghost", path: "2026/20261114.md", today: "2026-11-19", frontmatter: { intentions: ["Leave enough room to notice what matters"] } },
-    { name: "single-intention", path: "2026/20261119.md", today: "2026-11-19", frontmatter: { intentions: ["Protect the first quiet hour"] } },
-    { name: "three-with-both-bands", path: "2026/20261119.md", today: "2026-11-19", frontmatter: { intentions: ["Finish the smallest useful slice", "Ask for the missing context", "Leave a clean handoff"], summary: "A steady day with **one clear finish**.", summary_digest: H.intentionCardDigest("A steady day with **one clear finish**."), summary_drafted: "2026-11-19", reflection: "The pause before the meeting helped.\n\nI kept the afternoon open for follow-through." } },
-    { name: "edited-summary", path: "2026/2026-W47.md", today: "2026-11-19", frontmatter: { intentions: ["Build a reliable week"], summary: "I rewrote this summary after reviewing the week.", summary_digest: "sha256:0000000000000000", summary_drafted: "2026-11-19", reflection: "Keep the quieter pace." } },
-    { name: "summary-only", path: "2026/2026-Q4.md", today: "2026-11-19", frontmatter: { summary: "The quarter is taking shape around fewer, better commitments." } },
-    { name: "reflection-only", path: "2026.md", today: "2026-11-19", frontmatter: { reflection: "A year can hold a lot of change.\n\nKeep what made the work humane." } },
+    { name: "recent-closed-ghost", path: "2026/20261114.md", today: "2026-11-19", frontmatter: { intentions: ["Leave enough room to notice what matters"] },
+      body: "# 2026-11-14 Sat\n\n[[2026/20261113|prev]] · [[2026/2026-W46|W46]] · [[2026/20261115|next]]\n" },
+    { name: "single-intention", path: "2026/20261119.md", today: "2026-11-19", frontmatter: { intentions: ["Protect the first quiet hour"] },
+      body: day("2026-11-19", "Thu", "2026/20261118", "2026/20261120") },
+    { name: "three-with-both-bands", path: "2026/20261119.md", today: "2026-11-19", frontmatter: { intentions: ["Finish the smallest useful slice", "Ask for the missing context", "Leave a clean handoff"], summary: "A steady day with **one clear finish**.", summary_digest: H.intentionCardDigest("A steady day with **one clear finish**."), summary_drafted: "2026-11-19", reflection: "The pause before the meeting helped.\n\nI kept the afternoon open for follow-through." },
+      body: day("2026-11-19", "Thu", "2026/20261118", "2026/20261120") },
+    { name: "edited-summary", path: "2026/2026-W47.md", today: "2026-11-19", frontmatter: { intentions: ["Build a reliable week"], summary: "I rewrote this summary after reviewing the week.", summary_digest: "sha256:0000000000000000", summary_drafted: "2026-11-19", reflection: "Keep the quieter pace." },
+      body: WEEK_BODY },
+    { name: "summary-only", path: "2026/2026-Q4.md", today: "2026-11-19", frontmatter: { summary: "The quarter is taking shape around fewer, better commitments." }, body: QUARTER_BODY },
+    { name: "reflection-only", path: "2026.md", today: "2026-11-19", frontmatter: { reflection: "A year can hold a lot of change.\n\nKeep what made the work humane." }, body: YEAR_BODY },
+    // Day and period cards (bob-cli-o6 day-period-cards).
+    { name: "empty-today-ghost", path: "2026/20261120.md", today: "2026-11-20", frontmatter: {}, body: day("2026-11-20", "Fri", "2026/20261119", "2026/20261121") },
+    { name: "past-empty-day", path: "2026/20261117.md", today: "2026-11-20", frontmatter: {}, body: day("2026-11-17", "Tue", "2026/20261116", "2026/20261118") },
+    { name: "future-day", path: "2026/20261123.md", today: "2026-11-20", frontmatter: {},
+      body: "# 2026-11-23 Mon\n\n[[2026/20261122|prev]] · [[2026/2026-W48|W48]] · [[2026/20261124|next]]\n" },
+    { name: "week-children", path: "2026/2026-W47.md", today: "2026-11-20", frontmatter: { intentions: ["Finish the album", "Ship the release train"] }, body: WEEK_BODY },
+    { name: "quarter", path: "2026/2026-Q4.md", today: "2026-11-20", frontmatter: { intentions: ["The blog has been released!"] }, body: QUARTER_BODY },
+    { name: "year", path: "2026.md", today: "2026-11-20", frontmatter: {}, body: YEAR_BODY },
+    { name: "legacy-daily", path: "2025/20250301.md", today: "2026-11-20", frontmatter: {},
+      body: "day::2025-03-01 Sat\n\nRelated notes:\n- [[2025/20250228]]\n- [[2025/20250302]]\n" },
   ];
   return cases.map((item) => {
-    const model = H.intentionCardModelFor(item.path, item.frontmatter, item.today, null);
+    let model = H.intentionCardModelFor(item.path, item.frontmatter, item.today, null);
     assert.ok(model, `${item.name}: model is available`);
+    // What the plugin's model wrapper attaches: identity, the title
+    // recognizer's rail from the note body, and the ghost.
+    const source = `---\n${JSON.stringify(item.frontmatter)}\n---\n\n${item.body || ""}`;
+    const recognizer = H.intentionCardTitleRecognizer(model.subject, item.frontmatter, item.today);
+    model = { ...model, today: item.today, identity: H.intentionCardIdentity(model.subject),
+      rail: recognizer ? H.intentionCardRailModel(source, model.subject, recognizer, item.today) : null };
+    model.ghost = H.intentionCardShowsGhost(model);
     return { ...item, model };
   });
+}
+
+// A vault stub where every link resolves except PREVIEW_MISSING.
+function previewPlugin() {
+  const exists = (target) => !PREVIEW_MISSING.includes(String(target || "").replace(/\.md$/i, ""));
+  const file = (target) => ({ path: `${String(target).replace(/\.md$/i, "")}.md` });
+  return { app: {
+    workspace: {},
+    vault: { getAbstractFileByPath: (target) => (exists(target) ? file(target) : null) },
+    metadataCache: { getFirstLinkpathDest: (target) => (exists(target) ? file(target) : null), getFileCache: () => null },
+  } };
 }
 
 async function freePort() {
@@ -165,7 +212,7 @@ async function main() {
       for (const theme of ["light", "dark"]) {
         for (const width of [1280, 375]) {
           const doc = previewDocument();
-          const plugin = { app: { workspace: {}, vault: {}, metadataCache: {} } };
+          const plugin = previewPlugin();
           const card = H.intentionCardBuildDom(item.model, plugin, doc);
           assert.ok(card?.classList?.contains("bob-property-card"), `${item.name}: shared card painter ran`);
           const caseName = `${item.name}-${theme}-${width}`;

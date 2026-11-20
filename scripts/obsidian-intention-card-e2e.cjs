@@ -28,9 +28,11 @@ const REQUIRED_CHECKS = [
   "display-live-today-parent-line", "display-reading-today-mounts-once", "display-reading-today-placement",
   "display-reading-today-owned-rows", "display-seven-owned-keys-reading", "display-seven-owned-keys-live",
   "display-agent-summary-provenance", "display-reflection-quote", "display-recent-closed-missing-band",
-  "display-source-fails-open", "display-mode-change-restores", "display-empty-fails-open",
+  "display-source-fails-open", "display-mode-change-restores", "display-empty-identity-card",
   "display-malformed-fails-open", "display-embed-fails-open", "display-unmount-restores",
   "display-failure-restores-and-recovers", "display-plugin-disable-restores", "display-passive-bytes-neutral",
+  "display-reveal-on-cursor", "display-ghost-opens-editor", "display-rail-navigates", "display-period-children",
+  "display-legacy-daily", "display-bytes-neutral",
   "editor-empty-double-equals", "editor-open-initial-selection", "editor-closed-initial-selection",
   "close-q-browse", "close-ctrl-bracket-browse", "close-escape-browse", "close-q-types-in-stage",
   "close-ctrl-bracket-stage", "close-escape-stage", "yesterday-prev-note-double-equals-r",
@@ -172,7 +174,9 @@ function pluginProvenance() {
   };
 }
 
-// One DOM probe for the card, native Properties rows, and block order.
+// One DOM probe for the card, native Properties rows, block order, and the
+// title block: slot placement, inline title, hidden source title lines,
+// level-1 headings, the docked rail, and the ghost.
 function displayProbeSource(notePath) {
   return `(() => {
     const notePath = ${JSON.stringify(notePath)};
@@ -190,6 +194,12 @@ function displayProbeSource(notePath) {
       const rect = node.getBoundingClientRect();
       return { present: true, display: style.display, visibility: style.visibility, rectVisible: rect.width > 0 && rect.height > 0 };
     };
+    const shown = (node) => {
+      if (!node || !node.isConnected) return false;
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+    };
     const cards = Array.from(root?.querySelectorAll(".bob-intention-card") || []).filter((node) => !inEmbed(node));
     const embedCards = Array.from(root?.querySelectorAll(".bob-intention-card") || []).filter(inEmbed);
     const properties = Array.from(root?.querySelectorAll(".metadata-container") || []).find((node) => !inEmbed(node)) || null;
@@ -199,10 +209,12 @@ function displayProbeSource(notePath) {
     const embedProperties = Array.from(root?.querySelectorAll(".markdown-embed .metadata-property[data-property-key], .internal-embed .metadata-property[data-property-key]") || [])
       .map((row) => ({ key: row.getAttribute("data-property-key"), owned: row.classList.contains("bob-property-card-owned-property"), ...visible(row) }));
     const ownedAnywhere = document.querySelectorAll(".bob-property-card-owned-property").length;
+    const ownsTitle = document.querySelectorAll(".bob-property-card-owns-title").length;
     const card = cards[0] || null;
+    const lineSelector = mode === "preview" ? "p, li, h1, div.el-p, .task-list-item" : ".cm-line";
     const order = (needle) => {
       if (!card) return null;
-      const nodes = Array.from(root.querySelectorAll(mode === "preview" ? "p, li, h1, div.el-p, .task-list-item" : ".cm-line"))
+      const nodes = Array.from(root.querySelectorAll(lineSelector))
         .filter((node) => !inEmbed(node) && !card.contains(node) && (node.textContent || "").includes(needle));
       const node = nodes[nodes.length - 1] || null;
       if (!node) return { found: false, needle };
@@ -218,14 +230,38 @@ function displayProbeSource(notePath) {
     };
     const h1 = card ? Array.from(root.querySelectorAll(mode === "preview" ? "h1" : ".cm-line.HyperMD-header-1, .HyperMD-header-1"))
       .filter((node) => !inEmbed(node) && !card.contains(node))[0] || null : null;
+    // Every level-1 heading the pane paints: the card title, native H1s, and
+    // Live Preview header lines. The inline title is reported on its own.
+    const levelOne = Array.from(root?.querySelectorAll('[aria-level="1"], h1, .cm-line.HyperMD-header-1') || [])
+      .filter((node) => !inEmbed(node) && shown(node))
+      .map((node) => ({ text: (node.textContent || "").trim().slice(0, 120), card: Boolean(card && card.contains(node)) }));
+    const inlineTitle = Array.from(root?.querySelectorAll(".inline-title") || []).find((node) => !inEmbed(node)) || null;
+    const lineShown = (needle) => Array.from(root?.querySelectorAll(lineSelector) || [])
+      .filter((node) => !inEmbed(node) && !(card && card.contains(node)) && (node.textContent || "").includes(needle) && shown(node)).length;
+    const railItem = (direction) => {
+      const node = card?.querySelector('.bob-property-card-rail [data-rail="' + direction + '"].bob-property-card-rail-item');
+      return node ? { href: node.getAttribute("data-href"), text: node.textContent.trim(), aria: node.getAttribute("aria-label"),
+        unresolved: node.classList.contains("is-unresolved") } : null;
+    };
+    const slotParent = card?.parentElement;
     return {
       status: "pass", path: notePath, mode, source,
-      cardCount: cards.length, embedCardCount: embedCards.length, ownedAnywhere,
+      cardCount: cards.length, embedCardCount: embedCards.length, ownedAnywhere, ownsTitle,
       card: card ? {
-        label: card.getAttribute("aria-label"), role: card.getAttribute("role"),
+        label: card.getAttribute("aria-label"), role: card.getAttribute("role"), kind: card.getAttribute("data-card-kind"),
         sourceAttr: card.getAttribute("data-intention-source"),
-        kicker: card.querySelector(".bob-intention-card-kicker")?.textContent || "",
-        chips: Array.from(card.querySelectorAll(".bob-intention-card-chip")).map((node) => node.textContent),
+        kicker: (card.querySelector(".bob-property-card-kicker") || card.querySelector(".bob-intention-card-kicker"))?.textContent || "",
+        title: card.querySelector(".bob-property-card-title")?.textContent || "",
+        pill: card.querySelector(".bob-property-card-pill")?.textContent || "",
+        subtitle: card.querySelector(".bob-property-card-subtitle")?.textContent || "",
+        tile: { band: card.querySelector(".bob-property-card-tile-band")?.textContent || "", value: card.querySelector(".bob-property-card-tile-value")?.textContent || "" },
+        slot: slotParent?.classList.contains("cm-sizer") ? "cm-sizer" : slotParent?.classList.contains("mod-header") ? "mod-header" : "body",
+        beforeProperties: Boolean(properties && card.nextElementSibling === properties),
+        rail: card.querySelector(".bob-property-card-rail") ? { prev: railItem("prev"), parent: railItem("parent"), next: railItem("next") } : null,
+        chips: Array.from(card.querySelectorAll(".bob-property-card-rail-chip")).map((node) => ({
+          text: node.textContent.trim(), href: node.getAttribute("data-href"), current: node.classList.contains("is-current") })),
+        ghost: Boolean(card.querySelector(".bob-intention-card-ghost")),
+        intentionChips: Array.from(card.querySelectorAll(".bob-intention-card-chip")).map((node) => node.textContent),
         intentions: Array.from(card.querySelectorAll(".bob-intention-card-intention-body")).map((node) => node.textContent.trim()),
         parent: card.querySelector(".bob-intention-card-parent")?.textContent || "",
         summary: card.querySelector(".bob-intention-card-summary")?.textContent || "",
@@ -235,6 +271,13 @@ function displayProbeSource(notePath) {
         text: card.textContent.slice(0, 600), rect: (() => { const r = card.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })(),
         h1Before: h1 ? Boolean(card.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_PRECEDING) : null,
       } : null,
+      title: {
+        inlineTitle: inlineTitle ? shown(inlineTitle) : null,
+        levelOne,
+        h1Shown: Array.from(root?.querySelectorAll(mode === "preview" ? "h1" : ".cm-line.HyperMD-header-1") || [])
+          .filter((node) => !inEmbed(node) && shown(node)).map((node) => (node.textContent || "").trim().slice(0, 120)),
+        navShown: lineShown("prev") + lineShown("‹"),
+      },
       order: { nav: order("prev"), gtd: order("GTD-ANCHOR"), notes: order("Body sentinel") },
       properties: properties ? visible(properties) : { present: false }, rows, embedProperties,
     };
@@ -377,7 +420,7 @@ async function run(args) {
     const endToday = await client.evaluate("app.plugins.plugins['bob-ledger-tools'].intentionCardToday()");
     report.testClock.pluginTodayAtEnd = endToday;
     if (endToday !== today) check("test-clock-agrees-at-end", false, report.testClock);
-    check("screenshots-captured", report.screenshots.length >= 20, { count: report.screenshots.length });
+    check("screenshots-captured", report.screenshots.length >= 52, { count: report.screenshots.length });
     check("no-console-exceptions", report.consoleExceptions.length === 0, report.consoleExceptions);
     report.bobInvocations = readInvocations(ctx.logPath);
   } catch (error) {
@@ -506,39 +549,96 @@ function makeHelpers(ctx) {
     view.editor.focus();
     return { ok: true, line };
   })()`);
-  return { key, keys, open, probe, waitCard, waitNoCard, shot, vault, invocations, writerApplies, placeCursor, expandProperties };
+  // A real mouse click (CDP) at the center of the first matching node in the
+  // note's own pane, never inside an embed.
+  const clickIn = async (notePath, selector) => {
+    const box = await client.evaluate(`(() => {
+      const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === ${JSON.stringify(notePath)});
+      const view = leaf?.view;
+      const root = view?.getMode?.() === "preview" ? view.previewMode?.containerEl : view?.contentEl;
+      const node = Array.from(root?.querySelectorAll(${JSON.stringify(selector)}) || []).find((item) => !item.closest(".markdown-embed, .internal-embed"));
+      if (!node) return null;
+      const rect = node.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height };
+    })()`);
+    if (!box || !(box.width > 0)) throw new Error("nothing to click for " + selector + " on " + notePath);
+    await client.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x, y: box.y });
+    await client.call("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
+    await client.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
+    return box;
+  };
+  return { key, keys, open, probe, waitCard, waitNoCard, shot, vault, invocations, writerApplies, placeCursor, expandProperties, clickIn };
 }
 
 async function displayPhase(ctx) {
-  const { plan, attempt, open, probe, waitCard, waitNoCard, shot, client, vault } = ctx;
+  const { plan, attempt, open, probe, waitCard, waitNoCard, shot, client, vault, placeCursor, clickIn, sleep, waitFor } = ctx;
   const passive = vault();
   const authored = (name) => Object.keys(Object.fromEntries(lib.frontmatterBlocks(ctx.notes[name]))).filter(Boolean);
-  const assertPlacement = (state) => {
-    const order = state.order;
+  const linkOf = (notePath) => notePath.replace(/\.md$/, "");
+  const weekLink = (date) => { const id = lib.weekId(date); return id.slice(0, 4) + "/" + id; };
+  const dayRail = (date) => ({
+    prev: linkOf(lib.dayPath(lib.shiftDays(date, -1))), parent: weekLink(date), next: linkOf(lib.dayPath(lib.shiftDays(date, 1))),
+  });
+  const slotOf = (mode) => (mode === "reading" ? "mod-header" : "cm-sizer");
+  // The card is the title block: in the title slot right before Properties,
+  // the inline title, recognized H1, and nav line hidden, and exactly one
+  // visible level-1 heading in the pane (the card title).
+  const assertTitleSlot = (state, { mode, title, rail = null, hidesSource = true }) => {
     if (!state.card) throw new Error("card absent");
-    if (state.card.h1Before !== true) throw new Error("card does not follow the H1: " + JSON.stringify(state.card));
-    if (!order.nav?.found || !order.nav.before) throw new Error("card does not follow the navigation line: " + JSON.stringify(order));
-    if (!order.gtd?.found || !order.gtd.after) throw new Error("card is not above the ^gtd line: " + JSON.stringify(order));
-    if (!order.notes?.found || !order.notes.after) throw new Error("card is not above the body: " + JSON.stringify(order));
-    return order;
+    if (state.card.slot !== slotOf(mode)) throw new Error("card is not in the title slot: " + JSON.stringify(state.card.slot));
+    if (state.properties.present && !state.card.beforeProperties) throw new Error("card is not right before Properties");
+    if (state.title.inlineTitle !== false) throw new Error("inline title is visible: " + JSON.stringify(state.title));
+    if (hidesSource && state.title.h1Shown.length) throw new Error("source H1 is visible: " + JSON.stringify(state.title.h1Shown));
+    if (hidesSource && state.title.navShown) throw new Error("nav line is visible: " + state.title.navShown);
+    const level = state.title.levelOne;
+    if (level.length !== 1 || !level[0].card || level[0].text !== title) throw new Error("level-1 headings: " + JSON.stringify(level));
+    if (state.card.title !== title) throw new Error("card title: " + state.card.title);
+    if (rail) {
+      for (const direction of ["prev", "parent", "next"]) {
+        if (state.card.rail?.[direction]?.href !== rail[direction]) throw new Error("rail " + direction + ": " + JSON.stringify(state.card.rail));
+      }
+    }
+    if (state.order.notes?.found && !state.order.notes.after) throw new Error("card is not above the body: " + JSON.stringify(state.order));
+    return { slot: state.card.slot, levelOne: level, rail: state.card.rail, order: state.order };
+  };
+  // Native rendering is back: inline title and source H1 visible, no owner.
+  const assertNative = (state, label) => {
+    if (state.ownsTitle !== 0) throw new Error(label + ": a title owner remains: " + state.ownsTitle);
+    if (state.title.inlineTitle === false) throw new Error(label + ": the inline title is hidden");
+    if (!state.title.h1Shown.length) throw new Error(label + ": the source H1 is hidden");
+    return { inlineTitle: state.title.inlineTitle, h1: state.title.h1Shown };
   };
   const assertRows = (state, notePath, hidden) => {
     const hiddenKeys = lib.assertOwnedRows(state, { hidden, authoredKeys: authored(notePath) });
     return { hiddenKeys, rows: state.rows };
   };
+  const mounted = (mode) => (value) => value?.cardCount === 1 && value.card?.slot === slotOf(mode)
+    && value.title?.inlineTitle === false && value.title?.levelOne?.length === 1;
+  const todayTitle = lib.dayCardTitle(plan.today);
+  const todayRail = dayRail(plan.today);
+  const week = lib.weekId(plan.today);
 
-  // Live Preview: today mounts once, after H1 + nav, above ^gtd.
+  // Live Preview: today mounts once, as the title block in the title slot.
   await open(plan.paths.today, "live");
-  let state = await waitCard(plan.paths.today);
+  let state = await waitCard(plan.paths.today, mounted("live"));
   ctx.report.probes.liveToday = state;
   await attempt("display-live-today-mounts-once", () => {
     if (state.cardCount !== 1 || state.embedCardCount !== 0) throw new Error(JSON.stringify(state));
-    if (state.card.role !== "group" || !/intention card/.test(state.card.label || "")) throw new Error("card is not a labelled group: " + JSON.stringify(state.card));
+    if (state.card.role !== "group" || state.card.label !== "Day: " + todayTitle || state.card.kind !== "day") {
+      throw new Error("card is not a labelled day group: " + JSON.stringify(state.card));
+    }
+    if (state.card.kicker !== "Day·" + week.slice(5) + "·" + week.slice(0, 4)) throw new Error("kicker: " + state.card.kicker);
+    if (state.card.pill !== "TODAY") throw new Error("pill: " + state.card.pill);
     if (JSON.stringify(state.card.intentions) !== JSON.stringify(plan.intentions.today)) throw new Error("intentions mismatch " + JSON.stringify(state.card));
-    if (!state.card.chips[0]?.includes("①")) throw new Error("numbered chip missing: " + JSON.stringify(state.card.chips));
+    if (!state.card.intentionChips[0]?.includes("①")) throw new Error("numbered chip missing: " + JSON.stringify(state.card.intentionChips));
+    if (state.card.ghost) throw new Error("a day with intentions shows the ghost");
     return state.card;
   });
-  await attempt("display-live-today-placement", () => assertPlacement(state));
+  await attempt("display-live-today-placement", () => {
+    const result = assertTitleSlot(state, { mode: "live", title: todayTitle, rail: todayRail });
+    if (state.card.rail.next.unresolved !== true) throw new Error("the missing next day does not look unresolved");
+    return result;
+  });
   await attempt("display-live-today-owned-rows", () => {
     const result = assertRows(state, plan.paths.today, true);
     if (JSON.stringify(result.hiddenKeys) !== JSON.stringify(["intentions"])) throw new Error("hidden rows: " + JSON.stringify(result.hiddenKeys));
@@ -550,12 +650,12 @@ async function displayPhase(ctx) {
   });
   await shot("intention-card-live-today-light", "Live Preview");
 
-  // Reading view: same placement and ownership.
+  // Reading view: the same title block in .mod-header, same ownership.
   await open(plan.paths.today, "reading");
-  state = await waitCard(plan.paths.today, (value) => value?.cardCount === 1 && value.mode === "preview");
+  state = await waitCard(plan.paths.today, (value) => mounted("reading")(value) && value.mode === "preview");
   ctx.report.probes.readingToday = state;
   await attempt("display-reading-today-mounts-once", () => { if (state.cardCount !== 1) throw new Error(JSON.stringify(state)); return state.card; });
-  await attempt("display-reading-today-placement", () => assertPlacement(state));
+  await attempt("display-reading-today-placement", () => assertTitleSlot(state, { mode: "reading", title: todayTitle, rail: todayRail }));
   await attempt("display-reading-today-owned-rows", () => {
     const result = assertRows(state, plan.paths.today, true);
     if (JSON.stringify(result.hiddenKeys) !== JSON.stringify(["intentions"])) throw new Error("hidden rows: " + JSON.stringify(result.hiddenKeys));
@@ -598,9 +698,6 @@ async function displayPhase(ctx) {
   await shot("intention-card-live-stamped-dark-375", "Live Preview", { theme: "dark", width: 375 });
   await shared.setTheme(client, "light");
   await shot("intention-card-live-stamped-light-375", "Live Preview", { width: 375 });
-  await open(plan.paths.today, "reading");
-  await waitCard(plan.paths.today, (value) => value?.cardCount === 1 && value.mode === "preview");
-  await shot("intention-card-reading-today-light-375", "Reading", { width: 375 });
   await shared.setViewport(client, 1400, 1000);
 
   // Recently closed yesterday shows the quiet missing band.
@@ -608,6 +705,7 @@ async function displayPhase(ctx) {
   state = await waitCard(plan.paths.yesterday);
   await attempt("display-recent-closed-missing-band", () => {
     if (!/✦ summary pending/.test(state.card.missing) || !/＋ reflection r/.test(state.card.missing)) throw new Error("missing band: " + JSON.stringify(state.card));
+    if (state.card.pill !== "YESTERDAY") throw new Error("pill: " + state.card.pill);
     return state.card.missing;
   });
   await shot("intention-card-live-yesterday-missing-band", "Live Preview");
@@ -615,43 +713,60 @@ async function displayPhase(ctx) {
   await shot("intention-card-live-yesterday-missing-band-dark", "Live Preview", { theme: "dark" });
   await shared.setTheme(client, "light");
 
-  // Source mode fails open: no card and no owned rows anywhere.
+  // Source mode fails open: no card, no owned rows, native title rendering.
   await open(plan.paths.today, "source");
   await attempt("display-source-fails-open", async () => {
     const value = await waitNoCard(plan.paths.today);
     if (value.ownedAnywhere !== 0 || value.source !== true) throw new Error(JSON.stringify(value));
-    return { source: value.source, ownedAnywhere: value.ownedAnywhere };
+    const native = assertNative(value, "Source");
+    return { source: value.source, ownedAnywhere: value.ownedAnywhere, native };
   });
   await attempt("display-mode-change-restores", async () => {
     await open(plan.paths.today, "reading");
-    const reading = await waitCard(plan.paths.today, (value) => value?.cardCount === 1 && value.mode === "preview");
+    const reading = await waitCard(plan.paths.today, (value) => mounted("reading")(value) && value.mode === "preview");
     await open(plan.paths.today, "source");
     const source = await waitNoCard(plan.paths.today);
+    assertNative(source, "Source after Reading");
     await open(plan.paths.today, "live");
-    const live = await waitCard(plan.paths.today);
+    const live = await waitCard(plan.paths.today, mounted("live"));
     assertRows(live, plan.paths.today, true);
+    assertTitleSlot(live, { mode: "live", title: todayTitle, rail: todayRail });
     if (source.ownedAnywhere !== 0) throw new Error("Source kept owned rows: " + source.ownedAnywhere);
     return { reading: reading.cardCount, source: source.cardCount, live: live.cardCount };
   });
 
-  // Empty and malformed notes fail open with all Properties visible.
-  for (const [name, notePath] of [["display-empty-fails-open", plan.paths.empty], ["display-malformed-fails-open", plan.paths.malformed]]) {
-    await attempt(name, async () => {
-      const results = {};
-      for (const mode of ["live", "reading"]) {
-        await open(notePath, mode);
-        await sleep(600);
-        const value = await waitNoCard(notePath);
-        assertRows(value, notePath, false);
-        if (value.ownedAnywhere !== 0) throw new Error("owned rows remain: " + value.ownedAnywhere);
-        results[mode] = { rows: value.rows.length };
-      }
-      return results;
-    });
-  }
+  // An empty note gets the identity-only card: title and rail, every
+  // Properties row visible, nothing owned, and no ghost on a past day.
+  await attempt("display-empty-identity-card", async () => {
+    const results = {};
+    for (const mode of ["live", "reading"]) {
+      await open(plan.paths.empty, mode);
+      const value = await waitCard(plan.paths.empty, mounted(mode));
+      assertTitleSlot(value, { mode, title: lib.dayCardTitle(plan.empty), rail: dayRail(plan.empty) });
+      assertRows(value, plan.paths.empty, false);
+      if (value.ownedAnywhere !== 0) throw new Error("owned rows on an empty note: " + value.ownedAnywhere);
+      if (value.card.ghost) throw new Error("a past empty day shows the ghost");
+      if (value.card.intentions.length || value.card.summary || value.card.reflection) throw new Error("bands on an empty note: " + JSON.stringify(value.card));
+      results[mode] = { rows: value.rows.length, title: value.card.title };
+    }
+    return results;
+  });
+  // Malformed fields fail open: no card, native Properties and title.
+  await attempt("display-malformed-fails-open", async () => {
+    const results = {};
+    for (const mode of ["live", "reading"]) {
+      await open(plan.paths.malformed, mode);
+      await sleep(600);
+      const value = await waitNoCard(plan.paths.malformed);
+      assertRows(value, plan.paths.malformed, false);
+      if (value.ownedAnywhere !== 0) throw new Error("owned rows remain: " + value.ownedAnywhere);
+      results[mode] = { rows: value.rows.length, native: assertNative(value, "malformed " + mode) };
+    }
+    return results;
+  });
   await shot("intention-card-malformed-fails-open", "Reading");
 
-  // Embeds never host the card.
+  // Embeds never host the card or own a title.
   await attempt("display-embed-fails-open", async () => {
     const results = {};
     for (const mode of ["reading", "live"]) {
@@ -661,6 +776,7 @@ async function displayPhase(ctx) {
       if (value.cardCount !== 0 || value.embedCardCount !== 0) throw new Error("card inside embed: " + JSON.stringify(value));
       // Obsidian folds an embed's Properties itself; the card must never own them.
       if (value.embedProperties.some((row) => row.owned) || value.ownedAnywhere !== 0) throw new Error("embed properties owned: " + JSON.stringify(value.embedProperties));
+      if (value.ownsTitle !== 0) throw new Error("an embed owns a title: " + value.ownsTitle);
       results[mode] = { embedProperties: value.embedProperties.length };
     }
     return results;
@@ -670,46 +786,183 @@ async function displayPhase(ctx) {
   // Leaving the note releases ownership; recovery after failure repaints.
   await attempt("display-unmount-restores", async () => {
     await open(plan.paths.today, "live");
-    await waitCard(plan.paths.today);
+    await waitCard(plan.paths.today, mounted("live"));
     await open(plan.paths.ordinary, "live");
     await sleep(500);
-    const owned = await client.evaluate("document.querySelectorAll('.bob-property-card-owned-property').length");
-    const cards = await client.evaluate("document.querySelectorAll('.bob-intention-card').length");
-    if (owned !== 0 || cards !== 0) throw new Error(JSON.stringify({ owned, cards }));
-    return { owned, cards };
+    const counts = await client.evaluate("({ owned: document.querySelectorAll('.bob-property-card-owned-property').length, cards: document.querySelectorAll('.bob-intention-card').length, owns: document.querySelectorAll('.bob-property-card-owns-title').length, sources: document.querySelectorAll('.bob-property-card-title-source').length })");
+    if (counts.owned !== 0 || counts.cards !== 0 || counts.owns !== 0 || counts.sources !== 0) throw new Error(JSON.stringify(counts));
+    const value = await probe(plan.paths.ordinary);
+    if (value.title.inlineTitle !== true) throw new Error("the ordinary note's inline title is hidden");
+    return counts;
   });
   await attempt("display-failure-restores-and-recovers", async () => {
     await open(plan.paths.today, "live");
-    await waitCard(plan.paths.today);
+    await waitCard(plan.paths.today, mounted("live"));
     const original = ctx.notes[plan.paths.today];
     const broken = original.replace('intentions:\n  - "Ship the intention card"\n  - "Walk after lunch"\n', "intentions: 7\n");
     if (broken === original) throw new Error("could not build malformed variant");
     await client.evaluate(`app.vault.modify(app.vault.getAbstractFileByPath(${JSON.stringify(plan.paths.today)}), ${JSON.stringify(broken)})`);
     const failed = await waitNoCard(plan.paths.today, "card removal after malformed metadata");
     assertRows(failed, plan.paths.today, false);
+    const native = assertNative(failed, "malformed today");
     await client.evaluate(`app.vault.modify(app.vault.getAbstractFileByPath(${JSON.stringify(plan.paths.today)}), ${JSON.stringify(original)})`);
-    const recovered = await waitCard(plan.paths.today, (value) => value?.cardCount === 1 && value.rows.some((row) => row.key === "intentions" && row.owned));
+    const recovered = await waitCard(plan.paths.today, (value) => mounted("live")(value) && value.rows.some((row) => row.key === "intentions" && row.owned));
     assertRows(recovered, plan.paths.today, true);
+    assertTitleSlot(recovered, { mode: "live", title: todayTitle, rail: todayRail });
     const disk = fs.readFileSync(path.join(ctx.vaultDir, plan.paths.today), "utf8");
     if (disk !== original) throw new Error("recovery did not restore exact bytes");
-    return { failedRows: failed.rows.length, recoveredOwned: recovered.rows.filter((row) => row.owned).map((row) => row.key) };
+    return { failedRows: failed.rows.length, native, recoveredOwned: recovered.rows.filter((row) => row.owned).map((row) => row.key) };
   });
   await attempt("display-plugin-disable-restores", async () => {
     await client.evaluate("app.plugins.disablePlugin('bob-ledger-tools')");
     await waitFor(client, "!app.plugins.plugins['bob-ledger-tools']", Boolean, "ledger-tools disabled");
     const off = await waitNoCard(plan.paths.today);
     assertRows(off, plan.paths.today, false);
+    const native = assertNative(off, "plugin disabled");
+    const leftovers = await client.evaluate("({ slots: document.querySelectorAll('.bob-property-card-title-slot').length, sources: document.querySelectorAll('.bob-property-card-title-source').length })");
+    if (leftovers.slots !== 0 || leftovers.sources !== 0) throw new Error("disable left title-block DOM: " + JSON.stringify(leftovers));
     await client.evaluate("app.plugins.enablePlugin('bob-ledger-tools')");
     await waitFor(client, "Boolean(app.plugins.plugins['bob-ledger-tools'])", Boolean, "ledger-tools enabled", 30_000);
     await open(plan.paths.today, "live");
-    const on = await waitCard(plan.paths.today, (value) => value?.cardCount === 1 && value.rows.some((row) => row.owned));
+    const on = await waitCard(plan.paths.today, (value) => mounted("live")(value) && value.rows.some((row) => row.owned));
     assertRows(on, plan.paths.today, true);
-    return { offOwned: off.ownedAnywhere, onCards: on.cardCount };
+    return { offOwned: off.ownedAnywhere, native, onCards: on.cardCount };
   });
   await attempt("display-passive-bytes-neutral", () => {
     const now = vault();
     if (JSON.stringify(now) !== JSON.stringify(passive)) throw new Error("passive display changed Markdown bytes");
     return { files: Object.keys(now).length };
+  });
+
+  // Placing the cursor on the hidden H1 reveals the raw Markdown; moving it
+  // to the ^gtd line hides the title lines again.
+  await attempt("display-reveal-on-cursor", async () => {
+    await open(plan.paths.today, "live");
+    await waitCard(plan.paths.today, (value) => mounted("live")(value) && value.title.h1Shown.length === 0);
+    const onHeading = await placeCursor("# " + plan.today, plan.paths.today);
+    if (!onHeading.ok) throw new Error("could not place the cursor on the H1: " + JSON.stringify(onHeading));
+    const revealed = await waitFor(client, displayProbeSource(plan.paths.today),
+      (value) => value?.cardCount === 1 && value.title.h1Shown.length === 1 && value.title.navShown > 0, "raw H1 and nav revealed", 10_000);
+    await shot("intention-card-live-reveal", "Live Preview");
+    const away = await placeCursor("GTD-ANCHOR", plan.paths.today);
+    if (!away.ok) throw new Error("could not move the cursor to ^gtd: " + JSON.stringify(away));
+    const hidden = await waitFor(client, displayProbeSource(plan.paths.today),
+      (value) => value?.cardCount === 1 && value.title.h1Shown.length === 0 && value.title.navShown === 0, "title lines hidden again", 10_000);
+    return { revealed: revealed.title, hidden: hidden.title };
+  });
+
+  // The set-intentions ghost on an empty future day opens the card editor on
+  // the intention stage; the editor header carries the day's tile and word.
+  await attempt("display-ghost-opens-editor", async () => {
+    await open(plan.paths.future, "live");
+    const value = await waitCard(plan.paths.future, (item) => mounted("live")(item) && item.card?.ghost === true);
+    if (value.ownedAnywhere !== 0) throw new Error("the ghost owns Properties rows");
+    await shot("intention-card-live-future-ghost", "Live Preview");
+    const before = vault();
+    await clickIn(plan.paths.future, ".bob-intention-card .bob-intention-card-ghost");
+    const modal = await waitFor(client, workflows.MODAL, (item) => item && item.path === plan.paths.future
+      && item.stage === "intention" && item.stageField === "add", "card editor on the intention stage", 15_000);
+    const header = await client.evaluate(`(() => {
+      const row = app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.contentEl?.querySelector('.bob-intention-editor-identity');
+      return row ? { kind: row.getAttribute('data-card-kind'), word: row.querySelector('.bob-property-card-kicker-species')?.textContent || '',
+        band: row.querySelector('.bob-property-card-tile-band')?.textContent || '', value: row.querySelector('.bob-property-card-tile-value')?.textContent || '' } : null;
+    })()`);
+    if (!header || header.kind !== "day" || header.word !== "Day") throw new Error("editor header: " + JSON.stringify(header));
+    await shot("intention-card-ghost-editor", "Card editor");
+    await client.evaluate("app.plugins.plugins['bob-ledger-tools'].intentionCardEditorModal?.close()");
+    await waitFor(client, workflows.MODAL, (item) => item === null, "card editor closed", 10_000);
+    if (JSON.stringify(vault()) !== JSON.stringify(before)) throw new Error("opening the editor from the ghost changed bytes");
+    return { stage: modal.stage, field: modal.stageField, header };
+  });
+
+  // Rail next on yesterday opens today in the same leaf.
+  await attempt("display-rail-navigates", async () => {
+    await open(plan.paths.yesterday, "live");
+    await waitCard(plan.paths.yesterday, (value) => mounted("live")(value) && value.card?.rail?.next?.href === linkOf(plan.paths.today));
+    const before = await client.evaluate("(() => { window.__railLeaf = app.workspace.activeLeaf; return { path: window.__railLeaf?.view?.file?.path || null, leaves: app.workspace.getLeavesOfType('markdown').length }; })()");
+    await clickIn(plan.paths.yesterday, '.bob-intention-card .bob-property-card-rail-item[data-rail="next"]');
+    const after = await waitFor(client, "(() => ({ path: window.__railLeaf?.view?.file?.path || null, same: app.workspace.activeLeaf === window.__railLeaf, leaves: app.workspace.getLeavesOfType('markdown').length }))()",
+      (value) => value?.path === plan.paths.today, "rail next opens today", 15_000);
+    if (!after.same || after.leaves !== before.leaves) throw new Error("rail next left the leaf: " + JSON.stringify({ before, after }));
+    await client.evaluate("delete window.__railLeaf");
+    return { before, after };
+  });
+
+  // The week card docks its children strip with today's chip current.
+  await attempt("display-period-children", async () => {
+    const results = {};
+    for (const mode of ["live", "reading"]) {
+      await open(plan.paths.week, mode);
+      const value = await waitCard(plan.paths.week, (item) => mounted(mode)(item) && item.card?.chips?.length === 7);
+      assertTitleSlot(value, { mode, title: week });
+      const current = value.card.chips.filter((chip) => chip.current);
+      if (current.length !== 1 || current[0].href !== linkOf(plan.paths.today)) throw new Error("current chip: " + JSON.stringify(value.card.chips));
+      if (value.card.kind !== "week" || value.card.pill !== "THIS WEEK" || value.card.tile.band !== "WEEK") throw new Error("week identity: " + JSON.stringify(value.card));
+      if (!value.card.rail?.prev || !value.card.rail.parent || !value.card.rail.next) throw new Error("week rail: " + JSON.stringify(value.card.rail));
+      results[mode] = { current: current[0], subtitle: value.card.subtitle };
+    }
+    return results;
+  });
+
+  // The H1-less legacy daily gets a title and hides nothing in the body.
+  await attempt("display-legacy-daily", async () => {
+    const results = {};
+    for (const mode of ["live", "reading"]) {
+      await open(plan.paths.legacy, mode);
+      const value = await waitCard(plan.paths.legacy, mounted(mode));
+      assertTitleSlot(value, { mode, title: lib.dayCardTitle(plan.legacy), hidesSource: false });
+      if (value.card.rail !== null) throw new Error("a legacy daily invents a rail: " + JSON.stringify(value.card.rail));
+      if (!value.order.notes?.found || !value.order.notes.after) throw new Error("legacy body line is not below the card: " + JSON.stringify(value.order));
+      const bodyLine = await client.evaluate(`(() => {
+        const leaf = app.workspace.getLeavesOfType("markdown").find((item) => item.view?.file?.path === ${JSON.stringify(plan.paths.legacy)});
+        const root = leaf?.view?.getMode?.() === "preview" ? leaf.view.previewMode?.containerEl : leaf?.view?.contentEl;
+        return Array.from(root?.querySelectorAll("p, .cm-line") || []).some((node) => (node.textContent || "").includes("day::${plan.legacy}")
+          && node.getBoundingClientRect().height > 0);
+      })()`);
+      if (!bodyLine) throw new Error("the legacy day:: line is hidden");
+      results[mode] = { title: value.card.title, slot: value.card.slot };
+    }
+    return results;
+  });
+
+  // Screenshot matrix: light, dark, and 375px, Live Preview and Reading.
+  for (const [name, notePath] of [["today", plan.paths.today], ["empty", plan.paths.empty], ["week", plan.paths.week], ["legacy", plan.paths.legacy]]) {
+    for (const mode of ["live", "reading"]) {
+      await open(notePath, mode);
+      await waitCard(notePath, mounted(mode)).catch(() => null);
+      const label = mode === "live" ? "Live Preview" : "Reading";
+      await shot("day-card-" + name + "-" + mode + "-light", label);
+      await shared.setTheme(client, "dark");
+      await shot("day-card-" + name + "-" + mode + "-dark", label, { theme: "dark" });
+      await shared.setViewport(client, 375, 900);
+      await shot("day-card-" + name + "-" + mode + "-dark-375", label, { theme: "dark", width: 375 });
+      await shared.setTheme(client, "light");
+      await shot("day-card-" + name + "-" + mode + "-light-375", label, { width: 375 });
+      await shared.setViewport(client, 1400, 1000);
+    }
+  }
+
+  // Hash every fixture before and after opening, revealing, and closing.
+  await attempt("display-bytes-neutral", async () => {
+    const hash = (snap) => Object.fromEntries(Object.entries(snap).map(([name, text]) => [name, sha256Text(text)]));
+    const before = hash(vault());
+    for (const notePath of [plan.paths.today, plan.paths.empty, plan.paths.future, plan.paths.legacy, plan.paths.week, plan.paths.quarter]) {
+      for (const mode of ["live", "reading"]) {
+        await open(notePath, mode);
+        await waitCard(notePath).catch(() => null);
+      }
+    }
+    await open(plan.paths.today, "live");
+    await waitCard(plan.paths.today, mounted("live"));
+    await placeCursor("# " + plan.today, plan.paths.today);
+    await sleep(300);
+    await placeCursor("GTD-ANCHOR", plan.paths.today);
+    await open(plan.paths.ordinary, "live");
+    await sleep(500);
+    const after = hash(vault());
+    const changed = Object.keys({ ...before, ...after }).filter((name) => before[name] !== after[name]);
+    if (changed.length) throw new Error("fixture bytes changed: " + changed.join(", "));
+    return { files: Object.keys(after).length };
   });
 }
 

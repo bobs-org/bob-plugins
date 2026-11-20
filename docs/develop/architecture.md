@@ -103,6 +103,30 @@ hosts are needed. Core unit entry points are
 `scripts/test-ledger-tools-property-card-ownership.cjs`, and
 `scripts/test-ledger-tools-property-card-host.cjs`.
 
+### Title block kit
+
+`propertyCardSpecies(kind)` names seven species: album, record, day, week,
+quarter, year, and bank. Each has a word, tile form, fallback icon, and leaf
+band. `propertyCardApplyIdentity` stamps `data-card-kind` and an accessible
+name that starts with the species word. `propertyCardBuildGlyphTile`,
+`propertyCardBuildTitleBlock`, and `propertyCardBuildRail` return plain DOM
+or `null`. Links call the injected `onLink` or `onNavigate`, so adapters
+keep modifier keys and jump history. Kit CSS applies only under
+`data-card-kind`. Cards that opt in must be block-width, because the card is
+the narrow-width container. Days and periods use `--bob-day-accent`, never
+an area hue.
+
+`propertyCardOwnTitle(scope, { path, recognizer, view })` hides the view's
+inline title and the recognized source title range. In Live Preview, one
+`StateField` hides it until a selection touches the range. Reading tags only
+the matching `h1` and `p` elements. A host registers the field with
+`titleOwnership: true`. Ownership is released by the handle, a newer owner,
+Source mode, a file change, or host disposal. Title ownership is separate
+from Properties row ownership. The unit entry points are
+`scripts/test-ledger-tools-property-card-identity.cjs` and
+`scripts/test-ledger-tools-property-card-title-ownership.cjs`.
+`scripts/preview-title-block.cjs` renders the preview matrix.
+
 ## Plugin files
 
 | Path | Role |

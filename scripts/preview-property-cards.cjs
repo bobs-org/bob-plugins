@@ -517,4 +517,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, buildCard, htmlPage, serialize };
+module.exports = {
+  parseArgs, buildCard, htmlPage, serialize,
+  // Shared with scripts/preview-title-block.cjs.
+  PAGE_CHROME, PreviewElement, PreviewTextNode, previewDocument, escapeHtml,
+  CdpClient, freePort, cdpTarget, sleep, sha256,
+};

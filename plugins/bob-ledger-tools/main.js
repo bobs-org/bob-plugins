@@ -79801,6 +79801,9 @@ function propertyCardOwnBankKeys(scope, desktop) {
 //   editorScopeOf(root, view), markEditorScope(scope, view, enabled),
 //   workspaceEvents: string[] (each schedules refresh() unless
 //     onWorkspaceEvent(name, controller) is given, which replaces it),
+//   titleOwnership (default false; true registers the identity kit's title
+//     ownership StateField once per plugin instance, and dispose() releases
+//     every owned title through propertyCardTitleReleaseAll()),
 //   onSetup(), onDisposeStart(), onDisposeEnd(), onRefresh().
 const PROPERTY_CARD_HOST_REFRESH_MS = 100;
 
@@ -79859,6 +79862,7 @@ function createPropertyCardHost(options) {
   const fields = options.fields || {};
   const kind = options.kind || "property-card";
   const allowEmbedDisplay = options.allowEmbedDisplay === true;
+  const titleOwnership = options.titleOwnership === true;
   let registered = false;
   let extrasLive = false;
   let refreshEffect = null;
@@ -79969,6 +79973,9 @@ function createPropertyCardHost(options) {
           const extension = controller.createExtension();
           if (extension) plugin.registerEditorExtension?.(extension);
         } catch (_) {}
+        if (titleOwnership && typeof propertyCardHostRegisterTitleOwnership === "function") {
+          try { propertyCardHostRegisterTitleOwnership(plugin); } catch (_) {}
+        }
         const events = Array.isArray(options.workspaceEvents) ? options.workspaceEvents : [];
         try {
           const workspace = plugin.app?.workspace;
@@ -80019,6 +80026,9 @@ function createPropertyCardHost(options) {
       const slots = keySlots();
       if (slots) {
         try { propertyCardSlotReleaseAll(slots); } catch (_) {}
+      }
+      if (titleOwnership && typeof propertyCardTitleReleaseAll === "function") {
+        try { propertyCardTitleReleaseAll(); } catch (_) {}
       }
       reading().clear();
       editors().clear();
@@ -80153,6 +80163,7 @@ function createPropertyCardHost(options) {
     readingRoot,
     readingScope,
     allowEmbedDisplay,
+    titleOwnership,
     ensureRefreshEffect() {
       if (!refreshEffect && StateEffect?.define) {
         try { refreshEffect = StateEffect.define(); } catch (_) { refreshEffect = null; }
@@ -80343,6 +80354,1049 @@ function propertyCardHostCleanEditor(controller, options, editors, editorScopes,
     editorScopes().delete(view);
   } catch (_) {}
   editors().delete(view);
+}
+// ---- src/240f-plugin-property-card-species.js ----
+// Property-card identity kit (bob-cli-o6 identity-kit): species registry.
+// Hue says where, form says what, and words say both. A species never gets a
+// hue of its own: its tile form and kicker word carry it. Cards that adopt the
+// kit carry `data-card-kind`; no adapter sets it yet, so current cards keep
+// their exact pixels. Pure data plus one attribute writer. Never throws.
+const PROPERTY_CARD_KIND_ATTR = "data-card-kind";
+const PROPERTY_CARD_KINDS = Object.freeze(["album", "record", "day", "week", "quarter", "year", "bank"]);
+
+const PROPERTY_CARD_SPECIES = Object.freeze({
+  album: Object.freeze({ kind: "album", word: "Album", tile: "stack", icon: "library", band: "", temporal: false }),
+  record: Object.freeze({ kind: "record", word: "Record", tile: "sheet", icon: "file-text", band: "", temporal: false }),
+  day: Object.freeze({ kind: "day", word: "Day", tile: "leaf", icon: "calendar", band: "", temporal: true }),
+  week: Object.freeze({ kind: "week", word: "Week", tile: "leaf", icon: "calendar-range", band: "WEEK", temporal: true }),
+  quarter: Object.freeze({ kind: "quarter", word: "Quarter", tile: "leaf", icon: "calendar-range", band: "QTR", temporal: true }),
+  year: Object.freeze({ kind: "year", word: "Year", tile: "leaf", icon: "calendar-range", band: "YEAR", temporal: true }),
+  bank: Object.freeze({ kind: "bank", word: "Bank", tile: "plain", icon: "landmark", band: "", temporal: false }),
+});
+
+// Frozen descriptor { kind, word, tile, icon, band, temporal } or null. The
+// word is title case; CSS uppercases the kicker so screen readers still read
+// a word. A day's band is its weekday, which the adapter supplies.
+function propertyCardSpecies(kind) {
+  if (typeof kind !== "string") return null;
+  return Object.prototype.hasOwnProperty.call(PROPERTY_CARD_SPECIES, kind)
+    ? PROPERTY_CARD_SPECIES[kind]
+    : null;
+}
+
+// "<Word>: <title>" (Album: Restaurants), the bare word for an empty title,
+// or the title alone for an unknown kind.
+function propertyCardAccessibleName(kind, title) {
+  const text = String(title === null || title === undefined ? "" : title).replace(/\s+/g, " ").trim();
+  const species = propertyCardSpecies(kind);
+  if (!species) return text;
+  return text ? `${species.word}: ${text}` : species.word;
+}
+
+// Stamp identity on a card root: data-card-kind, an accessible name that
+// leads with the species word, and role=group unless the card already has a
+// role. Unknown kinds and missing cards change nothing and return false.
+function propertyCardApplyIdentity(card, spec = {}) {
+  const species = propertyCardSpecies(spec?.kind);
+  if (!card || !species || typeof card.setAttribute !== "function") return false;
+  try {
+    card.setAttribute(PROPERTY_CARD_KIND_ATTR, species.kind);
+    card.setAttribute("aria-label", propertyCardAccessibleName(species.kind, spec?.title));
+    const role = typeof card.getAttribute === "function" ? card.getAttribute("role") : null;
+    if (!role) card.setAttribute("role", "group");
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+// ---- src/240g-plugin-property-card-title-block-dom.js ----
+// Property-card identity kit (bob-cli-o6 identity-kit): DOM builders for the
+// glyph tile, the title block (tile, kicker, title row, subtitle, actions),
+// and the docked rail. Every builder takes an ownerDocument and a spec,
+// returns null instead of throwing, and writes text only through text nodes.
+// Link handling is injected (onLink/onNavigate) so adapters keep modifier
+// keys and jump history; the kit never adds Obsidian's internal-link class.
+// `setIcon` is captured from `obsidian` at load time; tests leave the glyph
+// empty and read data-icon instead.
+
+let PropertyCardObsidianSetIcon = null;
+try {
+  const obsidianMod = require("obsidian");
+  PropertyCardObsidianSetIcon = obsidianMod && typeof obsidianMod.setIcon === "function"
+    ? obsidianMod.setIcon
+    : null;
+} catch (_) {
+  PropertyCardObsidianSetIcon = null;
+}
+
+const PROPERTY_CARD_RAIL_DIRECTIONS = Object.freeze(["prev", "parent", "next"]);
+
+function propertyCardKitText(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function propertyCardKitEl(doc, tag, className) {
+  const node = doc.createElement(tag);
+  if (className) node.setAttribute("class", className);
+  return node;
+}
+
+function propertyCardKitAppendText(doc, node, text) {
+  const value = propertyCardKitText(text);
+  if (value) node.appendChild(doc.createTextNode(value));
+  return node;
+}
+
+function propertyCardKitSpan(doc, className, text) {
+  return propertyCardKitAppendText(doc, propertyCardKitEl(doc, "span", className), text);
+}
+
+function propertyCardKitAddClass(node, name) {
+  try { node.classList?.add(name); } catch (_) {}
+}
+
+function propertyCardKitDocOk(doc) {
+  return Boolean(doc && typeof doc.createElement === "function" && typeof doc.createTextNode === "function");
+}
+
+// Bind click (and middle-click) to an injected handler. The handler sees the
+// raw event so adapters can honor Mod/Alt/Shift for tabs and splits.
+function propertyCardKitBindLink(node, handler) {
+  const open = (event) => {
+    if (event?.type === "auxclick" && event.button !== 1) return;
+    try { event?.preventDefault?.(); } catch (_) {}
+    if (typeof handler === "function") {
+      try { handler(event); } catch (_) {}
+    }
+  };
+  try {
+    node.addEventListener?.("click", open);
+    node.addEventListener?.("auxclick", open);
+  } catch (_) {}
+}
+
+function propertyCardKitLink(doc, className, target, unresolved) {
+  const link = propertyCardKitEl(doc, "a", className);
+  const href = propertyCardKitText(target);
+  link.setAttribute("data-href", href);
+  link.setAttribute("href", href);
+  if (unresolved) propertyCardKitAddClass(link, "is-unresolved");
+  return link;
+}
+
+// span.bob-property-card-tile[data-tile-form][aria-hidden]. Stack, sheet, and
+// plain tiles show the emoji, else the species (or given) icon. A leaf tile
+// shows a band (weekday or WEEK/QTR/YEAR) over a large value.
+function propertyCardBuildGlyphTile(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const species = propertyCardSpecies(spec?.kind);
+    if (!species) return null;
+    const tile = propertyCardKitEl(doc, "span", "bob-property-card-tile");
+    tile.setAttribute("data-tile-form", species.tile);
+    tile.setAttribute("aria-hidden", "true");
+    if (species.tile === "leaf") {
+      const band = propertyCardKitText(spec.band).trim() || species.band;
+      tile.appendChild(propertyCardKitSpan(doc, "bob-property-card-tile-band", band));
+      const valueText = propertyCardKitText(spec.value).trim();
+      const value = propertyCardKitSpan(doc, "bob-property-card-tile-value", valueText);
+      // CSS shrinks long values (a year) so they fit the square tile.
+      value.setAttribute("data-value-length", String(Array.from(valueText).length));
+      tile.appendChild(value);
+      return tile;
+    }
+    const glyph = propertyCardKitEl(doc, "span", "bob-property-card-tile-glyph");
+    const emoji = propertyCardKitText(spec.emoji).trim();
+    if (emoji) {
+      glyph.setAttribute("data-glyph", "emoji");
+      propertyCardKitAppendText(doc, glyph, emoji);
+    } else {
+      const icon = propertyCardKitText(spec.icon).trim() || species.icon;
+      glyph.setAttribute("data-glyph", "icon");
+      glyph.setAttribute("data-icon", icon);
+      if (PropertyCardObsidianSetIcon) {
+        try { PropertyCardObsidianSetIcon(glyph, icon); } catch (_) {}
+      }
+    }
+    tile.appendChild(glyph);
+    return tile;
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardKitKickerPart(doc, part, onLink) {
+  const text = propertyCardKitText(part?.text).trim();
+  if (!text) return null;
+  const target = propertyCardKitText(part?.target).trim();
+  if (!target) return propertyCardKitSpan(doc, "bob-property-card-kicker-part", text);
+  const link = propertyCardKitLink(doc, "bob-property-card-kicker-link", target, part.unresolved === true);
+  propertyCardKitAppendText(doc, link, text);
+  propertyCardKitBindLink(link, (event) => {
+    if (typeof onLink === "function") onLink(target, event);
+  });
+  return link;
+}
+
+// { element, tile, kicker, heading, pill, subtitle, actions } or null.
+// spec: { kind, title, kicker = [{ text, target?, unresolved? }],
+//         pill?: { text, tone: "solid" | "outline" }, subtitle?,
+//         tile = {}, onLink?(target, event) }.
+// The heading is a div[role=heading][aria-level=1]; the actions slot is
+// always present (empty) so adapters can append buttons without reflow.
+function propertyCardBuildTitleBlock(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const species = propertyCardSpecies(spec?.kind);
+    if (!species) return null;
+    const title = propertyCardKitText(spec.title).trim();
+    if (!title) return null;
+    const element = propertyCardKitEl(doc, "div", "bob-property-card-title-block");
+    element.setAttribute(PROPERTY_CARD_KIND_ATTR, species.kind);
+
+    const tileSpec = spec.tile && typeof spec.tile === "object" ? spec.tile : {};
+    const tile = propertyCardBuildGlyphTile(doc, { ...tileSpec, kind: species.kind });
+    if (tile) element.appendChild(tile);
+
+    const main = propertyCardKitEl(doc, "div", "bob-property-card-title-main");
+    const kickerRow = propertyCardKitEl(doc, "div", "bob-property-card-kicker-row");
+    const kicker = propertyCardKitEl(doc, "span", "bob-property-card-kicker");
+    kicker.appendChild(propertyCardKitSpan(doc, "bob-property-card-kicker-species", species.word));
+    for (const part of Array.isArray(spec.kicker) ? spec.kicker : []) {
+      const node = propertyCardKitKickerPart(doc, part, spec.onLink);
+      if (!node) continue;
+      const sep = propertyCardKitSpan(doc, "bob-property-card-kicker-sep", "·");
+      sep.setAttribute("aria-hidden", "true");
+      kicker.appendChild(sep);
+      kicker.appendChild(node);
+    }
+    kickerRow.appendChild(kicker);
+    const actions = propertyCardKitEl(doc, "span", "bob-property-card-actions");
+    kickerRow.appendChild(actions);
+    main.appendChild(kickerRow);
+
+    const titleRow = propertyCardKitEl(doc, "div", "bob-property-card-title-row");
+    const heading = propertyCardKitEl(doc, "div", "bob-property-card-title");
+    heading.setAttribute("role", "heading");
+    heading.setAttribute("aria-level", "1");
+    propertyCardKitAppendText(doc, heading, title);
+    titleRow.appendChild(heading);
+    let pill = null;
+    const pillText = propertyCardKitText(spec.pill?.text).trim();
+    if (pillText) {
+      pill = propertyCardKitSpan(doc, "bob-property-card-pill", pillText);
+      pill.setAttribute("data-pill-tone", spec.pill.tone === "outline" ? "outline" : "solid");
+      titleRow.appendChild(pill);
+    }
+    main.appendChild(titleRow);
+
+    let subtitle = null;
+    const subtitleText = propertyCardKitText(spec.subtitle).trim();
+    if (subtitleText) {
+      subtitle = propertyCardKitEl(doc, "div", "bob-property-card-subtitle");
+      propertyCardKitAppendText(doc, subtitle, subtitleText);
+      main.appendChild(subtitle);
+    }
+    element.appendChild(main);
+    return { element, tile, kicker, heading, pill, subtitle, actions };
+  } catch (_) {
+    return null;
+  }
+}
+
+function propertyCardKitRailItemOk(item) {
+  return Boolean(item && typeof item === "object"
+    && propertyCardKitText(item.label).trim()
+    && propertyCardKitText(item.target).trim());
+}
+
+function propertyCardKitRailItem(doc, direction, item, onNavigate) {
+  const target = propertyCardKitText(item.target).trim();
+  const link = propertyCardKitLink(doc, "bob-property-card-rail-item", target, item.unresolved === true);
+  link.setAttribute("data-rail", direction);
+  const ariaLabel = propertyCardKitText(item.ariaLabel).trim();
+  if (ariaLabel) link.setAttribute("aria-label", ariaLabel);
+  const wide = propertyCardKitText(item.label).trim();
+  const narrow = propertyCardKitText(item.shortLabel).trim() || wide;
+  const glyph = (text) => {
+    const node = propertyCardKitSpan(doc, "bob-property-card-rail-glyph", text);
+    node.setAttribute("aria-hidden", "true");
+    return node;
+  };
+  if (direction === "prev") link.appendChild(glyph("‹ "));
+  if (direction === "parent") link.appendChild(glyph("↑ "));
+  link.appendChild(propertyCardKitSpan(doc, "bob-property-card-rail-label-wide", wide));
+  link.appendChild(propertyCardKitSpan(doc, "bob-property-card-rail-label-narrow", narrow));
+  if (direction === "next") link.appendChild(glyph(" ›"));
+  propertyCardKitBindLink(link, (event) => {
+    if (typeof onNavigate === "function") onNavigate(direction, item, event);
+  });
+  return link;
+}
+
+// { element, items: { prev, parent, next }, children: [] } or null when there
+// is neither an item nor a child. Missing items keep their grid column with
+// an empty gap span. Children render as a wrapping chip strip; the current
+// chip carries is-current and aria-current.
+function propertyCardBuildRail(doc, spec = {}) {
+  try {
+    if (!propertyCardKitDocOk(doc)) return null;
+    const options = spec && typeof spec === "object" ? spec : {};
+    const children = (Array.isArray(options.children) ? options.children : []).filter(propertyCardKitRailItemOk);
+    const present = PROPERTY_CARD_RAIL_DIRECTIONS.filter((direction) => propertyCardKitRailItemOk(options[direction]));
+    if (!present.length && !children.length) return null;
+    const element = propertyCardKitEl(doc, "nav", "bob-property-card-rail");
+    element.setAttribute("aria-label", propertyCardKitText(options.label).trim() || "Note navigation");
+    const items = { prev: null, parent: null, next: null };
+    const row = propertyCardKitEl(doc, "div", "bob-property-card-rail-row");
+    for (const direction of PROPERTY_CARD_RAIL_DIRECTIONS) {
+      const item = options[direction];
+      if (propertyCardKitRailItemOk(item)) {
+        items[direction] = propertyCardKitRailItem(doc, direction, item, options.onNavigate);
+        row.appendChild(items[direction]);
+      } else {
+        const gap = propertyCardKitEl(doc, "span", "bob-property-card-rail-gap");
+        gap.setAttribute("data-rail", direction);
+        row.appendChild(gap);
+      }
+    }
+    element.appendChild(row);
+    const chips = [];
+    if (children.length) {
+      const strip = propertyCardKitEl(doc, "div", "bob-property-card-rail-children");
+      strip.setAttribute("role", "list");
+      for (const child of children) {
+        const target = propertyCardKitText(child.target).trim();
+        const chip = propertyCardKitLink(doc, "bob-property-card-rail-chip", target, child.unresolved === true);
+        chip.setAttribute("role", "listitem");
+        if (child.current === true) {
+          propertyCardKitAddClass(chip, "is-current");
+          chip.setAttribute("aria-current", "true");
+        }
+        propertyCardKitAppendText(doc, chip, propertyCardKitText(child.label).trim());
+        propertyCardKitBindLink(chip, (event) => {
+          if (typeof options.onNavigate === "function") options.onNavigate("child", child, event);
+        });
+        strip.appendChild(chip);
+        chips.push(chip);
+      }
+      element.appendChild(strip);
+    }
+    return { element, items, children: chips };
+  } catch (_) {
+    return null;
+  }
+}
+// ---- src/240h-plugin-property-card-title-range.js ----
+// Property-card identity kit (bob-cli-o6 identity-kit): the recognized source
+// title block and its recognizers. Pure: no DOM, no CodeMirror. A card that
+// owns the title hides exactly this range at render time (never bytes): the
+// first body H1 when it is redundant with the card title, plus the blank and
+// recognized nav or child-link lines after it. The first non-blank body line
+// must start the block, so a fenced, late, or after-prose H1 stays visible.
+
+const PROPERTY_CARD_TITLE_H1 = /^ {0,3}#[ \t]+\S/;
+const PROPERTY_CARD_TITLE_WEEKDAYS = Object.freeze(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
+const PROPERTY_CARD_TITLE_MONTHS = Object.freeze(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]);
+
+// Wikilinks become their label, backslash escapes unescape, whitespace
+// collapses. Shared by headings, aliases, and Reading line text.
+function propertyCardCleanInlineText(raw) {
+  return String(raw === null || raw === undefined ? "" : raw)
+    .replace(/\[\[([^\]|]*)\|([^\]]*)\]\]/g, "$2")
+    .replace(/\[\[([^\]]*)\]\]/g, "$1")
+    .replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Strip the ATX marker and an optional closing # run, then clean inline text.
+function propertyCardCleanHeadingText(raw) {
+  const text = String(raw === null || raw === undefined ? "" : raw)
+    .replace(/^﻿/, "")
+    .replace(/^ {0,3}#{1,6}(?=[ \t]|$)/, "")
+    .replace(/(^|[ \t])#+[ \t]*$/, "$1");
+  return propertyCardCleanInlineText(text);
+}
+
+function propertyCardTitleFold(value) {
+  return propertyCardCleanInlineText(value).toLowerCase();
+}
+
+// Core scan. lineAt(i) -> { text, from, to } for 0-based line i with document
+// offsets; lineCount bounds the scan. Stops at the first non-follower line,
+// so Live Preview never stringifies a large note. Returns
+// { from, to, fromLine, toLine, headingLine, title, nextLine } or null.
+function propertyCardTitleSourceRangeFromLines(lineAt, lineCount, recognizer) {
+  try {
+    if (typeof lineAt !== "function" || !recognizer || typeof recognizer !== "object") return null;
+    const count = Number(lineCount);
+    if (!Number.isInteger(count) || count < 1) return null;
+    const line = (index) => {
+      const value = lineAt(index) || {};
+      return { text: String(value.text === null || value.text === undefined ? "" : value.text), from: value.from, to: value.to };
+    };
+    let index = 0;
+    const first = line(0);
+    if (first.text.replace(/^﻿/, "").trim() === "---") {
+      index = -1;
+      for (let cursor = 1; cursor < count; cursor += 1) {
+        const text = line(cursor).text.trim();
+        if (text === "---" || text === "...") {
+          index = cursor + 1;
+          break;
+        }
+      }
+      if (index < 0) return null;
+    }
+    while (index < count && !line(index).text.replace(/^﻿/, "").trim()) index += 1;
+    if (index >= count) return null;
+    const start = line(index);
+    const startText = index === 0 ? start.text.replace(/^﻿/, "") : start.text;
+    let headingLine = -1;
+    let title = "";
+    if (PROPERTY_CARD_TITLE_H1.test(startText)) {
+      const cleaned = propertyCardCleanHeadingText(startText);
+      if (typeof recognizer.heading === "function" && recognizer.heading(cleaned, startText) === true) {
+        headingLine = index;
+        title = cleaned;
+      }
+    }
+    if (headingLine < 0) {
+      const followerStart = recognizer.requireHeading === false
+        && typeof recognizer.follower === "function"
+        && recognizer.follower(startText.trim(), index) === true;
+      if (!followerStart) return null;
+    }
+    const fromLine = index;
+    let toLine = index;
+    for (let cursor = index + 1; cursor < count; cursor += 1) {
+      const trimmed = line(cursor).text.trim();
+      if (!trimmed) continue;
+      if (typeof recognizer.follower === "function" && recognizer.follower(trimmed, cursor) === true) {
+        toLine = cursor;
+        continue;
+      }
+      break;
+    }
+    const from = start.from;
+    const to = line(toLine).to;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) return null;
+    return { from, to, fromLine, toLine, headingLine, title, nextLine: toLine + 1 };
+  } catch (_) {
+    return null;
+  }
+}
+
+// String wrapper with \n, \r\n, or \r separators and exact offsets.
+function propertyCardTitleSourceRange(text, recognizer) {
+  const source = String(text === null || text === undefined ? "" : text);
+  const lines = [];
+  const separator = /\r\n|\r|\n/g;
+  let cursor = 0;
+  let match;
+  while ((match = separator.exec(source))) {
+    lines.push({ text: source.slice(cursor, match.index), from: cursor, to: match.index });
+    cursor = match.index + match[0].length;
+  }
+  lines.push({ text: source.slice(cursor), from: cursor, to: source.length });
+  return propertyCardTitleSourceRangeFromLines((index) => lines[index], lines.length, recognizer);
+}
+
+// Inclusive touch rule shared with recordWalkSelectionTouches: some range
+// satisfies min <= range.to && max >= range.from. Accepts a CodeMirror
+// selection, an EditorState, or a plain { ranges: [{ from, to }] }.
+function propertyCardSelectionTouches(selection, range) {
+  if (!range || !Number.isFinite(range.from) || !Number.isFinite(range.to)) return false;
+  const ranges = selection?.ranges || selection?.selection?.ranges || [];
+  try {
+    return Array.from(ranges).some((item) => {
+      const a = item?.from ?? item?.anchor;
+      const b = item?.to ?? item?.head;
+      if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+      return Math.min(a, b) <= range.to && Math.max(a, b) >= range.from;
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardNeverTitleRecognizer(kind) {
+  return Object.freeze({
+    key: `never:${kind}`,
+    requireHeading: true,
+    heading: () => false,
+    follower: () => false,
+  });
+}
+
+function propertyCardFirstAlias(alias) {
+  const list = Array.isArray(alias) ? alias : [alias];
+  for (const value of list) {
+    if (typeof value !== "string") continue;
+    const cleaned = propertyCardCleanInlineText(value);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function propertyCardTitleDateParts(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { year, month, day, weekday: PROPERTY_CARD_TITLE_WEEKDAYS[date.getUTCDay()] };
+}
+
+// bob's period range label (bob-cli periods/labels.rs): `Nov 16 – 22`,
+// `Oct 26 – Nov 1`, or `Dec 28, 2026 – Jan 3, 2027`.
+function propertyCardPeriodRangeLabel(start, end) {
+  const a = propertyCardTitleDateParts(start);
+  const b = propertyCardTitleDateParts(end);
+  if (!a || !b) return "";
+  const month = (parts) => PROPERTY_CARD_TITLE_MONTHS[parts.month - 1];
+  if (a.year !== b.year) return `${month(a)} ${a.day}, ${a.year} – ${month(b)} ${b.day}, ${b.year}`;
+  if (a.month !== b.month) return `${month(a)} ${a.day} – ${month(b)} ${b.day}`;
+  return `${month(a)} ${a.day} – ${b.day}`;
+}
+
+// bob's scaffold title for a period subject (the H1 and first alias it
+// writes): `2026-W47 · Nov 16 – 22`, `2026-Q4 · W40–W53 · Sep 28, 2026 –
+// Jan 3, 2027`, or `2026 · Dec 29, 2025 – Jan 3, 2027 · 53 weeks`.
+function propertyCardPeriodScaffoldTitle(subject) {
+  try {
+    if (!subject || !subject.id) return "";
+    const range = propertyCardPeriodRangeLabel(subject.start, subject.end);
+    if (!range) return "";
+    if (subject.kind === "week") return `${subject.id} · ${range}`;
+    if (subject.kind === "quarter") {
+      const weeks = /W(\d+)–W(\d+)/.exec(String(subject.label || ""));
+      return weeks ? `${subject.id} · W${weeks[1]}–W${weeks[2]} · ${range}` : "";
+    }
+    if (subject.kind === "year") {
+      const weeks = /· (\d+) weeks$/.exec(String(subject.label || ""));
+      return weeks ? `${subject.id} · ${range} · ${weeks[1]} weeks` : "";
+    }
+  } catch (_) {}
+  return "";
+}
+
+// Album: the first H1 whose cleaned text equals the card title. No followers.
+function propertyCardAlbumTitleRecognizer(title) {
+  const want = propertyCardCleanInlineText(title);
+  if (!want) return propertyCardNeverTitleRecognizer("album");
+  return Object.freeze({
+    key: `album:${want}`,
+    requireHeading: true,
+    heading: (cleaned) => propertyCardCleanInlineText(cleaned) === want,
+    follower: () => false,
+  });
+}
+
+// Day: an H1 equal to the first alias or one of this date's shapes
+// (`YYYY-MM-DD ddd`, `Day: YYYY-MM-DD ddd`, `day = YYYY-MM-DD.ddd`),
+// case-insensitively; followers are the daily nav line forms.
+function propertyCardDayTitleRecognizer(subject, options = {}) {
+  if (!subject || subject.kind !== "day" || typeof intentionCardIsNavigationLine !== "function") {
+    return propertyCardNeverTitleRecognizer("day");
+  }
+  const date = String(subject.id || subject.start || "");
+  const parts = propertyCardTitleDateParts(date);
+  if (!parts) return propertyCardNeverTitleRecognizer("day");
+  const today = options?.today || subject.today;
+  const accepted = new Set([
+    `${date} ${parts.weekday}`,
+    `Day: ${date} ${parts.weekday}`,
+    `day = ${date}.${parts.weekday}`,
+  ].map(propertyCardTitleFold));
+  const alias = propertyCardFirstAlias(options?.alias);
+  if (alias) accepted.add(propertyCardTitleFold(alias));
+  return Object.freeze({
+    key: `day:${date}`,
+    requireHeading: true,
+    heading: (cleaned) => accepted.has(propertyCardTitleFold(cleaned)),
+    follower: (line) => {
+      try { return intentionCardIsNavigationLine(line, subject, today) === true; } catch (_) { return false; }
+    },
+  });
+}
+
+// Week, quarter, or year: an H1 equal to the first alias or bob's scaffold
+// title (which is also the scaffold alias); followers are the period nav line
+// and the child-links line.
+function propertyCardPeriodTitleRecognizer(subject, options = {}) {
+  const kinds = ["week", "quarter", "year"];
+  if (!subject || !kinds.includes(subject.kind) || !subject.id
+    || typeof intentionCardIsNavigationLine !== "function"
+    || typeof intentionCardIsChildLinksLine !== "function") {
+    return propertyCardNeverTitleRecognizer(kinds.includes(subject?.kind) ? subject.kind : "period");
+  }
+  const today = options?.today || subject.today;
+  const accepted = new Set();
+  const alias = propertyCardFirstAlias(options?.alias);
+  if (alias) accepted.add(propertyCardTitleFold(alias));
+  const scaffold = propertyCardPeriodScaffoldTitle(subject);
+  if (scaffold) accepted.add(propertyCardTitleFold(scaffold));
+  if (subject.label) accepted.add(propertyCardTitleFold(subject.label));
+  return Object.freeze({
+    key: `${subject.kind}:${subject.id}`,
+    requireHeading: true,
+    heading: (cleaned) => accepted.has(propertyCardTitleFold(cleaned)),
+    follower: (line) => {
+      try {
+        return intentionCardIsNavigationLine(line, subject, today) === true
+          || intentionCardIsChildLinksLine(line, subject, today) === true;
+      } catch (_) {
+        return false;
+      }
+    },
+  });
+}
+// ---- src/240i-plugin-property-card-title-ownership.js ----
+// Property-card identity kit (bob-cli-o6 identity-kit): title ownership.
+// While a mounted card owns its note's title, the owning view scope carries
+// bob-property-card-owns-title (kit CSS hides that view's inline title) and
+// the recognized source title range is hidden at render time:
+//   - Live Preview: one kit StateField supplies a block replace decoration
+//     over the range. Ownership arrives through a deferred effect (dispatching
+//     inside an update is illegal), and any selection touching the range
+//     (inclusive) reveals the raw Markdown for editing.
+//   - Reading: the recognized h1 and nav/child-link p elements get a kit
+//     class; section wrappers, cards, and embeds are never tagged.
+// Ownership drops on release, a newer owner, Source mode, a file change,
+// plugin disable, or unload; native rendering returns in the same frame. No
+// note bytes change. Title ownership is separate from Properties row
+// ownership (240b). Never throws.
+const PROPERTY_CARD_OWNS_TITLE_CLASS = "bob-property-card-owns-title";
+const PROPERTY_CARD_TITLE_SOURCE_CLASS = "bob-property-card-title-source";
+const PROPERTY_CARD_TITLE_SOURCE_ATTR = "data-bob-title-source";
+const PROPERTY_CARD_TITLE_REGISTERED_FLAG = "_propertyCardTitleOwnershipRegistered";
+const PROPERTY_CARD_TITLE_OWNS_ATTRS = Object.freeze({ class: PROPERTY_CARD_OWNS_TITLE_CLASS });
+const PROPERTY_CARD_TITLE_NO_ATTRS = Object.freeze({});
+const PROPERTY_CARD_TITLE_SKIP_SECTIONS = Object.freeze([
+  "mod-header", "mod-frontmatter", "markdown-preview-pusher", "mod-footer",
+]);
+
+// Lazy CodeMirror pieces: the freshness-mark suite asserts one eager
+// StateEffect.define() at module load, so these are created on first use.
+let propertyCardTitleEffectType = null;
+let propertyCardTitleFieldType = null;
+let propertyCardTitleGeneration = 0;
+const propertyCardTitleEditorOwners = new WeakMap();
+const propertyCardTitleOwnedViews = new Set();
+const propertyCardTitleReadingOwners = new WeakMap();
+const propertyCardTitleReadingScopes = new Set();
+
+function propertyCardTitleScopeDenied(scope) {
+  if (propertyCardDeniedScope(scope)) return true;
+  try {
+    return Boolean(scope.closest(".canvas-node, .canvas-node-content, .print"));
+  } catch (_) {
+    return true;
+  }
+}
+
+function propertyCardTitleEnsureEffect() {
+  if (!propertyCardTitleEffectType) {
+    try {
+      if (StateEffect && typeof StateEffect.define === "function") propertyCardTitleEffectType = StateEffect.define();
+    } catch (_) {
+      propertyCardTitleEffectType = null;
+    }
+  }
+  return propertyCardTitleEffectType;
+}
+
+function propertyCardTitleFieldCreate() {
+  return { owner: null, range: null, revealed: false };
+}
+
+function propertyCardTitleStateField(state, field) {
+  if (!field || !state || typeof state.field !== "function") return undefined;
+  try { return state.field(field, false); } catch (_) { return undefined; }
+}
+
+function propertyCardTitleDocRange(doc, recognizer) {
+  if (!doc || typeof doc.line !== "function" || !recognizer) return null;
+  return propertyCardTitleSourceRangeFromLines((index) => {
+    const line = doc.line(index + 1);
+    return { text: line.text, from: line.from, to: line.to };
+  }, doc.lines, recognizer);
+}
+
+// Pure reducer behind the StateField. tr needs effects, docChanged, state
+// ({ doc, selection, field }), and startState. deps may inject { effect,
+// livePreviewField, infoField } for tests.
+function propertyCardTitleFieldReduce(value, tr, deps = {}) {
+  const current = value && typeof value === "object" ? value : propertyCardTitleFieldCreate();
+  try {
+    const effectType = deps.effect || propertyCardTitleEffectType;
+    const liveField = Object.prototype.hasOwnProperty.call(deps, "livePreviewField") ? deps.livePreviewField : editorLivePreviewField;
+    const infoField = Object.prototype.hasOwnProperty.call(deps, "infoField") ? deps.infoField : editorInfoField;
+    let owner = current.owner;
+    for (const effect of tr?.effects || []) {
+      if (!effectType || typeof effect?.is !== "function" || !effect.is(effectType)) continue;
+      const payload = effect.value || {};
+      if (payload.own && typeof payload.own.path === "string" && payload.own.recognizer) {
+        owner = { path: payload.own.path, generation: payload.own.generation, recognizer: payload.own.recognizer };
+      } else if (payload.release !== undefined && owner && owner.generation === payload.release) {
+        owner = null;
+      }
+    }
+    const state = tr?.state;
+    if (owner) {
+      if (propertyCardTitleStateField(state, liveField) === false) owner = null;
+    }
+    if (owner) {
+      const info = propertyCardTitleStateField(state, infoField);
+      if (info && (info.file?.path ?? null) !== owner.path) owner = null;
+    }
+    let range = current.range;
+    if (!owner) range = null;
+    else if (owner !== current.owner || tr?.docChanged) range = propertyCardTitleDocRange(state?.doc, owner.recognizer);
+    const revealed = range ? propertyCardSelectionTouches(state?.selection, range) : false;
+    if (owner === current.owner && range === current.range && revealed === current.revealed) return current;
+    return { owner, range, revealed };
+  } catch (_) {
+    return propertyCardTitleFieldCreate();
+  }
+}
+
+function propertyCardTitleFieldDecorations(value) {
+  const none = Decoration && Decoration.none !== undefined ? Decoration.none : null;
+  try {
+    if (!value?.owner || !value.range || value.revealed) return none;
+    const replace = Decoration.replace({ block: true });
+    if (typeof Decoration.set === "function") return Decoration.set([replace.range(value.range.from, value.range.to)]);
+    const builder = new RangeSetBuilder();
+    builder.add(value.range.from, value.range.to, replace);
+    return builder.finish();
+  } catch (_) {
+    return none;
+  }
+}
+
+function propertyCardTitleFieldAttributes(value) {
+  return value?.owner ? PROPERTY_CARD_TITLE_OWNS_ATTRS : null;
+}
+
+// The StateField that owns titles in every Live Preview editor. Returns null
+// (the caller registers nothing) when any CodeMirror piece is missing.
+function propertyCardTitleOwnershipExtension() {
+  try {
+    if (propertyCardTitleFieldType) return propertyCardTitleFieldType;
+    if (!StateField || typeof StateField.define !== "function") return null;
+    if (!Decoration || typeof Decoration.replace !== "function") return null;
+    if (typeof EditorView === "undefined" || !EditorView) return null;
+    if (typeof EditorView.decorations?.from !== "function") return null;
+    if (typeof EditorView.editorAttributes?.from !== "function") return null;
+    if (!propertyCardTitleEnsureEffect()) return null;
+    propertyCardTitleFieldType = StateField.define({
+      create: () => propertyCardTitleFieldCreate(),
+      update: (value, tr) => propertyCardTitleFieldReduce(value, tr),
+      provide: (field) => [
+        EditorView.decorations.from(field, (value) => propertyCardTitleFieldDecorations(value)),
+        EditorView.editorAttributes.from(field, (value) => propertyCardTitleFieldAttributes(value) || PROPERTY_CARD_TITLE_NO_ATTRS),
+      ],
+    });
+    return propertyCardTitleFieldType;
+  } catch (_) {
+    propertyCardTitleFieldType = null;
+    return null;
+  }
+}
+
+function propertyCardTitleDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+// Whether this view carries the kit field, and which generation it holds.
+// No field (no host opted in, or not yet reconfigured) means no ownership.
+function propertyCardTitleEditorFieldGeneration(view) {
+  if (!propertyCardTitleFieldType) return { installed: false, generation: undefined };
+  if (typeof view?.state?.field !== "function") return { installed: true, generation: undefined };
+  const value = propertyCardTitleStateField(view.state, propertyCardTitleFieldType);
+  if (value === undefined) return { installed: false, generation: undefined };
+  return { installed: true, generation: value?.owner?.generation };
+}
+
+function propertyCardTitleEditorDispatch(entry, payload) {
+  const effect = propertyCardTitleEnsureEffect();
+  if (!effect) return;
+  try { entry.view.dispatch({ effects: effect.of(payload) }); } catch (_) {}
+}
+
+function propertyCardTitleEditorScheduleOwn(entry) {
+  entry.pending = true;
+  entry.defer(() => {
+    entry.pending = false;
+    if (entry.released || propertyCardTitleEditorOwners.get(entry.view) !== entry) return;
+    propertyCardTitleEditorDispatch(entry, {
+      own: { path: entry.path, generation: entry.generation, recognizer: entry.recognizer },
+    });
+  });
+}
+
+function propertyCardTitleEditorRelease(entry) {
+  if (!entry || entry.released) return;
+  entry.released = true;
+  if (propertyCardTitleEditorOwners.get(entry.view) !== entry) return;
+  propertyCardTitleEditorOwners.delete(entry.view);
+  propertyCardTitleOwnedViews.delete(entry.view);
+  entry.defer(() => propertyCardTitleEditorDispatch(entry, { release: entry.generation }));
+}
+
+// Own the title in one Live Preview editor. Returns an idempotent,
+// generation-bound release function (with .generation), or null when the
+// scope is denied, the view is in Source mode, or the field is missing.
+// Re-owning with the same path and recognizer key returns the existing
+// handle and dispatches nothing, so adapters may call this on every
+// decoration rebuild; if the field dropped this owner (Source round trip),
+// the same generation is re-dispatched.
+function propertyCardOwnTitleInEditor(view, options = {}) {
+  try {
+    if (!view || typeof view.dispatch !== "function") return null;
+    if (propertyCardTitleScopeDenied(view.dom)) return null;
+    const path = String(options?.path || "");
+    const recognizer = options?.recognizer;
+    if (!path || !recognizer || typeof recognizer.key !== "string") return null;
+    if (!propertyCardTitleEnsureEffect()) return null;
+    if (propertyCardTitleStateField(view.state, editorLivePreviewField) === false) return null;
+    const field = propertyCardTitleEditorFieldGeneration(view);
+    if (!field.installed) return null;
+    const defer = typeof options.defer === "function" ? options.defer : propertyCardTitleDefer;
+    const current = propertyCardTitleEditorOwners.get(view);
+    if (current && !current.released && current.path === path && current.key === recognizer.key) {
+      if (current.pending || field.generation === current.generation) return current.handle;
+      current.recognizer = recognizer;
+      current.defer = defer;
+      propertyCardTitleEditorScheduleOwn(current);
+      return current.handle;
+    }
+    propertyCardTitleGeneration += 1;
+    const entry = {
+      view, path, key: recognizer.key, recognizer, defer,
+      generation: propertyCardTitleGeneration, pending: false, released: false, handle: null,
+    };
+    // A replaced owner is released first (same queue, so the field sees the
+    // release before the new own) so a new owner released before its own
+    // effect lands can never strand the old range hidden.
+    if (current && !current.released) {
+      current.released = true;
+      current.defer(() => propertyCardTitleEditorDispatch(current, { release: current.generation }));
+    }
+    const handle = () => propertyCardTitleEditorRelease(entry);
+    handle.generation = entry.generation;
+    entry.handle = handle;
+    propertyCardTitleEditorOwners.set(view, entry);
+    propertyCardTitleOwnedViews.add(view);
+    propertyCardTitleEditorScheduleOwn(entry);
+    return handle;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Reading line text: text nodes stay text, a[data-href] becomes
+// [[data-href|text]], br becomes \n, other elements recurse.
+function propertyCardReadingLineText(node) {
+  try {
+    if (!node) return "";
+    if (node.nodeType === 3) return String(node.nodeValue ?? node.textContent ?? "");
+    if (node.nodeType !== 1) return "";
+    const tag = String(node.tagName || "").toUpperCase();
+    if (tag === "BR") return "\n";
+    if (tag === "A") {
+      const href = node.getAttribute?.("data-href");
+      if (href) return `[[${href}|${String(node.textContent ?? "").trim()}]]`;
+    }
+    const kids = node.childNodes || node.children || [];
+    let out = "";
+    for (const child of Array.from(kids)) out += propertyCardReadingLineText(child);
+    return out;
+  } catch (_) {
+    return "";
+  }
+}
+
+function propertyCardTitleReadingElements(node) {
+  return Array.from(node?.children || []).filter((child) => child && child.nodeType === 1);
+}
+
+function propertyCardTitleReadingIsCard(node) {
+  try {
+    return Boolean(node.classList?.contains("bob-property-card") || node.querySelector?.(".bob-property-card"));
+  } catch (_) {
+    return false;
+  }
+}
+
+function propertyCardTitleReadingSectionEmpty(section) {
+  if (propertyCardTitleReadingElements(section).length) return false;
+  return !String(section.textContent ?? "").trim();
+}
+
+function propertyCardTitleReadingFollowerP(node, recognizer) {
+  if (String(node.tagName || "").toUpperCase() !== "P" || typeof recognizer.follower !== "function") return false;
+  const lines = propertyCardReadingLineText(node).split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.length > 0 && lines.every((line, index) => recognizer.follower(line, index) === true);
+}
+
+// Collect the recognized h1 and follower p elements of a Reading scope.
+function propertyCardTitleReadingTargets(scope, recognizer) {
+  const found = [];
+  const sizer = propertyCardTitleReadingElements(scope)
+    .find((node) => node.classList?.contains("markdown-preview-sizer"));
+  if (!sizer || !recognizer) return found;
+  let started = false;
+  for (const section of propertyCardTitleReadingElements(sizer)) {
+    if (PROPERTY_CARD_TITLE_SKIP_SECTIONS.some((name) => section.classList?.contains(name))) continue;
+    if (propertyCardTitleReadingSectionEmpty(section)) continue;
+    if (!propertyCardNodeBelongs(section, scope) || propertyCardScopeIsEmbed(section)) return found;
+    for (const node of propertyCardTitleReadingElements(section)) {
+      if (propertyCardTitleReadingIsCard(node)) continue;
+      if (!propertyCardNodeBelongs(node, scope) || propertyCardScopeIsEmbed(node)) return found;
+      const tag = String(node.tagName || "").toUpperCase();
+      if (!started) {
+        if (tag === "H1") {
+          const raw = propertyCardReadingLineText(node);
+          const cleaned = propertyCardCleanInlineText(raw);
+          if (typeof recognizer.heading !== "function" || recognizer.heading(cleaned, `# ${raw}`) !== true) return found;
+        } else if (!(recognizer.requireHeading === false && propertyCardTitleReadingFollowerP(node, recognizer))) {
+          return found;
+        }
+        started = true;
+        found.push(node);
+        continue;
+      }
+      if (!propertyCardTitleReadingFollowerP(node, recognizer)) return found;
+      found.push(node);
+    }
+  }
+  return found;
+}
+
+function propertyCardTitleReadingUntag(nodes) {
+  for (const node of nodes || []) {
+    try { node.classList?.remove(PROPERTY_CARD_TITLE_SOURCE_CLASS); } catch (_) {}
+    try { node.removeAttribute?.(PROPERTY_CARD_TITLE_SOURCE_ATTR); } catch (_) {}
+  }
+}
+
+function propertyCardTitleReadingPaint(scope, entry) {
+  let next = [];
+  try { next = propertyCardTitleReadingTargets(scope, entry.recognizer); } catch (_) { next = []; }
+  const keep = new Set(next);
+  propertyCardTitleReadingUntag(Array.from(entry.tagged).filter((node) => !keep.has(node)));
+  for (const node of next) {
+    try {
+      node.classList?.add(PROPERTY_CARD_TITLE_SOURCE_CLASS);
+      node.setAttribute?.(PROPERTY_CARD_TITLE_SOURCE_ATTR, entry.path);
+    } catch (_) {}
+  }
+  entry.tagged = keep;
+}
+
+function propertyCardTitleReadingDrop(scope, entry) {
+  if (!entry) return;
+  try { entry.observer?.disconnect(); } catch (_) {}
+  entry.observer = null;
+  propertyCardTitleReadingUntag(entry.tagged);
+  entry.tagged = new Set();
+  try { scope.classList?.remove(PROPERTY_CARD_OWNS_TITLE_CLASS); } catch (_) {}
+  if (propertyCardTitleReadingOwners.get(scope) === entry) {
+    propertyCardTitleReadingOwners.delete(scope);
+    propertyCardTitleReadingScopes.delete(scope);
+  }
+}
+
+// Own the title in one Reading view scope. Every call is a new generation
+// (like propertyCardOwnKeys): a newer owner replaces the old tags, and an old
+// handle can never clear it. A MutationObserver re-tags lazily rendered
+// sections. Returns a release function (with .generation) or null.
+function propertyCardOwnTitleInReading(scope, options = {}) {
+  try {
+    if (propertyCardTitleScopeDenied(scope)) return null;
+    if (!scope.classList?.contains("markdown-preview-view")) return null;
+    const path = String(options?.path || "");
+    const recognizer = options?.recognizer;
+    if (!path || !recognizer || typeof recognizer.key !== "string") return null;
+    const previous = propertyCardTitleReadingOwners.get(scope);
+    if (previous) propertyCardTitleReadingDrop(scope, previous);
+    propertyCardTitleGeneration += 1;
+    const entry = {
+      generation: propertyCardTitleGeneration, path, key: recognizer.key, recognizer,
+      tagged: new Set(), observer: null,
+    };
+    propertyCardTitleReadingOwners.set(scope, entry);
+    propertyCardTitleReadingScopes.add(scope);
+    scope.classList.add(PROPERTY_CARD_OWNS_TITLE_CLASS);
+    propertyCardTitleReadingPaint(scope, entry);
+    try {
+      const Observer = scope.ownerDocument?.defaultView?.MutationObserver;
+      if (Observer) {
+        entry.observer = new Observer(() => {
+          if (propertyCardTitleReadingOwners.get(scope) !== entry) return;
+          propertyCardTitleReadingPaint(scope, entry);
+        });
+        entry.observer.observe(scope, { childList: true, subtree: true });
+      }
+    } catch (_) {
+      entry.observer = null;
+    }
+    const handle = () => {
+      if (propertyCardTitleReadingOwners.get(scope) !== entry) return;
+      propertyCardTitleReadingDrop(scope, entry);
+    };
+    handle.generation = entry.generation;
+    return handle;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Unified entry: .cm-editor scopes with a view go through the Live Preview
+// field; .markdown-preview-view scopes go through Reading tags.
+function propertyCardOwnTitle(scope, options = {}) {
+  try {
+    if (scope?.classList?.contains("cm-editor") && options?.view) {
+      if (options.view.dom && options.view.dom !== scope) return null;
+      return propertyCardOwnTitleInEditor(options.view, options);
+    }
+    if (scope?.classList?.contains("markdown-preview-view")) return propertyCardOwnTitleInReading(scope, options);
+  } catch (_) {}
+  return null;
+}
+
+// Release every owned editor and Reading scope (host dispose, plugin unload).
+function propertyCardTitleReleaseAll() {
+  for (const view of Array.from(propertyCardTitleOwnedViews)) {
+    const entry = propertyCardTitleEditorOwners.get(view);
+    if (entry) propertyCardTitleEditorRelease(entry);
+    else propertyCardTitleOwnedViews.delete(view);
+  }
+  for (const scope of Array.from(propertyCardTitleReadingScopes)) {
+    propertyCardTitleReadingDrop(scope, propertyCardTitleReadingOwners.get(scope));
+    propertyCardTitleReadingScopes.delete(scope);
+  }
+}
+
+// Host opt-in (titleOwnership: true): register the field once per plugin.
+function propertyCardHostRegisterTitleOwnership(plugin) {
+  try {
+    if (!plugin || plugin[PROPERTY_CARD_TITLE_REGISTERED_FLAG] === true) return false;
+    const extension = propertyCardTitleOwnershipExtension();
+    if (!extension || typeof plugin.registerEditorExtension !== "function") return false;
+    plugin.registerEditorExtension(extension);
+    plugin[PROPERTY_CARD_TITLE_REGISTERED_FLAG] = true;
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
@@ -159311,6 +160365,41 @@ try {
       createPropertyCardHost,
       PROPERTY_CARD_BUILTIN_KINDS,
       propertyCardGateKinds,
+      // Identity kit (bob-cli-o6 identity-kit): species, builders, title
+      // source range, recognizers, and title ownership.
+      PROPERTY_CARD_KIND_ATTR,
+      PROPERTY_CARD_KINDS,
+      propertyCardSpecies,
+      propertyCardAccessibleName,
+      propertyCardApplyIdentity,
+      propertyCardBuildGlyphTile,
+      propertyCardBuildTitleBlock,
+      propertyCardBuildRail,
+      propertyCardCleanInlineText,
+      propertyCardCleanHeadingText,
+      propertyCardTitleSourceRangeFromLines,
+      propertyCardTitleSourceRange,
+      propertyCardSelectionTouches,
+      propertyCardPeriodScaffoldTitle,
+      propertyCardAlbumTitleRecognizer,
+      propertyCardDayTitleRecognizer,
+      propertyCardPeriodTitleRecognizer,
+      PROPERTY_CARD_OWNS_TITLE_CLASS,
+      PROPERTY_CARD_TITLE_SOURCE_CLASS,
+      PROPERTY_CARD_TITLE_SOURCE_ATTR,
+      propertyCardTitleScopeDenied,
+      propertyCardTitleFieldCreate,
+      propertyCardTitleFieldReduce,
+      propertyCardTitleFieldDecorations,
+      propertyCardTitleFieldAttributes,
+      propertyCardTitleOwnershipExtension,
+      propertyCardTitleEnsureEffect,
+      propertyCardOwnTitleInEditor,
+      propertyCardReadingLineText,
+      propertyCardOwnTitleInReading,
+      propertyCardOwnTitle,
+      propertyCardTitleReleaseAll,
+      propertyCardHostRegisterTitleOwnership,
     });
   }
 } catch (_) {}

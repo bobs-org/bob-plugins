@@ -11646,7 +11646,7 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 .bob-record-walk-rail[data-root-hue="green"] { --bob-walk-ink: var(--bob-area-green, var(--text-muted)); }
 .bob-record-walk-rail[data-root-hue="magenta"] { --bob-walk-ink: var(--bob-area-magenta, var(--text-muted)); }
 .bob-record-walk-rail[data-root-hue="orange"] { --bob-walk-ink: var(--bob-area-orange, var(--text-muted)); }
-.bob-record-walk-rail[data-root-hue="purple"] { --bob-walk-ink: var(--bob-area-purple, var(--text-muted)); }
+.bob-record-walk-rail[data-root-hue="violet"] { --bob-walk-ink: var(--bob-area-violet, var(--text-muted)); }
 .bob-record-walk-rail[data-root-hue="red"] { --bob-walk-ink: var(--bob-area-red, var(--text-muted)); }
 .bob-record-walk-rail[data-root-hue="yellow"] { --bob-walk-ink: var(--bob-area-yellow, var(--text-muted)); }
 @container record-walk (max-width: 28rem) {
@@ -11665,3 +11665,391 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
 @media (forced-colors: active) {
   .bob-record-walk-track, .bob-record-walk-thumb { background: CanvasText; forced-color-adjust: none; }
 }
+
+/* Property-card identity kit (bob-cli-o6 identity-kit): start.
+   One skeleton for every card that opts in: glyph tile, kicker (species word
+   first), a single title (role=heading, aria-level=1), optional pill and
+   subtitle, and a docked rail. Hue says where (root area), form says what
+   (tile shape and kicker word), and words say both. Every rule below is
+   scoped to a kit class or to .bob-property-card[data-card-kind]; no adapter
+   sets data-card-kind yet, so current cards keep their exact pixels. */
+
+/* Title ownership: while a mounted card owns its note's title, the owning
+   view scope carries bob-property-card-owns-title. Direct-child paths keep
+   embeds and hover popovers native. The record-specific
+   bob-record-sheet-hides-properties selectors above stay as aliases until the
+   collection-cards phase migrates them onto these kit classes. */
+.cm-editor.bob-property-card-owns-title > .cm-scroller > .cm-sizer > .inline-title,
+.markdown-preview-view.bob-property-card-owns-title > .markdown-preview-sizer > .mod-header > .inline-title {
+  display: none !important;
+}
+.markdown-preview-view.bob-property-card-owns-title .bob-property-card-title-source {
+  display: none !important;
+}
+
+/* Card kinds. The card is the inline-size container for the narrow rules,
+   so cards that opt in must be block-width (the day card drops its
+   fit-content width when it adopts the kit). The ink token is the accent
+   pulled toward body text so kicker text meets 4.5:1 on the tinted card. */
+.bob-property-card[data-card-kind] {
+  --bob-property-card-ink: color-mix(in srgb, var(--bob-property-card-accent) 70%, var(--text-normal));
+  container: bob-property-card / inline-size;
+}
+/* Album, "collection cover": area wash and a heavier header band. */
+.bob-property-card[data-card-kind="album"] { --bob-property-card-tint: 8%; }
+.bob-property-card[data-card-kind="album"] > .bob-property-card-title-block:not(:last-child) {
+  padding-block-end: 0.55em;
+  border-block-end: 1px solid color-mix(in srgb, var(--bob-property-card-accent) 35%, var(--background-modifier-border));
+}
+/* Record, "paper": a faint wash, a hairline border, and the area stripe. */
+.bob-property-card[data-card-kind="record"] {
+  --bob-property-card-tint: 4%;
+  border-color: var(--background-modifier-border);
+  border-inline-start-color: var(--bob-property-card-accent);
+}
+/* Days and periods use the temporal accent, never an area hue; the scale
+   deepens only the wash. */
+.bob-property-card[data-card-kind="day"],
+.bob-property-card[data-card-kind="week"],
+.bob-property-card[data-card-kind="quarter"],
+.bob-property-card[data-card-kind="year"] {
+  --bob-day-accent: color-mix(in srgb, var(--color-cyan, rgb(0 191 188)) 50%, var(--text-normal));
+  --bob-property-card-accent: var(--bob-day-accent);
+  --bob-property-card-tint: 6%;
+}
+.bob-property-card[data-card-kind="week"] { --bob-property-card-tint: 8%; }
+.bob-property-card[data-card-kind="quarter"] { --bob-property-card-tint: 10%; }
+.bob-property-card[data-card-kind="year"] { --bob-property-card-tint: 12%; }
+/* Bank keeps its existing chrome. */
+
+/* Title block: tile beside a kicker row, title row, and subtitle. Sized from
+   the note text so the title reads like the inline title it replaces. */
+.bob-property-card-title-block {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75em;
+  align-items: start;
+  min-width: 0;
+  font-size: var(--font-text-size, 16px);
+  line-height: 1.3;
+}
+.bob-property-card-title-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  min-width: 0;
+}
+.bob-property-card-kicker-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25em 0.75em;
+  min-width: 0;
+}
+.bob-property-card-kicker {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.4em;
+  min-width: 0;
+  color: var(--text-muted);
+  font: 650 0.74em/1.35 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bob-property-card-kicker-species { color: var(--bob-property-card-ink, var(--bob-property-card-accent)); }
+.bob-property-card-kicker-sep,
+.bob-property-card-kicker-part { color: var(--text-muted); }
+.bob-property-card-kicker-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 3px;
+  transition: color 120ms ease;
+}
+.bob-property-card-kicker-link:hover { color: var(--text-normal); text-decoration: underline; }
+.bob-property-card-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em;
+  margin-inline-start: auto;
+  font-size: var(--font-ui-small);
+}
+.bob-property-card-actions:empty { display: none; }
+.bob-property-card-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2em 0.6em;
+  min-width: 0;
+}
+.bob-property-card-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--inline-title-color, var(--h1-color, var(--text-normal)));
+  font-family: var(--inline-title-font, var(--h1-font, var(--font-text, inherit)));
+  font-size: var(--inline-title-size, var(--h1-size, 1.8em));
+  font-weight: var(--inline-title-weight, var(--h1-weight, 650));
+  line-height: var(--inline-title-line-height, var(--h1-line-height, 1.2));
+  overflow-wrap: anywhere;
+}
+.bob-property-card-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18em 0.6em;
+  border: 1px solid var(--bob-property-card-ink, var(--bob-property-card-accent));
+  border-radius: 999px;
+  font: 650 0.68em/1.3 var(--font-interface);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.bob-property-card-pill[data-pill-tone="solid"] {
+  color: var(--background-primary);
+  background: var(--bob-property-card-ink, var(--bob-property-card-accent));
+}
+.bob-property-card-pill[data-pill-tone="outline"] {
+  color: var(--bob-property-card-ink, var(--bob-property-card-accent));
+  background: transparent;
+}
+.bob-property-card-subtitle {
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Glyph tiles: a rounded square whose form names the species. */
+.bob-property-card-tile {
+  --bob-property-card-tile-size: 2.4em;
+  --bob-property-card-tile-fold: 0.7em;
+  --bob-property-card-tile-edge: color-mix(in srgb, var(--bob-property-card-accent) 45%, var(--background-modifier-border));
+  position: relative;
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  align-self: start;
+  inline-size: var(--bob-property-card-tile-size);
+  block-size: var(--bob-property-card-tile-size);
+  border: 1px solid var(--bob-property-card-tile-edge);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--bob-property-card-ink, var(--bob-property-card-accent));
+  line-height: 1;
+}
+.bob-property-card-tile-glyph {
+  display: inline-grid;
+  place-items: center;
+  font-size: 1.15em;
+  line-height: 1;
+}
+.bob-property-card-tile-glyph svg { width: 1em; height: 1em; }
+/* Stack (album): two offset sheet edges peek out behind the tile. */
+.bob-property-card-tile[data-tile-form="stack"]::before,
+.bob-property-card-tile[data-tile-form="stack"]::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid transparent;
+  border-inline-end-color: var(--bob-property-card-tile-edge);
+  border-block-end-color: var(--bob-property-card-tile-edge);
+  border-radius: inherit;
+  pointer-events: none;
+}
+.bob-property-card-tile[data-tile-form="stack"]::before { transform: translate(3px, 3px); }
+.bob-property-card-tile[data-tile-form="stack"]::after { transform: translate(6px, 6px); opacity: 0.6; }
+/* Sheet (record): one page with a folded top-right corner. */
+.bob-property-card-tile[data-tile-form="sheet"] {
+  clip-path: polygon(0 0, calc(100% - var(--bob-property-card-tile-fold)) 0, 100% var(--bob-property-card-tile-fold), 100% 100%, 0 100%);
+}
+.bob-property-card-tile[data-tile-form="sheet"]::after {
+  content: "";
+  position: absolute;
+  inset-block-start: -1px;
+  inset-inline-end: -1px;
+  box-sizing: border-box;
+  inline-size: calc(var(--bob-property-card-tile-fold) + 1px);
+  block-size: calc(var(--bob-property-card-tile-fold) + 1px);
+  border-inline-start: 1px solid var(--bob-property-card-tile-edge);
+  border-block-end: 1px solid var(--bob-property-card-tile-edge);
+  border-end-start-radius: 2px;
+  background: color-mix(in srgb, var(--bob-property-card-accent) 35%, var(--background-primary));
+  pointer-events: none;
+}
+/* Leaf (day and periods): an accent band over a large value. */
+.bob-property-card-tile[data-tile-form="leaf"] {
+  grid-template-rows: auto minmax(0, 1fr);
+  place-items: stretch;
+  overflow: hidden;
+}
+.bob-property-card-tile-band {
+  display: block;
+  padding-block: 0.22em 0.18em;
+  background: var(--bob-property-card-accent);
+  color: var(--background-primary);
+  font: 700 0.5em/1 var(--font-interface);
+  letter-spacing: 0.06em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.bob-property-card-tile-value {
+  display: grid;
+  place-items: center;
+  color: var(--text-normal);
+  font: 650 1em/1 var(--font-interface);
+  font-variant-numeric: tabular-nums;
+}
+.bob-property-card-tile-value[data-value-length="3"],
+.bob-property-card-tile-value[data-value-length="4"] { font-size: 0.72em; letter-spacing: -0.02em; }
+/* Plain (bank): a bordered tile around the existing mark. */
+.bob-property-card-tile[data-tile-form="plain"] { background: transparent; }
+
+/* Docked rail: a hairline, then prev / centred parent / next, plus an
+   optional wrapping children strip on period cards. */
+.bob-property-card-rail {
+  margin-block-start: 0.75em;
+  padding-block-start: 0.45em;
+  border-block-start: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  line-height: 1.35;
+}
+.bob-property-card-rail-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+.bob-property-card-rail-item,
+.bob-property-card-rail-gap { min-width: 0; }
+.bob-property-card-rail-item {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 0.4em;
+  border-radius: 4px;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.bob-property-card-rail-item[data-rail="prev"] { justify-self: start; }
+.bob-property-card-rail-item[data-rail="parent"] { justify-self: center; }
+.bob-property-card-rail-item[data-rail="next"] { justify-self: end; }
+.bob-property-card-rail-item:hover,
+.bob-property-card-rail-chip:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.bob-property-card-rail-label-wide { overflow: hidden; text-overflow: ellipsis; }
+.bob-property-card-rail-label-narrow { display: none; }
+.bob-property-card-rail-glyph { flex: none; white-space: pre; color: var(--text-faint); }
+.bob-property-card-rail-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  margin-block-start: 0.45em;
+}
+.bob-property-card-rail-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 0.55em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.bob-property-card-rail-chip.is-current {
+  border-color: var(--bob-property-card-ink, var(--bob-property-card-accent));
+  color: var(--bob-property-card-ink, var(--bob-property-card-accent));
+  font-weight: 650;
+}
+.bob-property-card-kicker-link.is-unresolved,
+.bob-property-card-rail-item.is-unresolved,
+.bob-property-card-rail-chip.is-unresolved {
+  opacity: var(--link-unresolved-opacity, 0.7);
+  text-decoration: underline;
+  text-decoration-style: var(--link-unresolved-decoration-style, dotted);
+  text-decoration-color: var(--link-unresolved-decoration-color, currentColor);
+}
+.bob-property-card-kicker-link:focus-visible,
+.bob-property-card-rail-item:focus-visible,
+.bob-property-card-rail-chip:focus-visible,
+.bob-property-card-actions button:focus-visible,
+.bob-property-card-actions a:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* Narrow content: actions wrap below the title, the tile shrinks, the rail
+   switches to short labels, and the species word never disappears. */
+@container bob-property-card (max-width: 375px) {
+  .bob-property-card-title-block { column-gap: 0.6em; }
+  .bob-property-card-tile { --bob-property-card-tile-size: 1.8em; --bob-property-card-tile-fold: 0.45em; }
+  .bob-property-card-tile-glyph { font-size: 0.9em; }
+  .bob-property-card-tile[data-tile-form="leaf"] .bob-property-card-tile-band { font-size: 0.42em; }
+  .bob-property-card-tile-value { font-size: 0.8em; }
+  .bob-property-card-tile-value[data-value-length="3"],
+  .bob-property-card-tile-value[data-value-length="4"] { font-size: 0.56em; }
+  .bob-property-card-kicker-row { display: contents; }
+  .bob-property-card-kicker { order: 0; }
+  .bob-property-card-title-row { order: 1; }
+  .bob-property-card-subtitle { order: 2; }
+  .bob-property-card-actions { order: 3; margin-inline-start: 0; }
+  .bob-property-card-kicker-species { flex: none; }
+  .bob-property-card-rail-label-wide { display: none; }
+  .bob-property-card-rail-label-narrow { display: inline; }
+}
+
+@media (forced-colors: active) {
+  .bob-property-card[data-card-kind] {
+    border-color: CanvasText;
+    border-inline-start-color: CanvasText;
+  }
+  .bob-property-card[data-card-kind="album"] > .bob-property-card-title-block:not(:last-child),
+  .bob-property-card-rail { border-color: CanvasText; }
+  .bob-property-card-tile,
+  .bob-property-card-pill,
+  .bob-property-card-rail-chip.is-current { border-color: CanvasText; }
+  .bob-property-card-tile[data-tile-form="stack"]::before,
+  .bob-property-card-tile[data-tile-form="stack"]::after,
+  .bob-property-card-tile[data-tile-form="sheet"]::after {
+    border-color: transparent;
+    border-inline-end-color: CanvasText;
+    border-block-end-color: CanvasText;
+  }
+  .bob-property-card-tile[data-tile-form="sheet"]::after {
+    border-inline-end-color: transparent;
+    border-inline-start-color: CanvasText;
+  }
+  .bob-property-card-tile-band {
+    forced-color-adjust: none;
+    background: CanvasText;
+    color: Canvas;
+  }
+  .bob-property-card-pill[data-pill-tone="solid"] {
+    forced-color-adjust: none;
+    background: CanvasText;
+    color: Canvas;
+  }
+  .bob-property-card-kicker-species { color: CanvasText; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bob-property-card[data-card-kind] *,
+  .bob-property-card[data-card-kind] *::before,
+  .bob-property-card[data-card-kind] *::after,
+  .bob-property-card-title-block *,
+  .bob-property-card-rail,
+  .bob-property-card-rail * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+/* Property-card identity kit (bob-cli-o6 identity-kit): end. */

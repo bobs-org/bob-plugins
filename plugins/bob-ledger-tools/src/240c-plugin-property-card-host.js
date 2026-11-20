@@ -36,6 +36,9 @@
 //   editorScopeOf(root, view), markEditorScope(scope, view, enabled),
 //   workspaceEvents: string[] (each schedules refresh() unless
 //     onWorkspaceEvent(name, controller) is given, which replaces it),
+//   titleOwnership (default false; true registers the identity kit's title
+//     ownership StateField once per plugin instance, and dispose() releases
+//     every owned title through propertyCardTitleReleaseAll()),
 //   onSetup(), onDisposeStart(), onDisposeEnd(), onRefresh().
 const PROPERTY_CARD_HOST_REFRESH_MS = 100;
 
@@ -94,6 +97,7 @@ function createPropertyCardHost(options) {
   const fields = options.fields || {};
   const kind = options.kind || "property-card";
   const allowEmbedDisplay = options.allowEmbedDisplay === true;
+  const titleOwnership = options.titleOwnership === true;
   let registered = false;
   let extrasLive = false;
   let refreshEffect = null;
@@ -204,6 +208,9 @@ function createPropertyCardHost(options) {
           const extension = controller.createExtension();
           if (extension) plugin.registerEditorExtension?.(extension);
         } catch (_) {}
+        if (titleOwnership && typeof propertyCardHostRegisterTitleOwnership === "function") {
+          try { propertyCardHostRegisterTitleOwnership(plugin); } catch (_) {}
+        }
         const events = Array.isArray(options.workspaceEvents) ? options.workspaceEvents : [];
         try {
           const workspace = plugin.app?.workspace;
@@ -254,6 +261,9 @@ function createPropertyCardHost(options) {
       const slots = keySlots();
       if (slots) {
         try { propertyCardSlotReleaseAll(slots); } catch (_) {}
+      }
+      if (titleOwnership && typeof propertyCardTitleReleaseAll === "function") {
+        try { propertyCardTitleReleaseAll(); } catch (_) {}
       }
       reading().clear();
       editors().clear();
@@ -388,6 +398,7 @@ function createPropertyCardHost(options) {
     readingRoot,
     readingScope,
     allowEmbedDisplay,
+    titleOwnership,
     ensureRefreshEffect() {
       if (!refreshEffect && StateEffect?.define) {
         try { refreshEffect = StateEffect.define(); } catch (_) { refreshEffect = null; }

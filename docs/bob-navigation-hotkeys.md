@@ -371,6 +371,8 @@ to Ready` (`N tasks · then …` for counted runs). `↵` applies and moves ther
 
 Work Log prompts provide `USED BEFORE` phrase recall; see the [Log Recall contract](https://bobs-org.github.io/log-recall/). The picker reuses it in schedule-review (`Tab`), schedule-work-log, lane-release, and cancel with `Ctrl+N`/`Ctrl+P`; `Esc` restores first.
 
+The Rotten keep prompts (single keep, decay-card Stay, and batch keep) recall Rotten Log reasons, and the successor picker's inline cancel field recalls Cancel Log reasons. In each field, `Ctrl+N`/`Ctrl+P` fill a history row; `Esc` restores the typed draft before backing out.
+
 ## Review walk
 
 `Ctrl+Alt+J/K` walks the tiered freshness review queue PRE → NEW → PROJECTS →

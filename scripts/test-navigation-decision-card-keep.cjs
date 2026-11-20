@@ -298,10 +298,17 @@ function makePlugin({ filePath, editor, freshness, dateText = DATE }) {
   const file = { path: filePath, extension: "md", basename: filePath };
   const view = { file, editor };
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const recallState = { attached: [], noted: [] };
+  const logRecall = {
+    version: 1,
+    attach(options) { recallState.attached.push(options); return { detach() {} }; },
+    noteUsed(kind, text) { recallState.noted.push([kind, text]); return true; },
+  };
   plugin.app = {
     plugins: {
       plugins: {
         "bob-ledger-tools": { api: { version: 3, freshness } },
+        "bob-navigation-hotkeys": { api: { logRecall } },
       },
     },
     workspace: { getActiveViewOfType: () => view },
@@ -322,6 +329,7 @@ function makePlugin({ filePath, editor, freshness, dateText = DATE }) {
     return true;
   };
   plugin.openedCards = [];
+  plugin.recallState = recallState;
   const realOpen = plugin.openFreshnessDecayCard;
   plugin.openFreshnessDecayCard = function (cardCtx) {
     plugin.openedCards.push(cardCtx);
@@ -439,8 +447,10 @@ test("Esc in the stage returns to the rows; a second Esc writes nothing", async 
 // --- Stay stage: Enter commits reset stamp and entry in one undo ---
 
 test("Stay stage Enter logs the reason with one transaction; one undo restores", async () => {
-  const { editor, modal, before } = await openCardAtLimit();
+  const { editor, modal, before, plugin } = await openCardAtLimit();
   pressAltF(modal);
+  assert.equal(plugin.recallState.attached.at(-1).kind, "rotten");
+  assert.equal(plugin.recallState.attached.at(-1).ownKeys, true);
   modal.keepStage.inputEl.value = "still needed";
   modal.keepStage.inputEl.listeners.input();
   assert.match(text(modal.contentEl), /still needed · stayed in Ready after 3 keeps/);
@@ -452,19 +462,21 @@ test("Stay stage Enter logs the reason with one transaction; one undo restores",
   assert.doesNotMatch(after.split("\n")[2], /keeps::/);
   assert.match(after, /\*2026-10-20\*\s+—\s+still needed · stayed in Ready after 3 keeps/);
   assert.equal(helpers.readRottenLog(after, 2).entries.length, 1);
+  assert.deepEqual(plugin.recallState.noted, [["rotten", "still needed"]]);
   assert.match(notices.join("\n"), /Stay in Ready · count restarted/);
   editor.undo();
   assert.equal(editor.getValue(), before);
 });
 
 test("blank Stay stage Enter logs no reason given", async () => {
-  const { editor, modal } = await openCardAtLimit();
+  const { editor, modal, plugin } = await openCardAtLimit();
   pressAltF(modal);
   assert.match(text(modal.contentEl), /🤷 no reason given · stayed in Ready after 3 keeps/);
   pressKey(modal, "Enter");
   await settle();
   assert.equal(editor.state.transactions.length, 1);
   assert.match(editor.getValue(), /🤷 no reason given · stayed in Ready after 3 keeps/);
+  assert.deepEqual(plugin.recallState.noted, []);
 });
 
 test("a double Enter submits once", async () => {

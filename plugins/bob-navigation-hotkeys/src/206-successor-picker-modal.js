@@ -127,6 +127,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.reasonEditKey = null;
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
+    this.reasonRecall = null;
     this.escArmed = false;
     this.statusLine = null;
     this.allowCloseWithoutArm = false;
@@ -196,6 +197,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     this.onCloseSettled = true;
     try {
+      this.disposeReasonRecall();
       super.onClose();
     } finally {
       this.onSettle(this.result);
@@ -542,6 +544,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     const oldKey = activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
     const query = this.getQuery();
     const navigation = [];
+    this.disposeReasonRecall();
     this.resultsEl.empty();
     for (let groupIndex = 0; groupIndex < this.model.groups.length; groupIndex += 1) {
       const group = this.model.groups[groupIndex];
@@ -662,6 +665,16 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     this.updateSubtitle();
     this.renderFooter();
+  }
+
+  disposeReasonRecall() {
+    const recall = this.reasonRecall;
+    this.reasonRecall = null;
+    try {
+      if (recall && typeof recall.detach === "function") recall.detach();
+    } catch (_error) {
+      // The picker remains usable when recall cleanup is unavailable.
+    }
   }
 
   updateSubtitle() {

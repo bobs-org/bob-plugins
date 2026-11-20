@@ -94,6 +94,15 @@ function plainModel(count) {
 
 function makePlugin(options = {}) {
   const plugin = Object.create(NavigationHotkeysPlugin.prototype);
+  const recallState = { attached: [], noted: [] };
+  const logRecall = {
+    version: 1,
+    attach(attachOptions) {
+      recallState.attached.push(attachOptions);
+      return { detach() {} };
+    },
+    noteUsed(kind, text) { recallState.noted.push([kind, text]); return true; },
+  };
   let now = options.now === undefined ? 1000 : options.now;
   plugin.app = {
     workspace: { getLeavesOfType: () => [] },
@@ -112,6 +121,8 @@ function makePlugin(options = {}) {
   plugin.reviewAdvanceNow = () => now;
   plugin.setNow = (value) => { now = value; };
   plugin.api = helpers.createDependencyNavApi(plugin);
+  plugin.app.plugins.plugins["bob-navigation-hotkeys"] = { api: { logRecall } };
+  plugin.recallState = recallState;
   return plugin;
 }
 
@@ -232,6 +243,9 @@ test("Ctrl+Shift+X opens the reason field; Enter confirms and Esc restores", asy
   const { pending, modal } = await openPicker(plugin, verdictModel(2));
   pressVerdict(modal, true);
   assert.equal(modal.reasonEditKey, "verdict:key/0");
+  assert.equal(plugin.recallState.attached.at(-1).kind, "cancel");
+  assert.equal(plugin.recallState.attached.at(-1).density, "dense");
+  assert.equal(plugin.recallState.attached.at(-1).ownKeys, true);
   const inputs = findAll(modal.resultsEl, "bob-successor-reason-input");
   assert.equal(inputs.length, 1, "the reason field replaces the detail line");
   assert.equal(inputs[0].getAttribute("placeholder"), "Why cancel? (optional)");
@@ -270,10 +284,24 @@ test("a blank Cancel reason is allowed and blur confirms the typed text", async 
   assert.equal(modal.verdicts.get("verdict:key/1").reason, "", "blank is allowed");
   assert.match(allText(modal.resultsEl), /no reason/);
 
-  const second = await openPicker(makePlugin({ now: 5000 }), verdictModel(1));
+  const secondPlugin = makePlugin({ now: 5000 });
+  const second = await openPicker(secondPlugin, verdictModel(1));
   pressVerdict(second.modal, true);
   const secondInputs = findAll(second.modal.resultsEl, "bob-successor-reason-input");
   secondInputs[0].value = "blur reason";
+  const reasonWrap = findAll(second.modal.resultsEl, "bob-successor-reason")[0];
+  reasonWrap.contains = (node) => {
+    for (let current = node; current; current = current.parent) {
+      if (current === reasonWrap) return true;
+    }
+    return false;
+  };
+  const bandRow = secondPlugin.recallState.attached.at(-1).bandHost.createDiv();
+  secondInputs[0].blur();
+  secondInputs[0].listeners.blur({ relatedTarget: bandRow });
+  assert.equal(second.modal.reasonEditKey, "verdict:key/0", "moving focus inside USED BEFORE does not commit");
+  secondInputs[0].focus();
+  secondInputs[0].blur();
   secondInputs[0].listeners.blur({});
   assert.equal(second.modal.verdicts.get("verdict:key/0").reason, "blur reason");
   second.modal.allowCloseWithoutArm = true;

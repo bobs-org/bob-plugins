@@ -489,6 +489,7 @@ class RottenKeepReasonStage {
   constructor(container, options = {}) {
     this.options = options;
     this.completed = false;
+    this.logRecall = null;
     this.root = container.createDiv({ cls: "bob-rotten-stage" });
     const model = buildRottenKeepPromptModel(options);
     const header = this.root.createDiv({ cls: "bob-cnp-header" });
@@ -501,6 +502,16 @@ class RottenKeepReasonStage {
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
       type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });
+    const recallApi = getNavigationLogRecallApi(options.app);
+    if (recallApi) {
+      const bandHost = this.root.createDiv({ cls: "bob-rotten-recall-host" });
+      this.logRecall = recallApi.attach({
+        inputEl: this.inputEl,
+        bandHost,
+        kind: "rotten",
+        ownKeys: true,
+      });
+    }
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
     if (model.historyRows.length) {
       this.root.createDiv({ cls: "bob-rotten-history-title", text: options.decayCard === true ? "EARLIER DECISIONS" : "EARLIER KEEPS" });
@@ -559,6 +570,10 @@ class RottenKeepReasonStage {
   }
   destroy() {
     this.completed = true;
+    if (this.logRecall && typeof this.logRecall.detach === "function") {
+      this.logRecall.detach();
+    }
+    this.logRecall = null;
     contentElCleanup(this.root);
     this.inputEl = null;
     this.previewEl = null;

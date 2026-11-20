@@ -26,7 +26,7 @@ class BobNavigationHotkeysDecayCardWriterMixin {
     );
   }
 
-  async applyFreshnessDecayCardLinePlan(cardCtx, live, content, noticeText, action) {
+  async applyFreshnessDecayCardLinePlan(cardCtx, live, content, noticeText, action, reason = "") {
     try {
       if (typeof content !== "string" || content === live.content) {
         new Notice("Could not update task; no tasks were updated");
@@ -42,6 +42,7 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
+      if (action === "stay") noteNavigationLogRecallUsed(this.app, "rotten", reason);
       this.rememberFreshnessDecayCardAnchor(cardCtx);
       new Notice(noticeText);
       await this.maybeAdvanceFreshnessDecayWalk(cardCtx, action);
@@ -172,13 +173,15 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         new Notice(freshStampRefusalNotice(logged.refusal));
         return false;
       }
-      return this.applyFreshnessDecayCardLinePlan(
+      const applied = await this.applyFreshnessDecayCardLinePlan(
         cardCtx,
         live,
         logged.content,
         `Stay ${rottenKeepRungPreposition(cardCtx.rung)} ${cardCtx.rung} · count restarted · Ctrl+Z undoes`,
         "stay",
+        reason,
       );
+      return applied;
     } catch (error) {
       new Notice("Could not update task; no tasks were updated");
       return false;

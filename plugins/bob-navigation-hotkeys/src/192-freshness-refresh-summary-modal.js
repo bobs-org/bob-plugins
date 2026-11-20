@@ -8,6 +8,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     this.previewEl = null;
     this.hintsEl = null;
     this.refreshButton = null;
+    this.keepRecall = null;
   }
 
   onOpen() {
@@ -22,6 +23,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     if (this.options.keep) {
       this.keepStage = new RottenKeepReasonStage(contentEl, {
         ...this.options.keep,
+        app: this.app,
         dateText: this.options.dateText,
         onModel: (model) => {
           if (!this.refreshButton) return;
@@ -80,6 +82,16 @@ class FreshnessRefreshSummaryModal extends Modal {
           type: "text",
         },
       });
+      const recallApi = getNavigationLogRecallApi(this.app);
+      if (recallApi) {
+        const bandHost = field.createDiv({ cls: "bob-cnp-log-recall-host" });
+        this.keepRecall = recallApi.attach({
+          inputEl: this.keepInputEl,
+          bandHost,
+          kind: "rotten",
+          ownKeys: true,
+        });
+      }
       this.keepPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
     }
 
@@ -220,6 +232,10 @@ class FreshnessRefreshSummaryModal extends Modal {
   onClose() {
     if (this.keepStage) this.keepStage.destroy();
     this.keepStage = null;
+    if (this.keepRecall && typeof this.keepRecall.detach === "function") {
+      this.keepRecall.detach();
+    }
+    this.keepRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {

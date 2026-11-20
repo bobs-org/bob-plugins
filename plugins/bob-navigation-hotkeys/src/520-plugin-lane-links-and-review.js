@@ -834,6 +834,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         return false;
       }
     }
+    if (plan.rottenLogWrittenCount > 0 && plan.content !== content) {
+      noteNavigationLogRecallUsed(this.app, "rotten", keepReason);
+    }
     // Ctrl+Alt+F advances through the shared tail with the stamp text
     // as its preamble, giving one composed toast.
     const stampPreamble = this.finishFreshStamp(

@@ -58,20 +58,31 @@ function fixture({ content = RAW, entry = row(), version = 6, keepLine = keep } 
   };
   const plugin = Object.create(Plugin.prototype);
   const freshness = { version, keepLine, stampLine: stamp, queue: () => entry ? [entry] : [], counts: () => ({ due: 1 }) };
-  plugin.app = { plugins: { plugins: { "bob-ledger-tools": { api: { version: 3, freshness } } } },
+  const recall = { attached: [], noted: [] };
+  const logRecall = {
+    version: 1,
+    attach(options) { recall.attached.push(options); return { detach() {} }; },
+    noteUsed(kind, text) { recall.noted.push([kind, text]); return true; },
+  };
+  plugin.app = { plugins: { plugins: {
+    "bob-ledger-tools": { api: { version: 3, freshness } },
+    "bob-navigation-hotkeys": { api: { logRecall } },
+  } },
     workspace: { getActiveViewOfType: () => ({ file: { path: "a.md", extension: "md" }, editor }) },
     vault: { getAbstractFileByPath: () => null } };
   plugin.laneReleaseDateText = (options = {}) => options.dateText || DATE;
   plugin.reviewAnchor = { before: true };
   const run = (options = {}) => plugin.refreshTaskFreshness(editor, { dateText: DATE, now: new Date(2026, 9, 23, 14, 32), workLogStampText: "2026-10-23 14:32", ...options });
-  return { plugin, editor, run, freshness };
+  return { plugin, editor, run, freshness, recall };
 }
 
 for (const reason of ["still the primer", ""]) {
   test(`single keep logs ${reason || "blank"} with stamp in one undo`, async () => {
-    const { editor, run } = fixture();
+    const { editor, run, recall } = fixture();
     const pending = run();
     const modal = modals.at(-1);
+    assert.equal(recall.attached.at(-1).kind, "rotten");
+    assert.equal(recall.attached.at(-1).ownKeys, true);
     assert.equal(editor.content, RAW);
     assert.equal(harness.activeElement, modal.inputEl);
     modal.inputEl.value = reason;
@@ -83,6 +94,7 @@ for (const reason of ["still the primer", ""]) {
     assert.match(editor.content, /fresh:: 2026-10-23/);
     assert.match(editor.content, /keeps:: 3/);
     assert.equal(h.readRottenLog(editor.content, 0).entries.length, 1);
+    assert.deepEqual(recall.noted, reason ? [["rotten", reason]] : []);
     assert.match(notices.at(-1), /Rotten Log updated/);
     editor.undo(); assert.equal(editor.content, RAW);
   });
@@ -255,6 +267,8 @@ test("counted mixed sessions use one Rotten prompt and log each rung tail", asyn
   assert.equal(modal.workInputEl, undefined);
   assert.ok(modal.keepInputEl);
   assert.equal(modal.keepInputEl.getAttribute("aria-label"), "Keep reason");
+  assert.equal(f.recall.attached.at(-1).kind, "rotten");
+  assert.equal(f.recall.attached.at(-1).ownKeys, true);
   assert.match(text(modal.keepPreviewEl), /Read primer #ref · Ready · none logged yet/);
   assert.match(text(modal.keepPreviewEl), /Finish intro · WIP · none logged yet/);
 
@@ -267,6 +281,7 @@ test("counted mixed sessions use one Rotten prompt and log each rung tail", asyn
   assert.doesNotMatch(f.editor.content, /WORK LOG/);
   assert.match(f.editor.content, /\*2026-10-23\* — still going · kept 1× in WIP/);
   assert.match(f.editor.content, /\*2026-10-23\* — still going · kept 3× in Ready/);
+  assert.deepEqual(f.recall.noted, [["rotten", "still going"]]);
 });
 
 test("counted at-limit Rotten targets skip without opening a prompt or logging", async () => {

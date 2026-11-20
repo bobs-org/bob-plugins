@@ -858,6 +858,7 @@ class TaskStatusCyclerOfferCloseApplyMixin {
         if (String(row.path) === String(path)) writtenRoots.push(row);
       }
     }
+    successorOfferCloseRememberCancelReasons(this, writtenRoots);
     // Phase 3: joint recover-only cascade over the actual successful writes.
     let recovery = { recovered: [], edits: [], plan: null };
     let recoveryFailures = [];

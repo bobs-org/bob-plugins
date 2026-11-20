@@ -29,6 +29,19 @@ function getNavigationLogRecallApi(app) {
   }
 }
 
+function noteNavigationLogRecallUsed(app, kind, text) {
+  try {
+    const value = String(text == null ? "" : text).replace(/\s+/gu, " ").trim();
+    if (!value) return false;
+    const api = getNavigationLogRecallApi(app);
+    return api && typeof api.noteUsed === "function"
+      ? api.noteUsed(kind, value) === true
+      : false;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function logRecallCreateElement(parent, tag, cls, text) {
   if (!parent) return null;
   let element = null;

@@ -332,10 +332,24 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     } catch (_error) {
       // The attribute already carries the draft.
     }
+    const recallApi = getNavigationLogRecallApi(modal.app);
+    if (recallApi) {
+      const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
+      modal.reasonRecall = recallApi.attach({
+        inputEl: input,
+        bandHost,
+        kind: "cancel",
+        density: "dense",
+        ownKeys: true,
+      });
+    }
     const hint = wrap.createSpan({ cls: "bob-successor-reason-hint", text: SUCCESSOR_VERDICT_REASON_HINT });
     hint.setAttribute("aria-hidden", "true");
+    let resolved = false;
     const commit = (value) => {
       try {
+        if (resolved || modal.reasonEditKey !== row.key) return;
+        resolved = true;
         const reason = normalizeSuccessorCancelReason(value);
         const current = modal.verdicts instanceof Map ? modal.verdicts.get(row.key) : null;
         if (current && current.outcome === SUCCESSOR_VERDICT_CANCELLED) {
@@ -367,6 +381,8 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     };
     const restore = () => {
       try {
+        if (resolved || modal.reasonEditKey !== row.key) return;
+        resolved = true;
         const previous = modal.reasonPreviousVerdict || null;
         if (modal.verdicts instanceof Map) {
           if (previous) {
@@ -415,11 +431,14 @@ function successorRenderReasonEditor(modal, container, row, draft) {
         // The editor keeps focus rather than throwing.
       }
     });
-    input.addEventListener("blur", () => {
+    input.addEventListener("blur", (event) => {
       try {
-        if (modal.reasonEditKey === row.key) {
-          commit(input.value);
-        }
+        if (modal.reasonEditKey !== row.key) return;
+        const related = event && event.relatedTarget;
+        if (related && typeof wrap.contains === "function" && wrap.contains(related)) return;
+        const active = input.ownerDocument && input.ownerDocument.activeElement;
+        if (active === input || (active && typeof wrap.contains === "function" && wrap.contains(active))) return;
+        commit(input.value);
       } catch (_error) {
         // Blur never throws away the staged verdict.
       }

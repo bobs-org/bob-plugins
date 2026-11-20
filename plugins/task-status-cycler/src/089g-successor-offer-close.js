@@ -21,6 +21,24 @@ function normalizeSuccessorCancelReason(value) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
 }
 
+function successorOfferCloseRememberCancelReasons(plugin, rows) {
+  try {
+    const plugins = plugin && plugin.app && plugin.app.plugins && plugin.app.plugins.plugins;
+    const recall = plugins && plugins["bob-navigation-hotkeys"] &&
+      plugins["bob-navigation-hotkeys"].api &&
+      plugins["bob-navigation-hotkeys"].api.logRecall;
+    if (!recall || Number(recall.version) < 1 || typeof recall.noteUsed !== "function") return;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row && row.outcome === "cancelled") {
+        const reason = normalizeSuccessorCancelReason(row.reason);
+        if (reason) recall.noteUsed("cancel", reason);
+      }
+    }
+  } catch (_error) {
+    // Phrase recall is best-effort and never changes a successful close.
+  }
+}
+
 // A malformed or conflicting close invalidates that row's whole choice. This
 // prevents a duplicate Done/Cancel pair from silently selecting a destructive
 // winner while preserving unrelated valid picks and closes.

@@ -6158,6 +6158,7 @@ class FreshnessDecayCardModal extends Modal {
     this.rowEls = [];
     this.keepStage = new RottenKeepReasonStage(this.rowsEl, {
       ...this.rottenKeep,
+      app: this.app,
       decayCard: true,
       onSubmit: (reason) => this.submitKeepStage(reason),
       onCancel: () => this.showRows(),
@@ -23810,6 +23811,19 @@ function getNavigationLogRecallApi(app) {
   }
 }
 
+function noteNavigationLogRecallUsed(app, kind, text) {
+  try {
+    const value = String(text == null ? "" : text).replace(/\s+/gu, " ").trim();
+    if (!value) return false;
+    const api = getNavigationLogRecallApi(app);
+    return api && typeof api.noteUsed === "function"
+      ? api.noteUsed(kind, value) === true
+      : false;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function logRecallCreateElement(parent, tag, cls, text) {
   if (!parent) return null;
   let element = null;
@@ -25426,6 +25440,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     this.previewEl = null;
     this.hintsEl = null;
     this.refreshButton = null;
+    this.keepRecall = null;
   }
 
   onOpen() {
@@ -25440,6 +25455,7 @@ class FreshnessRefreshSummaryModal extends Modal {
     if (this.options.keep) {
       this.keepStage = new RottenKeepReasonStage(contentEl, {
         ...this.options.keep,
+        app: this.app,
         dateText: this.options.dateText,
         onModel: (model) => {
           if (!this.refreshButton) return;
@@ -25498,6 +25514,16 @@ class FreshnessRefreshSummaryModal extends Modal {
           type: "text",
         },
       });
+      const recallApi = getNavigationLogRecallApi(this.app);
+      if (recallApi) {
+        const bandHost = field.createDiv({ cls: "bob-cnp-log-recall-host" });
+        this.keepRecall = recallApi.attach({
+          inputEl: this.keepInputEl,
+          bandHost,
+          kind: "rotten",
+          ownKeys: true,
+        });
+      }
       this.keepPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
     }
 
@@ -25638,6 +25664,10 @@ class FreshnessRefreshSummaryModal extends Modal {
   onClose() {
     if (this.keepStage) this.keepStage.destroy();
     this.keepStage = null;
+    if (this.keepRecall && typeof this.keepRecall.detach === "function") {
+      this.keepRecall.detach();
+    }
+    this.keepRecall = null;
     contentElCleanup(this.contentEl);
     if (!this.completed && typeof this.onDone === "function") {
       try {
@@ -26142,6 +26172,7 @@ class RottenKeepReasonStage {
   constructor(container, options = {}) {
     this.options = options;
     this.completed = false;
+    this.logRecall = null;
     this.root = container.createDiv({ cls: "bob-rotten-stage" });
     const model = buildRottenKeepPromptModel(options);
     const header = this.root.createDiv({ cls: "bob-cnp-header" });
@@ -26154,6 +26185,16 @@ class RottenKeepReasonStage {
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
       type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });
+    const recallApi = getNavigationLogRecallApi(options.app);
+    if (recallApi) {
+      const bandHost = this.root.createDiv({ cls: "bob-rotten-recall-host" });
+      this.logRecall = recallApi.attach({
+        inputEl: this.inputEl,
+        bandHost,
+        kind: "rotten",
+        ownKeys: true,
+      });
+    }
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
     if (model.historyRows.length) {
       this.root.createDiv({ cls: "bob-rotten-history-title", text: options.decayCard === true ? "EARLIER DECISIONS" : "EARLIER KEEPS" });
@@ -26212,6 +26253,10 @@ class RottenKeepReasonStage {
   }
   destroy() {
     this.completed = true;
+    if (this.logRecall && typeof this.logRecall.detach === "function") {
+      this.logRecall.detach();
+    }
+    this.logRecall = null;
     contentElCleanup(this.root);
     this.inputEl = null;
     this.previewEl = null;
@@ -30688,6 +30733,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.reasonEditKey = null;
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
+    this.reasonRecall = null;
     this.escArmed = false;
     this.statusLine = null;
     this.allowCloseWithoutArm = false;
@@ -30757,6 +30803,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     this.onCloseSettled = true;
     try {
+      this.disposeReasonRecall();
       super.onClose();
     } finally {
       this.onSettle(this.result);
@@ -31103,6 +31150,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     const oldKey = activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
     const query = this.getQuery();
     const navigation = [];
+    this.disposeReasonRecall();
     this.resultsEl.empty();
     for (let groupIndex = 0; groupIndex < this.model.groups.length; groupIndex += 1) {
       const group = this.model.groups[groupIndex];
@@ -31223,6 +31271,16 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     }
     this.updateSubtitle();
     this.renderFooter();
+  }
+
+  disposeReasonRecall() {
+    const recall = this.reasonRecall;
+    this.reasonRecall = null;
+    try {
+      if (recall && typeof recall.detach === "function") recall.detach();
+    } catch (_error) {
+      // The picker remains usable when recall cleanup is unavailable.
+    }
   }
 
   updateSubtitle() {
@@ -32476,10 +32534,24 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     } catch (_error) {
       // The attribute already carries the draft.
     }
+    const recallApi = getNavigationLogRecallApi(modal.app);
+    if (recallApi) {
+      const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
+      modal.reasonRecall = recallApi.attach({
+        inputEl: input,
+        bandHost,
+        kind: "cancel",
+        density: "dense",
+        ownKeys: true,
+      });
+    }
     const hint = wrap.createSpan({ cls: "bob-successor-reason-hint", text: SUCCESSOR_VERDICT_REASON_HINT });
     hint.setAttribute("aria-hidden", "true");
+    let resolved = false;
     const commit = (value) => {
       try {
+        if (resolved || modal.reasonEditKey !== row.key) return;
+        resolved = true;
         const reason = normalizeSuccessorCancelReason(value);
         const current = modal.verdicts instanceof Map ? modal.verdicts.get(row.key) : null;
         if (current && current.outcome === SUCCESSOR_VERDICT_CANCELLED) {
@@ -32511,6 +32583,8 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     };
     const restore = () => {
       try {
+        if (resolved || modal.reasonEditKey !== row.key) return;
+        resolved = true;
         const previous = modal.reasonPreviousVerdict || null;
         if (modal.verdicts instanceof Map) {
           if (previous) {
@@ -32559,11 +32633,14 @@ function successorRenderReasonEditor(modal, container, row, draft) {
         // The editor keeps focus rather than throwing.
       }
     });
-    input.addEventListener("blur", () => {
+    input.addEventListener("blur", (event) => {
       try {
-        if (modal.reasonEditKey === row.key) {
-          commit(input.value);
-        }
+        if (modal.reasonEditKey !== row.key) return;
+        const related = event && event.relatedTarget;
+        if (related && typeof wrap.contains === "function" && wrap.contains(related)) return;
+        const active = input.ownerDocument && input.ownerDocument.activeElement;
+        if (active === input || (active && typeof wrap.contains === "function" && wrap.contains(active))) return;
+        commit(input.value);
       } catch (_error) {
         // Blur never throws away the staged verdict.
       }
@@ -86126,6 +86203,9 @@ class BobNavigationHotkeysLaneReviewMixin {
         return false;
       }
     }
+    if (plan.rottenLogWrittenCount > 0 && plan.content !== content) {
+      noteNavigationLogRecallUsed(this.app, "rotten", keepReason);
+    }
     // Ctrl+Alt+F advances through the shared tail with the stamp text
     // as its preamble, giving one composed toast.
     const stampPreamble = this.finishFreshStamp(
@@ -92408,6 +92488,9 @@ class BobNavigationHotkeysDecayCancelMixin {
           return false;
         }
       }
+      if (plan.rottenLogWrittenCount > 0 && plan.content !== live.content) {
+        noteNavigationLogRecallUsed(this.app, "rotten", keepReason);
+      }
       this.rememberFreshnessDecayCardAnchor(cardCtx);
       const stamped = Array.isArray(plan.stamped)
         ? plan.stamped.find((entry) => entry.line === cardCtx.line)
@@ -93120,7 +93203,7 @@ class BobNavigationHotkeysDecayCardWriterMixin {
     );
   }
 
-  async applyFreshnessDecayCardLinePlan(cardCtx, live, content, noticeText, action) {
+  async applyFreshnessDecayCardLinePlan(cardCtx, live, content, noticeText, action, reason = "") {
     try {
       if (typeof content !== "string" || content === live.content) {
         new Notice("Could not update task; no tasks were updated");
@@ -93136,6 +93219,7 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         new Notice("Could not update task; no tasks were updated");
         return false;
       }
+      if (action === "stay") noteNavigationLogRecallUsed(this.app, "rotten", reason);
       this.rememberFreshnessDecayCardAnchor(cardCtx);
       new Notice(noticeText);
       await this.maybeAdvanceFreshnessDecayWalk(cardCtx, action);
@@ -93266,13 +93350,15 @@ class BobNavigationHotkeysDecayCardWriterMixin {
         new Notice(freshStampRefusalNotice(logged.refusal));
         return false;
       }
-      return this.applyFreshnessDecayCardLinePlan(
+      const applied = await this.applyFreshnessDecayCardLinePlan(
         cardCtx,
         live,
         logged.content,
         `Stay ${rottenKeepRungPreposition(cardCtx.rung)} ${cardCtx.rung} · count restarted · Ctrl+Z undoes`,
         "stay",
+        reason,
       );
+      return applied;
     } catch (error) {
       new Notice("Could not update task; no tasks were updated");
       return false;

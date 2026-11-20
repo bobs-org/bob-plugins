@@ -282,6 +282,9 @@ class BobNavigationHotkeysDecayCancelMixin {
           return false;
         }
       }
+      if (plan.rottenLogWrittenCount > 0 && plan.content !== live.content) {
+        noteNavigationLogRecallUsed(this.app, "rotten", keepReason);
+      }
       this.rememberFreshnessDecayCardAnchor(cardCtx);
       const stamped = Array.isArray(plan.stamped)
         ? plan.stamped.find((entry) => entry.line === cardCtx.line)

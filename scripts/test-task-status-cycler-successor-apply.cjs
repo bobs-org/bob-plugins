@@ -36,10 +36,18 @@ function setupPlugin(initial) {
   plugin.getFreshnessMarkUnblockedLine = () => markUnblockedLine;
   plugin.getScheduleLogDateString = () => TODAY;
   const cancelApi = navHarness.helpers.createCancelApi();
+  const recall = { noted: [] };
   harness.app.plugins.plugins["bob-navigation-hotkeys"] = {
-    api: { cancel: cancelApi, successors: { version: 4, pick() {} } },
+    api: {
+      cancel: cancelApi,
+      successors: { version: 4, pick() {} },
+      logRecall: {
+        version: 1,
+        noteUsed(kind, text) { recall.noted.push([kind, text]); return true; },
+      },
+    },
   };
-  return { harness, plugin, cancelApi };
+  return { harness, plugin, cancelApi, recall };
 }
 
 function offersFor(source, pathName = "Tasks.md") {
@@ -75,7 +83,7 @@ function runQueued(plugin, fn) {
 
 test("mixed Done and Cancel in one note writes both roots with exact bytes", async () => {
   const source = "- [ ] #task A ^a\n- [ ] #task B ^b\n";
-  const { harness, plugin } = setupPlugin({ "Tasks.md": source });
+  const { harness, plugin, recall } = setupPlugin({ "Tasks.md": source });
   const { offersByKey } = offersFor(source);
   const expected = expectedFor(source, offersByKey);
   const context = {
@@ -99,6 +107,7 @@ test("mixed Done and Cancel in one note writes both roots with exact bytes", asy
   assert.equal(cancelled.outcome, "cancelled");
   assert.equal(cancelled.cancel_log, "created");
   assert.equal(cancelled.reason, "obsolete");
+  assert.deepEqual(recall.noted, [["cancel", "obsolete"]]);
   assert.match(cancelled.message, /obsolete/);
   assert.match(done.message, /✓ completed/);
   const final = harness.getSource("Tasks.md");
@@ -132,7 +141,7 @@ test("all four Cancel Log cases match Task Card bytes and root fields stay untou
     },
   ];
   for (const item of cases) {
-    const { harness, plugin } = setupPlugin({ "Tasks.md": item.source });
+    const { harness, plugin, recall } = setupPlugin({ "Tasks.md": item.source });
     const { offersByKey } = offersFor(item.source);
     const expected = expectedFor(item.source, offersByKey);
     const context = {
@@ -153,6 +162,7 @@ test("all four Cancel Log cases match Task Card bytes and root fields stay untou
     if (item.log === "none") assert.doesNotMatch(final, /CANCEL LOG/, item.name);
     if (item.log === "fallback") assert.match(final, /🤷 no reason given/, item.name);
     if (item.name === "authored with log") assert.match(final, /Duplicate implementation/, item.name);
+    assert.deepEqual(recall.noted, item.name === "authored with log" ? [["cancel", "Duplicate implementation"]] : [], item.name);
   }
   const parentSource = "- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n";
   const { harness, plugin } = setupPlugin({ "Tasks.md": parentSource });

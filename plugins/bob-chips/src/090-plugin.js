@@ -66,6 +66,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       }
     }
     try {
+      if (typeof commandChipRuntimeSetup === "function") commandChipRuntimeSetup(this);
+    } catch (error) {
+      // Command chips fall back to copy-only faces without a runtime.
+    }
+    try {
       const liveExtension =
         typeof copyChipCreateLiveExtension === "function"
           ? copyChipCreateLiveExtension(this)
@@ -137,6 +142,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             // Author modal cleanup is best-effort.
           }
           this.copyChipAuthorModal = null;
+          try {
+            if (typeof commandChipRuntimeDispose === "function") commandChipRuntimeDispose(this);
+          } catch (error) {
+            // Runtime cleanup is best-effort.
+          }
         });
       }
     } catch (error) {
@@ -164,6 +174,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Author modal cleanup is best-effort.
     }
     this.copyChipAuthorModal = null;
+    try {
+      if (typeof commandChipRuntimeDispose === "function") commandChipRuntimeDispose(this);
+    } catch (error) {
+      // Runtime cleanup is best-effort.
+    }
   }
 
   copyChipsBuildApi() {

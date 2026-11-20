@@ -844,6 +844,50 @@ that line. `count` is the number of command chips on the line for a
 the cursor line is ignored. Whether a chip's text is a runnable bob command
 line is `api.commandMode.resolve`'s call, not this namespace's.
 
+### Command-chip runtime (internal)
+
+Bob Chips fragments share this runtime; it is not part of
+`api.commandChips`. `plugin.commandChipRuntime` holds one
+`CommandChipRunStore`, one resolve cache, and one
+`bob-command-mode:catalog-changed` subscription.
+
+- **Policy.** `commandChipEligibility(app, ctx)` returns frozen
+  `{ mode: "run" | "copy", reason, sourcePath, engine }`. Copy wins for a
+  root `mail/`, `ref/`, `ref_history/`, `.bob/`, or `_conflicts/` note (any
+  case); for an absolute, `..`, malformed, or missing path; for a `query`
+  origin without `sourceVerified: true`; on mobile; and without an enabled
+  Command Mode 0.4+. `ctx.resolveSourcePath()` wins over `ctx.sourcePath`.
+- **Painting.** `commandChipPaintModel(plugin, chip, ctx)` returns frozen
+  `{ face, mode, reason, verdict, key, snapshot, armed, sourcePath }` with
+  no side effects. `face` is `copy`, `queued`, `running`, `completed`,
+  `attention`, `failed`, `loading`, `unavailable`, `armed`, or `ready`.
+  Verdicts are cached per engine, catalog token, and payload; `loading` is
+  never cached. Repaint from `commandChipOnCatalogChanged(plugin, fn)` and
+  `store.subscribe(key, fn)`; both return unsubscribe functions.
+- **Store.** Keys are the canonical signature, or `text:` plus the payload
+  while loading. `snapshot(key)` is frozen `{ state, kind, runId,
+  sequenceId, step, total, steps, outcome, reason, exitCode, stoppedAt, … }`.
+  `state` is `idle`, `pending` (paint as resting), `queued`, `running`,
+  `completed` (idle after 1.6 s), `attention`, or `failed`; the last two
+  persist until the next run. `setArmed(target)`, `armedTarget()`, and
+  `isArmed(identity)` serve keymap. A target is `{ key, sourcePath, form,
+  line, from, to, fence? }` in `chipAt` coordinates (block chips match on
+  `fence.open`), so equal commands in two notes share run state but arm
+  separately.
+- **Activation.** `commandChipActivate(chip, ctx)` settles frozen
+  `{ action, ok, stage, outcome, reason, runId, sequenceId, signature }`.
+  `ctx` carries `plugin`, the source path, zero-based `line`, `origin`,
+  `view`/`element`, `shift`, `alt`, `refresh()`, and stale evidence:
+  `checkSource()`, a Live Preview `range: { from, to, raw }`, or
+  `readSource()` plus a line-relative `snapshot`. Copy contexts copy byte-exact.
+  Otherwise it resolves afresh and takes a per-key latch (at least 400 ms,
+  through acceptance) before any await. Then it rechecks the source, policy,
+  and verdict, and calls `runText` or (Shift) `openText` with only
+  `{ source, onState }`. A live key opens its output once per latch window;
+  a pending one swallows the gesture. Invalid, unavailable, and refused
+  activations show one Notice. Cards and previews restore the prior ink;
+  failures never retry. Alt is inert. Nothing calls task or walk APIs.
+
 ## Related
 
 - [Block ID Prompt](https://bobs-org.github.io/reference/plugins/block-id-prompt/)

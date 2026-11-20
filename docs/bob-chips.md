@@ -13,7 +13,7 @@ Bob Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
 | Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |

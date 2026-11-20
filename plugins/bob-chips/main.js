@@ -3209,6 +3209,987 @@ function commandChipFallbackApi() {
     chipAt: () => commandChipNone(),
   });
 }
+// ---- src/067-command-policy.js ----
+// Command-chip run eligibility: which source notes, hosts, and engines may
+// run a chip, plus fresh source checks for activation. Decisions read the
+// chip's actual source note, never the active leaf. Nothing here spawns,
+// copies, or writes.
+
+// Root folders whose notes hold text Bryan did not author. A chip in one of
+// them only copies. Compared case-insensitively, because the vault also
+// lives on a case-insensitive macOS file system.
+const COMMAND_CHIP_NO_RUN_ROOTS = copyChipFreeze(["mail", "ref", "ref_history", ".bob", "_conflicts"]);
+const COMMAND_CHIP_SOURCE_UNKNOWN = "source note unknown";
+const COMMAND_CHIP_MOBILE_REASON = "commands run only on desktop";
+const COMMAND_CHIP_ENGINE_ID = "bob-command-mode";
+const COMMAND_CHIP_ENGINE_MISSING = "Command Mode is not enabled";
+const COMMAND_CHIP_ENGINE_OLD = "Command Mode is too old for command chips";
+const COMMAND_CHIP_SOURCE_CHANGED = "source changed";
+
+let CommandChipsPlatform = null;
+try {
+  const obsidian = require("obsidian");
+  CommandChipsPlatform = (obsidian && obsidian.Platform) || null;
+} catch (error) {
+  CommandChipsPlatform = null;
+}
+
+// A vault-relative note path, or why it is not one. Absolute paths, drive
+// letters, backslashes, control characters, and empty, `.`, or `..`
+// components are refused rather than normalized: an odd path is unknown.
+function commandChipNormalizeSourcePath(path) {
+  try {
+    if (typeof path !== "string" || path === "") {
+      return copyChipFreeze({ ok: false, path: null, reason: COMMAND_CHIP_SOURCE_UNKNOWN });
+    }
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f\\]/.test(path) || path[0] === "/" || /^[A-Za-z]:/.test(path)) {
+      return copyChipFreeze({ ok: false, path: null, reason: COMMAND_CHIP_SOURCE_UNKNOWN });
+    }
+    const parts = path.split("/");
+    if (parts.some((part) => part === "" || part === "." || part === "..")) {
+      return copyChipFreeze({ ok: false, path: null, reason: COMMAND_CHIP_SOURCE_UNKNOWN });
+    }
+    return copyChipFreeze({ ok: true, path, reason: null });
+  } catch (error) {
+    return copyChipFreeze({ ok: false, path: null, reason: COMMAND_CHIP_SOURCE_UNKNOWN });
+  }
+}
+
+// The no-run root a normalized path sits under (its canonical spelling), or
+// null. Only the first component counts: `notes/ref/x.md` may run.
+function commandChipNoRunRoot(path) {
+  try {
+    const normalized = commandChipNormalizeSourcePath(path);
+    if (!normalized.ok) return null;
+    const root = normalized.path.split("/")[0].toLowerCase();
+    for (const candidate of COMMAND_CHIP_NO_RUN_ROOTS) {
+      if (root === candidate) return candidate;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Pure source-path verdict: frozen `{ mode: "run" | "copy", reason, path }`.
+function commandChipSourcePolicy(path) {
+  try {
+    const normalized = commandChipNormalizeSourcePath(path);
+    if (!normalized.ok) {
+      return copyChipFreeze({ mode: "copy", reason: normalized.reason, path: null });
+    }
+    const root = commandChipNoRunRoot(normalized.path);
+    if (root) {
+      return copyChipFreeze({
+        mode: "copy",
+        reason: "notes under " + root + "/ never run commands",
+        path: normalized.path,
+      });
+    }
+    return copyChipFreeze({ mode: "run", reason: null, path: normalized.path });
+  } catch (error) {
+    return copyChipFreeze({ mode: "copy", reason: COMMAND_CHIP_SOURCE_UNKNOWN, path: null });
+  }
+}
+
+function commandChipIsMobile(app) {
+  try {
+    if (app && app.isMobile === true) return true;
+    const platform = CommandChipsPlatform;
+    return Boolean(platform && (platform.isMobile === true || platform.isMobileApp === true));
+  } catch (error) {
+    return false;
+  }
+}
+
+// The live Command Mode namespace, looked up fresh on every call so a
+// disabled, reloaded, or replaced engine is never used by mistake. Frozen
+// `{ engine, reason }`; `engine` is null when chips cannot run.
+function commandChipEngineOf(app) {
+  try {
+    const registry = app && app.plugins;
+    const enabled = registry && registry.enabledPlugins;
+    if (enabled && typeof enabled.has === "function" && !enabled.has(COMMAND_CHIP_ENGINE_ID)) {
+      return copyChipFreeze({ engine: null, reason: COMMAND_CHIP_ENGINE_MISSING });
+    }
+    const plugin = registry && registry.plugins ? registry.plugins[COMMAND_CHIP_ENGINE_ID] : null;
+    const api = plugin && plugin.api;
+    const engine = api && api.commandMode;
+    if (!engine) return copyChipFreeze({ engine: null, reason: COMMAND_CHIP_ENGINE_MISSING });
+    if (
+      !(Number(engine.version) >= 1) ||
+      typeof engine.resolve !== "function" ||
+      typeof engine.runText !== "function" ||
+      typeof engine.openText !== "function"
+    ) {
+      return copyChipFreeze({ engine: null, reason: COMMAND_CHIP_ENGINE_OLD });
+    }
+    return copyChipFreeze({ engine, reason: null });
+  } catch (error) {
+    return copyChipFreeze({ engine: null, reason: COMMAND_CHIP_ENGINE_MISSING });
+  }
+}
+
+// A link or path resolved through the vault, never guessed: the target
+// file's path, or null when the vault cannot resolve it to one note.
+function commandChipResolveSourceLink(app, linktext, fromPath) {
+  try {
+    if (typeof linktext !== "string" || linktext.trim() === "") return null;
+    const cache = app && app.metadataCache;
+    if (!cache || typeof cache.getFirstLinkpathDest !== "function") return null;
+    // `Note#Heading|Alias` and `Note#^block` name the note `Note`.
+    const linkpath = linktext.trim().replace(/\|.*$/, "").replace(/#.*$/, "").trim();
+    if (linkpath === "") return null;
+    const file = cache.getFirstLinkpathDest(linkpath, typeof fromPath === "string" ? fromPath : "");
+    return file && typeof file.path === "string" ? file.path : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// True when the vault knows `path` as a note (not a folder). Without a vault
+// lookup API the path is taken as given; the source policy still applies.
+function commandChipSourceExists(app, path) {
+  try {
+    const vault = app && app.vault;
+    if (!vault || typeof vault.getAbstractFileByPath !== "function") return true;
+    const file = vault.getAbstractFileByPath(path);
+    if (!file) return false;
+    return !Array.isArray(file.children);
+  } catch (error) {
+    return false;
+  }
+}
+
+// The source path an activation context names right now: a renderer's
+// fresh reader (for example the editor's current file) wins over the path
+// captured at render time.
+function commandChipContextSourcePath(ctx) {
+  try {
+    if (!ctx || typeof ctx !== "object") return null;
+    if (typeof ctx.resolveSourcePath === "function") {
+      const fresh = ctx.resolveSourcePath();
+      return typeof fresh === "string" ? fresh : null;
+    }
+    return typeof ctx.sourcePath === "string" ? ctx.sourcePath : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Everything that decides run versus copy for one activation context:
+// frozen `{ mode: "run" | "copy", reason, sourcePath, engine }`. A query
+// result runs only when its renderer verified the owning note
+// (`ctx.sourceVerified === true`), so a dashboard's own path never
+// authorizes text rendered from another note.
+function commandChipEligibility(app, ctx) {
+  try {
+    const c = ctx && typeof ctx === "object" ? ctx : {};
+    const copy = (reason, sourcePath) => copyChipFreeze({
+      mode: "copy",
+      reason: String(reason || COMMAND_CHIP_SOURCE_UNKNOWN),
+      sourcePath: sourcePath || null,
+      engine: null,
+    });
+    if (c.origin === "query" && c.sourceVerified !== true) return copy(COMMAND_CHIP_SOURCE_UNKNOWN, null);
+    const source = commandChipSourcePolicy(commandChipContextSourcePath(c));
+    if (source.mode !== "run") return copy(source.reason, source.path);
+    if (!commandChipSourceExists(app, source.path)) return copy(COMMAND_CHIP_SOURCE_UNKNOWN, null);
+    if (commandChipIsMobile(app)) return copy(COMMAND_CHIP_MOBILE_REASON, source.path);
+    const found = commandChipEngineOf(app);
+    if (!found.engine) return copy(found.reason, source.path);
+    return copyChipFreeze({ mode: "run", reason: null, sourcePath: source.path, engine: found.engine });
+  } catch (error) {
+    return copyChipFreeze({ mode: "copy", reason: COMMAND_CHIP_SOURCE_UNKNOWN, sourcePath: null, engine: null });
+  }
+}
+
+function commandChipSourceVerdict(ok, reason) {
+  return copyChipFreeze({ ok: Boolean(ok), reason: ok ? null : String(reason || COMMAND_CHIP_SOURCE_CHANGED) });
+}
+
+// Live Preview: the exact document slice `[from, to)`, delimiters included,
+// must still equal `raw`. Identical text elsewhere never counts.
+function commandChipLiveSourceCheck(view, range) {
+  try {
+    const r = range && typeof range === "object" ? range : null;
+    if (!r || !Number.isInteger(r.from) || !Number.isInteger(r.to) || typeof r.raw !== "string") {
+      return commandChipSourceVerdict(false);
+    }
+    const state = view && view.state;
+    if (!state) return commandChipSourceVerdict(false);
+    const length = state.doc && Number.isInteger(state.doc.length) ? state.doc.length : null;
+    if (r.from < 0 || r.to < r.from || (length !== null && r.to > length)) return commandChipSourceVerdict(false);
+    let slice = null;
+    if (typeof state.sliceDoc === "function") slice = state.sliceDoc(r.from, r.to);
+    else if (state.doc && typeof state.doc.sliceString === "function") slice = state.doc.sliceString(r.from, r.to);
+    return commandChipSourceVerdict(slice === r.raw);
+  } catch (error) {
+    return commandChipSourceVerdict(false);
+  }
+}
+
+// Reading view and other text sources: line `line` (zero-based) of `text`
+// must still hold `raw` at the line-relative `[from, to)`.
+function commandChipTextSourceCheck(text, snapshot) {
+  try {
+    const s = snapshot && typeof snapshot === "object" ? snapshot : null;
+    if (typeof text !== "string" || !s || typeof s.raw !== "string") return commandChipSourceVerdict(false);
+    if (!Number.isInteger(s.line) || !Number.isInteger(s.from) || !Number.isInteger(s.to)) {
+      return commandChipSourceVerdict(false);
+    }
+    const lines = text.split("\n");
+    if (s.line < 0 || s.line >= lines.length) return commandChipSourceVerdict(false, "source disappeared");
+    const lineText = lines[s.line].replace(/\r$/, "");
+    if (s.from < 0 || s.to < s.from || s.to > lineText.length) return commandChipSourceVerdict(false);
+    return commandChipSourceVerdict(lineText.slice(s.from, s.to) === s.raw);
+  } catch (error) {
+    return commandChipSourceVerdict(false);
+  }
+}
+
+function commandChipNormalizeSourceResult(value) {
+  if (value === true) return commandChipSourceVerdict(true);
+  if (value && typeof value === "object" && typeof value.ok === "boolean") {
+    return commandChipSourceVerdict(value.ok, value.reason);
+  }
+  return commandChipSourceVerdict(false);
+}
+
+// Run the context's freshest source check. Precedence: the renderer's
+// `checkSource()`; Live Preview's `view` plus absolute `range`; a
+// `readSource()` text reader plus line-relative `snapshot`; otherwise no
+// evidence exists and the span is accepted as rendered. Returns a verdict or
+// a Promise of one; a throwing or rejecting checker reads as changed.
+function commandChipCheckSource(ctx) {
+  try {
+    const c = ctx && typeof ctx === "object" ? ctx : {};
+    if (typeof c.checkSource === "function") {
+      const value = c.checkSource();
+      if (value && typeof value.then === "function") {
+        return Promise.resolve(value).then(commandChipNormalizeSourceResult, () => commandChipSourceVerdict(false));
+      }
+      return commandChipNormalizeSourceResult(value);
+    }
+    if (c.view && c.range) return commandChipLiveSourceCheck(c.view, c.range);
+    if (typeof c.readSource === "function" && c.snapshot) {
+      const text = c.readSource();
+      if (text && typeof text.then === "function") {
+        return Promise.resolve(text).then(
+          (value) => commandChipTextSourceCheck(value, c.snapshot),
+          () => commandChipSourceVerdict(false),
+        );
+      }
+      return commandChipTextSourceCheck(text, c.snapshot);
+    }
+    return commandChipSourceVerdict(true);
+  } catch (error) {
+    return commandChipSourceVerdict(false);
+  }
+}
+// ---- src/068-command-run-store.js ----
+// CommandChipRunStore: the one plugin-owned record of chip-started runs,
+// keyed by the engine's canonical signature (or `text:` + payload while the
+// catalog loads). State lives here, never in widgets, so it survives
+// decoration rebuilds and notes that rewrite themselves mid-run. Widgets
+// subscribe and repaint in place; unsubscribing never touches a run.
+//
+// States: `idle` (nothing recorded), `pending` (a gesture was accepted and
+// the engine has not queued anything yet; paint it as resting, never as a
+// spinner), `queued`, `running`, `completed` (returns to idle after
+// COMMAND_CHIP_COMPLETED_MS), `attention`, and `failed` (both kept until the
+// next run or a plugin reload).
+const COMMAND_CHIP_COMPLETED_MS = 1600;
+const COMMAND_CHIP_LATCH_MS = 400;
+const COMMAND_CHIP_TEXT_KEY_PREFIX = "text:";
+
+function commandChipStoreKey(verdict, text) {
+  try {
+    if (verdict && verdict.state === "ready" && typeof verdict.signature === "string" && verdict.signature) {
+      return verdict.signature;
+    }
+    return COMMAND_CHIP_TEXT_KEY_PREFIX + String(text === undefined || text === null ? "" : text);
+  } catch (error) {
+    return COMMAND_CHIP_TEXT_KEY_PREFIX;
+  }
+}
+
+function commandChipIsLiveState(state) {
+  return state === "queued" || state === "running";
+}
+
+// Terminal ink for an engine outcome. `unknown` and `stopped` halt a
+// sequence without being errors, so they ask for attention.
+function commandChipTerminalState(outcome) {
+  if (outcome === "completed") return "completed";
+  if (outcome === "attention" || outcome === "unknown" || outcome === "stopped") return "attention";
+  return "failed";
+}
+
+// Identity of one rendered chip for armed-target matching. Inline chips use
+// zero-based `line` and UTF-16 line-relative `from` / `to` with delimiters,
+// `to` exclusive (the scanLine / chipAt convention). Block chips use the
+// zero-based `fence.open` line (or `line` when no fence is given). The
+// source path is part of the identity, so equal commands in two notes share
+// run state but never both appear armed.
+function commandChipTargetId(target) {
+  try {
+    if (!target || typeof target !== "object") return null;
+    const path = typeof target.sourcePath === "string" ? target.sourcePath : "";
+    if (target.form === "block") {
+      const open = target.fence && Number.isInteger(target.fence.open) ? target.fence.open : target.line;
+      if (!Number.isInteger(open)) return null;
+      return JSON.stringify(["block", path, open]);
+    }
+    if (!Number.isInteger(target.line) || !Number.isInteger(target.from) || !Number.isInteger(target.to)) {
+      return null;
+    }
+    return JSON.stringify(["inline", path, target.line, target.from, target.to]);
+  } catch (error) {
+    return null;
+  }
+}
+
+function commandChipDefaultTimers() {
+  return {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (handle) => clearTimeout(handle),
+  };
+}
+
+function commandChipCallListener(listener, ...args) {
+  try {
+    const result = listener(...args);
+    if (result && typeof result.catch === "function") result.catch(() => {});
+  } catch (error) {
+    // A painter's failure never affects the store or other painters.
+  }
+}
+
+class CommandChipRunStore {
+  constructor(options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    this.timers = opts.timers && typeof opts.timers.set === "function" ? opts.timers : commandChipDefaultTimers();
+    this.now = typeof opts.now === "function" ? opts.now : () => Date.now();
+    this.completedMs = Number.isFinite(opts.completedMs) ? opts.completedMs : COMMAND_CHIP_COMPLETED_MS;
+    this.latchMs = Number.isFinite(opts.latchMs) ? opts.latchMs : COMMAND_CHIP_LATCH_MS;
+    this.entries = new Map();
+    this.latches = new Map();
+    this.outputAt = new Map();
+    this.listeners = new Map();
+    this.anyListeners = new Set();
+    this.armed = null;
+    this.seq = 0;
+    this.latchSeq = 0;
+    this.disposed = false;
+  }
+
+  // Frozen `{ key, signature, state, kind, intent, runId, sequenceId, step,
+  // total, steps, outcome, reason, exitCode, stoppedAt, prior, seq, latched }`.
+  // `step` is the 1-based current step; `steps` holds each settled step's
+  // frozen `{ index, outcome, reason, runId }`.
+  snapshot(key) {
+    const entry = this.entries.get(key);
+    const latched = this.latches.has(key);
+    if (!entry) {
+      return copyChipFreeze({
+        key, signature: null, state: "idle", kind: null, intent: null, runId: null,
+        sequenceId: null, step: 0, total: 0, steps: copyChipFreeze([]), outcome: null,
+        reason: null, exitCode: null, stoppedAt: null, prior: null, seq: 0, latched,
+      });
+    }
+    return copyChipFreeze({
+      key,
+      signature: entry.signature,
+      state: entry.state,
+      kind: entry.kind,
+      intent: entry.intent,
+      runId: entry.runId,
+      sequenceId: entry.sequenceId,
+      step: entry.step,
+      total: entry.total,
+      steps: copyChipFreeze(entry.steps.slice()),
+      outcome: entry.outcome,
+      reason: entry.reason,
+      exitCode: entry.exitCode,
+      stoppedAt: entry.stoppedAt,
+      prior: entry.prior ? entry.prior.state : null,
+      seq: entry.seq,
+      latched,
+    });
+  }
+
+  isLive(key) {
+    const entry = this.entries.get(key);
+    return Boolean(entry && commandChipIsLiveState(entry.state));
+  }
+
+  // Subscribe one painter to one key. Returns an idempotent unsubscribe.
+  subscribe(key, listener) {
+    if (this.disposed || typeof listener !== "function") return () => {};
+    let set = this.listeners.get(key);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(key, set);
+    }
+    const token = { listener };
+    set.add(token);
+    return () => {
+      const current = this.listeners.get(key);
+      if (!current) return;
+      current.delete(token);
+      if (current.size === 0) this.listeners.delete(key);
+    };
+  }
+
+  // Every change: `listener(key, snapshot)`. Armed changes notify too.
+  subscribeAll(listener) {
+    if (this.disposed || typeof listener !== "function") return () => {};
+    const token = { listener };
+    this.anyListeners.add(token);
+    return () => {
+      this.anyListeners.delete(token);
+    };
+  }
+
+  notify(key) {
+    if (this.disposed) return;
+    const snapshot = this.snapshot(key);
+    const set = this.listeners.get(key);
+    if (set) {
+      for (const token of [...set]) commandChipCallListener(token.listener, snapshot);
+    }
+    for (const token of [...this.anyListeners]) commandChipCallListener(token.listener, key, snapshot);
+  }
+
+  clearTimer(entry) {
+    if (!entry || entry.timer === null || entry.timer === undefined) return;
+    try {
+      this.timers.clear(entry.timer);
+    } catch (error) {
+      // Timer cleanup is best-effort.
+    }
+    entry.timer = null;
+  }
+
+  // A gesture was accepted for `key`: record `pending` and remember what to
+  // restore if nothing runs. Returns the activation's sequence number, which
+  // every later update must present; a stale number is ignored.
+  begin(key, info = {}) {
+    if (this.disposed) return 0;
+    this.seq += 1;
+    const seq = this.seq;
+    const previous = this.entries.get(key) || null;
+    if (previous) this.clearTimer(previous);
+    const prior = previous && !commandChipIsLiveState(previous.state) && previous.state !== "pending"
+      ? { ...previous, timer: null, prior: null }
+      : null;
+    const total = Number(info.total) > 0 ? Number(info.total) : 1;
+    this.entries.set(key, {
+      key,
+      seq,
+      signature: typeof info.signature === "string" ? info.signature : null,
+      state: "pending",
+      kind: info.kind === "sequence" || total > 1 ? "sequence" : "run",
+      intent: info.intent === "open" ? "open" : "run",
+      runId: null,
+      sequenceId: null,
+      step: 1,
+      total,
+      steps: [],
+      outcome: null,
+      reason: null,
+      exitCode: null,
+      stoppedAt: null,
+      prior,
+      timer: null,
+    });
+    this.notify(key);
+    return seq;
+  }
+
+  current(key, seq) {
+    if (this.disposed) return null;
+    const entry = this.entries.get(key);
+    return entry && entry.seq === seq ? entry : null;
+  }
+
+  // Move a loading-time `text:` entry to the signature the engine reported.
+  // An existing live entry under `toKey` wins and the move is refused.
+  rekey(fromKey, toKey, seq) {
+    if (fromKey === toKey) return true;
+    const entry = this.current(fromKey, seq);
+    if (!entry || typeof toKey !== "string" || toKey === "") return false;
+    const existing = this.entries.get(toKey);
+    if (existing && (commandChipIsLiveState(existing.state) || existing.state === "pending")) return false;
+    if (existing) this.clearTimer(existing);
+    this.entries.delete(fromKey);
+    entry.key = toKey;
+    entry.signature = toKey;
+    this.entries.set(toKey, entry);
+    this.notify(fromKey);
+    this.notify(toKey);
+    return true;
+  }
+
+  // Apply one engine `onState` payload for activation `seq`.
+  apply(key, seq, payload) {
+    const entry = this.current(key, seq);
+    if (!entry || !payload || typeof payload !== "object") return false;
+    const state = payload.state;
+    if (payload.kind === "run" || payload.kind === "sequence") entry.kind = payload.kind;
+    if (Number(payload.total) > 0) entry.total = Number(payload.total);
+    if (payload.sequenceId) entry.sequenceId = String(payload.sequenceId);
+    if (state === "queued" || state === "running") {
+      if (payload.runId) entry.runId = String(payload.runId);
+      if (Number(payload.step) > 0) entry.step = Number(payload.step);
+      entry.state = state;
+      entry.outcome = state;
+    } else if (state === "step") {
+      const index = Number(payload.step) > 0 ? Number(payload.step) : entry.step;
+      const row = copyChipFreeze({
+        index,
+        outcome: payload.outcome ? String(payload.outcome) : "failed",
+        reason: payload.reason != null ? String(payload.reason) : null,
+        runId: payload.runId ? String(payload.runId) : null,
+      });
+      entry.steps = entry.steps.filter((item) => item.index !== index).concat([row]);
+      entry.steps.sort((left, right) => left.index - right.index);
+      if (row.runId) entry.runId = row.runId;
+      if (index < entry.total) entry.step = index + 1;
+      if (entry.state === "pending" || entry.state === "queued") entry.state = "running";
+    } else if (state === "finished") {
+      this.finish(entry, payload);
+    } else {
+      return false;
+    }
+    this.notify(entry.key);
+    return true;
+  }
+
+  finish(entry, result) {
+    const outcome = result && result.outcome ? String(result.outcome) : "failed";
+    entry.state = commandChipTerminalState(outcome);
+    entry.outcome = outcome;
+    if (result && result.runId) entry.runId = String(result.runId);
+    entry.reason = result && result.reason != null ? String(result.reason) : null;
+    entry.exitCode = result && typeof result.exitCode === "number" ? result.exitCode : null;
+    entry.stoppedAt = result && Number(result.stoppedAt) > 0 ? Number(result.stoppedAt) : null;
+    if (result && Number(result.step) > 0) entry.step = Number(result.step);
+    entry.prior = null;
+    this.clearTimer(entry);
+    if (entry.state === "completed") {
+      const seq = entry.seq;
+      const key = entry.key;
+      try {
+        entry.timer = this.timers.set(() => {
+          const current = this.entries.get(key);
+          // A newer run, or a rekey, owns the entry now: never reset it.
+          if (!current || current !== entry || current.seq !== seq || current.state !== "completed") return;
+          current.timer = null;
+          this.entries.delete(key);
+          this.notify(key);
+        }, this.completedMs);
+      } catch (error) {
+        entry.timer = null;
+      }
+    }
+  }
+
+  // The engine settled activation `seq` with a run result. Events already
+  // delivered win; a result without a `finished` event still ends the run.
+  settle(key, seq, result) {
+    const entry = this.current(key, seq);
+    if (!entry) return false;
+    if (entry.state !== "pending" && !commandChipIsLiveState(entry.state)) return false;
+    const outcome = result && result.outcome;
+    if (outcome === "queued" || outcome === "running") return false;
+    this.finish(entry, result || {});
+    this.notify(entry.key);
+    return true;
+  }
+
+  // Nothing ran for activation `seq` (a card opened, a preview, a refusal):
+  // restore the ink from before the gesture, never a fake running state.
+  revert(key, seq) {
+    const entry = this.current(key, seq);
+    if (!entry || entry.state !== "pending") return false;
+    this.clearTimer(entry);
+    const prior = entry.prior;
+    if (prior && prior.state !== "completed") {
+      this.entries.set(key, { ...prior, key, timer: null, prior: null });
+    } else {
+      this.entries.delete(key);
+    }
+    this.notify(key);
+    return true;
+  }
+
+  // The activation itself broke (a throwing or rejecting engine call).
+  fail(key, seq, reason) {
+    const entry = this.current(key, seq);
+    if (!entry) return false;
+    this.finish(entry, { outcome: "failed", reason: String(reason || "command failed") });
+    this.notify(entry.key);
+    return true;
+  }
+
+  // Synchronous per-key latch. Returns a token, or null while another
+  // gesture holds it. The latch lasts at least `latchMs` and until
+  // settleLatch(token): swallowing double clicks and key repeats.
+  tryLatch(key) {
+    if (this.disposed || this.latches.has(key)) return null;
+    this.latchSeq += 1;
+    const latch = { token: this.latchSeq, settled: false, elapsed: false, timer: null };
+    this.latches.set(key, latch);
+    try {
+      latch.timer = this.timers.set(() => {
+        latch.timer = null;
+        latch.elapsed = true;
+        if (latch.settled) this.releaseLatch(key, latch.token);
+      }, this.latchMs);
+    } catch (error) {
+      latch.elapsed = true;
+    }
+    return latch.token;
+  }
+
+  settleLatch(key, token) {
+    const latch = this.latches.get(key);
+    if (!latch || latch.token !== token) return false;
+    latch.settled = true;
+    if (latch.elapsed) this.releaseLatch(key, token);
+    return true;
+  }
+
+  releaseLatch(key, token) {
+    const latch = this.latches.get(key);
+    if (!latch || latch.token !== token) return false;
+    if (latch.timer !== null) {
+      try {
+        this.timers.clear(latch.timer);
+      } catch (error) {
+        // Timer cleanup is best-effort.
+      }
+    }
+    this.latches.delete(key);
+    return true;
+  }
+
+  isLatched(key) {
+    return this.latches.has(key);
+  }
+
+  // Output deduplication: true when opening `key`'s output now is allowed,
+  // and claims the next `latchMs` so a double click opens it once.
+  claimOutput(key) {
+    if (this.disposed) return false;
+    const now = this.now();
+    const last = this.outputAt.get(key);
+    if (Number.isFinite(last) && now - last < this.latchMs) return false;
+    this.outputAt.set(key, now);
+    return true;
+  }
+
+  // The `⌘↵` target that widgets paint `.is-armed` (keymap phase owner).
+  // `target` carries the run key (`key`) plus the commandChipTargetId
+  // identity fields; null disarms.
+  setArmed(target) {
+    if (this.disposed) return false;
+    const id = commandChipTargetId(target);
+    const key = id && target && typeof target.key === "string" ? target.key : null;
+    const next = id && key ? copyChipFreeze({ id, key, target: copyChipFreeze({ ...target }) }) : null;
+    const previous = this.armed;
+    if ((previous && previous.id) === (next && next.id) && (previous && previous.key) === (next && next.key)) return false;
+    this.armed = next;
+    if (previous) this.notify(previous.key);
+    if (next && (!previous || previous.key !== next.key)) this.notify(next.key);
+    return true;
+  }
+
+  armedTarget() {
+    return this.armed ? this.armed.target : null;
+  }
+
+  isArmed(identity) {
+    if (!this.armed) return false;
+    const id = commandChipTargetId(identity);
+    return Boolean(id && id === this.armed.id);
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    for (const entry of this.entries.values()) this.clearTimer(entry);
+    for (const [key, latch] of this.latches) {
+      if (latch.timer !== null) {
+        try {
+          this.timers.clear(latch.timer);
+        } catch (error) {
+          // Timer cleanup is best-effort.
+        }
+      }
+      this.latches.delete(key);
+    }
+    this.entries.clear();
+    this.outputAt.clear();
+    this.listeners.clear();
+    this.anyListeners.clear();
+    this.armed = null;
+    this.disposed = true;
+  }
+}
+// ---- src/069-command-runtime.js ----
+// The plugin-owned command-chip runtime: the shared run store, a bounded
+// resolve cache, and one catalog-change subscription fanned out to every
+// renderer. Painting reads only cached, synchronous data: it never starts a
+// catalog load, never spawns, and never writes.
+const COMMAND_CHIP_RESOLVE_CACHE_MAX = 512;
+const COMMAND_CHIP_CATALOG_EVENT = "bob-command-mode:catalog-changed";
+
+function commandChipCatalogToken(engine) {
+  try {
+    if (engine && typeof engine.catalogInfo === "function") {
+      const info = engine.catalogInfo();
+      if (info && info.token !== undefined && info.token !== null) return String(info.token);
+    }
+  } catch (error) {
+    // An unreadable token never matches a cached one.
+  }
+  return "";
+}
+
+// Resolve verdicts keyed by engine instance, catalog token, and exact
+// payload. A `loading` verdict is never cached, so a chip repaints as soon
+// as the catalog arrives; a new engine or token drops every entry.
+class CommandChipResolveCache {
+  constructor(max) {
+    this.max = Number(max) > 0 ? Number(max) : COMMAND_CHIP_RESOLVE_CACHE_MAX;
+    this.engine = null;
+    this.token = null;
+    this.map = new Map();
+    this.hits = 0;
+    this.misses = 0;
+  }
+
+  get(engine, text) {
+    try {
+      if (!engine || typeof engine.resolve !== "function" || typeof text !== "string") return null;
+      const token = commandChipCatalogToken(engine);
+      if (engine !== this.engine || token !== this.token) {
+        this.map.clear();
+        this.engine = engine;
+        this.token = token;
+      }
+      if (this.map.has(text)) {
+        const cached = this.map.get(text);
+        this.map.delete(text);
+        this.map.set(text, cached);
+        this.hits += 1;
+        return cached;
+      }
+      this.misses += 1;
+      const verdict = commandChipFreshResolve(engine, text);
+      if (verdict.state !== "loading") {
+        this.map.set(text, verdict);
+        while (this.map.size > this.max) this.map.delete(this.map.keys().next().value);
+      }
+      return verdict;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  clear() {
+    this.map.clear();
+    this.engine = null;
+    this.token = null;
+  }
+
+  stats() {
+    return copyChipFreeze({ hits: this.hits, misses: this.misses, size: this.map.size, token: this.token });
+  }
+}
+
+// A fresh, uncached engine verdict. Never throws.
+function commandChipFreshResolve(engine, text) {
+  try {
+    const verdict = engine.resolve(text);
+    if (verdict && typeof verdict === "object" && typeof verdict.state === "string") return verdict;
+  } catch (error) {
+    // Fall through to the generic refusal.
+  }
+  return copyChipFreeze({
+    ok: false,
+    state: "invalid",
+    signature: null,
+    steps: copyChipFreeze([]),
+    reason: "command could not be resolved",
+    step: null,
+  });
+}
+
+function commandChipRuntimeOf(plugin) {
+  try {
+    const runtime = plugin && plugin.commandChipRuntime;
+    return runtime && !runtime.disposed ? runtime : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function commandChipCatalogChanged(runtime, payload) {
+  if (!runtime || runtime.disposed) return;
+  runtime.cache.clear();
+  for (const token of [...runtime.catalogListeners]) commandChipCallListener(token.listener, payload || null);
+}
+
+// Idempotent per plugin. `options.store` passes test timers to the store.
+function commandChipRuntimeSetup(plugin, options) {
+  try {
+    if (!plugin) return null;
+    const existing = commandChipRuntimeOf(plugin);
+    if (existing) return existing;
+    const opts = options && typeof options === "object" ? options : {};
+    const runtime = {
+      store: new CommandChipRunStore(opts.store),
+      cache: new CommandChipResolveCache(opts.cacheMax),
+      catalogListeners: new Set(),
+      catalogRef: null,
+      workspace: null,
+      disposed: false,
+    };
+    plugin.commandChipRuntime = runtime;
+    try {
+      const workspace = plugin.app && plugin.app.workspace;
+      if (workspace && typeof workspace.on === "function") {
+        const ref = workspace.on(COMMAND_CHIP_CATALOG_EVENT, (payload) => commandChipCatalogChanged(runtime, payload));
+        runtime.catalogRef = ref || null;
+        runtime.workspace = workspace;
+        if (ref && typeof plugin.registerEvent === "function") plugin.registerEvent(ref);
+      }
+    } catch (error) {
+      // Without the event, verdicts still refresh on token or engine change.
+    }
+    return runtime;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Unload: stop every timer, latch, listener, and the catalog subscription.
+// In-flight engine callbacks become no-ops; runs themselves continue.
+function commandChipRuntimeDispose(plugin) {
+  try {
+    const runtime = plugin && plugin.commandChipRuntime;
+    if (!runtime) return;
+    plugin.commandChipRuntime = null;
+    if (runtime.disposed) return;
+    runtime.disposed = true;
+    try {
+      if (runtime.catalogRef && runtime.workspace && typeof runtime.workspace.offref === "function") {
+        runtime.workspace.offref(runtime.catalogRef);
+      }
+    } catch (error) {
+      // Obsidian's registerEvent also detaches the ref on unload.
+    }
+    runtime.catalogRef = null;
+    runtime.workspace = null;
+    runtime.catalogListeners.clear();
+    runtime.cache.clear();
+    runtime.store.dispose();
+  } catch (error) {
+    // Disposal never throws.
+  }
+}
+
+// Renderers repaint loading and refused faces here. One plugin-level
+// subscription feeds every listener; returns an idempotent unsubscribe.
+function commandChipOnCatalogChanged(plugin, listener) {
+  const runtime = commandChipRuntimeOf(plugin);
+  if (!runtime || typeof listener !== "function") return () => {};
+  const token = { listener };
+  runtime.catalogListeners.add(token);
+  return () => {
+    runtime.catalogListeners.delete(token);
+  };
+}
+
+function commandChipStoreOf(plugin) {
+  const runtime = commandChipRuntimeOf(plugin);
+  return runtime ? runtime.store : null;
+}
+
+// The face a chip shows, from data already in hand. `copy` wins (the click
+// copies); recorded run ink comes next, so a run started before a catalog
+// change still shows; then the verdict: `loading`, `unavailable` (invalid or
+// unavailable, click explains), or `ready` / `armed`. `pending` paints as
+// resting: a card handoff never shows a spinner.
+function commandChipFaceState(model) {
+  try {
+    const m = model && typeof model === "object" ? model : {};
+    if (!m.policy || m.policy.mode !== "run") return "copy";
+    const state = m.snapshot && m.snapshot.state;
+    if (state === "queued" || state === "running" || state === "completed" || state === "attention" || state === "failed") {
+      return state;
+    }
+    const verdict = m.verdict;
+    if (!verdict || verdict.state === "loading") return "loading";
+    if (verdict.state !== "ready") return "unavailable";
+    return m.armed ? "armed" : "ready";
+  } catch (error) {
+    return "copy";
+  }
+}
+
+// Everything one face needs for `chip` ({ label, text, form, line, from,
+// to, fence? }) in activation context `ctx`, computed without side effects:
+// frozen `{ face, mode, reason, verdict, key, snapshot, armed, sourcePath }`.
+// `reason` explains copy-only or unavailable faces. Renderers subscribe to
+// `key` in the store and to commandChipOnCatalogChanged, then call this
+// again to repaint.
+function commandChipPaintModel(plugin, chip, ctx) {
+  try {
+    const runtime = commandChipRuntimeOf(plugin);
+    const text = chip && typeof chip.text === "string" ? chip.text : "";
+    const app = plugin && plugin.app;
+    const policy = runtime ? commandChipEligibility(app, ctx) : copyChipFreeze({
+      mode: "copy", reason: "Bob Chips is not loaded", sourcePath: null, engine: null,
+    });
+    const verdict = policy.mode === "run" ? runtime.cache.get(policy.engine, text) : null;
+    const key = commandChipStoreKey(verdict, text);
+    const store = runtime ? runtime.store : null;
+    const snapshot = store ? store.snapshot(key) : null;
+    const identity = chip && typeof chip === "object" ? { ...chip, sourcePath: policy.sourcePath } : null;
+    const armed = Boolean(store && policy.mode === "run" && store.isArmed(identity));
+    const face = commandChipFaceState({ policy, verdict, snapshot, armed });
+    let reason = null;
+    if (face === "copy") reason = policy.reason;
+    else if (face === "unavailable") reason = verdict && verdict.reason ? String(verdict.reason) : null;
+    else if (face === "failed" || face === "attention") reason = snapshot && snapshot.reason;
+    return copyChipFreeze({
+      face,
+      mode: policy.mode,
+      reason: reason === undefined ? null : reason,
+      verdict,
+      key,
+      snapshot,
+      armed,
+      sourcePath: policy.sourcePath,
+    });
+  } catch (error) {
+    return copyChipFreeze({
+      face: "copy",
+      mode: "copy",
+      reason: COMMAND_CHIP_SOURCE_UNKNOWN,
+      verdict: null,
+      key: commandChipStoreKey(null, chip && chip.text),
+      snapshot: null,
+      armed: false,
+      sourcePath: null,
+    });
+  }
+}
 // ---- src/070-commands.js ----
 // Cursor command, public copy/flash path, and source-range flashes.
 // All public methods are frozen and never throw or reject.
@@ -3606,6 +4587,281 @@ function copyChipRegisterCursorCommand(plugin) {
     return true;
   } catch (error) {
     return false;
+  }
+}
+// ---- src/075-command-activate.js ----
+// commandChipActivate(chip, ctx): the one path from a deliberate gesture to
+// Command Mode, shared by Live Preview widgets, Reading buttons, the
+// `bob-run` card, and `⌘↵`. Only Command Mode tokenizes, validates, and
+// spawns; this file never builds argv, never retries, and never touches the
+// chip's task, its status, freshness, or the walk.
+//
+// `chip` is `{ label, text, form?, line?, from?, to?, fence? }` (the chipAt
+// shape). `ctx` is the renderer's activation context:
+//   plugin              the Bob Chips plugin (required)
+//   sourcePath          vault-relative path of the note holding the span
+//   resolveSourcePath() fresher path reader; wins over sourcePath
+//   sourceVerified      query results only: true once the owning note is proven
+//   line                zero-based source line, sent as run provenance
+//   origin              "live" | "reading" | "embed" | "hover" | "query" |
+//                       "fence" | "cursor"
+//   view, element       the editor view and/or the chip element
+//   checkSource()       fresh stale check: boolean, {ok, reason}, or a Promise
+//   range               Live Preview `{ from, to, raw }` absolute doc slice
+//   readSource(), snapshot  text reader plus `{ line, from, to, raw }`
+//   refresh()           repaint after a stale or changed span
+//   shift, alt          Shift opens the guarded path; Alt is inert for now
+//   copyFeedback(result) optional copy feedback override
+// Settles a frozen `{ action, ok, stage, outcome, reason, runId,
+// sequenceId, signature }` and never rejects.
+const COMMAND_CHIP_REFUSED_PREFIX = "Can't run: ";
+const COMMAND_CHIP_FAILED_PREFIX = "Command chip failed: ";
+
+function commandChipResult(action, fields) {
+  const f = fields && typeof fields === "object" ? fields : {};
+  return copyChipFreeze({
+    action,
+    ok: f.ok === undefined ? action !== "refused" && action !== "error" && action !== "stale" : Boolean(f.ok),
+    stage: f.stage === undefined ? null : f.stage,
+    outcome: f.outcome === undefined ? null : f.outcome,
+    reason: f.reason === undefined || f.reason === null ? null : String(f.reason),
+    runId: f.runId ? String(f.runId) : null,
+    sequenceId: f.sequenceId ? String(f.sequenceId) : null,
+    signature: f.signature ? String(f.signature) : null,
+  });
+}
+
+function commandChipNotice(message) {
+  try {
+    if (CopyChipsNotice && typeof CopyChipsNotice === "function") {
+      // eslint-disable-next-line no-new
+      new CopyChipsNotice(String(message));
+    }
+  } catch (error) {
+    // Notices are best-effort.
+  }
+}
+
+function commandChipErrorReason(error, fallback) {
+  try {
+    if (error && typeof error.message === "string" && error.message.trim()) return error.message.trim();
+    const text = String(error === undefined || error === null ? "" : error).trim();
+    if (text && text !== "[object Object]") return text;
+  } catch (ignore) {
+    // Fall through to the fallback.
+  }
+  return fallback;
+}
+
+function commandChipRefusalText(verdict) {
+  const reason = String((verdict && verdict.reason) || "command could not be resolved");
+  const step = verdict && Number(verdict.step) > 1 ? " (step " + Number(verdict.step) + ")" : "";
+  return reason + step;
+}
+
+function commandChipRefresh(ctx) {
+  try {
+    if (ctx && typeof ctx.refresh === "function") {
+      const value = ctx.refresh();
+      if (value && typeof value.catch === "function") value.catch(() => {});
+    }
+  } catch (error) {
+    // Refresh is best-effort; the next gesture rechecks anyway.
+  }
+}
+
+// Copy-only contexts copy the exact payload with the copy chips' feedback
+// and never reach Command Mode.
+async function commandChipCopyOnly(text, ctx, reason) {
+  let written = null;
+  try {
+    written = await copyChipWrite(text);
+  } catch (error) {
+    written = copyChipFreeze({ ok: false, reason: "copy failed" });
+  }
+  const ok = Boolean(written && written.ok);
+  const failure = (written && written.reason) || "copy failed";
+  try {
+    const el = ctx && ctx.element;
+    if (ctx && typeof ctx.copyFeedback === "function") {
+      commandChipCallListener(ctx.copyFeedback, written);
+    } else if (el) {
+      if (ok) copyChipShowFeedback(el, "success");
+      else copyChipFail(el, failure);
+    } else if (ok) {
+      copyChipAnnounce(typeof document !== "undefined" ? document : null, "Copied");
+    } else {
+      commandChipNotice("Couldn't copy: " + failure);
+    }
+  } catch (error) {
+    // Feedback never turns a written copy into a failure.
+  }
+  return commandChipResult("copy", { ok, reason: ok ? reason : failure });
+}
+
+function commandChipOpenOutput(engine, runId) {
+  try {
+    if (!engine || typeof engine.openOutput !== "function" || !runId) return;
+    const pending = engine.openOutput(runId);
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch (error) {
+    // Opening output never starts a run and never throws.
+  }
+}
+
+// A key already running opens its live output (once per latch window); a
+// key whose gesture is still pending acceptance swallows the duplicate.
+function commandChipBusy(store, engine, key) {
+  const snapshot = store.snapshot(key);
+  if (commandChipIsLiveState(snapshot.state) && snapshot.runId) {
+    if (!store.claimOutput(key)) return commandChipResult("duplicate", { signature: snapshot.signature });
+    commandChipOpenOutput(engine, snapshot.runId);
+    return commandChipResult("output", {
+      stage: "output",
+      outcome: snapshot.state,
+      runId: snapshot.runId,
+      sequenceId: snapshot.sequenceId,
+      signature: snapshot.signature,
+    });
+  }
+  if (store.isLatched(key) || snapshot.state === "pending" || commandChipIsLiveState(snapshot.state)) {
+    return commandChipResult("duplicate", { signature: snapshot.signature });
+  }
+  return null;
+}
+
+// Map Command Mode's settled result onto the store and the user.
+function commandChipSettle(store, key, seq, settled, intent, signature) {
+  const r = settled && typeof settled === "object" ? settled : null;
+  if (!r) {
+    const reason = "Command Mode returned no result";
+    store.fail(key, seq, reason);
+    commandChipNotice(COMMAND_CHIP_FAILED_PREFIX + reason);
+    return commandChipResult("error", { reason, signature });
+  }
+  const stage = typeof r.stage === "string" ? r.stage : null;
+  const fields = {
+    ok: r.ok !== false,
+    stage,
+    outcome: r.outcome || null,
+    reason: r.reason,
+    runId: r.runId,
+    sequenceId: r.sequenceId,
+    signature,
+  };
+  if (stage === "refused") {
+    store.revert(key, seq);
+    commandChipNotice(COMMAND_CHIP_REFUSED_PREFIX + commandChipRefusalText(r));
+    return commandChipResult("refused", { ...fields, ok: false });
+  }
+  if (stage === "confirm" || stage === "review" || stage === "preview" || (stage === "output" && r.duplicate)) {
+    // A card, a dry-run preview, or someone else's live run: nothing of
+    // ours is running, so restore the resting ink.
+    store.revert(key, seq);
+    if (r.ok === false && stage === "preview") {
+      commandChipNotice(COMMAND_CHIP_REFUSED_PREFIX + String(r.reason || "preview failed"));
+    }
+    return commandChipResult(stage === "output" ? "output" : intent, fields);
+  }
+  store.settle(key, seq, r);
+  if (r.ok === false && !r.runId && (stage === "run" || stage === "output")) {
+    // Refused before it queued (for example, a failed save): no toast or
+    // card will explain it, so say why once.
+    commandChipNotice(COMMAND_CHIP_REFUSED_PREFIX + String(r.reason || "run failed"));
+  }
+  return commandChipResult(intent, fields);
+}
+
+async function commandChipActivate(chip, ctx) {
+  const c = ctx && typeof ctx === "object" ? ctx : {};
+  const runtime = commandChipRuntimeOf(c.plugin);
+  const text = chip && typeof chip.text === "string" ? chip.text : "";
+  if (!runtime) return commandChipResult("refused", { reason: "Bob Chips is not loaded" });
+  if (!/\S/.test(text)) return commandChipResult("refused", { reason: RUN_CHIP_NOTHING_TO_RUN });
+  if (c.alt === true) return commandChipResult("inert", { ok: true });
+  const app = c.plugin.app;
+  const store = runtime.store;
+  const intent = c.shift === true ? "open" : "run";
+
+  // 1. Source note, host, and engine.
+  let policy = commandChipEligibility(app, c);
+  if (policy.mode !== "run") return commandChipCopyOnly(text, c, policy.reason);
+
+  // 2. A fresh verdict names the key; the latch is taken synchronously,
+  //    before the first asynchronous boundary.
+  let verdict = commandChipFreshResolve(policy.engine, text);
+  let key = commandChipStoreKey(verdict, text);
+  const busy = commandChipBusy(store, policy.engine, key);
+  if (busy) return busy;
+  const latches = [];
+  const first = store.tryLatch(key);
+  if (first === null) return commandChipResult("duplicate", { signature: verdict.signature });
+  latches.push([key, first]);
+  const settleLatches = () => {
+    for (const [latchKey, token] of latches) store.settleLatch(latchKey, token);
+  };
+  let seq = 0;
+  let liveKey = key;
+  try {
+    // 3. The displayed span must still be the source span.
+    const source = await commandChipCheckSource(c);
+    if (!source || !source.ok) {
+      commandChipRefresh(c);
+      return commandChipResult("stale", { reason: (source && source.reason) || COMMAND_CHIP_SOURCE_CHANGED });
+    }
+    // 4. Recheck note, engine, and catalog after the asynchronous read.
+    policy = commandChipEligibility(app, c);
+    if (policy.mode !== "run") return commandChipCopyOnly(text, c, policy.reason);
+    verdict = commandChipFreshResolve(policy.engine, text);
+    if (verdict.state === "invalid" || verdict.state === "unavailable") {
+      commandChipNotice(COMMAND_CHIP_REFUSED_PREFIX + commandChipRefusalText(verdict));
+      return commandChipResult("refused", { stage: "refused", outcome: "refused", reason: verdict.reason });
+    }
+    const nextKey = commandChipStoreKey(verdict, text);
+    if (nextKey !== key) {
+      const busyNext = commandChipBusy(store, policy.engine, nextKey);
+      if (busyNext) return busyNext;
+      const token = store.tryLatch(nextKey);
+      if (token === null) return commandChipResult("duplicate", { signature: verdict.signature });
+      latches.push([nextKey, token]);
+      key = nextKey;
+    }
+    liveKey = key;
+
+    // 5. Hand the payload to Command Mode, feeding the store from its events.
+    const steps = Array.isArray(verdict.steps) ? verdict.steps.length : 0;
+    seq = store.begin(key, { signature: verdict.signature, intent, total: steps || 1 });
+    const onState = (payload) => {
+      if (runtime.disposed || !payload || typeof payload !== "object") return;
+      if (typeof payload.signature === "string" && payload.signature && payload.signature !== liveKey) {
+        if (store.rekey(liveKey, payload.signature, seq)) liveKey = payload.signature;
+      }
+      store.apply(liveKey, seq, payload);
+      if (payload.state === "queued" || payload.state === "running") settleLatches();
+    };
+    const sourceArg = { path: policy.sourcePath };
+    if (Number.isInteger(c.line) && c.line >= 0) sourceArg.line = c.line;
+    const engine = policy.engine;
+    let settled;
+    try {
+      settled = await (intent === "open"
+        ? engine.openText(text, { source: sourceArg, onState })
+        : engine.runText(text, { source: sourceArg, onState }));
+    } catch (error) {
+      const reason = commandChipErrorReason(error, "Command Mode failed");
+      if (!runtime.disposed) store.fail(liveKey, seq, reason);
+      commandChipNotice(COMMAND_CHIP_FAILED_PREFIX + reason);
+      return commandChipResult("error", { reason, signature: verdict.signature });
+    }
+    if (runtime.disposed) return commandChipResult(intent, { stage: settled && settled.stage, ok: settled && settled.ok });
+    return commandChipSettle(store, liveKey, seq, settled, intent, verdict.signature);
+  } catch (error) {
+    const reason = commandChipErrorReason(error, "command chip failed");
+    if (seq && !runtime.disposed) store.fail(liveKey, seq, reason);
+    commandChipNotice(COMMAND_CHIP_FAILED_PREFIX + reason);
+    return commandChipResult("error", { reason });
+  } finally {
+    settleLatches();
   }
 }
 // ---- src/080-fence.js ----
@@ -5962,6 +7218,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       }
     }
     try {
+      if (typeof commandChipRuntimeSetup === "function") commandChipRuntimeSetup(this);
+    } catch (error) {
+      // Command chips fall back to copy-only faces without a runtime.
+    }
+    try {
       const liveExtension =
         typeof copyChipCreateLiveExtension === "function"
           ? copyChipCreateLiveExtension(this)
@@ -6033,6 +7294,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
             // Author modal cleanup is best-effort.
           }
           this.copyChipAuthorModal = null;
+          try {
+            if (typeof commandChipRuntimeDispose === "function") commandChipRuntimeDispose(this);
+          } catch (error) {
+            // Runtime cleanup is best-effort.
+          }
         });
       }
     } catch (error) {
@@ -6060,6 +7326,11 @@ class BobCopyChipsPlugin extends CopyChipsPluginBase {
       // Author modal cleanup is best-effort.
     }
     this.copyChipAuthorModal = null;
+    try {
+      if (typeof commandChipRuntimeDispose === "function") commandChipRuntimeDispose(this);
+    } catch (error) {
+      // Runtime cleanup is best-effort.
+    }
   }
 
   copyChipsBuildApi() {
@@ -6177,6 +7448,35 @@ module.exports.helpers = {
   commandChipAt,
   commandChipBuildApi,
   commandChipFallbackApi,
+  COMMAND_CHIP_NO_RUN_ROOTS,
+  COMMAND_CHIP_SOURCE_UNKNOWN,
+  COMMAND_CHIP_COMPLETED_MS,
+  COMMAND_CHIP_LATCH_MS,
+  COMMAND_CHIP_CATALOG_EVENT,
+  commandChipNormalizeSourcePath,
+  commandChipNoRunRoot,
+  commandChipSourcePolicy,
+  commandChipIsMobile,
+  commandChipEngineOf,
+  commandChipResolveSourceLink,
+  commandChipEligibility,
+  commandChipLiveSourceCheck,
+  commandChipTextSourceCheck,
+  commandChipCheckSource,
+  commandChipStoreKey,
+  commandChipTerminalState,
+  commandChipTargetId,
+  CommandChipRunStore,
+  CommandChipResolveCache,
+  commandChipFreshResolve,
+  commandChipRuntimeSetup,
+  commandChipRuntimeDispose,
+  commandChipRuntimeOf,
+  commandChipStoreOf,
+  commandChipOnCatalogChanged,
+  commandChipFaceState,
+  commandChipPaintModel,
+  commandChipActivate,
   copyChipParseContent,
   copyChipNormalizeSpan,
   copyChipScanLine,

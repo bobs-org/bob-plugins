@@ -167,6 +167,8 @@ class BobLedgerToolsPlugin extends Plugin {
           if (update && update.docChanged) this.scheduleRelationIndexOverlayRefresh();
         }),
       );
+      // Inert until a property card mounts in a Live Preview title slot.
+      this.registerEditorExtension(propertyCardTitleSlotEditorExtension());
     }
 
     const workspace = this.app && this.app.workspace;

@@ -8531,6 +8531,17 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 .markdown-preview-view > .markdown-preview-sizer > .mod-header > .metadata-container .metadata-property.bob-property-card-owned-property {
   display: none !important;
 }
+/* Property-card title slot: a card the kit mounts in Obsidian's own header
+   slot sits between the inline title and native Properties, as a direct
+   child of the Live Preview .cm-sizer or the Reading .mod-header. Keyed only
+   on the mount class, so cards mounted in the body keep their pixels. */
+.cm-sizer > .bob-property-card-title-slot,
+.mod-header > .bob-property-card-title-slot {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin-block: 0 var(--inline-title-margin-bottom, 0.5em);
+}
 /* Shared chrome for the three view-only property cards. Species keep their
    exact padding, tint, font size, wrapping, and accent fallbacks below. */
 .bob-property-card {

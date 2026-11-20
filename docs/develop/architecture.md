@@ -127,6 +127,40 @@ from Properties row ownership. The unit entry points are
 `scripts/test-ledger-tools-property-card-title-ownership.cjs`.
 `scripts/preview-title-block.cjs` renders the preview matrix.
 
+### Title slot
+
+`propertyCardMountInTitleSlot(scope, node, { path, kind, view, currentPath,
+onLost })` mounts a card in Obsidian's own header slot, after the inline title
+and before native Properties. In Live Preview the slot is the
+`.cm-editor > .cm-scroller > .cm-sizer` of the note's editor, and in Reading
+it is the `.markdown-preview-view > .markdown-preview-sizer > .mod-header`.
+`propertyCardTitleSlotFor(scope)` resolves the slot, and only direct children
+count. Pass the CodeMirror `EditorView` as `view` in Live Preview and
+`previewMode.renderer` in Reading, so that each insertion and resize
+re-measures the host.
+
+The mount returns `null` on mobile, in Source mode, in embeds, hover popovers,
+canvas nodes, and print, and when the slot is missing or insertion throws.
+`null` means the adapter falls back to the body. Otherwise the mount returns a
+generation-bound release handle. Calling it twice is harmless, and an old
+handle never clears a newer mount. Observers watch only the slot's own child
+lists. When Obsidian re-renders the header, they re-insert the card. In
+Reading, a header that is virtualized out of view stays parked with its card.
+
+If the slot is lost, `onLost(reason)` fires once. The reason is `denied`,
+`path-changed`, `disconnected`, `unstable`, or `insert-failed`. The adapter
+then remounts or falls back. Explicit releases never call `onLost`.
+
+In Live Preview, an editor update listener stops CodeMirror from dropping a
+scroll target while the card pushes the text below the pane. When a card
+above the visible area changes height, the text on screen stays still.
+Plugin teardown calls `propertyCardTitleSlotReleaseAll()`, which leaves no
+slot node or observer behind.
+
+Unit tests live in `scripts/test-ledger-tools-property-card-title-slot.cjs`.
+`scripts/obsidian-title-slot-spike.cjs` is the real-Obsidian proof, and its
+offline wrapper is `scripts/test-obsidian-title-slot-spike.cjs`.
+
 ## Plugin files
 
 | Path | Role |

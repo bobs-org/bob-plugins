@@ -165,6 +165,38 @@ Unit tests live in `scripts/test-ledger-tools-property-card-title-slot.cjs`.
 `scripts/obsidian-title-slot-spike.cjs` is the real-Obsidian proof, and its
 offline wrapper is `scripts/test-obsidian-title-slot-spike.cjs`.
 
+### Adopting the title block
+
+Adapters do not call the slot and ownership primitives directly.
+`propertyCardAdoptTitle(scope, node, { path, kind, view, recognizer,
+currentPath, onLost })` mounts the card in the title slot and owns the title.
+It returns `{ mode, release }`: mode `"slot"` means the card is (or is about
+to be) in the slot, and `"fallback"` means the adapter keeps its body
+placement. Reading mounts at once. Live Preview returns `"slot"` at once and
+mounts and owns in a microtask, because nothing may touch the DOM or dispatch
+inside a CodeMirror update. When a deferred mount fails, `onLost` receives
+`insert-failed`, and the adapter's refresh switches to its fallback widget.
+
+When the slot is lost, ownership drops in the same frame, so the inline title
+and H1 return at once. The adapter's `onLost(reason)` then runs deferred and
+remounts through its refresh. A path that came back `unstable` or
+`insert-failed` stays in the fallback until the scope sees a new path or an
+explicit `propertyCardAdoptRelease(scope, path?)`. Plugin teardown calls
+`propertyCardAdoptReleaseAll()`. Re-adopting the same node for the same path
+never remounts and re-owns only when the recognizer key changes. To update a
+mounted card, build a fresh node and pass it to `propertyCardAdoptPatch(target,
+fresh)`. That swaps children and attributes in place and keeps the slot's
+class and `data-title-slot-*` attributes, so a report body joins inside the
+same node.
+
+The kit heading carries `role="heading"` and `aria-level="1"` only while the
+card owns the title. Fallback cards and failed ownership demote it, so a pane
+never has two level-one headings. `propertyCardReadingViewFor(app, scope)`
+and `propertyCardLiveCurrentPath(view)` supply `view` and `currentPath`. The
+album card is the first adopter. The record card reuses the glue unchanged
+with its own recognizer. Unit tests live in
+`scripts/test-ledger-tools-property-card-title-adopt.cjs`.
+
 ## Plugin files
 
 | Path | Role |

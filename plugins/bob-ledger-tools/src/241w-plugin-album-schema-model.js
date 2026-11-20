@@ -108,8 +108,22 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
+// Healthy schemas start folded to one line; invalid and empty schemas start
+// expanded so their issues and teaching copy stay visible.
 function albumHeaderDefaultExpanded(model) {
-  return true;
+  return Boolean(model?.schemaInvalid || model?.emptySchema);
+}
+
+// The folded schema line for a healthy schema:
+// Schema · N fields[ · grouping][ · dated notes] · <record count>.
+function albumHeaderFoldText(model) {
+  if (!model) return "";
+  const count = (model.fields || []).length;
+  const parts = ["Schema", `${count} field${count === 1 ? "" : "s"}`];
+  if (model.groupingClause) parts.push(model.groupingClause);
+  if (model.datedNotes) parts.push("dated notes");
+  parts.push(albumHeaderRecordCountPhrase(model));
+  return parts.join(" · ");
 }
 
 function albumHeaderIsDesktopPlatform(platform) {

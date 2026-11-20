@@ -158,10 +158,12 @@ function fixtureNotes() {
     "tools.md": ["---", 'type: "[[notebook]]"', 'parent: "[[body]]"', "summary: Kitchen tools.", "---", "", "# Tools", ""].join(
       "\n",
     ),
+    // The post-tidy shape: a title: key and no H1.
     "h1less-album.md": [
       "---",
       'type: "[[album]]"',
       'parent: "[[body]]"',
+      "title: Bites",
       "summary: H1-less album.",
       "record:",
       "  noun: bite",
@@ -387,7 +389,11 @@ function assertNoMathLeak({ mathCount }) {
   return { ok: true };
 }
 
-function assertHeaderIntegrity(probe) {
+// One album card per pane, no ancestry warning, none inside callouts. When
+// the probe carries the title-block view (activeCard), the card must also sit
+// in the title slot before Properties, wear the album identity, hide the
+// inline title, and leave exactly one visible aria-level=1 heading.
+function assertHeaderIntegrity(probe, expect = {}) {
   if (!Array.isArray(probe?.activeHeaders) || probe.activeHeaders.length !== 1) {
     return { ok: false, reason: `expected one album header, saw ${probe?.activeHeaders?.length ?? "no probe"}` };
   }
@@ -397,6 +403,18 @@ function assertHeaderIntegrity(probe) {
   if (!Array.isArray(probe.headersInRecords) || probe.headersInRecords.length !== 0) {
     return { ok: false, reason: "records callout must not contain album headers" };
   }
+  if (!Object.prototype.hasOwnProperty.call(probe, "activeCard")) return { ok: true };
+  const card = probe.activeCard;
+  if (!card) return { ok: false, reason: "the active card is missing" };
+  const slot = probe.mode === "source" ? "cm-sizer" : "mod-header";
+  if (card.slot !== slot) return { ok: false, reason: `card must sit in .${slot}, saw ${card.slot || "none"}` };
+  if (card.next !== "metadata-container") return { ok: false, reason: `card must precede Properties, saw ${card.next || "nothing"}` };
+  if (card.kind !== "album") return { ok: false, reason: `data-card-kind must be album, saw ${card.kind}` };
+  if (expect.title && card.label !== `Album: ${expect.title}`) {
+    return { ok: false, reason: `aria-label must be "Album: ${expect.title}", saw "${card.label}"` };
+  }
+  if (card.inlineTitleHidden !== true) return { ok: false, reason: "the inline title must be hidden" };
+  if (card.visibleLevelOne !== 1) return { ok: false, reason: `expected one visible aria-level=1, saw ${card.visibleLevelOne}` };
   return { ok: true };
 }
 
@@ -433,6 +451,24 @@ function albumUiProbe() {
     const activeSurface = leafView?.containerEl?.querySelector(state.mode === "source"
       ? ".markdown-source-view" : ".markdown-preview-view");
     const activePick = (selector) => Array.from(activeSurface?.querySelectorAll(selector) || []).map(describe);
+    const shown = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    };
+    const cardNode = activeSurface?.querySelector(".bob-album-header") || null;
+    const activeCard = cardNode ? {
+      slot: ["cm-sizer", "mod-header"].find((name) => cardNode.parentElement?.classList.contains(name)) || "",
+      next: cardNode.nextElementSibling?.classList.contains("metadata-container") ? "metadata-container"
+        : String(cardNode.nextElementSibling?.className || ""),
+      kind: cardNode.getAttribute("data-card-kind") || "",
+      label: cardNode.getAttribute("aria-label") || "",
+      body: cardNode.getAttribute("data-album-body") || "",
+      title: String(cardNode.querySelector(".bob-property-card-title")?.textContent || ""),
+      inlineTitleHidden: Array.from(activeSurface.querySelectorAll(".inline-title")).every((el) => !shown(el)),
+      visibleLevelOne: Array.from(leafView.containerEl.querySelectorAll('[aria-level="1"]')).filter(shown).length,
+      titleSources: Array.from(activeSurface.querySelectorAll(".bob-property-card-title-source")).length,
+    } : null;
     return {
       path: file && file.path,
       mode: state.mode || null,
@@ -447,6 +483,7 @@ function albumUiProbe() {
       actions: pick(".bob-album-action"),
       headers: header,
       activeHeaders: activePick(".bob-album-header"),
+      activeCard,
       ancestryWarnings: activePick(".bob-album-header-ancestry-note"),
       headersInRecords: activePick('[data-callout="records"] .bob-album-header'),
       crumbs: pick(".bob-album-header-crumb, .bob-album-header a.internal-link"),

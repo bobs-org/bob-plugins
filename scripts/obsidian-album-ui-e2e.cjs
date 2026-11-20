@@ -1242,8 +1242,35 @@ async function run(args) {
       return latest;
     });
     report.probes.eatReading = records;
-    const readingHeader = album.assertHeaderIntegrity(records);
-    record("reading-single-header-no-warning", readingHeader.ok, readingHeader.reason || "one header outside records; no ancestry warning");
+    const readingHeader = album.assertHeaderIntegrity(records, { title: "Eat" });
+    record("reading-single-header-no-warning", readingHeader.ok, readingHeader.reason || "one title-slot card before Properties; no ancestry warning");
+    // The card owns the title: the redundant `# Eat` is hidden at render time,
+    // and a healthy schema starts folded to one line with its chips hidden.
+    const readingTitle = await client.evaluate(`(() => {
+      const view = window.app.workspace.activeLeaf.view;
+      const surface = view.containerEl.querySelector(".markdown-preview-view");
+      const h1 = Array.from(surface?.querySelectorAll("h1") || []).find((node) => node.textContent.trim() === "Eat");
+      const summary = surface?.querySelector(".bob-album-header .bob-album-schema-summary");
+      const chips = surface?.querySelector(".bob-album-header .bob-album-schema-card");
+      return {
+        h1Tagged: Boolean(h1?.classList.contains("bob-property-card-title-source")),
+        h1Display: h1 ? getComputedStyle(h1).display : null,
+        cardTitle: surface?.querySelector(".bob-album-header .bob-property-card-title")?.textContent || "",
+        kicker: surface?.querySelector(".bob-album-header .bob-property-card-kicker")?.textContent || "",
+        subtitle: surface?.querySelector(".bob-album-header .bob-property-card-subtitle")?.textContent || "",
+        actionsInKicker: Array.from(surface?.querySelectorAll(".bob-property-card-kicker-row .bob-property-card-actions > button") || []).map((node) => node.className),
+        summaryExpanded: summary?.getAttribute("aria-expanded") || null,
+        summaryText: summary?.textContent || "",
+        chipsShown: chips ? chips.getBoundingClientRect().height > 0 && getComputedStyle(chips).display !== "none" : null,
+      };
+    })()`);
+    report.probes.eatReadingTitle = readingTitle;
+    record("reading-h1-hidden", readingTitle.h1Tagged && readingTitle.h1Display === "none" && readingTitle.cardTitle === "Eat",
+      JSON.stringify(readingTitle).slice(0, 260));
+    record("card-identity", /^Album·Body$/i.test(readingTitle.kicker.replace(/\s+/g, "")) && readingTitle.subtitle === "Places to eat around here."
+      && readingTitle.actionsInKicker.join(",") === "bob-album-header-copy,bob-album-header-schema", JSON.stringify(readingTitle).slice(0, 260));
+    record("schema-fold-default", readingTitle.summaryExpanded === "false" && /^▸ Schema · /.test(readingTitle.summaryText)
+      && / · \d+ restaurants?$/.test(readingTitle.summaryText) && readingTitle.chipsShown === false, JSON.stringify(readingTitle).slice(0, 260));
     record("records-card", (records.recordCards || []).length > 0, `cards=${(records.recordCards || []).length}`);
     record("records-folds-present", (records.folds || []).length > 0, `folds=${(records.folds || []).length}`);
     const foldStates = (records.recordGroups || []).map((item) => item.folded);
@@ -1255,8 +1282,41 @@ async function run(args) {
     await sleep(700);
     const recordsLive = await client.evaluate(probe);
     report.probes.eatLive = recordsLive;
-    const liveHeader = album.assertHeaderIntegrity(recordsLive);
-    record("live-single-header-no-warning", liveHeader.ok, liveHeader.reason || "one header outside records; no ancestry warning");
+    const liveHeader = album.assertHeaderIntegrity(recordsLive, { title: "Eat" });
+    record("live-single-header-no-warning", liveHeader.ok, liveHeader.reason || "one title-slot card before Properties; no ancestry warning");
+    // Live Preview: the H1 line is hidden after open, the cursor on it reveals
+    // the raw Markdown under the still-mounted card, and moving away hides it.
+    const reveal = await client.evaluate(`(() => (async () => {
+      const view = window.app.workspace.activeLeaf.view;
+      const editor = view.editor;
+      const surface = view.containerEl.querySelector(".markdown-source-view");
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 350));
+      const h1Lines = () => Array.from(surface.querySelectorAll(".cm-content .cm-line"))
+        .filter((line) => /^(# )?Eat$/.test(line.textContent.trim()) && line.getBoundingClientRect().height > 0).length;
+      const card = () => surface.querySelector(".cm-sizer > .bob-album-header");
+      const line = editor.getValue().split("\\n").indexOf("# Eat");
+      const opened = h1Lines();
+      editor.setCursor({ line, ch: 0 });
+      await settle();
+      const touched = h1Lines();
+      const cardWhileRevealed = Boolean(card());
+      editor.setCursor({ line: editor.lastLine(), ch: 0 });
+      await settle();
+      const away = h1Lines();
+      return { line, opened, touched, away, cardWhileRevealed };
+    })())()`);
+    report.probes.liveReveal = reveal;
+    record("live-h1-hidden-and-revealed", reveal.line >= 0 && reveal.opened === 0 && reveal.touched === 1
+      && reveal.cardWhileRevealed && reveal.away === 0, JSON.stringify(reveal));
+    // Screenshot the reveal with the card in view, then put the cursor back
+    // in the frontmatter (where opening leaves it) and scroll to the top.
+    const revealShot = path.join(outDir, "album-live-h1-revealed.png");
+    await client.evaluate(`(() => { const e = window.app.workspace.activeLeaf.view.editor; e.setCursor({ line: e.getValue().split("\\n").indexOf("# Eat"), ch: 0 }); e.scrollTo(null, 0); return true; })()`);
+    await sleep(350);
+    await capturePage(client, revealShot);
+    report.screenshots.push(revealShot);
+    await client.evaluate(`(() => { const e = window.app.workspace.activeLeaf.view.editor; e.setCursor({ line: 0, ch: 0 }); e.scrollTo(null, 0); return true; })()`);
+    await sleep(350);
     record("records-live-card", (recordsLive.recordCards || []).length > 0, `cards=${(recordsLive.recordCards || []).length}`);
     const headerLayout = await client.evaluate(`(() => {
       const header = window.app.workspace.activeLeaf.view.containerEl.querySelector(".markdown-source-view .bob-album-header");
@@ -1352,7 +1412,7 @@ async function run(args) {
       await sleep(700);
       const empty = await client.evaluate(probe);
       report.probes[`empty-${mode}`] = empty;
-      const checked = album.assertHeaderIntegrity(empty);
+      const checked = album.assertHeaderIntegrity(empty, { title: "Empty" });
       record(`empty-${mode}-single-header-no-warning`, checked.ok, checked.reason || "one header outside the empty records callout");
       record(`empty-${mode}-records-card`, (empty.recordCards || []).length > 0, "empty generated records callout is rendered");
     }
@@ -1363,6 +1423,10 @@ async function run(args) {
     const h1less = await client.evaluate(probe);
     report.probes.h1less = h1less;
     record("h1less-header", (h1less.headers || []).some((item) => item.visible), `headers=${(h1less.headers || []).length}`);
+    // Post-tidy shape (title:, no H1): the card shows that title and hides no body H1.
+    const tidy = album.assertHeaderIntegrity(h1less, { title: "Bites" });
+    record("post-tidy-title-hides-nothing", tidy.ok && h1less.activeCard?.title === "Bites" && h1less.activeCard?.titleSources === 0,
+      tidy.reason || JSON.stringify(h1less.activeCard));
 
     // Invalid album: copy disabled with a reason.
     await openNote(client, "broken.md", "preview");
@@ -1395,6 +1459,56 @@ async function run(args) {
     report.probes.unrelatedProps = unrelatedProps;
     record("record-prop-hidden-on-album", properties.propertyVisibility(albumProps, "eat.md", false), JSON.stringify(albumProps));
     record("record-prop-visible-off-album", properties.propertyVisibility(unrelatedProps, "unrelated.md", true), JSON.stringify(unrelatedProps));
+
+    // Before the report the title block paints alone from local data and the
+    // record row stays; the report body then joins inside the same node, and
+    // only then does the record row hide.
+    for (const mode of ["preview", "live"]) {
+      await openNote(client, "eat.md", mode);
+      await sleep(500);
+      const join = await client.evaluate(`(() => (async () => {
+        const plugin = window.app.plugins.plugins["bob-ledger-tools"];
+        const view = window.app.workspace.activeLeaf.view;
+        const state = view.getState();
+        const surface = view.containerEl.querySelector(state.mode === "source" ? ".markdown-source-view" : ".markdown-preview-view");
+        const settle = () => new Promise((resolve) => setTimeout(resolve, 450));
+        const card = () => surface.querySelector(".bob-album-header");
+        const rowHidden = () => {
+          const row = surface.querySelector('.metadata-property[data-property-key="record"]');
+          return row ? getComputedStyle(row).display === "none" : null;
+        };
+        const snapshot = (node) => ({
+          body: node?.getAttribute("data-album-body") || null,
+          slot: node?.parentElement?.className || "",
+          title: node?.querySelector(".bob-property-card-title")?.textContent || "",
+          actions: node?.querySelectorAll(".bob-property-card-actions > button").length ?? null,
+          summary: Boolean(node?.querySelector(".bob-album-schema-summary")),
+          rowHidden: rowHidden(),
+        });
+        const real = plugin.albumReportState;
+        plugin.albumReportState = function pendingReport() { return { ...real.call(this), report: null, unavailable: true }; };
+        try {
+          plugin.refreshAlbumHeaderReading();
+          plugin.refreshAlbumHeaderEditors();
+          await settle();
+        } finally {
+          delete plugin.albumReportState;
+        }
+        const pendingNode = card();
+        const pending = snapshot(pendingNode);
+        plugin.refreshAlbumHeaderReading();
+        plugin.refreshAlbumHeaderEditors();
+        await settle();
+        const joinedNode = card();
+        return { pending, joined: { ...snapshot(joinedNode), sameNode: joinedNode === pendingNode } };
+      })())()`);
+      report.probes[`bodyJoin-${mode}`] = join;
+      record(`${mode}-title-block-before-report`, join.pending.body === "pending" && join.pending.title === "Eat"
+        && join.pending.actions === 0 && !join.pending.summary && join.pending.rowHidden === false
+        && /cm-sizer|mod-header/.test(join.pending.slot), JSON.stringify(join.pending));
+      record(`${mode}-body-joins-same-node`, join.joined.sameNode && join.joined.body === "report"
+        && join.joined.actions >= 1 && join.joined.summary && join.joined.rowHidden === true, JSON.stringify(join.joined));
+    }
 
     // Report failure and retry through the shim control flag.
     fs.writeFileSync(path.join(shimDir, "control.json"), JSON.stringify({ mode: "malformed" }));

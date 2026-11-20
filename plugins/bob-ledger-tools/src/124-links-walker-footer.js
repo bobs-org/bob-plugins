@@ -79,7 +79,10 @@ function linksWalkerFooterAlbumRecord(plugin, link) {
     if (!frontmatter || !linksWalkerFooterIsAlbumType(frontmatter.type)) {
       return link;
     }
-    const title = String(frontmatter.title || match[1]);
+    // The album card's title rule: title:, then H1, then alias, then stem.
+    const title = String(typeof notebookHeaderNoteTitle === "function"
+      ? notebookHeaderNoteTitle(albumFile.path, plugin.app.metadataCache, plugin.app.vault) || match[1]
+      : frontmatter.title || match[1]);
     return {
       ...link,
       albumRecord: true,

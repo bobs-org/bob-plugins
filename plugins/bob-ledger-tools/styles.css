@@ -8848,37 +8848,30 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
   --bob-album-accent: var(--bob-property-card-accent);
   font-weight: var(--font-normal);
 }
-.bob-album-header-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  min-width: 0;
-  color: var(--text-muted);
-}
-.bob-album-header-crumb {
-  color: var(--text-normal);
-  font-weight: 600;
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-.bob-album-header-current {
-  font-weight: 700;
-}
-.bob-album-header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35em 0.5em;
-  margin-top: 0.45em;
-}
-.bob-album-header-copy,
-.bob-album-header-schema {
-  padding: 0.2em 0.65em;
+/* Album card actions: compact pills right-aligned on the kicker row (the
+   kit's actions slot); at 375px the kit wraps them below the title. */
+.bob-album-header .bob-album-header-copy,
+.bob-album-header .bob-album-header-schema {
+  height: auto;
+  padding: 0.1em 0.6em;
   border: 1px solid var(--background-modifier-border);
   border-radius: 999px;
   color: var(--text-normal);
   background: var(--background-primary);
   font: inherit;
+  line-height: 1.45;
+  white-space: nowrap;
+  box-shadow: none;
   cursor: pointer;
+}
+.bob-album-header .bob-album-header-copy:hover:not(:disabled),
+.bob-album-header .bob-album-header-schema:hover {
+  background: var(--background-modifier-hover);
+}
+/* Reserve the pill height on the kicker row so the title never shifts when
+   the report's actions join the title block. */
+.bob-album-header > .bob-property-card-title-block .bob-property-card-kicker-row {
+  min-height: calc(var(--font-ui-small, 13px) * 1.65 + 2px);
 }
 .bob-album-header-copy:disabled {
   color: var(--text-faint);
@@ -8911,6 +8904,22 @@ body.bob-task-tag-marks a.tag.bob-no-reply-pill::before {
 }
 .bob-album-schema-summary.is-error {
   color: var(--text-error, var(--text-warning));
+}
+/* Obsidian's button:not(.clickable-icon) rule outranks the plain reset
+   above, which left the summary drawn as a boxed field inside the card. */
+.bob-album-header .bob-album-schema-summary {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+/* A healthy schema folds to one muted line under the title block; it wraps
+   instead of overflowing, and the hidden chip card draws no rule. */
+.bob-album-schema-summary[data-schema-fold] {
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+}
+.bob-album-schema-summary[data-schema-fold]:hover {
+  color: var(--text-normal);
 }
 .bob-album-schema-card {
   margin-top: 0.35em;
@@ -9836,7 +9845,6 @@ input.bob-emoji-slot-fallback {
 }
 @media (max-width: 420px) {
   .bob-album-schema-field,
-  .bob-album-header-actions,
   .bob-album-schema-target,
   .bob-album-schema-action {
     max-width: 100%;

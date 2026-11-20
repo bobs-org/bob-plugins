@@ -56,6 +56,8 @@ class FakeNode {
   set textContent(value) { this._text = String(value); if (this.nodeType === 1) this.children = [new FakeNode("", this.ownerDocument, this._text)]; }
   get firstChild() { return this.children[0] || null; }
   get nextSibling() { const xs = this.parentNode?.children || []; return xs[xs.indexOf(this) + 1] || null; }
+  get nextElementSibling() { const xs = (this.parentNode?.children || []).filter((x) => x.nodeType === 1); return xs[xs.indexOf(this) + 1] || null; }
+  get isConnected() { let item = this; while (item) { if (item.root) return true; item = item.parentNode; } return false; }
   setAttribute(name, value) { this.attrs.set(name, String(value)); }
   getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
   removeAttribute(name) { this.attrs.delete(name); }
@@ -325,8 +327,8 @@ test("clipboard failure is surfaced and does not mutate a note", async () => {
 
 test("Live Preview widgets follow album identity and remove the Properties scope on view switches", () => {
   const { doc, plugin } = fixture();
-  const text = "---\ntype: [[album]]\n---\nbody";
-  const lines = text.split("\n").map((line, i, rows) => {
+  let text = "---\ntype: [[album]]\n---\nbody";
+  const lines = () => text.split("\n").map((line, i, rows) => {
     const from = rows.slice(0, i).reduce((sum, item) => sum + item.length + 1, 0);
     return { from, to: from + line.length };
   });
@@ -334,16 +336,21 @@ test("Live Preview widgets follow album identity and remove the Properties scope
   const root = node(doc, "div", "cm-editor");
   sourceView.appendChild(root);
   const view = { path: "eat.md", dom: root, state: {
-    doc: { toString: () => text, line: (n) => lines[n - 1] },
+    doc: { toString: () => text, line: (n) => lines()[n - 1] },
   } };
   const decorations = plugin.buildAlbumHeaderDecorations(view);
-  assert.equal(decorations.length, 1);
+  assert.equal(decorations.length, 1, "no title slot here, so today's widget is the fallback");
   assert.equal(sourceView.classList.contains("bob-album-header-surface"), true);
-  assert.equal(decorations[0].deco.widget.toDOM().getAttribute("data-album-source"), "eat.md");
+  const widgetCard = decorations[0].deco.widget.toDOM();
+  assert.equal(widgetCard.getAttribute("data-album-source"), "eat.md");
+  assert.equal(widgetCard.querySelector(".bob-property-card-title").getAttribute("aria-level"), null,
+    "a fallback card never doubles the visible H1");
   view.path = "body.md";
+  text = "---\ntype: [[area]]\n---\nbody";
   assert.deepEqual(plugin.buildAlbumHeaderDecorations(view), Decoration.none);
   assert.equal(sourceView.classList.contains("bob-album-header-surface"), false);
   view.path = "eat.md";
+  text = "---\ntype: [[album]]\n---\nbody";
   plugin.buildAlbumHeaderDecorations(view);
   plugin.albumHeaderCleanEditor(view);
   assert.equal(sourceView.classList.contains("bob-album-header-surface"), false);
@@ -489,9 +496,11 @@ test("H1-less albums paint at the start and embeds keep their own property scope
   assert.equal(parent.children.filter((child) => child.classList.contains("bob-album-header")).length, 0);
 });
 
-test("schema summary starts expanded and collapses per album in view state", () => {
+test("healthy schema summary starts folded to one line and expands per album in view state", () => {
   const { doc, plugin, flushReading } = fixture(album({
     label: "Restaurant",
+    plural: "restaurants",
+    records: 104,
     dated_notes: true,
     index_by: "status",
     index_facets: ["location"],
@@ -505,21 +514,29 @@ test("schema summary starts expanded and collapses per album in view state", () 
   plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
   flushReading();
   const summary = root.querySelector(".bob-album-schema-summary");
-  assert.equal(summary.getAttribute("aria-expanded"), "true");
-  assert.match(summary.textContent, /^▾ /);
-  assert.match(summary.textContent, /Restaurant · 2 fields · dated notes · grouped by Status, sub-grouped by Location/);
-  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
-  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2);
-  summary.fire("click");
-  const closed = root.querySelector(".bob-album-schema-summary");
-  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), false);
-  assert.equal(closed.getAttribute("aria-expanded"), "false");
+  assert.equal(summary.getAttribute("aria-expanded"), "false");
+  assert.equal(summary.textContent,
+    "▸ Schema · 2 fields · grouped by Status, sub-grouped by Location · dated notes · 104 restaurants");
+  assert.equal(summary.getAttribute("data-schema-fold"), "folded");
   assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), "");
+  assert.equal(root.querySelectorAll(".bob-album-schema-field").length, 2, "chips stay in the DOM, hidden");
+  summary.fire("click");
+  const open = root.querySelector(".bob-album-schema-summary");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
+  assert.equal(open.getAttribute("aria-expanded"), "true");
+  assert.match(open.textContent, /^▾ Schema · 2 fields · /);
+  assert.equal(root.querySelector(".bob-album-schema-card").getAttribute("hidden"), null);
   const other = node(doc, "div", "markdown-preview-view");
   plugin.paintAlbumHeaderReading(other, "eat.md");
-  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
-  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), true);
+  assert.equal(other.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true",
+    "the per-session toggle is per album, not per pane");
+  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: false, emptySchema: false }), false);
   assert.equal(helpers.albumHeaderDefaultExpanded({ emptySchema: true }), true);
+  assert.equal(helpers.albumHeaderDefaultExpanded({ schemaInvalid: true }), true);
+  const model = { fields: [{}], records: 1, noun: "restaurant", singular: "restaurant", groupingClause: "", datedNotes: false };
+  assert.equal(helpers.albumHeaderFoldText(model), "Schema · 1 field · 1 restaurant");
+  assert.equal(helpers.albumHeaderSummaryText({ ...model, schemaLabel: "Restaurant", datedNotes: true, groupingClause: "grouped by Status" }),
+    "Restaurant · 1 field · dated notes · grouped by Status", "the editor's summary text is unchanged");
 });
 
 test("chip rows cover kinds, flags, grouping, legacy, and empty teaching copy", () => {
@@ -643,7 +660,7 @@ test("same-message child warnings name each file and keep distinct focus and car
     severity: "info", code: "album_child_reparent", path, line: 3, key_path: "parent",
     message: "this child lives outside eat/", suggestions: ["eat/"],
   })) });
-  const { app, doc, plugin } = fixture(entry);
+  const { app, doc, plugin, state } = fixture(entry);
   const model = helpers.albumHeaderModel(report(entry), "eat.md", {
     metadataCache: app.metadataCache, vault: app.vault,
   });
@@ -660,17 +677,22 @@ test("same-message child warnings name each file and keep distinct focus and car
   });
   assert.notEqual(warnings[0].getAttribute("data-album-header-focus"), warnings[1].getAttribute("data-album-header-focus"));
   warnings[1].focus();
+  const card = root.querySelector(".bob-album-header");
   plugin.paintAlbumHeaderReading(root, "eat.md");
+  assert.equal(doc.activeElement, warnings[1], "an unchanged repaint keeps the node and focus");
+  state.report = report({ ...entry, records: 7 });
+  plugin.paintAlbumHeaderReading(root, "eat.md");
+  assert.equal(root.querySelector(".bob-album-header"), card, "the body repaints inside the same card");
   assert.equal(doc.activeElement.textContent, warnings[1].textContent);
   assert.notEqual(doc.activeElement, warnings[1], "focus follows the repainted second warning");
 
   const targets = helpers.albumSchemaTargets(model).filter((target) => target.kind === "issue");
   assert.equal(new Set(targets.map((target) => target.key)).size, 2);
   assert.equal(helpers.albumSchemaTargetByKey(model, targets[1].key).issue.path, paths[1]);
-  const card = helpers.albumSchemaCardBuildEl(model, {
+  const editor = helpers.albumSchemaCardBuildEl(model, {
     editable: true, selectedKey: targets[1].key, handlers: {},
   }, doc);
-  const buttons = card.querySelectorAll("button").filter((button) => button.classList.contains("bob-album-schema-issue"));
+  const buttons = editor.querySelectorAll("button").filter((button) => button.classList.contains("bob-album-schema-issue"));
   assert.deepEqual(buttons.map((button) => button.getAttribute("data-target-key")), targets.map((target) => target.key));
   buttons.forEach((button, index) => {
     assert.equal(button.textContent, `${paths[index]} — this child lives outside eat/`);
@@ -716,9 +738,209 @@ test("theme accent, schema button, and keyboard labels stay on the header", () =
   const header = root.querySelector(".bob-album-header");
   assert.equal(header.tagName, "SECTION");
   assert.equal(root.querySelector(".bob-album-header-schema").textContent, "⊞ Schema");
-  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "true");
+  assert.equal(root.querySelector(".bob-album-schema-summary").getAttribute("aria-expanded"), "false");
   const field = root.querySelector(".bob-album-schema-field");
   assert.equal(field.getAttribute("tabindex"), "0");
+});
+
+// A desktop Reading pane with Obsidian's title slot: .markdown-preview-view >
+// .markdown-preview-sizer > .mod-header (inline title, Properties with the
+// record row), then the rendered H1 section.
+function slotPane(doc, title = "Restaurants") {
+  const preview = node(doc, "div", "markdown-preview-view");
+  preview.root = true;
+  const sizer = node(doc, "div", "markdown-preview-sizer");
+  preview.appendChild(sizer);
+  const header = node(doc, "div", "mod-header");
+  sizer.appendChild(header);
+  header.appendChild(node(doc, "div", "inline-title", title));
+  const properties = node(doc, "div", "metadata-container");
+  header.appendChild(properties);
+  const row = node(doc, "div", "metadata-property");
+  row.setAttribute("data-property-key", "record");
+  properties.appendChild(row);
+  const h1 = node(doc, "h1", "", title);
+  const section = node(doc, "div", "el-h1");
+  section.appendChild(h1);
+  sizer.appendChild(section);
+  return { preview, sizer, header, properties, row, h1, section };
+}
+const OWNED_ROW = "bob-property-card-owned-property";
+
+test("album title rule: valid title:, then the H1 before any H2 or bullet, then the alias, then the stem", () => {
+  const { app, caches, files } = fixture();
+  const title = (path) => helpers.notebookHeaderNoteTitle(path, app.metadataCache, app.vault);
+  const album = (frontmatter, extra = {}) => ({ frontmatter: { type: "[[album]]", ...frontmatter }, ...extra });
+  files.set("my_eat-list.md", { path: "my_eat-list.md" });
+  const cases = [
+    ["valid title wins", album({ title: "  Eat Here  ", aliases: ["Food"] }, { headings: [{ level: 1, heading: "Restaurants" }] }), "Eat Here"],
+    ["blank title falls through", album({ title: "   " }, { headings: [{ level: 1, heading: "Restaurants" }] }), "Restaurants"],
+    ["multi-line title falls through", album({ title: "Eat\nHere" }, { headings: [{ level: 1, heading: "Restaurants" }] }), "Restaurants"],
+    ["non-string title falls through", album({ title: 42 }, { headings: [{ level: 1, heading: "[[eat|Restaurants]]" }] }), "Restaurants"],
+    ["list title falls through", album({ title: ["Eat"] }, { headings: [{ level: 1, heading: "Restaurants" }] }), "Restaurants"],
+    ["an H1 after an H2 is skipped", album({ aliases: "Food" }, { headings: [{ level: 2, heading: "Intro" }, { level: 1, heading: "Late" }] }), "Food"],
+    ["an H1 after a column-0 bullet is skipped", album({ aliases: ["Food"] }, {
+      headings: [{ level: 1, heading: "Late", position: { start: { line: 9, col: 0 } } }],
+      listItems: [{ position: { start: { line: 5, col: 0 } } }],
+    }), "Food"],
+    ["a nested bullet does not stop the scan", album({}, {
+      headings: [{ level: 1, heading: "Kept", position: { start: { line: 9, col: 0 } } }],
+      listItems: [{ position: { start: { line: 5, col: 2 } } }],
+    }), "Kept"],
+    ["the alias", album({ aliases: ["Food", "Eats"] }), "Food"],
+    ["the humanized stem", album({}), "my eat list"],
+  ];
+  for (const [name, cache, want] of cases) {
+    caches.set("my_eat-list.md", cache);
+    assert.equal(title("my_eat-list.md"), want, name);
+  }
+  assert.equal(helpers.notebookHeaderHumanizeStem("h1less-album"), "h1less album");
+  assert.equal(helpers.notebookHeaderHumanizeStem("__Ma's  Deli__"), "Ma s Deli", "no case change");
+  caches.set("my_eat-list.md", { frontmatter: { type: "[[record]]", title: "  Kept  " }, headings: [{ level: 1, heading: "H" }] });
+  assert.equal(title("my_eat-list.md"), "Kept", "the record branch is unchanged");
+  caches.set("my_eat-list.md", { frontmatter: { type: "[[area]]", title: "Ignored" }, headings: [{ level: 1, heading: "Area H1" }] });
+  assert.equal(title("my_eat-list.md"), "Area H1", "non-album notes ignore title:");
+  caches.set("my_eat-list.md", { frontmatter: { type: "[[area]]", aliases: ["Alias"] } });
+  assert.equal(title("my_eat-list.md"), "Alias");
+  caches.set("my_eat-list.md", { frontmatter: { type: "[[area]]" } });
+  assert.equal(title("my_eat-list.md"), "my_eat-list", "non-album notes keep the raw stem");
+});
+
+test("the walker-footer album title follows the album rule", () => {
+  const { app, caches, files } = fixture();
+  files.get("eat.md").extension = "md";
+  const plugin = { app };
+  const link = { path: "eat/cranford.md", target: "eat/cranford", exists: true };
+  assert.equal(helpers.linksWalkerFooterAlbumRecord(plugin, link).albumTitle, "Restaurants", "H1 when there is no title:");
+  caches.get("eat.md").frontmatter.title = "eat places";
+  assert.equal(helpers.linksWalkerFooterAlbumRecord(plugin, link).albumTitle, "Eat places", "title: wins, first letter capitalized");
+  caches.get("eat.md").frontmatter.title = "";
+  caches.get("eat.md").headings = [];
+  assert.equal(helpers.linksWalkerFooterAlbumRecord(plugin, link).albumTitle, "Eat", "the humanized stem, capitalized");
+  caches.get("eat.md").frontmatter.type = "[[area]]";
+  assert.equal(helpers.linksWalkerFooterAlbumRecord(plugin, link).albumRecord, undefined);
+});
+
+test("the album card is the title block: stack tile, ALBUM kicker links, title, subtitle, actions on the kicker row", () => {
+  const { caches, doc, plugin } = fixture(album({
+    fields: [{ key: "status", label: "Status", kind: "text", required: true, list: false, choices: [] }],
+  }));
+  Object.assign(caches.get("eat.md").frontmatter, { parent: "[[body]]", emoji: " 🍽️ ", summary: " Places to eat. " });
+  const opened = [];
+  plugin.app.workspace = { openLinkText: async (...args) => { opened.push(args); } };
+  const root = node(doc, "div", "markdown-preview-view");
+  root.appendChild(node(doc, "h1", "", "Restaurants"));
+  const header = plugin.paintAlbumHeaderReading(root, "eat.md");
+  assert.equal(header.tagName, "SECTION");
+  assert.equal(header.classList.contains("bob-album-header"), true);
+  assert.equal(header.classList.contains("bob-property-card"), true);
+  assert.equal(header.getAttribute("data-card-kind"), "album");
+  assert.equal(header.getAttribute("aria-label"), "Album: Restaurants");
+  assert.equal(header.getAttribute("role"), "group");
+  assert.equal(header.getAttribute("data-album-header"), "true");
+  assert.equal(header.getAttribute("data-album-source"), "eat.md");
+  assert.equal(header.getAttribute("data-root-hue") !== null, true);
+  assert.equal(header.getAttribute("data-album-body"), "report");
+  const block = header.children[0];
+  assert.equal(block.classList.contains("bob-property-card-title-block"), true, "the title block comes first");
+  assert.equal(block.querySelector(".bob-property-card-tile").getAttribute("data-tile-form"), "stack");
+  assert.equal(block.querySelector(".bob-property-card-tile-glyph").textContent, "🍽️");
+  assert.equal(block.querySelector(".bob-property-card-kicker-species").textContent, "Album");
+  const crumbs = block.querySelectorAll(".bob-album-header-crumb");
+  assert.deepEqual(crumbs.map((crumb) => [crumb.getAttribute("data-href"), crumb.textContent]), [["body.md", "Body"]]);
+  assert.equal(crumbs[0].classList.contains("bob-property-card-kicker-link"), true);
+  assert.equal(block.querySelector(".bob-property-card-title").textContent, "Restaurants");
+  assert.equal(block.querySelector(".bob-property-card-subtitle").textContent, "Places to eat.");
+  const actions = block.querySelector(".bob-property-card-actions");
+  assert.equal(actions.parentNode.classList.contains("bob-property-card-kicker-row"), true);
+  assert.deepEqual(actions.children.map((item) => item.getAttribute("class")), ["bob-album-header-copy", "bob-album-header-schema"]);
+  assert.equal(header.querySelector(".bob-album-header-nav"), null, "no crumb nav");
+  assert.equal(header.querySelector(".bob-album-header-current"), null, "the title is not a crumb");
+  assert.equal(header.querySelector(".bob-property-card-title").getAttribute("aria-level"), null,
+    "the body fallback never doubles the visible H1");
+  crumbs[0].fire("click", { type: "click", ctrlKey: true, preventDefault() {} });
+  assert.deepEqual(opened.at(-1), ["body", "eat.md", true], "the kicker link honors Mod");
+  crumbs[0].fire("click", { type: "click", preventDefault() {} });
+  assert.deepEqual(opened.at(-1), ["body", "eat.md", false]);
+  crumbs[0].fire("auxclick", { type: "auxclick", button: 1, preventDefault() {} });
+  assert.deepEqual(opened.at(-1), ["body", "eat.md", "tab"], "middle click opens a tab");
+});
+
+test("the title block paints from local data before the report, and the body joins inside the same slot node", () => {
+  const { caches, doc, plugin, state } = fixture(album({
+    records: 3, plural: "restaurants",
+    fields: [{ key: "status", label: "Status", kind: "text", required: true, list: false, choices: [] }],
+  }));
+  caches.get("eat.md").frontmatter.parent = "[[body]]";
+  const pending = state.report;
+  state.report = null;
+  const pane = slotPane(doc);
+  const card = plugin.paintAlbumHeaderReading(pane.section, "eat.md");
+  assert.equal(card.parentNode, pane.header, "the card mounts in the title slot");
+  assert.equal(card.nextSibling, pane.properties, "before native Properties");
+  assert.equal(card.getAttribute("data-album-body"), "pending");
+  assert.equal(card.querySelector(".bob-property-card-title").textContent, "Restaurants");
+  assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1", "the owning card's heading");
+  assert.equal(card.querySelectorAll(".bob-album-header-copy").length, 0, "no actions before the report");
+  assert.equal(card.querySelector(".bob-album-schema-summary"), null);
+  assert.equal(pane.preview.classList.contains("bob-property-card-owns-title"), true);
+  assert.equal(pane.h1.classList.contains("bob-property-card-title-source"), true, "the redundant H1 hides at render time");
+  assert.equal(pane.row.classList.contains(OWNED_ROW), false, "the record row stays until the body paints");
+  const generation = helpers.propertyCardTitleSlotStats(pane.preview).generation;
+
+  state.report = pending;
+  const joined = plugin.paintAlbumHeaderReading(pane.section, "eat.md");
+  assert.equal(joined, card, "the same node object");
+  assert.equal(card.parentNode, pane.header);
+  assert.equal(helpers.propertyCardTitleSlotStats(pane.preview).generation, generation, "no remount");
+  assert.equal(card.getAttribute("data-album-body"), "report");
+  assert.equal(card.classList.contains("bob-property-card-title-slot"), true);
+  assert.equal(card.querySelectorAll(".bob-album-header-copy").length, 1);
+  assert.match(card.querySelector(".bob-album-schema-summary").textContent, /^▸ Schema · 1 field · 3 restaurants$/);
+  assert.equal(card.querySelector(".bob-property-card-title").getAttribute("aria-level"), "1");
+  assert.equal(pane.row.classList.contains(OWNED_ROW), true, "the record row hides once the body paints");
+  assert.equal(pane.sizer.querySelectorAll(".bob-album-header").length, 1, "nothing in the body");
+
+  plugin.teardownAlbumHeader();
+  helpers.propertyCardAdoptReleaseAll();
+  assert.equal(card.parentNode, null, "teardown releases the slot");
+  assert.equal(pane.preview.classList.contains("bob-property-card-owns-title"), false);
+  assert.equal(pane.h1.classList.contains("bob-property-card-title-source"), false);
+  assert.equal(pane.row.classList.contains(OWNED_ROW), false);
+  assert.equal(helpers.propertyCardTitleSlotLiveCount(), 0);
+});
+
+test("a title: album with no H1 hides nothing, and a differing H1 stays visible", () => {
+  const { caches, doc, plugin } = fixture();
+  caches.get("eat.md").frontmatter.title = "Eat Out";
+  caches.get("eat.md").headings = [];
+  const pane = slotPane(doc, "Restaurants");
+  const card = plugin.paintAlbumHeaderReading(pane.section, "eat.md");
+  assert.equal(card.querySelector(".bob-property-card-title").textContent, "Eat Out");
+  assert.equal(card.getAttribute("aria-label"), "Album: Eat Out");
+  assert.equal(pane.h1.classList.contains("bob-property-card-title-source"), false, "an H1 that differs from the title stays");
+  plugin.albumHeaderRemoveReading(pane.sizer, pane.preview, "eat.md");
+  assert.equal(card.parentNode, null);
+  assert.equal(pane.preview.classList.contains("bob-property-card-owns-title"), false);
+});
+
+test("the card model keeps the title local, refines only the subtitle from the report, and needs an album type", () => {
+  const { app, caches } = fixture(album({ summary: "From bob." }));
+  const options = { metadataCache: app.metadataCache, vault: app.vault, sourcePath: "eat.md" };
+  Object.assign(caches.get("eat.md").frontmatter, { parent: "[[body]]", summary: "From the note.", emoji: "🍽️" });
+  const local = helpers.albumHeaderCardModel(null, "eat.md", options);
+  assert.equal(local.body, null);
+  assert.equal(local.title, "Restaurants");
+  assert.equal(local.subtitle, "From the note.");
+  assert.deepEqual(local.identity.owners.map((owner) => owner.path), ["body.md"]);
+  const joined = helpers.albumHeaderCardModel(report(album({ title: "Report Title", summary: "From bob." })), "eat.md", options);
+  assert.equal(joined.title, "Restaurants", "the title never flips to the report's");
+  assert.equal(joined.subtitle, "From bob.");
+  assert.notEqual(helpers.albumHeaderCardSignature(local, {}), helpers.albumHeaderCardSignature(joined, {}));
+  delete caches.get("eat.md").frontmatter.type;
+  assert.equal(helpers.albumHeaderIdentityModel("eat.md", options), null, "a missing type is never an album");
+  assert.ok(helpers.albumHeaderIdentityModel("eat.md", { ...options, sourceText: "---\ntype: [[album]]\n---\n" }));
+  assert.equal(helpers.albumHeaderIdentityModel("eat.md", { ...options, sourceText: "---\ntype: [[area]]\n---\n" }), null);
 });
 
 test("schema edit model preserves typed defaults and stable field and choice targets", () => {

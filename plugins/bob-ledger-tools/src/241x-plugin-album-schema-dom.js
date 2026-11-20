@@ -1,6 +1,7 @@
-// Expanded-by-default schema summary, collapsible chip view, and lint
-// marks. All report strings are text nodes. Collapse is a view-state
-// flag; this fragment never writes the vault.
+// Schema summary (one folded line for healthy schemas, expanded for
+// invalid or empty ones), collapsible chip view, and lint marks. All report
+// strings are text nodes. Collapse is a view-state flag; this fragment never
+// writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {
@@ -120,11 +121,14 @@ function albumSchemaPaintSummary(doc, model, options) {
   summary.setAttribute("type", "button");
   summary.setAttribute("aria-expanded", expanded ? "true" : "false");
   summary.setAttribute("data-album-header-focus", "summary");
+  const healthy = !model.schemaInvalid && !model.emptySchema;
   if (model.schemaInvalid) {
     const cls = `${summary.getAttribute("class") || ""} is-error`.trim();
     summary.setAttribute("class", cls);
   }
-  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${albumHeaderSummaryText(model)}`);
+  if (healthy) summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
+  const text = healthy ? albumHeaderFoldText(model) : albumHeaderSummaryText(model);
+  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${text}`);
   summary.addEventListener("click", (event) => {
     event.preventDefault?.();
     options?.handlers?.toggleSchema?.(!expanded);

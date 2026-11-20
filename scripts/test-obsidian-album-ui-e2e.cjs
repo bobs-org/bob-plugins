@@ -99,3 +99,37 @@ test("header acceptance rejects duplicate chrome, false warnings, and callout he
   assert.match(probe, /const schemaRoot = plugin\?\.albumSchemaCardModal\?\.contentEl \|\| document/);
   assert.match(probe, /schemaPick\("\.bob-album-schema-dialog"\)/);
 });
+
+test("header acceptance requires the title-slot card, its identity, and one visible heading", () => {
+  const card = {
+    slot: "mod-header", next: "metadata-container", kind: "album", label: "Album: Eat",
+    inlineTitleHidden: true, visibleLevelOne: 1,
+  };
+  const reading = { activeHeaders: [{}], ancestryWarnings: [], headersInRecords: [], mode: "preview", activeCard: card };
+  assert.equal(album.assertHeaderIntegrity(reading, { title: "Eat" }).ok, true);
+  const live = { ...reading, mode: "source", activeCard: { ...card, slot: "cm-sizer" } };
+  assert.equal(album.assertHeaderIntegrity(live, { title: "Eat" }).ok, true);
+  for (const [name, invalid, expect] of [
+    ["missing card", { ...reading, activeCard: null }, {}],
+    ["body placement", { ...reading, activeCard: { ...card, slot: "" } }, {}],
+    ["wrong mode slot", { ...live, activeCard: card }, {}],
+    ["after Properties", { ...reading, activeCard: { ...card, next: "el-h1" } }, {}],
+    ["no kind", { ...reading, activeCard: { ...card, kind: "" } }, {}],
+    ["wrong name", reading, { title: "Restaurants" }],
+    ["inline title shown", { ...reading, activeCard: { ...card, inlineTitleHidden: false } }, {}],
+    ["two headings", { ...reading, activeCard: { ...card, visibleLevelOne: 2 } }, {}],
+    ["no heading", { ...reading, activeCard: { ...card, visibleLevelOne: 0 } }, {}],
+  ]) assert.equal(album.assertHeaderIntegrity(invalid, expect).ok, false, name);
+  const probe = album.albumUiProbe();
+  assert.match(probe, /activeCard/);
+  assert.match(probe, /visibleLevelOne/);
+  assert.match(probe, /inlineTitleHidden/);
+  assert.match(probe, /data-album-body/);
+  const notes = album.fixtureNotes();
+  assert.match(notes["h1less-album.md"], /\ntitle: Bites\n/, "the post-tidy fixture carries title: and no H1");
+  const source = require("node:fs").readFileSync(path.join(__dirname, "obsidian-album-ui-e2e.cjs"), "utf8");
+  for (const name of ["reading-h1-hidden", "live-h1-hidden-and-revealed", "schema-fold-default", "card-identity",
+    "post-tidy-title-hides-nothing", "-title-block-before-report", "-body-joins-same-node"]) {
+    assert.ok(source.includes(name), name);
+  }
+});

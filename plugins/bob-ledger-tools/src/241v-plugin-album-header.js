@@ -1,5 +1,34 @@
-// Report-driven album headers in Reading view and Live Preview. The only
-// editor decorations are widgets; no Markdown or frontmatter is rewritten.
+// The album card: the note's title block (stack tile, ALBUM kicker with owner
+// links, title, summary subtitle) painted from local data at once, with the
+// report-backed schema body joining inside the same node. On desktop Live
+// Preview and Reading it mounts in the title slot and owns the title through
+// the adopter glue (240k); embeds, popovers, mobile, and failed mounts keep
+// today's body placement with a demoted heading. No Markdown or frontmatter
+// is rewritten.
+const albumHeaderNodeSignatures = new WeakMap();
+const albumHeaderObsidianKeymap = (() => {
+  try { return require("obsidian").Keymap || null; } catch (_) { return null; }
+})();
+
+function albumHeaderDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+// Modifier-aware like a Markdown link: Mod opens a tab, Mod+Alt a split,
+// middle click a tab (Obsidian's Keymap.isModEvent when present).
+function albumHeaderLinkPane(event) {
+  if (!event) return false;
+  let pane = Boolean(event.ctrlKey || event.metaKey);
+  if (event.type === "auxclick" && event.button === 1) pane = "tab";
+  try {
+    if (albumHeaderObsidianKeymap && typeof albumHeaderObsidianKeymap.isModEvent === "function") {
+      pane = albumHeaderObsidianKeymap.isModEvent(event);
+    }
+  } catch (_) {}
+  return pane || false;
+}
+
 class BobLedgerToolsAlbumHeaderMixin {
   albumPropertyCardHost() {
     if (this._albumPropertyCardHost) return this._albumPropertyCardHost;
@@ -9,6 +38,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       kind: "album",
       readingPriority: 49,
       allowEmbedDisplay: true,
+      titleOwnership: true,
       fields: {
         active: "albumHeaderActive",
         reading: "albumHeaderReading",
@@ -107,7 +137,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       desktop,
       expanded,
       handlers: {
-        openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
+        openPath: (path, event) => { void this.albumHeaderOpenPath(path, sourcePath, event); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
         toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
         openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
@@ -122,6 +152,21 @@ class BobLedgerToolsAlbumHeaderMixin {
       const current = state || this.albumHeaderState();
       const report = current?.report || null;
       return albumHeaderModel(report, sourcePath, {
+        sourceText,
+        sourcePath,
+        metadataCache: this.app?.metadataCache,
+        vault: this.app?.vault,
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // { identity, body, title, subtitle } for the album card, or null.
+  albumHeaderCardModelFor(sourcePath, state, sourceText) {
+    try {
+      const current = state || this.albumHeaderState();
+      return albumHeaderCardModel(current?.report || null, sourcePath, {
         sourceText,
         sourcePath,
         metadataCache: this.app?.metadataCache,
@@ -150,13 +195,13 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  async albumHeaderOpenPath(path, sourcePath) {
+  async albumHeaderOpenPath(path, sourcePath, event) {
     const target = albumHeaderPath(path);
     if (!target) return { ok: false };
     try {
       const workspace = this.app?.workspace;
       if (workspace && typeof workspace.openLinkText === "function") {
-        await workspace.openLinkText(target.replace(/\.md$/i, ""), sourcePath || "", false);
+        await workspace.openLinkText(target.replace(/\.md$/i, ""), sourcePath || "", albumHeaderLinkPane(event));
         return { ok: true };
       }
     } catch (_) {}
@@ -257,8 +302,28 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) { return null; }
   }
 
+  albumHeaderReleaseAdoption(scope, sourcePath = "") {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined); } catch (_) { return false; }
+  }
+
+  // Body-placed card nodes for this path under root: never the slot node,
+  // never another path's card, never a nested embed's card.
+  albumHeaderBodyNodes(root, sourcePath, exclude = null) {
+    const path = albumHeaderPath(sourcePath);
+    return Array.from(root?.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || []).filter((node) => {
+      if (node === exclude || !this.albumHeaderNodeBelongs(node, root)) return false;
+      if (node.classList?.contains?.(PROPERTY_CARD_TITLE_SLOT_CLASS)) return false;
+      const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");
+      return !path || !ownedPath || ownedPath === path;
+    });
+  }
+
+  // The slot card (glue entry) is released first: it lives in .mod-header,
+  // inside the sizer root, so the sweep would otherwise tear it out while it
+  // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.albumHeaderReleaseAdoption(scope, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
       const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");
@@ -271,78 +336,99 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
   }
 
+  // A bare report model (older callers) still builds: identity from itself.
+  albumHeaderCardFrom(model) {
+    if (!model) return null;
+    if (model.identity) return model;
+    const owners = (Array.isArray(model.crumbs) ? model.crumbs : []).filter((crumb) => crumb && crumb.current !== true);
+    const title = String(model.title || model.stem || "");
+    return {
+      identity: {
+        kind: "album", path: albumHeaderPath(model.path), stem: String(model.stem || ""), title,
+        emoji: String(model.emoji || "").trim(), summary: "", owners, ancestryBroken: Boolean(model.ancestryMessage),
+      },
+      body: model,
+      title,
+      subtitle: "",
+    };
+  }
+
+  albumHeaderAppendActions(slot, body, options, doc) {
+    if (!slot || !body) return;
+    const copy = notebookCreateEl(doc, "button", "bob-album-header-copy");
+    copy.setAttribute?.("type", "button");
+    copy.setAttribute?.("data-album-header-focus", "copy");
+    const disabledReason = body.routeReason || "";
+    copy.disabled = Boolean(disabledReason);
+    copy.setAttribute?.("aria-disabled", copy.disabled ? "true" : "false");
+    copy.setAttribute?.("title", disabledReason || `Copy ${body.captureText}`);
+    copy.setAttribute?.("aria-label", disabledReason
+      ? `Copy capture route unavailable: ${disabledReason}`
+      : `Copy ${body.captureLabel} capture route`);
+    notebookSetText(copy, disabledReason ? `＋ ${body.captureLabel || "record"}` : `＋ ${body.captureLabel}`);
+    copy.addEventListener?.("click", (event) => {
+      event.preventDefault?.();
+      if (!copy.disabled) options?.handlers?.copyCapture?.(body);
+    });
+    slot.appendChild(copy);
+    if (options?.desktop !== false) {
+      const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
+      schema.setAttribute?.("type", "button");
+      schema.setAttribute?.("data-album-header-focus", "schema");
+      schema.setAttribute?.("aria-label", "Open schema card");
+      notebookSetText(schema, "⊞ Schema");
+      schema.addEventListener?.("click", (event) => {
+        event.preventDefault?.();
+        options?.handlers?.openSchemaCard?.(body);
+      });
+      slot.appendChild(schema);
+    }
+  }
+
+  // section.bob-album-header.bob-property-card: the kit title block first
+  // (title from local identity, never the report), then, once the report
+  // body exists, the actions in the kicker row, the ancestry note, the
+  // schema summary and chips, and the mobile hint.
   albumHeaderBuildEl(model, options, doc) {
     try {
+      const card = this.albumHeaderCardFrom(model);
+      const identity = card?.identity;
+      if (!identity || !doc) return null;
+      const body = card.body || null;
+      const title = String(card.title || identity.title || identity.stem || "").trim();
       const header = notebookCreateEl(doc, "section", `${ALBUM_HEADER_CLASS} bob-property-card`);
-      if (!header) return null;
+      if (!header || !title) return null;
       header.setAttribute?.("data-album-header", "true");
-      header.setAttribute?.("data-album-source", model.path);
-      header.setAttribute?.("aria-label", `${model.title} album details`);
+      header.setAttribute?.("data-album-source", identity.path);
+      header.setAttribute?.("data-album-body", body ? "report" : "pending");
       if (options?.hue) header.setAttribute?.("data-root-hue", options.hue);
-
-      const nav = notebookCreateEl(doc, "nav", "bob-album-header-nav");
-      nav.setAttribute?.("aria-label", "Album location");
-      const crumbs = Array.isArray(model.crumbs) ? model.crumbs : [];
-      crumbs.forEach((crumb, index) => {
-        if (index > 0) nav.appendChild(doc.createTextNode(" › "));
-        const current = crumb.current === true;
-        const resolved = albumHeaderPath(crumb.path);
-        const node = !current && resolved && doc?.createElement ? doc.createElement("a") : doc?.createElement?.("span");
-        if (!node) return;
-        if (!current && resolved) {
-          node.setAttribute("class", `internal-link ${ALBUM_HEADER_CRUMB_CLASS}`);
-          node.setAttribute("data-href", resolved);
-          node.setAttribute("href", resolved);
-          const open = () => options?.handlers?.openPath?.(resolved);
-          if (typeof notebookBindAction === "function") notebookBindAction(node, open);
-          else node.addEventListener?.("click", (event) => { event.preventDefault?.(); open(); });
-        } else {
-          node.setAttribute("class", `${ALBUM_HEADER_CRUMB_CLASS} bob-album-header-current`);
-          node.setAttribute("aria-current", "page");
-        }
-        notebookSetText(node, crumb.title || crumb.stem || "");
-        nav.appendChild(node);
+      propertyCardApplyIdentity(header, { kind: "album", title });
+      const block = propertyCardBuildTitleBlock(doc, {
+        kind: "album",
+        title,
+        subtitle: card.subtitle || "",
+        tile: { emoji: identity.emoji || "" },
+        kicker: (identity.owners || []).map((owner) => ({
+          text: owner.title || owner.stem || "",
+          target: albumHeaderPath(owner.path),
+        })),
+        onLink: (target, event) => options?.handlers?.openPath?.(target, event),
       });
-      header.appendChild(nav);
-
-      if (model.ancestryMessage) {
+      if (!block) return null;
+      header.appendChild(block.element);
+      for (const link of Array.from(block.element.querySelectorAll?.(".bob-property-card-kicker-link") || [])) {
+        link.classList?.add?.(ALBUM_HEADER_CRUMB_CLASS);
+        link.setAttribute?.("data-album-header-focus", `crumb:${link.getAttribute?.("data-href") || ""}`);
+      }
+      if (!body) return header;
+      this.albumHeaderAppendActions(block.actions, body, options, doc);
+      if (body.ancestryMessage) {
         const note = notebookCreateEl(doc, "p", "bob-album-header-ancestry-note");
-        notebookSetText(note, model.ancestryMessage);
+        notebookSetText(note, body.ancestryMessage);
         note.setAttribute?.("role", "note");
         header.appendChild(note);
       }
-
-      const actionRow = notebookCreateEl(doc, "div", "bob-album-header-actions");
-      const copy = notebookCreateEl(doc, "button", "bob-album-header-copy");
-      copy.setAttribute?.("type", "button");
-      copy.setAttribute?.("data-album-header-focus", "copy");
-      const disabledReason = model.routeReason || "";
-      copy.disabled = Boolean(disabledReason);
-      copy.setAttribute?.("aria-disabled", copy.disabled ? "true" : "false");
-      copy.setAttribute?.("title", disabledReason || `Copy ${model.captureText}`);
-      copy.setAttribute?.("aria-label", disabledReason
-        ? `Copy capture route unavailable: ${disabledReason}`
-        : `Copy ${model.captureLabel} capture route`);
-      notebookSetText(copy, disabledReason ? `＋ ${model.captureLabel || "record"}` : `＋ ${model.captureLabel}`);
-      copy.addEventListener?.("click", (event) => {
-        event.preventDefault?.();
-        if (!copy.disabled) options?.handlers?.copyCapture?.(model);
-      });
-      actionRow.appendChild(copy);
-      if (options?.desktop !== false) {
-        const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
-        schema.setAttribute?.("type", "button");
-        schema.setAttribute?.("data-album-header-focus", "schema");
-        schema.setAttribute?.("aria-label", "Open schema card");
-        notebookSetText(schema, "⊞ Schema");
-        schema.addEventListener?.("click", (event) => {
-          event.preventDefault?.();
-          options?.handlers?.openSchemaCard?.(model);
-        });
-        actionRow.appendChild(schema);
-      }
-      header.appendChild(actionRow);
-      albumSchemaHeaderAppend(header, model, options, doc);
+      albumSchemaHeaderAppend(header, body, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -359,6 +445,33 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderFocusKey(node, doc) {
+    const active = doc?.activeElement;
+    return active && node?.contains?.(active) ? active.getAttribute?.("data-album-header-focus") || "" : "";
+  }
+
+  albumHeaderRestoreFocus(node, focusKey) {
+    if (!focusKey || !node) return;
+    const next = Array.from(node.querySelectorAll?.("[data-album-header-focus]") || [])
+      .find((item) => item.getAttribute?.("data-album-header-focus") === focusKey);
+    next?.focus?.({ preventScroll: true });
+  }
+
+  // Body placement (fallback): today's spot right after the first non-code
+  // H1, else the start of the root. A node already there stays put.
+  albumHeaderPlaceInBody(root, header) {
+    const anchor = this.albumHeaderReadingAnchor(root);
+    if (anchor?.parentNode?.insertBefore) {
+      if (header.parentNode === anchor.parentNode && anchor.nextSibling === header) return true;
+      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      return true;
+    }
+    if (header.parentNode === root && root.firstChild === header) return true;
+    if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
+    else root.prepend?.(header);
+    return true;
+  }
+
   paintAlbumHeaderReading(el, sourcePath, state) {
     const root = this.albumHeaderReadingRoot(el);
     const scope = this.albumHeaderReadingScope(root);
@@ -366,48 +479,67 @@ class BobLedgerToolsAlbumHeaderMixin {
     // Remove old reading chrome stranded in editor callout chunks, while
     // leaving the legitimate CodeMirror decoration and other sources alone.
     this.albumHeaderRemoveStrays(root, sourcePath);
-    let model = null;
+    let card = null;
     try {
-      model = this.albumHeaderModelFor(sourcePath, state);
+      card = this.albumHeaderCardModelFor(sourcePath, state);
     } catch (_) {
-      model = null;
+      card = null;
+    }
+    const reading = scope?.classList?.contains?.("markdown-preview-view")
+      ? propertyCardReadingViewFor(this.app, scope) : null;
+    const leafPath = reading ? reading.currentPath() : "";
+    // A stale binding for a note this leaf no longer shows paints nothing.
+    if (!card || (leafPath && leafPath !== sourcePath)) {
+      this.albumHeaderRemoveReading(root, scope, sourcePath);
+      return null;
     }
     const doc = notebookDomDoc(root) || (typeof document !== "undefined" ? document : null);
-    const old = Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])
-      .find((node) => this.albumHeaderNodeBelongs(node, root));
-    const active = doc?.activeElement;
-    const focusKey = active && old?.contains?.(active)
-      ? active.getAttribute?.("data-album-header-focus") : "";
-    this.albumHeaderRemoveReading(root, scope, sourcePath);
-    if (!model) return null;
-
+    const adopted = propertyCardAdoptedEntry(scope);
+    const slotNode = adopted && adopted.path === sourcePath && adopted.mode === "slot" ? adopted.node : null;
+    const bodyNodes = this.albumHeaderBodyNodes(root, sourcePath, slotNode);
+    let header = slotNode || bodyNodes[0] || null;
+    const focusKey = this.albumHeaderFocusKey(header, doc);
+    const options = this.albumHeaderOptions(sourcePath, state, card.body);
+    const signature = albumHeaderCardSignature(card, options);
+    if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
+      let fresh = null;
+      try {
+        fresh = this.albumHeaderBuildEl(card, options, doc);
+      } catch (_) {
+        fresh = null;
+      }
+      if (!fresh) {
+        this.albumHeaderRemoveReading(root, scope, sourcePath);
+        return null;
+      }
+      // The body joins (or the title changes) inside the same node.
+      header = header ? propertyCardAdoptPatch(header, fresh) : fresh;
+      albumHeaderNodeSignatures.set(header, signature);
+    }
+    for (const node of bodyNodes) {
+      if (node !== header) node.remove?.();
+    }
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    let header = null;
-    try {
-      header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
-    } catch (_) {
-      header = null;
+    const adoption = propertyCardAdoptTitle(scope, header, {
+      path: sourcePath,
+      kind: "album",
+      view: reading?.view || null,
+      currentPath: reading?.currentPath || null,
+      recognizer: propertyCardAlbumTitleRecognizer(card.title),
+      onLost: () => this.scheduleAlbumHeaderRefresh(),
+    });
+    if (adoption.mode !== "slot") {
+      try {
+        this.albumHeaderPlaceInBody(root, header);
+      } catch (_) {
+        this.albumHeaderRemoveReading(root, scope, sourcePath);
+        return null;
+      }
     }
-    if (!header) {
-      this.albumHeaderReleaseKeys(scope);
-      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-      return null;
-    }
-    const anchor = this.albumHeaderReadingAnchor(root);
-    try {
-      if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-      else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
-      else root.prepend?.(header);
-    } catch (_) {
-      this.albumHeaderReleaseKeys(scope);
-      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-      return null;
-    }
-    if (focusKey) {
-      const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
-      next?.focus?.({ preventScroll: true });
-    }
-    this.albumHeaderOwnKeys(scope, sourcePath);
+    this.albumHeaderRestoreFocus(header, focusKey);
+    // Owned Properties rows (record) hide only once the report body paints.
+    if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
+    else this.albumHeaderReleaseKeys(scope, sourcePath);
     return header;
   }
 
@@ -440,6 +572,21 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  // Patch a slot-mounted Live Preview card outside the CodeMirror update.
+  albumHeaderPatchLive(view, adopted, fresh, signature) {
+    const target = adopted.node;
+    albumHeaderDefer(() => {
+      const entry = propertyCardAdoptedEntry(view?.dom);
+      if (!entry || entry.node !== target || entry.generation !== adopted.generation) return;
+      const doc = notebookDomDoc(target) || (typeof document !== "undefined" ? document : null);
+      const focusKey = this.albumHeaderFocusKey(target, doc);
+      propertyCardAdoptPatch(target, fresh);
+      albumHeaderNodeSignatures.set(target, signature);
+      propertyCardSyncTitleHeading(target, entry.owned);
+      this.albumHeaderRestoreFocus(target, focusKey);
+    });
+  }
+
   buildAlbumHeaderDecorations(view) {
     try {
       if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
@@ -447,36 +594,59 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
         this.albumHeaderReleaseKeys(view?.dom);
+        this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const text = view.state.doc.toString();
       const state = this.albumHeaderState();
-      const model = this.albumHeaderModelFor(path, state, text);
-      this.albumHeaderSetEditorScope(view, Boolean(model));
-      if (!model) {
+      const card = this.albumHeaderCardModelFor(path, state, text);
+      this.albumHeaderSetEditorScope(view, Boolean(card));
+      if (!card) {
         this.albumHeaderReleaseKeys(view?.dom);
+        this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.albumHeaderOptions(path, state, model);
-      const header = this.albumHeaderBuildEl(model, options, doc);
-      if (!header) {
-        this.albumHeaderReleaseKeys(view?.dom);
-        return Decoration.none;
+      const options = this.albumHeaderOptions(path, state, card.body);
+      const signature = albumHeaderCardSignature(card, options);
+      const adopted = propertyCardAdoptedEntry(view.dom);
+      let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
+      if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
+        const fresh = this.albumHeaderBuildEl(card, options, doc);
+        if (!fresh) {
+          this.albumHeaderReleaseKeys(view?.dom);
+          this.albumHeaderReleaseAdoption(view?.dom);
+          return Decoration.none;
+        }
+        if (header) this.albumHeaderPatchLive(view, adopted, fresh, signature);
+        else {
+          header = fresh;
+          albumHeaderNodeSignatures.set(header, signature);
+        }
       }
+      const adoption = propertyCardAdoptTitle(view.dom, header, {
+        path,
+        kind: "album",
+        view,
+        recognizer: propertyCardAlbumTitleRecognizer(card.title),
+        currentPath: () => propertyCardLiveCurrentPath(view),
+        onLost: () => this.scheduleAlbumHeaderRefresh(),
+      });
       // Native Properties live under the CodeMirror editor, not the
-      // .markdown-source-view that carries the surface class.
-      this.albumHeaderOwnKeys(view?.dom, path);
+      // .markdown-source-view that carries the surface class. The record row
+      // hides only once the report body paints.
+      if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
+      else this.albumHeaderReleaseKeys(view?.dom, path);
+      if (adoption.mode === "slot") return Decoration.none;
+
+      // Fallback: today's inline widget at the end of the first `# ` line.
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
         constructor() {
           super();
           this.path = path;
-          this.signature = albumHeaderSignature(model, {
-            expanded: options.expanded,
-            desktop: options.desktop,
-          });
+          this.signature = signature;
         }
         eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
         toDOM() {
@@ -519,6 +689,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },
     });

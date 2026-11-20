@@ -11395,7 +11395,10 @@ function linksWalkerFooterAlbumRecord(plugin, link) {
     if (!frontmatter || !linksWalkerFooterIsAlbumType(frontmatter.type)) {
       return link;
     }
-    const title = String(frontmatter.title || match[1]);
+    // The album card's title rule: title:, then H1, then alias, then stem.
+    const title = String(typeof notebookHeaderNoteTitle === "function"
+      ? notebookHeaderNoteTitle(albumFile.path, plugin.app.metadataCache, plugin.app.vault) || match[1]
+      : frontmatter.title || match[1]);
     return {
       ...link,
       albumRecord: true,
@@ -34798,6 +34801,7 @@ BobLedgerToolsPlugin.prototype.teardownLedgerToolsSurfaces = function () {
       // Reading Board data teardown is best-effort.
     }
     try { this.teardownRecordCard?.(); this.teardownRecordUpdate?.(); this.teardownRecordSheet?.(); this.teardownIntentionCardNavigation?.(); this.teardownIntentionCardEditor?.(); this.teardownIntentionUpdate?.(); this.teardownIntentionCard?.(); this.teardownSubscriptionSurfaces(); this.teardownAlbumHeader(); this.teardownNotebookHeader(); this.teardownAlbumYamlExcursion?.(); this.teardownAlbumSchemaEntrypoints?.(); } catch (error) {}
+    try { propertyCardAdoptReleaseAll(); } catch (_) {}
     try { propertyCardTitleSlotReleaseAll(); } catch (_) {}
     try {
       this.teardownAlbumRecords(); this.teardownAreasCatalog(); this.teardownProjectsCatalog(); this.teardownAlbumCatalog(); this.teardownNotebookCatalog(); this.teardownAreasData(); this.teardownNotebookData(); this.teardownAlbumData(); this.teardownProjectsData();
@@ -81917,6 +81921,366 @@ function propertyCardBuildIdentityBadge(doc, spec = {}) {
     return null;
   }
 }
+// ---- src/240k-plugin-property-card-title-adopt.js ----
+// Property-card adopter glue (bob-cli-o6 collection-cards): one call mounts a
+// card node in the title slot (240e) and owns the note's title (240i), or
+// reports "fallback" so the adapter keeps its body placement. Generic in
+// kind and recognizer, so every species adapter reuses it unchanged.
+//
+//   propertyCardAdoptTitle(scope, node, { path, kind, view, recognizer,
+//     currentPath, onLost, defer }) -> { mode: "slot" | "fallback", release }
+//
+// Reading mounts synchronously. Live Preview returns "slot" at once and
+// mounts and owns in a deferred callback (default queueMicrotask), because
+// nothing may mutate the DOM or dispatch inside a CodeMirror update; a
+// deferred mount that fails calls onLost("insert-failed"). When the slot is
+// lost, title ownership is released in the same frame, the heading demotes,
+// and the adapter's onLost(reason) runs deferred so it can remount through
+// its refresh. Paths that came back unstable or insert-failed stay in the
+// fallback until the scope sees a new path or an explicit release.
+//
+// The kit heading (.bob-property-card-title, role=heading, aria-level=1) is
+// promoted only while ownership is held; every other state demotes it, so a
+// card never doubles a visible H1. release() is idempotent and
+// generation-bound and never calls onLost. Never throws.
+const PROPERTY_CARD_TITLE_HEADING_CLASS = "bob-property-card-title";
+const PROPERTY_CARD_ADOPT_STICKY_REASONS = Object.freeze(["unstable", "insert-failed"]);
+
+const propertyCardAdoptions = new Map();
+const propertyCardAdoptMemory = new Map();
+let propertyCardAdoptGeneration = 0;
+
+function propertyCardAdoptNoop() {}
+
+function propertyCardAdoptDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+function propertyCardTitleHeadings(node) {
+  if (!node) return [];
+  const found = [];
+  try {
+    if (node.classList?.contains(PROPERTY_CARD_TITLE_HEADING_CLASS)) found.push(node);
+    for (const item of Array.from(node.querySelectorAll?.(`.${PROPERTY_CARD_TITLE_HEADING_CLASS}`) || [])) {
+      if (!found.includes(item)) found.push(item);
+    }
+  } catch (_) {}
+  return found;
+}
+
+// The kit builds title headings promoted. Demote drops role and aria-level
+// so a card that does not own the title (embed, body fallback, failed
+// ownership) is never announced as a second level-one heading.
+function propertyCardDemoteTitleHeading(node) {
+  for (const heading of propertyCardTitleHeadings(node)) {
+    try { heading.removeAttribute?.("role"); } catch (_) {}
+    try { heading.removeAttribute?.("aria-level"); } catch (_) {}
+  }
+  return node || null;
+}
+
+function propertyCardPromoteTitleHeading(node) {
+  for (const heading of propertyCardTitleHeadings(node)) {
+    try { heading.setAttribute?.("role", "heading"); } catch (_) {}
+    try { heading.setAttribute?.("aria-level", "1"); } catch (_) {}
+  }
+  return node || null;
+}
+
+function propertyCardSyncTitleHeading(node, owned) {
+  return owned ? propertyCardPromoteTitleHeading(node) : propertyCardDemoteTitleHeading(node);
+}
+
+function propertyCardAdoptRemembered(scope, path) {
+  const memory = propertyCardAdoptMemory.get(scope);
+  if (!memory) return false;
+  if (memory.path === path) return true;
+  propertyCardAdoptMemory.delete(scope);
+  return false;
+}
+
+function propertyCardAdoptForget(scope, path) {
+  const memory = propertyCardAdoptMemory.get(scope);
+  if (memory && (path === undefined || path === null || path === "" || memory.path === path)) {
+    propertyCardAdoptMemory.delete(scope);
+  }
+}
+
+function propertyCardAdoptCall(callback, ...args) {
+  if (typeof callback !== "function") return;
+  try { callback(...args); } catch (_) {}
+}
+
+// Drop one entry: title ownership first, then the slot (the node leaves the
+// slot unless keepNode), then demote. Never calls onLost.
+function propertyCardAdoptDrop(scope, entry, keepNode = false) {
+  if (!entry || entry.released) return;
+  entry.released = true;
+  if (propertyCardAdoptions.get(scope) === entry) propertyCardAdoptions.delete(scope);
+  propertyCardAdoptCall(entry.titleRelease);
+  entry.titleRelease = null;
+  entry.owned = false;
+  if (!keepNode) propertyCardAdoptCall(entry.slotRelease);
+  entry.slotRelease = null;
+  propertyCardDemoteTitleHeading(entry.node);
+}
+
+function propertyCardAdoptOwn(scope, entry) {
+  let handle = null;
+  try {
+    handle = propertyCardOwnTitle(scope, {
+      path: entry.path, recognizer: entry.recognizer, view: entry.view, defer: entry.defer,
+    });
+  } catch (_) {
+    handle = null;
+  }
+  entry.titleRelease = typeof handle === "function" ? handle : null;
+  entry.owned = Boolean(entry.titleRelease);
+  entry.titleKey = entry.recognizer && typeof entry.recognizer.key === "string" ? entry.recognizer.key : "";
+  propertyCardSyncTitleHeading(entry.node, entry.owned);
+}
+
+function propertyCardAdoptLost(scope, entry, reason) {
+  if (entry.released || propertyCardAdoptions.get(scope) !== entry) return;
+  entry.released = true;
+  propertyCardAdoptions.delete(scope);
+  // The primitive already took the node out of the slot. Ownership drops in
+  // the same frame so the inline title and the H1 return at once.
+  propertyCardAdoptCall(entry.titleRelease);
+  entry.titleRelease = null;
+  entry.owned = false;
+  entry.slotRelease = null;
+  propertyCardDemoteTitleHeading(entry.node);
+  if (PROPERTY_CARD_ADOPT_STICKY_REASONS.includes(reason)) {
+    propertyCardAdoptMemory.set(scope, { path: entry.path, reason });
+  }
+  entry.defer(() => propertyCardAdoptCall(entry.onLost, reason));
+}
+
+// Mount the entry's node now. Returns true when the slot holds it.
+function propertyCardAdoptMount(scope, entry) {
+  if (entry.released || propertyCardAdoptions.get(scope) !== entry) return false;
+  entry.pending = false;
+  let release = null;
+  try {
+    release = propertyCardMountInTitleSlot(scope, entry.node, {
+      path: entry.path,
+      kind: entry.kind,
+      view: entry.view,
+      currentPath: entry.currentPath,
+      onLost: (reason) => propertyCardAdoptLost(scope, entry, reason),
+    });
+  } catch (_) {
+    release = null;
+  }
+  if (typeof release !== "function") {
+    entry.released = true;
+    propertyCardAdoptions.delete(scope);
+    propertyCardAdoptMemory.set(scope, { path: entry.path, reason: "insert-failed" });
+    propertyCardDemoteTitleHeading(entry.node);
+    return false;
+  }
+  entry.slotRelease = release;
+  propertyCardAdoptOwn(scope, entry);
+  return true;
+}
+
+function propertyCardAdoptOptions(options) {
+  const opts = options && typeof options === "object" ? options : {};
+  return {
+    path: opts.path == null ? "" : String(opts.path),
+    kind: opts.kind == null ? "" : String(opts.kind),
+    view: opts.view || null,
+    recognizer: opts.recognizer || null,
+    currentPath: typeof opts.currentPath === "function" ? opts.currentPath : null,
+    onLost: typeof opts.onLost === "function" ? opts.onLost : null,
+    defer: typeof opts.defer === "function" ? opts.defer : propertyCardAdoptDefer,
+  };
+}
+
+function propertyCardAdoptHandle(scope, entry) {
+  return () => {
+    if (propertyCardAdoptions.get(scope) !== entry) return;
+    propertyCardAdoptDrop(scope, entry);
+  };
+}
+
+function propertyCardAdoptFallback(scope, node) {
+  const previous = propertyCardAdoptions.get(scope);
+  if (previous) propertyCardAdoptDrop(scope, previous);
+  propertyCardDemoteTitleHeading(node);
+  return { mode: "fallback", release: propertyCardAdoptNoop };
+}
+
+// Mount node in scope's title slot and own the title, or report fallback.
+function propertyCardAdoptTitle(scope, node, options = {}) {
+  try {
+    const opts = propertyCardAdoptOptions(options);
+    if (!scope || !node) return propertyCardAdoptFallback(scope, node);
+    const existing = propertyCardAdoptions.get(scope);
+    if (existing && existing.node === node && existing.path === opts.path && !existing.released
+      && (existing.pending || propertyCardTitleSlotMountedNode(scope) === node)) {
+      // Same node, same path, still mounted: never remount. Keep the newest
+      // callbacks and re-own only when the recognizer key changed (or
+      // ownership was refused before).
+      existing.onLost = opts.onLost;
+      existing.currentPath = opts.currentPath;
+      existing.defer = opts.defer;
+      if (opts.view) existing.view = opts.view;
+      const key = opts.recognizer && typeof opts.recognizer.key === "string" ? opts.recognizer.key : "";
+      if (opts.recognizer) existing.recognizer = opts.recognizer;
+      if (!existing.pending && (key !== existing.titleKey || !existing.owned)) propertyCardAdoptOwn(scope, existing);
+      propertyCardSyncTitleHeading(node, existing.owned);
+      return { mode: "slot", release: existing.handle };
+    }
+    if (propertyCardAdoptRemembered(scope, opts.path) || !propertyCardTitleSlotFor(scope)) {
+      return propertyCardAdoptFallback(scope, node);
+    }
+    if (existing) propertyCardAdoptDrop(scope, existing, existing.node === node);
+    propertyCardAdoptGeneration += 1;
+    const entry = {
+      generation: propertyCardAdoptGeneration,
+      node,
+      ...opts,
+      mode: "slot",
+      slotRelease: null,
+      titleRelease: null,
+      titleKey: "",
+      owned: false,
+      pending: false,
+      released: false,
+      handle: null,
+    };
+    entry.handle = propertyCardAdoptHandle(scope, entry);
+    propertyCardAdoptions.set(scope, entry);
+    propertyCardDemoteTitleHeading(node);
+    if (scope.classList?.contains("cm-editor")) {
+      entry.pending = true;
+      entry.defer(() => {
+        if (entry.released || propertyCardAdoptions.get(scope) !== entry) return;
+        if (!propertyCardAdoptMount(scope, entry)) propertyCardAdoptCall(entry.onLost, "insert-failed");
+      });
+      return { mode: "slot", release: entry.handle };
+    }
+    if (!propertyCardAdoptMount(scope, entry)) return { mode: "fallback", release: propertyCardAdoptNoop };
+    return { mode: "slot", release: entry.handle };
+  } catch (_) {
+    try { propertyCardDemoteTitleHeading(node); } catch (__) {}
+    return { mode: "fallback", release: propertyCardAdoptNoop };
+  }
+}
+
+// { node, path, kind, mode, owned, pending, generation } or null.
+function propertyCardAdoptedEntry(scope) {
+  const entry = propertyCardAdoptions.get(scope);
+  if (!entry || entry.released) return null;
+  return {
+    node: entry.node,
+    path: entry.path,
+    kind: entry.kind,
+    mode: entry.mode,
+    owned: entry.owned,
+    pending: entry.pending,
+    generation: entry.generation,
+  };
+}
+
+// Scope-wide release, optionally bound to one path. Also clears that path's
+// remembered fallback. Never calls onLost.
+function propertyCardAdoptRelease(scope, path) {
+  const bound = path === undefined || path === null || path === "" ? "" : String(path);
+  propertyCardAdoptForget(scope, bound);
+  const entry = propertyCardAdoptions.get(scope);
+  if (!entry || (bound && entry.path !== bound)) return false;
+  propertyCardAdoptDrop(scope, entry);
+  return true;
+}
+
+// Plugin unload: no adopted node, ownership, or memory may remain.
+function propertyCardAdoptReleaseAll() {
+  for (const [scope, entry] of Array.from(propertyCardAdoptions.entries())) {
+    propertyCardAdoptDrop(scope, entry);
+  }
+  propertyCardAdoptions.clear();
+  propertyCardAdoptMemory.clear();
+}
+
+function propertyCardAdoptAttrNames(node) {
+  try {
+    if (typeof node.getAttributeNames === "function") return node.getAttributeNames();
+  } catch (_) {}
+  const bag = node?.attrs instanceof Map ? node.attrs : node?.attributes;
+  if (bag instanceof Map) return Array.from(bag.keys());
+  try {
+    if (bag && typeof bag.length === "number") return Array.from(bag).map((attr) => attr.name);
+  } catch (_) {}
+  return [];
+}
+
+function propertyCardAdoptChildren(node) {
+  return Array.from(node?.childNodes || node?.children || []);
+}
+
+// Patch a mounted card in place: fresh's children replace target's, and
+// target's attributes follow fresh's, except the slot-owned class and
+// data-title-slot-* attributes, which stay. A body or title update thus
+// happens inside the same node with no remount. Returns target.
+function propertyCardAdoptPatch(target, fresh) {
+  if (!target || !fresh || target === fresh) return target || null;
+  try {
+    const keep = new Set(typeof PROPERTY_CARD_TITLE_SLOT_ATTRIBUTES !== "undefined" ? PROPERTY_CARD_TITLE_SLOT_ATTRIBUTES : []);
+    const slotted = Boolean(target.classList?.contains(PROPERTY_CARD_TITLE_SLOT_CLASS));
+    const wanted = new Set(propertyCardAdoptAttrNames(fresh));
+    for (const name of propertyCardAdoptAttrNames(target)) {
+      if (name === "class" || keep.has(name) || wanted.has(name)) continue;
+      try { target.removeAttribute(name); } catch (_) {}
+    }
+    for (const name of wanted) {
+      if (name === "class" || keep.has(name)) continue;
+      try { target.setAttribute(name, fresh.getAttribute(name)); } catch (_) {}
+    }
+    const classes = String(fresh.getAttribute?.("class") || "").split(/\s+/).filter(Boolean);
+    if (slotted && !classes.includes(PROPERTY_CARD_TITLE_SLOT_CLASS)) classes.push(PROPERTY_CARD_TITLE_SLOT_CLASS);
+    try { target.setAttribute("class", classes.join(" ")); } catch (_) {}
+    for (const child of propertyCardAdoptChildren(target)) {
+      try { target.removeChild(child); } catch (_) {}
+    }
+    for (const child of propertyCardAdoptChildren(fresh)) {
+      try { target.appendChild(child); } catch (_) {}
+    }
+  } catch (_) {}
+  return target;
+}
+
+// The Reading renderer and current path of the markdown leaf whose preview
+// container holds scope, or null (embeds, popovers, detached views).
+function propertyCardReadingViewFor(app, scope) {
+  try {
+    if (!scope) return null;
+    for (const leaf of app?.workspace?.getLeavesOfType?.("markdown") || []) {
+      const preview = leaf?.view?.previewMode;
+      const container = preview?.containerEl;
+      if (!container || (container !== scope && !container.contains?.(scope))) continue;
+      return {
+        view: preview.renderer || null,
+        currentPath: () => String(leaf.view?.file?.path || ""),
+      };
+    }
+  } catch (_) {}
+  return null;
+}
+
+// The Live Preview editor's file path (editorInfoField), or "".
+function propertyCardLiveCurrentPath(view) {
+  try {
+    if (typeof editorInfoField === "undefined" || !editorInfoField) return "";
+    const info = view?.state?.field?.(editorInfoField, false);
+    return String(info?.file?.path || "");
+  } catch (_) {
+    return "";
+  }
+}
 // ---- src/245-plugin-bank-category-card-model.js ----
 // Pure Category card view model, key table, session, and end-of-run summary
 // (bank_weekly_category_walk card-model). No DOM, no spawns: card-ui renders
@@ -96454,6 +96818,92 @@ function albumHeaderModel(report, sourcePath, options = {}) {
   };
 }
 
+function albumHeaderPlainString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// Local identity for the album card's title block: path, title, emoji,
+// summary, and owner chain from the metadata cache alone, so the title block
+// paints at once without waiting for a bob report. Null unless the note is
+// album-typed (the source text decides in Live Preview, else the cached
+// frontmatter type; a missing type is never an album here).
+function albumHeaderIdentityModel(sourcePath, options = {}) {
+  try {
+    const path = albumHeaderPath(sourcePath);
+    if (!path) return null;
+    const metadataCache = options.metadataCache || null;
+    const vault = options.vault || null;
+    const file = typeof notebookResolveLinkFile === "function"
+      ? notebookResolveLinkFile(path, path, metadataCache, vault)
+      : null;
+    const cache = file && metadataCache?.getFileCache?.(file);
+    const frontmatter = cache?.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : {};
+    if (options.sourceText !== undefined) {
+      if (!albumHeaderIsAlbumSource(options.sourceText)) return null;
+    } else if (!Object.prototype.hasOwnProperty.call(frontmatter, "type")
+      || !albumTypeNames(frontmatter.type).includes("album")) {
+      return null;
+    }
+    const stem = path.split("/").pop().replace(/\.md$/i, "");
+    const parent = typeof pomodoroHomeParentTarget === "function"
+      ? pomodoroHomeParentTarget(frontmatter.parent)
+      : albumNormalizeParent(frontmatter.parent);
+    const ancestry = albumHeaderOwnerChain({ path, parent: parent || "" }, { metadataCache, vault, sourcePath: path });
+    const title = (typeof notebookHeaderNoteTitle === "function"
+      ? String(notebookHeaderNoteTitle(path, metadataCache, vault) || "").trim()
+      : "") || stem;
+    return {
+      kind: "album",
+      path,
+      stem,
+      title,
+      emoji: albumHeaderPlainString(frontmatter.emoji),
+      summary: albumHeaderPlainString(frontmatter.summary),
+      owners: ancestry.crumbs.map((crumb) => ({ path: crumb.path, title: crumb.title, stem: crumb.stem, kind: crumb.kind })),
+      ancestryBroken: Boolean(ancestry.broken || ancestry.cyclic || ancestry.truncated),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// { identity, body }: identity is required and always supplies the title;
+// body is the report-backed album model, or null while the report is
+// pending, failed, or has no entry. A validated report summary may refine
+// the subtitle, never the title.
+function albumHeaderCardModel(report, sourcePath, options = {}) {
+  const identity = albumHeaderIdentityModel(sourcePath, options);
+  if (!identity) return null;
+  let body = null;
+  try {
+    body = report ? albumHeaderModel(report, sourcePath, options) : null;
+  } catch (_) {
+    body = null;
+  }
+  let subtitle = identity.summary;
+  try {
+    const refined = albumHeaderPlainString(albumHeaderEntry(report, sourcePath)?.summary);
+    if (body && refined && !/[\r\n]/.test(refined)) subtitle = refined;
+  } catch (_) {}
+  return { identity, body, title: identity.title, subtitle };
+}
+
+function albumHeaderCardSignature(card, extra = {}) {
+  if (!card?.identity) return "none";
+  const identity = card.identity;
+  return JSON.stringify({
+    path: identity.path,
+    title: identity.title,
+    emoji: identity.emoji,
+    subtitle: card.subtitle,
+    owners: identity.owners.map((owner) => [owner.path, owner.title]),
+    hue: extra.hue || "",
+    body: card.body ? albumHeaderSignature(card.body, extra) : null,
+    expanded: extra.expanded === true,
+    desktop: extra.desktop !== false,
+  });
+}
+
 function albumHeaderSignature(model, extra = {}) {
   if (!model) return "none";
   return JSON.stringify({
@@ -96589,8 +97039,22 @@ function albumHeaderYamlLine(model, target = {}) {
   return firstField ? firstField.line : null;
 }
 
+// Healthy schemas start folded to one line; invalid and empty schemas start
+// expanded so their issues and teaching copy stay visible.
 function albumHeaderDefaultExpanded(model) {
-  return true;
+  return Boolean(model?.schemaInvalid || model?.emptySchema);
+}
+
+// The folded schema line for a healthy schema:
+// Schema · N fields[ · grouping][ · dated notes] · <record count>.
+function albumHeaderFoldText(model) {
+  if (!model) return "";
+  const count = (model.fields || []).length;
+  const parts = ["Schema", `${count} field${count === 1 ? "" : "s"}`];
+  if (model.groupingClause) parts.push(model.groupingClause);
+  if (model.datedNotes) parts.push("dated notes");
+  parts.push(albumHeaderRecordCountPhrase(model));
+  return parts.join(" · ");
 }
 
 function albumHeaderIsDesktopPlatform(platform) {
@@ -96602,9 +97066,10 @@ function albumHeaderIsDesktopPlatform(platform) {
   }
 }
 // ---- src/241x-plugin-album-schema-dom.js ----
-// Expanded-by-default schema summary, collapsible chip view, and lint
-// marks. All report strings are text nodes. Collapse is a view-state
-// flag; this fragment never writes the vault.
+// Schema summary (one folded line for healthy schemas, expanded for
+// invalid or empty ones), collapsible chip view, and lint marks. All report
+// strings are text nodes. Collapse is a view-state flag; this fragment never
+// writes the vault.
 function albumSchemaBindYaml(node, line, options) {
   if (!node || typeof node.addEventListener !== "function") return;
   node.addEventListener("keydown", (event) => {
@@ -96724,11 +97189,14 @@ function albumSchemaPaintSummary(doc, model, options) {
   summary.setAttribute("type", "button");
   summary.setAttribute("aria-expanded", expanded ? "true" : "false");
   summary.setAttribute("data-album-header-focus", "summary");
+  const healthy = !model.schemaInvalid && !model.emptySchema;
   if (model.schemaInvalid) {
     const cls = `${summary.getAttribute("class") || ""} is-error`.trim();
     summary.setAttribute("class", cls);
   }
-  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${albumHeaderSummaryText(model)}`);
+  if (healthy) summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
+  const text = healthy ? albumHeaderFoldText(model) : albumHeaderSummaryText(model);
+  notebookSetText(summary, `${expanded ? "▾" : "▸"} ${text}`);
   summary.addEventListener("click", (event) => {
     event.preventDefault?.();
     options?.handlers?.toggleSchema?.(!expanded);
@@ -96750,8 +97218,37 @@ function albumSchemaHeaderAppend(header, model, options, doc) {
   }
 }
 // ---- src/241v-plugin-album-header.js ----
-// Report-driven album headers in Reading view and Live Preview. The only
-// editor decorations are widgets; no Markdown or frontmatter is rewritten.
+// The album card: the note's title block (stack tile, ALBUM kicker with owner
+// links, title, summary subtitle) painted from local data at once, with the
+// report-backed schema body joining inside the same node. On desktop Live
+// Preview and Reading it mounts in the title slot and owns the title through
+// the adopter glue (240k); embeds, popovers, mobile, and failed mounts keep
+// today's body placement with a demoted heading. No Markdown or frontmatter
+// is rewritten.
+const albumHeaderNodeSignatures = new WeakMap();
+const albumHeaderObsidianKeymap = (() => {
+  try { return require("obsidian").Keymap || null; } catch (_) { return null; }
+})();
+
+function albumHeaderDefer(callback) {
+  if (typeof queueMicrotask === "function") queueMicrotask(callback);
+  else Promise.resolve().then(callback);
+}
+
+// Modifier-aware like a Markdown link: Mod opens a tab, Mod+Alt a split,
+// middle click a tab (Obsidian's Keymap.isModEvent when present).
+function albumHeaderLinkPane(event) {
+  if (!event) return false;
+  let pane = Boolean(event.ctrlKey || event.metaKey);
+  if (event.type === "auxclick" && event.button === 1) pane = "tab";
+  try {
+    if (albumHeaderObsidianKeymap && typeof albumHeaderObsidianKeymap.isModEvent === "function") {
+      pane = albumHeaderObsidianKeymap.isModEvent(event);
+    }
+  } catch (_) {}
+  return pane || false;
+}
+
 class BobLedgerToolsAlbumHeaderMixin {
   albumPropertyCardHost() {
     if (this._albumPropertyCardHost) return this._albumPropertyCardHost;
@@ -96761,6 +97258,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       kind: "album",
       readingPriority: 49,
       allowEmbedDisplay: true,
+      titleOwnership: true,
       fields: {
         active: "albumHeaderActive",
         reading: "albumHeaderReading",
@@ -96859,7 +97357,7 @@ class BobLedgerToolsAlbumHeaderMixin {
       desktop,
       expanded,
       handlers: {
-        openPath: (path) => { void this.albumHeaderOpenPath(path, sourcePath); },
+        openPath: (path, event) => { void this.albumHeaderOpenPath(path, sourcePath, event); },
         copyCapture: (item) => this.albumHeaderCopyCapture(item),
         toggleSchema: (next) => this.albumHeaderSetExpanded(sourcePath, next),
         openSchemaCard: (item) => (typeof this.openAlbumSchemaEntry === "function" ? this.openAlbumSchemaEntry({ filePath: sourcePath }) : this.openAlbumSchemaCard?.(item, sourcePath)),
@@ -96874,6 +97372,21 @@ class BobLedgerToolsAlbumHeaderMixin {
       const current = state || this.albumHeaderState();
       const report = current?.report || null;
       return albumHeaderModel(report, sourcePath, {
+        sourceText,
+        sourcePath,
+        metadataCache: this.app?.metadataCache,
+        vault: this.app?.vault,
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // { identity, body, title, subtitle } for the album card, or null.
+  albumHeaderCardModelFor(sourcePath, state, sourceText) {
+    try {
+      const current = state || this.albumHeaderState();
+      return albumHeaderCardModel(current?.report || null, sourcePath, {
         sourceText,
         sourcePath,
         metadataCache: this.app?.metadataCache,
@@ -96902,13 +97415,13 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
-  async albumHeaderOpenPath(path, sourcePath) {
+  async albumHeaderOpenPath(path, sourcePath, event) {
     const target = albumHeaderPath(path);
     if (!target) return { ok: false };
     try {
       const workspace = this.app?.workspace;
       if (workspace && typeof workspace.openLinkText === "function") {
-        await workspace.openLinkText(target.replace(/\.md$/i, ""), sourcePath || "", false);
+        await workspace.openLinkText(target.replace(/\.md$/i, ""), sourcePath || "", albumHeaderLinkPane(event));
         return { ok: true };
       }
     } catch (_) {}
@@ -97009,8 +97522,28 @@ class BobLedgerToolsAlbumHeaderMixin {
     } catch (_) { return null; }
   }
 
+  albumHeaderReleaseAdoption(scope, sourcePath = "") {
+    try { return propertyCardAdoptRelease(scope, sourcePath || undefined); } catch (_) { return false; }
+  }
+
+  // Body-placed card nodes for this path under root: never the slot node,
+  // never another path's card, never a nested embed's card.
+  albumHeaderBodyNodes(root, sourcePath, exclude = null) {
+    const path = albumHeaderPath(sourcePath);
+    return Array.from(root?.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || []).filter((node) => {
+      if (node === exclude || !this.albumHeaderNodeBelongs(node, root)) return false;
+      if (node.classList?.contains?.(PROPERTY_CARD_TITLE_SLOT_CLASS)) return false;
+      const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");
+      return !path || !ownedPath || ownedPath === path;
+    });
+  }
+
+  // The slot card (glue entry) is released first: it lives in .mod-header,
+  // inside the sizer root, so the sweep would otherwise tear it out while it
+  // still owned the title.
   albumHeaderRemoveReading(root, scope = root, sourcePath = "") {
     if (!root) return;
+    this.albumHeaderReleaseAdoption(scope, sourcePath);
     for (const node of Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])) {
       if (!this.albumHeaderNodeBelongs(node, root)) continue;
       const ownedPath = albumHeaderPath(node.getAttribute?.("data-album-source") || "");
@@ -97023,78 +97556,99 @@ class BobLedgerToolsAlbumHeaderMixin {
     if (!anotherOwner) scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
   }
 
+  // A bare report model (older callers) still builds: identity from itself.
+  albumHeaderCardFrom(model) {
+    if (!model) return null;
+    if (model.identity) return model;
+    const owners = (Array.isArray(model.crumbs) ? model.crumbs : []).filter((crumb) => crumb && crumb.current !== true);
+    const title = String(model.title || model.stem || "");
+    return {
+      identity: {
+        kind: "album", path: albumHeaderPath(model.path), stem: String(model.stem || ""), title,
+        emoji: String(model.emoji || "").trim(), summary: "", owners, ancestryBroken: Boolean(model.ancestryMessage),
+      },
+      body: model,
+      title,
+      subtitle: "",
+    };
+  }
+
+  albumHeaderAppendActions(slot, body, options, doc) {
+    if (!slot || !body) return;
+    const copy = notebookCreateEl(doc, "button", "bob-album-header-copy");
+    copy.setAttribute?.("type", "button");
+    copy.setAttribute?.("data-album-header-focus", "copy");
+    const disabledReason = body.routeReason || "";
+    copy.disabled = Boolean(disabledReason);
+    copy.setAttribute?.("aria-disabled", copy.disabled ? "true" : "false");
+    copy.setAttribute?.("title", disabledReason || `Copy ${body.captureText}`);
+    copy.setAttribute?.("aria-label", disabledReason
+      ? `Copy capture route unavailable: ${disabledReason}`
+      : `Copy ${body.captureLabel} capture route`);
+    notebookSetText(copy, disabledReason ? `＋ ${body.captureLabel || "record"}` : `＋ ${body.captureLabel}`);
+    copy.addEventListener?.("click", (event) => {
+      event.preventDefault?.();
+      if (!copy.disabled) options?.handlers?.copyCapture?.(body);
+    });
+    slot.appendChild(copy);
+    if (options?.desktop !== false) {
+      const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
+      schema.setAttribute?.("type", "button");
+      schema.setAttribute?.("data-album-header-focus", "schema");
+      schema.setAttribute?.("aria-label", "Open schema card");
+      notebookSetText(schema, "⊞ Schema");
+      schema.addEventListener?.("click", (event) => {
+        event.preventDefault?.();
+        options?.handlers?.openSchemaCard?.(body);
+      });
+      slot.appendChild(schema);
+    }
+  }
+
+  // section.bob-album-header.bob-property-card: the kit title block first
+  // (title from local identity, never the report), then, once the report
+  // body exists, the actions in the kicker row, the ancestry note, the
+  // schema summary and chips, and the mobile hint.
   albumHeaderBuildEl(model, options, doc) {
     try {
+      const card = this.albumHeaderCardFrom(model);
+      const identity = card?.identity;
+      if (!identity || !doc) return null;
+      const body = card.body || null;
+      const title = String(card.title || identity.title || identity.stem || "").trim();
       const header = notebookCreateEl(doc, "section", `${ALBUM_HEADER_CLASS} bob-property-card`);
-      if (!header) return null;
+      if (!header || !title) return null;
       header.setAttribute?.("data-album-header", "true");
-      header.setAttribute?.("data-album-source", model.path);
-      header.setAttribute?.("aria-label", `${model.title} album details`);
+      header.setAttribute?.("data-album-source", identity.path);
+      header.setAttribute?.("data-album-body", body ? "report" : "pending");
       if (options?.hue) header.setAttribute?.("data-root-hue", options.hue);
-
-      const nav = notebookCreateEl(doc, "nav", "bob-album-header-nav");
-      nav.setAttribute?.("aria-label", "Album location");
-      const crumbs = Array.isArray(model.crumbs) ? model.crumbs : [];
-      crumbs.forEach((crumb, index) => {
-        if (index > 0) nav.appendChild(doc.createTextNode(" › "));
-        const current = crumb.current === true;
-        const resolved = albumHeaderPath(crumb.path);
-        const node = !current && resolved && doc?.createElement ? doc.createElement("a") : doc?.createElement?.("span");
-        if (!node) return;
-        if (!current && resolved) {
-          node.setAttribute("class", `internal-link ${ALBUM_HEADER_CRUMB_CLASS}`);
-          node.setAttribute("data-href", resolved);
-          node.setAttribute("href", resolved);
-          const open = () => options?.handlers?.openPath?.(resolved);
-          if (typeof notebookBindAction === "function") notebookBindAction(node, open);
-          else node.addEventListener?.("click", (event) => { event.preventDefault?.(); open(); });
-        } else {
-          node.setAttribute("class", `${ALBUM_HEADER_CRUMB_CLASS} bob-album-header-current`);
-          node.setAttribute("aria-current", "page");
-        }
-        notebookSetText(node, crumb.title || crumb.stem || "");
-        nav.appendChild(node);
+      propertyCardApplyIdentity(header, { kind: "album", title });
+      const block = propertyCardBuildTitleBlock(doc, {
+        kind: "album",
+        title,
+        subtitle: card.subtitle || "",
+        tile: { emoji: identity.emoji || "" },
+        kicker: (identity.owners || []).map((owner) => ({
+          text: owner.title || owner.stem || "",
+          target: albumHeaderPath(owner.path),
+        })),
+        onLink: (target, event) => options?.handlers?.openPath?.(target, event),
       });
-      header.appendChild(nav);
-
-      if (model.ancestryMessage) {
+      if (!block) return null;
+      header.appendChild(block.element);
+      for (const link of Array.from(block.element.querySelectorAll?.(".bob-property-card-kicker-link") || [])) {
+        link.classList?.add?.(ALBUM_HEADER_CRUMB_CLASS);
+        link.setAttribute?.("data-album-header-focus", `crumb:${link.getAttribute?.("data-href") || ""}`);
+      }
+      if (!body) return header;
+      this.albumHeaderAppendActions(block.actions, body, options, doc);
+      if (body.ancestryMessage) {
         const note = notebookCreateEl(doc, "p", "bob-album-header-ancestry-note");
-        notebookSetText(note, model.ancestryMessage);
+        notebookSetText(note, body.ancestryMessage);
         note.setAttribute?.("role", "note");
         header.appendChild(note);
       }
-
-      const actionRow = notebookCreateEl(doc, "div", "bob-album-header-actions");
-      const copy = notebookCreateEl(doc, "button", "bob-album-header-copy");
-      copy.setAttribute?.("type", "button");
-      copy.setAttribute?.("data-album-header-focus", "copy");
-      const disabledReason = model.routeReason || "";
-      copy.disabled = Boolean(disabledReason);
-      copy.setAttribute?.("aria-disabled", copy.disabled ? "true" : "false");
-      copy.setAttribute?.("title", disabledReason || `Copy ${model.captureText}`);
-      copy.setAttribute?.("aria-label", disabledReason
-        ? `Copy capture route unavailable: ${disabledReason}`
-        : `Copy ${model.captureLabel} capture route`);
-      notebookSetText(copy, disabledReason ? `＋ ${model.captureLabel || "record"}` : `＋ ${model.captureLabel}`);
-      copy.addEventListener?.("click", (event) => {
-        event.preventDefault?.();
-        if (!copy.disabled) options?.handlers?.copyCapture?.(model);
-      });
-      actionRow.appendChild(copy);
-      if (options?.desktop !== false) {
-        const schema = notebookCreateEl(doc, "button", "bob-album-header-schema");
-        schema.setAttribute?.("type", "button");
-        schema.setAttribute?.("data-album-header-focus", "schema");
-        schema.setAttribute?.("aria-label", "Open schema card");
-        notebookSetText(schema, "⊞ Schema");
-        schema.addEventListener?.("click", (event) => {
-          event.preventDefault?.();
-          options?.handlers?.openSchemaCard?.(model);
-        });
-        actionRow.appendChild(schema);
-      }
-      header.appendChild(actionRow);
-      albumSchemaHeaderAppend(header, model, options, doc);
+      albumSchemaHeaderAppend(header, body, options, doc);
       return header;
     } catch (_) {
       return null;
@@ -97111,6 +97665,33 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  albumHeaderFocusKey(node, doc) {
+    const active = doc?.activeElement;
+    return active && node?.contains?.(active) ? active.getAttribute?.("data-album-header-focus") || "" : "";
+  }
+
+  albumHeaderRestoreFocus(node, focusKey) {
+    if (!focusKey || !node) return;
+    const next = Array.from(node.querySelectorAll?.("[data-album-header-focus]") || [])
+      .find((item) => item.getAttribute?.("data-album-header-focus") === focusKey);
+    next?.focus?.({ preventScroll: true });
+  }
+
+  // Body placement (fallback): today's spot right after the first non-code
+  // H1, else the start of the root. A node already there stays put.
+  albumHeaderPlaceInBody(root, header) {
+    const anchor = this.albumHeaderReadingAnchor(root);
+    if (anchor?.parentNode?.insertBefore) {
+      if (header.parentNode === anchor.parentNode && anchor.nextSibling === header) return true;
+      anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
+      return true;
+    }
+    if (header.parentNode === root && root.firstChild === header) return true;
+    if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
+    else root.prepend?.(header);
+    return true;
+  }
+
   paintAlbumHeaderReading(el, sourcePath, state) {
     const root = this.albumHeaderReadingRoot(el);
     const scope = this.albumHeaderReadingScope(root);
@@ -97118,48 +97699,67 @@ class BobLedgerToolsAlbumHeaderMixin {
     // Remove old reading chrome stranded in editor callout chunks, while
     // leaving the legitimate CodeMirror decoration and other sources alone.
     this.albumHeaderRemoveStrays(root, sourcePath);
-    let model = null;
+    let card = null;
     try {
-      model = this.albumHeaderModelFor(sourcePath, state);
+      card = this.albumHeaderCardModelFor(sourcePath, state);
     } catch (_) {
-      model = null;
+      card = null;
+    }
+    const reading = scope?.classList?.contains?.("markdown-preview-view")
+      ? propertyCardReadingViewFor(this.app, scope) : null;
+    const leafPath = reading ? reading.currentPath() : "";
+    // A stale binding for a note this leaf no longer shows paints nothing.
+    if (!card || (leafPath && leafPath !== sourcePath)) {
+      this.albumHeaderRemoveReading(root, scope, sourcePath);
+      return null;
     }
     const doc = notebookDomDoc(root) || (typeof document !== "undefined" ? document : null);
-    const old = Array.from(root.querySelectorAll?.(`.${ALBUM_HEADER_CLASS}`) || [])
-      .find((node) => this.albumHeaderNodeBelongs(node, root));
-    const active = doc?.activeElement;
-    const focusKey = active && old?.contains?.(active)
-      ? active.getAttribute?.("data-album-header-focus") : "";
-    this.albumHeaderRemoveReading(root, scope, sourcePath);
-    if (!model) return null;
-
+    const adopted = propertyCardAdoptedEntry(scope);
+    const slotNode = adopted && adopted.path === sourcePath && adopted.mode === "slot" ? adopted.node : null;
+    const bodyNodes = this.albumHeaderBodyNodes(root, sourcePath, slotNode);
+    let header = slotNode || bodyNodes[0] || null;
+    const focusKey = this.albumHeaderFocusKey(header, doc);
+    const options = this.albumHeaderOptions(sourcePath, state, card.body);
+    const signature = albumHeaderCardSignature(card, options);
+    if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
+      let fresh = null;
+      try {
+        fresh = this.albumHeaderBuildEl(card, options, doc);
+      } catch (_) {
+        fresh = null;
+      }
+      if (!fresh) {
+        this.albumHeaderRemoveReading(root, scope, sourcePath);
+        return null;
+      }
+      // The body joins (or the title changes) inside the same node.
+      header = header ? propertyCardAdoptPatch(header, fresh) : fresh;
+      albumHeaderNodeSignatures.set(header, signature);
+    }
+    for (const node of bodyNodes) {
+      if (node !== header) node.remove?.();
+    }
     scope?.classList?.add?.(ALBUM_HEADER_SURFACE_CLASS);
-    let header = null;
-    try {
-      header = this.albumHeaderBuildEl(model, this.albumHeaderOptions(sourcePath, state, model), doc);
-    } catch (_) {
-      header = null;
+    const adoption = propertyCardAdoptTitle(scope, header, {
+      path: sourcePath,
+      kind: "album",
+      view: reading?.view || null,
+      currentPath: reading?.currentPath || null,
+      recognizer: propertyCardAlbumTitleRecognizer(card.title),
+      onLost: () => this.scheduleAlbumHeaderRefresh(),
+    });
+    if (adoption.mode !== "slot") {
+      try {
+        this.albumHeaderPlaceInBody(root, header);
+      } catch (_) {
+        this.albumHeaderRemoveReading(root, scope, sourcePath);
+        return null;
+      }
     }
-    if (!header) {
-      this.albumHeaderReleaseKeys(scope);
-      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-      return null;
-    }
-    const anchor = this.albumHeaderReadingAnchor(root);
-    try {
-      if (anchor?.parentNode?.insertBefore) anchor.parentNode.insertBefore(header, anchor.nextSibling || null);
-      else if (root.insertBefore) root.insertBefore(header, root.firstChild || null);
-      else root.prepend?.(header);
-    } catch (_) {
-      this.albumHeaderReleaseKeys(scope);
-      scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS);
-      return null;
-    }
-    if (focusKey) {
-      const next = header.querySelector?.(`[data-album-header-focus="${focusKey}"]`);
-      next?.focus?.({ preventScroll: true });
-    }
-    this.albumHeaderOwnKeys(scope, sourcePath);
+    this.albumHeaderRestoreFocus(header, focusKey);
+    // Owned Properties rows (record) hide only once the report body paints.
+    if (card.body) this.albumHeaderOwnKeys(scope, sourcePath);
+    else this.albumHeaderReleaseKeys(scope, sourcePath);
     return header;
   }
 
@@ -97192,6 +97792,21 @@ class BobLedgerToolsAlbumHeaderMixin {
     }
   }
 
+  // Patch a slot-mounted Live Preview card outside the CodeMirror update.
+  albumHeaderPatchLive(view, adopted, fresh, signature) {
+    const target = adopted.node;
+    albumHeaderDefer(() => {
+      const entry = propertyCardAdoptedEntry(view?.dom);
+      if (!entry || entry.node !== target || entry.generation !== adopted.generation) return;
+      const doc = notebookDomDoc(target) || (typeof document !== "undefined" ? document : null);
+      const focusKey = this.albumHeaderFocusKey(target, doc);
+      propertyCardAdoptPatch(target, fresh);
+      albumHeaderNodeSignatures.set(target, signature);
+      propertyCardSyncTitleHeading(target, entry.owned);
+      this.albumHeaderRestoreFocus(target, focusKey);
+    });
+  }
+
   buildAlbumHeaderDecorations(view) {
     try {
       if (!Decoration || !RangeSetBuilder || !WidgetType) return Decoration?.none || null;
@@ -97199,36 +97814,59 @@ class BobLedgerToolsAlbumHeaderMixin {
       if (!path || !view?.state?.doc) {
         this.albumHeaderSetEditorScope(view, false);
         this.albumHeaderReleaseKeys(view?.dom);
+        this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const text = view.state.doc.toString();
       const state = this.albumHeaderState();
-      const model = this.albumHeaderModelFor(path, state, text);
-      this.albumHeaderSetEditorScope(view, Boolean(model));
-      if (!model) {
+      const card = this.albumHeaderCardModelFor(path, state, text);
+      this.albumHeaderSetEditorScope(view, Boolean(card));
+      if (!card) {
         this.albumHeaderReleaseKeys(view?.dom);
+        this.albumHeaderReleaseAdoption(view?.dom);
         return Decoration.none;
       }
       const doc = notebookDomDoc(view.dom) || (typeof document !== "undefined" ? document : null);
-      const options = this.albumHeaderOptions(path, state, model);
-      const header = this.albumHeaderBuildEl(model, options, doc);
-      if (!header) {
-        this.albumHeaderReleaseKeys(view?.dom);
-        return Decoration.none;
+      const options = this.albumHeaderOptions(path, state, card.body);
+      const signature = albumHeaderCardSignature(card, options);
+      const adopted = propertyCardAdoptedEntry(view.dom);
+      let header = adopted && adopted.path === path && adopted.mode === "slot" ? adopted.node : null;
+      if (!header || albumHeaderNodeSignatures.get(header) !== signature) {
+        const fresh = this.albumHeaderBuildEl(card, options, doc);
+        if (!fresh) {
+          this.albumHeaderReleaseKeys(view?.dom);
+          this.albumHeaderReleaseAdoption(view?.dom);
+          return Decoration.none;
+        }
+        if (header) this.albumHeaderPatchLive(view, adopted, fresh, signature);
+        else {
+          header = fresh;
+          albumHeaderNodeSignatures.set(header, signature);
+        }
       }
+      const adoption = propertyCardAdoptTitle(view.dom, header, {
+        path,
+        kind: "album",
+        view,
+        recognizer: propertyCardAlbumTitleRecognizer(card.title),
+        currentPath: () => propertyCardLiveCurrentPath(view),
+        onLost: () => this.scheduleAlbumHeaderRefresh(),
+      });
       // Native Properties live under the CodeMirror editor, not the
-      // .markdown-source-view that carries the surface class.
-      this.albumHeaderOwnKeys(view?.dom, path);
+      // .markdown-source-view that carries the surface class. The record row
+      // hides only once the report body paints.
+      if (card.body) this.albumHeaderOwnKeys(view?.dom, path);
+      else this.albumHeaderReleaseKeys(view?.dom, path);
+      if (adoption.mode === "slot") return Decoration.none;
+
+      // Fallback: today's inline widget at the end of the first `# ` line.
       const anchor = this.notebookHeaderLiveAnchor?.(text) ?? -1;
       const frontmatterEnd = this.notebookHeaderFrontmatterEnd?.(text) ?? -1;
       const widget = new class extends WidgetType {
         constructor() {
           super();
           this.path = path;
-          this.signature = albumHeaderSignature(model, {
-            expanded: options.expanded,
-            desktop: options.desktop,
-          });
+          this.signature = signature;
         }
         eq(other) { return Boolean(other && other.path === this.path && other.signature === this.signature); }
         toDOM() {
@@ -97271,6 +97909,7 @@ class BobLedgerToolsAlbumHeaderMixin {
   }
 
   albumHeaderCleanEditor(view) {
+    this.albumHeaderReleaseAdoption(view?.dom);
     this.albumPropertyCardHost().cleanEditor(view, {
       unmark: (scope) => { scope?.classList?.remove?.(ALBUM_HEADER_SURFACE_CLASS); },
     });
@@ -109382,6 +110021,69 @@ function notebookHeaderChildEntries(report, entry) {
   return found;
 }
 
+// bob's humanize_stem: ASCII alphanumerics stay, every other run becomes one
+// space, and the result is trimmed. No case change.
+function notebookHeaderHumanizeStem(stem) {
+  return String(stem == null ? "" : stem).replace(/[^A-Za-z0-9]+/g, " ").trim();
+}
+
+// A valid album `title:` is a string that is nonblank after trimming and
+// holds no line break; anything else falls through, as in bob.
+function notebookHeaderAlbumFrontmatterTitle(frontmatter) {
+  const value = frontmatter ? frontmatter.title : undefined;
+  if (typeof value !== "string") return "";
+  const title = value.trim();
+  return title && !/[\r\n]/.test(title) ? title : "";
+}
+
+function notebookHeaderCacheLine(row) {
+  const line = row && row.position && row.position.start ? row.position.start.line : undefined;
+  return Number.isInteger(line) ? line : null;
+}
+
+// The first H1 before any H2 or column-0 list item, wikilinks reduced to
+// their text (bob's derive_title). Headings without positions keep document
+// order and still stop at the first H2.
+function notebookHeaderAlbumHeading(cache) {
+  const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
+  let stop = null;
+  for (const item of cache && Array.isArray(cache.listItems) ? cache.listItems : []) {
+    const line = notebookHeaderCacheLine(item);
+    const col = item && item.position && item.position.start ? item.position.start.col : 0;
+    if (line !== null && (!Number.isInteger(col) || col === 0) && (stop === null || line < stop)) stop = line;
+  }
+  for (const row of headings) {
+    if (!row || !Number.isInteger(row.level)) continue;
+    const line = notebookHeaderCacheLine(row);
+    if (stop !== null && line !== null && line > stop) break;
+    if (row.level === 2) break;
+    if (row.level !== 1) continue;
+    const text = typeof propertyCardCleanInlineText === "function"
+      ? propertyCardCleanInlineText(row.heading)
+      : String(row.heading == null ? "" : row.heading).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function notebookHeaderFirstAlias(frontmatter) {
+  const aliases = frontmatter ? frontmatter.aliases : undefined;
+  if (typeof aliases === "string") return aliases.trim();
+  if (Array.isArray(aliases) && typeof aliases[0] === "string") return aliases[0].trim();
+  return "";
+}
+
+// Album notes follow bob's album title rule: a valid `title:`, then the
+// first H1 before any H2 or column-0 bullet, then the first alias, then the
+// humanized stem.
+function notebookHeaderAlbumTitle(cache, frontmatter, stem) {
+  return notebookHeaderAlbumFrontmatterTitle(frontmatter)
+    || notebookHeaderAlbumHeading(cache)
+    || notebookHeaderFirstAlias(frontmatter)
+    || notebookHeaderHumanizeStem(stem)
+    || stem;
+}
+
 function notebookHeaderNoteTitle(path, metadataCache, vault) {
   const stem = notebookHeaderStem(path);
   try {
@@ -109398,6 +110100,9 @@ function notebookHeaderNoteTitle(path, metadataCache, vault) {
     if (types.length === 1 && types[0] === "record") {
       const title = frontmatter.title == null ? "" : String(frontmatter.title).trim();
       if (title) return title;
+    }
+    if (types.includes("album")) {
+      return notebookHeaderAlbumTitle(cache, frontmatter, notebookHeaderStem(file && file.path ? file.path : path));
     }
     const heading = cache && Array.isArray(cache.headings)
       ? cache.headings.find((row) => row && row.level === 1 && row.heading)
@@ -162005,6 +162710,32 @@ try {
       PROPERTY_CARD_IDENTITY_CLASS,
       PROPERTY_CARD_IDENTITY_WORD_CLASS,
       propertyCardBuildIdentityBadge,
+    });
+  }
+} catch (_) {}
+// ---- src/374c-exports-property-card-title-adopt.js ----
+// Test-facing exports for the property-card adopter glue and the album
+// card's title rule and card model.
+try {
+  if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
+    module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
+      PROPERTY_CARD_TITLE_HEADING_CLASS,
+      propertyCardAdoptTitle,
+      propertyCardAdoptedEntry,
+      propertyCardAdoptRelease,
+      propertyCardAdoptReleaseAll,
+      propertyCardAdoptPatch,
+      propertyCardReadingViewFor,
+      propertyCardLiveCurrentPath,
+      propertyCardDemoteTitleHeading,
+      propertyCardPromoteTitleHeading,
+      notebookHeaderNoteTitle,
+      notebookHeaderHumanizeStem,
+      albumHeaderIdentityModel,
+      albumHeaderCardModel,
+      albumHeaderCardSignature,
+      albumHeaderFoldText,
+      linksWalkerFooterAlbumRecord,
     });
   }
 } catch (_) {}

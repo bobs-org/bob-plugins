@@ -278,6 +278,92 @@ function albumHeaderModel(report, sourcePath, options = {}) {
   };
 }
 
+function albumHeaderPlainString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// Local identity for the album card's title block: path, title, emoji,
+// summary, and owner chain from the metadata cache alone, so the title block
+// paints at once without waiting for a bob report. Null unless the note is
+// album-typed (the source text decides in Live Preview, else the cached
+// frontmatter type; a missing type is never an album here).
+function albumHeaderIdentityModel(sourcePath, options = {}) {
+  try {
+    const path = albumHeaderPath(sourcePath);
+    if (!path) return null;
+    const metadataCache = options.metadataCache || null;
+    const vault = options.vault || null;
+    const file = typeof notebookResolveLinkFile === "function"
+      ? notebookResolveLinkFile(path, path, metadataCache, vault)
+      : null;
+    const cache = file && metadataCache?.getFileCache?.(file);
+    const frontmatter = cache?.frontmatter && typeof cache.frontmatter === "object" ? cache.frontmatter : {};
+    if (options.sourceText !== undefined) {
+      if (!albumHeaderIsAlbumSource(options.sourceText)) return null;
+    } else if (!Object.prototype.hasOwnProperty.call(frontmatter, "type")
+      || !albumTypeNames(frontmatter.type).includes("album")) {
+      return null;
+    }
+    const stem = path.split("/").pop().replace(/\.md$/i, "");
+    const parent = typeof pomodoroHomeParentTarget === "function"
+      ? pomodoroHomeParentTarget(frontmatter.parent)
+      : albumNormalizeParent(frontmatter.parent);
+    const ancestry = albumHeaderOwnerChain({ path, parent: parent || "" }, { metadataCache, vault, sourcePath: path });
+    const title = (typeof notebookHeaderNoteTitle === "function"
+      ? String(notebookHeaderNoteTitle(path, metadataCache, vault) || "").trim()
+      : "") || stem;
+    return {
+      kind: "album",
+      path,
+      stem,
+      title,
+      emoji: albumHeaderPlainString(frontmatter.emoji),
+      summary: albumHeaderPlainString(frontmatter.summary),
+      owners: ancestry.crumbs.map((crumb) => ({ path: crumb.path, title: crumb.title, stem: crumb.stem, kind: crumb.kind })),
+      ancestryBroken: Boolean(ancestry.broken || ancestry.cyclic || ancestry.truncated),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// { identity, body }: identity is required and always supplies the title;
+// body is the report-backed album model, or null while the report is
+// pending, failed, or has no entry. A validated report summary may refine
+// the subtitle, never the title.
+function albumHeaderCardModel(report, sourcePath, options = {}) {
+  const identity = albumHeaderIdentityModel(sourcePath, options);
+  if (!identity) return null;
+  let body = null;
+  try {
+    body = report ? albumHeaderModel(report, sourcePath, options) : null;
+  } catch (_) {
+    body = null;
+  }
+  let subtitle = identity.summary;
+  try {
+    const refined = albumHeaderPlainString(albumHeaderEntry(report, sourcePath)?.summary);
+    if (body && refined && !/[\r\n]/.test(refined)) subtitle = refined;
+  } catch (_) {}
+  return { identity, body, title: identity.title, subtitle };
+}
+
+function albumHeaderCardSignature(card, extra = {}) {
+  if (!card?.identity) return "none";
+  const identity = card.identity;
+  return JSON.stringify({
+    path: identity.path,
+    title: identity.title,
+    emoji: identity.emoji,
+    subtitle: card.subtitle,
+    owners: identity.owners.map((owner) => [owner.path, owner.title]),
+    hue: extra.hue || "",
+    body: card.body ? albumHeaderSignature(card.body, extra) : null,
+    expanded: extra.expanded === true,
+    desktop: extra.desktop !== false,
+  });
+}
+
 function albumHeaderSignature(model, extra = {}) {
   if (!model) return "none";
   return JSON.stringify({

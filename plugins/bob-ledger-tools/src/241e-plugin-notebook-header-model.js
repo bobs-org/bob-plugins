@@ -161,6 +161,69 @@ function notebookHeaderChildEntries(report, entry) {
   return found;
 }
 
+// bob's humanize_stem: ASCII alphanumerics stay, every other run becomes one
+// space, and the result is trimmed. No case change.
+function notebookHeaderHumanizeStem(stem) {
+  return String(stem == null ? "" : stem).replace(/[^A-Za-z0-9]+/g, " ").trim();
+}
+
+// A valid album `title:` is a string that is nonblank after trimming and
+// holds no line break; anything else falls through, as in bob.
+function notebookHeaderAlbumFrontmatterTitle(frontmatter) {
+  const value = frontmatter ? frontmatter.title : undefined;
+  if (typeof value !== "string") return "";
+  const title = value.trim();
+  return title && !/[\r\n]/.test(title) ? title : "";
+}
+
+function notebookHeaderCacheLine(row) {
+  const line = row && row.position && row.position.start ? row.position.start.line : undefined;
+  return Number.isInteger(line) ? line : null;
+}
+
+// The first H1 before any H2 or column-0 list item, wikilinks reduced to
+// their text (bob's derive_title). Headings without positions keep document
+// order and still stop at the first H2.
+function notebookHeaderAlbumHeading(cache) {
+  const headings = cache && Array.isArray(cache.headings) ? cache.headings : [];
+  let stop = null;
+  for (const item of cache && Array.isArray(cache.listItems) ? cache.listItems : []) {
+    const line = notebookHeaderCacheLine(item);
+    const col = item && item.position && item.position.start ? item.position.start.col : 0;
+    if (line !== null && (!Number.isInteger(col) || col === 0) && (stop === null || line < stop)) stop = line;
+  }
+  for (const row of headings) {
+    if (!row || !Number.isInteger(row.level)) continue;
+    const line = notebookHeaderCacheLine(row);
+    if (stop !== null && line !== null && line > stop) break;
+    if (row.level === 2) break;
+    if (row.level !== 1) continue;
+    const text = typeof propertyCardCleanInlineText === "function"
+      ? propertyCardCleanInlineText(row.heading)
+      : String(row.heading == null ? "" : row.heading).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function notebookHeaderFirstAlias(frontmatter) {
+  const aliases = frontmatter ? frontmatter.aliases : undefined;
+  if (typeof aliases === "string") return aliases.trim();
+  if (Array.isArray(aliases) && typeof aliases[0] === "string") return aliases[0].trim();
+  return "";
+}
+
+// Album notes follow bob's album title rule: a valid `title:`, then the
+// first H1 before any H2 or column-0 bullet, then the first alias, then the
+// humanized stem.
+function notebookHeaderAlbumTitle(cache, frontmatter, stem) {
+  return notebookHeaderAlbumFrontmatterTitle(frontmatter)
+    || notebookHeaderAlbumHeading(cache)
+    || notebookHeaderFirstAlias(frontmatter)
+    || notebookHeaderHumanizeStem(stem)
+    || stem;
+}
+
 function notebookHeaderNoteTitle(path, metadataCache, vault) {
   const stem = notebookHeaderStem(path);
   try {
@@ -177,6 +240,9 @@ function notebookHeaderNoteTitle(path, metadataCache, vault) {
     if (types.length === 1 && types[0] === "record") {
       const title = frontmatter.title == null ? "" : String(frontmatter.title).trim();
       if (title) return title;
+    }
+    if (types.includes("album")) {
+      return notebookHeaderAlbumTitle(cache, frontmatter, notebookHeaderStem(file && file.path ? file.path : path));
     }
     const heading = cache && Array.isArray(cache.headings)
       ? cache.headings.find((row) => row && row.level === 1 && row.heading)

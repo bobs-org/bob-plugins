@@ -170,8 +170,10 @@ function sampleAlbumReport(H) {
   return H.albumIndexReport({ schema_version: 1, ok: true, albums: [entry], catalogs: [], counts: {} });
 }
 
-function albumModel(H, app) {
-  return H.albumHeaderModel(sampleAlbumReport(H), "eat.md", {
+// The album card model: local identity plus the report body, or the title
+// block alone while the report is pending.
+function albumModel(H, app, pending = false) {
+  return H.albumHeaderCardModel(pending ? null : sampleAlbumReport(H), "eat.md", {
     sourcePath: "eat.md",
     sourceText: "---\ntype: [[album]]\n---\n",
     metadataCache: app.metadataCache,
@@ -239,6 +241,7 @@ function bankModel(H, expanded) {
 // carries none. Keep every phase's kinds when merging.
 const ADOPTED_KINDS = Object.freeze({
   bank: Object.freeze({ word: "Bank", tile: "plain", headings: 0, glyph: "🏦" }),
+  album: Object.freeze({ word: "Album", tile: "stack", headings: 1, glyph: "🍽️" }),
 });
 
 function adoptedSpec(kind) {
@@ -294,9 +297,9 @@ async function structuralCheck(client, kind, spec) {
   return result.result?.value || { ok: false, failures: ["probe returned nothing"], facts: {} };
 }
 
-function buildCard(kind, H, Plugin, doc, expanded, app) {
+function buildCard(kind, H, Plugin, doc, expanded, app, variant = "") {
   if (kind === "album") {
-    const model = albumModel(H, app);
+    const model = albumModel(H, app, variant === "pending");
     const plugin = Object.create(Plugin.prototype);
     return plugin.albumHeaderBuildEl(model, {
       desktop: true, expanded, hue: "blue", handlers: {},
@@ -482,8 +485,14 @@ async function main() {
     ["eat.md", { path: "eat.md" }], ["body.md", { path: "body.md" }], ["type.md", { path: "type.md" }],
   ]);
   const caches = new Map([
-    ["eat.md", { frontmatter: { type: "[[album]]", parent: "[[body]]" } }],
-    ["body.md", { frontmatter: { type: "[[area]]", parent: "[[type]]" } }],
+    ["eat.md", {
+      frontmatter: {
+        type: "[[album]]", parent: "[[body]]", emoji: "🍽️",
+        summary: "Restaurants Kelly and I have tried, liked, or want to try.",
+      },
+      headings: [{ level: 1, heading: "Restaurants" }],
+    }],
+    ["body.md", { frontmatter: { type: "[[area]]", parent: "[[type]]" }, headings: [{ level: 1, heading: "Body" }] }],
     ["type.md", { frontmatter: { type: "[[type]]" } }],
   ]);
   const app = {
@@ -527,10 +536,13 @@ async function main() {
     for (const kind of ["album", "record", "bank"]) {
       for (const theme of ["light", "dark"]) {
         for (const width of [1280, 375]) {
-          for (const expanded of [true, false]) {
-            const caseName = `${kind}-${theme}-${width}-${expanded ? "expanded" : "collapsed"}`;
+          const variants = [["expanded", true], ["collapsed", false]];
+          // The album card also paints before bob's report: title block only.
+          if (kind === "album") variants.push(["pending", false]);
+          for (const [variant, expanded] of variants) {
+            const caseName = `${kind}-${theme}-${width}-${variant}`;
             const doc = previewDocument();
-            const card = buildCard(kind, H, Plugin, doc, expanded, app);
+            const card = buildCard(kind, H, Plugin, doc, expanded, app, variant);
             assert.ok(card, `${caseName}: DOM builder returned a card`);
             assert.ok(card.classList.contains("bob-property-card"), `${caseName}: shared card class is missing`);
             const markup = serialize(card);
@@ -541,7 +553,7 @@ async function main() {
             const current = await renderOne(client, currentCss, markup, theme, width, height, currentPath, caseName);
             const pixelIdentical = baseline.sha256 === current.sha256 && baseline.bytes === current.bytes;
             const adopted = adoptedSpec(kind);
-            const row = { case: caseName, kind, theme, width, expanded, baseline, current, pixelIdentical, adopted: Boolean(adopted) };
+            const row = { case: caseName, kind, theme, width, expanded, variant, baseline, current, pixelIdentical, adopted: Boolean(adopted) };
             if (adopted) {
               // The current page is still installed, so probe it in place.
               row.structural = await structuralCheck(client, kind, adopted);

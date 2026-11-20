@@ -1,6 +1,6 @@
 ---
 title: "Album cards"
-description: "Live album counts, record-index folds, date chips, an expanded schema header, and repair controls in owner and album notes."
+description: "Live album counts, record-index folds, date chips, the album card title block, and repair controls in owner and album notes."
 ---
 
 Bob Ledger Tools decorates the generated `[!albums]` catalog in area and project
@@ -70,18 +70,30 @@ not bank spend, status counts, the top five by monthly equivalent, and the
 findings count. Unknown `bob-bank` views stay quiet. The card, index, and
 summary surfaces never write the note.
 
-Album notes also show an **album card** (formerly the album header) with a
-breadcrumb from their resolved area/project ancestry and an expanded-by-default
-schema summary in Reading view and Live Preview.
-The summary names the schema, field count, dated notes, and index grouping.
-Chip rows show by default, one per field in declaration order: human labels,
-kind and flag suffixes, required as a quiet `*`, choice chips with usage
-counts, grouping annotations, and muted `legacy` chips. The summary's `▾`
-toggle collapses them for the session. Collapse state lives
-in view state keyed by the album, never in frontmatter. An invalid schema
-paints the first diagnostic on the summary and expands to the lint list; an
-empty schema teaches how to add fields so `Name @stem/` can collect facts.
-The two states never impersonate each other.
+Album notes show an **album card** (formerly the album header) as the note's
+title block. On desktop, in Reading view and Live Preview, it sits in the title
+slot above native Properties: a stack tile with the album `emoji` (else a
+library icon), an `ALBUM · <owners>` kicker whose owner links behave like
+Markdown links (Mod opens a new tab), the title, and the frontmatter `summary`
+as a muted subtitle. The title is a one-line `title:`, else the first H1 before
+any `##` or bullet, else the first alias, else the file name. It paints at
+once, before bob's report arrives. The card hides the inline title and a
+first body H1 whose text equals the title at render time; nothing is deleted,
+and putting the cursor on that line in Live Preview reveals it. A differing or
+later H1 stays visible. Source mode shows no card. Embeds, hover previews, and
+mobile keep the inline title and H1 and place the card below the H1.
+
+When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
+and the schema folds to one line, such as
+`▸ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`;
+the native `record` property hides only then. The `▸` toggle expands chip
+rows, one per field in declaration order: human labels, kind and flag
+suffixes, required as a quiet `*`, choice chips with usage counts, grouping
+annotations, and muted `legacy` chips. The toggle state lives in view state
+keyed by the album for the session, never in frontmatter. An invalid schema
+starts expanded with the first diagnostic on the summary and the lint list;
+an empty schema starts expanded and teaches how to add fields so
+`Name @stem/` can collect facts. The two states never impersonate each other.
 
 **⊞ Schema** opens the album card editor (formerly the Schema Card) in the Task
 Card idiom: a species badge (the album emoji, else a library icon, in a
@@ -235,11 +247,11 @@ absent.
 
 The **＋ noun** button copies the exact `Name @stem/` capture starter for the
 album. It does not open capture or create a record. Invalid schemas or capture
-routes leave the header visible and disable the button with the report's
-reason. Owner links use resolved note paths; incomplete or cyclic ancestry
-shows only confirmed links. The breadcrumb ends at the top-level area; an ancestry
-warning appears only when a parent link cannot be resolved, is malformed, cycles,
-or exceeds the depth cap.
+routes leave the card visible and disable the button with the report's
+reason. Kicker owner links use resolved note paths; incomplete or cyclic
+ancestry shows only confirmed links. The kicker ends at the top-level area; an
+ancestry warning appears only when a parent link cannot be resolved, is
+malformed, cycles, or exceeds the depth cap.
 
 For stored album/record structure and capture routes, see
 [Records](https://bobs-org.github.io/records/).
@@ -254,7 +266,9 @@ Its JSON report records Bob's path and version. Run the writer acceptance with
 `BOB_BIN=/path/to/bob node scripts/obsidian-album-schema-writer-e2e.cjs --self-test`.
 The wrappers report their real-Bob checks as skipped when `BOB_BIN` is absent.
 The walkthrough covers owner chips,
-group jump, folds, date chips, the schema header, property hiding, failure
+group jump, folds, date chips, the album card in the title slot (H1 hide and
+reveal, the folded schema line, the body joining before the `record` row
+hides), property hiding, failure
 and retry, cleanup, byte preservation, the debounced sync, and the Schema
 Card walk: header, palette, record-parent, title-row album fallback with
 Task Card priority, keyboard-only edit and Undo, previewed apply with a

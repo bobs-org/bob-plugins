@@ -393,7 +393,10 @@ test("Live Preview album and bank cards own rows under the CodeMirror editor", (
   const albumOther = addRow(doc, album.container, "summary");
   plugin.albumHeaderLivePath = () => "albums/eat.md";
   plugin.albumHeaderState = () => null;
-  plugin.albumHeaderModelFor = () => ({ path: "albums/eat.md" });
+  plugin.albumHeaderCardModelFor = () => ({
+    identity: { kind: "album", path: "albums/eat.md", stem: "eat", title: "Eat", emoji: "", summary: "", owners: [] },
+    body: { path: "albums/eat.md" }, title: "Eat", subtitle: "",
+  });
   plugin.albumHeaderOptions = () => ({});
   plugin.albumHeaderBuildEl = () => doc.createElement("div");
   plugin.buildAlbumHeaderDecorations(album.view);

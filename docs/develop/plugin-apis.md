@@ -385,13 +385,13 @@ The root `bob-navigation-hotkeys.api` is version 3:
 
 | Namespace or method | Version | Purpose |
 | --- | ---: | --- |
-| `reviewWalk` | 1 | Capture a review landing with `capture(editor)`, then continue it after a gesture with `continue(origin, outcome)`. |
+| `reviewWalk` | 2 | Capture a review landing with `capture(editor)`, then continue it after a gesture with `continue(origin, outcome)`. v2 parks and lands on `outcome.follow`. |
 | `inboxRoute` | 1 | Test an inbox path and prompt or commit a route. |
 | `quickRoll` | 1 | Preview the `Alt+P` roll for a review row. |
 | `taskLinkLane` | 1 | Match a Pomodoro Task Link and toggle its Next/In Progress lane. |
 | `taskScope` | 1 | `at({ lines, line })` returns the frozen task owner and its owned zero-based lines, or `null`. |
 | `logRecall` | 1 | Attach the USED BEFORE phrase band to a host-owned text field and record successful Work Log writes. |
-| `notice` | 4 | Show the Unblocked card; v2 renders `keep_moving` rows, v3 renders `relation_successors`, and v4 renders the `offer_closes` receipt. |
+| `notice` | 5 | Show the Unblocked card; v2 `keep_moving`, v3 `relation_successors`, v4 `offer_closes`, v5 a trailing `↗ “S”` jump line. |
 | `successors` | 5 | Ask which offered successor links to add; v2 accepts `keep_moving`, v3 accepts the `relation` group, v4 resolves verdict closes, and v5 stages a `Ctrl+J` jump pin. |
 | `blocks` | 1 | Open the reverse Blocks stage or remove a dependent. |
 | `relations` | 0 | Remove a LINKS edge (`removeLink`). `openStage` opens the Links direction; the reverse direction settles `{ ok: false }` until both stage directions ship. |
@@ -401,6 +401,7 @@ The root `bob-navigation-hotkeys.api` is version 3:
 | `removeDependency(parentRef, target)` | Root method | Remove the requested prerequisite. |
 | `claimReviewWalkCompletion(editor)` | Root method | Claim completion handoff for a landed review row. |
 | `recordJump(from, to)` | Additive member | Record one origin→destination transition on the same file-aware Vim jump history `Ctrl+O` uses. Synchronous, never throws, returns `true` when recorded. Feature-detect the method; the root `version` stays 3. |
+| `landOnTask(target, options?)` | Additive member | Re-find a task by identity (`{path, blockId?, text?, line?, description?, label?}`). Resolves `{ok, reason?, line?}`. Records a Vim jump and flashes the line. Never stamps or touches the walk. |
 
 `inboxRoute` has `isInboxNote(path)`,
 `prompt(request)`, and `commit(request)`.
@@ -533,7 +534,8 @@ Callers add relation rows only when `api.notice?.version >= 3`.
 `undo: { restores: [{path, before, after}] }`. It renders Done / Cancel receipts,
 `↳` tickler rows, a refusal line, and a guarded `Undo closes` action. The action
 restores only when every note still matches the recorded postimage. Older payloads
-retain the v3 rendering.
+retain the v3 rendering. v5 appends a trailing `↗ “S”` from `jump.label`
+(`api.notice?.version >= 5`).
 
 `cancel` v1 exposes the pure `planCancel(content, targets, {date, reason})` planner.
 Each target is `{line, rawLine}` from the source shown to the user. It wraps the Task
@@ -545,18 +547,14 @@ Async navigation methods settle to result objects or `null` rather
 than rejecting. `taskLinkLane.matches` is synchronous and
 `toggle` settles its result. `reviewWalk.capture` returns
 `null` when there is no current landing;
-`reviewWalk.continue` resolves its advance result.
+`reviewWalk.continue` resolves its advance result. v2 parks then lands when
+`outcome.follow` is set (`{ok, advanced: false, parked, landed}`); stale
+origins still land, and without `follow` v1 is unchanged.
 
-The persisted family rides additive nav `api.walkMode` (the top-level
-navigation api version stays 3): v4 `current()` may return `"b"` and
-`select("b")` records like a letter click, while `setAttention(type, value)`
-accepts `"s"` and `"b"` with attention stored per type and painted per
-letter; v5 accepts `"w"` and ledger feature-detects `walkMode.version >= 5`
-before pushing it. Ledger feature-detects `walkMode.version >= 4` before
-selecting `b` or pushing the amber bank waiting attention. In v6, the selected
-family's attention is readable ink on its letter while off-family attention
-remains a dot. Ledger continues pushing for selected families without a v6
-gate; older nav hides that attention as before.
+The persisted family rides additive nav `api.walkMode` (root `version` stays 3):
+v4 `current()`/`select("b")` and `setAttention` for `"s"`/`"b"`; v5 adds `"w"`;
+v6 paints selected-family attention as letter ink and off-family as a dot.
+Ledger feature-detects `walkMode.version >= 4` before `b` and `>= 5` before `w`.
 
 ## Task Status Cycler
 

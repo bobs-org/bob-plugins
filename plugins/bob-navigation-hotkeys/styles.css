@@ -1691,6 +1691,12 @@
   font-size: var(--font-ui-smaller);
 }
 
+.bob-nh-unblock-row.is-jump .bob-nh-unblock-glyph,
+.bob-nh-unblock-row.is-jump .bob-nh-unblock-text {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
 .bob-nh-unblock-row.is-muted {
   color: var(--text-muted);
 }

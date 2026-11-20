@@ -880,7 +880,7 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // nav api v3: frozen, never throws. Feature-detect members (`api.notice?.version`,
 // `api.successors?.version`, `api.recordJump`). Dependency calls return Promises
 // of `{ok, reason?}`. Checklist claim declines with null or a settled Promise.
-// `reviewWalk` is capture/continue v1. `recordJump(from, to)` is additive on
+// `reviewWalk` is capture/continue v2. `recordJump(from, to)` is additive on
 // the same file-aware Vim jump history Ctrl+O uses; version stays 3.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>

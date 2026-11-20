@@ -54640,13 +54640,12 @@ function showUnblockedNotice(app, model, options = {}) {
 // §12.13/§12.18). Kept here (rather than inline in 480) so
 // `480-review-jump-and-nav-api.js` stays under the 1000-line fragment limit.
 // The api itself stays `version: 3`; this member carries its own version like
-// `reviewWalk`. v1/v2 callers pass models without relation rows and render
-// exactly as before.
+// `reviewWalk`. v5 appends a jump receipt; older payloads render as before.
 function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 4,
+    version: 5,
     showUnblocked: (model) => showUnblockedNotice(app, { ...model, __noticePlugin: plugin }),
   });
 }
@@ -82187,7 +82186,7 @@ async function openMarkdownFileWithLeafReuse(plugin, file, failureNotice) {
 // nav api v3: frozen, never throws. Feature-detect members (`api.notice?.version`,
 // `api.successors?.version`, `api.recordJump`). Dependency calls return Promises
 // of `{ok, reason?}`. Checklist claim declines with null or a settled Promise.
-// `reviewWalk` is capture/continue v1. `recordJump(from, to)` is additive on
+// `reviewWalk` is capture/continue v2. `recordJump(from, to)` is additive on
 // the same file-aware Vim jump history Ctrl+O uses; version stays 3.
 function createDependencyNavApi(plugin) {
   const shape = (result) =>
@@ -88821,8 +88820,9 @@ const REVIEW_WALK_BUSY = Object.freeze({ busy: true });
 // nav api v3 `reviewWalk` (`docs/task-dependencies.md` §9). Synchronous
 // `capture` never throws (null off a landing, REVIEW_WALK_BUSY while
 // locked, otherwise a frozen origin that took the gesture lock); async
-// `continue` never throws and resolves `{ ok, advanced, stopped }`. With a
-// null plugin (after unload) capture returns null and continue shows
+// `continue` never throws and resolves `{ ok, advanced, stopped }` (v2
+// adds `parked`/`landed` when `outcome.follow` is set). With a null
+// plugin (after unload) capture returns null and continue shows
 // `outcome.notice`, if any, resolving `{ ok: false, advanced: false }`.
 function createReviewWalkApi(plugin) {
   const showAlone = (outcome) => {
@@ -88839,7 +88839,7 @@ function createReviewWalkApi(plugin) {
     }
   };
   return Object.freeze({
-    version: 1,
+    version: 2,
     capture(editor) {
       try {
         if (!plugin || typeof plugin.captureReviewGesture !== "function") {
@@ -89237,6 +89237,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           .filter((value) => typeof value === "string" && value.trim())
           .map((value) => value.trim())
           .join("\n");
+      }
+      if (input && input.follow && typeof this.followReviewWalkAfter === "function") {
+        return this.followReviewWalkAfter(origin, outcome);
       }
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
@@ -89862,6 +89865,135 @@ class BobNavigationHotkeysReviewDueRowMixin {
     }
   }
 }
+// ---- src/536b-plugin-review-walk-follow.js ----
+// reviewWalk v2 follow: a pinned close parks the walk, then lands on the
+// jump target. Parking runs before focus because opening another note
+// would clear the `]s` landing. Without `outcome.follow`, continue stays
+// on the v1 path byte for byte.
+class BobNavigationHotkeysReviewWalkFollowMixin {
+  async followReviewWalkAfter(origin, outcome) {
+    const input = outcome && typeof outcome === "object" ? outcome : {};
+    const follow =
+      input.follow && typeof input.follow === "object" ? input.follow : null;
+    const notice = [input.notice, input.successorNotice]
+      .filter((value) => typeof value === "string" && value.trim())
+      .map((value) => value.trim())
+      .join("\n");
+    const label = taskLandingTargetLabel(follow);
+    const jumpLine = formatSuccessorJumpReceipt(label);
+    const lostLine = formatSuccessorJumpLostNotice(label);
+    const show = (text) => {
+      const message = String(text || "");
+      if (!message) {
+        return;
+      }
+      try {
+        new Notice(message);
+      } catch (_error) {
+        // Best effort: Obsidian is tearing down.
+      }
+    };
+    const compose = (...parts) => parts.filter(Boolean).join("\n");
+
+    const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
+    const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
+    let todayText = "";
+    try {
+      todayText = this.laneReleaseDateText({});
+    } catch (_error) {
+      todayText = "";
+    }
+    const offLanding =
+      origin && typeof origin === "object" && origin.offLanding === true;
+    const stale =
+      !origin ||
+      typeof origin !== "object" ||
+      origin.seq !== seq ||
+      origin.epoch !== epoch ||
+      (!offLanding &&
+        (!this.reviewLanding || this.reviewLanding.key !== origin.key)) ||
+      todayText !== origin.day;
+
+    let vimJumpContext = null;
+    try {
+      if (origin && typeof origin === "object" && Number.isInteger(origin.line)) {
+        vimJumpContext = this.createVimJumpContextWithOrigin({
+          path: origin.path,
+          line: origin.line,
+          ch: 0,
+        });
+      }
+    } catch (_error) {
+      vimJumpContext = null;
+    }
+
+    const land = async () => {
+      if (!follow || typeof this.landOnTask !== "function") {
+        return { ok: false, reason: "lost" };
+      }
+      try {
+        return await this.landOnTask(follow, {
+          vimJumpContext,
+          silent: true,
+        });
+      } catch (_error) {
+        return { ok: false, reason: "lost" };
+      }
+    };
+
+    const settleOwnLock = () => {
+      try {
+        if (origin && typeof origin === "object" && origin.seq === seq) {
+          this.settleReviewWalkLock(false);
+        }
+      } catch (_error) {
+        // Best effort only.
+      }
+    };
+
+    if (stale || offLanding) {
+      const landed = await land();
+      settleOwnLock();
+      show(compose(notice, landed && landed.ok ? jumpLine : lostLine));
+      return Object.freeze({
+        ok: true,
+        advanced: false,
+        parked: false,
+        landed: Boolean(landed && landed.ok),
+      });
+    }
+
+    try {
+      this.takeReviewWalkLock(REVIEW_GESTURE_LOCK_MS);
+    } catch (_error) {
+      // Keep whatever lock capture already took.
+    }
+    const handledRefs = Array.isArray(input.handledRefs) ? input.handledRefs : [];
+    let parked = false;
+    try {
+      parked =
+        this.parkReviewWalkAfterMove(origin, handledRefs, {
+          excludeRefs: Array.isArray(input.excludeRefs) ? input.excludeRefs : [],
+          settle: false,
+        }) === true;
+    } catch (_error) {
+      parked = false;
+    }
+    const landed = await land();
+    show(compose(notice, landed && landed.ok ? jumpLine : lostLine));
+    try {
+      this.settleReviewWalkLock(false);
+    } catch (_error) {
+      // Best effort only.
+    }
+    return Object.freeze({
+      ok: true,
+      advanced: false,
+      parked,
+      landed: Boolean(landed && landed.ok),
+    });
+  }
+}
 // ---- src/537-plugin-review-move-park.js ----
 // A Ctrl+Shift+M move never advances the walk. A move that started on a
 // landing consumes the landing and parks the walk on a text-identified
@@ -90062,8 +90194,9 @@ function planReviewResume(list, anchor, cursor, direction) {
 }
 
 class BobNavigationHotkeysReviewMoveMixin {
-  parkReviewWalkAfterMove(origin, handledRefs) {
+  parkReviewWalkAfterMove(origin, handledRefs, options) {
     try {
+      const extra = options && typeof options === "object" ? options : {};
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
       let todayText = "";
@@ -90098,6 +90231,7 @@ class BobNavigationHotkeysReviewMoveMixin {
         refs,
         this.reviewAnsweredKeys,
         todayText,
+        Array.isArray(extra.excludeRefs) ? extra.excludeRefs : [],
       );
       const positionKeys = Array.isArray(answerKeys.positionKeys)
         ? answerKeys.positionKeys
@@ -90123,7 +90257,9 @@ class BobNavigationHotkeysReviewMoveMixin {
         // Keep the previous anchor on a planning failure.
       }
       try {
-        this.settleReviewWalkLock(false);
+        if (extra.settle !== false) {
+          this.settleReviewWalkLock(false);
+        }
       } catch (error) {
         // Best effort only.
       }
@@ -118501,6 +118637,330 @@ class BobNavigationHotkeysOpenNotesUriMixin {
     return openedCount > 0;
   }
 }
+// ---- src/676a-plugin-task-landing.js ----
+// Additive nav `api.landOnTask` (root api stays v3). Re-finds a task by
+// identity, focuses it, records a Vim jump, and flashes the line. Never
+// clamps onto a nearby line, never stamps, and never touches the `]s` walk.
+function successorJumpQuote(text) {
+  const value = String(text === null || text === undefined ? "" : text).trim();
+  return `“${value}”`;
+}
+
+function formatSuccessorJumpReceipt(label) {
+  const value = String(label === null || label === undefined ? "" : label).trim();
+  if (!value) {
+    return "";
+  }
+  return `↗ ${successorJumpQuote(value)}`;
+}
+
+function formatSuccessorJumpLostNotice(label) {
+  const value =
+    String(label === null || label === undefined ? "" : label).trim() || "task";
+  return `Couldn't find ${successorJumpQuote(value)} to jump to — your changes are saved`;
+}
+
+function taskLandingTargetLabel(target) {
+  const info = target && typeof target === "object" ? target : {};
+  if (typeof info.label === "string" && info.label.trim()) {
+    return info.label.trim();
+  }
+  if (typeof info.description === "string" && info.description.trim()) {
+    return info.description.trim();
+  }
+  if (typeof info.text === "string" && info.text.trim()) {
+    try {
+      const cleaned = cleanTaskDisplayText(info.text);
+      if (cleaned && cleaned !== "(untitled task)") {
+        return cleaned;
+      }
+    } catch (_error) {
+      // Fall through to the raw text.
+    }
+    return info.text.trim();
+  }
+  return "";
+}
+
+function resolveTaskLandingLine(content, target) {
+  const info = target && typeof target === "object" ? target : {};
+  const text = String(content || "");
+  const { lines } = splitMarkdownContent(text);
+  let contexts = [];
+  try {
+    contexts = getMarkdownLineContexts(text);
+  } catch (_error) {
+    contexts = [];
+  }
+  const wantedText = typeof info.text === "string" ? info.text : "";
+  const rawLine = info.line;
+  const blockId = info.blockId || info.block_id || null;
+
+  if (wantedText && Number.isInteger(rawLine)) {
+    if (rawLine >= 0 && rawLine < lines.length && lines[rawLine] === wantedText) {
+      return Object.freeze({ ok: true, line: rawLine, source: "planned" });
+    }
+    if (
+      rawLine >= 1 &&
+      rawLine <= lines.length &&
+      lines[rawLine - 1] === wantedText
+    ) {
+      return Object.freeze({ ok: true, line: rawLine - 1, source: "planned" });
+    }
+  }
+
+  if (blockId) {
+    try {
+      const blockIdLine = findTaskLineByBlockId(lines, blockId);
+      if (blockIdLine !== null) {
+        return Object.freeze({ ok: true, line: blockIdLine, source: "block-id" });
+      }
+    } catch (_error) {
+      // Fall through to text identity.
+    }
+  }
+
+  if (wantedText) {
+    const hits = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const context = contexts[index];
+      if (context && (context.inFrontmatter || context.inFence)) {
+        continue;
+      }
+      if (lines[index] === wantedText) {
+        hits.push(index);
+      }
+    }
+    if (hits.length === 1) {
+      return Object.freeze({ ok: true, line: hits[0], source: "text" });
+    }
+  }
+
+  let needle = "";
+  if (typeof info.description === "string" && info.description.trim()) {
+    needle = info.description.trim();
+  } else if (wantedText) {
+    try {
+      needle = cleanTaskDisplayText(wantedText);
+    } catch (_error) {
+      needle = "";
+    }
+  }
+  if (needle) {
+    const hits = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const context = contexts[index];
+      if (context && (context.inFrontmatter || context.inFence)) {
+        continue;
+      }
+      let isTask = false;
+      try {
+        isTask = isObsidianTaskAtLine(text, index, contexts, lines);
+      } catch (_error) {
+        isTask = false;
+      }
+      if (!isTask) {
+        continue;
+      }
+      let cleaned = "";
+      try {
+        cleaned = cleanTaskDisplayText(lines[index]);
+      } catch (_error) {
+        cleaned = "";
+      }
+      if (cleaned === needle) {
+        hits.push(index);
+      }
+    }
+    if (hits.length === 1) {
+      return Object.freeze({ ok: true, line: hits[0], source: "description" });
+    }
+  }
+
+  return Object.freeze({ ok: false, reason: "lost", source: "lost" });
+}
+
+function resolveTaskLandingFile(plugin, target) {
+  const info = target && typeof target === "object" ? target : {};
+  const raw =
+    typeof info.path === "string" && info.path
+      ? info.path
+      : typeof info.relative_path === "string"
+        ? info.relative_path
+        : "";
+  if (!raw) {
+    return null;
+  }
+  try {
+    const vault = plugin && plugin.app ? plugin.app.vault : null;
+    if (!vault || typeof vault.getAbstractFileByPath !== "function") {
+      return null;
+    }
+    let file = vault.getAbstractFileByPath(raw);
+    if (file) {
+      return file;
+    }
+    if (raw.startsWith("/")) {
+      const vaultBase =
+        plugin && typeof plugin.getVaultBasePath === "function"
+          ? plugin.getVaultBasePath()
+          : "";
+      const relative =
+        typeof resolveGoToVaultRelativePath === "function"
+          ? resolveGoToVaultRelativePath(raw, vaultBase)
+          : null;
+      if (relative) {
+        file = vault.getAbstractFileByPath(relative);
+      }
+    }
+    return file || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function readTaskLandingContent(plugin, file) {
+  try {
+    const view =
+      plugin && typeof plugin.getActiveMarkdownView === "function"
+        ? plugin.getActiveMarkdownView()
+        : null;
+    if (
+      view &&
+      view.file &&
+      file &&
+      view.file.path === file.path &&
+      view.editor &&
+      typeof view.editor.getValue === "function"
+    ) {
+      return String(view.editor.getValue() || "");
+    }
+  } catch (_error) {
+    // Fall through to vault reads.
+  }
+  try {
+    if (plugin && typeof plugin.readLinkPickerNoteContent === "function") {
+      const content = await plugin.readLinkPickerNoteContent(file.path, file);
+      if (typeof content === "string") {
+        return content;
+      }
+    }
+  } catch (_error) {
+    // Fall through to cachedRead.
+  }
+  try {
+    const vault = plugin && plugin.app ? plugin.app.vault : null;
+    if (vault && typeof vault.cachedRead === "function") {
+      return String((await vault.cachedRead(file)) || "");
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
+const createDependencyNavApiBeforeLanding = createDependencyNavApi;
+createDependencyNavApi = function createDependencyNavApiWithLanding(plugin) {
+  const api = createDependencyNavApiBeforeLanding(plugin);
+  const shape = (result) =>
+    result && typeof result === "object" && "ok" in result
+      ? result
+      : { ok: false, reason: "unexpected-result" };
+  const settle = (call) => {
+    try {
+      return Promise.resolve()
+        .then(call)
+        .then(shape, () => ({ ok: false, reason: "api-failed" }));
+    } catch (_error) {
+      return Promise.resolve({ ok: false, reason: "api-failed" });
+    }
+  };
+  return Object.freeze({
+    ...api,
+    landOnTask(target, options) {
+      if (!plugin || typeof plugin.landOnTask !== "function") {
+        return Promise.resolve({ ok: false, reason: "unavailable" });
+      }
+      return settle(() => plugin.landOnTask(target, options));
+    },
+  });
+};
+
+class BobNavigationHotkeysTaskLandingMixin {
+  async landOnTask(target, options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    const silent = opts.silent === true;
+    const label = taskLandingTargetLabel(target);
+    const lost = async (reason) => {
+      if (!silent) {
+        try {
+          new Notice(formatSuccessorJumpLostNotice(label));
+        } catch (_error) {
+          // Best effort: Obsidian is tearing down.
+        }
+      }
+      return Object.freeze({ ok: false, reason: reason || "lost" });
+    };
+    try {
+      const file = resolveTaskLandingFile(this, target);
+      if (!file || (typeof this.isMarkdownFile === "function" && !this.isMarkdownFile(file))) {
+        return lost("lost");
+      }
+      const content = await readTaskLandingContent(this, file);
+      if (typeof content !== "string") {
+        return lost("lost");
+      }
+      const resolved = resolveTaskLandingLine(content, target);
+      if (!resolved || resolved.ok !== true || !Number.isInteger(resolved.line)) {
+        return lost("lost");
+      }
+      const { lines } = splitMarkdownContent(content);
+      const lineText = String(lines[resolved.line] ?? "");
+      const info = target && typeof target === "object" ? target : {};
+      const jumpContext =
+        opts.vimJumpContext ||
+        (typeof this.captureGoToTaskJumpContext === "function"
+          ? this.captureGoToTaskJumpContext()
+          : null);
+      const focused = await this.focusTaskAnchor(
+        file,
+        {
+          line: resolved.line,
+          text: lineText,
+          blockId: info.blockId || info.block_id || null,
+          resolve: (text) => resolveTaskLandingLine(text, target),
+        },
+        {
+          vimJumpContext: jumpContext,
+          ensureEditing: true,
+        },
+      );
+      if (!focused) {
+        return lost("lost");
+      }
+      try {
+        const view =
+          typeof this.getActiveMarkdownView === "function"
+            ? this.getActiveMarkdownView()
+            : null;
+        if (
+          view &&
+          view.file &&
+          view.file.path === file.path &&
+          view.editor &&
+          typeof this.flashBobOpenNotesLandingLine === "function"
+        ) {
+          this.flashBobOpenNotesLandingLine(view.editor, resolved.line);
+        }
+      } catch (_error) {
+        // The flash is best-effort after a successful focus.
+      }
+      return Object.freeze({ ok: true, line: resolved.line });
+    } catch (_error) {
+      return lost("lost");
+    }
+  }
+}
 // ---- src/677-plugin-ref-pdf-open.js ----
 const HIGHLIGHTS_BUNDLE_ID = "net.highlightsapp.universal";
 const HIGHLIGHTS_APP_NAME = "Highlights";
@@ -125819,6 +126279,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysChecklistWalkMixin,
   BobNavigationHotkeysReviewAdvanceMixin,
   BobNavigationHotkeysReviewDueRowMixin,
+  BobNavigationHotkeysReviewWalkFollowMixin,
   BobNavigationHotkeysWalkLandingMixin,
   BobNavigationHotkeysLaneWalkMixin,
   BobNavigationHotkeysBankWalkMixin,
@@ -125869,6 +126330,7 @@ installBobNavigationHotkeysMixins(BobNavigationHotkeysPlugin, [
   BobNavigationHotkeysProjectFileMixin,
   BobNavigationHotkeysGoToTaskUriMixin,
   BobNavigationHotkeysOpenNotesUriMixin,
+  BobNavigationHotkeysTaskLandingMixin,
   BobNavigationHotkeysRefPdfOpenMixin,
   BobNavigationHotkeysRefPdfTargetResolverMixin,
   BobNavigationHotkeysHighlightsHintsMixin,
@@ -127501,3 +127963,88 @@ try {
     });
   }
 } catch (_error) {}
+// ---- src/725-nav-jump-landing-exports.js ----
+// Notice v5: a trailing `↗ “S”` receipt when `model.jump.label` is set.
+// Wraps the v4 offer-close renderer so the jump line stays last.
+const buildUnblockedNoticeModelBeforeJump = buildUnblockedNoticeModel;
+buildUnblockedNoticeModel = function buildUnblockedNoticeModelWithJump(
+  model,
+  options = {},
+) {
+  const view = buildUnblockedNoticeModelBeforeJump(model, options);
+  const source = model && typeof model === "object" ? model : {};
+  const jump = source.jump && typeof source.jump === "object" ? source.jump : null;
+  const label =
+    jump && typeof jump.label === "string" ? jump.label.trim() : "";
+  if (!label) {
+    return view;
+  }
+  const receipt = formatSuccessorJumpReceipt(label);
+  const base = view || Object.freeze({
+    rows: Object.freeze([]),
+    visibleRows: Object.freeze([]),
+    moreCount: 0,
+    predecessors: Object.freeze([]),
+    linked: Object.freeze([]),
+    recovered: Object.freeze([]),
+    stillBlocked: Object.freeze([]),
+    chips: Object.freeze([]),
+    receipt: receipt,
+    title: receipt,
+    glyph: "↗",
+    text: receipt,
+    durationMs: 6000,
+    dailyPath: "",
+    failure: null,
+  });
+  return Object.freeze({
+    ...base,
+    jumpLabel: label,
+    text: view
+      ? [base.text, receipt].filter(Boolean).join("\n")
+      : receipt,
+  });
+};
+
+const renderUnblockedNoticeBeforeJump = renderUnblockedNoticeFragment;
+renderUnblockedNoticeFragment = function renderUnblockedNoticeWithJump(
+  view,
+  root,
+  options = {},
+) {
+  const card = renderUnblockedNoticeBeforeJump(view, root, options);
+  if (!card || !view || !view.jumpLabel) {
+    return card;
+  }
+  const row = card.createDiv({ cls: "bob-nh-unblock-row is-jump" });
+  row.createSpan({
+    cls: "bob-nh-unblock-glyph",
+    text: "↗",
+    attr: { "aria-hidden": "true" },
+  });
+  row.createSpan({
+    cls: "bob-nh-unblock-text",
+    text: formatSuccessorJumpReceipt(view.jumpLabel),
+  });
+  return card;
+};
+
+try {
+  if (typeof module !== "undefined" && module.exports && module.exports.helpers) {
+    Object.assign(module.exports.helpers, {
+      successorJumpQuote,
+      formatSuccessorJumpReceipt,
+      formatSuccessorJumpLostNotice,
+      taskLandingTargetLabel,
+      resolveTaskLandingLine,
+      buildUnblockedNoticeModel,
+      renderUnblockedNoticeFragment,
+      showUnblockedNotice,
+      createNoticeApi,
+      createReviewWalkApi,
+      createDependencyNavApi,
+    });
+  }
+} catch (_error) {
+  // Keep the runtime independent from the CommonJS test harness.
+}

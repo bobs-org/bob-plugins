@@ -19,8 +19,9 @@ const REVIEW_WALK_BUSY = Object.freeze({ busy: true });
 // nav api v3 `reviewWalk` (`docs/task-dependencies.md` §9). Synchronous
 // `capture` never throws (null off a landing, REVIEW_WALK_BUSY while
 // locked, otherwise a frozen origin that took the gesture lock); async
-// `continue` never throws and resolves `{ ok, advanced, stopped }`. With a
-// null plugin (after unload) capture returns null and continue shows
+// `continue` never throws and resolves `{ ok, advanced, stopped }` (v2
+// adds `parked`/`landed` when `outcome.follow` is set). With a null
+// plugin (after unload) capture returns null and continue shows
 // `outcome.notice`, if any, resolving `{ ok: false, advanced: false }`.
 function createReviewWalkApi(plugin) {
   const showAlone = (outcome) => {
@@ -37,7 +38,7 @@ function createReviewWalkApi(plugin) {
     }
   };
   return Object.freeze({
-    version: 1,
+    version: 2,
     capture(editor) {
       try {
         if (!plugin || typeof plugin.captureReviewGesture !== "function") {
@@ -435,6 +436,9 @@ class BobNavigationHotkeysReviewAdvanceMixin {
           .filter((value) => typeof value === "string" && value.trim())
           .map((value) => value.trim())
           .join("\n");
+      }
+      if (input && input.follow && typeof this.followReviewWalkAfter === "function") {
+        return this.followReviewWalkAfter(origin, outcome);
       }
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));

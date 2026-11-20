@@ -984,13 +984,12 @@ function showUnblockedNotice(app, model, options = {}) {
 // §12.13/§12.18). Kept here (rather than inline in 480) so
 // `480-review-jump-and-nav-api.js` stays under the 1000-line fragment limit.
 // The api itself stays `version: 3`; this member carries its own version like
-// `reviewWalk`. v1/v2 callers pass models without relation rows and render
-// exactly as before.
+// `reviewWalk`. v5 appends a jump receipt; older payloads render as before.
 function createNoticeApi(plugin) {
   const app =
     plugin && typeof plugin === "object" ? plugin.app : undefined;
   return Object.freeze({
-    version: 4,
+    version: 5,
     showUnblocked: (model) => showUnblockedNotice(app, { ...model, __noticePlugin: plugin }),
   });
 }

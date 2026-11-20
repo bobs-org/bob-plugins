@@ -1212,12 +1212,12 @@ test("jump history: a manual ]s also records its landing", async () => {
   ]);
 });
 
-test("api: reviewWalk v3 is frozen with version 1, degrades null, never throws", async () => {
+test("api: reviewWalk v2 is frozen with version 2, degrades null, never throws", async () => {
   const fixture = makePlugin({ rows: nextQueue(["One"]), activePath: "walk.md" });
   const { plugin, editor } = fixture;
   assert.equal(plugin.api.version, 3);
   assert.ok(Object.isFrozen(plugin.api));
-  assert.equal(plugin.api.reviewWalk.version, 1);
+  assert.equal(plugin.api.reviewWalk.version, 2);
   assert.ok(Object.isFrozen(plugin.api.reviewWalk));
   assert.equal(typeof plugin.api.reviewWalk.capture, "function");
   assert.equal(typeof plugin.api.reviewWalk.continue, "function");
@@ -1229,7 +1229,7 @@ test("api: reviewWalk v3 is frozen with version 1, degrades null, never throws",
 
   const nullApi = helpers.createDependencyNavApi(null);
   assert.equal(nullApi.version, 3);
-  assert.equal(nullApi.reviewWalk.version, 1);
+  assert.equal(nullApi.reviewWalk.version, 2);
   assert.equal(nullApi.reviewWalk.capture({}), null);
   clearNotices();
   assert.deepEqual(await nullApi.reviewWalk.continue({}, { notice: "Linked · done" }), {

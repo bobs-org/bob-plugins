@@ -696,14 +696,15 @@ test("unblocked text truncates to 48 characters with an ellipsis", () => {
   assert.equal(helpers.formatUnblockedScheduledDate("not-a-date"), "not-a-date");
 });
 
-test("nav api exposes additive notice v4 and cancel v1 without changing nav api version", () => {
+test("nav api exposes additive notice v5 and cancel v1 without changing nav api version", () => {
   const api = helpers.createDependencyNavApi({ app: {} });
   assert.equal(api.version, 3);
   assert.ok(api.notice);
-  assert.equal(api.notice.version, 4);
+  assert.equal(api.notice.version, 5);
   assert.equal(api.cancel.version, 1);
   assert.equal(typeof api.cancel.planCancel, "function");
   assert.equal(typeof api.notice.showUnblocked, "function");
+  assert.equal(typeof api.landOnTask, "function");
   assert.equal(Object.isFrozen(api.notice), true);
   assert.equal(api.notice.showUnblocked({ unblocked: [], failure: null }), false);
 });
@@ -1189,5 +1190,67 @@ test("relation stylesheet uses only existing tokens and no new hex values", () =
   assert.doesNotMatch(block, /#[0-9a-f]{3,8}\b/i);
   assert.doesNotMatch(block, /\brgba?\(/i);
   assert.doesNotMatch(block, /--task-status-/);
+});
+
+test("notice v5 appends a trailing jump receipt and leaves older payloads unchanged", () => {
+  const unchanged = helpers.buildUnblockedNoticeModel(singleLinkedModel(), {});
+  assert.equal(unchanged.jumpLabel, undefined);
+  assert.equal(
+    unchanged.text,
+    "🔓 Next in FIX: Re-launch all failed agents on apollo!",
+  );
+  const unchangedRoot = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(unchanged, unchangedRoot, {});
+  assert.equal(findFragmentNode(unchangedRoot, nodeHasClass("is-jump")), null);
+
+  const view = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({ jump: { label: "S" } }),
+    {},
+  );
+  assert.equal(view.jumpLabel, "S");
+  assert.equal(
+    view.text,
+    "🔓 Next in FIX: Re-launch all failed agents on apollo!\n↗ “S”",
+  );
+  const root = createFragmentNode();
+  helpers.renderUnblockedNoticeFragment(view, root, {});
+  const jumpRow = findFragmentNode(root, nodeHasClass("is-jump"));
+  assert.ok(jumpRow);
+  assert.ok(jumpRow.classes.includes("bob-nh-unblock-row"));
+  assert.equal(
+    findFragmentNode(jumpRow, nodeHasClass("bob-nh-unblock-glyph")).text,
+    "↗",
+  );
+  assert.equal(
+    findFragmentNode(jumpRow, nodeHasClass("bob-nh-unblock-text")).text,
+    "↗ “S”",
+  );
+  const rows = collectFragmentNodes(root, nodeHasClass("bob-nh-unblock-row"));
+  assert.equal(rows[rows.length - 1], jumpRow, "the jump receipt stays last");
+
+  const jumpOnly = helpers.buildUnblockedNoticeModel(
+    { jump: { label: "Solo" } },
+    {},
+  );
+  assert.equal(jumpOnly.jumpLabel, "Solo");
+  assert.equal(jumpOnly.text, "↗ “Solo”");
+
+  const blank = helpers.buildUnblockedNoticeModel(
+    singleLinkedModel({ jump: { label: "   " } }),
+    {},
+  );
+  assert.equal(blank.jumpLabel, undefined);
+  assert.equal(
+    blank.text,
+    "🔓 Next in FIX: Re-launch all failed agents on apollo!",
+  );
+
+  const stylesPath = path.join(
+    __dirname,
+    "../plugins/bob-navigation-hotkeys/styles.css",
+  );
+  const styles = fs.readFileSync(stylesPath, "utf8");
+  assert.match(styles, /\.bob-nh-unblock-row\.is-jump/);
+  assert.match(styles, /--text-accent/);
 });
 

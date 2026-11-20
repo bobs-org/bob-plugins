@@ -1329,3 +1329,143 @@ test("review settle never substitutes the cursor line and shares the inbox fallb
   picker.editor.content = deleted.join("\n");
   assert.equal(helpers.readReviewOriginAfterLine(picker), null);
 });
+
+test("reviewWalk v2 follow parks, holds the lock until landing, and shows one toast", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two", "Three"]),
+    activePath: "walk.md",
+  });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  const firstText = plugin.reviewLanding.text;
+  let busyDuringLand = null;
+  const landCalls = [];
+  plugin.landOnTask = async (target, options) => {
+    landCalls.push({ target, options });
+    busyDuringLand = plugin.reviewWalkBusy();
+    return { ok: true, line: 0 };
+  };
+  clearNotices();
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "complete",
+    handledRefs: [{ path: "walk.md", line: 0, raw: firstText }],
+    notice: "✓ Done · One",
+    follow: {
+      path: "dest.md",
+      text: "- [ ] #task Dest ^dest",
+      label: "Dest",
+    },
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    advanced: false,
+    parked: true,
+    landed: true,
+  });
+  assert.equal(landCalls.length, 1);
+  assert.equal(landCalls[0].options && landCalls[0].options.silent, true);
+  assert.equal(busyDuringLand, true, "the lock is held until landing");
+  assert.equal(plugin.reviewWalkBusy(), false, "the lock is free after landing");
+  assert.equal(plugin.reviewLanding, null, "the landing is consumed");
+  assert.deepEqual(notices, ["✓ Done · One\n↗ “Dest”"]);
+  plugin.advanceReviewClock(400);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.equal(
+    plugin.reviewLanding.text,
+    markFor("next", "Two"),
+    "the next ]s resumes at the neighbour",
+  );
+});
+
+test("reviewWalk v2 follow still lands on a stale origin without parking", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two"]),
+    activePath: "walk.md",
+  });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  const landingKey = plugin.reviewLanding.key;
+  plugin.reviewLandingEpoch += 1;
+  const landCalls = [];
+  plugin.landOnTask = async (target) => {
+    landCalls.push(target);
+    return { ok: true, line: 2 };
+  };
+  clearNotices();
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "complete",
+    notice: "✓ Done · One",
+    follow: { path: "dest.md", label: "Dest" },
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    advanced: false,
+    parked: false,
+    landed: true,
+  });
+  assert.equal(landCalls.length, 1);
+  assert.equal(plugin.reviewLanding.key, landingKey, "stale follow does not park");
+  assert.deepEqual(notices, ["✓ Done · One\n↗ “Dest”"]);
+});
+
+test("reviewWalk v2 follow parks even when the jump target is lost", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two"]),
+    activePath: "walk.md",
+  });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  assert.ok(origin && !origin.busy, "an origin is captured");
+  const firstText = plugin.reviewLanding.text;
+  clearNotices();
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "complete",
+    handledRefs: [{ path: "walk.md", line: 0, raw: firstText }],
+    notice: "✓ Done · One",
+    follow: { path: "gone.md", label: "Dest" },
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    advanced: false,
+    parked: true,
+    landed: false,
+  });
+  assert.equal(plugin.reviewLanding, null, "the landing is consumed");
+  assert.deepEqual(notices, [
+    "✓ Done · One\nCouldn't find “Dest” to jump to — your changes are saved",
+  ]);
+  plugin.advanceReviewClock(400);
+  clearNotices();
+  assert.equal(await plugin.jumpToDueTask(1), true);
+  assert.equal(
+    plugin.reviewLanding.text,
+    markFor("next", "Two"),
+    "the next ]s resumes at the neighbour",
+  );
+});
+
+test("reviewWalk continue without follow stays on the v1 result", async () => {
+  const fixture = makePlugin({
+    rows: nextQueue(["One", "Two"]),
+    activePath: "walk.md",
+  });
+  const { plugin, editor } = fixture;
+  await land(fixture, "first");
+  const origin = plugin.captureReviewGesture(editor);
+  const firstText = plugin.reviewLanding.text;
+  const result = await plugin.continueReviewWalkAfter(origin, {
+    kind: "lane",
+    handledRefs: [{ path: "walk.md", line: 0, raw: firstText }],
+    notice: "Ready · 1 task",
+  });
+  assert.deepEqual(result, { ok: true, advanced: true, stopped: false });
+  assert.equal("parked" in result, false);
+  assert.equal("landed" in result, false);
+  assert.equal(plugin.reviewLanding.text, markFor("next", "Two"));
+});

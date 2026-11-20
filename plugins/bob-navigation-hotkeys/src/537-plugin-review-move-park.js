@@ -197,8 +197,9 @@ function planReviewResume(list, anchor, cursor, direction) {
 }
 
 class BobNavigationHotkeysReviewMoveMixin {
-  parkReviewWalkAfterMove(origin, handledRefs) {
+  parkReviewWalkAfterMove(origin, handledRefs, options) {
     try {
+      const extra = options && typeof options === "object" ? options : {};
       const seq = Math.floor(numericOrDefault(this.reviewGestureSeq, 0));
       const epoch = Math.floor(numericOrDefault(this.reviewLandingEpoch, 0));
       let todayText = "";
@@ -233,6 +234,7 @@ class BobNavigationHotkeysReviewMoveMixin {
         refs,
         this.reviewAnsweredKeys,
         todayText,
+        Array.isArray(extra.excludeRefs) ? extra.excludeRefs : [],
       );
       const positionKeys = Array.isArray(answerKeys.positionKeys)
         ? answerKeys.positionKeys
@@ -258,7 +260,9 @@ class BobNavigationHotkeysReviewMoveMixin {
         // Keep the previous anchor on a planning failure.
       }
       try {
-        this.settleReviewWalkLock(false);
+        if (extra.settle !== false) {
+          this.settleReviewWalkLock(false);
+        }
       } catch (error) {
         // Best effort only.
       }

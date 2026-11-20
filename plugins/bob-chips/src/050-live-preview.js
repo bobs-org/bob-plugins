@@ -1,5 +1,6 @@
 // Live Preview chips: guarded ViewPlugin + WidgetType.
-// Decorates whole eligible code spans inside visibleRanges only.
+// Decorates whole eligible code spans inside visibleRanges only. One pass
+// emits copy widgets and command-chip widgets (051-live-command-widget.js).
 let copyChipLiveRefreshEffect = null;
 function copyChipEnsureLiveRefresh() {
   if (copyChipLiveRefreshEffect) return copyChipLiveRefreshEffect;
@@ -140,9 +141,11 @@ function copyChipLiveLineIsIndentedCode(lineText) {
   }
 }
 
-// Pure per-line chip discovery for one visible document line. Applies the
-// grammar, table inference, and inert filters. `tree` may be null in tests.
-function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, tableHint) {
+// Pure per-line discovery of both kinds for one visible document line: one
+// chipScanLine call, then table inference and the inert filters. Each chip
+// is `{ kind, label, text, raw, lineFrom, from, to, lineText }` with
+// absolute offsets. `tree` may be null in tests.
+function chipLiveChipsForLine(lineText, lineFrom, tree, tableHint) {
   try {
     if (typeof lineText !== "string" || lineText === "") return [];
     if (copyChipLiveLineIsIndentedCode(lineText)) return [];
@@ -150,7 +153,7 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
     const table = typeof tableHint === "boolean" ? tableHint : copyChipLiveTableForLine(lineText);
     let chips = null;
     try {
-      chips = copyChipScanLine(lineText, { table });
+      chips = chipScanLine(lineText, { table });
     } catch (error) {
       return [];
     }
@@ -188,8 +191,10 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
           if (!ok) continue;
         }
         out.push({
+          kind: chip.kind,
           label: chip.label,
           text: chip.text,
+          raw: chip.raw,
           lineFrom,
           from: absFrom,
           to: absTo,
@@ -203,6 +208,23 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
   } catch (error) {
     return [];
   }
+}
+
+// The copy-kind view of chipLiveChipsForLine in its original shape.
+function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, tableHint) {
+  const out = [];
+  for (const chip of chipLiveChipsForLine(lineText, lineFrom, tree, tableHint)) {
+    if (chip.kind !== "copy") continue;
+    out.push({
+      label: chip.label,
+      text: chip.text,
+      lineFrom: chip.lineFrom,
+      from: chip.from,
+      to: chip.to,
+      lineText: chip.lineText,
+    });
+  }
+  return out;
 }
 
 let CopyChipLiveWidgetClass = null;
@@ -532,10 +554,11 @@ function copyChipBuildLiveDecorations(view, plugin) {
               fenced = false;
             }
             if (!fenced && !copyChipLiveLineIsIndentedCode(line.text)) {
-              const chips = copyChipLiveChipsForLine(line.text, line.from, line.from, tree, undefined);
+              const chips = chipLiveChipsForLine(line.text, line.from, tree, undefined);
               for (const chip of chips) {
                 try {
                   if (copyChipLiveShouldReveal(chip.from, chip.to, selections)) continue;
+                  chip.line = lineNo;
                   found.push(chip);
                 } catch (error) {
                   continue;
@@ -553,16 +576,32 @@ function copyChipBuildLiveDecorations(view, plugin) {
     found.sort((a, b) => a.from - b.from);
     const WidgetClass = copyChipEnsureLiveWidget();
     if (!WidgetClass) return CopyChipsDecoration.none;
+    const RunWidgetClass = typeof commandChipEnsureLiveWidget === "function" ? commandChipEnsureLiveWidget() : null;
     const builder = new CopyChipsRangeSetBuilder();
     for (const chip of found) {
       try {
-        const widget = new WidgetClass({
-          label: chip.label,
-          text: chip.text,
-          from: chip.from,
-          to: chip.to,
-          plugin: plugin || null,
-        });
+        let widget = null;
+        if (chip.kind === "run") {
+          if (!RunWidgetClass) continue;
+          widget = new RunWidgetClass({
+            label: chip.label,
+            text: chip.text,
+            raw: chip.raw,
+            from: chip.from,
+            to: chip.to,
+            lineFrom: chip.lineFrom,
+            line: chip.line,
+            plugin: plugin || null,
+          });
+        } else {
+          widget = new WidgetClass({
+            label: chip.label,
+            text: chip.text,
+            from: chip.from,
+            to: chip.to,
+            plugin: plugin || null,
+          });
+        }
         builder.add(chip.from, chip.to, CopyChipsDecoration.replace({ widget }));
       } catch (error) {
         continue;

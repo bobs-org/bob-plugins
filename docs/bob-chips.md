@@ -13,10 +13,10 @@ Bob Chips turns an inline code span that starts with `copy:` — or a
 | --- | --- |
 | Name | Bob Chips |
 | ID | `bob-chips` |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | No |
-| Description | Click-to-copy chips from `copy:` inline code spans and `bob-copy` fences. |
+| Description | Click-to-copy chips from `copy:` spans and `bob-copy` fences, plus click-to-run `run:` bob command chips. |
 <!-- END GENERATED: facts -->
 
 <!-- BEGIN GENERATED: commands -->
@@ -234,9 +234,10 @@ Authored payloads live on copy chips; live context lives on the Copy card, whose
 ## Command chip grammar
 
 A command chip is a `run:` code span or a `bob-run` fence that holds a bob
-command line. This version parses command chips and exposes them through
-`api.commandChips`. It does not render or run them yet, so a `run:` span
-still reads as plain inline code.
+command line. `api.commandChips` exposes the grammar. Live Preview renders
+and runs `run:` spans (see [Command chips in Live Preview](#command-chips-in-live-preview));
+Reading view, embeds, hover previews, query results, and `bob-run` fences
+still show plain code.
 
 | You type | Parses as |
 | --- | --- |
@@ -290,6 +291,78 @@ that later decides what ⌘↵ runs. Coordinates match `copyChips.chipAt`:
 7. Otherwise `none`.
 
 Copy chips never count here, and `gy` never sees command chips.
+
+## Command chips in Live Preview
+
+A `run:` span becomes a quiet play pill. Only Bob Command Mode tokenizes the
+text, checks it against bob's catalog, and runs it. There is no shell, and
+`confirm` commands always ask first.
+
+| Gesture | Effect |
+| --- | --- |
+| Click, tap, Enter, or Space | Run it, or copy it in a copy-only note |
+| Shift+Click or Shift+Enter | Open it in Command Mode's guarded path |
+| Alt+Click | Nothing yet |
+| Move the cursor into the span | Reveal the Markdown source |
+
+A click runs now. A `run` or `preview-first` writer skips its preview, a
+`report` opens its output, and a `confirm` command opens its confirm card.
+Several `&&` steps run as one Command Mode sequence. Clicking a chip that is
+already running opens its live output and never starts a second run. Running
+never completes, freshens, or advances the chip's task. Drags of 4 px or
+more, secondary buttons, and releases outside do nothing, and a click never
+moves the caret. A span that changed since it rendered refreshes and runs
+nothing.
+
+The note's own path decides whether a chip may run. These chips are
+copy-only: they show a copy glyph and copy the payload byte-exact with the
+copy-chip feedback.
+
+- Notes under `mail/`, `ref/`, `ref_history/`, `.bob/`, or `_conflicts/`
+  (any case).
+- An editor without a note.
+- Mobile.
+- A missing or disabled Command Mode.
+
+A command that Command Mode refuses shows ⊘. Refusals cover non-bob steps,
+shell syntax, unknown or excluded commands, missing arguments, and other
+hosts. A click on ⊘ shows one Notice with the reason.
+
+An unlabeled chip shows its resolved steps in monospace, with each later
+step's leading `bob` drawn as a faint `›`. A labeled chip shows its label in
+the text font, plus a faint `· N` for N steps. While the catalog loads, and
+in copy-only notes, an unlabeled chip shows its payload verbatim.
+
+| State | Glyph and ink |
+| --- | --- |
+| Ready | Faint ▶, accent on hover |
+| Loading | Faint ▶ |
+| Queued | Hourglass, dashed accent border |
+| Running | Spinning loader; sequences add a 2 px segmented underline (done green, current accent, upcoming faint) and tint the current step |
+| Completed | Green check for about 1.6 s plus one pulse, then Ready |
+| Needs attention | Orange ▶, kept until the next run or reload |
+| Failed | Error ▶, kept until the next run or reload |
+| Unavailable | Ban glyph, muted text, dashed border |
+| Copy only | Copy glyph |
+
+Command chips share the copy chip's geometry, with a faint accent wash. No
+state changes the line's width or height. Run state outlives editor
+rebuilds, so a note rewritten mid-run keeps its live chip.
+
+The hover tooltip is DOM text with these lines:
+
+1. The state.
+2. The full command lines.
+3. One policy line: "Runs now · skips its preview", "Asks first: …", or
+   "Opens its output".
+4. "Click to run · ⇧Click opens Command Mode".
+
+A failed chip's tooltip carries the first error line. A shared polite live
+region announces "Running …", "… finished", "… needs attention", and
+"… failed". The accessible name is "Run" (or "Copy") plus the face, via
+`aria-labelledby`. Reduced motion drops the spin and pulse. Print and PDF
+show plain inline code. Rendering, hovering, scrolling, and catalog
+refreshes never run or copy anything.
 
 ## Non-goals
 

@@ -887,6 +887,15 @@ Bob Chips fragments share this runtime; it is not part of
   a pending one swallows the gesture. Invalid, unavailable, and refused
   activations show one Notice. Cards and previews restore the prior ink;
   failures never retry. Alt is inert. Nothing calls task or walk APIs.
+- **Face.** `commandChipBuildInline(doc, chip, { interactive })` builds the
+  shared `.bob-run-chip`: a `<button type="button">`, or a focusable
+  `role="button"` span. `commandChipPaint(host, paint)` repaints it in place.
+  `commandChipMount(plugin, host, chip, { context })` subscribes to the run
+  key and catalog changes and wires gestures. `context()` returns fresh
+  activation evidence without `plugin` or `element`. `commandChipUnmount(host)`
+  never touches the run. Live Preview reads the note from its own
+  `editorInfoField`. When set, `plugin.commandChipRunHotkey` adds the key to
+  the tooltip.
 
 ## Related
 

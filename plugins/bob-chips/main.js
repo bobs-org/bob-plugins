@@ -1413,9 +1413,699 @@ function copyChipBuildInline(doc, chip, options) {
     return null;
   }
 }
+// ---- src/041-command-chip-dom.js ----
+// The shared command-chip face: one `.bob-run-chip` builder and one in-place
+// painter for Live Preview widgets and Reading buttons. The payload lives in
+// a WeakMap and in DOM text only, never in innerHTML or an attribute. The
+// painter only reads a frozen commandChipPaintModel; it never resolves,
+// spawns, copies, or writes.
+const COMMAND_CHIP_FACES = copyChipFreeze([
+  "ready", "armed", "loading", "queued", "running", "completed", "attention", "failed", "unavailable", "copy",
+]);
+// Lucide names per face, first known name wins (`loader-circle` was
+// `loader-2` in older Lucide builds).
+const COMMAND_CHIP_GLYPHS = copyChipFreeze({
+  ready: ["play"],
+  armed: ["play"],
+  loading: ["play"],
+  queued: ["hourglass"],
+  running: ["loader-circle", "loader-2", "loader"],
+  completed: ["check"],
+  attention: ["play"],
+  failed: ["play"],
+  unavailable: ["ban"],
+  copy: ["copy"],
+});
+const COMMAND_CHIP_SHIFT_HINT = "⇧Click opens Command Mode";
+
+let CommandChipsGetIcon = null;
+try {
+  const obsidian = require("obsidian");
+  if (obsidian && typeof obsidian.getIcon === "function") CommandChipsGetIcon = obsidian.getIcon;
+} catch (error) {
+  CommandChipsGetIcon = null;
+}
+
+const commandChipDomRecords = new WeakMap();
+const commandChipIconChoice = new Map();
+let commandChipDomSeq = 0;
+
+function commandChipIconFor(face) {
+  const names = COMMAND_CHIP_GLYPHS[face] || COMMAND_CHIP_GLYPHS.ready;
+  if (commandChipIconChoice.has(face)) return commandChipIconChoice.get(face);
+  let chosen = names[0];
+  if (typeof CommandChipsGetIcon === "function") {
+    for (const name of names) {
+      try {
+        if (CommandChipsGetIcon(name)) {
+          chosen = name;
+          break;
+        }
+      } catch (error) {
+        // An unknown icon falls through to the next name.
+      }
+    }
+  }
+  commandChipIconChoice.set(face, chosen);
+  return chosen;
+}
+
+function commandChipFirstLine(text) {
+  const line = String(text === undefined || text === null ? "" : text).split(/\r\n|\r|\n/).find((part) => /\S/.test(part));
+  return line ? line.trim() : "";
+}
+
+// A later step's leading `bob` word becomes the faint `›` separator.
+function commandChipLaterStepText(text) {
+  const value = String(text);
+  return /^bob(?:\s|$)/.test(value) ? value.replace(/^bob\s*/, "") : value;
+}
+
+// What the face shows, from the chip and its verdict: a label (with a step
+// count once resolved), the resolved step texts, or the verbatim payload
+// while loading, copy-only, or refused. Frozen `{ form, label, count, parts }`.
+function commandChipFaceModel(chip, verdict) {
+  try {
+    const text = chip && typeof chip.text === "string" ? chip.text : "";
+    const steps = verdict && verdict.state === "ready" && Array.isArray(verdict.steps) ? verdict.steps : null;
+    if (chip && chip.label !== null && chip.label !== undefined) {
+      return copyChipFreeze({ form: "label", label: String(chip.label), count: steps ? steps.length : 0, parts: copyChipFreeze([]) });
+    }
+    if (steps && steps.length) {
+      const parts = steps.map((step, index) => {
+        const stepText = step && typeof step.text === "string" ? step.text : "";
+        return index === 0 ? stepText : commandChipLaterStepText(stepText);
+      });
+      return copyChipFreeze({ form: "steps", label: null, count: steps.length, parts: copyChipFreeze(parts) });
+    }
+    return copyChipFreeze({ form: "verbatim", label: null, count: 0, parts: copyChipFreeze([text]) });
+  } catch (error) {
+    return copyChipFreeze({ form: "verbatim", label: null, count: 0, parts: copyChipFreeze([""]) });
+  }
+}
+
+// The face as one line of text, for announcements.
+function commandChipFaceName(faceModel) {
+  if (!faceModel) return "";
+  if (faceModel.form === "label") return faceModel.label;
+  return faceModel.parts.join(" › ");
+}
+
+// One honest line about what a click does, from the resolved steps.
+function commandChipPolicyText(verdict) {
+  try {
+    const steps = verdict && verdict.state === "ready" && Array.isArray(verdict.steps) ? verdict.steps : [];
+    if (!steps.length) return null;
+    const confirm = steps.find((step) => step && step.policy === "confirm");
+    if (confirm) return "Asks first: " + String(confirm.confirm || "This command needs confirmation.");
+    if (steps.length === 1 && steps[0].presentation === "report") return "Opens its output";
+    const skips = steps.some((step) => step && step.policy === "preview-first" && step.hasPreview);
+    if (steps.length === 1) return "Runs now" + (skips ? " · skips its preview" : "");
+    return "Runs " + steps.length + " steps now" + (skips ? " · skips previews" : "");
+  } catch (error) {
+    return null;
+  }
+}
+
+// The gesture line. A keyboard binding is advertised only once the keymap
+// phase sets `plugin.commandChipRunHotkey` from the live binding.
+function commandChipHintText(plugin, face) {
+  if (face === "copy") return "Click to copy";
+  if (face === "unavailable") return "Click to see why";
+  if (face === "queued" || face === "running") return "Click opens its output";
+  let hotkey = null;
+  try {
+    const value = plugin && plugin.commandChipRunHotkey;
+    hotkey = typeof value === "string" && value.trim() ? value.trim() : null;
+  } catch (error) {
+    hotkey = null;
+  }
+  const verb = face === "attention" || face === "failed" ? " to run again" : " to run";
+  return (hotkey ? "Click or " + hotkey + verb : "Click" + verb) + " · " + COMMAND_CHIP_SHIFT_HINT;
+}
+
+function commandChipStateLine(paint) {
+  const face = paint && paint.face;
+  const snapshot = (paint && paint.snapshot) || {};
+  const reason = commandChipFirstLine(paint && paint.reason);
+  const step = paint && paint.verdict && Number(paint.verdict.step) > 1 ? " (step " + Number(paint.verdict.step) + ")" : "";
+  if (face === "copy") return "Copy only" + (reason ? ": " + reason : "");
+  if (face === "loading") return "Loading bob's command catalog";
+  if (face === "unavailable") return "Can't run: " + (reason || "command could not be resolved") + step;
+  if (face === "queued") return "Queued";
+  if (face === "running") {
+    return Number(snapshot.total) > 1 ? "Running step " + (Number(snapshot.step) || 1) + " of " + Number(snapshot.total) : "Running";
+  }
+  if (face === "completed") return "Completed";
+  if (face === "attention") return "Needs attention" + (reason ? ": " + reason : "");
+  if (face === "failed") return "Failed" + (reason ? ": " + reason : "");
+  return null;
+}
+
+// Tooltip rows: state, the full command line(s), policy, gestures.
+function commandChipTipRows(plugin, chip, paint) {
+  const rows = [];
+  const state = commandChipStateLine(paint);
+  if (state) rows.push(["state", state]);
+  const verdict = paint && paint.verdict;
+  const steps = paint && paint.face !== "copy" && verdict && verdict.state === "ready" && Array.isArray(verdict.steps)
+    ? verdict.steps
+    : null;
+  if (steps && steps.length) {
+    for (const step of steps) rows.push(["command", String((step && step.text) || "")]);
+  } else {
+    rows.push(["command", String((chip && chip.text) || "")]);
+  }
+  const policy = paint && paint.face !== "copy" && paint.face !== "unavailable" ? commandChipPolicyText(verdict) : null;
+  if (policy) rows.push(["policy", policy]);
+  rows.push(["hint", commandChipHintText(plugin, paint && paint.face)]);
+  return rows;
+}
+
+function commandChipSetText(el, text) {
+  try {
+    el.textContent = String(text);
+  } catch (error) {
+    // Text setup is best-effort on fake nodes.
+  }
+}
+
+function commandChipEl(doc, tag, className, text) {
+  const el = copyChipMakeEl(doc, tag, className);
+  if (el && text !== undefined) commandChipSetText(el, text);
+  return el;
+}
+
+function commandChipSetAttr(el, name, value) {
+  try {
+    if (el && typeof el.setAttribute === "function") el.setAttribute(name, String(value));
+  } catch (error) {
+    // Attributes are best-effort.
+  }
+}
+
+function commandChipRemoveAttr(el, name) {
+  try {
+    if (el && typeof el.removeAttribute === "function") el.removeAttribute(name);
+    else if (el && el.attrs && typeof el.attrs.delete === "function") el.attrs.delete(name);
+  } catch (error) {
+    // Attributes are best-effort.
+  }
+}
+
+function commandChipSetClass(el, name, on) {
+  try {
+    if (!el || !el.classList) return;
+    if (on) el.classList.add(name);
+    else el.classList.remove(name);
+  } catch (error) {
+    // Class changes are best-effort.
+  }
+}
+
+function commandChipSetStyleVar(el, name, value) {
+  try {
+    const style = el && el.style;
+    if (!style) return;
+    if (value === null) {
+      if (typeof style.removeProperty === "function") style.removeProperty(name);
+      else delete style[name];
+    } else if (typeof style.setProperty === "function") {
+      style.setProperty(name, value);
+    } else {
+      style[name] = value;
+    }
+  } catch (error) {
+    // Progress paint is best-effort.
+  }
+}
+
+// Builds one inert face. `chip` is `{ label, text }`; `options.interactive`
+// selects a real <button type="button"> (Reading), otherwise a focusable
+// span with role button (Live Preview). Never registers gestures and never
+// throws: bad input yields null. Paint it with commandChipPaint.
+function commandChipBuildInline(doc, chip, options) {
+  try {
+    if (!doc || typeof doc.createElement !== "function" || !chip || typeof chip !== "object") return null;
+    const text = chip.text;
+    if (typeof text !== "string" || !/\S/.test(text)) return null;
+    const opts = options && typeof options === "object" ? options : {};
+    const interactive = Boolean(opts.interactive);
+    const labeled = chip.label !== null && chip.label !== undefined;
+    const host = copyChipMakeEl(doc, interactive ? "button" : "span", "bob-run-chip" + (labeled ? " is-labeled" : " is-literal"));
+    if (!host) return null;
+    if (interactive) commandChipSetAttr(host, "type", "button");
+    else {
+      commandChipSetAttr(host, "role", "button");
+      commandChipSetAttr(host, "tabindex", "0");
+    }
+    commandChipDomSeq += 1;
+    const ids = {
+      action: "bob-run-chip-action-" + commandChipDomSeq,
+      face: "bob-run-chip-face-" + commandChipDomSeq,
+      tip: "bob-run-chip-tip-" + commandChipDomSeq,
+    };
+    // The glyph also carries the copy-chip glyph class, so copy-only clicks
+    // reuse the copy chips' feedback unchanged.
+    const glyph = commandChipEl(doc, "span", "bob-run-chip-glyph bob-copy-chip-glyph");
+    const action = commandChipEl(doc, "span", "bob-run-chip-action", "Run");
+    const face = commandChipEl(doc, "span", "bob-run-chip-face");
+    const tip = commandChipEl(doc, "span", "bob-run-chip-tip");
+    if (!glyph || !action || !face || !tip) return null;
+    commandChipSetAttr(glyph, "aria-hidden", "true");
+    commandChipSetAttr(action, "id", ids.action);
+    commandChipSetAttr(face, "id", ids.face);
+    commandChipSetAttr(tip, "id", ids.tip);
+    commandChipSetAttr(tip, "role", "tooltip");
+    host.appendChild(glyph);
+    host.appendChild(action);
+    host.appendChild(face);
+    host.appendChild(tip);
+    commandChipSetAttr(host, "aria-labelledby", ids.action + " " + ids.face);
+    commandChipSetAttr(host, "aria-describedby", ids.tip);
+    commandChipDomRecords.set(host, {
+      text,
+      label: labeled ? String(chip.label) : null,
+      glyph,
+      action,
+      face,
+      tip,
+      steps: [],
+      glyphFace: null,
+      faceSignature: null,
+      tipSignature: null,
+      progress: null,
+    });
+    commandChipPaint(host, null, { chip });
+    return host;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The payload a built face carries, for tests and renderers. Never an
+// attribute: a WeakMap lookup.
+function commandChipPayloadOf(el) {
+  try {
+    const record = el ? commandChipDomRecords.get(el) : null;
+    return record ? record.text : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function commandChipPaintFace(record, faceModel) {
+  const signature = JSON.stringify(faceModel);
+  if (record.faceSignature === signature) return;
+  record.faceSignature = signature;
+  const faceEl = record.face;
+  commandChipSetText(faceEl, "");
+  record.steps = [];
+  const doc = faceEl.ownerDocument || null;
+  if (faceModel.form === "label") {
+    faceEl.appendChild(commandChipEl(doc, "span", "bob-run-chip-label", faceModel.label));
+    if (faceModel.count > 1) faceEl.appendChild(commandChipEl(doc, "span", "bob-run-chip-count", " · " + faceModel.count));
+    return;
+  }
+  faceModel.parts.forEach((part, index) => {
+    if (index > 0) faceEl.appendChild(commandChipEl(doc, "span", "bob-run-chip-sep", " › "));
+    const stepEl = commandChipEl(doc, "span", "bob-run-chip-step", part);
+    faceEl.appendChild(stepEl);
+    record.steps.push(stepEl);
+  });
+}
+
+function commandChipPaintTip(record, rows) {
+  const signature = JSON.stringify(rows);
+  if (record.tipSignature === signature) return;
+  record.tipSignature = signature;
+  const tipEl = record.tip;
+  commandChipSetText(tipEl, "");
+  const doc = tipEl.ownerDocument || null;
+  for (const [kind, text] of rows) {
+    tipEl.appendChild(commandChipEl(doc, "span", "bob-run-chip-tip-row is-" + kind, text));
+  }
+}
+
+// The 2 px segmented underline: one segment per step, done in green, the
+// current step in accent, upcoming faint. Theme variables only.
+function commandChipProgressGradient(step, total) {
+  const n = Math.max(1, Math.floor(Number(total) || 1));
+  const current = Math.min(n, Math.max(1, Math.floor(Number(step) || 1)));
+  const gap = n > 1 ? Math.min(2, 30 / n) : 0;
+  const stops = [];
+  for (let index = 0; index < n; index += 1) {
+    const color = index + 1 < current
+      ? "var(--color-green)"
+      : index + 1 === current ? "var(--interactive-accent)" : "var(--text-faint)";
+    const from = (index * 100) / n;
+    const to = ((index + 1) * 100) / n - (index + 1 < n ? gap : 0);
+    stops.push(color + " " + from.toFixed(2) + "% " + to.toFixed(2) + "%");
+    if (index + 1 < n) stops.push("transparent " + to.toFixed(2) + "% " + (((index + 1) * 100) / n).toFixed(2) + "%");
+  }
+  return "linear-gradient(to right, " + stops.join(", ") + ")";
+}
+
+// Repaint `host` in place from a frozen paint model. Only what changed is
+// touched: the glyph icon is replaced only when the face changes, so a
+// running spinner never restarts between steps. A null paint shows Loading.
+function commandChipPaint(host, paint, options) {
+  try {
+    const record = host ? commandChipDomRecords.get(host) : null;
+    if (!record) return false;
+    const opts = options && typeof options === "object" ? options : {};
+    const chip = opts.chip || { label: record.label, text: record.text };
+    const p = paint && typeof paint === "object" ? paint : { face: "loading", verdict: null, snapshot: null, reason: null };
+    const face = COMMAND_CHIP_FACES.includes(p.face) ? p.face : "loading";
+    if (face !== "copy" && copyChipFeedbackTimers.has(host)) {
+      // Copy feedback from a copy-only click must not outlive the copy face.
+      copyChipClearFeedback(host);
+      record.glyphFace = null;
+    }
+    const copyFeedback = copyChipFeedbackTimers.has(host);
+    for (const name of COMMAND_CHIP_FACES) {
+      // A copy failure borrows `is-failed` for its dwell; keep it.
+      if (name === "failed" && face === "copy" && copyFeedback) continue;
+      commandChipSetClass(host, "is-" + name, name === face);
+    }
+    const snapshot = p.snapshot || {};
+    const total = Number(snapshot.total) || 0;
+    const faceModel = commandChipFaceModel(chip, p.verdict);
+    commandChipSetClass(host, "is-sequence", total > 1 || faceModel.count > 1);
+    if (record.glyphFace !== face && !(face === "copy" && copyFeedback)) {
+      copyChipPaintGlyph(record.glyph, commandChipIconFor(face));
+      record.glyphFace = face;
+    }
+    commandChipSetText(record.action, face === "copy" ? "Copy" : "Run");
+    commandChipPaintFace(record, faceModel);
+    const running = face === "running" && total > 1;
+    const current = running ? Math.min(total, Math.max(1, Number(snapshot.step) || 1)) : 0;
+    record.steps.forEach((stepEl, index) => {
+      commandChipSetClass(stepEl, "is-done", running && index + 1 < current);
+      commandChipSetClass(stepEl, "is-current", running && index + 1 === current);
+    });
+    const progress = running ? commandChipProgressGradient(current, total) : null;
+    if (progress !== record.progress) {
+      record.progress = progress;
+      commandChipSetClass(host, "has-progress", progress !== null);
+      commandChipSetStyleVar(host, "--bob-run-progress", progress);
+    }
+    if (face === "queued" || face === "running") commandChipSetAttr(host, "aria-busy", "true");
+    else commandChipRemoveAttr(host, "aria-busy");
+    commandChipPaintTip(record, commandChipTipRows(opts.plugin || null, chip, p));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Polite announcements, once per run transition however many faces show
+// the same run. Keyed per runtime so a reload starts fresh.
+const commandChipAnnounced = new WeakMap();
+const COMMAND_CHIP_ANNOUNCE_MAX = 256;
+
+function commandChipAnnouncement(face, name) {
+  if (face === "running") return "Running " + name;
+  if (face === "completed") return name + " finished";
+  if (face === "attention") return name + " needs attention";
+  if (face === "failed") return name + " failed";
+  return null;
+}
+
+function commandChipAnnounceTransition(plugin, paint, chip, doc) {
+  try {
+    const runtime = commandChipRuntimeOf(plugin);
+    const snapshot = paint && paint.snapshot;
+    if (!runtime || !snapshot || !snapshot.seq) return false;
+    const message = commandChipAnnouncement(paint.face, copyChipPreviewText(commandChipFaceName(commandChipFaceModel(chip, paint.verdict))));
+    if (!message) return false;
+    let seen = commandChipAnnounced.get(runtime);
+    if (!seen) {
+      seen = new Map();
+      commandChipAnnounced.set(runtime, seen);
+    }
+    const mark = snapshot.seq + ":" + paint.face;
+    if (seen.get(paint.key) === mark) return false;
+    seen.delete(paint.key);
+    seen.set(paint.key, mark);
+    while (seen.size > COMMAND_CHIP_ANNOUNCE_MAX) seen.delete(seen.keys().next().value);
+    copyChipAnnounce(doc || (typeof document !== "undefined" ? document : null), message);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+// ---- src/042-command-chip-mount.js ----
+// Mounting one command-chip face: paint from the shared store, subscribe to
+// its run key and to catalog changes, repaint in place, and route deliberate
+// gestures to commandChipActivate. Live Preview widgets and Reading buttons
+// share this; unmounting one face never cancels a run or another face's ink.
+const commandChipMounts = new WeakMap();
+const COMMAND_CHIP_KEY_CLICK_MS = 1000;
+
+function commandChipMountOf(host) {
+  try {
+    const mount = host ? commandChipMounts.get(host) : null;
+    return mount && !mount.destroyed ? mount : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// The activation context a renderer supplies, made fresh per call, plus the
+// plugin and element this mount owns.
+function commandChipMountContext(mount, extra) {
+  let base = {};
+  try {
+    const made = typeof mount.context === "function" ? mount.context() : null;
+    base = made && typeof made === "object" ? made : {};
+  } catch (error) {
+    base = {};
+  }
+  return { ...base, ...(extra || {}), plugin: mount.plugin, element: mount.host };
+}
+
+// Recompute the paint model and repaint. A changed run key (loading to
+// ready, a rekey, a catalog swap) moves the store subscription with it.
+// `announce` is true only for store transitions, never for a first paint.
+function commandChipMountRepaint(mount, announce) {
+  try {
+    if (!mount || mount.destroyed) return null;
+    const paint = commandChipPaintModel(mount.plugin, mount.chip, commandChipMountContext(mount));
+    if (paint.key !== mount.key) {
+      if (mount.unsubscribeKey) mount.unsubscribeKey();
+      mount.unsubscribeKey = null;
+      mount.key = paint.key;
+      const store = commandChipStoreOf(mount.plugin);
+      if (store) mount.unsubscribeKey = store.subscribe(paint.key, () => commandChipMountRepaint(mount, true));
+    }
+    mount.paint = paint;
+    commandChipPaint(mount.host, paint, { plugin: mount.plugin, chip: mount.chip });
+    if (announce) commandChipAnnounceTransition(mount.plugin, paint, mount.chip, mount.host.ownerDocument || null);
+    return paint;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Mount `host` (from commandChipBuildInline) for `chip` (`{ form, label,
+// text, line, from, to }` in chipAt coordinates). `options.context()`
+// returns the renderer's fresh activation context without plugin/element.
+// Returns the mount, whose `destroy()` is idempotent.
+function commandChipMount(plugin, host, chip, options) {
+  try {
+    if (!host || !chip) return null;
+    const previous = commandChipMountOf(host);
+    if (previous) commandChipUnmount(host);
+    const opts = options && typeof options === "object" ? options : {};
+    const mount = {
+      plugin: plugin || null,
+      host,
+      chip: copyChipFreeze({ ...chip }),
+      context: typeof opts.context === "function" ? opts.context : null,
+      key: null,
+      paint: null,
+      unsubscribeKey: null,
+      unsubscribeCatalog: null,
+      detachGestures: null,
+      destroyed: false,
+    };
+    commandChipMounts.set(host, mount);
+    mount.unsubscribeCatalog = commandChipOnCatalogChanged(mount.plugin, () => commandChipMountRepaint(mount, false));
+    if (opts.gestures !== false) {
+      mount.detachGestures = commandChipAttachGestures(host, (gesture) => commandChipMountActivate(mount, gesture));
+    }
+    commandChipMountRepaint(mount, false);
+    return mount;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Point a kept face at its chip's new place (a widget reused after an edit
+// moved its span). Identity, stale evidence, and armed ink follow.
+function commandChipMountRetarget(host, chip) {
+  const mount = commandChipMountOf(host);
+  if (!mount || !chip) return false;
+  mount.chip = copyChipFreeze({ ...chip });
+  commandChipMountRepaint(mount, false);
+  return true;
+}
+
+function commandChipUnmount(host) {
+  try {
+    const mount = host ? commandChipMounts.get(host) : null;
+    if (!mount || mount.destroyed) return false;
+    mount.destroyed = true;
+    commandChipMounts.delete(host);
+    for (const name of ["unsubscribeKey", "unsubscribeCatalog", "detachGestures"]) {
+      try {
+        if (typeof mount[name] === "function") mount[name]();
+      } catch (error) {
+        // Cleanup is best-effort.
+      }
+      mount[name] = null;
+    }
+    copyChipClearFeedback(host);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// One deliberate gesture. The store drives every repaint while a run lives;
+// the settled repaint picks up policy changes (a renamed note, an engine).
+function commandChipMountActivate(mount, gesture) {
+  try {
+    if (!mount || mount.destroyed) return Promise.resolve(null);
+    const g = gesture && typeof gesture === "object" ? gesture : {};
+    const ctx = commandChipMountContext(mount, { shift: g.shift === true, alt: g.alt === true });
+    return Promise.resolve(commandChipActivate(mount.chip, ctx)).then((result) => {
+      commandChipMountRepaint(mount, false);
+      return result;
+    }, () => {
+      commandChipMountRepaint(mount, false);
+      return null;
+    });
+  } catch (error) {
+    return Promise.resolve(null);
+  }
+}
+
+function commandChipEventPoint(event) {
+  try {
+    const touch = (event && event.changedTouches && event.changedTouches[0]) ||
+      (event && event.touches && event.touches[0]) || null;
+    if (touch) return { x: touch.clientX, y: touch.clientY };
+    return { x: event.clientX, y: event.clientY };
+  } catch (error) {
+    return { x: NaN, y: NaN };
+  }
+}
+
+function commandChipPrevent(event) {
+  try {
+    if (event && typeof event.preventDefault === "function") event.preventDefault();
+  } catch (error) {
+    // Default suppression is best-effort.
+  }
+}
+
+// Gestures shared by span and button faces. A primary click or tap that
+// stays under the copy chips' 4 px threshold activates; Shift opens. Enter
+// and Space activate (Shift+Enter opens). Secondary buttons, drags,
+// cancelled touches, and releases outside never activate, mousedown never
+// moves the editor caret, and the native click a button fires after a key
+// or mouse activation is swallowed; a bare synthetic click (assistive
+// technology) still activates once. Returns a detach function.
+function commandChipAttachGestures(host, onActivate) {
+  if (!host || typeof host.addEventListener !== "function" || typeof onActivate !== "function") return () => {};
+  const state = { start: null, keyAt: -Infinity };
+  const fire = (gesture) => {
+    try {
+      const pending = onActivate(gesture);
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    } catch (error) {
+      // A failed activation never breaks the next gesture.
+    }
+  };
+  const release = (event, pointerType) => {
+    const start = state.start;
+    state.start = null;
+    if (!start) return;
+    const ok = copyChipLiveGestureShouldCopy(start, commandChipEventPoint(event), {
+      button: pointerType === "touch" ? 0 : event && event.button,
+      releasedInside: true,
+      pointerType,
+    });
+    if (!ok) return;
+    commandChipPrevent(event);
+    fire({ shift: start.shift || Boolean(event && event.shiftKey), alt: start.alt || Boolean(event && event.altKey), via: pointerType });
+  };
+  const handlers = {
+    mousedown(event) {
+      if (!event || event.button !== 0) {
+        state.start = null;
+        return;
+      }
+      commandChipPrevent(event);
+      state.start = { ...commandChipEventPoint(event), shift: Boolean(event.shiftKey), alt: Boolean(event.altKey) };
+    },
+    mouseup(event) {
+      release(event, "mouse");
+    },
+    mouseleave() {
+      state.start = null;
+    },
+    touchstart(event) {
+      state.start = { ...commandChipEventPoint(event), shift: false, alt: false };
+    },
+    touchcancel() {
+      state.start = null;
+    },
+    touchend(event) {
+      release(event, "touch");
+    },
+    keydown(event) {
+      if (!event || (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar")) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      commandChipPrevent(event);
+      state.keyAt = Date.now();
+      if (event.repeat) return;
+      fire({ shift: Boolean(event.shiftKey), alt: false, via: "keyboard" });
+    },
+    keyup(event) {
+      if (event && (event.key === " " || event.key === "Spacebar")) commandChipPrevent(event);
+    },
+    click(event) {
+      commandChipPrevent(event);
+      if (event && Number(event.detail) > 0) return;
+      if (Date.now() - state.keyAt < COMMAND_CHIP_KEY_CLICK_MS) return;
+      fire({ shift: Boolean(event && event.shiftKey), alt: false, via: "click" });
+    },
+  };
+  const options = { touchstart: { passive: true } };
+  for (const [type, handler] of Object.entries(handlers)) {
+    try {
+      host.addEventListener(type, handler, options[type]);
+    } catch (error) {
+      // Listener wiring is best-effort.
+    }
+  }
+  return () => {
+    for (const [type, handler] of Object.entries(handlers)) {
+      try {
+        if (typeof host.removeEventListener === "function") host.removeEventListener(type, handler, options[type]);
+      } catch (error) {
+        // Listener cleanup is best-effort.
+      }
+    }
+  };
+}
 // ---- src/050-live-preview.js ----
 // Live Preview chips: guarded ViewPlugin + WidgetType.
-// Decorates whole eligible code spans inside visibleRanges only.
+// Decorates whole eligible code spans inside visibleRanges only. One pass
+// emits copy widgets and command-chip widgets (051-live-command-widget.js).
 let copyChipLiveRefreshEffect = null;
 function copyChipEnsureLiveRefresh() {
   if (copyChipLiveRefreshEffect) return copyChipLiveRefreshEffect;
@@ -1556,9 +2246,11 @@ function copyChipLiveLineIsIndentedCode(lineText) {
   }
 }
 
-// Pure per-line chip discovery for one visible document line. Applies the
-// grammar, table inference, and inert filters. `tree` may be null in tests.
-function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, tableHint) {
+// Pure per-line discovery of both kinds for one visible document line: one
+// chipScanLine call, then table inference and the inert filters. Each chip
+// is `{ kind, label, text, raw, lineFrom, from, to, lineText }` with
+// absolute offsets. `tree` may be null in tests.
+function chipLiveChipsForLine(lineText, lineFrom, tree, tableHint) {
   try {
     if (typeof lineText !== "string" || lineText === "") return [];
     if (copyChipLiveLineIsIndentedCode(lineText)) return [];
@@ -1566,7 +2258,7 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
     const table = typeof tableHint === "boolean" ? tableHint : copyChipLiveTableForLine(lineText);
     let chips = null;
     try {
-      chips = copyChipScanLine(lineText, { table });
+      chips = chipScanLine(lineText, { table });
     } catch (error) {
       return [];
     }
@@ -1604,8 +2296,10 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
           if (!ok) continue;
         }
         out.push({
+          kind: chip.kind,
           label: chip.label,
           text: chip.text,
+          raw: chip.raw,
           lineFrom,
           from: absFrom,
           to: absTo,
@@ -1619,6 +2313,23 @@ function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, table
   } catch (error) {
     return [];
   }
+}
+
+// The copy-kind view of chipLiveChipsForLine in its original shape.
+function copyChipLiveChipsForLine(lineText, lineFrom, docOffsetBase, tree, tableHint) {
+  const out = [];
+  for (const chip of chipLiveChipsForLine(lineText, lineFrom, tree, tableHint)) {
+    if (chip.kind !== "copy") continue;
+    out.push({
+      label: chip.label,
+      text: chip.text,
+      lineFrom: chip.lineFrom,
+      from: chip.from,
+      to: chip.to,
+      lineText: chip.lineText,
+    });
+  }
+  return out;
 }
 
 let CopyChipLiveWidgetClass = null;
@@ -1948,10 +2659,11 @@ function copyChipBuildLiveDecorations(view, plugin) {
               fenced = false;
             }
             if (!fenced && !copyChipLiveLineIsIndentedCode(line.text)) {
-              const chips = copyChipLiveChipsForLine(line.text, line.from, line.from, tree, undefined);
+              const chips = chipLiveChipsForLine(line.text, line.from, tree, undefined);
               for (const chip of chips) {
                 try {
                   if (copyChipLiveShouldReveal(chip.from, chip.to, selections)) continue;
+                  chip.line = lineNo;
                   found.push(chip);
                 } catch (error) {
                   continue;
@@ -1969,16 +2681,32 @@ function copyChipBuildLiveDecorations(view, plugin) {
     found.sort((a, b) => a.from - b.from);
     const WidgetClass = copyChipEnsureLiveWidget();
     if (!WidgetClass) return CopyChipsDecoration.none;
+    const RunWidgetClass = typeof commandChipEnsureLiveWidget === "function" ? commandChipEnsureLiveWidget() : null;
     const builder = new CopyChipsRangeSetBuilder();
     for (const chip of found) {
       try {
-        const widget = new WidgetClass({
-          label: chip.label,
-          text: chip.text,
-          from: chip.from,
-          to: chip.to,
-          plugin: plugin || null,
-        });
+        let widget = null;
+        if (chip.kind === "run") {
+          if (!RunWidgetClass) continue;
+          widget = new RunWidgetClass({
+            label: chip.label,
+            text: chip.text,
+            raw: chip.raw,
+            from: chip.from,
+            to: chip.to,
+            lineFrom: chip.lineFrom,
+            line: chip.line,
+            plugin: plugin || null,
+          });
+        } else {
+          widget = new WidgetClass({
+            label: chip.label,
+            text: chip.text,
+            from: chip.from,
+            to: chip.to,
+            plugin: plugin || null,
+          });
+        }
         builder.add(chip.from, chip.to, CopyChipsDecoration.replace({ widget }));
       } catch (error) {
         continue;
@@ -2187,6 +2915,156 @@ function copyChipCreateSourceFlashField() {
       },
     });
     return copyChipSourceFlashField;
+  } catch (error) {
+    return null;
+  }
+}
+// ---- src/051-live-command-widget.js ----
+// Live Preview command chips: the run widget the one copy-chip decoration
+// pass emits for `run:` spans. Run state lives in the plugin store, so a
+// rebuilt or reused widget paints the current run immediately.
+
+// The note this editor shows, from the widget's own editor info, never the
+// globally active leaf. Null when the editor has no file.
+function commandChipLiveSourcePath(view) {
+  try {
+    if (!CopyChipsEditorInfoField || !view || !view.state || typeof view.state.field !== "function") return null;
+    const info = view.state.field(CopyChipsEditorInfoField, false);
+    const file = info && info.file;
+    return file && typeof file.path === "string" ? file.path : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Ask the decoration pass to rebuild (a stale span after a rewrite).
+function commandChipLiveRefresh(view) {
+  try {
+    const effect = copyChipEnsureLiveRefresh();
+    if (effect && view && typeof view.dispatch === "function" && typeof effect.of === "function") {
+      view.dispatch({ effects: effect.of(null) });
+    }
+  } catch (error) {
+    // The next decoration pass repaints anyway.
+  }
+}
+
+// The chipAt-coordinate chip for a Live Preview span: zero-based `line`,
+// line-relative `from` / `to` with delimiters.
+function commandChipLiveChipOf(widget) {
+  return {
+    form: "inline",
+    label: widget.label,
+    text: widget.text,
+    line: widget.line,
+    from: widget.spanFrom - widget.lineFrom,
+    to: widget.spanTo - widget.lineFrom,
+  };
+}
+
+// Fresh Live Preview activation evidence: the editor's file, the zero-based
+// line, and the exact absolute document slice, delimiters included.
+function commandChipLiveContext(view, target) {
+  return () => ({
+    origin: "live",
+    view,
+    resolveSourcePath: () => commandChipLiveSourcePath(view),
+    line: target.line,
+    range: { from: target.spanFrom, to: target.spanTo, raw: target.raw },
+    refresh: () => commandChipLiveRefresh(view),
+  });
+}
+
+const commandChipLiveTargets = new WeakMap();
+
+let CommandChipLiveWidgetClass = null;
+function commandChipEnsureLiveWidget() {
+  if (CommandChipLiveWidgetClass) return CommandChipLiveWidgetClass;
+  try {
+    if (!CopyChipsWidgetType || typeof CopyChipsWidgetType !== "function") return null;
+    CommandChipLiveWidgetClass = class extends CopyChipsWidgetType {
+      constructor(model) {
+        super();
+        const m = model && typeof model === "object" ? model : {};
+        this.label = m.label !== undefined ? m.label : null;
+        this.text = String(m.text || "");
+        this.raw = String(m.raw || "");
+        this.spanFrom = Number(m.from);
+        this.spanTo = Number(m.to);
+        this.lineFrom = Number(m.lineFrom);
+        this.line = Number.isInteger(m.line) ? m.line : null;
+        this.plugin = m.plugin || null;
+      }
+
+      eq(other) {
+        return Boolean(
+          other instanceof CommandChipLiveWidgetClass &&
+            other.label === this.label &&
+            other.text === this.text &&
+            other.raw === this.raw &&
+            other.spanFrom === this.spanFrom &&
+            other.spanTo === this.spanTo &&
+            other.line === this.line &&
+            other.plugin === this.plugin,
+        );
+      }
+
+      // An edit that only moved the span keeps the DOM, its listeners, and a
+      // spinning glyph; the mount follows the span's new place.
+      updateDOM(dom) {
+        try {
+          const target = commandChipLiveTargets.get(dom);
+          const mount = commandChipMountOf(dom);
+          if (!target || !mount || mount.plugin !== this.plugin) return false;
+          if (target.label !== this.label || target.text !== this.text || target.raw !== this.raw) return false;
+          target.spanFrom = this.spanFrom;
+          target.spanTo = this.spanTo;
+          target.lineFrom = this.lineFrom;
+          target.line = this.line;
+          return commandChipMountRetarget(dom, commandChipLiveChipOf(target));
+        } catch (error) {
+          return false;
+        }
+      }
+
+      ignoreEvent() {
+        return true;
+      }
+
+      toDOM(view) {
+        const ownerDoc = (view && view.dom && view.dom.ownerDocument) || (typeof document !== "undefined" ? document : null);
+        const host = commandChipBuildInline(ownerDoc, { label: this.label, text: this.text }, { interactive: false });
+        if (!host) {
+          const fallback = ownerDoc.createElement("span");
+          fallback.textContent = this.raw || this.text;
+          return fallback;
+        }
+        const target = {
+          label: this.label,
+          text: this.text,
+          raw: this.raw,
+          spanFrom: this.spanFrom,
+          spanTo: this.spanTo,
+          lineFrom: this.lineFrom,
+          line: this.line,
+        };
+        commandChipLiveTargets.set(host, target);
+        commandChipMount(this.plugin, host, commandChipLiveChipOf(target), {
+          context: commandChipLiveContext(view, target),
+        });
+        return host;
+      }
+
+      destroy(dom) {
+        try {
+          commandChipUnmount(dom);
+          commandChipLiveTargets.delete(dom);
+        } catch (error) {
+          // Widget teardown never throws.
+        }
+      }
+    };
+    return CommandChipLiveWidgetClass;
   } catch (error) {
     return null;
   }
@@ -7477,6 +8355,30 @@ module.exports.helpers = {
   commandChipFaceState,
   commandChipPaintModel,
   commandChipActivate,
+  COMMAND_CHIP_FACES,
+  COMMAND_CHIP_GLYPHS,
+  commandChipIconFor,
+  commandChipFaceModel,
+  commandChipFaceName,
+  commandChipPolicyText,
+  commandChipHintText,
+  commandChipStateLine,
+  commandChipTipRows,
+  commandChipProgressGradient,
+  commandChipBuildInline,
+  commandChipPayloadOf,
+  commandChipPaint,
+  commandChipAnnounceTransition,
+  commandChipMount,
+  commandChipMountOf,
+  commandChipMountRetarget,
+  commandChipMountRepaint,
+  commandChipUnmount,
+  commandChipMountActivate,
+  commandChipAttachGestures,
+  commandChipLiveSourcePath,
+  commandChipEnsureLiveWidget,
+  chipLiveChipsForLine,
   copyChipParseContent,
   copyChipNormalizeSpan,
   copyChipScanLine,

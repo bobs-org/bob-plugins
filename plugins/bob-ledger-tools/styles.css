@@ -12431,6 +12431,38 @@ li[data-bob-records-pretty="true"] > .bob-records-native { display: none; }
   }
 }
 /* Property-card group row (bob-cli-oj group-rail): end. */
+/* Record walk group row (bob-cli-oj record-rail): start.
+   A grouped record walk puts the kit group row under its step row in place
+   of the whole-walk thumb track; the accent follows the rail's
+   --bob-walk-ink through the kit token. The record rail styles its links
+   with !important (Obsidian link colors otherwise win inside notes), so the
+   group arms restate the kit inks at that strength and ghosts never light
+   up on hover. The album card's folded schema line names the walk's field
+   as a quiet `walks by Section` pill. */
+.bob-record-walk-rail > .bob-property-card-group-row { margin-block-start: 0.2em; }
+.bob-record-walk-rail .bob-property-card-group-arm {
+  color: var(--bob-property-card-muted-ink) !important;
+  text-decoration: none !important;
+}
+.bob-record-walk-rail .bob-property-card-group-arm:hover { color: var(--text-normal) !important; }
+.bob-record-walk-rail .bob-property-card-group-arm[data-state="ghost"],
+.bob-record-walk-rail .bob-property-card-group-arm[data-state="ghost"]:hover {
+  color: var(--bob-property-card-faint-ink) !important;
+  background: transparent;
+}
+.bob-album-schema-walks-by {
+  display: inline-block;
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  white-space: nowrap;
+}
+@media (forced-colors: active) {
+  .bob-record-walk-rail .bob-property-card-group-arm[data-state="ghost"],
+  .bob-record-walk-rail .bob-property-card-group-arm[data-state="ghost"] * { color: GrayText !important; }
+  .bob-album-schema-walks-by { border: 1px solid CanvasText; }
+}
+/* Record walk group row (bob-cli-oj record-rail): end. */
 
 /* Property-card identity badge (bob-cli-o6 collection-cards): start.
    The species tile and word on surfaces that name their species without

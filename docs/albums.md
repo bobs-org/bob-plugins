@@ -86,7 +86,10 @@ mobile keep the inline title and H1 and place the card below the H1.
 When bob's report arrives, `＋ <noun>` and **⊞ Schema** join the kicker row
 and the schema folds to one line, such as
 `▸ Schema · 5 fields · grouped by Location · dated notes · 104 restaurants`;
-the native `record` property hides only then. The `▸` toggle expands chip
+the native `record` property hides only then. When the album sets a valid
+`walk_by`, the line ends with `· walks by Section` (the field's label), whose
+tooltip reads `Record walk: grouped by Section, then title`; it is
+display-only, and records show the matching group row on their walk rail. The `▸` toggle expands chip
 rows, one per field in declaration order: human labels, kind and flag
 suffixes, required as a quiet `*`, choice chips with usage counts, grouping
 annotations, and muted `legacy` chips. The toggle state lives in view state

@@ -22,6 +22,15 @@ try {
       recordWalkModel,
       recordWalkRequestSync,
       recordWalkClearSyncedEpisodes,
+      RECORD_WALK_GROUP_CHANGED_NOTICE,
+      recordWalkGroupEligible,
+      recordWalkGroupFieldLabel,
+      recordWalkGroupStop,
+      recordWalkGroupRailFrom,
+      recordWalkGroupRailSignature,
+      recordWalkGroupArmSpec,
+      recordWalkGroupRowSpec,
+      recordWalkGroupRowEl,
     });
   }
 } catch (_) {

@@ -114,6 +114,20 @@ function albumSchemaPaintChips(doc, model, options) {
   return card;
 }
 
+// Display-only `· walks by Section` on the folded line: the album's record
+// walk follows that field's groups, then titles.
+function albumSchemaPaintWalksBy(doc, summary, model) {
+  const label = String(model?.walkByLabel || model?.walkBy || "").trim();
+  if (!label || !doc || typeof doc.createTextNode !== "function") return null;
+  const pill = notebookCreateEl(doc, "span", "bob-album-schema-walks-by");
+  if (!pill) return null;
+  pill.setAttribute("title", `Record walk: grouped by ${label}, then title`);
+  notebookSetText(pill, `walks by ${label}`);
+  summary.appendChild(doc.createTextNode(" · "));
+  summary.appendChild(pill);
+  return pill;
+}
+
 function albumSchemaPaintSummary(doc, model, options) {
   const summary = notebookCreateEl(doc, "button", "bob-album-schema-summary");
   if (!summary) return null;
@@ -129,6 +143,7 @@ function albumSchemaPaintSummary(doc, model, options) {
   if (healthy) summary.setAttribute("data-schema-fold", expanded ? "open" : "folded");
   const text = healthy ? albumHeaderFoldText(model) : albumHeaderSummaryText(model);
   notebookSetText(summary, `${expanded ? "▾" : "▸"} ${text}`);
+  if (healthy && model.walkBy) albumSchemaPaintWalksBy(doc, summary, model);
   summary.addEventListener("click", (event) => {
     event.preventDefault?.();
     options?.handlers?.toggleSchema?.(!expanded);

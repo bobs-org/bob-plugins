@@ -392,6 +392,7 @@ class BobLedgerToolsRecordSheetMixin {
       gate,
     });
     if (typeof recordWalkRequestSync === "function") recordWalkRequestSync(this, model?.walk);
+    if (model?.walk) this.recordWalkAttachGroupRail?.(path, currentSource, model.walk);
     return model;
   }
 

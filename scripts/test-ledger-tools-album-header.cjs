@@ -539,6 +539,51 @@ test("healthy schema summary starts folded to one line and expands per album in 
     "Restaurant · 1 field · dated notes · grouped by Status", "the editor's summary text is unchanged");
 });
 
+test("a walk_by album's folded schema line ends with a display-only walks-by pill", () => {
+  const fields = [
+    { key: "status", label: "Status", kind: "choices", required: true, list: false,
+      choices: [{ value: "a", label: "First" }, { value: "b", label: "Second" }] },
+    { key: "section", label: "Section", kind: "choices", required: false, list: false,
+      choices: [{ value: "intro", label: "Intro" }] },
+  ];
+  const { doc, plugin, flushReading, state } = fixture(album({ records: 12, index_by: "status", walk_by: "section", fields }));
+  const root = node(doc, "div", "markdown-preview-view");
+  plugin.renderAlbumHeaderInReading(root, { sourcePath: "eat.md", addChild() {} });
+  flushReading();
+  const summary = root.querySelector(".bob-album-schema-summary");
+  assert.equal(summary.textContent, "▸ Schema · 2 fields · grouped by Status · 12 restaurants · walks by Section");
+  const pill = summary.querySelector(".bob-album-schema-walks-by");
+  assert.equal(pill.textContent, "walks by Section");
+  assert.equal(pill.getAttribute("title"), "Record walk: grouped by Section, then title");
+  assert.equal(pill.listeners.size, 0, "the pill is display-only; the summary keeps its own toggle");
+  summary.fire("click");
+  assert.equal(plugin.albumHeaderIsExpanded("eat.md"), true);
+  assert.match(root.querySelector(".bob-album-schema-summary").textContent, /^▾ Schema · .* · walks by Section$/);
+
+  const model = helpers.albumHeaderModel(state.report, "eat.md", { sourceText: "---\ntype: \"[[album]]\"\n---\n" });
+  assert.equal(model.walkBy, "section");
+  assert.equal(model.walkByLabel, "Section");
+  const unset = helpers.albumHeaderModel(report(album({ records: 12, fields })), "eat.md", { sourceText: "---\ntype: \"[[album]]\"\n---\n" });
+  assert.equal(unset.walkBy, null);
+  assert.equal(unset.walkByLabel, "");
+  assert.notEqual(helpers.albumHeaderSignature(model), helpers.albumHeaderSignature(unset), "walk_by is in the signature");
+  assert.notEqual(helpers.albumHeaderSignature(model), helpers.albumHeaderSignature({ ...model, walkByLabel: "Part" }));
+
+  const plain = fixture(album({ records: 12, fields }));
+  const bare = node(plain.doc, "div", "markdown-preview-view");
+  plain.plugin.renderAlbumHeaderInReading(bare, { sourcePath: "eat.md", addChild() {} });
+  plain.flushReading();
+  assert.equal(bare.querySelector(".bob-album-schema-walks-by"), null, "absent when bob reports no walk_by");
+  assert.doesNotMatch(bare.querySelector(".bob-album-schema-summary").textContent, /walks by/);
+
+  const broken = fixture(album({ records: 12, walk_by: "section", fields,
+    issues: [{ severity: "error", code: "bad", message: "The album schema is invalid." }] }));
+  const sick = node(broken.doc, "div", "markdown-preview-view");
+  broken.plugin.renderAlbumHeaderInReading(sick, { sourcePath: "eat.md", addChild() {} });
+  broken.flushReading();
+  assert.equal(sick.querySelector(".bob-album-schema-walks-by"), null, "only a healthy schema line carries the pill");
+});
+
 test("chip rows cover kinds, flags, grouping, legacy, and empty teaching copy", () => {
   const { app } = fixture();
   const fields = [

@@ -181,6 +181,8 @@ function recordSheetWalkSignature(walk) {
     albumPath: walk.albumPath || "",
     prev: walk.prev && walk.prev.path ? walk.prev.path : "",
     next: walk.next && walk.next.path ? walk.next.path : "",
+    groupRail: typeof recordWalkGroupRailSignature === "function"
+      ? recordWalkGroupRailSignature(walk.groupRail) : null,
   };
 }
 

@@ -33,15 +33,17 @@ function recordSheetSlotIsLive(view, path) {
 class BobLedgerToolsRecordWalkRailMixin {
   recordWalkFor(path, sourceText) {
     if (!this.recordSheetDesktop()) return null;
+    const source = typeof sourceText === "string" ? sourceText : this.recordSheetSourceCache?.get(path);
     const walk = recordWalkModel({
       path,
-      sourceText: typeof sourceText === "string" ? sourceText : this.recordSheetSourceCache?.get(path),
+      sourceText: source,
       report: this.recordSheetState()?.report,
       frontmatter: this.recordSheetFrontmatter(path),
       metadataCache: this.app?.metadataCache,
       vault: this.app?.vault,
     });
     recordWalkRequestSync(this, walk);
+    this.recordWalkAttachGroupRail?.(path, source, walk);
     return walk;
   }
 
@@ -49,6 +51,9 @@ class BobLedgerToolsRecordWalkRailMixin {
     const options = this.recordSheetOptions(path, model);
     options.handlers.walkOpen = (target, direction, event) => {
       void this.recordWalkOpen(target, direction, path, event);
+    };
+    options.handlers.groupOpen = (direction, arm, event) => {
+      void this.recordWalkGroupOpen?.(direction, arm, path, event);
     };
     return options;
   }

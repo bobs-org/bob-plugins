@@ -242,6 +242,8 @@ function albumHeaderModel(report, sourcePath, options = {}) {
   const indexBy = String(entry.index_by || "").trim();
   const indexFacets = (Array.isArray(entry.index_facets) ? entry.index_facets : [])
     .map((item) => String(item || "").trim()).filter(Boolean);
+  // bob reports the effective walk_by key, or null when unset or invalid.
+  const walkBy = typeof entry.walk_by === "string" && entry.walk_by.trim() ? entry.walk_by.trim() : null;
   return {
     path: albumHeaderPath(entry.path),
     stem: String(entry.stem || ""),
@@ -261,6 +263,8 @@ function albumHeaderModel(report, sourcePath, options = {}) {
     indexBy,
     indexFacets,
     groupingClause: albumHeaderGroupingClause(entry, fields),
+    walkBy,
+    walkByLabel: walkBy ? albumHeaderFieldLabel(fields, walkBy) : "",
     crumbs,
     broken: ancestry.broken,
     cyclic: ancestry.cyclic,
@@ -381,6 +385,8 @@ function albumHeaderSignature(model, extra = {}) {
     ancestryMessage: model.ancestryMessage,
     datedNotes: model.datedNotes,
     groupingClause: model.groupingClause,
+    walkBy: model.walkBy || null,
+    walkByLabel: model.walkByLabel || "",
     legacy: model.legacy,
     records: model.records,
     schemaInvalid: model.schemaInvalid,

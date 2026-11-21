@@ -214,6 +214,7 @@
   "242t-plugin-record-walk-model.js",
   "242u-plugin-record-walk-rail-dom.js",
   "242v-plugin-record-walk-rail.js",
+  "242va-plugin-record-walk-group-rail.js",
   "242w-plugin-record-title-recognizer.js",
   "242i-plugin-record-sheet-model.js",
   "242ia-plugin-record-sheet-identity.js",

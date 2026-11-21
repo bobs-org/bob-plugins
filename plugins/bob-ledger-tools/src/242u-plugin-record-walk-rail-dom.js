@@ -1,4 +1,5 @@
 // Read-only rail: links always follow the written line, counts only a checked ring.
+// Grouped walks add the kit group row (242va) in place of the thumb track.
 const RECORD_WALK_RAIL_CLASS = "bob-record-walk-rail";
 const RECORD_WALK_SOURCE_CLASS = "bob-record-walk-source";
 
@@ -96,8 +97,10 @@ function recordWalkRailBuildEl(walk, options = {}, doc) {
   centre.appendChild(separator);
   const count = recordSheetEl(doc, "span", "bob-record-walk-count");
   const healthy = walk.state === "ok";
+  const groupRow = healthy && typeof recordWalkGroupRowEl === "function" ? recordWalkGroupRowEl(walk, options, doc) : null;
+  const order = groupRow ? `By ${walk.groupRail.fieldLabel}, then title · wraps around` : "Alphabetical, wraps around";
   count.setAttribute("aria-label", healthy ? `${walk.position} of ${walk.total}` : "Record walk is syncing");
-  count.setAttribute("title", healthy ? "Alphabetical, wraps around" : "Record walk is syncing");
+  count.setAttribute("title", healthy ? order : "Record walk is syncing");
   for (const [kind, text] of [
     ["wide", healthy ? `${walk.position} of ${walk.total}` : "⟳"],
     ["narrow", healthy ? `${walk.position}/${walk.total}` : "⟳"],
@@ -110,7 +113,11 @@ function recordWalkRailBuildEl(walk, options = {}, doc) {
   centre.appendChild(count);
   grid.appendChild(centre);
   armEl("next");
-  if (healthy && walk.total > 1) {
+  // A grouped walk's group row replaces the whole-walk thumb track.
+  if (groupRow) {
+    rail.setAttribute("data-walk-grouped", "true");
+    rail.appendChild(groupRow);
+  } else if (healthy && walk.total > 1) {
     const track = recordSheetEl(doc, "div", "bob-record-walk-track");
     track.setAttribute("aria-hidden", "true");
     const thumb = recordSheetEl(doc, "span", "bob-record-walk-thumb");

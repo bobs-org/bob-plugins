@@ -56,6 +56,23 @@ the written destinations. Missing or damaged lines stay as Markdown; a
 frontmatter-only record has no rail. Rendering needs no cached album report
 or CLI capability; automatic repair requests require `record_walk_v1`.
 
+When the album sets `walk_by`, the walk follows that field's groups, then
+titles, and the rail adds a quieter group row in place of the location line:
+
+```text
+« 🛑 Why SASE… · AI Slop      🔮 Future Work · 2 of 3 ▮■▮      🏁 Conclusion · Wrap-up »
+```
+
+Each arm names the neighboring group and its first record; `↺` marks the
+wrap between the last and first groups. The centre shows the current group,
+your place in it, and one tick per member, and the count tooltip becomes
+`By Section, then title · wraps around`. A plain click re-checks the stop and
+runs the same commands as `[N` / `]N` in the card's pane; Mod-click opens
+the head in a new tab. A head missing from the vault is dotted with
+`· not in vault` and only explains itself; navigation never creates records.
+Below 28rem the row becomes `« 🛑 Intro · 2/3 · 🏁 Conclusion »`. Ungrouped,
+single-group, and syncing walks keep the line.
+
 Below 28rem the rail becomes `‹ 3/104 ›`, retaining full accessible names
 and at least 32px link targets. Collapsing the card keeps the rail. Links
 have visible keyboard focus and page previews. Ordinary arm clicks use the

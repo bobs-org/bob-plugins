@@ -483,6 +483,14 @@ function buildRottenKeepPromptModel(options = {}) {
   };
 }
 
+// The kept task's note: the host's explicit path, else the queue entry's.
+function rottenKeepSourcePath(options) {
+  const opts = options || {};
+  if (typeof opts.sourcePath === "string" && opts.sourcePath) return opts.sourcePath;
+  const entry = opts.entry;
+  return entry && typeof entry.path === "string" && entry.path ? entry.path : null;
+}
+
 // Shared by the refresh modal and the decay card. The stage owns only its
 // subtree and input; its host owns closing, committing, and returning to choices.
 class RottenKeepReasonStage {
@@ -510,6 +518,8 @@ class RottenKeepReasonStage {
         bandHost,
         kind: "rotten",
         ownKeys: true,
+        links: true,
+        sourcePath: () => rottenKeepSourcePath(this.options),
       });
     }
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
@@ -540,7 +550,8 @@ class RottenKeepReasonStage {
       } else if (event.key === "Enter") {
         if (event.isComposing) return;
         event.preventDefault(); event.stopPropagation(); this.submit();
-      } else if (event.key === "Escape") {
+      } else if (event.key === "Escape" || isCtrlLeftBracketKeydown(event)) {
+        // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
         event.preventDefault(); event.stopPropagation();
         if (typeof this.options.onCancel === "function") this.options.onCancel();
       }

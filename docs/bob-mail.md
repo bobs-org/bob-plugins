@@ -13,7 +13,7 @@ search and save behavior; the plugin displays its results and inserts links.
 | --- | --- |
 | Name | Bob Mail |
 | ID | `bob-mail` |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Minimum Obsidian version | 1.8.7 |
 | Desktop only | Yes |
 | Description | Link, open, refresh, and send saved Gmail threads from Obsidian. |
@@ -73,7 +73,9 @@ was and the notice shows Bob's message.
   task text, then captures it with a link to the mail note. When the cursor is
   in a message card, that link points to the message's `^m-…` block. It
   shares the widened email context above, so it is also available on
-  line-borne and child-hop rows.
+  line-borne and child-hop rows. With Bob Navigation Hotkeys enabled, typing
+  `[[` in the task text opens its LINK band; Enter or Tab inserts the link and
+  never captures. Esc or Ctrl+[ closes the band first, then the modal.
 - Bob Command Mode offers **Save this email to Bob Mail** under **FROM
   CLIPBOARD** when the clipboard contains a Gmail URL.
 

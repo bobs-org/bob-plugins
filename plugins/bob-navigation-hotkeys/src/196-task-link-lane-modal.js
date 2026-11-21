@@ -34,6 +34,12 @@ class TaskLinkLanePromptModal extends Modal {
       );
   }
 
+  // `[[#…` and the nearby list resolve against the tasks' note when they
+  // share one; mixed notes (or none) leave same-note links unresolved.
+  taskLinkLaneSourcePath() {
+    return proseSharedSourcePath(this.options.sourcePaths);
+  }
+
   workLogClockNow() {
     if (this.fixedWorkLogNow instanceof Date) {
       return this.fixedWorkLogNow;
@@ -167,6 +173,8 @@ class TaskLinkLanePromptModal extends Modal {
           arrowKeys: true,
           ownKeys: true,
           scope: this.scope,
+          links: true,
+          sourcePath: () => this.taskLinkLaneSourcePath(),
         });
       } catch (_error) { this.logRecall = null; }
     }

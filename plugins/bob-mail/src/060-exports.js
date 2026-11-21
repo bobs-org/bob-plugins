@@ -94,6 +94,8 @@ module.exports.helpers = {
   MailArchiveBannerWidget,
   BobMailPickerModal,
   BobMailTaskModal,
+  mailProseFieldApi,
+  mailIsCtrlLeftBracket,
   BobMailNewModal,
   BobMailSendModal,
   BobMailPlugin,

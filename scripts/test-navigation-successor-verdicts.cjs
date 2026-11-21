@@ -270,6 +270,60 @@ test("Ctrl+Shift+X opens the reason field; Enter confirms and Esc restores", asy
   assert.equal(await pending, null);
 });
 
+test("S6 reason field opts into links and keeps its draft and band across re-renders", async () => {
+  const plugin = makePlugin({ now: 5000 });
+  const handles = [];
+  const logRecall = plugin.app.plugins.plugins["bob-navigation-hotkeys"].api.logRecall;
+  logRecall.attach = (attachOptions) => {
+    plugin.recallState.attached.push(attachOptions);
+    const handle = {
+      rebinds: [],
+      detached: 0,
+      rebind(next) { this.rebinds.push(next); return true; },
+      detach() { this.detached += 1; },
+    };
+    handles.push(handle);
+    return handle;
+  };
+  const { pending, modal } = await openPicker(plugin, verdictModel(2));
+  pressVerdict(modal, true);
+  assert.equal(modal.reasonEditKey, "verdict:key/0");
+  const options = plugin.recallState.attached.at(-1);
+  assert.equal(options.links, true);
+  assert.equal(options.kind, "cancel");
+  assert.equal(options.density, "dense");
+  assert.equal(options.sourcePath(), "projects/project-1.md", "links resolve against the offer's note");
+  assert.equal(handles.length, 1);
+
+  const first = findAll(modal.resultsEl, "bob-successor-reason-input")[0];
+  first.value = "Superseded by [[sa";
+  first.selectionStart = 18;
+  first.selectionEnd = 18;
+  modal.renderResults();
+  const rebuilt = findAll(modal.resultsEl, "bob-successor-reason-input")[0];
+  assert.notEqual(rebuilt, first, "renderResults rebuilds the field");
+  assert.equal(rebuilt.value, "Superseded by [[sa", "the typed draft survives, not the staged reason");
+  assert.equal(handles.length, 1, "the band handle is rebound, not re-attached");
+  assert.equal(handles[0].rebinds.length, 1);
+  assert.equal(handles[0].rebinds[0].inputEl, rebuilt);
+  assert.equal(handles[0].detached, 0);
+
+  const marked = modal.markedKeys.size;
+  click(rebuilt);
+  assert.equal(modal.reasonEditKey, "verdict:key/0", "clicks inside the editor never toggle the row");
+  assert.equal(modal.markedKeys.size, marked);
+
+  rebuilt.focus();
+  const bracket = pressKey(modal, "[", { ctrlKey: true });
+  assert.equal(bracket.defaultPrevented, true);
+  assert.equal(modal.reasonEditKey, null, "Ctrl+[ restores like Esc");
+  assert.equal(modal.verdicts.has("verdict:key/0"), false);
+  assert.equal(handles[0].detached, 1, "closing the editor detaches its band");
+  modal.allowCloseWithoutArm = true;
+  modal.close();
+  assert.equal(await pending, null);
+});
+
 test("a blank Cancel reason is allowed and blur confirms the typed text", async () => {
   const plugin = makePlugin({ now: 5000 });
   const { pending, modal } = await openPicker(plugin, verdictModel(2));

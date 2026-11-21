@@ -17,31 +17,57 @@ attachLogRecall = function attachLogRecallWithLinks(options) {
   return attachLogRecallWithoutLinks(opts);
 };
 
-// Hosts that attach through api.logRecall pass no plugin. Cache their index
-// on nav's own instance (or per app) so a keystroke never rebuilds it and
-// vault listeners are registered once.
-const PROSE_LINK_INDEX_BY_APP = typeof WeakMap === "function" ? new WeakMap() : null;
+// logRecall.attach passes only `app`, so resolve nav's own plugin instance:
+// one lazy index per plugin (listeners cleaned up through registerEvent),
+// never a fresh vault walk per keystroke.
+const PROSE_LINK_INDEX_BY_APP = new WeakMap();
+
+function proseNavPluginFromApp(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins["bob-navigation-hotkeys"];
+    return holder && typeof holder === "object" ? holder : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// nav's published proseField v1 namespace, or null (hosts then type plainly).
+function getNavigationProseFieldApi(app) {
+  try {
+    const holder = proseNavPluginFromApp(app);
+    const api = holder && holder.api && holder.api.proseField;
+    return api && Number(api.version) >= 1 && typeof api.attach === "function" ? api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The one note every path names, else null (mixed, missing, or empty), so a
+// multi-note prompt never guesses a home note for `[[#…`.
+function proseSharedSourcePath(paths) {
+  try {
+    let shared = null;
+    for (const value of Array.isArray(paths) ? paths : []) {
+      const path = typeof value === "string" ? value.trim() : "";
+      if (!path || (shared !== null && shared !== path)) return null;
+      shared = path;
+    }
+    return shared;
+  } catch (_error) {
+    return null;
+  }
+}
 
 function getProseLinkIndex(plugin, app) {
   try {
-    let owner = plugin || null;
-    if (!owner) {
-      try {
-        const plugins = app && app.plugins && app.plugins.plugins;
-        const nav = plugins && plugins["bob-navigation-hotkeys"];
-        if (nav && typeof nav === "object") owner = nav;
-      } catch (_error) {}
-    }
+    const owner = plugin || proseNavPluginFromApp(app);
     if (owner && owner._bobProseLinkIndex) return owner._bobProseLinkIndex;
-    const sourceApp = app || (owner && owner.app);
-    if (!owner && sourceApp && PROSE_LINK_INDEX_BY_APP && PROSE_LINK_INDEX_BY_APP.has(sourceApp)) {
-      return PROSE_LINK_INDEX_BY_APP.get(sourceApp);
-    }
-    const index = createLinkIndex(sourceApp, owner);
+    const host = app || (owner && owner.app) || null;
+    if (!owner && host && PROSE_LINK_INDEX_BY_APP.has(host)) return PROSE_LINK_INDEX_BY_APP.get(host);
+    const index = createLinkIndex(host, owner);
     if (owner) owner._bobProseLinkIndex = index;
-    else if (sourceApp && typeof sourceApp === "object" && PROSE_LINK_INDEX_BY_APP) {
-      PROSE_LINK_INDEX_BY_APP.set(sourceApp, index);
-    }
+    else if (host && typeof host === "object") PROSE_LINK_INDEX_BY_APP.set(host, index);
     return index;
   } catch (_error) {
     return null;
@@ -579,7 +605,7 @@ function attachProseField(options) {
     const token = ++previewToken;
     const visible = (currentView().view || []).filter((row) => row && row.kind === "block" && row.blockId && !row.preview);
     if (!visible.length) return;
-    const index = opts.index || (plugin && plugin._bobProseLinkIndex);
+    const index = opts.index || (notesOverride ? null : getProseLinkIndex(plugin, app));
     for (const row of visible) {
       Promise.resolve()
         .then(async () => {

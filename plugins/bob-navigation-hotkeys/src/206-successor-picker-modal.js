@@ -130,6 +130,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
     this.reasonRecall = null;
+    // The live reason editor (206d parks it across renderResults).
+    this.reasonInputEl = null;
+    this.reasonInputKey = null;
+    this.reasonParked = null;
     this.escArmed = false;
     this.statusLine = null;
     this.allowCloseWithoutArm = false;
@@ -203,6 +207,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.onCloseSettled = true;
     try {
       this.disposeReasonRecall();
+      if (typeof successorDropParkedReasonEditor === "function") successorDropParkedReasonEditor(this);
       super.onClose();
     } finally {
       this.onSettle(this.result);
@@ -561,6 +566,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     const oldKey = activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
     const query = this.getQuery();
     const navigation = [];
+    if (typeof successorParkReasonEditor === "function") successorParkReasonEditor(this);
     this.disposeReasonRecall();
     this.resultsEl.empty();
     for (let groupIndex = 0; groupIndex < this.model.groups.length; groupIndex += 1) {
@@ -702,6 +708,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       const empty = this.resultsEl.createDiv({ cls: "bob-cnp-empty" });
       empty.createDiv({ cls: "bob-cnp-empty-text", text: this.emptyText });
     }
+    if (typeof successorDropParkedReasonEditor === "function") successorDropParkedReasonEditor(this);
     this.updateSubtitle();
     this.renderFooter();
   }

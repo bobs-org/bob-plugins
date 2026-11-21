@@ -313,35 +313,103 @@ function successorRowDetailsList(modal, row, verdict) {
   return details;
 }
 
+// renderResults rebuilds the reason editor. Park the live draft, caret, and
+// band handle first so the rebuilt editor rebinds instead of losing them.
+function successorParkReasonEditor(modal) {
+  try {
+    const input = modal.reasonInputEl;
+    const key = modal.reasonEditKey;
+    if (key != null && input && modal.reasonInputKey === key) {
+      modal.reasonParked = {
+        key,
+        value: String(input.value == null ? "" : input.value),
+        start: Number.isInteger(input.selectionStart) ? input.selectionStart : null,
+        end: Number.isInteger(input.selectionEnd) ? input.selectionEnd : null,
+        handle: modal.reasonRecall || null,
+      };
+      modal.reasonRecall = null;
+    }
+  } catch (_error) {
+    modal.reasonParked = null;
+  }
+  modal.reasonInputEl = null;
+  modal.reasonInputKey = null;
+}
+
+// Drop a parked handle the rebuilt results did not claim.
+function successorDropParkedReasonEditor(modal) {
+  const parked = modal.reasonParked;
+  modal.reasonParked = null;
+  try {
+    if (parked && parked.handle && typeof parked.handle.detach === "function") parked.handle.detach();
+  } catch (_error) {
+    // The picker stays usable when band cleanup is unavailable.
+  }
+}
+
 // Inline cancel reason field. Replaces the row's detail line while open.
-// Enter confirms, Esc restores, blur confirms the typed text.
+// Enter confirms, Esc or Ctrl+[ restores, blur confirms the typed text.
 function successorRenderReasonEditor(modal, container, row, draft) {
   try {
+    const parked = modal.reasonParked && modal.reasonParked.key === row.key ? modal.reasonParked : null;
+    if (parked) modal.reasonParked = null;
+    const initial = parked ? parked.value : draft || "";
     const wrap = container.createDiv({ cls: "bob-successor-reason" });
+    // Clicks inside the editor (field, band rows) never toggle the offer row.
+    wrap.addEventListener("click", (event) => {
+      try { if (event && typeof event.stopPropagation === "function") event.stopPropagation(); } catch (_error) {}
+    });
     const input = wrap.createEl("input", {
       cls: "bob-successor-reason-input",
       attr: {
         type: "text",
         placeholder: SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
         "aria-label": SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
-        value: draft || "",
+        value: initial,
       },
     });
     try {
-      input.value = draft || "";
+      input.value = initial;
     } catch (_error) {
       // The attribute already carries the draft.
     }
-    const recallApi = getNavigationLogRecallApi(modal.app);
-    if (recallApi) {
-      const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
-      modal.reasonRecall = recallApi.attach({
-        inputEl: input,
-        bandHost,
-        kind: "cancel",
-        density: "dense",
-        ownKeys: true,
-      });
+    modal.reasonInputEl = input;
+    modal.reasonInputKey = row.key;
+    if (parked && parked.start !== null && typeof input.setSelectionRange === "function") {
+      try {
+        input.setSelectionRange(parked.start, parked.end === null ? parked.start : parked.end);
+      } catch (_error) {
+        // The caret falls back to the end of the draft.
+      }
+    }
+    const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
+    let rebound = false;
+    if (parked && parked.handle && typeof parked.handle.rebind === "function") {
+      try {
+        rebound = parked.handle.rebind({ inputEl: input, bandHost }) !== false;
+        if (rebound) modal.reasonRecall = parked.handle;
+      } catch (_error) {
+        rebound = false;
+      }
+    }
+    if (!rebound) {
+      try {
+        if (parked && parked.handle && typeof parked.handle.detach === "function") parked.handle.detach();
+      } catch (_error) {
+        // A stale handle never blocks a fresh attach.
+      }
+      const recallApi = getNavigationLogRecallApi(modal.app);
+      if (recallApi) {
+        modal.reasonRecall = recallApi.attach({
+          inputEl: input,
+          bandHost,
+          kind: "cancel",
+          density: "dense",
+          ownKeys: true,
+          links: true,
+          sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
+        });
+      }
     }
     const hint = wrap.createSpan({ cls: "bob-successor-reason-hint", text: SUCCESSOR_VERDICT_REASON_HINT });
     hint.setAttribute("aria-hidden", "true");
@@ -422,7 +490,8 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           commit(input.value);
           return;
         }
-        if (event.key === "Escape" || event.key === "Esc") {
+        // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
+        if (event.key === "Escape" || event.key === "Esc" || isCtrlLeftBracketKeydown(event)) {
           event.preventDefault();
           event.stopPropagation();
           restore();
@@ -447,7 +516,12 @@ function successorRenderReasonEditor(modal, container, row, draft) {
       input.focus();
     }
     try {
-      if (typeof input.select === "function" && input.value) {
+      if (parked) {
+        // A rebuilt editor keeps the caret where the typing left it.
+        if (parked.start !== null && typeof input.setSelectionRange === "function") {
+          input.setSelectionRange(parked.start, parked.end === null ? parked.start : parked.end);
+        }
+      } else if (typeof input.select === "function" && input.value) {
         input.select();
       }
     } catch (_error) {

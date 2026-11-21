@@ -14,6 +14,7 @@ class NotebookCreateModal extends Modal {
     this.parentStem = String(options.parentStem || (this.parentFile && this.parentFile.basename) || "");
     this.basenames = Array.isArray(options.basenames) ? options.basenames : [];
     this.summaryInput = null;
+    this.summaryProse = null;
     this.idInput = null;
     this.titleInput = null;
     this.statusEl = null;
@@ -39,6 +40,7 @@ class NotebookCreateModal extends Modal {
       placeholder: "One line on what belongs in this notebook",
       required: true,
     });
+    this.attachSummaryLinks();
     this.idInput = this.addField(contentEl, "ID", {
       placeholder: "Used in the file name",
     });
@@ -86,6 +88,14 @@ class NotebookCreateModal extends Modal {
         }
       });
     }
+    // Ctrl+[ mirrors Esc (close) from any field or button; the Summary's
+    // LINK band consumes it first while open.
+    contentEl.addEventListener("keydown", (event) => {
+      if (!isCtrlLeftBracketKeydown(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.close();
+    });
     this.refresh();
     window.setTimeout(() => {
       if (!this.closed && this.summaryInput) {
@@ -94,8 +104,41 @@ class NotebookCreateModal extends Modal {
     }, 0);
   }
 
+  // The Summary is prose (S12): `[[` completes through nav's proseField.
+  // A notebook does not exist yet, so there is no home note for `[[#…`.
+  attachSummaryLinks() {
+    try {
+      const api = getNavigationProseFieldApi(this.app) ||
+        (this.plugin ? createProseFieldApi(this.plugin) : null);
+      if (!api || !this.summaryInput) return;
+      const wrapper = this.summaryInput.parentElement || this.summaryInput.parent || null;
+      const bandHost = wrapper && typeof wrapper.createDiv === "function"
+        ? wrapper.createDiv({ cls: "bob-nbc-link-host" })
+        : null;
+      if (!bandHost) return;
+      this.summaryProse = api.attach({
+        inputEl: this.summaryInput,
+        bandHost,
+        recall: null,
+        sourcePath: null,
+        density: "roomy",
+        arrowKeys: true,
+        ownKeys: true,
+        scope: this.scope,
+      });
+    } catch (_error) {
+      this.summaryProse = null;
+    }
+  }
+
   onClose() {
     this.closed = true;
+    try {
+      if (this.summaryProse && typeof this.summaryProse.detach === "function") this.summaryProse.detach();
+    } catch (_error) {
+      // Closing never depends on band cleanup.
+    }
+    this.summaryProse = null;
     if (this.plugin && this.plugin.activeNotebookCreateModal === this) {
       this.plugin.activeNotebookCreateModal = null;
     }

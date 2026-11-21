@@ -26957,31 +26957,57 @@ attachLogRecall = function attachLogRecallWithLinks(options) {
   return attachLogRecallWithoutLinks(opts);
 };
 
-// Hosts that attach through api.logRecall pass no plugin. Cache their index
-// on nav's own instance (or per app) so a keystroke never rebuilds it and
-// vault listeners are registered once.
-const PROSE_LINK_INDEX_BY_APP = typeof WeakMap === "function" ? new WeakMap() : null;
+// logRecall.attach passes only `app`, so resolve nav's own plugin instance:
+// one lazy index per plugin (listeners cleaned up through registerEvent),
+// never a fresh vault walk per keystroke.
+const PROSE_LINK_INDEX_BY_APP = new WeakMap();
+
+function proseNavPluginFromApp(app) {
+  try {
+    const plugins = app && app.plugins && app.plugins.plugins;
+    const holder = plugins && plugins["bob-navigation-hotkeys"];
+    return holder && typeof holder === "object" ? holder : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// nav's published proseField v1 namespace, or null (hosts then type plainly).
+function getNavigationProseFieldApi(app) {
+  try {
+    const holder = proseNavPluginFromApp(app);
+    const api = holder && holder.api && holder.api.proseField;
+    return api && Number(api.version) >= 1 && typeof api.attach === "function" ? api : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// The one note every path names, else null (mixed, missing, or empty), so a
+// multi-note prompt never guesses a home note for `[[#…`.
+function proseSharedSourcePath(paths) {
+  try {
+    let shared = null;
+    for (const value of Array.isArray(paths) ? paths : []) {
+      const path = typeof value === "string" ? value.trim() : "";
+      if (!path || (shared !== null && shared !== path)) return null;
+      shared = path;
+    }
+    return shared;
+  } catch (_error) {
+    return null;
+  }
+}
 
 function getProseLinkIndex(plugin, app) {
   try {
-    let owner = plugin || null;
-    if (!owner) {
-      try {
-        const plugins = app && app.plugins && app.plugins.plugins;
-        const nav = plugins && plugins["bob-navigation-hotkeys"];
-        if (nav && typeof nav === "object") owner = nav;
-      } catch (_error) {}
-    }
+    const owner = plugin || proseNavPluginFromApp(app);
     if (owner && owner._bobProseLinkIndex) return owner._bobProseLinkIndex;
-    const sourceApp = app || (owner && owner.app);
-    if (!owner && sourceApp && PROSE_LINK_INDEX_BY_APP && PROSE_LINK_INDEX_BY_APP.has(sourceApp)) {
-      return PROSE_LINK_INDEX_BY_APP.get(sourceApp);
-    }
-    const index = createLinkIndex(sourceApp, owner);
+    const host = app || (owner && owner.app) || null;
+    if (!owner && host && PROSE_LINK_INDEX_BY_APP.has(host)) return PROSE_LINK_INDEX_BY_APP.get(host);
+    const index = createLinkIndex(host, owner);
     if (owner) owner._bobProseLinkIndex = index;
-    else if (sourceApp && typeof sourceApp === "object" && PROSE_LINK_INDEX_BY_APP) {
-      PROSE_LINK_INDEX_BY_APP.set(sourceApp, index);
-    }
+    else if (host && typeof host === "object") PROSE_LINK_INDEX_BY_APP.set(host, index);
     return index;
   } catch (_error) {
     return null;
@@ -27519,7 +27545,7 @@ function attachProseField(options) {
     const token = ++previewToken;
     const visible = (currentView().view || []).filter((row) => row && row.kind === "block" && row.blockId && !row.preview);
     if (!visible.length) return;
-    const index = opts.index || (plugin && plugin._bobProseLinkIndex);
+    const index = opts.index || (notesOverride ? null : getProseLinkIndex(plugin, app));
     for (const row of visible) {
       Promise.resolve()
         .then(async () => {
@@ -28456,9 +28482,13 @@ function childNoteMatchesQuery(file, noteInfo, query) {
 // "Unlink task" prompt but titled "Release task". Escape cancels the whole
 // gesture; a blank submit releases without a log.
 class LaneReleaseSummaryModal extends Modal {
-  constructor(app, onDone) {
+  constructor(app, onDone, options = {}) {
     super(app);
     this.onDone = onDone;
+    // The released task's note: `[[#…` and nearby rows resolve against it.
+    this.sourcePath = options && typeof options.sourcePath === "string" && options.sourcePath
+      ? options.sourcePath
+      : null;
     this.completed = false;
     this.inputEl = null;
     this.previewEl = null;
@@ -28503,7 +28533,17 @@ class LaneReleaseSummaryModal extends Modal {
     const recallApi = getNavigationLogRecallApi(this.app);
     if (recallApi) {
       try {
-        this.logRecall = recallApi.attach({ inputEl: this.inputEl, kind: "work", bandHost: this.recallBandEl, density: "roomy", arrowKeys: true, ownKeys: true, scope: this.scope });
+        this.logRecall = recallApi.attach({
+          inputEl: this.inputEl,
+          kind: "work",
+          bandHost: this.recallBandEl,
+          density: "roomy",
+          arrowKeys: true,
+          ownKeys: true,
+          scope: this.scope,
+          links: true,
+          sourcePath: () => this.sourcePath,
+        });
       } catch (_error) { this.logRecall = null; }
     }
     const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });
@@ -28701,6 +28741,8 @@ class FreshnessRefreshSummaryModal extends Modal {
           bandHost,
           kind: "rotten",
           ownKeys: true,
+          links: true,
+          sourcePath: () => this.batchKeepSourcePath(),
         });
       }
       this.keepPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
@@ -28721,7 +28763,8 @@ class FreshnessRefreshSummaryModal extends Modal {
           event.preventDefault();
           event.stopPropagation();
           this.submit();
-        } else if (event.key === "Escape") {
+        } else if (event.key === "Escape" || isCtrlLeftBracketKeydown(event)) {
+          // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
           event.preventDefault();
           event.stopPropagation();
           this.close();
@@ -28736,6 +28779,16 @@ class FreshnessRefreshSummaryModal extends Modal {
     window.setTimeout(() => {
       if (this.keepInputEl) this.keepInputEl.focus();
     }, 0);
+  }
+
+  // The single note every keep target lives in, else null.
+  batchKeepSourcePath() {
+    if (typeof this.options.sourcePath === "string" && this.options.sourcePath) {
+      return this.options.sourcePath;
+    }
+    const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
+    return proseSharedSourcePath(targets.map((target) =>
+      (target && target.entry && target.entry.path) || (target && target.group && target.group.path) || null));
   }
 
   renderBatchPreview() {
@@ -29345,6 +29398,14 @@ function buildRottenKeepPromptModel(options = {}) {
   };
 }
 
+// The kept task's note: the host's explicit path, else the queue entry's.
+function rottenKeepSourcePath(options) {
+  const opts = options || {};
+  if (typeof opts.sourcePath === "string" && opts.sourcePath) return opts.sourcePath;
+  const entry = opts.entry;
+  return entry && typeof entry.path === "string" && entry.path ? entry.path : null;
+}
+
 // Shared by the refresh modal and the decay card. The stage owns only its
 // subtree and input; its host owns closing, committing, and returning to choices.
 class RottenKeepReasonStage {
@@ -29372,6 +29433,8 @@ class RottenKeepReasonStage {
         bandHost,
         kind: "rotten",
         ownKeys: true,
+        links: true,
+        sourcePath: () => rottenKeepSourcePath(this.options),
       });
     }
     this.previewEl = this.root.createDiv({ cls: "bob-cnp-results", attr: { "aria-live": "polite" } });
@@ -29402,7 +29465,8 @@ class RottenKeepReasonStage {
       } else if (event.key === "Enter") {
         if (event.isComposing) return;
         event.preventDefault(); event.stopPropagation(); this.submit();
-      } else if (event.key === "Escape") {
+      } else if (event.key === "Escape" || isCtrlLeftBracketKeydown(event)) {
+        // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
         event.preventDefault(); event.stopPropagation();
         if (typeof this.options.onCancel === "function") this.options.onCancel();
       }
@@ -29496,6 +29560,12 @@ class TaskLinkLanePromptModal extends Modal {
           path: String(task.path || "Current note"),
         }),
       );
+  }
+
+  // `[[#…` and the nearby list resolve against the tasks' note when they
+  // share one; mixed notes (or none) leave same-note links unresolved.
+  taskLinkLaneSourcePath() {
+    return proseSharedSourcePath(this.options.sourcePaths);
   }
 
   workLogClockNow() {
@@ -29631,6 +29701,8 @@ class TaskLinkLanePromptModal extends Modal {
           arrowKeys: true,
           ownKeys: true,
           scope: this.scope,
+          links: true,
+          sourcePath: () => this.taskLinkLaneSourcePath(),
         });
       } catch (_error) { this.logRecall = null; }
     }
@@ -33917,6 +33989,10 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.reasonPreviousVerdict = null;
     this.reasonOpenedAt = null;
     this.reasonRecall = null;
+    // The live reason editor (206d parks it across renderResults).
+    this.reasonInputEl = null;
+    this.reasonInputKey = null;
+    this.reasonParked = null;
     this.escArmed = false;
     this.statusLine = null;
     this.allowCloseWithoutArm = false;
@@ -33990,6 +34066,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     this.onCloseSettled = true;
     try {
       this.disposeReasonRecall();
+      if (typeof successorDropParkedReasonEditor === "function") successorDropParkedReasonEditor(this);
       super.onClose();
     } finally {
       this.onSettle(this.result);
@@ -34348,6 +34425,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
     const oldKey = activeBefore && activeBefore.kind === "offer" ? activeBefore.row.key : null;
     const query = this.getQuery();
     const navigation = [];
+    if (typeof successorParkReasonEditor === "function") successorParkReasonEditor(this);
     this.disposeReasonRecall();
     this.resultsEl.empty();
     for (let groupIndex = 0; groupIndex < this.model.groups.length; groupIndex += 1) {
@@ -34489,6 +34567,7 @@ class SuccessorOfferPickerModal extends FilteredPickerModal {
       const empty = this.resultsEl.createDiv({ cls: "bob-cnp-empty" });
       empty.createDiv({ cls: "bob-cnp-empty-text", text: this.emptyText });
     }
+    if (typeof successorDropParkedReasonEditor === "function") successorDropParkedReasonEditor(this);
     this.updateSubtitle();
     this.renderFooter();
   }
@@ -35433,35 +35512,103 @@ function successorRowDetailsList(modal, row, verdict) {
   return details;
 }
 
+// renderResults rebuilds the reason editor. Park the live draft, caret, and
+// band handle first so the rebuilt editor rebinds instead of losing them.
+function successorParkReasonEditor(modal) {
+  try {
+    const input = modal.reasonInputEl;
+    const key = modal.reasonEditKey;
+    if (key != null && input && modal.reasonInputKey === key) {
+      modal.reasonParked = {
+        key,
+        value: String(input.value == null ? "" : input.value),
+        start: Number.isInteger(input.selectionStart) ? input.selectionStart : null,
+        end: Number.isInteger(input.selectionEnd) ? input.selectionEnd : null,
+        handle: modal.reasonRecall || null,
+      };
+      modal.reasonRecall = null;
+    }
+  } catch (_error) {
+    modal.reasonParked = null;
+  }
+  modal.reasonInputEl = null;
+  modal.reasonInputKey = null;
+}
+
+// Drop a parked handle the rebuilt results did not claim.
+function successorDropParkedReasonEditor(modal) {
+  const parked = modal.reasonParked;
+  modal.reasonParked = null;
+  try {
+    if (parked && parked.handle && typeof parked.handle.detach === "function") parked.handle.detach();
+  } catch (_error) {
+    // The picker stays usable when band cleanup is unavailable.
+  }
+}
+
 // Inline cancel reason field. Replaces the row's detail line while open.
-// Enter confirms, Esc restores, blur confirms the typed text.
+// Enter confirms, Esc or Ctrl+[ restores, blur confirms the typed text.
 function successorRenderReasonEditor(modal, container, row, draft) {
   try {
+    const parked = modal.reasonParked && modal.reasonParked.key === row.key ? modal.reasonParked : null;
+    if (parked) modal.reasonParked = null;
+    const initial = parked ? parked.value : draft || "";
     const wrap = container.createDiv({ cls: "bob-successor-reason" });
+    // Clicks inside the editor (field, band rows) never toggle the offer row.
+    wrap.addEventListener("click", (event) => {
+      try { if (event && typeof event.stopPropagation === "function") event.stopPropagation(); } catch (_error) {}
+    });
     const input = wrap.createEl("input", {
       cls: "bob-successor-reason-input",
       attr: {
         type: "text",
         placeholder: SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
         "aria-label": SUCCESSOR_VERDICT_REASON_PLACEHOLDER,
-        value: draft || "",
+        value: initial,
       },
     });
     try {
-      input.value = draft || "";
+      input.value = initial;
     } catch (_error) {
       // The attribute already carries the draft.
     }
-    const recallApi = getNavigationLogRecallApi(modal.app);
-    if (recallApi) {
-      const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
-      modal.reasonRecall = recallApi.attach({
-        inputEl: input,
-        bandHost,
-        kind: "cancel",
-        density: "dense",
-        ownKeys: true,
-      });
+    modal.reasonInputEl = input;
+    modal.reasonInputKey = row.key;
+    if (parked && parked.start !== null && typeof input.setSelectionRange === "function") {
+      try {
+        input.setSelectionRange(parked.start, parked.end === null ? parked.start : parked.end);
+      } catch (_error) {
+        // The caret falls back to the end of the draft.
+      }
+    }
+    const bandHost = wrap.createDiv({ cls: "bob-successor-reason-recall-host" });
+    let rebound = false;
+    if (parked && parked.handle && typeof parked.handle.rebind === "function") {
+      try {
+        rebound = parked.handle.rebind({ inputEl: input, bandHost }) !== false;
+        if (rebound) modal.reasonRecall = parked.handle;
+      } catch (_error) {
+        rebound = false;
+      }
+    }
+    if (!rebound) {
+      try {
+        if (parked && parked.handle && typeof parked.handle.detach === "function") parked.handle.detach();
+      } catch (_error) {
+        // A stale handle never blocks a fresh attach.
+      }
+      const recallApi = getNavigationLogRecallApi(modal.app);
+      if (recallApi) {
+        modal.reasonRecall = recallApi.attach({
+          inputEl: input,
+          bandHost,
+          kind: "cancel",
+          density: "dense",
+          ownKeys: true,
+          links: true,
+          sourcePath: () => (row && row.notePath ? String(row.notePath) : null),
+        });
+      }
     }
     const hint = wrap.createSpan({ cls: "bob-successor-reason-hint", text: SUCCESSOR_VERDICT_REASON_HINT });
     hint.setAttribute("aria-hidden", "true");
@@ -35542,7 +35689,8 @@ function successorRenderReasonEditor(modal, container, row, draft) {
           commit(input.value);
           return;
         }
-        if (event.key === "Escape" || event.key === "Esc") {
+        // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
+        if (event.key === "Escape" || event.key === "Esc" || isCtrlLeftBracketKeydown(event)) {
           event.preventDefault();
           event.stopPropagation();
           restore();
@@ -35567,7 +35715,12 @@ function successorRenderReasonEditor(modal, container, row, draft) {
       input.focus();
     }
     try {
-      if (typeof input.select === "function" && input.value) {
+      if (parked) {
+        // A rebuilt editor keeps the caret where the typing left it.
+        if (parked.start !== null && typeof input.setSelectionRange === "function") {
+          input.setSelectionRange(parked.start, parked.end === null ? parked.start : parked.end);
+        }
+      } else if (typeof input.select === "function" && input.value) {
         input.select();
       }
     } catch (_error) {
@@ -88298,7 +88451,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     return false;
   }
 
-  async requestLaneReleaseSummary(options = {}) {
+  // `prompt.sourcePath` is the released task's note (null when the release
+  // spans notes); the summary prompt resolves `[[#…` links against it.
+  async requestLaneReleaseSummary(options = {}, prompt = {}) {
     if (options.skipReleasePrompt === true) {
       return { cancelled: false, summary: "" };
     }
@@ -88312,7 +88467,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         } else {
           resolve({ cancelled: false, summary: String(result || "") });
         }
-      });
+      }, { sourcePath: prompt && prompt.sourcePath });
       try {
         modal.open();
       } catch (error) {
@@ -88644,7 +88799,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         (entry) => entry.fromStatus === "/",
       );
       if (needsReason) {
-        const answer = await this.requestLaneReleaseSummary(options);
+        const answer = await this.requestLaneReleaseSummary(options, { sourcePath: filePath });
         if (answer.cancelled) {
           return false;
         }
@@ -89127,6 +89282,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     let summary = "";
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
+    const releasedPaths = [];
     for (const group of groups) {
       const probe = planTaskLaneBatch(group.content, group.session, {});
       if (
@@ -89135,10 +89291,13 @@ class BobNavigationHotkeysLaneReviewMixin {
         probe.released.some((entry) => entry.fromStatus === "/")
       ) {
         needsReason = true;
+        releasedPaths.push(group.path);
       }
     }
     if (needsReason) {
-      const answer = await this.requestLaneReleaseSummary(options);
+      const answer = await this.requestLaneReleaseSummary(options, {
+        sourcePath: proseSharedSourcePath(releasedPaths),
+      });
       if (answer.cancelled) {
         return false;
       }
@@ -89538,6 +89697,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           now: options.now,
           keep: options.keep,
           keepTargets: batchMode ? options.keepTargets : undefined,
+          sourcePath: typeof options.sourcePath === "string" ? options.sourcePath : undefined,
           showWorkField: options.showWorkField,
           totalCount: options.totalCount,
           eligibleCount: options.eligibleCount,
@@ -89813,6 +89973,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           history: item.history,
           ...(item.kind === "lane" && !item.rung && !(item.keep && item.keep.rung) ? { lane: "next" } : {}),
           advance: options.advance === true,
+          sourcePath: filePath,
         },
       });
       if (result.failed) {
@@ -89829,6 +89990,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         dateText: options.dateText,
         now: options.now,
         totalCount: keepTargets.length,
+        sourcePath: filePath,
       });
       if (result.failed) {
         new Notice("Could not open Keep reason prompt; no tasks were updated");
@@ -90192,6 +90354,7 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       try {
         modal = new TaskLinkLanePromptModal(this.app, {
           tasks,
+          sourcePaths: targets.map((target) => target && target.path),
           dateText: options.stampText || options.dateText,
           stampText: options.stampText || options.dateText,
           now: options.now instanceof Date ? options.now : undefined,
@@ -90652,6 +90815,7 @@ class BobNavigationHotkeysFreshnessDecayMixin {
           history: cardCtx.rottenHistory,
           dateText: cardCtx.dateText,
           advance: cardCtx.advance,
+          sourcePath: cardCtx.filePath,
         },
         onChoose: (action) => {
           this.activeFreshnessDecayCard = null;
@@ -127410,6 +127574,7 @@ class NotebookCreateModal extends Modal {
     this.parentStem = String(options.parentStem || (this.parentFile && this.parentFile.basename) || "");
     this.basenames = Array.isArray(options.basenames) ? options.basenames : [];
     this.summaryInput = null;
+    this.summaryProse = null;
     this.idInput = null;
     this.titleInput = null;
     this.statusEl = null;
@@ -127435,6 +127600,7 @@ class NotebookCreateModal extends Modal {
       placeholder: "One line on what belongs in this notebook",
       required: true,
     });
+    this.attachSummaryLinks();
     this.idInput = this.addField(contentEl, "ID", {
       placeholder: "Used in the file name",
     });
@@ -127482,6 +127648,14 @@ class NotebookCreateModal extends Modal {
         }
       });
     }
+    // Ctrl+[ mirrors Esc (close) from any field or button; the Summary's
+    // LINK band consumes it first while open.
+    contentEl.addEventListener("keydown", (event) => {
+      if (!isCtrlLeftBracketKeydown(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.close();
+    });
     this.refresh();
     window.setTimeout(() => {
       if (!this.closed && this.summaryInput) {
@@ -127490,8 +127664,41 @@ class NotebookCreateModal extends Modal {
     }, 0);
   }
 
+  // The Summary is prose (S12): `[[` completes through nav's proseField.
+  // A notebook does not exist yet, so there is no home note for `[[#…`.
+  attachSummaryLinks() {
+    try {
+      const api = getNavigationProseFieldApi(this.app) ||
+        (this.plugin ? createProseFieldApi(this.plugin) : null);
+      if (!api || !this.summaryInput) return;
+      const wrapper = this.summaryInput.parentElement || this.summaryInput.parent || null;
+      const bandHost = wrapper && typeof wrapper.createDiv === "function"
+        ? wrapper.createDiv({ cls: "bob-nbc-link-host" })
+        : null;
+      if (!bandHost) return;
+      this.summaryProse = api.attach({
+        inputEl: this.summaryInput,
+        bandHost,
+        recall: null,
+        sourcePath: null,
+        density: "roomy",
+        arrowKeys: true,
+        ownKeys: true,
+        scope: this.scope,
+      });
+    } catch (_error) {
+      this.summaryProse = null;
+    }
+  }
+
   onClose() {
     this.closed = true;
+    try {
+      if (this.summaryProse && typeof this.summaryProse.detach === "function") this.summaryProse.detach();
+    } catch (_error) {
+      // Closing never depends on band cleanup.
+    }
+    this.summaryProse = null;
     if (this.plugin && this.plugin.activeNotebookCreateModal === this) {
       this.plugin.activeNotebookCreateModal = null;
     }

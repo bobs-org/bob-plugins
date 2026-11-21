@@ -52,6 +52,12 @@ until the summary is present and the ID uses only letters, digits, and `-`; an
 ID whose file exists, or a summary over 140 characters, is called out in the
 status line.
 
+The Summary is prose: typing `[[` opens the LINK band under it (see
+[Wikilink completion in prompts](bob-navigation-hotkeys.md#wikilink-completion-in-prompts)).
+While the band is open, Enter or Tab inserts the link and never creates, and
+Esc or Ctrl+[ closes only the band. The ID and Title stay literal. With the
+band closed, Esc or Ctrl+[ closes the modal without writing.
+
 Enter or **Create** runs `bob notebooks create` through the Bob Ledger Tools
 `api.notebooks` v1 namespace (desktop only). Bob writes the new note and every
 affected catalog row in one guarded write, and the plugin opens the note. A

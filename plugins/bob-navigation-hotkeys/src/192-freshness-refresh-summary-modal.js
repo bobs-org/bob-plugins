@@ -90,6 +90,8 @@ class FreshnessRefreshSummaryModal extends Modal {
           bandHost,
           kind: "rotten",
           ownKeys: true,
+          links: true,
+          sourcePath: () => this.batchKeepSourcePath(),
         });
       }
       this.keepPreviewEl = field.createDiv({ cls: "bob-cnp-results" });
@@ -110,7 +112,8 @@ class FreshnessRefreshSummaryModal extends Modal {
           event.preventDefault();
           event.stopPropagation();
           this.submit();
-        } else if (event.key === "Escape") {
+        } else if (event.key === "Escape" || isCtrlLeftBracketKeydown(event)) {
+          // Ctrl+[ mirrors Esc once the LINK band and recall layers are shut.
           event.preventDefault();
           event.stopPropagation();
           this.close();
@@ -125,6 +128,16 @@ class FreshnessRefreshSummaryModal extends Modal {
     window.setTimeout(() => {
       if (this.keepInputEl) this.keepInputEl.focus();
     }, 0);
+  }
+
+  // The single note every keep target lives in, else null.
+  batchKeepSourcePath() {
+    if (typeof this.options.sourcePath === "string" && this.options.sourcePath) {
+      return this.options.sourcePath;
+    }
+    const targets = Array.isArray(this.options.keepTargets) ? this.options.keepTargets : [];
+    return proseSharedSourcePath(targets.map((target) =>
+      (target && target.entry && target.entry.path) || (target && target.group && target.group.path) || null));
   }
 
   renderBatchPreview() {

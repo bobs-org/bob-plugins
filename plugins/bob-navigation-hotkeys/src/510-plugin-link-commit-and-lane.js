@@ -407,7 +407,9 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
     return false;
   }
 
-  async requestLaneReleaseSummary(options = {}) {
+  // `prompt.sourcePath` is the released task's note (null when the release
+  // spans notes); the summary prompt resolves `[[#…` links against it.
+  async requestLaneReleaseSummary(options = {}, prompt = {}) {
     if (options.skipReleasePrompt === true) {
       return { cancelled: false, summary: "" };
     }
@@ -421,7 +423,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         } else {
           resolve({ cancelled: false, summary: String(result || "") });
         }
-      });
+      }, { sourcePath: prompt && prompt.sourcePath });
       try {
         modal.open();
       } catch (error) {
@@ -753,7 +755,7 @@ class BobNavigationHotkeysLinkCommitLaneMixin {
         (entry) => entry.fromStatus === "/",
       );
       if (needsReason) {
-        const answer = await this.requestLaneReleaseSummary(options);
+        const answer = await this.requestLaneReleaseSummary(options, { sourcePath: filePath });
         if (answer.cancelled) {
           return false;
         }

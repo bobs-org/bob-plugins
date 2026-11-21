@@ -255,6 +255,7 @@ class BobNavigationHotkeysTaskLinkLaneMixin {
       try {
         modal = new TaskLinkLanePromptModal(this.app, {
           tasks,
+          sourcePaths: targets.map((target) => target && target.path),
           dateText: options.stampText || options.dateText,
           stampText: options.stampText || options.dateText,
           now: options.now instanceof Date ? options.now : undefined,

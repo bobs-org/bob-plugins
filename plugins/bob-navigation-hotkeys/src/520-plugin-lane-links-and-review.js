@@ -59,6 +59,7 @@ class BobNavigationHotkeysLaneReviewMixin {
     let summary = "";
     // A release with an In Progress target asks once for an optional summary.
     let needsReason = false;
+    const releasedPaths = [];
     for (const group of groups) {
       const probe = planTaskLaneBatch(group.content, group.session, {});
       if (
@@ -67,10 +68,13 @@ class BobNavigationHotkeysLaneReviewMixin {
         probe.released.some((entry) => entry.fromStatus === "/")
       ) {
         needsReason = true;
+        releasedPaths.push(group.path);
       }
     }
     if (needsReason) {
-      const answer = await this.requestLaneReleaseSummary(options);
+      const answer = await this.requestLaneReleaseSummary(options, {
+        sourcePath: proseSharedSourcePath(releasedPaths),
+      });
       if (answer.cancelled) {
         return false;
       }
@@ -470,6 +474,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           now: options.now,
           keep: options.keep,
           keepTargets: batchMode ? options.keepTargets : undefined,
+          sourcePath: typeof options.sourcePath === "string" ? options.sourcePath : undefined,
           showWorkField: options.showWorkField,
           totalCount: options.totalCount,
           eligibleCount: options.eligibleCount,
@@ -745,6 +750,7 @@ class BobNavigationHotkeysLaneReviewMixin {
           history: item.history,
           ...(item.kind === "lane" && !item.rung && !(item.keep && item.keep.rung) ? { lane: "next" } : {}),
           advance: options.advance === true,
+          sourcePath: filePath,
         },
       });
       if (result.failed) {
@@ -761,6 +767,7 @@ class BobNavigationHotkeysLaneReviewMixin {
         dateText: options.dateText,
         now: options.now,
         totalCount: keepTargets.length,
+        sourcePath: filePath,
       });
       if (result.failed) {
         new Notice("Could not open Keep reason prompt; no tasks were updated");

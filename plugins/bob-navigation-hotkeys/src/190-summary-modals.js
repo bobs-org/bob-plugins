@@ -737,9 +737,13 @@ function childNoteMatchesQuery(file, noteInfo, query) {
 // "Unlink task" prompt but titled "Release task". Escape cancels the whole
 // gesture; a blank submit releases without a log.
 class LaneReleaseSummaryModal extends Modal {
-  constructor(app, onDone) {
+  constructor(app, onDone, options = {}) {
     super(app);
     this.onDone = onDone;
+    // The released task's note: `[[#…` and nearby rows resolve against it.
+    this.sourcePath = options && typeof options.sourcePath === "string" && options.sourcePath
+      ? options.sourcePath
+      : null;
     this.completed = false;
     this.inputEl = null;
     this.previewEl = null;
@@ -784,7 +788,17 @@ class LaneReleaseSummaryModal extends Modal {
     const recallApi = getNavigationLogRecallApi(this.app);
     if (recallApi) {
       try {
-        this.logRecall = recallApi.attach({ inputEl: this.inputEl, kind: "work", bandHost: this.recallBandEl, density: "roomy", arrowKeys: true, ownKeys: true, scope: this.scope });
+        this.logRecall = recallApi.attach({
+          inputEl: this.inputEl,
+          kind: "work",
+          bandHost: this.recallBandEl,
+          density: "roomy",
+          arrowKeys: true,
+          ownKeys: true,
+          scope: this.scope,
+          links: true,
+          sourcePath: () => this.sourcePath,
+        });
       } catch (_error) { this.logRecall = null; }
     }
     const row = contentEl.createDiv({ cls: "bob-lane-release-actions" });

@@ -51,14 +51,38 @@ When the note's recognized title block holds its nav line, the card docks a
 rail: `‹ Thu 19 · ↑ W47 · Sat 21 ›` on days and `‹ W46 · ↑ 2026-Q4 · W48 ›`
 on periods. Narrow panes compact it to `‹ Thu · ↑ W47 · Sat ›`. Week,
 quarter, and year cards add a strip of children chips from the child-links
-line, and the chip that contains today is marked current. Targets always come
-from the nav line's own links, and unresolved targets look unresolved.
+line, and the chip that contains today is marked current. Targets come from
+the nav line's own links.
+
+A note with no recognized nav line, such as a legacy daily, gets a derived
+step row from the same calendar answer behind `[n` and `]n`, unless the body
+already holds a written `prev`/`next` (or `‹`/`›`) link.
+
+Day, week, and quarter cards add a quieter group row below the step row,
+from the same resolver as `[N` and `]N`:
+`« Q3 · W27   week 8 of 14   2027-Q1 · W01 »`. Each arm names the group, then
+the note it lands on (Monday of the next week, the first week of the next
+quarter, or Q1 of the next year). The center shows the position and one tick
+per member: accent for this note, filled for existing notes, hollow for
+missing ones. Narrow panes keep `« Q3 · 8/14 · 2027-Q1 »`. Year cards have no
+group row, and a role with two conflicting `«` or `»` links has no arm.
+
+Every missing target uses one look. Dashed with `+` means not created yet:
+activating it creates the note (dailies from the daily template, periods with
+`bob periods ensure`) and opens it. Dotted and faint with `· not in vault`
+means navigation never creates it, such as a target before Bob's period notes
+began; it only shows its reason. Tooltips name the key and destination
+(`]N · next quarter: 2027-Q1 → 2027-W01`).
 
 Kicker, rail, and chip links open like the Markdown links they mirror: Mod
 opens a tab or split, and a middle click opens a tab. With Bob Navigation
 Hotkeys enabled, an unmodified rail prev or next runs its `open-prev-link` or
-`open-next-link` command in the card's pane, so jump history matches `[n` and
-`]n`.
+`open-next-link` command in the card's pane, and a group arm first confirms
+the stop is unchanged, then runs `open-prev-group-link` or
+`open-next-group-link`, so jump history matches `[n`, `]n`, `[N`, and `]N`.
+If the stop changed, the card repaints and says
+`The group stop changed — try again`. Cards repaint when calendar notes are
+created, deleted, or renamed, and at midnight.
 
 ### Hidden title lines
 
@@ -73,9 +97,10 @@ never change, so heading links, the Outline, search, and `[n`/`]n` keep
 working.
 
 A note whose H1 is not recognized, such as the H1-less 2024 and 2025 dailies
-and legacy year notes, keeps every body line visible and gets no rail. An
-unrecognized H1 or nav line stays visible as authored content, and a nav line
-the card does not recognize (such as `prev | day | next`) means no rail.
+and legacy year notes, keeps every body line visible and gets only the
+derived rows. An unrecognized H1 or nav line stays visible as authored
+content, and a nav line the card does not recognize (such as
+`prev | day | next`) never gets a derived step row beside it.
 
 ### Set intentions
 

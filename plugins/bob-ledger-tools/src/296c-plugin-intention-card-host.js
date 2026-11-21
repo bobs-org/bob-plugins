@@ -106,6 +106,8 @@ class BobLedgerToolsIntentionCardMixin {
         this.registerEvent(cache.on("changed", (file) => this.intentionCardOnMetadata(file)));
       }
     } catch (_) {}
+    // Calendar notes created, deleted, or renamed repaint rail states (296ca).
+    try { this.intentionCardWatchVault?.(); } catch (_) {}
     this.intentionCardScheduleMidnight();
   }
 
@@ -316,6 +318,10 @@ class BobLedgerToolsIntentionCardMixin {
     model.identity = typeof intentionCardIdentity === "function" ? intentionCardIdentity(model.subject) : null;
     model.rail = recognizer && typeof intentionCardRailModel === "function"
       ? intentionCardRailModel(current.source, model.subject, recognizer, today) : null;
+    // Group rail (296ca): states on the written rail, then one nav answer
+    // for the group row and the derived step row.
+    if (model.rail && typeof this.intentionCardRailStates === "function") model.rail = this.intentionCardRailStates(model.rail, key);
+    model.navRail = typeof this.intentionCardNavRail === "function" ? this.intentionCardNavRail(key, current.source, model) : null;
     model.ghost = typeof intentionCardShowsGhost === "function" ? intentionCardShowsGhost(model) : false;
     model.recognizerKey = recognizer?.key || "";
     model.signature = this.intentionCardModelSignature(model);
@@ -346,6 +352,7 @@ class BobLedgerToolsIntentionCardMixin {
         parentIntentions: model.parentIntentions, missingBands: model.missingBands,
         identity: model.identity, ghost: model.ghost, hasContent: model.hasContent,
         rail: rail ? { prev: rail.prev, parent: rail.parent, next: rail.next, children: rail.children } : null,
+        navRail: typeof intentionCardNavRailSignature === "function" ? intentionCardNavRailSignature(model.navRail) : null,
         recognizer: model.recognizerKey, links,
       });
     } catch (_) {

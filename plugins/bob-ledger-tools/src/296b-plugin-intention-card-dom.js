@@ -223,24 +223,46 @@ function intentionCardDomGhost(model, plugin, doc) {
   return ghost;
 }
 
+// The docked rail: the written rail (a recognized nav line) or, without
+// one, the derived step row (296ca), plus the group row on day, week, and
+// quarter cards. Items, chips, and arms carry exists / creatable / ghost.
 function intentionCardDomRail(model, plugin, doc) {
-  const rail = model.rail;
-  if (!rail || typeof propertyCardBuildRail !== "function") return null;
-  const mark = (item) => (item ? { ...item, unresolved: intentionCardDomUnresolved(plugin, item.target, model.path) } : null);
+  if (typeof propertyCardBuildRail !== "function") return null;
+  const navRail = model.navRail || null;
+  const rail = model.rail || (navRail && typeof intentionCardDerivedRailItems === "function"
+    ? intentionCardDerivedRailItems(navRail, model.subject) : null);
+  const group = navRail && typeof intentionCardGroupRowSpec === "function"
+    ? intentionCardGroupRowSpec(navRail, {
+      onActivate: (direction, arm, event) => {
+        if (typeof plugin?.intentionCardGroupActivate === "function") {
+          void plugin.intentionCardGroupActivate(direction, arm, model.path, event);
+        }
+      },
+    })
+    : null;
+  if (!rail && !group) return null;
+  const mark = (item) => (item
+    ? (item.state ? item : { ...item, unresolved: intentionCardDomUnresolved(plugin, item.target, model.path) })
+    : null);
   const word = typeof propertyCardSpecies === "function" ? propertyCardSpecies(model.kind)?.word : "";
   const built = propertyCardBuildRail(doc, {
-    prev: mark(rail.prev), parent: mark(rail.parent), next: mark(rail.next),
-    children: (rail.children || []).map(mark),
+    prev: mark(rail?.prev), parent: mark(rail?.parent), next: mark(rail?.next),
+    children: (rail?.children || []).map(mark),
+    group,
     label: `${word || "Note"} navigation`,
     onNavigate: (direction, item, event) => {
-      if (typeof plugin?.intentionCardRailNavigate === "function") {
+      if (typeof plugin?.intentionCardRailActivate === "function") {
+        void plugin.intentionCardRailActivate(direction, item, model.path, event);
+      } else if (typeof plugin?.intentionCardRailNavigate === "function") {
         void plugin.intentionCardRailNavigate(direction, item, model.path, event);
       } else intentionCardDomOpenLink(plugin, item?.target, model.path, event);
     },
   });
   if (!built?.element) return null;
-  for (const link of [built.items?.prev, built.items?.parent, built.items?.next, ...(built.children || [])]) {
-    if (link) intentionCardDomHover(plugin, link, link.getAttribute?.("data-href") || "", model.path);
+  const arms = [built.group?.arms?.prev, built.group?.arms?.next];
+  for (const link of [built.items?.prev, built.items?.parent, built.items?.next, ...(built.children || []), ...arms]) {
+    const target = link?.getAttribute?.("data-href") || "";
+    if (link && target) intentionCardDomHover(plugin, link, target, model.path);
   }
   return built.element;
 }

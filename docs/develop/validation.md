@@ -331,6 +331,21 @@ BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node --experimental-websocket \
   scripts/obsidian-prose-field-e2e.cjs -r /tmp/prose-walk.json -o /tmp/prose-walk-shots
 ```
 
+## Group-jump walkthrough
+
+`scripts/obsidian-group-jump-e2e.cjs` proves `[N` / `]N` in one owned Obsidian.
+Real bob scaffolds the period notes and syncs a `walk_by` album in a scratch Git
+vault. A logging shim lets the plugins reach only the period, album, and record
+commands. The run covers weeks, quarters, years, dailies, and authored `«` / `»`
+nav lines. It also covers grouped records, creatable and ghost stops, `]}`, and
+rail and footer clicks with `<C-o>`. It needs Templater and a bob that reports
+`record_walk_groups_v1`:
+
+```bash
+BOB_BIN=$HOME/.cargo/bin/bob xvfb-run -a node \
+  scripts/obsidian-group-jump-e2e.cjs -r /tmp/group-jump.json -o /tmp/group-jump-shots
+```
+
 ## Focused suites
 
 Navigation Hotkeys, Task Status Cycler, and Block ID Prompt tests are

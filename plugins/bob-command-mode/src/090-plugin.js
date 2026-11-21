@@ -707,6 +707,7 @@ class BobCommandModeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("bob path")
       .setDesc("Find bob in its usual install locations or on PATH; set an explicit path to override.")
+      // bob-text: literal executable path setting
       .addText((text) => {
         text.setPlaceholder("Auto (blank)").setValue(this.plugin.settings.bobPath || "");
         text.onChange(async (value) => {
@@ -730,6 +731,7 @@ class BobCommandModeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Keep runs")
       .setDesc("Retain at most this many runs in history.")
+      // bob-text: literal retained run count setting
       .addText((text) => {
         text.setPlaceholder(String(CM_DEFAULT_KEEP_RUNS)).setValue(String(this.plugin.settings.keepRuns ?? ""));
         text.onChange(async (value) => {
@@ -745,6 +747,7 @@ class BobCommandModeSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Keep days")
       .setDesc("Retain runs younger than this many days.")
+      // bob-text: literal retained run days setting
       .addText((text) => {
         text.setPlaceholder(String(CM_DEFAULT_KEEP_DAYS)).setValue(String(this.plugin.settings.keepDays ?? ""));
         text.onChange(async (value) => {

@@ -197,10 +197,12 @@ function recordCardPaintStageInput(doc, host, options) {
     // IME composition, whose uncommitted text the draft does not hold yet.
     if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
   } else if (kind === "text") {
+    // bob-text: prose S15 text/suggest stages; link stage uses field mode
     input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
     input.setAttribute("rows", "3");
     input.value = value;
   } else {
+    // bob-text: mixed S15 prose text/suggest/list and literal date/number/URL stages
     input = recordCardEl(doc, "input", `bob-record-card-stage-input bob-record-card-${kind}`);
     input.setAttribute("type", attrs.type);
     if (attrs.inputmode) input.setAttribute("inputmode", attrs.inputmode);
@@ -303,6 +305,7 @@ function recordCardPaintStageList(doc, host, options) {
   if (input) {
     if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
   } else {
+    // bob-text: prose S15 list stage
     input = recordCardEl(doc, "input", "bob-record-card-stage-input bob-record-card-list-input");
     input.setAttribute("type", "text");
     input.value = value;

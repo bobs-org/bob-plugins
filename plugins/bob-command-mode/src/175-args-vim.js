@@ -447,6 +447,7 @@ CommandModeSheetModal.prototype.renderHeader = function renderHeaderWithStage() 
   } else {
     inputWrap.createEl("span", { cls: "bob-cmd-sheet-prompt", text: "❯" });
   }
+  // bob-text: literal command argument editor
   this.inputEl = inputWrap.createEl("input", { cls: "bob-cmd-sheet-input", attr: { type: "text" } });
   try {
     this.inputEl.value = this.query;

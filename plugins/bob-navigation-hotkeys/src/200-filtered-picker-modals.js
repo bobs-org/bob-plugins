@@ -99,6 +99,7 @@ class FilteredPickerModal extends Modal {
     this.searchEl = searchEl;
     const searchIcon = searchEl.createDiv({ cls: "bob-cnp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: mixed S7 S8 S9 S10 S11 shared picker filter; prose stages attach separately
     this.inputEl = searchEl.createEl("input", {
       cls: "bob-cnp-input",
       attr: {

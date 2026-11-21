@@ -447,6 +447,7 @@ class DemotionSectionPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "tsc-sdp-search" });
     const searchIcon = searchEl.createDiv({ cls: "tsc-sdp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal task status picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "tsc-sdp-input",
       attr: {

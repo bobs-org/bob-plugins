@@ -507,6 +507,7 @@ class RottenKeepReasonStage {
     for (const line of model.subtitleLines) text.createDiv({ cls: "bob-cnp-subtitle", text: line });
     const inputWrap = this.root.createDiv({ cls: "bob-cnp-search" });
     inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "✎" });
+    // bob-text: prose S5
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
       type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });

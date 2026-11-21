@@ -148,6 +148,7 @@ class NotebookCreateModal extends Modal {
   addField(parentEl, label, options = {}) {
     const wrapper = parentEl.createDiv({ cls: "bob-nbc-field" });
     wrapper.createEl("label", { cls: "bob-nbc-label", text: label });
+    // bob-text: mixed S12 summary and literal ID/title share this creation site
     return wrapper.createEl("input", {
       cls: "bob-nbc-input",
       attr: {

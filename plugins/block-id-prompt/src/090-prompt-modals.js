@@ -45,6 +45,7 @@ class BlockIdPromptModal extends Modal {
     const isExplicit =
       Boolean(this.source.prefillId) && Boolean(this.source.oldId);
 
+    // bob-text: literal task block ID
     new Setting(this.contentEl).setName("ID").addText((text) => {
       this.input = text;
       text.setPlaceholder(isExplicit ? "my-id" : "Loading suggestion…");
@@ -435,6 +436,7 @@ class WorkSummaryPromptModal extends Modal {
       attr: { for: "bid-wlp-summary" },
       text: "Work summary (optional)",
     });
+    // bob-text: prose S1
     this.inputEl = fieldEl.createEl("input", {
       cls: "bid-wlp-input",
       attr: {

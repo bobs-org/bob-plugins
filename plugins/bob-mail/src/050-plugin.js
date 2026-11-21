@@ -24,6 +24,7 @@ class BobMailSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Undo seconds")
       .setDesc("Countdown before a confirmed send runs, with an Undo button. 0 sends at once.")
+      // bob-text: literal Gmail account setting
       .addText((text) => text
         .setPlaceholder("5")
         .setValue(String(mailComposeUndoSeconds(this.plugin.settings)))

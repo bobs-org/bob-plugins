@@ -276,6 +276,7 @@ class CommandModeSheetModal extends Modal {
     });
     const inputWrap = this.contentEl.createEl("div", { cls: "bob-cmd-sheet-input-wrap" });
     inputWrap.createEl("span", { cls: "bob-cmd-sheet-prompt", text: "❯" });
+    // bob-text: literal command mode input
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cmd-sheet-input", attr: { type: "text" } });
     try {
       this.inputEl.value = this.query;

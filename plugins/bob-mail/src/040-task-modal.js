@@ -36,6 +36,7 @@ class BobMailTaskModal extends Modal {
     content.empty();
     content.createEl("h2", { text: "Task from this email" });
     content.createEl("p", { text: "Capture a task with a link back to the email." });
+    // bob-text: prose S13
     this.input = content.createEl("input", { type: "text", value: this.initialText });
     this.input.value = this.initialText;
     this.input.setAttribute("aria-label", "Task text");

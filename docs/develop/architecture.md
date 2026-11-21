@@ -49,6 +49,16 @@ helpers, plugin prototype methods and descriptors, and module-load dependency
 calls. Split helpers must keep their name, superclass, and own prototype
 methods; the checker does not compare the whole class source text.
 
+## Prose fields
+
+Text controls declare their role in a `// bob-text: <role> <reason>` comment within
+three lines above the creation site. Use `prose S<n>` for a vault-writing Markdown
+field that attaches `api.proseField` with its `sourcePath`; use `literal` for identifiers
+and filters, `mixed` for shared controls with both kinds of stages, and `none` for
+non-text input types. Keep the S1–S15 allowlist and creation/wiring paths in
+`scripts/fixtures/prose-fields.json`; `npm test` checks that every control is declared
+and each allowlisted surface remains wired.
+
 ## Property-card extension API
 
 Bob Ledger Tools keeps the property-card `==` dispatcher open to registered

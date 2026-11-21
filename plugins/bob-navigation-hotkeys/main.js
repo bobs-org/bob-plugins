@@ -28507,6 +28507,7 @@ class LaneReleaseSummaryModal extends Modal {
       cls: "bob-lane-release-subtitle",
       text: "Optional: why is this pending? Saved to the Work Log.",
     });
+    // bob-text: prose S3
     this.inputEl = contentEl.createEl("input", {
       attr: {
         placeholder: "What did you get done?",
@@ -28727,6 +28728,7 @@ class FreshnessRefreshSummaryModal extends Modal {
       field.createDiv({ cls: "bob-cnp-field-title", text: "Keep reason" });
       const inputWrap = field.createDiv({ cls: "bob-cnp-search" });
       inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "🥀" });
+      // bob-text: prose S4
       this.keepInputEl = inputWrap.createEl("input", {
         cls: "bob-cnp-input",
         attr: {
@@ -29424,6 +29426,7 @@ class RottenKeepReasonStage {
     for (const line of model.subtitleLines) text.createDiv({ cls: "bob-cnp-subtitle", text: line });
     const inputWrap = this.root.createDiv({ cls: "bob-cnp-search" });
     inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "✎" });
+    // bob-text: prose S5
     this.inputEl = inputWrap.createEl("input", { cls: "bob-cnp-input", attr: {
       type: "text", "aria-label": options.decayCard === true ? "Stay reason" : "Keep reason", placeholder: model.placeholder,
     } });
@@ -29659,6 +29662,7 @@ class TaskLinkLanePromptModal extends Modal {
       attr: { for: "bob-tll-summary" },
       text: "Work summary (optional)",
     });
+    // bob-text: prose S2
     this.inputEl = fieldEl.createEl("input", {
       cls: "bob-tll-input",
       attr: {
@@ -29908,6 +29912,7 @@ class FilteredPickerModal extends Modal {
     this.searchEl = searchEl;
     const searchIcon = searchEl.createDiv({ cls: "bob-cnp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: mixed S7 S8 S9 S10 S11 shared picker filter; prose stages attach separately
     this.inputEl = searchEl.createEl("input", {
       cls: "bob-cnp-input",
       attr: {
@@ -32451,10 +32456,12 @@ class PomodoroThemeRenameModal extends Modal {
 
     const form = this.contentEl.createDiv({ cls: "bob-cnp-rename-form" });
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "New name" });
+    // bob-text: literal Pomodoro theme name
     this.nameInput = form.createEl("input", {
       cls: "bob-cnp-input",
       attr: { type: "text", placeholder: "FIX", "aria-label": "New type name" },
     });
+    // bob-text: none merge confirmation checkbox
     this.mergeToggle = form.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Merge into an existing type" },
@@ -35560,6 +35567,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     wrap.addEventListener("click", (event) => {
       try { if (event && typeof event.stopPropagation === "function") event.stopPropagation(); } catch (_error) {}
     });
+    // bob-text: prose S6
     const input = wrap.createEl("input", {
       cls: "bob-successor-reason-input",
       attr: {
@@ -40127,6 +40135,7 @@ class RenameCurrentFileModal extends Modal {
       cls: "bob-rename-file-label",
       text: "File name",
     });
+    // bob-text: literal file rename
     this.inputEl = field.createEl("input", {
       cls: "bob-rename-file-input",
       attr: {
@@ -70013,6 +70022,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       text: "Reason for this date (optional)",
       attr: { for: "bob-schedule-review-reason" },
     });
+    // bob-text: prose S9
     const reasonInput = reasonField.createEl("input", {
       cls: "bob-cnp-input bob-task-card-review-input",
       attr: {
@@ -70046,6 +70056,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         text: `Work summary (optional · ${countLabel})`,
         attr: { for: "bob-schedule-review-summary" },
       });
+      // bob-text: prose S10
       const summaryInput = summaryField.createEl("input", {
         cls: "bob-cnp-input bob-task-card-review-input",
         attr: {
@@ -78122,10 +78133,12 @@ class RelationLabelRenameModal extends Modal {
 
     const form = this.contentEl.createDiv({ cls: "bob-cnp-rename-form" });
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "New relation label" });
+    // bob-text: literal relation label
     this.nameInput = form.createEl("input", {
       cls: "bob-cnp-input",
       attr: { type: "text", placeholder: "prompted by", "aria-label": "New relation label" },
     });
+    // bob-text: none relation merge checkbox
     this.mergeToggle = form.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Merge into an existing relation label" },
@@ -78133,6 +78146,7 @@ class RelationLabelRenameModal extends Modal {
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "Allow merging into an existing relation label (--merge)" });
     this.mergeConfirmWrap = form.createDiv({ cls: "bob-cnp-rename-merge-confirm" });
     this.mergeConfirmWrap.style.display = "none";
+    // bob-text: none merge confirmation checkbox
     this.mergeConfirmToggle = this.mergeConfirmWrap.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Confirm merging relation labels" },
@@ -127710,6 +127724,7 @@ class NotebookCreateModal extends Modal {
   addField(parentEl, label, options = {}) {
     const wrapper = parentEl.createDiv({ cls: "bob-nbc-field" });
     wrapper.createEl("label", { cls: "bob-nbc-label", text: label });
+    // bob-text: mixed S12 summary and literal ID/title share this creation site
     return wrapper.createEl("input", {
       cls: "bob-nbc-input",
       attr: {

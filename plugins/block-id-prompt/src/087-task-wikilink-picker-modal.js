@@ -73,6 +73,7 @@ class TaskWikilinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-tlp-search bid-twl-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal task wikilink picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-tlp-input bid-twl-input",
       attr: {

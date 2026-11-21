@@ -197,8 +197,10 @@ class BobMailNewModal extends Modal {
     const content = this.contentEl;
     content.empty();
     content.createEl("h2", { text: "New email" });
+    // bob-text: literal email recipients
     this.toInput = content.createEl("input", { type: "text", placeholder: "To · comma-separated recipients" });
     this.toInput.setAttribute("aria-label", "To recipients");
+    // bob-text: literal email subject
     this.subjectInput = content.createEl("input", { type: "text", placeholder: "Subject" });
     this.subjectInput.setAttribute("aria-label", "Subject");
     const buttons = content.createEl("div", { cls: "modal-button-container" });

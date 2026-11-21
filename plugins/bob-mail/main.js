@@ -789,6 +789,7 @@ class BobMailPickerModal extends Modal {
     const content = this.contentEl;
     content.empty();
     content.createEl("h2", { text: "Link email" });
+    // bob-text: literal Gmail message search
     this.input = content.createEl("input", { type: "text", placeholder: "Search Gmail" });
     this.input.setAttribute("aria-label", "Search Gmail");
     this.resultsEl = content.createEl("div", { cls: "bob-mail-picker-results" });
@@ -907,6 +908,7 @@ class BobMailTaskModal extends Modal {
     content.empty();
     content.createEl("h2", { text: "Task from this email" });
     content.createEl("p", { text: "Capture a task with a link back to the email." });
+    // bob-text: prose S13
     this.input = content.createEl("input", { type: "text", value: this.initialText });
     this.input.value = this.initialText;
     this.input.setAttribute("aria-label", "Task text");
@@ -1166,8 +1168,10 @@ class BobMailNewModal extends Modal {
     const content = this.contentEl;
     content.empty();
     content.createEl("h2", { text: "New email" });
+    // bob-text: literal email recipients
     this.toInput = content.createEl("input", { type: "text", placeholder: "To · comma-separated recipients" });
     this.toInput.setAttribute("aria-label", "To recipients");
+    // bob-text: literal email subject
     this.subjectInput = content.createEl("input", { type: "text", placeholder: "Subject" });
     this.subjectInput.setAttribute("aria-label", "Subject");
     const buttons = content.createEl("div", { cls: "modal-button-container" });
@@ -1706,6 +1710,7 @@ class BobMailSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Undo seconds")
       .setDesc("Countdown before a confirmed send runs, with an Undo button. 0 sends at once.")
+      // bob-text: literal Gmail account setting
       .addText((text) => text
         .setPlaceholder("5")
         .setValue(String(mailComposeUndoSeconds(this.plugin.settings)))

@@ -74,6 +74,7 @@ class FreshnessRefreshSummaryModal extends Modal {
       field.createDiv({ cls: "bob-cnp-field-title", text: "Keep reason" });
       const inputWrap = field.createDiv({ cls: "bob-cnp-search" });
       inputWrap.createDiv({ cls: "bob-cnp-search-icon", text: "🥀" });
+      // bob-text: prose S4
       this.keepInputEl = inputWrap.createEl("input", {
         cls: "bob-cnp-input",
         attr: {

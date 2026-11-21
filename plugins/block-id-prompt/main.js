@@ -10416,6 +10416,7 @@ class TaskLinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-tlp-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal task picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-tlp-input",
       attr: {
@@ -10987,6 +10988,7 @@ class PomodoroLinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-ppk-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-ppk-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal Pomodoro picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-ppk-input",
       attr: {
@@ -11753,6 +11755,7 @@ class TaskWikilinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-tlp-search bid-twl-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal task wikilink picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-tlp-input bid-twl-input",
       attr: {
@@ -13510,6 +13513,7 @@ class BlockIdPromptModal extends Modal {
     const isExplicit =
       Boolean(this.source.prefillId) && Boolean(this.source.oldId);
 
+    // bob-text: literal task block ID
     new Setting(this.contentEl).setName("ID").addText((text) => {
       this.input = text;
       text.setPlaceholder(isExplicit ? "my-id" : "Loading suggestion…");
@@ -13900,6 +13904,7 @@ class WorkSummaryPromptModal extends Modal {
       attr: { for: "bid-wlp-summary" },
       text: "Work summary (optional)",
     });
+    // bob-text: prose S1
     this.inputEl = fieldEl.createEl("input", {
       cls: "bid-wlp-input",
       attr: {

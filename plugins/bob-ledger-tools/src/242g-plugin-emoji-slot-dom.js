@@ -272,6 +272,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
   const content = fused ? host : albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-content");
   const preview = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-preview");
   const note = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-note");
+  // bob-text: none hidden emoji value storage
   const hidden = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-value");
   hidden.setAttribute("type", "hidden");
   hidden.setAttribute("data-schema-input", inputName);
@@ -307,6 +308,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     panel.setAttribute("role", "group");
     panel.setAttribute("aria-label", "Emoji picker");
     const searchLabel = albumEmojiSlotCreateEl(doc, "label", "bob-emoji-slot-search-label", "Search emoji");
+    // bob-text: literal emoji picker filter
     const search = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-search");
     const results = albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-results");
     search.setAttribute("type", "search");
@@ -396,6 +398,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     content.appendChild(note);
     content.appendChild(panel);
   } else {
+    // bob-text: literal emoji glyph fallback
     fallbackInput = albumEmojiSlotCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-fallback");
     fallbackInput.setAttribute("type", "text");
     fallbackInput.setAttribute("data-schema-input", inputName);

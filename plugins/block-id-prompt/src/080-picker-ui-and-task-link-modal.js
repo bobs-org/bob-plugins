@@ -222,6 +222,7 @@ class TaskLinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-tlp-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-tlp-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal task picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-tlp-input",
       attr: {

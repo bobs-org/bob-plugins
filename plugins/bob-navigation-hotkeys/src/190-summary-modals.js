@@ -760,6 +760,7 @@ class LaneReleaseSummaryModal extends Modal {
       cls: "bob-lane-release-subtitle",
       text: "Optional: why is this pending? Saved to the Work Log.",
     });
+    // bob-text: prose S3
     this.inputEl = contentEl.createEl("input", {
       attr: {
         placeholder: "What did you get done?",

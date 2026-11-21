@@ -44,6 +44,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
       text: "Reason for this date (optional)",
       attr: { for: "bob-schedule-review-reason" },
     });
+    // bob-text: prose S9
     const reasonInput = reasonField.createEl("input", {
       cls: "bob-cnp-input bob-task-card-review-input",
       attr: {
@@ -77,6 +78,7 @@ class BulletPropertyPickerScheduleWorkLogMixin extends FilteredPickerModal {
         text: `Work summary (optional · ${countLabel})`,
         attr: { for: "bob-schedule-review-summary" },
       });
+      // bob-text: prose S10
       const summaryInput = summaryField.createEl("input", {
         cls: "bob-cnp-input bob-task-card-review-input",
         attr: {

@@ -1536,6 +1536,7 @@ class BobArticlesSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("bob path")
       .setDesc("Leave blank to find bob in its usual install locations or on PATH.")
+      // bob-text: literal articles API key
       .addText((text) => text
         .setPlaceholder("Auto")
         .setValue(this.plugin.settings.bobPath)

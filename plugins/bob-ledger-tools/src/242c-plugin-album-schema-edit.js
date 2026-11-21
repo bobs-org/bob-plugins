@@ -114,12 +114,15 @@ function albumSchemaControl(doc, host, labelText, type, name, value, options = {
   const label = notebookCreateEl(doc, "span", "bob-album-schema-control-label");
   notebookSetText(label, labelText);
   row.appendChild(label);
+  // bob-text: literal album schema field values (text, number, checkbox, and list)
   let input;
   if (type === "textarea") {
+    // bob-text: literal album schema list field
     input = notebookCreateEl(doc, "textarea", "bob-album-schema-input");
   } else if (type === "select") {
     input = notebookCreateEl(doc, "select", "bob-album-schema-input");
   } else {
+    // bob-text: literal album schema text, numeric, and non-text controls
     input = notebookCreateEl(doc, "input", "bob-album-schema-input");
     input.setAttribute("type", type);
   }
@@ -153,6 +156,7 @@ function albumSchemaChoiceEmojiField(doc, host, captionText, labelName, labelVal
   const caption = notebookCreateEl(doc, "span", "bob-album-schema-emoji-label");
   notebookSetText(caption, captionText);
   const fused = notebookCreateEl(doc, "div", "bob-emoji-slot-fused");
+  // bob-text: literal album choice label
   const labelInput = notebookCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-label");
   labelInput.setAttribute("type", "text");
   labelInput.setAttribute("data-schema-input", labelName);

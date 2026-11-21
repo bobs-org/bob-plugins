@@ -51,6 +51,7 @@ class RenameCurrentFileModal extends Modal {
       cls: "bob-rename-file-label",
       text: "File name",
     });
+    // bob-text: literal file rename
     this.inputEl = field.createEl("input", {
       cls: "bob-rename-file-input",
       attr: {

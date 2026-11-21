@@ -363,10 +363,12 @@ class PomodoroThemeRenameModal extends Modal {
 
     const form = this.contentEl.createDiv({ cls: "bob-cnp-rename-form" });
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "New name" });
+    // bob-text: literal Pomodoro theme name
     this.nameInput = form.createEl("input", {
       cls: "bob-cnp-input",
       attr: { type: "text", placeholder: "FIX", "aria-label": "New type name" },
     });
+    // bob-text: none merge confirmation checkbox
     this.mergeToggle = form.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Merge into an existing type" },

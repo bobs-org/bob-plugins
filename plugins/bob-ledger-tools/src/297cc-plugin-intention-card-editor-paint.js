@@ -126,6 +126,7 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
       if (context) stageHost.appendChild(context);
     }
     const reflection = options.stage.kind === "reflection";
+    // bob-text: prose S14 intention, summary, and reflection stages
     const input = reflection
       ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-reflection")
       : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");

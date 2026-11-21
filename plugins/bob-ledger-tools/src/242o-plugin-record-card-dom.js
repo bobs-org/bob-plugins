@@ -218,6 +218,7 @@ function recordCardPaintBody(card, targets, options, doc) {
 function recordCardPaintChoices(host, choices, options, doc) {
   if (!host || !doc) return;
   recordCardRegionEmpty(host);
+  // bob-text: literal Record Card choice filter
   const filter = recordCardEl(doc, "input", "bob-record-card-choice-filter");
   filter.setAttribute("type", "text");
   filter.setAttribute("data-record-input", "choice-filter");

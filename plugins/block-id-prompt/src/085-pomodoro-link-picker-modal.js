@@ -257,6 +257,7 @@ class PomodoroLinkPickerModal extends Modal {
     const searchEl = contentEl.createDiv({ cls: "bid-ppk-search" });
     const searchIcon = searchEl.createDiv({ cls: "bid-ppk-search-icon" });
     applyIcon(searchIcon, "search");
+    // bob-text: literal Pomodoro picker filter
     this.inputEl = searchEl.createEl("input", {
       cls: "bid-ppk-input",
       attr: {

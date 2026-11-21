@@ -15,6 +15,7 @@ class BobMailPickerModal extends Modal {
     const content = this.contentEl;
     content.empty();
     content.createEl("h2", { text: "Link email" });
+    // bob-text: literal Gmail message search
     this.input = content.createEl("input", { type: "text", placeholder: "Search Gmail" });
     this.input.setAttribute("aria-label", "Search Gmail");
     this.resultsEl = content.createEl("div", { cls: "bob-mail-picker-results" });

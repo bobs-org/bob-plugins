@@ -129,6 +129,7 @@ class TaskLinkLanePromptModal extends Modal {
       attr: { for: "bob-tll-summary" },
       text: "Work summary (optional)",
     });
+    // bob-text: prose S2
     this.inputEl = fieldEl.createEl("input", {
       cls: "bob-tll-input",
       attr: {

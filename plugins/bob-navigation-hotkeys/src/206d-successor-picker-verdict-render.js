@@ -359,6 +359,7 @@ function successorRenderReasonEditor(modal, container, row, draft) {
     wrap.addEventListener("click", (event) => {
       try { if (event && typeof event.stopPropagation === "function") event.stopPropagation(); } catch (_error) {}
     });
+    // bob-text: prose S6
     const input = wrap.createEl("input", {
       cls: "bob-successor-reason-input",
       attr: {

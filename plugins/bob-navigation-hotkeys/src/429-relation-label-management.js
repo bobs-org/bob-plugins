@@ -184,10 +184,12 @@ class RelationLabelRenameModal extends Modal {
 
     const form = this.contentEl.createDiv({ cls: "bob-cnp-rename-form" });
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "New relation label" });
+    // bob-text: literal relation label
     this.nameInput = form.createEl("input", {
       cls: "bob-cnp-input",
       attr: { type: "text", placeholder: "prompted by", "aria-label": "New relation label" },
     });
+    // bob-text: none relation merge checkbox
     this.mergeToggle = form.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Merge into an existing relation label" },
@@ -195,6 +197,7 @@ class RelationLabelRenameModal extends Modal {
     form.createEl("label", { cls: "bob-cnp-rename-label", text: "Allow merging into an existing relation label (--merge)" });
     this.mergeConfirmWrap = form.createDiv({ cls: "bob-cnp-rename-merge-confirm" });
     this.mergeConfirmWrap.style.display = "none";
+    // bob-text: none merge confirmation checkbox
     this.mergeConfirmToggle = this.mergeConfirmWrap.createEl("input", {
       cls: "bob-cnp-rename-merge",
       attr: { type: "checkbox", "aria-label": "Confirm merging relation labels" },

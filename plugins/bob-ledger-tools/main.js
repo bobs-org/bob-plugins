@@ -68751,12 +68751,15 @@ function albumSchemaControl(doc, host, labelText, type, name, value, options = {
   const label = notebookCreateEl(doc, "span", "bob-album-schema-control-label");
   notebookSetText(label, labelText);
   row.appendChild(label);
+  // bob-text: literal album schema field values (text, number, checkbox, and list)
   let input;
   if (type === "textarea") {
+    // bob-text: literal album schema list field
     input = notebookCreateEl(doc, "textarea", "bob-album-schema-input");
   } else if (type === "select") {
     input = notebookCreateEl(doc, "select", "bob-album-schema-input");
   } else {
+    // bob-text: literal album schema text, numeric, and non-text controls
     input = notebookCreateEl(doc, "input", "bob-album-schema-input");
     input.setAttribute("type", type);
   }
@@ -68790,6 +68793,7 @@ function albumSchemaChoiceEmojiField(doc, host, captionText, labelName, labelVal
   const caption = notebookCreateEl(doc, "span", "bob-album-schema-emoji-label");
   notebookSetText(caption, captionText);
   const fused = notebookCreateEl(doc, "div", "bob-emoji-slot-fused");
+  // bob-text: literal album choice label
   const labelInput = notebookCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-label");
   labelInput.setAttribute("type", "text");
   labelInput.setAttribute("data-schema-input", labelName);
@@ -103900,6 +103904,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
   const content = fused ? host : albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-content");
   const preview = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-preview");
   const note = albumEmojiSlotCreateEl(doc, "span", "bob-emoji-slot-note");
+  // bob-text: none hidden emoji value storage
   const hidden = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-value");
   hidden.setAttribute("type", "hidden");
   hidden.setAttribute("data-schema-input", inputName);
@@ -103935,6 +103940,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     panel.setAttribute("role", "group");
     panel.setAttribute("aria-label", "Emoji picker");
     const searchLabel = albumEmojiSlotCreateEl(doc, "label", "bob-emoji-slot-search-label", "Search emoji");
+    // bob-text: literal emoji picker filter
     const search = albumEmojiSlotCreateEl(doc, "input", "bob-emoji-slot-search");
     const results = albumEmojiSlotCreateEl(doc, "div", "bob-emoji-slot-results");
     search.setAttribute("type", "search");
@@ -104024,6 +104030,7 @@ function albumEmojiSlotControl(doc, host, labelText, inputName, value, labelInpu
     content.appendChild(note);
     content.appendChild(panel);
   } else {
+    // bob-text: literal emoji glyph fallback
     fallbackInput = albumEmojiSlotCreateEl(doc, "input", "bob-album-schema-input bob-emoji-slot-fallback");
     fallbackInput.setAttribute("type", "text");
     fallbackInput.setAttribute("data-schema-input", inputName);
@@ -109619,6 +109626,7 @@ function recordCardPaintBody(card, targets, options, doc) {
 function recordCardPaintChoices(host, choices, options, doc) {
   if (!host || !doc) return;
   recordCardRegionEmpty(host);
+  // bob-text: literal Record Card choice filter
   const filter = recordCardEl(doc, "input", "bob-record-card-choice-filter");
   filter.setAttribute("type", "text");
   filter.setAttribute("data-record-input", "choice-filter");
@@ -111083,10 +111091,12 @@ function recordCardPaintStageInput(doc, host, options) {
     // IME composition, whose uncommitted text the draft does not hold yet.
     if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
   } else if (kind === "text") {
+    // bob-text: prose S15 text/suggest stages; link stage uses field mode
     input = recordCardEl(doc, "textarea", "bob-record-card-stage-input bob-record-card-text");
     input.setAttribute("rows", "3");
     input.value = value;
   } else {
+    // bob-text: mixed S15 prose text/suggest/list and literal date/number/URL stages
     input = recordCardEl(doc, "input", `bob-record-card-stage-input bob-record-card-${kind}`);
     input.setAttribute("type", attrs.type);
     if (attrs.inputmode) input.setAttribute("inputmode", attrs.inputmode);
@@ -111189,6 +111199,7 @@ function recordCardPaintStageList(doc, host, options) {
   if (input) {
     if (!options.composing && String(input.value == null ? "" : input.value) !== value) input.value = value;
   } else {
+    // bob-text: prose S15 list stage
     input = recordCardEl(doc, "input", "bob-record-card-stage-input bob-record-card-list-input");
     input.setAttribute("type", "text");
     input.value = value;
@@ -160424,6 +160435,7 @@ function intentionCardEditorPaintAll(host, options, doc, modal) {
       if (context) stageHost.appendChild(context);
     }
     const reflection = options.stage.kind === "reflection";
+    // bob-text: prose S14 intention, summary, and reflection stages
     const input = reflection
       ? intentionCardEditorCreateEl(doc, "textarea", "bob-intention-stage-input is-reflection")
       : intentionCardEditorCreateEl(doc, "input", "bob-intention-stage-input");

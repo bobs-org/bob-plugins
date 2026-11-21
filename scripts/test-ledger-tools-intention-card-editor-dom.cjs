@@ -1,8 +1,9 @@
 // Intention card editor DOM: the summary shown read-only above Reflection,
 // the auto-growing reflection textarea (entry, input, paste, repaint) with a
-// stable caret, Enter/Shift+Enter/Ctrl+Enter, and the shared arrange
+// stable caret, Enter/Shift+Enter/Ctrl+Enter, the shared arrange
 // animation for Alt+J/K with stable row identities, kept selection, reduced
-// motion, and no animation for a refused write.
+// motion, and no animation for a refused write, and the keymap footer that
+// browse moves (j/k and friends) never replace.
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { loadLedgerTools, flush, fakeVault, installBobSimulator, simulatorDigest } = require("./intention-card-test-helpers.cjs");
@@ -157,4 +158,59 @@ test("the summary row shows its provenance in words", async () => {
   const row = card(modal).querySelector('[data-intention-key="summary"]');
   assert.match(row.textContent, /Summary ✦ agent · Nov 18 — Agent text\./);
   assert.equal(H.intentionCardEditorProvenance("edited", ""), "✎ edited");
+});
+
+test("browse moves keep the keymap footer", async () => {
+  const BROWSE_KEYS = "j/k move · Enter edit · o add · r reflect · Alt+J/K reorder · Ctrl+D remove · u undo · [ ] = travel · y YAML";
+  const statusOf = (modal) => card(modal).querySelector(".bob-intention-editor-status").textContent;
+  const selectedRow = (modal) => card(modal).querySelector('[aria-current="true"]');
+  const { modal } = setup({ intentions: ["One", "Two"] });
+  await flush();
+  assert.equal(statusOf(modal), BROWSE_KEYS);
+  assert.equal(selectedRow(modal).getAttribute("data-intention-key"), "intention:0");
+  const steps = [
+    { event: key("j", null), selected: "intention:1" },
+    { event: key("k", null), selected: "intention:0" },
+    { event: key("ArrowDown", null), selected: "intention:1" },
+    { event: key("Tab", null), selected: "reflection" },
+    { event: key("Tab", null, { shiftKey: true }), selected: "intention:1" },
+    { event: key("2", null), selected: "intention:1" },
+  ];
+  for (const step of steps) {
+    modal.intentionOnKeyDown(step.event);
+    assert.equal(modal.selectedKey, step.selected);
+    assert.equal(selectedRow(modal).getAttribute("data-intention-key"), step.selected);
+    assert.equal(statusOf(modal), BROWSE_KEYS, `footer survives ${step.event.key}`);
+  }
+  const reflectionRow = card(modal).querySelector('[data-intention-key="reflection"]');
+  modal.intentionOnClick({ target: reflectionRow, preventDefault() {} });
+  assert.equal(modal.selectedKey, "reflection");
+  assert.equal(statusOf(modal), BROWSE_KEYS, "footer survives a row click");
+  modal.close();
+});
+
+test("a move after an outcome brings the keymap footer back", async () => {
+  const BROWSE_KEYS = "j/k move · Enter edit · o add · r reflect · Alt+J/K reorder · Ctrl+D remove · u undo · [ ] = travel · y YAML";
+  const statusOf = (modal) => card(modal).querySelector(".bob-intention-editor-status").textContent;
+  const { modal } = setup({ intentions: ["One", "Two"] });
+  await flush();
+  modal.intentionOnKeyDown(key("u", null));
+  await flush();
+  assert.equal(statusOf(modal), "Nothing to undo.");
+  modal.intentionOnKeyDown(key("j", null));
+  assert.equal(statusOf(modal), BROWSE_KEYS);
+  modal.close();
+});
+
+test("s explains Summary ownership until the next move", async () => {
+  const BROWSE_KEYS = "j/k move · Enter edit · o add · r reflect · Alt+J/K reorder · Ctrl+D remove · u undo · [ ] = travel · y YAML";
+  const statusOf = (modal) => card(modal).querySelector(".bob-intention-editor-status").textContent;
+  const { modal } = setup({ intentions: ["One", "Two"] });
+  await flush();
+  modal.intentionOnKeyDown(key("s", null));
+  assert.equal(modal.selectedKey, "summary");
+  assert.match(statusOf(modal), /Summary selected/);
+  modal.intentionOnKeyDown(key("j", null));
+  assert.equal(statusOf(modal), BROWSE_KEYS);
+  modal.close();
 });

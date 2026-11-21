@@ -156,7 +156,10 @@ Done on a YAML excursion validates with a fresh dry run. Invalid YAML or
 malformed intentions keep Source open with a notice; a valid note returns to
 the prior view and reopens the card editor on the same field.
 
-Stage keys stay text while a stage is open; only explicit cancel or save
+The line under the rows always lists the browse keys; moving the selection never
+replaces it, and an outcome such as Saved or Undone stays only until the next move
+(`s` briefly explains Summary ownership). Stage keys stay text while a stage is
+open; only explicit cancel or save
 leaves the stage. Summary editing explains "agent drafted this; your edit
 makes it yours" before the intentional edit. At four or more intentions the
 card shows "Three is plenty — what can go?" without refusing. Pasted

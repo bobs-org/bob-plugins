@@ -292,7 +292,9 @@ class IntentionCardModal extends IntentionCardModalBase {
     const target = intentionCardEditorTargetByKey(this.intentionTargets(), key);
     if (!target) return;
     this.selectedKey = key;
-    this.announce = target.label;
+    // A move is not an outcome: the focused row already says where you are,
+    // so the status line returns to the browse keys.
+    this.announce = "";
     this.paintIntentionCard();
   }
 

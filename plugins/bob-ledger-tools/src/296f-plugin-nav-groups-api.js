@@ -1,6 +1,5 @@
-// api.navGroups v1: derived calendar group and step stops. Synchronous,
-// never throws, never writes, never spawns bob. Records return route null
-// until the record-groups phase. The adopted ISO-year cache is a set of
+// api.navGroups v1: derived calendar and record group stops. Synchronous,
+// never throws, never writes, never spawns bob. The adopted ISO-year cache is a set of
 // years that already have a YYYY/YYYY-Www.md week note; it invalidates on
 // vault create, delete, and rename of those paths.
 
@@ -131,6 +130,8 @@ class BobLedgerToolsNavGroupsMixin {
     try {
       const invalid = navGroupsRequestError(request);
       if (invalid) return invalid;
+      const record = navGroupsRecordResolve(this, request);
+      if (record) return record;
       const today = this.navGroupsTodayText();
       if (!today) return Object.freeze({ ok: false, reason: "unavailable" });
       return navGroupsCalendarResolve(request.path, {

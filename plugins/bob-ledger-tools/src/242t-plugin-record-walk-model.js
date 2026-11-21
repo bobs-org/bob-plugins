@@ -2,7 +2,8 @@
 // come from Obsidian's immediate album-folder Markdown children; the stored
 // links are cross-checked before a position is shown.
 const RECORD_WALK_CAPABILITY = "record_walk_v1";
-const RECORD_WALK_LABEL_DROP = new Set(["|", "[", "]", "#", "^"]);
+const RECORD_WALK_GROUP_CAPABILITY = "record_walk_groups_v1";
+const RECORD_WALK_LABEL_DROP = new Set(["|", "[", "]", "#", "^", "«", "»"]);
 
 function recordWalkPath(value) {
   const path = typeof value === "string"
@@ -47,15 +48,128 @@ function recordWalkCompareCodePoints(left, right) {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
-function recordWalkOrder(records) {
-  const rows = Array.isArray(records) ? records.slice() : [];
-  return rows.sort((left, right) => {
+function recordWalkTitleOrder(records) {
+  return records.slice().sort((left, right) => {
     const titleOrder = recordWalkCompareCodePoints(
       recordWalkMemberTitle(left).toLowerCase(),
       recordWalkMemberTitle(right).toLowerCase(),
     );
     return titleOrder || recordWalkCompareCodePoints(left?.path || "", right?.path || "");
   });
+}
+
+function recordWalkGroupingConfig(album) {
+  const walkBy = typeof album?.walk_by === "string" ? album.walk_by.trim() : "";
+  if (!walkBy) return null;
+  const field = (Array.isArray(album?.fields) ? album.fields : [])
+    .find((candidate) => candidate && candidate.key === walkBy);
+  if (!field || field.list === true || (field.kind && field.kind !== "choices")
+    || !Array.isArray(field.choices)) {
+    return { key: walkBy, field, unavailable: true };
+  }
+  const choices = field.choices
+    .filter((choice) => choice && typeof choice.value === "string")
+    .map((choice) => ({
+      value: choice.value,
+      label: typeof choice.label === "string" ? choice.label : choice.value,
+    }));
+  return { key: walkBy, field, choices, unavailable: false };
+}
+
+function recordWalkGroupValue(record, fieldKey) {
+  let value;
+  if (record && record.frontmatter && typeof record.frontmatter === "object") {
+    value = record.frontmatter[fieldKey];
+  } else if (record && record.fields && typeof record.fields === "object") {
+    value = record.fields[fieldKey];
+  }
+  if (value === null || value === undefined || Array.isArray(value)
+    || (typeof value === "object")) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function recordWalkPublicMember(member) {
+  return {
+    stem: String(member?.stem || recordWalkStem(member?.path)),
+    path: recordWalkPath(member?.path),
+    title: recordWalkMemberTitle(member),
+  };
+}
+
+function recordWalkGroupProjection(records, album) {
+  const rows = Array.isArray(records) ? records.slice() : [];
+  const config = recordWalkGroupingConfig(album);
+  if (!config) return { field: null, unavailable: false, groups: [], ordered: recordWalkTitleOrder(rows) };
+  if (config.unavailable) return { field: config.key, unavailable: true, groups: [], ordered: recordWalkTitleOrder(rows) };
+
+  const sorted = recordWalkTitleOrder(rows);
+  const choices = config.choices.map((choice) => ({ ...choice, members: [] }));
+  const byValue = new Map(choices.map((choice) => [choice.value, choice]));
+  const needs = [];
+  for (const member of sorted) {
+    const value = recordWalkGroupValue(member, config.key);
+    const choice = value === null ? null : byValue.get(value);
+    if (choice) choice.members.push(member);
+    else needs.push(member);
+  }
+  const groups = choices
+    .filter((choice) => choice.members.length > 0)
+    .map((choice) => ({ value: choice.value, label: choice.label, members: choice.members }));
+  if (needs.length) {
+    const label = config.key === "status" ? "⚠️ Needs a status" : `⚠️ Needs ${config.key}`;
+    groups.push({ value: null, label, members: needs });
+  }
+
+  const count = groups.length;
+  groups.forEach((group, index) => {
+    group.index = index + 1;
+    group.count = count;
+    group.size = group.members.length;
+    group.head = recordWalkPublicMember(group.members[0]);
+  });
+  groups.forEach((group, index) => {
+    if (count < 2) {
+      group.prevGroup = null;
+      group.nextGroup = null;
+    } else {
+      const prev = groups[(index + count - 1) % count];
+      const next = groups[(index + 1) % count];
+      group.prevGroup = {
+        value: prev.value,
+        label: prev.label,
+        head: prev.head,
+        wraps: index === 0,
+      };
+      group.nextGroup = {
+        value: next.value,
+        label: next.label,
+        head: next.head,
+        wraps: index + 1 === count,
+      };
+    }
+  });
+
+  const ordered = groups.flatMap((group) => group.members.map((member, index) => ({
+    ...member,
+    group: {
+      field: config.key,
+      value: group.value,
+      label: group.label,
+      index: group.index,
+      count,
+      position: index + 1,
+      size: group.size,
+    },
+    groupMembers: group.members,
+    prevGroup: group.prevGroup,
+    nextGroup: group.nextGroup,
+  })));
+  return { field: config.key, unavailable: false, groups, ordered };
+}
+
+function recordWalkOrder(records, album) {
+  return recordWalkGroupProjection(records, album).ordered;
 }
 
 function recordWalkInertText(value) {
@@ -112,8 +226,8 @@ function recordWalkMemberTitle(record) {
   return title || recordWalkHumanizeStem(record && record.stem);
 }
 
-function recordWalkRenderLines(album, records) {
-  const ordered = recordWalkOrder(records).map((record) => ({
+function recordWalkRenderLines(album, records, grouping) {
+  const ordered = recordWalkOrder(records, grouping).map((record) => ({
     ...record,
     stem: String(record.stem || recordWalkStem(record.path)),
     title: recordWalkMemberTitle(record),
@@ -317,6 +431,14 @@ function recordWalkModel(input = {}) {
   const albumFrontmatter = recordWalkCachedFrontmatter(albumFile, input.metadataCache);
   if (!recordWalkIsType(activeFrontmatter, "record") || !recordWalkIsType(albumFrontmatter, "album")) return null;
 
+  const albumReport = recordWalkReportAlbum(input.report, albumPath);
+  const capabilities = Array.isArray(input.report?.capabilities) ? input.report.capabilities : [];
+  const grouping = recordWalkGroupProjection([], albumReport);
+  const frontmatterHasWalkBy = Object.prototype.hasOwnProperty.call(albumFrontmatter, "walk_by");
+  const groupingUnavailable = (frontmatterHasWalkBy
+      && (!capabilities.includes(RECORD_WALK_GROUP_CAPABILITY) || !albumReport))
+    || (albumReport?.walk_by && (!capabilities.includes(RECORD_WALK_GROUP_CAPABILITY) || grouping.unavailable));
+
   const members = recordWalkFiles(input.vault)
     .filter((file) => {
       const memberPath = recordWalkPath(file && file.path);
@@ -325,15 +447,23 @@ function recordWalkModel(input = {}) {
     .map((file) => {
       const memberPath = recordWalkPath(file.path);
       const override = memberPath === path ? activeFrontmatter : null;
+      const memberFrontmatter = override || recordWalkCachedFrontmatter(file, input.metadataCache);
       const stem = recordWalkStem(memberPath);
-      return { path: memberPath, stem, title: recordWalkFileTitle(file, input.metadataCache, override) };
+      return {
+        path: memberPath,
+        stem,
+        title: recordWalkFileTitle(file, input.metadataCache, override),
+        frontmatter: memberFrontmatter,
+      };
     });
-  const ordered = recordWalkOrder(members);
+  const projection = groupingUnavailable
+    ? recordWalkGroupProjection(members, null)
+    : recordWalkGroupProjection(members, albumReport);
+  const ordered = projection.ordered;
   const positionIndex = ordered.findIndex((member) => member.path === path);
   if (positionIndex < 0 || ordered.length === 0) return null;
   const position = positionIndex + 1;
   const total = ordered.length;
-  const albumReport = recordWalkReportAlbum(input.report, albumPath);
   const albumTitle = String(
     albumReport?.title
     || (typeof notebookHeaderNoteTitle === "function"
@@ -355,7 +485,7 @@ function recordWalkModel(input = {}) {
   const next = total > 1 ? ordered[(positionIndex + 1) % total] : null;
   const slot = { path, stem: recordWalkStem(path), title: recordWalkFileTitle(activeFile, input.metadataCache, activeFrontmatter) };
   const slotIndex = ordered.findIndex((member) => member.path === path);
-  const canonical = recordWalkRenderLines(album, ordered)[slotIndex];
+  const canonical = recordWalkRenderLines(album, members, groupingUnavailable ? null : albumReport)[slotIndex];
   const sourceText = typeof input.sourceText === "string" ? input.sourceText : null;
   let classification = null;
   let state = "syncing";
@@ -378,6 +508,12 @@ function recordWalkModel(input = {}) {
       reason = matches ? null : "neighbors_mismatch";
     }
   }
+  if (groupingUnavailable) {
+    state = "syncing";
+    reason = "grouping_unavailable";
+  }
+  const current = ordered[positionIndex];
+  const group = current?.group || null;
   return {
     state,
     reason,
@@ -392,6 +528,11 @@ function recordWalkModel(input = {}) {
     writtenNext: classification?.writtenNext ? { stem: classification.writtenNext.stem, target: classification.writtenNext.target, label: classification.writtenNext.label } : null,
     wrapsPrev: Boolean(previous && position === 1),
     wrapsNext: Boolean(next && position === total),
+    walkBy: group ? group.field : null,
+    group,
+    groupMembers: group ? current.groupMembers.map(recordWalkPublicMember) : [],
+    prevGroup: group ? current.prevGroup : null,
+    nextGroup: group ? current.nextGroup : null,
     album,
     lineState: classification?.state || null,
     lineIndex: classification?.lineIndex ?? null,
@@ -420,6 +561,7 @@ function recordWalkRequestSync(plugin, model) {
   const report = state && state.report;
   const capabilities = Array.isArray(report?.capabilities) ? report.capabilities : [];
   if (!capabilities.includes(RECORD_WALK_CAPABILITY) || typeof plugin.albumScheduleSync !== "function") return false;
+  if (model.walkBy && !capabilities.includes(RECORD_WALK_GROUP_CAPABILITY)) return false;
   const albumPath = recordWalkPath(model.albumPath || model.album?.path);
   if (!albumPath) return false;
   recordWalkClearSyncedEpisodes(plugin, state);

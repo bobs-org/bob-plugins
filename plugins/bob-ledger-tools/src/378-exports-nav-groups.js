@@ -1,4 +1,4 @@
-// Test-facing exports for the calendar nav-groups provider and api.navGroups v1.
+// Test-facing exports for the calendar and record nav-groups providers.
 try {
   if (typeof module !== "undefined" && module.exports && typeof module.exports === "function") {
     module.exports.helpers = Object.assign({}, module.exports.helpers || {}, {
@@ -7,6 +7,8 @@ try {
       NAV_GROUPS_NONE_YEAR,
       NAV_GROUPS_NONE_ALL,
       NAV_GROUPS_API_VERSION,
+      navGroupsRecordResolve,
+      navGroupsRecordStop,
       navGroupsNormalizePath,
       navGroupsTarget,
       navGroupsWeekNoteIsoYear,

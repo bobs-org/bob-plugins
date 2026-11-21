@@ -312,6 +312,7 @@
   "296d-plugin-intention-card-title-slot.js",
   "296e-plugin-nav-groups-calendar.js",
   "296f-plugin-nav-groups-api.js",
+  "296g-plugin-nav-groups-records.js",
   "297a-plugin-intention-update-service.js",
   "297b-plugin-intention-update-session.js",
   "297c-plugin-intention-card-editor.js",

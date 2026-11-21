@@ -46,6 +46,8 @@ const {
   navGroupsPathInBounds,
   navGroupsWeekNoteIsoYear,
   NAV_GROUPS_API_VERSION,
+  recordWalkGroupProjection,
+  recordWalkRenderLines,
 } = LedgerToolsPlugin.helpers;
 
 const TODAY = "2026-11-21";
@@ -105,6 +107,60 @@ function makeHarness({ vaultPaths = adopted2026And2027() } = {}) {
     fireLayoutReady: () => {
       for (const callback of layoutReadyCallbacks.splice(0)) callback();
     },
+  };
+}
+
+function makeRecordHarness({ album, records, capabilities = ["record_walk_v1", "record_walk_groups_v1"] }) {
+  const frontmatter = new Map([
+    [album.path, {
+      type: "[[album]]", title: album.title,
+      ...(album.walk_by === undefined ? {} : { walk_by: album.walk_by }),
+    }],
+    ...records.map((record) => [record.path, {
+      type: "[[record]]", title: record.title,
+      ...(record.fields || {}),
+    }]),
+  ]);
+  const vaultPaths = Object.fromEntries([...frontmatter.keys()].map((path) => [path, file(path)]));
+  const harnessed = makeHarness({ vaultPaths });
+  harnessed.app.metadataCache = {
+    getFileCache: (candidate) => ({ frontmatter: frontmatter.get(candidate.path) || {} }),
+  };
+  const report = { capabilities, albums: [album] };
+  harnessed.plugin.albumReportState = () => ({ report, reportGeneration: 1, stale: false });
+  const modelRecords = records.map((record) => ({
+    path: record.path,
+    stem: record.stem,
+    title: record.title,
+    frontmatter: frontmatter.get(record.path),
+  }));
+  const lines = recordWalkRenderLines(album, modelRecords, album);
+  const orderedPaths = recordWalkGroupProjection(modelRecords, album).ordered.map((record) => record.path);
+  const linesByPath = new Map(orderedPaths.map((path, index) => [path, lines[index]]));
+  const sourceText = (path) => `---\ntype: "[[record]]"\n---\n\n${linesByPath.get(path)}\n`;
+  return { ...harnessed, album, records, report, sourceText, linesByPath };
+}
+
+function groupedRecordFixture() {
+  const choices = [
+    { value: "intro", label: "Intro" },
+    { value: "empty", label: "Empty" },
+    { value: "body", label: "Body" },
+    { value: "outro", label: "Outro" },
+  ];
+  return {
+    album: {
+      path: "z.md", stem: "z", title: "SASE Blog Zettel", walk_by: "section",
+      fields: [{ key: "section", label: "Section", kind: "choices", list: false, choices }],
+      walk: { state: "current" },
+    },
+    records: [
+      { path: "z/b.md", stem: "b", title: "Beta", fields: { section: "body" } },
+      { path: "z/a.md", stem: "a", title: "Alpha", fields: { section: "intro" } },
+      { path: "z/c.md", stem: "c", title: "Gamma", fields: { section: "body" } },
+      { path: "z/needs.md", stem: "needs", title: "Needs", fields: {} },
+      { path: "z/outro.md", stem: "outro", title: "Omega", fields: { section: "outro" } },
+    ],
   };
 }
 
@@ -334,6 +390,96 @@ test("non-calendar paths and bad input do not throw", () => {
   assert.equal(ok.ok, true);
   assert.equal(ok.prevGroup.path, "2026/2026-W14.md");
   assert.doesNotThrow(() => api.resolve({ path: "///" }));
+});
+
+test("record group stops follow the grouped walk and wrap between occupied groups", () => {
+  const fixture = groupedRecordFixture();
+  const harnessed = makeRecordHarness(fixture);
+  const api = harnessed.plugin.navGroupsApi();
+
+  const first = api.resolve({ path: "z/a.md", content: harnessed.sourceText("z/a.md") });
+  assert.equal(first.route, "record");
+  assert.equal(first.kind, "record");
+  assert.equal(first.step, null);
+  assert.equal(first.group.noun, "section");
+  assert.equal(first.group.label, "Intro");
+  assert.equal(first.group.index, 1);
+  assert.equal(first.group.count, 4);
+  assert.equal(first.group.position, 1);
+  assert.equal(first.group.size, 1);
+  assert.equal(first.group.members[0].state, "current");
+  assert.deepEqual(first.prevGroup, {
+    path: "z/needs.md", target: "z/needs", groupLabel: "⚠️ Needs section",
+    landingLabel: "Needs", shortLabel: "⚠️ Needs section", state: "exists",
+    ghostReason: null, wraps: true, source: "record",
+  });
+  assert.equal(first.nextGroup.path, "z/b.md");
+  assert.equal(first.nextGroup.groupLabel, "Body");
+  assert.equal(first.nextGroup.source, "record");
+  assert.equal(first.group.atStart, true);
+  assert.equal(first.group.enteringPrev, "⚠️ Needs section");
+
+  const middle = api.resolve({ path: "z/c.md", content: harnessed.sourceText("z/c.md") });
+  assert.equal(middle.group.label, "Body");
+  assert.equal(middle.group.position, 2);
+  assert.equal(middle.group.size, 2);
+  assert.deepEqual(middle.group.members.map((member) => member.state), ["exists", "current"]);
+  assert.equal(middle.prevGroup.path, "z/a.md");
+  assert.equal(middle.nextGroup.path, "z/outro.md");
+
+  const last = api.resolve({ path: "z/needs.md", content: harnessed.sourceText("z/needs.md") });
+  assert.equal(last.group.label, "⚠️ Needs section");
+  assert.equal(last.group.index, 4);
+  assert.equal(last.group.atEnd, true);
+  assert.equal(last.prevGroup.path, "z/outro.md");
+  assert.equal(last.nextGroup.path, "z/a.md");
+  assert.equal(last.nextGroup.wraps, true);
+  assert.equal(last.group.enteringNext, "Intro");
+});
+
+test("record group routes explain ungrouped, single-group, and syncing albums", () => {
+  const ungrouped = makeRecordHarness({
+    album: { path: "movies.md", stem: "movies", title: "Movies", fields: [], walk: { state: "current" } },
+    records: [{ path: "movies/one.md", stem: "one", title: "One", fields: {} }],
+  });
+  const ungroupedResult = ungrouped.plugin.navGroupsApi().resolve({
+    path: "movies/one.md", content: ungrouped.sourceText("movies/one.md"),
+  });
+  assert.equal(ungroupedResult.route, "record");
+  assert.equal(ungroupedResult.group, null);
+  assert.equal(ungroupedResult.none.reason, "ungrouped");
+  assert.equal(ungroupedResult.none.message, "Movies walks by title — set walk_by on the album to group it");
+
+  const fixture = groupedRecordFixture();
+  fixture.album.fields[0].choices = [{ value: "body", label: "Body" }];
+  fixture.records = fixture.records.filter((record) => record.fields.section === "body");
+  const single = makeRecordHarness(fixture);
+  const singleResult = single.plugin.navGroupsApi().resolve({
+    path: "z/b.md", content: single.sourceText("z/b.md"),
+  });
+  assert.equal(singleResult.group, null);
+  assert.equal(singleResult.prevGroup, null);
+  assert.equal(singleResult.none.reason, "single-group");
+  assert.equal(singleResult.none.message, "SASE Blog Zettel has one section group — ]n walks it");
+
+  const oldBob = groupedRecordFixture();
+  const unsupported = makeRecordHarness({ ...oldBob, capabilities: ["record_walk_v1"] });
+  const unsupportedResult = unsupported.plugin.navGroupsApi().resolve({
+    path: "z/a.md", content: unsupported.sourceText("z/a.md"),
+  });
+  assert.equal(unsupportedResult.none.reason, "grouping_unavailable");
+  assert.equal(unsupportedResult.prevGroup, null);
+  assert.equal(unsupportedResult.nextGroup, null);
+
+  const syncing = makeRecordHarness(oldBob);
+  const staleContent = syncing.sourceText("z/a.md").replace(
+    syncing.linesByPath.get("z/a.md"),
+    syncing.linesByPath.get("z/b.md"),
+  );
+  const syncingResult = syncing.plugin.navGroupsApi().resolve({ path: "z/a.md", content: staleContent });
+  assert.equal(syncingResult.none.reason, "syncing");
+  assert.equal(syncingResult.none.message, "Record walk is syncing");
+  assert.equal(syncingResult.prevGroup, null);
 });
 
 test("the adopted-year cache invalidates on week-note create, delete, and rename", () => {
